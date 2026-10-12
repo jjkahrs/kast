@@ -3,6 +3,7 @@
 #include <app.h>
 #include <log.h>
 #include <scene_io.h>
+#include <systems.h>
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
@@ -14,6 +15,8 @@ namespace {
 
 constexpr SDL_DialogFileFilter kSceneFilter{"Kast scene (*.scene)", "scene"};
 constexpr bx::Vec3 kNewLightEuler{-50.0f, -30.0f, 0.0f}; // ~50 deg down, slightly from the side so faces shade differently
+constexpr bx::Vec3 kMainCameraPosition{0.0f, 3.0f, 7.0f};
+constexpr bx::Vec3 kMainCameraEuler{-20.0f, 0.0f, 0.0f}; // looks down at the origin from kMainCameraPosition
 
 } // namespace
 
@@ -25,6 +28,7 @@ const char* objectKindLabel(ObjectKind kind)
     case ObjectKind::Plane: return "Plane";
     case ObjectKind::Sphere: return "Sphere";
     case ObjectKind::DirectionalLight: return "Directional Light";
+    case ObjectKind::Camera: return "Camera";
     }
     return "";
 }
@@ -42,10 +46,11 @@ entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent)
         scene.registry().emplace<kast::DirectionalLight>(entity);
         scene.registry().get<kast::Transform>(entity).rotation = kast::quatFromEulerDeg(kNewLightEuler);
         break;
+    case ObjectKind::Camera: scene.registry().emplace<kast::Camera>(entity); break;
     case ObjectKind::Empty: break;
     }
     doc.selected = entity;
-    doc.dirty = true;
+    markDirty(doc);
     return entity;
 }
 
@@ -55,7 +60,7 @@ void deleteSelected(Document& doc)
         return;
     doc.scene.destroy(doc.selected);
     doc.selected = entt::null;
-    doc.dirty = true;
+    markDirty(doc);
 }
 
 void duplicateSelected(Document& doc)
@@ -63,7 +68,64 @@ void duplicateSelected(Document& doc)
     if (!doc.scene.valid(doc.selected))
         return;
     doc.selected = doc.scene.duplicate(doc.selected);
-    doc.dirty = true;
+    markDirty(doc);
+}
+
+void markDirty(Document& doc)
+{
+    if (doc.play == PlayState::Stopped)
+        doc.dirty = true;
+}
+
+bool selectById(Document& doc, kast::EntityId id)
+{
+    doc.selected = entt::null;
+    for (auto [entity, persistent] : doc.scene.registry().view<kast::PersistentId>().each())
+        if (persistent.value == id)
+            doc.selected = entity;
+    return doc.selected != entt::null;
+}
+
+void startPlay(Document& doc)
+{
+    if (doc.play == PlayState::Stopped) {
+        doc.playSnapshot = kast::sceneToJson(doc.scene);
+        doc.playSnapshotDirty = doc.dirty;
+        doc.focusRequest = PanelFocus::Game;
+        kast::log::info("Play");
+        if (kast::activeCamera(doc.scene) == entt::null)
+            kast::log::warn("No Camera in scene: the Game view has nothing to render");
+    }
+    doc.play = PlayState::Playing;
+}
+
+void togglePause(Document& doc)
+{
+    if (doc.play != PlayState::Stopped)
+        doc.play = doc.play == PlayState::Paused ? PlayState::Playing : PlayState::Paused;
+}
+
+void stopPlay(Document& doc)
+{
+    if (doc.play == PlayState::Stopped)
+        return;
+    const kast::EntityId selected =
+        doc.scene.valid(doc.selected) ? doc.scene.registry().get<kast::PersistentId>(doc.selected).value : 0;
+    std::string error;
+    if (!kast::sceneFromJson(doc.playSnapshot, doc.scene, error))
+        kast::log::error(std::format("Cannot restore the scene from before Play: {}", error)); // keeps the play-mode scene
+    doc.play = PlayState::Stopped;
+    doc.playSnapshot = nullptr;
+    doc.dirty = doc.playSnapshotDirty;
+    selectById(doc, selected);
+    doc.focusRequest = PanelFocus::Scene;
+    kast::log::info("Stop");
+}
+
+void updatePlay(Document& doc, float dt)
+{
+    if (doc.play == PlayState::Playing)
+        kast::tickSystems(doc.scene, dt);
 }
 
 void resetToDefault(Document& doc)
@@ -83,6 +145,11 @@ void resetToDefault(Document& doc)
     const entt::entity cube = createObject(doc, ObjectKind::Cube, entt::null);
     registry.get<kast::Transform>(cube).position = {0.0f, 0.5f, 0.0f}; // unit cube resting on y=0
     registry.get<kast::MeshRenderer>(cube).color = {0.85f, 0.45f, 0.25f};
+
+    const entt::entity camera = createObject(doc, ObjectKind::Camera, entt::null);
+    registry.get<kast::Name>(camera).value = "Main Camera";
+    registry.get<kast::Transform>(camera).position = kMainCameraPosition;
+    registry.get<kast::Transform>(camera).rotation = kast::quatFromEulerDeg(kMainCameraEuler);
 
     doc.camera = EditorCamera{.pivot = {0.0f, 0.5f, 0.0f}, .yaw = 30.0f, .pitch = -25.0f, .distance = 7.0f};
     doc.path.clear();
@@ -138,6 +205,7 @@ void FileActions::save()
 
 bool FileActions::onQuitRequested()
 {
+    stopPlay(doc_); // restore the edit-mode scene first, so unsaved-changes checks see it
     if (quitConfirmed_ || (!doc_.dirty && !dialogOpen_))
         return true;
     request(Pending::Quit);
@@ -209,6 +277,8 @@ void FileActions::handleDialogResult()
     }
     dialogOpen_ = false;
     const Pending after = std::exchange(afterSave_, Pending::None);
+    if (!path.empty())
+        stopPlay(doc_); // the dialog opened before Play started: open/save the edit-mode scene
     if (!dialogError.empty()) {
         error_ = std::format("File dialog failed: {}", dialogError);
     } else if (path.empty()) {
@@ -242,7 +312,7 @@ void FileActions::saveTo(const std::string& path, Pending after)
 
 void FileActions::update()
 {
-    if (!dialogOpen_) {
+    if (idle()) {
         if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_N, ImGuiInputFlags_RouteGlobal))
             newScene();
         if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_O, ImGuiInputFlags_RouteGlobal))
@@ -298,7 +368,8 @@ void FileActions::drawModals()
 
 void FileActions::updateTitle()
 {
-    std::string title = std::format("Kast Editor - {}{}", displayName(doc_), doc_.dirty ? "*" : "");
+    const char* play = doc_.play == PlayState::Playing ? " (Playing)" : doc_.play == PlayState::Paused ? " (Paused)" : "";
+    std::string title = std::format("Kast Editor - {}{}{}", displayName(doc_), doc_.dirty ? "*" : "", play);
     if (title == title_ || !window_)
         return;
     title_ = std::move(title);

@@ -3,7 +3,8 @@
 #include <log.h>
 
 #include <imgui.h>
-#include <ImGuizmo.h> // after imgui.h, which it needs
+#include <imgui_internal.h> // dock tab visibility
+#include <ImGuizmo.h>       // after imgui.h, which it needs
 
 #include <algorithm>
 #include <format>
@@ -14,6 +15,8 @@ namespace {
 constexpr uint32_t kClearColor = 0x2b3440ff;
 constexpr float kFlySpeed = 5.0f; // meters per second
 constexpr float kFastMultiplier = 4.0f;
+constexpr ImU32 kPlayTint = IM_COL32(255, 160, 40, 255); // Scene panel border and active play button while playing
+constexpr float kCameraPickHalfSize = 0.25f; // cameras have no mesh: click within this box around the origin
 
 kast::Aabb worldBounds(const kast::Scene& scene, entt::entity entity)
 {
@@ -38,6 +41,22 @@ kast::Aabb worldBounds(const kast::Scene& scene, entt::entity entity)
 
 } // namespace
 
+bool beginViewportPanel(const char* name, Document& doc, PanelFocus panel)
+{
+    const bool requested = doc.focusRequest == panel;
+    if (requested)
+        ImGui::SetNextWindowFocus();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    const bool visible = ImGui::Begin(name, nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar();
+    // A docked tab is selected a frame after focus, and not at all while its dock node is being (re)built at startup,
+    // so keep asking until the tab is really shown.
+    const ImGuiWindow* window = ImGui::GetCurrentWindowRead();
+    if (requested && visible && ImGui::IsWindowFocused() && (!window->DockIsActive || window->DockTabIsVisible))
+        doc.focusRequest = PanelFocus::None;
+    return visible;
+}
+
 void SceneViewport::init()
 {
     renderer_.init();
@@ -46,18 +65,22 @@ void SceneViewport::init()
 
 void SceneViewport::shutdown()
 {
-    if (bgfx::isValid(frameBuffer_))
-        bgfx::destroy(frameBuffer_);
-    frameBuffer_ = BGFX_INVALID_HANDLE;
+    target_.destroy();
     renderer_.shutdown();
 }
 
-void SceneViewport::resize(uint16_t width, uint16_t height)
+void ViewTarget::destroy()
+{
+    if (bgfx::isValid(frameBuffer_))
+        bgfx::destroy(frameBuffer_);
+    frameBuffer_ = BGFX_INVALID_HANDLE;
+}
+
+void ViewTarget::resize(uint16_t width, uint16_t height)
 {
     if ((width == width_ && height == height_) || width == 0 || height == 0)
         return;
-    if (bgfx::isValid(frameBuffer_))
-        bgfx::destroy(frameBuffer_);
+    destroy();
     const bgfx::TextureHandle textures[] = {
         bgfx::createTexture2D(width, height, false, 1, bgfx::TextureFormat::BGRA8,
                               BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP),
@@ -66,34 +89,44 @@ void SceneViewport::resize(uint16_t width, uint16_t height)
     frameBuffer_ = bgfx::createFrameBuffer(2, textures, true);
     width_ = width;
     height_ = height;
-    bgfx::setViewName(view_, "Scene");
+    bgfx::setViewName(view_, name_);
     bgfx::setViewFrameBuffer(view_, frameBuffer_);
     bgfx::setViewRect(view_, 0, 0, width, height);
     bgfx::setViewClear(view_, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, kClearColor, 1.0f, 0);
-    kast::log::info(std::format("Scene framebuffer resized to {}x{}", width, height));
+    kast::log::info(std::format("{} framebuffer resized to {}x{}", name_, width, height));
 }
 
 void SceneViewport::draw(Document& doc)
 {
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    const bool visible = ImGui::Begin("Scene", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    ImGui::PopStyleVar();
+    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, ImGuiInputFlags_RouteGlobal))
+    {
+        if (doc.play == PlayState::Stopped)
+            startPlay(doc);
+        else
+            stopPlay(doc);
+    }
+
+    const bool visible = beginViewportPanel("Scene", doc, PanelFocus::Scene);
     if (visible) {
-        drawToolbar();
+        drawToolbar(doc);
         const ImVec2 size = ImGui::GetContentRegionAvail();
         const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
-        resize(static_cast<uint16_t>(size.x * scale.x), static_cast<uint16_t>(size.y * scale.y));
-        if (bgfx::isValid(frameBuffer_) && size.x > 0.0f && size.y > 0.0f) {
+        target_.resize(static_cast<uint16_t>(size.x * scale.x), static_cast<uint16_t>(size.y * scale.y));
+        if (target_.valid() && size.x > 0.0f && size.y > 0.0f) {
             const ImVec2 origin = ImGui::GetCursorScreenPos();
-            ImGui::Image(static_cast<ImTextureID>(bgfx::getTexture(frameBuffer_).idx), size);
+            ImGui::Image(static_cast<ImTextureID>(target_.texture().idx), size);
             const bool hovered = ImGui::IsItemHovered();
+            if (doc.play != PlayState::Stopped) {
+                ImGui::GetWindowDrawList()->AddRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), kPlayTint,
+                                                    0.0f, 0, ImGui::GetStyle().FramePadding.y); // scales with the UI
+            }
 
             updateCamera(doc, hovered, size.y);
             float view[16], proj[16], viewProj[16];
             doc.camera.viewMatrix(view);
             doc.camera.projMatrix(proj, size.x / size.y);
             bx::mtxMul(viewProj, view, proj);
-            renderer_.render(doc.scene, view_, view, proj);
+            renderer_.render(doc.scene, target_.view(), view, proj);
 
             ImGuizmo::SetDrawlist();
             ImGuizmo::SetRect(origin.x, origin.y, size.x, size.y);
@@ -111,11 +144,32 @@ void SceneViewport::draw(Document& doc)
     ImGui::End();
 }
 
-void SceneViewport::drawToolbar()
+void SceneViewport::drawToolbar(Document& doc)
 {
     const ImGuiStyle& style = ImGui::GetStyle();
     const ImVec2 start = ImGui::GetCursorPos(); // below the tab bar
     ImGui::SetCursorPos(ImVec2(start.x + style.FramePadding.x * 2.0f, start.y + style.FramePadding.y));
+
+    // Play controls first so they stay visible when the panel is narrow.
+    const auto playButton = [](const char* label, bool active, bool enabled) {
+        if (active)
+            ImGui::PushStyleColor(ImGuiCol_Button, kPlayTint);
+        ImGui::BeginDisabled(!enabled);
+        const bool pressed = ImGui::SmallButton(label);
+        ImGui::EndDisabled();
+        if (active)
+            ImGui::PopStyleColor();
+        ImGui::SameLine();
+        return pressed;
+    };
+    const bool stopped = doc.play == PlayState::Stopped;
+    if (playButton("Play (Ctrl+P)", doc.play == PlayState::Playing, doc.play != PlayState::Playing))
+        startPlay(doc);
+    if (playButton("Pause", doc.play == PlayState::Paused, !stopped))
+        togglePause(doc);
+    if (playButton("Stop", false, !stopped))
+        stopPlay(doc);
+    ImGui::SameLine(0.0f, style.ItemSpacing.x * 3.0f);
     if (ImGui::RadioButton("Move (W)", operation_ == ImGuizmo::TRANSLATE))
         operation_ = ImGuizmo::TRANSLATE;
     ImGui::SameLine();
@@ -210,7 +264,7 @@ void SceneViewport::manipulate(Document& doc, const float* view, const float* pr
     }
     kast::Transform& transform = scene.registry().get<kast::Transform>(entity);
     kast::decomposeTrs(local, transform.position, transform.rotation, transform.scale);
-    doc.dirty = true;
+    markDirty(doc);
 }
 
 void SceneViewport::pick(Document& doc, const float* viewProj, float x, float y, float width, float height)
@@ -218,6 +272,12 @@ void SceneViewport::pick(Document& doc, const float* viewProj, float x, float y,
     const kast::Ray ray = kast::screenRay(viewProj, x, y, width, height, bgfx::getCaps()->homogeneousDepth);
     entt::entity nearest = entt::null;
     float nearestDistance = std::numeric_limits<float>::max();
+    const auto consider = [&](entt::entity entity, float distance) {
+        if (distance >= 0.0f && distance < nearestDistance) {
+            nearestDistance = distance;
+            nearest = entity;
+        }
+    };
     for (auto [entity, mesh] : doc.scene.registry().view<kast::MeshRenderer>().each()) {
         // Test in the mesh's local space: exact for rotated/scaled boxes. The direction is left unnormalized
         // so the hit parameter is the same distance along the world ray.
@@ -225,11 +285,14 @@ void SceneViewport::pick(Document& doc, const float* viewProj, float x, float y,
         doc.scene.worldMatrix(entity, world);
         bx::mtxInverse(inverse, world);
         const kast::Ray local{bx::mul(ray.origin, inverse), kast::transformDir(ray.direction, inverse)};
-        const float distance = kast::intersect(local, kast::primitiveBounds(mesh.primitive));
-        if (distance >= 0.0f && distance < nearestDistance) {
-            nearestDistance = distance;
-            nearest = entity;
-        }
+        consider(entity, kast::intersect(local, kast::primitiveBounds(mesh.primitive)));
+    }
+    for (entt::entity entity : doc.scene.registry().view<kast::Camera>()) {
+        float world[16];
+        doc.scene.worldMatrix(entity, world);
+        const bx::Vec3 center{world[12], world[13], world[14]};
+        const bx::Vec3 half{kCameraPickHalfSize, kCameraPickHalfSize, kCameraPickHalfSize};
+        consider(entity, kast::intersect(ray, {bx::sub(center, half), bx::add(center, half)}));
     }
     doc.selected = nearest;
 }

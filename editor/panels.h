@@ -2,6 +2,8 @@
 
 #include "document.h"
 
+#include <entt/meta/meta.hpp>
+
 #include <string>
 
 // Hierarchy (tree, create/delete/rename/duplicate, drag-drop reparent) and Inspector panels.
@@ -22,6 +24,8 @@ private:
     void drawNode(Document& doc, entt::entity entity);
     void drawCreateItems(entt::entity parent);
     void applyEdit(Document& doc);
+    // One generated Inspector widget for a component field; true if it changed the value.
+    bool drawField(entt::entity entity, entt::meta_any& component, const entt::meta_data& field);
 
     Edit edit_;
     entt::entity renaming_ = entt::null;
@@ -30,6 +34,7 @@ private:
 
     // Euler angles shown in the Inspector, kept while editing so they don't jump between equivalent forms.
     entt::entity eulerEntity_ = entt::null;
+    const char* eulerField_ = nullptr; // meta field name, a stable string literal
     bx::Quaternion eulerSource_{bx::InitIdentity};
     bx::Vec3 euler_{0.0f, 0.0f, 0.0f};
 };

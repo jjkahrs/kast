@@ -1,5 +1,6 @@
 #include "panels.h"
 
+#include <components.h>
 #include <log.h>
 
 #include <imgui.h>
@@ -11,7 +12,6 @@
 namespace {
 
 constexpr const char* kEntityPayload = "KAST_ENTITY";
-constexpr const char* kPrimitiveLabels[] = {"Cube", "Plane", "Sphere"}; // kast::Primitive order
 
 bool sameBits(const bx::Quaternion& a, const bx::Quaternion& b) { return std::memcmp(&a, &b, sizeof(a)) == 0; }
 
@@ -124,7 +124,7 @@ void Panels::drawNode(Document& doc, entt::entity entity)
         }
         if (commit && !renameBuffer_.empty() && renameBuffer_ != name) {
             name = renameBuffer_;
-            doc.dirty = true;
+            markDirty(doc);
         }
         if (commit || cancel)
             renaming_ = entt::null;
@@ -165,7 +165,7 @@ void Panels::applyEdit(Document& doc)
         if (!scene.valid(edit.target) || scene.parent(edit.target) == edit.parent)
             break;
         if (scene.reparent(edit.target, edit.parent))
-            doc.dirty = true;
+            markDirty(doc);
         else
             kast::log::warn(std::format("Cannot parent '{}' under its own descendant",
                                         scene.registry().get<kast::Name>(edit.target).value));
@@ -173,6 +173,59 @@ void Panels::applyEdit(Document& doc)
     case Edit::Op::None:
         break;
     }
+}
+
+bool Panels::drawField(entt::entity entity, entt::meta_any& component, const entt::meta_data& field)
+{
+    const auto* info = static_cast<const kast::FieldInfo*>(field.custom());
+    const char* label = info ? info->displayName : field.name();
+    const entt::meta_type type = field.type();
+    entt::meta_any value = field.get(component);
+    bool changed = false;
+    if (kast::isType<float>(type)) {
+        changed = ImGui::DragFloat(label, &value.cast<float&>(), 0.05f);
+    } else if (kast::isType<int>(type)) {
+        changed = ImGui::DragInt(label, &value.cast<int&>());
+    } else if (kast::isType<bool>(type)) {
+        changed = ImGui::Checkbox(label, &value.cast<bool&>());
+    } else if (kast::isType<std::string>(type)) {
+        changed = ImGui::InputText(label, &value.cast<std::string&>());
+    } else if (kast::isType<bx::Vec3>(type)) {
+        float* v = &value.cast<bx::Vec3&>().x;
+        changed = info && info->color ? ImGui::ColorEdit3(label, v) : ImGui::DragFloat3(label, v, 0.05f);
+    } else if (kast::isType<bx::Quaternion>(type)) {
+        // Edited as Euler degrees, cached while unchanged so they don't jump between equivalent forms.
+        auto& rotation = value.cast<bx::Quaternion&>();
+        if (eulerEntity_ != entity || eulerField_ != field.name() || !sameBits(eulerSource_, rotation)) {
+            eulerEntity_ = entity;
+            eulerField_ = field.name();
+            eulerSource_ = rotation;
+            euler_ = kast::eulerDegFromQuat(rotation);
+        }
+        if (ImGui::DragFloat3(label, &euler_.x, 0.5f)) {
+            rotation = kast::quatFromEulerDeg(euler_);
+            eulerSource_ = rotation;
+            changed = true;
+        }
+    } else if (type.is_enum()) {
+        const char* preview = "";
+        for (auto [id, constant] : type.data())
+            if (constant.get({}) == value)
+                preview = static_cast<const kast::FieldInfo&>(constant.custom()).displayName;
+        if (ImGui::BeginCombo(label, preview)) {
+            for (auto [id, constant] : type.data()) {
+                entt::meta_any option = constant.get({});
+                if (ImGui::Selectable(static_cast<const kast::FieldInfo&>(constant.custom()).displayName, option == value)) {
+                    value = std::move(option);
+                    changed = true;
+                }
+            }
+            ImGui::EndCombo();
+        }
+    } else {
+        ImGui::TextDisabled("%s: unsupported field type", label);
+    }
+    return changed && field.set(component, value);
 }
 
 void Panels::drawInspector(Document& doc)
@@ -186,39 +239,56 @@ void Panels::drawInspector(Document& doc)
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.65f); // leave room for the labels
             bool changed = ImGui::InputText("Name", &registry.get<kast::Name>(entity).value);
 
-            if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-                kast::Transform& transform = registry.get<kast::Transform>(entity);
-                if (eulerEntity_ != entity || !sameBits(eulerSource_, transform.rotation)) {
-                    eulerEntity_ = entity;
-                    eulerSource_ = transform.rotation;
-                    euler_ = kast::eulerDegFromQuat(transform.rotation);
+            entt::meta_type removed;
+            for (const entt::meta_type& type : kast::componentTypes()) {
+                if (!kast::hasComponent(registry, entity, type))
+                    continue;
+                const kast::ComponentInfo& info = kast::componentInfo(type);
+                ImGui::PushID(type.name()); // field labels repeat across components
+                bool keep = true;           // the header's x button (removable types only) clears it
+                if (ImGui::CollapsingHeader(info.displayName, info.removable ? &keep : nullptr,
+                                            ImGuiTreeNodeFlags_DefaultOpen)) {
+                    entt::meta_any component = kast::getComponent(registry, entity, type);
+                    const entt::meta_any before = component; // owning copy: undoes edits validate rejects
+                    for (auto [id, field] : type.data()) {
+                        if (!drawField(entity, component, field))
+                            continue;
+                        if (info.validate && info.validate(component))
+                            component.assign(before); // keep the last valid value so the scene stays loadable
+                        else
+                            changed = true;
+                    }
                 }
-                changed |= ImGui::DragFloat3("Position", &transform.position.x, 0.05f);
-                if (ImGui::DragFloat3("Rotation", &euler_.x, 0.5f)) {
-                    transform.rotation = kast::quatFromEulerDeg(euler_);
-                    eulerSource_ = transform.rotation;
-                    changed = true;
-                }
-                changed |= ImGui::DragFloat3("Scale", &transform.scale.x, 0.01f);
+                if (!keep)
+                    removed = type;
+                ImGui::PopID();
             }
-
-            if (auto* mesh = registry.try_get<kast::MeshRenderer>(entity);
-                mesh && ImGui::CollapsingHeader("Mesh Renderer", ImGuiTreeNodeFlags_DefaultOpen)) {
-                int primitive = static_cast<int>(mesh->primitive);
-                if (ImGui::Combo("Primitive", &primitive, kPrimitiveLabels, IM_ARRAYSIZE(kPrimitiveLabels))) {
-                    mesh->primitive = static_cast<kast::Primitive>(primitive);
-                    changed = true;
-                }
-                changed |= ImGui::ColorEdit3("Color", &mesh->color.x);
-            }
-
-            if (auto* light = registry.try_get<kast::DirectionalLight>(entity);
-                light && ImGui::CollapsingHeader("Directional Light", ImGuiTreeNodeFlags_DefaultOpen)) {
-                changed |= ImGui::ColorEdit3("Light Color", &light->color.x);
-                changed |= ImGui::DragFloat("Intensity", &light->intensity, 0.01f, 0.0f, 100.0f);
+            if (removed) {
+                kast::removeComponent(registry, entity, removed);
+                changed = true;
             }
             ImGui::PopItemWidth();
-            doc.dirty |= changed;
+
+            ImGui::Spacing();
+            if (ImGui::Button("Add Component", ImVec2(-FLT_MIN, 0.0f)))
+                ImGui::OpenPopup("##addComponent");
+            if (ImGui::BeginPopup("##addComponent")) {
+                bool any = false;
+                for (const entt::meta_type& type : kast::componentTypes()) {
+                    if (kast::hasComponent(registry, entity, type))
+                        continue;
+                    any = true;
+                    if (ImGui::Selectable(kast::componentInfo(type).displayName)) {
+                        kast::addComponent(registry, entity, type);
+                        changed = true;
+                    }
+                }
+                if (!any)
+                    ImGui::TextDisabled("Every component is already added");
+                ImGui::EndPopup();
+            }
+            if (changed)
+                markDirty(doc);
         }
     }
     ImGui::End();

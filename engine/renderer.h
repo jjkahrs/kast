@@ -8,13 +8,15 @@
 
 namespace kast {
 
-// Draws a Scene's MeshRenderers lit by its first DirectionalLight, plus a ground grid and axis lines.
-// The caller owns the view's framebuffer, rect and clear; render() sets the view transform and submits.
+// Draws a Scene's MeshRenderers lit by its first DirectionalLight, plus editor overlays: a ground grid, axis lines
+// and a short frustum preview per Camera. The caller owns the view's framebuffer, rect and clear; render() sets the
+// view transform and submits.
 class Renderer {
 public:
     void init();
     void shutdown();
-    void render(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx);
+    // overlays = false draws the scene only, as the game sees it.
+    void render(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx, bool overlays = true);
 
 private:
     struct Mesh {
@@ -23,8 +25,10 @@ private:
     };
 
     void drawGrid(bgfx::ViewId view);
+    void drawCameraFrustums(const Scene& scene, bgfx::ViewId view);
 
     std::array<Mesh, 3> meshes_; // indexed by Primitive
+    bgfx::VertexLayout lineLayout_;
     bgfx::VertexBufferHandle grid_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle meshProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle lineProgram_ = BGFX_INVALID_HANDLE;

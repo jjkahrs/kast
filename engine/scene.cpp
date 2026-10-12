@@ -1,5 +1,7 @@
 #include "scene.h"
 
+#include "components.h"
+
 #include <algorithm>
 
 namespace kast {
@@ -56,13 +58,7 @@ entt::entity Scene::copySubtree(entt::entity source, entt::entity parentEntity)
 {
     const std::string name = registry_.get<Name>(source).value; // copy: create() may grow the Name pool
     const entt::entity copy = create(name, parentEntity);
-    // ponytail: explicit component list; add new copyable components here.
-    registry_.replace<Transform>(copy, registry_.get<Transform>(source));
-    // Copied by value before emplace, which may grow the pool the source lives in.
-    if (const auto* mesh = registry_.try_get<MeshRenderer>(source))
-        registry_.emplace<MeshRenderer>(copy, MeshRenderer{*mesh});
-    if (const auto* light = registry_.try_get<DirectionalLight>(source))
-        registry_.emplace<DirectionalLight>(copy, DirectionalLight{*light});
+    copyComponents(registry_, source, copy);
     // Copy the child list first: create() appends to vectors that may reallocate.
     const std::vector<entt::entity> kids = registry_.get<Hierarchy>(source).children;
     for (entt::entity child : kids)
@@ -122,6 +118,28 @@ void Scene::localMatrix(entt::entity entity, float* out) const
 {
     const Transform& t = registry_.get<Transform>(entity);
     mtxFromTrs(out, t.position, t.rotation, t.scale);
+}
+
+entt::entity activeCamera(const Scene& scene)
+{
+    entt::entity found = entt::null;
+    scene.forEachDepthFirst([&](entt::entity entity) {
+        if (found == entt::null && scene.registry().all_of<Camera>(entity))
+            found = entity;
+    });
+    return found;
+}
+
+void cameraMatrices(const Scene& scene, entt::entity camera, float aspect, bool homogeneousDepth, float* view, float* proj)
+{
+    float world[16];
+    scene.worldMatrix(camera, world);
+    const bx::Vec3 eye{world[12], world[13], world[14]};
+    const bx::Vec3 forward = bx::normalize(transformDir({0.0f, 0.0f, -1.0f}, world));
+    const bx::Vec3 up = bx::normalize(transformDir({0.0f, 1.0f, 0.0f}, world));
+    bx::mtxLookAt(view, eye, bx::add(eye, forward), up, bx::Handedness::Right);
+    const Camera& c = scene.registry().get<Camera>(camera);
+    bx::mtxProj(proj, c.verticalFovDegrees, aspect, c.nearPlane, c.farPlane, homogeneousDepth, bx::Handedness::Right);
 }
 
 void Scene::worldMatrix(entt::entity entity, float* out) const

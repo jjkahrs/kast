@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 namespace kast {
@@ -18,6 +19,9 @@ constexpr uint32_t kGridColor = 0xff505050; // ABGR
 constexpr uint32_t kAxisX = 0xff3030e0;
 constexpr uint32_t kAxisY = 0xff30e030;
 constexpr uint32_t kAxisZ = 0xffe03030;
+constexpr uint32_t kFrustumColor = 0xffe0e0e0;
+constexpr float kFrustumPreviewDistance = 2.0f; // meters: a short preview, not the far plane
+constexpr float kFrustumPreviewAspect = 16.0f / 9.0f; // ponytail: fixed; pass the Game panel's aspect if it matters
 constexpr int kSphereStacks = 16;
 constexpr int kSphereSlices = 32;
 constexpr uint64_t kState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS |
@@ -143,12 +147,11 @@ void Renderer::init()
         meshes_[i].indices = bgfx::createIndexBuffer(copyOf(data[i].indices));
     }
 
-    bgfx::VertexLayout lineLayout;
-    lineLayout.begin()
+    lineLayout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
         .end();
-    grid_ = bgfx::createVertexBuffer(copyOf(makeGrid()), lineLayout);
+    grid_ = bgfx::createVertexBuffer(copyOf(makeGrid()), lineLayout_);
 
     meshProgram_ = makeProgram(vs_mesh, sizeof(vs_mesh), fs_mesh, sizeof(fs_mesh));
     lineProgram_ = makeProgram(vs_line, sizeof(vs_line), fs_line, sizeof(fs_line));
@@ -171,7 +174,7 @@ void Renderer::shutdown()
         bgfx::destroy(uniform);
 }
 
-void Renderer::render(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx)
+void Renderer::render(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx, bool overlays)
 {
     bgfx::setViewTransform(view, viewMtx, projMtx);
     const entt::registry& registry = scene.registry();
@@ -217,12 +220,51 @@ void Renderer::render(const Scene& scene, bgfx::ViewId view, const float* viewMt
         bgfx::setState(kState);
         bgfx::submit(view, meshProgram_);
     }
-    drawGrid(view);
+    if (overlays) {
+        drawGrid(view);
+        drawCameraFrustums(scene, view);
+    }
 }
 
 void Renderer::drawGrid(bgfx::ViewId view)
 {
     bgfx::setVertexBuffer(0, grid_);
+    bgfx::setState(kState | BGFX_STATE_PT_LINES);
+    bgfx::submit(view, lineProgram_);
+}
+
+void Renderer::drawCameraFrustums(const Scene& scene, bgfx::ViewId view)
+{
+    std::vector<LineVertex> lines;
+    for (auto [entity, camera] : scene.registry().view<Camera>().each()) {
+        // The inverse view matrix, so the preview matches what the camera renders (scale ignored).
+        float cameraView[16], cameraProj[16], world[16];
+        cameraMatrices(scene, entity, kFrustumPreviewAspect, false, cameraView, cameraProj);
+        bx::mtxInverse(world, cameraView);
+        const float depth = bx::min(kFrustumPreviewDistance, camera.farPlane);
+        const float halfHeight = depth * std::tan(bx::toRad(camera.verticalFovDegrees) * 0.5f);
+        const float halfWidth = halfHeight * kFrustumPreviewAspect;
+        const bx::Vec3 origin = bx::mul(bx::Vec3{0.0f, 0.0f, 0.0f}, world);
+        const float signs[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+        bx::Vec3 corners[4] = {origin, origin, origin, origin};
+        for (int i = 0; i < 4; ++i)
+            corners[i] = bx::mul(bx::Vec3{signs[i][0] * halfWidth, signs[i][1] * halfHeight, -depth}, world);
+        for (int i = 0; i < 4; ++i) {
+            const bx::Vec3& a = corners[i];
+            const bx::Vec3& b = corners[(i + 1) % 4];
+            lines.push_back({origin.x, origin.y, origin.z, kFrustumColor});
+            lines.push_back({a.x, a.y, a.z, kFrustumColor});
+            lines.push_back({a.x, a.y, a.z, kFrustumColor});
+            lines.push_back({b.x, b.y, b.z, kFrustumColor});
+        }
+    }
+    const auto count = static_cast<uint32_t>(lines.size());
+    if (count == 0 || bgfx::getAvailTransientVertexBuffer(count, lineLayout_) < count)
+        return;
+    bgfx::TransientVertexBuffer buffer;
+    bgfx::allocTransientVertexBuffer(&buffer, count, lineLayout_);
+    std::memcpy(buffer.data, lines.data(), count * sizeof(LineVertex));
+    bgfx::setVertexBuffer(0, &buffer);
     bgfx::setState(kState | BGFX_STATE_PT_LINES);
     bgfx::submit(view, lineProgram_);
 }

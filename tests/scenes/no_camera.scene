@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Directional Light",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 4, 0], "rotation": [-0.408218, -0.23457, -0.109382, 0.875426], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 1, 1], "intensity": 1 }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Cube",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0.5, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "cube", "color": [0.85, 0.3, 0.25] },
+        "Rotator": { "axis": [0, 1, 0], "degreesPerSecond": 45 }
+      }
+    }
+  ]
+}

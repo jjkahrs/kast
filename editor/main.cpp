@@ -1,4 +1,5 @@
 #include "document.h"
+#include "game_view.h"
 #include "imgui_bgfx.h"
 #include "panels.h"
 #include "roboto_regular.h"
@@ -24,6 +25,7 @@
 namespace {
 
 constexpr bgfx::ViewId kSceneView = 1;
+constexpr bgfx::ViewId kGameView = 2;
 constexpr bgfx::ViewId kImGuiView = 255; // last, so the UI draws over everything
 constexpr uint32_t kBackbufferClearColor = 0x202020ff;
 constexpr int kScreenshotTimeoutFrames = 30;
@@ -32,7 +34,7 @@ constexpr float kMinUiScale = 0.75f;
 constexpr float kMaxUiScale = 3.0f;
 constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--ui-scale F] [--scene in.scene] "
-    "[--save-scene out.scene]";
+    "[--save-scene out.scene] [--select ID] [--play]";
 
 struct Options {
     int frames = 0;         // 0 = run until quit
@@ -42,6 +44,8 @@ struct Options {
     std::optional<float> uiScale; // overrides the monitor's display scale
     std::string scene;            // opened at startup instead of the default scene
     std::string saveScene;        // save the startup scene here and exit, without opening a window
+    kast::EntityId select = 0;    // select this entity at startup; 0 = none
+    bool play = false;            // enter Play mode once the startup scene is loaded
 };
 
 template <typename T>
@@ -68,6 +72,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.scene = argv[++i];
         } else if (arg == "--save-scene" && hasValue) {
             options.saveScene = argv[++i];
+        } else if (arg == "--select" && hasValue && parsePositive(argv[i + 1], options.select)) {
+            ++i;
+        } else if (arg == "--play") {
+            options.play = true;
         } else if (arg == "--size" && hasValue) {
             const std::string_view size = argv[++i];
             const size_t x = size.find('x');
@@ -171,6 +179,7 @@ void buildDefaultLayout(ImGuiID dockspace)
     ImGui::DockBuilderDockWindow("Console", bottom);
     ImGui::DockBuilderDockWindow("Assets", bottom);
     ImGui::DockBuilderDockWindow("Scene", center);
+    ImGui::DockBuilderDockWindow("Game", center);
     ImGui::DockBuilderFinish(dockspace);
 }
 
@@ -178,7 +187,7 @@ void drawMenuBar(FileActions& files, Document& doc)
 {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
-            const bool idle = !files.dialogOpen();
+            const bool idle = files.idle();
             if (ImGui::MenuItem("New", "Ctrl+N", false, idle))
                 files.newScene();
             if (ImGui::MenuItem("Open...", "Ctrl+O", false, idle))
@@ -246,10 +255,17 @@ int main(int argc, char** argv)
         }
         return 0;
     }
+    if (options->select != 0 && !selectById(doc, options->select)) {
+        kast::log::error(std::format("--select {}: no entity with that id", options->select));
+        return 1;
+    }
+    if (options->play)
+        startPlay(doc);
 
     FileActions files(doc);
     Panels panels;
     SceneViewport viewport(kSceneView);
+    GameViewport game(kGameView);
     UiScale uiScale(options->uiScale);
     int frame = 0;
     bool screenshotRequested = false;
@@ -270,6 +286,7 @@ int main(int argc, char** argv)
         }
         imgui_bgfx::init(kImGuiView);
         viewport.init();
+        game.init();
         files.setWindow(window);
         bgfx::setViewClear(kImGuiView, BGFX_CLEAR_COLOR, kBackbufferClearColor);
         kast::log::info("ImGui initialized (docking enabled)");
@@ -277,12 +294,15 @@ int main(int argc, char** argv)
     };
     hooks.event = [&](const SDL_Event& event) {
         uiScale.onEvent(event);
-        ImGui_ImplSDL3_ProcessEvent(&event);
+        ImGui_ImplSDL3_ProcessEvent(&event); // ImGui keeps getting input while the game has it, for Ctrl+P
+        if (game.hasInput(doc))
+            doc.input.onEvent(event);
     };
     hooks.frame = [&] {
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
         ImGuizmo::BeginFrame();
+        updatePlay(doc, ImGui::GetIO().DeltaTime);
 
         drawMenuBar(files, doc);
         const ImGuiID dockspace = ImGui::GetID("MainDockSpace");
@@ -291,11 +311,19 @@ int main(int argc, char** argv)
         ImGui::DockSpaceOverViewport(dockspace);
 
         panels.drawHierarchy(doc);
-        viewport.draw(doc);
+        viewport.draw(doc); // submitted before Game so Scene is the front tab on first run
+        // Layouts saved before the Game panel existed: dock it as a tab beside Scene.
+        if (const ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("Scene")))
+            ImGui::SetNextWindowDockID(scene->DockId, ImGuiCond_FirstUseEver);
+        game.draw(doc);
         panels.drawInspector(doc);
         drawPlaceholder("Assets");
         drawConsole(); // submitted after Assets so Console is the front tab on first run
         files.update();
+        if (game.hasInput(doc))
+            doc.input.endFrame();
+        else
+            doc.input.clear();
 
         ImGui::Render();
         bgfx::touch(kImGuiView);
@@ -322,6 +350,7 @@ int main(int argc, char** argv)
     };
     hooks.quitRequested = [&] { return files.onQuitRequested(); };
     hooks.shutdown = [&] {
+        game.shutdown();
         viewport.shutdown();
         imgui_bgfx::shutdown();
         ImGui_ImplSDL3_Shutdown();

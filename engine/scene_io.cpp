@@ -1,5 +1,7 @@
 #include "scene_io.h"
 
+#include "components.h"
+
 #include <charconv>
 #include <format>
 #include <fstream>
@@ -12,9 +14,6 @@ namespace {
 
 using Json = nlohmann::ordered_json;
 
-constexpr std::pair<Primitive, const char*> kPrimitiveNames[] = {
-    {Primitive::Cube, "cube"}, {Primitive::Plane, "plane"}, {Primitive::Sphere, "sphere"}};
-
 struct Invalid : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
@@ -26,30 +25,6 @@ const Json& field(const Json& object, const char* key)
     return object[key];
 }
 
-float number(const Json& value, const char* what)
-{
-    if (!value.is_number())
-        throw Invalid(std::format("\"{}\" must be a number", what));
-    return value.get<float>();
-}
-
-template <size_t N>
-std::array<float, N> numbers(const Json& value, const char* what)
-{
-    if (!value.is_array() || value.size() != N)
-        throw Invalid(std::format("\"{}\" must be an array of {} numbers", what, N));
-    std::array<float, N> out{};
-    for (size_t i = 0; i < N; ++i)
-        out[i] = number(value[i], what);
-    return out;
-}
-
-bx::Vec3 vec3(const Json& object, const char* key)
-{
-    const auto v = numbers<3>(field(object, key), key);
-    return {v[0], v[1], v[2]};
-}
-
 EntityId entityId(const Json& value, const char* what)
 {
     if (!value.is_number_unsigned() || value.get<EntityId>() == 0)
@@ -57,21 +32,12 @@ EntityId entityId(const Json& value, const char* what)
     return value.get<EntityId>();
 }
 
-Json toJson(const bx::Vec3& v) { return Json::array({jsonNumber(v.x), jsonNumber(v.y), jsonNumber(v.z)}); }
-
-Json toJson(const bx::Quaternion& q)
-{
-    return Json::array({jsonNumber(q.x), jsonNumber(q.y), jsonNumber(q.z), jsonNumber(q.w)});
-}
-
 // One parsed entity, before it is placed in the hierarchy.
 struct Record {
     EntityId id = 0;
     std::optional<EntityId> parent;
     std::string name;
-    Transform transform;
-    std::optional<MeshRenderer> mesh;
-    std::optional<DirectionalLight> light;
+    std::vector<entt::meta_any> components; // registration order
 };
 
 Record parseEntity(const Json& json)
@@ -87,31 +53,22 @@ Record parseEntity(const Json& json)
     if (const Json& parent = field(json, "parent"); !parent.is_null())
         record.parent = entityId(parent, "parent");
 
-    record.transform.position = vec3(json, "position");
-    const auto r = numbers<4>(field(json, "rotation"), "rotation");
-    record.transform.rotation = {r[0], r[1], r[2], r[3]};
-    if (bx::dot(record.transform.rotation, record.transform.rotation) < 1e-6f)
-        throw Invalid("\"rotation\" must be a nonzero quaternion");
-    record.transform.scale = vec3(json, "scale");
-
-    if (json.contains("mesh")) {
-        const Json& mesh = json["mesh"];
-        const Json& primitive = field(mesh, "primitive");
-        MeshRenderer renderer;
-        bool known = false;
-        for (const auto& [value, label] : kPrimitiveNames)
-            if (primitive.is_string() && primitive.get<std::string>() == label) {
-                renderer.primitive = value;
-                known = true;
-            }
-        if (!known)
-            throw Invalid(std::format("unknown mesh primitive {} (expected cube, plane or sphere)", primitive.dump()));
-        renderer.color = vec3(mesh, "color");
-        record.mesh = renderer;
-    }
-    if (json.contains("light")) {
-        const Json& light = json["light"];
-        record.light = DirectionalLight{vec3(light, "color"), number(field(light, "intensity"), "intensity")};
+    const Json& components = field(json, "components");
+    if (!components.is_object())
+        throw Invalid("\"components\" must be an object");
+    for (const auto& [key, value] : components.items())
+        if (!findComponentType(key))
+            throw Invalid(std::format("unknown component \"{}\"", key));
+    if (!components.contains(entt::resolve<Transform>().name()))
+        throw Invalid("missing \"Transform\" component");
+    for (const entt::meta_type& type : componentTypes()) {
+        if (!components.contains(type.name()))
+            continue;
+        std::string error;
+        entt::meta_any component = componentFromJson(type, components[type.name()], error);
+        if (!component)
+            throw Invalid(std::format("\"{}\": {}", type.name(), error));
+        record.components.push_back(std::move(component));
     }
     return record;
 }
@@ -134,11 +91,8 @@ void build(const std::vector<Record>& records, Scene& scene)
         for (size_t index : childrenOf[parentId]) {
             const Record& record = records[index];
             const entt::entity entity = scene.createWithId(record.id, record.name, parent);
-            scene.registry().replace<Transform>(entity, record.transform);
-            if (record.mesh)
-                scene.registry().emplace<MeshRenderer>(entity, *record.mesh);
-            if (record.light)
-                scene.registry().emplace<DirectionalLight>(entity, *record.light);
+            for (const entt::meta_any& component : record.components)
+                setComponent(scene.registry(), entity, component);
             ++created;
             self(self, record.id, entity);
         }
@@ -160,15 +114,9 @@ double jsonNumber(float value)
     return result;
 }
 
-bool loadScene(const std::string& path, Scene& out, std::string& error)
+bool sceneFromJson(const Json& json, Scene& out, std::string& error)
 {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        error = std::format("Cannot open scene '{}'", path);
-        return false;
-    }
     try {
-        const Json json = Json::parse(file);
         const Json& version = field(json, "version");
         if (!version.is_number_integer() || version.get<int>() != kSceneFileVersion)
             throw Invalid(std::format("unsupported \"version\" {} (expected {})", version.dump(), kSceneFileVersion));
@@ -195,36 +143,45 @@ bool loadScene(const std::string& path, Scene& out, std::string& error)
         out = std::move(scene);
         return true;
     } catch (const Json::exception& e) {
-        error = std::format("Invalid scene '{}': {}", path, e.what());
+        error = e.what();
     } catch (const Invalid& e) {
-        error = std::format("Invalid scene '{}': {}", path, e.what());
+        error = e.what();
     }
     return false;
 }
 
-bool saveScene(const Scene& scene, const std::string& path, std::string& error)
+bool loadScene(const std::string& path, Scene& out, std::string& error)
+{
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        error = std::format("Cannot open scene '{}'", path);
+        return false;
+    }
+    std::string reason;
+    try {
+        if (sceneFromJson(Json::parse(file), out, reason))
+            return true;
+    } catch (const Json::exception& e) {
+        reason = e.what();
+    }
+    error = std::format("Invalid scene '{}': {}", path, reason);
+    return false;
+}
+
+Json sceneToJson(const Scene& scene)
 {
     const entt::registry& registry = scene.registry();
     Json entities = Json::array();
     scene.forEachDepthFirst([&](entt::entity entity) {
-        const Transform& transform = registry.get<Transform>(entity);
         const entt::entity parent = scene.parent(entity);
         Json json;
         json["id"] = registry.get<PersistentId>(entity).value;
         json["name"] = registry.get<Name>(entity).value;
         json["parent"] = parent == entt::null ? Json(nullptr) : Json(registry.get<PersistentId>(parent).value);
-        json["position"] = toJson(transform.position);
-        json["rotation"] = toJson(transform.rotation);
-        json["scale"] = toJson(transform.scale);
-        if (const auto* mesh = registry.try_get<MeshRenderer>(entity)) {
-            const char* primitive = "";
-            for (const auto& [value, label] : kPrimitiveNames)
-                if (value == mesh->primitive)
-                    primitive = label;
-            json["mesh"] = {{"primitive", primitive}, {"color", toJson(mesh->color)}};
-        }
-        if (const auto* light = registry.try_get<DirectionalLight>(entity))
-            json["light"] = {{"color", toJson(light->color)}, {"intensity", jsonNumber(light->intensity)}};
+        Json& components = json["components"] = Json::object();
+        for (const entt::meta_type& type : componentTypes())
+            if (hasComponent(registry, entity, type))
+                components[type.name()] = componentToJson(getComponent(registry, entity, type));
         entities.push_back(std::move(json));
     });
 
@@ -232,9 +189,13 @@ bool saveScene(const Scene& scene, const std::string& path, std::string& error)
     root["version"] = kSceneFileVersion;
     root["entities"] = std::move(entities);
     root["editor"] = scene.editorData;
+    return root;
+}
 
+bool saveScene(const Scene& scene, const std::string& path, std::string& error)
+{
     std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    file << root.dump(2) << '\n';
+    file << sceneToJson(scene).dump(2) << '\n';
     file.close();
     if (!file) {
         error = std::format("Cannot write scene '{}'", path);

@@ -47,6 +47,19 @@ struct DirectionalLight {
     float intensity = 1.0f;
 };
 
+// Renders the scene from the entity's world position looking down its world -Z (scale is ignored).
+struct Camera {
+    float verticalFovDegrees = 60.0f;
+    float nearPlane = 0.1f;
+    float farPlane = 1000.0f;
+};
+
+// Spins the entity's local rotation around its local axis while playing (see rotatorSystem).
+struct Rotator {
+    bx::Vec3 axis{0.0f, 1.0f, 0.0f};
+    float degreesPerSecond = 45.0f;
+};
+
 // Local-space bounds of each built-in primitive (all fit the unit cube centered on the origin).
 Aabb primitiveBounds(Primitive primitive);
 
@@ -111,5 +124,11 @@ private:
     std::vector<entt::entity> roots_;
     EntityId nextId_ = 1;
 };
+
+// The camera the game renders from: the first Camera entity in depth-first order, or entt::null if there is none.
+entt::entity activeCamera(const Scene& scene);
+
+// View and projection matrices of a Camera entity for a viewport of the given width / height.
+void cameraMatrices(const Scene& scene, entt::entity camera, float aspect, bool homogeneousDepth, float* view, float* proj);
 
 } // namespace kast

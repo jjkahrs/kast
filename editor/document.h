@@ -2,12 +2,18 @@
 
 #include "camera.h"
 
+#include <input.h>
 #include <scene.h>
+
+#include <nlohmann/json.hpp>
 
 #include <mutex>
 #include <string>
 
 struct SDL_Window;
+
+enum class PlayState { Stopped, Playing, Paused };
+enum class PanelFocus { None, Scene, Game }; // a viewport tab to bring to front
 
 // The scene being edited plus its editor-side state.
 struct Document {
@@ -16,11 +22,31 @@ struct Document {
     std::string path; // empty until first saved/opened
     entt::entity selected = entt::null;
     bool dirty = false;
+
+    PlayState play = PlayState::Stopped;
+    nlohmann::ordered_json playSnapshot; // the scene as it was when Play started, restored on Stop
+    bool playSnapshotDirty = false;
+    kast::Input input; // fed by the Game panel while it is focused and playing
+
+    PanelFocus focusRequest = PanelFocus::None; // set by Play/Stop, cleared by the panel that takes focus
 };
 
-enum class ObjectKind { Empty, Cube, Plane, Sphere, DirectionalLight };
+// Sets dirty, except during Play: play-mode edits are discarded on Stop.
+void markDirty(Document& doc);
+// Selects the entity with this PersistentId; clears the selection if there is none. Returns whether it was found.
+bool selectById(Document& doc, kast::EntityId id);
+
+// Play mode. Play snapshots the scene in memory and runs the systems every frame; Pause holds them; Stop restores
+// the snapshot (scene, dirty flag, selection by id) without touching the editor camera. Play from Stopped requests
+// Game focus and Stop requests Scene focus; Pause and resume leave focus alone.
+void startPlay(Document& doc); // also resumes when paused
+void togglePause(Document& doc);
+void stopPlay(Document& doc);
+void updatePlay(Document& doc, float dt); // ticks the systems while playing
+
+enum class ObjectKind { Empty, Cube, Plane, Sphere, DirectionalLight, Camera };
 constexpr ObjectKind kObjectKinds[] = {ObjectKind::Empty, ObjectKind::Cube, ObjectKind::Plane, ObjectKind::Sphere,
-                                       ObjectKind::DirectionalLight};
+                                       ObjectKind::DirectionalLight, ObjectKind::Camera};
 const char* objectKindLabel(ObjectKind kind); // menu label, e.g. "Create Empty", "Cube"
 
 // Adds an object under parent (entt::null = root), selects it and marks the document dirty.
@@ -28,7 +54,7 @@ entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent);
 void deleteSelected(Document& doc);
 void duplicateSelected(Document& doc);
 
-// Default scene: angled light, ground plane, cube resting on it, camera framing them. Clears path and dirty.
+// Default scene: angled light, ground plane, cube resting on it, a Main Camera and an editor camera framing them. Clears path and dirty.
 void resetToDefault(Document& doc);
 bool openFile(Document& doc, const std::string& path, std::string& error); // doc untouched on failure
 bool saveFile(Document& doc, const std::string& path, std::string& error);
@@ -45,7 +71,8 @@ public:
     void save();
     void saveAs();
     void exit();
-    bool dialogOpen() const { return dialogOpen_; }
+    // File actions are available: no dialog open and not in Play mode.
+    bool idle() const { return !dialogOpen_ && doc_.play == PlayState::Stopped; }
 
     // Call once per frame inside the ImGui frame: shortcuts, dialog results, modals, title.
     void update();

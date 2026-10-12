@@ -51,7 +51,8 @@ endforeach()
 
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
-  engine/app.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/renderer.cpp
+  engine/app.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
+  engine/systems.cpp engine/renderer.cpp engine/input.cpp
   ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}")
 target_compile_options(kast_engine PRIVATE ${KAST_COMPILE_OPTIONS})
@@ -76,16 +77,18 @@ inline unsigned char kRobotoRegularTtf[] = {
 
 # --- editor ---
 add_executable(kast_editor
-  editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/camera.cpp editor/viewport.cpp editor/panels.cpp
+  editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/camera.cpp editor/viewport.cpp editor/game_view.cpp editor/panels.cpp
   ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 imgui::imgui imguizmo::imguizmo)
 
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
-add_executable(kast_self_check tests/self_check.cpp)
+# Also builds the editor Document (Play mode) so it can be checked without a window.
+add_executable(kast_self_check tests/self_check.cpp editor/document.cpp editor/camera.cpp)
+target_include_directories(kast_self_check PRIVATE editor)
 target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_self_check PRIVATE kast_engine)
+target_link_libraries(kast_self_check PRIVATE kast_engine SDL3::SDL3 imgui::imgui)
 
 # --- tests ---
 enable_testing()
@@ -100,6 +103,27 @@ add_test(NAME editor_smoke_scaled
 add_test(NAME scene_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/scene_basic.png"
           "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/basic.scene" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME scene_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/scene_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/basic.scene --play" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME scene_play_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/scene_basic.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/scene_play.png"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+# Play brings the Game tab to the front: the shot shows the scene through its Main Camera, without grid or gizmos.
+add_test(NAME game_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/game_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/basic.scene --play" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME game_play_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/scene_basic.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/game_play.png"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+add_test(NAME game_no_camera
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/game_no_camera.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/no_camera.scene --play" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(scene_screenshot PROPERTIES FIXTURES_SETUP basic_shot)
+set_tests_properties(scene_play_screenshot PROPERTIES FIXTURES_SETUP play_shot)
+set_tests_properties(game_play_screenshot PROPERTIES FIXTURES_SETUP game_shot)
+set_tests_properties(scene_play_differs PROPERTIES FIXTURES_REQUIRED "basic_shot;play_shot")
+set_tests_properties(game_play_differs PROPERTIES FIXTURES_REQUIRED "basic_shot;game_shot")
 add_test(NAME scene_roundtrip
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_SCENES}/basic.scene"
           "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
@@ -108,4 +132,7 @@ add_test(NAME scene_bad_json
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
 add_test(NAME scene_missing
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_SCENES}/does_not_exist.scene"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
+add_test(NAME scene_v1_rejected
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_SCENES}/v1.scene"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
