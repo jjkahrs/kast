@@ -2,11 +2,14 @@
 
 #include "components.h"
 #include "log.h"
+#include "project.h"
+#include "scene_io.h"
 
 #include <SDL3/SDL.h>
 #include <sol/sol.hpp>
 
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <format>
 #include <fstream>
@@ -72,11 +75,24 @@ struct System {
 
 } // namespace
 
+// A scene switch requested by kast.loadScene, applied at the end of the frame.
+struct PendingScene {
+    std::string path; // project-relative
+    Scene scene;
+};
+
 struct LuaSystems::State {
-    State(Scene& scene, const Input* input) : scene(scene), input(input) {}
+    State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, std::string scenePath, const Input* input)
+        : scene(scene), projectRoot(projectRoot), scenePath(std::move(scenePath)), input(input)
+    {
+    }
 
     Scene& scene;
+    std::optional<std::filesystem::path> projectRoot;
+    std::string scenePath; // project-relative, empty if unsaved or no project
     const Input* input;
+    std::optional<PendingScene> pending; // last kast.loadScene call wins
+    bool inShutdown = false;             // kast.loadScene is ignored while a shutdown runs
     sol::state lua;        // declared before everything holding Lua references, so it is destroyed last
     sol::table api;        // kast.* functions, copied into each system's own read-only kast table
     sol::table inputApi;   // kast.input.*
@@ -84,7 +100,7 @@ struct LuaSystems::State {
     std::unordered_map<EntityId, entt::entity> ids; // ponytail: rebuilt every tick, O(entities); index in Scene if big
     const System* current = nullptr; // whose code is running, for log prefixes
 
-    void init(const std::filesystem::path& baseDir, const std::vector<std::string>& paths);
+    void init(const std::vector<std::string>& paths);
     void tick(float dt);
     void stop();
 
@@ -104,7 +120,7 @@ struct LuaSystems::State {
     void bindApi();
 };
 
-void LuaSystems::State::init(const std::filesystem::path& baseDir, const std::vector<std::string>& paths)
+void LuaSystems::State::init(const std::vector<std::string>& paths)
 {
     // Only base, table, string and math: no io, os, ffi, debug, jit, bit or package.
     lua.open_libraries(sol::lib::base, sol::lib::table, sol::lib::string, sol::lib::math);
@@ -113,8 +129,16 @@ void LuaSystems::State::init(const std::filesystem::path& baseDir, const std::ve
     bindApi();
     indexIds();
     for (const std::string& path : paths)
-        systems.push_back({.path = path, .file = baseDir / path});
+        systems.push_back({.path = path});
     for (System& system : systems) {
+        std::string error = "no project (open a scene inside a project to run Lua systems)";
+        const std::optional<std::filesystem::path> file =
+            projectRoot ? resolveProjectPath(*projectRoot, system.path, error) : std::nullopt;
+        if (!file) {
+            disable(system, std::format("{}: {}", system.path, error));
+            continue;
+        }
+        system.file = *file;
         std::error_code ec;
         system.mtime = std::filesystem::last_write_time(system.file, ec);
         load(system);
@@ -126,6 +150,8 @@ void LuaSystems::State::tick(float dt)
     indexIds();
     // ponytail: one stat per script per frame; poll on a timer if script counts grow large.
     for (System& system : systems) {
+        if (system.file.empty()) // never resolved: no project or a path outside it
+            continue;
         std::error_code ec;
         const auto mtime = std::filesystem::last_write_time(system.file, ec);
         if (!ec && mtime != system.mtime) {
@@ -244,6 +270,7 @@ void LuaSystems::State::reload(System& system)
 bool LuaSystems::State::call(System& system, const sol::protected_function& fn, const char* what, std::optional<float> dt)
 {
     current = &system;
+    inShutdown = std::strcmp(what, "shutdown") == 0;
     std::string error;
     try {
         sol::protected_function_result result = dt ? fn(*dt) : fn();
@@ -253,6 +280,7 @@ bool LuaSystems::State::call(System& system, const sol::protected_function& fn, 
         error = std::format("{}: {}: {}", system.path, what, e.what());
     }
     current = nullptr;
+    inShutdown = false;
     if (error.empty())
         return true;
     disable(system, error);
@@ -437,6 +465,25 @@ void LuaSystems::State::bindApi()
     api.set_function("warn", logger(log::warn));
     api.set_function("error", logger(log::error));
 
+    // Validated now (raises at the calling line); applied by LuaSystems::tick after every update has run.
+    api.set_function("loadScene", [this](sol::this_state L, const std::string& path) {
+        if (inShutdown)
+            return; // the session is ending
+        if (!projectRoot)
+            raise(L, "kast.loadScene: no project is active");
+        std::string error;
+        const std::optional<std::filesystem::path> file = resolveProjectPath(*projectRoot, path, error);
+        if (!file)
+            raise(L, std::format("kast.loadScene: {}", error));
+        Scene loaded;
+        if (!loadScene(file->string(), loaded, error))
+            raise(L, std::format("kast.loadScene: {}", error));
+        pending = PendingScene{toProjectPath(*projectRoot, *file).value_or(path), std::move(loaded)};
+    });
+    api.set_function("currentScene", [this]() -> sol::optional<std::string> {
+        return scenePath.empty() ? sol::nullopt : sol::optional<std::string>(scenePath);
+    });
+
     inputApi = lua.create_table();
     inputApi.set_function("keyDown", [this](sol::this_state L, const std::string& name) {
         const SDL_Scancode scancode = SDL_GetScancodeFromName(name.c_str());
@@ -452,16 +499,30 @@ void LuaSystems::State::bindApi()
 LuaSystems::LuaSystems() = default;
 LuaSystems::~LuaSystems() = default;
 
-void LuaSystems::start(Scene& scene, const std::filesystem::path& baseDir, const Input* input)
+void LuaSystems::start(Scene& scene, const std::optional<std::filesystem::path>& projectRoot,
+                       const std::string& scenePath, const Input* input)
 {
-    state_ = std::make_unique<State>(scene, input);
-    state_->init(baseDir, scene.systems);
+    state_.reset(); // the old Lua state goes before the new one is built
+    state_ = std::make_unique<State>(scene, projectRoot, scenePath, input);
+    state_->init(scene.systems);
 }
 
-void LuaSystems::tick(float dt)
+bool LuaSystems::tick(float dt)
 {
-    if (state_)
-        state_->tick(dt);
+    if (!state_)
+        return false;
+    state_->tick(dt);
+    if (!state_->pending)
+        return false;
+    PendingScene next = std::move(*state_->pending);
+    Scene& scene = state_->scene;
+    const std::optional<std::filesystem::path> projectRoot = state_->projectRoot;
+    const Input* input = state_->input;
+    stop(); // old systems' shutdowns see the old scene; the Lua state is discarded
+    scene = std::move(next.scene);
+    log::info(std::format("Switched to scene '{}'", next.path));
+    start(scene, projectRoot, next.path, input);
+    return true;
 }
 
 void LuaSystems::stop()
@@ -480,5 +541,7 @@ std::vector<LuaSystemStatus> LuaSystems::status() const
             out.push_back({system.path, system.ok, system.error});
     return out;
 }
+
+std::string LuaSystems::scenePath() const { return state_ ? state_->scenePath : std::string(); }
 
 } // namespace kast

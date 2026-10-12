@@ -56,7 +56,7 @@ endforeach()
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
-  engine/systems.cpp engine/renderer.cpp engine/input.cpp engine/lua_systems.cpp
+  engine/systems.cpp engine/renderer.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
   ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}")
@@ -102,6 +102,7 @@ target_link_libraries(kast_self_check PRIVATE kast_engine SDL3::SDL3 imgui::imgu
 # --- tests ---
 enable_testing()
 set(KAST_TEST_SCENES "${CMAKE_CURRENT_SOURCE_DIR}/tests/scenes")
+set(KAST_TEST_PROJECT "${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
 add_test(NAME engine_self_check COMMAND kast_self_check)
 add_test(NAME editor_smoke
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/smoke.png"
@@ -166,3 +167,44 @@ add_test(NAME scene_missing
 add_test(NAME scene_v1_rejected
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_SCENES}/v1.scene"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
+add_test(NAME scene_v3_rejected
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_SCENES}/v3.scene"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
+# Projects: --project opens tests/project (its startScene, scene_a); a folder without project.kast must exit 1.
+add_test(NAME project_startup
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/project_startup.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME project_missing
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DFLAG=--project" "-DSCENE=${KAST_TEST_SCENES}/scripts"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
+# Scene switching: scene_a's script calls kast.loadScene("scene_b.scene") on its first frame, so Play shows scene B;
+# a copy of scene_a with "systems" emptied (generated at configure time) stays on scene A.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/scene_a.scene")
+file(READ "${KAST_TEST_PROJECT}/scene_a.scene" switch_scene)
+string(REGEX REPLACE "\"systems\": \\[[^]]*\\]" "\"systems\": []" switch_scene "${switch_scene}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/switch_no_systems.scene" "${switch_scene}")
+add_test(NAME switch_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/switch_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/scene_a.scene --play" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME switch_play_no_systems_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/switch_play_no_systems.png"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_BINARY_DIR}/switch_no_systems.scene --play"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME switch_play_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/switch_play_no_systems.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/switch_play.png"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(switch_play_screenshot PROPERTIES FIXTURES_SETUP switch_shot)
+set_tests_properties(switch_play_no_systems_screenshot PROPERTIES FIXTURES_SETUP switch_no_systems_shot)
+set_tests_properties(switch_play_differs PROPERTIES FIXTURES_REQUIRED "switch_shot;switch_no_systems_shot")
+# New Project modal opened by --new-project: valid (existing parent, preview ...\my-game, Create enabled) and invalid
+# (missing parent, inline message, Create disabled). Neither may create anything.
+set(KAST_NEW_PROJECT_PARENT "${CMAKE_CURRENT_BINARY_DIR}/new_project_parent")
+file(MAKE_DIRECTORY "${KAST_NEW_PROJECT_PARENT}")
+add_test(NAME new_project_valid_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/new_project_valid.png"
+          "-DNEW_PROJECT_NAME=My Game" "-DNEW_PROJECT_DIR=${KAST_NEW_PROJECT_PARENT}"
+          "-DMUST_NOT_EXIST=${KAST_NEW_PROJECT_PARENT}/my-game" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME new_project_invalid_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/new_project_invalid.png"
+          "-DNEW_PROJECT_NAME=My Game" "-DNEW_PROJECT_DIR=${CMAKE_CURRENT_BINARY_DIR}/does_not_exist/parent"
+          "-DMUST_NOT_EXIST=${CMAKE_CURRENT_BINARY_DIR}/does_not_exist" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")

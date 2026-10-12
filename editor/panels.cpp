@@ -322,8 +322,10 @@ void Panels::drawSystems(Document& doc)
         std::lock_guard lock(scriptMutex_);
         if (std::exchange(scriptChosen_, false)) {
             scriptDialogOpen_ = false;
-            if (!scriptPath_.empty() && editable) // Play may have started while the dialog was open
-                addSystem(doc, scriptPath_);
+            if (!scriptPath_.empty() && editable && !addSystem(doc, scriptPath_, systemsError_)) {
+                kast::log::error(systemsError_);
+                systemsErrorRequested_ = true; // Play may have started while the dialog was open: then nothing is added
+            }
         }
     }
 
@@ -361,22 +363,37 @@ void Panels::drawSystems(Document& doc)
         }
 
         ImGui::Spacing();
-        const char* addBlocked = !editable ? "Stop Play to edit systems" : doc.path.empty() ? "Save the scene first" : nullptr;
+        const char* addBlocked = !editable      ? "Stop Play to edit systems"
+                                 : !doc.project ? "Open a scene inside a project"
+                                                : nullptr;
+        const char* templateBlocked = addBlocked ? addBlocked : doc.path.empty() ? "Save the scene first" : nullptr;
         ImGui::BeginDisabled(addBlocked != nullptr || scriptDialogOpen_);
         if (ImGui::Button("Add Script...", ImVec2(-FLT_MIN, 0.0f))) {
             scriptDialogOpen_ = true;
-            const std::string dir = sceneDir(doc).string();
+            const std::string dir = doc.project->root.string();
             SDL_ShowOpenFileDialog(onScriptChosen, this, nullptr, &kLuaFilter, 1, dir.c_str(), false);
         }
         ImGui::EndDisabled();
         disabledTooltip(addBlocked);
-        ImGui::BeginDisabled(addBlocked != nullptr);
+        ImGui::BeginDisabled(templateBlocked != nullptr);
         if (ImGui::Button("New from Template", ImVec2(-FLT_MIN, 0.0f))) {
-            if (std::string error; !newSystemFromTemplate(doc, error))
-                kast::log::error(error);
+            if (!newSystemFromTemplate(doc, systemsError_)) {
+                kast::log::error(systemsError_);
+                systemsErrorRequested_ = true;
+            }
         }
         ImGui::EndDisabled();
-        disabledTooltip(addBlocked);
+        disabledTooltip(templateBlocked);
+
+        if (std::exchange(systemsErrorRequested_, false))
+            ImGui::OpenPopup("Systems Error");
+        if (ImGui::BeginPopupModal("Systems Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextUnformatted(systemsError_.c_str());
+            ImGui::Spacing();
+            if (ImGui::Button("OK") || ImGui::IsKeyPressed(ImGuiKey_Escape))
+                ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
 
         switch (op) {
         case Op::Up: moveSystem(doc, target, -1); break;

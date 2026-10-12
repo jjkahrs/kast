@@ -17,10 +17,12 @@
 
 #include <algorithm>
 #include <charconv>
+#include <filesystem>
 #include <format>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -34,7 +36,7 @@ constexpr float kMinUiScale = 0.75f;
 constexpr float kMaxUiScale = 3.0f;
 constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--ui-scale F] [--scene in.scene] "
-    "[--save-scene out.scene] [--select ID] [--play]";
+    "[--project dir] [--save-scene out.scene] [--select ID] [--play] [--new-project name dir]";
 
 struct Options {
     int frames = 0;         // 0 = run until quit
@@ -42,10 +44,12 @@ struct Options {
     int width = 1280;
     int height = 720;
     std::optional<float> uiScale; // overrides the monitor's display scale
+    std::string project;          // project directory opened at startup (before --scene)
     std::string scene;            // opened at startup instead of the default scene
     std::string saveScene;        // save the startup scene here and exit, without opening a window
     kast::EntityId select = 0;    // select this entity at startup; 0 = none
     bool play = false;            // enter Play mode once the startup scene is loaded
+    std::optional<std::pair<std::string, std::string>> newProject; // name, dir: open the prefilled New Project modal
 };
 
 template <typename T>
@@ -70,10 +74,15 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.screenshot = argv[++i];
         } else if (arg == "--scene" && hasValue) {
             options.scene = argv[++i];
+        } else if (arg == "--project" && hasValue) {
+            options.project = argv[++i];
         } else if (arg == "--save-scene" && hasValue) {
             options.saveScene = argv[++i];
         } else if (arg == "--select" && hasValue && parsePositive(argv[i + 1], options.select)) {
             ++i;
+        } else if (arg == "--new-project" && i + 2 < argc) {
+            options.newProject.emplace(argv[i + 1], argv[i + 2]);
+            i += 2;
         } else if (arg == "--play") {
             options.play = true;
         } else if (arg == "--size" && hasValue) {
@@ -199,6 +208,11 @@ void drawMenuBar(FileActions& files, Document& doc)
             if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S", false, idle))
                 files.saveAs();
             ImGui::Separator();
+            if (ImGui::MenuItem("New Project...", nullptr, false, idle))
+                files.newProject();
+            if (ImGui::MenuItem("Open Project...", nullptr, false, idle))
+                files.openProject();
+            ImGui::Separator();
             if (ImGui::MenuItem("Exit"))
                 files.exit();
             ImGui::EndMenu();
@@ -243,11 +257,19 @@ int main(int argc, char** argv)
     kast::log::info("Kast editor starting");
 
     Document doc;
-    if (options->scene.empty()) {
+    if (!options->project.empty()) {
+        if (std::string error; !openProject(doc, std::filesystem::path(options->project) / kast::kProjectFileName, error)) {
+            kast::log::error(error);
+            return 1;
+        }
+    } else if (options->scene.empty()) {
         resetToDefault(doc);
-    } else if (std::string error; !openFile(doc, options->scene, error)) {
-        kast::log::error(error);
-        return 1;
+    }
+    if (!options->scene.empty()) {
+        if (std::string error; !openFile(doc, options->scene, error)) { // its project walk-up wins over --project
+            kast::log::error(error);
+            return 1;
+        }
     }
     if (!options->saveScene.empty()) {
         std::string error;
@@ -265,6 +287,8 @@ int main(int argc, char** argv)
         startPlay(doc);
 
     FileActions files(doc);
+    if (options->newProject)
+        files.openNewProject(options->newProject->first, options->newProject->second);
     Panels panels;
     SceneViewport viewport(kSceneView);
     GameViewport game(kGameView);

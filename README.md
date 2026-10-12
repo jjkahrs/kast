@@ -80,10 +80,12 @@ build\release\kast_editor.exe
 | `--screenshot <path.png>` | With `--frames`: capture the backbuffer after frame N, write a PNG, then exit. Exit 1 if it can't be written. |
 | `--size WxH` | Initial window size (default `1280x720`). |
 | `--ui-scale F` | Force UI scale `F` (positive number, clamped to 0.75–3.0) instead of the monitor's display scale. |
+| `--project <dir>` | Open `<dir>/project.kast` at startup, like File > Open Project (its `startScene`, else a new Untitled scene). Exit 1 if it is missing or invalid. With `--scene`, the scene opens afterwards and its own project (walk-up) wins. |
 | `--scene <path>` | Open this `.scene` at startup instead of the default scene. Exit 1 if it can't be loaded. |
 | `--save-scene <path>` | Save the startup scene (default or `--scene`) to `path` and exit 0 without opening a window. Exit 1 on write failure. |
 | `--select <id>` | Select the entity with this persistent `id` at startup (shows it in the Inspector). Exit 1 if there is none. |
 | `--play` | Enter Play mode right after the startup scene loads. Works with `--frames`, `--screenshot`, `--scene`, `--select`. |
+| `--new-project <name> <dir>` | Open the File > New Project modal at startup with Name and Directory prefilled (quote values with spaces), e.g. for `--frames 120 --screenshot`. Creates nothing by itself. |
 
 Invalid arguments exit with code 2; init failures (SDL, window, bgfx) log the reason, show a message box, and exit 1.
 
@@ -123,9 +125,11 @@ systems to read; Lua systems read it through `kast.input`. It is cleared wheneve
 cursor stays normal (no capture).
 
 **Systems panel** (below Hierarchy): the scene's Lua systems in run order. **Add Script...** picks an existing `.lua`
-file, **New from Template** writes `scripts/new_system.lua` (then `new_system_2.lua`, ...) next to the scene and adds
-it; the arrows reorder and **Remove** drops an entry (the file stays). Both add buttons need a saved scene (tooltip
-"Save the scene first"), and the list can't be edited during Play. Each edit marks the scene dirty. While playing,
+file inside the active project (a file outside it is rejected with an error), **New from Template** writes
+`<project>/scripts/new_system.lua` (then `new_system_2.lua`, ...) and adds it; both store project-relative paths. The
+arrows reorder and **Remove** drops an entry (the file stays). With no active project both add buttons are disabled
+(tooltip "Open a scene inside a project"); New from Template also needs a saved scene (tooltip "Save the scene
+first"). The list can't be edited during Play. Each edit marks the scene dirty. While playing,
 each entry shows **OK** or **Disabled** with its last error. Layouts saved before the panel existed get it docked as a
 tab beside Hierarchy.
 
@@ -143,13 +147,56 @@ removes that component (not shown for Transform); **Add Component** lists the re
 unsaved-changes flag, selection by id; the editor camera stays where it is). Play (from stopped, including `--play`)
 brings the Game tab to the front; Stop brings the Scene tab back; Pause and resume leave the tabs alone. While
 playing, the Scene panel has an orange border and the title says `(Playing)` or `(Paused)`. Edits during Play are allowed and are discarded on Stop;
-they never mark the scene dirty. File New/Open/Save/Save As are disabled during Play; Exit or closing the window
-stops Play first.
+they never mark the scene dirty. File New/Open/Save/Save As/New Project/Open Project are disabled during Play; Exit or
+closing the window stops Play first. A Lua `kast.loadScene` switch replaces the running scene: Hierarchy, Inspector,
+Scene, Game and the Systems panel status show the new scene, the selection is cleared, the editor camera stays, and the
+title shows `(Playing: <scene>)` / `(Paused: <scene>)`. The edited scene's file and path are never touched; Stop
+restores the pre-Play scene, path, project, dirty flag and selection however many switches happened.
 
-**File**: New (Ctrl+N), Open... (Ctrl+O), Save (Ctrl+S), Save As... (Ctrl+Shift+S), Exit. The title shows
-`Kast Editor - <scene>` with `*` when there are unsaved changes; New, Open, Exit and closing the window ask
+**File**: New (Ctrl+N), Open... (Ctrl+O), Save (Ctrl+S), Save As... (Ctrl+Shift+S), New Project..., Open Project...,
+Exit. The title shows `Kast Editor - <project> - <scene>` with an active project, `Kast Editor - <scene>` without, plus
+`*` when there are unsaved changes; New, Open, New Project, Open Project, Exit and closing the window ask
 Save / Don't Save / Cancel first. Opening an invalid scene shows an error and keeps the current scene.
 Moving the camera does not mark the scene dirty, but Save stores the current camera pose.
+
+- **New Project...**: opens a modal with **Name**, **Directory** (type a parent directory or pick one with
+  **Browse...**; cancelling the picker keeps the field) and a `Will create: <directory>\<folder>` preview. The folder
+  name is the name trimmed, with ASCII letters lower-cased and each run of whitespace replaced by `-`
+  (`"  My   Game  "` → `my-game`); non-ASCII characters are kept. **Create** is disabled, with a one-line reason, if
+  that folder name is empty, `.`/`..`, ends with `.` or contains `< > : " / \ | ? *` or a control character, if the
+  directory is empty, missing or not a directory (parent directories are never created), or if `<directory>\<folder>`
+  already exists. Create makes that one folder, writes `project.kast` in it (`"name"` = the trimmed typed name,
+  `startScene: null`) and opens it like Open Project. A failure at that point shows an error, logs it to the Console and
+  removes the folder if this attempt made it. Cancel or Esc writes nothing.
+- **Open Project...**: pick a `project.kast` (the dialog filters `*.kast`; other file names are rejected). An invalid
+  file shows an error and changes nothing. Otherwise the project becomes active and its `startScene` opens; if that is
+  null, missing or fails to load (the Console says why), a new Untitled default scene opens with the project active.
+- Save / Save As never rewrite `systems` paths. If Save As moves a scene with systems into another project or out of
+  any project, the Console warns that its system paths may no longer resolve.
+
+## Projects
+
+A project is a directory marked by a `project.kast` file (exactly that name):
+
+```json
+{
+  "version": 1,
+  "name": "My Game",
+  "startScene": "scenes/start.scene"
+}
+```
+
+- `version` must be 1, `name` a non-empty string, `startScene` a project-relative path or `null` (only its type is
+  checked; Open Project opens it, and a future game client will start there). Every key is required and unknown keys
+  are rejected. Saved with 2-space indent in this key order.
+- **Active project**: opening a scene (File > Open, `--scene`) activates the project found by walking up from the
+  scene's directory (the nearest ancestor-or-self with a `project.kast`; none = no project; an invalid one is warned
+  about and treated as none). New (Untitled) keeps the current project. Save / Save As re-run the walk-up from the saved
+  file. Open Project / New Project / `--project` set it directly.
+- **Project-relative paths** (`systems`, `kast.loadScene`, `startScene`) use `/` separators and must stay inside the
+  project: absolute paths and `..` out of the root are rejected.
+- Without an active project the scene can still be edited and played (C++ systems run), but every Lua system is
+  disabled with a "no project" error.
 
 ## Coordinates and scenes
 
@@ -167,7 +214,7 @@ in registration order, floats in shortest round-trip form, so re-saving an uncha
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "entities": [
     { "id": 1, "name": "Directional Light", "parent": null,
       "components": {
@@ -202,10 +249,10 @@ in registration order, floats in shortest round-trip form, so re-saving an uncha
     between 0 and 180 (exclusive), and `0 < nearPlane < farPlane`. The Inspector keeps the last valid value if an
     edit would break that.
   - `Rotator`: spins the entity in Play mode, `degreesPerSecond` around its local `axis` (normalized; zero = no spin).
-- `systems`: Lua system scripts in run order, as paths relative to the `.scene` file's directory (see
-  [Lua systems](#lua-systems)). Always written; optional when loading (version 2 files have none).
+- `systems`: Lua system scripts in run order, as paths relative to the **project root** (see [Projects](#projects) and
+  [Lua systems](#lua-systems)). Always written; optional when loading (missing = none).
 - `editor` belongs to the editor (camera pivot, yaw/pitch in degrees, distance in meters); the engine keeps it as-is.
-- Loading rejects invalid JSON, a `version` other than 2 or 3 (version 1 files are not migrated), a `systems` that
+- Loading rejects invalid JSON, a `version` other than 4 (versions 1–3 are not migrated), a `systems` that
   isn't an array of non-empty strings, unknown component types,
   a missing `Transform`, unknown, missing or mistyped fields, unknown enum names, out-of-range `Camera` values, duplicate ids, parents that don't
   exist, and parent cycles. It reports why and leaves the current scene untouched.
@@ -249,9 +296,9 @@ return {
 A file that doesn't return a table with an `update` function, or whose `init`/`shutdown` isn't a function, is an
 error for that system.
 
-**Paths**: `"systems": ["scripts/spin.lua", "../shared/ai.lua"]` are relative to the `.scene` file's directory
-(`/` separators). The Systems panel stores paths that way, and Save As to another directory rewrites them so they
-still point at the same files.
+**Paths**: `"systems": ["scripts/spin.lua", "shared/ai.lua"]` are relative to the active project's root (`/`
+separators), wherever the scene file is. The Systems panel stores paths that way; Save As does not rewrite them. With no
+active project, or for a path outside the project, that system is disabled with the reason.
 
 **`kast` API** (one read-only table per system; assigning to `kast` or `kast.input` is an error). Entities are
 persistent ids (`EntityId` integers, the scene file's `id`). An invalid or destroyed id, an unknown component name or
@@ -270,6 +317,8 @@ a wrong argument type raises a Lua error at the calling line.
 | `kast.log(msg)`, `kast.warn(msg)`, `kast.error(msg)` | — | To the Console, prefixed with the system's path: `[info] scripts/spin.lua: msg`. |
 | `kast.input.keyDown(name)` | boolean | SDL scancode names (`SDL_GetScancodeFromName`): `"W"`, `"Space"`, `"Left Shift"`, `"Up"`... An unknown name raises. |
 | `kast.input.mouseDelta()` | `dx, dy` | Pixels moved this frame. |
+| `kast.loadScene(path)` | — | Switches the running scene. `path` is project-relative. Checked **at call time**, reading the file from disk (unsaved editor edits are not seen): no active project, a path outside the project, a missing file or a scene that fails to load (including an old version) raises at the calling line, and nothing is queued. On success the switch is applied at the **end of the frame**, after every system's `update`; the last call in a frame wins. Applying it calls the old scene's enabled systems' `shutdown`, discards the Lua state, replaces the scene, and starts a new session for the new scene's own `systems` (each `init` runs). Nothing persists across the switch. Calls from a `shutdown` are ignored; a call from an `init` is applied at the end of the next ticked frame. |
+| `kast.currentScene()` | string or `nil` | The running scene's project-relative path (`"levels/b.scene"`), or `nil` with no active project or for an Untitled scene. |
 
 Input is only live while the Game panel is focused and playing; otherwise every key is up and the delta is 0.
 
@@ -287,7 +336,8 @@ reachable. Files are loaded as text only (no precompiled bytecode).
 **Errors**: a syntax error, a missing file, a bad returned table or an error in `init`, `update` or `shutdown` (Lua
 or raised by `kast.*`) is logged to the Console with the file and line (`Lua system disabled: scripts/spin.lua:12:
 ...`, plus a traceback for runtime errors) and disables that system until the next Play or a successful hot reload.
-Play and the other systems keep running. Disabled systems' `shutdown` is not called.
+Play and the other systems keep running. Disabled systems' `shutdown` is not called. With no active project, every
+listed system is disabled with `no project (open a scene inside a project to run Lua systems)`.
 
 **Hot reload**: while playing, each listed file's modification time is checked every frame. When it changes, the old
 instance's `shutdown` runs (if it was enabled), the file is reloaded into a fresh environment and its `init` runs.
@@ -301,7 +351,7 @@ The dock layout is saved to `imgui.ini` in the working directory; delete it to g
 
 | Test | What it checks |
 |------|----------------|
-| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits and Save As path rebasing. No window. |
+| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values and versions 1–3 rejected), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits; projects: `project.kast` load/save/validation, walk-up discovery, project-relative paths and escape rejection, Open/New Project and Save/Save As on a `Document` (New Project folder-name sanitizing, every validation rule, creating `<dir>/my-game/project.kast` with the trimmed name, never creating missing parents or writing into an existing folder) (no rebasing, project-change warning, title format), no-project Lua disabling, Add Script outside the project, template location; `kast.loadScene` (end-of-frame, last call wins, ignored in `shutdown`, init calls deferred a frame, shutdown/init order, every error case keeps the current scene) and `kast.currentScene`, and Stop restoring the pre-Play scene after two switches. No window. |
 | `editor_smoke` | `kast_editor --frames 120 --screenshot build/<preset>/smoke.png` (default scene): exit 0 and a non-empty PNG. |
 | `editor_smoke_scaled` | Same, with `--ui-scale 2.0`. |
 | `scene_screenshot` | Same, with `--scene tests/scenes/basic.scene`. |
@@ -314,7 +364,13 @@ The dock layout is saved to `imgui.ini` in the working directory; delete it to g
 | `lua_scene_screenshot` | `--scene tests/scenes/lua.scene` (Systems panel lists its two scripts), writing `lua_scene.png`. |
 | `lua_play_screenshot`, `lua_play_no_systems_screenshot` | `--play` on `lua.scene` and on a copy with `"systems": []` generated at configure time, writing `lua_play.png` / `lua_play_no_systems.png`. |
 | `lua_play_differs` | `lua_play.png` must differ from `lua_play_no_systems.png`: only the Lua systems (lift the cube, tint the sphere) can make them differ. |
-| `scene_bad_json`, `scene_missing`, `scene_v1_rejected` | `--scene` with `tests/scenes/malformed.scene` / a missing file / the version 1 `tests/scenes/v1.scene` must exit 1. |
+| `scene_bad_json`, `scene_missing`, `scene_v1_rejected`, `scene_v3_rejected` | `--scene` with `tests/scenes/malformed.scene` / a missing file / the version 1 `tests/scenes/v1.scene` / the version 3 `tests/scenes/v3.scene` must exit 1. |
+| `project_startup` | `--project tests/project`: exit 0 and a PNG (opens its `startScene`, `scene_a.scene`). |
+| `project_missing` | `--project tests/scenes/scripts` (no `project.kast`) must exit 1. |
+| `new_project_valid_screenshot` | `--new-project "My Game" build/<preset>/new_project_parent` (an existing folder), writing `new_project_valid.png` (preview `...\my-game`, Create enabled). Fails if `my-game` was created. |
+| `new_project_invalid_screenshot` | Same with a missing directory, writing `new_project_invalid.png` (inline "does not exist", Create disabled). Fails if the missing directory was created. |
+| `switch_play_screenshot`, `switch_play_no_systems_screenshot` | `--play` on `tests/project/scene_a.scene` (its script calls `kast.loadScene("scene_b.scene")` on the first frame) and on a copy with `"systems": []` generated at configure time, writing `switch_play.png` / `switch_play_no_systems.png`. |
+| `switch_play_differs` | `switch_play.png` (scene B: three green spheres) must differ from `switch_play_no_systems.png` (scene A: a red cube). |
 
 The screenshot tests each open a real window for ~2 seconds, in a fresh working directory (`<png>.run/`) so they
 always start from the default layout.
@@ -332,6 +388,7 @@ always match the installed bgfx version.
 engine/   log (stdout + in-memory lines), app (SDL3 window, bgfx init, main loop, resize, quit hook, shutdown),
           math3d (quaternion/Euler/TRS helpers, picking rays), scene (EnTT components + hierarchy),
           components (entt::meta component registry, generic JSON/copy), scene_io (.scene load/save),
+          project (project.kast load/save, walk-up discovery, project-relative paths),
           systems (Play-mode systems, rotatorSystem), lua_systems (Lua systems: LuaJIT/sol2 session, kast.* API),
           input (game keyboard/mouse state),
           renderer (primitives, lit shader, grid/axes/camera frustums as optional overlays), shaders/
@@ -339,7 +396,9 @@ editor/   main.cpp (CLI, dock layout, menus, console), document (scene, Play mod
           camera (editor camera), viewport (Scene panel: render, camera input, picking, gizmo),
           game_view (Game panel: render from the active camera),
           panels (Hierarchy, Inspector, Systems), imgui_bgfx (ImGui renderer for bgfx), shaders/
-tests/    self_check.cpp, scenes/ (basic.scene, lua.scene + scripts/, no_camera.scene, malformed.scene, v1.scene)
+tests/    self_check.cpp, scenes/ (a project: project.kast, basic.scene, lua.scene + scripts/, no_camera.scene,
+          malformed.scene, v1.scene, v3.scene), project/ (scene-switch project: project.kast, scene_a.scene,
+          scene_b.scene, scripts/)
 cmake/    smoke_test.cmake, roundtrip_test.cmake, load_fails_test.cmake, differs_test.cmake
 ```
 

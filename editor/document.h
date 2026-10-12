@@ -4,13 +4,16 @@
 
 #include <input.h>
 #include <lua_systems.h>
+#include <project.h>
 #include <scene.h>
 
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
 
 struct SDL_Window;
 
@@ -22,6 +25,7 @@ struct Document {
     kast::Scene scene;
     EditorCamera camera;
     std::string path; // empty until first saved/opened
+    std::optional<kast::Project> project; // the active project; scene systems and kast.loadScene paths are relative to it
     entt::entity selected = entt::null;
     bool dirty = false;
 
@@ -30,6 +34,7 @@ struct Document {
     bool playSnapshotDirty = false;
     kast::Input input; // fed by the Game panel while it is focused and playing
     kast::LuaSystems lua; // the scene's Lua systems; a session runs from Play to Stop
+    std::string playSceneName; // the running scene's name after a kast.loadScene switch; empty if none happened
 
     PanelFocus focusRequest = PanelFocus::None; // set by Play/Stop, cleared by the panel that takes focus
 };
@@ -41,20 +46,24 @@ bool selectById(Document& doc, kast::EntityId id);
 
 // Play mode. Play snapshots the scene in memory and runs the systems every frame; Pause holds them; Stop restores
 // the snapshot (scene, dirty flag, selection by id) without touching the editor camera. Play from Stopped requests
-// Game focus and Stop requests Scene focus; Pause and resume leave focus alone.
+// Game focus and Stop requests Scene focus; Pause and resume leave focus alone. A kast.loadScene switch replaces
+// doc.scene and clears the selection; path and project stay those of the edited scene.
 void startPlay(Document& doc); // also resumes when paused
 void togglePause(Document& doc);
 void stopPlay(Document& doc);
 void updatePlay(Document& doc, float dt); // ticks the C++ systems, then the Lua systems, while playing
 
-// The directory scene.systems paths are relative to: the scene file's, or the working directory if never saved.
-std::filesystem::path sceneDir(const Document& doc);
+// doc.path relative to the active project ('/' separators); empty if unsaved or there is no project.
+std::string projectScenePath(const Document& doc);
 // Lua system list edits (Systems panel). Not allowed during Play; each marks the document dirty. index must be valid.
 bool canEditSystems(const Document& doc);
-void addSystem(Document& doc, const std::filesystem::path& script); // stored relative to sceneDir, '/' separators
+// Stored relative to the project root, '/' separators. False + error (list unchanged) with no project or a script
+// outside it.
+bool addSystem(Document& doc, const std::filesystem::path& script, std::string& error);
 void removeSystem(Document& doc, size_t index);
 void moveSystem(Document& doc, size_t index, int delta); // delta -1 = up, +1 = down; no-op past either end
-// Writes a template system as scripts/new_system[_N].lua next to the saved scene and adds it. False + error if not.
+// Writes a template system as <project>/scripts/new_system[_N].lua and adds it. Needs a project and a saved scene.
+// False + error if not.
 bool newSystemFromTemplate(Document& doc, std::string& error);
 
 enum class ObjectKind { Empty, Cube, Plane, Sphere, DirectionalLight, Camera };
@@ -67,11 +76,29 @@ entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent);
 void deleteSelected(Document& doc);
 void duplicateSelected(Document& doc);
 
-// Default scene: angled light, ground plane, cube resting on it, a Main Camera and an editor camera framing them. Clears path and dirty.
+// Default scene: angled light, ground plane, cube resting on it, a Main Camera and an editor camera framing them.
+// Clears path and dirty; keeps the active project.
 void resetToDefault(Document& doc);
+// Opens a scene; the active project becomes the one found walking up from its directory (maybe none).
 bool openFile(Document& doc, const std::string& path, std::string& error); // doc untouched on failure
+// Saves without rebasing systems paths; the active project becomes the one found walking up from the saved file.
+// Logs a warning if that changes the project of a scene with systems.
 bool saveFile(Document& doc, const std::string& path, std::string& error);
+// Opens a project.kast: activates it and opens its startScene, or (none, missing or invalid: logged) a new default
+// scene. doc untouched if the file is not named project.kast or is invalid.
+bool openProject(Document& doc, const std::filesystem::path& file, std::string& error);
+// New Project folder name: name trimmed, ASCII letters lower-cased, each whitespace run replaced by '-'.
+std::string projectFolderName(std::string_view name);
+// The folder New Project would create: dir (made absolute) / projectFolderName(name).
+std::filesystem::path newProjectTarget(std::string_view name, const std::string& dir);
+// Why New Project can't create name in dir (the first failing rule), or empty if it can. Checks the filesystem.
+std::string newProjectError(std::string_view name, const std::string& dir);
+// Creates the newProjectTarget folder (never its parents) holding project.kast (name trimmed, startScene null) and
+// sets created to it. False + error if newProjectError fails or a write fails; a folder made by this call is removed.
+bool createProject(std::string_view name, const std::string& dir, std::filesystem::path& created, std::string& error);
 std::string displayName(const Document& doc);
+// "Kast Editor - [<project> - ]<scene>[*][ (Playing|Paused[: <switched scene>])]"
+std::string windowTitle(const Document& doc);
 
 // File menu behavior: New/Open/Save/Save As with native dialogs, unsaved-changes and error modals, window title.
 class FileActions {
@@ -81,11 +108,15 @@ public:
     void setWindow(SDL_Window* window) { window_ = window; }
     void newScene();
     void open();
+    void newProject();
+    // Opens the New Project modal prefilled with these values (--new-project); creates nothing by itself.
+    void openNewProject(std::string name, std::string dir);
+    void openProject();
     void save();
     void saveAs();
     void exit();
-    // File actions are available: no dialog open and not in Play mode.
-    bool idle() const { return !dialogOpen_ && doc_.play == PlayState::Stopped; }
+    // File actions are available: no dialog or New Project modal open and not in Play mode.
+    bool idle() const { return !dialogOpen_ && !newProjectOpen_ && doc_.play == PlayState::Stopped; }
 
     // Call once per frame inside the ImGui frame: shortcuts, dialog results, modals, title.
     void update();
@@ -93,8 +124,8 @@ public:
     bool onQuitRequested();
 
 private:
-    enum class Pending { None, New, Open, Quit };
-    enum class DialogKind { Open, SaveAs };
+    enum class Pending { None, New, Open, NewProject, OpenProject, Quit };
+    enum class DialogKind { Open, SaveAs, NewProjectFolder, OpenProject };
 
     // Runs action now, or after the unsaved-changes modal if the document is dirty.
     void request(Pending action);
@@ -103,6 +134,9 @@ private:
     void handleDialogResult();
     void saveTo(const std::string& path, Pending after);
     void drawModals();
+    void drawNewProjectModal();
+    void browseNewProjectDir();
+    void createNewProject();
     void updateTitle();
 
     static void onDialogDone(void* userdata, const char* const* files, int filter);
@@ -116,6 +150,10 @@ private:
     std::string error_;
     bool errorRequested_ = false;
     std::string title_;
+    std::string newProjectName_; // New Project modal fields
+    std::string newProjectDir_;  // parent directory, typed or picked with Browse...
+    bool newProjectRequested_ = false;
+    bool newProjectOpen_ = false;
 
     // SDL calls onDialogDone on any thread; the main thread picks the result up in update().
     bool dialogOpen_ = false;

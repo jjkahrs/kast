@@ -105,7 +105,7 @@ public:
             visit(root, fn);
     }
 
-    // Lua system scripts in run order, relative to the .scene file's directory (see lua_systems.h).
+    // Lua system scripts in run order, relative to the project root (see project.h, lua_systems.h).
     std::vector<std::string> systems;
 
     // Opaque data owned by the editor (e.g. camera pose), saved under "editor" in the scene file.

@@ -47,4 +47,6 @@ private:
     bool scriptDialogOpen_ = false;
     bool scriptChosen_ = false;
     std::string scriptPath_; // empty = cancelled
+    std::string systemsError_; // shown in the Systems panel's error modal
+    bool systemsErrorRequested_ = false;
 };

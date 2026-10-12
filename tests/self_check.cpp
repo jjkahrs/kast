@@ -1,5 +1,6 @@
 // Assert-style checks for the non-trivial engine logic: rotation conventions, matrix decomposition, picking rays,
-// hierarchy edits, component registry, scene-file validation, cameras, input, systems, Lua systems and editor Play mode.
+// hierarchy edits, component registry, scene-file validation, cameras, input, systems, Lua systems, projects, scene
+// switching and editor Play mode.
 // Exit 0 if every check passes. Run by CTest as engine_self_check.
 #include "document.h" // editor Play mode; links editor/document.cpp, no window needed
 
@@ -8,6 +9,7 @@
 #include <log.h>
 #include <lua_systems.h>
 #include <math3d.h>
+#include <project.h>
 #include <scene.h>
 #include <scene_io.h>
 #include <systems.h>
@@ -271,10 +273,10 @@ void checkLoadValidation()
     const auto entity = [&](int id, const char* parent, const std::string& more = "") {
         return std::format(R"({{"id": {}, "parent": {}, "name": "E", "components": {{{}{}}}}})", id, parent, transform, more);
     };
-    const auto file = [](const std::string& entities) { return R"({"version": 2, "entities": [)" + entities + "]}"; };
+    const auto file = [](const std::string& entities) { return R"({"version": 4, "entities": [)" + entities + "]}"; };
     const std::tuple<const char*, std::string, const char*> bad[] = {
         // what, file contents, text the error must mention
-        {"invalid JSON", "{ \"version\": 2, ", ""},
+        {"invalid JSON", "{ \"version\": 4, ", ""},
         {"wrong version", R"({"version": 99, "entities": []})", "version"},
         {"version 1 rejected",
          R"({"version": 1, "entities": [{"id": 1, "parent": null, "name": "E", "position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]}]})",
@@ -593,25 +595,26 @@ void checkSystemsFormat()
         std::ifstream in(path, std::ios::binary);
         return std::string(std::istreambuf_iterator<char>(in), {});
     };
-    check(read(first) == read(second) && contains(read(first), "\"version\": 3") && contains(read(first), "\"systems\""),
-          "version 3 systems round trip is byte-identical");
+    check(read(first) == read(second) && contains(read(first), "\"version\": 4") && contains(read(first), "\"systems\""),
+          "version 4 systems round trip is byte-identical");
 
     const std::string entity =
         R"({"id": 1, "parent": null, "name": "E", "components": {"Transform": {"position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]}}})";
     const auto file = [&](int version, const std::string& systems) {
         return std::format(R"({{"version": {}, "entities": [{}]{}}})", version, entity, systems);
     };
-    for (int version : {2, 3}) {
-        writeFile(dir / "old.scene", file(version, ""));
-        loaded.systems = {"stale.lua"};
-        check(kast::loadScene((dir / "old.scene").string(), loaded, error) && loaded.systems.empty(),
-              "version 2 and 3 files without \"systems\" load with none");
-    }
+    writeFile(dir / "nosystems.scene", file(4, ""));
+    loaded.systems = {"stale.lua"};
+    check(kast::loadScene((dir / "nosystems.scene").string(), loaded, error) && loaded.systems.empty(),
+          "a version 4 file without \"systems\" loads with none");
     const std::tuple<const char*, std::string, const char*> bad[] = {
-        {"systems not an array", file(3, R"(, "systems": "a.lua")"), "\"systems\" must be an array"},
-        {"systems entry not a string", file(3, R"(, "systems": ["a.lua", 7])"), "systems[1]: must be a non-empty string"},
-        {"systems entry empty", file(3, R"(, "systems": [""])"), "systems[0]: must be a non-empty string"},
-        {"version 4", file(4, ""), "version"},
+        {"systems not an array", file(4, R"(, "systems": "a.lua")"), "\"systems\" must be an array"},
+        {"systems entry not a string", file(4, R"(, "systems": ["a.lua", 7])"), "systems[1]: must be a non-empty string"},
+        {"systems entry empty", file(4, R"(, "systems": [""])"), "systems[0]: must be a non-empty string"},
+        {"version 1 rejected", file(1, ""), "unsupported \"version\" 1"},
+        {"version 2 rejected", file(2, ""), "unsupported \"version\" 2"},
+        {"version 3 rejected", file(3, R"(, "systems": [])"), "unsupported \"version\" 3"},
+        {"version 5 rejected", file(5, ""), "unsupported \"version\" 5"},
     };
     for (const auto& [what, text, mention] : bad) {
         writeFile(dir / "bad.scene", text);
@@ -651,6 +654,7 @@ return {
 
     Document doc;
     doc.path = (dir / "play.scene").string();
+    doc.project = kast::Project{.root = dir, .name = "Lua"};
     const entt::entity spinner = doc.scene.create("Spinner");
     doc.scene.registry().emplace<kast::Rotator>(spinner, bx::Vec3{0, 1, 0}, 90.0f);
     doc.scene.registry().emplace<kast::DirectionalLight>(doc.scene.create("Probe"), bx::Vec3{0, 0, 0}, 0.0f);
@@ -775,7 +779,7 @@ end })");
     input.mouseDeltaY = -2.0f;
 
     kast::LuaSystems lua;
-    lua.start(scene, dir, &input);
+    lua.start(scene, dir, "", &input);
     lua.tick(0.1f);
     checkOk(lua, 0, "kast.* API asserts in Lua pass");
     check(near(registry.get<kast::Transform>(cube).position, {2, 3, 4}) &&
@@ -824,7 +828,7 @@ return {
     kast::Scene scene;
     scene.systems = {"one.lua", "two.lua"};
     kast::LuaSystems lua;
-    lua.start(scene, dir, nullptr);
+    lua.start(scene, dir, "", nullptr);
     lua.tick(0.1f);
     checkOk(lua, 0, "sandbox: unsafe libraries unreachable, globals isolated (one)");
     checkOk(lua, 1, "sandbox: globals isolated (two)");
@@ -854,7 +858,7 @@ end })");
     scene.systems = {"syntax.lua", "runtime.lua", "counter.lua", "badapi.lua", "noupdate.lua", "notable.lua",
                      "badinit.lua", "missing.lua"};
     kast::LuaSystems lua;
-    lua.start(scene, dir, nullptr);
+    lua.start(scene, dir, "", nullptr);
     const auto disabled = [&](size_t index, const std::vector<std::string>& parts, const char* what,
                               std::source_location where = std::source_location::current()) {
         const kast::LuaSystemStatus status = statusOf(lua, index);
@@ -905,7 +909,7 @@ void checkLuaHotReload()
     scene.systems = {"hot.lua"};
     const auto intensity = [&] { return scene.registry().get<kast::DirectionalLight>(probe).intensity; };
     kast::LuaSystems lua;
-    lua.start(scene, dir, nullptr);
+    lua.start(scene, dir, "", nullptr);
     lua.tick(0.1f);
     check(intensity() == 1.0f && logged("hot.lua: init v1"), "v1 runs");
 
@@ -931,48 +935,488 @@ void checkLuaHotReload()
     std::filesystem::remove_all(dir);
 }
 
+// --- Projects ---
+
+std::string readText(const std::filesystem::path& path)
+{
+    std::ifstream in(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(in), {});
+}
+
+ptrdiff_t countLogged(const std::string& part)
+{
+    return std::ranges::count_if(kast::log::lines(), [&](const std::string& line) { return contains(line, part); });
+}
+
+// Index of the first log line mentioning part; SIZE_MAX if none.
+size_t logIndex(const std::string& part)
+{
+    const std::vector<std::string>& lines = kast::log::lines();
+    const auto it = std::ranges::find_if(lines, [&](const std::string& line) { return contains(line, part); });
+    return it == lines.end() ? SIZE_MAX : static_cast<size_t>(it - lines.begin());
+}
+
+// A fresh temp directory holding a project.kast (and an empty scripts/).
+std::filesystem::path projectTestDir(const char* name, const char* projectName)
+{
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / name;
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir / "scripts");
+    writeFile(dir / kast::kProjectFileName, std::format(R"({{"version": 1, "name": "{}", "startScene": null}})", projectName));
+    return dir;
+}
+
+std::filesystem::path looseTestDir(const char* name) // no project.kast
+{
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / name;
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    return dir;
+}
+
+void saveTestScene(const std::filesystem::path& file, const char* entity, std::vector<std::string> systems)
+{
+    kast::Scene scene;
+    scene.create(entity);
+    scene.systems = std::move(systems);
+    std::string error;
+    check(kast::saveScene(scene, file.string(), error), "write a test scene");
+}
+
+void checkProjectFiles()
+{
+    check(!kast::findProjectDir(std::filesystem::temp_directory_path()),
+          "precondition: no project.kast above the temp directory");
+    const std::filesystem::path dir = looseTestDir("kast_project_check");
+    const std::filesystem::path root = (dir / "a").lexically_normal();
+    std::filesystem::create_directories(dir / "a/b/c");
+    std::string error;
+    kast::Project project{.root = root, .name = "Demo"};
+    check(kast::saveProject(project, error), "save project.kast");
+    check(readText(root / "project.kast") == "{\n  \"version\": 1,\n  \"name\": \"Demo\",\n  \"startScene\": null\n}\n",
+          "project.kast is written as deterministic JSON (2-space indent, fixed key order)");
+    project.startScene = "scenes/start.scene";
+    check(kast::saveProject(project, error), "save project.kast with a startScene");
+    kast::Project loaded;
+    check(kast::loadProject(root / "project.kast", loaded, error) && loaded.name == "Demo" &&
+              loaded.startScene == "scenes/start.scene" && loaded.root == root,
+          "project.kast round trip");
+
+    const std::tuple<const char*, std::string, const char*> bad[] = {
+        {"invalid JSON", R"({"version": 1,)", "Invalid project"},
+        {"not an object", "[]", "must be a JSON object"},
+        {"missing version", R"({"name": "X", "startScene": null})", "missing \"version\""},
+        {"missing name", R"({"version": 1, "startScene": null})", "missing \"name\""},
+        {"missing startScene", R"({"version": 1, "name": "X"})", "missing \"startScene\""},
+        {"unknown key", R"({"version": 1, "name": "X", "startScene": null, "extra": 1})", "unknown key \"extra\""},
+        {"wrong version", R"({"version": 2, "name": "X", "startScene": null})", "unsupported \"version\" 2"},
+        {"version not a number", R"({"version": "1", "name": "X", "startScene": null})", "unsupported \"version\""},
+        {"empty name", R"({"version": 1, "name": "", "startScene": null})", "\"name\" must be a non-empty string"},
+        {"name not a string", R"({"version": 1, "name": 5, "startScene": null})", "\"name\" must be a non-empty string"},
+        {"startScene not a string", R"({"version": 1, "name": "X", "startScene": 5})", "\"startScene\" must be a string or null"},
+    };
+    std::filesystem::create_directories(dir / "bad");
+    for (const auto& [what, text, mention] : bad) {
+        writeFile(dir / "bad/project.kast", text);
+        const bool ok = kast::loadProject(dir / "bad/project.kast", loaded, error);
+        check(!ok && contains(error, mention) && loaded.name == "Demo", what);
+        if (!ok)
+            kast::log::info(std::format("expected error ({}): {}", what, error));
+    }
+    check(!kast::loadProject(dir / "none/project.kast", loaded, error) && contains(error, "Cannot open project"),
+          "missing project.kast");
+
+    // Walk-up discovery: nearest ancestor-or-self.
+    check(kast::findProjectDir(dir / "a/b/c") == root, "walk-up finds an ancestor's project.kast");
+    check(kast::findProjectDir(root) == root, "walk-up includes the directory itself");
+    check(!kast::findProjectDir(dir), "no project.kast up the tree: none");
+    kast::saveProject({.root = root / "b", .name = "Inner"}, error);
+    check(kast::findProjectDir(dir / "a/b/c") == root / "b", "walk-up stops at the nearest project");
+    const auto warned = countLogged("no project is active");
+    check(!kast::discoverProject(dir / "bad") && countLogged("no project is active") == warned + 1,
+          "an invalid project.kast is warned about and treated as no project");
+    check(kast::discoverProject(dir / "a/b/c")->name == "Inner", "discoverProject loads the project found");
+
+    // Project-relative paths.
+    check(kast::toProjectPath(root, root / "scripts/x.lua") == "scripts/x.lua", "toProjectPath: '/' separated, relative");
+    check(kast::toProjectPath(root, root / "sub/../x.lua") == "x.lua", "toProjectPath normalizes");
+    check(!kast::toProjectPath(root, dir / "other.lua"), "toProjectPath: outside the root is rejected");
+    check(!kast::toProjectPath(root, root), "toProjectPath: the root itself is not a file in it");
+    check(kast::resolveProjectPath(root, "scripts/x.lua", error) == root / "scripts/x.lua", "resolveProjectPath");
+    check(kast::resolveProjectPath(root, "a/../b.scene", error) == root / "b.scene", "resolveProjectPath normalizes");
+    check(kast::resolveProjectPath(root, "scripts\\x.lua", error) == root / "scripts/x.lua", "backslashes work on Windows");
+    const std::pair<const char*, const char*> escapes[] = {
+        {"../x.scene", "outside the project"},
+        {"a/../../x.scene", "outside the project"},
+        {"..", "outside the project"},
+        {"C:/x.scene", "must be relative to the project root"},
+        {"/x.scene", "must be relative to the project root"},
+        {"", "empty"},
+    };
+    for (const auto& [path, mention] : escapes) {
+        error.clear();
+        check(!kast::resolveProjectPath(root, path, error) && contains(error, mention), path);
+    }
+    std::filesystem::remove_all(dir);
+}
+
+// Opening scenes and projects on a Document (the File menu adds dialogs and modals on top).
+void checkProjectDocument()
+{
+    const std::filesystem::path dir = projectTestDir("kast_projdoc_check", "Alpha");
+    const std::filesystem::path outside = looseTestDir("kast_projdoc_outside");
+    std::filesystem::create_directories(dir / "scenes");
+    saveTestScene(dir / "scenes/start.scene", "Start", {});
+    saveTestScene(outside / "loose.scene", "Loose", {});
+    std::string error;
+
+    Document doc;
+    resetToDefault(doc);
+    check(!doc.project && windowTitle(doc) == "Kast Editor - Untitled", "no project: title keeps its format");
+    check(openFile(doc, (dir / "scenes/start.scene").string(), error) && doc.project && doc.project->name == "Alpha",
+          "Open: the project is found walking up from the scene");
+    check(projectScenePath(doc) == "scenes/start.scene", "the scene's project-relative path");
+    check(windowTitle(doc) == "Kast Editor - Alpha - start", "title with a project");
+    doc.dirty = true;
+    check(windowTitle(doc) == "Kast Editor - Alpha - start*", "title with a project and unsaved changes");
+    resetToDefault(doc);
+    check(doc.project && doc.project->name == "Alpha" && doc.path.empty() && projectScenePath(doc).empty(),
+          "New keeps the active project");
+    check(openFile(doc, (outside / "loose.scene").string(), error) && !doc.project,
+          "Open outside any project: no project");
+
+    // Open Project: invalid files change nothing.
+    const std::string loose = kast::sceneToJson(doc.scene).dump();
+    std::filesystem::create_directories(outside / "bad");
+    writeFile(outside / "bad/project.kast", R"({"version": 1})");
+    check(!openProject(doc, outside / "bad/project.kast", error) && contains(error, "Invalid project") &&
+              kast::sceneToJson(doc.scene).dump() == loose && !doc.project && contains(doc.path, "loose"),
+          "Open Project: an invalid project.kast is rejected and changes nothing");
+    writeFile(outside / "other.kast", R"({"version": 1, "name": "X", "startScene": null})");
+    check(!openProject(doc, outside / "other.kast", error) && contains(error, "not a project.kast") && !doc.project,
+          "Open Project: only files named project.kast");
+
+    check(openProject(doc, dir / "project.kast", error) && doc.project && doc.project->name == "Alpha" &&
+              doc.path.empty() && !doc.dirty && named(doc.scene, "Ground") != entt::null,
+          "Open Project, startScene null: a new default Untitled scene with the project active");
+
+    kast::saveProject({.root = dir, .name = "Alpha", .startScene = "scenes/start.scene"}, error);
+    check(openProject(doc, dir / "project.kast", error) && named(doc.scene, "Start") != entt::null &&
+              std::filesystem::path(doc.path) == (dir / "scenes/start.scene").lexically_normal() && doc.project,
+          "Open Project opens startScene");
+
+    for (const char* start : {"scenes/missing.scene", "../kast_projdoc_outside/loose.scene"}) {
+        kast::saveProject({.root = dir, .name = "Alpha", .startScene = start}, error);
+        const auto warned = countLogged(std::format("Cannot open the project's startScene '{}'", start));
+        check(openProject(doc, dir / "project.kast", error) && doc.project && doc.path.empty() &&
+                  named(doc.scene, "Ground") != entt::null &&
+                  countLogged(std::format("Cannot open the project's startScene '{}'", start)) == warned + 1,
+              "Open Project: a startScene that can't load logs why and opens a new Untitled scene");
+    }
+
+    // New Project: folder name sanitizing, validation, then <dir>/<folder>/project.kast opened like Open Project.
+    check(projectFolderName("My Game") == "my-game" && projectFolderName("  My   Game  ") == "my-game" &&
+              projectFolderName("My\tCool  Game") == "my-cool-game" && projectFolderName("RPG2") == "rpg2" &&
+              projectFolderName("\xC3\x89pic Quest") == "\xC3\x89pic-quest" && projectFolderName(" \t ").empty(),
+          "New Project folder name: trimmed, ASCII lower-cased, whitespace runs become '-'");
+    const std::filesystem::path parent = looseTestDir("kast_projdoc_new");
+    const std::string parentDir = parent.string();
+    check(newProjectTarget("My Game", parentDir) == (parent / "my-game").lexically_normal(), "New Project target folder");
+    check(newProjectError("My Game", parentDir).empty(), "New Project: a valid name and directory");
+    check(contains(newProjectError("   ", parentDir), "Enter a project name"), "New Project rejects a blank name");
+    for (const char* bad : {"a<b", "a>b", "a:b", "a\"b", "a/b", "a\\b", "a|b", "a?b", "a*b", "a\x01b"})
+        check(contains(newProjectError(bad, parentDir), "must not contain"),
+              std::format("New Project rejects an invalid character in '{}'", bad).c_str());
+    check(contains(newProjectError(".", parentDir), "not a valid folder name") &&
+              contains(newProjectError(" .. ", parentDir), "not a valid folder name"),
+          "New Project rejects . and ..");
+    check(contains(newProjectError("game.", parentDir), "must not end with '.'"), "New Project rejects a trailing '.'");
+    check(contains(newProjectError("My Game", ""), "Choose a directory"), "New Project needs a directory");
+    check(contains(newProjectError("My Game", (parent / "missing").string()), "does not exist"),
+          "New Project rejects a missing directory");
+    writeFile(parent / "file.txt", "x");
+    check(contains(newProjectError("My Game", (parent / "file.txt").string()), "does not exist"),
+          "New Project rejects a file as the directory");
+    std::filesystem::create_directories(parent / "taken");
+    check(contains(newProjectError("Taken", parentDir), "already exists") &&
+              contains(newProjectError("File.txt", parentDir), "already exists"),
+          "New Project rejects an existing target folder or file");
+
+    std::filesystem::path created;
+    check(!createProject("My Game", (parent / "missing").string(), created, error) && contains(error, "does not exist") &&
+              !std::filesystem::exists(parent / "missing"),
+          "New Project never creates missing parent directories");
+    check(!createProject("Taken", parentDir, created, error) && contains(error, "already exists") &&
+              std::filesystem::is_empty(parent / "taken"),
+          "New Project refuses an existing folder and writes nothing into it");
+    check(createProject("  My Game ", parentDir, created, error) && created == parent / "my-game" &&
+              readText(parent / "my-game/project.kast") ==
+                  "{\n  \"version\": 1,\n  \"name\": \"My Game\",\n  \"startScene\": null\n}\n",
+          "New Project creates <dir>/my-game/project.kast with the trimmed name and startScene null");
+    check(!createProject("My Game", parentDir, created, error) && contains(error, "already exists"),
+          "New Project refuses to create the same project twice");
+    check(openProject(doc, created / "project.kast", error) && doc.project->name == "My Game" && doc.path.empty() &&
+              windowTitle(doc) == "Kast Editor - My Game - Untitled",
+          "the new project opens like Open Project");
+    startPlay(doc);
+    check(windowTitle(doc) == "Kast Editor - My Game - Untitled (Playing)", "title while playing");
+    togglePause(doc);
+    check(windowTitle(doc) == "Kast Editor - My Game - Untitled (Paused)", "title while paused");
+    stopPlay(doc);
+    std::filesystem::remove_all(dir);
+    std::filesystem::remove_all(outside);
+    std::filesystem::remove_all(parent);
+}
+
+// No active project: C++ systems still run, every Lua system is disabled, and the Systems panel can't add.
+void checkNoProjectLua()
+{
+    const std::filesystem::path dir = looseTestDir("kast_noproject_check");
+    std::filesystem::create_directories(dir / "scripts");
+    writeFile(dir / "scripts/a.lua", "return { update = function(dt) end }");
+    Document doc;
+    resetToDefault(doc);
+    doc.path = (dir / "loose.scene").string();
+    const entt::entity cube = doc.scene.children(entt::null)[2];
+    doc.scene.registry().emplace<kast::Rotator>(cube);
+    doc.scene.systems = {"scripts/a.lua", "scripts/b.lua"};
+    const bx::Quaternion start = doc.scene.registry().get<kast::Transform>(cube).rotation;
+    startPlay(doc);
+    updatePlay(doc, 1.0f);
+    check(!sameRotation(doc.scene.registry().get<kast::Transform>(cube).rotation, start), "no project: C++ systems run");
+    for (size_t i = 0; i < 2; ++i)
+        check(!statusOf(doc.lua, i).ok && contains(statusOf(doc.lua, i).error, "no project"),
+              "no project: each Lua system is disabled with a 'no project' error");
+    check(logged("Lua system disabled: scripts/a.lua: no project"), "the 'no project' error reaches the Console");
+    check(doc.lua.scenePath().empty(), "no project: no current scene path");
+    stopPlay(doc);
+
+    std::string error;
+    check(!addSystem(doc, dir / "scripts/a.lua", error) && contains(error, "project") && doc.scene.systems.size() == 2,
+          "Add Script needs a project");
+    check(!newSystemFromTemplate(doc, error) && contains(error, "project") &&
+              !std::filesystem::exists(dir / "scripts/new_system.lua"),
+          "New from Template needs a project");
+    std::filesystem::remove_all(dir);
+}
+
 // Systems panel operations on a Document (the panel only adds ImGui widgets on top).
 void checkSystemEdits()
 {
-    const std::filesystem::path dir = luaTestDir();
+    const std::filesystem::path dir = projectTestDir("kast_edits_check", "Edits");
+    const std::filesystem::path other = projectTestDir("kast_edits_other", "Other");
+    const std::filesystem::path loose = looseTestDir("kast_edits_loose");
     Document doc;
     resetToDefault(doc);
+    doc.project = kast::discoverProject(dir);
     std::string error;
     check(!newSystemFromTemplate(doc, error) && error == "Save the scene first" && doc.scene.systems.empty(),
           "template needs a saved scene");
-
-    doc.path = (dir / "edit.scene").string();
-    check(newSystemFromTemplate(doc, error) && newSystemFromTemplate(doc, error), "template written");
-    check((doc.scene.systems == std::vector<std::string>{"scripts/new_system.lua", "scripts/new_system_2.lua"}) &&
-              std::filesystem::exists(dir / "scripts/new_system_2.lua") && doc.dirty,
-          "template files get unique names, are added relative to the scene and set dirty");
-    doc.dirty = false;
     writeFile(dir / "other.lua", "return { update = function(dt) end }");
-    addSystem(doc, dir / "other.lua");
-    check(doc.scene.systems.back() == "other.lua" && doc.dirty, "add stores the path relative to the scene");
+    check(addSystem(doc, dir / "other.lua", error) && doc.scene.systems == std::vector<std::string>{"other.lua"} && doc.dirty,
+          "Add Script works on an Untitled scene in a project and stores a project-relative path");
+    doc.dirty = false;
+    writeFile(loose / "outside.lua", "return { update = function(dt) end }");
+    check(!addSystem(doc, loose / "outside.lua", error) && contains(error, "outside the project") &&
+              doc.scene.systems.size() == 1 && !doc.dirty,
+          "Add Script rejects a file outside the project");
+
+    std::filesystem::create_directories(dir / "scenes");
+    doc.path = (dir / "scenes/edit.scene").string();
+    check(newSystemFromTemplate(doc, error) && newSystemFromTemplate(doc, error), "template written");
+    check((doc.scene.systems == std::vector<std::string>{"other.lua", "scripts/new_system.lua", "scripts/new_system_2.lua"}) &&
+              std::filesystem::exists(dir / "scripts/new_system_2.lua") && !std::filesystem::exists(dir / "scenes/scripts") &&
+              doc.dirty,
+          "template files go to <project>/scripts with unique names, stored project-relative, and set dirty");
     moveSystem(doc, 2, -1);
     moveSystem(doc, 0, -1); // past the top: no-op
-    check((doc.scene.systems == std::vector<std::string>{"scripts/new_system.lua", "other.lua", "scripts/new_system_2.lua"}),
+    check((doc.scene.systems == std::vector<std::string>{"other.lua", "scripts/new_system_2.lua", "scripts/new_system.lua"}),
           "move up / down");
-    removeSystem(doc, 0);
+    removeSystem(doc, 2);
     check((doc.scene.systems == std::vector<std::string>{"other.lua", "scripts/new_system_2.lua"}), "remove");
 
     check(canEditSystems(doc), "systems editable when stopped");
     startPlay(doc);
     check(!canEditSystems(doc), "systems not editable during Play");
-    checkOk(doc.lua, 1, "the template is a working system");
+    checkOk(doc.lua, 1, "the template is a working system (resolved from the project root)");
     updatePlay(doc, 0.1f);
     checkOk(doc.lua, 1, "the template's update runs");
     stopPlay(doc);
 
-    // Save As into another directory keeps the paths pointing at the same files.
+    // Save As never rebases; moving to another project or none warns.
+    const std::string warning = "may no longer resolve";
+    const std::vector<std::string> systems = doc.scene.systems;
+    const auto warned = countLogged(warning);
     std::filesystem::create_directories(dir / "sub");
-    check(saveFile(doc, (dir / "sub/moved.scene").string(), error), "Save As");
-    check((doc.scene.systems == std::vector<std::string>{"../other.lua", "../scripts/new_system_2.lua"}),
-          "Save As rebases system paths");
+    check(saveFile(doc, (dir / "sub/moved.scene").string(), error) && doc.scene.systems == systems &&
+              countLogged(warning) == warned && doc.project->name == "Edits",
+          "Save As inside the project: paths unchanged, no warning");
     startPlay(doc);
-    checkOk(doc.lua, 0, "rebased paths still load");
+    checkOk(doc.lua, 0, "project-relative paths load from a scene in a subfolder");
     stopPlay(doc);
+    check(saveFile(doc, (other / "moved.scene").string(), error) && doc.scene.systems == systems &&
+              countLogged(warning) == warned + 1 && doc.project && doc.project->name == "Other" &&
+              contains(readText(other / "moved.scene"), "\"scripts/new_system_2.lua\""),
+          "Save As into another project: warns, paths not rebased, project switches");
+    check(saveFile(doc, (loose / "moved.scene").string(), error) && doc.scene.systems == systems &&
+              countLogged(warning) == warned + 2 && !doc.project,
+          "Save As into no project: warns, no project");
+    doc.scene.systems.clear();
+    check(saveFile(doc, (dir / "empty.scene").string(), error) && countLogged(warning) == warned + 2 && doc.project &&
+              doc.project->name == "Edits",
+          "no warning without systems; Save sets the project by walking up");
+    std::filesystem::remove_all(dir);
+    std::filesystem::remove_all(other);
+    std::filesystem::remove_all(loose);
+}
+
+// kast.loadScene errors: raised at the calling line, nothing queued, the current scene keeps running.
+void checkSceneSwitchErrors()
+{
+    const std::filesystem::path dir = projectTestDir("kast_switch_errors", "Errors");
+    saveTestScene(dir / "target.scene", "Target", {});
+    writeFile(dir / "broken.scene", R"({ "version": 4, )");
+    writeFile(dir / "v3.scene", R"({"version": 3, "entities": [], "systems": []})");
+    writeFile(dir / "scripts/errors.lua", R"(local function fails(part, fn)
+    local ok, err = pcall(fn)
+    assert(not ok, "expected an error mentioning " .. part)
+    assert(string.find(err, part, 1, true), "error '" .. tostring(err) .. "' does not mention " .. part)
+    assert(string.find(err, "errors.lua:%d+:"), "error '" .. tostring(err) .. "' has no file:line")
+end
+return { update = function(dt)
+    assert(kast.currentScene() == "errors.scene", "currentScene before any switch")
+    fails("outside the project", function() kast.loadScene("../outside.scene") end)
+    fails("outside the project", function() kast.loadScene("scripts/../../target.scene") end)
+    fails("must be relative to the project root", function() kast.loadScene("C:/target.scene") end)
+    fails("must be relative to the project root", function() kast.loadScene("/target.scene") end)
+    fails("path is empty", function() kast.loadScene("") end)
+    fails("Cannot open scene", function() kast.loadScene("missing.scene") end)
+    fails("Invalid scene", function() kast.loadScene("broken.scene") end)
+    fails('unsupported "version" 3', function() kast.loadScene("v3.scene") end)
+    assert(not pcall(kast.loadScene), "a missing argument raises")
+end })");
+    writeFile(dir / "scripts/raw.lua", "return { update = function(dt)\n    kast.loadScene(\"missing.scene\")\nend }");
+    writeFile(dir / "scripts/after.lua", "return { update = function(dt) kast.log(\"swerr after\") end }");
+    saveTestScene(dir / "errors.scene", "Errors", {"scripts/errors.lua", "scripts/raw.lua", "scripts/after.lua"});
+
+    kast::Scene scene;
+    std::string error;
+    check(kast::loadScene((dir / "errors.scene").string(), scene, error), "load errors.scene");
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "errors.scene", nullptr);
+    const auto ran = countLogged("swerr after");
+    check(!lua.tick(0.1f), "failed kast.loadScene calls queue no switch");
+    checkOk(lua, 0, "kast.loadScene errors raise at the calling line (no project root escape, missing, invalid, v3)");
+    check(!statusOf(lua, 1).ok && contains(statusOf(lua, 1).error, "raw.lua:2:") &&
+              contains(statusOf(lua, 1).error, "Cannot open scene"),
+          "an uncaught kast.loadScene error disables the calling system with file:line");
+    checkOk(lua, 2, "other systems keep running");
+    check(!lua.tick(0.1f) && countLogged("swerr after") == ran + 2 && named(scene, "Errors") != entt::null &&
+              lua.scenePath() == "errors.scene",
+          "the current scene keeps running");
+    lua.stop();
+    std::filesystem::remove_all(dir);
+}
+
+// kast.loadScene on a Document: deferred to the end of the frame, last call wins, shutdown calls ignored, old
+// shutdowns before new inits, panels/title follow, Stop restores the pre-Play scene after several switches.
+void checkSceneSwitch()
+{
+    const std::filesystem::path dir = projectTestDir("kast_switch_check", "Switch");
+    std::filesystem::create_directories(dir / "levels");
+    saveTestScene(dir / "a.scene", "A", {"scripts/a.lua", "scripts/a2.lua"});
+    saveTestScene(dir / "b.scene", "B", {"scripts/b.lua"});
+    saveTestScene(dir / "levels/c.scene", "C", {"scripts/c.lua"});
+    writeFile(dir / "scripts/a.lua", R"(return {
+    init = function() kast.log("sw a init " .. tostring(kast.currentScene())) end,
+    update = function(dt)
+        kast.loadScene("levels/c.scene")
+        kast.loadScene("./b.scene") -- last call wins
+        kast.log("sw a update " .. kast.currentScene()) -- still a.scene: the switch waits for the end of the frame
+    end,
+    shutdown = function() kast.log("sw a shutdown"); kast.loadScene("levels/c.scene") end, -- ignored
+})");
+    writeFile(dir / "scripts/a2.lua", R"(return { update = function(dt)
+    local n = 0
+    for e in kast.query() do n = n + 1 end
+    kast.log("sw a2 update " .. n)
+end })");
+    writeFile(dir / "scripts/b.lua", R"(return {
+    init = function() kast.log("sw b init " .. tostring(kast.currentScene())); kast.loadScene("levels/c.scene") end,
+    update = function(dt) kast.log("sw b update") end,
+    shutdown = function() kast.log("sw b shutdown") end,
+})");
+    writeFile(dir / "scripts/c.lua", R"(return {
+    init = function() kast.log("sw c init " .. tostring(kast.currentScene())) end,
+    update = function(dt) end,
+    shutdown = function() kast.log("sw c shutdown"); kast.loadScene("a.scene") end, -- ignored: Stop
+})");
+
+    Document doc;
+    std::string error;
+    check(openFile(doc, (dir / "a.scene").string(), error) && doc.project, "open a.scene in its project");
+    const entt::entity a = named(doc.scene, "A");
+    doc.scene.registry().get<kast::Name>(a).value = "A edited"; // unsaved: loadScene reads files, Stop restores this
+    markDirty(doc);
+    doc.selected = a;
+    const kast::EntityId selectedId = doc.scene.registry().get<kast::PersistentId>(a).value;
+    doc.camera.yaw = 77.0f;
+    const std::string before = kast::sceneToJson(doc.scene).dump(2);
+    const std::string path = doc.path;
+    const std::filesystem::path root = doc.project->root;
+
+    startPlay(doc);
+    check(logged("sw a init a.scene") && windowTitle(doc) == "Kast Editor - Switch - a* (Playing)",
+          "Play: currentScene is a.scene, title has no switched name yet");
+    updatePlay(doc, 0.1f);
+    check(logIndex("sw a update a.scene") < logIndex("sw a2 update 1") &&
+              logIndex("sw a2 update 1") < logIndex("sw a shutdown") &&
+              logIndex("sw a shutdown") < logIndex("sw b init b.scene") && logIndex("sw b init b.scene") != SIZE_MAX,
+          "switch at the end of the frame: every update, then old shutdowns, then new inits");
+    check(named(doc.scene, "B") != entt::null && named(doc.scene, "A edited") == entt::null && named(doc.scene, "A") == entt::null,
+          "the last call wins and the scene is read from disk");
+    check(!logged("sw c init"), "loadScene from a shutdown is ignored; from an init it waits for the next frame");
+    check(doc.selected == entt::null, "a switch clears the selection");
+    check((doc.scene.systems == std::vector<std::string>{"scripts/b.lua"}) && statusOf(doc.lua, 0).path == "scripts/b.lua" &&
+              statusOf(doc.lua, 0).ok,
+          "the Systems panel lists and reports the new scene's systems");
+    check(windowTitle(doc) == "Kast Editor - Switch - a* (Playing: b)", "title shows the running scene");
+    check(doc.path == path && doc.project && doc.project->root == root && doc.camera.yaw == 77.0f && doc.dirty,
+          "a switch keeps path, project, dirty flag and editor camera");
+
+    togglePause(doc);
+    updatePlay(doc, 0.1f);
+    check(windowTitle(doc) == "Kast Editor - Switch - a* (Paused: b)" && !logged("sw b update"), "paused: no tick, no switch");
+    startPlay(doc);
+    updatePlay(doc, 0.1f);
+    check(logIndex("sw b update") < logIndex("sw b shutdown") && logIndex("sw b shutdown") < logIndex("sw c init levels/c.scene") &&
+              logIndex("sw c init levels/c.scene") != SIZE_MAX,
+          "a call from init is applied at the end of the next ticked frame");
+    check(named(doc.scene, "C") != entt::null && doc.lua.scenePath() == "levels/c.scene" &&
+              windowTitle(doc) == "Kast Editor - Switch - a* (Playing: c)",
+          "second switch, into a subfolder");
+    doc.selected = named(doc.scene, "C");
+
+    stopPlay(doc);
+    check(logged("sw c shutdown") && countLogged("sw a init") == 1, "Stop: shutdown's loadScene is ignored");
+    check(kast::sceneToJson(doc.scene).dump(2) == before, "Stop after two switches restores the byte-identical pre-Play scene");
+    check(doc.path == path && doc.project && doc.project->root == root && doc.dirty &&
+              doc.scene.valid(doc.selected) && doc.scene.registry().get<kast::PersistentId>(doc.selected).value == selectedId &&
+              windowTitle(doc) == "Kast Editor - Switch - a*",
+          "Stop restores path, project, dirty flag, selection by id and the title");
+
+    // kast.currentScene: nil for an Untitled scene, the project-relative path otherwise.
+    writeFile(dir / "scripts/cur.lua",
+              R"(return { init = function() kast.log("sw cur " .. tostring(kast.currentScene())) end, update = function(dt) end })");
+    resetToDefault(doc);
+    doc.scene.systems = {"scripts/cur.lua"};
+    startPlay(doc);
+    stopPlay(doc);
+    check(logged("sw cur nil"), "kast.currentScene() is nil for an Untitled scene");
+    doc.path = (dir / "levels/d.scene").string();
+    startPlay(doc);
+    stopPlay(doc);
+    check(logged("sw cur levels/d.scene"), "kast.currentScene() is the project-relative path");
     std::filesystem::remove_all(dir);
 }
 
@@ -998,7 +1442,12 @@ int main()
     checkLuaSandbox();
     checkLuaErrors();
     checkLuaHotReload();
+    checkProjectFiles();
+    checkProjectDocument();
+    checkNoProjectLua();
     checkSystemEdits();
+    checkSceneSwitchErrors();
+    checkSceneSwitch();
     if (g_failures > 0) {
         kast::log::error(std::format("{} self-check(s) failed", g_failures));
         return 1;

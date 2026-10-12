@@ -7,14 +7,37 @@
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
+#include <imgui_stdlib.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <fstream>
 
 namespace {
 
+constexpr std::string_view kInvalidFolderChars = R"(<>:"/\|?*)"; // Windows; control characters are checked separately
+
+bool isAsciiSpace(char c) { return c == ' ' || (c >= '\t' && c <= '\r'); }
+
+std::string_view trimmed(std::string_view text)
+{
+    while (!text.empty() && isAsciiSpace(text.front()))
+        text.remove_prefix(1);
+    while (!text.empty() && isAsciiSpace(text.back()))
+        text.remove_suffix(1);
+    return text;
+}
+
+bool isInvalidFolderChar(char c)
+{
+    const auto byte = static_cast<unsigned char>(c);
+    return byte < 0x20 || byte == 0x7f || kInvalidFolderChars.find(c) != std::string_view::npos;
+}
+
 constexpr SDL_DialogFileFilter kSceneFilter{"Kast scene (*.scene)", "scene"};
+// SDL filters match extensions only; openProject rejects any other *.kast file name.
+constexpr SDL_DialogFileFilter kProjectFilter{"Kast project (project.kast)", "kast"};
 constexpr bx::Vec3 kNewLightEuler{-50.0f, -30.0f, 0.0f}; // ~50 deg down, slightly from the side so faces shade differently
 constexpr bx::Vec3 kMainCameraPosition{0.0f, 3.0f, 7.0f};
 constexpr bx::Vec3 kMainCameraEuler{-20.0f, 0.0f, 0.0f}; // looks down at the origin from kMainCameraPosition
@@ -40,12 +63,9 @@ return {
 }
 )";
 
-// path as a '/'-separated string relative to dir (absolute if they share no root, e.g. another drive).
-std::string relativeTo(const std::filesystem::path& path, const std::filesystem::path& dir)
+std::optional<kast::Project> projectOf(const std::string& sceneFile)
 {
-    const std::filesystem::path absolute = std::filesystem::absolute(path).lexically_normal();
-    const std::filesystem::path relative = absolute.lexically_relative(std::filesystem::absolute(dir).lexically_normal());
-    return (relative.empty() ? absolute : relative).generic_string();
+    return kast::discoverProject(std::filesystem::absolute(sceneFile).parent_path());
 }
 
 } // namespace
@@ -125,7 +145,9 @@ void startPlay(Document& doc)
         kast::log::info("Play");
         if (kast::activeCamera(doc.scene) == entt::null)
             kast::log::warn("No Camera in scene: the Game view has nothing to render");
-        doc.lua.start(doc.scene, sceneDir(doc), &doc.input);
+        doc.playSceneName.clear();
+        doc.lua.start(doc.scene, doc.project ? std::optional(doc.project->root) : std::nullopt, projectScenePath(doc),
+                      &doc.input);
     }
     doc.play = PlayState::Playing;
 }
@@ -148,6 +170,7 @@ void stopPlay(Document& doc)
         kast::log::error(std::format("Cannot restore the scene from before Play: {}", error)); // keeps the play-mode scene
     doc.play = PlayState::Stopped;
     doc.playSnapshot = nullptr;
+    doc.playSceneName.clear();
     doc.dirty = doc.playSnapshotDirty;
     selectById(doc, selected);
     doc.focusRequest = PanelFocus::Scene;
@@ -159,20 +182,35 @@ void updatePlay(Document& doc, float dt)
     if (doc.play != PlayState::Playing)
         return;
     kast::tickSystems(doc.scene, dt);
-    doc.lua.tick(dt);
+    if (doc.lua.tick(dt)) { // kast.loadScene replaced doc.scene
+        doc.selected = entt::null;
+        doc.playSceneName = std::filesystem::path(doc.lua.scenePath()).stem().string();
+    }
 }
 
-std::filesystem::path sceneDir(const Document& doc)
+std::string projectScenePath(const Document& doc)
 {
-    return doc.path.empty() ? std::filesystem::current_path() : std::filesystem::path(doc.path).parent_path();
+    if (!doc.project || doc.path.empty())
+        return {};
+    return kast::toProjectPath(doc.project->root, doc.path).value_or("");
 }
 
 bool canEditSystems(const Document& doc) { return doc.play == PlayState::Stopped; }
 
-void addSystem(Document& doc, const std::filesystem::path& script)
+bool addSystem(Document& doc, const std::filesystem::path& script, std::string& error)
 {
-    doc.scene.systems.push_back(relativeTo(script, sceneDir(doc)));
+    if (!doc.project) {
+        error = "Open a scene inside a project to add Lua systems";
+        return false;
+    }
+    const std::optional<std::string> path = kast::toProjectPath(doc.project->root, script);
+    if (!path) {
+        error = std::format("'{}' is outside the project '{}'", script.string(), doc.project->root.string());
+        return false;
+    }
+    doc.scene.systems.push_back(*path);
     markDirty(doc);
+    return true;
 }
 
 void removeSystem(Document& doc, size_t index)
@@ -192,11 +230,15 @@ void moveSystem(Document& doc, size_t index, int delta)
 
 bool newSystemFromTemplate(Document& doc, std::string& error)
 {
+    if (!doc.project) {
+        error = "Open a scene inside a project to add Lua systems";
+        return false;
+    }
     if (doc.path.empty()) {
         error = "Save the scene first";
         return false;
     }
-    const std::filesystem::path dir = sceneDir(doc) / "scripts";
+    const std::filesystem::path dir = doc.project->root / "scripts";
     std::filesystem::path file = dir / "new_system.lua";
     for (int n = 2; std::filesystem::exists(file); ++n)
         file = dir / std::format("new_system_{}.lua", n);
@@ -209,7 +251,8 @@ bool newSystemFromTemplate(Document& doc, std::string& error)
         error = std::format("Cannot write '{}'", file.string());
         return false;
     }
-    addSystem(doc, file);
+    if (!addSystem(doc, file, error))
+        return false;
     kast::log::info(std::format("Created Lua system '{}'", file.string()));
     return true;
 }
@@ -254,6 +297,7 @@ bool openFile(Document& doc, const std::string& path, std::string& error)
     doc.scene = std::move(scene);
     doc.camera = camera;
     doc.path = path;
+    doc.project = projectOf(path);
     doc.selected = entt::null;
     doc.dirty = false;
     kast::log::info(std::format("Opened scene '{}'", path));
@@ -263,17 +307,105 @@ bool openFile(Document& doc, const std::string& path, std::string& error)
 bool saveFile(Document& doc, const std::string& path, std::string& error)
 {
     doc.scene.editorData["camera"] = doc.camera.toJson();
-    // Save As to another directory: keep the Lua system paths pointing at the same files.
-    std::vector<std::string> systems = doc.scene.systems;
-    for (std::string& system : doc.scene.systems)
-        system = relativeTo(sceneDir(doc) / system, std::filesystem::path(path).parent_path());
-    if (!kast::saveScene(doc.scene, path, error)) {
-        doc.scene.systems = std::move(systems);
+    if (!kast::saveScene(doc.scene, path, error))
         return false;
-    }
+    std::optional<kast::Project> project = projectOf(path);
+    const auto root = [](const std::optional<kast::Project>& p) { return p ? p->root : std::filesystem::path(); };
+    if (!doc.scene.systems.empty() && root(project) != root(doc.project))
+        kast::log::warn(std::format("Saved into {}: the scene's Lua system paths are project-relative and may no longer "
+                                    "resolve",
+                                    project ? std::format("project '{}'", project->name) : "no project"));
     doc.path = path;
+    doc.project = std::move(project);
     doc.dirty = false;
     kast::log::info(std::format("Saved scene '{}'", path));
+    return true;
+}
+
+bool openProject(Document& doc, const std::filesystem::path& file, std::string& error)
+{
+    if (file.filename() != kast::kProjectFileName) {
+        error = std::format("'{}' is not a {} file", file.string(), kast::kProjectFileName);
+        return false;
+    }
+    kast::Project project;
+    if (!kast::loadProject(file, project, error))
+        return false;
+    kast::log::info(std::format("Opened project '{}' ({})", project.name, project.root.string()));
+    if (project.startScene) {
+        std::string reason;
+        const std::optional<std::filesystem::path> scene = kast::resolveProjectPath(project.root, *project.startScene, reason);
+        if (scene && openFile(doc, scene->string(), reason))
+            return true;
+        kast::log::warn(std::format("Cannot open the project's startScene '{}': {}", *project.startScene, reason));
+    }
+    resetToDefault(doc);
+    doc.project = std::move(project);
+    return true;
+}
+
+std::string projectFolderName(std::string_view name)
+{
+    std::string folder;
+    bool afterSpace = false;
+    for (const char c : trimmed(name)) {
+        if (isAsciiSpace(c)) {
+            afterSpace = true;
+            continue;
+        }
+        if (std::exchange(afterSpace, false))
+            folder += '-';
+        folder += c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+    }
+    return folder;
+}
+
+std::filesystem::path newProjectTarget(std::string_view name, const std::string& dir)
+{
+    const std::filesystem::path target = std::filesystem::path(dir) / projectFolderName(name);
+    std::error_code ec;
+    const std::filesystem::path absolute = std::filesystem::absolute(target, ec);
+    return (ec ? target : absolute).lexically_normal();
+}
+
+std::string newProjectError(std::string_view name, const std::string& dir)
+{
+    const std::string folder = projectFolderName(name);
+    if (folder.empty())
+        return "Enter a project name";
+    if (std::ranges::any_of(folder, isInvalidFolderChar))
+        return R"(The name must not contain < > : " / \ | ? * or control characters)";
+    if (folder == "." || folder == "..")
+        return std::format("'{}' is not a valid folder name", folder);
+    if (folder.back() == '.') // Windows silently drops it, so the folder would not match the preview
+        return "The name must not end with '.'";
+    if (dir.empty())
+        return "Choose a directory";
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec))
+        return std::format("The directory '{}' does not exist", dir);
+    if (const std::filesystem::path target = newProjectTarget(name, dir); std::filesystem::exists(target, ec))
+        return std::format("'{}' already exists", target.string());
+    return "";
+}
+
+bool createProject(std::string_view name, const std::string& dir, std::filesystem::path& created, std::string& error)
+{
+    error = newProjectError(name, dir);
+    if (!error.empty())
+        return false;
+    const std::filesystem::path target = newProjectTarget(name, dir);
+    std::error_code ec;
+    if (!std::filesystem::create_directory(target, ec)) {
+        error = std::format("Cannot create the folder '{}': {}", target.string(), ec ? ec.message() : "it already exists");
+        return false;
+    }
+    if (!kast::saveProject({.root = target, .name = std::string(trimmed(name))}, error)) {
+        std::filesystem::remove_all(target, ec); // made by this call, so nothing of the user's is lost
+        return false;
+    }
+    created = target;
+    kast::log::info(std::format("Created project '{}'", (target / kast::kProjectFileName).string()));
     return true;
 }
 
@@ -282,8 +414,20 @@ std::string displayName(const Document& doc)
     return doc.path.empty() ? "Untitled" : std::filesystem::path(doc.path).stem().string();
 }
 
+std::string windowTitle(const Document& doc)
+{
+    std::string play;
+    if (doc.play != PlayState::Stopped)
+        play = std::format(" ({}{}{})", doc.play == PlayState::Playing ? "Playing" : "Paused",
+                           doc.playSceneName.empty() ? "" : ": ", doc.playSceneName);
+    const std::string project = doc.project ? doc.project->name + " - " : "";
+    return std::format("Kast Editor - {}{}{}{}", project, displayName(doc), doc.dirty ? "*" : "", play);
+}
+
 void FileActions::newScene() { request(Pending::New); }
 void FileActions::open() { request(Pending::Open); }
+void FileActions::newProject() { request(Pending::NewProject); }
+void FileActions::openProject() { request(Pending::OpenProject); }
 void FileActions::saveAs() { showSaveDialog(Pending::None); }
 void FileActions::exit() { kast::requestQuit(); } // same path as the window X, so onQuitRequested runs
 
@@ -327,6 +471,14 @@ void FileActions::perform(Pending action)
         dialogOpen_ = true;
         dialogKind_ = DialogKind::Open;
         SDL_ShowOpenFileDialog(onDialogDone, this, window_, &kSceneFilter, 1, nullptr, false);
+        break;
+    case Pending::NewProject:
+        openNewProject("", "");
+        break;
+    case Pending::OpenProject:
+        dialogOpen_ = true;
+        dialogKind_ = DialogKind::OpenProject;
+        SDL_ShowOpenFileDialog(onDialogDone, this, window_, &kProjectFilter, 1, nullptr, false);
         break;
     case Pending::Quit:
         quitConfirmed_ = true;
@@ -380,6 +532,14 @@ void FileActions::handleDialogResult()
         if (openFile(doc_, path, error))
             return;
         error_ = error;
+    } else if (dialogKind_ == DialogKind::OpenProject) {
+        std::string error;
+        if (::openProject(doc_, path, error))
+            return;
+        error_ = error;
+    } else if (dialogKind_ == DialogKind::NewProjectFolder) {
+        newProjectDir_ = path;
+        return;
     } else {
         if (std::filesystem::path(path).extension().empty())
             path += ".scene";
@@ -447,6 +607,8 @@ void FileActions::drawModals()
         ImGui::EndPopup();
     }
 
+    drawNewProjectModal();
+
     if (std::exchange(errorRequested_, false))
         ImGui::OpenPopup("Error");
     if (ImGui::BeginPopupModal("Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -458,10 +620,77 @@ void FileActions::drawModals()
     }
 }
 
+void FileActions::openNewProject(std::string name, std::string dir)
+{
+    newProjectName_ = std::move(name);
+    newProjectDir_ = std::move(dir);
+    newProjectRequested_ = true;
+    newProjectOpen_ = true;
+}
+
+void FileActions::drawNewProjectModal()
+{
+    if (std::exchange(newProjectRequested_, false))
+        ImGui::OpenPopup("New Project");
+    // Tracks the popup itself, so idle() also sees it closed when another popup (an Error) replaced it.
+    newProjectOpen_ = ImGui::BeginPopupModal("New Project", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+    if (!newProjectOpen_)
+        return;
+    const float fieldWidth = ImGui::GetFontSize() * 24.0f;
+    if (ImGui::IsWindowAppearing())
+        ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(fieldWidth);
+    ImGui::InputText("Name", &newProjectName_);
+    ImGui::SetNextItemWidth(fieldWidth);
+    ImGui::InputText("Directory", &newProjectDir_);
+    ImGui::SameLine();
+    if (ImGui::Button("Browse..."))
+        browseNewProjectDir();
+
+    const std::string error = newProjectError(newProjectName_, newProjectDir_);
+    const bool previewable = !newProjectDir_.empty() && !projectFolderName(newProjectName_).empty();
+    ImGui::Text("Will create: %s", previewable ? newProjectTarget(newProjectName_, newProjectDir_).string().c_str() : "-");
+    if (!error.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", error.c_str());
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!error.empty());
+    const bool create = ImGui::Button("Create");
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (create) {
+        ImGui::CloseCurrentPopup();
+        createNewProject();
+    } else if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+void FileActions::browseNewProjectDir()
+{
+    if (dialogOpen_)
+        return;
+    dialogOpen_ = true;
+    dialogKind_ = DialogKind::NewProjectFolder;
+    std::error_code ec;
+    const bool startHere = std::filesystem::is_directory(newProjectDir_, ec);
+    SDL_ShowOpenFolderDialog(onDialogDone, this, window_, startHere ? newProjectDir_.c_str() : nullptr, false);
+}
+
+void FileActions::createNewProject()
+{
+    std::string error;
+    std::filesystem::path dir;
+    if (createProject(newProjectName_, newProjectDir_, dir, error) && ::openProject(doc_, dir / kast::kProjectFileName, error))
+        return;
+    error_ = error;
+    kast::log::error(error_);
+    errorRequested_ = true;
+}
+
 void FileActions::updateTitle()
 {
-    const char* play = doc_.play == PlayState::Playing ? " (Playing)" : doc_.play == PlayState::Paused ? " (Paused)" : "";
-    std::string title = std::format("Kast Editor - {}{}{}", displayName(doc_), doc_.dirty ? "*" : "", play);
+    std::string title = windowTitle(doc_);
     if (title == title_ || !window_)
         return;
     title_ = std::move(title);

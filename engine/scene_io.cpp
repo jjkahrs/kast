@@ -118,10 +118,9 @@ bool sceneFromJson(const Json& json, Scene& out, std::string& error)
 {
     try {
         const Json& version = field(json, "version");
-        if (!version.is_number_integer() || version.get<int>() < kOldestSceneFileVersion ||
-            version.get<int>() > kSceneFileVersion)
-            throw Invalid(std::format("unsupported \"version\" {} (expected {} to {})", version.dump(),
-                                      kOldestSceneFileVersion, kSceneFileVersion));
+        if (!version.is_number_integer() || version.get<int>() != kSceneFileVersion)
+            throw Invalid(std::format("unsupported \"version\" {} (expected {}; older scenes are not migrated)",
+                                      version.dump(), kSceneFileVersion));
 
         const Json& entities = field(json, "entities");
         if (!entities.is_array())
