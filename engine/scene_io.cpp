@@ -1,6 +1,7 @@
 #include "scene_io.h"
 
 #include "components.h"
+#include "log.h"
 
 #include <charconv>
 #include <format>
@@ -38,9 +39,11 @@ struct Record {
     std::optional<EntityId> parent;
     std::string name;
     std::vector<entt::meta_any> components; // registration order
+    std::vector<std::pair<std::string, Json>> luaComponents; // canonical, after the drift rules
+    std::map<std::string, Json> preserved;                   // unknown types, verbatim
 };
 
-Record parseEntity(const Json& json)
+Record parseEntity(const Json& json, SceneLoadReport& report)
 {
     if (!json.is_object())
         throw Invalid("must be an object");
@@ -56,9 +59,23 @@ Record parseEntity(const Json& json)
     const Json& components = field(json, "components");
     if (!components.is_object())
         throw Invalid("\"components\" must be an object");
-    for (const auto& [key, value] : components.items())
-        if (!findComponentType(key))
-            throw Invalid(std::format("unknown component \"{}\"", key));
+    const std::string label = std::format("Entity '{}' (id {})", record.name, record.id);
+    for (const auto& [key, value] : components.items()) {
+        const ComponentType type = findAnyComponentType(key);
+        if (type.meta())
+            continue; // below, strictly
+        if (type.lua()) {
+            std::vector<std::string> fixes;
+            record.luaComponents.emplace_back(key, migrateLuaComponent(*type.lua(), value, fixes));
+            for (const std::string& fix : fixes)
+                report.warnings.push_back(std::format("{}: {}: {}", label, key, fix));
+            report.migrated = report.migrated || !fixes.empty();
+        } else {
+            record.preserved[key] = value;
+            report.warnings.push_back(std::format("{}: unknown component \"{}\" (no built-in or valid Lua definition); "
+                                                  "its data is kept as-is", label, key));
+        }
+    }
     if (!components.contains(entt::resolve<Transform>().name()))
         throw Invalid("missing \"Transform\" component");
     for (const entt::meta_type& type : componentTypes()) {
@@ -93,6 +110,10 @@ void build(const std::vector<Record>& records, Scene& scene)
             const entt::entity entity = scene.createWithId(record.id, record.name, parent);
             for (const entt::meta_any& component : record.components)
                 setComponent(scene.registry(), entity, component);
+            for (const auto& [name, value] : record.luaComponents)
+                scene.registry().storage<LuaComponentData>(luaStorageId(name)).emplace(entity, LuaComponentData{value});
+            if (!record.preserved.empty())
+                scene.registry().emplace<PreservedComponents>(entity, record.preserved);
             ++created;
             self(self, record.id, entity);
         }
@@ -114,8 +135,9 @@ double jsonNumber(float value)
     return result;
 }
 
-bool sceneFromJson(const Json& json, Scene& out, std::string& error)
+bool sceneFromJson(const Json& json, Scene& out, std::string& error, SceneLoadReport* report)
 {
+    SceneLoadReport local;
     try {
         const Json& version = field(json, "version");
         if (!version.is_number_integer() || version.get<int>() != kSceneFileVersion)
@@ -128,7 +150,7 @@ bool sceneFromJson(const Json& json, Scene& out, std::string& error)
         std::vector<Record> records;
         for (size_t i = 0; i < entities.size(); ++i) {
             try {
-                records.push_back(parseEntity(entities[i]));
+                records.push_back(parseEntity(entities[i], local));
             } catch (const Invalid& e) {
                 throw Invalid(std::format("entities[{}]: {}", i, e.what()));
             }
@@ -152,6 +174,8 @@ bool sceneFromJson(const Json& json, Scene& out, std::string& error)
             }
         }
         out = std::move(scene);
+        if (report)
+            *report = std::move(local);
         return true;
     } catch (const Json::exception& e) {
         error = e.what();
@@ -161,7 +185,7 @@ bool sceneFromJson(const Json& json, Scene& out, std::string& error)
     return false;
 }
 
-bool loadScene(const std::string& path, Scene& out, std::string& error)
+bool loadScene(const std::string& path, Scene& out, std::string& error, SceneLoadReport* report)
 {
     std::ifstream file(path, std::ios::binary);
     if (!file) {
@@ -170,8 +194,14 @@ bool loadScene(const std::string& path, Scene& out, std::string& error)
     }
     std::string reason;
     try {
-        if (sceneFromJson(Json::parse(file), out, reason))
+        SceneLoadReport local;
+        if (sceneFromJson(Json::parse(file), out, reason, &local)) {
+            for (const std::string& warning : local.warnings)
+                log::warn(std::format("Scene '{}': {}", path, warning));
+            if (report)
+                *report = std::move(local);
             return true;
+        }
     } catch (const Json::exception& e) {
         reason = e.what();
     }
@@ -182,6 +212,7 @@ bool loadScene(const std::string& path, Scene& out, std::string& error)
 Json sceneToJson(const Scene& scene)
 {
     const entt::registry& registry = scene.registry();
+    const std::vector<ComponentType> types = allComponentTypes();
     Json entities = Json::array();
     scene.forEachDepthFirst([&](entt::entity entity) {
         const entt::entity parent = scene.parent(entity);
@@ -190,9 +221,12 @@ Json sceneToJson(const Scene& scene)
         json["name"] = registry.get<Name>(entity).value;
         json["parent"] = parent == entt::null ? Json(nullptr) : Json(registry.get<PersistentId>(parent).value);
         Json& components = json["components"] = Json::object();
-        for (const entt::meta_type& type : componentTypes())
+        for (const ComponentType& type : types)
             if (hasComponent(registry, entity, type))
-                components[type.name()] = componentToJson(getComponent(registry, entity, type));
+                components[type.name()] = componentToJson(registry, entity, type);
+        if (const auto* preserved = registry.try_get<PreservedComponents>(entity))
+            for (const auto& [name, value] : preserved->byName)
+                components[name] = value;
         entities.push_back(std::move(json));
     });
 

@@ -31,12 +31,16 @@ constexpr bgfx::ViewId kGameView = 2;
 constexpr bgfx::ViewId kImGuiView = 255; // last, so the UI draws over everything
 constexpr uint32_t kBackbufferClearColor = 0x202020ff;
 constexpr int kScreenshotTimeoutFrames = 30;
+// --add-component-popup waits this long: focus changes while the first frames dock the windows close popups.
+constexpr int kAddComponentPopupFrame = 10;
+constexpr float kComponentPollSeconds = 0.5f; // Lua component definition files are checked for changes this often
 constexpr float kFontSize = 16.0f; // at UI scale 1.0
 constexpr float kMinUiScale = 0.75f;
 constexpr float kMaxUiScale = 3.0f;
 constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--ui-scale F] [--scene in.scene] "
-    "[--project dir] [--save-scene out.scene] [--select ID] [--play] [--new-project name dir]";
+    "[--project dir] [--save-scene out.scene] [--select ID] [--play] [--new-project name dir] "
+    "[--add-component-popup] [--new-component-prompt Name] [--new-component Name]";
 
 struct Options {
     int frames = 0;         // 0 = run until quit
@@ -50,6 +54,9 @@ struct Options {
     kast::EntityId select = 0;    // select this entity at startup; 0 = none
     bool play = false;            // enter Play mode once the startup scene is loaded
     std::optional<std::pair<std::string, std::string>> newProject; // name, dir: open the prefilled New Project modal
+    bool addComponentPopup = false; // open the Inspector's Add Component popup for the --select entity
+    std::optional<std::string> newComponentPrompt; // open the Inspector's New Lua Component modal with this name
+    std::string newComponent; // create this Lua component and add it to the --select entity at startup
 };
 
 template <typename T>
@@ -83,6 +90,12 @@ std::optional<Options> parseArgs(int argc, char** argv)
         } else if (arg == "--new-project" && i + 2 < argc) {
             options.newProject.emplace(argv[i + 1], argv[i + 2]);
             i += 2;
+        } else if (arg == "--add-component-popup") {
+            options.addComponentPopup = true;
+        } else if (arg == "--new-component-prompt" && hasValue) {
+            options.newComponentPrompt = argv[++i];
+        } else if (arg == "--new-component" && hasValue) {
+            options.newComponent = argv[++i];
         } else if (arg == "--play") {
             options.play = true;
         } else if (arg == "--size" && hasValue) {
@@ -183,9 +196,11 @@ void buildDefaultLayout(ImGuiID dockspace)
     ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.2f, nullptr, &center);
     const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.25f, nullptr, &center);
     const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.3f, nullptr, &center);
-    const ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.35f, nullptr, &left);
+    ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.35f, nullptr, &left);
     ImGui::DockBuilderDockWindow("Hierarchy", left);
+    const ImGuiID leftLowest = ImGui::DockBuilderSplitNode(leftBottom, ImGuiDir_Down, 0.5f, nullptr, &leftBottom);
     ImGui::DockBuilderDockWindow("Systems", leftBottom);
+    ImGui::DockBuilderDockWindow("Components", leftLowest);
     ImGui::DockBuilderDockWindow("Inspector", right);
     ImGui::DockBuilderDockWindow("Console", bottom);
     ImGui::DockBuilderDockWindow("Assets", bottom);
@@ -283,6 +298,10 @@ int main(int argc, char** argv)
         kast::log::error(std::format("--select {}: no entity with that id", options->select));
         return 1;
     }
+    if (!options->newComponent.empty()) { // before --play, which blocks it
+        if (std::string error; !newLuaComponent(doc, doc.selected, options->newComponent, error))
+            kast::log::error(std::format("--new-component {}: {}", options->newComponent, error));
+    }
     if (options->play)
         startPlay(doc);
 
@@ -290,10 +309,13 @@ int main(int argc, char** argv)
     if (options->newProject)
         files.openNewProject(options->newProject->first, options->newProject->second);
     Panels panels;
+    if (options->newComponentPrompt)
+        panels.openNewComponent(*options->newComponentPrompt);
     SceneViewport viewport(kSceneView);
     GameViewport game(kGameView);
     UiScale uiScale(options->uiScale);
     int frame = 0;
+    float componentPollSeconds = 0.0f;
     bool screenshotRequested = false;
     bool screenshotSaved = false;
     bool failed = false;
@@ -329,6 +351,11 @@ int main(int argc, char** argv)
         ImGui::NewFrame();
         ImGuizmo::BeginFrame();
         updatePlay(doc, ImGui::GetIO().DeltaTime);
+        componentPollSeconds += ImGui::GetIO().DeltaTime;
+        if (componentPollSeconds >= kComponentPollSeconds) { // Lua component hot reload (does nothing during Play)
+            componentPollSeconds = 0.0f;
+            refreshComponents(doc);
+        }
 
         drawMenuBar(files, doc);
         const ImGuiID dockspace = ImGui::GetID("MainDockSpace");
@@ -336,6 +363,8 @@ int main(int argc, char** argv)
             buildDefaultLayout(dockspace);
         ImGui::DockSpaceOverViewport(dockspace);
 
+        if (options->addComponentPopup && frame == kAddComponentPopupFrame)
+            panels.openAddComponent();
         panels.drawHierarchy(doc);
         viewport.draw(doc); // submitted before Game so Scene is the front tab on first run
         // Layouts saved before the Game panel existed: dock it as a tab beside Scene.
@@ -348,6 +377,11 @@ int main(int argc, char** argv)
             hierarchy && !ImGui::FindWindowSettingsByID(ImHashStr("Systems")))
             ImGui::SetNextWindowDockID(hierarchy->DockId, ImGuiCond_FirstUseEver);
         panels.drawSystems(doc);
+        // Layouts saved before the Components panel existed: dock it as a tab beside Systems.
+        if (const ImGuiWindowSettings* systems = ImGui::FindWindowSettingsByID(ImHashStr("Systems"));
+            systems && !ImGui::FindWindowSettingsByID(ImHashStr("Components")))
+            ImGui::SetNextWindowDockID(systems->DockId, ImGuiCond_FirstUseEver);
+        panels.drawComponents(doc);
         drawPlaceholder("Assets");
         drawConsole(); // submitted after Assets so Console is the front tab on first run
         files.update();
@@ -379,7 +413,10 @@ int main(int argc, char** argv)
         screenshotSaved = saved;
         kast::requestQuit();
     };
-    hooks.quitRequested = [&] { return files.onQuitRequested(); };
+    hooks.quitRequested = [&] {
+        // A --frames run has no one to answer "Unsaved changes" (e.g. after --new-component): it always quits.
+        return files.onQuitRequested() || options->frames != 0;
+    };
     hooks.shutdown = [&] {
         game.shutdown();
         viewport.shutdown();

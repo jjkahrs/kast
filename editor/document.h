@@ -66,6 +66,31 @@ void moveSystem(Document& doc, size_t index, int delta); // delta -1 = up, +1 = 
 // False + error if not.
 bool newSystemFromTemplate(Document& doc, std::string& error);
 
+// Lua components (Components panel). Definitions hot-reload while stopped and are frozen during Play.
+bool canEditComponents(const Document& doc); // a project is active and Play is stopped
+// Hot reload: picks up added, removed and modified definition files and migrates doc.scene (marking it dirty if any
+// instance data changed). Does nothing during Play, so pending changes apply after Stop, to the restored scene.
+void refreshComponents(Document& doc);
+// The file New from Template would write: <root>/components/new_component[_N].lua, with type name NewComponent[N].
+std::filesystem::path newComponentFile(const std::filesystem::path& projectRoot, std::string& typeName);
+// Writes a template definition (one field, each field type shown commented) there and loads it. False + error with no
+// project or during Play.
+bool newComponentFromTemplate(Document& doc, std::string& error);
+// Why Lua components can't be created now (no project, or Play not stopped); null if canEditComponents.
+const char* componentEditBlocker(const Document& doc);
+// Definition file stem for a type name, snake_case: PlayerHealth -> player_health, HTTPServer2D -> http_server2_d.
+std::string componentFileStem(std::string_view typeName);
+// <projectRoot>/components/<componentFileStem>.lua for typeName (trimmed): where New Lua Component writes it.
+std::filesystem::path luaComponentFile(const std::filesystem::path& projectRoot, std::string_view typeName);
+// Why name (trimmed) can't be a new Lua component type (Add Component > New Lua Component...); empty if it can. Checks,
+// in order: componentEditBlocker, empty, identifier, built-in name, any listed definition's name (even one in error),
+// and an existing luaComponentFile (case-insensitive).
+std::string newComponentNameError(const Document& doc, std::string_view name);
+// Writes that file from the template with name (trimmed) as the type name, loads it, adds it to entity and marks the
+// document dirty. False + error if entity is invalid or newComponentNameError isn't empty (nothing written), the write
+// fails, or the definition doesn't load (file kept, nothing added). Never overwrites a file.
+bool newLuaComponent(Document& doc, entt::entity entity, std::string_view name, std::string& error);
+
 enum class ObjectKind { Empty, Cube, Plane, Sphere, DirectionalLight, Camera };
 constexpr ObjectKind kObjectKinds[] = {ObjectKind::Empty, ObjectKind::Cube, ObjectKind::Plane, ObjectKind::Sphere,
                                        ObjectKind::DirectionalLight, ObjectKind::Camera};

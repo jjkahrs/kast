@@ -57,6 +57,7 @@ endforeach()
 add_library(kast_engine STATIC
   engine/app.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
   engine/systems.cpp engine/renderer.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
+  engine/lua_sandbox.cpp engine/lua_components.cpp
   ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}")
@@ -196,6 +197,38 @@ add_test(NAME switch_play_differs
 set_tests_properties(switch_play_screenshot PROPERTIES FIXTURES_SETUP switch_shot)
 set_tests_properties(switch_play_no_systems_screenshot PROPERTIES FIXTURES_SETUP switch_no_systems_shot)
 set_tests_properties(switch_play_differs PROPERTIES FIXTURES_REQUIRED "switch_shot;switch_no_systems_shot")
+# Lua components: tests/project/health.scene (Health from components/health.lua, drained and tinted by
+# scripts/health_drain.lua). A configure-time copy of tests/project (so its components/ stay active for scenes saved
+# there) holds the "systems": [] variant and the round-trip output.
+set(KAST_HEALTH_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/health_project")
+file(GLOB_RECURSE health_project_files CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/*")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${health_project_files})
+file(REMOVE_RECURSE "${KAST_HEALTH_PROJECT}")
+file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${KAST_HEALTH_PROJECT}")
+file(READ "${KAST_TEST_PROJECT}/health.scene" health_scene)
+string(REGEX REPLACE "\"systems\": \\[[^]]*\\]" "\"systems\": []" health_scene "${health_scene}")
+file(WRITE "${KAST_HEALTH_PROJECT}/health_no_systems.scene" "${health_scene}")
+add_test(NAME lua_components_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/lua_components.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/health.scene --select 3 --size 1280x1000"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME lua_components_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/lua_components_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/health.scene --play" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME lua_components_play_no_systems_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/lua_components_play_no_systems.png"
+          "-DEXTRA_ARGS=--scene ${KAST_HEALTH_PROJECT}/health_no_systems.scene --play"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME lua_components_play_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/lua_components_play_no_systems.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/lua_components_play.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(lua_components_play_screenshot PROPERTIES FIXTURES_SETUP health_play_shot)
+set_tests_properties(lua_components_play_no_systems_screenshot PROPERTIES FIXTURES_SETUP health_no_systems_shot)
+set_tests_properties(lua_components_play_differs PROPERTIES FIXTURES_REQUIRED "health_play_shot;health_no_systems_shot")
+add_test(NAME lua_components_roundtrip
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_PROJECT}/health.scene"
+          "-DOUT_DIR=${KAST_HEALTH_PROJECT}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
 # New Project modal opened by --new-project: valid (existing parent, preview ...\my-game, Create enabled) and invalid
 # (missing parent, inline message, Create disabled). Neither may create anything.
 set(KAST_NEW_PROJECT_PARENT "${CMAKE_CURRENT_BINARY_DIR}/new_project_parent")
@@ -208,3 +241,48 @@ add_test(NAME new_project_invalid_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/new_project_invalid.png"
           "-DNEW_PROJECT_NAME=My Game" "-DNEW_PROJECT_DIR=${CMAKE_CURRENT_BINARY_DIR}/does_not_exist/parent"
           "-DMUST_NOT_EXIST=${CMAKE_CURRENT_BINARY_DIR}/does_not_exist" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# New Lua Component modal (Inspector > Add Component) opened by --new-component-prompt on tests/project, Hero selected:
+# valid (preview components/player_health.lua, Create enabled) and colliding (Health exists: inline error). Neither may
+# write anything. --new-component then creates PlayerHealth on a fresh copy of tests/project and adds it to Hero; the
+# shot differs from lua_components.png (same scene and selection, before).
+set(KAST_NEW_COMPONENT_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/new_component_project")
+set(new_component_args "--scene ${KAST_TEST_PROJECT}/health.scene --select 3 --size 1280x1000")
+add_test(NAME new_component_valid_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/new_component_valid.png"
+          "-DEXTRA_ARGS=${new_component_args} --new-component-prompt PlayerHealth"
+          "-DMUST_NOT_EXIST=${KAST_TEST_PROJECT}/components/player_health.lua"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME new_component_collide_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/new_component_collide.png"
+          "-DEXTRA_ARGS=${new_component_args} --new-component-prompt Health"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# --add-component-popup: the popup's first item, "New Lua Component...", enabled (stopped) and disabled (--play).
+add_test(NAME add_component_popup_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/add_component_popup.png"
+          "-DEXTRA_ARGS=${new_component_args} --add-component-popup" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME add_component_popup_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/add_component_popup_play.png"
+          "-DEXTRA_ARGS=${new_component_args} --add-component-popup --play"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME new_component_project_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${KAST_NEW_COMPONENT_PROJECT}")
+add_test(NAME new_component_project_copy
+  COMMAND "${CMAKE_COMMAND}" -E copy_directory "${KAST_TEST_PROJECT}" "${KAST_NEW_COMPONENT_PROJECT}")
+add_test(NAME new_component_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/new_component.png"
+          "-DEXTRA_ARGS=--scene ${KAST_NEW_COMPONENT_PROJECT}/health.scene --select 3 --size 1280x1000 --new-component PlayerHealth"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME new_component_file_written
+  COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_NEW_COMPONENT_PROJECT}/components/player_health.lua")
+set_tests_properties(new_component_file_written PROPERTIES PASS_REGULAR_EXPRESSION "name = \"PlayerHealth\"")
+add_test(NAME new_component_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/lua_components.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/new_component.png"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(new_component_project_clean PROPERTIES FIXTURES_SETUP new_component_clean)
+set_tests_properties(new_component_project_copy PROPERTIES FIXTURES_REQUIRED new_component_clean
+                     FIXTURES_SETUP new_component_copy)
+set_tests_properties(new_component_screenshot PROPERTIES FIXTURES_REQUIRED new_component_copy
+                     FIXTURES_SETUP new_component_shot)
+set_tests_properties(new_component_file_written PROPERTIES FIXTURES_REQUIRED new_component_shot)
+set_tests_properties(lua_components_screenshot PROPERTIES FIXTURES_SETUP lua_components_shot)
+set_tests_properties(new_component_differs PROPERTIES FIXTURES_REQUIRED "lua_components_shot;new_component_shot")

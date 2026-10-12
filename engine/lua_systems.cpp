@@ -2,6 +2,7 @@
 
 #include "components.h"
 #include "log.h"
+#include "lua_sandbox.h"
 #include "project.h"
 #include "scene_io.h"
 
@@ -12,10 +13,8 @@
 #include <cstring>
 #include <cmath>
 #include <format>
-#include <fstream>
 #include <functional>
 #include <optional>
-#include <sstream>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -24,9 +23,6 @@ namespace {
 
 using Json = nlohmann::ordered_json;
 
-// Base-library functions that load code from disk or reach outside a system's environment.
-constexpr const char* kUnsafeGlobals[] = {"dofile", "loadfile", "load", "loadstring", "getfenv", "setfenv", "require", "module"};
-constexpr const char* kQuaternionKeys[] = {"x", "y", "z", "w"};
 constexpr double kMaxExactInteger = 9007199254740992.0; // 2^53: Lua numbers are doubles
 
 // Raises a Lua error at the calling script's file:line. sol2 turns the exception into lua_error.
@@ -36,31 +32,6 @@ constexpr double kMaxExactInteger = 9007199254740992.0; // 2^53: Lua numbers are
     std::string where = lua_tostring(L, -1);
     lua_pop(L, 1);
     throw std::runtime_error(where + message);
-}
-
-std::string toString(lua_State* L, const sol::object& value)
-{
-    sol::protected_function tostring = sol::state_view(L)["tostring"];
-    sol::protected_function_result result = tostring(value);
-    return result.valid() && result.get_type() == sol::type::string ? result.get<std::string>() : "?";
-}
-
-std::string readFile(const std::filesystem::path& file, std::string& error)
-{
-    std::ifstream in(file, std::ios::binary);
-    if (!in) {
-        error = std::format("cannot open '{}'", file.string());
-        return {};
-    }
-    std::ostringstream text;
-    text << in.rdbuf();
-    return text.str();
-}
-
-bool vectorType(const entt::meta_type& type, size_t& count)
-{
-    count = isType<bx::Vec3>(type) ? 3 : isType<bx::Quaternion>(type) ? 4 : 0;
-    return count != 0;
 }
 
 struct System {
@@ -114,18 +85,13 @@ struct LuaSystems::State {
 
     // kast.* bindings
     entt::entity entity(lua_State* L, const sol::object& id);
-    entt::meta_type componentType(lua_State* L, const std::string& name);
-    Json fieldJson(lua_State* L, const entt::meta_type& type, const sol::object& value, const std::string& field);
-    sol::object fieldLua(const entt::meta_type& type, const Json& value);
+    ComponentType componentType(lua_State* L, const std::string& name);
     void bindApi();
 };
 
 void LuaSystems::State::init(const std::vector<std::string>& paths)
 {
-    // Only base, table, string and math: no io, os, ffi, debug, jit, bit or package.
-    lua.open_libraries(sol::lib::base, sol::lib::table, sol::lib::string, sol::lib::math);
-    for (const char* name : kUnsafeGlobals)
-        lua.globals()[name] = sol::lua_nil;
+    openSandbox(lua);
     bindApi();
     indexIds();
     for (const std::string& path : paths)
@@ -196,19 +162,7 @@ sol::table LuaSystems::State::readOnly(const sol::table& source)
 
 sol::environment LuaSystems::State::environment()
 {
-    // Own copies of the globals and library tables, so one system's globals and edits never reach another.
-    sol::environment env(lua, sol::create);
-    for (const auto& [key, value] : lua.globals()) {
-        if (value.get_type() != sol::type::table) {
-            env[key] = value;
-            continue;
-        }
-        sol::table copy = lua.create_table();
-        for (const auto& [k, v] : value.as<sol::table>())
-            copy[k] = v;
-        env[key] = copy;
-    }
-    env["_G"] = env;
+    sol::environment env = sandboxEnvironment(lua);
     sol::table inputTable = readOnly(inputApi);
     sol::table kast = lua.create_table();
     for (const auto& [key, value] : api)
@@ -223,16 +177,10 @@ void LuaSystems::State::load(System& system)
     system.ok = false;
     system.update = system.shutdown = sol::lua_nil;
     std::string error;
-    const std::string code = readFile(system.file, error);
-    if (!error.empty())
-        return disable(system, std::format("{}: {}", system.path, error));
-    // Text only: precompiled bytecode can break out of the sandbox.
-    sol::load_result chunk = lua.load(code, "@" + system.path, sol::load_mode::text);
-    if (!chunk.valid())
-        return disable(system, chunk.get<sol::error>().what());
     system.env = environment();
-    sol::protected_function body = chunk;
-    sol::set_environment(system.env, body);
+    sol::protected_function body = loadSandboxed(lua, system.file, "@" + system.path, system.env, error);
+    if (!body.valid())
+        return disable(system, error.starts_with("cannot open") ? std::format("{}: {}", system.path, error) : error);
 
     current = &system;
     sol::protected_function_result result = body();
@@ -308,61 +256,12 @@ entt::entity LuaSystems::State::entity(lua_State* L, const sol::object& id)
     raise(L, std::format("invalid entity id {}", toString(L, id)));
 }
 
-entt::meta_type LuaSystems::State::componentType(lua_State* L, const std::string& name)
+ComponentType LuaSystems::State::componentType(lua_State* L, const std::string& name)
 {
-    const entt::meta_type type = findComponentType(name);
+    const ComponentType type = findAnyComponentType(name);
     if (!type)
         raise(L, std::format("unknown component \"{}\"", name));
     return type;
-}
-
-// A Lua field value as the JSON componentFromJson expects; it does the type and value checks.
-Json LuaSystems::State::fieldJson(lua_State* L, const entt::meta_type& type, const sol::object& value, const std::string& field)
-{
-    size_t count = 0;
-    if (vectorType(type, count)) {
-        Json out = Json::array();
-        if (value.get_type() == sol::type::table) {
-            const sol::table table = value.as<sol::table>();
-            for (size_t i = 0; i < count; ++i) {
-                const sol::object c = table[kQuaternionKeys[i]];
-                if (c.get_type() == sol::type::number && std::isfinite(c.as<double>()))
-                    out.push_back(c.as<double>());
-            }
-        }
-        if (out.size() != count)
-            raise(L, std::format("\"{}\" must be a table {{x=, y=, z={}}} of finite numbers", field, count == 4 ? ", w=" : ""));
-        return out;
-    }
-    switch (value.get_type()) {
-    case sol::type::number: {
-        const double number = value.as<double>();
-        if (!std::isfinite(number))
-            raise(L, std::format("\"{}\" must be a finite number", field));
-        if (number == std::floor(number) && std::abs(number) <= kMaxExactInteger)
-            return static_cast<int64_t>(number); // an integer, so int fields accept it
-        return number;
-    }
-    case sol::type::boolean: return value.as<bool>();
-    case sol::type::string: return value.as<std::string>();
-    default: return nullptr; // rejected by componentFromJson with the field's expected type
-    }
-}
-
-sol::object LuaSystems::State::fieldLua(const entt::meta_type& type, const Json& value)
-{
-    size_t count = 0;
-    if (vectorType(type, count)) {
-        sol::table table = lua.create_table();
-        for (size_t i = 0; i < count; ++i)
-            table[kQuaternionKeys[i]] = value[i].get<double>();
-        return table;
-    }
-    if (value.is_boolean())
-        return sol::make_object(lua, value.get<bool>());
-    if (value.is_number())
-        return sol::make_object(lua, value.get<double>());
-    return sol::make_object(lua, value.get<std::string>()); // strings and enum names
 }
 
 void LuaSystems::State::bindApi()
@@ -373,7 +272,7 @@ void LuaSystems::State::bindApi()
     // Matches are captured when query is called: entities destroyed later in the loop are skipped, new ones are not
     // visited.
     api.set_function("query", [this, &registry](sol::this_state L, sol::variadic_args names) {
-        std::vector<entt::meta_type> types;
+        std::vector<ComponentType> types;
         for (const sol::object name : names) {
             if (name.get_type() != sol::type::string)
                 raise(L, std::format("component name must be a string, got {}", toString(L, name)));
@@ -381,7 +280,7 @@ void LuaSystems::State::bindApi()
         }
         std::vector<EntityId> matches;
         scene.forEachDepthFirst([&](entt::entity e) {
-            if (std::ranges::all_of(types, [&](const entt::meta_type& type) { return hasComponent(registry, e, type); }))
+            if (std::ranges::all_of(types, [&](const ComponentType& type) { return hasComponent(registry, e, type); }))
                 matches.push_back(registry.get<PersistentId>(e).value);
         });
         return std::function<sol::optional<EntityId>()>([this, matches = std::move(matches), next = size_t{0}]() mutable {
@@ -399,53 +298,53 @@ void LuaSystems::State::bindApi()
     });
     api.set_function("add", [this, &registry](sol::this_state L, const sol::object& id, const std::string& name) {
         const entt::entity e = entity(L, id);
-        const entt::meta_type type = componentType(L, name);
+        const ComponentType type = componentType(L, name);
         if (!hasComponent(registry, e, type))
             addComponent(registry, e, type);
     });
     api.set_function("remove", [this, &registry](sol::this_state L, const sol::object& id, const std::string& name) {
         const entt::entity e = entity(L, id);
-        const entt::meta_type type = componentType(L, name);
-        if (!componentInfo(type).removable)
+        const ComponentType type = componentType(L, name);
+        if (!type.removable())
             raise(L, std::format("\"{}\" cannot be removed", name));
         if (hasComponent(registry, e, type))
             removeComponent(registry, e, type);
     });
     api.set_function("get", [this, &registry](sol::this_state L, const sol::object& id, const std::string& name) {
         const entt::entity e = entity(L, id);
-        const entt::meta_type type = componentType(L, name);
+        const ComponentType type = componentType(L, name);
         if (!hasComponent(registry, e, type))
             raise(L, std::format("entity {} has no \"{}\"", toString(L, id), name));
-        const Json json = componentToJson(getComponent(registry, e, type));
+        const Json json = componentToJson(registry, e, type);
         sol::table table = lua.create_table();
-        for (auto [fieldId, field] : type.data())
-            table[field.name()] = fieldLua(field.type(), json[field.name()]);
+        for (const FieldDesc& field : type.fields())
+            table[field.name] = fieldJsonToLua(lua, field, json[field.name]);
         return table;
     });
     // Partial tables: listed fields change, the rest keep their values. All-or-nothing: any bad field or a value
-    // ComponentInfo::validate rejects leaves the component unchanged.
+    // ComponentInfo::validate (built-ins) or min/max / enum values (Lua components) reject leaves it unchanged.
     // ponytail: goes through JSON to reuse the scene-file checks; convert meta_any directly if it shows in profiles.
     api.set_function("set", [this, &registry](sol::this_state L, const sol::object& id, const std::string& name,
                                               const sol::table& fields) {
         const entt::entity e = entity(L, id);
-        const entt::meta_type type = componentType(L, name);
+        const ComponentType type = componentType(L, name);
         if (!hasComponent(registry, e, type))
             raise(L, std::format("entity {} has no \"{}\"", toString(L, id), name));
-        Json json = componentToJson(getComponent(registry, e, type));
+        Json json = componentToJson(registry, e, type);
+        std::string error;
         for (const auto& [key, value] : fields) {
             if (key.get_type() != sol::type::string)
                 raise(L, std::format("\"{}\": field names must be strings, got {}", name, toString(L, key)));
             const std::string field = key.as<std::string>();
-            const entt::meta_data data = type.data(entt::hashed_string{field.c_str(), field.size()});
-            if (!data)
+            const auto& descs = type.fields();
+            const auto desc = std::ranges::find(descs, field, &FieldDesc::name);
+            if (desc == descs.end())
                 raise(L, std::format("\"{}\": unknown field \"{}\"", name, field));
-            json[field] = fieldJson(L, data.type(), value, field);
+            if (!luaToFieldJson(*desc, value, json[field], error))
+                raise(L, error);
         }
-        std::string error;
-        const entt::meta_any component = componentFromJson(type, json, error);
-        if (!component)
+        if (!setComponentJson(registry, e, type, json, error))
             raise(L, std::format("\"{}\": {}", name, error));
-        setComponent(registry, e, component);
     });
     api.set_function("create", [this, &registry](sol::this_state L, const std::string& name, const sol::object& parent) {
         const bool root = parent.get_type() == sol::type::lua_nil || parent.get_type() == sol::type::none;

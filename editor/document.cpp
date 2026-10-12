@@ -2,6 +2,7 @@
 
 #include <app.h>
 #include <log.h>
+#include <lua_components.h>
 #include <scene_io.h>
 #include <systems.h>
 
@@ -62,6 +63,30 @@ return {
     -- shutdown = function() kast.log("stopped") end,
 }
 )";
+
+constexpr const char* kComponentTemplate = R"(-- A Lua component: a data-only component type. The file returns one table; see README "Lua components".
+return {
+    name = "%NAME%",              -- type name and scene-file key; unique, letters/digits/_
+    -- displayName = "%NAME%",    -- Inspector / Add Component label (defaults to name)
+    fields = {                     -- in save and Inspector order
+        { name = "speed", type = "float", default = 1, min = 0 },
+        -- { name = "count",   type = "int",    default = 3, min = 0, max = 10 },
+        -- { name = "active",  type = "bool",   default = true },
+        -- { name = "label",   type = "string", default = "hello" },
+        -- { name = "offset",  type = "vec3",   default = {x = 0, y = 1, z = 0} },
+        -- { name = "tint",    type = "vec3",   color = true, default = {x = 1, y = 1, z = 1} },
+        -- { name = "facing",  type = "quat" },                        -- defaults to identity
+        -- { name = "mode",    type = "enum",   values = {"idle", "busy"}, default = "idle" },
+        -- { name = "tags",    type = "array",  of = "string", default = {"a", "b"} },
+        -- { name = "weights", type = "array",  of = "float", min = 0, max = 1 },
+    },
+}
+)";
+
+std::optional<std::filesystem::path> rootOf(const std::optional<kast::Project>& project)
+{
+    return project ? std::optional(project->root) : std::nullopt;
+}
 
 std::optional<kast::Project> projectOf(const std::string& sceneFile)
 {
@@ -288,18 +313,25 @@ void resetToDefault(Document& doc)
 
 bool openFile(Document& doc, const std::string& path, std::string& error)
 {
+    // The scene's project's Lua components must be active before it loads; the current scene is replaced below.
+    std::optional<kast::Project> project = projectOf(path);
+    kast::activateComponentDefinitions(rootOf(project), nullptr);
     kast::Scene scene;
-    if (!kast::loadScene(path, scene, error))
+    kast::SceneLoadReport report;
+    if (!kast::loadScene(path, scene, error, &report)) {
+        if (kast::activateComponentDefinitions(rootOf(doc.project), &doc.scene)) // back to the kept scene's project
+            markDirty(doc);
         return false;
+    }
     EditorCamera camera;
     if (scene.editorData.contains("camera") && !camera.fromJson(scene.editorData["camera"]))
         kast::log::warn("Scene has an invalid editor camera; using the default view");
     doc.scene = std::move(scene);
     doc.camera = camera;
     doc.path = path;
-    doc.project = projectOf(path);
+    doc.project = std::move(project);
     doc.selected = entt::null;
-    doc.dirty = false;
+    doc.dirty = report.migrated; // Lua component data fixed by the drift rules
     kast::log::info(std::format("Opened scene '{}'", path));
     return true;
 }
@@ -315,10 +347,13 @@ bool saveFile(Document& doc, const std::string& path, std::string& error)
         kast::log::warn(std::format("Saved into {}: the scene's Lua system paths are project-relative and may no longer "
                                     "resolve",
                                     project ? std::format("project '{}'", project->name) : "no project"));
+    const bool projectChanged = root(project) != root(doc.project);
     doc.path = path;
     doc.project = std::move(project);
     doc.dirty = false;
     kast::log::info(std::format("Saved scene '{}'", path));
+    if (projectChanged && kast::activateComponentDefinitions(rootOf(doc.project), &doc.scene))
+        markDirty(doc); // the new project's Lua component definitions changed the scene
     return true;
 }
 
@@ -341,6 +376,144 @@ bool openProject(Document& doc, const std::filesystem::path& file, std::string& 
     }
     resetToDefault(doc);
     doc.project = std::move(project);
+    kast::activateComponentDefinitions(rootOf(doc.project), &doc.scene); // the default scene has no Lua components
+    return true;
+}
+
+bool canEditComponents(const Document& doc) { return doc.play == PlayState::Stopped && doc.project; }
+
+void refreshComponents(Document& doc)
+{
+    if (doc.play == PlayState::Stopped && kast::refreshComponentDefinitions(doc.scene))
+        markDirty(doc);
+}
+
+std::filesystem::path newComponentFile(const std::filesystem::path& projectRoot, std::string& typeName)
+{
+    const std::filesystem::path dir = projectRoot / kast::kComponentsDir;
+    std::filesystem::path file = dir / "new_component.lua";
+    typeName = "NewComponent";
+    for (int n = 2; std::filesystem::exists(file); ++n) {
+        file = dir / std::format("new_component_{}.lua", n);
+        typeName = std::format("NewComponent{}", n);
+    }
+    return file;
+}
+
+namespace {
+
+// Writes kComponentTemplate for typeName to file (creating its folder), replacing any file there, and logs it.
+bool writeComponentTemplate(const std::filesystem::path& file, const std::string& typeName, std::string& error)
+{
+    std::string text = kComponentTemplate;
+    for (size_t at; (at = text.find("%NAME%")) != std::string::npos;)
+        text.replace(at, 6, typeName);
+    std::error_code ec;
+    std::filesystem::create_directories(file.parent_path(), ec);
+    std::ofstream out(file, std::ios::binary);
+    out << text;
+    out.close();
+    if (ec || !out) {
+        error = std::format("Cannot write '{}'", file.string());
+        return false;
+    }
+    kast::log::info(std::format("Created Lua component '{}'", file.string()));
+    return true;
+}
+
+} // namespace
+
+bool newComponentFromTemplate(Document& doc, std::string& error)
+{
+    if (!canEditComponents(doc)) {
+        error = doc.project ? "Stop Play to add components" : "Open a scene inside a project to add Lua components";
+        return false;
+    }
+    std::string typeName;
+    const std::filesystem::path file = newComponentFile(doc.project->root, typeName);
+    if (!writeComponentTemplate(file, typeName, error))
+        return false;
+    refreshComponents(doc); // loads it now rather than at the next poll
+    return true;
+}
+
+const char* componentEditBlocker(const Document& doc)
+{
+    return !doc.project                     ? "Open a scene inside a project"
+           : doc.play != PlayState::Stopped ? "Stop Play to add components"
+                                            : nullptr;
+}
+
+std::string componentFileStem(std::string_view typeName)
+{
+    const auto upper = [](char c) { return c >= 'A' && c <= 'Z'; };
+    const auto lowerOrDigit = [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'); };
+    std::string stem;
+    for (size_t i = 0; i < typeName.size(); ++i) {
+        const char c = typeName[i];
+        if (upper(c) && i > 0 &&
+            (lowerOrDigit(typeName[i - 1]) ||
+             (upper(typeName[i - 1]) && i + 1 < typeName.size() && typeName[i + 1] >= 'a' && typeName[i + 1] <= 'z')))
+            stem += '_';
+        stem += upper(c) ? static_cast<char>(c - 'A' + 'a') : c;
+    }
+    return stem;
+}
+
+std::filesystem::path luaComponentFile(const std::filesystem::path& projectRoot, std::string_view typeName)
+{
+    return projectRoot / kast::kComponentsDir / (componentFileStem(trimmed(typeName)) + ".lua");
+}
+
+std::string newComponentNameError(const Document& doc, std::string_view name)
+{
+    if (const char* blocked = componentEditBlocker(doc))
+        return blocked;
+    const std::string typeName(trimmed(name));
+    if (typeName.empty())
+        return "Enter a name";
+    if (!kast::isIdentifier(typeName))
+        return "Use letters, digits and _ only, not starting with a digit";
+    if (kast::isBuiltInComponentName(typeName))
+        return std::format("\"{}\" is a built-in component", typeName);
+    // Every definition file of the active project, loaded or in error (loaded types are a subset).
+    if (std::ranges::any_of(kast::componentDefinitionStatus(),
+                            [&](const kast::ComponentDefinitionStatus& s) { return s.name == typeName; }))
+        return std::format("A Lua component named \"{}\" already exists", typeName);
+    // Case-insensitive, as on Windows, even in a case-sensitive folder.
+    const std::filesystem::path file = luaComponentFile(doc.project->root, typeName);
+    const auto lower = [](std::string text) {
+        std::ranges::transform(text, text.begin(),
+                               [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; });
+        return text;
+    };
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(file.parent_path(), ec))
+        if (lower(entry.path().filename().string()) == file.filename().string())
+            return std::format("{}/{} already exists", kast::kComponentsDir, entry.path().filename().string());
+    return {};
+}
+
+bool newLuaComponent(Document& doc, entt::entity entity, std::string_view name, std::string& error)
+{
+    if (!doc.scene.valid(entity)) {
+        error = "Select an entity";
+        return false;
+    }
+    if (error = newComponentNameError(doc, name); !error.empty())
+        return false;
+    const std::string typeName(trimmed(name));
+    const std::filesystem::path file = luaComponentFile(doc.project->root, typeName);
+    if (!writeComponentTemplate(file, typeName, error))
+        return false;
+    refreshComponents(doc); // loads it now rather than at the next poll
+    const kast::ComponentType type = kast::findAnyComponentType(typeName);
+    if (!type.lua()) {
+        error = std::format("Created '{}' but it did not load (see Console)", file.string());
+        return false;
+    }
+    kast::addComponent(doc.scene.registry(), entity, type);
+    markDirty(doc);
     return true;
 }
 

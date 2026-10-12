@@ -1,12 +1,13 @@
 // Assert-style checks for the non-trivial engine logic: rotation conventions, matrix decomposition, picking rays,
 // hierarchy edits, component registry, scene-file validation, cameras, input, systems, Lua systems, projects, scene
-// switching and editor Play mode.
+// switching, editor Play mode and Lua components.
 // Exit 0 if every check passes. Run by CTest as engine_self_check.
 #include "document.h" // editor Play mode; links editor/document.cpp, no window needed
 
 #include <components.h>
 #include <input.h>
 #include <log.h>
+#include <lua_components.h>
 #include <lua_systems.h>
 #include <math3d.h>
 #include <project.h>
@@ -23,6 +24,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <source_location>
 #include <string>
 
@@ -281,7 +283,6 @@ void checkLoadValidation()
         {"version 1 rejected",
          R"({"version": 1, "entities": [{"id": 1, "parent": null, "name": "E", "position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]}]})",
          "version"},
-        {"unknown component", file(entity(1, "null", R"(, "Teleporter": {})")), "Teleporter"},
         {"missing Transform", file(R"({"id": 1, "parent": null, "name": "E", "components": {}})"), "Transform"},
         {"missing components", file(R"({"id": 1, "parent": null, "name": "E"})"), "components"},
         {"bad enum", file(entity(1, "null", R"(, "MeshRenderer": {"primitive": "torus", "color": [1,1,1]})")), "torus"},
@@ -1422,6 +1423,624 @@ end })");
 
 } // namespace
 
+// --- Lua components ---
+
+constexpr const char* kHealthDef = R"(return {
+    name = "Health",
+    fields = {
+        { name = "current", type = "float",  default = 100, min = 0 },
+        { name = "max",     type = "float",  default = 100, min = 1 },
+        { name = "regen",   type = "bool",   default = true },
+        { name = "lives",   type = "int",    default = 3, min = 0, max = 9 },
+        { name = "title",   type = "string", default = "Hero" },
+        { name = "tint",    type = "vec3",   color = true, default = {x = 1, y = 0, z = 0} },
+        { name = "facing",  type = "quat" },
+        { name = "faction", type = "enum",   values = {"neutral", "ally", "enemy"}, default = "neutral" },
+        { name = "drops",   type = "array",  of = "string", default = {"gold", "potion"} },
+    },
+}
+)";
+constexpr const char* kHealthDefaults =
+    R"({"current":100.0,"max":100.0,"regen":true,"lives":3,"title":"Hero","tint":[1.0,0.0,0.0],)"
+    R"("facing":[0.0,0.0,0.0,1.0],"faction":"neutral","drops":["gold","potion"]})";
+
+const kast::ComponentDefinitionStatus* statusFor(const std::string& path)
+{
+    for (const kast::ComponentDefinitionStatus& status : kast::componentDefinitionStatus())
+        if (status.path == path)
+            return &status;
+    return nullptr;
+}
+
+// A temp project with components/health.lua.
+std::filesystem::path componentProject(const char* name)
+{
+    const std::filesystem::path dir = projectTestDir(name, "Components");
+    std::filesystem::create_directories(dir / kast::kComponentsDir);
+    writeFile(dir / "components/health.lua", kHealthDef);
+    return dir;
+}
+
+void checkLuaComponentDefinitions()
+{
+    const std::filesystem::path dir = componentProject("kast_components_defs");
+    std::filesystem::create_directories(dir / "components/sub/deep");
+    writeFile(dir / "components/sub/deep/tag.lua", R"(return { name = "Tag", displayName = "Tag!", fields = {} })");
+    writeFile(dir / "components/bounded.lua", R"(return { name = "Bounded", fields = {
+        { name = "n", type = "int", min = 2, max = 5 },
+        { name = "f", type = "float", max = -1 },
+        { name = "w", type = "array", of = "float", min = 0, max = 1, default = {0.5, 1} },
+        { name = "e", type = "array", of = "enum", values = {"a", "b"}, default = {"b", "a"} },
+    } })");
+    // Sandbox: nothing outside base/table/string/math is reachable; globals don't leak between files.
+    writeFile(dir / "components/sandboxed.lua", R"(
+for _, n in ipairs({"io", "os", "ffi", "debug", "package", "require", "loadfile", "dofile", "load", "loadstring", "jit", "module"}) do
+    assert(_G[n] == nil, n .. " is reachable")
+end
+assert(leaked == nil, "a global leaked from another definition file")
+return { name = "Sandboxed", fields = {} })");
+    writeFile(dir / "components/leaker.lua", R"(leaked = true
+return { name = "Leaker", fields = {} })");
+    writeFile(dir / "components/escape.lua", R"(return { name = "Escape", fields = {}, x = io.open("x") })");
+
+    // file, contents, text the error must mention (besides the path)
+    const std::tuple<const char*, const char*, const char*> bad[] = {
+        {"not_table.lua", "return 5", "must return exactly one table"},
+        {"two_values.lua", R"(return { name = "Two", fields = {} }, 2)", "must return exactly one table"},
+        {"no_name.lua", "return { fields = {} }", "\"name\" must be a name"},
+        {"bad_name.lua", R"(return { name = "9lives", fields = {} })", "\"name\" must be a name"},
+        {"no_fields.lua", R"(return { name = "NoFields" })", "\"fields\" must be a list"},
+        {"top_key.lua", R"(return { name = "TopKey", fields = {}, feilds = {} })", "unknown key feilds"},
+        {"dup_field.lua", R"(return { name = "DupField", fields = { {name = "a", type = "int"}, {name = "a", type = "bool"} } })",
+         "duplicate field name"},
+        {"field_name.lua", R"(return { name = "FieldName", fields = { {name = "has space", type = "int"} } })", "\"name\" must be a name"},
+        {"bad_type.lua", R"(return { name = "BadType", fields = { {name = "a", type = "flaot"} } })", "unknown \"type\" flaot"},
+        {"field_key.lua", R"(return { name = "FieldKey", fields = { {name = "a", type = "int", deafult = 1} } })", "unknown key deafult"},
+        {"no_values.lua", R"(return { name = "NoValues", fields = { {name = "a", type = "enum"} } })", "\"values\" must be a list"},
+        {"empty_values.lua", R"(return { name = "EmptyValues", fields = { {name = "a", type = "enum", values = {}} } })",
+         "\"values\" must not be empty"},
+        {"dup_values.lua", R"(return { name = "DupValues", fields = { {name = "a", type = "enum", values = {"x", "x"}} } })",
+         "duplicate value \"x\""},
+        {"values_on_int.lua", R"(return { name = "ValuesOnInt", fields = { {name = "a", type = "int", values = {"x"}} } })",
+         "only allowed on enum fields"},
+        {"no_of.lua", R"(return { name = "NoOf", fields = { {name = "a", type = "array"} } })", "unknown \"of\""},
+        {"nested.lua", R"(return { name = "Nested", fields = { {name = "a", type = "array", of = "array"} } })", "arrays can't nest"},
+        {"of_on_int.lua", R"(return { name = "OfOnInt", fields = { {name = "a", type = "int", of = "int"} } })", "\"of\" is only allowed"},
+        {"min_bool.lua", R"(return { name = "MinBool", fields = { {name = "a", type = "bool", min = 1} } })",
+         "only allowed on float and int"},
+        {"min_text.lua", R"(return { name = "MinText", fields = { {name = "a", type = "float", min = "low"} } })",
+         "\"min\" must be a finite number"},
+        {"min_max.lua", R"(return { name = "MinMax", fields = { {name = "a", type = "float", min = 2, max = 1} } })",
+         "\"min\" must not be greater"},
+        {"color_float.lua", R"(return { name = "ColorFloat", fields = { {name = "a", type = "float", color = true} } })",
+         "\"color\" must be true or false, on vec3"},
+        {"default_range.lua", R"(return { name = "DefaultRange", fields = { {name = "a", type = "float", min = 0, default = -1} } })",
+         "must be >= 0"},
+        {"default_type.lua", R"(return { name = "DefaultType", fields = { {name = "a", type = "int", default = "x"} } })",
+         "must be an integer"},
+        {"default_enum.lua", R"(return { name = "DefaultEnum", fields = { {name = "a", type = "enum", values = {"x"}, default = "y"} } })",
+         "unknown value \"y\""},
+        {"default_array.lua", R"(return { name = "DefaultArray", fields = { {name = "a", type = "array", of = "int", default = {1, "2"}} } })",
+         "element 2 must be an integer"},
+        {"runtime.lua", "local t = nil\nreturn t.x", "components/runtime.lua:2:"},
+        {"syntax.lua", "return {\n name = ", "components/syntax.lua:2:"},
+        {"builtin.lua", R"(return { name = "Transform", fields = {} })", "taken by a built-in component"},
+        {"structural.lua", R"(return { name = "Name", fields = {} })", "taken by a built-in component"},
+    };
+    for (const auto& [file, text, mention] : bad)
+        writeFile(dir / "components" / file, text);
+    writeFile(dir / "components/dup_a.lua", R"(return { name = "Dup", fields = {} })");
+    writeFile(dir / "components/sub/dup_b.lua", R"(return { name = "Dup", fields = {} })");
+    writeFile(dir / "components/notes.txt", "not a definition");
+
+    kast::activateComponentDefinitions(dir, nullptr);
+    const kast::ComponentDefinitionStatus* health = statusFor("components/health.lua");
+    check(health && health->ok && health->name == "Health", "health.lua discovered and OK");
+    const kast::ComponentDefinitionStatus* tag = statusFor("components/sub/deep/tag.lua");
+    check(tag && tag->ok, "definitions are discovered recursively (components/sub/deep/tag.lua)");
+    check(kast::findAnyComponentType("Tag") && std::string(kast::findAnyComponentType("Tag").displayName()) == "Tag!",
+          "displayName");
+    check(statusFor("components/notes.txt") == nullptr, "only .lua files are definitions");
+    const kast::ComponentDefinitionStatus* sandboxed = statusFor("components/sandboxed.lua");
+    check(sandboxed && sandboxed->ok, "sandbox: io/os/ffi/debug/package/require/loadfile/dofile/load unreachable");
+    if (sandboxed && !sandboxed->ok)
+        kast::log::error(sandboxed->error);
+    const kast::ComponentDefinitionStatus* escape = statusFor("components/escape.lua");
+    check(escape && !escape->ok && contains(escape->error, "components/escape.lua:1:"), "using io fails the definition");
+    for (const auto& [file, text, mention] : bad) {
+        const std::string path = std::string("components/") + file;
+        const kast::ComponentDefinitionStatus* status = statusFor(path);
+        const bool ok = status && !status->ok && contains(status->error, path) && contains(status->error, mention);
+        check(ok, file);
+        if (status && !ok)
+            kast::log::error(std::format("  {}: {}", file, status->error));
+    }
+    const kast::ComponentDefinitionStatus* dupA = statusFor("components/dup_a.lua");
+    const kast::ComponentDefinitionStatus* dupB = statusFor("components/sub/dup_b.lua");
+    check(dupA && dupB && !dupA->ok && !dupB->ok && contains(dupA->error, "components/sub/dup_b.lua") &&
+              contains(dupB->error, "components/dup_a.lua") && !kast::findAnyComponentType("Dup"),
+          "duplicate Lua names: both rejected, each naming the other file");
+    check(logged("Lua component rejected: components/bad_type.lua"), "rejected definitions are logged");
+    check(std::string(kast::findAnyComponentType("Transform").name()) == "Transform" &&
+              !kast::findAnyComponentType("Transform").lua(),
+          "a clashing Lua definition doesn't replace the built-in");
+
+    // Field descriptions and canonical defaults.
+    const kast::ComponentType type = kast::findAnyComponentType("Health");
+    check(type && type.lua() && type.removable() && type.fields().size() == 9, "Health type");
+    check(kast::defaultLuaComponent(*type.lua()).dump() == kHealthDefaults, "declared and implied (identity quat) defaults");
+    const kast::ComponentType bounded = kast::findAnyComponentType("Bounded");
+    check(bounded && kast::defaultLuaComponent(*bounded.lua()).dump() ==
+                         R"({"n":2,"f":-1.0,"w":[0.5,1.0],"e":["b","a"]})",
+          "omitted defaults are the zero value moved into min/max; arrays of float and enum");
+    const std::vector<kast::ComponentType> all = kast::allComponentTypes();
+    check(all.size() >= 5 && std::string(all[0].name()) == "Transform" &&
+              std::string(all[all.size() - 1].name()) == "Tag",
+          "allComponentTypes: built-ins first, then Lua types sorted by name");
+    check(kast::componentTypes().size() == all.size() - kast::luaComponentTypes().size(),
+          "componentTypes() still lists built-ins only");
+
+    kast::activateComponentDefinitions(std::nullopt, nullptr);
+    check(!kast::findAnyComponentType("Health") && kast::componentDefinitionStatus().empty(),
+          "no project: no Lua components");
+    std::filesystem::remove_all(dir);
+}
+
+void checkLuaComponentRegistry()
+{
+    const std::filesystem::path dir = componentProject("kast_components_registry");
+    kast::activateComponentDefinitions(dir, nullptr);
+    const kast::ComponentType health = kast::findAnyComponentType("Health");
+
+    kast::Scene scene;
+    entt::registry& registry = scene.registry();
+    const entt::entity e = scene.create("Hero");
+    check(!kast::hasComponent(registry, e, health), "has (absent)");
+    kast::addComponent(registry, e, health);
+    check(kast::hasComponent(registry, e, health) && kast::componentToJson(registry, e, health).dump() == kHealthDefaults,
+          "add gives the declared defaults");
+
+    std::string error;
+    nlohmann::ordered_json json = kast::componentToJson(registry, e, health);
+    json["current"] = 42.5;
+    json["drops"] = {"sword"};
+    check(kast::setComponentJson(registry, e, health, json, error) &&
+              kast::componentToJson(registry, e, health)["current"] == 42.5,
+          "setComponentJson writes");
+    const std::string valid = kast::componentToJson(registry, e, health).dump();
+    const std::pair<const char*, const char*> bad[] = {
+        {"current", R"(-1)"}, {"lives", R"(10)"}, {"lives", R"(1.5)"}, {"faction", R"("boss")"},
+        {"drops", R"("sword")"}, {"drops", R"(["a", 1])"}, {"facing", R"([0,0,0,0])"}, {"tint", R"([1,2])"},
+    };
+    for (const auto& [field, value] : bad) {
+        nlohmann::ordered_json broken = nlohmann::ordered_json::parse(valid);
+        broken[field] = nlohmann::ordered_json::parse(value);
+        check(!kast::setComponentJson(registry, e, health, broken, error) && contains(error, field) &&
+                  kast::componentToJson(registry, e, health).dump() == valid,
+              "strict set rejects a bad value and leaves the component unchanged");
+    }
+    nlohmann::ordered_json extra = nlohmann::ordered_json::parse(valid);
+    extra["armor"] = 1;
+    check(!kast::setComponentJson(registry, e, health, extra, error) && contains(error, "unknown field \"armor\""),
+          "strict set rejects unknown fields");
+    nlohmann::ordered_json missing = nlohmann::ordered_json::parse(valid);
+    missing.erase("title");
+    check(!kast::setComponentJson(registry, e, health, missing, error) && contains(error, "missing field \"title\""),
+          "strict set rejects missing fields");
+
+    // Duplicate copies Lua components and preserved data.
+    registry.emplace<kast::PreservedComponents>(e).byName["Ghost"] = nlohmann::ordered_json::parse(R"({"b":1,"a":[2]})");
+    const entt::entity copy = scene.duplicate(e);
+    check(kast::hasComponent(registry, copy, health) && kast::componentToJson(registry, copy, health).dump() == valid,
+          "Duplicate copies Lua components");
+    check(registry.all_of<kast::PreservedComponents>(copy) &&
+              registry.get<kast::PreservedComponents>(copy).byName.at("Ghost").dump() == R"({"b":1,"a":[2]})",
+          "Duplicate copies preserved (Missing) data");
+    kast::removeComponent(registry, copy, health);
+    check(!kast::hasComponent(registry, copy, health) && kast::hasComponent(registry, e, health), "remove");
+
+    // Scene JSON: same shape as built-ins, after them; preserved last; byte-identical round trip.
+    const nlohmann::ordered_json saved = kast::sceneToJson(scene);
+    const nlohmann::ordered_json& components = saved["entities"][0]["components"];
+    std::vector<std::string> keys;
+    for (const auto& [key, value] : components.items())
+        keys.push_back(key);
+    check(keys == std::vector<std::string>{"Transform", "Health", "Ghost"}, "save order: built-ins, Lua, preserved");
+    check(components["Health"].dump() == valid, "Lua component saved as its fields");
+    const std::string path = (dir / "round.scene").string();
+    const std::string path2 = (dir / "round2.scene").string();
+    kast::Scene loaded;
+    check(kast::saveScene(scene, path, error) && kast::loadScene(path, loaded, error) &&
+              kast::saveScene(loaded, path2, error) && readText(path) == readText(path2),
+          "save -> load -> save is byte-identical");
+    kast::Scene restored;
+    check(kast::sceneFromJson(saved, restored, error) && kast::sceneToJson(restored).dump() == saved.dump(),
+          "in-memory snapshot restores Lua and preserved components exactly");
+
+    // Play -> Stop on a Document restores them exactly.
+    Document doc;
+    check(openFile(doc, path, error) && !doc.dirty, "open a scene with Lua components (not dirty)");
+    const std::string before = kast::sceneToJson(doc.scene).dump();
+    startPlay(doc);
+    const entt::entity hero = named(doc.scene, "Hero");
+    nlohmann::ordered_json changed = kast::componentToJson(doc.scene.registry(), hero, health);
+    changed["current"] = 1.0;
+    check(kast::setComponentJson(doc.scene.registry(), hero, health, changed, error), "edit during Play");
+    kast::removePreservedComponent(doc.scene.registry(), hero, "Ghost");
+    stopPlay(doc);
+    check(kast::sceneToJson(doc.scene).dump() == before && !doc.dirty, "Stop restores Lua and preserved data exactly");
+
+    kast::activateComponentDefinitions(std::nullopt, nullptr);
+    std::filesystem::remove_all(dir);
+}
+
+void checkLuaComponentApi()
+{
+    const std::filesystem::path dir = componentProject("kast_components_api");
+    kast::activateComponentDefinitions(dir, nullptr);
+    writeFile(dir / "scripts/health_api.lua", R"(local function fails(part, fn)
+    local ok, err = pcall(fn)
+    assert(not ok, "expected an error mentioning " .. part)
+    assert(string.find(err, part, 1, true), "error '" .. tostring(err) .. "' does not mention " .. part)
+    assert(string.find(err, "health_api.lua:%d+:"), "error '" .. tostring(err) .. "' has no file:line")
+end
+local function snapshot(e)
+    local h = kast.get(e, "Health")
+    return table.concat({h.current, h.max, tostring(h.regen), h.lives, h.title, h.tint.x, h.tint.y, h.tint.z,
+                         h.facing.x, h.facing.w, h.faction, table.concat(h.drops, ",")}, "|")
+end
+local done = false
+return { update = function(dt)
+    if done then return end
+    done = true
+    local found = {}
+    for e in kast.query("Transform", "Health") do found[#found + 1] = e end
+    assert(#found == 1, "query by a Lua component")
+    local e = found[1]
+    assert(kast.has(e, "Health"), "has")
+    local h = kast.get(e, "Health")
+    assert(h.current == 100 and h.max == 100 and h.regen == true and h.lives == 3 and h.title == "Hero", "get scalars")
+    assert(h.tint.x == 1 and h.tint.y == 0 and h.facing.w == 1 and h.faction == "neutral", "get vec3, quat, enum")
+    assert(#h.drops == 2 and h.drops[1] == "gold" and h.drops[2] == "potion", "arrays are 1-based sequences")
+
+    kast.set(e, "Health", {current = 50, drops = {"a", "b", "c"}, faction = "enemy", tint = {x = 0, y = 1, z = 0}})
+    h = kast.get(e, "Health")
+    assert(h.current == 50 and h.max == 100 and h.title == "Hero", "set is partial")
+    assert(#h.drops == 3 and h.drops[3] == "c" and h.faction == "enemy" and h.tint.y == 1, "set arrays, enums, vec3")
+    kast.set(e, "Health", {drops = {}})
+    assert(#kast.get(e, "Health").drops == 0, "set an empty array")
+
+    local before = snapshot(e)
+    fails('"current" must be a number', function() kast.set(e, "Health", {lives = 4, current = "full"}) end)
+    fails('unknown field "armor"', function() kast.set(e, "Health", {current = 1, armor = 2}) end)
+    fails('unknown value "boss"', function() kast.set(e, "Health", {faction = "boss"}) end)
+    fails('"current" must be >= 0', function() kast.set(e, "Health", {current = -1}) end)
+    fails('"lives" must be <= 9', function() kast.set(e, "Health", {lives = 10}) end)
+    fails('"lives" must be an integer', function() kast.set(e, "Health", {lives = 1.5}) end)
+    fails('"regen" must be true or false', function() kast.set(e, "Health", {regen = 1}) end)
+    fails('"drops" must be a sequence', function() kast.set(e, "Health", {drops = {x = 1}}) end)
+    fails('"drops" element 2 must be a string', function() kast.set(e, "Health", {drops = {"ok", 5}}) end)
+    fails('"tint" must be a table', function() kast.set(e, "Health", {tint = {x = 1}}) end)
+    fails('"facing" must be a nonzero quaternion', function() kast.set(e, "Health", {facing = {x = 0, y = 0, z = 0, w = 0}}) end)
+    assert(snapshot(e) == before, "failed sets leave Health unchanged")
+
+    kast.remove(e, "Health")
+    assert(not kast.has(e, "Health"), "remove")
+    fails('has no "Health"', function() kast.get(e, "Health") end)
+    kast.add(e, "Health")
+    assert(kast.get(e, "Health").current == 100, "add uses the declared defaults")
+    local spawned = kast.create("Spawned")
+    kast.add(spawned, "Health")
+    local n = 0
+    for x in kast.query("Health") do n = n + 1 end
+    assert(n == 2, "query sees added Lua components")
+    fails('unknown component "Ghost"', function() kast.has(e, "Ghost") end)
+    fails('unknown component "Ghost"', function() kast.get(e, "Ghost") end)
+end })");
+
+    kast::Scene scene;
+    const entt::entity hero = scene.create("Hero");
+    kast::addComponent(scene.registry(), hero, kast::findAnyComponentType("Health"));
+    scene.registry().emplace<kast::PreservedComponents>(hero).byName["Ghost"] = nlohmann::ordered_json::object();
+    scene.systems = {"scripts/health_api.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr);
+    lua.tick(0.1f);
+    checkOk(lua, 0, "kast.* on a Lua component: asserts in Lua pass");
+    check(named(scene, "Spawned") != entt::null &&
+              kast::hasComponent(scene.registry(), named(scene, "Spawned"), kast::findAnyComponentType("Health")),
+          "kast.add on a new entity");
+    lua.stop();
+    kast::activateComponentDefinitions(std::nullopt, nullptr);
+    std::filesystem::remove_all(dir);
+}
+
+constexpr const char* kSceneHead = R"({"version": 4, "entities": [{"id": 1, "parent": null, "name": "Drifty", "components": {)"
+                                   R"("Transform": {"position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]})";
+
+void checkLuaComponentDrift()
+{
+    const std::filesystem::path dir = componentProject("kast_components_drift");
+    const std::string drifted = std::string(kSceneHead) +
+        R"(, "Health": {"max": 100, "regen": "yes", "lives": 12, "title": "Hero", "tint": [1,0,0], "facing": [0,0,0,1],)"
+        R"( "faction": "boss", "drops": ["a", 3], "armor": 5}}}]})";
+    writeFile(dir / "drift.scene", drifted);
+    writeFile(dir / "match.scene", std::string(kSceneHead) + R"(, "Health": )" + kHealthDefaults + "}}]}");
+
+    Document doc;
+    std::string error;
+    const ptrdiff_t warningsBefore = countLogged("Entity 'Drifty' (id 1): Health:");
+    check(openFile(doc, (dir / "drift.scene").string(), error), "a drifted scene still loads");
+    const ptrdiff_t warnings = countLogged("Entity 'Drifty' (id 1): Health:") - warningsBefore;
+    check(warnings == 6, "one warning per drift fix (missing, unknown, mistyped, out of range, bad enum, bad element)");
+    check(logged("unknown field \"armor\" dropped") && logged("missing field \"current\" set to default 100.0") &&
+              logged("\"regen\" \"yes\" must be true or false; reset to default true") &&
+              logged("\"lives\" 12 must be <= 9; reset to default 3") &&
+              logged("\"faction\" \"boss\" unknown value \"boss\"") && logged("\"drops\" [\"a\",3] element 2 must be a string"),
+          "warnings name the field and the fix");
+    const kast::ComponentType health = kast::findAnyComponentType("Health");
+    check(kast::componentToJson(doc.scene.registry(), named(doc.scene, "Drifty"), health).dump() == kHealthDefaults,
+          "drift fixes: defaults for missing/invalid values, unknown fields dropped");
+    check(doc.dirty, "a drifted scene is dirty after load");
+    check(openFile(doc, (dir / "match.scene").string(), error) && !doc.dirty, "a matching scene is not dirty after load");
+
+    // Built-in components stay strict.
+    writeFile(dir / "strict.scene", std::string(kSceneHead) + R"(, "Rotator": {"axis": [0,1,0], "degreesPerSecond": "fast"}}}]})");
+    check(!openFile(doc, (dir / "strict.scene").string(), error) && contains(error, "degreesPerSecond"),
+          "built-in components keep the strict load rules");
+    kast::activateComponentDefinitions(std::nullopt, nullptr);
+    std::filesystem::remove_all(dir);
+}
+
+void checkMissingComponents()
+{
+    const std::filesystem::path dir = projectTestDir("kast_components_missing", "Missing");
+    const char* ghost = R"({"b": 1, "a": [2, {"z": true, "y": null}]})";
+    writeFile(dir / "missing.scene", std::string(kSceneHead) + R"(, "Teleporter": )" + ghost +
+                                         R"(, "Health": {"current": 5, "bogus": 1}}}]})");
+    Document doc;
+    std::string error;
+    check(openFile(doc, (dir / "missing.scene").string(), error), "a scene with unknown components loads");
+    check(logged("Entity 'Drifty' (id 1): unknown component \"Teleporter\"") &&
+              logged("Entity 'Drifty' (id 1): unknown component \"Health\""),
+          "each unknown component is a warning");
+    check(!doc.dirty, "preserving data doesn't dirty the scene");
+    const entt::entity e = named(doc.scene, "Drifty");
+    const auto* preserved = doc.scene.registry().try_get<kast::PreservedComponents>(e);
+    check(preserved && preserved->byName.size() == 2 &&
+              preserved->byName.at("Teleporter").dump() == nlohmann::ordered_json::parse(ghost).dump(),
+          "unknown component JSON kept verbatim (key order too)");
+    check(saveFile(doc, (dir / "saved.scene").string(), error), "save");
+    const nlohmann::ordered_json saved = nlohmann::ordered_json::parse(readText(dir / "saved.scene"));
+    check(saved["entities"][0]["components"]["Teleporter"].dump() == nlohmann::ordered_json::parse(ghost).dump() &&
+              saved["entities"][0]["components"]["Health"].dump() == R"({"current":5,"bogus":1})",
+          "Save writes preserved JSON back unchanged");
+
+    // kast.* can't reach it.
+    writeFile(dir / "scripts/ghost.lua", R"(return { update = function(dt)
+    local ok, err = pcall(function() return kast.has(1, "Teleporter") end)
+    assert(not ok and string.find(err, 'unknown component "Teleporter"', 1, true), "Teleporter must be unknown")
+    ok, err = pcall(function() return kast.get(1, "Health") end)
+    assert(not ok and string.find(err, 'unknown component "Health"', 1, true), "Health must be unknown")
+end })");
+    kast::LuaSystems lua;
+    doc.scene.systems = {"scripts/ghost.lua"};
+    lua.start(doc.scene, dir, "", nullptr);
+    lua.tick(0.1f);
+    checkOk(lua, 0, "kast.* raises unknown component on preserved data");
+    lua.stop();
+    doc.scene.systems.clear();
+
+    // The definition appears later: preserved Health is converted with the drift rules; Teleporter stays preserved.
+    std::filesystem::create_directories(dir / kast::kComponentsDir);
+    writeFile(dir / "components/health.lua", kHealthDef);
+    doc.dirty = false;
+    refreshComponents(doc);
+    const kast::ComponentType health = kast::findAnyComponentType("Health");
+    check(health && kast::hasComponent(doc.scene.registry(), e, health) &&
+              kast::componentToJson(doc.scene.registry(), e, health)["current"] == 5.0,
+          "a new definition converts preserved data");
+    preserved = doc.scene.registry().try_get<kast::PreservedComponents>(e);
+    check(preserved && preserved->byName.size() == 1 && preserved->byName.contains("Teleporter"),
+          "converted data leaves Missing; other unknown components stay");
+    check(doc.dirty && logged("Entity 'Drifty' (id 1): Health: unknown field \"bogus\" dropped"),
+          "conversion applies the drift rules (warning + dirty)");
+    kast::activateComponentDefinitions(std::nullopt, nullptr);
+    std::filesystem::remove_all(dir);
+}
+
+void checkComponentHotReload()
+{
+    const std::filesystem::path dir = componentProject("kast_components_reload");
+    writeFile(dir / "hero.scene", std::string(kSceneHead) + R"(, "Health": )" + kHealthDefaults + "}}]}");
+    Document doc;
+    std::string error;
+    check(openFile(doc, (dir / "hero.scene").string(), error) && !doc.dirty, "open");
+    const entt::entity e = named(doc.scene, "Drifty");
+    const auto healthJson = [&] {
+        return kast::componentToJson(doc.scene.registry(), e, kast::findAnyComponentType("Health"));
+    };
+    refreshComponents(doc);
+    check(!doc.dirty, "no file change: nothing reloads");
+
+    // Modify: rename a field, add one. Instances migrate.
+    std::string modified = kHealthDef;
+    modified.replace(modified.find("\"current\""), 9, "\"hp\"");
+    modified.replace(modified.find("    },\n}"), 0, "        { name = \"armor\", type = \"int\", default = 7 },\n");
+    rewrite(dir / "components/health.lua", modified);
+    refreshComponents(doc);
+    check(healthJson().contains("hp") && !healthJson().contains("current") && healthJson()["armor"] == 7 && doc.dirty,
+          "modified definition: instances migrate (default for new fields, unknown dropped), dirty");
+    check(logged("Reloaded Lua component definitions"), "reload is logged");
+
+    // Add a file.
+    writeFile(dir / "components/mana.lua", R"(return { name = "Mana", fields = { {name = "points", type = "int"} } })");
+    refreshComponents(doc);
+    check(kast::findAnyComponentType("Mana") && statusFor("components/mana.lua") && statusFor("components/mana.lua")->ok,
+          "added definition file is picked up");
+
+    // Delete: instances become preserved, data intact. Restore: converted back.
+    const std::string data = healthJson().dump();
+    doc.dirty = false;
+    std::filesystem::remove(dir / "components/health.lua");
+    refreshComponents(doc);
+    const auto* preserved = doc.scene.registry().try_get<kast::PreservedComponents>(e);
+    check(!kast::findAnyComponentType("Health") && preserved && preserved->byName.at("Health").dump() == data && !doc.dirty,
+          "deleted definition: data kept as Missing, not dirty");
+    writeFile(dir / "components/health.lua", modified);
+    refreshComponents(doc);
+    check(kast::findAnyComponentType("Health") && healthJson().dump() == data &&
+              !doc.scene.registry().all_of<kast::PreservedComponents>(e) && !doc.dirty,
+          "restored definition converts it back unchanged");
+
+    // A broken definition also preserves data.
+    rewrite(dir / "components/health.lua", "return {");
+    refreshComponents(doc);
+    check(!kast::findAnyComponentType("Health") && doc.scene.registry().all_of<kast::PreservedComponents>(e) &&
+              !statusFor("components/health.lua")->ok,
+          "broken definition: data kept as Missing, status shows the error");
+    rewrite(dir / "components/health.lua", modified);
+    refreshComponents(doc);
+
+    // Play freezes definitions; pending changes apply after Stop, to the restored scene.
+    startPlay(doc);
+    rewrite(dir / "components/health.lua", kHealthDef); // back to "current"
+    refreshComponents(doc);
+    check(healthJson().contains("hp") && kast::findAnyComponentType("Health").fields()[0].name == "hp",
+          "during Play nothing changes");
+    nlohmann::ordered_json playEdit = healthJson();
+    playEdit["armor"] = 99;
+    check(kast::setComponentJson(doc.scene.registry(), e, kast::findAnyComponentType("Health"), playEdit, error),
+          "play-mode edit");
+    stopPlay(doc);
+    check(healthJson()["armor"] == 7, "Stop restores the pre-Play data under the frozen definition");
+    const entt::entity restored = named(doc.scene, "Drifty");
+    refreshComponents(doc);
+    const nlohmann::ordered_json after =
+        kast::componentToJson(doc.scene.registry(), restored, kast::findAnyComponentType("Health"));
+    check(after.contains("current") && !after.contains("hp") && !after.contains("armor"),
+          "after Stop the pending definition change applies to the restored scene");
+    kast::activateComponentDefinitions(std::nullopt, nullptr);
+    std::filesystem::remove_all(dir);
+}
+
+void checkComponentTemplate()
+{
+    const std::filesystem::path dir = projectTestDir("kast_components_template", "Template");
+    std::string typeName;
+    check(newComponentFile(dir, typeName) == dir / "components/new_component.lua" && typeName == "NewComponent",
+          "first template file name");
+    Document doc;
+    std::string error;
+    resetToDefault(doc);
+    check(!newComponentFromTemplate(doc, error) && contains(error, "project"), "no project: New from Template refused");
+    check(openProject(doc, dir / kast::kProjectFileName, error), "open project");
+    check(newComponentFromTemplate(doc, error) && std::filesystem::exists(dir / "components/new_component.lua"),
+          "New from Template writes components/new_component.lua");
+    check(kast::findAnyComponentType("NewComponent") && statusFor("components/new_component.lua")->ok,
+          "the template is a valid definition and is loaded at once");
+    check(newComponentFile(dir, typeName) == dir / "components/new_component_2.lua" && typeName == "NewComponent2",
+          "next file is numbered");
+    check(newComponentFromTemplate(doc, error) && kast::findAnyComponentType("NewComponent2") &&
+              statusFor("components/new_component_2.lua")->ok,
+          "numbered template has its own type name, so both stay valid");
+    startPlay(doc);
+    check(!canEditComponents(doc) && !newComponentFromTemplate(doc, error) &&
+              !std::filesystem::exists(dir / "components/new_component_3.lua"),
+          "disabled during Play");
+    stopPlay(doc);
+    check(canEditComponents(doc), "enabled again after Stop");
+    kast::activateComponentDefinitions(std::nullopt, nullptr);
+    std::filesystem::remove_all(dir);
+}
+
+std::string readBytes(const std::filesystem::path& path)
+{
+    std::ifstream in(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
+void checkNewLuaComponent()
+{
+    for (const auto& [name, stem] : {std::pair{"PlayerHealth", "player_health"}, {"HTTPServer", "http_server"},
+                                     {"HTTPServer2D", "http_server2_d"}, {"Health2", "health2"}, {"health", "health"},
+                                     {"My_Thing", "my_thing"}})
+        check(componentFileStem(name) == stem, std::format("componentFileStem({}) == {}", name, stem).c_str());
+
+    const std::filesystem::path dir = componentProject("kast_new_lua_component"); // defines Health
+    writeFile(dir / "components/broken.lua", R"(return { name = "Broken", fields = { { name = "x", type = "nope" } } })");
+    const std::string kept = "-- not a definition; must survive\n";
+    writeFile(dir / "components/Odd_Case.lua", kept);
+    const auto luaFiles = [&] {
+        size_t n = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(dir / "components"))
+            n += entry.path().extension() == ".lua";
+        return n;
+    };
+
+    Document doc;
+    std::string error;
+    resetToDefault(doc);
+    entt::entity entity = createObject(doc, ObjectKind::Empty, entt::null);
+    check(newComponentNameError(doc, "PlayerHealth") == "Open a scene inside a project" &&
+              !newLuaComponent(doc, entity, "PlayerHealth", error) && contains(error, "project"),
+          "no project: New Lua Component refused");
+    check(openProject(doc, dir / kast::kProjectFileName, error), "open project");
+    entity = createObject(doc, ObjectKind::Empty, entt::null);
+    doc.dirty = false;
+    check(statusFor("components/broken.lua") && !statusFor("components/broken.lua")->ok, "broken definition listed");
+
+    const std::pair<const char*, const char*> invalid[] = {
+        {"", "Enter a name"},
+        {"   ", "Enter a name"},
+        {"2Fast", "letters, digits"},
+        {"Player Health", "letters, digits"},
+        {"Bad-Name", "letters, digits"},
+        {"Transform", "built-in"},
+        {"Name", "built-in"},
+        {"Health", "already exists"},
+        {"Broken", "already exists"},
+        {"OddCase", "components/Odd_Case.lua already exists"},
+        {"odd_case", "components/Odd_Case.lua already exists"},
+    };
+    for (const auto& [name, part] : invalid) {
+        const size_t before = luaFiles();
+        const bool refused = contains(newComponentNameError(doc, name), part) &&
+                             !newLuaComponent(doc, entity, name, error) && contains(error, part);
+        check(refused && luaFiles() == before && !doc.dirty,
+              std::format("New Lua Component '{}' refused ({}), nothing written", name, part).c_str());
+    }
+    check(readBytes(dir / "components/Odd_Case.lua") == kept, "existing different-case file not overwritten");
+    check(!newLuaComponent(doc, entt::null, "PlayerHealth", error) && error == "Select an entity" &&
+              !std::filesystem::exists(dir / "components/player_health.lua"),
+          "no entity: refused, nothing written");
+
+    check(newComponentNameError(doc, " PlayerHealth ").empty(), "valid name (trimmed)");
+    check(newLuaComponent(doc, entity, " PlayerHealth ", error), "New Lua Component PlayerHealth created");
+    const std::string text = readBytes(dir / "components/player_health.lua");
+    const kast::ComponentType type = kast::findAnyComponentType("PlayerHealth");
+    check(contains(text, R"(name = "PlayerHealth",)") && contains(text, "speed"), "file is the template with the name");
+    check(type.lua() && std::ranges::any_of(kast::luaComponentTypes(), [](const auto& d) { return d->name == "PlayerHealth"; }),
+          "type loaded at once");
+    check(kast::hasComponent(doc.scene.registry(), entity, type) && doc.dirty, "added to the entity, scene dirty");
+
+    doc.dirty = false;
+    const entt::entity other = createObject(doc, ObjectKind::Empty, entt::null);
+    doc.dirty = false;
+    check(!newLuaComponent(doc, other, "PlayerHealth", error) && contains(error, "already exists") &&
+              readBytes(dir / "components/player_health.lua") == text && !doc.dirty,
+          "second create of the same name refused, file byte-identical");
+
+    startPlay(doc);
+    check(newComponentNameError(doc, "Other") == "Stop Play to add components" &&
+              !newLuaComponent(doc, other, "Other", error) && !std::filesystem::exists(dir / "components/other.lua"),
+          "Play: refused, nothing written");
+    stopPlay(doc);
+    check(newLuaComponent(doc, other, "Other", error), "enabled again after Stop");
+    kast::activateComponentDefinitions(std::nullopt, nullptr);
+    std::filesystem::remove_all(dir);
+}
+
 int main()
 {
     checkRotations();
@@ -1448,6 +2067,14 @@ int main()
     checkSystemEdits();
     checkSceneSwitchErrors();
     checkSceneSwitch();
+    checkLuaComponentDefinitions();
+    checkLuaComponentRegistry();
+    checkLuaComponentApi();
+    checkLuaComponentDrift();
+    checkMissingComponents();
+    checkComponentHotReload();
+    checkComponentTemplate();
+    checkNewLuaComponent();
     if (g_failures > 0) {
         kast::log::error(std::format("{} self-check(s) failed", g_failures));
         return 1;

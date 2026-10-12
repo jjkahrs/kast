@@ -2,15 +2,23 @@
 
 #include <components.h>
 #include <log.h>
+#include <lua_components.h>
+#include <scene_io.h>
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
 #include <imgui_stdlib.h>
 
+#include <algorithm>
+#include <cfloat>
+#include <climits>
 #include <cstring>
 #include <format>
+#include <utility>
 
 namespace {
+
+using Json = nlohmann::ordered_json;
 
 constexpr const char* kEntityPayload = "KAST_ENTITY";
 constexpr SDL_DialogFileFilter kLuaFilter{"Lua script (*.lua)", "lua"};
@@ -186,57 +194,132 @@ void Panels::applyEdit(Document& doc)
     }
 }
 
-bool Panels::drawField(entt::entity entity, entt::meta_any& component, const entt::meta_data& field)
+bool Panels::drawValue(entt::entity entity, const std::string& key, const kast::FieldDesc& field, const char* label,
+                       Json& value)
 {
-    const auto* info = static_cast<const kast::FieldInfo*>(field.custom());
-    const char* label = info ? info->displayName : field.name();
-    const entt::meta_type type = field.type();
-    entt::meta_any value = field.get(component);
-    bool changed = false;
-    if (kast::isType<float>(type)) {
-        changed = ImGui::DragFloat(label, &value.cast<float&>(), 0.05f);
-    } else if (kast::isType<int>(type)) {
-        changed = ImGui::DragInt(label, &value.cast<int&>());
-    } else if (kast::isType<bool>(type)) {
-        changed = ImGui::Checkbox(label, &value.cast<bool&>());
-    } else if (kast::isType<std::string>(type)) {
-        changed = ImGui::InputText(label, &value.cast<std::string&>());
-    } else if (kast::isType<bx::Vec3>(type)) {
-        float* v = &value.cast<bx::Vec3&>().x;
-        changed = info && info->color ? ImGui::ColorEdit3(label, v) : ImGui::DragFloat3(label, v, 0.05f);
-    } else if (kast::isType<bx::Quaternion>(type)) {
+    using kast::FieldKind;
+    const bool bounded = field.min || field.max;
+    const ImGuiSliderFlags clamp = bounded ? ImGuiSliderFlags_AlwaysClamp : ImGuiSliderFlags_None;
+    switch (field.kind) {
+    case FieldKind::Float: {
+        float v = value.get<float>();
+        const float lo = field.min ? static_cast<float>(*field.min) : -FLT_MAX;
+        const float hi = field.max ? static_cast<float>(*field.max) : FLT_MAX;
+        if (!ImGui::DragFloat(label, &v, 0.05f, bounded ? lo : 0.0f, bounded ? hi : 0.0f, "%.3f", clamp))
+            return false;
+        value = kast::jsonNumber(v);
+        return true;
+    }
+    case FieldKind::Int: {
+        int v = value.get<int>();
+        const int lo = field.min ? static_cast<int>(*field.min) : INT_MIN;
+        const int hi = field.max ? static_cast<int>(*field.max) : INT_MAX;
+        if (!ImGui::DragInt(label, &v, 1.0f, bounded ? lo : 0, bounded ? hi : 0, "%d", clamp))
+            return false;
+        value = v;
+        return true;
+    }
+    case FieldKind::Bool: {
+        bool v = value.get<bool>();
+        if (!ImGui::Checkbox(label, &v))
+            return false;
+        value = v;
+        return true;
+    }
+    case FieldKind::String: {
+        std::string v = value.get<std::string>();
+        if (!ImGui::InputText(label, &v))
+            return false;
+        value = v;
+        return true;
+    }
+    case FieldKind::Vec3: {
+        float v[3] = {value[0].get<float>(), value[1].get<float>(), value[2].get<float>()};
+        if (!(field.color ? ImGui::ColorEdit3(label, v) : ImGui::DragFloat3(label, v, 0.05f)))
+            return false;
+        value = Json::array({kast::jsonNumber(v[0]), kast::jsonNumber(v[1]), kast::jsonNumber(v[2])});
+        return true;
+    }
+    case FieldKind::Quat: {
         // Edited as Euler degrees, cached while unchanged so they don't jump between equivalent forms.
-        auto& rotation = value.cast<bx::Quaternion&>();
-        if (eulerEntity_ != entity || eulerField_ != field.name() || !sameBits(eulerSource_, rotation)) {
+        bx::Quaternion rotation{value[0].get<float>(), value[1].get<float>(), value[2].get<float>(), value[3].get<float>()};
+        if (eulerEntity_ != entity || eulerField_ != key || !sameBits(eulerSource_, rotation)) {
             eulerEntity_ = entity;
-            eulerField_ = field.name();
+            eulerField_ = key;
             eulerSource_ = rotation;
             euler_ = kast::eulerDegFromQuat(rotation);
         }
-        if (ImGui::DragFloat3(label, &euler_.x, 0.5f)) {
-            rotation = kast::quatFromEulerDeg(euler_);
-            eulerSource_ = rotation;
-            changed = true;
-        }
-    } else if (type.is_enum()) {
-        const char* preview = "";
-        for (auto [id, constant] : type.data())
-            if (constant.get({}) == value)
-                preview = static_cast<const kast::FieldInfo&>(constant.custom()).displayName;
-        if (ImGui::BeginCombo(label, preview)) {
-            for (auto [id, constant] : type.data()) {
-                entt::meta_any option = constant.get({});
-                if (ImGui::Selectable(static_cast<const kast::FieldInfo&>(constant.custom()).displayName, option == value)) {
-                    value = std::move(option);
+        if (!ImGui::DragFloat3(label, &euler_.x, 0.5f))
+            return false;
+        rotation = kast::quatFromEulerDeg(euler_);
+        eulerSource_ = rotation;
+        value = Json::array({kast::jsonNumber(rotation.x), kast::jsonNumber(rotation.y), kast::jsonNumber(rotation.z),
+                             kast::jsonNumber(rotation.w)});
+        return true;
+    }
+    case FieldKind::Enum: {
+        const auto current = std::ranges::find(field.enumValues, value.get<std::string>());
+        const size_t index = static_cast<size_t>(current - field.enumValues.begin());
+        bool changed = false;
+        if (ImGui::BeginCombo(label, index < field.enumLabels.size() ? field.enumLabels[index].c_str() : "")) {
+            for (size_t i = 0; i < field.enumValues.size(); ++i) {
+                if (ImGui::Selectable(field.enumLabels[i].c_str(), i == index) && i != index) {
+                    value = field.enumValues[i];
                     changed = true;
                 }
             }
             ImGui::EndCombo();
         }
-    } else {
-        ImGui::TextDisabled("%s: unsupported field type", label);
+        return changed;
     }
-    return changed && field.set(component, value);
+    }
+    return false;
+}
+
+bool Panels::drawField(entt::entity entity, const kast::ComponentType& type, const kast::FieldDesc& field, Json& value)
+{
+    const std::string key = std::format("{}.{}", type.name(), field.name);
+    if (!field.array)
+        return drawValue(entity, key, field, field.displayName.c_str(), value);
+
+    // Arrays: one row per element (value, move up/down, remove), then an Add button.
+    bool changed = false;
+    ImGui::PushID(field.name.c_str());
+    const std::string title = std::format("{} [{}]", field.displayName, value.size());
+    if (ImGui::TreeNodeEx("##array", ImGuiTreeNodeFlags_DefaultOpen, "%s", title.c_str())) {
+        enum class Op { None, Up, Down, Remove } op = Op::None;
+        size_t target = 0;
+        const float buttons = ImGui::GetFrameHeight() * 3.0f + ImGui::GetStyle().ItemSpacing.x * 3.0f;
+        for (size_t i = 0; i < value.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i));
+            ImGui::SetNextItemWidth(bx::max(ImGui::GetContentRegionAvail().x - buttons, 1.0f));
+            changed |= drawValue(entity, std::format("{}[{}]", key, i), field, "##value", value[i]);
+            ImGui::SameLine();
+            if (ImGui::ArrowButton("##up", ImGuiDir_Up))
+                op = Op::Up, target = i;
+            ImGui::SameLine();
+            if (ImGui::ArrowButton("##down", ImGuiDir_Down))
+                op = Op::Down, target = i;
+            ImGui::SameLine();
+            if (ImGui::Button("x", ImVec2(ImGui::GetFrameHeight(), 0.0f)))
+                op = Op::Remove, target = i;
+            ImGui::PopID();
+        }
+        const auto at = [&](size_t i) { return value.begin() + static_cast<ptrdiff_t>(i); };
+        if (op == Op::Up && target > 0)
+            std::iter_swap(at(target), at(target - 1)), changed = true;
+        else if (op == Op::Down && target + 1 < value.size())
+            std::iter_swap(at(target), at(target + 1)), changed = true;
+        else if (op == Op::Remove)
+            value.erase(at(target)), changed = true;
+        if (ImGui::Button("Add Element")) {
+            value.push_back(kast::zeroFieldValue(field, true));
+            changed = true;
+        }
+        ImGui::TreePop();
+    }
+    ImGui::PopID();
+    return changed;
 }
 
 void Panels::drawInspector(Document& doc)
@@ -250,24 +333,25 @@ void Panels::drawInspector(Document& doc)
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.65f); // leave room for the labels
             bool changed = ImGui::InputText("Name", &registry.get<kast::Name>(entity).value);
 
-            entt::meta_type removed;
-            for (const entt::meta_type& type : kast::componentTypes()) {
+            const std::vector<kast::ComponentType> types = kast::allComponentTypes();
+            kast::ComponentType removed;
+            for (const kast::ComponentType& type : types) {
                 if (!kast::hasComponent(registry, entity, type))
                     continue;
-                const kast::ComponentInfo& info = kast::componentInfo(type);
                 ImGui::PushID(type.name()); // field labels repeat across components
                 bool keep = true;           // the header's x button (removable types only) clears it
-                if (ImGui::CollapsingHeader(info.displayName, info.removable ? &keep : nullptr,
+                if (ImGui::CollapsingHeader(type.displayName(), type.removable() ? &keep : nullptr,
                                             ImGuiTreeNodeFlags_DefaultOpen)) {
-                    entt::meta_any component = kast::getComponent(registry, entity, type);
-                    const entt::meta_any before = component; // owning copy: undoes edits validate rejects
-                    for (auto [id, field] : type.data()) {
-                        if (!drawField(entity, component, field))
+                    Json json = kast::componentToJson(registry, entity, type);
+                    for (const kast::FieldDesc& field : type.fields()) {
+                        if (!drawField(entity, type, field, json[field.name]))
                             continue;
-                        if (info.validate && info.validate(component))
-                            component.assign(before); // keep the last valid value so the scene stays loadable
-                        else
+                        // Rejected edits (e.g. Camera ranges) are not applied: the last valid value stays, so the
+                        // scene stays loadable.
+                        if (std::string error; kast::setComponentJson(registry, entity, type, json, error))
                             changed = true;
+                        else
+                            json = kast::componentToJson(registry, entity, type);
                     }
                 }
                 if (!keep)
@@ -278,18 +362,50 @@ void Panels::drawInspector(Document& doc)
                 kast::removeComponent(registry, entity, removed);
                 changed = true;
             }
+
+            // Data of components with no valid definition: read-only, saved unchanged, removable.
+            std::string removedMissing;
+            if (const auto* preserved = registry.try_get<kast::PreservedComponents>(entity)) {
+                for (const auto& [name, value] : preserved->byName) {
+                    ImGui::PushID(("missing/" + name).c_str());
+                    bool keep = true;
+                    const std::string title = "Missing: " + name;
+                    if (ImGui::CollapsingHeader(title.c_str(), &keep, ImGuiTreeNodeFlags_DefaultOpen)) {
+                        ImGui::TextDisabled("No valid definition: kept as-is and saved unchanged.");
+                        ImGui::TextWrapped("%s", value.dump(2).c_str());
+                    }
+                    if (!keep)
+                        removedMissing = name;
+                    ImGui::PopID();
+                }
+            }
+            if (!removedMissing.empty()) {
+                kast::removePreservedComponent(registry, entity, removedMissing);
+                changed = true;
+            }
             ImGui::PopItemWidth();
 
             ImGui::Spacing();
             if (ImGui::Button("Add Component", ImVec2(-FLT_MIN, 0.0f)))
                 ImGui::OpenPopup("##addComponent");
+            if (std::exchange(addComponentRequested_, false)) { // --add-component-popup: below the button
+                ImGui::OpenPopup("##addComponent");
+                ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y));
+            }
             if (ImGui::BeginPopup("##addComponent")) {
+                const char* blocked = componentEditBlocker(doc);
+                ImGui::BeginDisabled(blocked != nullptr);
+                if (ImGui::Selectable("New Lua Component..."))
+                    openNewComponent("");
+                ImGui::EndDisabled();
+                disabledTooltip(blocked);
+                ImGui::Separator();
                 bool any = false;
-                for (const entt::meta_type& type : kast::componentTypes()) {
+                for (const kast::ComponentType& type : types) {
                     if (kast::hasComponent(registry, entity, type))
                         continue;
                     any = true;
-                    if (ImGui::Selectable(kast::componentInfo(type).displayName)) {
+                    if (ImGui::Selectable(type.displayName())) {
                         kast::addComponent(registry, entity, type);
                         changed = true;
                     }
@@ -301,6 +417,86 @@ void Panels::drawInspector(Document& doc)
             if (changed)
                 markDirty(doc);
         }
+    }
+    drawNewComponentModal(doc); // outside the selection branch, so --new-component-prompt shows it without one
+    ImGui::End();
+}
+
+void Panels::openNewComponent(std::string name)
+{
+    newComponentName_ = std::move(name);
+    newComponentError_.clear();
+    newComponentRequested_ = true;
+}
+
+void Panels::drawNewComponentModal(Document& doc)
+{
+    if (std::exchange(newComponentRequested_, false))
+        ImGui::OpenPopup("New Lua Component");
+    if (!ImGui::BeginPopupModal("New Lua Component", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    if (ImGui::IsWindowAppearing())
+        ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 18.0f);
+    const bool enter = ImGui::InputText("Name", &newComponentName_, ImGuiInputTextFlags_EnterReturnsTrue);
+    if (ImGui::IsItemEdited())
+        newComponentError_.clear(); // a failed Create's message stays until the name changes
+
+    const std::string error = !doc.scene.valid(doc.selected) ? "Select an entity"
+                              : !newComponentError_.empty()  ? newComponentError_
+                                                             : newComponentNameError(doc, newComponentName_);
+    if (error.empty())
+        ImGui::Text("Will create: %s/%s", kast::kComponentsDir,
+                    luaComponentFile(doc.project->root, newComponentName_).filename().string().c_str());
+    else
+        ImGui::TextColored(kErrorColor, "%s", error.c_str());
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!error.empty());
+    const bool create = ImGui::Button("Create") || (enter && error.empty());
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (create) {
+        if (newLuaComponent(doc, doc.selected, newComponentName_, newComponentError_))
+            ImGui::CloseCurrentPopup();
+        else
+            kast::log::error(newComponentError_);
+    } else if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+void Panels::drawComponents(Document& doc)
+{
+    if (ImGui::Begin("Components")) {
+        const std::vector<kast::ComponentDefinitionStatus>& status = kast::componentDefinitionStatus();
+        if (!doc.project)
+            ImGui::TextDisabled("No project: built-in components only");
+        else if (status.empty())
+            ImGui::TextDisabled("No Lua components (components/*.lua)");
+        for (size_t i = 0; i < status.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i));
+            ImGui::TextColored(status[i].ok ? kOkColor : kErrorColor, status[i].ok ? "OK" : "Error");
+            ImGui::SameLine();
+            ImGui::TextWrapped("%s  %s", status[i].name.empty() ? "?" : status[i].name.c_str(), status[i].path.c_str());
+            if (!status[i].ok) {
+                ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+                ImGui::TextWrapped("%s", status[i].error.c_str());
+                ImGui::PopStyleColor();
+            }
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+
+        ImGui::Spacing();
+        const char* blocked = componentEditBlocker(doc);
+        ImGui::BeginDisabled(blocked != nullptr);
+        if (ImGui::Button("New from Template", ImVec2(-FLT_MIN, 0.0f))) {
+            if (std::string error; !newComponentFromTemplate(doc, error))
+                kast::log::error(error);
+        }
+        ImGui::EndDisabled();
+        disabledTooltip(blocked);
     }
     ImGui::End();
 }

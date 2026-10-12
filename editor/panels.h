@@ -2,18 +2,26 @@
 
 #include "document.h"
 
-#include <entt/meta/meta.hpp>
+#include <components.h>
+
+#include <nlohmann/json.hpp>
 
 #include <mutex>
 #include <string>
 
-// Hierarchy (tree, create/delete/rename/duplicate, drag-drop reparent), Inspector and Systems (the scene's Lua
-// systems: list, status while playing, add/remove/reorder, new from template) panels.
+// Hierarchy (tree, create/delete/rename/duplicate, drag-drop reparent), Inspector, Systems (the scene's Lua
+// systems: list, status while playing, add/remove/reorder, new from template) and Components (the project's Lua
+// component definitions: list with status, new from template) panels.
 class Panels {
 public:
+    // Opens the Inspector's "New Lua Component" modal (Add Component > New Lua Component...) with name prefilled.
+    void openNewComponent(std::string name);
+    // Opens the Inspector's Add Component popup once an entity is selected.
+    void openAddComponent() { addComponentRequested_ = true; }
     void drawHierarchy(Document& doc);
     void drawInspector(Document& doc);
     void drawSystems(Document& doc);
+    void drawComponents(Document& doc);
 
 private:
     // Tree edits are deferred to the end of drawHierarchy so the child lists are not changed mid-iteration.
@@ -27,8 +35,14 @@ private:
     void drawNode(Document& doc, entt::entity entity);
     void drawCreateItems(entt::entity parent);
     void applyEdit(Document& doc);
-    // One generated Inspector widget for a component field; true if it changed the value.
-    bool drawField(entt::entity entity, entt::meta_any& component, const entt::meta_data& field);
+    void drawNewComponentModal(Document& doc);
+    // Generated Inspector widgets for a component field's JSON value (built-in or Lua); true if they changed it.
+    bool drawField(entt::entity entity, const kast::ComponentType& type, const kast::FieldDesc& field,
+                   nlohmann::ordered_json& value);
+    // One widget for a single value of field's kind (a whole non-array field or one array element). key identifies
+    // the value for the Euler cache.
+    bool drawValue(entt::entity entity, const std::string& key, const kast::FieldDesc& field, const char* label,
+                   nlohmann::ordered_json& value);
 
     Edit edit_;
     entt::entity renaming_ = entt::null;
@@ -37,7 +51,7 @@ private:
 
     // Euler angles shown in the Inspector, kept while editing so they don't jump between equivalent forms.
     entt::entity eulerEntity_ = entt::null;
-    const char* eulerField_ = nullptr; // meta field name, a stable string literal
+    std::string eulerField_; // "<component>.<field>[<element>]"
     bx::Quaternion eulerSource_{bx::InitIdentity};
     bx::Vec3 euler_{0.0f, 0.0f, 0.0f};
 
@@ -49,4 +63,9 @@ private:
     std::string scriptPath_; // empty = cancelled
     std::string systemsError_; // shown in the Systems panel's error modal
     bool systemsErrorRequested_ = false;
+
+    bool addComponentRequested_ = false;
+    bool newComponentRequested_ = false;
+    std::string newComponentName_;
+    std::string newComponentError_; // why the last Create failed (write or load); cleared when the name changes
 };

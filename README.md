@@ -85,6 +85,9 @@ build\release\kast_editor.exe
 | `--save-scene <path>` | Save the startup scene (default or `--scene`) to `path` and exit 0 without opening a window. Exit 1 on write failure. |
 | `--select <id>` | Select the entity with this persistent `id` at startup (shows it in the Inspector). Exit 1 if there is none. |
 | `--play` | Enter Play mode right after the startup scene loads. Works with `--frames`, `--screenshot`, `--scene`, `--select`. |
+| `--add-component-popup` | Open the Inspector's Add Component popup for the `--select`ed entity (after the first 10 frames, once the layout has settled). |
+| `--new-component-prompt <Name>` | Open the Inspector's New Lua Component modal at startup with Name prefilled (validation shown). Creates nothing by itself. |
+| `--new-component <Name>` | Create Lua component `<Name>` (as the modal's Create does) and add it to the `--select`ed entity at startup. On failure logs an error and keeps running. |
 | `--new-project <name> <dir>` | Open the File > New Project modal at startup with Name and Directory prefilled (quote values with spaces), e.g. for `--frames 120 --screenshot`. Creates nothing by itself. |
 
 Invalid arguments exit with code 2; init failures (SDL, window, bgfx) log the reason, show a message box, and exit 1.
@@ -132,6 +135,22 @@ arrows reorder and **Remove** drops an entry (the file stays). With no active pr
 first"). The list can't be edited during Play. Each edit marks the scene dirty. While playing,
 each entry shows **OK** or **Disabled** with its last error. Layouts saved before the panel existed get it docked as a
 tab beside Hierarchy.
+
+**Components panel** (below Systems): the active project's [Lua components](#lua-components), one row per definition
+file: **OK** or **Error**, the type name and its project-relative path, and the error message for a rejected file.
+**New from Template** writes `<project>/components/new_component.lua` (type `NewComponent`; then
+`new_component_2.lua` with `NewComponent2`, ...), a valid definition with one field and every field type shown
+commented, and loads it at once. It is disabled with no active project (tooltip "Open a scene inside a project") and
+during Play ("Stop Play to add components"). Layouts saved before the panel existed get it docked as a tab beside
+Systems.
+
+**New Lua Component...** (first item of the Inspector's Add Component popup) creates a Lua component and adds it to the
+selected entity in one step. Type a name (e.g. `PlayerHealth`) and choose Create (or Enter; Esc cancels): it writes the
+New from Template definition with that type name to `<project>/components/<snake_case>.lua` (`player_health.lua`;
+`HTTPServer` -> `http_server.lua`), loads it and adds it. The name is checked as you type, with the reason shown in red
+and Create disabled: empty, not an identifier (letters, digits, `_`; not starting with a digit), a built-in name, the
+name of any listed definition (even one in error), or a file that already exists (case-insensitive). It never
+overwrites a file. Disabled with the same tooltips as New from Template.
 
 Hierarchy: click to select, right-click for Create / Rename (F2) / Duplicate (Ctrl+D) / Delete (Del). Creating from an
 entity's menu makes the new entity its child; right-click empty space creates at the root. Drag an entity onto another
@@ -241,7 +260,9 @@ in registration order, floats in shortest round-trip form, so re-saving an uncha
 
 - `id`: persistent nonzero integer, unique in the file. `parent` is the parent's `id`, or `null` for a root. Children
   keep file order.
-- `components`: keyed by registered component type name; every field of a present component is required.
+- `components`: keyed by component type name; built-ins first (registration order), then [Lua
+  components](#lua-components) (sorted by name), then preserved components of unknown type (sorted by name). For a
+  built-in component every field is required.
   - `Transform` (required): local `position`, `rotation` (quaternion), `scale`, relative to the parent.
   - `MeshRenderer`: `primitive` is `cube`, `plane` or `sphere`; `color` is linear RGB 0–1.
   - `DirectionalLight`: `color` (linear RGB 0–1), `intensity`.
@@ -253,9 +274,11 @@ in registration order, floats in shortest round-trip form, so re-saving an uncha
   [Lua systems](#lua-systems)). Always written; optional when loading (missing = none).
 - `editor` belongs to the editor (camera pivot, yaw/pitch in degrees, distance in meters); the engine keeps it as-is.
 - Loading rejects invalid JSON, a `version` other than 4 (versions 1–3 are not migrated), a `systems` that
-  isn't an array of non-empty strings, unknown component types,
-  a missing `Transform`, unknown, missing or mistyped fields, unknown enum names, out-of-range `Camera` values, duplicate ids, parents that don't
-  exist, and parent cycles. It reports why and leaves the current scene untouched.
+  isn't an array of non-empty strings, a missing `Transform`, unknown, missing or mistyped fields of a built-in
+  component, unknown enum names, out-of-range `Camera` values, duplicate ids, parents that don't exist, and parent
+  cycles. It reports why and leaves the current scene untouched. Lua components are lenient (schema drift), and a
+  component name that is neither built-in nor a valid Lua definition is kept verbatim with a Console warning (missing
+  definitions); see [Lua components](#lua-components).
 
 ### Components and systems
 
@@ -265,6 +288,12 @@ values beyond their types (e.g. `Camera` ranges); loading rejects and the Inspec
 `std::string`, `bx::Vec3`, `bx::Quaternion` and registered enums. Registration alone gives a component scene-file
 save/load, copy on Duplicate, Inspector widgets and Add/Remove Component. `PersistentId`, `Name` and `Hierarchy` are
 structural and not registered.
+
+The uniform layer at the end of `engine/components.h` (`ComponentType`, `FieldDesc`, `allComponentTypes`,
+`findAnyComponentType`, `hasComponent/addComponent/removeComponent/componentToJson/setComponentJson`) covers built-in
+and [Lua components](#lua-components) alike, with JSON as the common value form; scene IO, the Inspector,
+Add/Remove Component, Duplicate, Play snapshots and `kast.*` use it. The `entt::meta` functions above stay for C++ code
+working with built-ins.
 
 Systems (`engine/systems.h`) are plain functions `void(Scene&, float dt)`, listed in update order in
 `engine/systems.cpp`. Only Play mode runs them, once per frame with the real frame time, never while paused or editing.
@@ -322,6 +351,9 @@ a wrong argument type raises a Lua error at the calling line.
 
 Input is only live while the Game panel is focused and playing; otherwise every key is up and the delta is 0.
 
+These work the same on [Lua components](#lua-components) (`kast.get(e, "Health")`, ...), whose `array` fields are
+1-based Lua sequences (`{"gold", "potion"}`); `kast.set` replaces an array field as a whole.
+
 Field values: `float`/`int` are Lua numbers (an `int` field needs an integral number; numbers must be finite),
 `bool` is a boolean, `std::string` a string, `bx::Vec3` a table `{x=, y=, z=}`, `bx::Quaternion` `{x=, y=, z=, w=}`
 (all keys required when setting), and enums their scene-file names (`"cube"`, `"plane"`, `"sphere"`). Component and
@@ -343,6 +375,102 @@ listed system is disabled with `no project (open a scene inside a project to run
 instance's `shutdown` runs (if it was enabled), the file is reloaded into a fresh environment and its `init` runs.
 A successful reload clears the error; the scene and entities are not reset, but the system's Lua locals start over.
 
+### Lua components
+
+Game developers can define data-only ECS component types in Lua, inside their project (`engine/lua_components.h`).
+Once defined, a Lua component behaves like a built-in one: saved in scenes, edited in the Inspector, listed by Add
+Component, copied on Duplicate, snapshot/restored by Play and reachable from Lua systems through `kast.*`.
+
+**Files**: every `.lua` file under `<project>/components/`, scanned recursively, is one definition. They are loaded when
+a project becomes active (opening a scene or project, New Project, `--project` / `--scene` at startup). No project =
+no Lua components. Each file returns exactly one table:
+
+```lua
+-- components/health.lua
+return {
+  name = "Health",          -- type name and scene-file key; required, unique
+  displayName = "Health",   -- optional: Inspector header / Add Component label, defaults to name
+  fields = {                -- required list (may be empty), in save and Inspector order
+    { name = "current", type = "float",  default = 100, min = 0 },
+    { name = "lives",   type = "int",    default = 3, min = 0, max = 9 },
+    { name = "regen",   type = "bool",   default = true },
+    { name = "title",   type = "string", default = "Hero" },
+    { name = "tint",    type = "vec3",   color = true, default = {x = 1, y = 0, z = 0} },
+    { name = "facing",  type = "quat" },                                     -- identity
+    { name = "faction", type = "enum",   values = {"neutral", "ally", "enemy"}, default = "neutral" },
+    { name = "drops",   type = "array",  of = "string", default = {} },
+  },
+}
+```
+
+| `type` | Value (Lua / JSON) | Options |
+|--------|--------------------|---------|
+| `float` | number (stored as a 32-bit float) | `min`, `max` |
+| `int` | integral number (32-bit) | `min`, `max` (integers) |
+| `bool` | boolean | |
+| `string` | string | |
+| `vec3` | `{x=, y=, z=}` / `[x, y, z]` | `color = true`: color picker in the Inspector |
+| `quat` | `{x=, y=, z=, w=}` / `[x, y, z, w]`, nonzero | |
+| `enum` | one of `values`, as a string | `values`: non-empty list of unique non-empty strings (required) |
+| `array` | Lua sequence / JSON array of `of` | `of`: any type above except `array` (no nesting); an enum array also takes `values`; `min`/`max` on a float/int array apply to each element; `color` on a vec3 array |
+
+- Names (`name` of the type and of each field) are letters, digits and `_`, not starting with a digit. Field names are
+  unique within the type.
+- `default` is optional. Without it a field gets its type's zero value moved into `min`/`max`: `0`, `false`, `""`,
+  `{0,0,0}`, the identity quaternion, the first enum value, an empty array. A given default that violates the field's
+  type, range or `values` is a definition error.
+- Unknown keys (at the top level or in a field) are errors, so typos don't pass silently.
+
+**Sandbox**: one Lua state per scan, separate from Play's, each file in its own environment with the same rules as
+[Lua systems](#lua-systems): only `base`, `table`, `string` and `math`; `io`, `os`, `ffi`, `debug`, `jit`, `package`,
+`require`, `dofile`, `loadfile`, `load` and `loadstring` are not reachable; text only.
+
+**Errors**: a file that isn't valid Lua, raises, doesn't return exactly one table, or breaks any rule above is
+rejected. The message starts with the project-relative path (and the line for Lua errors, e.g.
+`components/health.lua:3: ...`), is logged as `Lua component rejected: ...` and shown in the Components panel. Valid
+files in the same project still load.
+
+**Name clashes**: a name equal to a built-in component (`Transform`, `MeshRenderer`, `DirectionalLight`, `Camera`,
+`Rotator`) or a structural one (`PersistentId`, `Name`, `Hierarchy`, `PreservedComponents`) is rejected. If two files
+declare the same name, **both** are rejected, each error naming the other file, so the result never depends on scan
+order.
+
+**Scene files**: same shape as built-ins, after them, sorted by type name:
+`"Health": { "current": 100.0, "lives": 3, ..., "tint": [1.0, 0.0, 0.0], "faction": "neutral", "drops": ["gold"] }`
+(vec3/quat as arrays, enums by name, arrays as arrays, floats rounded to 32-bit). Output is deterministic; re-saving
+gives identical bytes. Scene files stay version 4.
+
+**Inspector**: one collapsible section per Lua component with generated widgets, removable with its **x**: drag fields
+clamped to `min`/`max`, a checkbox, a text box, a color picker for `color` vec3s, Euler degrees for quats (as for
+`Transform`), a combo for enums. Arrays show `name [count]` with one row per element (value, move up, move down,
+remove **x**) and **Add Element** (appends the zero value moved into `min`/`max`). Edits are checked like `kast.set`.
+Add Component lists Lua types the entity doesn't have; adding one gives the declared defaults.
+
+**Lua systems**: `kast.query/get/set/has/add/remove` take Lua component names like built-in ones. `kast.set` stays
+partial and all-or-nothing: an unknown field, a wrong type, an enum name not in `values`, a value outside `min`/`max`
+(including one array element) or a non-sequence table for an array raises at the calling line and leaves the
+component unchanged.
+
+**Schema drift** (lenient, unlike built-ins): when stored data doesn't match the current definition, on scene load and
+on definition hot reload, missing fields get their default, unknown fields are dropped, and mistyped or out-of-range
+values (including a bad array element or an unknown enum name; a bad element resets the whole array) are reset to the
+field default. Each change is a Console warning naming the entity, component and field, e.g.
+`Entity 'Hero' (id 3): Health: "lives" 12 must be <= 9; reset to default 3`. The scene still loads. The document is
+marked dirty only if some instance's data was changed this way.
+
+**Missing definitions**: a component name that is neither built-in nor a valid Lua definition (never defined, file
+deleted, or now broken) doesn't stop the scene from loading: a Console warning is logged, and its JSON is kept verbatim
+on the entity (`PreservedComponents`), written back unchanged on Save (after the known components) and carried through
+Duplicate and Play/Stop. The Inspector shows it read-only as `Missing: <name>` with its raw JSON, removable with **x**.
+Lua systems can't reach it (`kast.*` raises `unknown component "<name>"`). When a valid definition for that name
+appears (hot reload, or opening the scene in a project that has it), the preserved data is converted with the drift
+rules.
+
+**Hot reload**: while stopped, the editor checks the `components/` folder every 0.5 s for added, removed and modified
+`.lua` files (modification time) and reloads the definitions: existing instances migrate with the drift rules, and a
+removed or now-broken definition turns its instances into preserved Missing data (nothing is lost; restoring the file
+converts them back). During Play definitions are frozen; changes made meanwhile apply after Stop, to the restored scene.
+
 The dock layout is saved to `imgui.ini` in the working directory; delete it to get the default layout back.
 
 ## Tests
@@ -351,7 +479,7 @@ The dock layout is saved to `imgui.ini` in the working directory; delete it to g
 
 | Test | What it checks |
 |------|----------------|
-| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values and versions 1–3 rejected), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits; projects: `project.kast` load/save/validation, walk-up discovery, project-relative paths and escape rejection, Open/New Project and Save/Save As on a `Document` (New Project folder-name sanitizing, every validation rule, creating `<dir>/my-game/project.kast` with the trimmed name, never creating missing parents or writing into an existing folder) (no rebasing, project-change warning, title format), no-project Lua disabling, Add Script outside the project, template location; `kast.loadScene` (end-of-frame, last call wins, ignored in `shutdown`, init calls deferred a frame, shutdown/init order, every error case keeps the current scene) and `kast.currentScene`, and Stop restoring the pre-Play scene after two switches. No window. |
+| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values and versions 1–3 rejected), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits; projects: `project.kast` load/save/validation, walk-up discovery, project-relative paths and escape rejection, Open/New Project and Save/Save As on a `Document` (New Project folder-name sanitizing, every validation rule, creating `<dir>/my-game/project.kast` with the trimmed name, never creating missing parents or writing into an existing folder) (no rebasing, project-change warning, title format), no-project Lua disabling, Add Script outside the project, template location; `kast.loadScene` (end-of-frame, last call wins, ignored in `shutdown`, init calls deferred a frame, shutdown/init order, every error case keeps the current scene) and `kast.currentScene`, and Stop restoring the pre-Play scene after two switches; Lua components: definition parsing (every field type and option, recursive discovery, every invalid-definition case naming the file), name clashes (built-in, structural, both duplicate files rejected), sandbox and per-file globals, registry parity (add/has/remove, strict JSON set, Duplicate, save order, byte-identical save/load, snapshot and Document Play/Stop restore), `kast.*` on a Lua component with every `kast.set` error leaving it unchanged, drift rules (one warning per fix, dirty only when data changed, built-ins still strict), missing definitions (load with warnings, verbatim save, `kast.*` raises, later conversion), hot reload of modified/added/deleted/broken files without data loss and the Play freeze, Components panel template naming and enable rules. No window. |
 | `editor_smoke` | `kast_editor --frames 120 --screenshot build/<preset>/smoke.png` (default scene): exit 0 and a non-empty PNG. |
 | `editor_smoke_scaled` | Same, with `--ui-scale 2.0`. |
 | `scene_screenshot` | Same, with `--scene tests/scenes/basic.scene`. |
@@ -370,6 +498,13 @@ The dock layout is saved to `imgui.ini` in the working directory; delete it to g
 | `new_project_valid_screenshot` | `--new-project "My Game" build/<preset>/new_project_parent` (an existing folder), writing `new_project_valid.png` (preview `...\my-game`, Create enabled). Fails if `my-game` was created. |
 | `new_project_invalid_screenshot` | Same with a missing directory, writing `new_project_invalid.png` (inline "does not exist", Create disabled). Fails if the missing directory was created. |
 | `switch_play_screenshot`, `switch_play_no_systems_screenshot` | `--play` on `tests/project/scene_a.scene` (its script calls `kast.loadScene("scene_b.scene")` on the first frame) and on a copy with `"systems": []` generated at configure time, writing `switch_play.png` / `switch_play_no_systems.png`. |
+| `lua_components_screenshot` | `--scene tests/project/health.scene --select 3 --size 1280x1000`: the Components panel lists `Health` as OK and the Inspector shows Hero's `Health` with every widget kind, writing `lua_components.png`. |
+| `lua_components_play_screenshot`, `lua_components_play_no_systems_screenshot` | `--play` on `health.scene` and on a copy with `"systems": []` (in `build/<preset>/health_project/`, a configure-time copy of `tests/project`), writing `lua_components_play.png` / `lua_components_play_no_systems.png`. |
+| `lua_components_play_differs` | The two must differ: only `scripts/health_drain.lua` (drains `Health`, fades `MeshRenderer.color` from `Health.tint`) can change them. |
+| `lua_components_roundtrip` | `health.scene` saved twice into `build/<preset>/health_project/` (so `Health` stays defined): byte-identical. |
+| `new_component_valid_screenshot`, `new_component_collide_screenshot` | `health.scene --select 3` with `--new-component-prompt PlayerHealth` (preview `components/player_health.lua`, Create enabled; fails if the file was written) and `--new-component-prompt Health` (inline "already exists", Create disabled), writing `new_component_valid.png` / `new_component_collide.png`. |
+| `add_component_popup_screenshot`, `add_component_popup_play_screenshot` | `health.scene --select 3 --add-component-popup`, stopped and with `--play`, writing `add_component_popup.png` ("New Lua Component..." first, enabled) / `add_component_popup_play.png` (disabled). |
+| `new_component_screenshot`, `new_component_file_written`, `new_component_differs` | `--new-component PlayerHealth` on Hero in `build/<preset>/new_component_project/` (a fresh copy of `tests/project` made by `new_component_project_clean` / `_copy`), writing `new_component.png`; the file must contain `name = "PlayerHealth"` and the shot must differ from `lua_components.png`. |
 | `switch_play_differs` | `switch_play.png` (scene B: three green spheres) must differ from `switch_play_no_systems.png` (scene A: a red cube). |
 
 The screenshot tests each open a real window for ~2 seconds, in a fresh working directory (`<png>.run/`) so they
@@ -390,15 +525,17 @@ engine/   log (stdout + in-memory lines), app (SDL3 window, bgfx init, main loop
           components (entt::meta component registry, generic JSON/copy), scene_io (.scene load/save),
           project (project.kast load/save, walk-up discovery, project-relative paths),
           systems (Play-mode systems, rotatorSystem), lua_systems (Lua systems: LuaJIT/sol2 session, kast.* API),
+          lua_sandbox (shared Lua sandbox, Lua <-> field JSON), lua_components (Lua component definitions, hot
+          reload, drift migration),
           input (game keyboard/mouse state),
           renderer (primitives, lit shader, grid/axes/camera frustums as optional overlays), shaders/
 editor/   main.cpp (CLI, dock layout, menus, console), document (scene, Play mode, file actions, dialogs, modals, title),
           camera (editor camera), viewport (Scene panel: render, camera input, picking, gizmo),
           game_view (Game panel: render from the active camera),
-          panels (Hierarchy, Inspector, Systems), imgui_bgfx (ImGui renderer for bgfx), shaders/
+          panels (Hierarchy, Inspector, Systems, Components), imgui_bgfx (ImGui renderer for bgfx), shaders/
 tests/    self_check.cpp, scenes/ (a project: project.kast, basic.scene, lua.scene + scripts/, no_camera.scene,
-          malformed.scene, v1.scene, v3.scene), project/ (scene-switch project: project.kast, scene_a.scene,
-          scene_b.scene, scripts/)
+          malformed.scene, v1.scene, v3.scene), project/ (scene-switch and Lua components project: project.kast,
+          scene_a.scene, scene_b.scene, health.scene, scripts/, components/health.lua)
 cmake/    smoke_test.cmake, roundtrip_test.cmake, load_fails_test.cmake, differs_test.cmake
 ```
 
