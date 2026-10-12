@@ -3,6 +3,7 @@
 #include <components.h>
 #include <log.h>
 
+#include <SDL3/SDL.h>
 #include <imgui.h>
 #include <imgui_stdlib.h>
 
@@ -12,6 +13,16 @@
 namespace {
 
 constexpr const char* kEntityPayload = "KAST_ENTITY";
+constexpr SDL_DialogFileFilter kLuaFilter{"Lua script (*.lua)", "lua"};
+constexpr ImVec4 kOkColor{0.4f, 0.85f, 0.4f, 1.0f};
+constexpr ImVec4 kErrorColor{1.0f, 0.45f, 0.4f, 1.0f};
+
+// Explains why the last (disabled) item is disabled, if it is.
+void disabledTooltip(const char* reason)
+{
+    if (reason && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", reason);
+}
 
 bool sameBits(const bx::Quaternion& a, const bx::Quaternion& b) { return std::memcmp(&a, &b, sizeof(a)) == 0; }
 
@@ -289,6 +300,89 @@ void Panels::drawInspector(Document& doc)
             }
             if (changed)
                 markDirty(doc);
+        }
+    }
+    ImGui::End();
+}
+
+void Panels::onScriptChosen(void* userdata, const char* const* files, int /*filter*/)
+{
+    auto* self = static_cast<Panels*>(userdata);
+    std::lock_guard lock(self->scriptMutex_);
+    self->scriptChosen_ = true;
+    self->scriptPath_ = files && files[0] ? files[0] : "";
+    if (!files)
+        kast::log::error(std::format("File dialog failed: {}", SDL_GetError()));
+}
+
+void Panels::drawSystems(Document& doc)
+{
+    const bool editable = canEditSystems(doc);
+    {
+        std::lock_guard lock(scriptMutex_);
+        if (std::exchange(scriptChosen_, false)) {
+            scriptDialogOpen_ = false;
+            if (!scriptPath_.empty() && editable) // Play may have started while the dialog was open
+                addSystem(doc, scriptPath_);
+        }
+    }
+
+    if (ImGui::Begin("Systems")) {
+        const std::vector<kast::LuaSystemStatus> status = doc.lua.status(); // empty unless playing
+        const std::vector<std::string>& systems = doc.scene.systems;
+        enum class Op { None, Up, Down, Remove } op = Op::None;
+        size_t target = 0;
+        if (systems.empty())
+            ImGui::TextDisabled("No Lua systems");
+        for (size_t i = 0; i < systems.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i));
+            if (i < status.size()) {
+                ImGui::TextColored(status[i].ok ? kOkColor : kErrorColor, status[i].ok ? "OK" : "Disabled");
+                ImGui::SameLine();
+            }
+            ImGui::TextWrapped("%s", systems[i].c_str());
+            if (i < status.size() && !status[i].ok) {
+                ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+                ImGui::TextWrapped("%s", status[i].error.c_str());
+                ImGui::PopStyleColor();
+            }
+            ImGui::BeginDisabled(!editable);
+            if (ImGui::ArrowButton("##up", ImGuiDir_Up))
+                op = Op::Up, target = i;
+            ImGui::SameLine();
+            if (ImGui::ArrowButton("##down", ImGuiDir_Down))
+                op = Op::Down, target = i;
+            ImGui::SameLine();
+            if (ImGui::Button("Remove"))
+                op = Op::Remove, target = i;
+            ImGui::EndDisabled();
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+
+        ImGui::Spacing();
+        const char* addBlocked = !editable ? "Stop Play to edit systems" : doc.path.empty() ? "Save the scene first" : nullptr;
+        ImGui::BeginDisabled(addBlocked != nullptr || scriptDialogOpen_);
+        if (ImGui::Button("Add Script...", ImVec2(-FLT_MIN, 0.0f))) {
+            scriptDialogOpen_ = true;
+            const std::string dir = sceneDir(doc).string();
+            SDL_ShowOpenFileDialog(onScriptChosen, this, nullptr, &kLuaFilter, 1, dir.c_str(), false);
+        }
+        ImGui::EndDisabled();
+        disabledTooltip(addBlocked);
+        ImGui::BeginDisabled(addBlocked != nullptr);
+        if (ImGui::Button("New from Template", ImVec2(-FLT_MIN, 0.0f))) {
+            if (std::string error; !newSystemFromTemplate(doc, error))
+                kast::log::error(error);
+        }
+        ImGui::EndDisabled();
+        disabledTooltip(addBlocked);
+
+        switch (op) {
+        case Op::Up: moveSystem(doc, target, -1); break;
+        case Op::Down: moveSystem(doc, target, 1); break;
+        case Op::Remove: removeSystem(doc, target); break;
+        case Op::None: break;
         }
     }
     ImGui::End();

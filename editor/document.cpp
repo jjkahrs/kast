@@ -10,6 +10,7 @@
 
 #include <filesystem>
 #include <format>
+#include <fstream>
 
 namespace {
 
@@ -17,6 +18,35 @@ constexpr SDL_DialogFileFilter kSceneFilter{"Kast scene (*.scene)", "scene"};
 constexpr bx::Vec3 kNewLightEuler{-50.0f, -30.0f, 0.0f}; // ~50 deg down, slightly from the side so faces shade differently
 constexpr bx::Vec3 kMainCameraPosition{0.0f, 3.0f, 7.0f};
 constexpr bx::Vec3 kMainCameraEuler{-20.0f, 0.0f, 0.0f}; // looks down at the origin from kMainCameraPosition
+
+constexpr const char* kSystemTemplate = R"(-- A Lua system: update(dt) runs once per frame in Play mode, after the C++ systems.
+-- See README "Lua systems" for the full kast.* API.
+local elapsed = 0
+
+return {
+    -- init = function() kast.log("started") end,
+    update = function(dt)
+        elapsed = elapsed + dt
+        -- for e in kast.query("Transform", "MeshRenderer") do
+        --     local t = kast.get(e, "Transform")       -- {position = {x=, y=, z=}, rotation = {x=, y=, z=, w=}, scale = ...}
+        --     t.position.y = 0.5 + math.sin(elapsed)
+        --     kast.set(e, "Transform", {position = t.position}) -- partial: other fields keep their values
+        -- end
+        -- if kast.input.keyDown("Space") then kast.log("jump") end
+        -- local dx, dy = kast.input.mouseDelta()
+        -- local id = kast.create("Spawned"); kast.add(id, "MeshRenderer"); kast.destroy(id)
+    end,
+    -- shutdown = function() kast.log("stopped") end,
+}
+)";
+
+// path as a '/'-separated string relative to dir (absolute if they share no root, e.g. another drive).
+std::string relativeTo(const std::filesystem::path& path, const std::filesystem::path& dir)
+{
+    const std::filesystem::path absolute = std::filesystem::absolute(path).lexically_normal();
+    const std::filesystem::path relative = absolute.lexically_relative(std::filesystem::absolute(dir).lexically_normal());
+    return (relative.empty() ? absolute : relative).generic_string();
+}
 
 } // namespace
 
@@ -95,6 +125,7 @@ void startPlay(Document& doc)
         kast::log::info("Play");
         if (kast::activeCamera(doc.scene) == entt::null)
             kast::log::warn("No Camera in scene: the Game view has nothing to render");
+        doc.lua.start(doc.scene, sceneDir(doc), &doc.input);
     }
     doc.play = PlayState::Playing;
 }
@@ -109,6 +140,7 @@ void stopPlay(Document& doc)
 {
     if (doc.play == PlayState::Stopped)
         return;
+    doc.lua.stop(); // shutdowns see the play-mode scene
     const kast::EntityId selected =
         doc.scene.valid(doc.selected) ? doc.scene.registry().get<kast::PersistentId>(doc.selected).value : 0;
     std::string error;
@@ -124,8 +156,62 @@ void stopPlay(Document& doc)
 
 void updatePlay(Document& doc, float dt)
 {
-    if (doc.play == PlayState::Playing)
-        kast::tickSystems(doc.scene, dt);
+    if (doc.play != PlayState::Playing)
+        return;
+    kast::tickSystems(doc.scene, dt);
+    doc.lua.tick(dt);
+}
+
+std::filesystem::path sceneDir(const Document& doc)
+{
+    return doc.path.empty() ? std::filesystem::current_path() : std::filesystem::path(doc.path).parent_path();
+}
+
+bool canEditSystems(const Document& doc) { return doc.play == PlayState::Stopped; }
+
+void addSystem(Document& doc, const std::filesystem::path& script)
+{
+    doc.scene.systems.push_back(relativeTo(script, sceneDir(doc)));
+    markDirty(doc);
+}
+
+void removeSystem(Document& doc, size_t index)
+{
+    doc.scene.systems.erase(doc.scene.systems.begin() + static_cast<ptrdiff_t>(index));
+    markDirty(doc);
+}
+
+void moveSystem(Document& doc, size_t index, int delta)
+{
+    const ptrdiff_t target = static_cast<ptrdiff_t>(index) + delta;
+    if (target < 0 || target >= std::ssize(doc.scene.systems))
+        return;
+    std::swap(doc.scene.systems[index], doc.scene.systems[static_cast<size_t>(target)]);
+    markDirty(doc);
+}
+
+bool newSystemFromTemplate(Document& doc, std::string& error)
+{
+    if (doc.path.empty()) {
+        error = "Save the scene first";
+        return false;
+    }
+    const std::filesystem::path dir = sceneDir(doc) / "scripts";
+    std::filesystem::path file = dir / "new_system.lua";
+    for (int n = 2; std::filesystem::exists(file); ++n)
+        file = dir / std::format("new_system_{}.lua", n);
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    std::ofstream out(file, std::ios::binary);
+    out << kSystemTemplate;
+    out.close();
+    if (ec || !out) {
+        error = std::format("Cannot write '{}'", file.string());
+        return false;
+    }
+    addSystem(doc, file);
+    kast::log::info(std::format("Created Lua system '{}'", file.string()));
+    return true;
 }
 
 void resetToDefault(Document& doc)
@@ -177,8 +263,14 @@ bool openFile(Document& doc, const std::string& path, std::string& error)
 bool saveFile(Document& doc, const std::string& path, std::string& error)
 {
     doc.scene.editorData["camera"] = doc.camera.toJson();
-    if (!kast::saveScene(doc.scene, path, error))
+    // Save As to another directory: keep the Lua system paths pointing at the same files.
+    std::vector<std::string> systems = doc.scene.systems;
+    for (std::string& system : doc.scene.systems)
+        system = relativeTo(sceneDir(doc) / system, std::filesystem::path(path).parent_path());
+    if (!kast::saveScene(doc.scene, path, error)) {
+        doc.scene.systems = std::move(systems);
         return false;
+    }
     doc.path = path;
     doc.dirty = false;
     kast::log::info(std::format("Saved scene '{}'", path));

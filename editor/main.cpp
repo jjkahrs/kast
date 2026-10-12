@@ -171,10 +171,12 @@ void buildDefaultLayout(ImGuiID dockspace)
     ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
     ImGui::DockBuilderSetNodeSize(dockspace, ImGui::GetMainViewport()->WorkSize);
     ImGuiID center = dockspace;
-    const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.2f, nullptr, &center);
+    ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.2f, nullptr, &center);
     const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.25f, nullptr, &center);
     const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.3f, nullptr, &center);
+    const ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.35f, nullptr, &left);
     ImGui::DockBuilderDockWindow("Hierarchy", left);
+    ImGui::DockBuilderDockWindow("Systems", leftBottom);
     ImGui::DockBuilderDockWindow("Inspector", right);
     ImGui::DockBuilderDockWindow("Console", bottom);
     ImGui::DockBuilderDockWindow("Assets", bottom);
@@ -317,6 +319,11 @@ int main(int argc, char** argv)
             ImGui::SetNextWindowDockID(scene->DockId, ImGuiCond_FirstUseEver);
         game.draw(doc);
         panels.drawInspector(doc);
+        // Layouts saved before the Systems panel existed: dock it as a tab beside Hierarchy.
+        if (const ImGuiWindowSettings* hierarchy = ImGui::FindWindowSettingsByID(ImHashStr("Hierarchy"));
+            hierarchy && !ImGui::FindWindowSettingsByID(ImHashStr("Systems")))
+            ImGui::SetNextWindowDockID(hierarchy->DockId, ImGuiCond_FirstUseEver);
+        panels.drawSystems(doc);
         drawPlaceholder("Assets");
         drawConsole(); // submitted after Assets so Console is the front tab on first run
         files.update();

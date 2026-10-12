@@ -118,8 +118,10 @@ bool sceneFromJson(const Json& json, Scene& out, std::string& error)
 {
     try {
         const Json& version = field(json, "version");
-        if (!version.is_number_integer() || version.get<int>() != kSceneFileVersion)
-            throw Invalid(std::format("unsupported \"version\" {} (expected {})", version.dump(), kSceneFileVersion));
+        if (!version.is_number_integer() || version.get<int>() < kOldestSceneFileVersion ||
+            version.get<int>() > kSceneFileVersion)
+            throw Invalid(std::format("unsupported \"version\" {} (expected {} to {})", version.dump(),
+                                      kOldestSceneFileVersion, kSceneFileVersion));
 
         const Json& entities = field(json, "entities");
         if (!entities.is_array())
@@ -139,6 +141,16 @@ bool sceneFromJson(const Json& json, Scene& out, std::string& error)
             if (!json["editor"].is_object())
                 throw Invalid("\"editor\" must be an object");
             scene.editorData = json["editor"];
+        }
+        if (json.contains("systems")) {
+            const Json& systems = json["systems"];
+            if (!systems.is_array())
+                throw Invalid("\"systems\" must be an array");
+            for (size_t i = 0; i < systems.size(); ++i) {
+                if (!systems[i].is_string() || systems[i].get<std::string>().empty())
+                    throw Invalid(std::format("systems[{}]: must be a non-empty string", i));
+                scene.systems.push_back(systems[i].get<std::string>());
+            }
         }
         out = std::move(scene);
         return true;
@@ -188,6 +200,7 @@ Json sceneToJson(const Scene& scene)
     Json root;
     root["version"] = kSceneFileVersion;
     root["entities"] = std::move(entities);
+    root["systems"] = scene.systems;
     root["editor"] = scene.editorData;
     return root;
 }

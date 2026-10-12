@@ -4,13 +4,16 @@
 
 #include <entt/meta/meta.hpp>
 
+#include <mutex>
 #include <string>
 
-// Hierarchy (tree, create/delete/rename/duplicate, drag-drop reparent) and Inspector panels.
+// Hierarchy (tree, create/delete/rename/duplicate, drag-drop reparent), Inspector and Systems (the scene's Lua
+// systems: list, status while playing, add/remove/reorder, new from template) panels.
 class Panels {
 public:
     void drawHierarchy(Document& doc);
     void drawInspector(Document& doc);
+    void drawSystems(Document& doc);
 
 private:
     // Tree edits are deferred to the end of drawHierarchy so the child lists are not changed mid-iteration.
@@ -37,4 +40,11 @@ private:
     const char* eulerField_ = nullptr; // meta field name, a stable string literal
     bx::Quaternion eulerSource_{bx::InitIdentity};
     bx::Vec3 euler_{0.0f, 0.0f, 0.0f};
+
+    // "Add Script..." file dialog: SDL calls back on any thread; drawSystems picks the result up.
+    static void onScriptChosen(void* userdata, const char* const* files, int filter);
+    std::mutex scriptMutex_;
+    bool scriptDialogOpen_ = false;
+    bool scriptChosen_ = false;
+    std::string scriptPath_; // empty = cancelled
 };

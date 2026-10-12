@@ -3,10 +3,12 @@
 #include "camera.h"
 
 #include <input.h>
+#include <lua_systems.h>
 #include <scene.h>
 
 #include <nlohmann/json.hpp>
 
+#include <filesystem>
 #include <mutex>
 #include <string>
 
@@ -27,6 +29,7 @@ struct Document {
     nlohmann::ordered_json playSnapshot; // the scene as it was when Play started, restored on Stop
     bool playSnapshotDirty = false;
     kast::Input input; // fed by the Game panel while it is focused and playing
+    kast::LuaSystems lua; // the scene's Lua systems; a session runs from Play to Stop
 
     PanelFocus focusRequest = PanelFocus::None; // set by Play/Stop, cleared by the panel that takes focus
 };
@@ -42,7 +45,17 @@ bool selectById(Document& doc, kast::EntityId id);
 void startPlay(Document& doc); // also resumes when paused
 void togglePause(Document& doc);
 void stopPlay(Document& doc);
-void updatePlay(Document& doc, float dt); // ticks the systems while playing
+void updatePlay(Document& doc, float dt); // ticks the C++ systems, then the Lua systems, while playing
+
+// The directory scene.systems paths are relative to: the scene file's, or the working directory if never saved.
+std::filesystem::path sceneDir(const Document& doc);
+// Lua system list edits (Systems panel). Not allowed during Play; each marks the document dirty. index must be valid.
+bool canEditSystems(const Document& doc);
+void addSystem(Document& doc, const std::filesystem::path& script); // stored relative to sceneDir, '/' separators
+void removeSystem(Document& doc, size_t index);
+void moveSystem(Document& doc, size_t index, int delta); // delta -1 = up, +1 = down; no-op past either end
+// Writes a template system as scripts/new_system[_N].lua next to the saved scene and adds it. False + error if not.
+bool newSystemFromTemplate(Document& doc, std::string& error);
 
 enum class ObjectKind { Empty, Cube, Plane, Sphere, DirectionalLight, Camera };
 constexpr ObjectKind kObjectKinds[] = {ObjectKind::Empty, ObjectKind::Cube, ObjectKind::Plane, ObjectKind::Sphere,

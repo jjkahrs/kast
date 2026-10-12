@@ -1,11 +1,12 @@
 // Assert-style checks for the non-trivial engine logic: rotation conventions, matrix decomposition, picking rays,
-// hierarchy edits, component registry, scene-file validation, cameras, input, systems and editor Play mode. Exit 0 if every check
-// passes. Run by CTest as engine_self_check.
+// hierarchy edits, component registry, scene-file validation, cameras, input, systems, Lua systems and editor Play mode.
+// Exit 0 if every check passes. Run by CTest as engine_self_check.
 #include "document.h" // editor Play mode; links editor/document.cpp, no window needed
 
 #include <components.h>
 #include <input.h>
 #include <log.h>
+#include <lua_systems.h>
 #include <math3d.h>
 #include <scene.h>
 #include <scene_io.h>
@@ -14,6 +15,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -519,6 +521,461 @@ void checkPlayMode()
           "Create Camera adds a Camera");
 }
 
+// --- Lua systems ---
+
+void writeFile(const std::filesystem::path& path, const std::string& text)
+{
+    std::ofstream(path, std::ios::binary | std::ios::trunc) << text;
+}
+
+// Rewrites a script with a later mtime, so hot reload sees the change even within the file clock's resolution.
+void rewrite(const std::filesystem::path& path, const std::string& text)
+{
+    const auto before = std::filesystem::last_write_time(path);
+    writeFile(path, text);
+    std::filesystem::last_write_time(path, before + std::chrono::seconds(2));
+}
+
+bool contains(const std::string& text, const std::string& part) { return text.find(part) != std::string::npos; }
+
+bool logged(const std::string& part)
+{
+    return std::ranges::any_of(kast::log::lines(), [&](const std::string& line) { return contains(line, part); });
+}
+
+entt::entity named(const kast::Scene& scene, const std::string& name)
+{
+    entt::entity found = entt::null;
+    scene.forEachDepthFirst([&](entt::entity e) {
+        if (found == entt::null && scene.registry().get<kast::Name>(e).value == name)
+            found = e;
+    });
+    return found;
+}
+
+kast::LuaSystemStatus statusOf(const kast::LuaSystems& lua, size_t index)
+{
+    const auto status = lua.status();
+    return index < status.size() ? status[index] : kast::LuaSystemStatus{"<missing>", false, "<no status>"};
+}
+
+// A system that ran its own Lua asserts reports ok; if not, say why.
+void checkOk(const kast::LuaSystems& lua, size_t index, const char* what,
+             std::source_location where = std::source_location::current())
+{
+    const kast::LuaSystemStatus status = statusOf(lua, index);
+    check(status.ok, what, where);
+    if (!status.ok)
+        kast::log::error(std::format("  {}: {}", status.path, status.error));
+}
+
+std::filesystem::path luaTestDir()
+{
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "kast_lua_check";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir / "scripts");
+    return dir;
+}
+
+void checkSystemsFormat()
+{
+    const std::filesystem::path dir = luaTestDir();
+    kast::Scene scene;
+    scene.create("E");
+    scene.systems = {"scripts/b.lua", "scripts/a.lua", "../shared/c.lua"};
+    const std::string first = (dir / "first.scene").string(), second = (dir / "second.scene").string();
+    std::string error;
+    check(kast::saveScene(scene, first, error), "save a scene with systems");
+    kast::Scene loaded;
+    check(kast::loadScene(first, loaded, error) && loaded.systems == scene.systems, "systems load in listed order");
+    check(kast::saveScene(loaded, second, error), "re-save");
+    const auto read = [](const std::string& path) {
+        std::ifstream in(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), {});
+    };
+    check(read(first) == read(second) && contains(read(first), "\"version\": 3") && contains(read(first), "\"systems\""),
+          "version 3 systems round trip is byte-identical");
+
+    const std::string entity =
+        R"({"id": 1, "parent": null, "name": "E", "components": {"Transform": {"position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]}}})";
+    const auto file = [&](int version, const std::string& systems) {
+        return std::format(R"({{"version": {}, "entities": [{}]{}}})", version, entity, systems);
+    };
+    for (int version : {2, 3}) {
+        writeFile(dir / "old.scene", file(version, ""));
+        loaded.systems = {"stale.lua"};
+        check(kast::loadScene((dir / "old.scene").string(), loaded, error) && loaded.systems.empty(),
+              "version 2 and 3 files without \"systems\" load with none");
+    }
+    const std::tuple<const char*, std::string, const char*> bad[] = {
+        {"systems not an array", file(3, R"(, "systems": "a.lua")"), "\"systems\" must be an array"},
+        {"systems entry not a string", file(3, R"(, "systems": ["a.lua", 7])"), "systems[1]: must be a non-empty string"},
+        {"systems entry empty", file(3, R"(, "systems": [""])"), "systems[0]: must be a non-empty string"},
+        {"version 4", file(4, ""), "version"},
+    };
+    for (const auto& [what, text, mention] : bad) {
+        writeFile(dir / "bad.scene", text);
+        const bool ok = kast::loadScene((dir / "bad.scene").string(), loaded, error);
+        check(!ok && contains(error, mention), what);
+        if (!ok)
+            kast::log::info(std::format("expected error ({}): {}", what, error));
+    }
+    std::filesystem::remove_all(dir);
+}
+
+// Play mode on a Document: init on Play, update after the C++ systems in listed order, nothing while paused or
+// stopped, shutdown on Stop.
+void checkLuaPlayMode()
+{
+    const std::filesystem::path dir = luaTestDir();
+    // Each system appends its digit to the Probe light's intensity, so the order shows in the number.
+    const std::string probe = "local function probe() for e in kast.query(\"DirectionalLight\") do return e end end\n";
+    writeFile(dir / "scripts/a.lua", probe + R"(
+return {
+    init = function() kast.set(probe(), "DirectionalLight", {color = {x = 0.5, y = 0, z = 0}}) end,
+    update = function(dt)
+        local light = kast.get(probe(), "DirectionalLight")
+        kast.set(probe(), "DirectionalLight", {intensity = light.intensity * 10 + 1})
+    end,
+    shutdown = function() kast.log("a shutdown") end,
+})");
+    writeFile(dir / "scripts/b.lua", probe + R"(
+return {
+    update = function(dt)
+        local light = kast.get(probe(), "DirectionalLight")
+        local spun = 0
+        for e in kast.query("Rotator") do spun = kast.get(e, "Transform").rotation.y end
+        kast.set(probe(), "DirectionalLight", {intensity = light.intensity * 10 + 2, color = {x = light.color.x, y = spun, z = 0}})
+    end,
+})");
+
+    Document doc;
+    doc.path = (dir / "play.scene").string();
+    const entt::entity spinner = doc.scene.create("Spinner");
+    doc.scene.registry().emplace<kast::Rotator>(spinner, bx::Vec3{0, 1, 0}, 90.0f);
+    doc.scene.registry().emplace<kast::DirectionalLight>(doc.scene.create("Probe"), bx::Vec3{0, 0, 0}, 0.0f);
+    doc.scene.systems = {"scripts/a.lua", "scripts/b.lua"};
+    const auto light = [&] { return doc.scene.registry().get<kast::DirectionalLight>(named(doc.scene, "Probe")); };
+
+    updatePlay(doc, 1.0f);
+    check(light().intensity == 0.0f && !doc.lua.running(), "Lua systems do not run when stopped");
+    startPlay(doc);
+    check(doc.lua.running() && light().color.x == 0.5f, "Play starts a Lua session and calls init");
+    updatePlay(doc, 1.0f);
+    check(light().intensity == 12.0f, "Lua systems run in listed order");
+    check(near(light().color.y, std::sin(bx::toRad(45.0f))), "Lua systems run after the C++ systems (see this frame's rotation)");
+    togglePause(doc);
+    updatePlay(doc, 1.0f);
+    check(light().intensity == 12.0f, "Lua systems do not run while paused");
+    startPlay(doc);
+    updatePlay(doc, 1.0f);
+    check(light().intensity == 1212.0f, "Lua systems resume after Pause, without re-init");
+    check(!logged("a.lua: a shutdown"), "no shutdown before Stop");
+    stopPlay(doc);
+    check(logged("[info] scripts/a.lua: a shutdown") && !doc.lua.running(), "Stop calls shutdown and ends the session");
+    check(light().intensity == 0.0f, "Stop restores the scene the Lua systems changed");
+    std::filesystem::remove_all(dir);
+}
+
+// The kast.* API, exercised from Lua (its own asserts disable the system on failure) and checked from C++.
+void checkLuaApi()
+{
+    const std::filesystem::path dir = luaTestDir();
+    writeFile(dir / "api.lua", R"(local function fails(part, fn)
+    local ok, err = pcall(fn)
+    assert(not ok, "expected an error mentioning " .. part)
+    assert(string.find(err, part, 1, true), "error '" .. tostring(err) .. "' does not mention " .. part)
+    assert(string.find(err, "api.lua:%d+:"), "error '" .. tostring(err) .. "' has no file:line")
+end
+local done = false
+return { update = function(dt)
+    if done then return end
+    done = true
+    local meshes = {}
+    for e in kast.query("Transform", "MeshRenderer") do meshes[#meshes + 1] = e end
+    assert(#meshes == 2, "query by two components")
+    local cube, cam = meshes[1], nil
+    for e in kast.query("Camera") do cam = e end
+    local n = 0
+    for e in kast.query() do n = n + 1 end
+    assert(n == 3, "query with no names visits every entity")
+
+    local t = kast.get(cube, "Transform")
+    assert(t.position.x == 1 and t.position.y == 2 and t.rotation.w == 1 and t.scale.z == 1, "get Vec3/Quaternion as tables")
+    assert(kast.get(cube, "MeshRenderer").primitive == "cube", "get enum as its name")
+    assert(kast.get(cam, "Camera").verticalFovDegrees == 60, "get float")
+    kast.set(cube, "Transform", {position = {x = 2, y = 3, z = 4}})
+    kast.set(cube, "MeshRenderer", {primitive = "sphere"})
+    t = kast.get(cube, "Transform")
+    assert(t.position.z == 4 and t.rotation.w == 1, "partial set keeps the other fields")
+
+    assert(not kast.has(cube, "Rotator"))
+    kast.add(cube, "Rotator")
+    assert(kast.has(cube, "Rotator") and kast.get(cube, "Rotator").degreesPerSecond == 45, "add default-constructs")
+    kast.add(cube, "Rotator") -- already there: no-op
+    kast.remove(cube, "Rotator")
+    kast.remove(cube, "Rotator") -- already gone: no-op
+    assert(not kast.has(cube, "Rotator"), "remove")
+
+    fails('"Transform" cannot be removed', function() kast.remove(cube, "Transform") end)
+    fails('unknown component "Teleporter"', function() kast.has(cube, "Teleporter") end)
+    fails('unknown component "Teleporter"', function() for e in kast.query("Transform", "Teleporter") do end end)
+    fails("invalid entity id 999", function() kast.get(999, "Transform") end)
+    fails("invalid entity id 1.5", function() kast.get(1.5, "Transform") end)
+    fails("invalid entity id x", function() kast.get("x", "Transform") end)
+    fails('has no "Camera"', function() kast.get(cube, "Camera") end)
+    fails('"verticalFovDegrees" must be between', function() kast.set(cam, "Camera", {verticalFovDegrees = 0}) end)
+    fails('"nearPlane" must be a number', function() kast.set(cam, "Camera", {nearPlane = "far", farPlane = 5}) end)
+    fails('unknown field "speed"', function() kast.set(cam, "Camera", {speed = 1}) end)
+    fails('"position" must be a table', function() kast.set(cube, "Transform", {scale = {x = 2, y = 2, z = 2}, position = {x = 9, y = 9}}) end)
+    fails('"scale" must be a table', function() kast.set(cube, "Transform", {position = {x = 9, y = 9, z = 9}, scale = "big"}) end)
+    fails("finite number", function() kast.set(cam, "Camera", {farPlane = math.huge}) end)
+    fails('"rotation" must be a nonzero quaternion', function() kast.set(cube, "Transform", {rotation = {x = 0, y = 0, z = 0, w = 0}}) end)
+    fails('unknown value "torus"', function() kast.set(cube, "MeshRenderer", {primitive = "torus"}) end)
+    fails('unknown key name "NotAKey"', function() kast.input.keyDown("NotAKey") end)
+    fails("kast is read-only", function() kast.get = nil end)
+    fails("kast is read-only", function() kast.input.keyDown = nil end)
+
+    assert(kast.input.keyDown("W") and not kast.input.keyDown("S"), "keyDown by SDL name")
+    local dx, dy = kast.input.mouseDelta()
+    assert(dx == 3 and dy == -2, "mouseDelta")
+
+    local parent = kast.create("Parent")
+    local child = kast.create("Child", parent)
+    kast.add(child, "MeshRenderer")
+    fails("invalid entity id", function() kast.create("Orphan", 12345) end)
+    local visited = {}
+    for e in kast.query("MeshRenderer") do
+        visited[#visited + 1] = e
+        if e == cube then
+            kast.destroy(parent) -- takes child with it: skipped later in this loop
+            local late = kast.create("Late")
+            kast.add(late, "MeshRenderer") -- created during the loop: not visited
+        end
+    end
+    assert(#visited == 2 and visited[1] == cube, "destroy during query skips destroyed entities, new ones not visited")
+    fails("invalid entity id", function() kast.has(child, "Transform") end)
+    kast.log("hello")
+    kast.warn("careful")
+    kast.error("oops")
+end })");
+
+    kast::Scene scene;
+    entt::registry& registry = scene.registry();
+    const entt::entity cube = scene.create("Cube");
+    registry.get<kast::Transform>(cube).position = {1, 2, 3};
+    registry.emplace<kast::MeshRenderer>(cube, kast::Primitive::Cube);
+    registry.emplace<kast::MeshRenderer>(scene.create("Sphere"), kast::Primitive::Sphere);
+    const entt::entity cam = scene.create("Camera");
+    registry.emplace<kast::Camera>(cam);
+    scene.systems = {"api.lua"};
+    kast::Input input;
+    input.keysDown[SDL_SCANCODE_W] = true;
+    input.mouseDeltaX = 3.0f;
+    input.mouseDeltaY = -2.0f;
+
+    kast::LuaSystems lua;
+    lua.start(scene, dir, &input);
+    lua.tick(0.1f);
+    checkOk(lua, 0, "kast.* API asserts in Lua pass");
+    check(near(registry.get<kast::Transform>(cube).position, {2, 3, 4}) &&
+              near(registry.get<kast::Transform>(cube).scale, {1, 1, 1}),
+          "set wrote Transform; rejected sets left it unchanged");
+    check(registry.get<kast::MeshRenderer>(cube).primitive == kast::Primitive::Sphere, "set wrote an enum by name");
+    check(registry.get<kast::Camera>(cam).verticalFovDegrees == 60.0f && registry.get<kast::Camera>(cam).farPlane == 1000.0f,
+          "rejected Camera sets left it unchanged");
+    check(named(scene, "Parent") == entt::null && named(scene, "Child") == entt::null, "destroy removes the subtree");
+    const entt::entity late = named(scene, "Late");
+    check(scene.valid(late) && registry.all_of<kast::MeshRenderer>(late) && scene.parent(late) == entt::null,
+          "create adds a root entity through Scene");
+    check(logged("[info] api.lua: hello") && logged("[warn] api.lua: careful") && logged("[error] api.lua: oops"),
+          "kast.log/warn/error prefix the file");
+    lua.stop();
+    check(!lua.running() && lua.status().empty(), "stop ends the session");
+    std::filesystem::remove_all(dir);
+}
+
+void checkLuaSandbox()
+{
+    const std::filesystem::path dir = luaTestDir();
+    writeFile(dir / "one.lua", R"(
+for _, name in ipairs({"io", "os", "ffi", "debug", "require", "loadfile", "dofile", "package", "jit", "bit",
+                       "load", "loadstring", "getfenv", "setfenv", "module"}) do
+    assert(_G[name] == nil and rawget(_G, name) == nil, name .. " is reachable")
+end
+name = "one"
+return {
+    init = function() counter = 1 end,
+    update = function(dt)
+        assert(name == "one" and counter == 1, "globals are per system")
+        assert(math.pi > 3.14, "library tables are per system")
+        assert(kast.input.keyDown("W") == false, "no input: keys are up")
+        local dx, dy = kast.input.mouseDelta()
+        assert(dx == 0 and dy == 0, "no input: no mouse motion")
+    end,
+})");
+    writeFile(dir / "two.lua", R"(
+name = "two"
+math.pi = 3
+return {
+    init = function() counter = 100 end,
+    update = function(dt) assert(name == "two" and counter == 100 and math.pi == 3, "own globals") end,
+})");
+    kast::Scene scene;
+    scene.systems = {"one.lua", "two.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, nullptr);
+    lua.tick(0.1f);
+    checkOk(lua, 0, "sandbox: unsafe libraries unreachable, globals isolated (one)");
+    checkOk(lua, 1, "sandbox: globals isolated (two)");
+    lua.stop();
+    std::filesystem::remove_all(dir);
+}
+
+void checkLuaErrors()
+{
+    const std::filesystem::path dir = luaTestDir();
+    writeFile(dir / "counter.lua", R"(return { update = function(dt)
+    for e in kast.query("DirectionalLight") do
+        kast.set(e, "DirectionalLight", {intensity = kast.get(e, "DirectionalLight").intensity + 1})
+    end
+end })");
+    writeFile(dir / "syntax.lua", "return {\n update = function(dt) local x = end\n}");
+    writeFile(dir / "runtime.lua",
+              "local calls = 0\nreturn { update = function(dt)\n  calls = calls + 1\n  if calls == 2 then error(\"boom\") end\nend }");
+    writeFile(dir / "badapi.lua", "return { update = function(dt)\n  kast.get(424242, \"Transform\")\nend }");
+    writeFile(dir / "noupdate.lua", "return { init = function() end }");
+    writeFile(dir / "notable.lua", "return 42");
+    writeFile(dir / "badinit.lua", "return {\n  init = function() local t = nil; return t.x end,\n  update = function(dt) end }");
+
+    kast::Scene scene;
+    const entt::entity probe = scene.create("Probe");
+    scene.registry().emplace<kast::DirectionalLight>(probe, bx::Vec3{1, 1, 1}, 0.0f);
+    scene.systems = {"syntax.lua", "runtime.lua", "counter.lua", "badapi.lua", "noupdate.lua", "notable.lua",
+                     "badinit.lua", "missing.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, nullptr);
+    const auto disabled = [&](size_t index, const std::vector<std::string>& parts, const char* what,
+                              std::source_location where = std::source_location::current()) {
+        const kast::LuaSystemStatus status = statusOf(lua, index);
+        const bool ok = !status.ok && std::ranges::all_of(parts, [&](const std::string& part) { return contains(status.error, part); });
+        check(ok, what, where);
+        if (!ok)
+            kast::log::error(std::format("  {}: ok={} error='{}'", status.path, status.ok, status.error));
+    };
+    disabled(0, {"syntax.lua:2:"}, "syntax error: disabled, error has file:line");
+    disabled(4, {"noupdate.lua", "update"}, "missing update: disabled");
+    disabled(5, {"notable.lua", "must return a table"}, "non-table result: disabled");
+    disabled(6, {"badinit.lua:2:"}, "init error: disabled with file:line");
+    disabled(7, {"missing.lua", "cannot open"}, "missing file: disabled");
+    check(logged("Lua system disabled: syntax.lua:2:"), "load errors are logged with file:line");
+
+    lua.tick(0.1f);
+    checkOk(lua, 1, "runtime.lua runs fine on its first call");
+    disabled(3, {"badapi.lua:2:", "invalid entity id 424242"}, "kast.* error: disabled with file:line");
+    lua.tick(0.1f);
+    disabled(1, {"runtime.lua:4:", "boom"}, "runtime error: disabled with file:line");
+    lua.tick(0.1f);
+    checkOk(lua, 2, "other systems keep running");
+    check(scene.registry().get<kast::DirectionalLight>(probe).intensity == 3.0f, "the healthy system ran every tick");
+    lua.stop();
+    std::filesystem::remove_all(dir);
+}
+
+void checkLuaHotReload()
+{
+    const std::filesystem::path dir = luaTestDir();
+    const std::filesystem::path file = dir / "hot.lua";
+    const auto version = [](int add, const char* tag) {
+        return std::format(R"(return {{
+    init = function() kast.log("init {0}") end,
+    update = function(dt)
+        for e in kast.query("DirectionalLight") do
+            kast.set(e, "DirectionalLight", {{intensity = kast.get(e, "DirectionalLight").intensity + {1}}})
+        end
+    end,
+    shutdown = function() kast.log("shutdown {0}") end,
+}})",
+                           tag, add);
+    };
+    writeFile(file, version(1, "v1"));
+    kast::Scene scene;
+    const entt::entity probe = scene.create("Probe");
+    scene.registry().emplace<kast::DirectionalLight>(probe, bx::Vec3{1, 1, 1}, 0.0f);
+    scene.systems = {"hot.lua"};
+    const auto intensity = [&] { return scene.registry().get<kast::DirectionalLight>(probe).intensity; };
+    kast::LuaSystems lua;
+    lua.start(scene, dir, nullptr);
+    lua.tick(0.1f);
+    check(intensity() == 1.0f && logged("hot.lua: init v1"), "v1 runs");
+
+    rewrite(file, version(10, "v2"));
+    lua.tick(0.1f);
+    check(logged("hot.lua: shutdown v1") && logged("hot.lua: init v2") && logged("Reloaded Lua system hot.lua"),
+          "hot reload: shutdown old, init new");
+    check(intensity() == 11.0f, "hot reload: new behaviour, scene not reset");
+
+    rewrite(file, "return { update = function(dt) local = end }");
+    lua.tick(0.1f);
+    check(!statusOf(lua, 0).ok && contains(statusOf(lua, 0).error, "hot.lua:1:") && intensity() == 11.0f,
+          "reload with a syntax error disables the system");
+    lua.tick(0.1f);
+    check(intensity() == 11.0f, "disabled system does not run");
+
+    rewrite(file, version(100, "v3"));
+    lua.tick(0.1f);
+    check(statusOf(lua, 0).ok && statusOf(lua, 0).error.empty() && intensity() == 111.0f,
+          "a good reload clears the error and runs again");
+    lua.stop();
+    check(logged("hot.lua: shutdown v3"), "Stop shuts down the reloaded instance");
+    std::filesystem::remove_all(dir);
+}
+
+// Systems panel operations on a Document (the panel only adds ImGui widgets on top).
+void checkSystemEdits()
+{
+    const std::filesystem::path dir = luaTestDir();
+    Document doc;
+    resetToDefault(doc);
+    std::string error;
+    check(!newSystemFromTemplate(doc, error) && error == "Save the scene first" && doc.scene.systems.empty(),
+          "template needs a saved scene");
+
+    doc.path = (dir / "edit.scene").string();
+    check(newSystemFromTemplate(doc, error) && newSystemFromTemplate(doc, error), "template written");
+    check((doc.scene.systems == std::vector<std::string>{"scripts/new_system.lua", "scripts/new_system_2.lua"}) &&
+              std::filesystem::exists(dir / "scripts/new_system_2.lua") && doc.dirty,
+          "template files get unique names, are added relative to the scene and set dirty");
+    doc.dirty = false;
+    writeFile(dir / "other.lua", "return { update = function(dt) end }");
+    addSystem(doc, dir / "other.lua");
+    check(doc.scene.systems.back() == "other.lua" && doc.dirty, "add stores the path relative to the scene");
+    moveSystem(doc, 2, -1);
+    moveSystem(doc, 0, -1); // past the top: no-op
+    check((doc.scene.systems == std::vector<std::string>{"scripts/new_system.lua", "other.lua", "scripts/new_system_2.lua"}),
+          "move up / down");
+    removeSystem(doc, 0);
+    check((doc.scene.systems == std::vector<std::string>{"other.lua", "scripts/new_system_2.lua"}), "remove");
+
+    check(canEditSystems(doc), "systems editable when stopped");
+    startPlay(doc);
+    check(!canEditSystems(doc), "systems not editable during Play");
+    checkOk(doc.lua, 1, "the template is a working system");
+    updatePlay(doc, 0.1f);
+    checkOk(doc.lua, 1, "the template's update runs");
+    stopPlay(doc);
+
+    // Save As into another directory keeps the paths pointing at the same files.
+    std::filesystem::create_directories(dir / "sub");
+    check(saveFile(doc, (dir / "sub/moved.scene").string(), error), "Save As");
+    check((doc.scene.systems == std::vector<std::string>{"../other.lua", "../scripts/new_system_2.lua"}),
+          "Save As rebases system paths");
+    startPlay(doc);
+    checkOk(doc.lua, 0, "rebased paths still load");
+    stopPlay(doc);
+    std::filesystem::remove_all(dir);
+}
+
 } // namespace
 
 int main()
@@ -535,6 +992,13 @@ int main()
     checkRotatorSystem();
     checkSnapshot();
     checkPlayMode();
+    checkSystemsFormat();
+    checkLuaPlayMode();
+    checkLuaApi();
+    checkLuaSandbox();
+    checkLuaErrors();
+    checkLuaHotReload();
+    checkSystemEdits();
     if (g_failures > 0) {
         kast::log::error(std::format("{} self-check(s) failed", g_failures));
         return 1;

@@ -10,6 +10,10 @@ find_package(imgui CONFIG REQUIRED)
 find_package(imguizmo CONFIG REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(sol2 CONFIG REQUIRED)
+# vcpkg's luajit port ships no CMake config, only headers in include/luajit and lua51.lib/.dll.
+find_path(LUAJIT_INCLUDE_DIR luajit.h PATH_SUFFIXES luajit REQUIRED)
+find_library(LUAJIT_LIBRARY lua51 REQUIRED)
 
 # Kast code only; vcpkg headers are SYSTEM includes, so their warnings are suppressed.
 set(KAST_COMPILE_OPTIONS /W4 /WX /permissive-)
@@ -52,13 +56,18 @@ endforeach()
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
-  engine/systems.cpp engine/renderer.cpp engine/input.cpp
+  engine/systems.cpp engine/renderer.cpp engine/input.cpp engine/lua_systems.cpp
   ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}")
+target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}")
+# sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
+# exceptions unwind through LuaJIT by default, which reports them only as "C++ exception"; catching them in sol2
+# keeps the binding's error message (with the script's file:line). The message reaches the Console, not sol2's stdout print.
+target_compile_definitions(kast_engine PRIVATE SOL_LUAJIT=1 SOL_ALL_SAFETIES_ON=1 SOL_EXCEPTIONS_SAFE_PROPAGATION=0 SOL_PRINT_ERRORS=0)
 target_compile_options(kast_engine PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_engine
   PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json
-  PRIVATE SDL3::SDL3 bgfx::bimg)
+  PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 "${LUAJIT_LIBRARY}")
 
 # --- editor font: TTF embedded as a byte array header, regenerated when the TTF changes ---
 set(KAST_FONT "${CMAKE_CURRENT_SOURCE_DIR}/editor/assets/fonts/Roboto-Regular.ttf")
@@ -124,6 +133,27 @@ set_tests_properties(scene_play_screenshot PROPERTIES FIXTURES_SETUP play_shot)
 set_tests_properties(game_play_screenshot PROPERTIES FIXTURES_SETUP game_shot)
 set_tests_properties(scene_play_differs PROPERTIES FIXTURES_REQUIRED "basic_shot;play_shot")
 set_tests_properties(game_play_differs PROPERTIES FIXTURES_REQUIRED "basic_shot;game_shot")
+# Lua systems: lua.scene in Play vs the same scene with its "systems" emptied, so only the scripts can differ.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_SCENES}/lua.scene")
+file(READ "${KAST_TEST_SCENES}/lua.scene" lua_scene)
+string(REGEX REPLACE "\"systems\": \\[[^]]*\\]" "\"systems\": []" lua_scene "${lua_scene}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/lua_no_systems.scene" "${lua_scene}")
+add_test(NAME lua_scene_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/lua_scene.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/lua.scene" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME lua_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/lua_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/lua.scene --play" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME lua_play_no_systems_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/lua_play_no_systems.png"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_BINARY_DIR}/lua_no_systems.scene --play"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME lua_play_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/lua_play_no_systems.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/lua_play.png"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(lua_play_screenshot PROPERTIES FIXTURES_SETUP lua_play_shot)
+set_tests_properties(lua_play_no_systems_screenshot PROPERTIES FIXTURES_SETUP lua_no_systems_shot)
+set_tests_properties(lua_play_differs PROPERTIES FIXTURES_REQUIRED "lua_play_shot;lua_no_systems_shot")
 add_test(NAME scene_roundtrip
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_SCENES}/basic.scene"
           "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")

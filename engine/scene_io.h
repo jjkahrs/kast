@@ -7,7 +7,8 @@
 // .scene files: JSON, see README "Scene file format".
 namespace kast {
 
-constexpr int kSceneFileVersion = 2;
+constexpr int kSceneFileVersion = 3;
+constexpr int kOldestSceneFileVersion = 2; // still loads; version 2 files have no "systems"
 
 // Replaces out only on success; on failure out is untouched and error says why.
 bool loadScene(const std::string& path, Scene& out, std::string& error);
