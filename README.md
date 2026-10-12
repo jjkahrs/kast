@@ -21,7 +21,12 @@ so vcpkg builds ports with VS 2022 even when newer Visual Studio versions are in
 build.bat              :: configure + build (debug). build.bat release for optimized
 run.bat                :: run build\debug\kast_editor.exe from the repo root
 run.bat release --size 1600x900   :: optional preset, then any editor flags
+run.bat debug --ui-scale 2.0      :: force UI scale (default: monitor's display scale)
 ```
+
+The editor UI (text, padding, tabs, menu bar) scales with the monitor's Windows display scale (e.g. 150% → 1.5x),
+clamped to 0.75–3.0, and rescales live when the window moves to a monitor with a different scale. Resizing the window
+does not change text size. `--ui-scale F` overrides the detected scale (out-of-range values are clamped with a warning).
 
 Both work from any terminal (cmd, PowerShell, VS Code; in PowerShell type `.\build.bat` / `.\run.bat`); `build.bat` sets up the VS 2022 environment and
 `VCPKG_ROOT=C:/vcpkg` itself. Running from the repo root means the layout file is `imgui.ini` there.
@@ -73,6 +78,7 @@ build\release\kast_editor.exe
 | `--frames N` | Run N frames, then quit cleanly (exit 0). |
 | `--screenshot <path.png>` | With `--frames`: capture the backbuffer after frame N, write a PNG, then exit. Exit 1 if it can't be written. |
 | `--size WxH` | Initial window size (default `1280x720`). |
+| `--ui-scale F` | Force UI scale `F` (positive number, clamped to 0.75–3.0) instead of the monitor's display scale. |
 
 Invalid arguments exit with code 2; init failures (SDL, window, bgfx) log the reason, show a message box, and exit 1.
 
