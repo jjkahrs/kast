@@ -1,0 +1,11 @@
+{
+  "name": "kast",
+  "version-string": "0.1.0",
+  "builtin-baseline": "ed8445dd2a9ba44e0e3ace4e952b2e33130082d9",
+  "dependencies": [
+    "sdl3",
+    "bgfx",
+    { "name": "bgfx", "host": true, "features": ["tools"] },
+    { "name": "imgui", "features": ["docking-experimental", "sdl3-binding"] }
+  ]
+}

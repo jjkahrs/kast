@@ -1,0 +1,57 @@
+cmake_minimum_required(VERSION 3.25)
+project(kast LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+find_package(SDL3 CONFIG REQUIRED)
+find_package(bgfx CONFIG REQUIRED)
+find_package(imgui CONFIG REQUIRED)
+
+# Kast code only; vcpkg headers are SYSTEM includes, so their warnings are suppressed.
+set(KAST_COMPILE_OPTIONS /W4 /WX /permissive-)
+
+# --- engine: reusable by the shipped client, no ImGui/editor code ---
+add_library(kast_engine STATIC engine/app.cpp engine/log.cpp)
+target_include_directories(kast_engine PUBLIC engine)
+target_compile_options(kast_engine PRIVATE ${KAST_COMPILE_OPTIONS})
+target_link_libraries(kast_engine PRIVATE SDL3::SDL3 bgfx::bgfx bgfx::bimg bgfx::bx)
+
+# --- ImGui shaders: compiled to DX11 bytecode headers with vcpkg's shaderc ---
+# ponytail: host triplet == target triplet (x64-windows); look in the host triplet dir if cross-compiling ever happens.
+find_program(KAST_SHADERC shaderc PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/bgfx" NO_DEFAULT_PATH REQUIRED)
+set(KAST_SHADER_INCLUDE "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/bgfx")
+set(KAST_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+set(KAST_VARYING "${CMAKE_CURRENT_SOURCE_DIR}/editor/shaders/varying.def.sc")
+set(KAST_SHADER_HEADERS)
+foreach(shader vs_imgui fs_imgui)
+  string(SUBSTRING ${shader} 0 2 stage)
+  if(stage STREQUAL "vs")
+    set(type vertex)
+  else()
+    set(type fragment)
+  endif()
+  set(src "${CMAKE_CURRENT_SOURCE_DIR}/editor/shaders/${shader}.sc")
+  set(out "${KAST_SHADER_OUT}/${shader}.bin.h")
+  add_custom_command(
+    OUTPUT "${out}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${KAST_SHADER_OUT}"
+    COMMAND "${KAST_SHADERC}" -f "${src}" -o "${out}" --bin2c ${shader} --type ${type}
+            --platform windows -p s_5_0 -i "${KAST_SHADER_INCLUDE}" --varyingdef "${KAST_VARYING}"
+    DEPENDS "${src}" "${KAST_VARYING}"
+    COMMENT "shaderc ${shader}.sc"
+    VERBATIM)
+  list(APPEND KAST_SHADER_HEADERS "${out}")
+endforeach()
+
+# --- editor ---
+add_executable(kast_editor editor/main.cpp editor/imgui_bgfx.cpp ${KAST_SHADER_HEADERS})
+target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}")
+target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
+target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 bgfx::bgfx bgfx::bx imgui::imgui)
+
+# --- smoke test ---
+enable_testing()
+add_test(NAME editor_smoke
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/smoke.png"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")

@@ -1,0 +1,15 @@
+# Runs the editor without human input for a fixed frame count and checks it exits 0 and writes a non-empty PNG.
+# Usage: cmake -DEDITOR=<exe> -DSCREENSHOT=<png> -P smoke_test.cmake
+file(REMOVE "${SCREENSHOT}")
+execute_process(COMMAND "${EDITOR}" --frames 120 --screenshot "${SCREENSHOT}" RESULT_VARIABLE result)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "kast_editor exited with ${result}")
+endif()
+if(NOT EXISTS "${SCREENSHOT}")
+  message(FATAL_ERROR "Screenshot not written: ${SCREENSHOT}")
+endif()
+file(SIZE "${SCREENSHOT}" size)
+if(size EQUAL 0)
+  message(FATAL_ERROR "Screenshot is empty: ${SCREENSHOT}")
+endif()
+message(STATUS "OK: exit 0, ${SCREENSHOT} is ${size} bytes")

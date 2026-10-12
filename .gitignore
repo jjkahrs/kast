@@ -1,0 +1,41 @@
+# Build output (CMake presets write here, incl. vcpkg_installed)
+/build/
+/out/
+CMakeUserPresets.json
+
+# vcpkg
+vcpkg_installed/
+
+# Compiled artifacts
+*.exe
+*.dll
+*.lib
+*.exp
+*.ilk
+*.pdb
+*.obj
+*.o
+
+# Compiled bgfx shaders
+*.bin
+
+# Runtime-generated editor state
+imgui.ini
+
+# Local-only files
+/ignore/
+/prompts/
+
+# IDE / tooling
+.vs/
+.vscode/
+.idea/
+.cache/
+compile_commands.json
+*.user
+*.suo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
