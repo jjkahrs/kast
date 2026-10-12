@@ -6,6 +6,9 @@
     "sdl3",
     "bgfx",
     { "name": "bgfx", "host": true, "features": ["tools"] },
-    { "name": "imgui", "features": ["docking-experimental", "sdl3-binding"] }
+    { "name": "imgui", "features": ["docking-experimental", "sdl3-binding"] },
+    "imguizmo",
+    "entt",
+    "nlohmann-json"
   ]
 }

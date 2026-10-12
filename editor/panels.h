@@ -1,0 +1,35 @@
+#pragma once
+
+#include "document.h"
+
+#include <string>
+
+// Hierarchy (tree, create/delete/rename/duplicate, drag-drop reparent) and Inspector panels.
+class Panels {
+public:
+    void drawHierarchy(Document& doc);
+    void drawInspector(Document& doc);
+
+private:
+    // Tree edits are deferred to the end of drawHierarchy so the child lists are not changed mid-iteration.
+    struct Edit {
+        enum class Op { None, Create, Delete, Duplicate, Reparent } op = Op::None;
+        entt::entity target = entt::null;
+        entt::entity parent = entt::null;
+        ObjectKind kind = ObjectKind::Empty;
+    };
+
+    void drawNode(Document& doc, entt::entity entity);
+    void drawCreateItems(entt::entity parent);
+    void applyEdit(Document& doc);
+
+    Edit edit_;
+    entt::entity renaming_ = entt::null;
+    bool focusRename_ = false;
+    std::string renameBuffer_;
+
+    // Euler angles shown in the Inspector, kept while editing so they don't jump between equivalent forms.
+    entt::entity eulerEntity_ = entt::null;
+    bx::Quaternion eulerSource_{bx::InitIdentity};
+    bx::Vec3 euler_{0.0f, 0.0f, 0.0f};
+};

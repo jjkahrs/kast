@@ -1,0 +1,18 @@
+# Loads a scene and saves it twice; the two saves must be byte-identical (deterministic serialization) and loadable.
+# Usage: cmake -DEDITOR=<exe> -DSCENE=<scene> -DOUT_DIR=<dir> -P roundtrip_test.cmake
+set(out "${OUT_DIR}/roundtrip_out.scene")
+set(out2 "${OUT_DIR}/roundtrip_out2.scene")
+file(REMOVE "${out}" "${out2}")
+foreach(step "${SCENE};${out}" "${out};${out2}")
+  list(GET step 0 input)
+  list(GET step 1 output)
+  execute_process(COMMAND "${EDITOR}" --scene "${input}" --save-scene "${output}" RESULT_VARIABLE result)
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "kast_editor --scene ${input} --save-scene ${output} exited with ${result}")
+  endif()
+endforeach()
+execute_process(COMMAND "${CMAKE_COMMAND}" -E compare_files "${out}" "${out2}" RESULT_VARIABLE differ)
+if(NOT differ EQUAL 0)
+  message(FATAL_ERROR "Round trip changed the file: ${out} vs ${out2}")
+endif()
+message(STATUS "OK: ${out} and ${out2} are byte-identical")

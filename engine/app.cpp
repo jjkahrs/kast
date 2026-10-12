@@ -122,7 +122,7 @@ int run(const AppConfig& config, const AppHooks& hooks)
     for (bool running = true; running;) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_EVENT_QUIT)
+            if (event.type == SDL_EVENT_QUIT && (!hooks.quitRequested || hooks.quitRequested()))
                 running = false;
             if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
                 width = event.window.data1;

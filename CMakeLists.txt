@@ -7,42 +7,57 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(SDL3 CONFIG REQUIRED)
 find_package(bgfx CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+find_package(imguizmo CONFIG REQUIRED)
+find_package(EnTT CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 # Kast code only; vcpkg headers are SYSTEM includes, so their warnings are suppressed.
 set(KAST_COMPILE_OPTIONS /W4 /WX /permissive-)
 
-# --- engine: reusable by the shipped client, no ImGui/editor code ---
-add_library(kast_engine STATIC engine/app.cpp engine/log.cpp)
-target_include_directories(kast_engine PUBLIC engine)
-target_compile_options(kast_engine PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_engine PRIVATE SDL3::SDL3 bgfx::bgfx bgfx::bimg bgfx::bx)
-
-# --- ImGui shaders: compiled to DX11 bytecode headers with vcpkg's shaderc ---
+# --- shaders: compiled to DX11 bytecode headers with vcpkg's shaderc; each dir has its own varying.def.sc ---
 # ponytail: host triplet == target triplet (x64-windows); look in the host triplet dir if cross-compiling ever happens.
 find_program(KAST_SHADERC shaderc PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/bgfx" NO_DEFAULT_PATH REQUIRED)
 set(KAST_SHADER_INCLUDE "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/bgfx")
 set(KAST_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
-set(KAST_VARYING "${CMAKE_CURRENT_SOURCE_DIR}/editor/shaders/varying.def.sc")
-set(KAST_SHADER_HEADERS)
-foreach(shader vs_imgui fs_imgui)
+set(KAST_EDITOR_SHADERS)
+set(KAST_ENGINE_SHADERS)
+foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
+             engine/shaders/vs_mesh engine/shaders/fs_mesh engine/shaders/vs_line engine/shaders/fs_line)
+  get_filename_component(shader ${path} NAME)
+  get_filename_component(dir ${path} DIRECTORY)
+  set(varying "${CMAKE_CURRENT_SOURCE_DIR}/${dir}/varying.def.sc")
   string(SUBSTRING ${shader} 0 2 stage)
   if(stage STREQUAL "vs")
     set(type vertex)
   else()
     set(type fragment)
   endif()
-  set(src "${CMAKE_CURRENT_SOURCE_DIR}/editor/shaders/${shader}.sc")
+  set(src "${CMAKE_CURRENT_SOURCE_DIR}/${path}.sc")
   set(out "${KAST_SHADER_OUT}/${shader}.bin.h")
   add_custom_command(
     OUTPUT "${out}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${KAST_SHADER_OUT}"
     COMMAND "${KAST_SHADERC}" -f "${src}" -o "${out}" --bin2c ${shader} --type ${type}
-            --platform windows -p s_5_0 -i "${KAST_SHADER_INCLUDE}" --varyingdef "${KAST_VARYING}"
-    DEPENDS "${src}" "${KAST_VARYING}"
+            --platform windows -p s_5_0 -i "${KAST_SHADER_INCLUDE}" --varyingdef "${varying}"
+    DEPENDS "${src}" "${varying}"
     COMMENT "shaderc ${shader}.sc"
     VERBATIM)
-  list(APPEND KAST_SHADER_HEADERS "${out}")
+  if(dir STREQUAL "engine/shaders")
+    list(APPEND KAST_ENGINE_SHADERS "${out}")
+  else()
+    list(APPEND KAST_EDITOR_SHADERS "${out}")
+  endif()
 endforeach()
+
+# --- engine: reusable by the shipped client, no ImGui/editor code ---
+add_library(kast_engine STATIC
+  engine/app.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/renderer.cpp
+  ${KAST_ENGINE_SHADERS})
+target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}")
+target_compile_options(kast_engine PRIVATE ${KAST_COMPILE_OPTIONS})
+target_link_libraries(kast_engine
+  PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json
+  PRIVATE SDL3::SDL3 bgfx::bimg)
 
 # --- editor font: TTF embedded as a byte array header, regenerated when the TTF changes ---
 set(KAST_FONT "${CMAKE_CURRENT_SOURCE_DIR}/editor/assets/fonts/Roboto-Regular.ttf")
@@ -60,16 +75,37 @@ inline unsigned char kRobotoRegularTtf[] = {
 ")
 
 # --- editor ---
-add_executable(kast_editor editor/main.cpp editor/imgui_bgfx.cpp ${KAST_SHADER_HEADERS})
+add_executable(kast_editor
+  editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/camera.cpp editor/viewport.cpp editor/panels.cpp
+  ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 bgfx::bgfx bgfx::bx imgui::imgui)
+target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 imgui::imgui imguizmo::imguizmo)
 
-# --- smoke test ---
+# --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
+add_executable(kast_self_check tests/self_check.cpp)
+target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS})
+target_link_libraries(kast_self_check PRIVATE kast_engine)
+
+# --- tests ---
 enable_testing()
+set(KAST_TEST_SCENES "${CMAKE_CURRENT_SOURCE_DIR}/tests/scenes")
+add_test(NAME engine_self_check COMMAND kast_self_check)
 add_test(NAME editor_smoke
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/smoke.png"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME editor_smoke_scaled
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/smoke_scaled.png"
           "-DEXTRA_ARGS=--ui-scale 2.0" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME scene_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/scene_basic.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/basic.scene" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME scene_roundtrip
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_SCENES}/basic.scene"
+          "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
+add_test(NAME scene_bad_json
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_SCENES}/malformed.scene"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
+add_test(NAME scene_missing
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_SCENES}/does_not_exist.scene"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
