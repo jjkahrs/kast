@@ -70,6 +70,10 @@ void registerBuiltins()
     registerComponent<Rotator>("Rotator", {"Rotator"})
         .data<&Rotator::axis>("axis").custom<FieldInfo>("Axis")
         .data<&Rotator::degreesPerSecond>("degreesPerSecond").custom<FieldInfo>("Degrees Per Second");
+
+    registerComponent<StateMachine>("StateMachine", {"State Machine"})
+        .data<&StateMachine::machine>("machine").custom<FieldInfo>("Machine")
+        .data<&StateMachine::initialState>("initialState").custom<FieldInfo>("Initial State");
 }
 
 // ponytail: not thread-safe; registration happens on the main thread before any scene work.

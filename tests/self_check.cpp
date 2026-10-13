@@ -1,6 +1,6 @@
 // Assert-style checks for the non-trivial engine logic: rotation conventions, matrix decomposition, picking rays,
 // hierarchy edits, component registry, scene-file validation, cameras, input, systems, Lua systems, projects, scene
-// switching, editor Play mode, Lua components, game.pak and Build.
+// switching, editor Play mode, Lua components, game.pak, Build and state machines.
 // Exit 0 if every check passes. Run by CTest as engine_self_check.
 #include "build.h"    // editor Build pipeline; links editor/build.cpp
 #include "document.h" // editor Play mode; links editor/document.cpp, no window needed
@@ -18,6 +18,7 @@
 #include <project.h>
 #include <scene.h>
 #include <scene_io.h>
+#include <state_machines.h>
 #include <systems.h>
 
 #include <SDL3/SDL.h>
@@ -34,6 +35,7 @@
 #include <source_location>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 namespace {
 
@@ -173,7 +175,8 @@ std::vector<std::string> typeNames()
 
 void checkComponentRegistry()
 {
-    check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "DirectionalLight", "Camera", "Rotator"},
+    check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "DirectionalLight", "Camera", "Rotator",
+                                                 "StateMachine"},
           "built-in component types in registration order");
     const entt::meta_type transform = kast::findComponentType("Transform");
     const entt::meta_type rotator = kast::findComponentType("Rotator");
@@ -2257,8 +2260,8 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"events.scene", "health.scene", "scene_a.scene", "scene_b.scene"},
-          "tests/project lists events.scene, health.scene, scene_a.scene, scene_b.scene");
+              std::vector<std::string>{"events.scene", "fsm.scene", "health.scene", "scene_a.scene", "scene_b.scene"},
+          "tests/project lists events.scene, fsm.scene, health.scene, scene_a.scene, scene_b.scene");
 
     const std::filesystem::path root = looseTestDir("kast_build_settings_check") / "game";
     std::filesystem::copy(KAST_TEST_PROJECT_DIR, root, std::filesystem::copy_options::recursive);
@@ -2268,7 +2271,7 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / ".dot.scene");
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
-    check(projectScenes(root) == std::vector<std::string>{"broken.scene", "events.scene", "health.scene",
+    check(projectScenes(root) == std::vector<std::string>{"broken.scene", "events.scene", "fsm.scene", "health.scene",
                                                           "levels/c.scene", "scene_a.scene", "scene_b.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
@@ -2293,7 +2296,8 @@ void checkBuildSettings()
 
     check(setStartScene(*doc.project, "levels/c.scene", error), "Save a valid Start Scene");
     check(readText(root / kast::kProjectFileName) ==
-              "{\n  \"version\": 1,\n  \"name\": \"Switch Test\",\n  \"startScene\": \"levels/c.scene\"\n}\n",
+              "{\n  \"version\": 1,\n  \"name\": \"Switch Test\",\n  \"startScene\": \"levels/c.scene\",\n"
+              "  \"stateMachines\": [\n    \"game_flow\"\n  ]\n}\n",
           "Save writes project.kast with the new startScene, other keys and order kept");
     kast::Project reloaded;
     check(kast::loadProject(root / kast::kProjectFileName, reloaded, error) && reloaded.startScene == "levels/c.scene" &&
@@ -2761,6 +2765,665 @@ return { update = function(dt) n = n + 1; kast.publish("tick", {n = n}) end })")
     std::filesystem::remove_all(dir);
 }
 
+// --- State machines ---
+
+// door (fsms/sub/door.lua, nested to show recursive discovery) and game (fsms/game.lua). Every callback logs
+// "<prefix> ..." so each check reads its own lines. In game.lua, line 15 raises.
+void writeFsmDefinitions(const std::filesystem::path& dir, const std::string& prefix, const std::string& doorTag = "")
+{
+    std::filesystem::create_directories(dir / "fsms/sub");
+    std::string door = R"(local function say(text)
+    return function(ctx)
+        kast.log(string.format("%P%%T% %s %s from=%s to=%s entity=%s", text, ctx.machine, tostring(ctx.from), ctx.to,
+                               tostring(ctx.entity)))
+    end
+end
+return {
+    name = "door",
+    initial = "closed",
+    states = {
+        closed = { allowedFrom = {"open"}, enter = say("enter"), exit = say("exit") },
+        open = { allowedFrom = {"closed", "locked"}, enter = say("enter"), exit = say("exit") },
+        locked = { enter = say("enter"), exit = say("exit") },
+        broken = { allowedFrom = {"*"}, enter = say("enter") },
+    },
+})";
+    std::string game = R"(return {
+    name = "game",
+    initial = "a",
+    states = {
+        a = { allowedFrom = {"err"}, enter = function(ctx) kast.log("%P% game enter a from=" .. tostring(ctx.from) .. " entity=" .. tostring(ctx.entity)) end },
+        b = { allowedFrom = {"a"},
+              enter = function(ctx)
+                  kast.log("%P% game enter b")
+                  local queued = kast.fsm.change("game", "c")
+                  kast.log("%P% game queued " .. tostring(queued) .. " still " .. kast.fsm.state("game"))
+              end,
+              exit = function(ctx) kast.log("%P% game exit b") end },
+        c = { allowedFrom = {"b"}, enter = function(ctx) kast.log("%P% game enter c"); kast.fsm.change("game", "d") end },
+        d = { allowedFrom = {"a"} },
+        err = { allowedFrom = {"*"}, enter = function(ctx) error("%P% boom") end },
+    },
+})";
+    const auto fill = [&](std::string text) {
+        for (size_t at; (at = text.find("%P%")) != std::string::npos;)
+            text.replace(at, 3, prefix);
+        for (size_t at; (at = text.find("%T%")) != std::string::npos;)
+            text.replace(at, 3, doorTag);
+        return text;
+    };
+    writeFile(dir / "fsms/sub/door.lua", fill(door));
+    writeFile(dir / "fsms/game.lua", fill(game));
+}
+
+std::filesystem::path fsmProject(const char* name, const std::string& prefix)
+{
+    const std::filesystem::path dir = projectTestDir(name, "FSM");
+    writeFsmDefinitions(dir, prefix);
+    return dir;
+}
+
+kast::EntityId idOf(const kast::Scene& scene, entt::entity entity) { return scene.registry().get<kast::PersistentId>(entity).value; }
+
+template <typename Fn>
+bool throwsInvalid(Fn&& fn, const std::string& part = "")
+{
+    try {
+        fn();
+    } catch (const std::invalid_argument& e) {
+        return part.empty() || contains(e.what(), part);
+    }
+    return false;
+}
+
+std::vector<const kast::EventBus::Delivered*> fsmEvents(const kast::LuaSystems& lua)
+{
+    std::vector<const kast::EventBus::Delivered*> out;
+    for (const kast::EventBus::Delivered& event : lua.bus().history())
+        if (event.name == kast::kStateChangedEvent)
+            out.push_back(&event);
+    return out;
+}
+
+const kast::ComponentDefinitionStatus* fsmStatus(const kast::StateMachineDefinitions& defs, const std::string& path)
+{
+    const auto it = std::ranges::find(defs.status, path, &kast::ComponentDefinitionStatus::path);
+    return it == defs.status.end() ? nullptr : &*it;
+}
+
+// Discovery, every invalid-definition case naming its file, duplicate names, allowedFrom rules, editor rescans.
+void checkStateMachineDefinitions()
+{
+    const std::filesystem::path dir = fsmProject("kast_fsm_defs", "fsmd");
+    std::filesystem::create_directories(dir / "fsms/bad");
+    const std::pair<const char*, const char*> bad[] = {
+        {"noname", R"(return { initial = "a", states = { a = {} } })"},
+        {"numname", R"(return { name = 5, initial = "a", states = { a = {} } })"},
+        {"badinitial", R"(return { name = "bi", initial = "zz", states = { a = {} } })"},
+        {"noinitial", R"(return { name = "ni", states = { a = {} } })"},
+        {"badfrom", R"(return { name = "bf", initial = "a", states = { a = { allowedFrom = {"nope"} } } })"},
+        {"fromnotlist", R"(return { name = "fl", initial = "a", states = { a = { allowedFrom = "a" } } })"},
+        {"fromnumber", R"(return { name = "fn", initial = "a", states = { a = { allowedFrom = {5} } } })"},
+        {"statesnum", R"(return { name = "sn", initial = "a", states = 5 })"},
+        {"statesempty", R"(return { name = "se", initial = "a", states = {} })"},
+        {"statenum", R"(return { name = "st", initial = "a", states = { a = 5 } })"},
+        {"starstate", R"(return { name = "ss", initial = "a", states = { a = {}, ["*"] = {} } })"},
+        {"enternum", R"(return { name = "en", initial = "a", states = { a = { enter = 5 } } })"},
+        {"exitstr", R"(return { name = "ex", initial = "a", states = { a = { exit = "x" } } })"},
+        {"statekey", R"(return { name = "sk", initial = "a", states = { a = { update = function() end } } })"},
+        {"topkey", R"(return { name = "tk", initial = "a", states = { a = {} }, extra = 1 })"},
+        {"syntax", "return {\n  name = \n"},
+        {"notable", "return 5"},
+        {"sandbox", "local f = io.open\nreturn { name = \"sb\", initial = \"a\", states = { a = {} } }"},
+        {"dup1", R"(return { name = "twin", initial = "a", states = { a = {} } })"},
+        {"dup2", R"(return { name = "twin", initial = "b", states = { b = {} } })"},
+    };
+    for (const auto& [name, text] : bad)
+        writeFile(dir / "fsms/bad" / (std::string(name) + ".lua"), text);
+    writeFile(dir / "fsms/notes.txt", "not a definition");
+
+    const kast::StateMachineDefinitions defs = kast::loadStateMachineDefinitions(dir);
+    check(defs.status.size() == std::size(bad) + 2, "fsm: every .lua file under fsms/ is scanned, recursively");
+    check(defs.valid.size() == 2 && defs.valid[0].name == "game" && defs.valid[1].name == "door",
+          "fsm: valid definitions load (sorted by path: fsms/game.lua, fsms/sub/door.lua)");
+    const std::pair<const char*, const char*> errors[] = {
+        {"noname", "\"name\" must be a non-empty string"},
+        {"numname", "\"name\" must be a non-empty string"},
+        {"badinitial", "\"initial\" must name one of its states, got zz"},
+        {"noinitial", "\"initial\" must name one of its states, got nil"},
+        {"badfrom", "state \"a\": \"allowedFrom\" names unknown state \"nope\""},
+        {"fromnotlist", "state \"a\": \"allowedFrom\" must be a list"},
+        {"fromnumber", "state \"a\": \"allowedFrom\" must hold state names, got 5"},
+        {"statesnum", "\"states\" must be a table"},
+        {"statesempty", "\"states\" must not be empty"},
+        {"statenum", "state \"a\" must be a table"},
+        {"starstate", "state names must be non-empty strings other than \"*\""},
+        {"enternum", "state \"a\": \"enter\" must be a function"},
+        {"exitstr", "state \"a\": \"exit\" must be a function"},
+        {"statekey", "state \"a\": unknown key update"},
+        {"topkey", "unknown key extra"},
+        {"syntax", ""},
+        {"notable", "must return exactly one table"},
+        {"sandbox", "attempt to index"},
+        {"dup1", "name \"twin\" is also declared in fsms/bad/dup2.lua"},
+        {"dup2", "name \"twin\" is also declared in fsms/bad/dup1.lua"},
+    };
+    for (const auto& [name, message] : errors) {
+        const std::string path = std::format("fsms/bad/{}.lua", name);
+        const kast::ComponentDefinitionStatus* status = fsmStatus(defs, path);
+        const bool ok = status && !status->ok && status->error.starts_with(path + ":") && contains(status->error, message);
+        check(ok, std::format("fsm: {} rejected naming its file ({})", path, message).c_str());
+        if (!ok && status)
+            kast::log::error(std::format("  got: {}", status->error));
+    }
+    check(contains(fsmStatus(defs, "fsms/bad/sandbox.lua")->error, "fsms/bad/sandbox.lua:1:"),
+          "fsm: definition files are sandboxed; Lua errors give file:line");
+
+    const kast::StateMachineDef& door = defs.valid[1];
+    check(door.path == "fsms/sub/door.lua" && door.initial == "closed" &&
+              door.stateNames() == std::vector<std::string>{"broken", "closed", "locked", "open"},
+          "fsm: name, path, initial and sorted state names");
+    check(door.allows("open", "closed") && !door.allows("locked", "closed") && !door.allows("closed", "closed"),
+          "fsm: allowedFrom is enforced, self needs listing");
+    check(door.allows("closed", "locked") && door.allows("locked", "locked"), "fsm: omitted allowedFrom allows any (and self)");
+    check(door.allows("open", "broken") && door.allows("broken", "broken"), "fsm: \"*\" allows any (and self)");
+    check(!door.allows("open", "nope"), "fsm: an unknown target state is never allowed");
+
+    check(kast::refreshStateMachineDefinitions(dir) && kast::stateMachineDefinitions().valid.size() == 2,
+          "fsm: editor scan loads the project's definitions");
+    check(logged("State machine rejected: fsms/bad/noname.lua: "), "fsm: rejected files are logged");
+    check(!kast::refreshStateMachineDefinitions(dir), "fsm: editor rescan does nothing when nothing changed");
+    rewrite(dir / "fsms/bad/noname.lua", R"(return { name = "fixed", initial = "a", states = { a = {} } })");
+    check(kast::refreshStateMachineDefinitions(dir) && kast::stateMachineDefinitions().valid.size() == 3,
+          "fsm: editor rescans a modified file");
+    check(kast::refreshStateMachineDefinitions(std::nullopt) && kast::stateMachineDefinitions().status.empty(),
+          "fsm: no project, no definitions");
+    std::filesystem::remove_all(dir);
+}
+
+// The C++ API at Play start and through transitions: entry order, allowedFrom, events, queueing, callback errors,
+// misuse.
+void checkStateMachineRuntime()
+{
+    const std::filesystem::path dir = fsmProject("kast_fsm_runtime", "fsm1");
+    writeFile(dir / "scripts/probe.lua", R"(return { init = function() kast.log("fsm1 probe init") end, update = function(dt) end })");
+    kast::Scene scene;
+    entt::registry& registry = scene.registry();
+    const entt::entity door = scene.create("Door");
+    registry.emplace<kast::StateMachine>(door, "door", "");
+    const entt::entity gate = scene.create("Gate");
+    registry.emplace<kast::StateMachine>(gate, "door", "open");
+    const entt::entity plain = scene.create("Plain");
+    const kast::EntityId doorId = idOf(scene, door), gateId = idOf(scene, gate), plainId = idOf(scene, plain);
+    scene.systems = {"scripts/probe.lua"};
+    kast::LuaSystems lua;
+    kast::StateMachines& fsm = lua.fsm();
+    lua.start(scene, dir, "", nullptr, {"game", "ghost"});
+
+    check(logged("Game state machine \"ghost\" (project.kast \"stateMachines\") has no valid definition"),
+          "fsm: a listed game machine without a definition is logged");
+    check(logIndex("fsm1 probe init") < logIndex("fsm1 game enter a from=nil entity=nil") &&
+              logIndex("fsm1 game enter a from=nil entity=nil") <
+                  logIndex(std::format("fsm1 enter door from=nil to=closed entity={}", doorId)) &&
+              logIndex(std::format("fsm1 enter door from=nil to=closed entity={}", doorId)) <
+                  logIndex(std::format("fsm1 enter door from=nil to=open entity={}", gateId)),
+          "fsm: after the inits, game machines then entities (depth-first) enter their initial state");
+    check(logged("Entity 'Door' (id 1): StateMachine \"door\": initialState is empty; using \"closed\""),
+          "fsm: an empty initialState falls back to the definition's initial, with a warning");
+    check(fsm.state("game") == "a" && fsm.state(doorId) == "closed" && fsm.state(gateId) == "open",
+          "fsm: current states after Play start");
+    lua.tick(0.0f);
+    check(fsmEvents(lua).empty(), "fsm: entering the initial state publishes no event");
+
+    const size_t lines = kast::log::lines().size();
+    check(fsm.canChange(doorId, "open") && !fsm.canChange(doorId, "closed") && fsm.canChange(doorId, "locked") &&
+              fsm.canChange(doorId, "broken") && !fsm.canChange(doorId, "nope") && fsm.canChange("game", "b") &&
+              !fsm.canChange("game", "c"),
+          "fsm: canChange follows allowedFrom");
+    check(kast::log::lines().size() == lines && fsm.state(doorId) == "closed", "fsm: canChange has no side effects or log");
+    check(fsm.states("game") == std::vector<std::string>{"a", "b", "c", "d", "err"}, "fsm: states lists the state names");
+    check(fsm.peek("game") == "a" && !fsm.peek(kast::EntityId{999}) && !fsm.peek("ghost"), "fsm: peek");
+
+    check(fsm.change(doorId, "open"), "fsm: an allowed transition returns true");
+    const std::string exitClosed = std::format("fsm1 exit door from=closed to=open entity={}", doorId);
+    const std::string enterOpen = std::format("fsm1 enter door from=closed to=open entity={}", doorId);
+    check(fsm.state(doorId) == "open" && logIndex(exitClosed) < logIndex(enterOpen) && logIndex(enterOpen) != SIZE_MAX,
+          "fsm: exit(old), then switch, then enter(new), with ctx {machine, entity, from, to}");
+    lua.tick(0.0f);
+    std::vector<const kast::EventBus::Delivered*> events = fsmEvents(lua);
+    check(events.size() == 1 && events[0]->publisher == "fsms/sub/door.lua" &&
+              nlohmann::json::parse(events[0]->payload) ==
+                  nlohmann::json{{"machine", "door"}, {"entity", doorId}, {"from", "closed"}, {"to", "open"}},
+          "fsm: fsm.changed {machine, entity, from, to} is published by the definition file");
+
+    const ptrdiff_t enters = countLogged("fsm1 enter door"), exits = countLogged("fsm1 exit door");
+    check(!fsm.change(doorId, "open") && fsm.state(doorId) == "open" &&
+              logged("State machine \"door\" (entity 1): \"open\" can't be entered from \"open\""),
+          "fsm: a self-transition not in allowedFrom is denied with a warning");
+    check(fsm.change(doorId, "closed") && fsm.state(doorId) == "closed", "fsm: closed is allowed from open");
+    check(!fsm.change(doorId, "nope") && logged("State machine \"door\" (entity 1): unknown state \"nope\"; staying in \"closed\""),
+          "fsm: an unknown target state is denied with a warning");
+    check(!fsm.change(doorId, "closed") && fsm.state(doorId) == "closed", "fsm: denied self-transition");
+    check(fsm.change(doorId, "locked") && fsm.change(doorId, "locked") && fsm.state(doorId) == "locked",
+          "fsm: omitted allowedFrom allows any state, itself included");
+    check(fsm.change(doorId, "broken") && fsm.change(doorId, "broken") && !fsm.change(doorId, "closed"),
+          "fsm: \"*\" allows any state, itself included");
+    check(countLogged("fsm1 enter door") == enters + 5 && countLogged("fsm1 exit door") == exits + 4,
+          "fsm: denied transitions run no callbacks");
+    lua.tick(0.0f);
+    check(fsmEvents(lua).size() == 6, "fsm: denied transitions publish nothing (6 allowed so far)");
+
+    // Queueing: b.enter asks for c (queued), c.enter asks for d (denied when applied).
+    check(fsm.change("game", "b") && fsm.state("game") == "c", "fsm: a change queued in enter is applied after it");
+    check(logIndex("fsm1 game enter b") < logIndex("fsm1 game queued true still b") &&
+              logIndex("fsm1 game queued true still b") < logIndex("fsm1 game exit b") &&
+              logIndex("fsm1 game exit b") < logIndex("fsm1 game enter c"),
+          "fsm: queued changes return true and wait for the current transition (no recursion)");
+    check(logged("State machine \"game\": \"d\" can't be entered from \"c\""), "fsm: a queued change denied when applied warns");
+    lua.tick(0.0f);
+    events = fsmEvents(lua);
+    check(events.size() == 8 && nlohmann::json::parse(events[7]->payload)["entity"].is_null() &&
+              nlohmann::json::parse(events[6]->payload)["to"] == "b" && nlohmann::json::parse(events[7]->payload)["to"] == "c",
+          "fsm: game machine events in order, entity null");
+
+    // A callback error is logged with file:line and a traceback; the transition commits.
+    check(fsm.change("game", "err") && fsm.state("game") == "err", "fsm: a failing enter still commits");
+    check(logged("State machine fsms/game.lua: enter \"err\" failed: fsms/game.lua:15: fsm1 boom") &&
+              logged("stack traceback:"),
+          "fsm: callback errors are logged with file:line and a traceback");
+    check(fsm.change("game", "a") && fsm.state("game") == "a", "fsm: the machine keeps working after a callback error");
+
+    check(throwsInvalid([&] { fsm.state("nope"); }, "no game state machine \"nope\"") &&
+              throwsInvalid([&] { fsm.change("ghost", "a"); }, "\"ghost\" has no valid definition") &&
+              throwsInvalid([&] { fsm.canChange(kast::EntityId{999}, "a"); }, "invalid entity id 999") &&
+              throwsInvalid([&] { fsm.states(plainId); }, "has no \"StateMachine\""),
+          "fsm: C++ misuse throws std::invalid_argument");
+
+    scene.destroy(gate);
+    const ptrdiff_t exitsBefore = countLogged("fsm1 exit");
+    lua.tick(0.0f);
+    check(throwsInvalid([&] { fsm.state(gateId); }) && countLogged("fsm1 exit") == exitsBefore,
+          "fsm: a destroyed entity's machine goes away without exit");
+    lua.stop();
+    check(throwsInvalid([&] { fsm.state("game"); }, "no Play session"), "fsm: Stop resets the machines");
+    std::filesystem::remove_all(dir);
+}
+
+// kast.fsm.* from Lua: results, misuse raising at the calling line, read-only table; the C++ API gives the same results.
+void checkLuaStateMachineApi()
+{
+    const std::filesystem::path dir = fsmProject("kast_fsm_lua", "fsm2");
+    writeFile(dir / "scripts/probe.lua", R"(local door, plain
+local function try(f) local ok, err = pcall(f); kast.log("fsm2 rej " .. tostring(ok) .. " " .. tostring(err)) end
+return {
+    init = function()
+        for e in kast.query("StateMachine") do door = e end
+        for e in kast.query("Transform") do if not kast.has(e, "StateMachine") then plain = e end end
+        kast.log("fsm2 init game=" .. kast.fsm.state("game"))
+    end,
+    update = function(dt)
+        try(function() kast.fsm.state("nope") end)
+        try(function() kast.fsm.state(999) end)
+        try(function() kast.fsm.state(plain) end)
+        try(function() kast.fsm.change(door, 5) end)
+        try(function() kast.fsm.state(true) end)
+        try(function() kast.fsm.canChange("ghost", "a") end)
+        try(function() kast.fsm.states(1.5) end)
+        try(function() kast.fsm.change("game") end)
+        assert(type(kast.fsm.state) == "function" and not pcall(function() kast.fsm.state = nil end), "kast.fsm is read-only")
+        local r = {}
+        local function rec(v) r[#r + 1] = tostring(v) end
+        rec(kast.fsm.state(door)); rec(kast.fsm.canChange(door, "open")); rec(kast.fsm.canChange(door, "closed"))
+        rec(kast.fsm.change(door, "open")); rec(kast.fsm.change(door, "open")); rec(kast.fsm.change(door, "nope"))
+        rec(kast.fsm.change(door, "locked")); rec(kast.fsm.change(door, "locked")); rec(kast.fsm.change(door, "closed"))
+        rec(kast.fsm.state(door)); rec(table.concat(kast.fsm.states(door), "/")); rec(kast.fsm.state("game"))
+        rec(kast.fsm.change("game", "b")); rec(kast.fsm.state("game")); rec(kast.fsm.canChange("game", "a"))
+        kast.log("fsm2 results " .. table.concat(r, ","))
+    end,
+})");
+    const auto makeScene = [](kast::Scene& scene) {
+        scene.create("Plain");
+        scene.registry().emplace<kast::StateMachine>(scene.create("Door"), "door", "closed");
+    };
+    kast::Scene scene;
+    makeScene(scene);
+    scene.systems = {"scripts/probe.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr, {"game", "ghost"});
+    check(logIndex("fsm2 game enter a from=nil") < logIndex("fsm2 init game=a") && countLogged("fsm2 game enter a") == 1,
+          "fsm: a game machine touched during init enters then (and only once)");
+    lua.tick(0.1f);
+    checkOk(lua, 0, "fsm: kast.fsm rejections are catchable; kast.fsm is read-only");
+    const std::pair<int, const char*> cases[] = {
+        {10, "kast.fsm.state: no game state machine \"nope\""},
+        {11, "kast.fsm.state: invalid entity id 999"},
+        {12, "kast.fsm.state: entity 1 has no \"StateMachine\""},
+        {13, "kast.fsm.change: state must be a string, got 5"},
+        {14, "kast.fsm.state: target must be a state machine name or an entity id, got true"},
+        {15, "kast.fsm.canChange: game state machine \"ghost\" has no valid definition"},
+        {16, "kast.fsm.states: invalid entity id 1.5"},
+        {17, "kast.fsm.change: state must be a string, got nil"},
+    };
+    for (const auto& [line, message] : cases)
+        check(logged(std::format("fsm2 rej false scripts/probe.lua:{}: {}", line, message)),
+              std::format("fsm: raised at probe.lua:{}: {}", line, message).c_str());
+
+    // The same operations through the C++ API, on a fresh session.
+    kast::Scene scene2;
+    makeScene(scene2);
+    kast::LuaSystems cpp;
+    cpp.start(scene2, dir, "", nullptr, {"game"});
+    kast::StateMachines& fsm = cpp.fsm();
+    const kast::EntityId door = 2;
+    std::vector<std::string> r;
+    const auto rec = [&](auto value) {
+        if constexpr (std::is_same_v<decltype(value), bool>)
+            r.push_back(value ? "true" : "false");
+        else
+            r.push_back(value);
+    };
+    rec(fsm.state(door)); rec(fsm.canChange(door, "open")); rec(fsm.canChange(door, "closed"));
+    rec(fsm.change(door, "open")); rec(fsm.change(door, "open")); rec(fsm.change(door, "nope"));
+    rec(fsm.change(door, "locked")); rec(fsm.change(door, "locked")); rec(fsm.change(door, "closed"));
+    std::string states;
+    for (const std::string& s : fsm.states(door))
+        states += (states.empty() ? "" : "/") + s;
+    rec(fsm.state(door)); rec(states); rec(fsm.state("game"));
+    rec(fsm.change("game", "b")); rec(fsm.state("game")); rec(fsm.canChange("game", "a"));
+    std::string joined;
+    for (const std::string& s : r)
+        joined += (joined.empty() ? "" : ",") + s;
+    check(joined == "closed,true,false,true,false,false,true,true,false,locked,broken/closed/locked/open,a,true,c,false",
+          std::format("fsm: expected results ({})", joined).c_str());
+    check(logged("fsm2 results " + joined), "fsm: the C++ API gives the same results as kast.fsm");
+    cpp.stop();
+    lua.stop();
+    std::filesystem::remove_all(dir);
+}
+
+// Game machines keep their state across kast.loadScene (no callbacks; the new Lua state's callbacks are used after),
+// entity machines of the new scene enter after its inits, and Stop then Play starts over.
+void checkStateMachineSceneSwitch()
+{
+    const std::filesystem::path dir = fsmProject("kast_fsm_switch", "fsm3");
+    saveTestScene(dir / "a.scene", "A", {"scripts/a.lua"});
+    {
+        kast::Scene b;
+        b.registry().emplace<kast::StateMachine>(b.create("Door"), "door", "open");
+        b.systems = {"scripts/b.lua"};
+        std::string error;
+        check(kast::saveScene(b, (dir / "b.scene").string(), error), "fsm: write b.scene");
+    }
+    writeFile(dir / "scripts/a.lua", R"(return { update = function(dt)
+    kast.fsm.change("game", "b")
+    kast.loadScene("b.scene")
+end })");
+    writeFile(dir / "scripts/b.lua", R"(local frame = 0
+return {
+    init = function() kast.log("fsm3 b init game=" .. kast.fsm.state("game")) end,
+    update = function(dt)
+        frame = frame + 1
+        if frame == 1 then kast.fsm.change("game", "err") end
+    end,
+})");
+    kast::Scene scene;
+    std::string error;
+    check(kast::loadScene((dir / "a.scene").string(), scene, error), "fsm: load a.scene");
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "a.scene", nullptr, {"game"});
+    check(lua.fsm().state("game") == "a" && countLogged("fsm3 game enter") == 1, "fsm: game machine entered at start");
+    check(lua.tick(0.1f), "fsm: switched to b.scene");
+    check(logged("fsm3 b init game=c") && countLogged("fsm3 game enter") == 3,
+          "fsm: game state kept across kast.loadScene, with no callbacks on the switch");
+    check(logIndex("fsm3 b init game=c") < logIndex("fsm3 enter door from=nil to=open"),
+          "fsm: the new scene's entity machines enter after its inits");
+    lua.tick(0.1f);
+    check(logged("fsm3 boom") && lua.fsm().state("game") == "err",
+          "fsm: after a switch the game machine's callbacks come from the new Lua state");
+    lua.stop();
+    check(lua.fsm().peek("game") == std::nullopt, "fsm: Stop resets game machines");
+    kast::Scene again;
+    check(kast::loadScene((dir / "a.scene").string(), again, error), "fsm: reload a.scene");
+    lua.start(again, dir, "a.scene", nullptr, {"game"});
+    check(lua.fsm().state("game") == "a" && countLogged("fsm3 game enter a from=nil") == 2,
+          "fsm: the next Play starts from the initial state again");
+    lua.stop();
+    std::filesystem::remove_all(dir);
+}
+
+// Entity machines added at runtime (kast.add + kast.set, a registry edit, Duplicate), destroyed, removed or naming a
+// missing definition.
+void checkEntityStateMachines()
+{
+    const std::filesystem::path dir = fsmProject("kast_fsm_entities", "fsm4");
+    writeFile(dir / "scripts/r.lua", R"(local frame, made = 0, nil
+return { update = function(dt)
+    frame = frame + 1
+    if frame == 1 then
+        made = kast.create("Made")
+        kast.add(made, "StateMachine")
+        local ok, err = pcall(function() local s = kast.fsm.state(made); return s end)
+        kast.log("fsm4 empty " .. tostring(ok) .. " " .. tostring(err))
+        kast.set(made, "StateMachine", {machine = "door", initialState = "locked"})
+        kast.log("fsm4 made " .. kast.fsm.state(made))
+        kast.set(made, "StateMachine", {initialState = "open"})
+        kast.log("fsm4 still " .. kast.fsm.state(made))
+    elseif frame == 2 then
+        kast.destroy(made)
+    end
+end })");
+    kast::Scene scene;
+    entt::registry& registry = scene.registry();
+    const entt::entity gate = scene.create("Gate");
+    registry.emplace<kast::StateMachine>(gate, "door", "open");
+    const entt::entity later = scene.create("Later");
+    const entt::entity missing = scene.create("Missing");
+    scene.systems = {"scripts/r.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr, {});
+    lua.tick(0.1f);
+    checkOk(lua, 0, "fsm: runtime StateMachine script runs");
+    check(logged("fsm4 empty false scripts/r.lua:7: kast.fsm.state: entity 4: StateMachine has no \"machine\""),
+          "fsm: a StateMachine with no machine yet raises on use");
+    check(logged("fsm4 made locked") && logged("fsm4 enter door from=nil to=locked entity=4") && logged("fsm4 still locked"),
+          "fsm: kast.add + kast.set machine enters initialState; changing only initialState doesn't re-enter");
+    lua.tick(0.1f);
+    check(!logged("fsm4 exit door from=locked"), "fsm: destroying an entity runs no exit");
+
+    registry.emplace<kast::StateMachine>(later, "door", ""); // an Inspector edit during Play
+    lua.tick(0.1f);
+    check(lua.fsm().peek(idOf(scene, later)) == "closed", "fsm: an entity that gains StateMachine enters on the next tick");
+    lua.fsm().change(idOf(scene, gate), "locked");
+    const entt::entity copy = scene.duplicate(gate);
+    lua.tick(0.1f);
+    check(lua.fsm().peek(idOf(scene, copy)) == "open" && lua.fsm().peek(idOf(scene, gate)) == "locked",
+          "fsm: a duplicate enters its own initialState");
+    registry.emplace<kast::StateMachine>(missing, "nosuch", "");
+    lua.tick(0.1f);
+    lua.tick(0.1f);
+    check(countLogged("Entity 'Missing' (id 3): StateMachine: no valid state machine definition \"nosuch\"") == 1,
+          "fsm: a missing definition is logged once");
+    check(throwsInvalid([&] { lua.fsm().state(idOf(scene, missing)); }, "no valid state machine definition \"nosuch\""),
+          "fsm: a missing definition raises on use");
+    registry.remove<kast::StateMachine>(later);
+    lua.tick(0.1f);
+    check(!registry.all_of<kast::StateMachineRuntime>(later), "fsm: removing StateMachine forgets the machine");
+    lua.stop();
+    std::filesystem::remove_all(dir);
+}
+
+// Hot reload during Play: kept state, reset when the state is gone, last valid definition kept when broken.
+void checkStateMachineHotReload()
+{
+    const std::filesystem::path dir = fsmProject("kast_fsm_reload", "fsm5");
+    kast::Scene scene;
+    const entt::entity door = scene.create("Door");
+    scene.registry().emplace<kast::StateMachine>(door, "door", "closed");
+    const kast::EntityId id = idOf(scene, door);
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr, {"game"});
+    kast::StateMachines& fsm = lua.fsm();
+    fsm.change(id, "open");
+    lua.tick(0.1f);
+
+    const auto rewriteDoor = [&](const std::string& tag) {
+        const auto before = std::filesystem::last_write_time(dir / "fsms/sub/door.lua");
+        writeFsmDefinitions(dir, "fsm5", tag);
+        std::filesystem::last_write_time(dir / "fsms/sub/door.lua", before + std::chrono::seconds(2));
+    };
+    const ptrdiff_t enters = countLogged("fsm5 enter");
+    rewriteDoor(" v2");
+    lua.tick(0.1f);
+    check(logged("Reloaded state machine definitions (2 OK, 0 rejected)") && fsm.state(id) == "open" &&
+              countLogged("fsm5 enter") == enters,
+          "fsm: a reloaded definition keeps an existing state, running no callbacks");
+    check(fsm.change(id, "locked") && logged("fsm5 v2 enter door from=open to=locked"), "fsm: reloaded callbacks are used");
+
+    // v3: no "locked" state.
+    const auto before = std::filesystem::last_write_time(dir / "fsms/sub/door.lua");
+    std::string text = readText(dir / "fsms/sub/door.lua");
+    text.replace(text.find("        locked = "), text.find("        broken = ") - text.find("        locked = "), "");
+    for (size_t at; (at = text.find(" v2")) != std::string::npos;)
+        text.replace(at, 3, " v3");
+    text.replace(text.find("{\"closed\", \"locked\"}"), 20, "{\"closed\"}");
+    writeFile(dir / "fsms/sub/door.lua", text);
+    std::filesystem::last_write_time(dir / "fsms/sub/door.lua", before + std::chrono::seconds(4));
+    lua.tick(0.1f);
+    check(logged("Entity 'Door' (id 1): state machine \"door\": state \"locked\" no longer exists; reset to \"closed\"") &&
+              logged("fsm5 v3 enter door from=nil to=closed") && fsm.state(id) == "closed",
+          "fsm: a removed current state resets to initialState with a warning, enter with no from");
+
+    rewrite(dir / "fsms/sub/door.lua", "return {\n  name = \n");
+    lua.tick(0.1f);
+    check(logged("State machine rejected: fsms/sub/door.lua:") &&
+              logged("Reloaded state machine definitions (1 OK, 1 rejected)"),
+          "fsm: a broken definition is logged");
+    check(fsm.state(id) == "closed" && fsm.change(id, "open") && logged("fsm5 v3 enter door from=closed to=open") &&
+              !fsm.canChange(id, "locked"),
+          "fsm: machines keep their last valid definition while the file is broken");
+
+    // Game machine: its current state "a" removed.
+    const auto gameBefore = std::filesystem::last_write_time(dir / "fsms/game.lua");
+    writeFile(dir / "fsms/game.lua", R"(return { name = "game", initial = "z", states = {
+    z = { enter = function(ctx) kast.log("fsm5 game z from=" .. tostring(ctx.from)) end }, b = {} } })");
+    std::filesystem::last_write_time(dir / "fsms/game.lua", gameBefore + std::chrono::seconds(2));
+    lua.tick(0.1f);
+    check(logged("State machine \"game\": state \"a\" no longer exists; reset to \"z\"") && logged("fsm5 game z from=nil") &&
+              fsm.state("game") == "z",
+          "fsm: game machines follow the same hot reload rules");
+    lua.stop();
+    std::filesystem::remove_all(dir);
+}
+
+// StateMachine data: scene round trip, Duplicate, Play/Stop restore; project.kast "stateMachines".
+void checkStateMachineFiles()
+{
+    const std::filesystem::path dir = fsmProject("kast_fsm_files", "fsm6");
+    kast::Scene scene;
+    const entt::entity door = scene.create("Door");
+    scene.registry().emplace<kast::StateMachine>(door, "door", "open");
+    scene.registry().emplace<kast::StateMachine>(scene.create("Lost"), "gone_machine", "x"); // no definition: kept
+    std::string error;
+    const std::string first = (dir / "first.scene").string(), second = (dir / "second.scene").string();
+    kast::Scene loaded;
+    check(kast::saveScene(scene, first, error) && kast::loadScene(first, loaded, error) &&
+              kast::saveScene(loaded, second, error) && readText(first) == readText(second),
+          "fsm: StateMachine save/load is byte-identical");
+    const nlohmann::json saved = nlohmann::json::parse(readText(first));
+    check(saved["entities"][0]["components"]["StateMachine"] ==
+                  nlohmann::json{{"machine", "door"}, {"initialState", "open"}} &&
+              saved["entities"][1]["components"]["StateMachine"]["machine"] == "gone_machine",
+          "fsm: StateMachine scene JSON; a missing definition's data is kept");
+    const entt::entity copy = scene.duplicate(door);
+    const auto& copied = scene.registry().get<kast::StateMachine>(copy);
+    check(copied.machine == "door" && copied.initialState == "open", "fsm: Duplicate copies StateMachine");
+
+    Document doc;
+    check(openProject(doc, dir / kast::kProjectFileName, error), "fsm: open the test project");
+    doc.scene.registry().emplace<kast::StateMachine>(doc.scene.create("Door"), "door", "closed");
+    const nlohmann::ordered_json before = kast::sceneToJson(doc.scene);
+    startPlay(doc);
+    updatePlay(doc, 0.1f);
+    for (auto [entity, machine] : doc.scene.registry().view<kast::StateMachine>().each())
+        machine.machine = "changed";
+    stopPlay(doc);
+    check(kast::sceneToJson(doc.scene) == before, "fsm: Stop restores StateMachine");
+
+    // project.kast
+    const std::filesystem::path file = dir / kast::kProjectFileName;
+    kast::Project project;
+    check(kast::loadProject(file, project, error) && kast::saveProject(project, error), "fsm: normalize project.kast");
+    const std::string plain = readText(file);
+    check(kast::loadProject(file, project, error) && !project.stateMachines && kast::saveProject(project, error) &&
+              readText(file) == plain && !contains(plain, "stateMachines"),
+          "fsm: project.kast without stateMachines round-trips byte-identical");
+    const std::string listed = "{\n  \"version\": 1,\n  \"name\": \"FSM\",\n  \"startScene\": null,\n"
+                               "  \"stateMachines\": [\n    \"game\",\n    \"door\"\n  ]\n}\n";
+    writeFile(file, listed);
+    check(kast::loadProject(file, project, error) && project.stateMachines == std::vector<std::string>{"game", "door"} &&
+              kast::saveProject(project, error) && readText(file) == listed,
+          "fsm: project.kast stateMachines round-trips byte-identical, in key order");
+    const std::pair<const char*, const char*> invalid[] = {
+        {R"("x")", "\"stateMachines\" must be an array of state machine names"},
+        {"[1]", "\"stateMachines\" must hold non-empty strings"},
+        {R"([""])", "\"stateMachines\" must hold non-empty strings"},
+        {R"(["a", "a"])", "\"stateMachines\" lists \"a\" twice"},
+    };
+    for (const auto& [value, message] : invalid) {
+        writeFile(file, std::format(R"({{"version": 1, "name": "FSM", "startScene": null, "stateMachines": {}}})", value));
+        check(!kast::loadProject(file, project, error) && contains(error, message),
+              std::format("fsm: project.kast rejects stateMachines {}", value).c_str());
+    }
+    std::filesystem::remove_all(dir);
+}
+
+// New State Machine naming and template, the Global toggle (project.kast) and their Play blocking.
+void checkStateMachineEditor()
+{
+    const std::filesystem::path dir = fsmProject("kast_fsm_editor", "fsm7");
+    writeFile(dir / "fsms/Odd.lua", R"(return { name = "odd_one", initial = "a", states = { a = {} } })");
+    Document doc;
+    std::string error;
+    check(openProject(doc, dir / kast::kProjectFileName, error), "fsm: open the editor test project");
+    refreshStateMachines(doc);
+    check(newStateMachineNameError(doc, "  ") == "Enter a name" &&
+              newStateMachineNameError(doc, "1door") == "Use letters, digits and _ only, not starting with a digit" &&
+              newStateMachineNameError(doc, "door") == "A state machine named \"door\" already exists" &&
+              newStateMachineNameError(doc, "Odd") == "fsms/Odd.lua already exists" &&
+              newStateMachineNameError(doc, " TrafficLight ").empty(),
+          "fsm: New State Machine name rules");
+    check(stateMachineFile(doc.project->root, "TrafficLight") == dir / "fsms/traffic_light.lua",
+          "fsm: definition file is fsms/<snake_name>.lua");
+    check(newStateMachine(doc, " TrafficLight ", error), "fsm: New State Machine creates the file");
+    const kast::StateMachineDefinitions& defs = kast::stateMachineDefinitions();
+    const auto created = std::ranges::find(defs.valid, "TrafficLight", &kast::StateMachineDef::name);
+    check(created != defs.valid.end() && created->path == "fsms/traffic_light.lua" && created->initial == "idle" &&
+              created->stateNames() == std::vector<std::string>{"active", "idle"},
+          "fsm: the template is a valid definition named as asked");
+    const std::string text = readText(dir / "fsms/traffic_light.lua");
+    check(!newStateMachine(doc, "TrafficLight", error) && contains(error, "already exists") &&
+              readText(dir / "fsms/traffic_light.lua") == text,
+          "fsm: New State Machine never overwrites");
+
+    const std::string file = (dir / kast::kProjectFileName).string();
+    check(!isGlobalStateMachine(doc, "door") && setGlobalStateMachine(doc, "door", true, error) &&
+              isGlobalStateMachine(doc, "door") &&
+              readText(file) == "{\n  \"version\": 1,\n  \"name\": \"FSM\",\n  \"startScene\": null,\n"
+                                "  \"stateMachines\": [\n    \"door\"\n  ]\n}\n",
+          "fsm: Global adds the machine to project.kast (other keys and order kept)");
+    check(setGlobalStateMachine(doc, "door", false, error) && !isGlobalStateMachine(doc, "door") &&
+              contains(readText(file), "\"stateMachines\": []"),
+          "fsm: unchecking Global removes it");
+
+    doc.play = PlayState::Playing;
+    check(newStateMachineNameError(doc, "Fresh") == "Stop Play to change state machines" &&
+              !setGlobalStateMachine(doc, "door", true, error) && !newStateMachine(doc, "Fresh", error) &&
+              !std::filesystem::exists(dir / "fsms/fresh.lua"),
+          "fsm: New State Machine and Global are blocked during Play");
+    doc.play = PlayState::Stopped;
+    std::filesystem::remove_all(dir);
+}
+
 int main()
 {
     checkRotations();
@@ -2806,7 +3469,15 @@ int main()
     checkPak();
     checkBuild();
     checkBuildSettings();
-    checkMountedPak();
+    checkStateMachineDefinitions();
+    checkStateMachineRuntime();
+    checkLuaStateMachineApi();
+    checkStateMachineSceneSwitch();
+    checkEntityStateMachines();
+    checkStateMachineHotReload();
+    checkStateMachineFiles();
+    checkStateMachineEditor();
+    checkMountedPak(); // last: the mounted pak hides the disk for the rest of the run
     if (g_failures > 0) {
         kast::log::error(std::format("{} self-check(s) failed", g_failures));
         return 1;

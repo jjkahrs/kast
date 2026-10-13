@@ -18,9 +18,7 @@ namespace {
 using Json = nlohmann::ordered_json;
 using Files = std::map<std::filesystem::path, std::filesystem::file_time_type>;
 
-struct Invalid : std::runtime_error {
-    using std::runtime_error::runtime_error;
-};
+using Invalid = InvalidDefinition;
 
 constexpr const char* kStructuralNames[] = {"PersistentId", "Name", "Hierarchy", "PreservedComponents"};
 constexpr std::pair<const char*, FieldKind> kKinds[] = {
@@ -69,40 +67,12 @@ bool isBuiltInComponentName(const std::string& name)
 
 namespace {
 
-void checkKeys(const sol::table& table, std::initializer_list<const char*> allowed, const std::string& what)
-{
-    for (const auto& [key, value] : table) {
-        const bool known = key.get_type() == sol::type::string &&
-                           std::ranges::any_of(allowed, [&](const char* k) { return key.as<std::string>() == k; });
-        if (!known)
-            throw Invalid(std::format("{}unknown key {}", what, toString(table.lua_state(), key)));
-    }
-}
-
 std::string identifier(const sol::table& table, const char* key, const std::string& what)
 {
     const sol::object value = table[key];
     if (value.get_type() != sol::type::string || !isIdentifier(value.as<std::string>()))
         throw Invalid(std::format("{}\"{}\" must be a name (letters, digits, _; not starting with a digit)", what, key));
     return value.as<std::string>();
-}
-
-std::vector<sol::object> sequence(const sol::object& value, const std::string& what)
-{
-    if (value.get_type() != sol::type::table)
-        throw Invalid(std::format("{} must be a list {{...}}", what));
-    const sol::table table = value.as<sol::table>();
-    size_t count = 0;
-    for (const auto& [key, unused] : table)
-        ++count;
-    std::vector<sol::object> items;
-    for (size_t i = 1; i <= count; ++i) {
-        sol::object item = table[i];
-        if (item.get_type() == sol::type::lua_nil)
-            throw Invalid(std::format("{} must be a list {{...}}", what));
-        items.push_back(item);
-    }
-    return items;
 }
 
 std::optional<double> bound(const sol::table& table, const char* key, const FieldDesc& field, const std::string& what)

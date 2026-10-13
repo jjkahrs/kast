@@ -14,7 +14,8 @@ namespace {
 
 using Json = nlohmann::ordered_json;
 
-constexpr const char* kProjectKeys[] = {"version", "name", "startScene"};
+constexpr const char* kProjectKeys[] = {"version", "name", "startScene"}; // required
+constexpr const char* kOptionalProjectKeys[] = {"stateMachines"};
 
 std::string validate(const Json& json)
 {
@@ -24,7 +25,8 @@ std::string validate(const Json& json)
         if (!json.contains(key))
             return std::format("missing \"{}\"", key);
     for (const auto& [key, value] : json.items())
-        if (std::ranges::find(kProjectKeys, key) == std::end(kProjectKeys))
+        if (std::ranges::find(kProjectKeys, key) == std::end(kProjectKeys) &&
+            std::ranges::find(kOptionalProjectKeys, key) == std::end(kOptionalProjectKeys))
             return std::format("unknown key \"{}\"", key);
     if (!json["version"].is_number_integer() || json["version"].get<int>() != kProjectFileVersion)
         return std::format("unsupported \"version\" {} (expected {})", json["version"].dump(), kProjectFileVersion);
@@ -32,6 +34,18 @@ std::string validate(const Json& json)
         return "\"name\" must be a non-empty string";
     if (!json["startScene"].is_string() && !json["startScene"].is_null())
         return "\"startScene\" must be a string or null";
+    if (json.contains("stateMachines")) {
+        const Json& machines = json["stateMachines"];
+        if (!machines.is_array())
+            return "\"stateMachines\" must be an array of state machine names";
+        for (size_t i = 0; i < machines.size(); ++i) {
+            if (!machines[i].is_string() || machines[i].get<std::string>().empty())
+                return "\"stateMachines\" must hold non-empty strings";
+            for (size_t j = 0; j < i; ++j)
+                if (machines[j] == machines[i])
+                    return std::format("\"stateMachines\" lists {} twice", machines[i].dump());
+        }
+    }
     return {};
 }
 
@@ -63,6 +77,8 @@ bool loadProject(const std::filesystem::path& file, Project& out, std::string& e
             out = Project{.root = normalized(file).parent_path(), .name = json["name"].get<std::string>()};
             if (json["startScene"].is_string())
                 out.startScene = json["startScene"].get<std::string>();
+            if (json.contains("stateMachines"))
+                out.stateMachines = json["stateMachines"].get<std::vector<std::string>>();
             return true;
         }
     } catch (const Json::exception& e) {
@@ -78,6 +94,8 @@ bool saveProject(const Project& project, std::string& error)
     json["version"] = kProjectFileVersion;
     json["name"] = project.name;
     json["startScene"] = project.startScene ? Json(*project.startScene) : Json(nullptr);
+    if (project.stateMachines)
+        json["stateMachines"] = *project.stateMachines;
     const std::filesystem::path file = project.root / kProjectFileName;
     std::ofstream out(file, std::ios::binary | std::ios::trunc);
     out << json.dump(2) << '\n';

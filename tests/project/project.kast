@@ -1,5 +1,8 @@
 {
   "version": 1,
   "name": "Switch Test",
-  "startScene": "scene_a.scene"
+  "startScene": "scene_a.scene",
+  "stateMachines": [
+    "game_flow"
+  ]
 }

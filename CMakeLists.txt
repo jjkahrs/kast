@@ -57,6 +57,7 @@ endforeach()
 add_library(kast_engine STATIC
   engine/app.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
   engine/systems.cpp engine/renderer.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
+  engine/state_machines.cpp engine/lua_state_machines.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}")
@@ -257,6 +258,52 @@ add_test(NAME events_play_differs
 set_tests_properties(events_play_screenshot PROPERTIES FIXTURES_SETUP events_play_shot)
 set_tests_properties(events_play_no_systems_screenshot PROPERTIES FIXTURES_SETUP events_no_systems_shot)
 set_tests_properties(events_play_differs PROPERTIES FIXTURES_REQUIRED "events_play_shot;events_no_systems_shot")
+# State machines: tests/project/fsm.scene (two traffic_light entities, game machine game_flow from project.kast) runs
+# scripts/fsm_driver.lua, which steps the lights once game_flow is playing and has one disallowed change denied. Both
+# copies enter their initial states at Play start, so only the driven transitions make Play differ from the copy with
+# "systems": []. --focus-panel Events shows the fsm.changed events.
+file(READ "${KAST_TEST_PROJECT}/fsm.scene" fsm_scene)
+string(REGEX REPLACE "\"systems\": \\[[^]]*\\]" "\"systems\": []" fsm_scene "${fsm_scene}")
+file(WRITE "${KAST_HEALTH_PROJECT}/fsm_no_systems.scene" "${fsm_scene}")
+add_test(NAME fsm_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/fsm_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/fsm.scene --play --focus-panel Events"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME fsm_play_no_systems_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/fsm_play_no_systems.png"
+          "-DEXTRA_ARGS=--scene ${KAST_HEALTH_PROJECT}/fsm_no_systems.scene --play --focus-panel Events"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME fsm_play_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/fsm_play_no_systems.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/fsm_play.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(fsm_play_screenshot PROPERTIES FIXTURES_SETUP fsm_play_shot)
+set_tests_properties(fsm_play_no_systems_screenshot PROPERTIES FIXTURES_SETUP fsm_no_systems_shot)
+set_tests_properties(fsm_play_differs PROPERTIES FIXTURES_REQUIRED "fsm_play_shot;fsm_no_systems_shot")
+# State Machines panel while playing (both definitions OK, game_flow Global with its live state) with the StateMachine
+# Inspector on Light A (live current state), the Inspector stopped (machine / initial state combos), and the New State
+# Machine modal: valid (preview fsms/traffic_signal.lua, Create enabled; must not write it) and colliding
+# (traffic_light exists: inline error, Create disabled).
+set(fsm_args "--scene ${KAST_TEST_PROJECT}/fsm.scene --select 3 --size 1280x1000")
+add_test(NAME state_machines_panel_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/state_machines_panel.png" "-DEXTRA_ARGS=${fsm_args} --play"
+          "-DFOCUS_PANEL=State Machines" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME state_machine_inspector_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/state_machine_inspector.png" "-DEXTRA_ARGS=${fsm_args}"
+          "-DFOCUS_PANEL=State Machines" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME new_state_machine_valid_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/new_state_machine_valid.png"
+          "-DEXTRA_ARGS=${fsm_args} --new-state-machine-prompt TrafficSignal"
+          "-DMUST_NOT_EXIST=${KAST_TEST_PROJECT}/fsms/traffic_signal.lua"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME new_state_machine_collide_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/new_state_machine_collide.png"
+          "-DEXTRA_ARGS=${fsm_args} --new-state-machine-prompt traffic_light"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME lua_components_roundtrip
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_PROJECT}/health.scene"
           "-DOUT_DIR=${KAST_HEALTH_PROJECT}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
@@ -349,12 +396,17 @@ set_tests_properties(new_component_differs PROPERTIES FIXTURES_REQUIRED "lua_com
 # build/<preset>/game_out/<name>/, then the built player runs from a copy of that folder. Each copy gets its own
 # project.kast; the "systems": [] variants show that only the Lua code (run from game.pak) changes the shot.
 set(KAST_GAME_OUT "${CMAKE_CURRENT_BINARY_DIR}/game_out")
+# An optional fifth argument names a game state machine for project.kast "stateMachines".
 function(kast_game_project name project_name start_scene empty_systems)
   set(dir "${CMAKE_CURRENT_BINARY_DIR}/game_projects/${name}")
   file(REMOVE_RECURSE "${dir}")
   file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${dir}")
+  set(machines "")
+  if(ARGV4)
+    set(machines ",\n  \"stateMachines\": [\n    \"${ARGV4}\"\n  ]")
+  endif()
   file(WRITE "${dir}/project.kast"
-       "{\n  \"version\": 1,\n  \"name\": \"${project_name}\",\n  \"startScene\": \"${start_scene}\"\n}\n")
+       "{\n  \"version\": 1,\n  \"name\": \"${project_name}\",\n  \"startScene\": \"${start_scene}\"${machines}\n}\n")
   file(WRITE "${dir}/.kast/editor.json" "{\n  \"buildFolder\": \"C:/elsewhere\"\n}\n") # must stay out of game.pak
   if(empty_systems)
     file(READ "${dir}/${start_scene}" scene)
@@ -362,17 +414,23 @@ function(kast_game_project name project_name start_scene empty_systems)
     file(WRITE "${dir}/${start_scene}" "${scene}")
   endif()
 endfunction()
-# name, project name, startScene, empty its systems
+# name, project name, startScene, empty its systems[, game state machine]
 set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switch Test|scene_a.scene|TRUE"
                "health|Health Test|health.scene|FALSE" "health_no_systems|Health Test|health.scene|TRUE"
-               "events|Events Test|events.scene|FALSE" "events_no_systems|Events Test|events.scene|TRUE")
+               "events|Events Test|events.scene|FALSE" "events_no_systems|Events Test|events.scene|TRUE"
+               "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
   list(GET game 1 project_name)
   list(GET game 2 start_scene)
   list(GET game 3 empty_systems)
-  kast_game_project(${name} "${project_name}" ${start_scene} ${empty_systems})
+  set(machine "")
+  list(LENGTH game fields)
+  if(fields GREATER 4)
+    list(GET game 4 machine)
+  endif()
+  kast_game_project(${name} "${project_name}" ${start_scene} ${empty_systems} "${machine}")
   add_test(NAME build_game_${name}
     COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/${name}"
             "-DOUT=${KAST_GAME_OUT}/${name}" "-DEXE=${project_name}.exe" -DEXPECT=0
@@ -386,7 +444,7 @@ foreach(game ${KAST_GAMES})
   set_tests_properties(player_${name}_screenshot PROPERTIES FIXTURES_REQUIRED game_${name}_built
                        FIXTURES_SETUP player_${name}_shot TIMEOUT 90)
 endforeach()
-foreach(name switch health events)
+foreach(name switch health events fsm)
   add_test(NAME player_${name}_differs
     COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_${name}_no_systems.png"
             "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_${name}.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")

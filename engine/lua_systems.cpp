@@ -3,6 +3,7 @@
 #include "components.h"
 #include "log.h"
 #include "lua_sandbox.h"
+#include "lua_state_machines.h"
 #include "project.h"
 #include "scene_io.h"
 
@@ -55,8 +56,8 @@ struct PendingScene {
 
 struct LuaSystems::State {
     State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, std::string scenePath, const Input* input,
-          EventBus& bus)
-        : scene(scene), projectRoot(projectRoot), scenePath(std::move(scenePath)), input(input), bus(bus)
+          EventBus& bus, StateMachines& fsm)
+        : scene(scene), projectRoot(projectRoot), scenePath(std::move(scenePath)), input(input), bus(bus), fsm(fsm)
     {
     }
 
@@ -65,11 +66,15 @@ struct LuaSystems::State {
     std::string scenePath; // project-relative, empty if unsaved or no project
     const Input* input;
     EventBus& bus;
+    StateMachines& fsm;
     std::optional<PendingScene> pending; // last kast.loadScene call wins
     bool inShutdown = false;             // kast.loadScene is ignored while a shutdown runs
     sol::state lua;        // declared before everything holding Lua references, so it is destroyed last
     sol::table api;        // kast.* functions, copied into each system's own read-only kast table
     sol::table inputApi;   // kast.input.*
+    sol::table fsmApi;     // kast.fsm.*
+    DefinitionFiles fsmFiles; // state machine definition files at the last load, for hot reload
+    std::string callbackPath; // the definition file whose enter/exit is running (log prefixes, event publisher)
     std::vector<System> systems;
     std::unordered_map<EntityId, entt::entity> ids; // ponytail: rebuilt every tick, O(entities); index in Scene if big
     System* current = nullptr; // whose code is running: log prefixes, event publisher and subscription owner
@@ -79,6 +84,10 @@ struct LuaSystems::State {
     void stop();
 
     void indexIds();
+    entt::entity find(EntityId id);
+    std::string who() const; // the running code's file, for log prefixes and event publishers
+    void loadMachines(bool reload);
+    StateCallback bindCallback(const sol::protected_function& fn, const std::string& path, const std::string& what);
     void load(System& system);
     void reload(System& system);
     template <class... Args>
@@ -92,6 +101,7 @@ struct LuaSystems::State {
     ComponentType componentType(lua_State* L, const std::string& name);
     std::string eventName(lua_State* L, const char* function, const sol::object& name);
     void bindApi();
+    void bindFsmApi();
 };
 
 void LuaSystems::State::init(const std::vector<std::string>& paths)
@@ -99,6 +109,9 @@ void LuaSystems::State::init(const std::vector<std::string>& paths)
     openSandbox(lua);
     bindApi();
     indexIds();
+    fsm.attach(scene, [this](EntityId id) { return find(id); });
+    if (projectRoot)
+        loadMachines(false);
     for (const std::string& path : paths)
         systems.push_back({.path = path});
     for (System& system : systems) {
@@ -114,6 +127,8 @@ void LuaSystems::State::init(const std::vector<std::string>& paths)
         system.mtime = std::filesystem::last_write_time(system.file, ec);
         load(system);
     }
+    indexIds(); // entities the inits created
+    fsm.enterAll();
 }
 
 void LuaSystems::State::tick(float dt)
@@ -130,6 +145,10 @@ void LuaSystems::State::tick(float dt)
             reload(system);
         }
     }
+    // ponytail: lists fsms/ every frame; poll on a timer if definition counts grow large.
+    if (projectRoot && scanStateMachineFiles(*projectRoot) != fsmFiles)
+        loadMachines(true);
+    fsm.syncAll(); // entities that gained StateMachine (or changed its machine) outside kast.add/kast.set
     for (System& system : systems)
         if (system.ok)
             call(system, system.update, "update", dt);
@@ -149,6 +168,70 @@ void LuaSystems::State::indexIds()
     ids.clear();
     for (auto [entity, id] : scene.registry().view<PersistentId>().each())
         ids.emplace(id.value, entity);
+}
+
+entt::entity LuaSystems::State::find(EntityId id)
+{
+    const auto it = ids.find(id);
+    if (it != ids.end() && scene.valid(it->second) && scene.registry().get<PersistentId>(it->second).value == id)
+        return it->second;
+    for (auto [entity, persistent] : scene.registry().view<PersistentId>().each()) // created since the last index
+        if (persistent.value == id)
+            return ids[id] = entity;
+    return entt::null;
+}
+
+std::string LuaSystems::State::who() const
+{
+    return current ? current->path : callbackPath.empty() ? std::string("lua") : callbackPath;
+}
+
+// Every definition file is reloaded (a fresh environment each). Valid definitions replace the running ones; a broken
+// or deleted file keeps its last valid definition.
+void LuaSystems::State::loadMachines(bool reload)
+{
+    fsmFiles = scanStateMachineFiles(*projectRoot);
+    StateMachineDefinitions defs = parseStateMachineDefinitions(
+        lua, *projectRoot, [this] { return environment(); },
+        [this](const sol::protected_function& fn, const std::string& path, const std::string& what) {
+            return bindCallback(fn, path, what);
+        });
+    for (const ComponentDefinitionStatus& status : defs.status)
+        if (!status.ok)
+            log::error(std::format("State machine rejected: {}", status.error));
+    const size_t ok = defs.valid.size();
+    for (StateMachineDef& def : defs.valid)
+        fsm.define(std::move(def));
+    if (reload)
+        log::info(std::format("Reloaded state machine definitions ({} OK, {} rejected)", ok, defs.status.size() - ok));
+}
+
+StateCallback LuaSystems::State::bindCallback(const sol::protected_function& fn, const std::string& path,
+                                              const std::string& what)
+{
+    return [this, callback = fn, path, what](const Transition& t) { // errors come back with a traceback, as for systems
+        sol::table ctx = lua.create_table();
+        ctx["machine"] = t.machine;
+        if (t.entity)
+            ctx["entity"] = *t.entity;
+        if (t.from)
+            ctx["from"] = *t.from;
+        ctx["to"] = t.to;
+        System* caller = std::exchange(current, nullptr); // a system's kast.fsm.change may have called this
+        std::string callerPath = std::exchange(callbackPath, path);
+        std::string error;
+        try {
+            sol::protected_function_result result = callback(ctx);
+            if (!result.valid())
+                error = result.get<sol::error>().what();
+        } catch (const std::exception& e) { // sol2 conversions; nothing may escape to the main loop
+            error = std::format("{}: {}", path, e.what());
+        }
+        current = caller;
+        callbackPath = std::move(callerPath);
+        if (!error.empty())
+            log::error(std::format("State machine {}: {} failed: {}", path, what, error));
+    };
 }
 
 sol::table LuaSystems::State::readOnly(const sol::table& source)
@@ -174,6 +257,7 @@ sol::environment LuaSystems::State::environment()
     for (const auto& [key, value] : api)
         kast[key] = value;
     kast["input"] = inputTable;
+    kast["fsm"] = readOnly(fsmApi);
     env["kast"] = readOnly(kast);
     return env;
 }
@@ -317,6 +401,7 @@ void LuaSystems::State::bindApi()
         const ComponentType type = componentType(L, name);
         if (!hasComponent(registry, e, type))
             addComponent(registry, e, type);
+        fsm.syncEntity(e); // a new StateMachine enters its initial state
     });
     api.set_function("remove", [this, &registry](sol::this_state L, const sol::object& id, const std::string& name) {
         const entt::entity e = entity(L, id);
@@ -361,6 +446,7 @@ void LuaSystems::State::bindApi()
         }
         if (!setComponentJson(registry, e, type, json, error))
             raise(L, std::format("\"{}\": {}", name, error));
+        fsm.syncEntity(e); // a changed StateMachine "machine" enters the new machine's initial state
     });
     api.set_function("create", [this, &registry](sol::this_state L, const std::string& name, const sol::object& parent) {
         const bool root = parent.get_type() == sol::type::lua_nil || parent.get_type() == sol::type::none;
@@ -373,7 +459,7 @@ void LuaSystems::State::bindApi()
 
     const auto logger = [this](void (*write)(std::string_view)) {
         return [this, write](sol::this_state L, const sol::object& message) {
-            write(std::format("{}: {}", current ? current->path : "lua", toString(L, message)));
+            write(std::format("{}: {}", who(), toString(L, message)));
         };
     };
     api.set_function("log", logger(log::info));
@@ -406,7 +492,7 @@ void LuaSystems::State::bindApi()
         nlohmann::json json;
         if (std::string error; !luaToJson(payload, json, error))
             raise(L, std::format("kast.publish: {}", error));
-        bus.publish(std::move(event), std::move(json), current ? current->path : "lua");
+        bus.publish(std::move(event), std::move(json), who());
     });
     api.set_function("subscribe", [this](sol::this_state L, const sol::object& name, const sol::object& fn) {
         std::string event = eventName(L, "kast.subscribe", name);
@@ -445,14 +531,70 @@ void LuaSystems::State::bindApi()
     inputApi.set_function("mouseDelta", [this] {
         return input ? std::make_tuple(input->mouseDeltaX, input->mouseDeltaY) : std::make_tuple(0.0f, 0.0f);
     });
+    bindFsmApi();
+}
+
+// kast.fsm.*: thin wrappers over StateMachines, whose std::invalid_argument (a bad target) becomes a Lua error at the
+// calling line. See README "State machines".
+void LuaSystems::State::bindFsmApi()
+{
+    using Target = StateMachines::Target;
+    const auto target = [](lua_State* L, const char* function, const sol::object& value) -> Target {
+        if (value.get_type() == sol::type::string)
+            return value.as<std::string>();
+        if (value.get_type() == sol::type::number) {
+            const double id = value.as<double>();
+            if (id >= 1.0 && id <= kMaxExactInteger && id == std::floor(id))
+                return static_cast<EntityId>(id);
+            raise(L, std::format("{}: invalid entity id {}", function, toString(L, value)));
+        }
+        raise(L, std::format("{}: target must be a state machine name or an entity id, got {}", function,
+                             toString(L, value)));
+    };
+    const auto stateName = [](lua_State* L, const char* function, const sol::object& value) {
+        if (value.get_type() != sol::type::string)
+            raise(L, std::format("{}: state must be a string, got {}", function, toString(L, value)));
+        return value.as<std::string>();
+    };
+    // Runs body; a bad target raises at the calling line.
+    const auto guarded = [](lua_State* L, const char* function, auto&& body) {
+        try {
+            return body();
+        } catch (const std::invalid_argument& e) {
+            raise(L, std::format("{}: {}", function, e.what()));
+        }
+    };
+
+    fsmApi = lua.create_table();
+    fsmApi.set_function("state", [this, target, guarded](sol::this_state L, const sol::object& t) {
+        const Target machine = target(L, "kast.fsm.state", t);
+        return guarded(L, "kast.fsm.state", [&] { return fsm.state(machine); });
+    });
+    fsmApi.set_function("change", [this, target, stateName, guarded](sol::this_state L, const sol::object& t,
+                                                                     const sol::object& state) {
+        const Target machine = target(L, "kast.fsm.change", t);
+        const std::string to = stateName(L, "kast.fsm.change", state);
+        return guarded(L, "kast.fsm.change", [&] { return fsm.change(machine, to); });
+    });
+    fsmApi.set_function("canChange", [this, target, stateName, guarded](sol::this_state L, const sol::object& t,
+                                                                        const sol::object& state) {
+        const Target machine = target(L, "kast.fsm.canChange", t);
+        const std::string to = stateName(L, "kast.fsm.canChange", state);
+        return guarded(L, "kast.fsm.canChange", [&] { return fsm.canChange(machine, to); });
+    });
+    fsmApi.set_function("states", [this, target, guarded](sol::this_state L, const sol::object& t) {
+        const Target machine = target(L, "kast.fsm.states", t);
+        return sol::as_table(guarded(L, "kast.fsm.states", [&] { return fsm.states(machine); }));
+    });
 }
 
 LuaSystems::LuaSystems() = default;
 LuaSystems::~LuaSystems() = default;
 
 void LuaSystems::start(Scene& scene, const std::optional<std::filesystem::path>& projectRoot,
-                       const std::string& scenePath, const Input* input)
+                       const std::string& scenePath, const Input* input, std::vector<std::string> gameMachines)
 {
+    fsm_.reset(std::move(gameMachines)); // its Lua callbacks go before the Lua state
     state_.reset(); // its subscriptions go first
     bus_.reset();
     launch(scene, projectRoot, scenePath, input);
@@ -461,8 +603,9 @@ void LuaSystems::start(Scene& scene, const std::optional<std::filesystem::path>&
 void LuaSystems::launch(Scene& scene, const std::optional<std::filesystem::path>& projectRoot,
                         const std::string& scenePath, const Input* input)
 {
+    fsm_.detach(); // drops callbacks into the old Lua state
     state_.reset(); // the old Lua state goes before the new one is built
-    state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_);
+    state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_);
     state_->init(scene.systems);
 }
 
@@ -477,20 +620,27 @@ bool LuaSystems::tick(float dt)
     Scene& scene = state_->scene;
     const std::optional<std::filesystem::path> projectRoot = state_->projectRoot;
     const Input* input = state_->input;
-    stop(); // old systems' shutdowns see the old scene; the Lua state and queued events are discarded
+    endSession(); // old systems' shutdowns see the old scene; the Lua state and queued events are discarded
     scene = std::move(next.scene);
     log::info(std::format("Switched to scene '{}'", next.path));
-    launch(scene, projectRoot, next.path, input); // C++ subscriptions and the bus history carry over
+    launch(scene, projectRoot, next.path, input); // C++ subscriptions, the bus history and game states carry over
     return true;
+}
+
+void LuaSystems::endSession()
+{
+    state_->stop();
+    fsm_.detach();
+    state_.reset();
+    bus_.dropQueued();
 }
 
 void LuaSystems::stop()
 {
     if (!state_)
         return;
-    state_->stop();
-    state_.reset();
-    bus_.dropQueued();
+    endSession();
+    fsm_.reset();
 }
 
 std::vector<LuaSystemStatus> LuaSystems::status() const

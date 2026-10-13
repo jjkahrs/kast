@@ -60,6 +60,13 @@ struct Rotator {
     float degreesPerSecond = 45.0f;
 };
 
+// Gives the entity its own finite state machine in Play mode (see state_machines.h): machine is a definition name
+// (fsms/*.lua), initialState the state it enters at Play start (empty or unknown: the definition's initial).
+struct StateMachine {
+    std::string machine;
+    std::string initialState;
+};
+
 // Local-space bounds of each built-in primitive (all fit the unit cube centered on the origin).
 Aabb primitiveBounds(Primitive primitive);
 

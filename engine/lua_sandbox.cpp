@@ -198,6 +198,34 @@ std::string toString(lua_State* L, const sol::object& value)
     return result.valid() && result.get_type() == sol::type::string ? result.get<std::string>() : "?";
 }
 
+void checkKeys(const sol::table& table, std::initializer_list<const char*> allowed, const std::string& what)
+{
+    for (const auto& [key, value] : table) {
+        const bool known = key.get_type() == sol::type::string &&
+                           std::ranges::any_of(allowed, [&](const char* k) { return key.as<std::string>() == k; });
+        if (!known)
+            throw InvalidDefinition(std::format("{}unknown key {}", what, toString(table.lua_state(), key)));
+    }
+}
+
+std::vector<sol::object> sequence(const sol::object& value, const std::string& what)
+{
+    if (value.get_type() != sol::type::table)
+        throw InvalidDefinition(std::format("{} must be a list {{...}}", what));
+    const sol::table table = value.as<sol::table>();
+    size_t count = 0;
+    for (const auto& [key, unused] : table)
+        ++count;
+    std::vector<sol::object> items;
+    for (size_t i = 1; i <= count; ++i) {
+        sol::object item = table[i];
+        if (item.get_type() == sol::type::lua_nil)
+            throw InvalidDefinition(std::format("{} must be a list {{...}}", what));
+        items.push_back(item);
+    }
+    return items;
+}
+
 bool luaToFieldJson(const FieldDesc& field, const sol::object& value, Json& out, std::string& error, bool element)
 {
     const std::string label = std::format("\"{}\"", field.name);

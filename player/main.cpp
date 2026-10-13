@@ -128,7 +128,8 @@ int main(int argc, char** argv)
         bgfx::setViewClear(kGameView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, kClearColor, 1.0f, 0);
         if (kast::activeCamera(scene) == entt::null)
             kast::log::warn("No Camera in scene: nothing to render");
-        lua.start(scene, project.root, *project.startScene, &input);
+        lua.start(scene, project.root, *project.startScene, &input,
+                  project.stateMachines.value_or(std::vector<std::string>{}));
         lastTicks = SDL_GetTicksNS();
         return true;
     };

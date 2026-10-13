@@ -5,7 +5,10 @@
 #include <sol/sol.hpp>
 
 #include <filesystem>
+#include <initializer_list>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 // Sandbox and value conversion shared by Lua systems (lua_systems.h, one state per Play session) and Lua component
 // definitions (lua_components.h, a state per definition scan). Engine-internal: needs sol2 (a private dependency).
@@ -23,6 +26,16 @@ sol::protected_function loadSandboxed(sol::state& lua, const std::filesystem::pa
                                       const sol::environment& env, std::string& error);
 
 std::string toString(lua_State* L, const sol::object& value); // Lua tostring
+
+// Definition-file checks shared by Lua components and state machines. Each throws InvalidDefinition, its message
+// starting with what (e.g. "components/health.lua: ").
+struct InvalidDefinition : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+// Every key of table is a string in allowed.
+void checkKeys(const sol::table& table, std::initializer_list<const char*> allowed, const std::string& what);
+// value is a sequence {v1, v2, ...} (exactly the keys 1..n); returns its items.
+std::vector<sol::object> sequence(const sol::object& value, const std::string& what);
 
 // A Lua value as the JSON a component field takes (or one array element when element is true): {x=,y=,z=[,w=]} tables
 // become arrays, 1-based sequences become arrays, integral numbers integers. Shape errors set error ("\"f\" must be

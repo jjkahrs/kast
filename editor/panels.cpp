@@ -6,6 +6,7 @@
 #include <log.h>
 #include <lua_components.h>
 #include <scene_io.h>
+#include <state_machines.h>
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
@@ -337,16 +338,20 @@ void Panels::drawInspector(Document& doc)
                 bool keep = true;           // the header's x button (removable types only) clears it
                 if (ImGui::CollapsingHeader(type.displayName(), type.removable() ? &keep : nullptr,
                                             ImGuiTreeNodeFlags_DefaultOpen)) {
-                    Json json = kast::componentToJson(registry, entity, type);
-                    for (const kast::FieldDesc& field : type.fields()) {
-                        if (!drawField(entity, type, field, json[field.name]))
-                            continue;
-                        // Rejected edits (e.g. Camera ranges) are not applied: the last valid value stays, so the
-                        // scene stays loadable.
-                        if (std::string error; kast::setComponentJson(registry, entity, type, json, error))
-                            changed = true;
-                        else
-                            json = kast::componentToJson(registry, entity, type);
+                    if (type.meta() && type.meta() == entt::resolve<kast::StateMachine>()) {
+                        changed = drawStateMachineComponent(doc, entity) || changed;
+                    } else {
+                        Json json = kast::componentToJson(registry, entity, type);
+                        for (const kast::FieldDesc& field : type.fields()) {
+                            if (!drawField(entity, type, field, json[field.name]))
+                                continue;
+                            // Rejected edits (e.g. Camera ranges) are not applied: the last valid value stays, so
+                            // the scene stays loadable.
+                            if (std::string error; kast::setComponentJson(registry, entity, type, json, error))
+                                changed = true;
+                            else
+                                json = kast::componentToJson(registry, entity, type);
+                        }
                     }
                 }
                 if (!keep)
@@ -493,6 +498,183 @@ void Panels::drawComponents(Document& doc)
         ImGui::EndDisabled();
         disabledTooltip(blocked);
     }
+    ImGui::End();
+}
+
+bool Panels::drawStateMachineComponent(Document& doc, entt::entity entity)
+{
+    entt::registry& registry = doc.scene.registry();
+    kast::StateMachine& component = registry.get<kast::StateMachine>(entity);
+    const std::vector<kast::StateMachineDef>& defs = kast::stateMachineDefinitions().valid;
+    const auto definition = [&]() -> const kast::StateMachineDef* {
+        const auto it = std::ranges::find(defs, component.machine, &kast::StateMachineDef::name);
+        return it == defs.end() ? nullptr : &*it;
+    };
+    bool changed = false;
+
+    // A name with no valid definition is kept as-is (and saved) until another machine is chosen.
+    const kast::StateMachineDef* def = definition();
+    const std::string machineLabel = component.machine.empty() ? "(none)"
+                                     : def                     ? component.machine
+                                                               : "(missing) " + component.machine;
+    if (ImGui::BeginCombo("Machine", machineLabel.c_str())) {
+        if (defs.empty())
+            ImGui::TextDisabled("No state machines (%s/*.lua)", kast::kStateMachinesDir);
+        for (const kast::StateMachineDef& candidate : defs) {
+            if (ImGui::Selectable(candidate.name.c_str(), candidate.name == component.machine) &&
+                candidate.name != component.machine) {
+                component.machine = candidate.name;
+                if (!candidate.states.contains(component.initialState))
+                    component.initialState.clear(); // the new machine's initial
+                changed = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (!component.machine.empty() && !definition()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+        ImGui::TextWrapped("No valid definition \"%s\": kept as-is", component.machine.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    def = definition();
+    const std::string defaultLabel = def ? std::format("(initial: {})", def->initial) : std::string("(initial)");
+    const std::string stateLabel = component.initialState.empty() ? defaultLabel
+                                   : def && !def->states.contains(component.initialState)
+                                       ? "(missing) " + component.initialState
+                                       : component.initialState;
+    if (ImGui::BeginCombo("Initial", stateLabel.c_str())) {
+        if (!def) {
+            ImGui::TextDisabled("Choose a machine first");
+        } else {
+            if (ImGui::Selectable(defaultLabel.c_str(), component.initialState.empty()) && !component.initialState.empty()) {
+                component.initialState.clear();
+                changed = true;
+            }
+            for (const std::string& state : def->stateNames()) {
+                if (ImGui::Selectable(state.c_str(), state == component.initialState) && state != component.initialState) {
+                    component.initialState = state;
+                    changed = true;
+                }
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    if (doc.play != PlayState::Stopped) {
+        const std::optional<std::string> current = doc.lua.fsm().peek(registry.get<kast::PersistentId>(entity).value);
+        ImGui::LabelText("Current", "%s", current ? current->c_str() : "(not running)");
+    }
+    return changed;
+}
+
+void Panels::openNewStateMachine(std::string name)
+{
+    newStateMachineName_ = std::move(name);
+    newStateMachineError_.clear();
+    newStateMachineRequested_ = true;
+}
+
+void Panels::drawNewStateMachineModal(Document& doc)
+{
+    if (std::exchange(newStateMachineRequested_, false))
+        ImGui::OpenPopup("New State Machine");
+    if (!ImGui::BeginPopupModal("New State Machine", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    if (ImGui::IsWindowAppearing())
+        ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 18.0f);
+    const bool enter = ImGui::InputText("Name", &newStateMachineName_, ImGuiInputTextFlags_EnterReturnsTrue);
+    if (ImGui::IsItemEdited())
+        newStateMachineError_.clear(); // a failed Create's message stays until the name changes
+
+    const std::string error =
+        !newStateMachineError_.empty() ? newStateMachineError_ : newStateMachineNameError(doc, newStateMachineName_);
+    if (error.empty())
+        ImGui::Text("Will create: %s/%s", kast::kStateMachinesDir,
+                    stateMachineFile(doc.project->root, newStateMachineName_).filename().string().c_str());
+    else
+        ImGui::TextColored(kErrorColor, "%s", error.c_str());
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!error.empty());
+    const bool create = ImGui::Button("Create") || (enter && error.empty());
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (create) {
+        if (newStateMachine(doc, newStateMachineName_, newStateMachineError_))
+            ImGui::CloseCurrentPopup();
+        else
+            kast::log::error(newStateMachineError_);
+    } else if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+void Panels::drawStateMachines(Document& doc)
+{
+    if (ImGui::Begin("State Machines")) {
+        const std::vector<kast::ComponentDefinitionStatus>& status = kast::stateMachineDefinitions().status;
+        const char* blocked = stateMachineEditBlocker(doc);
+        const bool playing = doc.play != PlayState::Stopped;
+        if (!doc.project)
+            ImGui::TextDisabled("No project: state machines live in a project's %s/", kast::kStateMachinesDir);
+        else if (status.empty())
+            ImGui::TextDisabled("No state machines (%s/*.lua)", kast::kStateMachinesDir);
+        for (size_t i = 0; i < status.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i));
+            ImGui::TextColored(status[i].ok ? kOkColor : kErrorColor, status[i].ok ? "OK" : "Error");
+            ImGui::SameLine();
+            ImGui::TextWrapped("%s  %s", status[i].name.empty() ? "?" : status[i].name.c_str(), status[i].path.c_str());
+            if (status[i].ok) {
+                bool global = isGlobalStateMachine(doc, status[i].name);
+                ImGui::BeginDisabled(blocked != nullptr);
+                if (ImGui::Checkbox("Global", &global)) {
+                    if (std::string error; !setGlobalStateMachine(doc, status[i].name, global, error))
+                        kast::log::error(error);
+                }
+                ImGui::EndDisabled();
+                disabledTooltip(blocked);
+                if (playing && global) {
+                    const std::optional<std::string> current = doc.lua.fsm().peek(status[i].name);
+                    ImGui::SameLine();
+                    ImGui::Text("State: %s", current ? current->c_str() : "(unavailable)");
+                }
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+                ImGui::TextWrapped("%s", status[i].error.c_str());
+                ImGui::PopStyleColor();
+            }
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+        // Game machines project.kast lists that have no valid definition: unavailable in Play.
+        if (doc.project && doc.project->stateMachines) {
+            const std::vector<std::string> listed = *doc.project->stateMachines; // a copy: Remove edits it
+            for (const std::string& name : listed) {
+                if (std::ranges::any_of(status, [&](const auto& s) { return s.ok && s.name == name; }))
+                    continue;
+                ImGui::PushID(("listed/" + name).c_str());
+                ImGui::TextColored(kErrorColor, "Global \"%s\": no valid definition", name.c_str());
+                ImGui::SameLine();
+                ImGui::BeginDisabled(blocked != nullptr);
+                if (ImGui::SmallButton("Remove")) {
+                    if (std::string error; !setGlobalStateMachine(doc, name, false, error))
+                        kast::log::error(error);
+                }
+                ImGui::EndDisabled();
+                ImGui::PopID();
+            }
+        }
+
+        ImGui::Spacing();
+        ImGui::BeginDisabled(blocked != nullptr);
+        if (ImGui::Button("New State Machine...", ImVec2(-FLT_MIN, 0.0f)))
+            openNewStateMachine("");
+        ImGui::EndDisabled();
+        disabledTooltip(blocked);
+    }
+    drawNewStateMachineModal(doc); // outside the Begin branch, so --new-state-machine-prompt shows it on a hidden tab
     ImGui::End();
 }
 

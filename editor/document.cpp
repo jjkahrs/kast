@@ -7,6 +7,7 @@
 #include <lua_components.h>
 #include <scene_io.h>
 #include <play.h>
+#include <state_machines.h>
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
@@ -78,6 +79,23 @@ return {
         -- { name = "mode",    type = "enum",   values = {"idle", "busy"}, default = "idle" },
         -- { name = "tags",    type = "array",  of = "string", default = {"a", "b"} },
         -- { name = "weights", type = "array",  of = "float", min = 0, max = 1 },
+    },
+}
+)";
+
+constexpr const char* kStateMachineTemplate = R"(-- A state machine: named states, entered one at a time. The file returns one table; see README "State machines".
+-- Use it as a game machine (State Machines panel > Global) or on entities (StateMachine component).
+return {
+    name = "%NAME%",       -- unique machine name: kast.fsm.* targets and StateMachine "machine"
+    initial = "idle",      -- the state entered at Play start
+    states = {
+        idle = {
+            -- ctx = {machine = "%NAME%", entity = id or nil (game machine), from = "..." or nil (first state), to = "..."}
+            enter = function(ctx) kast.log("%NAME%: " .. tostring(ctx.from) .. " -> " .. ctx.to) end,
+            -- exit = function(ctx) end,
+        },
+        active = { allowedFrom = {"idle"} },   -- may only be entered from idle
+        -- paused = { allowedFrom = {"*"} },  -- from any state (also when allowedFrom is omitted)
     },
 }
 )";
@@ -171,7 +189,8 @@ void startPlay(Document& doc)
             kast::log::warn("No Camera in scene: the Game view has nothing to render");
         doc.playSceneName.clear();
         doc.lua.start(doc.scene, doc.project ? std::optional(doc.project->root) : std::nullopt, projectScenePath(doc),
-                      &doc.input);
+                      &doc.input, doc.project ? doc.project->stateMachines.value_or(std::vector<std::string>{})
+                                              : std::vector<std::string>{});
     }
     doc.play = PlayState::Playing;
 }
@@ -400,21 +419,13 @@ std::filesystem::path newComponentFile(const std::filesystem::path& projectRoot,
 
 namespace {
 
+bool writeTemplate(const std::filesystem::path& file, std::string text, const std::string& name, std::string& error);
+
 // Writes kComponentTemplate for typeName to file (creating its folder), replacing any file there, and logs it.
 bool writeComponentTemplate(const std::filesystem::path& file, const std::string& typeName, std::string& error)
 {
-    std::string text = kComponentTemplate;
-    for (size_t at; (at = text.find("%NAME%")) != std::string::npos;)
-        text.replace(at, 6, typeName);
-    std::error_code ec;
-    std::filesystem::create_directories(file.parent_path(), ec);
-    std::ofstream out(file, std::ios::binary);
-    out << text;
-    out.close();
-    if (ec || !out) {
-        error = std::format("Cannot write '{}'", file.string());
+    if (!writeTemplate(file, kComponentTemplate, typeName, error))
         return false;
-    }
     kast::log::info(std::format("Created Lua component '{}'", file.string()));
     return true;
 }
@@ -458,6 +469,43 @@ std::string componentFileStem(std::string_view typeName)
     return stem;
 }
 
+namespace {
+
+// The name of a file in file's folder whose name matches file's (lower-case) one case-insensitively, as on Windows,
+// even in a case-sensitive folder; empty if none.
+std::string existingFileName(const std::filesystem::path& file)
+{
+    const auto lower = [](std::string text) {
+        std::ranges::transform(text, text.begin(),
+                               [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; });
+        return text;
+    };
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(file.parent_path(), ec))
+        if (lower(entry.path().filename().string()) == file.filename().string())
+            return entry.path().filename().string();
+    return {};
+}
+
+// Writes text with %NAME% replaced by name to file (creating its folder), replacing any file there.
+bool writeTemplate(const std::filesystem::path& file, std::string text, const std::string& name, std::string& error)
+{
+    for (size_t at; (at = text.find("%NAME%")) != std::string::npos;)
+        text.replace(at, 6, name);
+    std::error_code ec;
+    std::filesystem::create_directories(file.parent_path(), ec);
+    std::ofstream out(file, std::ios::binary);
+    out << text;
+    out.close();
+    if (ec || !out) {
+        error = std::format("Cannot write '{}'", file.string());
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
 std::filesystem::path luaComponentFile(const std::filesystem::path& projectRoot, std::string_view typeName)
 {
     return projectRoot / kast::kComponentsDir / (componentFileStem(trimmed(typeName)) + ".lua");
@@ -478,17 +526,8 @@ std::string newComponentNameError(const Document& doc, std::string_view name)
     if (std::ranges::any_of(kast::componentDefinitionStatus(),
                             [&](const kast::ComponentDefinitionStatus& s) { return s.name == typeName; }))
         return std::format("A Lua component named \"{}\" already exists", typeName);
-    // Case-insensitive, as on Windows, even in a case-sensitive folder.
-    const std::filesystem::path file = luaComponentFile(doc.project->root, typeName);
-    const auto lower = [](std::string text) {
-        std::ranges::transform(text, text.begin(),
-                               [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; });
-        return text;
-    };
-    std::error_code ec;
-    for (const auto& entry : std::filesystem::directory_iterator(file.parent_path(), ec))
-        if (lower(entry.path().filename().string()) == file.filename().string())
-            return std::format("{}/{} already exists", kast::kComponentsDir, entry.path().filename().string());
+    if (const std::string existing = existingFileName(luaComponentFile(doc.project->root, typeName)); !existing.empty())
+        return std::format("{}/{} already exists", kast::kComponentsDir, existing);
     return {};
 }
 
@@ -512,6 +551,80 @@ bool newLuaComponent(Document& doc, entt::entity entity, std::string_view name, 
     }
     kast::addComponent(doc.scene.registry(), entity, type);
     markDirty(doc);
+    return true;
+}
+
+void refreshStateMachines(Document& doc) { kast::refreshStateMachineDefinitions(rootOf(doc.project)); }
+
+const char* stateMachineEditBlocker(const Document& doc)
+{
+    return !doc.project                     ? "Open a scene inside a project"
+           : doc.play != PlayState::Stopped ? "Stop Play to change state machines"
+                                            : nullptr;
+}
+
+std::filesystem::path stateMachineFile(const std::filesystem::path& projectRoot, std::string_view name)
+{
+    return projectRoot / kast::kStateMachinesDir / (componentFileStem(trimmed(name)) + ".lua");
+}
+
+std::string newStateMachineNameError(const Document& doc, std::string_view name)
+{
+    if (const char* blocked = stateMachineEditBlocker(doc))
+        return blocked;
+    const std::string machine(trimmed(name));
+    if (machine.empty())
+        return "Enter a name";
+    if (!kast::isIdentifier(machine))
+        return "Use letters, digits and _ only, not starting with a digit";
+    // Every definition file of the project, valid or in error.
+    if (std::ranges::any_of(kast::stateMachineDefinitions().status,
+                            [&](const kast::ComponentDefinitionStatus& s) { return s.name == machine; }))
+        return std::format("A state machine named \"{}\" already exists", machine);
+    if (const std::string existing = existingFileName(stateMachineFile(doc.project->root, machine)); !existing.empty())
+        return std::format("{}/{} already exists", kast::kStateMachinesDir, existing);
+    return {};
+}
+
+bool newStateMachine(Document& doc, std::string_view name, std::string& error)
+{
+    if (error = newStateMachineNameError(doc, name); !error.empty())
+        return false;
+    const std::string machine(trimmed(name));
+    const std::filesystem::path file = stateMachineFile(doc.project->root, machine);
+    if (!writeTemplate(file, kStateMachineTemplate, machine, error))
+        return false;
+    kast::log::info(std::format("Created state machine '{}'", file.string()));
+    refreshStateMachines(doc); // loads it now rather than at the next poll
+    return true;
+}
+
+bool isGlobalStateMachine(const Document& doc, const std::string& name)
+{
+    return doc.project && doc.project->stateMachines &&
+           std::ranges::find(*doc.project->stateMachines, name) != doc.project->stateMachines->end();
+}
+
+bool setGlobalStateMachine(Document& doc, const std::string& name, bool global, std::string& error)
+{
+    if (const char* blocked = stateMachineEditBlocker(doc)) {
+        error = blocked;
+        return false;
+    }
+    if (isGlobalStateMachine(doc, name) == global)
+        return true;
+    kast::Project project = *doc.project;
+    std::vector<std::string> machines = project.stateMachines.value_or(std::vector<std::string>{});
+    if (global)
+        machines.push_back(name);
+    else
+        std::erase(machines, name);
+    project.stateMachines = std::move(machines);
+    if (!kast::saveProject(project, error))
+        return false;
+    doc.project = std::move(project);
+    kast::log::info(std::format("State machine \"{}\" is {} global ({})", name, global ? "now" : "no longer",
+                                kast::kProjectFileName));
     return true;
 }
 

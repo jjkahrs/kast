@@ -92,6 +92,25 @@ std::string newComponentNameError(const Document& doc, std::string_view name);
 // fails, or the definition doesn't load (file kept, nothing added). Never overwrites a file.
 bool newLuaComponent(Document& doc, entt::entity entity, std::string_view name, std::string& error);
 
+// State machines (State Machines panel, StateMachine Inspector). Definitions are scanned for the editor whenever the
+// project or its fsms/ files change; Play loads its own copy (LuaSystems).
+void refreshStateMachines(Document& doc); // rescans if the project or its definition files changed
+// Why state machines can't be created or made global now (no project, or Play not stopped); null if they can.
+const char* stateMachineEditBlocker(const Document& doc);
+// <projectRoot>/fsms/<componentFileStem>.lua for name (trimmed): where New State Machine writes it.
+std::filesystem::path stateMachineFile(const std::filesystem::path& projectRoot, std::string_view name);
+// Why name (trimmed) can't be a new state machine; empty if it can. Checks, in order: stateMachineEditBlocker, empty,
+// identifier, any definition file's name (even one in error), and an existing stateMachineFile (case-insensitive).
+std::string newStateMachineNameError(const Document& doc, std::string_view name);
+// Writes that file from the template with name (trimmed) as the machine name and rescans. False + error if
+// newStateMachineNameError isn't empty (nothing written) or the write fails. Never overwrites a file.
+bool newStateMachine(Document& doc, std::string_view name, std::string& error);
+// name is listed in project.kast "stateMachines" (a game machine run in every Play session).
+bool isGlobalStateMachine(const Document& doc, const std::string& name);
+// Adds name to, or removes it from, project.kast "stateMachines" and saves it (other keys and their order kept). False
+// + error (nothing changed) if stateMachineEditBlocker or the write fails.
+bool setGlobalStateMachine(Document& doc, const std::string& name, bool global, std::string& error);
+
 enum class ObjectKind { Empty, Cube, Plane, Sphere, DirectionalLight, Camera };
 constexpr ObjectKind kObjectKinds[] = {ObjectKind::Empty, ObjectKind::Cube, ObjectKind::Plane, ObjectKind::Sphere,
                                        ObjectKind::DirectionalLight, ObjectKind::Camera};

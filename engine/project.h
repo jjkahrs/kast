@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 // Projects: a directory marked by a project.kast file (JSON, see README "Projects"). Scene "systems" and
 // kast.loadScene paths are relative to the project root, with '/' separators.
@@ -15,6 +16,9 @@ struct Project {
     std::filesystem::path root; // absolute directory holding project.kast
     std::string name;
     std::optional<std::string> startScene; // project-relative; where a built game (kast_player) starts
+    // Game state machines (definition names, see state_machines.h) run in every Play session. Optional in the file:
+    // nullopt = the key is absent (saving leaves it out).
+    std::optional<std::vector<std::string>> stateMachines;
 };
 
 // file is a project.kast path. Replaces out only on success; on failure error says why.

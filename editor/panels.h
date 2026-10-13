@@ -11,18 +11,22 @@
 
 // Hierarchy (tree, create/delete/rename/duplicate, drag-drop reparent), Inspector, Systems (the scene's Lua
 // systems: list, status while playing, add/remove/reorder, new from template) and Components (the project's Lua
-// component definitions: list with status, new from template) and Events (the Play session's recently delivered
-// events, with a name filter) panels.
+// component definitions: list with status, new from template), State Machines (the project's state machine
+// definitions: status, Global toggle, live game states, new from template) and Events (the Play session's recently
+// delivered events, with a name filter) panels.
 class Panels {
 public:
     // Opens the Inspector's "New Lua Component" modal (Add Component > New Lua Component...) with name prefilled.
     void openNewComponent(std::string name);
     // Opens the Inspector's Add Component popup once an entity is selected.
     void openAddComponent() { addComponentRequested_ = true; }
+    // Opens the State Machines panel's "New State Machine" modal with name prefilled.
+    void openNewStateMachine(std::string name);
     void drawHierarchy(Document& doc);
     void drawInspector(Document& doc);
     void drawSystems(Document& doc);
     void drawComponents(Document& doc);
+    void drawStateMachines(Document& doc);
     void drawEvents(Document& doc);
 
 private:
@@ -38,6 +42,10 @@ private:
     void drawCreateItems(entt::entity parent);
     void applyEdit(Document& doc);
     void drawNewComponentModal(Document& doc);
+    void drawNewStateMachineModal(Document& doc);
+    // The StateMachine component's Inspector body: machine and initial state combos, live state while playing. True if
+    // it changed the component.
+    bool drawStateMachineComponent(Document& doc, entt::entity entity);
     // Generated Inspector widgets for a component field's JSON value (built-in or Lua); true if they changed it.
     bool drawField(entt::entity entity, const kast::ComponentType& type, const kast::FieldDesc& field,
                    nlohmann::ordered_json& value);
@@ -71,4 +79,7 @@ private:
     std::string newComponentName_;
     std::string newComponentError_; // why the last Create failed (write or load); cleared when the name changes
     std::string eventsFilter_;      // Events panel: shows events whose name contains this
+    bool newStateMachineRequested_ = false;
+    std::string newStateMachineName_;
+    std::string newStateMachineError_; // why the last Create failed; cleared when the name changes
 };

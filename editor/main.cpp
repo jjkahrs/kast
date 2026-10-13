@@ -36,11 +36,12 @@ constexpr uint32_t kBackbufferClearColor = 0x202020ff;
 // --add-component-popup, --open-menu, --open-build-settings and --focus-panel wait this long: focus changes while the first frames dock the windows close
 // popups.
 constexpr int kAddComponentPopupFrame = 10;
-constexpr float kComponentPollSeconds = 0.5f; // Lua component definition files are checked for changes this often
+constexpr float kComponentPollSeconds = 0.5f; // Lua component and state machine definition files are checked this often
 constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--ui-scale F] [--projects-file list.json] "
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--add-component-popup] "
-    "[--new-component-prompt Name] [--new-component Name] [--build dir] [--open-menu Name] [--open-build-settings] "
+    "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
+    "[--open-menu Name] [--open-build-settings] "
     "[--focus-panel Window] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
@@ -58,6 +59,7 @@ struct Options {
     bool addComponentPopup = false; // open the Inspector's Add Component popup for the --select entity
     std::optional<std::string> newComponentPrompt; // open the Inspector's New Lua Component modal with this name
     std::string newComponent; // create this Lua component and add it to the --select entity at startup
+    std::optional<std::string> newStateMachinePrompt; // open the State Machines panel's New State Machine modal
     std::string build;        // build the --project game into this folder and exit, without opening a window
     std::string openMenu;     // open this main menu (e.g. "Build") for screenshots
     bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
@@ -104,6 +106,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.addComponentPopup = true;
         } else if (arg == "--new-component-prompt" && hasValue) {
             options.newComponentPrompt = argv[++i];
+        } else if (arg == "--new-state-machine-prompt" && hasValue) {
+            options.newStateMachinePrompt = argv[++i];
         } else if (arg == "--new-component" && hasValue) {
             options.newComponent = argv[++i];
         } else if (arg == "--build" && hasValue) {
@@ -160,10 +164,11 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     const bool editorFlags = options.select != 0 || options.play || options.addComponentPopup ||
                              options.newComponentPrompt || !options.newComponent.empty() || !options.openMenu.empty() ||
-                             options.openBuildSettings || !options.focusPanel.empty();
+                             options.openBuildSettings || !options.focusPanel.empty() || options.newStateMachinePrompt;
     if (!options.editor() && editorFlags) {
-        kast::log::error("--select, --play, --add-component-popup, --new-component[-prompt], --open-menu, "
-                         "--open-build-settings and --focus-panel require --project <dir> or --scene <file>");
+        kast::log::error("--select, --play, --add-component-popup, --new-component[-prompt], "
+                         "--new-state-machine-prompt, --open-menu, --open-build-settings and --focus-panel require "
+                         "--project <dir> or --scene <file>");
         return std::nullopt;
     }
     if (!options.saveScene.empty() && options.project.empty() && options.scene.empty()) {
@@ -197,6 +202,7 @@ void buildDefaultLayout(ImGuiID dockspace)
     ImGui::DockBuilderDockWindow("Inspector", right);
     ImGui::DockBuilderDockWindow("Console", bottom);
     ImGui::DockBuilderDockWindow("Events", bottom);
+    ImGui::DockBuilderDockWindow("State Machines", bottom);
     ImGui::DockBuilderDockWindow("Assets", bottom);
     ImGui::DockBuilderDockWindow("Scene", center);
     ImGui::DockBuilderDockWindow("Game", center);
@@ -328,6 +334,7 @@ int main(int argc, char** argv)
         if (std::string error; !newLuaComponent(doc, doc.selected, options->newComponent, error))
             kast::log::error(std::format("--new-component {}: {}", options->newComponent, error));
     }
+    refreshStateMachines(doc); // the Inspector and State Machines panel list them from the first frame
     if (options->play)
         startPlay(doc);
     if (std::string error; opened && !recordRecent(projectsFile, *opened, error))
@@ -337,6 +344,8 @@ int main(int argc, char** argv)
     Panels panels;
     if (options->newComponentPrompt)
         panels.openNewComponent(*options->newComponentPrompt);
+    if (options->newStateMachinePrompt)
+        panels.openNewStateMachine(*options->newStateMachinePrompt);
     SceneViewport viewport(kSceneView);
     GameViewport game(kGameView);
     UiScale uiScale(options->uiScale);
@@ -378,6 +387,7 @@ int main(int argc, char** argv)
         if (componentPollSeconds >= kComponentPollSeconds) { // Lua component hot reload (does nothing during Play)
             componentPollSeconds = 0.0f;
             refreshComponents(doc);
+            refreshStateMachines(doc); // also during Play: only the editor's listing (Play reloads its own)
         }
 
         drawMenuBar(files, doc, frames.frame() == kAddComponentPopupFrame ? options->openMenu : std::string());
@@ -415,7 +425,12 @@ int main(int argc, char** argv)
             console && !ImGui::FindWindowSettingsByID(ImHashStr("Events")))
             ImGui::SetNextWindowDockID(console->DockId, ImGuiCond_FirstUseEver);
         panels.drawEvents(doc);
-        drawConsole(); // submitted after Assets and Events so Console is the front tab on first run
+        // Layouts saved before the State Machines panel existed: dock it as a tab beside Console.
+        if (const ImGuiWindowSettings* console = ImGui::FindWindowSettingsByID(ImHashStr("Console"));
+            console && !ImGui::FindWindowSettingsByID(ImHashStr("State Machines")))
+            ImGui::SetNextWindowDockID(console->DockId, ImGuiCond_FirstUseEver);
+        panels.drawStateMachines(doc);
+        drawConsole(); // submitted after Assets, Events and State Machines so Console is the front tab on first run
         files.update();
         if (game.hasInput(doc))
             doc.input.endFrame();

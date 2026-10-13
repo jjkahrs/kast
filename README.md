@@ -89,6 +89,7 @@ build\release\kast_editor.exe
 | `--play` | Enter Play mode right after the startup scene loads. Works with `--frames`, `--screenshot`, `--scene`, `--select`. |
 | `--add-component-popup` | Open the Inspector's Add Component popup for the `--select`ed entity (after the first 10 frames, once the layout has settled). |
 | `--new-component-prompt <Name>` | Open the Inspector's New Lua Component modal at startup with Name prefilled (validation shown). Creates nothing by itself. |
+| `--new-state-machine-prompt <Name>` | Open the State Machines panel's New State Machine modal at startup with Name prefilled (validation shown). Creates nothing by itself. |
 | `--new-component <Name>` | Create Lua component `<Name>` (as the modal's Create does) and add it to the `--select`ed entity at startup. On failure logs an error and keeps running. |
 | `--launcher` | Run the [Project Manager](#project-manager) (what no `--project`/`--scene`/`--save-scene`/`--build` already does), e.g. with `--frames 120 --screenshot`. |
 | `--new-project <name> <dir>` | Project Manager: open its New Project modal at startup with Name and Directory prefilled (quote values with spaces), e.g. for `--frames 120 --screenshot`. Creates nothing by itself. |
@@ -97,11 +98,11 @@ build\release\kast_editor.exe
 | `--build <dir>` | With `--project`: build that project's game into `<dir>` (see [Build](#build)) and exit without opening a window or any dialog. Exit 0 on success, 1 on failure (no `--project`, invalid `startScene`, ...). Does not remember the folder. |
 | `--open-menu <Name>` | Open that main menu (e.g. `Build`) after the first 10 frames, for screenshots. |
 | `--open-build-settings` | With `--project`: open the Build > Build Settings modal after the first 10 frames, for screenshots. Writes nothing by itself. Without `--project` it is an invalid argument. |
-| `--focus-panel <Window>` | Bring that editor window (e.g. `Events`) to the front of its dock after the first 10 frames, for screenshots. |
+| `--focus-panel <Window>` | Bring that editor window (e.g. `Events`, `"State Machines"`) to the front of its dock after the first 10 frames, for screenshots. |
 
 Without `--project`, `--scene`, `--save-scene` or `--build`, `kast_editor` runs the Project Manager instead of the
-editor. Editor-only flags (`--select`, `--play`, `--add-component-popup`, `--new-component[-prompt]`, `--open-menu`,
-`--open-build-settings`, `--focus-panel`) then are invalid arguments, as are Project Manager flags (`--launcher`, `--new-project`,
+editor. Editor-only flags (`--select`, `--play`, `--add-component-popup`, `--new-component[-prompt]`,
+`--new-state-machine-prompt`, `--open-menu`, `--open-build-settings`, `--focus-panel`) then are invalid arguments, as are Project Manager flags (`--launcher`, `--new-project`,
 `--launcher-open`, `--`) together with the editor's.
 
 Invalid arguments exit with code 2; init failures (SDL, window, bgfx) log the reason, show a message box, and exit 1.
@@ -157,6 +158,18 @@ file: **OK** or **Error**, the type name and its project-relative path, and the 
 commented, and loads it at once. It is disabled with no active project (tooltip "Open a scene inside a project") and
 during Play ("Stop Play to add components"). Layouts saved before the panel existed get it docked as a tab beside
 Systems.
+
+**State Machines panel** (tabbed with Console): the active project's [state machine](#state-machines) definitions, one
+row per file: **OK** or **Error**, the machine name and its project-relative path, and the error message for a
+rejected file. A valid one has a **Global** checkbox that adds it to (or removes it from) `project.kast`
+`"stateMachines"` and saves that file at once; while playing, a Global machine shows its live `State:`. A listed name
+with no valid definition is shown in red with **Remove**. **New State Machine...** opens a modal like New Lua
+Component: type a name (e.g. `TrafficSignal`), Create writes a template definition (states `idle` and `active`, every
+option shown) to `<project>/fsms/<snake_case>.lua` and rescans. Create is disabled, with the reason in red, for an
+empty name, a non-identifier, the name of any listed definition (even one in error) or an existing file
+(case-insensitive); it never overwrites. Global and New State Machine are disabled with no active project and during
+Play ("Stop Play to change state machines"). The list is rescanned every 0.5 s, also during Play (Play itself reloads
+its own copy). Layouts saved before the panel existed get it docked as a tab beside Console.
 
 **New Lua Component...** (first item of the Inspector's Add Component popup) creates a Lua component and adds it to the
 selected entity in one step. Type a name (e.g. `PlayerHealth`) and choose Create (or Enter; Esc cancels): it writes the
@@ -251,13 +264,19 @@ A project is a directory marked by a `project.kast` file (exactly that name):
 {
   "version": 1,
   "name": "My Game",
-  "startScene": "scenes/start.scene"
+  "startScene": "scenes/start.scene",
+  "stateMachines": ["game_flow"]
 }
 ```
 
 - `version` must be 1, `name` a non-empty string, `startScene` a project-relative path or `null` (only its type is
-  checked; opening the project opens it, and a built game starts there, see [Build](#build)). Every key is required and unknown keys
-  are rejected. Saved with 2-space indent in this key order.
+  checked; opening the project opens it, and a built game starts there, see [Build](#build)). These three keys are
+  required.
+- `stateMachines` (optional): the [game state machines](#state-machines) every Play session runs, as definition names;
+  an array of unique non-empty strings. A name without a valid definition is an error at Play start, not here. The
+  State Machines panel's **Global** checkbox edits it.
+- Unknown keys are rejected. Saved with 2-space indent in this key order; `stateMachines` is written only if the file
+  had it or a machine was made Global (unchecking the last one leaves `[]`), so other projects keep identical bytes.
 - **Active project**: opening a scene (File > Open, `--scene`) activates the project found by walking up from the
   scene's directory (the nearest ancestor-or-self with a `project.kast`; none = no project; an invalid one is warned
   about and treated as none). New (Untitled) keeps the current project. Save / Save As re-run the walk-up from the saved
@@ -374,6 +393,9 @@ in registration order, floats in shortest round-trip form, so re-saving an uncha
     between 0 and 180 (exclusive), and `0 < nearPlane < farPlane`. The Inspector keeps the last valid value if an
     edit would break that.
   - `Rotator`: spins the entity in Play mode, `degreesPerSecond` around its local `axis` (normalized; zero = no spin).
+  - `StateMachine`: gives the entity its own [state machine](#state-machines) in Play mode. `machine` is a definition
+    name, `initialState` the state it enters at Play start (empty = the definition's `initial`). Both are plain
+    strings: a name with no valid definition still loads and saves unchanged. Scene files stay version 4.
 - `systems`: Lua system scripts in run order, as paths relative to the **project root** (see [Projects](#projects) and
   [Lua systems](#lua-systems)). Always written; optional when loading (missing = none).
 - `editor` belongs to the editor (camera pivot, yaw/pitch in degrees, distance in meters); the engine keeps it as-is.
@@ -433,7 +455,7 @@ error for that system.
 separators), wherever the scene file is. The Systems panel stores paths that way; Save As does not rewrite them. With no
 active project, or for a path outside the project, that system is disabled with the reason.
 
-**`kast` API** (one read-only table per system; assigning to `kast` or `kast.input` is an error). Entities are
+**`kast` API** (one read-only table per system; assigning to `kast`, `kast.input` or `kast.fsm` is an error). Entities are
 persistent ids (`EntityId` integers, the scene file's `id`). An invalid or destroyed id, an unknown component name or
 a wrong argument type raises a Lua error at the calling line.
 
@@ -453,6 +475,7 @@ a wrong argument type raises a Lua error at the calling line.
 | `kast.loadScene(path)` | — | Switches the running scene. `path` is project-relative. Checked **at call time**, reading the file from disk (unsaved editor edits are not seen): no active project, a path outside the project, a missing file or a scene that fails to load (including an old version) raises at the calling line, and nothing is queued. On success the switch is applied at the **end of the frame**, after every system's `update`; the last call in a frame wins. Applying it calls the old scene's enabled systems' `shutdown`, discards the Lua state, replaces the scene, and starts a new session for the new scene's own `systems` (each `init` runs). Nothing persists across the switch. Calls from a `shutdown` are ignored; a call from an `init` is applied at the end of the next ticked frame. |
 | `kast.publish(name [, payload])`, `kast.subscribe(name, fn)`, `kast.unsubscribe(handle)` | —, handle, — | Events between systems and C++: see [Events](#events). |
 | `kast.currentScene()` | string or `nil` | The running scene's project-relative path (`"levels/b.scene"`), or `nil` with no active project or for an Untitled scene. |
+| `kast.fsm.state(target)`, `kast.fsm.change(target, state)`, `kast.fsm.canChange(target, state)`, `kast.fsm.states(target)` | string, boolean, boolean, table | Game and entity state machines: see [State machines](#state-machines). `kast.fsm` is read-only too. |
 
 Input is only live while the Game panel is focused and playing; otherwise every key is up and the delta is 0.
 
@@ -619,7 +642,7 @@ rejected. The message starts with the project-relative path (and the line for Lu
 files in the same project still load.
 
 **Name clashes**: a name equal to a built-in component (`Transform`, `MeshRenderer`, `DirectionalLight`, `Camera`,
-`Rotator`) or a structural one (`PersistentId`, `Name`, `Hierarchy`, `PreservedComponents`) is rejected. If two files
+`Rotator`, `StateMachine`) or a structural one (`PersistentId`, `Name`, `Hierarchy`, `PreservedComponents`) is rejected. If two files
 declare the same name, **both** are rejected, each error naming the other file, so the result never depends on scan
 order.
 
@@ -659,6 +682,153 @@ rules.
 removed or now-broken definition turns its instances into preserved Missing data (nothing is lost; restoring the file
 converts them back). During Play definitions are frozen; changes made meanwhile apply after Stop, to the restored scene.
 
+### State machines
+
+Game logic can be organised as finite state machines defined in Lua (`engine/state_machines.h`): named states, at most
+one current, with rules on which state each may be entered from and optional `enter`/`exit` callbacks. There are two
+kinds, built from the same definition files:
+
+- **Game state machines**: project-wide, one instance per Play session, listed by name in `project.kast`
+  `"stateMachines"` (the State Machines panel's Global checkbox). They keep their state across `kast.loadScene`.
+- **Entity state machines**: one instance per entity with the built-in `StateMachine` component (`machine`,
+  `initialState`).
+
+**Files**: every `.lua` file under `<project>/fsms/`, scanned recursively, is one definition. Each returns exactly one
+table:
+
+```lua
+-- fsms/door.lua
+return {
+    name = "door",              -- required, unique: kast.fsm.* game target and StateMachine "machine"
+    initial = "closed",         -- required: one of the states
+    states = {                  -- required, non-empty: name -> state
+        closed = { allowedFrom = {"open"}, enter = function(ctx) end, exit = function(ctx) end },
+        open   = { allowedFrom = {"closed", "locked"} },
+        locked = { },                      -- no allowedFrom: enterable from any state
+        broken = { allowedFrom = {"*"} },  -- "*": from any state
+    },
+}
+```
+
+- `name` is a non-empty string; state names are non-empty strings other than `"*"`. `allowedFrom` is a list of state
+  names of this machine, or `"*"`. `enter` and `exit` are optional functions. There is no per-state `update`: drive
+  machines from Lua systems.
+- A file that isn't valid Lua, raises, doesn't return exactly one table, has a missing or non-string `name`, an
+  `initial` that isn't one of its states, an `allowedFrom` entry naming an unknown state, a wrong type or an unknown
+  key is rejected. The message starts with the project-relative path (and the line for Lua errors), is logged as
+  `State machine rejected: ...` and shown in the State Machines panel. If two files declare the same `name`, **both**
+  are rejected, each naming the other.
+- Callbacks run sandboxed like [Lua systems](#lua-systems): each definition file has its own environment with the full
+  read-only `kast` API. `kast.log` and events published from a callback are prefixed / attributed with the definition's
+  path (`fsms/door.lua`).
+
+**Callbacks** get one argument, `ctx`:
+
+| Field | Value |
+|-------|-------|
+| `ctx.machine` | The definition's `name`. |
+| `ctx.entity` | The entity id for an entity machine; `nil` for a game machine. |
+| `ctx.from` | The state being left; `nil` when the machine enters its first state (Play start, runtime add, hot reload reset). |
+| `ctx.to` | The state being entered. |
+
+`exit` and `enter` of one transition get the same `ctx`.
+
+**Transition rules** (`kast.fsm.change` / `StateMachines::change`):
+- A state may be entered from the current one if its `allowedFrom` is omitted, contains `"*"`, or lists the current
+  state. That includes a **self-transition** (target == current): it is allowed only by the same rule (omitted or
+  `"*"` count as listing itself), and then runs `exit` and `enter` and publishes an event like any other.
+- Denied (not allowed, or an unknown target state): returns `false` with a Console warning
+  (`State machine "door" (entity 3): "open" can't be entered from "open" (allowedFrom); staying in "open"`). Nothing
+  else happens: same state, no callbacks, no event.
+- Allowed: applied **immediately**, in this order: `exit` of the old state, the switch, `enter` of the new state, then
+  `fsm.changed` is published on the [event bus](#events) with `{machine, entity, from, to}` (`entity` is `null` for a
+  game machine; the publisher is the definition's path). Returns `true`.
+- A change requested from inside `enter` or `exit` (of any machine) is **queued** and returns `true`; queued changes
+  are applied after the current transition finishes, in request order (no recursion). One that turns out denied when
+  applied logs the usual warning.
+- An error in `enter` or `exit` is logged with file:line and a traceback (`State machine fsms/door.lua: enter "open"
+  failed: fsms/door.lua:5: ...`). The transition still commits and returns `true`; the machine stays usable.
+
+**Lifecycle**:
+- Play start: definitions load into the session's Lua state, then every scene system's `init` runs, then each listed
+  game machine enters its `initial` state, then every `StateMachine` entity (depth-first) enters its `initialState`.
+  An empty or unknown `initialState` falls back to the definition's `initial`, with a warning. Entering a first state
+  calls `enter` with `from = nil` and publishes no event. A machine touched by `kast.fsm.*` before that (from an
+  `init`) enters right then, once.
+- A listed game machine without a valid definition is logged as an error (once per Play) and unavailable:
+  `kast.fsm.*` on it raises.
+- An entity that gains `StateMachine` during Play (`kast.add` then `kast.set` of `machine`, an Inspector edit, a
+  Duplicate) enters its initial state: at once from `kast.add`/`kast.set`, otherwise at the start of the next frame.
+  Changing `machine` enters the new machine's initial state (no `exit` of the old one); changing only `initialState`
+  does nothing until the next Play. `kast.add` alone leaves `machine` empty: no machine yet, and `kast.fsm.*` on it
+  raises. A `machine` with no valid definition is logged once. A destroyed entity's machine, or one whose
+  `StateMachine` is removed, just goes away: no `exit`.
+- `kast.loadScene`: game machines keep their current state name, with no callbacks; their definitions (and callbacks)
+  reload into the new scene's Lua state. The new scene's entity machines enter after its systems' `init`s.
+- Stop resets everything; the next Play starts every machine from its initial state again. The current state is never
+  saved: Stop restores the scene (and its `StateMachine` data) as it was.
+
+**Lua API** (`kast.fsm`, read-only). `target` is a game machine's name (string) or an entity id (number):
+
+| Function | Returns | Notes |
+|----------|---------|-------|
+| `kast.fsm.state(target)` | string | The current state. |
+| `kast.fsm.change(target, state)` | boolean | The transition rules above. |
+| `kast.fsm.canChange(target, state)` | boolean | The same check against the current state, with no side effects and no log. |
+| `kast.fsm.states(target)` | table | The machine's state names, sorted. |
+
+A bad argument raises a Lua error at the calling line: an unknown or unavailable game machine, an invalid entity id,
+an entity without `StateMachine` (or with no valid `machine`), a target that is neither a string nor a number, a
+non-string `state`. An unknown **state name** passed to `change` is a denial (false and a warning), not an error.
+
+```lua
+local door
+return {
+    init = function()
+        for e in kast.query("StateMachine") do door = e end
+    end,
+    update = function(dt)
+        if kast.input.keyDown("E") and kast.fsm.canChange(door, "open") then
+            kast.fsm.change(door, "open")
+        end
+        if kast.fsm.state("game_flow") == "paused" then return end
+    end,
+}
+```
+
+**C++ API** (`kast::StateMachines`, from `LuaSystems::fsm()`; no Lua or ImGui dependency), same rules, events and
+logging; a bad target throws `std::invalid_argument` (which `kast.fsm` turns into the Lua error):
+
+```cpp
+kast::StateMachines& fsm = lua.fsm();
+std::string state = fsm.state("game_flow");           // a game machine by name
+bool opened = fsm.change(kast::EntityId{7}, "open");  // an entity machine by persistent id
+bool can = fsm.canChange("game_flow", "paused");
+std::vector<std::string> names = fsm.states(kast::EntityId{7});
+std::optional<std::string> shown = fsm.peek("game_flow"); // editor display: never enters or throws
+```
+
+**Hot reload**: while playing, the `fsms/` folder is checked every frame; on any added, removed or modified file
+every definition reloads (each in a fresh environment). A running machine keeps its current state if the new
+definition still has it; otherwise it resets to its initial state with a warning and `enter` runs with `from = nil`.
+New callbacks are used from then on. A definition that becomes invalid (or whose file is deleted) logs the error, and
+its machines keep their last valid definition until it is fixed.
+
+**Editor**: the Inspector shows `StateMachine` as a **Machine** combo (valid definitions; a name with no valid
+definition is shown as `(missing) <name>` with a red "No valid definition" note, and kept as-is until another machine
+is chosen) and an **Initial** combo (`(initial: <state>)` for empty, then the machine's states; an unknown one shown as
+`(missing) <state>`), plus the live **Current** state while playing. See the State Machines panel under
+[Editor controls](#editor-controls).
+
+**Built games**: `fsms/` is packed into `game.pak` like every project file, and `kast_player` runs the project's
+game machines and entity machines exactly as Play does (definitions are read from the pak; hot reload doesn't apply).
+
+**Sample**: `tests/project/fsm.scene` has two entities with `StateMachine` (`traffic_light`, from
+`fsms/entities/traffic_light.lua`, whose `enter` recolors the `MeshRenderer`) and the project lists the game machine
+`game_flow` (`fsms/game_flow.lua`). `scripts/fsm_driver.lua` moves `game_flow` from `boot` to `playing`, then steps
+each light once (red → green, green → yellow) and tries to switch both to red: the yellow one may, the green one is
+denied with a warning.
+
 The dock layout is saved to `imgui.ini` in the working directory; delete it to get the default layout back.
 
 ## Tests
@@ -667,7 +837,7 @@ The dock layout is saved to `imgui.ini` in the working directory; delete it to g
 
 | Test | What it checks |
 |------|----------------|
-| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values and versions 1–3 rejected), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits; projects: `project.kast` load/save/validation, walk-up discovery, project-relative paths and escape rejection, opening a project and Save/Save As on a `Document` (New Project folder-name sanitizing, every validation rule, creating `<dir>/my-game/project.kast` with the trimmed name, never creating missing parents or writing into an existing folder) (no rebasing, project-change warning, title format), the Project Manager's recent list (save/load round trip, newest first, case-insensitive dedupe with trailing separators, Remove leaving the project on disk, missing folder / missing or invalid `project.kast` reported, three kinds of corrupt file backed up to `projects.json.bad` with a warning and read as empty) and an editor that can't be started reporting why, no-project Lua disabling, Add Script outside the project, template location; `kast.loadScene` (end-of-frame, last call wins, ignored in `shutdown`, init calls deferred a frame, shutdown/init order, every error case keeps the current scene) and `kast.currentScene`, and Stop restoring the pre-Play scene after two switches; events: the C++ bus (publish then subscription order, next-drain re-publish, subscribe/unsubscribe during a drain, a throwing subscriber, RAII and stale handles, dropQueued, reset, the 500-event history and Clear), Lua→Lua in the same frame after every update with independent payload copies, Lua→C++ and C++→Lua payload conversion, one subscription order across C++ and Lua, every `kast.publish/subscribe/unsubscribe` rejection raising at file:line and queueing nothing (bad names, functions, userdata, threads, cycles, nesting past 32, mixed keys, NaN), a failing subscriber disabling only its system, cleanup on disable/hot reload/Stop/Play start, a scene switch dropping queued events and old Lua subscribers but keeping C++ ones, and Pause holding / Stop discarding the queue in editor Play; Lua components: definition parsing (every field type and option, recursive discovery, every invalid-definition case naming the file), name clashes (built-in, structural, both duplicate files rejected), sandbox and per-file globals, registry parity (add/has/remove, strict JSON set, Duplicate, save order, byte-identical save/load, snapshot and Document Play/Stop restore), `kast.*` on a Lua component with every `kast.set` error leaving it unchanged, drift rules (one warning per fix, dirty only when data changed, built-ins still strict), missing definitions (load with warnings, verbatim save, `kast.*` raises, later conversion), hot reload of modified/added/deleted/broken files without data loss and the Play freeze, Components panel template naming and enable rules; game.pak: write/read round trip (byte-identical, binary and empty files), directory listing, rejection of bad magic, bad version, truncated header/index/data, an offset past the end and an overflowing size; a mounted pak serving project.kast, readFile and listFiles (and not the disk); Build: exe-name sanitizing, pak contents (no dotfiles, dot-directories or output folder), every validation failure writing nothing, a full build (exe, game.pak, DLLs, other files kept), the remembered folder in `.kast/editor.json` (project.kast unchanged) and the Build menu enable rule (no project, Play, Pause); Build Settings: Start Scene choices (`tests/project` lists `events.scene`, `health.scene`, `scene_a.scene`, `scene_b.scene`; a dotfile or dot-directory scene is left out), Save writing only `startScene` (same keys and order, reloads, `doc.project` updated, the open scene's dirty flag and path kept, no `.kast/editor.json`), a scene that doesn't load or escapes the project leaving `project.kast` byte-identical, opening (then Cancel) writing nothing, and Build / Build and Run with `startScene` null or missing opening Build Settings. No window. |
+| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values and versions 1–3 rejected), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits; projects: `project.kast` load/save/validation, walk-up discovery, project-relative paths and escape rejection, opening a project and Save/Save As on a `Document` (New Project folder-name sanitizing, every validation rule, creating `<dir>/my-game/project.kast` with the trimmed name, never creating missing parents or writing into an existing folder) (no rebasing, project-change warning, title format), the Project Manager's recent list (save/load round trip, newest first, case-insensitive dedupe with trailing separators, Remove leaving the project on disk, missing folder / missing or invalid `project.kast` reported, three kinds of corrupt file backed up to `projects.json.bad` with a warning and read as empty) and an editor that can't be started reporting why, no-project Lua disabling, Add Script outside the project, template location; `kast.loadScene` (end-of-frame, last call wins, ignored in `shutdown`, init calls deferred a frame, shutdown/init order, every error case keeps the current scene) and `kast.currentScene`, and Stop restoring the pre-Play scene after two switches; events: the C++ bus (publish then subscription order, next-drain re-publish, subscribe/unsubscribe during a drain, a throwing subscriber, RAII and stale handles, dropQueued, reset, the 500-event history and Clear), Lua→Lua in the same frame after every update with independent payload copies, Lua→C++ and C++→Lua payload conversion, one subscription order across C++ and Lua, every `kast.publish/subscribe/unsubscribe` rejection raising at file:line and queueing nothing (bad names, functions, userdata, threads, cycles, nesting past 32, mixed keys, NaN), a failing subscriber disabling only its system, cleanup on disable/hot reload/Stop/Play start, a scene switch dropping queued events and old Lua subscribers but keeping C++ ones, and Pause holding / Stop discarding the queue in editor Play; Lua components: definition parsing (every field type and option, recursive discovery, every invalid-definition case naming the file), name clashes (built-in, structural, both duplicate files rejected), sandbox and per-file globals, registry parity (add/has/remove, strict JSON set, Duplicate, save order, byte-identical save/load, snapshot and Document Play/Stop restore), `kast.*` on a Lua component with every `kast.set` error leaving it unchanged, drift rules (one warning per fix, dirty only when data changed, built-ins still strict), missing definitions (load with warnings, verbatim save, `kast.*` raises, later conversion), hot reload of modified/added/deleted/broken files without data loss and the Play freeze, Components panel template naming and enable rules; game.pak: write/read round trip (byte-identical, binary and empty files), directory listing, rejection of bad magic, bad version, truncated header/index/data, an offset past the end and an overflowing size; a mounted pak serving project.kast, readFile and listFiles (and not the disk); Build: exe-name sanitizing, pak contents (no dotfiles, dot-directories or output folder), every validation failure writing nothing, a full build (exe, game.pak, DLLs, other files kept), the remembered folder in `.kast/editor.json` (project.kast unchanged) and the Build menu enable rule (no project, Play, Pause); Build Settings: Start Scene choices (`tests/project` lists `events.scene`, `fsm.scene`, `health.scene`, `scene_a.scene`, `scene_b.scene`; a dotfile or dot-directory scene is left out), Save writing only `startScene` (same keys and order, reloads, `doc.project` updated, the open scene's dirty flag and path kept, no `.kast/editor.json`), a scene that doesn't load or escapes the project leaving `project.kast` byte-identical, opening (then Cancel) writing nothing, and Build / Build and Run with `startScene` null or missing opening Build Settings; state machines: recursive discovery, every invalid-definition case naming the file (bad or missing `name`, bad `initial`, unknown `allowedFrom` state, wrong types, unknown keys, syntax and sandbox errors, both duplicate files), `allowedFrom` / omitted / `"*"` / self-transition rules, editor rescans, entry order at Play start (after the inits, game then entity machines, no event, `initialState` fallback warning, first touch during `init`), allowed and denied transitions (return value, warning, no callbacks, no event), `exit` → switch → `enter` → `fsm.changed {machine, entity, from, to}` with the definition as publisher, queued changes from callbacks (no recursion, denial on apply), callback errors (file:line and traceback, commit, still usable), C++ misuse throwing, every `kast.fsm.*` misuse raising at the calling line, read-only `kast.fsm`, identical results from Lua and C++, game state kept across `kast.loadScene` with no callbacks and new callbacks after it, Stop then Play starting over, runtime add (`kast.add` + `kast.set`, registry edit, Duplicate), destroy/remove without `exit`, a missing definition logged once, hot reload (state kept, reset with warning when removed, last valid definition kept when broken, game machines too), `StateMachine` byte-identical save/load, Duplicate and Stop restore, `project.kast` `stateMachines` round trip and validation, New State Machine name rules / template / no overwrite, Global toggling `project.kast`, and both blocked during Play. No window. |
 | `editor_smoke` | `kast_editor --frames 120 --screenshot build/<preset>/smoke.png` with no project or scene (the Project Manager, empty list): exit 0 and a non-empty PNG. Every screenshot test passes `--projects-file <its run folder>/projects.json`. |
 | `editor_smoke_scaled` | Same, with `--ui-scale 2.0`. |
 | `scene_screenshot` | Same, with `--scene tests/scenes/basic.scene`. |
@@ -695,6 +865,11 @@ The dock layout is saved to `imgui.ini` in the working directory; delete it to g
 | `lua_components_play_differs` | The two must differ: only `scripts/health_drain.lua` (drains `Health`, fades `MeshRenderer.color` from `Health.tint`) can change them. |
 | `events_play_screenshot`, `events_play_no_systems_screenshot` | `--play --focus-panel Events` on `tests/project/events.scene` and on a copy with `"systems": []` (in `build/<preset>/health_project/`), writing `events_play.png` (Events panel listing the sample's events) / `events_play_no_systems.png`. |
 | `events_play_differs` | The two must differ: the publisher changes nothing itself, so only the delivered `health.empty` events (greying Hero and Slime) can change them. |
+| `fsm_play_screenshot`, `fsm_play_no_systems_screenshot` | `--play --focus-panel Events` on `tests/project/fsm.scene` and on a copy with `"systems": []` (in `build/<preset>/health_project/`), writing `fsm_play.png` (Events panel listing `fsm.changed`) / `fsm_play_no_systems.png`. |
+| `fsm_play_differs` | The two must differ: both copies enter their initial states (red cube, green sphere), so only the transitions driven by `scripts/fsm_driver.lua` (green cube, red sphere) can change them. |
+| `state_machines_panel_screenshot` | `fsm.scene --select 3 --size 1280x1000 --play --focus-panel "State Machines"`, writing `state_machines_panel.png`: both definitions OK, `game_flow` Global with `State: playing`, Global and New State Machine disabled; the Inspector shows Light A's `StateMachine` with `Current` green. |
+| `state_machine_inspector_screenshot` | The same, stopped, writing `state_machine_inspector.png`: the Machine / Initial combos, Global and New State Machine enabled. |
+| `new_state_machine_valid_screenshot`, `new_state_machine_collide_screenshot` | `fsm.scene --select 3` with `--new-state-machine-prompt TrafficSignal` (preview `fsms/traffic_signal.lua`, Create enabled; fails if the file was written) and `--new-state-machine-prompt traffic_light` (inline "already exists", Create disabled), writing `new_state_machine_valid.png` / `new_state_machine_collide.png`. |
 | `lua_components_roundtrip` | `health.scene` saved twice into `build/<preset>/health_project/` (so `Health` stays defined): byte-identical. |
 | `new_component_valid_screenshot`, `new_component_collide_screenshot` | `health.scene --select 3` with `--new-component-prompt PlayerHealth` (preview `components/player_health.lua`, Create enabled; fails if the file was written) and `--new-component-prompt Health` (inline "already exists", Create disabled), writing `new_component_valid.png` / `new_component_collide.png`. |
 | `add_component_popup_screenshot`, `add_component_popup_play_screenshot` | `health.scene --select 3 --add-component-popup`, stopped and with `--play`, writing `add_component_popup.png` ("New Lua Component..." first, enabled) / `add_component_popup_play.png` (disabled). |
@@ -704,6 +879,8 @@ The dock layout is saved to `imgui.ini` in the working directory; delete it to g
 | `player_switch_screenshot`, `player_switch_no_systems_screenshot`, `player_health_screenshot`, `player_health_no_systems_screenshot`, `player_events_screenshot`, `player_events_no_systems_screenshot` | The built game, run from a copy of its folder with `--frames 120 --screenshot`: exit 0, a PNG (`player_<name>.png`) and the log line `Window title: <project name>`. |
 | `player_switch_differs` | `player_switch.png` (scene B, reached by `kast.loadScene` from the pak) must differ from `player_switch_no_systems.png` (scene A). |
 | `player_health_differs` | `player_health.png` (Lua component `Health` drained by a Lua system) must differ from `player_health_no_systems.png`. |
+| `build_game_fsm`, `build_game_fsm_no_systems`, `player_fsm_screenshot`, `player_fsm_no_systems_screenshot` | The same build and run for `fsm.scene` (project.kast of the copies lists `game_flow`), writing `player_fsm.png` / `player_fsm_no_systems.png`. |
+| `player_fsm_differs` | `player_fsm.png` must differ from `player_fsm_no_systems.png`: the driver (which only acts once the game machine `game_flow` is `playing`) and the entity machines run from `game.pak` in `kast_player` too. |
 | `player_events_differs` | `player_events.png` (Hero and Slime greyed by a `health.empty` subscriber) must differ from `player_events_no_systems.png`: events are delivered in `kast_player` too. |
 | `player_missing_pak`, `player_corrupt_pak` | The built game with its `game.pak` deleted / replaced by text, with `--frames`: exit 1 (no message box, no hang). |
 | `build_bad_start_scene` | `--build` on a copy whose `startScene` is `missing.scene`: exit 1, and the (empty) output folder gets no exe and no `game.pak`. |
