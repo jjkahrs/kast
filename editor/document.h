@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 struct SDL_Window;
 
@@ -140,8 +141,21 @@ public:
     void save();
     void saveAs();
     void exit();
-    // File actions are available: no dialog or New Project modal open and not in Play mode.
-    bool idle() const { return !dialogOpen_ && !newProjectOpen_ && doc_.play == PlayState::Stopped; }
+    // Build menu: Build... asks for an output folder; Build and Run uses the project's last one (or asks) and then
+    // starts the game. Both save or discard unsaved changes first (the prompt), so game.pak holds the on-disk files.
+    // Then, if checkStartScene fails, they log why and open Build Settings instead (no folder dialog, no build).
+    void build();
+    void buildAndRun();
+    // Opens the Build Settings modal (Start Scene choice, saved to project.kast); reason is shown in it, may be empty.
+    void openBuildSettings(std::string reason = "");
+    bool buildSettingsOpen() const { return buildSettingsOpen_; }
+    // File actions are available: no dialog, New Project or Build Settings modal open and not in Play mode.
+    bool idle() const
+    {
+        return !dialogOpen_ && !newProjectOpen_ && !buildSettingsOpen_ && doc_.play == PlayState::Stopped;
+    }
+    // Build menu items are available: idle and a project is open.
+    bool canBuild() const { return idle() && doc_.project.has_value(); }
 
     // Call once per frame inside the ImGui frame: shortcuts, dialog results, modals, title.
     void update();
@@ -149,8 +163,8 @@ public:
     bool onQuitRequested();
 
 private:
-    enum class Pending { None, New, Open, NewProject, OpenProject, Quit };
-    enum class DialogKind { Open, SaveAs, NewProjectFolder, OpenProject };
+    enum class Pending { None, New, Open, NewProject, OpenProject, Quit, Build, BuildAndRun };
+    enum class DialogKind { Open, SaveAs, NewProjectFolder, OpenProject, BuildFolder };
 
     // Runs action now, or after the unsaved-changes modal if the document is dirty.
     void request(Pending action);
@@ -162,6 +176,11 @@ private:
     void drawNewProjectModal();
     void browseNewProjectDir();
     void createNewProject();
+    void drawBuildSettingsModal();
+    // Build / Build and Run: false (Build Settings opened instead) if the project's startScene can't be built.
+    bool startSceneReady();
+    void browseBuildFolder(bool run);
+    void buildTo(const std::filesystem::path& folder, bool run);
     void updateTitle();
 
     static void onDialogDone(void* userdata, const char* const* files, int filter);
@@ -179,6 +198,12 @@ private:
     std::string newProjectDir_;  // parent directory, typed or picked with Browse...
     bool newProjectRequested_ = false;
     bool newProjectOpen_ = false;
+    bool runAfterBuild_ = false; // the Build folder dialog was opened by Build and Run
+    std::vector<std::string> buildScenes_; // Build Settings modal: projectScenes, listed when it opens
+    std::string buildStartScene_;          // the Start Scene choice (maybe not in buildScenes_: shown "(missing)")
+    std::string buildSettingsError_;
+    bool buildSettingsRequested_ = false;
+    bool buildSettingsOpen_ = false;
 
     // SDL calls onDialogDone on any thread; the main thread picks the result up in update().
     bool dialogOpen_ = false;

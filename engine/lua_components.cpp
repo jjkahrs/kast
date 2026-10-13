@@ -1,5 +1,6 @@
 #include "lua_components.h"
 
+#include "files.h"
 #include "log.h"
 #include "lua_sandbox.h"
 #include "project.h"
@@ -45,14 +46,9 @@ Files scan(const std::filesystem::path& root)
 {
     Files files;
     std::error_code ec;
-    const std::filesystem::path dir = root / kComponentsDir;
-    if (!std::filesystem::is_directory(dir, ec))
-        return files;
-    for (auto it = std::filesystem::recursive_directory_iterator(dir, ec); !ec && it != std::filesystem::end(it);
-         it.increment(ec)) {
-        if (it->is_regular_file(ec) && it->path().extension() == ".lua")
-            files[it->path()] = std::filesystem::last_write_time(it->path(), ec);
-    }
+    for (const std::filesystem::path& file : listFiles(root / kComponentsDir))
+        if (file.extension() == ".lua")
+            files[file] = std::filesystem::last_write_time(file, ec); // disk only: under a pak, never changes
     return files;
 }
 

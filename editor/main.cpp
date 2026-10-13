@@ -1,3 +1,4 @@
+#include "build.h"
 #include "document.h"
 #include "game_view.h"
 #include "imgui_bgfx.h"
@@ -31,7 +32,8 @@ constexpr bgfx::ViewId kGameView = 2;
 constexpr bgfx::ViewId kImGuiView = 255; // last, so the UI draws over everything
 constexpr uint32_t kBackbufferClearColor = 0x202020ff;
 constexpr int kScreenshotTimeoutFrames = 30;
-// --add-component-popup waits this long: focus changes while the first frames dock the windows close popups.
+// --add-component-popup, --open-menu and --open-build-settings wait this long: focus changes while the first frames dock the windows close
+// popups.
 constexpr int kAddComponentPopupFrame = 10;
 constexpr float kComponentPollSeconds = 0.5f; // Lua component definition files are checked for changes this often
 constexpr float kFontSize = 16.0f; // at UI scale 1.0
@@ -40,7 +42,8 @@ constexpr float kMaxUiScale = 3.0f;
 constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--ui-scale F] [--scene in.scene] "
     "[--project dir] [--save-scene out.scene] [--select ID] [--play] [--new-project name dir] "
-    "[--add-component-popup] [--new-component-prompt Name] [--new-component Name]";
+    "[--add-component-popup] [--new-component-prompt Name] [--new-component Name] [--build dir] [--open-menu Name] "
+    "[--open-build-settings]";
 
 struct Options {
     int frames = 0;         // 0 = run until quit
@@ -57,6 +60,9 @@ struct Options {
     bool addComponentPopup = false; // open the Inspector's Add Component popup for the --select entity
     std::optional<std::string> newComponentPrompt; // open the Inspector's New Lua Component modal with this name
     std::string newComponent; // create this Lua component and add it to the --select entity at startup
+    std::string build;        // build the --project game into this folder and exit, without opening a window
+    std::string openMenu;     // open this main menu (e.g. "Build") for screenshots
+    bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
 };
 
 template <typename T>
@@ -96,6 +102,12 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.newComponentPrompt = argv[++i];
         } else if (arg == "--new-component" && hasValue) {
             options.newComponent = argv[++i];
+        } else if (arg == "--build" && hasValue) {
+            options.build = argv[++i];
+        } else if (arg == "--open-menu" && hasValue) {
+            options.openMenu = argv[++i];
+        } else if (arg == "--open-build-settings") {
+            options.openBuildSettings = true;
         } else if (arg == "--play") {
             options.play = true;
         } else if (arg == "--size" && hasValue) {
@@ -120,6 +132,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
             kast::log::error(std::format("Invalid argument '{}'. {}", arg, kUsage));
             return std::nullopt;
         }
+    }
+    if (options.openBuildSettings && options.project.empty()) {
+        kast::log::error("--open-build-settings requires --project <dir>");
+        return std::nullopt;
     }
     if (!options.screenshot.empty() && options.frames == 0) {
         kast::log::error("--screenshot requires --frames N");
@@ -209,9 +225,12 @@ void buildDefaultLayout(ImGuiID dockspace)
     ImGui::DockBuilderFinish(dockspace);
 }
 
-void drawMenuBar(FileActions& files, Document& doc)
+// openMenu: a main menu to open this frame (--open-menu), or empty.
+void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu)
 {
     if (ImGui::BeginMainMenuBar()) {
+        if (!openMenu.empty())
+            ImGui::OpenPopup(ImGui::GetID(openMenu.c_str())); // BeginMenu's popup id inside the menu bar
         if (ImGui::BeginMenu("File")) {
             const bool idle = files.idle();
             if (ImGui::MenuItem("New", "Ctrl+N", false, idle))
@@ -236,6 +255,17 @@ void drawMenuBar(FileActions& files, Document& doc)
             for (ObjectKind kind : kObjectKinds)
                 if (ImGui::MenuItem(objectKindLabel(kind)))
                     createObject(doc, kind, entt::null);
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Build")) {
+            const bool canBuild = files.canBuild();
+            if (ImGui::MenuItem("Build Settings...", nullptr, false, canBuild))
+                files.openBuildSettings();
+            ImGui::Separator();
+            if (ImGui::MenuItem("Build...", nullptr, false, canBuild))
+                files.build();
+            if (ImGui::MenuItem("Build and Run", nullptr, false, canBuild))
+                files.buildAndRun();
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -293,6 +323,16 @@ int main(int argc, char** argv)
             return 1;
         }
         return 0;
+    }
+    if (!options->build.empty()) {
+        std::string error = "--build needs --project <dir>";
+        std::filesystem::path exe;
+        const char* base = SDL_GetBasePath(); // kast_player.exe is built next to the editor
+        if (!options->project.empty() && doc.project && base &&
+            buildGame(*doc.project, options->build, std::filesystem::path(reinterpret_cast<const char8_t*>(base)), exe, error))
+            return 0;
+        kast::log::error(base ? error : std::format("Cannot find the editor's folder: {}", SDL_GetError()));
+        return 1;
     }
     if (options->select != 0 && !selectById(doc, options->select)) {
         kast::log::error(std::format("--select {}: no entity with that id", options->select));
@@ -357,7 +397,7 @@ int main(int argc, char** argv)
             refreshComponents(doc);
         }
 
-        drawMenuBar(files, doc);
+        drawMenuBar(files, doc, frame == kAddComponentPopupFrame ? options->openMenu : std::string());
         const ImGuiID dockspace = ImGui::GetID("MainDockSpace");
         if (!ImGui::DockBuilderGetNode(dockspace)) // no saved layout in imgui.ini
             buildDefaultLayout(dockspace);
@@ -365,6 +405,8 @@ int main(int argc, char** argv)
 
         if (options->addComponentPopup && frame == kAddComponentPopupFrame)
             panels.openAddComponent();
+        if (options->openBuildSettings && frame == kAddComponentPopupFrame)
+            files.openBuildSettings();
         panels.drawHierarchy(doc);
         viewport.draw(doc); // submitted before Game so Scene is the front tab on first run
         // Layouts saved before the Game panel existed: dock it as a tab beside Scene.

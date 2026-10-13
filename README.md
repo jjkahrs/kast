@@ -66,7 +66,8 @@ cmake --build --preset release
 ctest --preset release
 ```
 
-Output goes to `build/<preset>/`; runtime DLLs are copied next to `kast_editor.exe`.
+Output goes to `build/<preset>/`: `kast_editor.exe`, `kast_player.exe` (the game client Build copies) and
+`kast_self_check.exe`; runtime DLLs are copied next to them.
 
 ## Run
 
@@ -89,6 +90,9 @@ build\release\kast_editor.exe
 | `--new-component-prompt <Name>` | Open the Inspector's New Lua Component modal at startup with Name prefilled (validation shown). Creates nothing by itself. |
 | `--new-component <Name>` | Create Lua component `<Name>` (as the modal's Create does) and add it to the `--select`ed entity at startup. On failure logs an error and keeps running. |
 | `--new-project <name> <dir>` | Open the File > New Project modal at startup with Name and Directory prefilled (quote values with spaces), e.g. for `--frames 120 --screenshot`. Creates nothing by itself. |
+| `--build <dir>` | With `--project`: build that project's game into `<dir>` (see [Build](#build)) and exit without opening a window or any dialog. Exit 0 on success, 1 on failure (no `--project`, invalid `startScene`, ...). Does not remember the folder. |
+| `--open-menu <Name>` | Open that main menu (e.g. `Build`) after the first 10 frames, for screenshots. |
+| `--open-build-settings` | With `--project`: open the Build > Build Settings modal after the first 10 frames, for screenshots. Writes nothing by itself. Without `--project` it is an invalid argument. |
 
 Invalid arguments exit with code 2; init failures (SDL, window, bgfx) log the reason, show a message box, and exit 1.
 
@@ -206,7 +210,7 @@ A project is a directory marked by a `project.kast` file (exactly that name):
 ```
 
 - `version` must be 1, `name` a non-empty string, `startScene` a project-relative path or `null` (only its type is
-  checked; Open Project opens it, and a future game client will start there). Every key is required and unknown keys
+  checked; Open Project opens it, and a built game starts there, see [Build](#build)). Every key is required and unknown keys
   are rejected. Saved with 2-space indent in this key order.
 - **Active project**: opening a scene (File > Open, `--scene`) activates the project found by walking up from the
   scene's directory (the nearest ancestor-or-self with a `project.kast`; none = no project; an invalid one is warned
@@ -216,6 +220,60 @@ A project is a directory marked by a `project.kast` file (exactly that name):
   project: absolute paths and `..` out of the root are rejected.
 - Without an active project the scene can still be edited and played (C++ systems run), but every Lua system is
   disabled with a "no project" error.
+
+## Build
+
+**Build** menu (enabled when a project is open and Play is stopped):
+
+- **Build Settings...** opens a modal with one setting, **Start Scene**: a dropdown of every `*.scene` in the project
+  that would ship in `game.pak` (no dotfiles or dot-directories), as sorted project-relative `/` paths, listed when the
+  modal opens. It starts on the current `startScene`; one that is set but not listed shows as `<path> (missing)`. With
+  no scenes the dropdown is disabled and the modal says `No scenes in project. Save a scene first.` **Save** (enabled
+  once a listed scene is chosen) checks that the scene loads, then writes it as `startScene` to `project.kast`
+  (nothing else changes: not the open scene, its unsaved changes or `.kast/editor.json`); a failure shows in the modal
+  and writes nothing. **Cancel** / Escape closes without writing. There is no way to set `startScene` back to `null`
+  here.
+- **Build...** asks for an output folder, then builds the game into it.
+- **Build and Run** builds into the project's last output folder (asks if there is none), then starts the game as a
+  separate process.
+
+Both first offer to save unsaved scene changes (the same prompt as File > Open), because the game is built from the
+files on disk. The last output folder is remembered per project in `<project>/.kast/editor.json`
+(`{"buildFolder": "..."}`), never in `project.kast`. Errors go to the Console and an Error popup.
+
+If `startScene` is not set, outside the project or doesn't load, **Build...** and **Build and Run** log why and open
+Build Settings instead (after the unsaved-changes prompt, before any folder dialog); saving there doesn't resume the
+build, run it again. Headless `--build` fails instead (exit 1), its error pointing at Build > Build Settings.
+
+Before writing anything, Build checks that `startScene` is set, inside the project and loads, that the output folder
+isn't the project folder itself, and that `kast_player.exe` and its DLLs are next to the editor. Then it writes, into
+the output folder (created if needed, overwriting only these files):
+
+```
+<Name>.exe   copy of kast_player.exe
+game.pak     the project's files
+SDL3.dll     runtime DLLs kast_player.exe imports (dumpbin /dependents)
+lua51.dll
+```
+
+`<Name>` is the project name with each of `< > : " / \ | ? *` and control characters replaced by `_`, surrounding
+spaces and trailing dots removed, `_` appended to a reserved device name (`CON`, `NUL`, `COM1`, ...) and `Game` if
+nothing is left: `Switch Test` -> `Switch Test.exe`, `My: Game?` -> `My_ Game_.exe`.
+
+**game.pak** holds every file under the project folder except dotfiles, anything in a dot-directory (`.kast/`, `.git/`)
+and the output folder if it is inside the project. It is uncompressed: a `KPAK` magic and format version, an index of
+(project-relative `/` path, offset, size) entries, then the raw bytes. The exact byte layout is in `engine/pak.h`. The
+player checks the magic, the version and that every entry lies inside the file.
+
+**The game** (`kast_player.exe` under its new name) opens the `game.pak` next to it, loads `project.kast` and its Lua
+components from it, titles its window with the project name and plays `startScene` as editor Play mode does (C++
+systems, Lua systems, Lua components, `kast.loadScene`), rendering through the scene's Main Camera. It has no console
+window and doesn't hot reload. Flags (for tests): `--frames N` and `--screenshot out.png`, as in the editor. A missing
+or corrupt `game.pak`, an invalid `project.kast` or a `startScene` that is missing or doesn't load shows an error
+message box and exits 1; with `--frames` the message is only logged (stdout), so tests never block.
+
+Ship from a `release` build: a `debug` build copies the debug player, which needs Visual Studio's debug runtime. Players
+need the Microsoft Visual C++ Redistributable (x64); Build doesn't copy it.
 
 ## Coordinates and scenes
 
@@ -479,7 +537,7 @@ The dock layout is saved to `imgui.ini` in the working directory; delete it to g
 
 | Test | What it checks |
 |------|----------------|
-| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values and versions 1–3 rejected), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits; projects: `project.kast` load/save/validation, walk-up discovery, project-relative paths and escape rejection, Open/New Project and Save/Save As on a `Document` (New Project folder-name sanitizing, every validation rule, creating `<dir>/my-game/project.kast` with the trimmed name, never creating missing parents or writing into an existing folder) (no rebasing, project-change warning, title format), no-project Lua disabling, Add Script outside the project, template location; `kast.loadScene` (end-of-frame, last call wins, ignored in `shutdown`, init calls deferred a frame, shutdown/init order, every error case keeps the current scene) and `kast.currentScene`, and Stop restoring the pre-Play scene after two switches; Lua components: definition parsing (every field type and option, recursive discovery, every invalid-definition case naming the file), name clashes (built-in, structural, both duplicate files rejected), sandbox and per-file globals, registry parity (add/has/remove, strict JSON set, Duplicate, save order, byte-identical save/load, snapshot and Document Play/Stop restore), `kast.*` on a Lua component with every `kast.set` error leaving it unchanged, drift rules (one warning per fix, dirty only when data changed, built-ins still strict), missing definitions (load with warnings, verbatim save, `kast.*` raises, later conversion), hot reload of modified/added/deleted/broken files without data loss and the Play freeze, Components panel template naming and enable rules. No window. |
+| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values and versions 1–3 rejected), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits; projects: `project.kast` load/save/validation, walk-up discovery, project-relative paths and escape rejection, Open/New Project and Save/Save As on a `Document` (New Project folder-name sanitizing, every validation rule, creating `<dir>/my-game/project.kast` with the trimmed name, never creating missing parents or writing into an existing folder) (no rebasing, project-change warning, title format), no-project Lua disabling, Add Script outside the project, template location; `kast.loadScene` (end-of-frame, last call wins, ignored in `shutdown`, init calls deferred a frame, shutdown/init order, every error case keeps the current scene) and `kast.currentScene`, and Stop restoring the pre-Play scene after two switches; Lua components: definition parsing (every field type and option, recursive discovery, every invalid-definition case naming the file), name clashes (built-in, structural, both duplicate files rejected), sandbox and per-file globals, registry parity (add/has/remove, strict JSON set, Duplicate, save order, byte-identical save/load, snapshot and Document Play/Stop restore), `kast.*` on a Lua component with every `kast.set` error leaving it unchanged, drift rules (one warning per fix, dirty only when data changed, built-ins still strict), missing definitions (load with warnings, verbatim save, `kast.*` raises, later conversion), hot reload of modified/added/deleted/broken files without data loss and the Play freeze, Components panel template naming and enable rules; game.pak: write/read round trip (byte-identical, binary and empty files), directory listing, rejection of bad magic, bad version, truncated header/index/data, an offset past the end and an overflowing size; a mounted pak serving project.kast, readFile and listFiles (and not the disk); Build: exe-name sanitizing, pak contents (no dotfiles, dot-directories or output folder), every validation failure writing nothing, a full build (exe, game.pak, DLLs, other files kept), the remembered folder in `.kast/editor.json` (project.kast unchanged) and the Build menu enable rule (no project, Play, Pause); Build Settings: Start Scene choices (`tests/project` lists `health.scene`, `scene_a.scene`, `scene_b.scene`; a dotfile or dot-directory scene is left out), Save writing only `startScene` (same keys and order, reloads, `doc.project` updated, the open scene's dirty flag and path kept, no `.kast/editor.json`), a scene that doesn't load or escapes the project leaving `project.kast` byte-identical, opening (then Cancel) writing nothing, and Build / Build and Run with `startScene` null or missing opening Build Settings. No window. |
 | `editor_smoke` | `kast_editor --frames 120 --screenshot build/<preset>/smoke.png` (default scene): exit 0 and a non-empty PNG. |
 | `editor_smoke_scaled` | Same, with `--ui-scale 2.0`. |
 | `scene_screenshot` | Same, with `--scene tests/scenes/basic.scene`. |
@@ -506,6 +564,16 @@ The dock layout is saved to `imgui.ini` in the working directory; delete it to g
 | `add_component_popup_screenshot`, `add_component_popup_play_screenshot` | `health.scene --select 3 --add-component-popup`, stopped and with `--play`, writing `add_component_popup.png` ("New Lua Component..." first, enabled) / `add_component_popup_play.png` (disabled). |
 | `new_component_screenshot`, `new_component_file_written`, `new_component_differs` | `--new-component PlayerHealth` on Hero in `build/<preset>/new_component_project/` (a fresh copy of `tests/project` made by `new_component_project_clean` / `_copy`), writing `new_component.png`; the file must contain `name = "PlayerHealth"` and the shot must differ from `lua_components.png`. |
 | `switch_play_differs` | `switch_play.png` (scene B: three green spheres) must differ from `switch_play_no_systems.png` (scene A: a red cube). |
+| `build_game_switch`, `build_game_switch_no_systems`, `build_game_health`, `build_game_health_no_systems` | `--project <copy> --build build/<preset>/game_out/<name>` on configure-time copies of `tests/project` in `build/<preset>/game_projects/` (startScene `scene_a.scene` / `health.scene`, each also with its `"systems"` emptied; each copy has a `.kast/editor.json`): exit 0; the folder holds `Switch Test.exe` / `Health Test.exe`, `game.pak` and the DLLs; `game.pak` lists `project.kast` but nothing under `.kast/`; `project.kast` is unchanged. |
+| `player_switch_screenshot`, `player_switch_no_systems_screenshot`, `player_health_screenshot`, `player_health_no_systems_screenshot` | The built game, run from a copy of its folder with `--frames 120 --screenshot`: exit 0, a PNG (`player_<name>.png`) and the log line `Window title: <project name>`. |
+| `player_switch_differs` | `player_switch.png` (scene B, reached by `kast.loadScene` from the pak) must differ from `player_switch_no_systems.png` (scene A). |
+| `player_health_differs` | `player_health.png` (Lua component `Health` drained by a Lua system) must differ from `player_health_no_systems.png`. |
+| `player_missing_pak`, `player_corrupt_pak` | The built game with its `game.pak` deleted / replaced by text, with `--frames`: exit 1 (no message box, no hang). |
+| `build_bad_start_scene` | `--build` on a copy whose `startScene` is `missing.scene`: exit 1, and the (empty) output folder gets no exe and no `game.pak`. |
+| `build_no_project` | `--build` without `--project`: exit 1, nothing written. |
+| `build_menu_screenshot`, `build_menu_play_screenshot`, `build_menu_no_project_screenshot` | `--open-menu Build` with `--project tests/project` (Build Settings..., a separator, Build..., Build and Run: enabled), with `--play` too (disabled) and with no project (disabled), writing `build_menu*.png`. |
+| `build_settings_screenshot`, `build_settings_missing_screenshot`, `build_settings_no_scenes_screenshot` | `--open-build-settings` on `tests/project` (`scene_a.scene` selected), on the `bad_start` copy (`missing.scene (missing)`, Save disabled) and on `build/<preset>/game_projects/no_scenes` (only `project.kast` and an excluded `.kast/scene_a.scene`: hint text, dropdown and Save disabled), writing `build_settings*.png`. |
+| `build_no_start_scene` | `--build` on the `no_scenes` copy (`startScene: null`): exit 1, nothing written, and the error mentions `Build Settings`. |
 
 The screenshot tests each open a real window for ~2 seconds, in a fresh working directory (`<png>.run/`) so they
 always start from the default layout.
@@ -528,15 +596,19 @@ engine/   log (stdout + in-memory lines), app (SDL3 window, bgfx init, main loop
           lua_sandbox (shared Lua sandbox, Lua <-> field JSON), lua_components (Lua component definitions, hot
           reload, drift migration),
           input (game keyboard/mouse state),
-          renderer (primitives, lit shader, grid/axes/camera frustums as optional overlays), shaders/
+          renderer (primitives, lit shader, grid/axes/camera frustums as optional overlays), pak (game.pak format),
+          files (content reads from disk or a mounted pak), play (one Play frame: C++ then Lua systems), shaders/
+player/   main.cpp (kast_player: the built game client)
 editor/   main.cpp (CLI, dock layout, menus, console), document (scene, Play mode, file actions, dialogs, modals, title),
           camera (editor camera), viewport (Scene panel: render, camera input, picking, gizmo),
           game_view (Game panel: render from the active camera),
-          panels (Hierarchy, Inspector, Systems, Components), imgui_bgfx (ImGui renderer for bgfx), shaders/
+          panels (Hierarchy, Inspector, Systems, Components), build (Build: game.pak, exe, DLLs, last folder),
+          imgui_bgfx (ImGui renderer for bgfx), shaders/
 tests/    self_check.cpp, scenes/ (a project: project.kast, basic.scene, lua.scene + scripts/, no_camera.scene,
           malformed.scene, v1.scene, v3.scene), project/ (scene-switch and Lua components project: project.kast,
           scene_a.scene, scene_b.scene, health.scene, scripts/, components/health.lua)
-cmake/    smoke_test.cmake, roundtrip_test.cmake, load_fails_test.cmake, differs_test.cmake
+cmake/    smoke_test.cmake, roundtrip_test.cmake, load_fails_test.cmake, differs_test.cmake, build_test.cmake,
+          player_test.cmake
 ```
 
 bgfx views: 1 = Scene panel, 2 = Game panel (each an offscreen color + depth target), 255 = ImGui (backbuffer).

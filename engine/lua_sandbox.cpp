@@ -1,9 +1,9 @@
 #include "lua_sandbox.h"
 
+#include "files.h"
+
 #include <cmath>
 #include <format>
-#include <fstream>
-#include <sstream>
 
 namespace kast {
 namespace {
@@ -98,14 +98,12 @@ sol::environment sandboxEnvironment(sol::state& lua)
 sol::protected_function loadSandboxed(sol::state& lua, const std::filesystem::path& file, const std::string& chunkName,
                                       const sol::environment& env, std::string& error)
 {
-    std::ifstream in(file, std::ios::binary);
-    if (!in) {
+    std::string text;
+    if (!readFile(file, text)) {
         error = std::format("cannot open '{}'", file.string());
         return {};
     }
-    std::ostringstream text;
-    text << in.rdbuf();
-    sol::load_result chunk = lua.load(text.str(), chunkName, sol::load_mode::text);
+    sol::load_result chunk = lua.load(text, chunkName, sol::load_mode::text);
     if (!chunk.valid()) {
         error = chunk.get<sol::error>().what();
         return {};

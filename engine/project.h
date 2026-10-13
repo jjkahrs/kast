@@ -14,7 +14,7 @@ constexpr int kProjectFileVersion = 1;
 struct Project {
     std::filesystem::path root; // absolute directory holding project.kast
     std::string name;
-    std::optional<std::string> startScene; // project-relative; stored for a future game client
+    std::optional<std::string> startScene; // project-relative; where a built game (kast_player) starts
 };
 
 // file is a project.kast path. Replaces out only on success; on failure error says why.

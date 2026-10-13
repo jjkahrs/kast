@@ -1,10 +1,12 @@
 #include "document.h"
 
+#include "build.h"
+
 #include <app.h>
 #include <log.h>
 #include <lua_components.h>
 #include <scene_io.h>
-#include <systems.h>
+#include <play.h>
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
@@ -206,8 +208,7 @@ void updatePlay(Document& doc, float dt)
 {
     if (doc.play != PlayState::Playing)
         return;
-    kast::tickSystems(doc.scene, dt);
-    if (doc.lua.tick(dt)) { // kast.loadScene replaced doc.scene
+    if (kast::tickPlay(doc.scene, doc.lua, dt)) { // kast.loadScene replaced doc.scene
         doc.selected = entt::null;
         doc.playSceneName = std::filesystem::path(doc.lua.scenePath()).stem().string();
     }
@@ -603,6 +604,8 @@ void FileActions::newProject() { request(Pending::NewProject); }
 void FileActions::openProject() { request(Pending::OpenProject); }
 void FileActions::saveAs() { showSaveDialog(Pending::None); }
 void FileActions::exit() { kast::requestQuit(); } // same path as the window X, so onQuitRequested runs
+void FileActions::build() { request(Pending::Build); }
+void FileActions::buildAndRun() { request(Pending::BuildAndRun); }
 
 void FileActions::save()
 {
@@ -656,6 +659,18 @@ void FileActions::perform(Pending action)
     case Pending::Quit:
         quitConfirmed_ = true;
         kast::requestQuit();
+        break;
+    case Pending::Build:
+        if (startSceneReady())
+            browseBuildFolder(false);
+        break;
+    case Pending::BuildAndRun:
+        if (!startSceneReady())
+            break;
+        if (const std::optional<std::filesystem::path> folder = doc_.project ? loadBuildFolder(doc_.project->root) : std::nullopt)
+            buildTo(*folder, true);
+        else
+            browseBuildFolder(true);
         break;
     case Pending::None: break;
     }
@@ -712,6 +727,9 @@ void FileActions::handleDialogResult()
         error_ = error;
     } else if (dialogKind_ == DialogKind::NewProjectFolder) {
         newProjectDir_ = path;
+        return;
+    } else if (dialogKind_ == DialogKind::BuildFolder) {
+        buildTo(std::filesystem::path(reinterpret_cast<const char8_t*>(path.c_str())), runAfterBuild_); // SDL gives UTF-8
         return;
     } else {
         if (std::filesystem::path(path).extension().empty())
@@ -781,6 +799,7 @@ void FileActions::drawModals()
     }
 
     drawNewProjectModal();
+    drawBuildSettingsModal();
 
     if (std::exchange(errorRequested_, false))
         ImGui::OpenPopup("Error");
@@ -856,6 +875,101 @@ void FileActions::createNewProject()
     std::filesystem::path dir;
     if (createProject(newProjectName_, newProjectDir_, dir, error) && ::openProject(doc_, dir / kast::kProjectFileName, error))
         return;
+    error_ = error;
+    kast::log::error(error_);
+    errorRequested_ = true;
+}
+
+void FileActions::openBuildSettings(std::string reason)
+{
+    if (!doc_.project)
+        return;
+    buildScenes_ = projectScenes(doc_.project->root);
+    buildStartScene_ = doc_.project->startScene.value_or("");
+    buildSettingsError_ = std::move(reason);
+    buildSettingsRequested_ = true;
+    buildSettingsOpen_ = true;
+}
+
+void FileActions::drawBuildSettingsModal()
+{
+    if (std::exchange(buildSettingsRequested_, false))
+        ImGui::OpenPopup("Build Settings");
+    // Tracks the popup itself, as New Project does.
+    buildSettingsOpen_ = ImGui::BeginPopupModal("Build Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+    if (!buildSettingsOpen_)
+        return;
+    const bool listed = std::ranges::find(buildScenes_, buildStartScene_) != buildScenes_.end();
+    const std::string preview = listed || buildStartScene_.empty() ? buildStartScene_ : buildStartScene_ + " (missing)";
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 24.0f);
+    ImGui::BeginDisabled(buildScenes_.empty());
+    if (ImGui::BeginCombo("Start Scene", preview.c_str())) {
+        for (const std::string& scene : buildScenes_) {
+            if (ImGui::Selectable(scene.c_str(), scene == buildStartScene_)) {
+                buildStartScene_ = scene;
+                buildSettingsError_.clear();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    if (buildScenes_.empty())
+        ImGui::TextUnformatted("No scenes in project. Save a scene first.");
+    if (!buildSettingsError_.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", buildSettingsError_.c_str());
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!listed);
+    const bool save = ImGui::Button("Save");
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (save) {
+        if (setStartScene(*doc_.project, buildStartScene_, buildSettingsError_))
+            ImGui::CloseCurrentPopup();
+        else
+            kast::log::error(buildSettingsError_);
+    } else if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+bool FileActions::startSceneReady()
+{
+    std::string error;
+    if (!doc_.project || checkStartScene(*doc_.project, error))
+        return true; // no project: buildTo reports it
+    kast::log::warn(error);
+    openBuildSettings(error);
+    return false;
+}
+
+void FileActions::browseBuildFolder(bool run)
+{
+    if (dialogOpen_ || !doc_.project)
+        return;
+    runAfterBuild_ = run;
+    dialogOpen_ = true;
+    dialogKind_ = DialogKind::BuildFolder;
+    const std::optional<std::filesystem::path> last = loadBuildFolder(doc_.project->root);
+    const std::string start = last ? reinterpret_cast<const char*>(last->u8string().c_str()) : "";
+    SDL_ShowOpenFolderDialog(onDialogDone, this, window_, start.empty() ? nullptr : start.c_str(), false);
+}
+
+void FileActions::buildTo(const std::filesystem::path& folder, bool run)
+{
+    std::string error;
+    std::filesystem::path exe;
+    const char* base = SDL_GetBasePath(); // kast_player.exe is built next to the editor
+    if (!doc_.project) {
+        error = "Build failed: no project is open";
+    } else if (!base) {
+        error = std::format("Build failed: cannot find the editor's folder: {}", SDL_GetError());
+    } else if (buildGame(*doc_.project, folder, std::filesystem::path(reinterpret_cast<const char8_t*>(base)), exe, error)) {
+        if (std::string saveError; !saveBuildFolder(doc_.project->root, folder, saveError))
+            kast::log::warn(saveError);
+        if (!run || launchGame(exe, error))
+            return;
+    }
     error_ = error;
     kast::log::error(error_);
     errorRequested_ = true;

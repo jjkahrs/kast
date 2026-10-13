@@ -1,5 +1,6 @@
 #include "project.h"
 
+#include "files.h"
 #include "log.h"
 
 #include <nlohmann/json.hpp>
@@ -49,14 +50,14 @@ bool escapes(const std::filesystem::path& relative)
 
 bool loadProject(const std::filesystem::path& file, Project& out, std::string& error)
 {
-    std::ifstream in(file, std::ios::binary);
-    if (!in) {
+    std::string text;
+    if (!readFile(file, text)) {
         error = std::format("Cannot open project '{}'", file.string());
         return false;
     }
     std::string reason;
     try {
-        const Json json = Json::parse(in);
+        const Json json = Json::parse(text);
         reason = validate(json);
         if (reason.empty()) {
             out = Project{.root = normalized(file).parent_path(), .name = json["name"].get<std::string>()};

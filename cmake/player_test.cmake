@@ -1,0 +1,36 @@
+# Runs a built game (a copy of GAME_DIR, in WORK_DIR) for 120 frames and checks its exit code is EXPECT (0 or 1).
+# PAK=missing deletes game.pak first, PAK=corrupt overwrites it. SCREENSHOT also writes a PNG (must be non-empty).
+# EXPECT_OUTPUT is a regex the game's log must match. A hang fails after 60 s instead of blocking the run.
+# Usage: cmake -DGAME_DIR=<dir> -DEXE=<name.exe> -DWORK_DIR=<dir> -DEXPECT=0|1 [-DSCREENSHOT=<png>]
+#              [-DPAK=missing|corrupt] [-DEXPECT_OUTPUT=<regex>] -P player_test.cmake
+file(REMOVE_RECURSE "${WORK_DIR}")
+file(COPY "${GAME_DIR}/" DESTINATION "${WORK_DIR}")
+if(PAK STREQUAL "missing")
+  file(REMOVE "${WORK_DIR}/game.pak")
+elseif(PAK STREQUAL "corrupt")
+  file(WRITE "${WORK_DIR}/game.pak" "this is not a Kast pak")
+endif()
+set(args --frames 120)
+if(DEFINED SCREENSHOT)
+  file(REMOVE "${SCREENSHOT}")
+  list(APPEND args --screenshot "${SCREENSHOT}")
+endif()
+execute_process(COMMAND "${WORK_DIR}/${EXE}" ${args} WORKING_DIRECTORY "${WORK_DIR}" TIMEOUT 60
+                RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output)
+message("${output}")
+if(NOT result STREQUAL EXPECT)
+  message(FATAL_ERROR "${EXE} exited with '${result}', expected ${EXPECT}")
+endif()
+if(DEFINED EXPECT_OUTPUT AND NOT output MATCHES "${EXPECT_OUTPUT}")
+  message(FATAL_ERROR "Output does not match '${EXPECT_OUTPUT}'")
+endif()
+if(DEFINED SCREENSHOT)
+  if(NOT EXISTS "${SCREENSHOT}")
+    message(FATAL_ERROR "Screenshot not written: ${SCREENSHOT}")
+  endif()
+  file(SIZE "${SCREENSHOT}" size)
+  if(size EQUAL 0)
+    message(FATAL_ERROR "Screenshot is empty: ${SCREENSHOT}")
+  endif()
+endif()
+message(STATUS "OK: ${EXE} exited with ${EXPECT}")

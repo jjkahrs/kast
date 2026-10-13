@@ -1,0 +1,69 @@
+#include "files.h"
+
+#include "pak.h"
+#include "project.h"
+
+#include <algorithm>
+#include <fstream>
+#include <optional>
+
+namespace kast {
+namespace {
+
+struct Mount {
+    Pak pak;
+    std::filesystem::path root;
+};
+
+std::optional<Mount>& mounted()
+{
+    static std::optional<Mount> mount;
+    return mount;
+}
+
+} // namespace
+
+bool readFile(const std::filesystem::path& file, std::string& out)
+{
+    if (const std::optional<Mount>& mount = mounted()) {
+        const std::optional<std::string> path = toProjectPath(mount->root, file);
+        const std::optional<std::string_view> bytes = path ? mount->pak.find(*path) : std::nullopt;
+        if (bytes)
+            out.assign(*bytes);
+        return bytes.has_value();
+    }
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(file, ec))
+        return false;
+    std::ifstream in(file, std::ios::binary);
+    out.assign(std::istreambuf_iterator<char>(in), {});
+    return !in.bad();
+}
+
+std::vector<std::filesystem::path> listFiles(const std::filesystem::path& dir)
+{
+    std::vector<std::filesystem::path> files;
+    if (const std::optional<Mount>& mount = mounted()) {
+        const std::optional<std::string> path = toProjectPath(mount->root, dir);
+        const bool isRoot = std::filesystem::absolute(dir).lexically_normal() ==
+                            std::filesystem::absolute(mount->root).lexically_normal();
+        if (path || isRoot)
+            for (const std::string& entry : mount->pak.list(path.value_or("")))
+                files.push_back((mount->root / entry).lexically_normal());
+        return files;
+    }
+    std::error_code ec;
+    for (auto it = std::filesystem::recursive_directory_iterator(dir, ec); !ec && it != std::filesystem::end(it);
+         it.increment(ec))
+        if (it->is_regular_file(ec))
+            files.push_back(it->path());
+    std::ranges::sort(files);
+    return files;
+}
+
+void mountPak(Pak pak, const std::filesystem::path& root)
+{
+    mounted() = Mount{std::move(pak), std::filesystem::absolute(root).lexically_normal()};
+}
+
+} // namespace kast

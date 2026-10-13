@@ -57,7 +57,7 @@ endforeach()
 add_library(kast_engine STATIC
   engine/app.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
   engine/systems.cpp engine/renderer.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
-  engine/lua_sandbox.cpp engine/lua_components.cpp
+  engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp
   ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}")
@@ -85,18 +85,27 @@ inline unsigned char kRobotoRegularTtf[] = {
 };
 ")
 
+# --- player: the prebuilt game client the editor's Build menu copies; engine only, no ImGui ---
+# A Windows-subsystem app (no console window); SDL_main.h supplies WinMain.
+add_executable(kast_player WIN32 player/main.cpp)
+target_compile_options(kast_player PRIVATE ${KAST_COMPILE_OPTIONS})
+target_link_libraries(kast_player PRIVATE kast_engine SDL3::SDL3)
+
 # --- editor ---
 add_executable(kast_editor
-  editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/camera.cpp editor/viewport.cpp editor/game_view.cpp editor/panels.cpp
+  editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
+  editor/game_view.cpp editor/panels.cpp
   ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 imgui::imgui imguizmo::imguizmo)
+add_dependencies(kast_editor kast_player) # Build copies kast_player.exe from next to kast_editor.exe
 
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
-add_executable(kast_self_check tests/self_check.cpp editor/document.cpp editor/camera.cpp)
+add_executable(kast_self_check tests/self_check.cpp editor/document.cpp editor/build.cpp editor/camera.cpp)
 target_include_directories(kast_self_check PRIVATE editor)
+target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
 target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_self_check PRIVATE kast_engine SDL3::SDL3 imgui::imgui)
 
@@ -286,3 +295,99 @@ set_tests_properties(new_component_screenshot PROPERTIES FIXTURES_REQUIRED new_c
 set_tests_properties(new_component_file_written PROPERTIES FIXTURES_REQUIRED new_component_shot)
 set_tests_properties(lua_components_screenshot PROPERTIES FIXTURES_SETUP lua_components_shot)
 set_tests_properties(new_component_differs PROPERTIES FIXTURES_REQUIRED "lua_components_shot;new_component_shot")
+# Build: --build packages configure-time copies of tests/project (tests never write into them) into
+# build/<preset>/game_out/<name>/, then the built player runs from a copy of that folder. Each copy gets its own
+# project.kast; the "systems": [] variants show that only the Lua code (run from game.pak) changes the shot.
+set(KAST_GAME_OUT "${CMAKE_CURRENT_BINARY_DIR}/game_out")
+function(kast_game_project name project_name start_scene empty_systems)
+  set(dir "${CMAKE_CURRENT_BINARY_DIR}/game_projects/${name}")
+  file(REMOVE_RECURSE "${dir}")
+  file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${dir}")
+  file(WRITE "${dir}/project.kast"
+       "{\n  \"version\": 1,\n  \"name\": \"${project_name}\",\n  \"startScene\": \"${start_scene}\"\n}\n")
+  file(WRITE "${dir}/.kast/editor.json" "{\n  \"buildFolder\": \"C:/elsewhere\"\n}\n") # must stay out of game.pak
+  if(empty_systems)
+    file(READ "${dir}/${start_scene}" scene)
+    string(REGEX REPLACE "\"systems\": \\[[^]]*\\]" "\"systems\": []" scene "${scene}")
+    file(WRITE "${dir}/${start_scene}" "${scene}")
+  endif()
+endfunction()
+# name, project name, startScene, empty its systems
+set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switch Test|scene_a.scene|TRUE"
+               "health|Health Test|health.scene|FALSE" "health_no_systems|Health Test|health.scene|TRUE")
+foreach(game ${KAST_GAMES})
+  string(REPLACE "|" ";" game "${game}")
+  list(GET game 0 name)
+  list(GET game 1 project_name)
+  list(GET game 2 start_scene)
+  list(GET game 3 empty_systems)
+  kast_game_project(${name} "${project_name}" ${start_scene} ${empty_systems})
+  add_test(NAME build_game_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/${name}"
+            "-DOUT=${KAST_GAME_OUT}/${name}" "-DEXE=${project_name}.exe" -DEXPECT=0
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+  add_test(NAME player_${name}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/${name}" "-DEXE=${project_name}.exe"
+            "-DWORK_DIR=${KAST_GAME_OUT}/${name}.run" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_${name}.png"
+            -DEXPECT=0 "-DEXPECT_OUTPUT=Window title: ${project_name}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+  set_tests_properties(build_game_${name} PROPERTIES FIXTURES_SETUP game_${name}_built)
+  set_tests_properties(player_${name}_screenshot PROPERTIES FIXTURES_REQUIRED game_${name}_built
+                       FIXTURES_SETUP player_${name}_shot TIMEOUT 90)
+endforeach()
+foreach(name switch health)
+  add_test(NAME player_${name}_differs
+    COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_${name}_no_systems.png"
+            "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_${name}.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+  set_tests_properties(player_${name}_differs PROPERTIES FIXTURES_REQUIRED "player_${name}_shot;player_${name}_no_systems_shot")
+endforeach()
+foreach(pak missing corrupt)
+  add_test(NAME player_${pak}_pak
+    COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/switch" "-DEXE=Switch Test.exe"
+            "-DWORK_DIR=${KAST_GAME_OUT}/${pak}_pak.run" -DPAK=${pak} -DEXPECT=1
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+  set_tests_properties(player_${pak}_pak PROPERTIES FIXTURES_REQUIRED game_switch_built TIMEOUT 90)
+endforeach()
+kast_game_project(bad_start "Bad Start" missing.scene FALSE)
+add_test(NAME build_bad_start_scene
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/bad_start"
+          "-DOUT=${KAST_GAME_OUT}/bad_start" -DEXPECT=1 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+add_test(NAME build_no_project
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DOUT=${KAST_GAME_OUT}/no_project" -DEXPECT=1
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+# Build menu opened by --open-menu Build: enabled with a project, disabled with none and during Play.
+add_test(NAME build_menu_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/build_menu.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --open-menu Build" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME build_menu_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/build_menu_play.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --play --open-menu Build"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME build_menu_no_project_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/build_menu_no_project.png" "-DEXTRA_ARGS=--open-menu Build"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# Build Settings modal opened by --open-build-settings: tests/project (scene_a.scene selected), the bad_start copy
+# (missing.scene (missing), Save disabled) and a copy with no shippable scene (hint, combo disabled).
+set(KAST_NO_SCENES_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/game_projects/no_scenes")
+file(REMOVE_RECURSE "${KAST_NO_SCENES_PROJECT}")
+file(WRITE "${KAST_NO_SCENES_PROJECT}/project.kast" "{
+  \"version\": 1,
+  \"name\": \"No Scenes\",
+  \"startScene\": null
+}
+")
+file(COPY "${KAST_TEST_PROJECT}/scene_a.scene" DESTINATION "${KAST_NO_SCENES_PROJECT}/.kast") # excluded, like game.pak
+foreach(shot "build_settings|${KAST_TEST_PROJECT}" "build_settings_missing|${CMAKE_CURRENT_BINARY_DIR}/game_projects/bad_start"
+             "build_settings_no_scenes|${KAST_NO_SCENES_PROJECT}")
+  string(REPLACE "|" ";" shot "${shot}")
+  list(GET shot 0 name)
+  list(GET shot 1 dir)
+  add_test(NAME ${name}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/${name}.png"
+            "-DEXTRA_ARGS=--project ${dir} --open-build-settings" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endforeach()
+add_test(NAME build_no_start_scene
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${KAST_NO_SCENES_PROJECT}"
+          "-DOUT=${KAST_GAME_OUT}/no_start" -DEXPECT=1 "-DEXPECT_OUTPUT=Build Settings"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")

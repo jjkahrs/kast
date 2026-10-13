@@ -1,15 +1,18 @@
 // Assert-style checks for the non-trivial engine logic: rotation conventions, matrix decomposition, picking rays,
 // hierarchy edits, component registry, scene-file validation, cameras, input, systems, Lua systems, projects, scene
-// switching, editor Play mode and Lua components.
+// switching, editor Play mode, Lua components, game.pak and Build.
 // Exit 0 if every check passes. Run by CTest as engine_self_check.
+#include "build.h"    // editor Build pipeline; links editor/build.cpp
 #include "document.h" // editor Play mode; links editor/document.cpp, no window needed
 
 #include <components.h>
+#include <files.h>
 #include <input.h>
 #include <log.h>
 #include <lua_components.h>
 #include <lua_systems.h>
 #include <math3d.h>
+#include <pak.h>
 #include <project.h>
 #include <scene.h>
 #include <scene_io.h>
@@ -2041,6 +2044,246 @@ void checkNewLuaComponent()
     std::filesystem::remove_all(dir);
 }
 
+// --- game.pak and Build ---
+
+void checkPak()
+{
+    const std::filesystem::path dir = looseTestDir("kast_pak_check");
+    std::filesystem::create_directories(dir / "src/scripts/ai");
+    const std::vector<std::pair<std::string, std::string>> files = {
+        {"project.kast", "{}"},
+        {"scripts/a.lua", "return 1"},
+        {"scripts/ai/b.lua", std::string("bin\0ary\xff", 9)},
+        {"empty.txt", ""},
+        {"scriptsx.lua", "not under scripts/"},
+    };
+    std::vector<std::string> paths;
+    for (const auto& [path, bytes] : files) {
+        writeFile(dir / "src" / path, bytes);
+        paths.push_back(path);
+    }
+    std::string error;
+    check(kast::writePak(dir / "src", paths, dir / "game.pak", error), "write a pak");
+    kast::Pak pak;
+    check(pak.open(dir / "game.pak", error), "open the written pak");
+    for (const auto& [path, bytes] : files)
+        check(pak.find(path) == std::optional<std::string_view>(bytes), "every pak entry reads back byte-identical");
+    check(!pak.find("missing.lua") && !pak.find("scripts"), "unknown paths and directories are not entries");
+    check(pak.list("scripts") == std::vector<std::string>{"scripts/a.lua", "scripts/ai/b.lua"},
+          "list a pak directory: everything under it, sorted, not a sibling sharing its prefix");
+    check(pak.list("").size() == files.size(), "list the whole pak");
+    check(!kast::writePak(dir / "src", {"nope.lua"}, dir / "bad.pak", error) && contains(error, "nope.lua"),
+          "writing a pak with a missing file fails naming it");
+
+    const std::string good = readText(dir / "game.pak");
+    const auto rejected = [&](std::string bytes, const char* expected, const char* what) {
+        kast::Pak corrupt;
+        std::string reason;
+        const bool ok = corrupt.parse(std::move(bytes), reason);
+        check(!ok && contains(reason, expected), what);
+        if (ok || !contains(reason, expected))
+            kast::log::error(std::format("  got: {}", reason));
+    };
+    rejected("", "bad magic", "an empty pak is rejected");
+    rejected("ZPAK" + good.substr(4), "bad magic", "a pak with bad magic is rejected");
+    std::string version = good;
+    version[4] = 2;
+    rejected(version, "unsupported pak version 2", "a pak with an unknown version is rejected");
+    rejected(good.substr(0, 10), "truncated header", "a pak cut inside its header is rejected");
+    rejected(good.substr(0, 30), "truncated index", "a pak cut inside its index is rejected");
+    rejected(good.substr(0, good.size() - 1), "past the end", "a pak missing its last data byte is rejected");
+    // First entry: u32 path length at 12, the path, then its u64 offset and u64 size.
+    const size_t firstOffset = 16 + files[0].first.size();
+    std::string offset = good;
+    const uint64_t past = good.size() + 100;
+    std::memcpy(offset.data() + firstOffset, &past, sizeof(past));
+    rejected(offset, "past the end", "an entry offset past the end is rejected");
+    std::string huge = good;
+    const uint64_t wrap = ~uint64_t{0};
+    std::memcpy(huge.data() + firstOffset + 8, &wrap, sizeof(wrap));
+    rejected(huge, "past the end", "an entry size that would overflow is rejected");
+    kast::Pak missing;
+    check(!missing.open(dir / "absent.pak", error) && contains(error, "Cannot open"), "a missing pak is an error");
+}
+
+void checkBuild()
+{
+    const std::pair<const char*, const char*> names[] = {
+        {"Switch Test", "Switch Test.exe"}, {"  My: Game?  ", "My_ Game_.exe"}, {"a/b\\c", "a_b_c.exe"},
+        {"Game...", "Game.exe"},            {"con", "con_.exe"},              {"Nul.v2", "Nul.v2_.exe"},
+        {"", "Game.exe"},                   {" .. ", "Game.exe"},              {"tab\there", "tab_here.exe"},
+    };
+    for (const auto& [name, exe] : names) {
+        check(gameExeName(name) == exe, "gameExeName sanitizes the project name");
+        if (gameExeName(name) != exe)
+            kast::log::error(std::format("  '{}' -> '{}', expected '{}'", name, gameExeName(name), exe));
+    }
+
+    const std::filesystem::path dir = looseTestDir("kast_build_check");
+    const std::filesystem::path root = dir / "game";
+    for (const char* file : {"project.kast", "a.scene", "scripts/s.lua", ".hidden", ".kast/editor.json", ".git/HEAD",
+                             "scripts/.cache/x", "out/old.exe"}) {
+        std::filesystem::create_directories((root / file).parent_path());
+        writeFile(root / file, "x");
+    }
+    check(pakContents(root, root / "out") == std::vector<std::string>{"a.scene", "project.kast", "scripts/s.lua"},
+          "pak contents skip dotfiles, dot-directories and an output folder inside the project");
+    check(pakContents(root, dir).size() == 4, "an output folder above the project excludes nothing else");
+
+    // Validation writes nothing.
+    kast::Project project{.root = root, .name = "Demo"};
+    const std::filesystem::path out = dir / "out";
+    const std::filesystem::path playerDir = std::filesystem::path(SDL_GetBasePath());
+    std::filesystem::path exe;
+    std::string error;
+    check(!buildGame(project, out, playerDir, exe, error) && contains(error, "no startScene") &&
+              contains(error, "Build > Build Settings"),
+          "Build needs a startScene and points at Build Settings");
+    project.startScene = "missing.scene";
+    check(!buildGame(project, out, playerDir, exe, error) && contains(error, "missing.scene"),
+          "Build needs a startScene that exists");
+    project.startScene = "a.scene"; // "x": not a valid scene
+    check(!buildGame(project, out, playerDir, exe, error) && contains(error, "Invalid scene"),
+          "Build needs a startScene that loads");
+    project.startScene = "../escape.scene";
+    check(!buildGame(project, out, playerDir, exe, error) && contains(error, "outside the project"),
+          "Build rejects a startScene outside the project");
+    saveTestScene(root / "a.scene", "Thing", {});
+    project.startScene = "a.scene";
+    check(!buildGame(project, root, playerDir, exe, error) && contains(error, "other than the project folder"),
+          "Build rejects the project folder as output");
+    check(!buildGame(project, out, dir, exe, error) && contains(error, "kast_player.exe"),
+          "Build needs kast_player.exe next to the editor");
+    check(!std::filesystem::exists(out), "failed builds write nothing");
+
+    check(buildGame(project, out, playerDir, exe, error), "Build a valid project");
+    check(exe == out / "Demo.exe", "Build names the exe after the project");
+    for (const char* file : {"Demo.exe", "game.pak", "SDL3.dll", "lua51.dll"})
+        check(std::filesystem::is_regular_file(out / file), "Build writes the exe, game.pak and the player's DLLs");
+    kast::Pak pak;
+    check(pak.open(out / kGamePakName, error) && pak.list("") == pakContents(root, out) &&
+              pak.find("a.scene") == std::optional<std::string_view>(readText(root / "a.scene")),
+          "game.pak holds the project content");
+    writeFile(out / "keep.txt", "mine");
+    check(buildGame(project, out, playerDir, exe, error) && readText(out / "keep.txt") == "mine",
+          "Build overwrites its own files and leaves others alone");
+
+    // The last output folder is editor-local: .kast/editor.json, project.kast untouched.
+    const std::string projectFile = readText(root / "project.kast");
+    check(!loadBuildFolder(root / "scripts"), "no remembered Build folder without .kast/editor.json");
+    check(saveBuildFolder(root, out, error) && loadBuildFolder(root) == std::filesystem::path(out.generic_string()),
+          "remembered Build folder round trip");
+    check(readText(root / "project.kast") == projectFile, "remembering the Build folder leaves project.kast unchanged");
+    writeFile(root / ".kast/editor.json", "{oops");
+    check(!loadBuildFolder(root), "an invalid editor.json is ignored");
+
+    // Build menu items: a project is open and Play is stopped.
+    Document doc;
+    resetToDefault(doc);
+    FileActions files(doc);
+    check(!files.canBuild(), "Build is disabled with no project");
+    doc.project = project;
+    check(files.canBuild(), "Build is enabled with a project, stopped");
+    startPlay(doc);
+    check(!files.canBuild(), "Build is disabled while playing");
+    togglePause(doc);
+    check(!files.canBuild(), "Build is disabled while paused");
+    stopPlay(doc);
+    check(files.canBuild(), "Build is enabled again after Stop");
+}
+
+// Build Settings: Start Scene choices, Save validating and writing only project.kast, Build opening the modal.
+void checkBuildSettings()
+{
+    check(projectScenes(KAST_TEST_PROJECT_DIR) == std::vector<std::string>{"health.scene", "scene_a.scene", "scene_b.scene"},
+          "tests/project lists health.scene, scene_a.scene, scene_b.scene");
+
+    const std::filesystem::path root = looseTestDir("kast_build_settings_check") / "game";
+    std::filesystem::copy(KAST_TEST_PROJECT_DIR, root, std::filesystem::copy_options::recursive);
+    std::filesystem::create_directories(root / ".hidden");
+    std::filesystem::create_directories(root / "levels");
+    std::filesystem::copy_file(root / "scene_b.scene", root / ".hidden/x.scene");
+    std::filesystem::copy_file(root / "scene_b.scene", root / ".dot.scene");
+    std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
+    writeFile(root / "broken.scene", "{oops");
+    check(projectScenes(root) == std::vector<std::string>{"broken.scene", "health.scene", "levels/c.scene",
+                                                          "scene_a.scene", "scene_b.scene"},
+          "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
+
+    Document doc;
+    std::string error;
+    check(openProject(doc, root / kast::kProjectFileName, error) && doc.project->startScene == "scene_a.scene",
+          "Build Settings precondition: the project copy opens scene_a.scene");
+    createObject(doc, ObjectKind::Cube, entt::null); // unsaved edit: Save must leave it alone
+    const std::string scenePath = doc.path;
+    const std::string before = readText(root / kast::kProjectFileName);
+
+    FileActions files(doc);
+    files.openBuildSettings();
+    check(files.buildSettingsOpen() && !files.idle() && !files.canBuild(), "Build Settings open: not idle, Build disabled");
+    check(readText(root / kast::kProjectFileName) == before, "opening Build Settings (then Cancel) writes nothing");
+
+    check(!setStartScene(*doc.project, "broken.scene", error) && contains(error, "broken.scene") &&
+              readText(root / kast::kProjectFileName) == before && doc.project->startScene == "scene_a.scene",
+          "Save of a scene that doesn't load fails, project.kast byte-identical, project unchanged");
+    check(!setStartScene(*doc.project, "../escape.scene", error) && readText(root / kast::kProjectFileName) == before,
+          "Save of a scene outside the project fails, project.kast byte-identical");
+
+    check(setStartScene(*doc.project, "levels/c.scene", error), "Save a valid Start Scene");
+    check(readText(root / kast::kProjectFileName) ==
+              "{\n  \"version\": 1,\n  \"name\": \"Switch Test\",\n  \"startScene\": \"levels/c.scene\"\n}\n",
+          "Save writes project.kast with the new startScene, other keys and order kept");
+    kast::Project reloaded;
+    check(kast::loadProject(root / kast::kProjectFileName, reloaded, error) && reloaded.startScene == "levels/c.scene" &&
+              doc.project->startScene == "levels/c.scene",
+          "saved project.kast reloads and doc.project is updated");
+    check(doc.dirty && doc.path == scenePath, "Save leaves the open scene's dirty flag and path alone");
+    check(!std::filesystem::exists(root / ".kast/editor.json"), "Save doesn't write .kast/editor.json");
+
+    // Build / Build and Run with a startScene that can't be built open Build Settings instead of the folder dialog.
+    // ponytail: "no folder dialog" is the early return in perform(); an invalid project never reaches SDL here.
+    doc.dirty = false;
+    for (const std::optional<std::string>& start : {std::optional<std::string>(), std::optional<std::string>("missing.scene")}) {
+        for (const bool run : {false, true}) {
+            Document buildDoc;
+            buildDoc.project = doc.project;
+            buildDoc.project->startScene = start;
+            FileActions buildFiles(buildDoc);
+            run ? buildFiles.buildAndRun() : buildFiles.build();
+            const std::string what = std::format("{} with startScene {} opens Build Settings",
+                                                 run ? "Build and Run" : "Build", start.value_or("null"));
+            check(buildFiles.buildSettingsOpen(), what.c_str());
+        }
+    }
+}
+
+// Last: mounting a pak lasts for the rest of the process, so later disk reads would fail.
+void checkMountedPak()
+{
+    const std::filesystem::path dir = looseTestDir("kast_mount_check");
+    std::filesystem::create_directories(dir / "src/components/sub");
+    writeFile(dir / "src/project.kast", R"({"version": 1, "name": "Packed", "startScene": "a.scene"})");
+    writeFile(dir / "src/components/sub/c.lua", "return 1");
+    writeFile(dir / "src/components/d.lua", "return 2");
+    std::string error;
+    check(kast::writePak(dir / "src", {"project.kast", "components/sub/c.lua", "components/d.lua"}, dir / "game.pak", error),
+          "write a pak to mount");
+    kast::Pak pak;
+    check(pak.open(dir / "game.pak", error), "open the pak to mount");
+    const std::filesystem::path root = dir / "game"; // not on disk: everything comes from the pak
+    kast::mountPak(std::move(pak), root);
+    kast::Project project;
+    check(kast::loadProject(root / "project.kast", project, error) && project.name == "Packed", "project.kast from the pak");
+    std::string text;
+    check(kast::readFile(root / "components/d.lua", text) && text == "return 2", "readFile from the pak");
+    check(!kast::readFile(dir / "src/components/d.lua", text), "with a pak mounted, the disk is not read");
+    check(kast::listFiles(root / "components") ==
+              std::vector<std::filesystem::path>{root / "components/d.lua", root / "components/sub/c.lua"},
+          "listFiles from the pak");
+    check(kast::listFiles(root).size() == 3 && kast::listFiles(root / "nothing").empty(),
+          "listFiles of the root and of a missing folder");
+}
+
 int main()
 {
     checkRotations();
@@ -2075,6 +2318,10 @@ int main()
     checkComponentHotReload();
     checkComponentTemplate();
     checkNewLuaComponent();
+    checkPak();
+    checkBuild();
+    checkBuildSettings();
+    checkMountedPak();
     if (g_failures > 0) {
         kast::log::error(std::format("{} self-check(s) failed", g_failures));
         return 1;

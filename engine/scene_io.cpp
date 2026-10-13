@@ -1,6 +1,7 @@
 #include "scene_io.h"
 
 #include "components.h"
+#include "files.h"
 #include "log.h"
 
 #include <charconv>
@@ -187,15 +188,15 @@ bool sceneFromJson(const Json& json, Scene& out, std::string& error, SceneLoadRe
 
 bool loadScene(const std::string& path, Scene& out, std::string& error, SceneLoadReport* report)
 {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
+    std::string text;
+    if (!readFile(path, text)) {
         error = std::format("Cannot open scene '{}'", path);
         return false;
     }
     std::string reason;
     try {
         SceneLoadReport local;
-        if (sceneFromJson(Json::parse(file), out, reason, &local)) {
+        if (sceneFromJson(Json::parse(text), out, reason, &local)) {
             for (const std::string& warning : local.warnings)
                 log::warn(std::format("Scene '{}': {}", path, warning));
             if (report)
