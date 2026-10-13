@@ -1,0 +1,56 @@
+{
+  "version": 4,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Directional Light",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 4, 0], "rotation": [-0.408218, -0.23457, -0.109382, 0.875426], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.95, 0.9], "intensity": 1.1 }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [12, 1, 12] },
+        "MeshRenderer": { "primitive": "plane", "color": [0.45, 0.5, 0.45] }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Cube",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0.5, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "cube", "color": [0.8, 0.3, 0.2] }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 2.5, 6], "rotation": [-0.173648, 0, 0, 0.984808], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Main Menu",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "UIDocument": { "path": "ui/main_menu.rml", "visible": true }
+      }
+    }
+  ],
+  "systems": [
+    "scripts/ui_menu.lua"
+  ],
+  "editor": {
+    "camera": { "pivot": [0, 0.5, 0], "yaw": 20, "pitch": -20, "distance": 8 }
+  }
+}

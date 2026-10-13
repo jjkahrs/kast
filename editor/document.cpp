@@ -196,6 +196,7 @@ void startPlay(Document& doc)
         if (kast::activeCamera(doc.scene) == entt::null)
             kast::log::warn("No Camera in scene: the Game view has nothing to render");
         doc.playSceneName.clear();
+        ++doc.playGeneration;
         doc.lua.start(doc.scene, doc.project ? std::optional(doc.project->root) : std::nullopt, projectScenePath(doc),
                       &doc.input, doc.project ? doc.project->stateMachines.value_or(std::vector<std::string>{})
                                               : std::vector<std::string>{});
@@ -234,6 +235,7 @@ void updatePlay(Document& doc, float dt)
         return;
     if (kast::tickPlay(doc.scene, doc.lua, dt)) { // kast.loadScene replaced doc.scene
         doc.selected = entt::null;
+        ++doc.playGeneration;
         doc.playSceneName = std::filesystem::path(doc.lua.scenePath()).stem().string();
     }
 }
@@ -489,16 +491,7 @@ bool writeTemplate(const std::filesystem::path& file, std::string text, const st
 {
     for (size_t at; (at = text.find("%NAME%")) != std::string::npos;)
         text.replace(at, 6, name);
-    std::error_code ec;
-    std::filesystem::create_directories(file.parent_path(), ec);
-    std::ofstream out(file, std::ios::binary);
-    out << text;
-    out.close();
-    if (ec || !out) {
-        error = std::format("Cannot write '{}'", file.string());
-        return false;
-    }
-    return true;
+    return writeTextFile(file, text, error);
 }
 
 } // namespace

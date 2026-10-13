@@ -9,6 +9,7 @@
 #include "viewport.h"
 
 #include <app.h>
+#include <gui.h>
 #include <log.h>
 
 #include <SDL3/SDL.h>
@@ -31,6 +32,8 @@ namespace {
 
 constexpr bgfx::ViewId kSceneView = 1;
 constexpr bgfx::ViewId kGameView = 2;
+constexpr bgfx::ViewId kGameGuiView = 3;    // the game GUIs, over the Game view's scene
+constexpr bgfx::ViewId kGuiPreviewView = 4; // the GUI Builder's preview
 constexpr bgfx::ViewId kImGuiView = 255; // last, so the UI draws over everything
 constexpr uint32_t kBackbufferClearColor = 0x202020ff;
 // --add-component-popup, --open-menu, --open-build-settings, --focus-panel and --assets-* wait this long: focus changes while the first frames dock the windows close
@@ -41,8 +44,9 @@ constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--ui-scale F] [--projects-file list.json] "
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
-    "[--open-menu Name] [--open-build-settings] [--assets-menu path|/] [--assets-create system|fsm:folder] "
-    "[--focus-panel Window] | "
+    "[--open-menu Name] [--open-build-settings] [--assets-menu path|/] [--assets-create system|fsm|gui:folder] "
+    "[--focus-panel Window] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
+    "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 struct Options {
@@ -63,9 +67,16 @@ struct Options {
     std::string build;        // build the --project game into this folder and exit, without opening a window
     std::string openMenu;     // open this main menu (e.g. "Build") for screenshots
     std::optional<std::string> assetsMenu; // open this Assets entry's context menu + Create submenu ("" = background)
-    std::optional<std::pair<bool, std::string>> assetsCreate; // fsm?, folder: run Assets Create in that folder
+    std::optional<std::pair<Panels::AssetCreate, std::string>> assetsCreate; // run Assets Create in that folder
     bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
     std::string focusPanel;         // bring this window (e.g. "Events") to the front of its dock, for screenshots
+    std::string openGui;            // open this .rml in the GUI Builder (relative paths: to the project, else the cwd)
+    std::string guiSelect;          // then select the element with this id in it
+    std::optional<std::pair<int, int>> guiPreviewSize; // add this GUI Preview resolution and pick it
+    std::optional<std::pair<int, int>> guiPick; // click the GUI Preview here (preview pixels, kAddComponentPopupFrame)
+    std::optional<GuiKind> guiAdd; // then add this element as the GUI Hierarchy's + buttons do
+    bool guiSave = false;          // then save the GUI as its Save button does
+    std::string guiClick;           // with --play: click the game GUI element with this id (frame kAddComponentPopupFrame)
     std::string projectsFile;       // the recent-projects list; empty = the one in %APPDATA%
     bool launcher = false;          // run the Project Manager (the default anyway when nothing asks for the editor)
     std::string launcherOpen;       // open this project as the Project Manager would, without a window, and exit
@@ -81,6 +92,47 @@ bool parsePositive(std::string_view text, T& out)
     const char* end = text.data() + text.size();
     auto [ptr, ec] = std::from_chars(text.data(), end, out);
     return ec == std::errc{} && ptr == end && out > 0;
+}
+
+// "<A><separator><B>" with positive A and B; logs why not.
+bool parsePair(std::string_view text, char separator, std::optional<std::pair<int, int>>& out)
+{
+    const size_t at = text.find(separator);
+    int a = 0;
+    int b = 0;
+    if (at == std::string_view::npos || !parsePositive(text.substr(0, at), a) || !parsePositive(text.substr(at + 1), b)) {
+        kast::log::error(std::format("Invalid '{}', expected two positive numbers separated by '{}'", text, separator));
+        return false;
+    }
+    out.emplace(a, b);
+    return true;
+}
+
+bool parseSize(std::string_view size, std::optional<std::pair<int, int>>& out) { return parsePair(size, 'x', out); }
+
+// "Panel", "Text" or "Button".
+bool parseGuiKind(std::string_view label, std::optional<GuiKind>& out)
+{
+    for (GuiKind kind : kGuiCreatableKinds)
+        if (label == guiKindLabel(kind)) {
+            out = kind;
+            return true;
+        }
+    return false;
+}
+
+// "system:<folder>", "fsm:<folder>" or "gui:<folder>".
+bool parseAssetCreate(std::string_view value, std::optional<std::pair<Panels::AssetCreate, std::string>>& out)
+{
+    constexpr std::pair<std::string_view, Panels::AssetCreate> kinds[] = {{"system:", Panels::AssetCreate::System},
+                                                                          {"fsm:", Panels::AssetCreate::StateMachine},
+                                                                          {"gui:", Panels::AssetCreate::Gui}};
+    for (const auto& [prefix, kind] : kinds)
+        if (value.starts_with(prefix)) {
+            out.emplace(kind, std::string(value.substr(prefix.size())));
+            return true;
+        }
+    return false;
 }
 
 std::optional<Options> parseArgs(int argc, char** argv)
@@ -117,11 +169,24 @@ std::optional<Options> parseArgs(int argc, char** argv)
         } else if (arg == "--assets-menu" && hasValue) {
             const std::string_view path = argv[++i];
             options.assetsMenu = std::string(path == "/" ? "" : path);
-        } else if (arg == "--assets-create" && hasValue && (std::string_view(argv[i + 1]).starts_with("system:") ||
-                                                            std::string_view(argv[i + 1]).starts_with("fsm:"))) {
-            const std::string_view value = argv[++i];
-            const size_t colon = value.find(':');
-            options.assetsCreate = std::pair(value.starts_with("fsm:"), std::string(value.substr(colon + 1)));
+        } else if (arg == "--assets-create" && hasValue && parseAssetCreate(argv[i + 1], options.assetsCreate)) {
+            ++i;
+        } else if (arg == "--open-gui" && hasValue) {
+            options.openGui = argv[++i];
+        } else if (arg == "--gui-select" && hasValue) {
+            options.guiSelect = argv[++i];
+        } else if (arg == "--gui-click" && hasValue) {
+            options.guiClick = argv[++i];
+        } else if (arg == "--gui-add" && hasValue && parseGuiKind(argv[i + 1], options.guiAdd)) {
+            ++i;
+        } else if (arg == "--gui-save") {
+            options.guiSave = true;
+        } else if (arg == "--gui-pick" && hasValue) {
+            if (!parsePair(argv[++i], ',', options.guiPick))
+                return std::nullopt;
+        } else if (arg == "--gui-preview-size" && hasValue) {
+            if (!parseSize(argv[++i], options.guiPreviewSize))
+                return std::nullopt;
         } else if (arg == "--open-menu" && hasValue) {
             options.openMenu = argv[++i];
         } else if (arg == "--focus-panel" && hasValue) {
@@ -140,16 +205,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
         } else if (arg == "--play") {
             options.play = true;
         } else if (arg == "--size" && hasValue) {
-            const std::string_view size = argv[++i];
-            const size_t x = size.find('x');
-            int width = 0;
-            int height = 0;
-            if (x == std::string_view::npos || !parsePositive(size.substr(0, x), width) ||
-                !parsePositive(size.substr(x + 1), height)) {
-                kast::log::error(std::format("Invalid --size '{}', expected WxH", size));
+            if (!parseSize(argv[++i], options.size))
                 return std::nullopt;
-            }
-            options.size.emplace(width, height);
         } else if (arg == "--ui-scale" && hasValue) {
             const std::string_view value = argv[++i];
             float scale = 0.0f;
@@ -175,16 +232,27 @@ std::optional<Options> parseArgs(int argc, char** argv)
     const bool editorFlags = options.select != 0 || options.play || options.addComponentPopup ||
                              options.newComponentPrompt || !options.newComponent.empty() || !options.openMenu.empty() ||
                              options.openBuildSettings || !options.focusPanel.empty() || options.newStateMachinePrompt ||
-                             options.assetsMenu || options.assetsCreate;
+                             options.assetsMenu || options.assetsCreate || !options.openGui.empty() ||
+                             !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
+                             options.guiAdd || options.guiSave || !options.guiClick.empty();
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --add-component-popup, --new-component[-prompt], "
-                         "--new-state-machine-prompt, --open-menu, --open-build-settings, --focus-panel, --assets-menu and "
-                         "--assets-create require "
+                         "--new-state-machine-prompt, --open-menu, --open-build-settings, --focus-panel, --assets-menu, "
+                         "--assets-create, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save and "
+                         "--gui-click require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
     }
     if (!options.saveScene.empty() && options.project.empty() && options.scene.empty()) {
         kast::log::error("--save-scene requires --scene <file> or --project <dir>");
+        return std::nullopt;
+    }
+    if ((!options.guiSelect.empty() || options.guiPick || options.guiAdd || options.guiSave) && options.openGui.empty()) {
+        kast::log::error("--gui-select, --gui-pick, --gui-add and --gui-save require --open-gui <file.rml>");
+        return std::nullopt;
+    }
+    if (!options.guiClick.empty() && !options.play) {
+        kast::log::error("--gui-click requires --play");
         return std::nullopt;
     }
     if (options.openBuildSettings && options.project.empty()) {
@@ -218,6 +286,10 @@ void buildDefaultLayout(ImGuiID dockspace)
     ImGui::DockBuilderDockWindow("Assets", bottom);
     ImGui::DockBuilderDockWindow("Scene", center);
     ImGui::DockBuilderDockWindow("Game", center);
+    ImGui::DockBuilderDockWindow(GuiBuilder::kHierarchyWindow, left);
+    ImGui::DockBuilderDockWindow(GuiBuilder::kInspectorWindow, right);
+    ImGui::DockBuilderDockWindow(GuiBuilder::kStyleWindow, bottom);
+    ImGui::DockBuilderDockWindow(GuiBuilder::kPreviewWindow, center);
     ImGui::DockBuilderFinish(dockspace);
 }
 
@@ -261,6 +333,26 @@ void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu)
         }
         ImGui::EndMainMenuBar();
     }
+}
+
+// The GUI Builder's panels, each docked beside its scene counterpart in layouts saved before the builder existed:
+// GUI Hierarchy by Hierarchy, GUI Inspector by Inspector, GUI Style by Console, GUI Preview by Scene.
+void drawGuiBuilder(GuiBuilder& builder)
+{
+    const auto dockBeside = [](const char* existing, const char* window) {
+        if (const ImGuiWindowSettings* settings = ImGui::FindWindowSettingsByID(ImHashStr(existing));
+            settings && !ImGui::FindWindowSettingsByID(ImHashStr(window)))
+            ImGui::SetNextWindowDockID(settings->DockId, ImGuiCond_FirstUseEver);
+    };
+    dockBeside("Hierarchy", GuiBuilder::kHierarchyWindow);
+    builder.drawHierarchy();
+    dockBeside("Inspector", GuiBuilder::kInspectorWindow);
+    builder.drawInspector();
+    dockBeside("Console", GuiBuilder::kStyleWindow);
+    builder.drawStyle();
+    dockBeside("Scene", GuiBuilder::kPreviewWindow);
+    builder.drawPreview();
+    builder.drawModals();
 }
 
 void drawConsole()
@@ -353,7 +445,8 @@ int main(int argc, char** argv)
     if (options->newStateMachinePrompt)
         panels.openNewStateMachine(*options->newStateMachinePrompt);
     SceneViewport viewport(kSceneView);
-    GameViewport game(kGameView);
+    GameViewport game(kGameView, kGameGuiView);
+    GuiBuilder guiBuilder(kGuiPreviewView);
     UiScale uiScale(options->uiScale);
     FrameLimit frames(options->frames, options->screenshot);
     float componentPollSeconds = 0.0f;
@@ -373,6 +466,17 @@ int main(int argc, char** argv)
         imgui_bgfx::init(kImGuiView);
         viewport.init();
         game.init();
+        kast::gui::init();
+        if (!options->openGui.empty()) {
+            std::filesystem::path rml = std::filesystem::path(reinterpret_cast<const char8_t*>(options->openGui.c_str()));
+            if (rml.is_relative() && doc.project)
+                rml = doc.project->root / rml;
+            guiBuilder.open(std::filesystem::absolute(rml).lexically_normal());
+            if (!options->guiSelect.empty() && !guiBuilder.selectById(options->guiSelect))
+                kast::log::error(std::format("--gui-select {}: no element with that id", options->guiSelect));
+        }
+        if (options->guiPreviewSize)
+            guiBuilder.setPreviewSize(options->guiPreviewSize->first, options->guiPreviewSize->second);
         files.setWindow(window);
         bgfx::setViewClear(kImGuiView, BGFX_CLEAR_COLOR, kBackbufferClearColor);
         kast::log::info("ImGui initialized (docking enabled)");
@@ -381,8 +485,10 @@ int main(int argc, char** argv)
     hooks.event = [&](const SDL_Event& event) {
         uiScale.onEvent(event);
         ImGui_ImplSDL3_ProcessEvent(&event); // ImGui keeps getting input while the game has it, for Ctrl+P
-        if (game.hasInput(doc))
+        if (game.hasInput(doc)) {
             doc.input.onEvent(event);
+            game.onEvent(event);
+        }
     };
     hooks.frame = [&] {
         ImGui_ImplSDL3_NewFrame();
@@ -395,6 +501,8 @@ int main(int argc, char** argv)
             refreshComponents(doc);
             refreshStateMachines(doc); // also during Play: only the editor's listing (Play reloads its own)
             panels.refreshAssets(doc);
+            game.gui().reloadChanged(); // Play-mode GUI hot reload
+            guiBuilder.poll();
         }
 
         drawMenuBar(files, doc, frames.frame() == kAddComponentPopupFrame ? options->openMenu : std::string());
@@ -407,8 +515,26 @@ int main(int argc, char** argv)
             panels.openAddComponent();
         if (options->openBuildSettings && frames.frame() == kAddComponentPopupFrame)
             files.openBuildSettings();
-        if (!options->focusPanel.empty() && frames.frame() == kAddComponentPopupFrame)
-            ImGui::SetWindowFocus(options->focusPanel.c_str()); // applied when that window is submitted below
+        if (!options->focusPanel.empty() && frames.frame() == kAddComponentPopupFrame) {
+            // Applied when that window is submitted below. Builder panels go by their "###" id.
+            const std::string id = "###" + options->focusPanel;
+            ImGui::SetWindowFocus(ImGui::FindWindowByName(id.c_str()) ? id.c_str() : options->focusPanel.c_str());
+        }
+        if (!options->openGui.empty() && frames.frame() == kAddComponentPopupFrame)
+            guiBuilder.focusPanels(); // again: the first frames' docking undid the focus open() asked for
+        if (options->guiPick && frames.frame() == kAddComponentPopupFrame + 6) { // the preview has been laid out
+            const auto [x, y] = *options->guiPick;
+            if (guiBuilder.pick(static_cast<float>(x), static_cast<float>(y)))
+                kast::log::info(std::format("--gui-pick {},{} selected '{}'", x, y, guiBuilder.selectedId()));
+            else
+                kast::log::error("--gui-pick: the GUI Preview isn't showing");
+        }
+        if (options->guiAdd && frames.frame() == kAddComponentPopupFrame + 7)
+            guiBuilder.requestAdd(*options->guiAdd);
+        if (options->guiSave && frames.frame() == kAddComponentPopupFrame + 9)
+            guiBuilder.save();
+        if (!options->guiClick.empty() && frames.frame() == kAddComponentPopupFrame && !game.gui().click(options->guiClick))
+            kast::log::error(std::format("--gui-click {}: no such element in a visible game GUI", options->guiClick));
         if (options->assetsMenu && frames.frame() == kAddComponentPopupFrame + 2) // after --focus-panel, which closes popups
             panels.openAssetMenu(*options->assetsMenu);
         if (options->assetsCreate && frames.frame() == kAddComponentPopupFrame)
@@ -430,7 +556,7 @@ int main(int argc, char** argv)
             systems && !ImGui::FindWindowSettingsByID(ImHashStr("Components")))
             ImGui::SetNextWindowDockID(systems->DockId, ImGuiCond_FirstUseEver);
         panels.drawComponents(doc);
-        panels.drawAssets(doc, files);
+        panels.drawAssets(doc, files, guiBuilder);
         // Layouts saved before the Events panel existed: dock it as a tab beside Console.
         if (const ImGuiWindowSettings* console = ImGui::FindWindowSettingsByID(ImHashStr("Console"));
             console && !ImGui::FindWindowSettingsByID(ImHashStr("Events")))
@@ -441,6 +567,7 @@ int main(int argc, char** argv)
             console && !ImGui::FindWindowSettingsByID(ImHashStr("State Machines")))
             ImGui::SetNextWindowDockID(console->DockId, ImGuiCond_FirstUseEver);
         panels.drawStateMachines(doc);
+        drawGuiBuilder(guiBuilder);
         drawConsole(); // submitted after Assets, Events and State Machines so Console is the front tab on first run
         files.update();
         if (game.hasInput(doc))
@@ -456,10 +583,12 @@ int main(int argc, char** argv)
     hooks.screenshotSaved = [&](const char*, bool saved) { frames.onScreenshotSaved(saved); };
     hooks.quitRequested = [&] {
         // A --frames run has no one to answer "Unsaved changes" (e.g. after --new-component): it always quits.
-        return files.onQuitRequested() || options->frames != 0;
+        return (guiBuilder.onQuitRequested() && files.onQuitRequested()) || options->frames != 0;
     };
     hooks.shutdown = [&] {
+        guiBuilder.shutdown();
         game.shutdown();
+        kast::gui::shutdown();
         viewport.shutdown();
         imgui_bgfx::shutdown();
         ImGui_ImplSDL3_Shutdown();

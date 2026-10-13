@@ -36,6 +36,7 @@ struct Document {
     kast::Input input; // fed by the Game panel while it is focused and playing
     kast::LuaSystems lua; // the scene's Lua systems; a session runs from Play to Stop
     std::string playSceneName; // the running scene's name after a kast.loadScene switch; empty if none happened
+    uint32_t playGeneration = 0; // bumped when Play starts and on each kast.loadScene switch (Game view GUIs reload)
 
     PanelFocus focusRequest = PanelFocus::None; // set by Play/Stop, cleared by the panel that takes focus
 };

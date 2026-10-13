@@ -1,14 +1,17 @@
 // Assert-style checks for the non-trivial engine logic: rotation conventions, matrix decomposition, picking rays,
 // hierarchy edits, component registry, scene-file validation, cameras, input, systems, Lua systems, projects, scene
-// switching, editor Play mode, Lua components, game.pak, Build, state machines and Assets panel file operations.
+// switching, editor Play mode, Lua components, game.pak, Build, state machines, Assets panel file operations and the
+// game GUI (builder document model, GUI files, UIDocument, button click events).
 // Exit 0 if every check passes. Run by CTest as engine_self_check.
 #include "assets.h"   // Assets panel file logic; links editor/assets.cpp
 #include "build.h"    // editor Build pipeline; links editor/build.cpp
 #include "document.h" // editor Play mode; links editor/document.cpp, no window needed
+#include "gui_doc.h"  // GUI Builder document model; links editor/gui_doc.cpp
 #include "recent_projects.h" // Project Manager list; links editor/recent_projects.cpp
 
 #include <components.h>
 #include <event_bus.h>
+#include <gui_events.h>
 #include <files.h>
 #include <input.h>
 #include <log.h>
@@ -177,7 +180,7 @@ std::vector<std::string> typeNames()
 void checkComponentRegistry()
 {
     check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "DirectionalLight", "Camera", "Rotator",
-                                                 "StateMachine"},
+                                                 "StateMachine", "UIDocument"},
           "built-in component types in registration order");
     const entt::meta_type transform = kast::findComponentType("Transform");
     const entt::meta_type rotator = kast::findComponentType("Rotator");
@@ -2279,8 +2282,9 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"events.scene", "fsm.scene", "health.scene", "scene_a.scene", "scene_b.scene"},
-          "tests/project lists events.scene, fsm.scene, health.scene, scene_a.scene, scene_b.scene");
+              std::vector<std::string>{"events.scene", "fsm.scene", "health.scene", "scene_a.scene", "scene_b.scene",
+                                       "ui.scene"},
+          "tests/project lists events.scene, fsm.scene, health.scene, scene_a.scene, scene_b.scene, ui.scene");
 
     const std::filesystem::path root = looseTestDir("kast_build_settings_check") / "game";
     std::filesystem::copy(KAST_TEST_PROJECT_DIR, root, std::filesystem::copy_options::recursive);
@@ -2291,7 +2295,8 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
     check(projectScenes(root) == std::vector<std::string>{"broken.scene", "events.scene", "fsm.scene", "health.scene",
-                                                          "levels/c.scene", "scene_a.scene", "scene_b.scene"},
+                                                          "levels/c.scene", "scene_a.scene", "scene_b.scene",
+                                                          "ui.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
     Document doc;
@@ -3698,6 +3703,214 @@ void checkAssets()
     checkAssetCreate();
 }
 
+// --- game GUI: builder document model, template/rename, UIDocument, button click -> event bus ---
+
+constexpr const char* kGuiSample = R"(<rml>
+    <head>
+        <title>Menu</title>
+        <link type="text/rcss" href="menu.rcss"/>
+        <style>p { color: red; }</style>
+    </head>
+    <body class="root">
+        <!-- keep me -->
+        <div id="panel" class="box" style="width: 10px;" data-custom="1">
+            <p id="title">Hello &amp; welcome</p>
+            <p id="mixed">An <span class="hi">odd</span> one</p>
+            <img src="logo.png" alt="Logo"><p>inside unknown</p></img>
+            <button id="go" data-event="menu.go" title="Go!">Go</button>
+        </div>
+        <button id="quiet">Quiet</button>
+    </body>
+</rml>
+)";
+
+pugi::xml_node guiNode(const GuiDoc& doc, const char* id)
+{
+    std::vector<pugi::xml_node> nodes;
+    doc.previewRml("", nodes);
+    const auto it = std::ranges::find_if(nodes, [&](pugi::xml_node node) { return GuiDoc::attribute(node, "id") == id; });
+    return it == nodes.end() ? pugi::xml_node() : *it;
+}
+
+std::vector<std::string> guiIds(pugi::xml_node parent)
+{
+    std::vector<std::string> ids;
+    for (pugi::xml_node node : GuiDoc::elements(parent))
+        ids.push_back(GuiDoc::attribute(node, "id").empty() ? node.name() : GuiDoc::attribute(node, "id"));
+    return ids;
+}
+
+void checkGuiDocRoundTrip()
+{
+    GuiDoc doc;
+    std::string error;
+    check(!doc.parse("<rml><body>", error) && !error.empty(), "GuiDoc refuses malformed RML");
+    check(!doc.parse("<rml><head/></rml>", error) && error.find("body") != std::string::npos, "GuiDoc needs <rml><body>");
+    check(doc.parse(kGuiSample, error), "GuiDoc parses the sample");
+    const std::string saved = doc.serialize();
+    for (const char* kept : {"<!-- keep me -->", R"(<img src="logo.png" alt="Logo">)", "<p>inside unknown</p>",
+                             R"(title="Go!")", R"(style="width: 10px;")", R"(data-custom="1")", "Hello &amp; welcome",
+                             R"(<span class="hi">odd</span>)", "<style>p { color: red; }</style>", R"(<body class="root">)",
+                             R"(<link type="text/rcss" href="menu.rcss" />)"})
+        check(contains(saved, kept), std::format("round trip keeps {}", kept).c_str());
+    GuiDoc again;
+    check(again.parse(saved, error) && again.serialize() == saved, "serialize -> parse -> serialize is unchanged");
+    check(doc.stylesheetHref() == "menu.rcss", "stylesheetHref is the linked .rcss");
+
+    const pugi::xml_node panel = guiNode(doc, "panel");
+    check(guiKind(panel) == GuiKind::Panel && guiKind(guiNode(doc, "title")) == GuiKind::Text &&
+              guiKind(guiNode(doc, "go")) == GuiKind::Button && guiKind(panel.child("img")) == GuiKind::Unknown,
+          "div/p/button are Panel/Text/Button, anything else Unknown");
+    check(GuiDoc::hasEditableText(guiNode(doc, "title")) && GuiDoc::text(guiNode(doc, "title")) == "Hello & welcome" &&
+              !GuiDoc::hasEditableText(guiNode(doc, "mixed")) && !GuiDoc::hasEditableText(panel),
+          "text is editable on Text/Button holding only text");
+
+    std::vector<pugi::xml_node> nodes;
+    const std::string preview = doc.previewRml("div > p { color: blue; }", nodes);
+    check(nodes.size() == 8 && nodes[0] == panel && contains(preview, R"(data-kast-node="0")") &&
+              contains(preview, R"(data-kast-node="7")") && !contains(preview, "menu.rcss") &&
+              contains(preview, "<style>div > p { color: blue; }</style>") && !contains(doc.serialize(), "data-kast-node"),
+          "previewRml numbers elements pre-order, inlines the sheet unescaped and leaves the document alone");
+}
+
+void checkGuiDocEdits()
+{
+    GuiDoc doc;
+    std::string error;
+    check(doc.parse(kGuiSample, error), "GuiDoc edits: parse");
+    const pugi::xml_node body = doc.body();
+    pugi::xml_node panel = guiNode(doc, "panel");
+
+    const pugi::xml_node added = doc.add(GuiKind::Panel, body);
+    check(added && guiIds(body).back() == "div" && GuiDoc::elements(added).empty(), "add Panel appends an empty <div>");
+    const pugi::xml_node text = doc.add(GuiKind::Text, added);
+    const pugi::xml_node button = doc.add(GuiKind::Button, added);
+    check(std::string_view(text.name()) == "p" && GuiDoc::text(text) == "Text" &&
+              std::string_view(button.name()) == "button" && GuiDoc::text(button) == "Button",
+          "add Text / Button: placeholder text");
+    check(!doc.add(GuiKind::Unknown, body), "Unknown elements can't be created");
+
+    check(doc.move(guiNode(doc, "quiet"), -1) && guiIds(body) == std::vector<std::string>{"quiet", "panel", "div"},
+          "move -1 swaps with the previous element, skipping comments");
+    check(!doc.move(guiNode(doc, "quiet"), -1), "move -1 at the start fails");
+    check(doc.move(guiNode(doc, "quiet"), 1) && guiIds(body) == std::vector<std::string>{"panel", "quiet", "div"},
+          "move +1 swaps with the next element");
+    check(!doc.move(added, 1) && !doc.move(body, -1), "move +1 at the end, and moving <body>, fail");
+
+    const pugi::xml_node img = panel.child("img");
+    check(!doc.reparent(panel, panel) && !doc.reparent(panel, img) && !doc.reparent(body, added),
+          "reparent refuses the node itself, its own subtree and <body>");
+    check(doc.reparent(guiNode(doc, "go"), added) && guiIds(added) == std::vector<std::string>{"p", "button", "go"} &&
+              guiNode(doc, "go").parent() == added,
+          "reparent moves an element to the end of the new parent");
+    check(doc.reparent(img, body) && img.parent() == body && GuiDoc::elements(img).size() == 1 &&
+              contains(doc.serialize(), "<p>inside unknown</p>"),
+          "Unknown elements move with their children");
+
+    pugi::xml_node go = guiNode(doc, "go");
+    GuiDoc::setAttribute(go, "data-event", "menu.start");
+    check(GuiDoc::attribute(go, "data-event") == "menu.start" && contains(doc.serialize(), R"(data-event="menu.start")"),
+          "data-event set");
+    GuiDoc::setAttribute(go, "data-event", "");
+    check(!go.attribute("data-event") && !contains(doc.serialize(), "data-event=\"\""), "empty data-event removes it");
+    GuiDoc::setText(guiNode(doc, "title"), "New <title>");
+    check(contains(doc.serialize(), "New &lt;title&gt;"), "setText escapes markup");
+
+    check(!doc.remove(body), "remove refuses <body>");
+    check(doc.remove(added) && !guiNode(doc, "go") && guiIds(body) == std::vector<std::string>{"panel", "quiet", "img"},
+          "remove drops the element and its subtree");
+    GuiDoc reopened;
+    check(reopened.parse(doc.serialize(), error) && reopened.serialize() == doc.serialize(),
+          "an edited document saves and reopens identically");
+}
+
+void checkGuiFiles()
+{
+    std::string error;
+    const std::filesystem::path dir = looseTestDir("kast_gui_files");
+    std::filesystem::path rml;
+    check(writeNewGui(dir, rml, error) && rml == dir / "new_gui.rml" && std::filesystem::exists(dir / "new_gui.rcss"),
+          "writeNewGui writes new_gui.rml + .rcss");
+    const std::string first = readText(rml);
+    GuiDoc doc;
+    check(doc.parse(first, error) && doc.stylesheetHref() == "new_gui.rcss" && guiNode(doc, "panel") &&
+              guiKind(guiNode(doc, "title")) == GuiKind::Text && guiKind(guiNode(doc, "button")) == GuiKind::Button &&
+              GuiDoc::attribute(guiNode(doc, "button"), "data-event") == "ui.clicked",
+          "the template: a Panel with a Text and a Button, linking its .rcss");
+    check(linkedStylesheet(rml) == dir / "new_gui.rcss", "linkedStylesheet resolves the link next to the .rml");
+    writeFile(dir / "NEW_GUI_3.rcss", "keep");
+    check(writeNewGui(dir, rml, error) && rml == dir / "new_gui_2.rml", "a second GUI is new_gui_2");
+    check(writeNewGui(dir, rml, error) && rml == dir / "new_gui_4.rml" && readText(dir / "NEW_GUI_3.rcss") == "keep" &&
+              readText(dir / "new_gui.rml") == first,
+          "writeNewGui skips a stem whose .rcss is taken (ignoring case) and never overwrites");
+    check(contains(readText(rml), R"(href="new_gui_4.rcss")"), "each template links its own .rcss");
+
+    check(renameGui(dir / "new_gui.rml", "hud.rml", error) && !std::filesystem::exists(dir / "new_gui.rml") &&
+              !std::filesystem::exists(dir / "new_gui.rcss") && std::filesystem::exists(dir / "hud.rcss") &&
+              linkedStylesheet(dir / "hud.rml") == dir / "hud.rcss",
+          "renameGui renames the linked sibling .rcss and rewrites the link");
+    writeFile(dir / "taken.rcss", "other");
+    const std::string before = readText(dir / "hud.rml");
+    check(!renameGui(dir / "hud.rml", "taken.rml", error) && !error.empty() && readText(dir / "hud.rml") == before &&
+              std::filesystem::exists(dir / "hud.rcss") && readText(dir / "taken.rcss") == "other" &&
+              !std::filesystem::exists(dir / "taken.rml"),
+          "renameGui refuses when the new .rcss name is taken, leaving the disk unchanged");
+    writeFile(dir / "plain.rml", "<rml><head/><body/></rml>");
+    check(renameGui(dir / "plain.rml", "plainer.rml", error) && std::filesystem::exists(dir / "plainer.rml"),
+          "renameGui renames an .rml that links nothing like any file");
+}
+
+void checkUIDocumentComponent()
+{
+    const kast::ComponentType type = kast::findAnyComponentType("UIDocument");
+    check(static_cast<bool>(type) && std::string_view(type.displayName()) == "UI Document", "UIDocument is registered");
+    kast::Scene scene;
+    const entt::entity entity = scene.create("Menu");
+    scene.registry().emplace<kast::UIDocument>(entity, kast::UIDocument{"ui/menu.rml", false});
+    const nlohmann::ordered_json json = kast::sceneToJson(scene);
+    check(json.dump().find(R"("UIDocument":{"path":"ui/menu.rml","visible":false})") != std::string::npos,
+          "UIDocument saves path and visible");
+    kast::Scene loaded;
+    std::string error;
+    check(kast::sceneFromJson(json, loaded, error), "a scene with a UIDocument loads");
+    bool found = false;
+    for (auto [e, ui] : loaded.registry().view<const kast::UIDocument>().each())
+        found = ui.path == "ui/menu.rml" && !ui.visible;
+    check(found, "UIDocument round-trips through scene JSON");
+    check(kast::UIDocument{}.visible, "UIDocument is visible by default");
+}
+
+void checkGuiEvents()
+{
+    kast::EventBus bus;
+    nlohmann::json received;
+    int calls = 0;
+    kast::EventBus::Subscription subscription = bus.subscribe("menu.start", [&](const nlohmann::json& payload) {
+        received = payload;
+        ++calls;
+    });
+    check(kast::publishButtonClick(bus, "menu.start", "start_button", "ui/main_menu.rml"), "a click with an event publishes");
+    bus.drain();
+    check(calls == 1 && received == nlohmann::json{{"id", "start_button"}, {"document", "ui/main_menu.rml"}} &&
+              bus.history().back().publisher == "UI" && bus.history().back().name == "menu.start",
+          "the click payload is {id, document}, published by UI");
+    check(!kast::publishButtonClick(bus, "", "quiet", "ui/main_menu.rml"), "an empty data-event publishes nothing");
+    bus.drain();
+    check(calls == 1 && bus.history().size() == 1, "nothing was delivered for the empty event");
+    kast::publishButtonClick(bus, "menu.start", "", "ui/main_menu.rml");
+    bus.drain();
+    check(calls == 2 && received["id"] == "", "a button without an id sends id \"\"");
+}
+
+void checkGui()
+{
+    checkGuiDocRoundTrip();
+    checkGuiDocEdits();
+    checkGuiFiles();
+    checkUIDocumentComponent();
+    checkGuiEvents();
+}
+
 int main()
 {
     checkRotations();
@@ -3752,6 +3965,7 @@ int main()
     checkStateMachineFiles();
     checkStateMachineEditor();
     checkAssets();
+    checkGui();
     checkMountedPak(); // last: the mounted pak hides the disk for the rest of the run
     if (g_failures > 0) {
         kast::log::error(std::format("{} self-check(s) failed", g_failures));

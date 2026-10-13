@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <format>
+#include <fstream>
 #include <system_error>
 
 namespace {
@@ -197,6 +198,20 @@ bool createAssetFolder(const fs::path& dir, const std::string& name, std::string
         return true;
     error = std::format("Cannot create folder '{}': {}", name, reason);
     return false;
+}
+
+bool writeTextFile(const fs::path& file, std::string_view text, std::string& error)
+{
+    std::error_code ec;
+    fs::create_directories(file.parent_path(), ec);
+    std::ofstream out(file, std::ios::binary);
+    out << text;
+    out.close();
+    if (ec || !out) {
+        error = std::format("Cannot write '{}'", file.string());
+        return false;
+    }
+    return true;
 }
 
 bool renameAsset(const fs::path& source, const std::string& name, std::string& error)

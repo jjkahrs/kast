@@ -1,0 +1,121 @@
+#pragma once
+
+#include "gui_doc.h"
+#include "viewport.h"
+
+#include <gui.h>
+
+#include <filesystem>
+#include <string>
+#include <vector>
+
+namespace Rml {
+class Element;
+class ElementDocument;
+} // namespace Rml
+
+// GUI Builder: four panels on one open .rml (gui_doc.h) and the .rcss it links.
+// - GUI Hierarchy: element tree; add Panel / Text / Button (into the selected Panel, else <body>), delete, move up/down,
+//   drag-drop onto a Panel or <body> to reparent; Save.
+// - GUI Inspector: id, class, text (Text, Button) and data-event (Button) of the selection; Unknown elements read-only.
+// - GUI Style: the .rcss text, applied to the preview 0.3 s after the last keystroke. A sheet RmlUi logs problems for
+//   (in the Console) is not applied: the preview keeps the last good one.
+// - GUI Preview: the document rendered by RmlUi at a chosen resolution, scaled to fit; click selects the deepest
+//   element under the cursor; the selection is outlined (an overlay, not in the file).
+// Edits mark the GUI dirty ("*" in the titles); Save or Ctrl+S (a builder panel focused) writes both files. Files
+// changed on disk reload when clean, else Reload / Keep mine is asked. Opening another GUI or quitting while dirty asks
+// Save / Discard / Cancel first.
+class GuiBuilder {
+public:
+    // Window names (stable ids; the visible title adds the file name and dirty marker).
+    static constexpr const char* kHierarchyWindow = "###GUI Hierarchy";
+    static constexpr const char* kInspectorWindow = "###GUI Inspector";
+    static constexpr const char* kStyleWindow = "###GUI Style";
+    static constexpr const char* kPreviewWindow = "###GUI Preview";
+
+    explicit GuiBuilder(bgfx::ViewId previewView) : target_(previewView, "GUI Preview") {}
+    void shutdown();
+
+    // Opens rml in the builder (after the unsaved-changes prompt if dirty) and brings its panels to the front.
+    void open(const std::filesystem::path& rml);
+    void focusPanels() { focusStep_ = 4; } // brings the four panels to the front of their docks, one per frame
+    // Selects the first element with this id attribute. False if there is none.
+    bool selectById(const std::string& id);
+    // Selects the deepest element at (x, y) in preview pixels, as a click there does (<body> if none). False if no
+    // preview is laid out yet.
+    bool pick(float x, float y);
+    std::string selectedId() const { return GuiDoc::attribute(selected_, "id"); } // "" if none or no id
+    // Adds an element of kind as the GUI Hierarchy's + buttons do (applied when the panel next draws).
+    void requestAdd(GuiKind kind) { edit_ = {Edit::Op::Add, addParent(), {}, kind}; }
+    // Writes the .rml and .rcss (Save button, Ctrl+S). False (logged) if a write fails.
+    bool save();
+    // Adds WxH to the preview resolutions and picks it.
+    void setPreviewSize(int width, int height);
+    bool dirty() const { return rmlDirty_ || rcssDirty_; }
+    // An Assets rename or move: the open files follow if they were from or inside it.
+    void remap(const std::filesystem::path& from, const std::filesystem::path& to);
+    // Hot reload check (main's file poll).
+    void poll();
+    // AppHooks::quitRequested: false while the user still has to answer the unsaved-changes prompt.
+    bool onQuitRequested();
+
+    // The panels (the host docks each) and the builder's modals; call once per frame.
+    void drawHierarchy();
+    void drawInspector();
+    void drawStyle();
+    void drawPreview();
+    void drawModals();
+
+private:
+    struct Edit {
+        enum class Op { None, Add, Delete, Move, Reparent } op = Op::None;
+        pugi::xml_node node; // Delete, Move, Reparent: the element; Add: the parent
+        pugi::xml_node parent;
+        GuiKind kind = GuiKind::Panel;
+        int delta = 0;
+    };
+
+    bool load(const std::filesystem::path& rml); // false (logged, nothing changed) if it can't be read or parsed
+    void close();
+    bool applyRcss(); // validates rcssText_; on success it becomes the preview's sheet
+    void markRmlDirty();
+    void rememberFileTimes();
+    std::string title(const char* name, const char* window) const;
+    pugi::xml_node addParent() const; // the selected Panel, else <body>
+
+    void drawNode(pugi::xml_node node);
+    void applyEdit();
+    void saveShortcut();
+    void rebuildPreview();
+
+    ViewTarget target_;
+    kast::GuiContext preview_{"gui-preview"};
+    Rml::ElementDocument* previewDoc_ = nullptr;
+    std::vector<pugi::xml_node> previewNodes_;    // data-kast-node index -> model element
+    std::vector<Rml::Element*> previewElements_;  // same index -> preview element
+    bool previewStale_ = true;
+    std::vector<std::pair<int, int>> resolutions_{{1280, 720}, {1920, 1080}, {0, 0}}; // {0, 0} = the panel's size
+    int resolution_ = 0;
+
+    std::filesystem::path rml_; // empty = nothing open
+    std::filesystem::path rcss_; // the linked sheet; empty if none
+    GuiDoc doc_;
+    std::string rcssText_;
+    std::string goodRcss_; // the last rcssText_ RmlUi parsed without problems: the preview's sheet
+    bool sheetFailed_ = false;
+    double rcssEditedAt_ = -1.0; // ImGui time of the last unapplied keystroke; < 0 = none
+    bool rmlDirty_ = false;
+    bool rcssDirty_ = false;
+    std::filesystem::file_time_type rmlTime_, rcssTime_;
+    pugi::xml_node selected_;
+    Edit edit_;
+    std::string inspectorBuffer_[4]; // id, class, text, data-event of inspectorNode_
+    pugi::xml_node inspectorNode_;
+
+    std::filesystem::path pendingOpen_; // waits on the unsaved-changes prompt
+    bool openPromptRequested_ = false;
+    bool reloadPromptRequested_ = false;
+    bool quitPromptRequested_ = false;
+    bool quitConfirmed_ = false;
+    int focusStep_ = 0; // focusPanels: 4 Hierarchy, 3 Inspector, 2 Style, 1 Preview (ImGui focuses one window a frame)
+};

@@ -2,6 +2,7 @@
 // game.pak next to it from its startScene, as editor Play mode does, through the scene's Main Camera.
 #include <app.h>
 #include <files.h>
+#include <gui.h>
 #include <input.h>
 #include <log.h>
 #include <lua_components.h>
@@ -11,6 +12,7 @@
 #include <project.h>
 #include <renderer.h>
 #include <scene.h>
+#include <scene_gui.h>
 #include <scene_io.h>
 
 #include <SDL3/SDL.h>
@@ -27,14 +29,17 @@
 namespace {
 
 constexpr bgfx::ViewId kGameView = 0;
+constexpr bgfx::ViewId kGuiView = 1; // the scene's game GUIs, over the scene
 constexpr uint32_t kClearColor = 0x202020ff;
 constexpr int kScreenshotTimeoutFrames = 30;
 constexpr const char* kPakFileName = "game.pak";
-constexpr const char* kUsage = "Usage: <game>.exe [--frames N] [--screenshot out.png]";
+constexpr int kGuiClickFrame = 10; // --gui-click: once the GUIs have loaded and laid out
+constexpr const char* kUsage = "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id]";
 
 struct Options {
     int frames = 0;         // 0 = run until quit
     std::string screenshot; // captured after the last frame
+    std::string guiClick;   // tests: click this GUI element id on frame kGuiClickFrame
 };
 
 std::optional<Options> parseArgs(int argc, char** argv)
@@ -52,6 +57,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             }
         } else if (arg == "--screenshot" && hasValue) {
             options.screenshot = argv[++i];
+        } else if (arg == "--gui-click" && hasValue) {
+            options.guiClick = argv[++i];
         } else {
             kast::log::error(std::format("Invalid argument '{}'. {}", arg, kUsage));
             return std::nullopt;
@@ -113,6 +120,7 @@ int main(int argc, char** argv)
     kast::LuaSystems lua;
     kast::Input input;
     kast::Renderer renderer;
+    kast::SceneGui gui("game");
     SDL_Window* window = nullptr;
     uint64_t lastTicks = 0;
     int frame = 0;
@@ -125,6 +133,7 @@ int main(int argc, char** argv)
         window = created;
         kast::log::info(std::format("Window title: {}", SDL_GetWindowTitle(window)));
         renderer.init();
+        kast::gui::init();
         bgfx::setViewClear(kGameView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, kClearColor, 1.0f, 0);
         if (kast::activeCamera(scene) == entt::null)
             kast::log::warn("No Camera in scene: nothing to render");
@@ -133,10 +142,15 @@ int main(int argc, char** argv)
         lastTicks = SDL_GetTicksNS();
         return true;
     };
-    hooks.event = [&](const SDL_Event& event) { input.onEvent(event); };
+    hooks.event = [&](const SDL_Event& event) {
+        input.onEvent(event);
+        gui.context().onEvent(event);
+    };
     hooks.frame = [&] {
         const uint64_t ticks = SDL_GetTicksNS();
-        kast::tickPlay(scene, lua, static_cast<float>(ticks - lastTicks) * 1e-9f);
+        if (kast::tickPlay(scene, lua, static_cast<float>(ticks - lastTicks) * 1e-9f))
+            gui.clear(); // kast.loadScene: the new scene's GUIs load below
+        gui.sync(scene, project.root, lua.bus());
         lastTicks = ticks;
         input.endFrame();
 
@@ -151,9 +165,15 @@ int main(int argc, char** argv)
                                  bgfx::getCaps()->homogeneousDepth, view, proj);
             renderer.render(scene, kGameView, view, proj, false);
         }
+        if (width > 0 && height > 0) {
+            gui.context().resize(width, height);
+            gui.context().render(kGuiView, BGFX_INVALID_HANDLE);
+        }
 
         // ponytail: same --frames/--screenshot sequence as editor/main.cpp; move into kast::run if a third host needs it.
         ++frame;
+        if (!options->guiClick.empty() && frame == kGuiClickFrame && !gui.click(options->guiClick))
+            kast::log::error(std::format("--gui-click {}: no such element in a visible GUI", options->guiClick));
         if (options->frames == 0 || frame < options->frames)
             return;
         if (options->screenshot.empty()) {
@@ -174,6 +194,9 @@ int main(int argc, char** argv)
     };
     hooks.shutdown = [&] {
         lua.stop();
+        gui.clear();
+        gui.context().release();
+        kast::gui::shutdown();
         renderer.shutdown();
     };
 

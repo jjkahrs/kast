@@ -15,8 +15,15 @@ struct SDL_Process;
 
 constexpr const char* kGamePakName = "game.pak";
 constexpr const char* kPlayerExeName = "kast_player.exe";
-// What kast_player.exe imports beyond Windows and the MSVC runtime (dumpbin /dependents); vcpkg copies them next to it.
-constexpr const char* kPlayerDlls[] = {"SDL3.dll", "lua51.dll"};
+// What kast_player.exe imports beyond Windows and the MSVC runtime, directly or through RmlUi -> FreeType (dumpbin
+// /dependents); vcpkg copies them next to it. vcpkg's debug builds of the FreeType chain carry a 'd' suffix.
+#ifdef NDEBUG
+constexpr const char* kPlayerDlls[] = {"SDL3.dll",   "lua51.dll",  "rmlui.dll",        "freetype.dll",    "zlib1.dll",
+                                       "bz2.dll",    "libpng16.dll", "brotlidec.dll", "brotlicommon.dll"};
+#else
+constexpr const char* kPlayerDlls[] = {"SDL3.dll",   "lua51.dll",   "rmlui.dll",       "freetyped.dll",   "zlibd1.dll",
+                                       "bz2d.dll",   "libpng16d.dll", "brotlidec.dll", "brotlicommon.dll"};
+#endif
 
 // c can't appear in a Windows file name: one of < > : " / \ | ? * or a control character.
 bool isInvalidFileChar(char c);

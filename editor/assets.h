@@ -46,6 +46,8 @@ bool remapProjectPaths(std::vector<std::string>& paths, const std::string& from,
 // Why target can't be deleted while openScene (the edited scene's file, maybe empty) is open; empty if it can.
 std::string deleteBlocker(const std::filesystem::path& target, const std::filesystem::path& openScene);
 
+// Writes text to file (creating its folder), replacing any file there. False + error if that fails.
+bool writeTextFile(const std::filesystem::path& file, std::string_view text, std::string& error);
 // Creates folder name in dir. False + error (nothing created) if the name is invalid or taken.
 bool createAssetFolder(const std::filesystem::path& dir, const std::string& name, std::string& error);
 // Renames source in place. A name differing only in case is allowed. False + error (disk unchanged) if the name is

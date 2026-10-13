@@ -1,8 +1,9 @@
 # Runs a built game (a copy of GAME_DIR, in WORK_DIR) for 120 frames and checks its exit code is EXPECT (0 or 1).
 # PAK=missing deletes game.pak first, PAK=corrupt overwrites it. SCREENSHOT also writes a PNG (must be non-empty).
-# EXPECT_OUTPUT is a regex the game's log must match. A hang fails after 60 s instead of blocking the run.
+# EXPECT_OUTPUT is a regex the game's log must match. EXTRA_ARGS are passed on to the game (e.g. --gui-click id). A hang
+# fails after 60 s instead of blocking the run.
 # Usage: cmake -DGAME_DIR=<dir> -DEXE=<name.exe> -DWORK_DIR=<dir> -DEXPECT=0|1 [-DSCREENSHOT=<png>]
-#              [-DPAK=missing|corrupt] [-DEXPECT_OUTPUT=<regex>] -P player_test.cmake
+#              [-DPAK=missing|corrupt] [-DEXPECT_OUTPUT=<regex>] [-DEXTRA_ARGS=<args>] -P player_test.cmake
 file(REMOVE_RECURSE "${WORK_DIR}")
 file(COPY "${GAME_DIR}/" DESTINATION "${WORK_DIR}")
 if(PAK STREQUAL "missing")
@@ -11,6 +12,10 @@ elseif(PAK STREQUAL "corrupt")
   file(WRITE "${WORK_DIR}/game.pak" "this is not a Kast pak")
 endif()
 set(args --frames 120)
+if(DEFINED EXTRA_ARGS)
+  separate_arguments(EXTRA_ARGS)
+  list(APPEND args ${EXTRA_ARGS})
+endif()
 if(DEFINED SCREENSHOT)
   file(REMOVE "${SCREENSHOT}")
   list(APPEND args --screenshot "${SCREENSHOT}")

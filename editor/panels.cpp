@@ -344,6 +344,8 @@ void Panels::drawInspector(Document& doc)
                                             ImGuiTreeNodeFlags_DefaultOpen)) {
                     if (type.meta() && type.meta() == entt::resolve<kast::StateMachine>()) {
                         changed = drawStateMachineComponent(doc, entity) || changed;
+                    } else if (type.meta() && type.meta() == entt::resolve<kast::UIDocument>()) {
+                        changed = drawUIDocumentComponent(doc, entity) || changed;
                     } else {
                         Json json = kast::componentToJson(registry, entity, type);
                         for (const kast::FieldDesc& field : type.fields()) {
@@ -569,6 +571,52 @@ bool Panels::drawStateMachineComponent(Document& doc, entt::entity entity)
         const std::optional<std::string> current = doc.lua.fsm().peek(registry.get<kast::PersistentId>(entity).value);
         ImGui::LabelText("Current", "%s", current ? current->c_str() : "(not running)");
     }
+    return changed;
+}
+
+namespace {
+
+bool hasExtension(const std::string& name, std::string_view extension); // below, with the other Assets helpers
+
+void collectRmlFiles(const std::vector<AssetEntry>& entries, std::vector<std::string>& out)
+{
+    for (const AssetEntry& entry : entries) {
+        if (entry.folder)
+            collectRmlFiles(entry.children, out);
+        else if (hasExtension(entry.name, ".rml"))
+            out.push_back(entry.path);
+    }
+}
+
+} // namespace
+
+bool Panels::drawUIDocumentComponent(Document& doc, entt::entity entity)
+{
+    kast::UIDocument& component = doc.scene.registry().get<kast::UIDocument>(entity);
+    if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
+        refreshAssets(doc); // the Assets panel hasn't scanned this project yet
+    std::vector<std::string> files;
+    collectRmlFiles(assets_, files);
+    const bool listed = std::ranges::find(files, component.path) != files.end();
+    const std::string label = component.path.empty() ? "(none)" : listed ? component.path : "(missing) " + component.path;
+    bool changed = false;
+    if (ImGui::BeginCombo("Path", label.c_str())) {
+        if (files.empty())
+            ImGui::TextDisabled("No .rml files in the project (Assets > Create > GUI)");
+        for (const std::string& file : files)
+            if (ImGui::Selectable(file.c_str(), file == component.path) && file != component.path) {
+                component.path = file;
+                changed = true;
+            }
+        ImGui::EndCombo();
+    }
+    // A path that isn't listed is kept as-is (and saved) until another file is chosen.
+    if (!component.path.empty() && !listed) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+        ImGui::TextWrapped("No file \"%s\" in the project: kept as-is", component.path.c_str());
+        ImGui::PopStyleColor();
+    }
+    changed = ImGui::Checkbox("Visible", &component.visible) || changed;
     return changed;
 }
 
@@ -838,11 +886,12 @@ std::string joinAsset(const std::string& folder, const std::string& name)
     return folder.empty() ? name : folder + '/' + name;
 }
 
-bool isScene(const std::string& name)
+// name ends in extension (".scene"), ignoring case.
+bool hasExtension(const std::string& name, std::string_view extension)
 {
-    std::string extension = utf8(fromUtf8(name).extension());
-    std::ranges::transform(extension, extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return extension == ".scene";
+    std::string actual = utf8(fromUtf8(name).extension());
+    std::ranges::transform(actual, actual.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return actual == extension;
 }
 
 bool acceptAssetDrop(std::string& dropped)
@@ -898,7 +947,7 @@ void Panels::refreshAssets(const Document& doc)
         assetRenaming_.clear();
 }
 
-void Panels::drawAssets(Document& doc, FileActions& files)
+void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui)
 {
     if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
         refreshAssets(doc);
@@ -910,7 +959,7 @@ void Panels::drawAssets(Document& doc, FileActions& files)
                                   : !files.idle()                ? "Close the open dialog first"
                                                                  : nullptr;
             for (const AssetEntry& entry : assets_)
-                drawAssetNode(doc, files, entry, blocker);
+                drawAssetNode(doc, files, gui, entry, blocker);
 
             // The rest of the panel: click clears selection, drop moves to the root, right-click creates at the root.
             ImVec2 rest = ImGui::GetContentRegionAvail();
@@ -975,10 +1024,11 @@ void Panels::drawAssets(Document& doc, FileActions& files)
         }
     }
     ImGui::End();
-    applyAssetEdit(doc);
+    applyAssetEdit(doc, gui);
 }
 
-void Panels::drawAssetNode(const Document& doc, FileActions& files, const AssetEntry& entry, const char* blocker)
+void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, const AssetEntry& entry,
+                           const char* blocker)
 {
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
                                ImGuiTreeNodeFlags_SpanAvailWidth;
@@ -998,7 +1048,10 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, const AssetE
     if ((ImGui::IsItemClicked(ImGuiMouseButton_Left) || ImGui::IsItemClicked(ImGuiMouseButton_Right)) &&
         !ImGui::IsItemToggledOpen())
         assetSelected_ = entry.path;
-    if (!entry.folder && !blocker && isScene(entry.name) && ImGui::IsItemHovered() &&
+    if (!entry.folder && hasExtension(entry.name, ".rml") && ImGui::IsItemHovered() &&
+        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        gui.open(assetsRoot_ / fromUtf8(entry.path));
+    if (!entry.folder && !blocker && hasExtension(entry.name, ".scene") && ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
         std::string error;
         if (const std::optional<std::string> file = narrowPath(assetsRoot_ / fromUtf8(entry.path), error))
@@ -1042,7 +1095,7 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, const AssetE
 
     if (open && entry.folder) {
         for (const AssetEntry& child : entry.children)
-            drawAssetNode(doc, files, child, blocker);
+            drawAssetNode(doc, files, gui, child, blocker);
         ImGui::TreePop();
     }
     ImGui::PopID();
@@ -1081,6 +1134,9 @@ void Panels::drawAssetCreateMenu(const std::string& folder, const char* blocker)
     if (ImGui::MenuItem("State Machine", nullptr, false, !fsmBlocker))
         assetEdit_ = {AssetEdit::Op::NewStateMachine, folder};
     disabledTooltip(fsmBlocker);
+    if (ImGui::MenuItem("GUI", nullptr, false, !blocker))
+        assetEdit_ = {AssetEdit::Op::NewGui, folder};
+    disabledTooltip(blocker);
     ImGui::EndMenu();
 }
 
@@ -1123,7 +1179,7 @@ void Panels::assetsFailed(std::string error)
     assetsErrorRequested_ = true;
 }
 
-void Panels::applyAssetEdit(Document& doc)
+void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui)
 {
     const AssetEdit edit = std::exchange(assetEdit_, AssetEdit{});
     if (edit.op == AssetEdit::Op::None || !doc.project || doc.play != PlayState::Stopped)
@@ -1176,6 +1232,20 @@ void Panels::applyAssetEdit(Document& doc)
         }
         break;
     }
+    case AssetEdit::Op::NewGui: {
+        const std::filesystem::path dir = edit.path.empty() ? root : source;
+        std::filesystem::path file;
+        if (writeNewGui(dir, file, error)) {
+            const std::string name = utf8(file.filename());
+            assetExpand_ = edit.path;
+            selected = joinAsset(edit.path, name);
+            kast::log::info(std::format("Created GUI '{}' and its .rcss", selected));
+            refreshAssets(doc);
+            startAssetRename(selected, name);
+            return;
+        }
+        break;
+    }
     case AssetEdit::Op::Delete:
         error = deleteBlocker(source, openScenePath(doc)); // the scene may have changed since the prompt opened
         if (error.empty() && recycleAsset(source, error))
@@ -1205,12 +1275,15 @@ void Panels::applyAssetEdit(Document& doc)
         const bool newFsm = edit.op == AssetEdit::Op::Rename && edit.path == assetNewFsm_;
         const bool ok = (!movedScene || scenePath) &&
                         (newFsm ? renameNewStateMachine(source, edit.target, stateMachineNames(doc), error)
+                         : edit.op == AssetEdit::Op::Rename && hasExtension(edit.path, ".rml")
+                             ? renameGui(source, edit.target, error) // its linked .rcss follows
                          : edit.op == AssetEdit::Op::Rename ? renameAsset(source, edit.target, error)
                                                             : moveAsset(source, dest.parent_path(), error));
         if (ok) {
             kast::log::info(std::format("{} '{}' to '{}'", edit.op == AssetEdit::Op::Rename ? "Renamed" : "Moved",
                                         edit.path, selected));
             assetSelected_ = selected;
+            gui.remap(source, dest);
             if (scenePath)
                 doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
             if (remapProjectPaths(doc.scene.systems, edit.path, selected))

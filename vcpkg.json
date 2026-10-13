@@ -11,6 +11,8 @@
     "entt",
     "nlohmann-json",
     "luajit",
-    "sol2"
+    "sol2",
+    "rmlui",
+    "pugixml"
   ]
 }

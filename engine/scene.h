@@ -67,6 +67,12 @@ struct StateMachine {
     std::string initialState;
 };
 
+// Shows a game GUI over the Game view in Play mode (see scene_gui.h): path is a project-relative .rml file.
+struct UIDocument {
+    std::string path;
+    bool visible = true;
+};
+
 // Local-space bounds of each built-in primitive (all fit the unit cube centered on the origin).
 Aabb primitiveBounds(Primitive primitive);
 

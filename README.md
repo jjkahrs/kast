@@ -98,11 +98,21 @@ build\release\kast_editor.exe
 | `--build <dir>` | With `--project`: build that project's game into `<dir>` (see [Build](#build)) and exit without opening a window or any dialog. Exit 0 on success, 1 on failure (no `--project`, invalid `startScene`, ...). Does not remember the folder. |
 | `--open-menu <Name>` | Open that main menu (e.g. `Build`) after the first 10 frames, for screenshots. |
 | `--open-build-settings` | With `--project`: open the Build > Build Settings modal after the first 10 frames, for screenshots. Writes nothing by itself. Without `--project` it is an invalid argument. |
-| `--focus-panel <Window>` | Bring that editor window (e.g. `Events`, `"State Machines"`) to the front of its dock after the first 10 frames, for screenshots. |
+| `--focus-panel <Window>` | Bring that editor window (e.g. `Events`, `"State Machines"`, `"GUI Preview"`) to the front of its dock after the first 10 frames, for screenshots. |
+| `--assets-menu <path>\|/` | Open that Assets entry's context menu (`/` = the panel background) with its Create submenu open, for screenshots. |
+| `--assets-create system\|fsm\|gui:<folder>` | Run Assets > Create > Lua System / State Machine / GUI in that project folder (empty = the root) after the first 10 frames, as the menu does (the new file's rename starts). |
+| `--open-gui <file.rml>` | Open that `.rml` in the [GUI Builder](#gui-builder) at startup (relative paths: to the project, else the working directory) and bring its four panels to the front. |
+| `--gui-select <id>` | With `--open-gui`: select the element with this `id` (logs an error if there is none). |
+| `--gui-preview-size WxH` | Add `WxH` to the GUI Preview's resolutions and pick it. |
+| `--gui-pick X,Y` | With `--open-gui`: click the GUI Preview at (X, Y) in preview pixels after 16 frames, as the mouse does, and log `--gui-pick X,Y selected '<id>'`. |
+| `--gui-add Panel\|Text\|Button` | With `--open-gui`: add that element as the GUI Hierarchy's **+** buttons do (into the selected Panel, else `<body>`), after 17 frames. |
+| `--gui-save` | With `--open-gui`: save the GUI as its **Save** button does, after 19 frames. |
+| `--gui-click <id>` | With `--play`: click the game GUI element with this `id` (topmost visible document holding one) after 10 frames, as the mouse does; logs an error if there is none. |
 
 Without `--project`, `--scene`, `--save-scene` or `--build`, `kast_editor` runs the Project Manager instead of the
 editor. Editor-only flags (`--select`, `--play`, `--add-component-popup`, `--new-component[-prompt]`,
-`--new-state-machine-prompt`, `--open-menu`, `--open-build-settings`, `--focus-panel`) then are invalid arguments, as are Project Manager flags (`--launcher`, `--new-project`,
+`--new-state-machine-prompt`, `--open-menu`, `--open-build-settings`, `--focus-panel`, `--assets-*`, `--open-gui`,
+`--gui-*`) then are invalid arguments, as are Project Manager flags (`--launcher`, `--new-project`,
 `--launcher-open`, `--`) together with the editor's.
 
 Invalid arguments exit with code 2; init failures (SDL, window, bgfx) log the reason, show a message box, and exit 1.
@@ -198,6 +208,9 @@ closing the window stops Play first. A Lua `kast.loadScene` switch replaces the 
 Scene, Game and the Systems panel status show the new scene, the selection is cleared, the editor camera stays, and the
 title shows `(Playing: <scene>)` / `(Paused: <scene>)`. The edited scene's file and path are never touched; Stop
 restores the pre-Play scene, path, project, dirty flag and selection however many switches happened.
+
+**GUI Builder** (GUI Hierarchy, GUI Inspector, GUI Style, GUI Preview): double-click a `.rml` in Assets. See
+[GUI Builder](#gui-builder).
 
 **File**: New (Ctrl+N), Open... (Ctrl+O), Save (Ctrl+S), Save As... (Ctrl+Shift+S), Exit. Projects are created and
 opened from the [Project Manager](#project-manager), not the editor. The title shows `Kast Editor - <project> - <scene>`
@@ -318,8 +331,10 @@ the output folder (created if needed, overwriting only these files):
 ```
 <Name>.exe   copy of kast_player.exe
 game.pak     the project's files
-SDL3.dll     runtime DLLs kast_player.exe imports (dumpbin /dependents)
+SDL3.dll     runtime DLLs kast_player.exe imports, directly or through RmlUi (dumpbin /dependents)
 lua51.dll
+rmlui.dll    game GUI, with FreeType and its libraries: freetype.dll, zlib1.dll, bz2.dll, libpng16.dll,
+             brotlidec.dll, brotlicommon.dll (a debug build: freetyped.dll, zlibd1.dll, bz2d.dll, libpng16d.dll)
 ```
 
 `<Name>` is the project name with each of `< > : " / \ | ? *` and control characters replaced by `_`, surrounding
@@ -334,7 +349,9 @@ player checks the magic, the version and that every entry lies inside the file.
 **The game** (`kast_player.exe` under its new name) opens the `game.pak` next to it, loads `project.kast` and its Lua
 components from it, titles its window with the project name and plays `startScene` as editor Play mode does (C++
 systems, Lua systems, Lua components, `kast.loadScene`), rendering through the scene's Main Camera. It has no console
-window and doesn't hot reload. Flags (for tests): `--frames N` and `--screenshot out.png`, as in the editor. A missing
+window and doesn't hot reload. Its scene's [game GUIs](#game-gui) show over the scene and take mouse and keyboard
+input. Flags (for tests): `--frames N` and `--screenshot out.png`, as in the editor, and `--gui-click <id>` (click that
+GUI element on frame 10). A missing
 or corrupt `game.pak`, an invalid `project.kast` or a `startScene` that is missing or doesn't load shows an error
 message box and exits 1; with `--frames` the message is only logged (stdout), so tests never block.
 
@@ -832,13 +849,106 @@ denied with a warning.
 
 The dock layout is saved to `imgui.ini` in the working directory; delete it to get the default layout back.
 
+### Game GUI
+
+Game GUIs are HTML/CSS-like documents rendered by [RmlUi](https://mikke89.github.io/RmlUiDoc/) (`engine/gui*.h`,
+`engine/scene_gui.h`): an `.rml` file for the elements and a sibling `.rcss` file for their style. RmlUi reads them
+through the engine's file access (disk in the editor, `game.pak` in the player), logs to the Console as
+`RmlUi: ...`, and draws with bgfx (`engine/shaders/gui/`).
+
+**Files**: an `.rml` links its style sheet in its `<head>`; the builder edits the elements under `<body>`:
+
+```html
+<rml>
+    <head>
+        <title>Main Menu</title>
+        <link type="text/rcss" href="main_menu.rcss"/>
+    </head>
+    <body>
+        <div id="menu" class="panel">
+            <p id="title">Kast Quest</p>
+            <button id="start_button" data-event="menu.start">Start</button>
+        </div>
+    </body>
+</rml>
+```
+
+**Elements**: **Panel** = `<div>`, **Text** = `<p>`, **Button** = `<button>`. A Button's `data-event` names the event
+its click publishes (see below). Any other element (hand-written `<span>`, `<img>`, ...) is **Unknown** to the builder:
+listed and movable/deletable there, never created or edited, and kept with its attributes and children on save.
+Attributes the builder doesn't edit (`style`, `title`, `data-*`, ...) and comments are kept too; saving only
+normalizes whitespace and indentation.
+
+**Style sheets** are RCSS (CSS2-like; see the RmlUi docs). RmlUi has no built-in styles: elements are inline until a
+rule says otherwise, so sheets start with `div, p { display: block; }`. The only font is the bundled Roboto
+(`font-family: Roboto;`, set on `body`); text without a `font-family` doesn't show (RmlUi warns). Images
+(`<img>`, image decorators) are not supported yet: they log a warning and draw nothing.
+
+**UIDocument** (built-in component, *UI Document* in the Inspector): `path` (project-relative `.rml`; the Inspector
+offers a combo of the project's `.rml` files, an unknown path shows as `(missing) <path>` and is kept) and `visible`
+(default true). Saved with the scene like any component. In Play (and in the built game), every `UIDocument` in the
+scene loads at Play start and shows over the Game view while `visible`, stacked in entity creation order (later
+entities on top); they unload on Stop and on a `kast.loadScene` switch (the new scene's load instead). Adding,
+removing or editing a `UIDocument` during Play applies at once. A missing `.rml`, an `.rml` RmlUi can't parse or a
+linked `.rcss` with problems logs an error naming the file and that document shows nothing; Play goes on. While the
+Game panel has input (focused and playing) the GUIs get the mouse, wheel and keys too (the game's `kast.*` input
+still sees them).
+
+**Button events**: clicking a `<button>` with a non-empty `data-event` publishes that event on the Play session's
+[event bus](#events), publisher `UI`, payload `{"id": "<button id or empty>", "document": "<rml path>"}` (the
+UIDocument's `path`). No or empty `data-event`: nothing is published. Lua subscribes as to any event:
+
+```lua
+kast.subscribe("menu.start", function(event)
+    kast.log("Menu start clicked: " .. event.id .. " in " .. event.document)
+end)
+```
+
+**Hot reload** (Play): when a loaded `.rml` or a `.rcss` it links changes on disk (the editor's 0.5 s file poll), that
+document reloads; fix a broken file and it shows again. Not in the built game.
+
+**Sample**: `tests/project/ui.scene` has a *Main Menu* entity with a `UIDocument` for `ui/main_menu.rml`
+(+ `main_menu.rcss`: a panel with a title, a subtitle holding an unknown `<span>`, and Start / Quit buttons publishing
+`menu.start` / `menu.quit`); `scripts/ui_menu.lua` logs both events.
+
+### GUI Builder
+
+Four editor panels on one open GUI. **Assets > Create > GUI** writes `new_gui.rml` + `new_gui.rcss` (a Panel holding a
+Text and a Button with `data-event="ui.clicked"`, the `.rml` linking the `.rcss`) into the chosen folder, as
+`new_gui_2`, `new_gui_3`, ... when a name is taken (ignoring case), never overwriting, and starts renaming the
+`.rml`. Renaming an `.rml` in Assets also renames the sibling `<stem>.rcss` it links and rewrites the link (refused,
+nothing changed, if either new name is taken); moves and renames of the open files are followed. **Double-click** an
+`.rml` in Assets to open it (one GUI at a time; with unsaved builder changes, Save / Discard / Cancel first); its
+four panels come to the front.
+
+- **GUI Hierarchy** (tab beside Hierarchy): the elements under **Body**. **+ Panel / + Text / + Button** add into the
+  selected Panel, else into Body; **Delete**, **Up**, **Down** act on the selection; the right-click menu has the same.
+  Drag an element onto a Panel or Body to move it there (into itself or its own children is refused). Unknown elements
+  are greyed and labelled `<tag>`.
+- **GUI Inspector** (tab beside Inspector): the selection's `id` and `class`, its text (Text and Button holding only
+  text; one with child elements says so) and, for a Button, `data-event`. Other attributes are listed read-only.
+  Unknown elements are read-only. Edits apply as you type.
+- **GUI Style** (tab beside Console): the `.rcss` text, applied to the preview 0.3 s after the last keystroke. A sheet
+  RmlUi reports problems for (in the Console) is not applied: the preview keeps the last good style and the panel
+  says so in red.
+- **GUI Preview** (tab beside Scene and Game): the document as RmlUi renders it at **1280x720**, **1920x1080** or the
+  **Panel size**, scaled to fit. Click selects the deepest element under the cursor (Body if none); the selection has a
+  yellow outline, drawn by the editor, never saved.
+
+Selection is shared by the three. Any edit marks the GUI dirty: `*` after the file name in the builder panels'
+titles. **Save** (GUI Hierarchy, GUI Style) or **Ctrl+S** while a builder panel is focused writes the `.rml` and
+`.rcss` (elsewhere Ctrl+S still saves the scene). Quitting with unsaved builder changes asks Save / Discard / Cancel
+first, then the scene's own prompt if it is dirty. When the open files change on disk (the 0.5 s poll), a clean
+builder reloads them (keeping the selection by `id` and, if the new sheet is broken, the last good style); with
+unsaved changes it asks **Reload** / **Keep mine**. A deleted `.rml` closes a clean builder.
+
 ## Tests
 
 `ctest --preset debug` (or `release`) runs:
 
 | Test | What it checks |
 |------|----------------|
-| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values and versions 1–3 rejected), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits; projects: `project.kast` load/save/validation, walk-up discovery, project-relative paths and escape rejection, opening a project and Save/Save As on a `Document` (New Project folder-name sanitizing, every validation rule, creating `<dir>/my-game/project.kast` with the trimmed name, never creating missing parents or writing into an existing folder) (no rebasing, project-change warning, title format), the Project Manager's recent list (save/load round trip, newest first, case-insensitive dedupe with trailing separators, Remove leaving the project on disk, missing folder / missing or invalid `project.kast` reported, three kinds of corrupt file backed up to `projects.json.bad` with a warning and read as empty) and an editor that can't be started reporting why, no-project Lua disabling, Add Script outside the project, template location; `kast.loadScene` (end-of-frame, last call wins, ignored in `shutdown`, init calls deferred a frame, shutdown/init order, every error case keeps the current scene) and `kast.currentScene`, and Stop restoring the pre-Play scene after two switches; events: the C++ bus (publish then subscription order, next-drain re-publish, subscribe/unsubscribe during a drain, a throwing subscriber, RAII and stale handles, dropQueued, reset, the 500-event history and Clear), Lua→Lua in the same frame after every update with independent payload copies, Lua→C++ and C++→Lua payload conversion, one subscription order across C++ and Lua, every `kast.publish/subscribe/unsubscribe` rejection raising at file:line and queueing nothing (bad names, functions, userdata, threads, cycles, nesting past 32, mixed keys, NaN), a failing subscriber disabling only its system, cleanup on disable/hot reload/Stop/Play start, a scene switch dropping queued events and old Lua subscribers but keeping C++ ones, and Pause holding / Stop discarding the queue in editor Play; Lua components: definition parsing (every field type and option, recursive discovery, every invalid-definition case naming the file), name clashes (built-in, structural, both duplicate files rejected), sandbox and per-file globals, registry parity (add/has/remove, strict JSON set, Duplicate, save order, byte-identical save/load, snapshot and Document Play/Stop restore), `kast.*` on a Lua component with every `kast.set` error leaving it unchanged, drift rules (one warning per fix, dirty only when data changed, built-ins still strict), missing definitions (load with warnings, verbatim save, `kast.*` raises, later conversion), hot reload of modified/added/deleted/broken files without data loss and the Play freeze, Components panel template naming and enable rules; game.pak: write/read round trip (byte-identical, binary and empty files), directory listing, rejection of bad magic, bad version, truncated header/index/data, an offset past the end and an overflowing size; a mounted pak serving project.kast, readFile and listFiles (and not the disk); Build: exe-name sanitizing, pak contents (no dotfiles, dot-directories or output folder), every validation failure writing nothing, a full build (exe, game.pak, DLLs, other files kept), the remembered folder in `.kast/editor.json` (project.kast unchanged) and the Build menu enable rule (no project, Play, Pause); Build Settings: Start Scene choices (`tests/project` lists `events.scene`, `fsm.scene`, `health.scene`, `scene_a.scene`, `scene_b.scene`; a dotfile or dot-directory scene is left out), Save writing only `startScene` (same keys and order, reloads, `doc.project` updated, the open scene's dirty flag and path kept, no `.kast/editor.json`), a scene that doesn't load or escapes the project leaving `project.kast` byte-identical, opening (then Cancel) writing nothing, and Build / Build and Run with `startScene` null or missing opening Build Settings; state machines: recursive discovery, every invalid-definition case naming the file (bad or missing `name`, bad `initial`, unknown `allowedFrom` state, wrong types, unknown keys, syntax and sandbox errors, both duplicate files), `allowedFrom` / omitted / `"*"` / self-transition rules, editor rescans, entry order at Play start (after the inits, game then entity machines, no event, `initialState` fallback warning, first touch during `init`), allowed and denied transitions (return value, warning, no callbacks, no event), `exit` → switch → `enter` → `fsm.changed {machine, entity, from, to}` with the definition as publisher, queued changes from callbacks (no recursion, denial on apply), callback errors (file:line and traceback, commit, still usable), C++ misuse throwing, every `kast.fsm.*` misuse raising at the calling line, read-only `kast.fsm`, identical results from Lua and C++, game state kept across `kast.loadScene` with no callbacks and new callbacks after it, Stop then Play starting over, runtime add (`kast.add` + `kast.set`, registry edit, Duplicate), destroy/remove without `exit`, a missing definition logged once, hot reload (state kept, reset with warning when removed, last valid definition kept when broken, game machines too), `StateMachine` byte-identical save/load, Duplicate and Stop restore, `project.kast` `stateMachines` round trip and validation, New State Machine name rules / template / no overwrite, Global toggling `project.kast`, and both blocked during Play. No window. |
+| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values and versions 1–3 rejected), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits; projects: `project.kast` load/save/validation, walk-up discovery, project-relative paths and escape rejection, opening a project and Save/Save As on a `Document` (New Project folder-name sanitizing, every validation rule, creating `<dir>/my-game/project.kast` with the trimmed name, never creating missing parents or writing into an existing folder) (no rebasing, project-change warning, title format), the Project Manager's recent list (save/load round trip, newest first, case-insensitive dedupe with trailing separators, Remove leaving the project on disk, missing folder / missing or invalid `project.kast` reported, three kinds of corrupt file backed up to `projects.json.bad` with a warning and read as empty) and an editor that can't be started reporting why, no-project Lua disabling, Add Script outside the project, template location; `kast.loadScene` (end-of-frame, last call wins, ignored in `shutdown`, init calls deferred a frame, shutdown/init order, every error case keeps the current scene) and `kast.currentScene`, and Stop restoring the pre-Play scene after two switches; events: the C++ bus (publish then subscription order, next-drain re-publish, subscribe/unsubscribe during a drain, a throwing subscriber, RAII and stale handles, dropQueued, reset, the 500-event history and Clear), Lua→Lua in the same frame after every update with independent payload copies, Lua→C++ and C++→Lua payload conversion, one subscription order across C++ and Lua, every `kast.publish/subscribe/unsubscribe` rejection raising at file:line and queueing nothing (bad names, functions, userdata, threads, cycles, nesting past 32, mixed keys, NaN), a failing subscriber disabling only its system, cleanup on disable/hot reload/Stop/Play start, a scene switch dropping queued events and old Lua subscribers but keeping C++ ones, and Pause holding / Stop discarding the queue in editor Play; Lua components: definition parsing (every field type and option, recursive discovery, every invalid-definition case naming the file), name clashes (built-in, structural, both duplicate files rejected), sandbox and per-file globals, registry parity (add/has/remove, strict JSON set, Duplicate, save order, byte-identical save/load, snapshot and Document Play/Stop restore), `kast.*` on a Lua component with every `kast.set` error leaving it unchanged, drift rules (one warning per fix, dirty only when data changed, built-ins still strict), missing definitions (load with warnings, verbatim save, `kast.*` raises, later conversion), hot reload of modified/added/deleted/broken files without data loss and the Play freeze, Components panel template naming and enable rules; game.pak: write/read round trip (byte-identical, binary and empty files), directory listing, rejection of bad magic, bad version, truncated header/index/data, an offset past the end and an overflowing size; a mounted pak serving project.kast, readFile and listFiles (and not the disk); Build: exe-name sanitizing, pak contents (no dotfiles, dot-directories or output folder), every validation failure writing nothing, a full build (exe, game.pak, DLLs, other files kept), the remembered folder in `.kast/editor.json` (project.kast unchanged) and the Build menu enable rule (no project, Play, Pause); Build Settings: Start Scene choices (`tests/project` lists `events.scene`, `fsm.scene`, `health.scene`, `scene_a.scene`, `scene_b.scene`, `ui.scene`; a dotfile or dot-directory scene is left out), Save writing only `startScene` (same keys and order, reloads, `doc.project` updated, the open scene's dirty flag and path kept, no `.kast/editor.json`), a scene that doesn't load or escapes the project leaving `project.kast` byte-identical, opening (then Cancel) writing nothing, and Build / Build and Run with `startScene` null or missing opening Build Settings; state machines: recursive discovery, every invalid-definition case naming the file (bad or missing `name`, bad `initial`, unknown `allowedFrom` state, wrong types, unknown keys, syntax and sandbox errors, both duplicate files), `allowedFrom` / omitted / `"*"` / self-transition rules, editor rescans, entry order at Play start (after the inits, game then entity machines, no event, `initialState` fallback warning, first touch during `init`), allowed and denied transitions (return value, warning, no callbacks, no event), `exit` → switch → `enter` → `fsm.changed {machine, entity, from, to}` with the definition as publisher, queued changes from callbacks (no recursion, denial on apply), callback errors (file:line and traceback, commit, still usable), C++ misuse throwing, every `kast.fsm.*` misuse raising at the calling line, read-only `kast.fsm`, identical results from Lua and C++, game state kept across `kast.loadScene` with no callbacks and new callbacks after it, Stop then Play starting over, runtime add (`kast.add` + `kast.set`, registry edit, Duplicate), destroy/remove without `exit`, a missing definition logged once, hot reload (state kept, reset with warning when removed, last valid definition kept when broken, game machines too), `StateMachine` byte-identical save/load, Duplicate and Stop restore, `project.kast` `stateMachines` round trip and validation, New State Machine name rules / template / no overwrite, Global toggling `project.kast`, and both blocked during Play; game GUI: the builder model (malformed RML and a missing `<body>` refused, parse → serialize → parse unchanged keeping unknown elements, their children, unedited attributes, comments, entities and `<head>`, Panel/Text/Button/Unknown kinds, editable-text rule, preview numbering and inline sheet), add / delete / move up and down / reparent (own subtree and `<body>` refused, Unknown elements move with their children), `data-event` set and cleared, an edited document reopening identically, Create GUI naming (`new_gui`, `_2`, skipping a stem whose `.rcss` is taken, never overwriting, each `.rml` linking its `.rcss`), GUI rename (linked `.rcss` follows, refusal leaves the disk unchanged), `UIDocument` registration, defaults and scene JSON round trip, and the button click adapter (payload `{id, document}`, publisher `UI`, empty event publishes nothing). No window. |
 | `editor_smoke` | `kast_editor --frames 120 --screenshot build/<preset>/smoke.png` with no project or scene (the Project Manager, empty list): exit 0 and a non-empty PNG. Every screenshot test passes `--projects-file <its run folder>/projects.json`. |
 | `editor_smoke_scaled` | Same, with `--ui-scale 2.0`. |
 | `scene_screenshot` | Same, with `--scene tests/scenes/basic.scene`. |
@@ -889,14 +999,27 @@ The dock layout is saved to `imgui.ini` in the working directory; delete it to g
 | `build_menu_screenshot`, `build_menu_play_screenshot`, `build_menu_no_project_screenshot` | `--open-menu Build` with `--project tests/project` (Build Settings..., a separator, Build..., Build and Run: enabled), with `--play` too (disabled) and with `--scene tests/scenes/basic.scene`, outside any project (disabled), writing `build_menu*.png`. |
 | `build_settings_screenshot`, `build_settings_missing_screenshot`, `build_settings_no_scenes_screenshot` | `--open-build-settings` on `tests/project` (`scene_a.scene` selected), on the `bad_start` copy (`missing.scene (missing)`, Save disabled) and on `build/<preset>/game_projects/no_scenes` (only `project.kast` and an excluded `.kast/scene_a.scene`: hint text, dropdown and Save disabled), writing `build_settings*.png`. |
 | `build_no_start_scene` | `--build` on the `no_scenes` copy (`startScene: null`): exit 1, nothing written, and the error mentions `Build Settings`. |
+| `ui_play_screenshot`, `ui_play_hidden_screenshot`, `ui_play_differs` | `--play` on `tests/project/ui.scene` (the main menu over the Game view) and on a copy with the `UIDocument` `visible: false` (in `health_project`), writing `ui_play.png` / `ui_play_hidden.png`; they must differ. |
+| `ui_bad_path_screenshot` | `--play` on a copy whose `UIDocument` names `ui/missing.rml`: exit 0, a PNG, and the log has `UI document 'ui/missing.rml' not found`. |
+| `ui_click_screenshot` | `ui.scene --play --gui-click start_button --focus-panel Events`, writing `ui_click.png` (Events panel lists `menu.start` from `UI`); the log must have `Menu start clicked: start_button in ui/main_menu.rml` from `scripts/ui_menu.lua`. |
+| `build_game_ui`, `player_ui_screenshot`, `player_ui_click` | The build and run of a copy with startScene `ui.scene` (`UI Test.exe`): the GUI from `game.pak` in `player_ui.png`, and with `--gui-click start_button` the Lua log line above (`player_ui_click.png`). |
+| `gui_builder_screenshot` | `--project tests/project --open-gui ui/main_menu.rml --gui-select start_button --size 1600x1000`, writing `gui_builder.png`: GUI Hierarchy (with the Unknown `<span>`), GUI Inspector (id, text, data-event, `title` kept), GUI Style and GUI Preview with the outline. |
+| `gui_builder_restyled_screenshot`, `gui_builder_restyle_differs` | The same in `health_project`, whose `main_menu.rcss` (configure-time copy) has a wider panel and red buttons, writing `gui_builder_restyled.png`; it must differ from `gui_builder.png`. |
+| `gui_builder_pick_screenshot`, `gui_builder_pick_differs` | `--gui-pick 640,277` (the Quit button): the log must have `selected 'quit_button'`, and `gui_builder_pick.png` must differ from `gui_builder.png`. |
+| `gui_builder_add_screenshot` | `--gui-select buttons --gui-add Button`, writing `gui_builder_add.png` (a third button in tree and preview, `*` in the titles; nothing saved). |
+| `gui_builder_save`, `gui_builder_saved_file` | The same plus `--gui-save` on `build/<preset>/new_gui_project/` (a fresh copy): `Saved GUI` is logged and `ui/main_menu.rml` keeps its comment, the `<span>` and the `title` attribute and has the new `<button>Button</button>`. |
+| `ui_document_inspector_screenshot` | `ui.scene --select 5`, writing `ui_document_inspector.png` (UI Document: Path combo, Visible). |
+| `ui_scene_roundtrip` | `ui.scene` saved twice: byte-identical. |
+| `assets_create_gui_screenshot`, `assets_create_gui_written` | `--assets-create gui:ui --focus-panel Assets` on `new_gui_project` (made by `new_gui_project_clean` / `_copy`): `ui/new_gui.rcss` exists, `ui/new_gui.rml` links `new_gui.rcss`, and the shot shows its rename. |
+| `assets_create_menu_screenshot` | `--assets-menu / --focus-panel Assets`, writing `assets_create_menu.png` (Create: Lua System, State Machine, GUI). |
 
 The screenshot tests each open a real window for ~2 seconds, in a fresh working directory (`<png>.run/`) so they
 always start from the default layout.
 
 ## Shaders
 
-Shaders (`editor/shaders/*.sc` for ImGui, `engine/shaders/*.sc` for meshes and grid lines; each directory has its own
-`varying.def.sc`) are compiled at build time to Direct3D 11 bytecode headers
+Shaders (`editor/shaders/*.sc` for ImGui, `engine/shaders/*.sc` for meshes and grid lines, `engine/shaders/gui/*.sc`
+for game GUIs; each directory has its own `varying.def.sc`) are compiled at build time to Direct3D 11 bytecode headers
 (`-p s_5_0`) with `shaderc` from vcpkg's `bgfx[tools]` (a host dependency in `vcpkg.json`). Sources stay editable and
 always match the installed bgfx version.
 
@@ -912,18 +1035,25 @@ engine/   log (stdout + in-memory lines), app (SDL3 window, bgfx init, main loop
           reload, drift migration),
           input (game keyboard/mouse state),
           renderer (primitives, lit shader, grid/axes/camera frustums as optional overlays), pak (game.pak format),
-          files (content reads from disk or a mounted pak), play (one Play frame: C++ then Lua systems), shaders/
+          files (content reads from disk or a mounted pak), play (one Play frame: C++ then Lua systems),
+          gui (RmlUi setup, file/log interfaces, GuiContext: one RmlUi context drawn into a bgfx view, SDL input),
+          gui_render (RmlUi render interface on bgfx), gui_events (button click -> event bus adapter),
+          scene_gui (a scene's UIDocuments in Play: load, stack, show/hide, hot reload), shaders/
 player/   main.cpp (kast_player: the built game client)
 editor/   main.cpp (CLI, dock layout, menus, console), document (scene, Play mode, file actions, dialogs, modals, title),
           camera (editor camera), viewport (Scene panel: render, camera input, picking, gizmo),
-          game_view (Game panel: render from the active camera),
+          game_view (Game panel: render from the active camera, game GUIs over it in Play),
+          gui_doc (GUI Builder document model: RML tree edits, serialize, Create/rename GUI files),
+          gui_builder (GUI Hierarchy, GUI Inspector, GUI Style, GUI Preview),
           panels (Hierarchy, Inspector, Systems, Components), build (Build: game.pak, exe, DLLs, last folder),
           imgui_bgfx (ImGui renderer for bgfx), shaders/
 tests/    self_check.cpp, scenes/ (a project: project.kast, basic.scene, lua.scene + scripts/, no_camera.scene,
           malformed.scene, v1.scene, v3.scene), project/ (scene-switch and Lua components project: project.kast,
-          scene_a.scene, scene_b.scene, health.scene, scripts/, components/health.lua)
+          scene_a.scene, scene_b.scene, health.scene, ui.scene + ui/main_menu.rml/.rcss, scripts/,
+          components/health.lua)
 cmake/    smoke_test.cmake, roundtrip_test.cmake, load_fails_test.cmake, differs_test.cmake, build_test.cmake,
           player_test.cmake
 ```
 
-bgfx views: 1 = Scene panel, 2 = Game panel (each an offscreen color + depth target), 255 = ImGui (backbuffer).
+bgfx views: 1 = Scene panel, 2 = Game panel (each an offscreen color + depth target), 3 = game GUIs (into the Game
+panel's target), 4 = GUI Preview (its own target), 255 = ImGui (backbuffer). kast_player: 0 = scene, 1 = game GUIs.

@@ -11,6 +11,8 @@ find_package(imguizmo CONFIG REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(sol2 CONFIG REQUIRED)
+find_package(RmlUi CONFIG REQUIRED)
+find_package(pugixml CONFIG REQUIRED)
 # vcpkg's luajit port ships no CMake config, only headers in include/luajit and lua51.lib/.dll.
 find_path(LUAJIT_INCLUDE_DIR luajit.h PATH_SUFFIXES luajit REQUIRED)
 find_library(LUAJIT_LIBRARY lua51 REQUIRED)
@@ -26,7 +28,8 @@ set(KAST_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 set(KAST_EDITOR_SHADERS)
 set(KAST_ENGINE_SHADERS)
 foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
-             engine/shaders/vs_mesh engine/shaders/fs_mesh engine/shaders/vs_line engine/shaders/fs_line)
+             engine/shaders/vs_mesh engine/shaders/fs_mesh engine/shaders/vs_line engine/shaders/fs_line
+             engine/shaders/gui/vs_gui engine/shaders/gui/fs_gui)
   get_filename_component(shader ${path} NAME)
   get_filename_component(dir ${path} DIRECTORY)
   set(varying "${CMAKE_CURRENT_SOURCE_DIR}/${dir}/varying.def.sc")
@@ -46,32 +49,15 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
     DEPENDS "${src}" "${varying}"
     COMMENT "shaderc ${shader}.sc"
     VERBATIM)
-  if(dir STREQUAL "engine/shaders")
+  if(dir MATCHES "^engine/")
     list(APPEND KAST_ENGINE_SHADERS "${out}")
   else()
     list(APPEND KAST_EDITOR_SHADERS "${out}")
   endif()
 endforeach()
 
-# --- engine: reusable by the shipped client, no ImGui/editor code ---
-add_library(kast_engine STATIC
-  engine/app.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
-  engine/systems.cpp engine/renderer.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
-  engine/state_machines.cpp engine/lua_state_machines.cpp
-  engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
-  ${KAST_ENGINE_SHADERS})
-target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}")
-target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}")
-# sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
-# exceptions unwind through LuaJIT by default, which reports them only as "C++ exception"; catching them in sol2
-# keeps the binding's error message (with the script's file:line). The message reaches the Console, not sol2's stdout print.
-target_compile_definitions(kast_engine PRIVATE SOL_LUAJIT=1 SOL_ALL_SAFETIES_ON=1 SOL_EXCEPTIONS_SAFE_PROPAGATION=0 SOL_PRINT_ERRORS=0)
-target_compile_options(kast_engine PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_engine
-  PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json
-  PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 "${LUAJIT_LIBRARY}")
-
-# --- editor font: TTF embedded as a byte array header, regenerated when the TTF changes ---
+# --- Roboto font: TTF embedded as a byte array header, regenerated when the TTF changes; the editor UI font and the
+# game GUI fallback face ---
 set(KAST_FONT "${CMAKE_CURRENT_SOURCE_DIR}/editor/assets/fonts/Roboto-Regular.ttf")
 set(KAST_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_FONT}")
@@ -86,6 +72,25 @@ inline unsigned char kRobotoRegularTtf[] = {
 };
 ")
 
+# --- engine: reusable by the shipped client, no ImGui/editor code ---
+add_library(kast_engine STATIC
+  engine/app.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
+  engine/systems.cpp engine/renderer.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
+  engine/state_machines.cpp engine/lua_state_machines.cpp
+  engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
+  engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp
+  ${KAST_ENGINE_SHADERS})
+target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
+target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}")
+# sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
+# exceptions unwind through LuaJIT by default, which reports them only as "C++ exception"; catching them in sol2
+# keeps the binding's error message (with the script's file:line). The message reaches the Console, not sol2's stdout print.
+target_compile_definitions(kast_engine PRIVATE SOL_LUAJIT=1 SOL_ALL_SAFETIES_ON=1 SOL_EXCEPTIONS_SAFE_PROPAGATION=0 SOL_PRINT_ERRORS=0)
+target_compile_options(kast_engine PRIVATE ${KAST_COMPILE_OPTIONS})
+target_link_libraries(kast_engine
+  PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json RmlUi::RmlUi
+  PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 "${LUAJIT_LIBRARY}")
+
 # --- player: the prebuilt game client the editor's Build menu copies; engine only, no ImGui ---
 # A Windows-subsystem app (no console window); SDL_main.h supplies WinMain.
 add_executable(kast_player WIN32 player/main.cpp)
@@ -96,21 +101,21 @@ target_link_libraries(kast_player PRIVATE kast_engine SDL3::SDL3)
 add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
-  editor/assets.cpp
+  editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp
   ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 imgui::imgui imguizmo::imguizmo shell32) # shell32: Recycle Bin
+target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 imgui::imgui imguizmo::imguizmo pugixml::pugixml shell32) # shell32: Recycle Bin
 add_dependencies(kast_editor kast_player) # Build copies kast_player.exe from next to kast_editor.exe
 
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
 add_executable(kast_self_check tests/self_check.cpp editor/document.cpp editor/build.cpp editor/camera.cpp
-  editor/recent_projects.cpp editor/assets.cpp)
+  editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp)
 target_include_directories(kast_self_check PRIVATE editor)
 target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
 target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_self_check PRIVATE kast_engine SDL3::SDL3 imgui::imgui shell32)
+target_link_libraries(kast_self_check PRIVATE kast_engine SDL3::SDL3 imgui::imgui pugixml::pugixml shell32)
 
 # --- tests ---
 enable_testing()
@@ -419,7 +424,8 @@ endfunction()
 set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switch Test|scene_a.scene|TRUE"
                "health|Health Test|health.scene|FALSE" "health_no_systems|Health Test|health.scene|TRUE"
                "events|Events Test|events.scene|FALSE" "events_no_systems|Events Test|events.scene|TRUE"
-               "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow")
+               "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow"
+               "ui|UI Test|ui.scene|FALSE")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
@@ -503,3 +509,120 @@ add_test(NAME build_no_start_scene
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${KAST_NO_SCENES_PROJECT}"
           "-DOUT=${KAST_GAME_OUT}/no_start" -DEXPECT=1 "-DEXPECT_OUTPUT=Build Settings"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+
+# --- game GUI (RmlUi) and the GUI Builder ---
+# Play: tests/project/ui.scene shows ui/main_menu.rml over the Game view; configure-time copies (in health_project) with
+# the UIDocument hidden (must look different) and with a missing .rml (logs the file, Play goes on).
+file(READ "${KAST_TEST_PROJECT}/ui.scene" ui_scene)
+string(REPLACE "\"visible\": true" "\"visible\": false" ui_hidden_scene "${ui_scene}")
+file(WRITE "${KAST_HEALTH_PROJECT}/ui_hidden.scene" "${ui_hidden_scene}")
+string(REPLACE "ui/main_menu.rml" "ui/missing.rml" ui_bad_scene "${ui_scene}")
+file(WRITE "${KAST_HEALTH_PROJECT}/ui_bad_path.scene" "${ui_bad_scene}")
+add_test(NAME ui_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui.scene --play" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME ui_play_hidden_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_play_hidden.png"
+          "-DEXTRA_ARGS=--scene ${KAST_HEALTH_PROJECT}/ui_hidden.scene --play"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME ui_play_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/ui_play_hidden.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/ui_play.png"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(ui_play_screenshot PROPERTIES FIXTURES_SETUP ui_play_shot)
+set_tests_properties(ui_play_hidden_screenshot PROPERTIES FIXTURES_SETUP ui_play_hidden_shot)
+set_tests_properties(ui_play_differs PROPERTIES FIXTURES_REQUIRED "ui_play_shot;ui_play_hidden_shot")
+add_test(NAME ui_bad_path_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_bad_path.png"
+          "-DEXTRA_ARGS=--scene ${KAST_HEALTH_PROJECT}/ui_bad_path.scene --play"
+          "-DEXPECT_OUTPUT=UI document 'ui/missing.rml' not found" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# A synthetic click on the Start button publishes menu.start (Events panel) and scripts/ui_menu.lua logs it.
+add_test(NAME ui_click_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_click.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui.scene --play --gui-click start_button --focus-panel Events"
+          "-DEXPECT_OUTPUT=Menu start clicked: start_button in ui/main_menu.rml"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# The built game (game_projects/ui, startScene ui.scene, see KAST_GAMES) loads the GUI from game.pak; a click there
+# reaches Lua too.
+add_test(NAME player_ui_click
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/ui" "-DEXE=UI Test.exe" "-DWORK_DIR=${KAST_GAME_OUT}/ui_click.run"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_ui_click.png" "-DEXTRA_ARGS=--gui-click start_button"
+          -DEXPECT=0 "-DEXPECT_OUTPUT=Menu start clicked: start_button in ui/main_menu.rml"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_ui_click PROPERTIES FIXTURES_REQUIRED game_ui_built TIMEOUT 90)
+
+# Builder: main_menu.rml open with start_button selected (tree, Inspector, Style, Preview with the outline), and the same
+# GUI in health_project with a different .rcss (wider panel, red buttons) must render differently. --gui-pick clicks the
+# preview (1280x720 preview pixels) on the Quit button, which selects it.
+set(builder_args "--open-gui ui/main_menu.rml --size 1600x1000")
+file(READ "${KAST_TEST_PROJECT}/ui/main_menu.rcss" ui_rcss)
+string(REPLACE "width: 420px;" "width: 640px;" ui_rcss "${ui_rcss}")
+string(REPLACE "#3a6fb0" "#c03030" ui_rcss "${ui_rcss}")
+file(WRITE "${KAST_HEALTH_PROJECT}/ui/main_menu.rcss" "${ui_rcss}")
+add_test(NAME gui_builder_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} ${builder_args} --gui-select start_button"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME gui_builder_restyled_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_restyled.png"
+          "-DEXTRA_ARGS=--project ${KAST_HEALTH_PROJECT} ${builder_args} --gui-select start_button"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME gui_builder_restyle_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/gui_builder.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_restyled.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(gui_builder_screenshot PROPERTIES FIXTURES_SETUP gui_builder_shot)
+set_tests_properties(gui_builder_restyled_screenshot PROPERTIES FIXTURES_SETUP gui_builder_restyled_shot)
+set_tests_properties(gui_builder_restyle_differs PROPERTIES FIXTURES_REQUIRED "gui_builder_shot;gui_builder_restyled_shot")
+add_test(NAME gui_builder_pick_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_pick.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} ${builder_args} --gui-pick 640,277"
+          "-DEXPECT_OUTPUT=--gui-pick 640,277 selected 'quit_button'"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME gui_builder_pick_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/gui_builder.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_pick.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(gui_builder_pick_screenshot PROPERTIES FIXTURES_SETUP gui_builder_pick_shot)
+set_tests_properties(gui_builder_pick_differs PROPERTIES FIXTURES_REQUIRED "gui_builder_shot;gui_builder_pick_shot")
+# The Inspector's UI Document (path combo, Visible) on the Main Menu entity; ui.scene survives save/load.
+add_test(NAME ui_document_inspector_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_document_inspector.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui.scene --select 5" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME ui_scene_roundtrip
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_PROJECT}/ui.scene"
+          "-DOUT_DIR=${KAST_HEALTH_PROJECT}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
+# Assets > Create > GUI on a fresh copy of tests/project, in ui/ (which holds main_menu.*): writes new_gui.rml + .rcss,
+# the .rml linking its .rcss, and starts the rename. The Create submenu (with GUI) via --assets-menu.
+set(KAST_NEW_GUI_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/new_gui_project")
+add_test(NAME new_gui_project_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${KAST_NEW_GUI_PROJECT}")
+add_test(NAME new_gui_project_copy COMMAND "${CMAKE_COMMAND}" -E copy_directory "${KAST_TEST_PROJECT}" "${KAST_NEW_GUI_PROJECT}")
+add_test(NAME assets_create_gui_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/assets_create_gui.png"
+          "-DEXTRA_ARGS=--project ${KAST_NEW_GUI_PROJECT} --assets-create gui:ui" "-DFOCUS_PANEL=Assets"
+          "-DMUST_EXIST=${KAST_NEW_GUI_PROJECT}/ui/new_gui.rcss" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME assets_create_gui_written COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_NEW_GUI_PROJECT}/ui/new_gui.rml")
+set_tests_properties(assets_create_gui_written PROPERTIES PASS_REGULAR_EXPRESSION "href=\"new_gui.rcss\"")
+set_tests_properties(new_gui_project_clean PROPERTIES FIXTURES_SETUP new_gui_clean)
+set_tests_properties(new_gui_project_copy PROPERTIES FIXTURES_REQUIRED new_gui_clean FIXTURES_SETUP new_gui_copy)
+set_tests_properties(assets_create_gui_screenshot PROPERTIES FIXTURES_REQUIRED new_gui_copy FIXTURES_SETUP new_gui_made)
+set_tests_properties(assets_create_gui_written PROPERTIES FIXTURES_REQUIRED new_gui_made)
+add_test(NAME assets_create_menu_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/assets_create_menu.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --assets-menu /" "-DFOCUS_PANEL=Assets"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# Tree edit -> preview -> Save, through the same deferred edit and Save as the GUI Hierarchy's buttons: --gui-add Button
+# into Panel #buttons shows a third button and the dirty marker (nothing saved); on the new_gui_project copy, --gui-save
+# then writes it, keeping the comment, the unknown <span> and the unedited title attribute.
+add_test(NAME gui_builder_add_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_add.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} ${builder_args} --gui-select buttons --gui-add Button"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME gui_builder_save
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_save.png"
+          "-DEXTRA_ARGS=--project ${KAST_NEW_GUI_PROJECT} ${builder_args} --gui-select buttons --gui-add Button --gui-save"
+          "-DEXPECT_OUTPUT=Saved GUI" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME gui_builder_saved_file COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_NEW_GUI_PROJECT}/ui/main_menu.rml")
+set_tests_properties(gui_builder_saved_file PROPERTIES PASS_REGULAR_EXPRESSION
+  "<!-- The game's main menu.*<span class=\"accent\">awaits</span>.*title=\"Begin a new game\".*<button>Button</button>")
+set_tests_properties(gui_builder_save PROPERTIES FIXTURES_REQUIRED new_gui_copy FIXTURES_SETUP gui_saved)
+set_tests_properties(gui_builder_saved_file PROPERTIES FIXTURES_REQUIRED gui_saved)

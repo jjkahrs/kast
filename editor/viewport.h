@@ -16,6 +16,7 @@ public:
     bgfx::ViewId view() const { return view_; }
     bool valid() const { return bgfx::isValid(frameBuffer_); }
     bgfx::TextureHandle texture() const { return bgfx::getTexture(frameBuffer_); }
+    bgfx::FrameBufferHandle frameBuffer() const { return frameBuffer_; }
 
 private:
     bgfx::ViewId view_;

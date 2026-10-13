@@ -2,6 +2,7 @@
 
 #include "assets.h"
 #include "document.h"
+#include "gui_builder.h"
 
 #include <components.h>
 
@@ -16,8 +17,8 @@
 // systems: list, status while playing, add/remove/reorder, new from template) and Components (the project's Lua
 // component definitions: list with status, new from template), State Machines (the project's state machine
 // definitions: status, Global toggle, live game states, new from template) and Events (the Play session's recently
-// delivered events, with a name filter) and Assets (the project's files: browse, open scenes, new folder, rename,
-// delete to the Recycle Bin, drag-drop move) panels.
+// delivered events, with a name filter) and Assets (the project's files: browse, open scenes and GUIs, new folder,
+// new Lua system / state machine / GUI, rename, delete to the Recycle Bin, drag-drop move) panels.
 class Panels {
 public:
     // Opens the Inspector's "New Lua Component" modal (Add Component > New Lua Component...) with name prefilled.
@@ -29,10 +30,12 @@ public:
     // Opens the Assets context menu of the entry at path ("" = the panel background) with its Create submenu open, for
     // screenshots. The entry must be listed at the top level or inside an open folder.
     void openAssetMenu(std::string path) { assetMenuRequest_ = std::move(path); }
-    // Runs Assets Create > State Machine (fsm) or Lua System in folder ("" = the project root), as the menu does.
-    void requestAssetCreate(bool fsm, std::string folder)
+    enum class AssetCreate { System, StateMachine, Gui };
+    // Runs Assets Create > Lua System, State Machine or GUI in folder ("" = the project root), as the menu does.
+    void requestAssetCreate(AssetCreate what, std::string folder)
     {
-        assetEdit_ = {fsm ? AssetEdit::Op::NewStateMachine : AssetEdit::Op::NewSystem, std::move(folder)};
+        constexpr AssetEdit::Op ops[] = {AssetEdit::Op::NewSystem, AssetEdit::Op::NewStateMachine, AssetEdit::Op::NewGui};
+        assetEdit_ = {ops[static_cast<int>(what)], std::move(folder)};
     }
     void drawHierarchy(Document& doc);
     void drawInspector(Document& doc);
@@ -42,7 +45,8 @@ public:
     void drawEvents(Document& doc);
     // Rescans the project's files for the Assets panel (main's poll). drawAssets also rescans when the project changes.
     void refreshAssets(const Document& doc);
-    void drawAssets(Document& doc, FileActions& files);
+    // Double-clicked .rml files open in gui; renames and moves of its open files reach it.
+    void drawAssets(Document& doc, FileActions& files, GuiBuilder& gui);
 
 private:
     // Tree edits are deferred to the end of drawHierarchy so the child lists are not changed mid-iteration.
@@ -56,19 +60,20 @@ private:
     // Assets panel file operations, deferred like Edit and applied at the end of drawAssets. Paths are
     // project-relative; "" is the project root.
     struct AssetEdit {
-        enum class Op { None, NewFolder, NewSystem, NewStateMachine, Rename, Move, Delete } op = Op::None;
-        std::string path;   // the entry acted on (NewFolder, NewSystem, NewStateMachine: the folder to create in)
+        enum class Op { None, NewFolder, NewSystem, NewStateMachine, NewGui, Rename, Move, Delete } op = Op::None;
+        std::string path;   // the entry acted on (NewFolder, NewSystem, NewStateMachine, NewGui: the folder to create in)
         std::string target; // Rename: the new name; Move: the destination folder
     };
 
     void drawNode(Document& doc, entt::entity entity);
-    void drawAssetNode(const Document& doc, FileActions& files, const AssetEntry& entry, const char* blocker);
+    void drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, const AssetEntry& entry,
+                       const char* blocker);
     void drawAssetItems(const Document& doc, const AssetEntry& entry, const char* blocker);
     void drawAssetCreateMenu(const std::string& folder, const char* blocker); // folder: "" = root
     void openRequestedAssetMenu(const char* popup); // opens popup (the last item's context menu) for openAssetMenu
     void startAssetRename(const std::string& path, const std::string& name);
     void requestAssetDelete(const Document& doc, const std::string& path);
-    void applyAssetEdit(Document& doc);
+    void applyAssetEdit(Document& doc, GuiBuilder& gui);
     void assetsFailed(std::string error); // logs it and shows the Assets Error modal
     void drawCreateItems(entt::entity parent);
     void applyEdit(Document& doc);
@@ -77,6 +82,8 @@ private:
     // The StateMachine component's Inspector body: machine and initial state combos, live state while playing. True if
     // it changed the component.
     bool drawStateMachineComponent(Document& doc, entt::entity entity);
+    // The UIDocument component's Inspector body: a combo of the project's .rml files and Visible. True if it changed.
+    bool drawUIDocumentComponent(Document& doc, entt::entity entity);
     // Generated Inspector widgets for a component field's JSON value (built-in or Lua); true if they changed it.
     bool drawField(entt::entity entity, const kast::ComponentType& type, const kast::FieldDesc& field,
                    nlohmann::ordered_json& value);

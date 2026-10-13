@@ -74,6 +74,10 @@ void registerBuiltins()
     registerComponent<StateMachine>("StateMachine", {"State Machine"})
         .data<&StateMachine::machine>("machine").custom<FieldInfo>("Machine")
         .data<&StateMachine::initialState>("initialState").custom<FieldInfo>("Initial State");
+
+    registerComponent<UIDocument>("UIDocument", {"UI Document"})
+        .data<&UIDocument::path>("path").custom<FieldInfo>("Path")
+        .data<&UIDocument::visible>("visible").custom<FieldInfo>("Visible");
 }
 
 // ponytail: not thread-safe; registration happens on the main thread before any scene work.
