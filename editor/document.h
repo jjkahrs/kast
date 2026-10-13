@@ -66,6 +66,9 @@ void moveSystem(Document& doc, size_t index, int delta); // delta -1 = up, +1 = 
 // Writes a template system as <project>/scripts/new_system[_N].lua and adds it. Needs a project and a saved scene.
 // False + error if not.
 bool newSystemFromTemplate(Document& doc, std::string& error);
+// Writes a template system as dir/new_system[_N].lua (creating dir): the first N whose file name is free in dir
+// (ignoring case). Sets file to it. False + error if the write fails. Never overwrites a file.
+bool writeNewSystem(const std::filesystem::path& dir, std::filesystem::path& file, std::string& error);
 
 // Lua components (Components panel). Definitions hot-reload while stopped and are frozen during Play.
 bool canEditComponents(const Document& doc); // a project is active and Play is stopped
@@ -105,6 +108,19 @@ std::string newStateMachineNameError(const Document& doc, std::string_view name)
 // Writes that file from the template with name (trimmed) as the machine name and rescans. False + error if
 // newStateMachineNameError isn't empty (nothing written) or the write fails. Never overwrites a file.
 bool newStateMachine(Document& doc, std::string_view name, std::string& error);
+// dir is <projectRoot>/fsms or inside it (ignoring case): the only place state machine definitions load from.
+bool isInStateMachinesDir(const std::filesystem::path& projectRoot, const std::filesystem::path& dir);
+// Writes a template state machine as dir/new_state_machine[_N].lua (creating dir), named after the file stem: the first
+// N whose file name is free in dir (ignoring case) and whose stem is not in machineNames. Sets file to it. False + error
+// if the write fails. Never overwrites a file.
+bool writeNewStateMachine(const std::filesystem::path& dir, const std::vector<std::string>& machineNames,
+                          std::filesystem::path& file, std::string& error);
+// Renames a file written by writeNewStateMachine to newName (renameAsset rules) and, if the stem changes, its machine
+// name to the new stem: the template's quoted occurrences of the old stem. False + error (disk unchanged) if newName
+// doesn't end in .lua, the new stem isn't an identifier or is in machineNames (the old stem itself is skipped), the
+// file no longer holds name = "<old stem>", or the rename or write fails.
+bool renameNewStateMachine(const std::filesystem::path& file, const std::string& newName,
+                           const std::vector<std::string>& machineNames, std::string& error);
 // name is listed in project.kast "stateMachines" (a game machine run in every Play session).
 bool isGlobalStateMachine(const Document& doc, const std::string& name);
 // Adds name to, or removes it from, project.kast "stateMachines" and saves it (other keys and their order kept). False
@@ -138,8 +154,9 @@ std::string projectFolderName(std::string_view name);
 std::filesystem::path newProjectTarget(std::string_view name, const std::string& dir);
 // Why New Project can't create name in dir (the first failing rule), or empty if it can. Checks the filesystem.
 std::string newProjectError(std::string_view name, const std::string& dir);
-// Creates the newProjectTarget folder (never its parents) holding project.kast (name trimmed, startScene null) and
-// sets created to it. False + error if newProjectError fails or a write fails; a folder made by this call is removed.
+// Creates the newProjectTarget folder (never its parents) holding scenes/main.scene (the resetToDefault scene and its
+// editor camera) and project.kast (name trimmed, startScene "scenes/main.scene"), and sets created to it. False +
+// error if newProjectError fails or a write fails; a folder made by this call is removed.
 bool createProject(std::string_view name, const std::string& dir, std::filesystem::path& created, std::string& error);
 std::string displayName(const Document& doc);
 // "Kast Editor - [<project> - ]<scene>[*][ (Playing|Paused[: <switched scene>])]"

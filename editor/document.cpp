@@ -1,5 +1,6 @@
 #include "document.h"
 
+#include "assets.h"
 #include "build.h"
 
 #include <app.h>
@@ -108,6 +109,13 @@ std::optional<std::filesystem::path> rootOf(const std::optional<kast::Project>& 
 std::optional<kast::Project> projectOf(const std::string& sceneFile)
 {
     return kast::discoverProject(std::filesystem::absolute(sceneFile).parent_path());
+}
+
+// Writes doc's scene with its editor camera in editorData; no project or document state changes.
+bool writeScene(Document& doc, const std::string& path, std::string& error)
+{
+    doc.scene.editorData["camera"] = doc.camera.toJson();
+    return kast::saveScene(doc.scene, path, error);
 }
 
 } // namespace
@@ -280,19 +288,9 @@ bool newSystemFromTemplate(Document& doc, std::string& error)
         error = "Save the scene first";
         return false;
     }
-    const std::filesystem::path dir = doc.project->root / "scripts";
-    std::filesystem::path file = dir / "new_system.lua";
-    for (int n = 2; std::filesystem::exists(file); ++n)
-        file = dir / std::format("new_system_{}.lua", n);
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    std::ofstream out(file, std::ios::binary);
-    out << kSystemTemplate;
-    out.close();
-    if (ec || !out) {
-        error = std::format("Cannot write '{}'", file.string());
+    std::filesystem::path file;
+    if (!writeNewSystem(doc.project->root / "scripts", file, error))
         return false;
-    }
     if (!addSystem(doc, file, error))
         return false;
     kast::log::info(std::format("Created Lua system '{}'", file.string()));
@@ -355,8 +353,7 @@ bool openFile(Document& doc, const std::string& path, std::string& error)
 
 bool saveFile(Document& doc, const std::string& path, std::string& error)
 {
-    doc.scene.editorData["camera"] = doc.camera.toJson();
-    if (!kast::saveScene(doc.scene, path, error))
+    if (!writeScene(doc, path, error))
         return false;
     std::optional<kast::Project> project = projectOf(path);
     const auto root = [](const std::optional<kast::Project>& p) { return p ? p->root : std::filesystem::path(); };
@@ -599,6 +596,91 @@ bool newStateMachine(Document& doc, std::string_view name, std::string& error)
     return true;
 }
 
+namespace {
+
+// dir/<stem>[_N].lua: the first N (1 = no suffix) whose file name is free in dir (ignoring case) and whose stem is not in
+// names.
+std::filesystem::path uniqueLuaFile(const std::filesystem::path& dir, std::string_view stem,
+                                    const std::vector<std::string>& names = {})
+{
+    for (int n = 1;; ++n) {
+        const std::string name = n == 1 ? std::string(stem) : std::format("{}_{}", stem, n);
+        if (!assetNameTaken(dir, name + ".lua") && std::ranges::find(names, name) == names.end())
+            return dir / (name + ".lua");
+    }
+}
+
+// The template's quoted occurrences of machine oldName in text, renamed to newName; nullopt if text has no
+// name = "<oldName>".
+std::optional<std::string> renameMachineText(std::string text, const std::string& oldName, const std::string& newName)
+{
+    if (text.find(std::format("name = \"{}\"", oldName)) == std::string::npos)
+        return std::nullopt;
+    for (const std::string_view pattern : {"name = \"{}\"", "machine = \"{}\"", "\"{}: "}) {
+        const std::string from = std::vformat(pattern, std::make_format_args(oldName));
+        const std::string to = std::vformat(pattern, std::make_format_args(newName));
+        for (size_t at = 0; (at = text.find(from, at)) != std::string::npos; at += to.size())
+            text.replace(at, from.size(), to);
+    }
+    return text;
+}
+
+} // namespace
+
+bool writeNewSystem(const std::filesystem::path& dir, std::filesystem::path& file, std::string& error)
+{
+    file = uniqueLuaFile(dir, "new_system"); // ponytail: free when checked, not locked until written
+    return writeTemplate(file, kSystemTemplate, "", error);
+}
+
+bool isInStateMachinesDir(const std::filesystem::path& projectRoot, const std::filesystem::path& dir)
+{
+    return isSameOrInside(dir, projectRoot / kast::kStateMachinesDir);
+}
+
+bool writeNewStateMachine(const std::filesystem::path& dir, const std::vector<std::string>& machineNames,
+                          std::filesystem::path& file, std::string& error)
+{
+    file = uniqueLuaFile(dir, "new_state_machine", machineNames);
+    return writeTemplate(file, kStateMachineTemplate, utf8(file.stem()), error);
+}
+
+bool renameNewStateMachine(const std::filesystem::path& file, const std::string& newName,
+                           const std::vector<std::string>& machineNames, std::string& error)
+{
+    const std::filesystem::path target = fromUtf8(newName);
+    const std::string oldStem = utf8(file.stem());
+    const std::string newStem = utf8(target.stem());
+    const auto refuse = [&](const std::string& reason) {
+        error = std::format("Cannot rename '{}' to '{}': {}", utf8(file.filename()), newName, reason);
+        return false;
+    };
+    if (target.extension() != ".lua")
+        return refuse("state machine files must end in .lua");
+    if (newStem == oldStem)
+        return renameAsset(file, newName, error);
+    if (!kast::isIdentifier(newStem))
+        return refuse(std::format("\"{}\" is not a valid machine name (letters, digits and _ only, not starting with a "
+                                  "digit)",
+                                  newStem));
+    if (std::ranges::any_of(machineNames, [&](const std::string& name) { return name != oldStem && name == newStem; }))
+        return refuse(std::format("a state machine named \"{}\" already exists", newStem));
+    std::ifstream in(file, std::ios::binary);
+    const std::optional<std::string> text =
+        renameMachineText(std::string(std::istreambuf_iterator<char>(in), {}), oldStem, newStem);
+    in.close();
+    if (!text)
+        return refuse(std::format("it no longer holds name = \"{}\"", oldStem));
+    if (!renameAsset(file, newName, error))
+        return false;
+    const std::filesystem::path renamed = file.parent_path() / target;
+    if (writeTemplate(renamed, *text, newStem, error))
+        return true;
+    std::string ignored;
+    renameAsset(renamed, utf8(file.filename()), ignored); // back to the old name; its text is unchanged
+    return false;
+}
+
 bool isGlobalStateMachine(const Document& doc, const std::string& name)
 {
     return doc.project && doc.project->stateMachines &&
@@ -684,7 +766,16 @@ bool createProject(std::string_view name, const std::string& dir, std::filesyste
         error = std::format("Cannot create the folder '{}': {}", target.string(), ec ? ec.message() : "it already exists");
         return false;
     }
-    if (!kast::saveProject({.root = target, .name = std::string(trimmed(name))}, error)) {
+    const char* startScene = "scenes/main.scene";
+    Document defaults;
+    resetToDefault(defaults);
+    bool written = std::filesystem::create_directory(target / "scenes", ec);
+    if (!written)
+        error = std::format("Cannot create the folder '{}': {}", (target / "scenes").string(),
+                            ec ? ec.message() : "it already exists");
+    written = written && writeScene(defaults, (target / startScene).string(), error) &&
+              kast::saveProject({.root = target, .name = std::string(trimmed(name)), .startScene = startScene}, error);
+    if (!written) {
         std::filesystem::remove_all(target, ec); // made by this call, so nothing of the user's is lost
         return false;
     }

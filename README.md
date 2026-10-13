@@ -227,8 +227,9 @@ attached until the editor closes and its log stays in the terminal. Closing the 
   non-ASCII characters are kept. **Create** is disabled, with a one-line reason, if that folder name is empty,
   `.`/`..`, ends with `.` or contains `< > : " / \ | ? *` or a control character, if the directory is empty, missing or
   not a directory (parent directories are never created), or if `<directory>\<folder>` already exists. Create makes
-  that one folder, writes `project.kast` in it (`"name"` = the trimmed typed name, `startScene: null`), adds it to the
-  list and opens it. A failure shows under the list and removes the folder if this attempt made it. Cancel or Esc
+  that one folder, writes `scenes/main.scene` in it (the editor's default scene: light, ground, cube, Main Camera and
+  the editor camera framing them) and `project.kast` (`"name"` = the trimmed typed name,
+  `"startScene": "scenes/main.scene"`), adds it to the list and opens it, so the editor starts in `main`. A failure shows under the list and removes the folder if this attempt made it. Cancel or Esc
   writes nothing.
 - **Import**: pick a `project.kast` (the dialog filters `*.kast`; other file names are rejected). An invalid file shows
   the error under the list and changes nothing. Otherwise the project is added to the top of the list (an already

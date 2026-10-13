@@ -127,6 +127,8 @@ std::string assetNameError(std::string_view name)
     return {};
 }
 
+bool assetNameTaken(const fs::path& dir, const fs::path& name) { return nameTaken(dir, name); }
+
 std::string uniqueFolderName(const fs::path& dir)
 {
     for (int n = 1;; ++n) {
@@ -162,6 +164,17 @@ std::optional<fs::path> remapPath(const fs::path& file, const fs::path& from, co
     for (; it != source.end(); ++it)
         out /= *it;
     return out;
+}
+
+bool remapProjectPaths(std::vector<std::string>& paths, const std::string& from, const std::string& to)
+{
+    bool changed = false;
+    for (std::string& path : paths)
+        if (const std::optional<fs::path> moved = remapPath(fromUtf8(path), fromUtf8(from), fromUtf8(to))) {
+            path = utf8(*moved);
+            changed = true;
+        }
+    return changed;
 }
 
 std::string deleteBlocker(const fs::path& target, const fs::path& openScene)

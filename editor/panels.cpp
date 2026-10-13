@@ -870,6 +870,16 @@ std::optional<std::string> narrowPath(const std::filesystem::path& file, std::st
     }
 }
 
+// Every state machine definition file's name (even one in error), after a rescan.
+std::vector<std::string> stateMachineNames(Document& doc)
+{
+    refreshStateMachines(doc);
+    std::vector<std::string> names;
+    for (const kast::ComponentDefinitionStatus& status : kast::stateMachineDefinitions().status)
+        names.push_back(status.name);
+    return names;
+}
+
 // The open scene as an absolute path, or empty if it was never saved.
 std::filesystem::path openScenePath(const Document& doc)
 {
@@ -911,10 +921,13 @@ void Panels::drawAssets(Document& doc, FileActions& files)
                 assetSelected_.clear();
             if (std::string dropped; acceptAssetDrop(dropped))
                 assetEdit_ = {AssetEdit::Op::Move, dropped, ""};
+            if (assetMenuRequest_ == "")
+                openRequestedAssetMenu("##rootMenu");
             if (ImGui::BeginPopupContextItem("##rootMenu")) {
                 if (ImGui::MenuItem("New Folder", nullptr, false, !blocker))
                     assetEdit_ = {AssetEdit::Op::NewFolder, ""};
                 disabledTooltip(blocker);
+                drawAssetCreateMenu("", blocker);
                 ImGui::EndPopup();
             }
 
@@ -1000,6 +1013,8 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, const AssetE
     }
     if (std::string dropped; entry.folder && acceptAssetDrop(dropped))
         assetEdit_ = {AssetEdit::Op::Move, dropped, entry.path};
+    if (assetMenuRequest_ == entry.path)
+        openRequestedAssetMenu("##assetMenu");
     if (ImGui::BeginPopupContextItem("##assetMenu")) {
         drawAssetItems(doc, entry, blocker);
         ImGui::EndPopup();
@@ -1019,6 +1034,8 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, const AssetE
         }
         if (commit && assetRenameBuffer_ != entry.name)
             assetEdit_ = {AssetEdit::Op::Rename, entry.path, assetRenameBuffer_};
+        else if ((commit || cancel) && assetNewFsm_ == entry.path)
+            assetNewFsm_.clear(); // kept its default name: later renames are plain
         if (commit || cancel)
             assetRenaming_.clear();
     }
@@ -1037,6 +1054,7 @@ void Panels::drawAssetItems(const Document& doc, const AssetEntry& entry, const 
         if (ImGui::MenuItem("New Folder", nullptr, false, !blocker))
             assetEdit_ = {AssetEdit::Op::NewFolder, entry.path};
         disabledTooltip(blocker);
+        drawAssetCreateMenu(entry.path, blocker);
         ImGui::Separator();
     }
     if (ImGui::MenuItem("Rename", "F2", false, !blocker))
@@ -1047,8 +1065,41 @@ void Panels::drawAssetItems(const Document& doc, const AssetEntry& entry, const 
     disabledTooltip(blocker);
 }
 
+void Panels::drawAssetCreateMenu(const std::string& folder, const char* blocker)
+{
+    if (std::exchange(assetCreateMenuRequested_, false))
+        ImGui::OpenPopup("Create"); // BeginMenu's popup id
+    if (!ImGui::BeginMenu("Create"))
+        return;
+    if (ImGui::MenuItem("Lua System", nullptr, false, !blocker))
+        assetEdit_ = {AssetEdit::Op::NewSystem, folder};
+    disabledTooltip(blocker);
+    const char* fsmBlocker = blocker ? blocker
+                             : !isInStateMachinesDir(assetsRoot_, assetsRoot_ / fromUtf8(folder))
+                                 ? "State machines must be inside fsms/"
+                                 : nullptr;
+    if (ImGui::MenuItem("State Machine", nullptr, false, !fsmBlocker))
+        assetEdit_ = {AssetEdit::Op::NewStateMachine, folder};
+    disabledTooltip(fsmBlocker);
+    ImGui::EndMenu();
+}
+
+void Panels::openRequestedAssetMenu(const char* popup)
+{
+    assetMenuRequest_.reset();
+    assetCreateMenuRequested_ = true;
+    ImGui::OpenPopup(popup);
+    // Grows up from the item's top-left (kept inside the window) rather than from the (absent) mouse.
+    const float bottom = ImGui::GetWindowPos().y + ImGui::GetWindowHeight();
+    ImGui::SetNextWindowPos({ImGui::GetItemRectMin().x + ImGui::GetFontSize() * 4.0f,
+                             bx::min(ImGui::GetItemRectMin().y, bottom)},
+                            ImGuiCond_Always, {0.0f, 1.0f});
+}
+
 void Panels::startAssetRename(const std::string& path, const std::string& name)
 {
+    if (path != assetNewFsm_)
+        assetNewFsm_.clear(); // its first rename has ended without renaming it
     assetSelected_ = path;
     assetRenaming_ = path;
     assetRenameBuffer_ = name;
@@ -1097,6 +1148,34 @@ void Panels::applyAssetEdit(Document& doc)
         }
         break;
     }
+    case AssetEdit::Op::NewSystem:
+    case AssetEdit::Op::NewStateMachine: {
+        const bool fsm = edit.op == AssetEdit::Op::NewStateMachine;
+        const std::filesystem::path dir = edit.path.empty() ? root : source;
+        std::filesystem::path file;
+        if (fsm && !isInStateMachinesDir(root, dir))
+            error = "State machines must be inside fsms/";
+        else if (fsm ? writeNewStateMachine(dir, stateMachineNames(doc), file, error) : writeNewSystem(dir, file, error)) {
+            const std::string name = utf8(file.filename());
+            assetExpand_ = edit.path;
+            selected = joinAsset(edit.path, name);
+            kast::log::info(std::format("Created {} '{}'", fsm ? "state machine" : "Lua system", selected));
+            if (fsm)
+                refreshStateMachines(doc); // loads it now rather than at the next poll
+            else if (doc.path.empty())
+                kast::log::info(std::format("'{}' was not added to the scene's systems: the scene is unsaved", selected));
+            else
+                addSystem(doc, file, error); // ponytail: can't fail, the project is open and file is inside it
+            refreshAssets(doc);
+            startAssetRename(selected, name);
+            if (fsm)
+                assetNewFsm_ = selected;
+            if (!error.empty())
+                assetsFailed(std::move(error));
+            return;
+        }
+        break;
+    }
     case AssetEdit::Op::Delete:
         error = deleteBlocker(source, openScenePath(doc)); // the scene may have changed since the prompt opened
         if (error.empty() && recycleAsset(source, error))
@@ -1122,15 +1201,24 @@ void Panels::applyAssetEdit(Document& doc)
         const std::filesystem::path scene = openScenePath(doc);
         const std::optional<std::filesystem::path> movedScene = scene.empty() ? std::nullopt : remapPath(scene, source, dest);
         std::optional<std::string> scenePath = movedScene ? narrowPath(*movedScene, error) : std::nullopt;
+        // Kept after a refusal, so retrying is still the first rename.
+        const bool newFsm = edit.op == AssetEdit::Op::Rename && edit.path == assetNewFsm_;
         const bool ok = (!movedScene || scenePath) &&
-                        (edit.op == AssetEdit::Op::Rename ? renameAsset(source, edit.target, error)
-                                                          : moveAsset(source, dest.parent_path(), error));
+                        (newFsm ? renameNewStateMachine(source, edit.target, stateMachineNames(doc), error)
+                         : edit.op == AssetEdit::Op::Rename ? renameAsset(source, edit.target, error)
+                                                            : moveAsset(source, dest.parent_path(), error));
         if (ok) {
             kast::log::info(std::format("{} '{}' to '{}'", edit.op == AssetEdit::Op::Rename ? "Renamed" : "Moved",
                                         edit.path, selected));
             assetSelected_ = selected;
             if (scenePath)
                 doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
+            if (remapProjectPaths(doc.scene.systems, edit.path, selected))
+                markDirty(doc);
+            if (newFsm) {
+                assetNewFsm_.clear();
+                refreshStateMachines(doc);
+            }
         }
     }
     if (!error.empty())

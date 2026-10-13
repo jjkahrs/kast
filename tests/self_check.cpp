@@ -1163,17 +1163,35 @@ void checkProjectDocument()
           "New Project refuses an existing folder and writes nothing into it");
     check(createProject("  My Game ", parentDir, created, error) && created == parent / "my-game" &&
               readText(parent / "my-game/project.kast") ==
-                  "{\n  \"version\": 1,\n  \"name\": \"My Game\",\n  \"startScene\": null\n}\n",
-          "New Project creates <dir>/my-game/project.kast with the trimmed name and startScene null");
+                  "{\n  \"version\": 1,\n  \"name\": \"My Game\",\n  \"startScene\": \"scenes/main.scene\"\n}\n",
+          "New Project creates <dir>/my-game/project.kast with the trimmed name and startScene scenes/main.scene");
+    Document defaults;
+    resetToDefault(defaults);
+    kast::Scene mainScene;
+    check(kast::loadScene((created / "scenes/main.scene").string(), mainScene, error) &&
+              mainScene.registry().view<kast::Name>().size() == 4 && named(mainScene, "Main Camera") != entt::null &&
+              named(mainScene, "Directional Light") != entt::null && named(mainScene, "Ground") != entt::null &&
+              named(mainScene, "Cube") != entt::null &&
+              mainScene.editorData["camera"] == defaults.camera.toJson(),
+          "New Project writes scenes/main.scene: the default scene and its editor camera");
+    check(projectScenes(created) == std::vector<std::string>{"scenes/main.scene"},
+          "Build Settings lists the new project's scenes/main.scene");
+    if (kast::Project made; kast::loadProject(created / "project.kast", made, error))
+        check(checkStartScene(made, error), "a new project's startScene passes the build check");
+    else
+        check(false, "the new project.kast loads");
     check(!createProject("My Game", parentDir, created, error) && contains(error, "already exists"),
           "New Project refuses to create the same project twice");
-    check(openProject(doc, created / "project.kast", error) && doc.project->name == "My Game" && doc.path.empty() &&
-              windowTitle(doc) == "Kast Editor - My Game - Untitled",
-          "the new project opens like Open Project");
+    const auto warned = countLogged("Cannot open the project's startScene");
+    check(openProject(doc, created / "project.kast", error) && doc.project->name == "My Game" &&
+              std::filesystem::path(doc.path) == (created / "scenes/main.scene").lexically_normal() &&
+              displayName(doc) == "main" && windowTitle(doc) == "Kast Editor - My Game - main" &&
+              countLogged("Cannot open the project's startScene") == warned,
+          "the new project opens its startScene scenes/main.scene without a warning");
     startPlay(doc);
-    check(windowTitle(doc) == "Kast Editor - My Game - Untitled (Playing)", "title while playing");
+    check(windowTitle(doc) == "Kast Editor - My Game - main (Playing)", "title while playing");
     togglePause(doc);
-    check(windowTitle(doc) == "Kast Editor - My Game - Untitled (Paused)", "title while paused");
+    check(windowTitle(doc) == "Kast Editor - My Game - main (Paused)", "title while paused");
     stopPlay(doc);
     std::filesystem::remove_all(dir);
     std::filesystem::remove_all(outside);
@@ -3594,6 +3612,82 @@ void checkOpenSceneAction()
           "FileActions::openScene waits on the unsaved-changes prompt when dirty");
 }
 
+// Assets panel Create > Lua System / State Machine: unique template files, the fsms/ rule, the first-rename machine
+// rename and scene system paths following renames and moves.
+void checkAssetCreate()
+{
+    std::string error;
+    const std::filesystem::path loose = looseTestDir("kast_assets_create");
+    std::filesystem::path file;
+    check(writeNewSystem(loose / "logic", file, error) && file == loose / "logic/new_system.lua" &&
+              contains(readText(file), "-- A Lua system: update(dt)"),
+          "writeNewSystem writes new_system.lua from the template, creating its folder");
+    const std::string systemText = readText(file);
+    writeFile(loose / "logic/NEW_SYSTEM_2.lua", "keep");
+    check(writeNewSystem(loose / "logic", file, error) && file == loose / "logic/new_system_3.lua" &&
+              readText(file) == systemText && readText(loose / "logic/NEW_SYSTEM_2.lua") == "keep" &&
+              readText(loose / "logic/new_system.lua") == systemText,
+          "writeNewSystem skips names taken ignoring case and never overwrites");
+
+    const std::filesystem::path dir = fsmProject("kast_assets_create_fsm", "fsm8");
+    check(!isInStateMachinesDir(dir, dir) && isInStateMachinesDir(dir, dir / "fsms") &&
+              isInStateMachinesDir(dir, dir / "fsms/entities") && !isInStateMachinesDir(dir, dir / "scripts") &&
+              isInStateMachinesDir(dir, dir / "FSMS/x") && !isInStateMachinesDir(dir, dir / "fsmsx"),
+          "isInStateMachinesDir: fsms/ and inside it only, ignoring case");
+
+    writeFile(dir / "fsms/sub/new_state_machine.lua", R"(return { name = "taken_file", initial = "a", states = { a = {} } })");
+    writeFile(dir / "fsms/sub/x.lua", R"(return { name = "new_state_machine_2", initial = "a", states = { a = {} } })");
+    Document doc;
+    check(openProject(doc, dir / kast::kProjectFileName, error), "create: open the test project");
+    refreshStateMachines(doc);
+    std::vector<std::string> names;
+    for (const kast::ComponentDefinitionStatus& status : kast::stateMachineDefinitions().status)
+        names.push_back(status.name);
+    check(writeNewStateMachine(dir / "fsms/sub", names, file, error) && file == dir / "fsms/sub/new_state_machine_3.lua" &&
+              contains(readText(file), "name = \"new_state_machine_3\",") && !contains(readText(file), "%NAME%"),
+          "writeNewStateMachine skips a taken file name and a taken machine name, and names the machine after the file");
+    refreshStateMachines(doc);
+    check(std::ranges::find(kast::stateMachineDefinitions().valid, "new_state_machine_3", &kast::StateMachineDef::name) !=
+              kast::stateMachineDefinitions().valid.end(),
+          "the new state machine loads as a valid definition");
+
+    names.clear();
+    for (const kast::ComponentDefinitionStatus& status : kast::stateMachineDefinitions().status)
+        names.push_back(status.name);
+    const std::string before = readText(file);
+    for (const char* bad : {"My FSM.lua", "1st.lua", "game.lua", "enemy_ai.txt", "x.lua"}) {
+        const bool existed = std::filesystem::exists(dir / "fsms/sub" / bad); // x.lua: a taken file name
+        check(!renameNewStateMachine(file, bad, names, error) && !error.empty() && readText(file) == before &&
+                  std::filesystem::exists(dir / "fsms/sub" / bad) == existed,
+              std::format("renameNewStateMachine refuses '{}' and leaves the disk unchanged", bad).c_str());
+    }
+    check(renameNewStateMachine(file, "enemy_ai.lua", names, error) && !std::filesystem::exists(file),
+          "renameNewStateMachine renames the file");
+    const std::string renamed = readText(dir / "fsms/sub/enemy_ai.lua");
+    check(contains(renamed, "name = \"enemy_ai\",") && contains(renamed, "machine = \"enemy_ai\"") &&
+              contains(renamed, "kast.log(\"enemy_ai: \"") && !contains(renamed, "new_state_machine_3"),
+          "renameNewStateMachine renames the machine's template occurrences");
+    refreshStateMachines(doc);
+    check(std::ranges::find(kast::stateMachineDefinitions().valid, "enemy_ai", &kast::StateMachineDef::name) !=
+              kast::stateMachineDefinitions().valid.end(),
+          "the renamed state machine loads under its new name");
+    writeFile(dir / "fsms/sub/edited.lua", "return {}");
+    check(!renameNewStateMachine(dir / "fsms/sub/edited.lua", "fresh.lua", names, error) &&
+              readText(dir / "fsms/sub/edited.lua") == "return {}",
+          "renameNewStateMachine refuses a file without its name = line");
+
+    std::vector<std::string> systems{"scripts/a.lua", "scripts/deep/b.lua", "other/c.lua", "scriptsx/d.lua"};
+    check(remapProjectPaths(systems, "scripts/a.lua", "scripts/z.lua") &&
+              (systems == std::vector<std::string>{"scripts/z.lua", "scripts/deep/b.lua", "other/c.lua", "scriptsx/d.lua"}),
+          "remapProjectPaths follows a renamed file");
+    check(remapProjectPaths(systems, "Scripts", "game/scripts") &&
+              (systems ==
+               std::vector<std::string>{"game/scripts/z.lua", "game/scripts/deep/b.lua", "other/c.lua", "scriptsx/d.lua"}),
+          "remapProjectPaths follows a moved parent folder, ignoring case");
+    check(!remapProjectPaths(systems, "nothing", "x") && systems[2] == "other/c.lua",
+          "remapProjectPaths leaves unrelated paths unchanged");
+}
+
 void checkAssets()
 {
     checkAssetScan();
@@ -3601,6 +3695,7 @@ void checkAssets()
     checkAssetPaths();
     checkAssetMoves();
     checkOpenSceneAction();
+    checkAssetCreate();
 }
 
 int main()

@@ -26,6 +26,14 @@ public:
     void openAddComponent() { addComponentRequested_ = true; }
     // Opens the State Machines panel's "New State Machine" modal with name prefilled.
     void openNewStateMachine(std::string name);
+    // Opens the Assets context menu of the entry at path ("" = the panel background) with its Create submenu open, for
+    // screenshots. The entry must be listed at the top level or inside an open folder.
+    void openAssetMenu(std::string path) { assetMenuRequest_ = std::move(path); }
+    // Runs Assets Create > State Machine (fsm) or Lua System in folder ("" = the project root), as the menu does.
+    void requestAssetCreate(bool fsm, std::string folder)
+    {
+        assetEdit_ = {fsm ? AssetEdit::Op::NewStateMachine : AssetEdit::Op::NewSystem, std::move(folder)};
+    }
     void drawHierarchy(Document& doc);
     void drawInspector(Document& doc);
     void drawSystems(Document& doc);
@@ -48,14 +56,16 @@ private:
     // Assets panel file operations, deferred like Edit and applied at the end of drawAssets. Paths are
     // project-relative; "" is the project root.
     struct AssetEdit {
-        enum class Op { None, NewFolder, Rename, Move, Delete } op = Op::None;
-        std::string path;   // the entry acted on (NewFolder: the folder to create in)
+        enum class Op { None, NewFolder, NewSystem, NewStateMachine, Rename, Move, Delete } op = Op::None;
+        std::string path;   // the entry acted on (NewFolder, NewSystem, NewStateMachine: the folder to create in)
         std::string target; // Rename: the new name; Move: the destination folder
     };
 
     void drawNode(Document& doc, entt::entity entity);
     void drawAssetNode(const Document& doc, FileActions& files, const AssetEntry& entry, const char* blocker);
     void drawAssetItems(const Document& doc, const AssetEntry& entry, const char* blocker);
+    void drawAssetCreateMenu(const std::string& folder, const char* blocker); // folder: "" = root
+    void openRequestedAssetMenu(const char* popup); // opens popup (the last item's context menu) for openAssetMenu
     void startAssetRename(const std::string& path, const std::string& name);
     void requestAssetDelete(const Document& doc, const std::string& path);
     void applyAssetEdit(Document& doc);
@@ -110,6 +120,9 @@ private:
     std::string assetRenaming_; // empty = none
     bool focusAssetRename_ = false;
     std::string assetRenameBuffer_;
+    std::optional<std::string> assetMenuRequest_; // openAssetMenu: the entry whose menu opens next frame
+    bool assetCreateMenuRequested_ = false;       // open the Create submenu when it is next drawn
+    std::string assetNewFsm_; // a just-created state machine: its first rename (if any) also renames the machine
     std::string assetExpand_; // a folder to expand next frame (New Folder's parent)
     AssetEdit assetEdit_;
     std::string assetDeletePath_; // waiting on the delete confirmation

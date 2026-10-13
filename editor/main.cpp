@@ -33,7 +33,7 @@ constexpr bgfx::ViewId kSceneView = 1;
 constexpr bgfx::ViewId kGameView = 2;
 constexpr bgfx::ViewId kImGuiView = 255; // last, so the UI draws over everything
 constexpr uint32_t kBackbufferClearColor = 0x202020ff;
-// --add-component-popup, --open-menu, --open-build-settings and --focus-panel wait this long: focus changes while the first frames dock the windows close
+// --add-component-popup, --open-menu, --open-build-settings, --focus-panel and --assets-* wait this long: focus changes while the first frames dock the windows close
 // popups.
 constexpr int kAddComponentPopupFrame = 10;
 constexpr float kComponentPollSeconds = 0.5f; // Lua definition files and the Assets tree are checked this often
@@ -41,7 +41,7 @@ constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--ui-scale F] [--projects-file list.json] "
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
-    "[--open-menu Name] [--open-build-settings] "
+    "[--open-menu Name] [--open-build-settings] [--assets-menu path|/] [--assets-create system|fsm:folder] "
     "[--focus-panel Window] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
@@ -62,6 +62,8 @@ struct Options {
     std::optional<std::string> newStateMachinePrompt; // open the State Machines panel's New State Machine modal
     std::string build;        // build the --project game into this folder and exit, without opening a window
     std::string openMenu;     // open this main menu (e.g. "Build") for screenshots
+    std::optional<std::string> assetsMenu; // open this Assets entry's context menu + Create submenu ("" = background)
+    std::optional<std::pair<bool, std::string>> assetsCreate; // fsm?, folder: run Assets Create in that folder
     bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
     std::string focusPanel;         // bring this window (e.g. "Events") to the front of its dock, for screenshots
     std::string projectsFile;       // the recent-projects list; empty = the one in %APPDATA%
@@ -112,6 +114,14 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.newComponent = argv[++i];
         } else if (arg == "--build" && hasValue) {
             options.build = argv[++i];
+        } else if (arg == "--assets-menu" && hasValue) {
+            const std::string_view path = argv[++i];
+            options.assetsMenu = std::string(path == "/" ? "" : path);
+        } else if (arg == "--assets-create" && hasValue && (std::string_view(argv[i + 1]).starts_with("system:") ||
+                                                            std::string_view(argv[i + 1]).starts_with("fsm:"))) {
+            const std::string_view value = argv[++i];
+            const size_t colon = value.find(':');
+            options.assetsCreate = std::pair(value.starts_with("fsm:"), std::string(value.substr(colon + 1)));
         } else if (arg == "--open-menu" && hasValue) {
             options.openMenu = argv[++i];
         } else if (arg == "--focus-panel" && hasValue) {
@@ -164,10 +174,12 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     const bool editorFlags = options.select != 0 || options.play || options.addComponentPopup ||
                              options.newComponentPrompt || !options.newComponent.empty() || !options.openMenu.empty() ||
-                             options.openBuildSettings || !options.focusPanel.empty() || options.newStateMachinePrompt;
+                             options.openBuildSettings || !options.focusPanel.empty() || options.newStateMachinePrompt ||
+                             options.assetsMenu || options.assetsCreate;
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --add-component-popup, --new-component[-prompt], "
-                         "--new-state-machine-prompt, --open-menu, --open-build-settings and --focus-panel require "
+                         "--new-state-machine-prompt, --open-menu, --open-build-settings, --focus-panel, --assets-menu and "
+                         "--assets-create require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
     }
@@ -397,6 +409,10 @@ int main(int argc, char** argv)
             files.openBuildSettings();
         if (!options->focusPanel.empty() && frames.frame() == kAddComponentPopupFrame)
             ImGui::SetWindowFocus(options->focusPanel.c_str()); // applied when that window is submitted below
+        if (options->assetsMenu && frames.frame() == kAddComponentPopupFrame + 2) // after --focus-panel, which closes popups
+            panels.openAssetMenu(*options->assetsMenu);
+        if (options->assetsCreate && frames.frame() == kAddComponentPopupFrame)
+            panels.requestAssetCreate(options->assetsCreate->first, options->assetsCreate->second);
         panels.drawHierarchy(doc);
         viewport.draw(doc); // submitted before Game so Scene is the front tab on first run
         // Layouts saved before the Game panel existed: dock it as a tab beside Scene.

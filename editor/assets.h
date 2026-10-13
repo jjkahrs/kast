@@ -30,6 +30,8 @@ const AssetEntry* findAsset(const std::vector<AssetEntry>& entries, std::string_
 // Why name can't be an asset's new name; empty if it can. Refuses empty names, names starting with '.' (the panel hides
 // them), invalid characters, a trailing space or '.', and reserved device names.
 std::string assetNameError(std::string_view name);
+// A name in dir equals name ignoring case.
+bool assetNameTaken(const std::filesystem::path& dir, const std::filesystem::path& name);
 // "New Folder", else "New Folder 2", "New Folder 3", ...: the first not taken in dir (ignoring case).
 std::string uniqueFolderName(const std::filesystem::path& dir);
 // path is ancestor or ancestor itself (absolute or both relative to the same place; compared ignoring case).
@@ -38,6 +40,9 @@ bool isSameOrInside(const std::filesystem::path& path, const std::filesystem::pa
 // not from or inside it.
 std::optional<std::filesystem::path> remapPath(const std::filesystem::path& file, const std::filesystem::path& from,
                                                const std::filesystem::path& to);
+// Rewrites each project-relative ('/') path in paths that is from or inside it to where remapPath puts it (from and to
+// project-relative too). True if any changed.
+bool remapProjectPaths(std::vector<std::string>& paths, const std::string& from, const std::string& to);
 // Why target can't be deleted while openScene (the edited scene's file, maybe empty) is open; empty if it can.
 std::string deleteBlocker(const std::filesystem::path& target, const std::filesystem::path& openScene);
 
