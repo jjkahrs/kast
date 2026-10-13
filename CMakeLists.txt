@@ -94,7 +94,7 @@ target_link_libraries(kast_player PRIVATE kast_engine SDL3::SDL3)
 # --- editor ---
 add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
-  editor/game_view.cpp editor/panels.cpp
+  editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
   ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
@@ -103,7 +103,8 @@ add_dependencies(kast_editor kast_player) # Build copies kast_player.exe from ne
 
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
-add_executable(kast_self_check tests/self_check.cpp editor/document.cpp editor/build.cpp editor/camera.cpp)
+add_executable(kast_self_check tests/self_check.cpp editor/document.cpp editor/build.cpp editor/camera.cpp
+  editor/recent_projects.cpp)
 target_include_directories(kast_self_check PRIVATE editor)
 target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
 target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS})
@@ -238,7 +239,35 @@ set_tests_properties(lua_components_play_differs PROPERTIES FIXTURES_REQUIRED "h
 add_test(NAME lua_components_roundtrip
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_PROJECT}/health.scene"
           "-DOUT_DIR=${KAST_HEALTH_PROJECT}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
-# New Project modal opened by --new-project: valid (existing parent, preview ...\my-game, Create enabled) and invalid
+# Project Manager (no project or scene; editor_smoke* above also start it): tests/project plus a missing folder (greyed,
+# "Folder not found"); a corrupt list (backed up to projects.json.bad, empty list); --launcher-open tests/project (the
+# started editor takes the screenshot; tests/project is first in the list); and the editor's --project startup, which
+# records the project.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/launcher_projects.json" "[
+  {\"path\": \"${KAST_TEST_PROJECT}\", \"name\": \"Switch Test\", \"lastOpened\": 1767225600},
+  {\"path\": \"${CMAKE_CURRENT_BINARY_DIR}/does_not_exist/old-game\", \"name\": \"Old Game\", \"lastOpened\": 1760000000}
+]
+")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/launcher_corrupt_projects.json" "[{\"path\": ")
+add_test(NAME launcher_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/launcher.png"
+          "-DEXTRA_ARGS=--launcher" "-DPROJECTS_FROM=${CMAKE_CURRENT_BINARY_DIR}/launcher_projects.json"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME launcher_corrupt_list
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/launcher_corrupt.png"
+          "-DPROJECTS_FROM=${CMAKE_CURRENT_BINARY_DIR}/launcher_corrupt_projects.json"
+          "-DMUST_EXIST=${CMAKE_CURRENT_BINARY_DIR}/launcher_corrupt.png.run/projects.json.bad"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME launcher_open
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${KAST_TEST_PROJECT}"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/launcher_open.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/launcher_open_test.cmake")
+set_tests_properties(launcher_open PROPERTIES TIMEOUT 120)
+add_test(NAME editor_project_records_recent
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/editor_project_records_recent.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT}" "-DLIST_MUST_CONTAIN=${KAST_TEST_PROJECT}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# New Project modal (Project Manager) opened by --new-project: valid (existing parent, preview ...\my-game, Create enabled) and invalid
 # (missing parent, inline message, Create disabled). Neither may create anything.
 set(KAST_NEW_PROJECT_PARENT "${CMAKE_CURRENT_BINARY_DIR}/new_project_parent")
 file(MAKE_DIRECTORY "${KAST_NEW_PROJECT_PARENT}")
@@ -355,7 +384,8 @@ add_test(NAME build_bad_start_scene
 add_test(NAME build_no_project
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DOUT=${KAST_GAME_OUT}/no_project" -DEXPECT=1
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
-# Build menu opened by --open-menu Build: enabled with a project, disabled with none and during Play.
+# Build menu opened by --open-menu Build: enabled with a project, disabled with none (a scene outside any project) and
+# during Play.
 add_test(NAME build_menu_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/build_menu.png"
           "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --open-menu Build" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
@@ -365,7 +395,8 @@ add_test(NAME build_menu_play_screenshot
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME build_menu_no_project_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
-          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/build_menu_no_project.png" "-DEXTRA_ARGS=--open-menu Build"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/build_menu_no_project.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/basic.scene --open-menu Build"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 # Build Settings modal opened by --open-build-settings: tests/project (scene_a.scene selected), the bad_start copy
 # (missing.scene (missing), Save disabled) and a copy with no shippable scene (hint, combo disabled).

@@ -203,16 +203,25 @@ bool saveBuildFolder(const std::filesystem::path& projectRoot, const std::filesy
     return true;
 }
 
-bool launchGame(const std::filesystem::path& exe, std::string& error)
+SDL_Process* startProcess(const std::filesystem::path& exe, const std::vector<std::string>& args, std::string& error)
 {
     const std::u8string path = exe.u8string(); // SDL takes UTF-8
-    const char* args[] = {reinterpret_cast<const char*>(path.c_str()), nullptr};
-    SDL_Process* process = SDL_CreateProcess(args, false);
+    std::vector<const char*> argv{reinterpret_cast<const char*>(path.c_str())};
+    for (const std::string& arg : args)
+        argv.push_back(arg.c_str());
+    argv.push_back(nullptr);
+    SDL_Process* process = SDL_CreateProcess(argv.data(), false);
     if (!process) {
         error = std::format("Cannot start '{}': {}", exe.string(), SDL_GetError());
-        return false;
+        return nullptr;
     }
-    SDL_DestroyProcess(process); // only the handle: the game keeps running
     kast::log::info(std::format("Started '{}'", exe.string()));
-    return true;
+    return process;
+}
+
+bool launchProcess(const std::filesystem::path& exe, const std::vector<std::string>& args, std::string& error)
+{
+    SDL_Process* process = startProcess(exe, args, error);
+    SDL_DestroyProcess(process); // only the handle: the game keeps running (null is ignored)
+    return process != nullptr;
 }

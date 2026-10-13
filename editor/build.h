@@ -8,6 +8,8 @@
 #include <string_view>
 #include <vector>
 
+struct SDL_Process;
+
 // Build: packages a project into a standalone game folder: <name>.exe (a copy of the prebuilt kast_player.exe next to
 // the editor), game.pak (the project content, see pak.h) and the runtime DLLs the player loads.
 
@@ -41,5 +43,8 @@ bool buildGame(const kast::Project& project, const std::filesystem::path& outDir
 std::optional<std::filesystem::path> loadBuildFolder(const std::filesystem::path& projectRoot);
 bool saveBuildFolder(const std::filesystem::path& projectRoot, const std::filesystem::path& folder, std::string& error);
 
-// Starts exe as a separate process that keeps running after the editor exits. False + error if it can't start.
-bool launchGame(const std::filesystem::path& exe, std::string& error);
+// Starts exe with args (UTF-8) as a separate process; it inherits the console. Returns its handle (the caller
+// SDL_DestroyProcess-es it; the process keeps running), or null + error if it can't start.
+SDL_Process* startProcess(const std::filesystem::path& exe, const std::vector<std::string>& args, std::string& error);
+// startProcess without keeping the handle: the process keeps running after the editor exits.
+bool launchProcess(const std::filesystem::path& exe, const std::vector<std::string>& args, std::string& error);

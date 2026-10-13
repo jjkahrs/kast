@@ -10,7 +10,6 @@
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
-#include <imgui_stdlib.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -39,8 +38,6 @@ bool isInvalidFolderChar(char c)
 }
 
 constexpr SDL_DialogFileFilter kSceneFilter{"Kast scene (*.scene)", "scene"};
-// SDL filters match extensions only; openProject rejects any other *.kast file name.
-constexpr SDL_DialogFileFilter kProjectFilter{"Kast project (project.kast)", "kast"};
 constexpr bx::Vec3 kNewLightEuler{-50.0f, -30.0f, 0.0f}; // ~50 deg down, slightly from the side so faces shade differently
 constexpr bx::Vec3 kMainCameraPosition{0.0f, 3.0f, 7.0f};
 constexpr bx::Vec3 kMainCameraEuler{-20.0f, 0.0f, 0.0f}; // looks down at the origin from kMainCameraPosition
@@ -600,8 +597,6 @@ std::string windowTitle(const Document& doc)
 
 void FileActions::newScene() { request(Pending::New); }
 void FileActions::open() { request(Pending::Open); }
-void FileActions::newProject() { request(Pending::NewProject); }
-void FileActions::openProject() { request(Pending::OpenProject); }
 void FileActions::saveAs() { showSaveDialog(Pending::None); }
 void FileActions::exit() { kast::requestQuit(); } // same path as the window X, so onQuitRequested runs
 void FileActions::build() { request(Pending::Build); }
@@ -647,14 +642,6 @@ void FileActions::perform(Pending action)
         dialogOpen_ = true;
         dialogKind_ = DialogKind::Open;
         SDL_ShowOpenFileDialog(onDialogDone, this, window_, &kSceneFilter, 1, nullptr, false);
-        break;
-    case Pending::NewProject:
-        openNewProject("", "");
-        break;
-    case Pending::OpenProject:
-        dialogOpen_ = true;
-        dialogKind_ = DialogKind::OpenProject;
-        SDL_ShowOpenFileDialog(onDialogDone, this, window_, &kProjectFilter, 1, nullptr, false);
         break;
     case Pending::Quit:
         quitConfirmed_ = true;
@@ -720,14 +707,6 @@ void FileActions::handleDialogResult()
         if (openFile(doc_, path, error))
             return;
         error_ = error;
-    } else if (dialogKind_ == DialogKind::OpenProject) {
-        std::string error;
-        if (::openProject(doc_, path, error))
-            return;
-        error_ = error;
-    } else if (dialogKind_ == DialogKind::NewProjectFolder) {
-        newProjectDir_ = path;
-        return;
     } else if (dialogKind_ == DialogKind::BuildFolder) {
         buildTo(std::filesystem::path(reinterpret_cast<const char8_t*>(path.c_str())), runAfterBuild_); // SDL gives UTF-8
         return;
@@ -798,7 +777,6 @@ void FileActions::drawModals()
         ImGui::EndPopup();
     }
 
-    drawNewProjectModal();
     drawBuildSettingsModal();
 
     if (std::exchange(errorRequested_, false))
@@ -810,74 +788,6 @@ void FileActions::drawModals()
             ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
-}
-
-void FileActions::openNewProject(std::string name, std::string dir)
-{
-    newProjectName_ = std::move(name);
-    newProjectDir_ = std::move(dir);
-    newProjectRequested_ = true;
-    newProjectOpen_ = true;
-}
-
-void FileActions::drawNewProjectModal()
-{
-    if (std::exchange(newProjectRequested_, false))
-        ImGui::OpenPopup("New Project");
-    // Tracks the popup itself, so idle() also sees it closed when another popup (an Error) replaced it.
-    newProjectOpen_ = ImGui::BeginPopupModal("New Project", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-    if (!newProjectOpen_)
-        return;
-    const float fieldWidth = ImGui::GetFontSize() * 24.0f;
-    if (ImGui::IsWindowAppearing())
-        ImGui::SetKeyboardFocusHere();
-    ImGui::SetNextItemWidth(fieldWidth);
-    ImGui::InputText("Name", &newProjectName_);
-    ImGui::SetNextItemWidth(fieldWidth);
-    ImGui::InputText("Directory", &newProjectDir_);
-    ImGui::SameLine();
-    if (ImGui::Button("Browse..."))
-        browseNewProjectDir();
-
-    const std::string error = newProjectError(newProjectName_, newProjectDir_);
-    const bool previewable = !newProjectDir_.empty() && !projectFolderName(newProjectName_).empty();
-    ImGui::Text("Will create: %s", previewable ? newProjectTarget(newProjectName_, newProjectDir_).string().c_str() : "-");
-    if (!error.empty())
-        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", error.c_str());
-    ImGui::Spacing();
-    ImGui::BeginDisabled(!error.empty());
-    const bool create = ImGui::Button("Create");
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    if (create) {
-        ImGui::CloseCurrentPopup();
-        createNewProject();
-    } else if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-}
-
-void FileActions::browseNewProjectDir()
-{
-    if (dialogOpen_)
-        return;
-    dialogOpen_ = true;
-    dialogKind_ = DialogKind::NewProjectFolder;
-    std::error_code ec;
-    const bool startHere = std::filesystem::is_directory(newProjectDir_, ec);
-    SDL_ShowOpenFolderDialog(onDialogDone, this, window_, startHere ? newProjectDir_.c_str() : nullptr, false);
-}
-
-void FileActions::createNewProject()
-{
-    std::string error;
-    std::filesystem::path dir;
-    if (createProject(newProjectName_, newProjectDir_, dir, error) && ::openProject(doc_, dir / kast::kProjectFileName, error))
-        return;
-    error_ = error;
-    kast::log::error(error_);
-    errorRequested_ = true;
 }
 
 void FileActions::openBuildSettings(std::string reason)
@@ -895,7 +805,7 @@ void FileActions::drawBuildSettingsModal()
 {
     if (std::exchange(buildSettingsRequested_, false))
         ImGui::OpenPopup("Build Settings");
-    // Tracks the popup itself, as New Project does.
+    // Tracks the popup itself, so idle() also sees it closed when another popup (an Error) replaced it.
     buildSettingsOpen_ = ImGui::BeginPopupModal("Build Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
     if (!buildSettingsOpen_)
         return;
@@ -967,7 +877,7 @@ void FileActions::buildTo(const std::filesystem::path& folder, bool run)
     } else if (buildGame(*doc_.project, folder, std::filesystem::path(reinterpret_cast<const char8_t*>(base)), exe, error)) {
         if (std::string saveError; !saveBuildFolder(doc_.project->root, folder, saveError))
             kast::log::warn(saveError);
-        if (!run || launchGame(exe, error))
+        if (!run || launchProcess(exe, {}, error))
             return;
     }
     error_ = error;

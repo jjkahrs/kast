@@ -79,20 +79,29 @@ build\release\kast_editor.exe
 |------|--------|
 | `--frames N` | Run N frames, then quit cleanly (exit 0). |
 | `--screenshot <path.png>` | With `--frames`: capture the backbuffer after frame N, write a PNG, then exit. Exit 1 if it can't be written. |
-| `--size WxH` | Initial window size (default `1280x720`). |
+| `--size WxH` | Initial window size (default `1280x720`; Project Manager `1024x600`). |
 | `--ui-scale F` | Force UI scale `F` (positive number, clamped to 0.75–3.0) instead of the monitor's display scale. |
-| `--project <dir>` | Open `<dir>/project.kast` at startup, like File > Open Project (its `startScene`, else a new Untitled scene). Exit 1 if it is missing or invalid. With `--scene`, the scene opens afterwards and its own project (walk-up) wins. |
-| `--scene <path>` | Open this `.scene` at startup instead of the default scene. Exit 1 if it can't be loaded. |
-| `--save-scene <path>` | Save the startup scene (default or `--scene`) to `path` and exit 0 without opening a window. Exit 1 on write failure. |
+| `--project <dir>` | Open `<dir>/project.kast` at startup (its `startScene`, else a new Untitled scene). Exit 1 if it is missing or invalid. With `--scene`, the scene opens afterwards and its own project (walk-up) wins. Once the editor window opens, the project is added to the top of the recent-projects list. |
+| `--scene <path>` | Open this `.scene` at startup (inside a project or not). Exit 1 if it can't be loaded. |
+| `--save-scene <path>` | With `--scene` or `--project`: save the startup scene to `path` and exit 0 without opening a window. Exit 1 on write failure. |
+| `--projects-file <path>` | Use this recent-projects list instead of `%APPDATA%\Kast\Editor\projects.json` (Project Manager and editor; the Project Manager passes it on to the editor it starts). Tests always set it. |
 | `--select <id>` | Select the entity with this persistent `id` at startup (shows it in the Inspector). Exit 1 if there is none. |
 | `--play` | Enter Play mode right after the startup scene loads. Works with `--frames`, `--screenshot`, `--scene`, `--select`. |
 | `--add-component-popup` | Open the Inspector's Add Component popup for the `--select`ed entity (after the first 10 frames, once the layout has settled). |
 | `--new-component-prompt <Name>` | Open the Inspector's New Lua Component modal at startup with Name prefilled (validation shown). Creates nothing by itself. |
 | `--new-component <Name>` | Create Lua component `<Name>` (as the modal's Create does) and add it to the `--select`ed entity at startup. On failure logs an error and keeps running. |
-| `--new-project <name> <dir>` | Open the File > New Project modal at startup with Name and Directory prefilled (quote values with spaces), e.g. for `--frames 120 --screenshot`. Creates nothing by itself. |
+| `--launcher` | Run the [Project Manager](#project-manager) (what no `--project`/`--scene`/`--save-scene`/`--build` already does), e.g. with `--frames 120 --screenshot`. |
+| `--new-project <name> <dir>` | Project Manager: open its New Project modal at startup with Name and Directory prefilled (quote values with spaces), e.g. for `--frames 120 --screenshot`. Creates nothing by itself. |
+| `--launcher-open <dir>` | Project Manager without a window: open `<dir>` exactly as double-clicking it does (add it to the top of the list, start `kast_editor --project <dir>`), wait for that editor and exit with its exit code; exit 1 if the project is invalid or the editor can't start. |
+| `-- <flags...>` | Project Manager: every argument after `--` is appended to the editor it starts, e.g. `--launcher-open tests/project -- --frames 120 --screenshot out.png` makes that editor take a screenshot and exit. |
 | `--build <dir>` | With `--project`: build that project's game into `<dir>` (see [Build](#build)) and exit without opening a window or any dialog. Exit 0 on success, 1 on failure (no `--project`, invalid `startScene`, ...). Does not remember the folder. |
 | `--open-menu <Name>` | Open that main menu (e.g. `Build`) after the first 10 frames, for screenshots. |
 | `--open-build-settings` | With `--project`: open the Build > Build Settings modal after the first 10 frames, for screenshots. Writes nothing by itself. Without `--project` it is an invalid argument. |
+
+Without `--project`, `--scene`, `--save-scene` or `--build`, `kast_editor` runs the Project Manager instead of the
+editor. Editor-only flags (`--select`, `--play`, `--add-component-popup`, `--new-component[-prompt]`, `--open-menu`,
+`--open-build-settings`) then are invalid arguments, as are Project Manager flags (`--launcher`, `--new-project`,
+`--launcher-open`, `--`) together with the editor's.
 
 Invalid arguments exit with code 2; init failures (SDL, window, bgfx) log the reason, show a message box, and exit 1.
 
@@ -170,32 +179,68 @@ removes that component (not shown for Transform); **Add Component** lists the re
 unsaved-changes flag, selection by id; the editor camera stays where it is). Play (from stopped, including `--play`)
 brings the Game tab to the front; Stop brings the Scene tab back; Pause and resume leave the tabs alone. While
 playing, the Scene panel has an orange border and the title says `(Playing)` or `(Paused)`. Edits during Play are allowed and are discarded on Stop;
-they never mark the scene dirty. File New/Open/Save/Save As/New Project/Open Project are disabled during Play; Exit or
+they never mark the scene dirty. File New/Open/Save/Save As are disabled during Play; Exit or
 closing the window stops Play first. A Lua `kast.loadScene` switch replaces the running scene: Hierarchy, Inspector,
 Scene, Game and the Systems panel status show the new scene, the selection is cleared, the editor camera stays, and the
 title shows `(Playing: <scene>)` / `(Paused: <scene>)`. The edited scene's file and path are never touched; Stop
 restores the pre-Play scene, path, project, dirty flag and selection however many switches happened.
 
-**File**: New (Ctrl+N), Open... (Ctrl+O), Save (Ctrl+S), Save As... (Ctrl+Shift+S), New Project..., Open Project...,
-Exit. The title shows `Kast Editor - <project> - <scene>` with an active project, `Kast Editor - <scene>` without, plus
-`*` when there are unsaved changes; New, Open, New Project, Open Project, Exit and closing the window ask
-Save / Don't Save / Cancel first. Opening an invalid scene shows an error and keeps the current scene.
-Moving the camera does not mark the scene dirty, but Save stores the current camera pose.
+**File**: New (Ctrl+N), Open... (Ctrl+O), Save (Ctrl+S), Save As... (Ctrl+Shift+S), Exit. Projects are created and
+opened from the [Project Manager](#project-manager), not the editor. The title shows `Kast Editor - <project> - <scene>`
+with an active project, `Kast Editor - <scene>` without, plus `*` when there are unsaved changes; New, Open, Exit and
+closing the window ask Save / Don't Save / Cancel first. Opening an invalid scene shows an error and keeps the current
+scene. Moving the camera does not mark the scene dirty, but Save stores the current camera pose.
 
-- **New Project...**: opens a modal with **Name**, **Directory** (type a parent directory or pick one with
-  **Browse...**; cancelling the picker keeps the field) and a `Will create: <directory>\<folder>` preview. The folder
-  name is the name trimmed, with ASCII letters lower-cased and each run of whitespace replaced by `-`
-  (`"  My   Game  "` → `my-game`); non-ASCII characters are kept. **Create** is disabled, with a one-line reason, if
-  that folder name is empty, `.`/`..`, ends with `.` or contains `< > : " / \ | ? *` or a control character, if the
-  directory is empty, missing or not a directory (parent directories are never created), or if `<directory>\<folder>`
-  already exists. Create makes that one folder, writes `project.kast` in it (`"name"` = the trimmed typed name,
-  `startScene: null`) and opens it like Open Project. A failure at that point shows an error, logs it to the Console and
-  removes the folder if this attempt made it. Cancel or Esc writes nothing.
-- **Open Project...**: pick a `project.kast` (the dialog filters `*.kast`; other file names are rejected). An invalid
-  file shows an error and changes nothing. Otherwise the project becomes active and its `startScene` opens; if that is
-  null, missing or fails to load (the Console says why), a new Untitled default scene opens with the project active.
 - Save / Save As never rewrite `systems` paths. If Save As moves a scene with systems into another project or out of
   any project, the Console warns that its system paths may no longer resolve.
+
+## Project Manager
+
+Running `kast_editor.exe` with no project or scene (or with `--launcher`) opens the **Kast Project Manager** window
+(1024×600, resizable) instead of the editor. Opening or creating a project there starts a new
+`kast_editor.exe --project <dir>` process (`SDL_CreateProcess`, sharing the console) and closes the Project Manager's
+window. Its process then waits for that editor and exits with the editor's exit code, so a terminal (`run.bat`) stays
+attached until the editor closes and its log stays in the terminal. Closing the Project Manager without choosing exits
+0 and starts nothing.
+
+- **List** (left), most recently opened first: the project name, its folder and when it was last opened. Click selects;
+  double-click, Enter or **Open** opens the selected project. A project whose folder is missing or whose `project.kast`
+  is missing or invalid (checked when the window opens) is greyed out with the reason, and can't be opened (Open's
+  tooltip says why); it stays listed until removed.
+- **New Project**: a modal with **Name**, **Directory** (type a parent directory or pick one with **Browse...**;
+  cancelling the picker keeps the field) and a `Will create: <directory>\<folder>` preview. The folder name is the name
+  trimmed, with ASCII letters lower-cased and each run of whitespace replaced by `-` (`"  My   Game  "` → `my-game`);
+  non-ASCII characters are kept. **Create** is disabled, with a one-line reason, if that folder name is empty,
+  `.`/`..`, ends with `.` or contains `< > : " / \ | ? *` or a control character, if the directory is empty, missing or
+  not a directory (parent directories are never created), or if `<directory>\<folder>` already exists. Create makes
+  that one folder, writes `project.kast` in it (`"name"` = the trimmed typed name, `startScene: null`), adds it to the
+  list and opens it. A failure shows under the list and removes the folder if this attempt made it. Cancel or Esc
+  writes nothing.
+- **Import**: pick a `project.kast` (the dialog filters `*.kast`; other file names are rejected). An invalid file shows
+  the error under the list and changes nothing. Otherwise the project is added to the top of the list (an already
+  listed folder just moves there, never twice) and opened.
+- **Remove**: drops the selected entry from the list. Files on disk are never touched; no confirmation.
+- If the editor can't be started, the error shows under the list (and in the log) and the Project Manager stays open;
+  the list keeps the update.
+
+**Recent-projects list**: `%APPDATA%\Kast\Editor\projects.json` (`SDL_GetPrefPath("Kast", "Editor")`), or
+`--projects-file <path>`. A JSON array, most recent first, 2-space indent:
+
+```json
+[
+  {
+    "path": "C:/dev/games/my-game",
+    "name": "My Game",
+    "lastOpened": 1791900000
+  }
+]
+```
+
+`path` is the absolute, normalized project folder (`/` separators; compared case-insensitively, so a folder is listed
+once), `name` the project name when last opened, `lastOpened` Unix seconds. Every successful open adds or moves the
+project to the top: Open/double-click/Enter, Import, New Project, `--launcher-open`, and the editor's own `--project`
+startup once its window opens (not `--build` / `--save-scene`). An unreadable or invalid file is copied to
+`projects.json.bad`, a warning is logged, and the list starts empty.
 
 ## Projects
 
@@ -210,12 +255,12 @@ A project is a directory marked by a `project.kast` file (exactly that name):
 ```
 
 - `version` must be 1, `name` a non-empty string, `startScene` a project-relative path or `null` (only its type is
-  checked; Open Project opens it, and a built game starts there, see [Build](#build)). Every key is required and unknown keys
+  checked; opening the project opens it, and a built game starts there, see [Build](#build)). Every key is required and unknown keys
   are rejected. Saved with 2-space indent in this key order.
 - **Active project**: opening a scene (File > Open, `--scene`) activates the project found by walking up from the
   scene's directory (the nearest ancestor-or-self with a `project.kast`; none = no project; an invalid one is warned
   about and treated as none). New (Untitled) keeps the current project. Save / Save As re-run the walk-up from the saved
-  file. Open Project / New Project / `--project` set it directly.
+  file. `--project` (how the Project Manager opens a project) sets it directly.
 - **Project-relative paths** (`systems`, `kast.loadScene`, `startScene`) use `/` separators and must stay inside the
   project: absolute paths and `..` out of the root are rejected.
 - Without an active project the scene can still be edited and played (C++ systems run), but every Lua system is
@@ -537,8 +582,8 @@ The dock layout is saved to `imgui.ini` in the working directory; delete it to g
 
 | Test | What it checks |
 |------|----------------|
-| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values and versions 1–3 rejected), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits; projects: `project.kast` load/save/validation, walk-up discovery, project-relative paths and escape rejection, Open/New Project and Save/Save As on a `Document` (New Project folder-name sanitizing, every validation rule, creating `<dir>/my-game/project.kast` with the trimmed name, never creating missing parents or writing into an existing folder) (no rebasing, project-change warning, title format), no-project Lua disabling, Add Script outside the project, template location; `kast.loadScene` (end-of-frame, last call wins, ignored in `shutdown`, init calls deferred a frame, shutdown/init order, every error case keeps the current scene) and `kast.currentScene`, and Stop restoring the pre-Play scene after two switches; Lua components: definition parsing (every field type and option, recursive discovery, every invalid-definition case naming the file), name clashes (built-in, structural, both duplicate files rejected), sandbox and per-file globals, registry parity (add/has/remove, strict JSON set, Duplicate, save order, byte-identical save/load, snapshot and Document Play/Stop restore), `kast.*` on a Lua component with every `kast.set` error leaving it unchanged, drift rules (one warning per fix, dirty only when data changed, built-ins still strict), missing definitions (load with warnings, verbatim save, `kast.*` raises, later conversion), hot reload of modified/added/deleted/broken files without data loss and the Play freeze, Components panel template naming and enable rules; game.pak: write/read round trip (byte-identical, binary and empty files), directory listing, rejection of bad magic, bad version, truncated header/index/data, an offset past the end and an overflowing size; a mounted pak serving project.kast, readFile and listFiles (and not the disk); Build: exe-name sanitizing, pak contents (no dotfiles, dot-directories or output folder), every validation failure writing nothing, a full build (exe, game.pak, DLLs, other files kept), the remembered folder in `.kast/editor.json` (project.kast unchanged) and the Build menu enable rule (no project, Play, Pause); Build Settings: Start Scene choices (`tests/project` lists `health.scene`, `scene_a.scene`, `scene_b.scene`; a dotfile or dot-directory scene is left out), Save writing only `startScene` (same keys and order, reloads, `doc.project` updated, the open scene's dirty flag and path kept, no `.kast/editor.json`), a scene that doesn't load or escapes the project leaving `project.kast` byte-identical, opening (then Cancel) writing nothing, and Build / Build and Run with `startScene` null or missing opening Build Settings. No window. |
-| `editor_smoke` | `kast_editor --frames 120 --screenshot build/<preset>/smoke.png` (default scene): exit 0 and a non-empty PNG. |
+| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values and versions 1–3 rejected), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits; projects: `project.kast` load/save/validation, walk-up discovery, project-relative paths and escape rejection, opening a project and Save/Save As on a `Document` (New Project folder-name sanitizing, every validation rule, creating `<dir>/my-game/project.kast` with the trimmed name, never creating missing parents or writing into an existing folder) (no rebasing, project-change warning, title format), the Project Manager's recent list (save/load round trip, newest first, case-insensitive dedupe with trailing separators, Remove leaving the project on disk, missing folder / missing or invalid `project.kast` reported, three kinds of corrupt file backed up to `projects.json.bad` with a warning and read as empty) and an editor that can't be started reporting why, no-project Lua disabling, Add Script outside the project, template location; `kast.loadScene` (end-of-frame, last call wins, ignored in `shutdown`, init calls deferred a frame, shutdown/init order, every error case keeps the current scene) and `kast.currentScene`, and Stop restoring the pre-Play scene after two switches; Lua components: definition parsing (every field type and option, recursive discovery, every invalid-definition case naming the file), name clashes (built-in, structural, both duplicate files rejected), sandbox and per-file globals, registry parity (add/has/remove, strict JSON set, Duplicate, save order, byte-identical save/load, snapshot and Document Play/Stop restore), `kast.*` on a Lua component with every `kast.set` error leaving it unchanged, drift rules (one warning per fix, dirty only when data changed, built-ins still strict), missing definitions (load with warnings, verbatim save, `kast.*` raises, later conversion), hot reload of modified/added/deleted/broken files without data loss and the Play freeze, Components panel template naming and enable rules; game.pak: write/read round trip (byte-identical, binary and empty files), directory listing, rejection of bad magic, bad version, truncated header/index/data, an offset past the end and an overflowing size; a mounted pak serving project.kast, readFile and listFiles (and not the disk); Build: exe-name sanitizing, pak contents (no dotfiles, dot-directories or output folder), every validation failure writing nothing, a full build (exe, game.pak, DLLs, other files kept), the remembered folder in `.kast/editor.json` (project.kast unchanged) and the Build menu enable rule (no project, Play, Pause); Build Settings: Start Scene choices (`tests/project` lists `health.scene`, `scene_a.scene`, `scene_b.scene`; a dotfile or dot-directory scene is left out), Save writing only `startScene` (same keys and order, reloads, `doc.project` updated, the open scene's dirty flag and path kept, no `.kast/editor.json`), a scene that doesn't load or escapes the project leaving `project.kast` byte-identical, opening (then Cancel) writing nothing, and Build / Build and Run with `startScene` null or missing opening Build Settings. No window. |
+| `editor_smoke` | `kast_editor --frames 120 --screenshot build/<preset>/smoke.png` with no project or scene (the Project Manager, empty list): exit 0 and a non-empty PNG. Every screenshot test passes `--projects-file <its run folder>/projects.json`. |
 | `editor_smoke_scaled` | Same, with `--ui-scale 2.0`. |
 | `scene_screenshot` | Same, with `--scene tests/scenes/basic.scene`. |
 | `scene_roundtrip` | `basic.scene` → `--save-scene roundtrip_out.scene` → load that → `roundtrip_out2.scene`; the two saves must be byte-identical. |
@@ -553,7 +598,11 @@ The dock layout is saved to `imgui.ini` in the working directory; delete it to g
 | `scene_bad_json`, `scene_missing`, `scene_v1_rejected`, `scene_v3_rejected` | `--scene` with `tests/scenes/malformed.scene` / a missing file / the version 1 `tests/scenes/v1.scene` / the version 3 `tests/scenes/v3.scene` must exit 1. |
 | `project_startup` | `--project tests/project`: exit 0 and a PNG (opens its `startScene`, `scene_a.scene`). |
 | `project_missing` | `--project tests/scenes/scripts` (no `project.kast`) must exit 1. |
-| `new_project_valid_screenshot` | `--new-project "My Game" build/<preset>/new_project_parent` (an existing folder), writing `new_project_valid.png` (preview `...\my-game`, Create enabled). Fails if `my-game` was created. |
+| `launcher_screenshot` | `--launcher` with a list holding `tests/project` and a missing folder, writing `launcher.png` (one normal row, one greyed with "Folder not found"). |
+| `launcher_corrupt_list` | No arguments with an invalid `projects.json`: exit 0, `projects.json.bad` written, `launcher_corrupt.png` shows an empty list. |
+| `launcher_open` | `--launcher-open tests/project -- --frames 120 --screenshot launcher_open.png`: exit 0 (the started editor's, after waiting for it), the editor wrote `launcher_open.png`, and `tests/project` is first in the list. |
+| `editor_project_records_recent` | `--project tests/project`: the list file then holds `tests/project`. |
+| `new_project_valid_screenshot` | Project Manager `--new-project "My Game" build/<preset>/new_project_parent` (an existing folder), writing `new_project_valid.png` (preview `...\my-game`, Create enabled). Fails if `my-game` was created. |
 | `new_project_invalid_screenshot` | Same with a missing directory, writing `new_project_invalid.png` (inline "does not exist", Create disabled). Fails if the missing directory was created. |
 | `switch_play_screenshot`, `switch_play_no_systems_screenshot` | `--play` on `tests/project/scene_a.scene` (its script calls `kast.loadScene("scene_b.scene")` on the first frame) and on a copy with `"systems": []` generated at configure time, writing `switch_play.png` / `switch_play_no_systems.png`. |
 | `lua_components_screenshot` | `--scene tests/project/health.scene --select 3 --size 1280x1000`: the Components panel lists `Health` as OK and the Inspector shows Hero's `Health` with every widget kind, writing `lua_components.png`. |
@@ -571,7 +620,7 @@ The dock layout is saved to `imgui.ini` in the working directory; delete it to g
 | `player_missing_pak`, `player_corrupt_pak` | The built game with its `game.pak` deleted / replaced by text, with `--frames`: exit 1 (no message box, no hang). |
 | `build_bad_start_scene` | `--build` on a copy whose `startScene` is `missing.scene`: exit 1, and the (empty) output folder gets no exe and no `game.pak`. |
 | `build_no_project` | `--build` without `--project`: exit 1, nothing written. |
-| `build_menu_screenshot`, `build_menu_play_screenshot`, `build_menu_no_project_screenshot` | `--open-menu Build` with `--project tests/project` (Build Settings..., a separator, Build..., Build and Run: enabled), with `--play` too (disabled) and with no project (disabled), writing `build_menu*.png`. |
+| `build_menu_screenshot`, `build_menu_play_screenshot`, `build_menu_no_project_screenshot` | `--open-menu Build` with `--project tests/project` (Build Settings..., a separator, Build..., Build and Run: enabled), with `--play` too (disabled) and with `--scene tests/scenes/basic.scene`, outside any project (disabled), writing `build_menu*.png`. |
 | `build_settings_screenshot`, `build_settings_missing_screenshot`, `build_settings_no_scenes_screenshot` | `--open-build-settings` on `tests/project` (`scene_a.scene` selected), on the `bad_start` copy (`missing.scene (missing)`, Save disabled) and on `build/<preset>/game_projects/no_scenes` (only `project.kast` and an excluded `.kast/scene_a.scene`: hint text, dropdown and Save disabled), writing `build_settings*.png`. |
 | `build_no_start_scene` | `--build` on the `no_scenes` copy (`startScene: null`): exit 1, nothing written, and the error mentions `Build Settings`. |
 

@@ -4,6 +4,7 @@
 // Exit 0 if every check passes. Run by CTest as engine_self_check.
 #include "build.h"    // editor Build pipeline; links editor/build.cpp
 #include "document.h" // editor Play mode; links editor/document.cpp, no window needed
+#include "recent_projects.h" // Project Manager list; links editor/recent_projects.cpp
 
 #include <components.h>
 #include <files.h>
@@ -21,6 +22,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -1172,6 +1174,63 @@ void checkProjectDocument()
     std::filesystem::remove_all(parent);
 }
 
+// Project Manager recent list: JSON round trip, bump to top without duplicates, Remove, unusable entries, corrupt file.
+void checkRecentProjects()
+{
+    const std::filesystem::path root = looseTestDir("kast_recent_check");
+    const std::filesystem::path file = root / "lists/projects.json";
+    const std::filesystem::path alpha = projectTestDir("kast_recent_check/Alpha", "Alpha");
+    const std::filesystem::path beta = projectTestDir("kast_recent_check/beta", "Beta");
+    std::string error;
+
+    check(loadRecent(file).empty(), "no list file: an empty list");
+    std::vector<RecentProject> list;
+    bumpRecent(list, alpha, "Alpha", 100);
+    bumpRecent(list, beta / "scripts" / "..", "Beta", 200);
+    check(list.size() == 2 && list[0].dir == beta && list[0].lastOpened == 200 && list[1].name == "Alpha",
+          "bump: newest first, the path made normal");
+    check(saveRecent(file, list, error) && std::filesystem::exists(file), "the list is saved, creating its folder");
+    std::vector<RecentProject> loaded = loadRecent(file);
+    check(loaded.size() == 2 && loaded[0].dir == beta && loaded[0].name == "Beta" && loaded[0].lastOpened == 200 &&
+              loaded[1].dir == alpha && loaded[1].lastOpened == 100,
+          "save/load round trip keeps path, name, time and order");
+    check(contains(readText(file), "[\n  {\n    \"path\": \"" + beta.generic_string() + "\",\n"),
+          "2-space indent, '/'-separated paths");
+
+    std::string upper = alpha.string();
+    std::ranges::transform(upper, upper.begin(), [](char c) { return static_cast<char>(std::toupper(c)); });
+    bumpRecent(loaded, upper + "\\", "Alpha", 300);
+    check(loaded.size() == 2 && loaded[0].name == "Alpha" && loaded[0].lastOpened == 300 && loaded[1].name == "Beta",
+          "bump of a listed folder (other case, trailing '\\') moves it to the top without a duplicate");
+    loaded.erase(loaded.begin() + 1); // Remove
+    check(saveRecent(file, loaded, error) && loadRecent(file).size() == 1 && std::filesystem::exists(beta / "project.kast"),
+          "Remove drops the entry only; the project stays on disk");
+
+    check(recentProblem({alpha, "Alpha", 1}).empty(), "a valid project has no problem");
+    check(recentProblem({root / "gone", "Gone", 1}) == "Folder not found", "a missing folder is reported");
+    writeFile(beta / "project.kast", R"({"version": 1})");
+    check(contains(recentProblem({beta, "Beta", 1}), "Invalid project"), "an invalid project.kast is reported");
+    std::filesystem::remove(beta / "project.kast");
+    check(!recentProblem({beta, "Beta", 1}).empty(), "a folder without project.kast is reported");
+
+    kast::Project project;
+    check(kast::loadProject(alpha / "project.kast", project, error) && recordRecent(file, project, error) &&
+              loadRecent(file).size() == 1 && loadRecent(file)[0].dir == alpha,
+          "recordRecent: an open project is listed once, at the top");
+
+    for (const char* bad : {"{not json", R"({"path": "x"})", R"([{"path": "x", "name": 3, "lastOpened": 1}])"}) {
+        writeFile(file, bad);
+        std::filesystem::remove(root / "lists/projects.json.bad");
+        const auto warned = countLogged("is invalid");
+        check(loadRecent(file).empty() && readText(root / "lists/projects.json.bad") == bad &&
+                  countLogged("is invalid") == warned + 1,
+              std::format("a corrupt list ({}) is backed up to projects.json.bad, warned about and read as empty", bad).c_str());
+    }
+    check(!launchProcess(root / "missing.exe", {"--project", alpha.string()}, error) && contains(error, "Cannot start"),
+          "a process that can't start (the Project Manager's editor) reports why");
+    std::filesystem::remove_all(root);
+}
+
 // No active project: C++ systems still run, every Lua system is disabled, and the Systems panel can't add.
 void checkNoProjectLua()
 {
@@ -2306,6 +2365,7 @@ int main()
     checkLuaHotReload();
     checkProjectFiles();
     checkProjectDocument();
+    checkRecentProjects();
     checkNoProjectLua();
     checkSystemEdits();
     checkSceneSwitchErrors();

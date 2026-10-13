@@ -1,5 +1,7 @@
 #include "panels.h"
 
+#include "ui_common.h"
+
 #include <components.h>
 #include <log.h>
 #include <lua_components.h>
@@ -24,13 +26,6 @@ constexpr const char* kEntityPayload = "KAST_ENTITY";
 constexpr SDL_DialogFileFilter kLuaFilter{"Lua script (*.lua)", "lua"};
 constexpr ImVec4 kOkColor{0.4f, 0.85f, 0.4f, 1.0f};
 constexpr ImVec4 kErrorColor{1.0f, 0.45f, 0.4f, 1.0f};
-
-// Explains why the last (disabled) item is disabled, if it is.
-void disabledTooltip(const char* reason)
-{
-    if (reason && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("%s", reason);
-}
 
 bool sameBits(const bx::Quaternion& a, const bx::Quaternion& b) { return std::memcmp(&a, &b, sizeof(a)) == 0; }
 

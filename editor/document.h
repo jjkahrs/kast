@@ -134,10 +134,6 @@ public:
     void setWindow(SDL_Window* window) { window_ = window; }
     void newScene();
     void open();
-    void newProject();
-    // Opens the New Project modal prefilled with these values (--new-project); creates nothing by itself.
-    void openNewProject(std::string name, std::string dir);
-    void openProject();
     void save();
     void saveAs();
     void exit();
@@ -149,11 +145,8 @@ public:
     // Opens the Build Settings modal (Start Scene choice, saved to project.kast); reason is shown in it, may be empty.
     void openBuildSettings(std::string reason = "");
     bool buildSettingsOpen() const { return buildSettingsOpen_; }
-    // File actions are available: no dialog, New Project or Build Settings modal open and not in Play mode.
-    bool idle() const
-    {
-        return !dialogOpen_ && !newProjectOpen_ && !buildSettingsOpen_ && doc_.play == PlayState::Stopped;
-    }
+    // File actions are available: no dialog or Build Settings modal open and not in Play mode.
+    bool idle() const { return !dialogOpen_ && !buildSettingsOpen_ && doc_.play == PlayState::Stopped; }
     // Build menu items are available: idle and a project is open.
     bool canBuild() const { return idle() && doc_.project.has_value(); }
 
@@ -163,8 +156,8 @@ public:
     bool onQuitRequested();
 
 private:
-    enum class Pending { None, New, Open, NewProject, OpenProject, Quit, Build, BuildAndRun };
-    enum class DialogKind { Open, SaveAs, NewProjectFolder, OpenProject, BuildFolder };
+    enum class Pending { None, New, Open, Quit, Build, BuildAndRun };
+    enum class DialogKind { Open, SaveAs, BuildFolder };
 
     // Runs action now, or after the unsaved-changes modal if the document is dirty.
     void request(Pending action);
@@ -173,9 +166,6 @@ private:
     void handleDialogResult();
     void saveTo(const std::string& path, Pending after);
     void drawModals();
-    void drawNewProjectModal();
-    void browseNewProjectDir();
-    void createNewProject();
     void drawBuildSettingsModal();
     // Build / Build and Run: false (Build Settings opened instead) if the project's startScene can't be built.
     bool startSceneReady();
@@ -194,10 +184,6 @@ private:
     std::string error_;
     bool errorRequested_ = false;
     std::string title_;
-    std::string newProjectName_; // New Project modal fields
-    std::string newProjectDir_;  // parent directory, typed or picked with Browse...
-    bool newProjectRequested_ = false;
-    bool newProjectOpen_ = false;
     bool runAfterBuild_ = false; // the Build folder dialog was opened by Build and Run
     std::vector<std::string> buildScenes_; // Build Settings modal: projectScenes, listed when it opens
     std::string buildStartScene_;          // the Start Scene choice (maybe not in buildScenes_: shown "(missing)")
