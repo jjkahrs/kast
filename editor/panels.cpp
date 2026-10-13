@@ -595,3 +595,44 @@ void Panels::drawSystems(Document& doc)
     }
     ImGui::End();
 }
+
+void Panels::drawEvents(Document& doc)
+{
+    if (ImGui::Begin("Events")) {
+        kast::EventBus& bus = doc.lua.bus();
+        if (ImGui::Button("Clear"))
+            bus.clearHistory();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##filter", "Filter by event name", &eventsFilter_);
+        constexpr ImGuiTableFlags flags = ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                                          ImGuiTableFlags_Resizable | ImGuiTableFlags_NoSavedSettings;
+        if (ImGui::BeginTable("events", 4, flags)) {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            const float charWidth = ImGui::CalcTextSize("0").x; // starting widths; columns are resizable
+            ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthFixed, charWidth * 5);
+            ImGui::TableSetupColumn("Event", ImGuiTableColumnFlags_WidthFixed, charWidth * 10);
+            ImGui::TableSetupColumn("Payload", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Publisher", ImGuiTableColumnFlags_WidthFixed, charWidth * 12);
+            ImGui::TableHeadersRow();
+            // ponytail: draws every matching row (at most EventBus::kHistorySize); clip if the history grows.
+            for (const kast::EventBus::Delivered& event : bus.history()) {
+                if (event.name.find(eventsFilter_) == std::string::npos)
+                    continue;
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("%llu", static_cast<unsigned long long>(event.frame));
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(event.name.c_str());
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(event.payload.c_str());
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(event.publisher.c_str());
+            }
+            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) // follow new events while at the bottom
+                ImGui::SetScrollHereY(1.0f);
+            ImGui::EndTable();
+        }
+    }
+    ImGui::End();
+}

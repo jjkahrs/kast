@@ -7,6 +7,7 @@
 #include "recent_projects.h" // Project Manager list; links editor/recent_projects.cpp
 
 #include <components.h>
+#include <event_bus.h>
 #include <files.h>
 #include <input.h>
 #include <log.h>
@@ -31,6 +32,7 @@
 #include <fstream>
 #include <iterator>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 
 namespace {
@@ -2254,8 +2256,9 @@ void checkBuild()
 // Build Settings: Start Scene choices, Save validating and writing only project.kast, Build opening the modal.
 void checkBuildSettings()
 {
-    check(projectScenes(KAST_TEST_PROJECT_DIR) == std::vector<std::string>{"health.scene", "scene_a.scene", "scene_b.scene"},
-          "tests/project lists health.scene, scene_a.scene, scene_b.scene");
+    check(projectScenes(KAST_TEST_PROJECT_DIR) ==
+              std::vector<std::string>{"events.scene", "health.scene", "scene_a.scene", "scene_b.scene"},
+          "tests/project lists events.scene, health.scene, scene_a.scene, scene_b.scene");
 
     const std::filesystem::path root = looseTestDir("kast_build_settings_check") / "game";
     std::filesystem::copy(KAST_TEST_PROJECT_DIR, root, std::filesystem::copy_options::recursive);
@@ -2265,8 +2268,8 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / ".dot.scene");
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
-    check(projectScenes(root) == std::vector<std::string>{"broken.scene", "health.scene", "levels/c.scene",
-                                                          "scene_a.scene", "scene_b.scene"},
+    check(projectScenes(root) == std::vector<std::string>{"broken.scene", "events.scene", "health.scene",
+                                                          "levels/c.scene", "scene_a.scene", "scene_b.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
     Document doc;
@@ -2343,6 +2346,421 @@ void checkMountedPak()
           "listFiles of the root and of a missing folder");
 }
 
+// --- Events ---
+
+// The C++ bus alone: publish and subscription order, next-drain re-publish, subscribe/unsubscribe during a drain,
+// a throwing subscriber, RAII handles, dropQueued, reset and the bounded history.
+void checkEventBus()
+{
+    kast::EventBus bus;
+    std::vector<std::string> seen;
+    const auto record = [&](std::string tag) {
+        return [&seen, tag](const nlohmann::json& payload) { seen.push_back(tag + payload.dump()); };
+    };
+    kast::EventBus::Subscription a1 = bus.subscribe("a", record("a1"));
+    kast::EventBus::Subscription b1 = bus.subscribe("b", record("b1"));
+    kast::EventBus::Subscription a2 = bus.subscribe("a", record("a2"));
+    bus.publish("b", 1);
+    bus.publish("a", 2);
+    check(seen.empty(), "bus: publish only queues");
+    bus.drain();
+    check(seen == std::vector<std::string>{"b11", "a12", "a22"}, "bus: publish order, then subscription order");
+    check(bus.history().size() == 2 && bus.history()[0].frame == 1 && bus.history()[0].name == "b" &&
+              bus.history()[0].payload == "1" && bus.history()[0].publisher == "C++",
+          "bus: history records frame, name, compact payload and publisher");
+
+    // A subscriber that re-publishes, subscribes and unsubscribes during a drain.
+    seen.clear();
+    std::vector<kast::EventBus::Subscription> added;
+    kast::EventBus::Subscription cut;
+    kast::EventBus::Subscription actor = bus.subscribe("act", [&](const nlohmann::json&) {
+        seen.push_back("actor");
+        bus.publish("act", "again");                     // next drain
+        added.push_back(bus.subscribe("act", record("late"))); // from the next event
+        cut.unsubscribe();                                 // immediately, even for this event
+        cut.unsubscribe();                                 // twice: no-op
+    });
+    cut = bus.subscribe("act", record("cut"));
+    bus.publish("act", nullptr);
+    bus.drain();
+    check(seen == std::vector<std::string>{"actor"}, "bus: unsubscribe mid-drain is immediate; a new subscription waits");
+    seen.clear();
+    bus.drain();
+    check(seen == std::vector<std::string>{"actor", "late\"again\""}, "bus: an event published in a drain arrives in the next");
+    actor.unsubscribe();
+    added.clear();
+    bus.drain(); // the last "again"
+    seen.clear();
+
+    bool after = false;
+    kast::EventBus::Subscription thrower = bus.subscribe("t", [](const nlohmann::json&) { throw std::runtime_error("bad"); });
+    kast::EventBus::Subscription next = bus.subscribe("t", [&](const nlohmann::json&) { after = true; });
+    bus.publish("t", nullptr);
+    bus.drain();
+    check(after && logged("Event 't': C++ subscriber failed: bad"), "bus: a throwing C++ subscriber is logged, the rest run");
+
+    {
+        kast::EventBus::Subscription scoped = bus.subscribe("s", record("scoped"));
+        kast::EventBus::Subscription moved = std::move(scoped);
+    }
+    bus.publish("s", nullptr);
+    bus.drain();
+    check(seen.empty(), "bus: a destroyed handle unsubscribes (after a move too)");
+
+    bus.publish("a", 3);
+    bus.dropQueued();
+    bus.drain();
+    check(seen.empty(), "bus: dropQueued discards undelivered events");
+
+    for (int i = 0; i < 600; ++i)
+        bus.publish("h", i);
+    bus.drain();
+    check(bus.history().size() == kast::EventBus::kHistorySize && bus.history().back().payload == "599" &&
+              bus.history().front().payload == "100",
+          "bus: the history keeps the last 500 events");
+    bus.clearHistory();
+    check(bus.history().empty(), "bus: clearHistory (the Events panel's Clear) empties the history");
+
+    bus.publish("a", 4);
+    bus.reset();
+    bus.publish("a", 5);
+    bus.drain();
+    check(seen.empty() && bus.history().size() == 1 && bus.history()[0].frame == 1,
+          "bus: reset drops the queue, subscriptions and history and restarts the frame count");
+    a1.unsubscribe(); // stale after reset: no-op
+    kast::EventBus::Subscription fresh = bus.subscribe("a", record("fresh"));
+    a2.unsubscribe(); // stale id must not remove the newer subscription
+    bus.publish("a", 6);
+    bus.drain();
+    check(seen == std::vector<std::string>{"fresh6"}, "bus: stale handles never remove newer subscriptions");
+}
+
+// Lua -> Lua and Lua -> C++: same frame after every update, shared subscription order, independent payload copies,
+// payload conversion.
+void checkLuaEvents()
+{
+    const std::filesystem::path dir = luaTestDir();
+    writeFile(dir / "a.lua", R"(local frame = 0
+assert(type(kast.publish) == "function" and type(kast.subscribe) == "function" and type(kast.unsubscribe) == "function")
+assert(not pcall(function() kast.publish = nil end), "kast.publish can't be overwritten")
+return { update = function(dt)
+    frame = frame + 1
+    kast.log("ev a update " .. frame)
+    if frame == 1 then
+        kast.publish("first", {n = 1})
+        kast.publish("data", {list = {1, 2, 3}, obj = {a = "x"}, empty = {}, flag = true, s = "str", f = 1.5, i = -7})
+        kast.publish("bare")
+    end
+end })");
+    writeFile(dir / "b.lua", R"(return {
+    init = function()
+        kast.subscribe("first", function(p) kast.log("ev b first " .. p.n); p.n = 99; p.extra = true end)
+        kast.subscribe("data", function(p) kast.log("ev b data") end)
+    end,
+    update = function(dt) kast.log("ev b update") end,
+})");
+    writeFile(dir / "d.lua", R"(local subscribed = false
+return { update = function(dt)
+    if not subscribed then
+        subscribed = true
+        kast.subscribe("first", function(p)
+            assert(p.n == 1 and p.extra == nil, "each subscriber gets its own copy")
+            kast.log("ev d first")
+        end)
+    end
+end })");
+    kast::Scene scene;
+    scene.systems = {"a.lua", "b.lua", "d.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr);
+    nlohmann::json first, data, bare = "unset";
+    kast::EventBus::Subscription s1 = lua.bus().subscribe("first", [&](const nlohmann::json& p) {
+        kast::log::info("ev C++ first");
+        first = p;
+    });
+    kast::EventBus::Subscription s2 = lua.bus().subscribe("data", [&](const nlohmann::json& p) { data = p; });
+    kast::EventBus::Subscription s3 = lua.bus().subscribe("bare", [&](const nlohmann::json& p) { bare = p; });
+    lua.tick(0.1f);
+    checkOk(lua, 0, "events: kast.publish/subscribe/unsubscribe exist and are read-only");
+    checkOk(lua, 2, "events: Lua subscribers get independent copies");
+    check(logIndex("ev a update 1") < logIndex("ev b update") && logIndex("ev b update") < logIndex("ev b first 1"),
+          "events: Lua -> Lua in the same frame, after every update");
+    check(logIndex("ev b first 1") < logIndex("ev C++ first") && logIndex("ev C++ first") < logIndex("ev d first") &&
+              logIndex("ev d first") < logIndex("ev b data") && logIndex("ev b data") != SIZE_MAX,
+          "events: publish order, then one subscription order across Lua and C++");
+    check(first == nlohmann::json{{"n", 1}}, "events: Lua -> C++ payload, unchanged by Lua subscribers");
+    check(data == nlohmann::json::parse(
+                      R"({"list": [1, 2, 3], "obj": {"a": "x"}, "empty": {}, "flag": true, "s": "str", "f": 1.5, "i": -7})"),
+          "events: payload conversion (arrays, objects, empty table, scalars)");
+    check(data["i"].is_number_integer() && bare.is_null(), "events: integral numbers are integers; no payload is null");
+    check(lua.bus().history().size() == 3 && lua.bus().history()[0].publisher == "a.lua",
+          "events: the publisher is the system's path");
+    lua.stop();
+    std::filesystem::remove_all(dir);
+}
+
+// C++ -> Lua, JSON -> Lua conversion, re-publish and subscribe during a drain, unsubscribe during a drain.
+void checkLuaEventsFromCpp()
+{
+    const std::filesystem::path dir = luaTestDir();
+    writeFile(dir / "r.lua", R"(local late = 0
+local second
+return {
+    init = function()
+        kast.subscribe("cpp", function(p)
+            assert(#p.arr == 2 and p.arr[1] == 1 and p.arr[2] == 2, "array -> sequence")
+            assert(p.o.k == "v" and p.b == false and p.nul == nil and p.i == 7 and p.s == "x", "object -> table")
+            assert(next(p.e) == nil, "empty object -> empty table")
+            kast.log("ev r cpp")
+            kast.publish("pong", {from = "r"}) -- next frame
+            kast.subscribe("cpp", function() late = late + 1; kast.log("ev r late " .. late) end) -- from the next event
+        end)
+        kast.subscribe("cut", function()
+            kast.unsubscribe(second)
+            kast.unsubscribe(second) -- twice: no-op
+            kast.log("ev r cutter")
+        end)
+        second = kast.subscribe("cut", function() kast.log("ev r second") end)
+    end,
+    update = function(dt) end,
+})");
+    kast::Scene scene;
+    scene.systems = {"r.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr);
+    int pongs = 0;
+    kast::EventBus::Subscription thrower =
+        lua.bus().subscribe("pong", [](const nlohmann::json&) { throw std::runtime_error("pong failed"); });
+    kast::EventBus::Subscription counter = lua.bus().subscribe("pong", [&](const nlohmann::json&) { ++pongs; });
+    const nlohmann::json payload =
+        nlohmann::json::parse(R"({"arr": [1, 2], "o": {"k": "v"}, "b": false, "nul": null, "i": 7, "s": "x", "e": {}})");
+    lua.bus().publish("cpp", payload);
+    lua.bus().publish("cut", nullptr);
+    lua.tick(0.1f);
+    checkOk(lua, 0, "events: C++ -> Lua payload converts to tables");
+    check(logged("ev r cpp") && pongs == 0 && !logged("ev r late"),
+          "events: published during a drain waits; a subscription added during a drain misses the current event");
+    check(logged("ev r cutter") && !logged("ev r second"), "events: unsubscribe during a drain is immediate");
+    lua.bus().publish("cpp", payload);
+    lua.tick(0.1f);
+    check(pongs == 1 && logged("Event 'pong': C++ subscriber failed: pong failed"),
+          "events: re-published event arrives next frame; a throwing C++ subscriber doesn't stop the rest");
+    check(logged("ev r late 1") && !logged("ev r late 2"), "events: the late subscription gets later events only");
+    checkOk(lua, 0, "events: the system is still fine");
+    lua.stop();
+    std::filesystem::remove_all(dir);
+}
+
+// Rejections raise at the calling file:line and queue nothing.
+void checkLuaEventErrors()
+{
+    const std::filesystem::path dir = luaTestDir();
+    writeFile(dir / "rej.lua", R"(local cyc = {}; cyc.self = cyc
+local deep = {}; local t = deep; for i = 1, 32 do t.x = {}; t = t.x end
+local ok32 = {}; t = ok32; for i = 1, 31 do t.x = {}; t = t.x end
+local function try(f) local ok, err = pcall(f); kast.log("rej " .. tostring(ok) .. " " .. tostring(err)) end
+return { update = function(dt)
+    try(function() kast.publish(42) end)
+    try(function() kast.publish("") end)
+    try(function() kast.publish("e", {f = print}) end)
+    try(function() kast.publish("e", {u = newproxy()}) end)
+    try(function() kast.publish("e", {co = coroutine.create(print)}) end)
+    try(function() kast.publish("e", cyc) end)
+    try(function() kast.publish("e", deep) end)
+    try(function() kast.publish("e", {1, a = 2}) end)
+    try(function() kast.publish("e", {1, nil, 3}) end)
+    try(function() kast.publish("e", {[0] = 1}) end)
+    try(function() kast.publish("e", {x = 0 / 0}) end)
+    try(function() kast.subscribe("e", 5) end)
+    try(function() kast.subscribe("", print) end)
+    try(function() kast.unsubscribe(5) end)
+    try(function() kast.unsubscribe({}) end)
+    kast.publish("ok32", ok32)
+end })");
+    kast::Scene scene;
+    scene.systems = {"rej.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr);
+    lua.tick(0.1f);
+    checkOk(lua, 0, "events: rejections are catchable Lua errors");
+    const std::pair<int, const char*> cases[] = {
+        {6, "kast.publish: event name must be a non-empty string, got 42"},
+        {7, "kast.publish: event name must be a non-empty string"},
+        {8, "kast.publish: payload.f: a function can't be sent in an event"},
+        {9, "kast.publish: payload.u: a userdata can't be sent in an event"},
+        {10, "kast.publish: payload.co: a thread can't be sent in an event"},
+        {11, "kast.publish: payload.self: the table contains itself (cycle)"},
+        {12, "kast.publish: payload.x.x.x"}, // ... 32 levels: checked below
+        {13, "kast.publish: payload: table keys must be exactly 1..n (an array) or all strings (an object)"},
+        {14, "kast.publish: payload: table keys must be exactly 1..n"},
+        {15, "kast.publish: payload: table keys must be exactly 1..n"},
+        {16, "kast.publish: payload.x must be a finite number"},
+        {17, "kast.subscribe: callback must be a function, got 5"},
+        {18, "kast.subscribe: event name must be a non-empty string"},
+        {19, "kast.unsubscribe: expected a handle from kast.subscribe, got 5"},
+        {20, "kast.unsubscribe: expected a handle from kast.subscribe, got table"},
+    };
+    for (const auto& [line, message] : cases)
+        check(logged(std::format("rej false rej.lua:{}: {}", line, message)),
+              std::format("events: rejected at rej.lua:{}: {}", line, message).c_str());
+    check(logged("x: tables are nested more than 32 deep"), "events: nesting deeper than 32 is rejected");
+    check(lua.bus().history().size() == 1 && lua.bus().history()[0].name == "ok32",
+          "events: rejected calls queue nothing; 32 nested tables are fine");
+    lua.stop();
+    std::filesystem::remove_all(dir);
+}
+
+// A failing subscriber disables only its system (and removes its subscriptions); hot reload, Stop and Play start
+// clean subscriptions up.
+void checkLuaEventLifetime()
+{
+    const std::filesystem::path dir = luaTestDir();
+    writeFile(dir / "bad.lua", R"(return {
+    init = function()
+        kast.subscribe("hit", function(p)
+            error("subscriber failed")
+        end)
+        kast.subscribe("hit", function(p) kast.log("ev bad second") end)
+        kast.subscribe("other", function(p) kast.log("ev bad other") end)
+    end,
+    update = function(dt) end,
+})");
+    const auto good = [](const char* tag) {
+        return std::format(R"(return {{
+    init = function() kast.subscribe("hit", function(p) kast.log("ev good {0} " .. p.n) end) end,
+    update = function(dt) end,
+}})",
+                           tag);
+    };
+    writeFile(dir / "good.lua", good("v1"));
+    kast::Scene scene;
+    scene.systems = {"bad.lua", "good.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr);
+    lua.bus().publish("hit", {{"n", 1}});
+    lua.tick(0.1f);
+    const kast::LuaSystemStatus bad = statusOf(lua, 0);
+    check(!bad.ok && contains(bad.error, "bad.lua:4: subscriber failed") &&
+              logged("Lua system disabled: bad.lua:4: subscriber failed"),
+          "events: a failing subscriber disables its system with file:line");
+    check(!logged("ev bad second") && logged("ev good v1 1") && statusOf(lua, 1).ok,
+          "events: the failed system's other subscribers stop; other systems' still run");
+    lua.bus().publish("other", nullptr);
+    lua.tick(0.1f);
+    check(!logged("ev bad other"), "events: disabling removes all of the system's subscriptions");
+
+    rewrite(dir / "good.lua", good("v2"));
+    lua.tick(0.1f); // reload: the old instance's subscription goes
+    lua.bus().publish("hit", {{"n", 2}});
+    lua.tick(0.1f);
+    check(logged("ev good v2 2") && !logged("ev good v1 2"), "events: hot reload drops the old instance's subscriptions");
+
+    rewrite(dir / "bad.lua", R"(return {
+    init = function() kast.subscribe("hit", function(p) kast.log("ev fixed " .. p.n) end) end,
+    update = function(dt) end,
+})");
+    lua.tick(0.1f);
+    lua.bus().publish("hit", {{"n", 3}});
+    lua.tick(0.1f);
+    check(statusOf(lua, 0).ok && logged("ev fixed 3"), "events: a good hot reload subscribes again");
+
+    int cpp = 0;
+    kast::EventBus::Subscription sub = lua.bus().subscribe("hit", [&](const nlohmann::json&) { ++cpp; });
+    lua.bus().publish("hit", {{"n", 4}});
+    lua.stop();
+    lua.bus().drain();
+    check(cpp == 0 && !logged("ev good v2 4") && !logged("ev fixed 4"), "events: Stop drops queued events");
+    lua.bus().publish("hit", {{"n", 5}});
+    lua.bus().drain();
+    check(cpp == 1 && !logged("ev good v2 5") && !logged("ev fixed 5"), "events: no Lua subscriber is left after Stop");
+    check(!lua.bus().history().empty(), "events: the history outlives Stop");
+
+    lua.start(scene, dir, "", nullptr);
+    check(lua.bus().history().empty(), "events: Play start clears the history");
+    lua.bus().publish("hit", {{"n", 6}});
+    lua.tick(0.1f);
+    check(cpp == 1 && logged("ev fixed 6"), "events: Play start clears C++ subscriptions");
+    lua.stop();
+    std::filesystem::remove_all(dir);
+}
+
+// Scene switch: old Lua subscribers are gone, queued events dropped, C++ subscriptions and history kept.
+void checkLuaEventSceneSwitch()
+{
+    const std::filesystem::path dir = projectTestDir("kast_event_switch_check", "Events");
+    saveTestScene(dir / "a.scene", "A", {"scripts/a.lua"});
+    saveTestScene(dir / "b.scene", "B", {"scripts/b.lua"});
+    writeFile(dir / "scripts/a.lua", R"(return {
+    init = function()
+        kast.subscribe("go", function(p)
+            kast.log("ev a go")
+            kast.publish("late") -- queued for the next frame: dropped by the switch
+            kast.loadScene("b.scene")
+        end)
+        kast.subscribe("ping", function(p) kast.log("ev a ping") end)
+    end,
+    update = function(dt) end,
+    shutdown = function() kast.publish("from shutdown") end, -- dropped
+})");
+    writeFile(dir / "scripts/b.lua", R"(return {
+    init = function() kast.subscribe("ping", function(p) kast.log("ev b ping") end) end,
+    update = function(dt) end,
+})");
+    Document doc;
+    std::string error;
+    check(openFile(doc, (dir / "a.scene").string(), error) && doc.project, "open a.scene for the event switch");
+    startPlay(doc);
+    std::vector<std::string> cpp;
+    kast::EventBus::Subscription sub = doc.lua.bus().subscribe("ping", [&](const nlohmann::json&) { cpp.push_back("ping"); });
+    kast::EventBus::Subscription late = doc.lua.bus().subscribe("late", [&](const nlohmann::json&) { cpp.push_back("late"); });
+    kast::EventBus::Subscription shut =
+        doc.lua.bus().subscribe("from shutdown", [&](const nlohmann::json&) { cpp.push_back("shutdown"); });
+    doc.lua.bus().publish("go", nullptr);
+    updatePlay(doc, 0.1f);
+    check(logged("ev a go") && doc.playSceneName == "b", "events: a subscriber's loadScene switches at the end of the frame");
+    doc.lua.bus().publish("ping", nullptr);
+    updatePlay(doc, 0.1f);
+    check(logged("ev b ping") && !logged("ev a ping"), "events: no Lua subscriber of the old scene runs after a switch");
+    check(cpp == std::vector<std::string>{"ping"}, "events: C++ subscriptions survive a switch; queued events are dropped");
+    check(doc.lua.bus().history().size() == 2 && doc.lua.bus().history()[0].name == "go",
+          "events: the history carries over a switch");
+    stopPlay(doc);
+    std::filesystem::remove_all(dir);
+}
+
+// Editor Play: nothing is delivered while paused; Stop discards the queue.
+void checkLuaEventPause()
+{
+    const std::filesystem::path dir = luaTestDir();
+    writeFile(dir / "scripts/tick.lua", R"(local n = 0
+return { update = function(dt) n = n + 1; kast.publish("tick", {n = n}) end })");
+    Document doc;
+    doc.path = (dir / "pause.scene").string();
+    doc.project = kast::Project{.root = dir, .name = "Pause"};
+    doc.scene.systems = {"scripts/tick.lua"};
+    startPlay(doc);
+    std::vector<int> ticks;
+    kast::EventBus::Subscription sub =
+        doc.lua.bus().subscribe("tick", [&](const nlohmann::json& p) { ticks.push_back(p["n"].get<int>()); });
+    updatePlay(doc, 0.1f);
+    check(ticks == std::vector<int>{1}, "events: delivered in editor Play");
+    togglePause(doc);
+    doc.lua.bus().publish("tick", {{"n", 100}});
+    updatePlay(doc, 0.1f);
+    updatePlay(doc, 0.1f);
+    check(ticks == std::vector<int>{1}, "events: nothing is delivered while paused");
+    togglePause(doc);
+    updatePlay(doc, 0.1f);
+    check((ticks == std::vector<int>{1, 100, 2}), "events: resuming delivers the held queue in order");
+    togglePause(doc);
+    doc.lua.bus().publish("tick", {{"n", 200}});
+    stopPlay(doc);
+    doc.lua.bus().drain();
+    check((ticks == std::vector<int>{1, 100, 2}), "events: Stop discards the queue");
+    check(doc.lua.bus().history().size() == 3, "events: the Events panel history is kept after Stop");
+    std::filesystem::remove_all(dir);
+}
+
 int main()
 {
     checkRotations();
@@ -2370,6 +2788,13 @@ int main()
     checkSystemEdits();
     checkSceneSwitchErrors();
     checkSceneSwitch();
+    checkEventBus();
+    checkLuaEvents();
+    checkLuaEventsFromCpp();
+    checkLuaEventErrors();
+    checkLuaEventLifetime();
+    checkLuaEventSceneSwitch();
+    checkLuaEventPause();
     checkLuaComponentDefinitions();
     checkLuaComponentRegistry();
     checkLuaComponentApi();

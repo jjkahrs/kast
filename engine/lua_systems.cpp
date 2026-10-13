@@ -10,7 +10,7 @@
 #include <sol/sol.hpp>
 
 #include <algorithm>
-#include <cstring>
+#include <cstdint>
 #include <cmath>
 #include <format>
 #include <functional>
@@ -40,6 +40,7 @@ struct System {
     std::filesystem::file_time_type mtime{};
     sol::environment env;
     sol::protected_function update, shutdown;
+    std::vector<EventBus::Subscription> subscriptions; // kast.subscribe; cleared on load and disable
     bool ok = false;
     std::string error;
 };
@@ -53,8 +54,9 @@ struct PendingScene {
 };
 
 struct LuaSystems::State {
-    State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, std::string scenePath, const Input* input)
-        : scene(scene), projectRoot(projectRoot), scenePath(std::move(scenePath)), input(input)
+    State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, std::string scenePath, const Input* input,
+          EventBus& bus)
+        : scene(scene), projectRoot(projectRoot), scenePath(std::move(scenePath)), input(input), bus(bus)
     {
     }
 
@@ -62,6 +64,7 @@ struct LuaSystems::State {
     std::optional<std::filesystem::path> projectRoot;
     std::string scenePath; // project-relative, empty if unsaved or no project
     const Input* input;
+    EventBus& bus;
     std::optional<PendingScene> pending; // last kast.loadScene call wins
     bool inShutdown = false;             // kast.loadScene is ignored while a shutdown runs
     sol::state lua;        // declared before everything holding Lua references, so it is destroyed last
@@ -69,7 +72,7 @@ struct LuaSystems::State {
     sol::table inputApi;   // kast.input.*
     std::vector<System> systems;
     std::unordered_map<EntityId, entt::entity> ids; // ponytail: rebuilt every tick, O(entities); index in Scene if big
-    const System* current = nullptr; // whose code is running, for log prefixes
+    System* current = nullptr; // whose code is running: log prefixes, event publisher and subscription owner
 
     void init(const std::vector<std::string>& paths);
     void tick(float dt);
@@ -78,7 +81,8 @@ struct LuaSystems::State {
     void indexIds();
     void load(System& system);
     void reload(System& system);
-    bool call(System& system, const sol::protected_function& fn, const char* what, std::optional<float> dt = {});
+    template <class... Args>
+    bool call(System& system, const sol::protected_function& fn, std::string_view what, Args&&... args);
     void disable(System& system, const std::string& message);
     sol::table readOnly(const sol::table& source);
     sol::environment environment();
@@ -86,6 +90,7 @@ struct LuaSystems::State {
     // kast.* bindings
     entt::entity entity(lua_State* L, const sol::object& id);
     ComponentType componentType(lua_State* L, const std::string& name);
+    std::string eventName(lua_State* L, const char* function, const sol::object& name);
     void bindApi();
 };
 
@@ -128,6 +133,7 @@ void LuaSystems::State::tick(float dt)
     for (System& system : systems)
         if (system.ok)
             call(system, system.update, "update", dt);
+    bus.drain();
 }
 
 void LuaSystems::State::stop()
@@ -176,6 +182,7 @@ void LuaSystems::State::load(System& system)
 {
     system.ok = false;
     system.update = system.shutdown = sol::lua_nil;
+    system.subscriptions.clear(); // the old instance's
     std::string error;
     system.env = environment();
     sol::protected_function body = loadSandboxed(lua, system.file, "@" + system.path, system.env, error);
@@ -215,13 +222,14 @@ void LuaSystems::State::reload(System& system)
         log::info(std::format("Reloaded Lua system {}", system.path));
 }
 
-bool LuaSystems::State::call(System& system, const sol::protected_function& fn, const char* what, std::optional<float> dt)
+template <class... Args>
+bool LuaSystems::State::call(System& system, const sol::protected_function& fn, std::string_view what, Args&&... args)
 {
     current = &system;
-    inShutdown = std::strcmp(what, "shutdown") == 0;
+    inShutdown = what == "shutdown";
     std::string error;
     try {
-        sol::protected_function_result result = dt ? fn(*dt) : fn();
+        sol::protected_function_result result = fn(std::forward<Args>(args)...);
         if (!result.valid())
             error = result.get<sol::error>().what();
     } catch (const std::exception& e) { // sol2 conversions; nothing may escape to the main loop
@@ -239,6 +247,7 @@ void LuaSystems::State::disable(System& system, const std::string& message)
 {
     system.ok = false;
     system.error = message;
+    system.subscriptions.clear(); // until a successful hot reload
     log::error(std::format("Lua system disabled: {}", message));
 }
 
@@ -262,6 +271,13 @@ ComponentType LuaSystems::State::componentType(lua_State* L, const std::string& 
     if (!type)
         raise(L, std::format("unknown component \"{}\"", name));
     return type;
+}
+
+std::string LuaSystems::State::eventName(lua_State* L, const char* function, const sol::object& name)
+{
+    if (name.get_type() != sol::type::string || name.as<std::string>().empty())
+        raise(L, std::format("{}: event name must be a non-empty string, got {}", function, toString(L, name)));
+    return name.as<std::string>();
 }
 
 void LuaSystems::State::bindApi()
@@ -383,6 +399,42 @@ void LuaSystems::State::bindApi()
         return scenePath.empty() ? sol::nullopt : sol::optional<std::string>(scenePath);
     });
 
+    // Events: queued, delivered by bus.drain() after every update (see README "Events"). Subscriptions belong to the
+    // calling system; a handle is a light userdata holding the subscription id (no metatable a script could edit).
+    api.set_function("publish", [this](sol::this_state L, const sol::object& name, const sol::object& payload) {
+        std::string event = eventName(L, "kast.publish", name);
+        nlohmann::json json;
+        if (std::string error; !luaToJson(payload, json, error))
+            raise(L, std::format("kast.publish: {}", error));
+        bus.publish(std::move(event), std::move(json), current ? current->path : "lua");
+    });
+    api.set_function("subscribe", [this](sol::this_state L, const sol::object& name, const sol::object& fn) {
+        std::string event = eventName(L, "kast.subscribe", name);
+        if (fn.get_type() != sol::type::function)
+            raise(L, std::format("kast.subscribe: callback must be a function, got {}", toString(L, fn)));
+        if (!current)
+            raise(L, "kast.subscribe: only a system can subscribe");
+        System* owner = current;
+        std::string what = std::format("event '{}'", event);
+        EventBus::Subscription subscription = bus.subscribe(
+            std::move(event), [this, owner, what = std::move(what), callback = sol::protected_function(fn)](
+                                  const nlohmann::json& payload) {
+                if (owner->ok) // a disabled system's subscriptions are gone; this guards the rest of its drain
+                    call(*owner, callback, what, jsonToLua(lua, payload));
+            });
+        const uint64_t id = subscription.id();
+        owner->subscriptions.push_back(std::move(subscription));
+        return reinterpret_cast<void*>(static_cast<uintptr_t>(id)); // ponytail: 64-bit ids in a pointer, x64 only
+    });
+    api.set_function("unsubscribe", [this](sol::this_state L, const sol::object& handle) {
+        if (handle.get_type() != sol::type::lightuserdata)
+            raise(L, std::format("kast.unsubscribe: expected a handle from kast.subscribe, got {}", toString(L, handle)));
+        const uint64_t id = reinterpret_cast<uintptr_t>(handle.as<void*>());
+        // Another system's handle, or one already unsubscribed, isn't in current's list: nothing happens.
+        if (current)
+            std::erase_if(current->subscriptions, [id](const EventBus::Subscription& s) { return s.id() == id; });
+    });
+
     inputApi = lua.create_table();
     inputApi.set_function("keyDown", [this](sol::this_state L, const std::string& name) {
         const SDL_Scancode scancode = SDL_GetScancodeFromName(name.c_str());
@@ -401,8 +453,16 @@ LuaSystems::~LuaSystems() = default;
 void LuaSystems::start(Scene& scene, const std::optional<std::filesystem::path>& projectRoot,
                        const std::string& scenePath, const Input* input)
 {
+    state_.reset(); // its subscriptions go first
+    bus_.reset();
+    launch(scene, projectRoot, scenePath, input);
+}
+
+void LuaSystems::launch(Scene& scene, const std::optional<std::filesystem::path>& projectRoot,
+                        const std::string& scenePath, const Input* input)
+{
     state_.reset(); // the old Lua state goes before the new one is built
-    state_ = std::make_unique<State>(scene, projectRoot, scenePath, input);
+    state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_);
     state_->init(scene.systems);
 }
 
@@ -417,10 +477,10 @@ bool LuaSystems::tick(float dt)
     Scene& scene = state_->scene;
     const std::optional<std::filesystem::path> projectRoot = state_->projectRoot;
     const Input* input = state_->input;
-    stop(); // old systems' shutdowns see the old scene; the Lua state is discarded
+    stop(); // old systems' shutdowns see the old scene; the Lua state and queued events are discarded
     scene = std::move(next.scene);
     log::info(std::format("Switched to scene '{}'", next.path));
-    start(scene, projectRoot, next.path, input);
+    launch(scene, projectRoot, next.path, input); // C++ subscriptions and the bus history carry over
     return true;
 }
 
@@ -430,6 +490,7 @@ void LuaSystems::stop()
         return;
     state_->stop();
     state_.reset();
+    bus_.dropQueued();
 }
 
 std::vector<LuaSystemStatus> LuaSystems::status() const

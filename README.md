@@ -97,10 +97,11 @@ build\release\kast_editor.exe
 | `--build <dir>` | With `--project`: build that project's game into `<dir>` (see [Build](#build)) and exit without opening a window or any dialog. Exit 0 on success, 1 on failure (no `--project`, invalid `startScene`, ...). Does not remember the folder. |
 | `--open-menu <Name>` | Open that main menu (e.g. `Build`) after the first 10 frames, for screenshots. |
 | `--open-build-settings` | With `--project`: open the Build > Build Settings modal after the first 10 frames, for screenshots. Writes nothing by itself. Without `--project` it is an invalid argument. |
+| `--focus-panel <Window>` | Bring that editor window (e.g. `Events`) to the front of its dock after the first 10 frames, for screenshots. |
 
 Without `--project`, `--scene`, `--save-scene` or `--build`, `kast_editor` runs the Project Manager instead of the
 editor. Editor-only flags (`--select`, `--play`, `--add-component-popup`, `--new-component[-prompt]`, `--open-menu`,
-`--open-build-settings`) then are invalid arguments, as are Project Manager flags (`--launcher`, `--new-project`,
+`--open-build-settings`, `--focus-panel`) then are invalid arguments, as are Project Manager flags (`--launcher`, `--new-project`,
 `--launcher-open`, `--`) together with the editor's.
 
 Invalid arguments exit with code 2; init failures (SDL, window, bgfx) log the reason, show a message box, and exit 1.
@@ -450,6 +451,7 @@ a wrong argument type raises a Lua error at the calling line.
 | `kast.input.keyDown(name)` | boolean | SDL scancode names (`SDL_GetScancodeFromName`): `"W"`, `"Space"`, `"Left Shift"`, `"Up"`... An unknown name raises. |
 | `kast.input.mouseDelta()` | `dx, dy` | Pixels moved this frame. |
 | `kast.loadScene(path)` | — | Switches the running scene. `path` is project-relative. Checked **at call time**, reading the file from disk (unsaved editor edits are not seen): no active project, a path outside the project, a missing file or a scene that fails to load (including an old version) raises at the calling line, and nothing is queued. On success the switch is applied at the **end of the frame**, after every system's `update`; the last call in a frame wins. Applying it calls the old scene's enabled systems' `shutdown`, discards the Lua state, replaces the scene, and starts a new session for the new scene's own `systems` (each `init` runs). Nothing persists across the switch. Calls from a `shutdown` are ignored; a call from an `init` is applied at the end of the next ticked frame. |
+| `kast.publish(name [, payload])`, `kast.subscribe(name, fn)`, `kast.unsubscribe(handle)` | —, handle, — | Events between systems and C++: see [Events](#events). |
 | `kast.currentScene()` | string or `nil` | The running scene's project-relative path (`"levels/b.scene"`), or `nil` with no active project or for an Untitled scene. |
 
 Input is only live while the Game panel is focused and playing; otherwise every key is up and the delta is 0.
@@ -477,6 +479,89 @@ listed system is disabled with `no project (open a scene inside a project to run
 **Hot reload**: while playing, each listed file's modification time is checked every frame. When it changes, the old
 instance's `shutdown` runs (if it was enabled), the file is reloaded into a fresh environment and its `init` runs.
 A successful reload clears the error; the scene and entities are not reset, but the system's Lua locals start over.
+
+### Events
+
+Lua systems and engine C++ code exchange named events with plain-data payloads through one event bus per Play session
+(`engine/event_bus.h`, built on `entt::dispatcher`; owned by `LuaSystems`, so editor Play and `kast_player` both have
+it). Publishing only queues an event; the queue is delivered once per frame at a fixed point.
+
+```lua
+local handle
+return {
+    init = function()
+        handle = kast.subscribe("health.empty", function(event)  -- event: a fresh copy of the payload
+            kast.log("empty: " .. event.id)
+        end)
+    end,
+    update = function(dt)
+        kast.publish("heartbeat", {time = dt, tags = {"a", "b"}})
+        if kast.input.keyDown("U") then kast.unsubscribe(handle) end
+    end,
+}
+```
+
+| Function | Returns | Notes |
+|----------|---------|-------|
+| `kast.publish(name [, payload])` | — | Queues an event. `name`: a non-empty string. `payload`: plain data (below); omitted or `nil` is JSON `null`. The payload is deep-copied now: later changes to the table don't affect the event. |
+| `kast.subscribe(name, fn)` | handle | `fn(payload)` is called for every later event named exactly `name` (no wildcards). `name`: a non-empty string, `fn`: a function. |
+| `kast.unsubscribe(handle)` | — | Stops deliveries at once, including the rest of the current drain. A handle already unsubscribed, or one owned by another system, is a no-op; any value that isn't a handle raises. |
+
+A wrong argument raises a Lua error at the calling line, and nothing is queued or subscribed.
+
+**Payloads** are plain data: `nil`, booleans, finite numbers, strings, and tables of these. A table whose keys are
+exactly `1..n` becomes a JSON array; one with only string keys becomes an object; an empty table is `{}`. Mixed or
+other keys (`{1, x = 2}`, `{1, nil, 3}`, `{[0] = 1}`, `{[true] = 1}`), functions, userdata, threads, cycles, NaN or
+infinity, and tables nested more than **32** deep raise at the `publish` call (`payload.a.b: ...` names the bad
+value). Integral numbers travel as JSON integers. Each subscriber gets its own fresh copy: mutating it affects no one
+else. JSON arrays arrive as 1-based sequences, objects as string-keyed tables; a `null` inside a payload arrives as
+`nil` (in an array that leaves a hole).
+
+**Delivery**: the queue drains once per frame in `LuaSystems::tick`, **after** every Lua system's `update` and before
+a `kast.loadScene` switch is applied, so an event published in `update` reaches subscribers in the same frame. Events
+are delivered in publish order; each event goes to its subscribers in subscription order, C++ and Lua subscribers in
+one shared order. Events published while the queue drains (by Lua or C++ subscribers) are delivered **next frame**,
+so a subscriber that re-publishes can't loop within a frame. A subscription added during a drain takes effect from the
+next event.
+
+**Ownership**: a Lua subscription belongs to the system whose code called `kast.subscribe` (from `init`, `update`, a
+subscriber or the file body). It is removed when that system is disabled (by any error), when it is hot-reloaded (the
+old instance's subscriptions go before the new file runs), and when the Lua state goes on Stop or a scene switch. The
+publisher recorded for a Lua event is the system's path as listed in the scene (`scripts/health_events.lua`).
+
+**Errors, Pause, Stop, scene switch**:
+- A Lua subscriber that raises is logged with file:line and its system is disabled exactly like an `update` error
+  (which also removes all its subscriptions until a successful hot reload). The event's other subscribers still run,
+  and Play continues.
+- A C++ subscriber that throws is caught and logged (`Event 'x': C++ subscriber failed: ...`); delivery continues.
+- Paused: nothing is delivered; the queue is held until Play resumes.
+- Stop: queued events are discarded (including any published by `shutdown`). Play start resets the bus: queue, every
+  subscription (C++ ones too), the history and the frame count.
+- `kast.loadScene` switch: undelivered events (published during that frame's drain or by the old `shutdown`s) are
+  dropped and the old scene's Lua subscriptions go with its Lua state. C++ subscriptions and the history carry over.
+
+**C++ API** (`kast::EventBus`, from `LuaSystems::bus()`; no Lua or ImGui dependency):
+
+```cpp
+kast::EventBus& bus = lua.bus();
+kast::EventBus::Subscription sub = bus.subscribe("health.empty", [](const nlohmann::json& payload) { /* ... */ });
+bus.publish("door.opened", {{"id", 7}});   // publisher "C++"; delivered at the next drain
+sub.unsubscribe();                          // or let the handle go out of scope (RAII, move-only)
+```
+
+`drain()` delivers (`LuaSystems::tick` calls it), `dropQueued()` discards the queue, `reset()` clears everything, and
+`history()` returns the last 500 delivered events (`frame` = drains since Play start, `name`, compact one-line JSON
+`payload`, `publisher`). A `Subscription` must not outlive its bus; after `reset()` it is a harmless no-op. No engine
+code publishes events yet.
+
+**Events panel** (editor, tabbed with Console): the last 500 delivered events, oldest first, following new ones while
+scrolled to the bottom. Columns: frame, event name, compact payload, publisher (script path or `C++`). **Clear**
+empties it; the filter shows events whose name contains the text (case-sensitive). Play start clears it; it stays
+after Stop. `--focus-panel Events` brings it to the front for screenshots.
+
+**Sample**: `tests/project/events.scene` runs `scripts/health_events.lua` (a `heartbeat` every 20 frames and, on frame
+30, `health.empty` with `{id, title}` for every entity with `Health`; it changes nothing itself) and
+`scripts/on_health_empty.lua` (greys out the named entity's `MeshRenderer`).
 
 ### Lua components
 
@@ -582,7 +667,7 @@ The dock layout is saved to `imgui.ini` in the working directory; delete it to g
 
 | Test | What it checks |
 |------|----------------|
-| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values and versions 1–3 rejected), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits; projects: `project.kast` load/save/validation, walk-up discovery, project-relative paths and escape rejection, opening a project and Save/Save As on a `Document` (New Project folder-name sanitizing, every validation rule, creating `<dir>/my-game/project.kast` with the trimmed name, never creating missing parents or writing into an existing folder) (no rebasing, project-change warning, title format), the Project Manager's recent list (save/load round trip, newest first, case-insensitive dedupe with trailing separators, Remove leaving the project on disk, missing folder / missing or invalid `project.kast` reported, three kinds of corrupt file backed up to `projects.json.bad` with a warning and read as empty) and an editor that can't be started reporting why, no-project Lua disabling, Add Script outside the project, template location; `kast.loadScene` (end-of-frame, last call wins, ignored in `shutdown`, init calls deferred a frame, shutdown/init order, every error case keeps the current scene) and `kast.currentScene`, and Stop restoring the pre-Play scene after two switches; Lua components: definition parsing (every field type and option, recursive discovery, every invalid-definition case naming the file), name clashes (built-in, structural, both duplicate files rejected), sandbox and per-file globals, registry parity (add/has/remove, strict JSON set, Duplicate, save order, byte-identical save/load, snapshot and Document Play/Stop restore), `kast.*` on a Lua component with every `kast.set` error leaving it unchanged, drift rules (one warning per fix, dirty only when data changed, built-ins still strict), missing definitions (load with warnings, verbatim save, `kast.*` raises, later conversion), hot reload of modified/added/deleted/broken files without data loss and the Play freeze, Components panel template naming and enable rules; game.pak: write/read round trip (byte-identical, binary and empty files), directory listing, rejection of bad magic, bad version, truncated header/index/data, an offset past the end and an overflowing size; a mounted pak serving project.kast, readFile and listFiles (and not the disk); Build: exe-name sanitizing, pak contents (no dotfiles, dot-directories or output folder), every validation failure writing nothing, a full build (exe, game.pak, DLLs, other files kept), the remembered folder in `.kast/editor.json` (project.kast unchanged) and the Build menu enable rule (no project, Play, Pause); Build Settings: Start Scene choices (`tests/project` lists `health.scene`, `scene_a.scene`, `scene_b.scene`; a dotfile or dot-directory scene is left out), Save writing only `startScene` (same keys and order, reloads, `doc.project` updated, the open scene's dirty flag and path kept, no `.kast/editor.json`), a scene that doesn't load or escapes the project leaving `project.kast` byte-identical, opening (then Cancel) writing nothing, and Build / Build and Run with `startScene` null or missing opening Build Settings. No window. |
+| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values and versions 1–3 rejected), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits; projects: `project.kast` load/save/validation, walk-up discovery, project-relative paths and escape rejection, opening a project and Save/Save As on a `Document` (New Project folder-name sanitizing, every validation rule, creating `<dir>/my-game/project.kast` with the trimmed name, never creating missing parents or writing into an existing folder) (no rebasing, project-change warning, title format), the Project Manager's recent list (save/load round trip, newest first, case-insensitive dedupe with trailing separators, Remove leaving the project on disk, missing folder / missing or invalid `project.kast` reported, three kinds of corrupt file backed up to `projects.json.bad` with a warning and read as empty) and an editor that can't be started reporting why, no-project Lua disabling, Add Script outside the project, template location; `kast.loadScene` (end-of-frame, last call wins, ignored in `shutdown`, init calls deferred a frame, shutdown/init order, every error case keeps the current scene) and `kast.currentScene`, and Stop restoring the pre-Play scene after two switches; events: the C++ bus (publish then subscription order, next-drain re-publish, subscribe/unsubscribe during a drain, a throwing subscriber, RAII and stale handles, dropQueued, reset, the 500-event history and Clear), Lua→Lua in the same frame after every update with independent payload copies, Lua→C++ and C++→Lua payload conversion, one subscription order across C++ and Lua, every `kast.publish/subscribe/unsubscribe` rejection raising at file:line and queueing nothing (bad names, functions, userdata, threads, cycles, nesting past 32, mixed keys, NaN), a failing subscriber disabling only its system, cleanup on disable/hot reload/Stop/Play start, a scene switch dropping queued events and old Lua subscribers but keeping C++ ones, and Pause holding / Stop discarding the queue in editor Play; Lua components: definition parsing (every field type and option, recursive discovery, every invalid-definition case naming the file), name clashes (built-in, structural, both duplicate files rejected), sandbox and per-file globals, registry parity (add/has/remove, strict JSON set, Duplicate, save order, byte-identical save/load, snapshot and Document Play/Stop restore), `kast.*` on a Lua component with every `kast.set` error leaving it unchanged, drift rules (one warning per fix, dirty only when data changed, built-ins still strict), missing definitions (load with warnings, verbatim save, `kast.*` raises, later conversion), hot reload of modified/added/deleted/broken files without data loss and the Play freeze, Components panel template naming and enable rules; game.pak: write/read round trip (byte-identical, binary and empty files), directory listing, rejection of bad magic, bad version, truncated header/index/data, an offset past the end and an overflowing size; a mounted pak serving project.kast, readFile and listFiles (and not the disk); Build: exe-name sanitizing, pak contents (no dotfiles, dot-directories or output folder), every validation failure writing nothing, a full build (exe, game.pak, DLLs, other files kept), the remembered folder in `.kast/editor.json` (project.kast unchanged) and the Build menu enable rule (no project, Play, Pause); Build Settings: Start Scene choices (`tests/project` lists `events.scene`, `health.scene`, `scene_a.scene`, `scene_b.scene`; a dotfile or dot-directory scene is left out), Save writing only `startScene` (same keys and order, reloads, `doc.project` updated, the open scene's dirty flag and path kept, no `.kast/editor.json`), a scene that doesn't load or escapes the project leaving `project.kast` byte-identical, opening (then Cancel) writing nothing, and Build / Build and Run with `startScene` null or missing opening Build Settings. No window. |
 | `editor_smoke` | `kast_editor --frames 120 --screenshot build/<preset>/smoke.png` with no project or scene (the Project Manager, empty list): exit 0 and a non-empty PNG. Every screenshot test passes `--projects-file <its run folder>/projects.json`. |
 | `editor_smoke_scaled` | Same, with `--ui-scale 2.0`. |
 | `scene_screenshot` | Same, with `--scene tests/scenes/basic.scene`. |
@@ -608,15 +693,18 @@ The dock layout is saved to `imgui.ini` in the working directory; delete it to g
 | `lua_components_screenshot` | `--scene tests/project/health.scene --select 3 --size 1280x1000`: the Components panel lists `Health` as OK and the Inspector shows Hero's `Health` with every widget kind, writing `lua_components.png`. |
 | `lua_components_play_screenshot`, `lua_components_play_no_systems_screenshot` | `--play` on `health.scene` and on a copy with `"systems": []` (in `build/<preset>/health_project/`, a configure-time copy of `tests/project`), writing `lua_components_play.png` / `lua_components_play_no_systems.png`. |
 | `lua_components_play_differs` | The two must differ: only `scripts/health_drain.lua` (drains `Health`, fades `MeshRenderer.color` from `Health.tint`) can change them. |
+| `events_play_screenshot`, `events_play_no_systems_screenshot` | `--play --focus-panel Events` on `tests/project/events.scene` and on a copy with `"systems": []` (in `build/<preset>/health_project/`), writing `events_play.png` (Events panel listing the sample's events) / `events_play_no_systems.png`. |
+| `events_play_differs` | The two must differ: the publisher changes nothing itself, so only the delivered `health.empty` events (greying Hero and Slime) can change them. |
 | `lua_components_roundtrip` | `health.scene` saved twice into `build/<preset>/health_project/` (so `Health` stays defined): byte-identical. |
 | `new_component_valid_screenshot`, `new_component_collide_screenshot` | `health.scene --select 3` with `--new-component-prompt PlayerHealth` (preview `components/player_health.lua`, Create enabled; fails if the file was written) and `--new-component-prompt Health` (inline "already exists", Create disabled), writing `new_component_valid.png` / `new_component_collide.png`. |
 | `add_component_popup_screenshot`, `add_component_popup_play_screenshot` | `health.scene --select 3 --add-component-popup`, stopped and with `--play`, writing `add_component_popup.png` ("New Lua Component..." first, enabled) / `add_component_popup_play.png` (disabled). |
 | `new_component_screenshot`, `new_component_file_written`, `new_component_differs` | `--new-component PlayerHealth` on Hero in `build/<preset>/new_component_project/` (a fresh copy of `tests/project` made by `new_component_project_clean` / `_copy`), writing `new_component.png`; the file must contain `name = "PlayerHealth"` and the shot must differ from `lua_components.png`. |
 | `switch_play_differs` | `switch_play.png` (scene B: three green spheres) must differ from `switch_play_no_systems.png` (scene A: a red cube). |
-| `build_game_switch`, `build_game_switch_no_systems`, `build_game_health`, `build_game_health_no_systems` | `--project <copy> --build build/<preset>/game_out/<name>` on configure-time copies of `tests/project` in `build/<preset>/game_projects/` (startScene `scene_a.scene` / `health.scene`, each also with its `"systems"` emptied; each copy has a `.kast/editor.json`): exit 0; the folder holds `Switch Test.exe` / `Health Test.exe`, `game.pak` and the DLLs; `game.pak` lists `project.kast` but nothing under `.kast/`; `project.kast` is unchanged. |
-| `player_switch_screenshot`, `player_switch_no_systems_screenshot`, `player_health_screenshot`, `player_health_no_systems_screenshot` | The built game, run from a copy of its folder with `--frames 120 --screenshot`: exit 0, a PNG (`player_<name>.png`) and the log line `Window title: <project name>`. |
+| `build_game_switch`, `build_game_switch_no_systems`, `build_game_health`, `build_game_health_no_systems`, `build_game_events`, `build_game_events_no_systems` | `--project <copy> --build build/<preset>/game_out/<name>` on configure-time copies of `tests/project` in `build/<preset>/game_projects/` (startScene `scene_a.scene` / `health.scene` / `events.scene`, each also with its `"systems"` emptied; each copy has a `.kast/editor.json`): exit 0; the folder holds `Switch Test.exe` / `Health Test.exe` / `Events Test.exe`, `game.pak` and the DLLs; `game.pak` lists `project.kast` but nothing under `.kast/`; `project.kast` is unchanged. |
+| `player_switch_screenshot`, `player_switch_no_systems_screenshot`, `player_health_screenshot`, `player_health_no_systems_screenshot`, `player_events_screenshot`, `player_events_no_systems_screenshot` | The built game, run from a copy of its folder with `--frames 120 --screenshot`: exit 0, a PNG (`player_<name>.png`) and the log line `Window title: <project name>`. |
 | `player_switch_differs` | `player_switch.png` (scene B, reached by `kast.loadScene` from the pak) must differ from `player_switch_no_systems.png` (scene A). |
 | `player_health_differs` | `player_health.png` (Lua component `Health` drained by a Lua system) must differ from `player_health_no_systems.png`. |
+| `player_events_differs` | `player_events.png` (Hero and Slime greyed by a `health.empty` subscriber) must differ from `player_events_no_systems.png`: events are delivered in `kast_player` too. |
 | `player_missing_pak`, `player_corrupt_pak` | The built game with its `game.pak` deleted / replaced by text, with `--frames`: exit 1 (no message box, no hang). |
 | `build_bad_start_scene` | `--build` on a copy whose `startScene` is `missing.scene`: exit 1, and the (empty) output folder gets no exe and no `game.pak`. |
 | `build_no_project` | `--build` without `--project`: exit 1, nothing written. |

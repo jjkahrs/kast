@@ -57,7 +57,7 @@ endforeach()
 add_library(kast_engine STATIC
   engine/app.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
   engine/systems.cpp engine/renderer.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
-  engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp
+  engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}")
@@ -236,6 +236,27 @@ add_test(NAME lua_components_play_differs
 set_tests_properties(lua_components_play_screenshot PROPERTIES FIXTURES_SETUP health_play_shot)
 set_tests_properties(lua_components_play_no_systems_screenshot PROPERTIES FIXTURES_SETUP health_no_systems_shot)
 set_tests_properties(lua_components_play_differs PROPERTIES FIXTURES_REQUIRED "health_play_shot;health_no_systems_shot")
+# Events: tests/project/events.scene runs scripts/health_events.lua (publishes "health.empty", changes nothing itself)
+# and scripts/on_health_empty.lua (greys the named entity), so only event delivery makes Play differ from the copy
+# with "systems": [] (in the health_project copy, so Health stays defined). --focus-panel shows the Events panel.
+file(READ "${KAST_TEST_PROJECT}/events.scene" events_scene)
+string(REGEX REPLACE "\"systems\": \\[[^]]*\\]" "\"systems\": []" events_scene "${events_scene}")
+file(WRITE "${KAST_HEALTH_PROJECT}/events_no_systems.scene" "${events_scene}")
+add_test(NAME events_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/events_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/events.scene --play --focus-panel Events"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME events_play_no_systems_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/events_play_no_systems.png"
+          "-DEXTRA_ARGS=--scene ${KAST_HEALTH_PROJECT}/events_no_systems.scene --play --focus-panel Events"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME events_play_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/events_play_no_systems.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/events_play.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(events_play_screenshot PROPERTIES FIXTURES_SETUP events_play_shot)
+set_tests_properties(events_play_no_systems_screenshot PROPERTIES FIXTURES_SETUP events_no_systems_shot)
+set_tests_properties(events_play_differs PROPERTIES FIXTURES_REQUIRED "events_play_shot;events_no_systems_shot")
 add_test(NAME lua_components_roundtrip
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_PROJECT}/health.scene"
           "-DOUT_DIR=${KAST_HEALTH_PROJECT}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
@@ -343,7 +364,8 @@ function(kast_game_project name project_name start_scene empty_systems)
 endfunction()
 # name, project name, startScene, empty its systems
 set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switch Test|scene_a.scene|TRUE"
-               "health|Health Test|health.scene|FALSE" "health_no_systems|Health Test|health.scene|TRUE")
+               "health|Health Test|health.scene|FALSE" "health_no_systems|Health Test|health.scene|TRUE"
+               "events|Events Test|events.scene|FALSE" "events_no_systems|Events Test|events.scene|TRUE")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
@@ -364,7 +386,7 @@ foreach(game ${KAST_GAMES})
   set_tests_properties(player_${name}_screenshot PROPERTIES FIXTURES_REQUIRED game_${name}_built
                        FIXTURES_SETUP player_${name}_shot TIMEOUT 90)
 endforeach()
-foreach(name switch health)
+foreach(name switch health events)
   add_test(NAME player_${name}_differs
     COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_${name}_no_systems.png"
             "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_${name}.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")

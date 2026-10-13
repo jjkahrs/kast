@@ -1,5 +1,6 @@
 #pragma once
 
+#include "event_bus.h"
 #include "input.h"
 #include "scene.h"
 
@@ -27,18 +28,21 @@ public:
     LuaSystems(const LuaSystems&) = delete;
     LuaSystems& operator=(const LuaSystems&) = delete;
 
-    // Starts a session: loads every script in scene.systems (paths relative to projectRoot) and calls each init.
+    // Starts a session: resets the event bus (queue, subscriptions, history), loads every script in scene.systems
+    // (paths relative to projectRoot) and calls each init.
     // With no project every listed system is disabled ("no project"). scenePath is the scene's project-relative
     // path, empty if unsaved or outside a project (kast.currentScene returns nil). Stops any running session first
     // (without its shutdowns: the old scene may be gone). scene and input must outlive the session; input may be
     // null (no keys down, no mouse motion).
     void start(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, const std::string& scenePath,
                const Input* input);
-    // Reloads scripts whose file changed, then calls each enabled system's update(dt) in listed order. Then applies
-    // a scene switch queued by kast.loadScene: the old systems' shutdowns run, the loaded scene replaces scene (same
-    // object) and a new session starts for its systems. Returns true if the scene was switched.
+    // Reloads scripts whose file changed, then calls each enabled system's update(dt) in listed order, then drains
+    // the event bus. Then applies a scene switch queued by kast.loadScene: the old systems' shutdowns run, queued
+    // events are dropped, the loaded scene replaces scene (same object) and a new session starts for its systems (C++
+    // subscriptions and the bus history are kept). Returns true if the scene was switched.
     bool tick(float dt);
-    // Calls each enabled system's shutdown and ends the session. Does nothing if none is running.
+    // Calls each enabled system's shutdown, ends the session and drops queued events. Does nothing if none is
+    // running.
     void stop();
 
     bool running() const { return state_ != nullptr; }
@@ -47,8 +51,16 @@ public:
     // The running scene's project-relative path; empty if unsaved, outside a project or no session is running.
     std::string scenePath() const;
 
+    // The session's event bus, also for C++ publishers and subscribers. Its history outlives stop().
+    EventBus& bus() { return bus_; }
+    const EventBus& bus() const { return bus_; }
+
 private:
     struct State;
+    void launch(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, const std::string& scenePath,
+                const Input* input);
+
+    EventBus bus_; // declared before state_: the systems' subscriptions unsubscribe from it when state_ goes
     std::unique_ptr<State> state_;
 };
 

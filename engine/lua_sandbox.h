@@ -33,4 +33,13 @@ bool luaToFieldJson(const FieldDesc& field, const sol::object& value, nlohmann::
 sol::object fieldJsonToLua(sol::state_view lua, const FieldDesc& field, const nlohmann::ordered_json& value,
                            bool element = false);
 
+// An event payload (plain data) as JSON: nil -> null, booleans, finite numbers (integral ones as integers), strings,
+// and tables whose keys are exactly 1..n (arrays) or all strings (objects; an empty table is {}), nested at most
+// kMaxPayloadDepth tables deep. Anything else (functions, userdata, threads, cycles, mixed keys) sets error and
+// returns false.
+constexpr int kMaxPayloadDepth = 32;
+bool luaToJson(const sol::object& value, nlohmann::json& out, std::string& error);
+// The reverse: arrays become 1-based sequences, objects string-keyed tables, null nil. Always a fresh value.
+sol::object jsonToLua(sol::state_view lua, const nlohmann::json& value);
+
 } // namespace kast

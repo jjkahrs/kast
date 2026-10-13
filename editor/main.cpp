@@ -33,14 +33,15 @@ constexpr bgfx::ViewId kSceneView = 1;
 constexpr bgfx::ViewId kGameView = 2;
 constexpr bgfx::ViewId kImGuiView = 255; // last, so the UI draws over everything
 constexpr uint32_t kBackbufferClearColor = 0x202020ff;
-// --add-component-popup, --open-menu and --open-build-settings wait this long: focus changes while the first frames dock the windows close
+// --add-component-popup, --open-menu, --open-build-settings and --focus-panel wait this long: focus changes while the first frames dock the windows close
 // popups.
 constexpr int kAddComponentPopupFrame = 10;
 constexpr float kComponentPollSeconds = 0.5f; // Lua component definition files are checked for changes this often
 constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--ui-scale F] [--projects-file list.json] "
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--add-component-popup] "
-    "[--new-component-prompt Name] [--new-component Name] [--build dir] [--open-menu Name] [--open-build-settings] | "
+    "[--new-component-prompt Name] [--new-component Name] [--build dir] [--open-menu Name] [--open-build-settings] "
+    "[--focus-panel Window] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 struct Options {
@@ -60,6 +61,7 @@ struct Options {
     std::string build;        // build the --project game into this folder and exit, without opening a window
     std::string openMenu;     // open this main menu (e.g. "Build") for screenshots
     bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
+    std::string focusPanel;         // bring this window (e.g. "Events") to the front of its dock, for screenshots
     std::string projectsFile;       // the recent-projects list; empty = the one in %APPDATA%
     bool launcher = false;          // run the Project Manager (the default anyway when nothing asks for the editor)
     std::string launcherOpen;       // open this project as the Project Manager would, without a window, and exit
@@ -108,6 +110,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.build = argv[++i];
         } else if (arg == "--open-menu" && hasValue) {
             options.openMenu = argv[++i];
+        } else if (arg == "--focus-panel" && hasValue) {
+            options.focusPanel = argv[++i];
         } else if (arg == "--projects-file" && hasValue) {
             options.projectsFile = argv[++i];
         } else if (arg == "--launcher") {
@@ -156,10 +160,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     const bool editorFlags = options.select != 0 || options.play || options.addComponentPopup ||
                              options.newComponentPrompt || !options.newComponent.empty() || !options.openMenu.empty() ||
-                             options.openBuildSettings;
+                             options.openBuildSettings || !options.focusPanel.empty();
     if (!options.editor() && editorFlags) {
-        kast::log::error("--select, --play, --add-component-popup, --new-component[-prompt], --open-menu and "
-                         "--open-build-settings require --project <dir> or --scene <file>");
+        kast::log::error("--select, --play, --add-component-popup, --new-component[-prompt], --open-menu, "
+                         "--open-build-settings and --focus-panel require --project <dir> or --scene <file>");
         return std::nullopt;
     }
     if (!options.saveScene.empty() && options.project.empty() && options.scene.empty()) {
@@ -192,6 +196,7 @@ void buildDefaultLayout(ImGuiID dockspace)
     ImGui::DockBuilderDockWindow("Components", leftLowest);
     ImGui::DockBuilderDockWindow("Inspector", right);
     ImGui::DockBuilderDockWindow("Console", bottom);
+    ImGui::DockBuilderDockWindow("Events", bottom);
     ImGui::DockBuilderDockWindow("Assets", bottom);
     ImGui::DockBuilderDockWindow("Scene", center);
     ImGui::DockBuilderDockWindow("Game", center);
@@ -385,6 +390,8 @@ int main(int argc, char** argv)
             panels.openAddComponent();
         if (options->openBuildSettings && frames.frame() == kAddComponentPopupFrame)
             files.openBuildSettings();
+        if (!options->focusPanel.empty() && frames.frame() == kAddComponentPopupFrame)
+            ImGui::SetWindowFocus(options->focusPanel.c_str()); // applied when that window is submitted below
         panels.drawHierarchy(doc);
         viewport.draw(doc); // submitted before Game so Scene is the front tab on first run
         // Layouts saved before the Game panel existed: dock it as a tab beside Scene.
@@ -403,7 +410,12 @@ int main(int argc, char** argv)
             ImGui::SetNextWindowDockID(systems->DockId, ImGuiCond_FirstUseEver);
         panels.drawComponents(doc);
         drawPlaceholder("Assets");
-        drawConsole(); // submitted after Assets so Console is the front tab on first run
+        // Layouts saved before the Events panel existed: dock it as a tab beside Console.
+        if (const ImGuiWindowSettings* console = ImGui::FindWindowSettingsByID(ImHashStr("Console"));
+            console && !ImGui::FindWindowSettingsByID(ImHashStr("Events")))
+            ImGui::SetNextWindowDockID(console->DockId, ImGuiCond_FirstUseEver);
+        panels.drawEvents(doc);
+        drawConsole(); // submitted after Assets and Events so Console is the front tab on first run
         files.update();
         if (game.hasInput(doc))
             doc.input.endFrame();

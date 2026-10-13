@@ -11,7 +11,8 @@
 
 // Hierarchy (tree, create/delete/rename/duplicate, drag-drop reparent), Inspector, Systems (the scene's Lua
 // systems: list, status while playing, add/remove/reorder, new from template) and Components (the project's Lua
-// component definitions: list with status, new from template) panels.
+// component definitions: list with status, new from template) and Events (the Play session's recently delivered
+// events, with a name filter) panels.
 class Panels {
 public:
     // Opens the Inspector's "New Lua Component" modal (Add Component > New Lua Component...) with name prefilled.
@@ -22,6 +23,7 @@ public:
     void drawInspector(Document& doc);
     void drawSystems(Document& doc);
     void drawComponents(Document& doc);
+    void drawEvents(Document& doc);
 
 private:
     // Tree edits are deferred to the end of drawHierarchy so the child lists are not changed mid-iteration.
@@ -68,4 +70,5 @@ private:
     bool newComponentRequested_ = false;
     std::string newComponentName_;
     std::string newComponentError_; // why the last Create failed (write or load); cleared when the name changes
+    std::string eventsFilter_;      // Events panel: shows events whose name contains this
 };
