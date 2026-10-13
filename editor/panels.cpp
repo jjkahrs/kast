@@ -13,10 +13,14 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <climits>
 #include <cstring>
+#include <filesystem>
 #include <format>
+#include <optional>
+#include <system_error>
 #include <utility>
 
 namespace {
@@ -817,4 +821,319 @@ void Panels::drawEvents(Document& doc)
         }
     }
     ImGui::End();
+}
+
+namespace {
+
+constexpr const char* kAssetPayload = "KAST_ASSET"; // a project-relative path, null-terminated
+
+std::string parentAsset(const std::string& path)
+{
+    const size_t slash = path.rfind('/');
+    return slash == std::string::npos ? "" : path.substr(0, slash);
+}
+
+std::string joinAsset(const std::string& folder, const std::string& name)
+{
+    return folder.empty() ? name : folder + '/' + name;
+}
+
+bool isScene(const std::string& name)
+{
+    std::string extension = utf8(fromUtf8(name).extension());
+    std::ranges::transform(extension, extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return extension == ".scene";
+}
+
+bool acceptAssetDrop(std::string& dropped)
+{
+    bool accepted = false;
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kAssetPayload)) {
+            dropped = static_cast<const char*>(payload->Data);
+            accepted = true;
+        }
+        ImGui::EndDragDropTarget();
+    }
+    return accepted;
+}
+
+// file as the narrow string doc.path and openFile use; nullopt + error if the code page can't hold its characters.
+std::optional<std::string> narrowPath(const std::filesystem::path& file, std::string& error)
+{
+    try {
+        return file.string();
+    } catch (const std::system_error&) {
+        error = std::format("'{}' can't be used as a scene path: it has characters outside the system code page",
+                            utf8(file));
+        return std::nullopt;
+    }
+}
+
+// The open scene as an absolute path, or empty if it was never saved.
+std::filesystem::path openScenePath(const Document& doc)
+{
+    return doc.path.empty() ? std::filesystem::path() : std::filesystem::absolute(doc.path);
+}
+
+} // namespace
+
+void Panels::refreshAssets(const Document& doc)
+{
+    assetsRoot_ = doc.project ? doc.project->root : std::filesystem::path();
+    assets_ = assetsRoot_.empty() ? std::vector<AssetEntry>{} : scanAssets(assetsRoot_);
+    if (!findAsset(assets_, assetSelected_))
+        assetSelected_.clear();
+    if (!findAsset(assets_, assetRenaming_))
+        assetRenaming_.clear();
+}
+
+void Panels::drawAssets(Document& doc, FileActions& files)
+{
+    if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
+        refreshAssets(doc);
+    if (ImGui::Begin("Assets")) {
+        if (!doc.project) {
+            ImGui::TextDisabled("No project: open a project to browse its assets");
+        } else {
+            const char* blocker = doc.play != PlayState::Stopped ? "Stop Play mode to change assets"
+                                  : !files.idle()                ? "Close the open dialog first"
+                                                                 : nullptr;
+            for (const AssetEntry& entry : assets_)
+                drawAssetNode(doc, files, entry, blocker);
+
+            // The rest of the panel: click clears selection, drop moves to the root, right-click creates at the root.
+            ImVec2 rest = ImGui::GetContentRegionAvail();
+            rest.x = bx::max(rest.x, 1.0f);
+            rest.y = bx::max(rest.y, ImGui::GetFrameHeight());
+            ImGui::InvisibleButton("##empty", rest);
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+                assetSelected_.clear();
+            if (std::string dropped; acceptAssetDrop(dropped))
+                assetEdit_ = {AssetEdit::Op::Move, dropped, ""};
+            if (ImGui::BeginPopupContextItem("##rootMenu")) {
+                if (ImGui::MenuItem("New Folder", nullptr, false, !blocker))
+                    assetEdit_ = {AssetEdit::Op::NewFolder, ""};
+                disabledTooltip(blocker);
+                ImGui::EndPopup();
+            }
+
+            const AssetEntry* selected = findAsset(assets_, assetSelected_);
+            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
+                selected && !blocker) {
+                if (ImGui::IsKeyPressed(ImGuiKey_F2, false))
+                    startAssetRename(selected->path, selected->name);
+                if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))
+                    requestAssetDelete(doc, selected->path);
+            }
+
+            if (std::exchange(assetDeleteRequested_, false))
+                ImGui::OpenPopup("Delete Asset");
+            if (ImGui::BeginPopupModal("Delete Asset", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                const AssetEntry* target = findAsset(assets_, assetDeletePath_);
+                if (target) {
+                    ImGui::Text("Delete '%s'%s?", target->name.c_str(), target->folder ? " and all its contents" : "");
+                    ImGui::TextUnformatted("It will be moved to the Recycle Bin.");
+                } else {
+                    ImGui::TextUnformatted("It no longer exists.");
+                }
+                ImGui::Spacing();
+                ImGui::BeginDisabled(!target);
+                if (ImGui::Button("Delete")) {
+                    assetEdit_ = {AssetEdit::Op::Delete, assetDeletePath_};
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape))
+                    ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+
+            if (std::exchange(assetsErrorRequested_, false))
+                ImGui::OpenPopup("Assets Error");
+            if (ImGui::BeginPopupModal("Assets Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::TextUnformatted(assetsError_.c_str());
+                ImGui::Spacing();
+                if (ImGui::Button("OK") || ImGui::IsKeyPressed(ImGuiKey_Escape))
+                    ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+        }
+    }
+    ImGui::End();
+    applyAssetEdit(doc);
+}
+
+void Panels::drawAssetNode(const Document& doc, FileActions& files, const AssetEntry& entry, const char* blocker)
+{
+    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
+                               ImGuiTreeNodeFlags_SpanAvailWidth;
+    if (!entry.folder)
+        flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+    if (assetSelected_ == entry.path)
+        flags |= ImGuiTreeNodeFlags_Selected;
+
+    ImGui::PushID(entry.path.c_str()); // keyed on the path, so open folders stay open across rescans
+    if (entry.folder && entry.path == assetExpand_) {
+        ImGui::SetNextItemOpen(true);
+        assetExpand_.clear();
+    }
+    const bool renaming = assetRenaming_ == entry.path;
+    const bool open = ImGui::TreeNodeEx("##node", flags, "%s", renaming ? "" : entry.name.c_str());
+
+    if ((ImGui::IsItemClicked(ImGuiMouseButton_Left) || ImGui::IsItemClicked(ImGuiMouseButton_Right)) &&
+        !ImGui::IsItemToggledOpen())
+        assetSelected_ = entry.path;
+    if (!entry.folder && !blocker && isScene(entry.name) && ImGui::IsItemHovered() &&
+        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        std::string error;
+        if (const std::optional<std::string> file = narrowPath(assetsRoot_ / fromUtf8(entry.path), error))
+            files.openScene(*file);
+        else
+            assetsFailed(error);
+    }
+    if (!blocker && !renaming && ImGui::BeginDragDropSource()) {
+        ImGui::SetDragDropPayload(kAssetPayload, entry.path.c_str(), entry.path.size() + 1);
+        ImGui::TextUnformatted(entry.name.c_str());
+        ImGui::EndDragDropSource();
+    }
+    if (std::string dropped; entry.folder && acceptAssetDrop(dropped))
+        assetEdit_ = {AssetEdit::Op::Move, dropped, entry.path};
+    if (ImGui::BeginPopupContextItem("##assetMenu")) {
+        drawAssetItems(doc, entry, blocker);
+        ImGui::EndPopup();
+    }
+
+    if (renaming) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (std::exchange(focusAssetRename_, false))
+            ImGui::SetKeyboardFocusHere();
+        bool commit = ImGui::InputText("##rename", &assetRenameBuffer_,
+                                       ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+        bool cancel = false;
+        if (ImGui::IsItemDeactivated()) {
+            cancel = ImGui::IsKeyPressed(ImGuiKey_Escape);
+            commit = !cancel;
+        }
+        if (commit && assetRenameBuffer_ != entry.name)
+            assetEdit_ = {AssetEdit::Op::Rename, entry.path, assetRenameBuffer_};
+        if (commit || cancel)
+            assetRenaming_.clear();
+    }
+
+    if (open && entry.folder) {
+        for (const AssetEntry& child : entry.children)
+            drawAssetNode(doc, files, child, blocker);
+        ImGui::TreePop();
+    }
+    ImGui::PopID();
+}
+
+void Panels::drawAssetItems(const Document& doc, const AssetEntry& entry, const char* blocker)
+{
+    if (entry.folder) {
+        if (ImGui::MenuItem("New Folder", nullptr, false, !blocker))
+            assetEdit_ = {AssetEdit::Op::NewFolder, entry.path};
+        disabledTooltip(blocker);
+        ImGui::Separator();
+    }
+    if (ImGui::MenuItem("Rename", "F2", false, !blocker))
+        startAssetRename(entry.path, entry.name);
+    disabledTooltip(blocker);
+    if (ImGui::MenuItem("Delete", "Del", false, !blocker))
+        requestAssetDelete(doc, entry.path);
+    disabledTooltip(blocker);
+}
+
+void Panels::startAssetRename(const std::string& path, const std::string& name)
+{
+    assetSelected_ = path;
+    assetRenaming_ = path;
+    assetRenameBuffer_ = name;
+    focusAssetRename_ = true;
+}
+
+void Panels::requestAssetDelete(const Document& doc, const std::string& path)
+{
+    if (std::string error = deleteBlocker(assetsRoot_ / fromUtf8(path), openScenePath(doc)); !error.empty()) {
+        assetsFailed(std::move(error));
+        return;
+    }
+    assetDeletePath_ = path;
+    assetDeleteRequested_ = true;
+}
+
+void Panels::assetsFailed(std::string error)
+{
+    assetsError_ = std::move(error);
+    kast::log::error(assetsError_);
+    assetsErrorRequested_ = true;
+}
+
+void Panels::applyAssetEdit(Document& doc)
+{
+    const AssetEdit edit = std::exchange(assetEdit_, AssetEdit{});
+    if (edit.op == AssetEdit::Op::None || !doc.project || doc.play != PlayState::Stopped)
+        return;
+    const std::filesystem::path& root = doc.project->root;
+    const std::filesystem::path source = root / fromUtf8(edit.path);
+    std::string error;
+    std::string selected; // the entry to select afterwards
+    std::filesystem::path dest; // Rename / Move: where source goes
+
+    switch (edit.op) {
+    case AssetEdit::Op::NewFolder: {
+        const std::filesystem::path dir = edit.path.empty() ? root : source;
+        const std::string name = uniqueFolderName(dir);
+        if (createAssetFolder(dir, name, error)) {
+            assetExpand_ = edit.path;
+            selected = joinAsset(edit.path, name);
+            kast::log::info(std::format("Created folder '{}'", selected));
+            refreshAssets(doc);
+            startAssetRename(selected, name);
+            return;
+        }
+        break;
+    }
+    case AssetEdit::Op::Delete:
+        error = deleteBlocker(source, openScenePath(doc)); // the scene may have changed since the prompt opened
+        if (error.empty() && recycleAsset(source, error))
+            kast::log::info(std::format("Moved '{}' to the Recycle Bin", edit.path));
+        break;
+    case AssetEdit::Op::Rename:
+        dest = source.parent_path() / fromUtf8(edit.target);
+        selected = joinAsset(parentAsset(edit.path), edit.target);
+        break;
+    case AssetEdit::Op::Move:
+        if (parentAsset(edit.path) == edit.target)
+            return; // dropped onto its own folder
+        dest = (edit.target.empty() ? root : root / fromUtf8(edit.target)) / source.filename();
+        selected = joinAsset(edit.target, utf8(source.filename()));
+        break;
+    case AssetEdit::Op::None:
+        break;
+    }
+
+    if (!dest.empty()) {
+        // The open scene follows its file: work out its new path first, so a path doc.path can't hold refuses the
+        // operation before anything changes on disk.
+        const std::filesystem::path scene = openScenePath(doc);
+        const std::optional<std::filesystem::path> movedScene = scene.empty() ? std::nullopt : remapPath(scene, source, dest);
+        std::optional<std::string> scenePath = movedScene ? narrowPath(*movedScene, error) : std::nullopt;
+        const bool ok = (!movedScene || scenePath) &&
+                        (edit.op == AssetEdit::Op::Rename ? renameAsset(source, edit.target, error)
+                                                          : moveAsset(source, dest.parent_path(), error));
+        if (ok) {
+            kast::log::info(std::format("{} '{}' to '{}'", edit.op == AssetEdit::Op::Rename ? "Renamed" : "Moved",
+                                        edit.path, selected));
+            assetSelected_ = selected;
+            if (scenePath)
+                doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
+        }
+    }
+    if (!error.empty())
+        assetsFailed(std::move(error));
+    refreshAssets(doc);
 }

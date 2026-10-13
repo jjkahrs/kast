@@ -1,19 +1,23 @@
 #pragma once
 
+#include "assets.h"
 #include "document.h"
 
 #include <components.h>
 
 #include <nlohmann/json.hpp>
 
+#include <filesystem>
 #include <mutex>
 #include <string>
+#include <vector>
 
 // Hierarchy (tree, create/delete/rename/duplicate, drag-drop reparent), Inspector, Systems (the scene's Lua
 // systems: list, status while playing, add/remove/reorder, new from template) and Components (the project's Lua
 // component definitions: list with status, new from template), State Machines (the project's state machine
 // definitions: status, Global toggle, live game states, new from template) and Events (the Play session's recently
-// delivered events, with a name filter) panels.
+// delivered events, with a name filter) and Assets (the project's files: browse, open scenes, new folder, rename,
+// delete to the Recycle Bin, drag-drop move) panels.
 class Panels {
 public:
     // Opens the Inspector's "New Lua Component" modal (Add Component > New Lua Component...) with name prefilled.
@@ -28,6 +32,9 @@ public:
     void drawComponents(Document& doc);
     void drawStateMachines(Document& doc);
     void drawEvents(Document& doc);
+    // Rescans the project's files for the Assets panel (main's poll). drawAssets also rescans when the project changes.
+    void refreshAssets(const Document& doc);
+    void drawAssets(Document& doc, FileActions& files);
 
 private:
     // Tree edits are deferred to the end of drawHierarchy so the child lists are not changed mid-iteration.
@@ -38,7 +45,21 @@ private:
         ObjectKind kind = ObjectKind::Empty;
     };
 
+    // Assets panel file operations, deferred like Edit and applied at the end of drawAssets. Paths are
+    // project-relative; "" is the project root.
+    struct AssetEdit {
+        enum class Op { None, NewFolder, Rename, Move, Delete } op = Op::None;
+        std::string path;   // the entry acted on (NewFolder: the folder to create in)
+        std::string target; // Rename: the new name; Move: the destination folder
+    };
+
     void drawNode(Document& doc, entt::entity entity);
+    void drawAssetNode(const Document& doc, FileActions& files, const AssetEntry& entry, const char* blocker);
+    void drawAssetItems(const Document& doc, const AssetEntry& entry, const char* blocker);
+    void startAssetRename(const std::string& path, const std::string& name);
+    void requestAssetDelete(const Document& doc, const std::string& path);
+    void applyAssetEdit(Document& doc);
+    void assetsFailed(std::string error); // logs it and shows the Assets Error modal
     void drawCreateItems(entt::entity parent);
     void applyEdit(Document& doc);
     void drawNewComponentModal(Document& doc);
@@ -82,4 +103,17 @@ private:
     bool newStateMachineRequested_ = false;
     std::string newStateMachineName_;
     std::string newStateMachineError_; // why the last Create failed; cleared when the name changes
+
+    std::filesystem::path assetsRoot_; // the project root assets_ was scanned from; empty = no project
+    std::vector<AssetEntry> assets_;
+    std::string assetSelected_; // empty = none
+    std::string assetRenaming_; // empty = none
+    bool focusAssetRename_ = false;
+    std::string assetRenameBuffer_;
+    std::string assetExpand_; // a folder to expand next frame (New Folder's parent)
+    AssetEdit assetEdit_;
+    std::string assetDeletePath_; // waiting on the delete confirmation
+    bool assetDeleteRequested_ = false;
+    std::string assetsError_;
+    bool assetsErrorRequested_ = false;
 };

@@ -36,7 +36,7 @@ constexpr uint32_t kBackbufferClearColor = 0x202020ff;
 // --add-component-popup, --open-menu, --open-build-settings and --focus-panel wait this long: focus changes while the first frames dock the windows close
 // popups.
 constexpr int kAddComponentPopupFrame = 10;
-constexpr float kComponentPollSeconds = 0.5f; // Lua component and state machine definition files are checked this often
+constexpr float kComponentPollSeconds = 0.5f; // Lua definition files and the Assets tree are checked this often
 constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--ui-scale F] [--projects-file list.json] "
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--add-component-popup] "
@@ -251,12 +251,6 @@ void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu)
     }
 }
 
-void drawPlaceholder(const char* name)
-{
-    ImGui::Begin(name);
-    ImGui::End();
-}
-
 void drawConsole()
 {
     if (ImGui::Begin("Console")) {
@@ -388,6 +382,7 @@ int main(int argc, char** argv)
             componentPollSeconds = 0.0f;
             refreshComponents(doc);
             refreshStateMachines(doc); // also during Play: only the editor's listing (Play reloads its own)
+            panels.refreshAssets(doc);
         }
 
         drawMenuBar(files, doc, frames.frame() == kAddComponentPopupFrame ? options->openMenu : std::string());
@@ -419,7 +414,7 @@ int main(int argc, char** argv)
             systems && !ImGui::FindWindowSettingsByID(ImHashStr("Components")))
             ImGui::SetNextWindowDockID(systems->DockId, ImGuiCond_FirstUseEver);
         panels.drawComponents(doc);
-        drawPlaceholder("Assets");
+        panels.drawAssets(doc, files);
         // Layouts saved before the Events panel existed: dock it as a tab beside Console.
         if (const ImGuiWindowSettings* console = ImGui::FindWindowSettingsByID(ImHashStr("Console"));
             console && !ImGui::FindWindowSettingsByID(ImHashStr("Events")))

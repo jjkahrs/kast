@@ -710,6 +710,13 @@ std::string windowTitle(const Document& doc)
 
 void FileActions::newScene() { request(Pending::New); }
 void FileActions::open() { request(Pending::Open); }
+void FileActions::openScene(std::string path)
+{
+    if (dialogOpen_)
+        return; // request would drop it; keep the previous openPath_ for a pending prompt
+    openPath_ = std::move(path);
+    request(Pending::OpenPath);
+}
 void FileActions::saveAs() { showSaveDialog(Pending::None); }
 void FileActions::exit() { kast::requestQuit(); } // same path as the window X, so onQuitRequested runs
 void FileActions::build() { request(Pending::Build); }
@@ -755,6 +762,13 @@ void FileActions::perform(Pending action)
         dialogOpen_ = true;
         dialogKind_ = DialogKind::Open;
         SDL_ShowOpenFileDialog(onDialogDone, this, window_, &kSceneFilter, 1, nullptr, false);
+        break;
+    case Pending::OpenPath:
+        if (std::string error; !openFile(doc_, openPath_, error)) {
+            error_ = error;
+            kast::log::error(error_);
+            errorRequested_ = true;
+        }
         break;
     case Pending::Quit:
         quitConfirmed_ = true;

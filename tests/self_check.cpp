@@ -1,7 +1,8 @@
 // Assert-style checks for the non-trivial engine logic: rotation conventions, matrix decomposition, picking rays,
 // hierarchy edits, component registry, scene-file validation, cameras, input, systems, Lua systems, projects, scene
-// switching, editor Play mode, Lua components, game.pak, Build and state machines.
+// switching, editor Play mode, Lua components, game.pak, Build, state machines and Assets panel file operations.
 // Exit 0 if every check passes. Run by CTest as engine_self_check.
+#include "assets.h"   // Assets panel file logic; links editor/assets.cpp
 #include "build.h"    // editor Build pipeline; links editor/build.cpp
 #include "document.h" // editor Play mode; links editor/document.cpp, no window needed
 #include "recent_projects.h" // Project Manager list; links editor/recent_projects.cpp
@@ -3424,6 +3425,184 @@ void checkStateMachineEditor()
     std::filesystem::remove_all(dir);
 }
 
+std::vector<std::string> assetNames(const std::vector<AssetEntry>& entries)
+{
+    std::vector<std::string> names;
+    for (const AssetEntry& entry : entries)
+        names.push_back(entry.name + (entry.folder ? "/" : ""));
+    return names;
+}
+
+bool sameFile(const std::filesystem::path& a, const std::filesystem::path& b)
+{
+    return a.lexically_normal() == b.lexically_normal();
+}
+
+// The names in dir exactly as stored on disk (case included), sorted.
+std::vector<std::string> diskNames(const std::filesystem::path& dir)
+{
+    std::vector<std::string> names;
+    for (const auto& entry : std::filesystem::directory_iterator(dir))
+        names.push_back(utf8(entry.path().filename()));
+    std::ranges::sort(names);
+    return names;
+}
+
+void checkAssetScan()
+{
+    const std::filesystem::path root = projectTestDir("kast_assets_scan", "Assets"); // project.kast, empty scripts/
+    for (const char* dir : {"Zeta", "alpha/Empty", ".kast", "out/game", "fsms/.hidden"})
+        std::filesystem::create_directories(root / dir);
+    for (const char* file : {"b.scene", "A.lua", ".gitignore", "alpha/z.txt", "fsms/m.lua", "fsms/.hidden/x.lua", "out/game.pak"})
+        writeFile(root / file, "");
+    writeFile(root / u8"\u00e9t\u00e9.lua", ""); // non-ASCII name
+
+    std::string error;
+    check(saveBuildFolder(root, root / "out", error), "save an in-project build folder");
+    std::vector<AssetEntry> entries = scanAssets(root);
+    const std::vector<std::string> expected = {"alpha/", "fsms/", "scripts/", "Zeta/", "A.lua", "b.scene", "\xc3\xa9t\xc3\xa9.lua"};
+    check(assetNames(entries) == expected,
+          "scanAssets: folders first, A-Z ignoring case; dot-entries, project.kast and the build folder hidden");
+    if (assetNames(entries) != expected)
+        for (const std::string& name : assetNames(entries))
+            kast::log::error(std::format("  listed '{}'", name));
+    const AssetEntry* alpha = findAsset(entries, "alpha");
+    check(alpha && alpha->folder && assetNames(alpha->children) == std::vector<std::string>{"Empty/", "z.txt"},
+          "scanAssets lists an empty folder before a file");
+    const AssetEntry* empty = findAsset(entries, "alpha/Empty");
+    check(empty && empty->folder && empty->children.empty() && empty->path == "alpha/Empty",
+          "an empty folder has a project-relative path and no children");
+    check(findAsset(entries, "fsms/m.lua") && !findAsset(entries, "fsms/.hidden") && !findAsset(entries, "fsms/.hidden/x.lua"),
+          "a dot-folder and its contents are hidden");
+    check(!findAsset(entries, "missing") && !findAsset(entries, "alpha/missing"), "findAsset: no such entry");
+
+    check(saveBuildFolder(root, root.parent_path() / "kast_assets_out", error), "save a build folder outside");
+    check(findAsset(scanAssets(root), "out") != nullptr, "a build folder outside the project hides nothing");
+    check(saveBuildFolder(root, root, error) && findAsset(scanAssets(root), "alpha") != nullptr,
+          "a build folder equal to the project root hides nothing");
+}
+
+void checkAssetNames()
+{
+    for (const char* bad : {"", ".git", ".", "a<b", "a>b", "a:b", "a\"b", "a/b", "a\\b", "a|b", "a?b", "a*b", "a\tb",
+                            "a\x7f", "name ", "name.", "CON", "con.txt", "Com1", "LPT9.lua", "nul", "aux.tar.gz"})
+        check(!assetNameError(bad).empty(), std::format("assetNameError refuses '{}'", bad).c_str());
+    for (const char* good : {"health.lua", "New Folder", "CONSOLE", "a.b.c", " lead", "COM10", "\xc3\xa9t\xc3\xa9"})
+        check(assetNameError(good).empty(), std::format("assetNameError accepts '{}'", good).c_str());
+
+    const std::filesystem::path dir = looseTestDir("kast_assets_names");
+    check(uniqueFolderName(dir) == "New Folder", "uniqueFolderName: New Folder first");
+    std::filesystem::create_directory(dir / "new folder"); // taken, ignoring case
+    check(uniqueFolderName(dir) == "New Folder 2", "uniqueFolderName: New Folder 2 next");
+    writeFile(dir / "New Folder 2", ""); // a file takes the name too
+    check(uniqueFolderName(dir) == "New Folder 3", "uniqueFolderName: New Folder 3 next");
+
+    std::string error;
+    check(createAssetFolder(dir, uniqueFolderName(dir), error) && std::filesystem::is_directory(dir / "New Folder 3"),
+          "createAssetFolder creates the folder");
+    check(!createAssetFolder(dir, "NEW FOLDER 3", error) && contains(error, "already exists"),
+          "createAssetFolder refuses a taken name (ignoring case)");
+    check(!createAssetFolder(dir, "bad?", error) && !std::filesystem::exists(dir / "bad?"),
+          "createAssetFolder refuses an invalid name");
+}
+
+void checkAssetPaths()
+{
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "kast_assets_paths";
+    check(isSameOrInside(root / "a" / "b", root / "a"), "isSameOrInside: a child");
+    check(isSameOrInside(root / "a", root / "a"), "isSameOrInside: itself");
+    check(isSameOrInside(root / "A" / "x", root / "a"), "isSameOrInside ignores case");
+    check(isSameOrInside(root / "a" / "b", (root / "a").string() + "\\"), "isSameOrInside: trailing separator");
+    check(!isSameOrInside(root / "ab", root / "a"), "isSameOrInside: a sibling sharing a prefix is not inside");
+    check(!isSameOrInside(root / "a", root / "a" / "b"), "isSameOrInside: a parent is not inside its child");
+
+    const std::filesystem::path scene = root / "lvl" / "a.scene";
+    const std::optional<std::filesystem::path> renamed = remapPath(scene, scene, root / "lvl" / "b.scene");
+    check(renamed && sameFile(*renamed, root / "lvl" / "b.scene"), "remapPath follows a renamed scene");
+    const std::optional<std::filesystem::path> moved = remapPath(scene, root / "lvl", root / "x" / "lvl");
+    check(moved && sameFile(*moved, root / "x" / "lvl" / "a.scene"), "remapPath follows a moved parent folder");
+    const std::optional<std::filesystem::path> folded = remapPath(root / "LVL" / "a.scene", root / "lvl", root / "w");
+    check(folded && sameFile(*folded, root / "w" / "a.scene"), "remapPath ignores case");
+    check(!remapPath(scene, root / "other", root / "x"), "remapPath: an unrelated path is unchanged");
+    check(!remapPath(scene, root / "lvl" / "a", root / "x"), "remapPath: a name prefix is not a parent");
+
+    check(!deleteBlocker(scene, scene).empty(), "deleteBlocker refuses the open scene");
+    check(!deleteBlocker(root / "lvl", scene).empty(), "deleteBlocker refuses a folder holding the open scene");
+    check(!deleteBlocker(root, scene).empty(), "deleteBlocker refuses an ancestor of the open scene");
+    check(deleteBlocker(root / "lvl" / "b.scene", scene).empty(), "deleteBlocker allows another file");
+    check(deleteBlocker(scene, {}).empty(), "deleteBlocker allows anything with no saved scene");
+}
+
+void checkAssetMoves()
+{
+    const std::filesystem::path root = looseTestDir("kast_assets_moves");
+    std::filesystem::create_directories(root / "r");
+    writeFile(root / "r" / "one.lua", "one");
+    writeFile(root / "r" / "two.lua", "two");
+    std::string error;
+
+    check(!renameAsset(root / "r" / "one.lua", "TWO.lua", error) && contains(error, "already exists"),
+          "renameAsset refuses a taken name (ignoring case)");
+    check(diskNames(root / "r") == std::vector<std::string>{"one.lua", "two.lua"} && readText(root / "r" / "two.lua") == "two",
+          "a refused rename leaves the disk unchanged");
+    for (const char* bad : {"", ".one.lua", "bad?.lua", "con.lua", "trail."})
+        check(!renameAsset(root / "r" / "one.lua", bad, error) &&
+                  diskNames(root / "r") == std::vector<std::string>{"one.lua", "two.lua"},
+              std::format("renameAsset refuses '{}' and changes nothing", bad).c_str());
+    check(renameAsset(root / "r" / "one.lua", "One.lua", error) &&
+              diskNames(root / "r") == std::vector<std::string>{"One.lua", "two.lua"},
+          "renameAsset allows a case-only rename");
+    check(renameAsset(root / "r" / "One.lua", "three.lua", error) && readText(root / "r" / "three.lua") == "one",
+          "renameAsset renames a file");
+    check(renameAsset(root / "r", "renamed", error) && std::filesystem::exists(root / "renamed" / "two.lua"),
+          "renameAsset renames a folder with its contents");
+
+    std::filesystem::create_directories(root / "m" / "sub" / "deep");
+    writeFile(root / "m" / "f.txt", "mine");
+    writeFile(root / "m" / "sub" / "F.TXT", "theirs");
+    check(!moveAsset(root / "m" / "f.txt", root / "m" / "sub", error) && contains(error, "already exists") &&
+              readText(root / "m" / "f.txt") == "mine" && readText(root / "m" / "sub" / "F.TXT") == "theirs",
+          "moveAsset refuses a taken name (ignoring case) and changes nothing");
+    check(!moveAsset(root / "m", root / "m", error) && std::filesystem::exists(root / "m" / "f.txt"),
+          "moveAsset refuses moving a folder into itself");
+    check(!moveAsset(root / "m", root / "M" / "sub" / "deep", error) && std::filesystem::exists(root / "m" / "sub" / "deep"),
+          "moveAsset refuses moving a folder into its descendant");
+    check(moveAsset(root / "m" / "f.txt", root / "m", error) && readText(root / "m" / "f.txt") == "mine",
+          "moveAsset onto its own folder is a no-op");
+    check(moveAsset(root / "m" / "sub", root, error) && std::filesystem::exists(root / "sub" / "deep") &&
+              !std::filesystem::exists(root / "m" / "sub"),
+          "moveAsset moves a folder with its contents");
+    check(moveAsset(root / "m" / "f.txt", root / "sub" / "deep", error) && readText(root / "sub" / "deep" / "f.txt") == "mine",
+          "moveAsset moves a file");
+    check(!moveAsset(root / "missing.txt", root / "sub", error) && !error.empty(), "moveAsset reports an OS failure");
+}
+
+void checkOpenSceneAction()
+{
+    const std::filesystem::path root = projectTestDir("kast_assets_open", "Open");
+    saveTestScene(root / "a.scene", "A", {});
+    saveTestScene(root / "b.scene", "B", {});
+    Document doc;
+    std::string error;
+    check(openFile(doc, (root / "a.scene").string(), error), "open a.scene");
+    FileActions files(doc);
+    files.openScene((root / "b.scene").string());
+    check(doc.path == (root / "b.scene").string(), "FileActions::openScene opens a clean document's scene right away");
+    markDirty(doc);
+    files.openScene((root / "a.scene").string());
+    check(doc.path == (root / "b.scene").string() && doc.dirty,
+          "FileActions::openScene waits on the unsaved-changes prompt when dirty");
+}
+
+void checkAssets()
+{
+    checkAssetScan();
+    checkAssetNames();
+    checkAssetPaths();
+    checkAssetMoves();
+    checkOpenSceneAction();
+}
+
 int main()
 {
     checkRotations();
@@ -3477,6 +3656,7 @@ int main()
     checkStateMachineHotReload();
     checkStateMachineFiles();
     checkStateMachineEditor();
+    checkAssets();
     checkMountedPak(); // last: the mounted pak hides the disk for the rest of the run
     if (g_failures > 0) {
         kast::log::error(std::format("{} self-check(s) failed", g_failures));

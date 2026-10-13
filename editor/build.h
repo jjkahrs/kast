@@ -18,6 +18,10 @@ constexpr const char* kPlayerExeName = "kast_player.exe";
 // What kast_player.exe imports beyond Windows and the MSVC runtime (dumpbin /dependents); vcpkg copies them next to it.
 constexpr const char* kPlayerDlls[] = {"SDL3.dll", "lua51.dll"};
 
+// c can't appear in a Windows file name: one of < > : " / \ | ? * or a control character.
+bool isInvalidFileChar(char c);
+// name up to its first '.' is a reserved Windows device name (CON, NUL, COM1, ...), ignoring case.
+bool isReservedFileName(std::string_view name);
 // The game exe's file name: the project name trimmed, each of < > : " / \ | ? * and control characters replaced by
 // '_', trailing dots and spaces dropped, '_' appended to a reserved device name (CON, NUL, COM1, ...), "Game" if
 // nothing is left; then ".exe". "Switch Test" -> "Switch Test.exe".

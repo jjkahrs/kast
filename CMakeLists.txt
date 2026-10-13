@@ -96,20 +96,21 @@ target_link_libraries(kast_player PRIVATE kast_engine SDL3::SDL3)
 add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
+  editor/assets.cpp
   ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 imgui::imgui imguizmo::imguizmo)
+target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 imgui::imgui imguizmo::imguizmo shell32) # shell32: Recycle Bin
 add_dependencies(kast_editor kast_player) # Build copies kast_player.exe from next to kast_editor.exe
 
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
 add_executable(kast_self_check tests/self_check.cpp editor/document.cpp editor/build.cpp editor/camera.cpp
-  editor/recent_projects.cpp)
+  editor/recent_projects.cpp editor/assets.cpp)
 target_include_directories(kast_self_check PRIVATE editor)
 target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
 target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_self_check PRIVATE kast_engine SDL3::SDL3 imgui::imgui)
+target_link_libraries(kast_self_check PRIVATE kast_engine SDL3::SDL3 imgui::imgui shell32)
 
 # --- tests ---
 enable_testing()

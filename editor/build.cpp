@@ -40,22 +40,30 @@ std::filesystem::path editorFile(const std::filesystem::path& projectRoot) { ret
 
 } // namespace
 
+bool isInvalidFileChar(char c)
+{
+    const auto byte = static_cast<unsigned char>(c);
+    return byte < 0x20 || byte == 0x7f || kInvalidFileChars.find(c) != std::string_view::npos;
+}
+
+bool isReservedFileName(std::string_view name)
+{
+    // Windows reserves the device names even with an extension: "CON.txt" is the console.
+    return std::ranges::find(kReservedNames, upper(name.substr(0, name.find('.')))) != std::end(kReservedNames);
+}
+
 std::string gameExeName(std::string_view projectName)
 {
     std::string name;
-    for (const char c : projectName) {
-        const auto byte = static_cast<unsigned char>(c);
-        name += byte < 0x20 || byte == 0x7f || kInvalidFileChars.find(c) != std::string_view::npos ? '_' : c;
-    }
+    for (const char c : projectName)
+        name += isInvalidFileChar(c) ? '_' : c;
     const size_t first = name.find_first_not_of(' ');
     name.erase(0, first == std::string::npos ? name.size() : first);
     while (!name.empty() && (name.back() == ' ' || name.back() == '.'))
         name.pop_back();
     if (name.empty())
         name = "Game";
-    // Windows reserves the device names even with an extension: "CON.txt" is the console.
-    const std::string base = upper(std::string_view(name).substr(0, name.find('.')));
-    if (std::ranges::find(kReservedNames, base) != std::end(kReservedNames))
+    if (isReservedFileName(name))
         name += '_';
     return name + ".exe";
 }

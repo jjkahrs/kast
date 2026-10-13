@@ -153,6 +153,8 @@ public:
     void setWindow(SDL_Window* window) { window_ = window; }
     void newScene();
     void open();
+    // Opens path (no dialog), after the unsaved-changes prompt if the document is dirty. Failures show the Error modal.
+    void openScene(std::string path);
     void save();
     void saveAs();
     void exit();
@@ -175,7 +177,7 @@ public:
     bool onQuitRequested();
 
 private:
-    enum class Pending { None, New, Open, Quit, Build, BuildAndRun };
+    enum class Pending { None, New, Open, OpenPath, Quit, Build, BuildAndRun };
     enum class DialogKind { Open, SaveAs, BuildFolder };
 
     // Runs action now, or after the unsaved-changes modal if the document is dirty.
@@ -198,6 +200,7 @@ private:
     SDL_Window* window_ = nullptr;
     Pending pending_ = Pending::None;   // action waiting on the unsaved-changes modal
     Pending afterSave_ = Pending::None; // action to run once a Save As dialog saves successfully
+    std::string openPath_; // the scene Pending::OpenPath opens
     bool confirmRequested_ = false;
     bool quitConfirmed_ = false;
     std::string error_;
