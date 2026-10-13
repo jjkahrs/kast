@@ -1,11 +1,12 @@
 // Assert-style checks for the non-trivial engine logic: rotation conventions, matrix decomposition, picking rays,
 // hierarchy edits, component registry, scene-file validation, cameras, input, systems, Lua systems, projects, scene
 // switching, editor Play mode, Lua components, game.pak, Build, state machines, Assets panel file operations and the
-// game GUI (builder document model, GUI files, UIDocument, button click events).
+// game GUI (builder document model, GUI files, UIDocument, button click events) and the external editor setting.
 // Exit 0 if every check passes. Run by CTest as engine_self_check.
 #include "assets.h"   // Assets panel file logic; links editor/assets.cpp
 #include "build.h"    // editor Build pipeline; links editor/build.cpp
 #include "document.h" // editor Play mode; links editor/document.cpp, no window needed
+#include "external_editor.h" // external editor command; links editor/external_editor.cpp
 #include "gui_doc.h"  // GUI Builder document model; links editor/gui_doc.cpp
 #include "recent_projects.h" // Project Manager list; links editor/recent_projects.cpp
 
@@ -3911,6 +3912,42 @@ void checkGui()
     checkGuiEvents();
 }
 
+void checkExternalEditor()
+{
+    const std::filesystem::path plain = R"(C:\game\scripts\report.lua)";
+    const std::filesystem::path spaced = R"(C:\My Game\ui\main menu.rcss)";
+    check(expandEditorCommand(kDefaultEditorCommand, plain) == R"(code "C:\game\scripts\report.lua")",
+          "default command: {file} replaced by the path");
+    check(expandEditorCommand(kDefaultEditorCommand, spaced) == R"(code "C:\My Game\ui\main menu.rcss")",
+          "path with spaces stays inside the template's quotes");
+    check(expandEditorCommand("notepad++.exe -multiInst", spaced) ==
+              R"(notepad++.exe -multiInst "C:\My Game\ui\main menu.rcss")",
+          "no {file}: the quoted path is appended");
+    check(expandEditorCommand("", plain) == R"("C:\game\scripts\report.lua")", "empty command: just the quoted path");
+    check(expandEditorCommand("ed {file} --diff {file}", plain) ==
+              R"(ed C:\game\scripts\report.lua --diff C:\game\scripts\report.lua)",
+          "every {file} replaced");
+    check(expandEditorCommand(kDefaultEditorCommand, std::filesystem::path(u8"C:\\j\u00fcgo\\a.json")) ==
+              "code \"C:\\j\xC3\xBCgo\\a.json\"",
+          "non-ASCII path expanded as UTF-8");
+
+    const std::filesystem::path file = looseTestDir("kast_editor_settings_check") / "Kast/Editor/editor_settings.json";
+    std::string error;
+    check(loadEditorCommand(file) == kDefaultEditorCommand, "no settings file: the default command");
+    check(saveEditorCommand(file, "subl \"{file}\"", error) && loadEditorCommand(file) == "subl \"{file}\"",
+          "save/load round trip, creating the folder");
+    check(contains(readText(file), "\"externalEditor\": \"subl \\\"{file}\\\"\""), "stored under externalEditor");
+    std::ofstream(file, std::ios::binary | std::ios::trunc) << "{ not json";
+    check(loadEditorCommand(file) == kDefaultEditorCommand && logged("Editor settings"),
+          "invalid settings file: the default command, with a warning");
+    std::ofstream(file, std::ios::binary | std::ios::trunc) << R"({"other": 1})";
+    check(loadEditorCommand(file) == kDefaultEditorCommand, "missing key: the default command");
+    ExternalEditor editor(file);
+    check(editor.command() == kDefaultEditorCommand && editor.setCommand("vim {file}", error) &&
+              editor.command() == "vim {file}" && loadEditorCommand(file) == "vim {file}",
+          "setCommand saves and is used from then on");
+}
+
 int main()
 {
     checkRotations();
@@ -3966,6 +4003,7 @@ int main()
     checkStateMachineEditor();
     checkAssets();
     checkGui();
+    checkExternalEditor();
     checkMountedPak(); // last: the mounted pak hides the disk for the rest of the run
     if (g_failures > 0) {
         kast::log::error(std::format("{} self-check(s) failed", g_failures));

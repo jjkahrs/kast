@@ -2,6 +2,7 @@
 
 #include "assets.h"
 #include "document.h"
+#include "external_editor.h"
 #include "gui_builder.h"
 
 #include <components.h>
@@ -18,7 +19,8 @@
 // component definitions: list with status, new from template), State Machines (the project's state machine
 // definitions: status, Global toggle, live game states, new from template) and Events (the Play session's recently
 // delivered events, with a name filter) and Assets (the project's files: browse, open scenes and GUIs, new folder,
-// new Lua system / state machine / GUI, rename, delete to the Recycle Bin, drag-drop move) panels.
+// new Lua system / state machine / GUI, rename, delete to the Recycle Bin, drag-drop move, open text files in an
+// external editor) panels.
 class Panels {
 public:
     // Opens the Inspector's "New Lua Component" modal (Add Component > New Lua Component...) with name prefilled.
@@ -45,8 +47,9 @@ public:
     void drawEvents(Document& doc);
     // Rescans the project's files for the Assets panel (main's poll). drawAssets also rescans when the project changes.
     void refreshAssets(const Document& doc);
-    // Double-clicked .rml files open in gui; renames and moves of its open files reach it.
-    void drawAssets(Document& doc, FileActions& files, GuiBuilder& gui);
+    // Double-clicked .rml files open in gui, .lua/.rcss/.json files in editor; renames and moves of gui's open files
+    // reach it.
+    void drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ExternalEditor& editor);
 
 private:
     // Tree edits are deferred to the end of drawHierarchy so the child lists are not changed mid-iteration.
@@ -66,9 +69,9 @@ private:
     };
 
     void drawNode(Document& doc, entt::entity entity);
-    void drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, const AssetEntry& entry,
-                       const char* blocker);
-    void drawAssetItems(const Document& doc, const AssetEntry& entry, const char* blocker);
+    void drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ExternalEditor& editor,
+                       const AssetEntry& entry, const char* blocker);
+    void drawAssetItems(const Document& doc, ExternalEditor& editor, const AssetEntry& entry, const char* blocker);
     void drawAssetCreateMenu(const std::string& folder, const char* blocker); // folder: "" = root
     void openRequestedAssetMenu(const char* popup); // opens popup (the last item's context menu) for openAssetMenu
     void startAssetRename(const std::string& path, const std::string& name);

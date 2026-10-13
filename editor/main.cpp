@@ -1,5 +1,6 @@
 #include "build.h"
 #include "document.h"
+#include "external_editor.h"
 #include "game_view.h"
 #include "imgui_bgfx.h"
 #include "launcher.h"
@@ -18,6 +19,7 @@
 #include <ImGuizmo.h> // after imgui.h, which it needs
 #include <imgui_impl_sdl3.h>
 #include <imgui_internal.h> // DockBuilder API
+#include <imgui_stdlib.h>
 
 #include <charconv>
 #include <filesystem>
@@ -36,7 +38,7 @@ constexpr bgfx::ViewId kGameGuiView = 3;    // the game GUIs, over the Game view
 constexpr bgfx::ViewId kGuiPreviewView = 4; // the GUI Builder's preview
 constexpr bgfx::ViewId kImGuiView = 255; // last, so the UI draws over everything
 constexpr uint32_t kBackbufferClearColor = 0x202020ff;
-// --add-component-popup, --open-menu, --open-build-settings, --focus-panel and --assets-* wait this long: focus changes while the first frames dock the windows close
+// --add-component-popup, --open-menu, --open-build-settings, --open-preferences, --focus-panel and --assets-* wait this long: focus changes while the first frames dock the windows close
 // popups.
 constexpr int kAddComponentPopupFrame = 10;
 constexpr float kComponentPollSeconds = 0.5f; // Lua definition files and the Assets tree are checked this often
@@ -46,7 +48,8 @@ constexpr const char* kUsage =
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--assets-menu path|/] [--assets-create system|fsm|gui:folder] "
     "[--focus-panel Window] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
-    "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] | "
+    "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--settings-file settings.json] [--open-preferences] "
+    "[--open-external path] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 struct Options {
@@ -78,6 +81,9 @@ struct Options {
     bool guiSave = false;          // then save the GUI as its Save button does
     std::string guiClick;           // with --play: click the game GUI element with this id (frame kAddComponentPopupFrame)
     std::string projectsFile;       // the recent-projects list; empty = the one in %APPDATA%
+    std::string settingsFile;       // the editor settings (external editor command); empty = the one in %APPDATA%
+    bool openPreferences = false;   // open the File > Preferences modal for screenshots
+    std::string openExternal;       // open this project file (path relative to the project) in the external editor
     bool launcher = false;          // run the Project Manager (the default anyway when nothing asks for the editor)
     std::string launcherOpen;       // open this project as the Project Manager would, without a window, and exit
     std::vector<std::string> childArgs; // the flags after --, passed on to the editor the Project Manager starts
@@ -193,6 +199,12 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.focusPanel = argv[++i];
         } else if (arg == "--projects-file" && hasValue) {
             options.projectsFile = argv[++i];
+        } else if (arg == "--settings-file" && hasValue) {
+            options.settingsFile = argv[++i];
+        } else if (arg == "--open-preferences") {
+            options.openPreferences = true;
+        } else if (arg == "--open-external" && hasValue) {
+            options.openExternal = argv[++i];
         } else if (arg == "--launcher") {
             options.launcher = true;
         } else if (arg == "--launcher-open" && hasValue) {
@@ -234,12 +246,13 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.openBuildSettings || !options.focusPanel.empty() || options.newStateMachinePrompt ||
                              options.assetsMenu || options.assetsCreate || !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
-                             options.guiAdd || options.guiSave || !options.guiClick.empty();
+                             options.guiAdd || options.guiSave || !options.guiClick.empty() || options.openPreferences ||
+                             !options.openExternal.empty();
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --add-component-popup, --new-component[-prompt], "
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --focus-panel, --assets-menu, "
-                         "--assets-create, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save and "
-                         "--gui-click require "
+                         "--assets-create, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
+                         "--gui-click, --open-preferences and --open-external require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
     }
@@ -253,6 +266,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     if (!options.guiClick.empty() && !options.play) {
         kast::log::error("--gui-click requires --play");
+        return std::nullopt;
+    }
+    if (!options.openExternal.empty() && options.project.empty()) {
+        kast::log::error("--open-external requires --project <dir>");
         return std::nullopt;
     }
     if (options.openBuildSettings && options.project.empty()) {
@@ -293,8 +310,9 @@ void buildDefaultLayout(ImGuiID dockspace)
     ImGui::DockBuilderFinish(dockspace);
 }
 
-// openMenu: a main menu to open this frame (--open-menu), or empty.
-void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu)
+// openMenu: a main menu to open this frame (--open-menu), or empty. openPreferences: set when File > Preferences... is
+// chosen.
+void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu, bool& openPreferences)
 {
     if (ImGui::BeginMainMenuBar()) {
         if (!openMenu.empty())
@@ -309,6 +327,9 @@ void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu)
                 files.save();
             if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S", false, idle))
                 files.saveAs();
+            ImGui::Separator();
+            if (ImGui::MenuItem("Preferences..."))
+                openPreferences = true;
             ImGui::Separator();
             if (ImGui::MenuItem("Exit"))
                 files.exit();
@@ -333,6 +354,32 @@ void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu)
         }
         ImGui::EndMainMenuBar();
     }
+}
+
+// File > Preferences...: the external editor command (per user, every project). open: open it this frame, showing the
+// current setting.
+void drawPreferences(ExternalEditor& editor, std::string& draft, bool open)
+{
+    if (open) {
+        draft = editor.command();
+        ImGui::OpenPopup("Preferences");
+    }
+    if (!ImGui::BeginPopupModal("Preferences", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    ImGui::TextUnformatted("External editor command");
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 25.0f);
+    ImGui::InputText("##externalEditor", &draft);
+    ImGui::TextDisabled("{file} is replaced with the file's full path. Default: %s", kDefaultEditorCommand);
+    if (ImGui::Button("Save")) {
+        if (std::string error; editor.setCommand(draft, error))
+            ImGui::CloseCurrentPopup();
+        else
+            kast::log::error(error);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape))
+        ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
 }
 
 // The GUI Builder's panels, each docked beside its scene counterpart in layouts saved before the builder existed:
@@ -450,6 +497,12 @@ int main(int argc, char** argv)
     UiScale uiScale(options->uiScale);
     FrameLimit frames(options->frames, options->screenshot);
     float componentPollSeconds = 0.0f;
+    ExternalEditor externalEditor(options->settingsFile.empty() ? defaultEditorSettingsFile()
+                                                                : std::filesystem::absolute(options->settingsFile));
+    std::string preferencesDraft; // the Preferences modal's edit of the command
+    if (!options->openExternal.empty())
+        externalEditor.open(doc.project->root /
+                            std::filesystem::path(reinterpret_cast<const char8_t*>(options->openExternal.c_str())));
 
     kast::AppHooks hooks;
     hooks.init = [&](SDL_Window* window) {
@@ -505,7 +558,9 @@ int main(int argc, char** argv)
             guiBuilder.poll();
         }
 
-        drawMenuBar(files, doc, frames.frame() == kAddComponentPopupFrame ? options->openMenu : std::string());
+        bool openPreferences = options->openPreferences && frames.frame() == kAddComponentPopupFrame;
+        drawMenuBar(files, doc, frames.frame() == kAddComponentPopupFrame ? options->openMenu : std::string(),
+                    openPreferences);
         const ImGuiID dockspace = ImGui::GetID("MainDockSpace");
         if (!ImGui::DockBuilderGetNode(dockspace)) // no saved layout in imgui.ini
             buildDefaultLayout(dockspace);
@@ -556,7 +611,7 @@ int main(int argc, char** argv)
             systems && !ImGui::FindWindowSettingsByID(ImHashStr("Components")))
             ImGui::SetNextWindowDockID(systems->DockId, ImGuiCond_FirstUseEver);
         panels.drawComponents(doc);
-        panels.drawAssets(doc, files, guiBuilder);
+        panels.drawAssets(doc, files, guiBuilder, externalEditor);
         // Layouts saved before the Events panel existed: dock it as a tab beside Console.
         if (const ImGuiWindowSettings* console = ImGui::FindWindowSettingsByID(ImHashStr("Console"));
             console && !ImGui::FindWindowSettingsByID(ImHashStr("Events")))
@@ -569,6 +624,8 @@ int main(int argc, char** argv)
         panels.drawStateMachines(doc);
         drawGuiBuilder(guiBuilder);
         drawConsole(); // submitted after Assets, Events and State Machines so Console is the front tab on first run
+        drawPreferences(externalEditor, preferencesDraft, openPreferences);
+        externalEditor.poll();
         files.update();
         if (game.hasInput(doc))
             doc.input.endFrame();

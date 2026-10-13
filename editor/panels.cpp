@@ -894,6 +894,13 @@ bool hasExtension(const std::string& name, std::string_view extension)
     return actual == extension;
 }
 
+// Files the external editor opens (File > Preferences...).
+bool isTextAsset(const std::string& name)
+{
+    return hasExtension(name, ".lua") || hasExtension(name, ".rcss") || hasExtension(name, ".rml") ||
+           hasExtension(name, ".json");
+}
+
 bool acceptAssetDrop(std::string& dropped)
 {
     bool accepted = false;
@@ -947,7 +954,7 @@ void Panels::refreshAssets(const Document& doc)
         assetRenaming_.clear();
 }
 
-void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui)
+void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ExternalEditor& editor)
 {
     if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
         refreshAssets(doc);
@@ -959,7 +966,7 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui)
                                   : !files.idle()                ? "Close the open dialog first"
                                                                  : nullptr;
             for (const AssetEntry& entry : assets_)
-                drawAssetNode(doc, files, gui, entry, blocker);
+                drawAssetNode(doc, files, gui, editor, entry, blocker);
 
             // The rest of the panel: click clears selection, drop moves to the root, right-click creates at the root.
             ImVec2 rest = ImGui::GetContentRegionAvail();
@@ -1027,8 +1034,8 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui)
     applyAssetEdit(doc, gui);
 }
 
-void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, const AssetEntry& entry,
-                           const char* blocker)
+void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ExternalEditor& editor,
+                           const AssetEntry& entry, const char* blocker)
 {
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
                                ImGuiTreeNodeFlags_SpanAvailWidth;
@@ -1051,6 +1058,9 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
     if (!entry.folder && hasExtension(entry.name, ".rml") && ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
         gui.open(assetsRoot_ / fromUtf8(entry.path));
+    if (!entry.folder && isTextAsset(entry.name) && !hasExtension(entry.name, ".rml") && ImGui::IsItemHovered() &&
+        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) // .rml: the GUI Builder above; its menu opens it here
+        editor.open(assetsRoot_ / fromUtf8(entry.path));
     if (!entry.folder && !blocker && hasExtension(entry.name, ".scene") && ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
         std::string error;
@@ -1069,7 +1079,7 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
     if (assetMenuRequest_ == entry.path)
         openRequestedAssetMenu("##assetMenu");
     if (ImGui::BeginPopupContextItem("##assetMenu")) {
-        drawAssetItems(doc, entry, blocker);
+        drawAssetItems(doc, editor, entry, blocker);
         ImGui::EndPopup();
     }
 
@@ -1095,14 +1105,19 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
 
     if (open && entry.folder) {
         for (const AssetEntry& child : entry.children)
-            drawAssetNode(doc, files, gui, child, blocker);
+            drawAssetNode(doc, files, gui, editor, child, blocker);
         ImGui::TreePop();
     }
     ImGui::PopID();
 }
 
-void Panels::drawAssetItems(const Document& doc, const AssetEntry& entry, const char* blocker)
+void Panels::drawAssetItems(const Document& doc, ExternalEditor& editor, const AssetEntry& entry, const char* blocker)
 {
+    if (!entry.folder && isTextAsset(entry.name)) {
+        if (ImGui::MenuItem("Open in External Editor"))
+            editor.open(assetsRoot_ / fromUtf8(entry.path));
+        ImGui::Separator();
+    }
     if (entry.folder) {
         if (ImGui::MenuItem("New Folder", nullptr, false, !blocker))
             assetEdit_ = {AssetEdit::Op::NewFolder, entry.path};
