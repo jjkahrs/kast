@@ -29,7 +29,8 @@
 
 namespace {
 
-constexpr bgfx::ViewId kGameView = 0; // then its post passes
+constexpr bgfx::ViewId kShadowViews = 0; // the scene's shadow maps (Renderer::kShadowViews)
+constexpr bgfx::ViewId kGameView = kShadowViews + kast::Renderer::kShadowViews; // then its post passes
 constexpr bgfx::ViewId kGuiView = kGameView + kast::PostProcess::kViews; // the scene's game GUIs, over the scene
 constexpr uint32_t kClearColor = 0x202020ff;
 constexpr int kScreenshotTimeoutFrames = 30;
@@ -189,7 +190,7 @@ int main(int argc, char** argv)
             float view[16], proj[16];
             kast::cameraMatrices(scene, camera, static_cast<float>(width) / static_cast<float>(height),
                                  bgfx::getCaps()->homogeneousDepth, view, proj);
-            renderer.render(scene, project.root, post.sceneView(), view, proj);
+            renderer.render(scene, project.root, post.sceneView(), view, proj, kShadowViews);
         }
         post.apply(scene.postProcessing, true, BGFX_INVALID_HANDLE);
         if (const bgfx::Stats* stats = bgfx::getStats(); options->gpuStats && frame >= kGpuStatsWarmupFrames) {

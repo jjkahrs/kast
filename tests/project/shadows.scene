@@ -1,0 +1,91 @@
+{
+  "version": 4,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Sun",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 6, 0], "rotation": [-0.408218, -0.23457, -0.109382, 0.875426], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.95, 0.9], "intensity": 0.8 }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, -30], "rotation": [0, 0, 0, 1], "scale": [60, 1, 90] },
+        "MeshRenderer": { "primitive": "plane", "material": "" }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Cube",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-3, 0.75, 0], "rotation": [0, 0.173648, 0, 0.984808], "scale": [1.5, 1.5, 1.5] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Sphere",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 1, -2], "rotation": [0, 0, 0, 1], "scale": [2, 2, 2] },
+        "MeshRenderer": { "primitive": "sphere", "material": "" }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Character",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [3, 0, 0], "rotation": [0, 0, 0, 1], "scale": [2, 2, 2] },
+        "ModelRenderer": { "model": "models/female-128-anim.glb", "materials": [] },
+        "Animator": { "clip": "Cheering_Two_Hands", "loop": true, "speed": 0, "playOnStart": true }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Cutout",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-1.5, 1.25, 2.5], "rotation": [0, 0, 0, 1], "scale": [2, 2, 0.05] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/cutout.mat" }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Glass",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [1.5, 0.75, 2.5], "rotation": [0, 0, 0, 1], "scale": [1.5, 1.5, 1.5] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/glass_blue.mat" }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Far Pillar",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-4, 4, -40], "rotation": [0, 0, 0, 1], "scale": [2, 8, 2] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 5, 9], "rotation": [-0.21644, 0, 0, 0.976296], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    }
+  ],
+  "lighting": { "ambientColor": [0.6, 0.7, 1], "ambientIntensity": 0.15 },
+  "editor": {
+    "camera": { "pivot": [0, 1, 0], "yaw": 0, "pitch": -25, "distance": 11 }
+  }
+}

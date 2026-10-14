@@ -54,6 +54,20 @@ const char* validatePointLight(const entt::meta_any& component)
         return "\"intensity\" must be >= 0";
     if (!(light.range > 0.0f))
         return "\"range\" must be > 0";
+    if (!(light.bias >= 0.0f))
+        return "\"bias\" must be >= 0";
+    return nullptr;
+}
+
+const char* validateDirectionalLight(const entt::meta_any& component)
+{
+    const auto& light = component.cast<const DirectionalLight&>();
+    if (!(light.bias >= 0.0f && light.normalBias >= 0.0f))
+        return "\"bias\" and \"normalBias\" must be >= 0";
+    if (!(light.maxDistance > 0.0f))
+        return "\"maxDistance\" must be > 0";
+    if (light.cascadeCount < 1 || light.cascadeCount > kMaxShadowCascades)
+        return "\"cascadeCount\" must be between 1 and 4"; // kMaxShadowCascades
     return nullptr;
 }
 
@@ -79,12 +93,16 @@ void registerBuiltins()
         .data<Primitive::Sphere>("sphere").custom<FieldInfo>("Sphere");
     registerComponent<MeshRenderer>("MeshRenderer", {"Mesh Renderer"})
         .data<&MeshRenderer::primitive>("primitive").custom<FieldInfo>("Primitive")
-        .data<&MeshRenderer::material>("material").custom<FieldInfo>("Material");
+        .data<&MeshRenderer::material>("material").custom<FieldInfo>("Material")
+        .data<&MeshRenderer::castShadows>("castShadows").custom<FieldInfo>(FieldInfo{.displayName = "Cast Shadows", .optional = true})
+        .data<&MeshRenderer::receiveShadows>("receiveShadows").custom<FieldInfo>(FieldInfo{.displayName = "Receive Shadows", .optional = true});
 
     // materials: a JSON array of strings (see FieldDesc::array); the first built-in list field.
     registerComponent<ModelRenderer>("ModelRenderer", {"Model Renderer"})
         .data<&ModelRenderer::model>("model").custom<FieldInfo>("Model")
-        .data<&ModelRenderer::materials>("materials").custom<FieldInfo>("Materials");
+        .data<&ModelRenderer::materials>("materials").custom<FieldInfo>("Materials")
+        .data<&ModelRenderer::castShadows>("castShadows").custom<FieldInfo>(FieldInfo{.displayName = "Cast Shadows", .optional = true})
+        .data<&ModelRenderer::receiveShadows>("receiveShadows").custom<FieldInfo>(FieldInfo{.displayName = "Receive Shadows", .optional = true});
 
     registerComponent<Animator>("Animator", {"Animator", true, validateAnimator})
         .data<&Animator::clip>("clip").custom<FieldInfo>("Clip")
@@ -92,14 +110,22 @@ void registerBuiltins()
         .data<&Animator::speed>("speed").custom<FieldInfo>("Speed", false, 0.0, kMaxAnimatorSpeed)
         .data<&Animator::playOnStart>("playOnStart").custom<FieldInfo>("Play On Start");
 
-    registerComponent<DirectionalLight>("DirectionalLight", {"Directional Light"})
+    registerComponent<DirectionalLight>("DirectionalLight", {"Directional Light", true, validateDirectionalLight})
         .data<&DirectionalLight::color>("color").custom<FieldInfo>("Color", true)
-        .data<&DirectionalLight::intensity>("intensity").custom<FieldInfo>("Intensity");
+        .data<&DirectionalLight::intensity>("intensity").custom<FieldInfo>("Intensity")
+        .data<&DirectionalLight::castShadows>("castShadows").custom<FieldInfo>(FieldInfo{.displayName = "Cast Shadows", .optional = true})
+        .data<&DirectionalLight::bias>("bias").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Bias", .min = 0.0, .optional = true})
+        .data<&DirectionalLight::normalBias>("normalBias").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Normal Bias", .min = 0.0, .optional = true})
+        .data<&DirectionalLight::maxDistance>("maxDistance").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Distance", .min = 0.1, .optional = true})
+        .data<&DirectionalLight::cascadeCount>("cascadeCount")
+        .custom<FieldInfo>(FieldInfo{.displayName = "Shadow Cascades", .min = 1.0, .max = double(kMaxShadowCascades), .optional = true});
 
     registerComponent<PointLight>("PointLight", {"Point Light", true, validatePointLight})
         .data<&PointLight::color>("color").custom<FieldInfo>("Color", true)
         .data<&PointLight::intensity>("intensity").custom<FieldInfo>("Intensity", false, 0.0)
-        .data<&PointLight::range>("range").custom<FieldInfo>("Range", false, kMinPointLightRange);
+        .data<&PointLight::range>("range").custom<FieldInfo>("Range", false, kMinPointLightRange)
+        .data<&PointLight::castShadows>("castShadows").custom<FieldInfo>(FieldInfo{.displayName = "Cast Shadows", .optional = true})
+        .data<&PointLight::bias>("bias").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Bias", .min = 0.0, .optional = true});
 
     registerComponent<Camera>("Camera", {"Camera", true, validateCamera})
         .data<&Camera::verticalFovDegrees>("verticalFovDegrees").custom<FieldInfo>("Vertical FOV")
@@ -352,8 +378,12 @@ entt::meta_any componentFromJson(const entt::meta_type& type, const Json& json, 
                 throw Invalid(std::format("unknown field \"{}\"", key));
         entt::meta_any component = type.construct();
         for (auto [id, field] : type.data()) {
-            if (!json.contains(field.name()))
+            if (!json.contains(field.name())) {
+                const auto* info = static_cast<const FieldInfo*>(field.custom());
+                if (info && info->optional)
+                    continue;
                 throw Invalid(std::format("missing field \"{}\"", field.name()));
+            }
             try {
                 if (!field.set(component, fieldFromJson(field.type(), json[field.name()])))
                     throw std::logic_error(std::format("cannot set field {}", field.name()));

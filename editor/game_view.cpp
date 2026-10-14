@@ -41,7 +41,7 @@ void GameViewport::draw(Document& doc)
                 float view[16], proj[16];
                 kast::cameraMatrices(doc.scene, camera, size.x / size.y, bgfx::getCaps()->homogeneousDepth, view, proj);
                 renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), post_.sceneView(),
-                                 view, proj);
+                                 view, proj, shadowViews_);
             }
             post_.apply(doc.scene.postProcessing, true, target_.frameBuffer());
             if (doc.play != PlayState::Stopped) {

@@ -34,6 +34,7 @@ set(KAST_EDITOR_SHADERS)
 set(KAST_ENGINE_SHADERS)
 foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
              engine/shaders/vs_mesh engine/shaders/vs_mesh_skinned engine/shaders/fs_mesh engine/shaders/vs_line
+             engine/shaders/vs_shadow engine/shaders/vs_shadow_skinned engine/shaders/fs_shadow
              engine/shaders/fs_line
              engine/shaders/gui/vs_gui engine/shaders/gui/fs_gui
              engine/shaders/post/vs_post engine/shaders/post/fs_post_bright engine/shaders/post/fs_post_down
@@ -83,7 +84,7 @@ inline unsigned char kRobotoRegularTtf[] = {
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
-  engine/systems.cpp engine/renderer.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
+  engine/systems.cpp engine/renderer.cpp engine/shadow.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp
@@ -239,6 +240,106 @@ foreach(bad range lighting)
     COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
             "-DSCENE=${CMAKE_CURRENT_BINARY_DIR}/point_lights_bad_${bad}.scene"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
+endforeach()
+# Shadows: tests/project/shadows.scene (a sun with cascaded shadows over a cube, a sphere, a posed skinned character,
+# an alpha-mask cutout, alpha-blend glass and a pillar ~49 m out) and point_shadows.scene (5 castShadows point lights
+# with pillars; Far Right Light is the farthest from both cameras). The built games "shadows" and "point_shadows" in
+# KAST_GAMES run them in the player. Configure-time copies each change one thing; Play screenshots of each are compared
+# with the unchanged scene's: *_differs must differ (the change shows), *_same must be identical (it must not show).
+set(KAST_SHADOWS "${KAST_TEST_PROJECT}/shadows.scene")
+set(KAST_POINT_SHADOWS "${KAST_TEST_PROJECT}/point_shadows.scene")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_SHADOWS}" "${KAST_POINT_SHADOWS}")
+file(READ "${KAST_SHADOWS}" shadows_scene)
+file(READ "${KAST_POINT_SHADOWS}" point_shadows_scene)
+# kast_shadow_variant(<name> <scene text> <regex> <replacement>): writes <name>.scene into the project (so models and
+# materials resolve) under the build folder.
+set(KAST_SHADOW_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/shadow_project")
+file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${KAST_SHADOW_PROJECT}")
+function(kast_shadow_variant name scene regex replacement)
+  string(REGEX REPLACE "${regex}" "${replacement}" variant "${scene}")
+  if(variant STREQUAL scene)
+    message(FATAL_ERROR "Shadow variant ${name}: '${regex}' matched nothing")
+  endif()
+  file(WRITE "${KAST_SHADOW_PROJECT}/${name}.scene" "${variant}")
+endfunction()
+set(sun "(\"intensity\": 0.8)( })")
+kast_shadow_variant(shadows_sun_off "${shadows_scene}" "${sun}" "\\1, \"castShadows\": false\\2")
+kast_shadow_variant(shadows_sphere_cast_off "${shadows_scene}" "(\"primitive\": \"sphere\", \"material\": \"\")"
+                    "\\1, \"castShadows\": false")
+kast_shadow_variant(shadows_ground_receive_off "${shadows_scene}" "(\"primitive\": \"plane\", \"material\": \"\")"
+                    "\\1, \"receiveShadows\": false")
+kast_shadow_variant(shadows_cutout_cast_off "${shadows_scene}" "(\"materials/cutout.mat\")" "\\1, \"castShadows\": false")
+kast_shadow_variant(shadows_glass_cast_off "${shadows_scene}" "(\"materials/glass_blue.mat\")"
+                    "\\1, \"castShadows\": false")
+kast_shadow_variant(shadows_character_cast_off "${shadows_scene}" "(\"materials\": \\[\\])" "\\1, \"castShadows\": false")
+set(far_pillar "(\\[2, 8, 2\\] },[^}]*\"material\": \"\")")
+kast_shadow_variant(shadows_far_cast_off "${shadows_scene}" "${far_pillar}" "\\1, \"castShadows\": false")
+kast_shadow_variant(shadows_short "${shadows_scene}" "${sun}" "\\1, \"maxDistance\": 20\\2")
+string(REGEX REPLACE "${far_pillar}" "\\1, \"castShadows\": false" short_far_off "${shadows_scene}")
+kast_shadow_variant(shadows_short_far_cast_off "${short_far_off}" "${sun}" "\\1, \"maxDistance\": 20\\2")
+kast_shadow_variant(point_shadows_off "${point_shadows_scene}" "\"castShadows\": true" "\"castShadows\": false")
+kast_shadow_variant(point_shadows_far_off "${point_shadows_scene}"
+                    "(\"color\": \\[1, 0.3, 1\\], \"intensity\": 6, \"range\": 7, \"castShadows\": )true" "\\1false")
+kast_shadow_variant(point_shadows_center_off "${point_shadows_scene}"
+                    "(\"color\": \\[1, 0.9, 0.7\\], \"intensity\": 6, \"range\": 7, \"castShadows\": )true" "\\1false")
+file(COPY_FILE "${KAST_SHADOWS}" "${KAST_SHADOW_PROJECT}/shadows.scene")
+file(COPY_FILE "${KAST_POINT_SHADOWS}" "${KAST_SHADOW_PROJECT}/point_shadows.scene")
+# Scene view (edit mode) of the base scenes, with and without the shadow; the Inspector on the Sun (shadow fields).
+foreach(shot shadows shadows_sun_off point_shadows point_shadows_off)
+  add_test(NAME ${shot}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/${shot}.png"
+            "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/${shot}.scene" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+  set_tests_properties(${shot}_screenshot PROPERTIES FIXTURES_SETUP ${shot}_shot)
+endforeach()
+foreach(pair "shadows|shadows_sun_off" "point_shadows|point_shadows_off")
+  string(REPLACE "|" ";" pair "${pair}")
+  list(GET pair 0 a)
+  list(GET pair 1 b)
+  add_test(NAME ${b}_differs
+    COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/${a}.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/${b}.png"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+  set_tests_properties(${b}_differs PROPERTIES FIXTURES_REQUIRED "${a}_shot;${b}_shot")
+endforeach()
+add_test(NAME shadows_inspector_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/shadows_inspector.png"
+          "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/shadows.scene --select 1" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# Game view (Play) of every variant against its base: expect differs or same. The Assets panel covers the Console,
+# whose log names the scene file.
+foreach(shot shadows shadows_sun_off shadows_sphere_cast_off shadows_ground_receive_off shadows_cutout_cast_off
+             shadows_glass_cast_off shadows_character_cast_off shadows_far_cast_off shadows_short
+             shadows_short_far_cast_off point_shadows point_shadows_off point_shadows_far_off point_shadows_center_off)
+  add_test(NAME ${shot}_play_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/${shot}_play.png"
+            "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/${shot}.scene --play" -DFOCUS_PANEL=Assets
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+  set_tests_properties(${shot}_play_screenshot PROPERTIES FIXTURES_SETUP ${shot}_play_shot)
+endforeach()
+# base|variant|differs or same
+foreach(compare "shadows|shadows_sun_off|differs" "shadows|shadows_sphere_cast_off|differs"
+                "shadows|shadows_ground_receive_off|differs" "shadows|shadows_cutout_cast_off|differs"
+                "shadows|shadows_glass_cast_off|same" "shadows|shadows_character_cast_off|differs"
+                "shadows|shadows_far_cast_off|differs" "shadows|shadows_short|differs"
+                "shadows_short|shadows_short_far_cast_off|same" "point_shadows|point_shadows_off|differs"
+                "point_shadows|point_shadows_far_off|same" "point_shadows|point_shadows_center_off|differs")
+  string(REPLACE "|" ";" compare "${compare}")
+  list(GET compare 0 a)
+  list(GET compare 1 b)
+  list(GET compare 2 expect)
+  set(same OFF)
+  if(expect STREQUAL "same")
+    set(same ON)
+  endif()
+  add_test(NAME ${b}_play_${expect}
+    COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/${a}_play.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/${b}_play.png"
+            -DSAME=${same} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+  set_tests_properties(${b}_play_${expect} PROPERTIES FIXTURES_REQUIRED "${a}_play_shot;${b}_play_shot")
+endforeach()
+foreach(scene shadows point_shadows)
+  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${scene}_roundtrip")
+  add_test(NAME ${scene}_roundtrip
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_SHADOW_PROJECT}/${scene}.scene"
+            "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${scene}_roundtrip" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
 endforeach()
 # Post-processing: tests/project/post_processing.scene (every effect on: ACES, bloom, color grading, vignette, FXAA,
 # fog; an emissive sphere, bright point lights, near and far glass, pillars out to 55 m, a game GUI; the built game
@@ -658,7 +759,9 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow"
                "ui|UI Test|ui.scene|FALSE" "lights|Lights Test|point_lights.scene|FALSE"
                "materials|Materials Test|materials.scene|FALSE" "post|Post Test|post_processing.scene|FALSE"
-               "models|Models Test|models_anim.scene|FALSE")
+               "models|Models Test|models_anim.scene|FALSE" "shadows|Shadows Test|shadows.scene|FALSE"
+               "shadows_off|Shadows Test|shadows_sun_off.scene|FALSE"
+               "point_shadows|Point Shadows Test|point_shadows.scene|FALSE")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
@@ -684,6 +787,12 @@ foreach(game ${KAST_GAMES})
   set_tests_properties(player_${name}_screenshot PROPERTIES FIXTURES_REQUIRED game_${name}_built
                        FIXTURES_SETUP player_${name}_shot TIMEOUT 90)
 endforeach()
+# The sun-shadow-off copy for the "shadows_off" game (configured above, under Shadows).
+file(COPY_FILE "${KAST_SHADOW_PROJECT}/shadows_sun_off.scene" "${CMAKE_CURRENT_BINARY_DIR}/game_projects/shadows_off/shadows_sun_off.scene")
+add_test(NAME player_shadows_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_shadows_off.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_shadows.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(player_shadows_differs PROPERTIES FIXTURES_REQUIRED "player_shadows_shot;player_shadows_off_shot")
 foreach(name switch health events fsm)
   add_test(NAME player_${name}_differs
     COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_${name}_no_systems.png"

@@ -32,9 +32,11 @@
 
 namespace {
 
-constexpr bgfx::ViewId kSceneView = 1; // then its post passes and overlays (see SceneViewport)
-constexpr bgfx::ViewId kGameView = kSceneView + kast::PostProcess::kViews + 1; // then its post passes
-constexpr bgfx::ViewId kGameGuiView = kGameView + kast::PostProcess::kViews; // the game GUIs, over the Game view's scene
+// Each viewport's shadow maps, then its scene and post passes (see SceneViewport, GameViewport).
+constexpr bgfx::ViewId kViewportViews = kast::Renderer::kShadowViews + kast::PostProcess::kViews;
+constexpr bgfx::ViewId kSceneView = 1; // then its overlays
+constexpr bgfx::ViewId kGameView = kSceneView + kViewportViews + 1;
+constexpr bgfx::ViewId kGameGuiView = kGameView + kViewportViews; // the game GUIs, over the Game view's scene
 constexpr bgfx::ViewId kGuiPreviewView = kGameGuiView + 1; // the GUI Builder's preview
 constexpr bgfx::ViewId kImGuiView = 255; // last, so the UI draws over everything
 constexpr uint32_t kBackbufferClearColor = 0x202020ff;

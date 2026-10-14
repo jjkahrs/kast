@@ -37,16 +37,22 @@ struct Hierarchy {
 enum class Primitive { Cube, Plane, Sphere };
 
 // material: a project-relative .mat file (see material.h); empty = the default grey material.
+// castShadows / receiveShadows: into / from the shadow maps of shadow-casting lights (see renderer.h).
 struct MeshRenderer {
     Primitive primitive = Primitive::Cube;
     std::string material;
+    bool castShadows = true;
+    bool receiveShadows = true;
 };
 
 // model: a project-relative .glb/.gltf/.fbx/.obj file (see model.h). materials: per-slot .mat overrides by slot index;
 // empty (or past the end) = the model's embedded material.
+// castShadows / receiveShadows: as MeshRenderer.
 struct ModelRenderer {
     std::string model;
     std::vector<std::string> materials;
+    bool castShadows = true;
+    bool receiveShadows = true;
 };
 
 constexpr float kMaxAnimatorSpeed = 10.0f;
@@ -60,10 +66,19 @@ struct Animator {
     bool playOnStart = true;
 };
 
-// Shines along the entity's world -Z axis.
+constexpr int kMaxShadowCascades = 4;
+
+// Shines along the entity's world -Z axis. castShadows: cascaded shadow maps out to maxDistance meters from the eye,
+// in cascadeCount (1..kMaxShadowCascades) slices. bias: meters along the light, normalBias: shadow map texels along
+// the surface normal; both push the receiver toward the light against shadow acne.
 struct DirectionalLight {
     bx::Vec3 color{1.0f, 1.0f, 1.0f};
     float intensity = 1.0f;
+    bool castShadows = true;
+    float bias = 0.05f;       // >= 0
+    float normalBias = 1.5f;  // >= 0
+    float maxDistance = 100.0f; // > 0
+    int cascadeCount = kMaxShadowCascades;
 };
 
 // Lights meshes within range meters of the entity's world position (see pointLightFalloff in renderer.h).
@@ -71,6 +86,8 @@ struct PointLight {
     bx::Vec3 color{1.0f, 1.0f, 1.0f}; // linear RGB 0..1
     float intensity = 1.0f;
     float range = 10.0f;
+    bool castShadows = false; // a cube shadow map; only the kMaxShadowedPointLights nearest the eye get one
+    float bias = 0.05f;       // >= 0, meters toward the light against shadow acne
 };
 
 // Per-scene light settings. The defaults match the renderer's former fixed 0.2 grey ambient.

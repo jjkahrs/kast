@@ -41,10 +41,15 @@ bool beginViewportPanel(const char* name, Document& doc, PanelFocus panel);
 // The Scene panel: renders the document through kast::Renderer and kast::PostProcess (the toolbar's "Post" toggles
 // the effects) into an offscreen target, editor overlays over that, and handles the editor camera, click selection,
 // transform gizmo and viewport shortcuts. Input is only taken while the panel is hovered (or a drag that started
-// there is still held), so other panels keep theirs. Uses views first .. first + PostProcess::kViews (overlays last).
+// there is still held), so other panels keep theirs. Uses views first .. first + Renderer::kShadowViews +
+// PostProcess::kViews: shadow maps, then the scene and post passes, overlays last.
 class SceneViewport {
 public:
-    explicit SceneViewport(bgfx::ViewId first) : post_(first), target_(first + kast::PostProcess::kViews, "Scene") {}
+    explicit SceneViewport(bgfx::ViewId first)
+        : shadowViews_(first), post_(first + kast::Renderer::kShadowViews),
+          target_(first + kast::Renderer::kShadowViews + kast::PostProcess::kViews, "Scene")
+    {
+    }
 
     void init();
     void shutdown();
@@ -60,6 +65,7 @@ private:
     void pick(Document& doc, const float* viewProj, float x, float y, float width, float height);
     void shortcuts(Document& doc);
 
+    bgfx::ViewId shadowViews_;
     kast::PostProcess post_;
     ViewTarget target_;
     kast::Renderer renderer_;

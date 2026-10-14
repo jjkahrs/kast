@@ -1,5 +1,6 @@
-# Two screenshots must both exist and differ (e.g. Play mode moved something).
-# Usage: cmake -DA=<png> -DB=<png> -P differs_test.cmake
+# Two screenshots must both exist and differ (e.g. Play mode moved something), or with -DSAME=ON be identical (e.g. a
+# change that must have no visible effect).
+# Usage: cmake -DA=<png> -DB=<png> [-DSAME=ON] -P differs_test.cmake
 foreach(png "${A}" "${B}")
   if(NOT EXISTS "${png}")
     message(FATAL_ERROR "Missing screenshot: ${png}")
@@ -7,7 +8,13 @@ foreach(png "${A}" "${B}")
 endforeach()
 file(SHA256 "${A}" hash_a)
 file(SHA256 "${B}" hash_b)
-if(hash_a STREQUAL hash_b)
+if(SAME)
+  if(NOT hash_a STREQUAL hash_b)
+    message(FATAL_ERROR "Screenshots differ: ${A} and ${B}")
+  endif()
+  message(STATUS "OK: ${A} and ${B} are identical")
+elseif(hash_a STREQUAL hash_b)
   message(FATAL_ERROR "Screenshots are identical: ${A} and ${B}")
+else()
+  message(STATUS "OK: ${A} and ${B} differ")
 endif()
-message(STATUS "OK: ${A} and ${B} differ")

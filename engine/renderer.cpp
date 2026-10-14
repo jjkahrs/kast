@@ -2,9 +2,12 @@
 
 #include "fs_line.bin.h"
 #include "fs_mesh.bin.h"
+#include "fs_shadow.bin.h"
 #include "vs_line.bin.h"
 #include "vs_mesh.bin.h"
 #include "vs_mesh_skinned.bin.h"
+#include "vs_shadow.bin.h"
+#include "vs_shadow_skinned.bin.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -46,6 +49,13 @@ constexpr uint64_t kState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STA
                             BGFX_STATE_MSAA; // no back-face culling: an open plane stays visible from below
 // Blended meshes test depth but don't write it, so blended meshes behind them still draw.
 constexpr uint64_t kBlendState = (kState & ~BGFX_STATE_WRITE_Z) | BGFX_STATE_BLEND_ALPHA;
+// Shadow casters: depth only, both faces (open planes cast too).
+constexpr uint64_t kShadowState = BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS;
+constexpr uint64_t kShadowMapFlags = BGFX_TEXTURE_RT | BGFX_SAMPLER_COMPARE_LEQUAL | BGFX_SAMPLER_UVW_CLAMP;
+constexpr uint16_t kCsmAtlasSize = 2 * kCascadeSize; // 2x2 cascades
+// D3D cube face order (+X, -X, +Y, -Y, +Z, -Z): the direction each face looks and its up, for left-handed views.
+constexpr bx::Vec3 kCubeFaceForward[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+constexpr bx::Vec3 kCubeFaceUp[6] = {{0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}};
 
 struct MeshVertex {
     float x, y, z;
@@ -248,6 +258,20 @@ std::vector<size_t> nearestPointLights(const std::vector<PointLightSample>& ligh
     return indices;
 }
 
+std::vector<size_t> shadowedPointLights(const std::vector<PointLightSample>& lights, const bx::Vec3& eye)
+{
+    std::vector<std::pair<float, size_t>> casting; // (squared distance to eye, index)
+    for (size_t i = 0; i < lights.size(); ++i)
+        if (lights[i].castShadows)
+            casting.emplace_back(bx::distanceSq(lights[i].position, eye), i);
+    const size_t count = std::min(casting.size(), kMaxShadowedPointLights);
+    std::partial_sort(casting.begin(), casting.begin() + static_cast<ptrdiff_t>(count), casting.end());
+    std::vector<size_t> indices;
+    for (size_t i = 0; i < count; ++i)
+        indices.push_back(casting[i].second);
+    return indices;
+}
+
 void Renderer::init()
 {
     bgfx::VertexLayout meshLayout;
@@ -280,6 +304,8 @@ void Renderer::init()
     meshProgram_ = makeProgram(vs_mesh, sizeof(vs_mesh), fs_mesh, sizeof(fs_mesh));
     skinnedProgram_ = makeProgram(vs_mesh_skinned, sizeof(vs_mesh_skinned), fs_mesh, sizeof(fs_mesh));
     lineProgram_ = makeProgram(vs_line, sizeof(vs_line), fs_line, sizeof(fs_line));
+    shadowProgram_ = makeProgram(vs_shadow, sizeof(vs_shadow), fs_shadow, sizeof(fs_shadow));
+    shadowSkinnedProgram_ = makeProgram(vs_shadow_skinned, sizeof(vs_shadow_skinned), fs_shadow, sizeof(fs_shadow));
     normalMatrix_ = bgfx::createUniform("u_normalMatrix", bgfx::UniformType::Mat4);
     bones_ = bgfx::createUniform("u_bones", bgfx::UniformType::Mat4, static_cast<uint16_t>(kMaxBones));
     baseColor_ = bgfx::createUniform("u_baseColor", bgfx::UniformType::Vec4);
@@ -295,6 +321,19 @@ void Renderer::init()
     fogParams_ = bgfx::createUniform("u_fogParams", bgfx::UniformType::Vec4);
     baseColorSampler_ = bgfx::createUniform("s_baseColor", bgfx::UniformType::Sampler);
     metallicRoughnessSampler_ = bgfx::createUniform("s_metallicRoughness", bgfx::UniformType::Sampler);
+    csmMtx_ = bgfx::createUniform("u_csmMtx", bgfx::UniformType::Mat4, kMaxShadowCascades);
+    csmSplits_ = bgfx::createUniform("u_csmSplits", bgfx::UniformType::Vec4);
+    csmBias_ = bgfx::createUniform("u_csmBias", bgfx::UniformType::Vec4, kMaxShadowCascades);
+    shadowParams_ = bgfx::createUniform("u_shadowParams", bgfx::UniformType::Vec4);
+    pointShadow_ = bgfx::createUniform("u_pointShadow", bgfx::UniformType::Vec4, kMaxPointLights);
+    csmSampler_ = bgfx::createUniform("s_csm", bgfx::UniformType::Sampler);
+    for (size_t i = 0; i < kMaxShadowedPointLights; ++i) {
+        pointShadowSamplers_[i] = bgfx::createUniform(std::format("s_pointShadow{}", i).c_str(), bgfx::UniformType::Sampler);
+        cubes_[i] = BGFX_INVALID_HANDLE;
+        cubeFrameBuffers_[i].fill(BGFX_INVALID_HANDLE);
+    }
+    noShadow2D_ = bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::D16, kShadowMapFlags);
+    noShadowCube_ = bgfx::createTextureCube(1, false, 1, bgfx::TextureFormat::D16, kShadowMapFlags);
     const uint32_t white = 0xffffffff;
     white_ = bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
                                    bgfx::copy(&white, sizeof(white)));
@@ -310,10 +349,29 @@ void Renderer::shutdown()
     bgfx::destroy(meshProgram_);
     bgfx::destroy(skinnedProgram_);
     bgfx::destroy(lineProgram_);
+    bgfx::destroy(shadowProgram_);
+    bgfx::destroy(shadowSkinnedProgram_);
     for (bgfx::UniformHandle uniform : {normalMatrix_, bones_, baseColor_, lightDir_, lightColor_, ambient_, pointPosRange_,
                                         pointColor_, emissive_, materialParams_, cameraPos_, fogColor_, fogParams_,
-                                        baseColorSampler_, metallicRoughnessSampler_})
+                                        baseColorSampler_, metallicRoughnessSampler_, csmMtx_, csmSplits_, csmBias_,
+                                        shadowParams_, pointShadow_, csmSampler_})
         bgfx::destroy(uniform);
+    for (bgfx::UniformHandle uniform : pointShadowSamplers_)
+        bgfx::destroy(uniform);
+    // Frame buffers first: they don't own their textures (destroyTexture = false).
+    for (const auto& faces : cubeFrameBuffers_)
+        for (bgfx::FrameBufferHandle frameBuffer : faces)
+            if (bgfx::isValid(frameBuffer))
+                bgfx::destroy(frameBuffer);
+    for (bgfx::TextureHandle cube : cubes_)
+        if (bgfx::isValid(cube))
+            bgfx::destroy(cube);
+    bgfx::destroy(noShadow2D_);
+    bgfx::destroy(noShadowCube_);
+    if (bgfx::isValid(csmFrameBuffer_)) {
+        bgfx::destroy(csmFrameBuffer_);
+        bgfx::destroy(csm_);
+    }
     clearTextures();
     clearModels();
     bgfx::destroy(white_);
@@ -431,6 +489,8 @@ void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const Mode
         return;
     DrawItem item;
     std::copy_n(world, 16, item.world.begin());
+    item.castShadows = renderer.castShadows;
+    item.receiveShadows = renderer.receiveShadows;
     const GpuModel* gpu = gpuModel(renderer.model);
     if (!gpu) { // missing, corrupt or unsupported: the library warned once
         const Mesh& cube = meshes_[static_cast<size_t>(Primitive::Cube)];
@@ -466,8 +526,139 @@ void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const Mode
     }
 }
 
+void Renderer::submitShadowCaster(const DrawItem& item, const std::vector<std::vector<Mat4>>& boneSets, bgfx::ViewId view)
+{
+    const Material& material = *item.material;
+    const float params[4] = {0.0f, 0.0f, material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f, 0.0f};
+    bgfx::setTransform(item.world.data());
+    if (item.bones >= 0) {
+        const std::vector<Mat4>& bones = boneSets[static_cast<size_t>(item.bones)];
+        bgfx::setUniform(bones_, bones.data(), static_cast<uint16_t>(bones.size()));
+    }
+    bgfx::setUniform(baseColor_, material.baseColor.data());
+    bgfx::setUniform(materialParams_, params);
+    bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
+    bgfx::setVertexBuffer(0, item.vertices);
+    bgfx::setIndexBuffer(item.indices);
+    bgfx::setState(kShadowState);
+    bgfx::submit(view, item.bones >= 0 ? shadowSkinnedProgram_ : shadowProgram_);
+}
+
+Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const bx::Vec3& sunDir,
+                                              const std::vector<DrawItem>& draws,
+                                              const std::vector<std::vector<Mat4>>& boneSets,
+                                              const std::vector<PointLightSample>& pointLights, const float* viewMtx,
+                                              const float* projMtx, bgfx::ViewId shadowViews)
+{
+    ShadowFrame frame;
+    std::vector<const DrawItem*> casters; // blended materials never cast
+    for (const DrawItem& item : draws)
+        if (item.castShadows && item.material->alphaMode != AlphaMode::Blend)
+            casters.push_back(&item);
+    const bool homogeneousDepth = bgfx::getCaps()->homogeneousDepth;
+    float cameraWorld[16];
+    bx::mtxInverse(cameraWorld, viewMtx);
+    const bx::Vec3 eye{cameraWorld[12], cameraWorld[13], cameraWorld[14]};
+
+    frame.sun = sun && sun->castShadows;
+    if (frame.sun) {
+        if (!bgfx::isValid(csm_)) {
+            csm_ = bgfx::createTexture2D(kCsmAtlasSize, kCsmAtlasSize, false, 1, bgfx::TextureFormat::D16, kShadowMapFlags);
+            csmFrameBuffer_ = bgfx::createFrameBuffer(1, &csm_, false);
+        }
+        // The camera's near and far planes, as view depths.
+        float invProj[16];
+        bx::mtxInverse(invProj, projMtx);
+        const float cameraNear = -bx::mulH({0.0f, 0.0f, homogeneousDepth ? -1.0f : 0.0f}, invProj).z;
+        const float cameraFar = -bx::mulH({0.0f, 0.0f, 1.0f}, invProj).z;
+        const int count = std::clamp(sun->cascadeCount, 1, kMaxShadowCascades);
+        const auto splits = cascadeSplits(cameraNear, std::min(sun->maxDistance, cameraFar), count);
+        float casterNear = FLT_MAX;
+        for (const DrawItem* item : casters)
+            for (int corner = 0; corner < 8; ++corner) {
+                const bx::Vec3 p{corner & 1 ? item->bounds.max.x : item->bounds.min.x,
+                                 corner & 2 ? item->bounds.max.y : item->bounds.min.y,
+                                 corner & 4 ? item->bounds.max.z : item->bounds.min.z};
+                casterNear = std::min(casterNear, bx::dot(p, sunDir));
+            }
+        for (int c = 0; c < kMaxShadowCascades; ++c) {
+            const auto i = static_cast<size_t>(c);
+            frame.csmSplits[i] = splits[i + 1];
+            if (c >= count)
+                continue;
+            const Cascade cascade = fitCascade(frustumSliceCorners(viewMtx, projMtx, splits[i], splits[i + 1]), sunDir,
+                                               casterNear, homogeneousDepth);
+            const auto x = static_cast<uint16_t>(c % 2 * kCascadeSize);
+            const auto y = static_cast<uint16_t>(c / 2 * kCascadeSize);
+            const auto view = static_cast<bgfx::ViewId>(shadowViews + c);
+            bgfx::setViewName(view, "Shadow cascade");
+            bgfx::setViewFrameBuffer(view, csmFrameBuffer_);
+            bgfx::setViewRect(view, x, y, kCascadeSize, kCascadeSize);
+            bgfx::setViewClear(view, BGFX_CLEAR_DEPTH, 0, 1.0f, 0);
+            bgfx::setViewTransform(view, cascade.view.data(), cascade.proj.data());
+            bgfx::touch(view);
+            for (const DrawItem* item : casters)
+                submitShadowCaster(*item, boneSets, view);
+            // NDC to this cascade's quarter of the atlas (v down), depth unchanged.
+            float tile[16];
+            bx::mtxIdentity(tile);
+            tile[0] = 0.25f;
+            tile[5] = -0.25f;
+            tile[12] = 0.25f + 0.5f * static_cast<float>(c % 2);
+            tile[13] = 0.25f + 0.5f * static_cast<float>(c / 2);
+            if (homogeneousDepth) { // -1..1 to the 0..1 a depth texture holds
+                tile[10] = 0.5f;
+                tile[14] = 0.5f;
+            }
+            float viewProj[16];
+            bx::mtxMul(viewProj, cascade.view.data(), cascade.proj.data());
+            bx::mtxMul(frame.csmMtx[i], viewProj, tile);
+            frame.csmBias[i][0] = sun->normalBias * cascade.texelSize;
+            frame.csmBias[i][1] = sun->bias / cascade.depthRange;
+        }
+    }
+
+    frame.pointLights = shadowedPointLights(pointLights, eye);
+    for (size_t cube = 0; cube < frame.pointLights.size(); ++cube) {
+        if (!bgfx::isValid(cubes_[cube])) {
+            cubes_[cube] = bgfx::createTextureCube(kPointShadowSize, false, 1, bgfx::TextureFormat::D32F, kShadowMapFlags);
+            for (uint16_t face = 0; face < 6; ++face) {
+                bgfx::Attachment attachment;
+                attachment.init(cubes_[cube], bgfx::Access::Write, face);
+                cubeFrameBuffers_[cube][face] = bgfx::createFrameBuffer(1, &attachment, false);
+            }
+        }
+        const PointLightSample& light = pointLights[frame.pointLights[cube]];
+        // ponytail: casters are culled by the light's range only, not per face.
+        std::vector<const DrawItem*> inRange;
+        for (const DrawItem* item : casters) {
+            const bx::Vec3 closest = bx::clamp(light.position, item->bounds.min, item->bounds.max);
+            if (bx::length(bx::sub(light.position, closest)) < light.range)
+                inRange.push_back(item);
+        }
+        // ponytail: D3D 0..1 depth assumed (fs_mesh.sc pointShadow), as for the DX11-only shaders.
+        float proj[16];
+        bx::mtxProj(proj, 90.0f, 1.0f, kPointShadowNear, light.range, false, bx::Handedness::Left);
+        for (uint16_t face = 0; face < 6; ++face) {
+            const auto view = static_cast<bgfx::ViewId>(shadowViews + kMaxShadowCascades + cube * 6 + face);
+            float faceView[16];
+            bx::mtxLookAt(faceView, light.position, bx::add(light.position, kCubeFaceForward[face]), kCubeFaceUp[face],
+                          bx::Handedness::Left);
+            bgfx::setViewName(view, "Shadow cube face");
+            bgfx::setViewFrameBuffer(view, cubeFrameBuffers_[cube][face]);
+            bgfx::setViewRect(view, 0, 0, kPointShadowSize, kPointShadowSize);
+            bgfx::setViewClear(view, BGFX_CLEAR_DEPTH, 0, 1.0f, 0);
+            bgfx::setViewTransform(view, faceView, proj);
+            bgfx::touch(view);
+            for (const DrawItem* item : inRange)
+                submitShadowCaster(*item, boneSets, view);
+        }
+    }
+    return frame;
+}
+
 void Renderer::render(const Scene& scene, const std::filesystem::path& projectRoot, bgfx::ViewId view,
-                      const float* viewMtx, const float* projMtx)
+                      const float* viewMtx, const float* projMtx, bgfx::ViewId shadowViews)
 {
     setProjectRoot(projectRoot);
     bgfx::setViewTransform(view, viewMtx, projMtx);
@@ -480,12 +671,12 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
 
     float lightDir[4] = {0.0f, -1.0f, 0.0f, 0.0f};
     float lightColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    bool lightFound = false;
+    const DirectionalLight* sun = nullptr;
     scene.forEachDepthFirst([&](entt::entity entity) {
         const auto* light = registry.try_get<DirectionalLight>(entity);
-        if (lightFound || !light)
+        if (sun || !light)
             return;
-        lightFound = true;
+        sun = light;
         float world[16];
         scene.worldMatrix(entity, world);
         const bx::Vec3 dir = bx::normalize(transformDir({0.0f, 0.0f, -1.0f}, world));
@@ -509,7 +700,8 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     for (auto [entity, light] : registry.view<PointLight>().each()) {
         float world[16];
         scene.worldMatrix(entity, world);
-        pointLights.push_back({{world[12], world[13], world[14]}, light.range, bx::mul(light.color, light.intensity)});
+        pointLights.push_back({{world[12], world[13], world[14]}, light.range, bx::mul(light.color, light.intensity),
+                               light.castShadows, light.bias});
     }
 
     // ponytail: world matrices are recomputed up the parent chain per entity; cache them when scenes get deep or large.
@@ -524,6 +716,8 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         item.material = instance ? &instance->material : &materials_.get(mesh.material);
         item.vertices = gpu.vertices;
         item.indices = gpu.indices;
+        item.castShadows = mesh.castShadows;
+        item.receiveShadows = mesh.receiveShadows;
         draws.push_back(item);
     }
     for (auto [entity, model] : registry.view<ModelRenderer>().each()) {
@@ -531,6 +725,12 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         scene.worldMatrix(entity, world);
         addModelDraws(scene, entity, model, world, draws, boneSets);
     }
+
+    const ShadowFrame shadows = renderShadows(sun, {lightDir[0], lightDir[1], lightDir[2]}, draws, boneSets,
+                                              pointLights, viewMtx, projMtx, shadowViews);
+    std::vector<int> cubeOf(pointLights.size(), -1); // point light index to its shadow cube
+    for (size_t cube = 0; cube < shadows.pointLights.size(); ++cube)
+        cubeOf[shadows.pointLights[cube]] = static_cast<int>(cube);
 
     const auto submit = [&](const DrawItem& item) {
         const Material& material = *item.material;
@@ -541,15 +741,22 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         // Unused slots: black, range 1, so they add nothing.
         float pointPosRange[kMaxPointLights][4] = {};
         float pointColor[kMaxPointLights][4] = {};
+        float pointShadow[kMaxPointLights][4] = {}; // x: cube (-1: none), y: bias, z: range
         for (auto& slot : pointPosRange)
             slot[3] = 1.0f;
+        for (auto& slot : pointShadow)
+            slot[0] = -1.0f;
         const std::vector<size_t> nearest = nearestPointLights(pointLights, item.bounds);
         for (size_t slot = 0; slot < nearest.size(); ++slot) {
             const PointLightSample& light = pointLights[nearest[slot]];
             std::memcpy(pointPosRange[slot], &light.position, sizeof(bx::Vec3));
             pointPosRange[slot][3] = light.range;
             std::memcpy(pointColor[slot], &light.color, sizeof(bx::Vec3));
+            pointShadow[slot][0] = static_cast<float>(cubeOf[nearest[slot]]);
+            pointShadow[slot][1] = light.bias;
+            pointShadow[slot][2] = light.range;
         }
+        const float shadowParams[4] = {item.receiveShadows ? 1.0f : 0.0f, shadows.sun ? 1.0f : 0.0f, 0.0f, 0.0f};
         const bx::Vec3 radiance = emissiveRadiance(material);
         const float emissive[4] = {radiance.x, radiance.y, radiance.z, 0.0f};
         const bool blend = material.alphaMode == AlphaMode::Blend;
@@ -574,6 +781,17 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         bgfx::setUniform(ambient_, ambient);
         bgfx::setUniform(pointPosRange_, pointPosRange, kMaxPointLights);
         bgfx::setUniform(pointColor_, pointColor, kMaxPointLights);
+        bgfx::setUniform(pointShadow_, pointShadow, kMaxPointLights);
+        bgfx::setUniform(shadowParams_, shadowParams);
+        if (shadows.sun) {
+            bgfx::setUniform(csmMtx_, shadows.csmMtx, kMaxShadowCascades);
+            bgfx::setUniform(csmSplits_, shadows.csmSplits);
+            bgfx::setUniform(csmBias_, shadows.csmBias, kMaxShadowCascades);
+        }
+        bgfx::setTexture(2, csmSampler_, shadows.sun ? csm_ : noShadow2D_);
+        for (size_t cube = 0; cube < kMaxShadowedPointLights; ++cube)
+            bgfx::setTexture(static_cast<uint8_t>(3 + cube), pointShadowSamplers_[cube],
+                             cube < shadows.pointLights.size() ? cubes_[cube] : noShadowCube_);
         bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
         bgfx::setTexture(1, metallicRoughnessSampler_, texture(material.metallicRoughnessTexture, false));
         bgfx::setVertexBuffer(0, item.vertices);

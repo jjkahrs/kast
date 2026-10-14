@@ -29,6 +29,7 @@
 #include <renderer.h>
 #include <scene.h>
 #include <scene_io.h>
+#include <shadow.h>
 #include <state_machines.h>
 #include <systems.h>
 
@@ -338,10 +339,10 @@ void checkComponentJson()
     check(sameRotation(t.rotation, {0, 0.6f, 0, 0.8f}) && near(t.position, {1.5f, -2, 0.1f}),
           "Transform values (Quaternion field)");
     const kast::MeshRenderer m = roundTrip(kast::MeshRenderer{kast::Primitive::Sphere, "materials/red.mat"},
-                                           R"({"primitive":"sphere","material":"materials/red.mat"})");
+                                           R"({"primitive":"sphere","material":"materials/red.mat","castShadows":true,"receiveShadows":true})");
     check(m.primitive == kast::Primitive::Sphere && m.material == "materials/red.mat", "MeshRenderer values (enum field)");
     const kast::DirectionalLight l = roundTrip(kast::DirectionalLight{{1, 0.9f, 0.8f}, 2.5f},
-                                               R"({"color":[1.0,0.9,0.8],"intensity":2.5})");
+                                               R"({"color":[1.0,0.9,0.8],"intensity":2.5,"castShadows":true,"bias":0.05,"normalBias":1.5,"maxDistance":100.0,"cascadeCount":4})");
     check(l.intensity == 2.5f, "DirectionalLight values");
     const kast::Rotator r = roundTrip(kast::Rotator{{1, 0, 0}, -30}, R"({"axis":[1.0,0.0,0.0],"degreesPerSecond":-30.0})");
     check(r.degreesPerSecond == -30.0f && near(r.axis, {1, 0, 0}), "Rotator values");
@@ -2596,8 +2597,9 @@ void checkBuildSettings()
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
               std::vector<std::string>{"events.scene", "fsm.scene", "health.scene", "materials.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
-                                       "models_missing.scene", "point_lights.scene", "post_processing.scene",
-                                       "scene_a.scene", "scene_b.scene", "ui.scene"},
+                                       "models_missing.scene", "point_lights.scene", "point_shadows.scene",
+                                       "post_processing.scene", "scene_a.scene", "scene_b.scene", "shadows.scene",
+                                       "ui.scene"},
           "tests/project lists its scenes, sorted");
 
     const std::filesystem::path root = looseTestDir("kast_build_settings_check") / "game";
@@ -2612,8 +2614,9 @@ void checkBuildSettings()
                                                           "levels/c.scene", "materials.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
                                                           "models_material.scene", "models_missing.scene",
-                                                          "point_lights.scene", "post_processing.scene",
-                                                          "scene_a.scene", "scene_b.scene", "ui.scene"},
+                                                          "point_lights.scene", "point_shadows.scene",
+                                                          "post_processing.scene", "scene_a.scene", "scene_b.scene",
+                                                          "shadows.scene", "ui.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
     Document doc;
@@ -4502,6 +4505,145 @@ void checkPointLights()
           "missing lighting: default white at 0.2");
 }
 
+// Shadow math (shadow.h), shadowed point light selection (renderer.h) and the shadow fields in scene files.
+void checkShadows()
+{
+    // Cascade splits: from near to far, increasing, between the uniform and logarithmic schemes; past count = far.
+    const auto splits = kast::cascadeSplits(0.1f, 100.0f, 4);
+    bool increasing = true;
+    for (size_t i = 1; i < splits.size(); ++i)
+        increasing = increasing && splits[i] > splits[i - 1];
+    check(splits[0] == 0.1f && splits[4] == 100.0f && increasing, "4 splits run from near to far, increasing");
+    const float logarithmic = 0.1f * std::pow(1000.0f, 0.25f), uniform = 0.1f + 99.9f * 0.25f;
+    check(splits[1] > logarithmic && splits[1] < uniform &&
+              near(splits[1], kast::kCascadeSplitLambda * logarithmic + (1.0f - kast::kCascadeSplitLambda) * uniform),
+          "first split mixes logarithmic and uniform by lambda");
+    const auto one = kast::cascadeSplits(0.5f, 40.0f, 1);
+    check(one[0] == 0.5f && one[1] == 40.0f && one[2] == 40.0f && one[4] == 40.0f, "1 cascade covers near..far");
+    check(kast::cascadeSplits(0.1f, 100.0f, 9) == splits && kast::cascadeSplits(0.5f, 40.0f, 0) == one,
+          "cascade count clamped to 1..4");
+
+    // A camera at (0, 2, 0) looking down -Z, 90 degree FOV, square: at view depth d the slice is d wide each side.
+    for (const bool homogeneousDepth : {false, true}) {
+        float view[16], proj[16];
+        bx::mtxLookAt(view, {0, 2, 0}, {0, 2, -1}, {0, 1, 0}, bx::Handedness::Right);
+        bx::mtxProj(proj, 90.0f, 1.0f, 0.1f, 1000.0f, homogeneousDepth, bx::Handedness::Right);
+        const auto corners = kast::frustumSliceCorners(view, proj, 2.0f, 10.0f);
+        bool onSlice = true;
+        for (size_t i = 0; i < 8; ++i) {
+            const float d = i < 4 ? 2.0f : 10.0f;
+            onSlice = onSlice && near(corners[i].z, -d) && near(std::abs(corners[i].x), d) &&
+                      near(std::abs(corners[i].y - 2.0f), d);
+        }
+        check(onSlice, "slice corners at the near and far view depths");
+
+        // The cascade's ortho bounds hold every corner, and a caster toward the light stays inside its depth range.
+        const bx::Vec3 lightDir = bx::normalize(bx::Vec3{0.3f, -0.8f, -0.5f});
+        const bx::Vec3 caster{0.0f, 30.0f, -5.0f}; // high above the slice, toward the light
+        const kast::Cascade cascade =
+            kast::fitCascade(corners, lightDir, std::min(bx::dot(caster, lightDir), 0.0f), homogeneousDepth);
+        float viewProj[16];
+        bx::mtxMul(viewProj, cascade.view.data(), cascade.proj.data());
+        const float zMin = homogeneousDepth ? -1.0f : 0.0f;
+        bool inside = true;
+        for (const bx::Vec3& corner : corners) {
+            const bx::Vec3 p = bx::mulH(corner, viewProj);
+            inside = inside && std::abs(p.x) <= 1.0f && std::abs(p.y) <= 1.0f && p.z >= zMin && p.z <= 1.0f;
+        }
+        check(inside, "cascade bounds contain the frustum slice");
+        const bx::Vec3 casterNdc = bx::mulH(caster, viewProj);
+        check(casterNdc.z >= zMin && casterNdc.z <= 1.0f, "caster toward the light is within the cascade's depth");
+        check(near(cascade.texelSize * kast::kCascadeSize, 2.0f / cascade.proj[0]) && cascade.depthRange > 0.0f,
+              "texel size is the cascade's width over its resolution");
+
+        // Stable: a camera move shifts the projection by whole texels only (here 0 or 1 for a tenth-texel move).
+        std::array<bx::Vec3, 8> moved = corners;
+        for (bx::Vec3& corner : moved)
+            corner = bx::add(corner, bx::Vec3{cascade.texelSize * 0.1f, 0.0f, 0.0f});
+        const kast::Cascade after = kast::fitCascade(moved, lightDir, std::min(bx::dot(caster, lightDir), 0.0f),
+                                                     homogeneousDepth);
+        const float shift = (after.proj[12] - cascade.proj[12]) / cascade.proj[0] / cascade.texelSize;
+        check(std::abs(shift - std::round(shift)) < 1e-2f, "cascade moves in whole texels");
+    }
+
+    // The 4 castShadows point lights nearest the eye, nearest first; ties keep list order.
+    std::vector<kast::PointLightSample> lights;
+    for (int i = 0; i < 7; ++i) // at x = 7 .. 1, every other one casting
+        lights.push_back({{static_cast<float>(7 - i), 0, 0}, 10.0f, {1, 1, 1}, i % 2 == 0, 0.05f});
+    // Casting: indices 0 (x 7), 2 (x 5), 4 (x 3), 6 (x 1).
+    check(kast::shadowedPointLights(lights, {0, 0, 0}) == std::vector<size_t>{6, 4, 2, 0}, "4 casting lights, nearest first");
+    lights.push_back({{-1, 0, 0}, 10.0f, {1, 1, 1}, true, 0.05f}); // ties with index 6, later in the list
+    check(kast::shadowedPointLights(lights, {0, 0, 0}) == std::vector<size_t>{6, 7, 4, 2},
+          "only the 4 nearest casting lights shadow; ties keep list order");
+    check(kast::shadowedPointLights(lights, {8, 0, 0}) == std::vector<size_t>{0, 2, 4, 6}, "nearest to the eye");
+    for (auto& light : lights)
+        light.castShadows = false;
+    check(kast::shadowedPointLights(lights, {0, 0, 0}).empty(), "no casting lights, no shadows");
+
+    // Defaults; scenes saved before shadows (fields missing) load with them.
+    const kast::DirectionalLight sun;
+    const kast::PointLight lamp;
+    const kast::MeshRenderer mesh;
+    const kast::ModelRenderer model;
+    check(sun.castShadows && sun.maxDistance == 100.0f && sun.cascadeCount == 4 && sun.bias > 0.0f &&
+              sun.normalBias > 0.0f && !lamp.castShadows && lamp.bias > 0.0f && mesh.castShadows &&
+              mesh.receiveShadows && model.castShadows && model.receiveShadows,
+          "shadow field defaults");
+    std::string error;
+    const entt::meta_any oldSun = kast::componentFromJson(kast::findComponentType("DirectionalLight"),
+                                                     nlohmann::ordered_json::parse(R"({"color": [1, 1, 1], "intensity": 2})"),
+                                                     error);
+    const auto* oldSunValue = oldSun ? &oldSun.cast<const kast::DirectionalLight&>() : nullptr;
+    check(oldSunValue && oldSunValue->intensity == 2.0f && oldSunValue->castShadows && oldSunValue->cascadeCount == 4 &&
+              oldSunValue->maxDistance == 100.0f,
+          "DirectionalLight without shadow fields loads with the defaults");
+    const char* oldScene = R"({"version": 4, "entities": [
+        {"id": 1, "name": "Box", "parent": null, "components": {
+            "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+            "MeshRenderer": {"primitive": "cube", "material": ""},
+            "ModelRenderer": {"model": "", "materials": []},
+            "PointLight": {"color": [1, 1, 1], "intensity": 1, "range": 5}}}]})";
+    kast::Scene loaded;
+    check(kast::sceneFromJson(nlohmann::ordered_json::parse(oldScene), loaded, error), "pre-shadow scene loads");
+    const entt::entity box = loaded.children(entt::null).at(0);
+    const auto& registry = loaded.registry();
+    check(registry.get<kast::MeshRenderer>(box).castShadows && registry.get<kast::MeshRenderer>(box).receiveShadows &&
+              registry.get<kast::ModelRenderer>(box).castShadows && registry.get<kast::ModelRenderer>(box).receiveShadows &&
+              !registry.get<kast::PointLight>(box).castShadows,
+          "pre-shadow scene gets the shadow defaults");
+
+    // Validation and round trip.
+    const entt::meta_type sunType = kast::findComponentType("DirectionalLight");
+    const std::pair<const char*, bool> values[] = {
+        {R"({"color": [1, 1, 1], "intensity": 1, "cascadeCount": 1, "maxDistance": 0.5, "bias": 0, "normalBias": 0})", true},
+        {R"({"color": [1, 1, 1], "intensity": 1, "cascadeCount": 0})", false},
+        {R"({"color": [1, 1, 1], "intensity": 1, "cascadeCount": 5})", false},
+        {R"({"color": [1, 1, 1], "intensity": 1, "maxDistance": 0})", false},
+        {R"({"color": [1, 1, 1], "intensity": 1, "bias": -0.1})", false},
+        {R"({"color": [1, 1, 1], "intensity": 1, "normalBias": -1})", false},
+    };
+    for (const auto& [text, valid] : values)
+        check(static_cast<bool>(kast::componentFromJson(sunType, nlohmann::ordered_json::parse(text), error)) == valid, text);
+    check(!kast::componentFromJson(kast::findComponentType("PointLight"),
+                                   nlohmann::ordered_json::parse(R"({"color": [1, 1, 1], "intensity": 1, "range": 5, "bias": -1})"),
+                                   error),
+          "PointLight bias must be >= 0");
+    kast::Scene scene;
+    const entt::entity e = scene.create("Lit");
+    scene.registry().emplace<kast::DirectionalLight>(e, kast::DirectionalLight{{1, 1, 1}, 1.0f, false, 0.2f, 3.0f, 50.0f, 2});
+    scene.registry().emplace<kast::PointLight>(e, kast::PointLight{{1, 1, 1}, 1.0f, 5.0f, true, 0.1f});
+    scene.registry().emplace<kast::MeshRenderer>(e, kast::MeshRenderer{kast::Primitive::Cube, "", false, false});
+    const nlohmann::ordered_json json = kast::sceneToJson(scene);
+    check(kast::sceneFromJson(json, loaded, error), "shadow fields scene loads");
+    const entt::entity lit = loaded.children(entt::null).at(0);
+    const auto& d = loaded.registry().get<kast::DirectionalLight>(lit);
+    const auto& p = loaded.registry().get<kast::PointLight>(lit);
+    const auto& m = loaded.registry().get<kast::MeshRenderer>(lit);
+    check(!d.castShadows && d.bias == 0.2f && d.normalBias == 3.0f && d.maxDistance == 50.0f && d.cascadeCount == 2 &&
+              p.castShadows && p.bias == 0.1f && !m.castShadows && !m.receiveShadows,
+          "shadow fields round trip");
+}
+
 // --- Post-processing ---
 
 void checkPostProcessing()
@@ -5377,6 +5519,7 @@ int main()
     checkDuplicateComponents();
     checkLoadValidation();
     checkPointLights();
+    checkShadows();
     checkPostProcessing();
     checkMaterialFiles();
     checkMaterialLibrary();

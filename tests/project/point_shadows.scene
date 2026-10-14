@@ -1,0 +1,144 @@
+{
+  "version": 4,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [0, 0, -4], "rotation": [0, 0, 0, 1], "scale": [40, 1, 40]},
+        "MeshRenderer": {"primitive": "plane", "material": ""}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Pillar",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [2.5, 1, 0], "rotation": [0, 0, 0, 1], "scale": [0.6, 2, 0.6]},
+        "MeshRenderer": {"primitive": "cube", "material": ""}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Pillar",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [-2.5, 1, 0], "rotation": [0, 0, 0, 1], "scale": [0.6, 2, 0.6]},
+        "MeshRenderer": {"primitive": "cube", "material": ""}
+      }
+    },
+    {
+      "id": 4,
+      "name": "Pillar",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [0, 1, 2.5], "rotation": [0, 0, 0, 1], "scale": [0.6, 2, 0.6]},
+        "MeshRenderer": {"primitive": "cube", "material": ""}
+      }
+    },
+    {
+      "id": 5,
+      "name": "Pillar",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [0, 1, -2.5], "rotation": [0, 0, 0, 1], "scale": [0.6, 2, 0.6]},
+        "MeshRenderer": {"primitive": "cube", "material": ""}
+      }
+    },
+    {
+      "id": 6,
+      "name": "Center Light",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [0, 1.5, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "PointLight": {"color": [1, 0.9, 0.7], "intensity": 6, "range": 7, "castShadows": true}
+      }
+    },
+    {
+      "id": 7,
+      "name": "Left Light",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [-6, 1.5, -4], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "PointLight": {"color": [1, 0.3, 0.2], "intensity": 6, "range": 7, "castShadows": true}
+      }
+    },
+    {
+      "id": 8,
+      "name": "Left Pillar",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [-4.5, 1, -4], "rotation": [0, 0, 0, 1], "scale": [0.6, 2, 0.6]},
+        "MeshRenderer": {"primitive": "cube", "material": ""}
+      }
+    },
+    {
+      "id": 9,
+      "name": "Right Light",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [6, 1.5, -6], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "PointLight": {"color": [0.3, 1, 0.3], "intensity": 6, "range": 7, "castShadows": true}
+      }
+    },
+    {
+      "id": 10,
+      "name": "Right Pillar",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [7.5, 1, -6], "rotation": [0, 0, 0, 1], "scale": [0.6, 2, 0.6]},
+        "MeshRenderer": {"primitive": "cube", "material": ""}
+      }
+    },
+    {
+      "id": 11,
+      "name": "Back Left Light",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [-6, 1.5, -10], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "PointLight": {"color": [0.3, 0.5, 1], "intensity": 6, "range": 7, "castShadows": true}
+      }
+    },
+    {
+      "id": 12,
+      "name": "Back Left Pillar",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [-4.5, 1, -10], "rotation": [0, 0, 0, 1], "scale": [0.6, 2, 0.6]},
+        "MeshRenderer": {"primitive": "cube", "material": ""}
+      }
+    },
+    {
+      "id": 13,
+      "name": "Far Right Light",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [6, 1.5, -14], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "PointLight": {"color": [1, 0.3, 1], "intensity": 6, "range": 7, "castShadows": true}
+      }
+    },
+    {
+      "id": 14,
+      "name": "Far Right Pillar",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [7.5, 1, -14], "rotation": [0, 0, 0, 1], "scale": [0.6, 2, 0.6]},
+        "MeshRenderer": {"primitive": "cube", "material": ""}
+      }
+    },
+    {
+      "id": 15,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [0, 7, 9], "rotation": [-0.300706, 0, 0, 0.953717], "scale": [1, 1, 1]},
+        "Camera": {"verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000}
+      }
+    }
+  ],
+  "lighting": {"ambientColor": [0.6, 0.7, 1], "ambientIntensity": 0.05},
+  "editor": {
+    "camera": {"pivot": [0, 0, -4], "yaw": 0, "pitch": -35, "distance": 16}
+  }
+}
