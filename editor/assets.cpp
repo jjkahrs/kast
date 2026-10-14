@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <format>
-#include <fstream>
 #include <system_error>
 
 namespace {
@@ -97,8 +96,9 @@ fs::path fromUtf8(std::string_view text)
 std::vector<AssetEntry> scanAssets(const fs::path& root)
 {
     std::optional<fs::path> hidden = loadBuildFolder(root);
-    if (hidden && (!isSameOrInside(*hidden, root) || isSameOrInside(root, *hidden)))
-        hidden.reset(); // outside the project, or the project itself (Build refuses that): hides nothing
+    std::error_code ec;
+    if (hidden && (!isSameOrInside(*hidden, root) || isSameOrInside(root, *hidden) || !fs::exists(*hidden / kGamePakName, ec)))
+        hidden.reset(); // outside the project, the project itself (Build refuses that) or not a build: hides nothing
     std::vector<AssetEntry> entries;
     scanFolder(root, "", hidden, entries);
     return entries;
@@ -241,11 +241,8 @@ bool writeTextFile(const fs::path& file, std::string_view text, std::string& err
 {
     std::error_code ec;
     fs::create_directories(file.parent_path(), ec);
-    std::ofstream out(file, std::ios::binary);
-    out << text;
-    out.close();
-    if (ec || !out) {
-        error = std::format("Cannot write '{}'", file.string());
+    if (ec || !kast::writeFileAtomic(file, text)) {
+        error = std::format("Cannot write '{}'", utf8(file));
         return false;
     }
     return true;

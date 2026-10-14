@@ -9,7 +9,6 @@
 #include <charconv>
 #include <cmath>
 #include <format>
-#include <fstream>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -290,6 +289,8 @@ void build(const std::vector<Record>& records, Scene& scene)
         for (size_t index : childrenOf[parentId]) {
             const Record& record = records[index];
             const entt::entity entity = scene.createWithId(record.id, record.name, parent);
+            if (entity == entt::null) // also bounds this recursion
+                throw Invalid(std::format("entity hierarchy is deeper than {} levels", kMaxHierarchyDepth));
             for (const entt::meta_any& component : record.components)
                 setComponent(scene.registry(), entity, component);
             for (const auto& [name, value] : record.luaComponents)
@@ -431,10 +432,7 @@ Json sceneToJson(const Scene& scene)
 
 bool saveScene(const Scene& scene, const std::string& path, std::string& error)
 {
-    std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    file << sceneToJson(scene).dump(2) << '\n';
-    file.close();
-    if (!file) {
+    if (!writeFileAtomic(path, sceneToJson(scene).dump(2) + '\n')) {
         error = std::format("Cannot write scene '{}'", path);
         return false;
     }

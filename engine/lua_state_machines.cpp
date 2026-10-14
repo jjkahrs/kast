@@ -51,13 +51,17 @@ StateMachineDef parseDefinition(sol::state& lua, const std::filesystem::path& fi
     sol::protected_function body = loadSandboxed(lua, file, "@" + path, env, error);
     if (!body.valid())
         throw Invalid(error.starts_with("cannot open") ? std::format("{}: {}", path, error) : error);
-    sol::protected_function_result result = body();
+    sol::protected_function_result result = [&] {
+        const ScriptBudget budget(lua.lua_state()); // per file, in Play's scan and the editor's
+        return body();
+    }();
     if (!result.valid())
         throw Invalid(result.get<sol::error>().what()); // "path:line: message"
     if (result.return_count() != 1 || result.get_type() != sol::type::table)
         throw Invalid(std::format("{}: must return exactly one table {{name = ..., initial = ..., states = {{...}}}}", path));
     const sol::table table = result;
     const std::string prefix = path + ": ";
+    checkPlainData(table, prefix);
     StateMachineDef def;
     def.path = path;
     def.name = text(table, "name", prefix);

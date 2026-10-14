@@ -20,6 +20,8 @@ entt::entity Scene::create(const std::string& name, entt::entity parent)
 
 entt::entity Scene::createWithId(EntityId id, const std::string& name, entt::entity parent)
 {
+    if (parent != entt::null && depth(parent) >= kMaxHierarchyDepth)
+        return entt::null;
     const entt::entity entity = registry_.create();
     registry_.emplace<PersistentId>(entity, id);
     registry_.emplace<Name>(entity, name);
@@ -32,6 +34,8 @@ entt::entity Scene::createWithId(EntityId id, const std::string& name, entt::ent
 
 void Scene::destroy(entt::entity entity)
 {
+    if (!valid(entity))
+        return;
     std::vector<entt::entity>& list = siblings(parent(entity));
     list.erase(std::find(list.begin(), list.end(), entity));
 
@@ -68,7 +72,9 @@ entt::entity Scene::copySubtree(entt::entity source, entt::entity parentEntity)
 
 bool Scene::reparent(entt::entity entity, entt::entity newParent)
 {
-    if (newParent != entt::null && isSelfOrAncestor(entity, newParent))
+    if (!valid(entity) || (newParent != entt::null && (!valid(newParent) || isSelfOrAncestor(entity, newParent))))
+        return false;
+    if (newParent != entt::null && depth(newParent) + height(entity) > kMaxHierarchyDepth)
         return false;
     const entt::entity oldParent = parent(entity);
     if (oldParent == newParent)
@@ -102,6 +108,26 @@ bool Scene::isSelfOrAncestor(entt::entity ancestor, entt::entity entity) const
         if (e == ancestor)
             return true;
     return false;
+}
+
+int Scene::depth(entt::entity entity) const
+{
+    int levels = 0;
+    for (entt::entity e = entity; e != entt::null; e = parent(e))
+        ++levels;
+    return levels;
+}
+
+int Scene::height(entt::entity entity) const
+{
+    int levels = 0;
+    for (std::vector<entt::entity> level{entity}; !level.empty(); ++levels) {
+        std::vector<entt::entity> next;
+        for (entt::entity e : level)
+            next.insert(next.end(), children(e).begin(), children(e).end());
+        level = std::move(next);
+    }
+    return levels;
 }
 
 const std::vector<entt::entity>& Scene::children(entt::entity entity) const

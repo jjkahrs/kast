@@ -253,6 +253,7 @@ StateCallback LuaSystems::State::bindCallback(const sol::protected_function& fn,
         std::string callerPath = std::exchange(callbackPath, path);
         std::string error;
         try {
+            const ScriptBudget budget(lua.lua_state());
             sol::protected_function_result result = callback(ctx);
             if (!result.valid())
                 error = result.get<sol::error>().what();
@@ -306,7 +307,10 @@ void LuaSystems::State::load(System& system)
         return disable(system, error.starts_with("cannot open") ? std::format("{}: {}", system.path, error) : error);
 
     current = &system;
-    sol::protected_function_result result = body();
+    sol::protected_function_result result = [&] {
+        const ScriptBudget budget(lua.lua_state());
+        return body();
+    }();
     current = nullptr;
     if (!result.valid())
         return disable(system, result.get<sol::error>().what());
@@ -345,6 +349,7 @@ bool LuaSystems::State::call(System& system, const sol::protected_function& fn, 
     inShutdown = what == "shutdown";
     std::string error;
     try {
+        const ScriptBudget budget(lua.lua_state());
         sol::protected_function_result result = fn(std::forward<Args>(args)...);
         if (!result.valid())
             error = result.get<sol::error>().what();
@@ -499,6 +504,8 @@ void LuaSystems::State::bindApi()
     api.set_function("create", [this, &registry](sol::this_state L, const std::string& name, const sol::object& parent) {
         const bool root = parent.get_type() == sol::type::lua_nil || parent.get_type() == sol::type::none;
         const entt::entity e = scene.create(name, root ? entt::null : entity(L, parent));
+        if (e == entt::null)
+            raise(L, std::format("parent is already {} levels deep (the hierarchy limit)", kMaxHierarchyDepth));
         const EntityId id = registry.get<PersistentId>(e).value;
         ids[id] = e;
         return id;
@@ -655,8 +662,9 @@ void LuaSystems::State::bindApi()
         System* owner = current;
         std::string what = std::format("event '{}'", event);
         EventBus::Subscription subscription = bus.subscribe(
-            std::move(event), [this, owner, what = std::move(what), callback = sol::protected_function(fn)](
-                                  const nlohmann::json& payload) {
+            std::move(event), [this, owner, what = std::move(what),
+                               // on the main thread: fn's own may be a coroutine, collected before the drain
+                               callback = sol::protected_function(lua.lua_state(), fn)](const nlohmann::json& payload) {
                 if (owner->ok) // a disabled system's subscriptions are gone; this guards the rest of its drain
                     call(*owner, callback, what, jsonToLua(lua, payload));
             });

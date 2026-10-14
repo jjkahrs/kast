@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <unordered_set>
 #include <vector>
 
 namespace kast {
@@ -16,6 +17,21 @@ using Json = nlohmann::ordered_json;
 constexpr const char* kUnsafeGlobals[] = {"dofile", "loadfile", "load", "loadstring", "getfenv", "setfenv", "require", "module"};
 constexpr const char* kVectorKeys[] = {"x", "y", "z", "w"};
 constexpr double kMaxExactInteger = 9007199254740992.0; // 2^53: Lua numbers are doubles
+
+constexpr int kHookInstructions = 10000; // between clock checks
+using Clock = std::chrono::steady_clock;
+Clock::time_point g_deadline = Clock::time_point::max(); // ponytail: Lua runs on one thread, one entry at a time
+
+void watchdog(lua_State* L, lua_Debug*)
+{
+    if (Clock::now() < g_deadline)
+        return;
+    lua_sethook(L, watchdog, LUA_MASKCOUNT, 1); // every instruction until the entry point returns: pcall can't hide it
+    luaL_where(L, 0); // in a hook, level 0 is the running Lua function
+    lua_pushfstring(L, "script ran longer than %d seconds (infinite loop?)", static_cast<int>(kScriptBudget.count()));
+    lua_concat(L, 2);
+    lua_error(L);
+}
 
 // Integral and within double's exact range: stored as a JSON integer.
 bool exactInteger(double number) { return number == std::floor(number) && std::abs(number) <= kMaxExactInteger; }
@@ -154,6 +170,28 @@ void openSandbox(sol::state& lua)
     lua.open_libraries(sol::lib::base, sol::lib::table, sol::lib::string, sol::lib::math);
     for (const char* name : kUnsafeGlobals)
         lua.globals()[name] = sol::lua_nil;
+    // Every string shares one metatable whose __index is the real string table: hide it so no file can edit the
+    // methods (s:format()) every other file uses. Method calls still work.
+    lua_pushliteral(lua.lua_state(), "");
+    lua_getmetatable(lua.lua_state(), -1);
+    lua_pushboolean(lua.lua_state(), 0);
+    lua_setfield(lua.lua_state(), -2, "__metatable");
+    lua_pop(lua.lua_state(), 2);
+    lua_sethook(lua.lua_state(), watchdog, LUA_MASKCOUNT, kHookInstructions);
+}
+
+ScriptBudget::ScriptBudget(lua_State* L) : L_(L), outer_(g_deadline == Clock::time_point::max())
+{
+    if (outer_)
+        g_deadline = Clock::now() + kScriptBudget;
+}
+
+ScriptBudget::~ScriptBudget()
+{
+    if (!outer_)
+        return;
+    g_deadline = Clock::time_point::max();
+    lua_sethook(L_, watchdog, LUA_MASKCOUNT, kHookInstructions);
 }
 
 sol::environment sandboxEnvironment(sol::state& lua)
@@ -205,6 +243,28 @@ void checkKeys(const sol::table& table, std::initializer_list<const char*> allow
                            std::ranges::any_of(allowed, [&](const char* k) { return key.as<std::string>() == k; });
         if (!known)
             throw InvalidDefinition(std::format("{}unknown key {}", what, toString(table.lua_state(), key)));
+    }
+}
+
+void checkPlainData(const sol::table& table, const std::string& what)
+{
+    lua_State* L = table.lua_state();
+    std::unordered_set<const void*> seen;
+    std::vector<sol::table> pending{table}; // not recursive: nesting depth is up to the file
+    while (!pending.empty()) {
+        const sol::table next = std::move(pending.back());
+        pending.pop_back();
+        if (!seen.insert(next.pointer()).second)
+            continue;
+        next.push();
+        const int hasMeta = lua_getmetatable(L, -1);
+        lua_pop(L, hasMeta ? 2 : 1);
+        if (hasMeta)
+            throw InvalidDefinition(what + "tables must be plain data (no metatables)");
+        for (const auto& [key, value] : next) // lua_next: raw, runs no metamethods
+            for (const sol::object& item : {key, value})
+                if (item.get_type() == sol::type::table)
+                    pending.push_back(item.as<sol::table>());
     }
 }
 

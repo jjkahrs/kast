@@ -76,8 +76,8 @@ void StateMachines::define(StateMachineDef def)
             entities.push_back(entity);
     for (entt::entity entity : entities) {
         const auto* runtime = registry.try_get<StateMachineRuntime>(entity);
-        if (!runtime || runtime->machine != name)
-            continue; // changed by an earlier entity's enter
+        if (!runtime || runtime->machine != name || !registry.all_of<StateMachine>(entity))
+            continue; // changed by an earlier entity's enter, or StateMachine removed (syncAll drops the runtime)
         if (runtime->current.empty()) { // the definition was missing when it tried to enter
             registry.remove<StateMachineRuntime>(entity);
             syncEntity(entity);
@@ -197,7 +197,7 @@ StateMachines::Instance StateMachines::resolve(const Target& target, bool enter)
     return {it->second, entered ? runtime->current : std::string(), entityInitial(entity, *it->second, false), id};
 }
 
-std::string* StateMachines::slot(const Target& target)
+std::string* StateMachines::slot(const Target& target, const std::string& machine)
 {
     if (const auto* name = std::get_if<std::string>(&target)) {
         const auto it = game_.find(*name);
@@ -207,7 +207,9 @@ std::string* StateMachines::slot(const Target& target)
     if (!scene_ || !scene_->valid(entity))
         return nullptr;
     auto* runtime = scene_->registry().try_get<StateMachineRuntime>(entity);
-    return runtime ? &runtime->current : nullptr;
+    const auto* component = scene_->registry().try_get<StateMachine>(entity);
+    return runtime && runtime->machine == machine && component && component->machine == machine ? &runtime->current
+                                                                                                  : nullptr;
 }
 
 void StateMachines::enterInitial(const Target& target, const std::shared_ptr<StateMachineDef>& def,
@@ -215,7 +217,7 @@ void StateMachines::enterInitial(const Target& target, const std::shared_ptr<Sta
 {
     if (const auto* name = std::get_if<std::string>(&target)) {
         game_[*name] = initial;
-    } else if (std::string* current = slot(target)) {
+    } else if (std::string* current = slot(target, def->name)) {
         *current = initial;
     } else {
         return;
@@ -255,7 +257,7 @@ bool StateMachines::apply(const Target& target, const std::string& to)
     const Transition transition{def->name, machine.entity, machine.current, to};
     busy_ = true;
     call(def->states.at(machine.current).exit, *def, "exit", machine.current, transition);
-    if (std::string* current = slot(target)) { // gone if exit destroyed the entity or removed its StateMachine
+    if (std::string* current = slot(target, def->name)) { // gone if exit destroyed, removed or swapped the machine
         *current = to;
         call(def->states.at(to).enter, *def, "enter", to, transition);
         bus_.publish(kStateChangedEvent,
@@ -276,7 +278,7 @@ void StateMachines::runQueue()
         queue_.pop_front();
         try {
             apply(next.target, next.to);
-        } catch (const std::invalid_argument& e) {
+        } catch (const std::exception& e) { // nothing may escape to the main loop
             log::warn(std::format("Queued state change to \"{}\" skipped: {}", next.to, e.what()));
         }
     }

@@ -128,32 +128,38 @@ std::vector<std::string> Pak::list(const std::string& dir) const
 bool writePak(const std::filesystem::path& root, const std::vector<std::string>& paths, const std::filesystem::path& out,
               std::string& error)
 {
-    std::string index;
-    std::string data;
-    size_t indexSize = sizeof(kMagic) + 2 * sizeof(uint32_t);
-    for (const std::string& path : paths)
-        indexSize += sizeof(uint32_t) + path.size() + 2 * sizeof(uint64_t);
-    for (const std::string& path : paths) {
-        std::string bytes;
-        if (!readFile(root / path, bytes)) {
-            error = std::format("Cannot read '{}'", (root / path).string());
-            return false;
-        }
-        put(index, static_cast<uint32_t>(path.size()));
-        index += path;
-        put(index, static_cast<uint64_t>(indexSize + data.size()));
-        put(index, static_cast<uint64_t>(bytes.size()));
-        data += bytes;
-    }
-    std::ofstream file(out, std::ios::binary | std::ios::trunc);
-    file.write(kMagic, sizeof(kMagic));
-    std::string header;
+    std::string header(kMagic, sizeof(kMagic));
     put(header, kPakVersion);
     put(header, static_cast<uint32_t>(paths.size()));
-    file << header << index << data;
-    file.close();
-    if (!file) {
-        error = std::format("Cannot write '{}'", out.string());
+    size_t indexSize = header.size();
+    for (const std::string& path : paths)
+        indexSize += sizeof(uint32_t) + path.size() + 2 * sizeof(uint64_t);
+    std::string readError;
+    // Offsets are known only once each file is read, so the index is a placeholder that is filled in last. Only the
+    // index and one file at a time are held in memory.
+    const bool written = writeFileAtomic(out, [&](std::ostream& file) {
+        file << header << std::string(indexSize - header.size(), '\0');
+        std::string index;
+        uint64_t offset = indexSize;
+        for (const std::string& path : paths) {
+            std::string bytes;
+            if (!readFile(root / path, bytes)) {
+                readError = std::format("Cannot read '{}'", (root / path).string());
+                return false;
+            }
+            put(index, static_cast<uint32_t>(path.size()));
+            index += path;
+            put(index, offset);
+            put(index, static_cast<uint64_t>(bytes.size()));
+            file << bytes;
+            offset += bytes.size();
+        }
+        file.seekp(static_cast<std::streamoff>(header.size()));
+        file << index;
+        return true;
+    });
+    if (!written) {
+        error = readError.empty() ? std::format("Cannot write '{}'", out.string()) : readError;
         return false;
     }
     return true;

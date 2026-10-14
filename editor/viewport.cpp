@@ -124,7 +124,8 @@ void ViewTarget::resize(uint16_t width, uint16_t height, bgfx::TextureHandle dep
 
 void SceneViewport::draw(Document& doc)
 {
-    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, ImGuiInputFlags_RouteGlobal))
+    // Not while a modal is up: e.g. the unsaved-changes prompt would then save or discard a play-mode scene.
+    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, ImGuiInputFlags_RouteGlobal) && !ImGui::GetTopMostPopupModal())
     {
         if (doc.play == PlayState::Stopped)
             startPlay(doc);

@@ -39,10 +39,14 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <fcntl.h> // _O_RDONLY
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <io.h> // _wsopen_s, _close
 #include <iterator>
+#include <process.h> // _getpid
+#include <share.h>   // _SH_DENYRW
 #include <source_location>
 #include <stdexcept>
 #include <string>
@@ -58,6 +62,26 @@ void check(bool ok, const char* what, std::source_location where = std::source_l
         return;
     ++g_failures;
     kast::log::error(std::format("FAILED line {}: {}", where.line(), what));
+}
+
+// Never throws: a file briefly locked by Defender or the indexer must not abort the run; main() checks the root is gone.
+void removeTree(const std::filesystem::path& path)
+{
+    std::error_code ec;
+    std::filesystem::remove_all(path, ec);
+}
+
+// One temp folder per run holds every test folder, so parallel runs never collide and main() cleans up once.
+// ponytail: a crashed run leaves its kast_self_check_<pid> behind; sweep stale roots if that ever piles up.
+const std::filesystem::path& testRoot()
+{
+    static const std::filesystem::path root = [] {
+        const std::filesystem::path dir = std::filesystem::temp_directory_path() / std::format("kast_self_check_{}", _getpid());
+        removeTree(dir);
+        std::filesystem::create_directories(dir);
+        return dir;
+    }();
+    return root;
 }
 
 bool near(float a, float b, float eps = 1e-4f) { return std::abs(a - b) <= eps; }
@@ -166,6 +190,82 @@ void checkHierarchy()
     scene.destroy(parent);
     check(!scene.valid(parent) && !scene.valid(child) && !scene.valid(grandchild), "destroy removes subtree");
     check(scene.valid(copy) && scene.children(entt::null).size() == 2, "destroy leaves the rest");
+    scene.destroy(parent);
+    check(!scene.reparent(parent, entt::null) && !scene.reparent(copy, parent) && scene.parent(copy) == entt::null &&
+              scene.children(entt::null).size() == 2,
+          "destroy / reparent of a destroyed entity change nothing");
+}
+
+// Reparenting keeps the whole world matrix of a mirrored (negative-scale) entity, not just its position.
+void checkMirroredReparent()
+{
+    kast::Scene scene;
+    const entt::entity parent = scene.create("Parent");
+    auto& pt = scene.registry().get<kast::Transform>(parent);
+    pt.position = {1, 2, 3};
+    pt.rotation = kast::quatFromEulerDeg({10, 40, 0});
+    pt.scale = {2, 2, 2};
+    const entt::entity mirrored = scene.create("Mirrored");
+    auto& t = scene.registry().get<kast::Transform>(mirrored);
+    t.position = {4, 5, 6};
+    t.rotation = kast::quatFromEulerDeg({20, 30, 50});
+    t.scale = {2, -2, 2}; // uniform magnitude: the child below gets no shear
+    const entt::entity child = scene.create("Child", mirrored);
+    scene.registry().get<kast::Transform>(child).rotation = kast::quatFromEulerDeg({0, 70, 0});
+    const auto keepsWorld = [&](entt::entity e, entt::entity newParent) {
+        float before[16], after[16];
+        scene.worldMatrix(e, before);
+        const bool moved = scene.reparent(e, newParent);
+        scene.worldMatrix(e, after);
+        return moved && std::ranges::equal(before, after, [](float a, float b) { return std::abs(a - b) < 1e-4f; });
+    };
+    check(keepsWorld(mirrored, parent), "reparent keeps a mirrored entity's world matrix");
+    check(keepsWorld(mirrored, entt::null), "unparent keeps a mirrored entity's world matrix");
+    check(keepsWorld(child, entt::null), "unparent from a mirrored parent keeps the world matrix");
+}
+
+// A scene nested deeper than kMaxHierarchyDepth fails to load instead of overflowing the stack in the recursive walks.
+void checkDeepHierarchy()
+{
+    using Json = nlohmann::ordered_json;
+    const auto chain = [](int depth) {
+        Json entities = Json::array();
+        for (kast::EntityId id = 1; id <= kast::EntityId(depth); ++id)
+            entities.push_back({{"id", id}, {"parent", id == 1 ? Json(nullptr) : Json(id - 1)}, {"name", "E"},
+                                {"components", {{"Transform", {{"position", {0, 0, 0}}, {"rotation", {0, 0, 0, 1}},
+                                                               {"scale", {1, 1, 1}}}}}}});
+        return Json{{"version", kast::kSceneFileVersion}, {"entities", std::move(entities)}};
+    };
+    kast::Scene scene;
+    std::string error;
+    const bool loaded = kast::sceneFromJson(chain(kast::kMaxHierarchyDepth), scene, error);
+    check(loaded, "a hierarchy at the depth cap loads");
+    for (const int depth : {kast::kMaxHierarchyDepth + 1, 100000}) {
+        kast::Scene deep;
+        check(!kast::sceneFromJson(chain(depth), deep, error) &&
+                  error.find(std::format("deeper than {} levels", kast::kMaxHierarchyDepth)) != std::string::npos,
+              "a hierarchy deeper than the cap is rejected with an error");
+    }
+    if (!loaded)
+        return;
+
+    // At runtime, create and reparent refuse to go past the cap too.
+    entt::entity leaf = scene.children(entt::null)[0];
+    entt::entity aboveLeaf = entt::null;
+    while (!scene.children(leaf).empty()) {
+        aboveLeaf = leaf;
+        leaf = scene.children(leaf)[0];
+    }
+    check(scene.depth(leaf) == kast::kMaxHierarchyDepth && scene.create("Deeper", leaf) == entt::null &&
+              scene.children(leaf).empty(),
+          "create under an entity at the depth cap is refused");
+    const entt::entity pair = scene.create("Pair");
+    scene.create("PairChild", pair);
+    check(!scene.reparent(pair, aboveLeaf) && scene.parent(pair) == entt::null,
+          "reparent that would push a subtree past the depth cap is refused");
+    check(scene.reparent(pair, scene.parent(aboveLeaf)) &&
+              scene.depth(scene.children(pair)[0]) == kast::kMaxHierarchyDepth,
+          "reparent up to the depth cap is allowed");
 }
 
 // A registered type that only the self-check knows: proves new components need no serialization/copy code and
@@ -291,7 +391,7 @@ void checkDuplicateComponents()
 
 void checkLoadValidation()
 {
-    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "kast_self_check";
+    const std::filesystem::path dir = testRoot() / "kast_self_check";
     std::filesystem::create_directories(dir);
     const std::string transform = R"("Transform": {"position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]})";
     const auto entity = [&](int id, const char* parent, const std::string& more = "") {
@@ -315,6 +415,11 @@ void checkLoadValidation()
         {"zero quaternion",
          file(R"({"id": 1, "parent": null, "name": "E", "components": {"Transform": {"position": [0,0,0], "rotation": [0,0,0,0], "scale": [1,1,1]}}})"),
          "rotation"},
+        {"position beyond float range",
+         file(R"({"id": 1, "parent": null, "name": "E", "components": {"Transform": {"position": [1e39,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]}}})"),
+         "position"},
+        {"float field beyond float range",
+         file(entity(1, "null", R"(, "Rotator": {"axis": [0,1,0], "degreesPerSecond": -1e39})")), "degreesPerSecond"},
         {"camera fov 0", file(entity(1, "null", R"(, "Camera": {"verticalFovDegrees": 0, "nearPlane": 0.1, "farPlane": 10})")),
          "verticalFovDegrees"},
         {"camera fov 180", file(entity(1, "null", R"(, "Camera": {"verticalFovDegrees": 180, "nearPlane": 0.1, "farPlane": 10})")),
@@ -370,7 +475,12 @@ void checkLoadValidation()
     check(scene.children(entt::null).size() == 1 && scene.children(scene.children(entt::null)[0]).size() == 1,
           "child-before-parent hierarchy rebuilt");
     check(scene.registry().get<kast::PersistentId>(scene.create("New")).value == 10, "new ids continue after loaded ids");
-    std::filesystem::remove_all(dir);
+
+    std::ofstream(path, std::ios::binary | std::ios::trunc)
+        << file(R"({"id": 1, "parent": null, "name": "E", "components": {"Transform": {"position": [0,0,0], "rotation": [2,0,0,0], "scale": [1,1,1]}}})");
+    check(kast::loadScene(path, scene, error), "non-unit quaternion file loads");
+    const bx::Quaternion loaded = scene.registry().get<kast::Transform>(scene.children(entt::null)[0]).rotation;
+    check(loaded.x == 1.0f && loaded.y == 0.0f && loaded.z == 0.0f && loaded.w == 0.0f, "non-unit quaternion loads normalized");
 }
 
 bx::Vec3 transformPoint(const float* m, const bx::Vec3& p) { return bx::mul(p, m); }
@@ -617,8 +727,8 @@ void checkOk(const kast::LuaSystems& lua, size_t index, const char* what,
 
 std::filesystem::path luaTestDir()
 {
-    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "kast_lua_check";
-    std::filesystem::remove_all(dir);
+    const std::filesystem::path dir = testRoot() / "kast_lua_check";
+    removeTree(dir);
     std::filesystem::create_directories(dir / "scripts");
     return dir;
 }
@@ -667,7 +777,6 @@ void checkSystemsFormat()
         if (!ok)
             kast::log::info(std::format("expected error ({}): {}", what, error));
     }
-    std::filesystem::remove_all(dir);
 }
 
 // Play mode on a Document: init on Play, update after the C++ systems in listed order, nothing while paused or
@@ -722,7 +831,6 @@ return {
     stopPlay(doc);
     check(logged("[info] scripts/a.lua: a shutdown") && !doc.lua.running(), "Stop calls shutdown and ends the session");
     check(light().intensity == 0.0f, "Stop restores the scene the Lua systems changed");
-    std::filesystem::remove_all(dir);
 }
 
 // The kast.* API, exercised from Lua (its own asserts disable the system on failure) and checked from C++.
@@ -852,7 +960,6 @@ end })");
           "kast.log/warn/error prefix the file");
     lua.stop();
     check(!lua.running() && lua.status().empty(), "stop ends the session");
-    std::filesystem::remove_all(dir);
 }
 
 void checkLuaSandbox()
@@ -889,7 +996,47 @@ return {
     checkOk(lua, 0, "sandbox: unsafe libraries unreachable, globals isolated (one)");
     checkOk(lua, 1, "sandbox: globals isolated (two)");
     lua.stop();
-    std::filesystem::remove_all(dir);
+}
+
+// The string metatable is shared by every system: one can't reach it to change another's s:format().
+void checkLuaStringMetatable()
+{
+    const std::filesystem::path dir = luaTestDir();
+    writeFile(dir / "evil.lua", R"(
+pcall(function() getmetatable("").__index.format = function() return "evil" end end)
+assert(getmetatable("") == false, "the string metatable is hidden")
+assert(("%d"):format(7) == "7" and ("ab"):upper() == "AB", "string methods work")
+return { update = function(dt) end })");
+    writeFile(dir / "victim.lua", R"(
+return { update = function(dt) assert(("%d"):format(7) == "7", "s:format was changed by another system") end })");
+    kast::Scene scene;
+    scene.systems = {"evil.lua", "victim.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr);
+    lua.tick(0.1f);
+    checkOk(lua, 0, "sandbox: string metatable hidden, string methods work");
+    checkOk(lua, 1, "sandbox: string methods untouched by another system");
+    lua.stop();
+}
+
+// kast.create past the hierarchy depth cap raises a Lua error instead of building a chain that crashes the walks.
+void checkLuaDepthCap()
+{
+    const std::filesystem::path dir = luaTestDir();
+    writeFile(dir / "deep.lua", std::format(R"(
+return {{ update = function(dt)
+    local id
+    for i = 1, {} do id = kast.create("E", id) end
+    local ok, err = pcall(kast.create, "E", id)
+    assert(not ok and err:find("parent is already {} levels deep", 1, true), "create past the cap: " .. tostring(err))
+end }})", kast::kMaxHierarchyDepth, kast::kMaxHierarchyDepth));
+    kast::Scene scene;
+    scene.systems = {"deep.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr);
+    lua.tick(0.1f);
+    checkOk(lua, 0, "kast.create past the hierarchy depth cap raises a Lua error");
+    lua.stop();
 }
 
 void checkLuaErrors()
@@ -939,7 +1086,6 @@ end })");
     checkOk(lua, 2, "other systems keep running");
     check(scene.registry().get<kast::DirectionalLight>(probe).intensity == 3.0f, "the healthy system ran every tick");
     lua.stop();
-    std::filesystem::remove_all(dir);
 }
 
 void checkLuaHotReload()
@@ -988,7 +1134,6 @@ void checkLuaHotReload()
           "a good reload clears the error and runs again");
     lua.stop();
     check(logged("hot.lua: shutdown v3"), "Stop shuts down the reloaded instance");
-    std::filesystem::remove_all(dir);
 }
 
 // --- Projects ---
@@ -1015,8 +1160,8 @@ size_t logIndex(const std::string& part)
 // A fresh temp directory holding a project.kast (and an empty scripts/).
 std::filesystem::path projectTestDir(const char* name, const char* projectName)
 {
-    const std::filesystem::path dir = std::filesystem::temp_directory_path() / name;
-    std::filesystem::remove_all(dir);
+    const std::filesystem::path dir = testRoot() / name;
+    removeTree(dir);
     std::filesystem::create_directories(dir / "scripts");
     writeFile(dir / kast::kProjectFileName, std::format(R"({{"version": 1, "name": "{}", "startScene": null}})", projectName));
     return dir;
@@ -1024,8 +1169,8 @@ std::filesystem::path projectTestDir(const char* name, const char* projectName)
 
 std::filesystem::path looseTestDir(const char* name) // no project.kast
 {
-    const std::filesystem::path dir = std::filesystem::temp_directory_path() / name;
-    std::filesystem::remove_all(dir);
+    const std::filesystem::path dir = testRoot() / name;
+    removeTree(dir);
     std::filesystem::create_directories(dir);
     return dir;
 }
@@ -1037,6 +1182,33 @@ void saveTestScene(const std::filesystem::path& file, const char* entity, std::v
     scene.systems = std::move(systems);
     std::string error;
     check(kast::saveScene(scene, file.string(), error), "write a test scene");
+}
+
+// Narrow strings are UTF-8 (cmake/utf8.manifest + /utf-8): path(std::string) and path::string() round-trip non-ASCII
+// names instead of going through a legacy code page (which mangled them, or threw for characters outside it).
+void checkUtf8Paths()
+{
+    const std::string name = "J\xC3\xBCrgen \xE6\x97\xA5\xE6\x9C\xAC"; // "Jürgen 日本" as UTF-8 bytes
+    check(std::string("Jürgen 日本") == name, "source literals are compiled as UTF-8");
+    const std::wstring wide = L"Jürgen 日本";
+    check(std::filesystem::path(name).wstring() == wide, "path(std::string) reads UTF-8");
+    std::string narrow;
+    try {
+        narrow = std::filesystem::path(wide).string();
+    } catch (const std::system_error&) { // no mapping in the code page
+    }
+    check(narrow == name, "path::string() writes UTF-8");
+
+    const std::filesystem::path dir = projectTestDir(("kast_utf8_" + name).c_str(), name.c_str());
+    check(std::filesystem::exists(testRoot() / (L"kast_utf8_" + wide) / kast::kProjectFileName),
+          "a project made through narrow paths lands in the non-ASCII folder");
+    kast::Project project;
+    std::string error;
+    check(kast::loadProject(dir / kast::kProjectFileName, project, error) && project.name == name,
+          "load a project from a non-ASCII folder");
+    saveTestScene(dir / "a.scene", "e", {});
+    kast::Scene scene;
+    check(kast::loadScene((dir / "a.scene").string(), scene, error), "save and load a scene by a non-ASCII std::string path");
 }
 
 void checkProjectFiles()
@@ -1113,7 +1285,6 @@ void checkProjectFiles()
         error.clear();
         check(!kast::resolveProjectPath(root, path, error) && contains(error, mention), path);
     }
-    std::filesystem::remove_all(dir);
 }
 
 // Opening scenes and projects on a Document (the File menu adds dialogs and modals on top).
@@ -1237,9 +1408,6 @@ void checkProjectDocument()
     togglePause(doc);
     check(windowTitle(doc) == "Kast Editor - My Game - main (Paused)", "title while paused");
     stopPlay(doc);
-    std::filesystem::remove_all(dir);
-    std::filesystem::remove_all(outside);
-    std::filesystem::remove_all(parent);
 }
 
 // Project Manager recent list: JSON round trip, bump to top without duplicates, Remove, unusable entries, corrupt file.
@@ -1296,7 +1464,6 @@ void checkRecentProjects()
     }
     check(!launchProcess(root / "missing.exe", {"--project", alpha.string()}, error) && contains(error, "Cannot start"),
           "a process that can't start (the Project Manager's editor) reports why");
-    std::filesystem::remove_all(root);
 }
 
 // No active project: C++ systems still run, every Lua system is disabled, and the Systems panel can't add.
@@ -1328,7 +1495,6 @@ void checkNoProjectLua()
     check(!newSystemFromTemplate(doc, error) && contains(error, "project") &&
               !std::filesystem::exists(dir / "scripts/new_system.lua"),
           "New from Template needs a project");
-    std::filesystem::remove_all(dir);
 }
 
 // Systems panel operations on a Document (the panel only adds ImGui widgets on top).
@@ -1396,9 +1562,6 @@ void checkSystemEdits()
     check(saveFile(doc, (dir / "empty.scene").string(), error) && countLogged(warning) == warned + 2 && doc.project &&
               doc.project->name == "Edits",
           "no warning without systems; Save sets the project by walking up");
-    std::filesystem::remove_all(dir);
-    std::filesystem::remove_all(other);
-    std::filesystem::remove_all(loose);
 }
 
 // kast.loadScene errors: raised at the calling line, nothing queued, the current scene keeps running.
@@ -1446,7 +1609,6 @@ end })");
               lua.scenePath() == "errors.scene",
           "the current scene keeps running");
     lua.stop();
-    std::filesystem::remove_all(dir);
 }
 
 // kast.loadScene on a Document: deferred to the end of the frame, last call wins, shutdown calls ignored, old
@@ -1527,14 +1689,18 @@ end })");
               windowTitle(doc) == "Kast Editor - Switch - a* (Playing: c)",
           "second switch, into a subfolder");
     doc.selected = named(doc.scene, "C");
+    check(doc.scene.registry().get<kast::PersistentId>(doc.selected).value == selectedId,
+          "C shares A's id (ids are only unique per scene file)");
+    const uint32_t generation = doc.sceneGeneration;
 
     stopPlay(doc);
     check(logged("sw c shutdown") && countLogged("sw a init") == 1, "Stop: shutdown's loadScene is ignored");
     check(kast::sceneToJson(doc.scene).dump(2) == before, "Stop after two switches restores the byte-identical pre-Play scene");
     check(doc.path == path && doc.project && doc.project->root == root && doc.dirty &&
-              doc.scene.valid(doc.selected) && doc.scene.registry().get<kast::PersistentId>(doc.selected).value == selectedId &&
               windowTitle(doc) == "Kast Editor - Switch - a*",
-          "Stop restores path, project, dirty flag, selection by id and the title");
+          "Stop restores path, project, dirty flag and the title");
+    check(doc.selected == entt::null, "Stop after a switch clears the selection rather than select A by C's id");
+    check(doc.sceneGeneration != generation, "Stop bumps sceneGeneration (panels drop stale edits)");
 
     // kast.currentScene: nil for an Untitled scene, the project-relative path otherwise.
     writeFile(dir / "scripts/cur.lua",
@@ -1548,7 +1714,13 @@ end })");
     startPlay(doc);
     stopPlay(doc);
     check(logged("sw cur levels/d.scene"), "kast.currentScene() is the project-relative path");
-    std::filesystem::remove_all(dir);
+
+    // The unsaved-changes prompt blocks file actions (Ctrl+N/O/S, the File menu) until it is answered.
+    FileActions files(doc);
+    doc.dirty = true;
+    const bool idleBefore = files.idle();
+    files.newScene();
+    check(idleBefore && !files.idle() && doc.dirty, "FileActions is not idle while the unsaved-changes prompt is pending");
 }
 
 } // namespace
@@ -1713,7 +1885,6 @@ return { name = "Leaker", fields = {} })");
     kast::activateComponentDefinitions(std::nullopt, nullptr);
     check(!kast::findAnyComponentType("Health") && kast::componentDefinitionStatus().empty(),
           "no project: no Lua components");
-    std::filesystem::remove_all(dir);
 }
 
 void checkLuaComponentRegistry()
@@ -1749,6 +1920,12 @@ void checkLuaComponentRegistry()
                   kast::componentToJson(registry, e, health).dump() == valid,
               "strict set rejects a bad value and leaves the component unchanged");
     }
+    nlohmann::ordered_json scaled = nlohmann::ordered_json::parse(valid);
+    scaled["facing"] = {0, 0, 2, 0};
+    check(kast::setComponentJson(registry, e, health, scaled, error) &&
+              kast::componentToJson(registry, e, health)["facing"].dump() == "[0.0,0.0,1.0,0.0]",
+          "Lua quat field set non-unit is stored normalized");
+    check(kast::setComponentJson(registry, e, health, nlohmann::ordered_json::parse(valid), error), "restore Health");
     nlohmann::ordered_json extra = nlohmann::ordered_json::parse(valid);
     extra["armor"] = 1;
     check(!kast::setComponentJson(registry, e, health, extra, error) && contains(error, "unknown field \"armor\""),
@@ -1801,7 +1978,6 @@ void checkLuaComponentRegistry()
     check(kast::sceneToJson(doc.scene).dump() == before && !doc.dirty, "Stop restores Lua and preserved data exactly");
 
     kast::activateComponentDefinitions(std::nullopt, nullptr);
-    std::filesystem::remove_all(dir);
 }
 
 void checkLuaComponentApi()
@@ -1882,7 +2058,6 @@ end })");
           "kast.add on a new entity");
     lua.stop();
     kast::activateComponentDefinitions(std::nullopt, nullptr);
-    std::filesystem::remove_all(dir);
 }
 
 constexpr const char* kSceneHead = R"({"version": 4, "entities": [{"id": 1, "parent": null, "name": "Drifty", "components": {)"
@@ -1919,7 +2094,6 @@ void checkLuaComponentDrift()
     check(!openFile(doc, (dir / "strict.scene").string(), error) && contains(error, "degreesPerSecond"),
           "built-in components keep the strict load rules");
     kast::activateComponentDefinitions(std::nullopt, nullptr);
-    std::filesystem::remove_all(dir);
 }
 
 void checkMissingComponents()
@@ -1976,7 +2150,6 @@ end })");
     check(doc.dirty && logged("Entity 'Drifty' (id 1): Health: unknown field \"bogus\" dropped"),
           "conversion applies the drift rules (warning + dirty)");
     kast::activateComponentDefinitions(std::nullopt, nullptr);
-    std::filesystem::remove_all(dir);
 }
 
 void checkComponentHotReload()
@@ -2051,7 +2224,6 @@ void checkComponentHotReload()
     check(after.contains("current") && !after.contains("hp") && !after.contains("armor"),
           "after Stop the pending definition change applies to the restored scene");
     kast::activateComponentDefinitions(std::nullopt, nullptr);
-    std::filesystem::remove_all(dir);
 }
 
 void checkComponentTemplate()
@@ -2081,7 +2253,6 @@ void checkComponentTemplate()
     stopPlay(doc);
     check(canEditComponents(doc), "enabled again after Stop");
     kast::activateComponentDefinitions(std::nullopt, nullptr);
-    std::filesystem::remove_all(dir);
 }
 
 std::string readBytes(const std::filesystem::path& path)
@@ -2168,7 +2339,6 @@ void checkNewLuaComponent()
     stopPlay(doc);
     check(newLuaComponent(doc, other, "Other", error), "enabled again after Stop");
     kast::activateComponentDefinitions(std::nullopt, nullptr);
-    std::filesystem::remove_all(dir);
 }
 
 // --- game.pak and Build ---
@@ -2231,7 +2401,73 @@ void checkPak()
     rejected(huge, "past the end", "an entry size that would overflow is rejected");
     kast::Pak missing;
     check(!missing.open(dir / "absent.pak", error) && contains(error, "Cannot open"), "a missing pak is an error");
-    std::filesystem::remove_all(dir);
+
+    // Exact on-disk layout: header, index (path, offset, size per entry), then the data in index order.
+    std::filesystem::create_directories(dir / "layout/b");
+    writeFile(dir / "layout/a.txt", "hi");
+    writeFile(dir / "layout/b/c.lua", "");
+    std::string expected = "KPAK";
+    const auto put = [&](auto value) { expected.append(reinterpret_cast<const char*>(&value), sizeof(value)); };
+    put(kast::kPakVersion);
+    put(uint32_t{2});
+    put(uint32_t{5});
+    expected += "a.txt";
+    put(uint64_t{64});
+    put(uint64_t{2});
+    put(uint32_t{7});
+    expected += "b/c.lua";
+    put(uint64_t{66});
+    put(uint64_t{0});
+    expected += "hi";
+    check(kast::writePak(dir / "layout", {"a.txt", "b/c.lua"}, dir / "layout.pak", error) &&
+              readText(dir / "layout.pak") == expected && !std::filesystem::exists(dir / "layout.pak.tmp"),
+          "pak bytes match the documented layout");
+    check(!kast::writePak(dir / "layout", {"a.txt", "gone.lua"}, dir / "layout.pak", error) && contains(error, "gone.lua") &&
+              readText(dir / "layout.pak") == expected && !std::filesystem::exists(dir / "layout.pak.tmp"),
+          "a pak write that fails mid-stream keeps the previous pak");
+}
+
+void checkFileWrites()
+{
+    const std::filesystem::path dir = looseTestDir("kast_file_writes");
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path file = dir / "data.txt";
+    const std::filesystem::path temp = dir / "data.txt.tmp";
+    check(kast::writeFileAtomic(file, "first") && readText(file) == "first", "atomic write creates a file");
+    check(kast::writeFileAtomic(file, "second") && readText(file) == "second", "atomic write replaces a file");
+    check(!std::filesystem::exists(temp), "atomic write leaves no temp file behind");
+
+    std::filesystem::create_directories(temp); // temp file can't be created
+    check(!kast::writeFileAtomic(file, "third") && readText(file) == "second", "failed temp write keeps the original");
+    std::filesystem::remove(temp);
+    std::filesystem::create_directories(dir / "folder"); // rename over a directory fails
+    check(!kast::writeFileAtomic(dir / "folder", "x") && std::filesystem::is_directory(dir / "folder") &&
+              !std::filesystem::exists(dir / "folder.tmp"),
+          "failed rename cleans up its temp file");
+
+    // saveScene goes through the same path: a failed save keeps the previous scene file.
+    kast::Scene scene;
+    scene.create("Saved");
+    std::string error;
+    const std::string scenePath = (dir / "main.scene").string();
+    check(kast::saveScene(scene, scenePath, error), "save a scene");
+    const std::string saved = readText(scenePath);
+    scene.create("Unsaved");
+    std::filesystem::create_directories(scenePath + ".tmp");
+    check(!kast::saveScene(scene, scenePath, error) && readText(scenePath) == saved, "failed scene save keeps the old file");
+    std::filesystem::remove(scenePath + ".tmp");
+
+    // A file that exists but can't be opened (locked) is a read failure, not empty content.
+    writeFile(dir / "locked.lua", "return 1");
+    int fd = -1;
+    check(_wsopen_s(&fd, (dir / "locked.lua").c_str(), _O_RDONLY, _SH_DENYRW, 0) == 0, "lock a file exclusively");
+    std::string bytes;
+    check(!kast::readFile(dir / "locked.lua", bytes), "readFile fails on a locked file");
+    check(!kast::writePak(dir, {"locked.lua"}, dir / "game.pak", error) && contains(error, "locked.lua"),
+          "writePak fails on a locked file instead of packing it empty");
+    if (fd != -1)
+        _close(fd);
+    check(kast::readFile(dir / "locked.lua", bytes) && bytes == "return 1", "readFile reads it once unlocked");
 }
 
 void checkBuild()
@@ -2280,6 +2516,28 @@ void checkBuild()
     project.startScene = "a.scene";
     check(!buildGame(project, root, playerDir, exe, error) && contains(error, "other than the project folder"),
           "Build rejects the project folder as output");
+    std::string upperRoot = root.string();
+    std::ranges::transform(upperRoot, upperRoot.begin(), [](char c) { return static_cast<char>(std::toupper(c)); });
+    for (const std::filesystem::path& same : {std::filesystem::path(root.native() + L"\\"), std::filesystem::path(upperRoot)})
+        check(!buildGame(project, same, playerDir, exe, error) && contains(error, "other than the project folder"),
+              "Build rejects the project folder as output with a trailing separator or different case");
+    check(!buildGame(project, root / "scripts", playerDir, exe, error) && contains(error, "previous build") &&
+              readText(root / "scripts/s.lua") == "x" && !std::filesystem::exists(root / "scripts" / kGamePakName),
+          "Build rejects a content folder inside the project as output");
+    for (const char* folder : {".wip", "build"})
+        std::filesystem::create_directories(root / folder);
+    saveTestScene(root / ".wip/a.scene", "Thing", {});
+    project.startScene = ".wip/a.scene";
+    check(!buildGame(project, out, playerDir, exe, error) && contains(error, ".wip/a.scene") && contains(error, "game.pak"),
+          "Build rejects a startScene in a dot-folder (game.pak leaves it out)");
+    writeFile(root / "build" / kGamePakName, "old");
+    saveTestScene(root / "build/s.scene", "Thing", {});
+    project.startScene = "build/s.scene";
+    check(!buildGame(project, root / "build", playerDir, exe, error) && contains(error, "output folder") &&
+              readText(root / "build" / kGamePakName) == "old",
+          "Build rejects a startScene inside an in-project output folder");
+    std::filesystem::remove_all(root / "build");
+    project.startScene = "a.scene";
     check(!buildGame(project, out, dir, exe, error) && contains(error, "kast_player.exe"),
           "Build needs kast_player.exe next to the editor");
     check(!std::filesystem::exists(out), "failed builds write nothing");
@@ -2295,12 +2553,24 @@ void checkBuild()
     writeFile(out / "keep.txt", "mine");
     check(buildGame(project, out, playerDir, exe, error) && readText(out / "keep.txt") == "mine",
           "Build overwrites its own files and leaves others alone");
+    check(buildGame(project, root / "builds/a", playerDir, exe, error) &&
+              buildGame(project, root / "builds/a", playerDir, exe, error),
+          "Build accepts a new in-project output folder, then rebuilds into it (it holds game.pak)");
+    std::filesystem::remove_all(root / "builds");
+    kast::Project cafe = project;
+    cafe.name = reinterpret_cast<const char*>(u8"Caf\u00e9");
+    check(buildGame(cafe, dir / u8"out_\u65e5\u672c", playerDir, exe, error) && exe.filename().u8string() == u8"Caf\u00e9.exe" &&
+              std::filesystem::is_regular_file(exe),
+          "Build names the exe after a non-ASCII project name");
 
     // The last output folder is editor-local: .kast/editor.json, project.kast untouched.
     const std::string projectFile = readText(root / "project.kast");
     check(!loadBuildFolder(root / "scripts"), "no remembered Build folder without .kast/editor.json");
     check(saveBuildFolder(root, out, error) && loadBuildFolder(root) == std::filesystem::path(out.generic_string()),
           "remembered Build folder round trip");
+    const std::filesystem::path unicodeOut = dir / u8"J\u00fcrgen \u65e5\u672c";
+    check(saveBuildFolder(root, unicodeOut, error) && loadBuildFolder(root) == unicodeOut,
+          "remembered non-ASCII Build folder round trip");
     check(readText(root / "project.kast") == projectFile, "remembering the Build folder leaves project.kast unchanged");
     writeFile(root / ".kast/editor.json", "{oops");
     check(!loadBuildFolder(root), "an invalid editor.json is ignored");
@@ -2318,7 +2588,6 @@ void checkBuild()
     check(!files.canBuild(), "Build is disabled while paused");
     stopPlay(doc);
     check(files.canBuild(), "Build is enabled again after Stop");
-    std::filesystem::remove_all(dir);
 }
 
 // Build Settings: Start Scene choices, Save validating and writing only project.kast, Build opening the modal.
@@ -2365,6 +2634,9 @@ void checkBuildSettings()
           "Save of a scene that doesn't load fails, project.kast byte-identical, project unchanged");
     check(!setStartScene(*doc.project, "../escape.scene", error) && readText(root / kast::kProjectFileName) == before,
           "Save of a scene outside the project fails, project.kast byte-identical");
+    check(!setStartScene(*doc.project, ".hidden/x.scene", error) && contains(error, "game.pak") &&
+              readText(root / kast::kProjectFileName) == before,
+          "Save of a dot-folder scene (not in game.pak) fails, project.kast byte-identical");
 
     check(setStartScene(*doc.project, "levels/c.scene", error), "Save a valid Start Scene");
     check(readText(root / kast::kProjectFileName) ==
@@ -2393,7 +2665,6 @@ void checkBuildSettings()
             check(buildFiles.buildSettingsOpen(), what.c_str());
         }
     }
-    std::filesystem::remove_all(root.parent_path());
 }
 
 // Last: mounting a pak lasts for the rest of the process, so later disk reads would fail.
@@ -2421,7 +2692,6 @@ void checkMountedPak()
           "listFiles from the pak");
     check(kast::listFiles(root).size() == 3 && kast::listFiles(root / "nothing").empty(),
           "listFiles of the root and of a missing folder");
-    std::filesystem::remove_all(dir);
 }
 
 // --- Events ---
@@ -2574,7 +2844,6 @@ end })");
     check(lua.bus().history().size() == 3 && lua.bus().history()[0].publisher == "a.lua",
           "events: the publisher is the system's path");
     lua.stop();
-    std::filesystem::remove_all(dir);
 }
 
 // C++ -> Lua, JSON -> Lua conversion, re-publish and subscribe during a drain, unsubscribe during a drain.
@@ -2626,7 +2895,6 @@ return {
     check(logged("ev r late 1") && !logged("ev r late 2"), "events: the late subscription gets later events only");
     checkOk(lua, 0, "events: the system is still fine");
     lua.stop();
-    std::filesystem::remove_all(dir);
 }
 
 // Rejections raise at the calling file:line and queue nothing.
@@ -2685,7 +2953,6 @@ end })");
     check(lua.bus().history().size() == 1 && lua.bus().history()[0].name == "ok32",
           "events: rejected calls queue nothing; 32 nested tables are fine");
     lua.stop();
-    std::filesystem::remove_all(dir);
 }
 
 // A failing subscriber disables only its system (and removes its subscriptions); hot reload, Stop and Play start
@@ -2759,7 +3026,31 @@ void checkLuaEventLifetime()
     lua.tick(0.1f);
     check(cpp == 1 && logged("ev fixed 6"), "events: Play start clears C++ subscriptions");
     lua.stop();
-    std::filesystem::remove_all(dir);
+}
+
+// A subscriber registered inside a coroutine outlives the coroutine.
+void checkLuaEventCoroutine()
+{
+    const std::filesystem::path dir = luaTestDir();
+    writeFile(dir / "co.lua", R"(return {
+    init = function()
+        coroutine.resume(coroutine.create(function()
+            kast.subscribe("co", function(p) kast.log("ev co " .. p.n .. " " .. tostring(coroutine.running())) end)
+        end))
+    end,
+    update = function(dt) collectgarbage(); collectgarbage() end,
+})");
+    kast::Scene scene;
+    scene.systems = {"co.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr);
+    lua.bus().publish("co", {{"n", 1}});
+    lua.tick(0.1f); // the coroutine is collected before the drain
+    lua.bus().publish("co", {{"n", 2}});
+    lua.tick(0.1f);
+    check(statusOf(lua, 0).ok && logged("ev co 1 nil") && logged("ev co 2 nil"),
+          "events: a subscriber from a collected coroutine runs on the main thread");
+    lua.stop();
 }
 
 // Scene switch: old Lua subscribers are gone, queued events dropped, C++ subscriptions and history kept.
@@ -2803,7 +3094,6 @@ void checkLuaEventSceneSwitch()
     check(doc.lua.bus().history().size() == 2 && doc.lua.bus().history()[0].name == "go",
           "events: the history carries over a switch");
     stopPlay(doc);
-    std::filesystem::remove_all(dir);
 }
 
 // Editor Play: nothing is delivered while paused; Stop discards the queue.
@@ -2836,7 +3126,6 @@ return { update = function(dt) n = n + 1; kast.publish("tick", {n = n}) end })")
     doc.lua.bus().drain();
     check((ticks == std::vector<int>{1, 100, 2}), "events: Stop discards the queue");
     check(doc.lua.bus().history().size() == 3, "events: the Events panel history is kept after Stop");
-    std::filesystem::remove_all(dir);
 }
 
 // --- State machines ---
@@ -3012,7 +3301,6 @@ void checkStateMachineDefinitions()
           "fsm: editor rescans a modified file");
     check(kast::refreshStateMachineDefinitions(std::nullopt) && kast::stateMachineDefinitions().status.empty(),
           "fsm: no project, no definitions");
-    std::filesystem::remove_all(dir);
 }
 
 // The C++ API at Play start and through transitions: entry order, allowedFrom, events, queueing, callback errors,
@@ -3120,7 +3408,6 @@ void checkStateMachineRuntime()
           "fsm: a destroyed entity's machine goes away without exit");
     lua.stop();
     check(throwsInvalid([&] { fsm.state("game"); }, "no Play session"), "fsm: Stop resets the machines");
-    std::filesystem::remove_all(dir);
 }
 
 // kast.fsm.* from Lua: results, misuse raising at the calling line, read-only table; the C++ API gives the same results.
@@ -3212,7 +3499,6 @@ return {
     check(logged("fsm2 results " + joined), "fsm: the C++ API gives the same results as kast.fsm");
     cpp.stop();
     lua.stop();
-    std::filesystem::remove_all(dir);
 }
 
 // Game machines keep their state across kast.loadScene (no callbacks; the new Lua state's callbacks are used after),
@@ -3262,7 +3548,6 @@ return {
     check(lua.fsm().state("game") == "a" && countLogged("fsm3 game enter a from=nil") == 2,
           "fsm: the next Play starts from the initial state again");
     lua.stop();
-    std::filesystem::remove_all(dir);
 }
 
 // Entity machines added at runtime (kast.add + kast.set, a registry edit, Duplicate), destroyed, removed or naming a
@@ -3323,7 +3608,123 @@ end })");
     lua.tick(0.1f);
     check(!registry.all_of<kast::StateMachineRuntime>(later), "fsm: removing StateMachine forgets the machine");
     lua.stop();
-    std::filesystem::remove_all(dir);
+}
+
+// An exit that swaps or removes the entity's StateMachine ends the transition; a stale runtime survives a reload.
+void checkStateMachineExitChanges()
+{
+    const std::filesystem::path dir = fsmProject("kast_fsm_exit_changes", "fsm7");
+    writeFile(dir / "fsms/swap.lua", R"(return { name = "swap", initial = "a", states = {
+    a = { exit = function(ctx) kast.set(ctx.entity, "StateMachine", {machine = "door"}) end },
+    b = { enter = function(ctx) kast.log("fsm7 swap entered b") end } } })");
+    writeFile(dir / "fsms/drop.lua", R"(return { name = "drop", initial = "a", states = {
+    a = { exit = function(ctx) kast.remove(ctx.entity, "StateMachine") end },
+    b = { enter = function(ctx) kast.log("fsm7 drop entered b") end } } })");
+    kast::Scene scene;
+    entt::registry& registry = scene.registry();
+    const entt::entity swap = scene.create("Swap");
+    registry.emplace<kast::StateMachine>(swap, "swap", "");
+    const entt::entity drop = scene.create("Drop");
+    registry.emplace<kast::StateMachine>(drop, "drop", "");
+    const entt::entity door = scene.create("Door");
+    registry.emplace<kast::StateMachine>(door, "door", "");
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr, {});
+    kast::StateMachines& fsm = lua.fsm();
+    fsm.change(idOf(scene, swap), "b");
+    check(!logged("fsm7 swap entered b") && fsm.state(idOf(scene, swap)) == "closed" &&
+              registry.get<kast::StateMachineRuntime>(swap).machine == "door",
+          "fsm: an exit that swaps the machine keeps the new machine's state, no enter of the old target");
+    fsm.change(idOf(scene, drop), "b");
+    check(!logged("fsm7 drop entered b") && registry.get<kast::StateMachineRuntime>(drop).current == "a",
+          "fsm: an exit that removes StateMachine stops the transition");
+
+    fsm.change(idOf(scene, door), "open");
+    registry.remove<kast::StateMachine>(door); // as kast.remove: the runtime stays until the next syncAll
+    kast::StateMachineDef def{.name = "door", .path = "fsms/sub/door.lua", .initial = "closed"};
+    def.states["closed"] = {};
+    fsm.define(std::move(def)); // "open" is gone
+    check(registry.get<kast::StateMachineRuntime>(door).current == "open",
+          "fsm: a reload skips a runtime whose StateMachine was removed");
+    lua.stop();
+}
+
+// Runaway scripts are stopped by the watchdog (2 s budget each) instead of freezing the editor.
+void checkLuaWatchdog()
+{
+    const std::filesystem::path dir = fsmProject("kast_lua_watchdog", "dog");
+    writeFile(dir / "fsms/spin.lua", R"(return { name = "spin", initial = "a", states = {
+    a = {}, b = { enter = function(ctx) while true do end end } } })");
+    writeFile(dir / "scripts/loop.lua", R"(return { update = function(dt)
+    while true do pcall(function() while true do end end) end
+end })");
+    writeFile(dir / "scripts/after.lua", R"(return { update = function(dt) kast.log("dog after ran") end })");
+    kast::Scene scene;
+    const entt::entity spin = scene.create("Spin");
+    scene.registry().emplace<kast::StateMachine>(spin, "spin", "");
+    scene.systems = {"scripts/loop.lua", "scripts/after.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr, {});
+    const auto start = std::chrono::steady_clock::now();
+    lua.tick(0.1f);
+    const kast::LuaSystemStatus loop = statusOf(lua, 0);
+    check(!loop.ok && contains(loop.error, "scripts/loop.lua:2: script ran longer than 2 seconds") &&
+              logged("dog after ran") && statusOf(lua, 1).ok,
+          "watchdog: an endless update (even inside pcall) disables its system; the others run");
+    lua.fsm().change(idOf(scene, spin), "b");
+    check(logged("State machine fsms/spin.lua: enter \"b\" failed: fsms/spin.lua:2: script ran longer than 2 seconds"),
+          "watchdog: an endless state machine callback is stopped and logged");
+    check(std::chrono::steady_clock::now() - start < std::chrono::seconds(6), "watchdog: stops each within its budget");
+    lua.stop();
+
+    writeFile(dir / "fsms/hang.lua", "while true do end");
+    const kast::StateMachineDefinitions defs = kast::loadStateMachineDefinitions(dir); // the editor's scan
+    check(std::ranges::any_of(defs.status, [](const kast::ComponentDefinitionStatus& s) {
+              return !s.ok && contains(s.error, "fsms/hang.lua:1: script ran longer than 2 seconds");
+          }) && defs.valid.size() == 3,
+          "watchdog: an endless definition file is rejected; the others load");
+}
+
+// A Lua component definition with an endless loop is stopped by the same watchdog instead of freezing the editor.
+void checkComponentWatchdog()
+{
+    const std::filesystem::path dir = componentProject("kast_components_watchdog");
+    writeFile(dir / "components/spin.lua", "while true do end\nreturn { name = \"Spin\", fields = {} }");
+    const auto start = std::chrono::steady_clock::now();
+    const kast::ComponentDefinitions defs = kast::loadComponentDefinitions(dir);
+    const auto spin = std::ranges::find(defs.status, std::string("components/spin.lua"), &kast::ComponentDefinitionStatus::path);
+    check(spin != defs.status.end() && !spin->ok &&
+              contains(spin->error, "components/spin.lua:1: script ran longer than 2 seconds") && defs.valid.size() == 1,
+          "watchdog: an endless component definition is rejected; the others load");
+    check(std::chrono::steady_clock::now() - start < std::chrono::seconds(4), "watchdog: stops it within its budget");
+
+    const std::filesystem::path fsmDir = fsmProject("kast_fsm_watchdog", "dog");
+    writeFile(fsmDir / "fsms/spin.lua", "while true do end");
+    const auto fsmStart = std::chrono::steady_clock::now();
+    const kast::StateMachineDefinitions fsms = kast::loadStateMachineDefinitions(fsmDir); // the editor's scan
+    check(std::ranges::any_of(fsms.status, [](const kast::ComponentDefinitionStatus& s) {
+              return s.path == "fsms/spin.lua" && !s.ok && contains(s.error, "fsms/spin.lua:1: script ran longer than 2 seconds");
+          }) && std::chrono::steady_clock::now() - fsmStart < std::chrono::seconds(4),
+          "watchdog: an endless state machine definition is rejected by the editor's scan within its budget");
+
+    // Reading the returned table runs no Lua: one with a metatable (here an endless __index) is rejected unread.
+    const char* endlessIndex = "setmetatable(t, { __index = function() while true do end end })";
+    writeFile(dir / "components/meta.lua", std::format("local t = {{ fields = {{}} }}\n{}\nreturn t", endlessIndex));
+    writeFile(fsmDir / "fsms/meta.lua",
+              std::format("local t = {{ initial = \"a\", states = {{ a = {{}} }} }}\n{}\nreturn t", endlessIndex));
+    std::filesystem::remove(dir / "components/spin.lua");
+    std::filesystem::remove(fsmDir / "fsms/spin.lua");
+    const auto metaStart = std::chrono::steady_clock::now();
+    const kast::ComponentDefinitions metaDefs = kast::loadComponentDefinitions(dir);
+    const kast::StateMachineDefinitions metaFsms = kast::loadStateMachineDefinitions(fsmDir);
+    const auto endless = [](const std::vector<kast::ComponentDefinitionStatus>& status, const std::string& path) {
+        return std::ranges::any_of(status, [&](const kast::ComponentDefinitionStatus& s) {
+            return s.path == path && !s.ok && contains(s.error, path + ": tables must be plain data (no metatables)");
+        });
+    };
+    check(endless(metaDefs.status, "components/meta.lua") && endless(metaFsms.status, "fsms/meta.lua") &&
+              std::chrono::steady_clock::now() - metaStart < std::chrono::seconds(1),
+          "definitions: a returned table with a metatable (endless __index) is rejected without running it");
 }
 
 // Hot reload during Play: kept state, reset when the state is gone, last valid definition kept when broken.
@@ -3386,7 +3787,6 @@ void checkStateMachineHotReload()
               fsm.state("game") == "z",
           "fsm: game machines follow the same hot reload rules");
     lua.stop();
-    std::filesystem::remove_all(dir);
 }
 
 // StateMachine data: scene round trip, Duplicate, Play/Stop restore; project.kast "stateMachines".
@@ -3448,7 +3848,6 @@ void checkStateMachineFiles()
         check(!kast::loadProject(file, project, error) && contains(error, message),
               std::format("fsm: project.kast rejects stateMachines {}", value).c_str());
     }
-    std::filesystem::remove_all(dir);
 }
 
 // New State Machine naming and template, the Global toggle (project.kast) and their Play blocking.
@@ -3495,7 +3894,6 @@ void checkStateMachineEditor()
               !std::filesystem::exists(dir / "fsms/fresh.lua"),
           "fsm: New State Machine and Global are blocked during Play");
     doc.play = PlayState::Stopped;
-    std::filesystem::remove_all(dir);
 }
 
 std::vector<std::string> assetNames(const std::vector<AssetEntry>& entries)
@@ -3549,11 +3947,12 @@ void checkAssetScan()
           "a dot-folder and its contents are hidden");
     check(!findAsset(entries, "missing") && !findAsset(entries, "alpha/missing"), "findAsset: no such entry");
 
+    check(saveBuildFolder(root, root / "alpha", error) && findAsset(scanAssets(root), "alpha/z.txt") != nullptr,
+          "a remembered in-project folder without game.pak (not a build) hides nothing");
     check(saveBuildFolder(root, root.parent_path() / "kast_assets_out", error), "save a build folder outside");
     check(findAsset(scanAssets(root), "out") != nullptr, "a build folder outside the project hides nothing");
     check(saveBuildFolder(root, root, error) && findAsset(scanAssets(root), "alpha") != nullptr,
           "a build folder equal to the project root hides nothing");
-    std::filesystem::remove_all(root);
 }
 
 void checkAssetNames()
@@ -3578,12 +3977,11 @@ void checkAssetNames()
           "createAssetFolder refuses a taken name (ignoring case)");
     check(!createAssetFolder(dir, "bad?", error) && !std::filesystem::exists(dir / "bad?"),
           "createAssetFolder refuses an invalid name");
-    std::filesystem::remove_all(dir);
 }
 
 void checkAssetPaths()
 {
-    const std::filesystem::path root = std::filesystem::temp_directory_path() / "kast_assets_paths";
+    const std::filesystem::path root = testRoot() / "kast_assets_paths";
     check(isSameOrInside(root / "a" / "b", root / "a"), "isSameOrInside: a child");
     check(isSameOrInside(root / "a", root / "a"), "isSameOrInside: itself");
     check(isSameOrInside(root / "A" / "x", root / "a"), "isSameOrInside ignores case");
@@ -3650,7 +4048,6 @@ void checkAssetMoves()
     check(moveAsset(root / "m" / "f.txt", root / "sub" / "deep", error) && readText(root / "sub" / "deep" / "f.txt") == "mine",
           "moveAsset moves a file");
     check(!moveAsset(root / "missing.txt", root / "sub", error) && !error.empty(), "moveAsset reports an OS failure");
-    std::filesystem::remove_all(root);
 }
 
 void checkOpenSceneAction()
@@ -3668,7 +4065,6 @@ void checkOpenSceneAction()
     files.openScene((root / "a.scene").string());
     check(doc.path == (root / "b.scene").string() && doc.dirty,
           "FileActions::openScene waits on the unsaved-changes prompt when dirty");
-    std::filesystem::remove_all(root);
 }
 
 // Assets panel Create > Lua System / State Machine: unique template files, the fsms/ rule, the first-rename machine
@@ -3745,8 +4141,6 @@ void checkAssetCreate()
           "remapProjectPaths follows a moved parent folder, ignoring case");
     check(!remapProjectPaths(systems, "nothing", "x") && systems[2] == "other/c.lua",
           "remapProjectPaths leaves unrelated paths unchanged");
-    std::filesystem::remove_all(loose);
-    std::filesystem::remove_all(dir);
 }
 
 void checkAssets()
@@ -3914,7 +4308,6 @@ void checkGuiFiles()
     writeFile(dir / "plain.rml", "<rml><head/><body/></rml>");
     check(renameGui(dir / "plain.rml", "plainer.rml", error) && std::filesystem::exists(dir / "plainer.rml"),
           "renameGui renames an .rml that links nothing like any file");
-    std::filesystem::remove_all(dir);
 }
 
 void checkUIDocumentComponent()
@@ -3959,11 +4352,31 @@ void checkGuiEvents()
     check(calls == 2 && received["id"] == "", "a button without an id sends id \"\"");
 }
 
+// The GUI Builder saves the linked .rcss: a link that leaves the project (or a loose .rml's folder) is not followed.
+void checkGuiStylesheetBounds()
+{
+    const std::filesystem::path root = projectTestDir("kast_gui_bounds", "bounds");
+    std::filesystem::create_directories(root / "ui");
+    const auto rmlLinking = [](const char* href) {
+        return std::format(R"(<rml><head><link type="text/rcss" href="{}"/></head><body/></rml>)", href);
+    };
+    writeFile(root / "ui/in.rml", rmlLinking("../styles/main.rcss"));
+    check(linkedStylesheet(root / "ui/in.rml") == root / "styles/main.rcss", "a sheet elsewhere in the project is linked");
+    writeFile(root / "ui/out.rml", rmlLinking("../../outside.rcss"));
+    check(linkedStylesheet(root / "ui/out.rml").empty(), "a sheet outside the project is not linked");
+    writeFile(root / "ui/abs.rml", rmlLinking("C:/Windows/evil.rcss"));
+    check(linkedStylesheet(root / "ui/abs.rml").empty(), "an absolute sheet path outside the project is not linked");
+    const std::filesystem::path loose = looseTestDir("kast_gui_bounds_loose");
+    writeFile(loose / "a.rml", rmlLinking("../b.rcss"));
+    check(linkedStylesheet(loose / "a.rml").empty(), "a GUI in no project links only sheets in its own folder");
+}
+
 void checkGui()
 {
     checkGuiDocRoundTrip();
     checkGuiDocEdits();
     checkGuiFiles();
+    checkGuiStylesheetBounds();
     checkUIDocumentComponent();
     checkGuiEvents();
 }
@@ -3999,11 +4412,25 @@ void checkExternalEditor()
           "invalid settings file: the default command, with a warning");
     std::ofstream(file, std::ios::binary | std::ios::trunc) << R"({"other": 1})";
     check(loadEditorCommand(file) == kDefaultEditorCommand, "missing key: the default command");
+
+    // cmd.exe runs the command: a %VAR% in the file name must reach it literally, not expanded (%OS% -> Windows_NT).
+    // copy stands in for an editor; poll() is never called, so a failure can't fall back to the file association.
+    const std::filesystem::path source = dir / "%OS%.lua";
+    const std::filesystem::path copied = dir / "copied.lua";
+    writeFile(source, "-- percent");
+    {
+        ExternalEditor editor(dir / "percent_settings.json");
+        check(editor.setCommand(std::format("copy /y \"{{file}}\" \"{}\"", copied.string()), error),
+              "set a copy command");
+        editor.open(source);
+        for (int i = 0; i < 200 && readText(copied) != "-- percent"; ++i) // until copy has finished writing it
+            SDL_Delay(50);
+    }
+    check(readText(copied) == "-- percent", "a %VAR% in the file name reaches the command unexpanded");
     ExternalEditor editor(file);
     check(editor.command() == kDefaultEditorCommand && editor.setCommand("vim {file}", error) &&
               editor.command() == "vim {file}" && loadEditorCommand(file) == "vim {file}",
           "setCommand saves and is used from then on");
-    std::filesystem::remove_all(dir);
 }
 
 // Point light falloff and per-mesh selection (renderer.h), PointLight validation and scene ambient in scene files.
@@ -4182,8 +4609,7 @@ void checkPostProcessing()
         {R"({"fog": {"start": -1}})", "start"},
         {R"({"fog": {"color": [0.5, 0.5, -1]}})", "color"},
     };
-    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "kast_post_check";
-    std::filesystem::create_directories(dir);
+    const std::filesystem::path dir = looseTestDir("kast_post_check");
     const std::string path = (dir / "bad.scene").string();
     kast::Scene current;
     current.create("Keep me");
@@ -4201,7 +4627,6 @@ void checkPostProcessing()
     check(current.children(entt::null).size() == 1 && current.postProcessing.vignette.intensity == 0.9f &&
               !current.postProcessing.bloom.enabled,
           "failed post loads leave the scene untouched");
-    std::filesystem::remove_all(dir);
 }
 
 // --- Materials ---
@@ -4283,8 +4708,8 @@ void checkMaterialFiles()
 
 void checkMaterialLibrary()
 {
-    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "kast_material_check";
-    std::filesystem::remove_all(dir);
+    const std::filesystem::path dir = testRoot() / "kast_material_check";
+    removeTree(dir);
     std::filesystem::create_directories(dir / "materials");
     writeFile(dir / "materials/red.mat", R"({"version": 1, "baseColor": [1, 0, 0, 1]})");
     writeFile(dir / "materials/bad.mat", R"({"version": 1, "metallic": 9})");
@@ -4364,7 +4789,6 @@ void checkMaterialLibrary()
               registry.get<kast::MeshRenderer>(b).material == "art/mats/blue.mat" &&
               registry.get<kast::MeshRenderer>(c).material.empty(),
           "moving a folder remaps every MeshRenderer material inside it; empty stays empty");
-    std::filesystem::remove_all(dir);
 }
 
 void checkTextureDecode()
@@ -4496,13 +4920,15 @@ end })");
               std::filesystem::last_write_time(dir / "materials/shared.mat") == fileTime,
           "material edits from Lua never reach the .mat file");
     check(before == kast::materialToJson(kast::defaultMaterial()).dump(), "the default material is never edited");
-    std::filesystem::remove_all(dir);
 }
 
 // --- Models and animation ---
 
-// A GLB in memory: a chain of joints nodes and one triangle-list mesh skinned to them, vertex i fully on joint i.
-std::string skinnedGlb(int joints)
+// A GLB in memory: a chain of joints nodes and one triangle-list mesh skinned to them, vertex i fully on joint i
+// (unweightedLast: the last vertex has no weights; decoyJoint1: a joint-less node also named "Joint1" comes first in the
+// scene, and clip "Move" animates the real Joint1, node 1; bodyInSkeleton: the mesh node is a child of the last joint,
+// so the scene's one root node is Joint0).
+std::string skinnedGlb(int joints, bool unweightedLast = false, bool decoyJoint1 = false, bool bodyInSkeleton = false)
 {
     std::string bin;
     const auto put = [&bin](const auto& value) { bin.append(reinterpret_cast<const char*>(&value), sizeof(value)); };
@@ -4516,20 +4942,28 @@ std::string skinnedGlb(int joints)
             put(j);
     const size_t weightsOffset = bin.size();
     for (int v = 0; v < vertices; ++v)
-        for (float w : {1.0f, 0.0f, 0.0f, 0.0f})
+        for (float w : {unweightedLast && v == vertices - 1 ? 0.0f : 1.0f, 0.0f, 0.0f, 0.0f})
             put(w);
     const size_t bindsOffset = bin.size();
     for (int j = 0; j < joints; ++j)
         for (int i = 0; i < 16; ++i)
             put(i % 5 == 0 ? 1.0f : 0.0f); // identity
+    const size_t timesOffset = bin.size();
+    for (float t : {0.0f, 1.0f})
+        put(t);
+    const size_t valuesOffset = bin.size();
+    for (float c : {0.0f, 0.1f, 0.0f, 1.0f, 0.1f, 0.0f})
+        put(c);
     nlohmann::json nodes = nlohmann::json::array();
     for (int j = 0; j < joints; ++j) {
         nlohmann::json node = {{"name", std::format("Joint{}", j)}, {"translation", {0.0, 0.1, 0.0}}};
-        if (j + 1 < joints)
+        if (j + 1 < joints || bodyInSkeleton)
             node["children"] = {j + 1};
         nodes.push_back(node);
     }
     nodes.push_back({{"name", "Body"}, {"mesh", 0}, {"skin", 0}});
+    if (decoyJoint1)
+        nodes.push_back({{"name", "Joint1"}});
     nlohmann::json skinJoints = nlohmann::json::array();
     for (int j = 0; j < joints; ++j)
         skinJoints.push_back(j);
@@ -4537,7 +4971,15 @@ std::string skinnedGlb(int joints)
     nlohmann::json gltf;
     gltf["asset"] = {{"version", "2.0"}};
     gltf["scene"] = 0;
-    gltf["scenes"] = nlohmann::json::array({{{"nodes", {0, joints}}}});
+    gltf["scenes"] = nlohmann::json::array(
+        {{{"nodes", decoyJoint1      ? nlohmann::json{joints + 1, 0, joints}
+                    : bodyInSkeleton ? nlohmann::json{0}
+                                     : nlohmann::json{0, joints}}}});
+    if (decoyJoint1)
+        gltf["animations"] = nlohmann::json::array(
+            {{{"name", "Move"},
+              {"channels", nlohmann::json::array({{{"sampler", 0}, {"target", {{"node", 1}, {"path", "translation"}}}}})},
+              {"samplers", nlohmann::json::array({{{"input", 4}, {"output", 5}}})}}});
     gltf["nodes"] = nodes;
     gltf["skins"] = nlohmann::json::array({{{"joints", skinJoints}, {"inverseBindMatrices", 3}}});
     nlohmann::json primitive = {{"attributes", {{"POSITION", 0}, {"JOINTS_0", 1}, {"WEIGHTS_0", 2}}}};
@@ -4547,13 +4989,17 @@ std::string skinnedGlb(int joints)
         {{{"buffer", 0}, {"byteOffset", 0}, {"byteLength", jointsOffset}},
          {{"buffer", 0}, {"byteOffset", jointsOffset}, {"byteLength", weightsOffset - jointsOffset}},
          {{"buffer", 0}, {"byteOffset", weightsOffset}, {"byteLength", bindsOffset - weightsOffset}},
-         {{"buffer", 0}, {"byteOffset", bindsOffset}, {"byteLength", bin.size() - bindsOffset}}});
+         {{"buffer", 0}, {"byteOffset", bindsOffset}, {"byteLength", timesOffset - bindsOffset}},
+         {{"buffer", 0}, {"byteOffset", timesOffset}, {"byteLength", valuesOffset - timesOffset}},
+         {{"buffer", 0}, {"byteOffset", valuesOffset}, {"byteLength", bin.size() - valuesOffset}}});
     gltf["accessors"] = nlohmann::json::array(
         {{{"bufferView", 0}, {"componentType", 5126}, {"count", count}, {"type", "VEC3"},
           {"min", {0.0, 0.0, 0.0}}, {"max", {6.0, static_cast<double>(vertices / 7), 0.0}}},
          {{"bufferView", 1}, {"componentType", 5123}, {"count", count}, {"type", "VEC4"}},
          {{"bufferView", 2}, {"componentType", 5126}, {"count", count}, {"type", "VEC4"}},
-         {{"bufferView", 3}, {"componentType", 5126}, {"count", joints}, {"type", "MAT4"}}});
+         {{"bufferView", 3}, {"componentType", 5126}, {"count", joints}, {"type", "MAT4"}},
+         {{"bufferView", 4}, {"componentType", 5126}, {"count", 2}, {"type", "SCALAR"}, {"min", {0.0}}, {"max", {1.0}}},
+         {{"bufferView", 5}, {"componentType", 5126}, {"count", 2}, {"type", "VEC3"}}});
     std::string json = gltf.dump();
     json.append((4 - json.size() % 4) % 4, ' ');
     bin.append((4 - bin.size() % 4) % 4, '\0');
@@ -4678,7 +5124,52 @@ void checkModelLoading()
     const auto big = kast::loadModelFromMemory(skinnedGlb(130), "glb", error);
     check(big && big->overBoneLimit, "a model with more than 128 joints is over the limit");
 
+    // A skinned vertex without weights stays where the mesh node puts it (not collapsed to the origin).
+    const auto unweighted = kast::loadModelFromMemory(skinnedGlb(3, true), "glb", error);
+    bool unweightedKept = unweighted && unweighted->meshes.size() == 1;
+    if (unweightedKept) {
+        const kast::ModelMesh& mesh = unweighted->meshes[0];
+        std::vector<kast::Mat4> globals, skin;
+        kast::nodeGlobals(*unweighted, kast::bindPose(*unweighted), globals);
+        kast::skinMatrices(mesh, globals, skin);
+        int found = 0;
+        for (const kast::ModelVertex& v : mesh.vertices) {
+            if (!near(v.x, 2.0f) || !near(v.y, 0.0f))
+                continue; // vertex 2, the unweighted one, is at (2, 0, 0)
+            ++found;
+            bx::Vec3 p{0.0f, 0.0f, 0.0f};
+            for (size_t i = 0; i < kast::kMaxBoneWeights; ++i)
+                p = bx::add(p, bx::mul(bx::mul(bx::Vec3{v.x, v.y, v.z}, skin[static_cast<size_t>(v.joints[i])].data()),
+                                       v.weights[i]));
+            unweightedKept = unweightedKept &&
+                             near(p, bx::mul(bx::Vec3{v.x, v.y, v.z}, globals[static_cast<size_t>(mesh.node)].data()));
+        }
+        unweightedKept = unweightedKept && found == 1 && unweighted->bounds.max.x >= 2.0f - 1e-4f;
+    }
+    check(unweightedKept, "an unweighted skinned vertex keeps its mesh-node position (and stays in the bounds)");
+
+    // Two nodes named "Joint1": the bone and the clip bind to the one in the skeleton, not the decoy that comes first.
+    const auto decoy = kast::loadModelFromMemory(skinnedGlb(3, false, true), "glb", error);
+    const auto isRealJoint1 = [&decoy](int node) {
+        return node > 0 && decoy->nodes[static_cast<size_t>(node)].name == "Joint1" &&
+               decoy->nodes[static_cast<size_t>(decoy->nodes[static_cast<size_t>(node)].parent)].name == "Joint0";
+    };
+    check(decoy && decoy->meshes.size() == 1 && decoy->meshes[0].joints.size() >= 2 &&
+              isRealJoint1(decoy->meshes[0].joints[1]),
+          "a bone binds to the skeleton's node when another node has its name");
+    check(decoy && decoy->clips.size() == 1 && decoy->clips[0].channels.size() == 1 &&
+              isRealJoint1(decoy->clips[0].channels[0].node),
+          "a clip channel binds to the skeleton's node when another node has its name");
+    // Assimp's PopulateArmatureData asserts (aborts in a debug Assimp) when every ancestor of a bone is a bone.
+    const auto rootJoint = kast::loadModelFromMemory(skinnedGlb(3, false, false, true), "glb", error);
+    check(rootJoint && rootJoint->meshes.size() == 1 && rootJoint->meshes[0].joints.size() == 3,
+          "a skinned glTF whose one root node is a joint loads");
+
     check(kast::isModelFile("a/B.GLB") && kast::isModelFile("x.fbx") && !kast::isModelFile("x.mat"), "model extensions");
+    check(kast::embeddedTextureModel("models/a.glb#2") == "models/a.glb" &&
+              kast::embeddedTextureModel("tex#1/m.glb#0") == "tex#1/m.glb" &&
+              kast::embeddedTextureModel("textures/a#b.png").empty() && kast::embeddedTextureModel("t.png").empty(),
+          "embedded texture references split on the last '#', and only after a model file");
 }
 
 // One node, one clip: translation 0 -> 2 on X and rotation identity -> 90 degrees about Y over 2 seconds.
@@ -4850,7 +5341,7 @@ void checkModelEditor()
     const auto* state = edit.scene.registry().try_get<kast::AnimatorState>(animated);
     check(state && state->playing && !state->globals.empty(), "Edit mode plays playOnStart clips");
     check(!edit.dirty, "the Edit-mode preview doesn't dirty the scene");
-    const std::filesystem::path file = std::filesystem::temp_directory_path() / "kast_model_preview.scene";
+    const std::filesystem::path file = testRoot() / "kast_model_preview.scene";
     std::string error;
     check(kast::saveScene(edit.scene, file.string(), error), "a scene with a previewed Animator saves");
     std::string text;
@@ -4861,7 +5352,6 @@ void checkModelEditor()
     check(kast::loadScene(file.string(), reloaded, error), "the saved scene loads");
     check(reloaded.registry().view<kast::AnimatorState>().empty() && !reloaded.registry().view<kast::Animator>().empty(),
           "after reload the Animator is back without any preview state");
-    std::filesystem::remove(file);
 
     // Play starts clips from 0 (not where the Edit preview was); Stop drops the playback state.
     updatePlay(edit, 1.0f);
@@ -4879,6 +5369,8 @@ int main()
 {
     checkRotations();
     checkPicking();
+    checkMirroredReparent();
+    checkDeepHierarchy();
     checkHierarchy();
     checkComponentRegistry();
     checkComponentJson();
@@ -4900,8 +5392,11 @@ int main()
     checkLuaPlayMode();
     checkLuaApi();
     checkLuaSandbox();
+    checkLuaStringMetatable();
+    checkLuaDepthCap();
     checkLuaErrors();
     checkLuaHotReload();
+    checkUtf8Paths();
     checkProjectFiles();
     checkProjectDocument();
     checkRecentProjects();
@@ -4914,6 +5409,7 @@ int main()
     checkLuaEventsFromCpp();
     checkLuaEventErrors();
     checkLuaEventLifetime();
+    checkLuaEventCoroutine();
     checkLuaEventSceneSwitch();
     checkLuaEventPause();
     checkLuaComponentDefinitions();
@@ -4925,6 +5421,7 @@ int main()
     checkComponentTemplate();
     checkNewLuaComponent();
     checkPak();
+    checkFileWrites();
     checkBuild();
     checkBuildSettings();
     checkStateMachineDefinitions();
@@ -4932,6 +5429,9 @@ int main()
     checkLuaStateMachineApi();
     checkStateMachineSceneSwitch();
     checkEntityStateMachines();
+    checkStateMachineExitChanges();
+    checkLuaWatchdog();
+    checkComponentWatchdog();
     checkStateMachineHotReload();
     checkStateMachineFiles();
     checkStateMachineEditor();
@@ -4943,11 +5443,9 @@ int main()
     checkAnimatorSystem();
     checkModelEditor();
     checkMountedPak(); // last: the mounted pak hides the disk for the rest of the run
-    for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::temp_directory_path())) {
-        const std::string name = entry.path().filename().string();
-        const std::string what = std::format("removes its temp folder {}", name);
-        check(!entry.is_directory() || !name.starts_with("kast_"), what.c_str());
-    }
+    removeTree(testRoot());
+    std::error_code ec;
+    check(!std::filesystem::exists(testRoot(), ec) && !ec, "removes its temp folder");
     if (g_failures > 0) {
         kast::log::error(std::format("{} self-check(s) failed", g_failures));
         return 1;

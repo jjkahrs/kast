@@ -4,6 +4,7 @@
 
 #include <sol/sol.hpp>
 
+#include <chrono>
 #include <filesystem>
 #include <initializer_list>
 #include <stdexcept>
@@ -16,6 +17,7 @@ namespace kast {
 
 // Opens only the base, table, string and math libraries and removes the base functions that load code or reach
 // outside an environment: no io, os, ffi, debug, jit, bit, package, require, dofile, loadfile, load, loadstring.
+// Also installs the runaway-script watchdog (see ScriptBudget).
 void openSandbox(sol::state& lua);
 // A fresh environment with its own copies of the globals and library tables, so one file's globals and edits never
 // reach another.
@@ -24,6 +26,24 @@ sol::environment sandboxEnvironment(sol::state& lua);
 // error messages ("@path" gives "path:line: ..."). On failure returns an invalid function and sets error.
 sol::protected_function loadSandboxed(sol::state& lua, const std::filesystem::path& file, const std::string& chunkName,
                                       const sol::environment& env, std::string& error);
+
+// Runaway-script watchdog: each entry into Lua from C++ (a system's chunk or callback, a state machine callback, a
+// definition file) holds a ScriptBudget, and may run kScriptBudget of wall-clock time before a count hook raises a Lua
+// error, which callers report like any other error. Count hooks never fire in JIT-compiled code; the sandbox doesn't
+// open the jit library, which leaves LuaJIT's JIT compiler off.
+constexpr std::chrono::seconds kScriptBudget{2};
+// Starts the budget for an outermost entry into Lua; nested entries (kast.fsm.change running a callback) share it.
+class ScriptBudget {
+public:
+    explicit ScriptBudget(lua_State* L);
+    ~ScriptBudget();
+    ScriptBudget(const ScriptBudget&) = delete;
+    ScriptBudget& operator=(const ScriptBudget&) = delete;
+
+private:
+    lua_State* L_;
+    bool outer_;
+};
 
 std::string toString(lua_State* L, const sol::object& value); // Lua tostring
 
@@ -34,6 +54,9 @@ struct InvalidDefinition : std::runtime_error {
 };
 // Every key of table is a string in allowed.
 void checkKeys(const sol::table& table, std::initializer_list<const char*> allowed, const std::string& what);
+// No table reachable from table (keys or values) has a metatable, so reading the definition runs no Lua code (an
+// endless __index would escape the watchdog: sol2's table reads aren't protected calls). Checked without running any.
+void checkPlainData(const sol::table& table, const std::string& what);
 // value is a sequence {v1, v2, ...} (exactly the keys 1..n); returns its items.
 std::vector<sol::object> sequence(const sol::object& value, const std::string& what);
 

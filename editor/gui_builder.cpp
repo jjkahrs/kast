@@ -99,10 +99,12 @@ bool GuiBuilder::load(const std::filesystem::path& rml)
     const std::string selectedId = reload && selected_ ? GuiDoc::attribute(selected_, "id") : std::string();
     rml_ = rml;
     doc_.parse(text, error); // parsed fine above
-    rcss_ = doc_.stylesheetHref().empty() ? std::filesystem::path()
-                                          : (rml.parent_path() / fromUtf8(doc_.stylesheetHref())).lexically_normal();
+    rcss_ = linkedStylesheet(rml);
     rcssText_.clear();
-    if (!rcss_.empty() && !readText(rcss_, rcssText_))
+    if (rcss_.empty() && !doc_.stylesheetHref().empty())
+        kast::log::warn(std::format("GUI '{}' links '{}', outside its project: the stylesheet is ignored",
+                                    utf8(rml.filename()), doc_.stylesheetHref()));
+    else if (!rcss_.empty() && !readText(rcss_, rcssText_))
         kast::log::warn(std::format("GUI '{}' links '{}', which is missing: Save creates it", utf8(rml.filename()),
                                     utf8(rcss_.filename())));
     rmlDirty_ = rcssDirty_ = false;

@@ -92,6 +92,9 @@ struct Model {
 // The extensions models load from: .glb, .gltf, .fbx, .obj.
 const std::vector<std::string>& modelExtensions();
 bool isModelFile(const std::filesystem::path& file);
+// The model of an embedded texture reference "<model path>#<i>" (the last '#', before it a model file); "" if path
+// isn't one, so an ordinary texture file may contain '#'.
+std::string embeddedTextureModel(const std::string& path);
 
 // Loads <root>/<path> (disk or mounted pak; sidecar .bin/.mtl/image files resolve next to it). External texture paths
 // become project-relative, embedded ones "<path>#<i>". nullptr + error if it can't be read or parsed.

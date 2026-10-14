@@ -44,13 +44,13 @@ bool shipsInPak(const std::string& projectPath);
 std::vector<std::string> pakContents(const std::filesystem::path& root, const std::filesystem::path& outDir);
 // Every *.scene under root that shipsInPak: project-relative '/' paths, sorted (Build Settings' Start Scene choices).
 std::vector<std::string> projectScenes(const std::filesystem::path& root);
-// startScene is set, resolves inside the project and loads. False + error (prefixed "Build failed: ") if not.
+// startScene is set, resolves inside the project, shipsInPak and loads. False + error (prefixed "Build failed: ") if not.
 bool checkStartScene(const kast::Project& project, std::string& error);
-// Build Settings > Save: validates scene (inside the project, loads), then writes project.kast with it as startScene
+// Build Settings > Save: validates scene (inside the project, shipsInPak, loads), then writes project.kast with it as startScene
 // and updates project. Writes nothing and leaves project unchanged on failure (false + error).
 bool setStartScene(kast::Project& project, const std::string& scene, std::string& error);
-// Validates first (checkStartScene; outDir not the project root; the player and its
-// DLLs present in playerDir), writing nothing on failure. Then creates outDir if needed and writes the exe, game.pak
+// Validates first (checkStartScene; outDir not the project root; an outDir inside the project new, empty or holding
+// game.pak, and not holding startScene; the player and its DLLs present in playerDir), writing nothing on failure. Then creates outDir if needed and writes the exe, game.pak
 // and the DLLs, overwriting those files only. Sets exe to the written exe. False + error on failure.
 bool buildGame(const kast::Project& project, const std::filesystem::path& outDir, const std::filesystem::path& playerDir,
                std::filesystem::path& exe, std::string& error);

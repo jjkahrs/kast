@@ -164,6 +164,14 @@ Json fieldToJson(const entt::meta_any& value)
     throw std::logic_error(std::format("component field of unsupported type {}", type.info().name()));
 }
 
+float finiteFloat(double value)
+{
+    const auto f = static_cast<float>(value);
+    if (!std::isfinite(f))
+        throw Invalid("must be a finite number within float range");
+    return f;
+}
+
 template <size_t N>
 std::array<float, N> floats(const Json& json)
 {
@@ -173,9 +181,21 @@ std::array<float, N> floats(const Json& json)
     for (size_t i = 0; i < N; ++i) {
         if (!json[i].is_number())
             throw Invalid(std::format("must be an array of {} numbers", N));
-        out[i] = json[i].get<float>();
+        out[i] = finiteFloat(json[i].get<double>());
     }
     return out;
+}
+
+// Normalized, so a hand-edited [2,0,0,0] doesn't scale the mesh. Already-unit values (to float rounding) are kept
+// bit-exact so save/load round trips stay byte-identical.
+bx::Quaternion unitQuaternion(const Json& json)
+{
+    const auto v = floats<4>(json);
+    const bx::Quaternion q{v[0], v[1], v[2], v[3]};
+    const float lengthSquared = bx::dot(q, q);
+    if (!(lengthSquared >= 1e-6f && std::isfinite(lengthSquared)))
+        throw Invalid("must be a nonzero quaternion");
+    return std::abs(lengthSquared - 1.0f) > 1e-5f ? bx::normalize(q) : q;
 }
 
 entt::meta_any fieldFromJson(const entt::meta_type& type, const Json& json)
@@ -183,7 +203,7 @@ entt::meta_any fieldFromJson(const entt::meta_type& type, const Json& json)
     if (isType<float>(type)) {
         if (!json.is_number())
             throw Invalid("must be a number");
-        return json.get<float>();
+        return finiteFloat(json.get<double>());
     }
     if (isType<int>(type)) {
         if (!json.is_number_integer())
@@ -209,13 +229,8 @@ entt::meta_any fieldFromJson(const entt::meta_type& type, const Json& json)
         const auto v = floats<3>(json);
         return bx::Vec3{v[0], v[1], v[2]};
     }
-    if (isType<bx::Quaternion>(type)) {
-        const auto v = floats<4>(json);
-        const bx::Quaternion q{v[0], v[1], v[2], v[3]};
-        if (bx::dot(q, q) < 1e-6f)
-            throw Invalid("must be a nonzero quaternion");
-        return q;
-    }
+    if (isType<bx::Quaternion>(type))
+        return unitQuaternion(json);
     std::string expected;
     for (auto [id, constant] : type.data()) {
         if (json.is_string() && json.get<std::string>() == constant.name())
@@ -411,14 +426,6 @@ void checkRange(const FieldDesc& field, double value)
         throw Invalid(std::format("must be <= {}", *field.max));
 }
 
-float finiteFloat(double value)
-{
-    const auto f = static_cast<float>(value);
-    if (!std::isfinite(f))
-        throw Invalid("must be a finite number within float range");
-    return f;
-}
-
 Json scalarFromJson(const FieldDesc& field, const Json& json)
 {
     switch (field.kind) {
@@ -450,13 +457,10 @@ Json scalarFromJson(const FieldDesc& field, const Json& json)
         return json;
     case FieldKind::Vec3: {
         const auto v = floats<3>(json);
-        return numbers({finiteFloat(v[0]), finiteFloat(v[1]), finiteFloat(v[2])});
+        return numbers({v[0], v[1], v[2]});
     }
     case FieldKind::Quat: {
-        const auto v = floats<4>(json);
-        const bx::Quaternion q{finiteFloat(v[0]), finiteFloat(v[1]), finiteFloat(v[2]), finiteFloat(v[3])};
-        if (bx::dot(q, q) < 1e-6f)
-            throw Invalid("must be a nonzero quaternion");
+        const bx::Quaternion q = unitQuaternion(json);
         return numbers({q.x, q.y, q.z, q.w});
     }
     case FieldKind::Enum: {

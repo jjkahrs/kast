@@ -79,6 +79,8 @@ private:
         std::string target; // Rename: the new name; Move: the destination folder
     };
 
+    // After doc.scene was replaced: drops the Hierarchy rename and the active ImGui item (an edit in progress).
+    void forgetStaleScene(const Document& doc);
     void drawNode(Document& doc, entt::entity entity);
     void drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ExternalEditor& editor,
                        const AssetEntry& entry, const char* blocker);
@@ -122,6 +124,7 @@ private:
     entt::entity renaming_ = entt::null;
     bool focusRename_ = false;
     std::string renameBuffer_;
+    uint32_t sceneGeneration_ = 0; // the Document::sceneGeneration last drawn
 
     // Euler angles shown in the Inspector, kept while editing so they don't jump between equivalent forms.
     entt::entity eulerEntity_ = entt::null;

@@ -64,5 +64,6 @@ bool writeNewGui(const std::filesystem::path& dir, std::filesystem::path& rml, s
 // <new stem>.rcss and the link rewritten. False + error (disk unchanged) if a name is invalid or taken or a rename
 // fails.
 bool renameGui(const std::filesystem::path& rml, const std::string& newName, std::string& error);
-// The .rcss file the .rml at rml links (resolved next to it); empty if it links none or can't be parsed.
+// The .rcss file the .rml at rml links (resolved next to it); empty if it links none, can't be parsed, or the link
+// leaves the .rml's project (its folder if it is in no project): Save writes the sheet.
 std::filesystem::path linkedStylesheet(const std::filesystem::path& rml);

@@ -19,8 +19,11 @@ find_package(Stb REQUIRED) # header-only: stb_image (PNG/JPG decode), stb_image_
 find_path(LUAJIT_INCLUDE_DIR luajit.h PATH_SUFFIXES luajit REQUIRED)
 find_library(LUAJIT_LIBRARY lua51 REQUIRED)
 
-# Kast code only; vcpkg headers are SYSTEM includes, so their warnings are suppressed.
-set(KAST_COMPILE_OPTIONS /W4 /WX /permissive-)
+# Kast code only; vcpkg headers are SYSTEM includes, so their warnings are suppressed. /utf-8: sources and string
+# literals are UTF-8.
+set(KAST_COMPILE_OPTIONS /W4 /WX /permissive- /utf-8)
+# Added to every exe: makes the process code page UTF-8 (see the manifest).
+set(KAST_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/utf8.manifest")
 
 # --- shaders: compiled to DX11 bytecode headers with vcpkg's shaderc; each dir has its own varying.def.sc ---
 # ponytail: host triplet == target triplet (x64-windows); look in the host triplet dir if cross-compiling ever happens.
@@ -98,7 +101,7 @@ target_link_libraries(kast_engine
 
 # --- player: the prebuilt game client the editor's Build menu copies; engine only, no ImGui ---
 # A Windows-subsystem app (no console window); SDL_main.h supplies WinMain.
-add_executable(kast_player WIN32 player/main.cpp)
+add_executable(kast_player WIN32 player/main.cpp "${KAST_MANIFEST}")
 target_compile_options(kast_player PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_player PRIVATE kast_engine SDL3::SDL3)
 
@@ -107,7 +110,7 @@ add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
   editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp editor/kast_editor.rc
-  ${KAST_EDITOR_SHADERS})
+  "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 imgui::imgui imguizmo::imguizmo pugixml::pugixml shell32) # shell32: Recycle Bin
@@ -116,7 +119,7 @@ add_dependencies(kast_editor kast_player) # Build copies kast_player.exe from ne
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
 add_executable(kast_self_check tests/self_check.cpp editor/document.cpp editor/build.cpp editor/camera.cpp
-  editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/external_editor.cpp)
+  editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/external_editor.cpp "${KAST_MANIFEST}")
 target_include_directories(kast_self_check PRIVATE editor)
 target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
 target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS})
@@ -694,6 +697,12 @@ foreach(pak missing corrupt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
   set_tests_properties(player_${pak}_pak PROPERTIES FIXTURES_REQUIRED game_switch_built TIMEOUT 90)
 endforeach()
+# A game in a non-ASCII folder still finds its game.pak (UTF-8 paths, cmake/utf8.manifest).
+add_test(NAME player_non_ascii_folder
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/switch" "-DEXE=Switch Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/Jürgen 日本.run" -DEXPECT=0 "-DEXPECT_OUTPUT=Window title: Switch Test"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_non_ascii_folder PROPERTIES FIXTURES_REQUIRED game_switch_built TIMEOUT 90)
 kast_game_project(bad_start "Bad Start" missing.scene FALSE)
 add_test(NAME build_bad_start_scene
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/bad_start"

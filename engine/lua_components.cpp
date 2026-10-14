@@ -171,12 +171,16 @@ std::shared_ptr<LuaComponentDef> parseDefinition(sol::state& lua, const std::fil
     sol::protected_function body = loadSandboxed(lua, file, "@" + path, env, error);
     if (!body.valid())
         throw Invalid(error.starts_with("cannot open") ? std::format("{}: {}", path, error) : error);
-    sol::protected_function_result result = body();
+    sol::protected_function_result result = [&] {
+        const ScriptBudget budget(lua.lua_state());
+        return body();
+    }();
     if (!result.valid())
         throw Invalid(result.get<sol::error>().what()); // "path:line: message"
     if (result.return_count() != 1 || result.get_type() != sol::type::table)
         throw Invalid(std::format("{}: must return exactly one table {{name = ..., fields = {{...}}}}", path));
     const sol::table table = result;
+    checkPlainData(table, path + ": ");
     auto def = std::make_shared<LuaComponentDef>();
     def->path = path;
     def->name = identifier(table, "name", path + ": ");

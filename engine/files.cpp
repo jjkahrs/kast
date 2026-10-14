@@ -36,8 +36,37 @@ bool readFile(const std::filesystem::path& file, std::string& out)
     if (!std::filesystem::is_regular_file(file, ec))
         return false;
     std::ifstream in(file, std::ios::binary);
+    if (!in)
+        return false;
     out.assign(std::istreambuf_iterator<char>(in), {});
     return !in.bad();
+}
+
+bool writeFileAtomic(const std::filesystem::path& file, std::string_view bytes)
+{
+    return writeFileAtomic(file, [&](std::ostream& out) {
+        out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        return true;
+    });
+}
+
+bool writeFileAtomic(const std::filesystem::path& file, const std::function<bool(std::ostream&)>& write)
+{
+    std::filesystem::path temp = file;
+    temp += ".tmp";
+    std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+    if (!out)
+        return false;
+    const bool written = write(out);
+    out.close();
+    std::error_code ec;
+    if (written && out)
+        std::filesystem::rename(temp, file, ec);
+    if (!written || !out || ec) {
+        std::filesystem::remove(temp, ec);
+        return false;
+    }
+    return true;
 }
 
 std::vector<std::filesystem::path> listFiles(const std::filesystem::path& dir)

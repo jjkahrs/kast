@@ -149,17 +149,85 @@ struct Loader {
     std::string texturePrefix;          // "<model path>" for embedded textures
     std::filesystem::path modelDir;     // project-relative directory of the model, for external textures
     Model model;
-    std::unordered_map<std::string, int> nodeByName;
+    std::unordered_map<std::string, std::vector<int>> nodesByName; // in file order; names can repeat
     std::vector<const aiNode*> sources; // per model node; null for the axis fix node
+    std::vector<bool> isJoint;          // per model node: some bone binds to it
 
     void addNodes(const aiNode& node, int parent)
     {
         const int index = static_cast<int>(model.nodes.size());
         model.nodes.push_back({node.mName.C_Str(), parent, toTrs(node.mTransformation)});
-        nodeByName.try_emplace(node.mName.C_Str(), index);
+        nodesByName[node.mName.C_Str()].push_back(index);
         sources.push_back(&node);
         for (unsigned i = 0; i < node.mNumChildren; ++i)
             addNodes(*node.mChildren[i], index);
+    }
+
+    // How many ancestors nodes a and b share.
+    int sharedDepth(int a, int b) const
+    {
+        const auto path = [this](int n) {
+            std::vector<int> nodes;
+            for (; n >= 0; n = model.nodes[static_cast<size_t>(n)].parent)
+                nodes.insert(nodes.begin(), n);
+            return nodes;
+        };
+        const std::vector<int> pa = path(a), pb = path(b);
+        return static_cast<int>(std::ranges::mismatch(pa, pb).in1 - pa.begin());
+    }
+
+    // Assimp names a bone's node but nodes can share a name. Of those, the bone binds to the one most tied to the skin:
+    // most parent/child nodes named as the mesh's bones, then the deepest ancestor shared with the mesh node, then file
+    // order. -1 if no node has the name. (Not aiProcess_PopulateArmatureData's aiBone::mNode: it is a name lookup too,
+    // first match in tree order, and a debug Assimp aborts on a file whose root node is a joint.)
+    int boneNode(const aiMesh& mesh, const aiBone& bone, int meshNode)
+    {
+        const auto it = nodesByName.find(bone.mName.C_Str());
+        if (it == nodesByName.end())
+            return -1;
+        if (it->second.size() == 1)
+            return it->second.front();
+        const auto isBone = [&mesh](const aiNode* node) {
+            return node && std::any_of(mesh.mBones, mesh.mBones + mesh.mNumBones,
+                                       [node](const aiBone* b) { return b->mName == node->mName; });
+        };
+        const auto score = [&](int candidate) {
+            const aiNode& n = *sources[static_cast<size_t>(candidate)];
+            int linked = isBone(n.mParent) ? 1 : 0;
+            for (unsigned c = 0; c < n.mNumChildren; ++c)
+                linked += isBone(n.mChildren[c]) ? 1 : 0;
+            return std::pair{linked, sharedDepth(candidate, meshNode)};
+        };
+        std::vector<int> best;
+        for (int candidate : it->second) {
+            if (!best.empty() && score(candidate) < score(best.front()))
+                continue;
+            if (!best.empty() && score(candidate) > score(best.front()))
+                best.clear();
+            best.push_back(candidate);
+        }
+        if (best.size() > 1)
+            warnOnce(std::format("Model '{}': {} nodes named '{}' fit its bone equally; binding it to the first",
+                                 texturePrefix, best.size(), bone.mName.C_Str()));
+        return best.front();
+    }
+
+    // A channel only names its node. Of nodes sharing the name, a bone's node wins; if that's still not one node, the
+    // first, with a warning (Assimp keeps no more to tell them apart).
+    int channelNode(const aiNodeAnim& anim) const
+    {
+        const auto it = nodesByName.find(anim.mNodeName.C_Str());
+        if (it == nodesByName.end())
+            return -1;
+        if (it->second.size() == 1)
+            return it->second.front();
+        std::vector<int> joints;
+        std::ranges::copy_if(it->second, std::back_inserter(joints),
+                             [this](int n) { return isJoint[static_cast<size_t>(n)]; });
+        if (joints.size() != 1)
+            warnOnce(std::format("Model '{}': {} nodes are named '{}'; clips animate the first{}", texturePrefix,
+                                 it->second.size(), anim.mNodeName.C_Str(), joints.empty() ? "" : " joint"));
+        return joints.empty() ? it->second.front() : joints.front();
     }
 
     void addMesh(const aiMesh& source, int node)
@@ -189,21 +257,41 @@ struct Loader {
         for (unsigned f = 0; f < source.mNumFaces; ++f)
             if (source.mFaces[f].mNumIndices == 3)
                 mesh.indices.insert(mesh.indices.end(), source.mFaces[f].mIndices, source.mFaces[f].mIndices + 3);
+        if (mesh.indices.empty()) // nothing to draw, and bgfx can't make an empty buffer
+            return;
+        Mat4 identity;
+        bx::mtxIdentity(identity.data());
         for (unsigned b = 0; b < source.mNumBones; ++b) {
             const aiBone& bone = *source.mBones[b];
-            const auto it = nodeByName.find(bone.mName.C_Str());
-            mesh.joints.push_back(it == nodeByName.end() ? 0 : it->second);
-            mesh.inverseBinds.push_back(toMat4(bone.mOffsetMatrix));
+            const int joint = boneNode(source, bone, node);
+            if (joint < 0)
+                log::warn(std::format("Model '{}': no node for bone '{}'; its vertices follow the mesh node",
+                                      texturePrefix, bone.mName.C_Str()));
+            else
+                isJoint[static_cast<size_t>(joint)] = true;
+            // An unknown bone becomes the mesh node with no inverse bind: it leaves its vertices where they are.
+            mesh.joints.push_back(joint < 0 ? node : joint);
+            mesh.inverseBinds.push_back(joint < 0 ? identity : toMat4(bone.mOffsetMatrix));
             for (unsigned w = 0; w < bone.mNumWeights; ++w)
                 addWeight(mesh.vertices[bone.mWeights[w].mVertexId], static_cast<float>(b), bone.mWeights[w].mWeight);
         }
+        int meshNodeJoint = -1; // the same for unweighted vertices, added when the first one needs it
         if (!mesh.joints.empty())
             for (ModelVertex& v : mesh.vertices) {
                 float sum = 0.0f;
                 for (float weight : v.weights)
                     sum += weight;
+                if (sum <= 0.0f) { // all-zero weights would collapse the vertex to the origin
+                    if (meshNodeJoint < 0) {
+                        meshNodeJoint = static_cast<int>(mesh.joints.size());
+                        mesh.joints.push_back(node);
+                        mesh.inverseBinds.push_back(identity);
+                    }
+                    v.joints[0] = static_cast<float>(meshNodeJoint);
+                    v.weights[0] = sum = 1.0f;
+                }
                 for (float& weight : v.weights)
-                    weight = sum > 0.0f ? weight / sum : 0.0f;
+                    weight /= sum;
             }
         model.overBoneLimit = model.overBoneLimit || mesh.joints.size() > kMaxBones;
         model.meshes.push_back(std::move(mesh));
@@ -325,11 +413,11 @@ struct Loader {
             clip.duration = static_cast<float>(source.mDuration) / ticks;
             for (unsigned c = 0; c < source.mNumChannels; ++c) {
                 const aiNodeAnim& anim = *source.mChannels[c];
-                const auto node = nodeByName.find(anim.mNodeName.C_Str());
-                if (node == nodeByName.end())
+                const int node = channelNode(anim);
+                if (node < 0)
                     continue;
                 Channel channel;
-                channel.node = node->second;
+                channel.node = node;
                 for (unsigned k = 0; k < anim.mNumPositionKeys; ++k)
                     channel.translation.push_back({static_cast<float>(anim.mPositionKeys[k].mTime) / ticks,
                                                    toVec3(anim.mPositionKeys[k].mValue)});
@@ -391,6 +479,7 @@ std::shared_ptr<const Model> convert(const aiScene* scene, Assimp::Importer& imp
     loader.model.nodes.push_back({"(kast unit and axis fix)", -1, fixTrs});
     loader.sources.push_back(nullptr);
     loader.addNodes(*scene->mRootNode, 0);
+    loader.isJoint.resize(loader.sources.size());
     for (size_t index = 1; index < loader.sources.size(); ++index) { // after all nodes: bones look them up by name
         const aiNode& node = *loader.sources[index];
         for (unsigned i = 0; i < node.mNumMeshes; ++i)
@@ -432,6 +521,14 @@ bool isModelFile(const std::filesystem::path& file)
     std::string ext = file.extension().string();
     std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return std::ranges::find(modelExtensions(), ext) != modelExtensions().end();
+}
+
+std::string embeddedTextureModel(const std::string& path)
+{
+    const size_t hash = path.rfind('#');
+    if (hash == std::string::npos || !isModelFile(path.substr(0, hash)))
+        return "";
+    return path.substr(0, hash);
 }
 
 std::shared_ptr<const Model> loadModel(const std::filesystem::path& root, const std::string& path, std::string& error)
@@ -487,12 +584,12 @@ void ModelLibrary::reloadChanged()
 
 std::optional<std::string_view> ModelLibrary::embeddedTexture(const std::string& reference)
 {
-    const size_t hash = reference.rfind('#');
-    if (hash == std::string::npos)
+    const std::string file = embeddedTextureModel(reference);
+    if (file.empty())
         return std::nullopt;
-    const std::shared_ptr<const Model> model = get(reference.substr(0, hash));
+    const std::shared_ptr<const Model> model = get(file);
     size_t index = 0;
-    const char* digits = reference.c_str() + hash + 1;
+    const char* digits = reference.c_str() + file.size() + 1;
     if (!model || std::from_chars(digits, reference.c_str() + reference.size(), index).ec != std::errc{} ||
         index >= model->textures.size() || model->textures[index].empty())
         return std::nullopt;

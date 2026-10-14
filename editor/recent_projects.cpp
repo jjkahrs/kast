@@ -1,5 +1,6 @@
 #include "recent_projects.h"
 
+#include <files.h>
 #include <log.h>
 
 #include <SDL3/SDL.h>
@@ -84,10 +85,7 @@ bool saveRecent(const std::filesystem::path& file, const std::vector<RecentProje
         json.push_back({{"path", utf8(entry.dir)}, {"name", entry.name}, {"lastOpened", entry.lastOpened}});
     std::error_code ec;
     std::filesystem::create_directories(file.parent_path(), ec);
-    std::ofstream out(file, std::ios::binary | std::ios::trunc);
-    out << json.dump(2) << '\n';
-    out.close();
-    if (!out) {
+    if (!kast::writeFileAtomic(file, json.dump(2) + '\n')) {
         error = std::format("Cannot write the recent projects list '{}'", file.string());
         return false;
     }

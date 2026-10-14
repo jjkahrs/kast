@@ -70,6 +70,8 @@ void GuiRenderer::begin(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, 
 Rml::CompiledGeometryHandle GuiRenderer::CompileGeometry(Rml::Span<const Rml::Vertex> vertices,
                                                          Rml::Span<const int> indices)
 {
+    if (vertices.empty() || indices.empty()) // bgfx can't make an empty buffer; 0 is RmlUi's "no geometry"
+        return 0;
     auto* geometry = new Geometry{
         bgfx::createVertexBuffer(bgfx::copy(vertices.data(), static_cast<uint32_t>(vertices.size() * sizeof(Rml::Vertex))),
                                  layout_),
@@ -81,6 +83,8 @@ Rml::CompiledGeometryHandle GuiRenderer::CompileGeometry(Rml::Span<const Rml::Ve
 void GuiRenderer::RenderGeometry(Rml::CompiledGeometryHandle handle, Rml::Vector2f translation, Rml::TextureHandle texture)
 {
     const auto* geometry = reinterpret_cast<const Geometry*>(handle);
+    if (!geometry)
+        return;
     float model[16];
     bx::mtxTranslate(model, translation.x, translation.y, 0.0f);
     if (transform_) { // the CSS transform applies after the translation
@@ -92,11 +96,12 @@ void GuiRenderer::RenderGeometry(Rml::CompiledGeometryHandle handle, Rml::Vector
     bgfx::setVertexBuffer(0, geometry->vertices);
     bgfx::setIndexBuffer(geometry->indices);
     bgfx::setTexture(0, sampler_, texture ? toBgfx(texture) : white_);
-    if (scissor_)
-        bgfx::setScissor(static_cast<uint16_t>(std::max(scissorRegion_.Left(), 0)),
-                         static_cast<uint16_t>(std::max(scissorRegion_.Top(), 0)),
-                         static_cast<uint16_t>(std::max(scissorRegion_.Width(), 0)),
-                         static_cast<uint16_t>(std::max(scissorRegion_.Height(), 0)));
+    if (scissor_) { // clamped at the top-left corner: a region off-screen there loses the off-screen part
+        const int x0 = std::max(scissorRegion_.Left(), 0), y0 = std::max(scissorRegion_.Top(), 0);
+        const int x1 = std::max(scissorRegion_.Right(), x0), y1 = std::max(scissorRegion_.Bottom(), y0);
+        bgfx::setScissor(static_cast<uint16_t>(x0), static_cast<uint16_t>(y0), static_cast<uint16_t>(x1 - x0),
+                         static_cast<uint16_t>(y1 - y0));
+    }
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                    BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA));
     bgfx::submit(view_, program_);
@@ -105,6 +110,8 @@ void GuiRenderer::RenderGeometry(Rml::CompiledGeometryHandle handle, Rml::Vector
 void GuiRenderer::ReleaseGeometry(Rml::CompiledGeometryHandle handle)
 {
     auto* geometry = reinterpret_cast<Geometry*>(handle);
+    if (!geometry)
+        return;
     bgfx::destroy(geometry->vertices);
     bgfx::destroy(geometry->indices);
     delete geometry;

@@ -1,5 +1,7 @@
 #include "build.h"
 
+#include "assets.h"
+
 #include <files.h>
 #include <log.h>
 #include <pak.h>
@@ -11,7 +13,6 @@
 
 #include <algorithm>
 #include <format>
-#include <fstream>
 
 namespace {
 
@@ -100,12 +101,18 @@ std::vector<std::string> projectScenes(const std::filesystem::path& root)
 
 namespace {
 
-// scene resolves inside the project and loads; error says why not.
+// scene resolves inside the project, ships in game.pak and loads; error says why not.
 bool sceneLoads(const std::filesystem::path& root, const std::string& scene, std::string& error)
 {
     const std::optional<std::filesystem::path> file = kast::resolveProjectPath(root, scene, error);
+    if (!file)
+        return false;
+    if (const std::optional<std::string> path = kast::toProjectPath(root, *file); !path || !shipsInPak(*path)) {
+        error = "it is a dotfile or in a dot-folder, which game.pak leaves out";
+        return false;
+    }
     kast::Scene loaded;
-    return file && kast::loadScene(file->string(), loaded, error);
+    return kast::loadScene(file->string(), loaded, error);
 }
 
 } // namespace
@@ -144,9 +151,23 @@ bool buildGame(const kast::Project& project, const std::filesystem::path& outDir
     if (!checkStartScene(project, error))
         return false;
     const std::filesystem::path out = std::filesystem::absolute(outDir).lexically_normal();
-    if (out == std::filesystem::absolute(project.root).lexically_normal()) {
+    const std::filesystem::path root = std::filesystem::absolute(project.root);
+    if (isSameOrInside(out, root) && isSameOrInside(root, out)) { // ignoring case and a trailing separator
         error = "Build failed: choose an output folder other than the project folder";
         return false;
+    }
+    if (isSameOrInside(out, root)) { // its content leaves game.pak and the Assets panel, and Build overwrites it
+        std::error_code ec;
+        if (!std::filesystem::is_empty(out, ec) && !ec && !std::filesystem::exists(out / kGamePakName, ec)) {
+            error = std::format("Build failed: '{}' is a project folder with other files in it; choose a new or empty "
+                                "folder, or a previous build's (holding {})", utf8(out), kGamePakName);
+            return false;
+        }
+        if (isSameOrInside(root / fromUtf8(*project.startScene), out)) {
+            error = std::format("Build failed: startScene '{}' is in the output folder, which game.pak leaves out",
+                                *project.startScene);
+            return false;
+        }
     }
     std::vector<std::filesystem::path> sources{playerDir / kPlayerExeName};
     for (const char* dll : kPlayerDlls)
@@ -154,7 +175,7 @@ bool buildGame(const kast::Project& project, const std::filesystem::path& outDir
     for (const std::filesystem::path& source : sources) {
         std::error_code ec;
         if (!std::filesystem::is_regular_file(source, ec)) {
-            error = std::format("Build failed: '{}' is missing (build kast_player)", source.string());
+            error = std::format("Build failed: '{}' is missing (build kast_player)", utf8(source));
             return false;
         }
     }
@@ -162,22 +183,22 @@ bool buildGame(const kast::Project& project, const std::filesystem::path& outDir
     std::error_code ec;
     std::filesystem::create_directories(out, ec);
     if (ec) {
-        error = std::format("Build failed: cannot create '{}': {}", out.string(), ec.message());
+        error = std::format("Build failed: cannot create '{}': {}", utf8(out), ec.message());
         return false;
     }
     if (!kast::writePak(project.root, pakContents(project.root, out), out / kGamePakName, error)) {
         error = "Build failed: " + error;
         return false;
     }
-    exe = out / gameExeName(project.name);
+    exe = out / fromUtf8(gameExeName(project.name));
     for (const std::filesystem::path& source : sources) {
         const std::filesystem::path target = source.filename() == kPlayerExeName ? exe : out / source.filename();
         if (!std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, ec)) {
-            error = std::format("Build failed: cannot write '{}': {}", target.string(), ec.message());
+            error = std::format("Build failed: cannot write '{}': {}", utf8(target), ec.message());
             return false;
         }
     }
-    kast::log::info(std::format("Built '{}' to {}", project.name, out.string()));
+    kast::log::info(std::format("Built '{}' to {}", project.name, utf8(out)));
     return true;
 }
 
@@ -188,27 +209,17 @@ std::optional<std::filesystem::path> loadBuildFolder(const std::filesystem::path
         return std::nullopt;
     const Json json = Json::parse(text, nullptr, false);
     if (!json.is_object() || !json.contains("buildFolder") || !json["buildFolder"].is_string()) {
-        kast::log::warn(std::format("Ignoring invalid '{}'", editorFile(projectRoot).string()));
+        kast::log::warn(std::format("Ignoring invalid '{}'", utf8(editorFile(projectRoot))));
         return std::nullopt;
     }
-    return std::filesystem::path(json["buildFolder"].get<std::string>());
+    return fromUtf8(json["buildFolder"].get<std::string>());
 }
 
 bool saveBuildFolder(const std::filesystem::path& projectRoot, const std::filesystem::path& folder, std::string& error)
 {
-    const std::filesystem::path file = editorFile(projectRoot);
     Json json;
-    json["buildFolder"] = folder.generic_string();
-    std::error_code ec;
-    std::filesystem::create_directories(file.parent_path(), ec);
-    std::ofstream out(file, std::ios::binary | std::ios::trunc);
-    out << json.dump(2) << '\n';
-    out.close();
-    if (ec || !out) {
-        error = std::format("Cannot write '{}'", file.string());
-        return false;
-    }
-    return true;
+    json["buildFolder"] = utf8(folder);
+    return writeTextFile(editorFile(projectRoot), json.dump(2) + "\n", error);
 }
 
 SDL_Process* startProcess(const std::filesystem::path& exe, const std::vector<std::string>& args, std::string& error)
@@ -220,10 +231,10 @@ SDL_Process* startProcess(const std::filesystem::path& exe, const std::vector<st
     argv.push_back(nullptr);
     SDL_Process* process = SDL_CreateProcess(argv.data(), false);
     if (!process) {
-        error = std::format("Cannot start '{}': {}", exe.string(), SDL_GetError());
+        error = std::format("Cannot start '{}': {}", utf8(exe), SDL_GetError());
         return nullptr;
     }
-    kast::log::info(std::format("Started '{}'", exe.string()));
+    kast::log::info(std::format("Started '{}'", utf8(exe)));
     return process;
 }
 

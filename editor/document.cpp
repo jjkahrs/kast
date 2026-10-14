@@ -141,6 +141,8 @@ entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent)
     kast::Scene& scene = doc.scene;
     const char* name = kind == ObjectKind::Empty ? "Empty" : objectKindLabel(kind);
     const entt::entity entity = scene.create(name, parent);
+    if (entity == entt::null)
+        return entity; // parent is at the hierarchy depth limit
     switch (kind) {
     case ObjectKind::Cube: scene.registry().emplace<kast::MeshRenderer>(entity, kast::Primitive::Cube); break;
     case ObjectKind::Plane: scene.registry().emplace<kast::MeshRenderer>(entity, kast::Primitive::Plane); break;
@@ -162,6 +164,8 @@ entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent)
 entt::entity createModelEntity(Document& doc, const std::string& path, entt::entity parent)
 {
     const entt::entity entity = doc.scene.create(std::filesystem::path(path).stem().string(), parent);
+    if (entity == entt::null)
+        return entity; // parent is at the hierarchy depth limit
     doc.scene.registry().emplace<kast::ModelRenderer>(entity, path);
     if (doc.project)
         kast::models().setRoot(doc.project->root);
@@ -234,8 +238,10 @@ void stopPlay(Document& doc)
     if (doc.play == PlayState::Stopped)
         return;
     doc.lua.stop(); // shutdowns see the play-mode scene
-    const kast::EntityId selected =
-        doc.scene.valid(doc.selected) ? doc.scene.registry().get<kast::PersistentId>(doc.selected).value : 0;
+    // Ids are only unique per scene file: after a kast.loadScene switch the selection's id means nothing in the snapshot.
+    const kast::EntityId selected = doc.playSceneName.empty() && doc.scene.valid(doc.selected)
+                                        ? doc.scene.registry().get<kast::PersistentId>(doc.selected).value
+                                        : 0;
     std::string error;
     if (!kast::sceneFromJson(doc.playSnapshot, doc.scene, error))
         kast::log::error(std::format("Cannot restore the scene from before Play: {}", error)); // keeps the play-mode scene
@@ -244,6 +250,7 @@ void stopPlay(Document& doc)
     doc.playSceneName.clear();
     doc.dirty = doc.playSnapshotDirty;
     selectById(doc, selected);
+    ++doc.sceneGeneration;
     doc.focusRequest = PanelFocus::Scene;
     kast::log::info("Stop");
 }
@@ -261,6 +268,7 @@ void updatePlay(Document& doc, float dt)
     if (kast::tickPlay(doc.scene, doc.lua, dt)) { // kast.loadScene replaced doc.scene
         doc.selected = entt::null;
         ++doc.playGeneration;
+        ++doc.sceneGeneration;
         doc.playSceneName = std::filesystem::path(doc.lua.scenePath()).stem().string();
     }
 }
@@ -370,6 +378,7 @@ void resetToDefault(Document& doc)
     doc.path.clear();
     doc.selected = entt::null;
     doc.dirty = false;
+    ++doc.sceneGeneration;
 }
 
 bool openFile(Document& doc, const std::string& path, std::string& error)
@@ -393,6 +402,7 @@ bool openFile(Document& doc, const std::string& path, std::string& error)
     doc.project = std::move(project);
     doc.selected = entt::null;
     doc.dirty = report.migrated; // Lua component data fixed by the drift rules
+    ++doc.sceneGeneration;
     kast::log::info(std::format("Opened scene '{}'", path));
     return true;
 }
@@ -1013,6 +1023,7 @@ void FileActions::drawModals()
         ImGui::Spacing();
         if (ImGui::Button("Save")) {
             ImGui::CloseCurrentPopup();
+            stopPlay(doc_); // save the edit-mode scene, never a play-mode one
             const Pending action = std::exchange(pending_, Pending::None);
             if (doc_.path.empty())
                 showSaveDialog(action);
@@ -1022,6 +1033,7 @@ void FileActions::drawModals()
         ImGui::SameLine();
         if (ImGui::Button("Don't Save")) {
             ImGui::CloseCurrentPopup();
+            stopPlay(doc_);
             perform(std::exchange(pending_, Pending::None));
         }
         ImGui::SameLine();

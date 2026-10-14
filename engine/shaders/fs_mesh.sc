@@ -50,7 +50,7 @@ vec3 shade(vec3 n, vec3 v, vec3 l, vec3 light, vec3 albedo, vec3 f0, float metal
     float d = a2 / (PI * denom * denom);
     float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
     float g = (nv / (nv * (1.0 - k) + k)) * (nl / (nl * (1.0 - k) + k));
-    vec3 f = f0 + (vec3_splat(1.0) - f0) * pow(1.0 - vh, 5.0);
+    vec3 f = f0 + (vec3_splat(1.0) - f0) * pow(saturate(1.0 - vh), 5.0);
     vec3 specular = d * g * f / (4.0 * nv * nl);
     vec3 kd = (vec3_splat(1.0) - f) * (1.0 - metallic);
     return (kd * albedo + PI * specular) * light * nl;
@@ -81,7 +81,7 @@ void main()
     // Ambient, no IBL: diffuse ambient plus a flat specular term weighted by the roughness-aware Schlick Fresnel
     // F = F0 + (max(1 - roughness, F0) - F0) * (1 - N.V)^5, so metals (no diffuse) still show ambient.
     float nv = max(dot(n, v), 0.0);
-    vec3 fAmbient = f0 + (max(vec3_splat(1.0 - roughness), f0) - f0) * pow(1.0 - nv, 5.0);
+    vec3 fAmbient = f0 + (max(vec3_splat(1.0 - roughness), f0) - f0) * pow(saturate(1.0 - nv), 5.0);
     color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo + fAmbient) * u_ambient.rgb;
 
     color += u_emissive.rgb;

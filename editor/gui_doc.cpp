@@ -2,6 +2,8 @@
 
 #include "assets.h"
 
+#include <project.h>
+
 #include <array>
 #include <format>
 #include <fstream>
@@ -306,7 +308,10 @@ std::filesystem::path linkedStylesheet(const std::filesystem::path& rml)
     std::string error;
     if (!doc.parse(readText(rml), error) || doc.stylesheetHref().empty())
         return {};
-    return (rml.parent_path() / fromUtf8(doc.stylesheetHref())).lexically_normal();
+    const std::filesystem::path rcss = (rml.parent_path() / fromUtf8(doc.stylesheetHref())).lexically_normal();
+    // Save writes the sheet: never outside the project (or, for a GUI in no project, outside the .rml's folder).
+    const std::filesystem::path root = kast::findProjectDir(rml.parent_path()).value_or(rml.parent_path());
+    return kast::toProjectPath(root, rcss) ? rcss : std::filesystem::path();
 }
 
 bool renameGui(const std::filesystem::path& rml, const std::string& newName, std::string& error)

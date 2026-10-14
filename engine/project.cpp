@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <format>
-#include <fstream>
 
 namespace kast {
 namespace {
@@ -97,10 +96,7 @@ bool saveProject(const Project& project, std::string& error)
     if (project.stateMachines)
         json["stateMachines"] = *project.stateMachines;
     const std::filesystem::path file = project.root / kProjectFileName;
-    std::ofstream out(file, std::ios::binary | std::ios::trunc);
-    out << json.dump(2) << '\n';
-    out.close();
-    if (!out) {
+    if (!writeFileAtomic(file, json.dump(2) + '\n')) {
         error = std::format("Cannot write project '{}'", file.string());
         return false;
     }

@@ -12,6 +12,7 @@
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
+#include <imgui_internal.h> // ClearActiveID
 #include <imgui_stdlib.h>
 
 #include <algorithm>
@@ -51,8 +52,18 @@ bool acceptEntityDrop(entt::entity& dropped)
 
 } // namespace
 
+void Panels::forgetStaleScene(const Document& doc)
+{
+    if (sceneGeneration_ == doc.sceneGeneration)
+        return;
+    sceneGeneration_ = doc.sceneGeneration;
+    renaming_ = entt::null;
+    ImGui::ClearActiveID(); // an active InputText (Inspector Name) would write its old-scene text into the new scene
+}
+
 void Panels::drawHierarchy(Document& doc)
 {
+    forgetStaleScene(doc);
     if (ImGui::Begin("Hierarchy")) {
         for (entt::entity root : doc.scene.children(entt::null))
             drawNode(doc, root);
@@ -333,6 +344,7 @@ bool Panels::drawField(entt::entity entity, const kast::ComponentType& type, con
 
 void Panels::drawInspector(Document& doc)
 {
+    forgetStaleScene(doc);
     if (doc.selected != inspectedEntity_) { // a new entity selection takes the Inspector back from a material
         inspectedEntity_ = doc.selected;
         if (doc.scene.valid(doc.selected))

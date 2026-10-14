@@ -35,6 +35,13 @@ void decomposeTrs(const float* m, bx::Vec3& translation, bx::Quaternion& rotatio
         for (int col = 0; col < 3; ++col)
             r[col][row] = m[row * 4 + col] * inv;
     }
+    // A mirror (negative determinant) is not a rotation: fold it into the x scale so r stays a proper rotation.
+    const bx::Vec3 x{m[0], m[1], m[2]}, y{m[4], m[5], m[6]}, z{m[8], m[9], m[10]};
+    if (bx::dot(bx::cross(x, y), z) < 0.0f) {
+        s[0] = -s[0];
+        for (int col = 0; col < 3; ++col)
+            r[col][0] = -r[col][0];
+    }
     scale = {s[0], s[1], s[2]};
 
     const float trace = r[0][0] + r[1][1] + r[2][2];

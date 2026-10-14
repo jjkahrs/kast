@@ -118,7 +118,8 @@ private:
 
     // Throws std::invalid_argument for a bad target. enter: a machine not entered yet enters its initial state.
     Instance resolve(const Target& target, bool enter);
-    std::string* slot(const Target& target); // where the current state is stored; null if the machine is gone
+    // Where machine's current state is stored; null if it is gone (or the entity's StateMachine now names another).
+    std::string* slot(const Target& target, const std::string& machine);
     void enterInitial(const Target& target, const std::shared_ptr<StateMachineDef>& def, const std::string& initial);
     bool apply(const Target& target, const std::string& to);
     void runQueue();

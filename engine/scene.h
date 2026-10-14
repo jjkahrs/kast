@@ -147,6 +147,10 @@ struct UIDocument {
 // Local-space bounds of each built-in primitive (all fit the unit cube centered on the origin).
 Aabb primitiveBounds(Primitive primitive);
 
+// Deepest parent chain a scene may have (a root is level 1): the hierarchy walks recurse, so loading, create and
+// reparent refuse anything deeper.
+constexpr int kMaxHierarchyDepth = 1000;
+
 // An entity hierarchy on an EnTT registry. Entities are created and destroyed only through Scene so the
 // Hierarchy links and root list stay consistent; other components can be added directly via registry().
 class Scene {
@@ -155,26 +159,30 @@ public:
     const entt::registry& registry() const { return registry_; }
 
     // New entity with Name, Transform, Hierarchy and a fresh PersistentId, appended to parent's children.
+    // Returns entt::null and creates nothing if parent is already kMaxHierarchyDepth levels deep.
     entt::entity create(const std::string& name, entt::entity parent = entt::null);
     // Same, with an explicit id (used by loading). The caller guarantees the id is unique and nonzero.
     entt::entity createWithId(EntityId id, const std::string& name, entt::entity parent = entt::null);
 
     bool valid(entt::entity entity) const { return entity != entt::null && registry_.valid(entity); }
 
-    // Destroys the entity and its whole subtree.
+    // Destroys the entity and its whole subtree. No-op if entity isn't valid.
     void destroy(entt::entity entity);
 
     // Copies the subtree with new ids, inserted right after the original among its siblings. Returns the copy.
     entt::entity duplicate(entt::entity entity);
 
     // Moves entity under newParent (entt::null = root), appended last. Keeps the world transform.
-    // Returns false and changes nothing if newParent is entity itself or one of its descendants.
+    // Returns false and changes nothing if either isn't valid, newParent is entity itself or one of its descendants,
+    // or the move would put part of entity's subtree deeper than kMaxHierarchyDepth.
     bool reparent(entt::entity entity, entt::entity newParent);
 
     // True if ancestor is entity or one of its ancestors.
     bool isSelfOrAncestor(entt::entity ancestor, entt::entity entity) const;
 
     entt::entity parent(entt::entity entity) const { return registry_.get<Hierarchy>(entity).parent; }
+    // Levels from the top: 1 for a root.
+    int depth(entt::entity entity) const;
     // Ordered children; entt::null gives the roots.
     const std::vector<entt::entity>& children(entt::entity entity) const;
 
@@ -211,6 +219,7 @@ private:
 
     std::vector<entt::entity>& siblings(entt::entity parent);
     entt::entity copySubtree(entt::entity source, entt::entity parent);
+    int height(entt::entity entity) const; // levels in entity's subtree: 1 for a leaf
 
     entt::registry registry_;
     std::vector<entt::entity> roots_;

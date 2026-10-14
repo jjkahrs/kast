@@ -37,6 +37,9 @@ struct Document {
     kast::LuaSystems lua; // the scene's Lua systems; a session runs from Play to Stop
     std::string playSceneName; // the running scene's name after a kast.loadScene switch; empty if none happened
     uint32_t playGeneration = 0; // bumped when Play starts and on each kast.loadScene switch (Game view GUIs reload)
+    // Bumped whenever doc.scene is replaced (Stop, kast.loadScene switch, New, Open): entity handles and in-progress
+    // edits held by panels are stale.
+    uint32_t sceneGeneration = 0;
 
     PanelFocus focusRequest = PanelFocus::None; // set by Play/Stop, cleared by the panel that takes focus
 };
@@ -47,7 +50,7 @@ void markDirty(Document& doc);
 bool selectById(Document& doc, kast::EntityId id);
 
 // Play mode. Play snapshots the scene in memory and runs the systems every frame; Pause holds them; Stop restores
-// the snapshot (scene, dirty flag, selection by id) without touching the editor camera. Play from Stopped requests
+// the snapshot (scene, dirty flag, selection by id unless a kast.loadScene switch cleared it) without touching the editor camera. Play from Stopped requests
 // Game focus and Stop requests Scene focus; Pause and resume leave focus alone. A kast.loadScene switch replaces
 // doc.scene and clears the selection; path and project stay those of the edited scene.
 void startPlay(Document& doc); // also resumes when paused
@@ -139,7 +142,8 @@ constexpr ObjectKind kObjectKinds[] = {ObjectKind::Empty, ObjectKind::Cube, Obje
                                        ObjectKind::Camera};
 const char* objectKindLabel(ObjectKind kind); // menu label, e.g. "Create Empty", "Cube"
 
-// Adds an object under parent (entt::null = root), selects it and marks the document dirty.
+// Adds an object under parent (entt::null = root), selects it and marks the document dirty. Does nothing and returns
+// entt::null if parent is at kast::kMaxHierarchyDepth (also createModelEntity).
 entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent);
 // Adds an entity named after the model file (a project-relative .glb/.gltf/.fbx/.obj) under parent with a
 // ModelRenderer, plus an Animator playing kast::defaultClip if the model has clips; selects it and marks the document
@@ -194,8 +198,11 @@ public:
     // Opens the Build Settings modal (Start Scene choice, saved to project.kast); reason is shown in it, may be empty.
     void openBuildSettings(std::string reason = "");
     bool buildSettingsOpen() const { return buildSettingsOpen_; }
-    // File actions are available: no dialog or Build Settings modal open and not in Play mode.
-    bool idle() const { return !dialogOpen_ && !buildSettingsOpen_ && doc_.play == PlayState::Stopped; }
+    // File actions are available: no dialog, unsaved-changes prompt or Build Settings modal open and not in Play mode.
+    bool idle() const
+    {
+        return !dialogOpen_ && pending_ == Pending::None && !buildSettingsOpen_ && doc_.play == PlayState::Stopped;
+    }
     // Build menu items are available: idle and a project is open.
     bool canBuild() const { return idle() && doc_.project.has_value(); }
 

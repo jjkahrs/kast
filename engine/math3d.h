@@ -26,7 +26,7 @@ void mtxFromQuat(float* out, const bx::Quaternion& q);
 // out = scale, then rotate, then translate.
 void mtxFromTrs(float* out, const bx::Vec3& translation, const bx::Quaternion& rotation, const bx::Vec3& scale);
 
-// Inverse of mtxFromTrs for matrices without shear. ponytail: negative scale comes back as a rotation flip.
+// Inverse of mtxFromTrs for matrices without shear. A mirror comes back as a negative x scale.
 void decomposeTrs(const float* m, bx::Vec3& translation, bx::Quaternion& rotation, bx::Vec3& scale);
 
 bx::Quaternion quatFromEulerDeg(const bx::Vec3& degrees);

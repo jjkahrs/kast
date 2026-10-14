@@ -184,7 +184,11 @@ Aabb transformBounds(const Aabb& local, const float* world)
 }
 
 // The file a texture path reads: a model's embedded image "<model>#<i>" comes from the model file.
-std::string textureFile(const std::string& path) { return path.substr(0, path.find('#')); }
+std::string textureFile(const std::string& path)
+{
+    const std::string model = embeddedTextureModel(path);
+    return model.empty() ? path : model;
+}
 
 } // namespace
 
@@ -353,7 +357,7 @@ void Renderer::loadTexture(const std::string& path, bool srgb, Texture& texture)
     texture.mtime = file ? modifiedTime(*file) : std::nullopt;
     std::string bytes;
     std::optional<MipImage> image;
-    if (path.find('#') != std::string::npos) { // embedded in a model
+    if (!embeddedTextureModel(path).empty()) { // embedded in a model
         const std::optional<std::string_view> embedded = models().embeddedTexture(path);
         if (embedded)
             bytes = *embedded;

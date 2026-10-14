@@ -2,6 +2,7 @@
 
 #include "assets.h" // utf8, fromUtf8
 
+#include <files.h>
 #include <log.h>
 
 #include <SDL3/SDL.h>
@@ -21,6 +22,7 @@ constexpr const char* kCommandKey = "externalEditor";
 // A command that fails (e.g. "not recognized", exit 9009) does so well within this; one still running after it is
 // taken to be the editor, left alone.
 constexpr uint64_t kFailureWindowMs = 3000;
+constexpr const wchar_t* kFileVariable = L"KAST_EDITOR_FILE"; // the file to open, for the command cmd.exe runs
 
 std::string nativeUtf8(const std::filesystem::path& path) // backslashes, as Windows editors expect
 {
@@ -96,10 +98,7 @@ bool saveEditorCommand(const std::filesystem::path& file, const std::string& com
 {
     std::error_code ec;
     std::filesystem::create_directories(file.parent_path(), ec);
-    std::ofstream out(file, std::ios::binary | std::ios::trunc);
-    out << nlohmann::ordered_json{{kCommandKey, command}}.dump(2) << '\n';
-    out.close();
-    if (file.empty() || !out) {
+    if (file.empty() || !kast::writeFileAtomic(file, nlohmann::ordered_json{{kCommandKey, command}}.dump(2) + '\n')) {
         error = std::format("Cannot write the editor settings '{}'", utf8(file));
         return false;
     }
@@ -141,8 +140,11 @@ void ExternalEditor::open(const std::filesystem::path& file)
 {
     const std::filesystem::path absolute = std::filesystem::absolute(file).lexically_normal();
     const std::string command = expandEditorCommand(command_, absolute);
+    // cmd expands %VAR% even inside quotes, and a file name may contain '%'. Passing the path in a variable keeps it
+    // literal: cmd expands variables once and never rescans what one expanded to.
+    SetEnvironmentVariableW(kFileVariable, absolute.c_str());
     std::string error;
-    HANDLE process = startCommand(command, error);
+    HANDLE process = startCommand(expandEditorCommand(command_, std::wstring(L"%") + kFileVariable + L"%"), error);
     if (!process) {
         kast::log::warn(std::format("External editor command '{}' failed: {}; falling back to the file association",
                                     command, error));

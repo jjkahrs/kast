@@ -20,6 +20,8 @@ if(DEFINED SCREENSHOT)
   file(REMOVE "${SCREENSHOT}")
   list(APPEND args --screenshot "${SCREENSHOT}")
 endif()
+# Only Windows on PATH: a DLL the Build forgot to copy fails the run instead of loading from vcpkg's bin folder.
+set(ENV{PATH} "$ENV{SystemRoot}/System32;$ENV{SystemRoot}")
 execute_process(COMMAND "${WORK_DIR}/${EXE}" ${args} WORKING_DIRECTORY "${WORK_DIR}" TIMEOUT 60
                 RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output)
 message("${output}")

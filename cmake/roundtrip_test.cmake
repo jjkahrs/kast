@@ -1,7 +1,9 @@
 # Loads a scene and saves it twice; the two saves must be byte-identical (deterministic serialization) and loadable.
 # Usage: cmake -DEDITOR=<exe> -DSCENE=<scene> -DOUT_DIR=<dir> -P roundtrip_test.cmake
-set(out "${OUT_DIR}/roundtrip_out.scene")
-set(out2 "${OUT_DIR}/roundtrip_out2.scene")
+# Named after SCENE: tests sharing OUT_DIR may run in parallel.
+get_filename_component(stem "${SCENE}" NAME_WE)
+set(out "${OUT_DIR}/${stem}_roundtrip_out.scene")
+set(out2 "${OUT_DIR}/${stem}_roundtrip_out2.scene")
 file(REMOVE "${out}" "${out2}")
 foreach(step "${SCENE};${out}" "${out};${out2}")
   list(GET step 0 input)
