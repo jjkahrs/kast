@@ -128,9 +128,9 @@ bool isGlobalStateMachine(const Document& doc, const std::string& name);
 // + error (nothing changed) if stateMachineEditBlocker or the write fails.
 bool setGlobalStateMachine(Document& doc, const std::string& name, bool global, std::string& error);
 
-enum class ObjectKind { Empty, Cube, Plane, Sphere, DirectionalLight, Camera };
+enum class ObjectKind { Empty, Cube, Plane, Sphere, DirectionalLight, PointLight, Camera };
 constexpr ObjectKind kObjectKinds[] = {ObjectKind::Empty, ObjectKind::Cube, ObjectKind::Plane, ObjectKind::Sphere,
-                                       ObjectKind::DirectionalLight, ObjectKind::Camera};
+                                       ObjectKind::DirectionalLight, ObjectKind::PointLight, ObjectKind::Camera};
 const char* objectKindLabel(ObjectKind kind); // menu label, e.g. "Create Empty", "Cube"
 
 // Adds an object under parent (entt::null = root), selects it and marks the document dirty.

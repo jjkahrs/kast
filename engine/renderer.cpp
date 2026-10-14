@@ -5,6 +5,8 @@
 #include "vs_line.bin.h"
 #include "vs_mesh.bin.h"
 
+#include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -22,6 +24,8 @@ constexpr uint32_t kAxisZ = 0xffe03030;
 constexpr uint32_t kFrustumColor = 0xffe0e0e0;
 constexpr float kFrustumPreviewDistance = 2.0f; // meters: a short preview, not the far plane
 constexpr float kFrustumPreviewAspect = 16.0f / 9.0f; // ponytail: fixed; pass the Game panel's aspect if it matters
+constexpr uint32_t kPointLightRangeColor = 0xff40d0f0;
+constexpr int kRangeCircleSegments = 48;
 constexpr int kSphereStacks = 16;
 constexpr int kSphereSlices = 32;
 constexpr uint64_t kState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS |
@@ -132,7 +136,61 @@ bgfx::ProgramHandle makeProgram(const uint8_t* vs, uint32_t vsSize, const uint8_
                                true);
 }
 
+// Draws lines (vertex pairs) with this frame's transient buffer; skipped if it has no room left.
+void submitLines(const std::vector<LineVertex>& lines, const bgfx::VertexLayout& layout, bgfx::ProgramHandle program,
+                 bgfx::ViewId view)
+{
+    const auto count = static_cast<uint32_t>(lines.size());
+    if (count == 0 || bgfx::getAvailTransientVertexBuffer(count, layout) < count)
+        return;
+    bgfx::TransientVertexBuffer buffer;
+    bgfx::allocTransientVertexBuffer(&buffer, count, layout);
+    std::memcpy(buffer.data, lines.data(), count * sizeof(LineVertex));
+    bgfx::setVertexBuffer(0, &buffer);
+    bgfx::setState(kState | BGFX_STATE_PT_LINES);
+    bgfx::submit(view, program);
+}
+
+// World-space box around a local box transformed by world.
+Aabb transformBounds(const Aabb& local, const float* world)
+{
+    Aabb result{{FLT_MAX, FLT_MAX, FLT_MAX}, {-FLT_MAX, -FLT_MAX, -FLT_MAX}};
+    for (int corner = 0; corner < 8; ++corner) {
+        const bx::Vec3 p = bx::mul(bx::Vec3{corner & 1 ? local.max.x : local.min.x, corner & 2 ? local.max.y : local.min.y,
+                                            corner & 4 ? local.max.z : local.min.z},
+                                   world);
+        result.min = bx::min(result.min, p);
+        result.max = bx::max(result.max, p);
+    }
+    return result;
+}
+
 } // namespace
+
+float pointLightFalloff(float distance, float range)
+{
+    const float ratio = distance / range;
+    const float window = bx::clamp(1.0f - ratio * ratio * ratio * ratio, 0.0f, 1.0f);
+    return window * window / (distance * distance + 1.0f);
+}
+
+std::vector<size_t> nearestPointLights(const std::vector<PointLightSample>& lights, const Aabb& bounds)
+{
+    const bx::Vec3 center = bx::mul(bx::add(bounds.min, bounds.max), 0.5f);
+    std::vector<std::pair<float, size_t>> reaching; // (squared distance to center, index)
+    for (size_t i = 0; i < lights.size(); ++i) {
+        const PointLightSample& light = lights[i];
+        const bx::Vec3 closest = bx::clamp(light.position, bounds.min, bounds.max);
+        if (bx::length(bx::sub(light.position, closest)) < light.range)
+            reaching.emplace_back(bx::distanceSq(light.position, center), i);
+    }
+    const size_t count = std::min(reaching.size(), kMaxPointLights);
+    std::partial_sort(reaching.begin(), reaching.begin() + static_cast<ptrdiff_t>(count), reaching.end());
+    std::vector<size_t> indices;
+    for (size_t i = 0; i < count; ++i)
+        indices.push_back(reaching[i].second);
+    return indices;
+}
 
 void Renderer::init()
 {
@@ -159,6 +217,9 @@ void Renderer::init()
     baseColor_ = bgfx::createUniform("u_baseColor", bgfx::UniformType::Vec4);
     lightDir_ = bgfx::createUniform("u_lightDir", bgfx::UniformType::Vec4);
     lightColor_ = bgfx::createUniform("u_lightColor", bgfx::UniformType::Vec4);
+    ambient_ = bgfx::createUniform("u_ambient", bgfx::UniformType::Vec4);
+    pointPosRange_ = bgfx::createUniform("u_pointPosRange", bgfx::UniformType::Vec4, kMaxPointLights);
+    pointColor_ = bgfx::createUniform("u_pointColor", bgfx::UniformType::Vec4, kMaxPointLights);
 }
 
 void Renderer::shutdown()
@@ -170,11 +231,13 @@ void Renderer::shutdown()
     bgfx::destroy(grid_);
     bgfx::destroy(meshProgram_);
     bgfx::destroy(lineProgram_);
-    for (bgfx::UniformHandle uniform : {normalMatrix_, baseColor_, lightDir_, lightColor_})
+    for (bgfx::UniformHandle uniform :
+         {normalMatrix_, baseColor_, lightDir_, lightColor_, ambient_, pointPosRange_, pointColor_})
         bgfx::destroy(uniform);
 }
 
-void Renderer::render(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx, bool overlays)
+void Renderer::render(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx, bool overlays,
+                      entt::entity selected)
 {
     bgfx::setViewTransform(view, viewMtx, projMtx);
     const entt::registry& registry = scene.registry();
@@ -198,6 +261,17 @@ void Renderer::render(const Scene& scene, bgfx::ViewId view, const float* viewMt
         lightColor[1] = light->color.y * light->intensity;
         lightColor[2] = light->color.z * light->intensity;
     });
+    const SceneLighting& lighting = scene.lighting;
+    const float ambient[4] = {lighting.ambientColor.x * lighting.ambientIntensity,
+                              lighting.ambientColor.y * lighting.ambientIntensity,
+                              lighting.ambientColor.z * lighting.ambientIntensity, 0.0f};
+
+    std::vector<PointLightSample> pointLights;
+    for (auto [entity, light] : registry.view<PointLight>().each()) {
+        float world[16];
+        scene.worldMatrix(entity, world);
+        pointLights.push_back({{world[12], world[13], world[14]}, light.range, bx::mul(light.color, light.intensity)});
+    }
 
     // ponytail: world matrices are recomputed up the parent chain per entity; cache them when scenes get deep or large.
     for (auto [entity, mesh] : registry.view<MeshRenderer>().each()) {
@@ -208,12 +282,28 @@ void Renderer::render(const Scene& scene, bgfx::ViewId view, const float* viewMt
         bx::mtxInverse(inverse, world);
         bx::mtxTranspose(normalMatrix, inverse);
         const float color[4] = {mesh.color.x, mesh.color.y, mesh.color.z, 1.0f};
+        // Unused slots: black, range 1, so they add nothing.
+        float pointPosRange[kMaxPointLights][4] = {};
+        float pointColor[kMaxPointLights][4] = {};
+        for (auto& slot : pointPosRange)
+            slot[3] = 1.0f;
+        const std::vector<size_t> nearest =
+            nearestPointLights(pointLights, transformBounds(primitiveBounds(mesh.primitive), world));
+        for (size_t slot = 0; slot < nearest.size(); ++slot) {
+            const PointLightSample& light = pointLights[nearest[slot]];
+            std::memcpy(pointPosRange[slot], &light.position, sizeof(bx::Vec3));
+            pointPosRange[slot][3] = light.range;
+            std::memcpy(pointColor[slot], &light.color, sizeof(bx::Vec3));
+        }
 
         bgfx::setTransform(world);
         bgfx::setUniform(normalMatrix_, normalMatrix);
         bgfx::setUniform(baseColor_, color);
         bgfx::setUniform(lightDir_, lightDir);
         bgfx::setUniform(lightColor_, lightColor);
+        bgfx::setUniform(ambient_, ambient);
+        bgfx::setUniform(pointPosRange_, pointPosRange, kMaxPointLights);
+        bgfx::setUniform(pointColor_, pointColor, kMaxPointLights);
         const Mesh& gpu = meshes_[static_cast<size_t>(mesh.primitive)];
         bgfx::setVertexBuffer(0, gpu.vertices);
         bgfx::setIndexBuffer(gpu.indices);
@@ -223,6 +313,7 @@ void Renderer::render(const Scene& scene, bgfx::ViewId view, const float* viewMt
     if (overlays) {
         drawGrid(view);
         drawCameraFrustums(scene, view);
+        drawPointLightRange(scene, view, selected);
     }
 }
 
@@ -258,15 +349,33 @@ void Renderer::drawCameraFrustums(const Scene& scene, bgfx::ViewId view)
             lines.push_back({b.x, b.y, b.z, kFrustumColor});
         }
     }
-    const auto count = static_cast<uint32_t>(lines.size());
-    if (count == 0 || bgfx::getAvailTransientVertexBuffer(count, lineLayout_) < count)
+    submitLines(lines, lineLayout_, lineProgram_, view);
+}
+
+// Three axis-aligned circles of radius range around the selected PointLight (world position; scale ignored).
+void Renderer::drawPointLightRange(const Scene& scene, bgfx::ViewId view, entt::entity selected)
+{
+    const auto* light = scene.valid(selected) ? scene.registry().try_get<PointLight>(selected) : nullptr;
+    if (!light)
         return;
-    bgfx::TransientVertexBuffer buffer;
-    bgfx::allocTransientVertexBuffer(&buffer, count, lineLayout_);
-    std::memcpy(buffer.data, lines.data(), count * sizeof(LineVertex));
-    bgfx::setVertexBuffer(0, &buffer);
-    bgfx::setState(kState | BGFX_STATE_PT_LINES);
-    bgfx::submit(view, lineProgram_);
+    float world[16];
+    scene.worldMatrix(selected, world);
+    const bx::Vec3 center{world[12], world[13], world[14]};
+    std::vector<LineVertex> lines;
+    for (int axis = 0; axis < 3; ++axis) {
+        const auto point = [&](int segment) {
+            const float angle = 2.0f * bx::kPi * static_cast<float>(segment) / kRangeCircleSegments;
+            float offset[3] = {};
+            offset[(axis + 1) % 3] = std::cos(angle) * light->range;
+            offset[(axis + 2) % 3] = std::sin(angle) * light->range;
+            return LineVertex{center.x + offset[0], center.y + offset[1], center.z + offset[2], kPointLightRangeColor};
+        };
+        for (int segment = 0; segment < kRangeCircleSegments; ++segment) {
+            lines.push_back(point(segment));
+            lines.push_back(point(segment + 1));
+        }
+    }
+    submitLines(lines, lineLayout_, lineProgram_, view);
 }
 
 } // namespace kast

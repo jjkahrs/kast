@@ -1,0 +1,2 @@
+// Windows resources for kast_editor. SDL uses the first icon group for the window class too.
+IDI_KAST_EDITOR ICON "kast.ico"

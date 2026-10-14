@@ -128,6 +128,7 @@ const char* objectKindLabel(ObjectKind kind)
     case ObjectKind::Plane: return "Plane";
     case ObjectKind::Sphere: return "Sphere";
     case ObjectKind::DirectionalLight: return "Directional Light";
+    case ObjectKind::PointLight: return "Point Light";
     case ObjectKind::Camera: return "Camera";
     }
     return "";
@@ -146,6 +147,7 @@ entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent)
         scene.registry().emplace<kast::DirectionalLight>(entity);
         scene.registry().get<kast::Transform>(entity).rotation = kast::quatFromEulerDeg(kNewLightEuler);
         break;
+    case ObjectKind::PointLight: scene.registry().emplace<kast::PointLight>(entity); break;
     case ObjectKind::Camera: scene.registry().emplace<kast::Camera>(entity); break;
     case ObjectKind::Empty: break;
     }

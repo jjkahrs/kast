@@ -830,6 +830,26 @@ void Panels::drawSystems(Document& doc)
     ImGui::End();
 }
 
+void Panels::drawLighting(Document& doc, bool& open)
+{
+    if (!open)
+        return;
+    const float em = ImGui::GetFontSize();
+    ImGui::SetNextWindowSize(ImVec2(em * 22, em * 7), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Lighting", &open)) {
+        kast::SceneLighting& lighting = doc.scene.lighting;
+        ImGui::SeparatorText("Ambient");
+        bool changed = ImGui::ColorEdit3("Color", &lighting.ambientColor.x);
+        changed |= ImGui::DragFloat("Intensity", &lighting.ambientIntensity, 0.01f, 0.0f, FLT_MAX, "%.3f",
+                                    ImGuiSliderFlags_AlwaysClamp);
+        if (changed) {
+            lighting.ambientColor = bx::clamp(lighting.ambientColor, bx::Vec3(0.0f), bx::Vec3(1.0f)); // typed values
+            markDirty(doc);
+        }
+    }
+    ImGui::End();
+}
+
 void Panels::drawEvents(Document& doc)
 {
     if (ImGui::Begin("Events")) {

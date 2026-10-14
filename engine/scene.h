@@ -47,6 +47,19 @@ struct DirectionalLight {
     float intensity = 1.0f;
 };
 
+// Lights meshes within range meters of the entity's world position (see pointLightFalloff in renderer.h).
+struct PointLight {
+    bx::Vec3 color{1.0f, 1.0f, 1.0f}; // linear RGB 0..1
+    float intensity = 1.0f;
+    float range = 10.0f;
+};
+
+// Per-scene light settings. The defaults match the renderer's former fixed 0.2 grey ambient.
+struct SceneLighting {
+    bx::Vec3 ambientColor{1.0f, 1.0f, 1.0f}; // linear RGB 0..1
+    float ambientIntensity = 0.2f;           // >= 0
+};
+
 // Renders the scene from the entity's world position looking down its world -Z (scale is ignored).
 struct Camera {
     float verticalFovDegrees = 60.0f;
@@ -120,6 +133,9 @@ public:
 
     // Lua system scripts in run order, relative to the project root (see project.h, lua_systems.h).
     std::vector<std::string> systems;
+
+    // Saved under "lighting" in the scene file.
+    SceneLighting lighting;
 
     // Opaque data owned by the editor (e.g. camera pose), saved under "editor" in the scene file.
     nlohmann::ordered_json editorData = nlohmann::ordered_json::object();

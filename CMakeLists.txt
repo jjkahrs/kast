@@ -101,7 +101,7 @@ target_link_libraries(kast_player PRIVATE kast_engine SDL3::SDL3)
 add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
-  editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp
+  editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp editor/kast_editor.rc
   ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
@@ -188,6 +188,50 @@ add_test(NAME scene_v1_rejected
 add_test(NAME scene_v3_rejected
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_SCENES}/v3.scene"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
+# Point lights: tests/project/point_lights.scene (dim sun, red / green / blue point lights, bluish ambient; the built
+# game "lights" in KAST_GAMES runs it in the player). Editor with Blue Light selected (range sphere), the Lighting panel,
+# Play, and Play of a configure-time copy with every PointLight intensity 0, so only point light shading can differ.
+# Copies with a zero range or a negative ambient intensity must fail to load.
+set(KAST_POINT_LIGHTS "${KAST_TEST_PROJECT}/point_lights.scene")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_POINT_LIGHTS}")
+file(READ "${KAST_POINT_LIGHTS}" lights_scene)
+string(REGEX REPLACE "(\"PointLight\": {[^}]*\"intensity\": )[0-9.]+" "\\10" lights_off "${lights_scene}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/point_lights_off.scene" "${lights_off}")
+string(REPLACE "\"range\": 5" "\"range\": 0" lights_bad "${lights_scene}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/point_lights_bad_range.scene" "${lights_bad}")
+string(REPLACE "\"ambientIntensity\": 0.1" "\"ambientIntensity\": -1" lights_bad "${lights_scene}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/point_lights_bad_lighting.scene" "${lights_bad}")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/point_lights_roundtrip")
+add_test(NAME point_lights_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/point_lights.png"
+          "-DEXTRA_ARGS=--scene ${KAST_POINT_LIGHTS} --select 7" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME lighting_panel_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/lighting_panel.png"
+          "-DEXTRA_ARGS=--scene ${KAST_POINT_LIGHTS}" -DFOCUS_PANEL=Lighting
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME point_lights_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/point_lights_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_POINT_LIGHTS} --play" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME point_lights_off_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/point_lights_off_play.png"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_BINARY_DIR}/point_lights_off.scene --play"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME point_lights_play_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/point_lights_off_play.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/point_lights_play.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(point_lights_play_screenshot PROPERTIES FIXTURES_SETUP point_lights_play_shot)
+set_tests_properties(point_lights_off_play_screenshot PROPERTIES FIXTURES_SETUP point_lights_off_play_shot)
+set_tests_properties(point_lights_play_differs PROPERTIES FIXTURES_REQUIRED "point_lights_play_shot;point_lights_off_play_shot")
+add_test(NAME point_lights_roundtrip
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_POINT_LIGHTS}"
+          "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/point_lights_roundtrip" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
+foreach(bad range lighting)
+  add_test(NAME point_lights_bad_${bad}_rejected
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+            "-DSCENE=${CMAKE_CURRENT_BINARY_DIR}/point_lights_bad_${bad}.scene"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
+endforeach()
 # Projects: --project opens tests/project (its startScene, scene_a); a folder without project.kast must exit 1.
 add_test(NAME project_startup
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/project_startup.png"
@@ -425,7 +469,7 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "health|Health Test|health.scene|FALSE" "health_no_systems|Health Test|health.scene|TRUE"
                "events|Events Test|events.scene|FALSE" "events_no_systems|Events Test|events.scene|TRUE"
                "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow"
-               "ui|UI Test|ui.scene|FALSE")
+               "ui|UI Test|ui.scene|FALSE" "lights|Lights Test|point_lights.scene|FALSE")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)

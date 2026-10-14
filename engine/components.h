@@ -32,6 +32,7 @@ struct ComponentInfo {
 struct FieldInfo {
     const char* displayName = "";
     bool color = false; // bx::Vec3 edited as a color
+    std::optional<double> min, max; // float Inspector clamp; enforce it in ComponentInfo::validate too
 };
 
 namespace detail {
@@ -93,7 +94,7 @@ struct FieldDesc {
     FieldKind kind = FieldKind::Float;
     bool array = false;             // a JSON array of kind (Lua types only)
     bool color = false;             // Vec3 edited as a color
-    std::optional<double> min, max; // Float / Int, per element for arrays (Lua types only)
+    std::optional<double> min, max; // Float / Int, per element for arrays (built-ins: Inspector clamp only)
     std::vector<std::string> enumValues; // JSON names
     std::vector<std::string> enumLabels; // Inspector labels, same order
     nlohmann::ordered_json defaultValue; // canonical JSON (Lua types only: built-ins default-construct)

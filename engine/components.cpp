@@ -42,6 +42,21 @@ const char* validateCamera(const entt::meta_any& component)
     return nullptr;
 }
 
+constexpr double kMinPointLightRange = 0.01; // Inspector floor in meters; files and kast.set only need > 0
+
+const char* validatePointLight(const entt::meta_any& component)
+{
+    const auto& light = component.cast<const PointLight&>();
+    for (float channel : {light.color.x, light.color.y, light.color.z})
+        if (!(channel >= 0.0f && channel <= 1.0f))
+            return "\"color\" channels must be between 0 and 1";
+    if (!(light.intensity >= 0.0f))
+        return "\"intensity\" must be >= 0";
+    if (!(light.range > 0.0f))
+        return "\"range\" must be > 0";
+    return nullptr;
+}
+
 void registerBuiltins()
 {
     registerComponent<Transform>("Transform", {"Transform", false})
@@ -61,6 +76,11 @@ void registerBuiltins()
     registerComponent<DirectionalLight>("DirectionalLight", {"Directional Light"})
         .data<&DirectionalLight::color>("color").custom<FieldInfo>("Color", true)
         .data<&DirectionalLight::intensity>("intensity").custom<FieldInfo>("Intensity");
+
+    registerComponent<PointLight>("PointLight", {"Point Light", true, validatePointLight})
+        .data<&PointLight::color>("color").custom<FieldInfo>("Color", true)
+        .data<&PointLight::intensity>("intensity").custom<FieldInfo>("Intensity", false, 0.0)
+        .data<&PointLight::range>("range").custom<FieldInfo>("Range", false, kMinPointLightRange);
 
     registerComponent<Camera>("Camera", {"Camera", true, validateCamera})
         .data<&Camera::verticalFovDegrees>("verticalFovDegrees").custom<FieldInfo>("Vertical FOV")
@@ -323,6 +343,10 @@ std::vector<FieldDesc> describeBuiltin(const entt::meta_type& type)
         const auto* info = static_cast<const FieldInfo*>(data.custom());
         field.displayName = info ? info->displayName : field.name;
         field.color = info && info->color;
+        if (info) {
+            field.min = info->min;
+            field.max = info->max;
+        }
         const entt::meta_type t = data.type();
         if (isType<float>(t)) {
             field.kind = FieldKind::Float;

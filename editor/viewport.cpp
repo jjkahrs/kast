@@ -126,7 +126,7 @@ void SceneViewport::draw(Document& doc)
             doc.camera.viewMatrix(view);
             doc.camera.projMatrix(proj, size.x / size.y);
             bx::mtxMul(viewProj, view, proj);
-            renderer_.render(doc.scene, target_.view(), view, proj);
+            renderer_.render(doc.scene, target_.view(), view, proj, true, doc.selected);
 
             ImGuizmo::SetDrawlist();
             ImGuizmo::SetRect(origin.x, origin.y, size.x, size.y);

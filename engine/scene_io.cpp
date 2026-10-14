@@ -4,6 +4,7 @@
 #include "files.h"
 #include "log.h"
 
+#include <cfloat>
 #include <charconv>
 #include <format>
 #include <fstream>
@@ -91,6 +92,32 @@ Record parseEntity(const Json& json, SceneLoadReport& report)
     return record;
 }
 
+// A finite JSON number >= 0 and, if unit, <= 1.
+float lightingNumber(const Json& value, const char* what, bool unit)
+{
+    const double v = value.is_number() ? value.get<double>() : -1.0;
+    if (!(v >= 0.0 && v <= (unit ? 1.0 : FLT_MAX)))
+        throw Invalid(std::format("lighting: \"{}\" must be {}", what, unit ? "numbers between 0 and 1" : "a number >= 0"));
+    return static_cast<float>(v);
+}
+
+SceneLighting parseLighting(const Json& json)
+{
+    if (!json.is_object())
+        throw Invalid("\"lighting\" must be an object");
+    for (const auto& [key, value] : json.items())
+        if (key != "ambientColor" && key != "ambientIntensity")
+            throw Invalid(std::format("lighting: unknown field \"{}\"", key));
+    SceneLighting lighting;
+    const Json& color = field(json, "ambientColor");
+    if (!color.is_array() || color.size() != 3)
+        throw Invalid("lighting: \"ambientColor\" must be an array of 3 numbers");
+    lighting.ambientColor = {lightingNumber(color[0], "ambientColor", true), lightingNumber(color[1], "ambientColor", true),
+                             lightingNumber(color[2], "ambientColor", true)};
+    lighting.ambientIntensity = lightingNumber(field(json, "ambientIntensity"), "ambientIntensity", false);
+    return lighting;
+}
+
 void build(const std::vector<Record>& records, Scene& scene)
 {
     std::map<EntityId, size_t> byId;
@@ -164,6 +191,8 @@ bool sceneFromJson(const Json& json, Scene& out, std::string& error, SceneLoadRe
                 throw Invalid("\"editor\" must be an object");
             scene.editorData = json["editor"];
         }
+        if (json.contains("lighting"))
+            scene.lighting = parseLighting(json["lighting"]);
         if (json.contains("systems")) {
             const Json& systems = json["systems"];
             if (!systems.is_array())
@@ -235,6 +264,10 @@ Json sceneToJson(const Scene& scene)
     root["version"] = kSceneFileVersion;
     root["entities"] = std::move(entities);
     root["systems"] = scene.systems;
+    const SceneLighting& lighting = scene.lighting;
+    root["lighting"] = {{"ambientColor", Json::array({jsonNumber(lighting.ambientColor.x), jsonNumber(lighting.ambientColor.y),
+                                                      jsonNumber(lighting.ambientColor.z)})},
+                        {"ambientIntensity", jsonNumber(lighting.ambientIntensity)}};
     root["editor"] = scene.editorData;
     return root;
 }

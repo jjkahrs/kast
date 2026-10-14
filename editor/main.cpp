@@ -72,7 +72,7 @@ struct Options {
     std::optional<std::string> assetsMenu; // open this Assets entry's context menu + Create submenu ("" = background)
     std::optional<std::pair<Panels::AssetCreate, std::string>> assetsCreate; // run Assets Create in that folder
     bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
-    std::string focusPanel;         // bring this window (e.g. "Events") to the front of its dock, for screenshots
+    std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting" also opens it) to the front, for screenshots
     std::string openGui;            // open this .rml in the GUI Builder (relative paths: to the project, else the cwd)
     std::string guiSelect;          // then select the element with this id in it
     std::optional<std::pair<int, int>> guiPreviewSize; // add this GUI Preview resolution and pick it
@@ -311,8 +311,9 @@ void buildDefaultLayout(ImGuiID dockspace)
 }
 
 // openMenu: a main menu to open this frame (--open-menu), or empty. openPreferences: set when File > Preferences... is
-// chosen.
-void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu, bool& openPreferences)
+// chosen. showLighting: the Lighting panel's visibility, toggled by Window > Lighting.
+void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu, bool& openPreferences,
+                 bool& showLighting)
 {
     if (ImGui::BeginMainMenuBar()) {
         if (!openMenu.empty())
@@ -350,6 +351,10 @@ void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu,
                 files.build();
             if (ImGui::MenuItem("Build and Run", nullptr, false, canBuild))
                 files.buildAndRun();
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Window")) {
+            ImGui::MenuItem("Lighting", nullptr, &showLighting);
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -500,6 +505,7 @@ int main(int argc, char** argv)
     ExternalEditor externalEditor(options->settingsFile.empty() ? defaultEditorSettingsFile()
                                                                 : std::filesystem::absolute(options->settingsFile));
     std::string preferencesDraft; // the Preferences modal's edit of the command
+    bool showLighting = options->focusPanel == "Lighting"; // hidden by default; --focus-panel Lighting opens it
     if (!options->openExternal.empty())
         externalEditor.open(doc.project->root /
                             std::filesystem::path(reinterpret_cast<const char8_t*>(options->openExternal.c_str())));
@@ -560,7 +566,7 @@ int main(int argc, char** argv)
 
         bool openPreferences = options->openPreferences && frames.frame() == kAddComponentPopupFrame;
         drawMenuBar(files, doc, frames.frame() == kAddComponentPopupFrame ? options->openMenu : std::string(),
-                    openPreferences);
+                    openPreferences, showLighting);
         const ImGuiID dockspace = ImGui::GetID("MainDockSpace");
         if (!ImGui::DockBuilderGetNode(dockspace)) // no saved layout in imgui.ini
             buildDefaultLayout(dockspace);
@@ -622,6 +628,7 @@ int main(int argc, char** argv)
             console && !ImGui::FindWindowSettingsByID(ImHashStr("State Machines")))
             ImGui::SetNextWindowDockID(console->DockId, ImGuiCond_FirstUseEver);
         panels.drawStateMachines(doc);
+        panels.drawLighting(doc, showLighting);
         drawGuiBuilder(guiBuilder);
         drawConsole(); // submitted after Assets, Events and State Machines so Console is the front tab on first run
         drawPreferences(externalEditor, preferencesDraft, openPreferences);

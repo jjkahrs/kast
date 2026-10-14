@@ -21,6 +21,7 @@
 #include <math3d.h>
 #include <pak.h>
 #include <project.h>
+#include <renderer.h>
 #include <scene.h>
 #include <scene_io.h>
 #include <state_machines.h>
@@ -180,8 +181,8 @@ std::vector<std::string> typeNames()
 
 void checkComponentRegistry()
 {
-    check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "DirectionalLight", "Camera", "Rotator",
-                                                 "StateMachine", "UIDocument"},
+    check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "DirectionalLight", "PointLight", "Camera",
+                                                 "Rotator", "StateMachine", "UIDocument"},
           "built-in component types in registration order");
     const entt::meta_type transform = kast::findComponentType("Transform");
     const entt::meta_type rotator = kast::findComponentType("Rotator");
@@ -316,6 +317,25 @@ void checkLoadValidation()
          "nearPlane"},
         {"camera near >= far", file(entity(1, "null", R"(, "Camera": {"verticalFovDegrees": 60, "nearPlane": 10, "farPlane": 10})")),
          "farPlane"},
+        {"point light range 0", file(entity(1, "null", R"(, "PointLight": {"color": [1,1,1], "intensity": 1, "range": 0})")),
+         "range"},
+        {"point light negative intensity",
+         file(entity(1, "null", R"(, "PointLight": {"color": [1,1,1], "intensity": -0.5, "range": 5})")), "intensity"},
+        {"point light color > 1", file(entity(1, "null", R"(, "PointLight": {"color": [1,1.5,1], "intensity": 1, "range": 5})")),
+         "color"},
+        {"lighting not an object", R"({"version": 4, "entities": [], "lighting": 3})", "lighting"},
+        {"lighting color out of range",
+         R"({"version": 4, "entities": [], "lighting": {"ambientColor": [1,-0.1,1], "ambientIntensity": 0.2}})", "ambientColor"},
+        {"lighting color wrong size", R"({"version": 4, "entities": [], "lighting": {"ambientColor": [1,1], "ambientIntensity": 0.2}})",
+         "ambientColor"},
+        {"lighting negative intensity",
+         R"({"version": 4, "entities": [], "lighting": {"ambientColor": [1,1,1], "ambientIntensity": -1}})", "ambientIntensity"},
+        {"lighting mistyped intensity",
+         R"({"version": 4, "entities": [], "lighting": {"ambientColor": [1,1,1], "ambientIntensity": "dim"}})", "ambientIntensity"},
+        {"lighting missing intensity", R"({"version": 4, "entities": [], "lighting": {"ambientColor": [1,1,1]}})",
+         "ambientIntensity"},
+        {"lighting unknown field",
+         R"({"version": 4, "entities": [], "lighting": {"ambientColor": [1,1,1], "ambientIntensity": 1, "fog": 1}})", "fog"},
         {"dangling parent", file(entity(1, "7")), "parent"},
         {"cycle", file(entity(1, "2") + ", " + entity(2, "1")), "cycle"},
         {"self parent", file(entity(1, "1")), "cycle"},
@@ -323,6 +343,7 @@ void checkLoadValidation()
     };
     kast::Scene scene;
     scene.create("Keep me");
+    scene.lighting.ambientIntensity = 0.7f;
     for (const auto& [what, text, mention] : bad) {
         const std::string path = (dir / "bad.scene").string();
         std::ofstream(path, std::ios::binary | std::ios::trunc) << text;
@@ -332,7 +353,8 @@ void checkLoadValidation()
         if (!loaded)
             kast::log::info(std::format("expected error ({}): {}", what, error));
     }
-    check(scene.children(entt::null).size() == 1, "failed loads leave the scene untouched");
+    check(scene.children(entt::null).size() == 1 && scene.lighting.ambientIntensity == 0.7f,
+          "failed loads leave the scene untouched");
 
     // Child listed before its parent still loads, keeping file order among siblings.
     const std::string path = (dir / "good.scene").string();
@@ -752,6 +774,14 @@ return { update = function(dt)
     fails("finite number", function() kast.set(cam, "Camera", {farPlane = math.huge}) end)
     fails('"rotation" must be a nonzero quaternion', function() kast.set(cube, "Transform", {rotation = {x = 0, y = 0, z = 0, w = 0}}) end)
     fails('unknown value "torus"', function() kast.set(cube, "MeshRenderer", {primitive = "torus"}) end)
+    local light = kast.get(cam, "PointLight")
+    assert(light.intensity == 1 and light.range == 10 and light.color.x == 1, "get PointLight defaults")
+    kast.set(cam, "PointLight", {intensity = 2, range = 3.5, color = {x = 0.5, y = 0.25, z = 0}})
+    light = kast.get(cam, "PointLight")
+    assert(light.intensity == 2 and light.range == 3.5 and light.color.y == 0.25, "set PointLight")
+    fails('"range" must be > 0', function() kast.set(cam, "PointLight", {range = 0}) end)
+    fails('"intensity" must be >= 0', function() kast.set(cam, "PointLight", {intensity = -1, range = 7}) end)
+    fails('"color" channels must be between 0 and 1', function() kast.set(cam, "PointLight", {color = {x = 1.5, y = 0, z = 0}}) end)
     fails('unknown key name "NotAKey"', function() kast.input.keyDown("NotAKey") end)
     fails("kast is read-only", function() kast.get = nil end)
     fails("kast is read-only", function() kast.input.keyDown = nil end)
@@ -788,6 +818,7 @@ end })");
     registry.emplace<kast::MeshRenderer>(scene.create("Sphere"), kast::Primitive::Sphere);
     const entt::entity cam = scene.create("Camera");
     registry.emplace<kast::Camera>(cam);
+    registry.emplace<kast::PointLight>(cam);
     scene.systems = {"api.lua"};
     kast::Input input;
     input.keysDown[SDL_SCANCODE_W] = true;
@@ -804,6 +835,9 @@ end })");
     check(registry.get<kast::MeshRenderer>(cube).primitive == kast::Primitive::Sphere, "set wrote an enum by name");
     check(registry.get<kast::Camera>(cam).verticalFovDegrees == 60.0f && registry.get<kast::Camera>(cam).farPlane == 1000.0f,
           "rejected Camera sets left it unchanged");
+    const auto& pointLight = registry.get<kast::PointLight>(cam);
+    check(pointLight.intensity == 2.0f && pointLight.range == 3.5f && near(pointLight.color, {0.5f, 0.25f, 0.0f}),
+          "set wrote PointLight; rejected sets left it unchanged");
     check(named(scene, "Parent") == entt::null && named(scene, "Child") == entt::null, "destroy removes the subtree");
     const entt::entity late = named(scene, "Late");
     check(scene.valid(late) && registry.all_of<kast::MeshRenderer>(late) && scene.parent(late) == entt::null,
@@ -2283,9 +2317,10 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"events.scene", "fsm.scene", "health.scene", "scene_a.scene", "scene_b.scene",
-                                       "ui.scene"},
-          "tests/project lists events.scene, fsm.scene, health.scene, scene_a.scene, scene_b.scene, ui.scene");
+              std::vector<std::string>{"events.scene", "fsm.scene", "health.scene", "point_lights.scene", "scene_a.scene",
+                                       "scene_b.scene", "ui.scene"},
+          "tests/project lists events.scene, fsm.scene, health.scene, point_lights.scene, scene_a.scene, scene_b.scene, "
+          "ui.scene");
 
     const std::filesystem::path root = looseTestDir("kast_build_settings_check") / "game";
     std::filesystem::copy(KAST_TEST_PROJECT_DIR, root, std::filesystem::copy_options::recursive);
@@ -2296,8 +2331,8 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
     check(projectScenes(root) == std::vector<std::string>{"broken.scene", "events.scene", "fsm.scene", "health.scene",
-                                                          "levels/c.scene", "scene_a.scene", "scene_b.scene",
-                                                          "ui.scene"},
+                                                          "levels/c.scene", "point_lights.scene", "scene_a.scene",
+                                                          "scene_b.scene", "ui.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
     Document doc;
@@ -3948,6 +3983,75 @@ void checkExternalEditor()
           "setCommand saves and is used from then on");
 }
 
+// Point light falloff and per-mesh selection (renderer.h), PointLight validation and scene ambient in scene files.
+void checkPointLights()
+{
+    check(kast::pointLightFalloff(5.0f, 5.0f) == 0.0f && kast::pointLightFalloff(7.0f, 5.0f) == 0.0f,
+          "falloff is 0 at and beyond range");
+    float previous = kast::pointLightFalloff(0.0f, 5.0f);
+    bool decreasing = previous > 0.0f;
+    for (float d = 0.05f; d < 5.0f; d += 0.05f) {
+        const float f = kast::pointLightFalloff(d, 5.0f);
+        decreasing = decreasing && f > 0.0f && f < previous;
+        previous = f;
+    }
+    check(decreasing, "falloff is positive and decreasing inside range");
+
+    // Ten lights on the +X axis at 1..10 m from a unit box at the origin, listed far to near; every range reaches it.
+    std::vector<kast::PointLightSample> lights;
+    for (int i = 10; i >= 1; --i)
+        lights.push_back({{static_cast<float>(i), 0, 0}, 20.0f, {1, 1, 1}});
+    const kast::Aabb box{{-0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, 0.5f}};
+    check(kast::nearestPointLights(lights, box) == std::vector<size_t>{9, 8, 7, 6, 5, 4, 3, 2},
+          "nearest 8 of 10, nearest first");
+    lights[9].range = 0.4f; // 1 m away, its range stops 0.1 m short of the box face
+    lights[8].range = 1.6f; // 2 m away, reaches the face at 1.5 m
+    check(kast::nearestPointLights(lights, box) == std::vector<size_t>{8, 7, 6, 5, 4, 3, 2, 1},
+          "lights whose range misses the box are skipped");
+    check(kast::nearestPointLights({}, box).empty(), "no lights");
+
+    const entt::meta_type type = kast::findComponentType("PointLight");
+    const kast::PointLight defaults;
+    check(type && kast::componentInfo(type).validate && defaults.intensity == 1.0f && defaults.range == 10.0f &&
+              near(defaults.color, {1, 1, 1}),
+          "PointLight registered with defaults white / 1 / 10 m");
+    const std::pair<const char*, bool> values[] = {
+        {R"({"color": [1, 0.5, 0], "intensity": 0, "range": 0.001})", true},
+        {R"({"color": [1, 1, 1], "intensity": 1, "range": 0})", false},
+        {R"({"color": [1, 1, 1], "intensity": 1, "range": -2})", false},
+        {R"({"color": [1, 1, 1], "intensity": -0.1, "range": 5})", false},
+        {R"({"color": [-0.1, 1, 1], "intensity": 1, "range": 5})", false},
+        {R"({"color": [1, 1, 1.01], "intensity": 1, "range": 5})", false},
+    };
+    for (const auto& [text, valid] : values) {
+        std::string error;
+        check(static_cast<bool>(kast::componentFromJson(type, nlohmann::ordered_json::parse(text), error)) == valid, text);
+    }
+
+    // Round trip: point lights and custom ambient; a file without "lighting" gets the defaults.
+    kast::Scene scene;
+    const entt::entity e = scene.create("Lamp");
+    scene.registry().emplace<kast::PointLight>(e, kast::PointLight{{0.25f, 0.5f, 1.0f}, 2.5f, 7.0f});
+    scene.lighting = {{0.1f, 0.2f, 0.3f}, 0.45f};
+    const nlohmann::ordered_json json = kast::sceneToJson(scene);
+    check(json["version"] == kast::kSceneFileVersion && json.contains("lighting"), "saved with lighting, same version");
+    kast::Scene loaded;
+    std::string error;
+    check(kast::sceneFromJson(json, loaded, error), "point light scene loads");
+    const entt::entity lamp = loaded.children(entt::null).at(0);
+    const auto* light = loaded.registry().try_get<kast::PointLight>(lamp);
+    check(light && near(light->color, {0.25f, 0.5f, 1.0f}) && light->intensity == 2.5f && light->range == 7.0f,
+          "PointLight round trip");
+    check(near(loaded.lighting.ambientColor, {0.1f, 0.2f, 0.3f}) && loaded.lighting.ambientIntensity == 0.45f,
+          "lighting round trip");
+    check(kast::sceneToJson(loaded) == json, "second save is identical");
+    nlohmann::ordered_json noLighting = json;
+    noLighting.erase("lighting");
+    check(kast::sceneFromJson(noLighting, loaded, error) && near(loaded.lighting.ambientColor, {1, 1, 1}) &&
+              loaded.lighting.ambientIntensity == 0.2f,
+          "missing lighting: default white at 0.2");
+}
+
 int main()
 {
     checkRotations();
@@ -3957,6 +4061,7 @@ int main()
     checkComponentJson();
     checkDuplicateComponents();
     checkLoadValidation();
+    checkPointLights();
     checkCameras();
     checkInput();
     checkRotatorSystem();
