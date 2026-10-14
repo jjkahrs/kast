@@ -2231,6 +2231,7 @@ void checkPak()
     rejected(huge, "past the end", "an entry size that would overflow is rejected");
     kast::Pak missing;
     check(!missing.open(dir / "absent.pak", error) && contains(error, "Cannot open"), "a missing pak is an error");
+    std::filesystem::remove_all(dir);
 }
 
 void checkBuild()
@@ -2317,6 +2318,7 @@ void checkBuild()
     check(!files.canBuild(), "Build is disabled while paused");
     stopPlay(doc);
     check(files.canBuild(), "Build is enabled again after Stop");
+    std::filesystem::remove_all(dir);
 }
 
 // Build Settings: Start Scene choices, Save validating and writing only project.kast, Build opening the modal.
@@ -2391,6 +2393,7 @@ void checkBuildSettings()
             check(buildFiles.buildSettingsOpen(), what.c_str());
         }
     }
+    std::filesystem::remove_all(root.parent_path());
 }
 
 // Last: mounting a pak lasts for the rest of the process, so later disk reads would fail.
@@ -2418,6 +2421,7 @@ void checkMountedPak()
           "listFiles from the pak");
     check(kast::listFiles(root).size() == 3 && kast::listFiles(root / "nothing").empty(),
           "listFiles of the root and of a missing folder");
+    std::filesystem::remove_all(dir);
 }
 
 // --- Events ---
@@ -3549,6 +3553,7 @@ void checkAssetScan()
     check(findAsset(scanAssets(root), "out") != nullptr, "a build folder outside the project hides nothing");
     check(saveBuildFolder(root, root, error) && findAsset(scanAssets(root), "alpha") != nullptr,
           "a build folder equal to the project root hides nothing");
+    std::filesystem::remove_all(root);
 }
 
 void checkAssetNames()
@@ -3573,6 +3578,7 @@ void checkAssetNames()
           "createAssetFolder refuses a taken name (ignoring case)");
     check(!createAssetFolder(dir, "bad?", error) && !std::filesystem::exists(dir / "bad?"),
           "createAssetFolder refuses an invalid name");
+    std::filesystem::remove_all(dir);
 }
 
 void checkAssetPaths()
@@ -3644,6 +3650,7 @@ void checkAssetMoves()
     check(moveAsset(root / "m" / "f.txt", root / "sub" / "deep", error) && readText(root / "sub" / "deep" / "f.txt") == "mine",
           "moveAsset moves a file");
     check(!moveAsset(root / "missing.txt", root / "sub", error) && !error.empty(), "moveAsset reports an OS failure");
+    std::filesystem::remove_all(root);
 }
 
 void checkOpenSceneAction()
@@ -3661,6 +3668,7 @@ void checkOpenSceneAction()
     files.openScene((root / "a.scene").string());
     check(doc.path == (root / "b.scene").string() && doc.dirty,
           "FileActions::openScene waits on the unsaved-changes prompt when dirty");
+    std::filesystem::remove_all(root);
 }
 
 // Assets panel Create > Lua System / State Machine: unique template files, the fsms/ rule, the first-rename machine
@@ -3737,6 +3745,8 @@ void checkAssetCreate()
           "remapProjectPaths follows a moved parent folder, ignoring case");
     check(!remapProjectPaths(systems, "nothing", "x") && systems[2] == "other/c.lua",
           "remapProjectPaths leaves unrelated paths unchanged");
+    std::filesystem::remove_all(loose);
+    std::filesystem::remove_all(dir);
 }
 
 void checkAssets()
@@ -3904,6 +3914,7 @@ void checkGuiFiles()
     writeFile(dir / "plain.rml", "<rml><head/><body/></rml>");
     check(renameGui(dir / "plain.rml", "plainer.rml", error) && std::filesystem::exists(dir / "plainer.rml"),
           "renameGui renames an .rml that links nothing like any file");
+    std::filesystem::remove_all(dir);
 }
 
 void checkUIDocumentComponent()
@@ -3976,7 +3987,8 @@ void checkExternalEditor()
               "code \"C:\\j\xC3\xBCgo\\a.json\"",
           "non-ASCII path expanded as UTF-8");
 
-    const std::filesystem::path file = looseTestDir("kast_editor_settings_check") / "Kast/Editor/editor_settings.json";
+    const std::filesystem::path dir = looseTestDir("kast_editor_settings_check");
+    const std::filesystem::path file = dir / "Kast/Editor/editor_settings.json";
     std::string error;
     check(loadEditorCommand(file) == kDefaultEditorCommand, "no settings file: the default command");
     check(saveEditorCommand(file, "subl \"{file}\"", error) && loadEditorCommand(file) == "subl \"{file}\"",
@@ -3991,6 +4003,7 @@ void checkExternalEditor()
     check(editor.command() == kDefaultEditorCommand && editor.setCommand("vim {file}", error) &&
               editor.command() == "vim {file}" && loadEditorCommand(file) == "vim {file}",
           "setCommand saves and is used from then on");
+    std::filesystem::remove_all(dir);
 }
 
 // Point light falloff and per-mesh selection (renderer.h), PointLight validation and scene ambient in scene files.
@@ -4188,6 +4201,7 @@ void checkPostProcessing()
     check(current.children(entt::null).size() == 1 && current.postProcessing.vignette.intensity == 0.9f &&
               !current.postProcessing.bloom.enabled,
           "failed post loads leave the scene untouched");
+    std::filesystem::remove_all(dir);
 }
 
 // --- Materials ---
@@ -4929,6 +4943,11 @@ int main()
     checkAnimatorSystem();
     checkModelEditor();
     checkMountedPak(); // last: the mounted pak hides the disk for the rest of the run
+    for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::temp_directory_path())) {
+        const std::string name = entry.path().filename().string();
+        const std::string what = std::format("removes its temp folder {}", name);
+        check(!entry.is_directory() || !name.starts_with("kast_"), what.c_str());
+    }
     if (g_failures > 0) {
         kast::log::error(std::format("{} self-check(s) failed", g_failures));
         return 1;
