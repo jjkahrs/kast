@@ -18,6 +18,7 @@
 #include <log.h>
 #include <lua_components.h>
 #include <lua_systems.h>
+#include <material.h>
 #include <math3d.h>
 #include <pak.h>
 #include <project.h>
@@ -231,9 +232,9 @@ void checkComponentJson()
                                         R"({"position":[1.5,-2.0,0.1],"rotation":[0.0,0.6,0.0,0.8],"scale":[2.0,2.0,2.0]})");
     check(sameRotation(t.rotation, {0, 0.6f, 0, 0.8f}) && near(t.position, {1.5f, -2, 0.1f}),
           "Transform values (Quaternion field)");
-    const kast::MeshRenderer m = roundTrip(kast::MeshRenderer{kast::Primitive::Sphere, {0.25f, 0.5f, 1}},
-                                           R"({"primitive":"sphere","color":[0.25,0.5,1.0]})");
-    check(m.primitive == kast::Primitive::Sphere && near(m.color, {0.25f, 0.5f, 1}), "MeshRenderer values (enum field)");
+    const kast::MeshRenderer m = roundTrip(kast::MeshRenderer{kast::Primitive::Sphere, "materials/red.mat"},
+                                           R"({"primitive":"sphere","material":"materials/red.mat"})");
+    check(m.primitive == kast::Primitive::Sphere && m.material == "materials/red.mat", "MeshRenderer values (enum field)");
     const kast::DirectionalLight l = roundTrip(kast::DirectionalLight{{1, 0.9f, 0.8f}, 2.5f},
                                                R"({"color":[1.0,0.9,0.8],"intensity":2.5})");
     check(l.intensity == 2.5f, "DirectionalLight values");
@@ -264,7 +265,7 @@ void checkDuplicateComponents()
     kast::Scene scene;
     entt::registry& registry = scene.registry();
     const entt::entity e = scene.create("E");
-    registry.emplace<kast::MeshRenderer>(e, kast::Primitive::Plane, bx::Vec3{0.1f, 0.2f, 0.3f});
+    registry.emplace<kast::MeshRenderer>(e, kast::Primitive::Plane, "a.mat");
     registry.emplace<kast::Rotator>(e, bx::Vec3{1, 0, 0}, 12.0f);
     registry.emplace<TestComponent>(e, 5, false, "copy me");
     registry.emplace<kast::Camera>(e, 40.0f, 0.3f, 50.0f);
@@ -273,7 +274,7 @@ void checkDuplicateComponents()
     const auto* mesh = registry.try_get<kast::MeshRenderer>(copy);
     const auto* rotator = registry.try_get<kast::Rotator>(copy);
     const auto* test = registry.try_get<TestComponent>(copy);
-    check(mesh && mesh->primitive == kast::Primitive::Plane && near(mesh->color, {0.1f, 0.2f, 0.3f}), "duplicate copies MeshRenderer");
+    check(mesh && mesh->primitive == kast::Primitive::Plane && mesh->material == "a.mat", "duplicate copies MeshRenderer");
     check(rotator && rotator->degreesPerSecond == 12.0f && near(rotator->axis, {1, 0, 0}), "duplicate copies Rotator");
     check(test && test->label == "copy me", "duplicate copies a newly registered component");
     const auto* camera = registry.try_get<kast::Camera>(copy);
@@ -301,7 +302,7 @@ void checkLoadValidation()
          "version"},
         {"missing Transform", file(R"({"id": 1, "parent": null, "name": "E", "components": {}})"), "Transform"},
         {"missing components", file(R"({"id": 1, "parent": null, "name": "E"})"), "components"},
-        {"bad enum", file(entity(1, "null", R"(, "MeshRenderer": {"primitive": "torus", "color": [1,1,1]})")), "torus"},
+        {"bad enum", file(entity(1, "null", R"(, "MeshRenderer": {"primitive": "torus", "material": ""})")), "torus"},
         {"mistyped field", file(entity(1, "null", R"(, "Rotator": {"axis": [0,1,0], "degreesPerSecond": "fast"})")),
          "degreesPerSecond"},
         {"unknown field", file(entity(1, "null", R"(, "Rotator": {"axis": [0,1,0], "degreesPerSecond": 1, "rpm": 2})")), "rpm"},
@@ -2317,10 +2318,10 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"events.scene", "fsm.scene", "health.scene", "point_lights.scene", "scene_a.scene",
-                                       "scene_b.scene", "ui.scene"},
-          "tests/project lists events.scene, fsm.scene, health.scene, point_lights.scene, scene_a.scene, scene_b.scene, "
-          "ui.scene");
+              std::vector<std::string>{"events.scene", "fsm.scene", "health.scene", "materials.scene",
+                                       "point_lights.scene", "scene_a.scene", "scene_b.scene", "ui.scene"},
+          "tests/project lists events.scene, fsm.scene, health.scene, materials.scene, point_lights.scene, scene_a.scene, "
+          "scene_b.scene, ui.scene");
 
     const std::filesystem::path root = looseTestDir("kast_build_settings_check") / "game";
     std::filesystem::copy(KAST_TEST_PROJECT_DIR, root, std::filesystem::copy_options::recursive);
@@ -2331,7 +2332,8 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
     check(projectScenes(root) == std::vector<std::string>{"broken.scene", "events.scene", "fsm.scene", "health.scene",
-                                                          "levels/c.scene", "point_lights.scene", "scene_a.scene",
+                                                          "levels/c.scene", "materials.scene", "point_lights.scene",
+                                                          "scene_a.scene",
                                                           "scene_b.scene", "ui.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
@@ -4052,6 +4054,275 @@ void checkPointLights()
           "missing lighting: default white at 0.2");
 }
 
+// --- Materials ---
+
+std::string materialError(const std::string& text)
+{
+    kast::Material material;
+    std::string error;
+    kast::materialFromJson(nlohmann::ordered_json::parse(text), material, error);
+    return error;
+}
+
+void checkMaterialFiles()
+{
+    kast::Material m;
+    std::string error;
+    check(kast::materialFromJson(nlohmann::ordered_json::parse(R"({"version": 1, "baseColor": [0.1, 0.2, 0.3, 0.4],
+        "baseColorTexture": "textures/a.png", "metallic": 1, "roughness": 0.25, "metallicRoughnessTexture": "textures/mr.png",
+        "emissive": [0, 0.5, 1], "alphaMode": "mask", "alphaCutoff": 0.75})"), m, error),
+          "a .mat with every field parses");
+    check(m.baseColor == std::array<float, 4>{0.1f, 0.2f, 0.3f, 0.4f} && m.baseColorTexture == "textures/a.png" &&
+              m.metallic == 1.0f && m.roughness == 0.25f && m.metallicRoughnessTexture == "textures/mr.png" &&
+              near(m.emissive, {0, 0.5f, 1}) && m.alphaMode == kast::AlphaMode::Mask && m.alphaCutoff == 0.75f,
+          ".mat field values");
+    kast::Material back;
+    check(kast::materialFromJson(kast::materialToJson(m), back, error) && kast::materialToJson(back) == kast::materialToJson(m),
+          ".mat round trip");
+
+    check(kast::materialFromJson(nlohmann::ordered_json::parse(R"({"version": 1})"), m, error), "a .mat with only a version parses");
+    check(m.baseColor == std::array<float, 4>{0.8f, 0.8f, 0.8f, 1.0f} && m.baseColorTexture.empty() && m.metallic == 0.0f &&
+              m.roughness == 0.5f && m.metallicRoughnessTexture.empty() && near(m.emissive, {0, 0, 0}) &&
+              m.alphaMode == kast::AlphaMode::Opaque && m.alphaCutoff == 0.5f,
+          "missing .mat fields get their defaults");
+
+    const std::pair<const char*, const char*> bad[] = {
+        {R"({"metallic": 0})", "\"version\" must be 1"},
+        {R"({"version": 2})", "\"version\" must be 1"},
+        {R"([1, 2])", "must be a JSON object"},
+        {R"({"version": 1, "shininess": 3})", "unknown field \"shininess\""},
+        {R"({"version": 1, "metallic": 1.5})", "\"metallic\" must be a number between 0 and 1"},
+        {R"({"version": 1, "roughness": -0.1})", "\"roughness\" must be a number between 0 and 1"},
+        {R"({"version": 1, "roughness": "rough"})", "\"roughness\" must be a number between 0 and 1"},
+        {R"({"version": 1, "alphaCutoff": 2})", "\"alphaCutoff\" must be a number between 0 and 1"},
+        {R"({"version": 1, "baseColor": [1, 1, 1]})", "\"baseColor\" must be an array of 4 numbers between 0 and 1"},
+        {R"({"version": 1, "baseColor": [1, 1, 1, 1.2]})", "\"baseColor\" must be an array of 4 numbers"},
+        {R"({"version": 1, "emissive": [1, "x", 1]})", "\"emissive\" must be an array of 3 numbers"},
+        {R"({"version": 1, "alphaMode": "additive"})", "\"alphaMode\" must be \"opaque\", \"mask\" or \"blend\""},
+        {R"({"version": 1, "baseColorTexture": 7})", "\"baseColorTexture\" must be a string"},
+    };
+    for (const auto& [text, expected] : bad)
+        check(contains(materialError(text), expected), std::format(".mat {} is rejected: {}", text, expected).c_str());
+
+    kast::Material field = kast::defaultMaterial();
+    check(!kast::setMaterialField(field, "metallic", 3.0, error) && field.metallic == 0.0f,
+          "a rejected field leaves the material unchanged");
+    check(kast::materialField(field, "alphaMode") == nlohmann::ordered_json("opaque") && !kast::materialField(field, "nope"),
+          "materialField by name");
+}
+
+void checkMaterialLibrary()
+{
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "kast_material_check";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir / "materials");
+    writeFile(dir / "materials/red.mat", R"({"version": 1, "baseColor": [1, 0, 0, 1]})");
+    writeFile(dir / "materials/bad.mat", R"({"version": 1, "metallic": 9})");
+    writeFile(dir / "materials/notjson.mat", "{ nope");
+
+    kast::MaterialLibrary library;
+    library.setRoot(dir);
+    check(&library.get("") == &kast::defaultMaterial(), "empty material path: the default material");
+    check(library.get("materials/red.mat").baseColor[0] == 1.0f && library.get("materials/red.mat").baseColor[1] == 0.0f,
+          "a .mat loads by project-relative path");
+    const auto isError = [](const kast::Material& m) { return kast::materialToJson(m) == kast::materialToJson(kast::errorMaterial()); };
+    check(isError(library.get("materials/missing.mat")), "missing .mat: the error material");
+    check(isError(library.get("materials/bad.mat")) && isError(library.get("materials/notjson.mat")),
+          "invalid .mat (bad value, bad JSON): the error material");
+    check(near(kast::errorMaterial().emissive, {1, 0, 1}), "the error material is magenta");
+    check(isError(library.get("../outside.mat")), "a path escaping the project: the error material");
+    for (int i = 0; i < 3; ++i) {
+        library.get("materials/missing.mat");
+        library.reloadChanged();
+    }
+    kast::MaterialLibrary second; // another renderer: still one line per path
+    second.setRoot(dir);
+    second.get("materials/missing.mat");
+    check(countLogged("Material 'materials/missing.mat': cannot read the file") == 1, "a missing .mat is logged once");
+    check(countLogged("Material 'materials/bad.mat': \"metallic\" must be a number between 0 and 1") == 1,
+          "an invalid .mat is logged once, with the reason");
+
+    rewrite(dir / "materials/red.mat", R"({"version": 1, "baseColor": [0, 0, 1, 1]})");
+    library.reloadChanged();
+    check(library.get("materials/red.mat").baseColor[2] == 1.0f, "a changed .mat reloads (external edit)");
+    writeFile(dir / "materials/missing.mat", R"({"version": 1, "roughness": 0.9})");
+    library.reloadChanged();
+    check(library.get("materials/missing.mat").roughness == 0.9f, "a .mat that appears later loads");
+
+    kast::Material saved;
+    saved.metallic = 0.7f;
+    saved.baseColorTexture = "textures/a.png";
+    std::string error;
+    kast::Material loaded;
+    check(saveMaterial(dir / "materials/saved.mat", saved, error) &&
+              kast::loadMaterial(dir / "materials/saved.mat", loaded, error) && loaded.metallic == 0.7f,
+          "saveMaterial writes a loadable .mat");
+    std::filesystem::path created;
+    check(writeNewMaterial(dir / "materials", created, error) && created.filename() == "new_material.mat" &&
+              kast::loadMaterial(created, loaded, error) &&
+              kast::materialToJson(loaded) == kast::materialToJson(kast::defaultMaterial()),
+          "Create > Material writes the default material");
+    check(writeNewMaterial(dir / "materials", created, error) && created.filename() == "new_material_2.mat",
+          "Create > Material picks a free name");
+
+    // Renaming / moving a texture rewrites the .mat files pointing at it.
+    std::filesystem::create_directories(dir / "textures");
+    const std::vector<std::string> changed = remapMaterialTextures(dir, "textures", "art");
+    check(changed == std::vector<std::string>{"materials/saved.mat"} &&
+              kast::loadMaterial(dir / "materials/saved.mat", loaded, error) && loaded.baseColorTexture == "art/a.png",
+          "moving a texture folder remaps .mat texture paths");
+    check(remapMaterialTextures(dir, "art/a.png", "art/b.png").size() == 1 &&
+              kast::loadMaterial(dir / "materials/saved.mat", loaded, error) && loaded.baseColorTexture == "art/b.png",
+          "renaming a texture remaps .mat texture paths");
+    check(remapMaterialTextures(dir, "art/other.png", "art/c.png").empty(), "unrelated renames change no .mat");
+
+    // Renaming / moving a .mat (or its folder) rewrites the open scene's MeshRenderers pointing at it.
+    Document doc;
+    entt::registry& registry = doc.scene.registry();
+    const entt::entity a = doc.scene.create("A");
+    const entt::entity b = doc.scene.create("B");
+    const entt::entity c = doc.scene.create("C");
+    registry.emplace<kast::MeshRenderer>(a, kast::Primitive::Cube, "materials/red.mat");
+    registry.emplace<kast::MeshRenderer>(b, kast::Primitive::Cube, "materials/blue.mat");
+    registry.emplace<kast::MeshRenderer>(c, kast::Primitive::Cube, "");
+    remapScenePaths(doc, "materials/red.mat", "materials/crimson.mat");
+    check(registry.get<kast::MeshRenderer>(a).material == "materials/crimson.mat" &&
+              registry.get<kast::MeshRenderer>(b).material == "materials/blue.mat" && doc.dirty,
+          "renaming a .mat remaps the MeshRenderers using it");
+    remapScenePaths(doc, "materials", "art/mats");
+    check(registry.get<kast::MeshRenderer>(a).material == "art/mats/crimson.mat" &&
+              registry.get<kast::MeshRenderer>(b).material == "art/mats/blue.mat" &&
+              registry.get<kast::MeshRenderer>(c).material.empty(),
+          "moving a folder remaps every MeshRenderer material inside it; empty stays empty");
+    std::filesystem::remove_all(dir);
+}
+
+void checkTextureDecode()
+{
+    std::string png, jpg;
+    check(kast::readFile(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "textures/checker.png", png) &&
+              kast::readFile(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "textures/bricks.jpg", jpg),
+          "test textures present");
+    const std::optional<kast::MipImage> image = kast::decodeImage(png, true);
+    check(image && image->width == 64 && image->height == 64 && image->levels == 7, "PNG decodes with a full mip chain");
+    size_t bytes = 0;
+    for (int level = 0, size = 64; level < 7; ++level, size /= 2)
+        bytes += static_cast<size_t>(size) * size * 4;
+    check(image && image->rgba.size() == bytes, "mip chain size: 64x64 down to 1x1");
+    check(image && image->rgba[0] == 40 && image->rgba[1] == 80 && image->rgba[2] == 220 && image->rgba[3] == 255,
+          "row 0 is the image's top (blue marker cell at the top-left)");
+    check(kast::decodeImage(jpg, false).has_value(), "JPG decodes");
+    check(!kast::decodeImage("not an image", true) && !kast::decodeImage("", false), "undecodable bytes: nullopt");
+}
+
+void checkMaterialScenes()
+{
+    // A scene saved before materials: MeshRenderer "color" is dropped with a warning, the scene loads.
+    kast::Scene loaded;
+    std::string error;
+    kast::SceneLoadReport report;
+    const auto json = nlohmann::ordered_json::parse(R"({"version": 4, "entities": [{"id": 1, "name": "Old", "parent": null,
+        "components": {"Transform": {"position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]},
+                       "MeshRenderer": {"primitive": "sphere", "color": [0.3, 0.45, 0.85]}}}]})");
+    check(kast::sceneFromJson(json, loaded, error, &report), "a scene with MeshRenderer \"color\" still loads");
+    const auto* mesh = loaded.registry().try_get<kast::MeshRenderer>(loaded.children(entt::null).at(0));
+    check(mesh && mesh->primitive == kast::Primitive::Sphere && mesh->material.empty(), "old MeshRenderer: default material");
+    check(report.warnings.size() == 1 && contains(report.warnings[0], "\"color\" is no longer supported"),
+          "old MeshRenderer \"color\": one warning");
+    check(!contains(kast::sceneToJson(loaded).dump(), "\"color\""), "re-saving drops \"color\"");
+
+    const std::vector<bx::Vec3> centers = {{0, 0, 1}, {0, 0, 5}, {0, 0, 3}, {0, 0, -5}};
+    check(kast::backToFront(centers, {0, 0, 0}) == std::vector<size_t>{1, 3, 2, 0}, "blend order: far to near");
+    check(kast::backToFront({{1, 0, 0}, {-1, 0, 0}}, {0, 0, 0}) == std::vector<size_t>{0, 1}, "blend order: ties keep list order");
+    check(kast::backToFront({}, {0, 0, 0}).empty(), "blend order: none");
+}
+
+void checkLuaMaterials()
+{
+    const std::filesystem::path dir = luaTestDir();
+    std::filesystem::create_directories(dir / "materials");
+    writeFile(dir / "materials/shared.mat", R"({"version": 1, "baseColor": [0.5, 0.5, 0.5, 1], "roughness": 0.3})");
+    writeFile(dir / "materials/other.mat", R"({"version": 1, "metallic": 1})");
+    writeFile(dir / "scripts/mat.lua", R"(local function fails(part, fn)
+    local ok, err = pcall(fn)
+    assert(not ok, "expected an error mentioning " .. part)
+    assert(string.find(err, part, 1, true), "error '" .. tostring(err) .. "' does not mention " .. part)
+end
+local done = false
+local function find(name)
+    for e in kast.query("MeshRenderer") do
+        if kast.get(e, "MeshRenderer").primitive == name then return e end
+    end
+end
+return { update = function(dt)
+    if done then return end
+    done = true
+    local a, b, c = find("cube"), find("sphere"), find("plane")
+    assert(kast.getMaterialProperty(a, "roughness") == 0.3, "get reads the shared .mat")
+    assert(kast.getMaterialProperty(a, "alphaMode") == "opaque", "get a string property")
+    local color = kast.getMaterialProperty(a, "baseColor")
+    assert(#color == 4 and color[1] == 0.5 and color[4] == 1, "get a color as an array")
+    kast.setMaterialProperty(a, "baseColor", {1, 0, 0, 1})
+    kast.setMaterialProperty(a, "metallic", 0.75)
+    kast.setMaterialProperty(a, "emissive", {x = 0, y = 1, z = 0})
+    kast.setMaterialProperty(a, "alphaMode", "blend")
+    assert(kast.getMaterialProperty(a, "baseColor")[1] == 1 and kast.getMaterialProperty(a, "metallic") == 0.75,
+           "set changes the entity's instance")
+    assert(kast.getMaterialProperty(a, "roughness") == 0.3, "the instance starts as a copy of the .mat")
+    assert(kast.getMaterialProperty(b, "baseColor")[1] == 0.5 and kast.getMaterialProperty(b, "metallic") == 0,
+           "another entity with the same .mat is unaffected")
+    assert(kast.getMaterialProperty(c, "baseColor")[1] == 0.8, "no material path: the default material")
+    fails('"metallic" must be a number between 0 and 1', function() kast.setMaterialProperty(a, "metallic", 2) end)
+    fails('"baseColor" must be an array of 4 numbers', function() kast.setMaterialProperty(a, "baseColor", {1, 0, 0}) end)
+    fails('"baseColor" must be an array of 4 numbers', function() kast.setMaterialProperty(a, "baseColor", {1, 0, 0, 1, 1}) end)
+    fails('"alphaMode" must be', function() kast.setMaterialProperty(a, "alphaMode", "glow") end)
+    fails('"roughness" must be a number', function() kast.setMaterialProperty(a, "roughness", "smooth") end)
+    fails('unknown field "shine"', function() kast.setMaterialProperty(a, "shine", 1) end)
+    fails('unknown material property "shine"', function() kast.getMaterialProperty(a, "shine") end)
+    fails('has no "MeshRenderer"', function() kast.setMaterialProperty(kast.create("Bare"), "metallic", 1) end)
+    assert(kast.getMaterialProperty(a, "metallic") == 0.75, "rejected sets leave the instance unchanged")
+
+    kast.set(b, "MeshRenderer", {material = "materials/other.mat"})
+    assert(kast.getMaterialProperty(b, "metallic") == 1, "kast.set swaps the material")
+    kast.setMaterialProperty(c, "roughness", 0.9)
+    kast.set(c, "MeshRenderer", {primitive = "plane"})
+    assert(kast.getMaterialProperty(c, "roughness") == 0.9, "kast.set without a material change keeps the instance")
+    kast.set(c, "MeshRenderer", {material = "materials/shared.mat"})
+    assert(kast.getMaterialProperty(c, "roughness") == 0.3, "kast.set to another material drops the instance")
+end })");
+
+    Document doc;
+    doc.path = (dir / "mat.scene").string();
+    doc.project = kast::Project{.root = dir, .name = "Materials"};
+    entt::registry& registry = doc.scene.registry();
+    registry.emplace<kast::MeshRenderer>(doc.scene.create("A"), kast::Primitive::Cube, "materials/shared.mat");
+    registry.emplace<kast::MeshRenderer>(doc.scene.create("B"), kast::Primitive::Sphere, "materials/shared.mat");
+    registry.emplace<kast::MeshRenderer>(doc.scene.create("C"), kast::Primitive::Plane, "");
+    doc.scene.systems = {"scripts/mat.lua"};
+    const std::string before = kast::materialToJson(kast::defaultMaterial()).dump();
+    const auto fileTime = std::filesystem::last_write_time(dir / "materials/shared.mat");
+
+    startPlay(doc);
+    updatePlay(doc, 0.1f);
+    checkOk(doc.lua, 0, "kast.get/setMaterialProperty asserts in Lua pass");
+    const auto* instance = registry.try_get<kast::MaterialInstance>(named(doc.scene, "A"));
+    check(instance && instance->material.baseColor[0] == 1.0f && instance->material.alphaMode == kast::AlphaMode::Blend &&
+              near(instance->material.emissive, {0, 1, 0}),
+          "the instance holds the per-entity values");
+    check(!registry.all_of<kast::MaterialInstance>(named(doc.scene, "B")), "B has no instance");
+    check(registry.get<kast::MeshRenderer>(named(doc.scene, "B")).material == "materials/other.mat", "kast.set wrote the material");
+    stopPlay(doc);
+    check(registry.view<kast::MaterialInstance>().empty(), "Stop discards every material instance");
+    check(registry.get<kast::MeshRenderer>(named(doc.scene, "B")).material == "materials/shared.mat",
+          "Stop restores the swapped material path");
+    std::string text;
+    check(kast::readFile(dir / "materials/shared.mat", text) && !contains(text, "0.75") &&
+              std::filesystem::last_write_time(dir / "materials/shared.mat") == fileTime,
+          "material edits from Lua never reach the .mat file");
+    check(before == kast::materialToJson(kast::defaultMaterial()).dump(), "the default material is never edited");
+    std::filesystem::remove_all(dir);
+}
+
 int main()
 {
     checkRotations();
@@ -4062,6 +4333,11 @@ int main()
     checkDuplicateComponents();
     checkLoadValidation();
     checkPointLights();
+    checkMaterialFiles();
+    checkMaterialLibrary();
+    checkTextureDecode();
+    checkMaterialScenes();
+    checkLuaMaterials();
     checkCameras();
     checkInput();
     checkRotatorSystem();

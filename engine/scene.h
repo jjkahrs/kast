@@ -36,9 +36,10 @@ struct Hierarchy {
 
 enum class Primitive { Cube, Plane, Sphere };
 
+// material: a project-relative .mat file (see material.h); empty = the default grey material.
 struct MeshRenderer {
     Primitive primitive = Primitive::Cube;
-    bx::Vec3 color{0.8f, 0.8f, 0.8f}; // linear RGB 0..1
+    std::string material;
 };
 
 // Shines along the entity's world -Z axis.

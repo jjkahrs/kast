@@ -84,7 +84,16 @@ Record parseEntity(const Json& json, SceneLoadReport& report)
         if (!components.contains(type.name()))
             continue;
         std::string error;
-        entt::meta_any component = componentFromJson(type, components[type.name()], error);
+        Json value = components[type.name()];
+        // MeshRenderer "color" predates materials: dropped, so older scenes still load.
+        if (type == entt::resolve<MeshRenderer>() && value.is_object() && value.contains("color")) {
+            value.erase("color");
+            if (!value.contains("material"))
+                value["material"] = "";
+            report.warnings.push_back(std::format("{}: MeshRenderer: \"color\" is no longer supported (use a material); "
+                                                  "ignored", label));
+        }
+        entt::meta_any component = componentFromJson(type, value, error);
         if (!component)
             throw Invalid(std::format("\"{}\": {}", type.name(), error));
         record.components.push_back(std::move(component));

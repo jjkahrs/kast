@@ -10,7 +10,18 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <vector>
+
+#include "files.h"
+#include "project.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#define STBI_ONLY_JPEG
+#include <stb_image.h>
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include <stb_image_resize2.h>
 
 namespace kast {
 namespace {
@@ -30,10 +41,13 @@ constexpr int kSphereStacks = 16;
 constexpr int kSphereSlices = 32;
 constexpr uint64_t kState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS |
                             BGFX_STATE_MSAA; // no back-face culling: an open plane stays visible from below
+// Blended meshes test depth but don't write it, so blended meshes behind them still draw.
+constexpr uint64_t kBlendState = (kState & ~BGFX_STATE_WRITE_Z) | BGFX_STATE_BLEND_ALPHA;
 
 struct MeshVertex {
     float x, y, z;
     float nx, ny, nz;
+    float u, v; // (0, 0) is the image's top-left
 };
 
 struct LineVertex {
@@ -53,7 +67,7 @@ void addQuad(MeshData& mesh, bx::Vec3 center, bx::Vec3 u, bx::Vec3 v, bx::Vec3 n
     const float corners[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
     for (const auto& c : corners) {
         const bx::Vec3 p = bx::add(center, bx::add(bx::mul(u, c[0]), bx::mul(v, c[1])));
-        mesh.vertices.push_back({p.x, p.y, p.z, normal.x, normal.y, normal.z});
+        mesh.vertices.push_back({p.x, p.y, p.z, normal.x, normal.y, normal.z, c[0] * 0.5f + 0.5f, 0.5f - c[1] * 0.5f});
     }
     for (int i : {0, 1, 2, 0, 2, 3})
         mesh.indices.push_back(static_cast<uint16_t>(base + i));
@@ -87,7 +101,8 @@ MeshData makeSphere()
         for (int slice = 0; slice <= kSphereSlices; ++slice) {
             const float theta = 2.0f * bx::kPi * static_cast<float>(slice) / kSphereSlices;
             const bx::Vec3 n{std::sin(phi) * std::sin(theta), std::cos(phi), std::sin(phi) * std::cos(theta)};
-            mesh.vertices.push_back({n.x * 0.5f, n.y * 0.5f, n.z * 0.5f, n.x, n.y, n.z});
+            mesh.vertices.push_back({n.x * 0.5f, n.y * 0.5f, n.z * 0.5f, n.x, n.y, n.z,
+                                     static_cast<float>(slice) / kSphereSlices, static_cast<float>(stack) / kSphereStacks});
         }
     }
     constexpr int kRow = kSphereSlices + 1;
@@ -167,6 +182,37 @@ Aabb transformBounds(const Aabb& local, const float* world)
 
 } // namespace
 
+std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb)
+{
+    int width = 0, height = 0, channels = 0;
+    stbi_uc* pixels = stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(bytes.data()), static_cast<int>(bytes.size()),
+                                            &width, &height, &channels, 4);
+    if (!pixels)
+        return std::nullopt;
+    if (width > 16384 || height > 16384) { // bgfx sizes are uint16_t, and no GPU takes more
+        stbi_image_free(pixels);
+        return std::nullopt;
+    }
+    MipImage image{static_cast<uint16_t>(width), static_cast<uint16_t>(height), 1, {}};
+    image.rgba.assign(pixels, pixels + static_cast<size_t>(width) * height * 4);
+    stbi_image_free(pixels);
+    // Each level is filtered from the one before; sRGB images are filtered in linear space so the mips don't darken.
+    size_t level = 0; // byte offset of the last level
+    for (int w = width, h = height; w > 1 || h > 1; ++image.levels) {
+        const int nw = bx::max(w / 2, 1), nh = bx::max(h / 2, 1);
+        const size_t next = image.rgba.size();
+        image.rgba.resize(next + static_cast<size_t>(nw) * nh * 4); // may move the data: take pointers after
+        if (srgb)
+            stbir_resize_uint8_srgb(image.rgba.data() + level, w, h, 0, image.rgba.data() + next, nw, nh, 0, STBIR_RGBA);
+        else
+            stbir_resize_uint8_linear(image.rgba.data() + level, w, h, 0, image.rgba.data() + next, nw, nh, 0, STBIR_RGBA);
+        level = next;
+        w = nw;
+        h = nh;
+    }
+    return image;
+}
+
 float pointLightFalloff(float distance, float range)
 {
     const float ratio = distance / range;
@@ -198,6 +244,7 @@ void Renderer::init()
     meshLayout.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
         .end();
     const MeshData data[3] = {makeCube(), makePlane(), makeSphere()}; // Primitive order
     for (size_t i = 0; i < meshes_.size(); ++i) {
@@ -220,6 +267,14 @@ void Renderer::init()
     ambient_ = bgfx::createUniform("u_ambient", bgfx::UniformType::Vec4);
     pointPosRange_ = bgfx::createUniform("u_pointPosRange", bgfx::UniformType::Vec4, kMaxPointLights);
     pointColor_ = bgfx::createUniform("u_pointColor", bgfx::UniformType::Vec4, kMaxPointLights);
+    emissive_ = bgfx::createUniform("u_emissive", bgfx::UniformType::Vec4);
+    materialParams_ = bgfx::createUniform("u_material", bgfx::UniformType::Vec4);
+    cameraPos_ = bgfx::createUniform("u_cameraPos", bgfx::UniformType::Vec4);
+    baseColorSampler_ = bgfx::createUniform("s_baseColor", bgfx::UniformType::Sampler);
+    metallicRoughnessSampler_ = bgfx::createUniform("s_metallicRoughness", bgfx::UniformType::Sampler);
+    const uint32_t white = 0xffffffff;
+    white_ = bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
+                                   bgfx::copy(&white, sizeof(white)));
 }
 
 void Renderer::shutdown()
@@ -231,16 +286,80 @@ void Renderer::shutdown()
     bgfx::destroy(grid_);
     bgfx::destroy(meshProgram_);
     bgfx::destroy(lineProgram_);
-    for (bgfx::UniformHandle uniform :
-         {normalMatrix_, baseColor_, lightDir_, lightColor_, ambient_, pointPosRange_, pointColor_})
+    for (bgfx::UniformHandle uniform : {normalMatrix_, baseColor_, lightDir_, lightColor_, ambient_, pointPosRange_,
+                                        pointColor_, emissive_, materialParams_, cameraPos_, baseColorSampler_,
+                                        metallicRoughnessSampler_})
         bgfx::destroy(uniform);
+    clearTextures();
+    bgfx::destroy(white_);
 }
 
-void Renderer::render(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx, bool overlays,
-                      entt::entity selected)
+void Renderer::setProjectRoot(const std::filesystem::path& root)
 {
+    if (root != root_) {
+        root_ = root;
+        clearTextures();
+    }
+    materials_.setRoot(root);
+    materials_.reloadChanged();
+    // ponytail: one stat per texture per frame, as for materials; watch the folder if projects grow to thousands.
+    for (auto& [key, texture] : textures_)
+        if (!root_.empty() && modifiedTime(root_ / key.first) != texture.mtime)
+            loadTexture(key.first, key.second, texture);
+}
+
+bgfx::TextureHandle Renderer::texture(const std::string& path, bool srgb)
+{
+    if (path.empty())
+        return white_;
+    auto [it, added] = textures_.try_emplace({path, srgb});
+    if (added)
+        loadTexture(path, srgb, it->second);
+    return bgfx::isValid(it->second.handle) ? it->second.handle : white_;
+}
+
+void Renderer::loadTexture(const std::string& path, bool srgb, Texture& texture)
+{
+    if (bgfx::isValid(texture.handle))
+        bgfx::destroy(texture.handle);
+    texture.handle = BGFX_INVALID_HANDLE;
+    std::string error = "no project";
+    const std::optional<std::filesystem::path> file = root_.empty() ? std::nullopt : resolveProjectPath(root_, path, error);
+    texture.mtime = file ? modifiedTime(*file) : std::nullopt;
+    std::string bytes;
+    std::optional<MipImage> image;
+    if (file && !readFile(*file, bytes))
+        error = "cannot read the file";
+    else if (file && !(image = decodeImage(bytes, srgb)))
+        error = std::format("cannot decode it as PNG or JPG ({})", stbi_failure_reason());
+    if (!image) {
+        warnOnce(std::format("Texture '{}': {}; using white", path, error));
+        return;
+    }
+    texture.handle = bgfx::createTexture2D(image->width, image->height, image->levels > 1, 1, bgfx::TextureFormat::RGBA8,
+                                           srgb ? BGFX_TEXTURE_SRGB : BGFX_TEXTURE_NONE,
+                                           bgfx::copy(image->rgba.data(), static_cast<uint32_t>(image->rgba.size())));
+}
+
+void Renderer::clearTextures()
+{
+    for (auto& [key, texture] : textures_)
+        if (bgfx::isValid(texture.handle))
+            bgfx::destroy(texture.handle);
+    textures_.clear();
+}
+
+void Renderer::render(const Scene& scene, const std::filesystem::path& projectRoot, bgfx::ViewId view,
+                      const float* viewMtx, const float* projMtx, bool overlays, entt::entity selected)
+{
+    setProjectRoot(projectRoot);
     bgfx::setViewTransform(view, viewMtx, projMtx);
+    bgfx::setViewMode(view, bgfx::ViewMode::Sequential); // blended meshes must draw in the order submitted
     const entt::registry& registry = scene.registry();
+    float cameraWorld[16];
+    bx::mtxInverse(cameraWorld, viewMtx);
+    const bx::Vec3 eye{cameraWorld[12], cameraWorld[13], cameraWorld[14]};
+    const float cameraPos[4] = {eye.x, eye.y, eye.z, 1.0f};
 
     float lightDir[4] = {0.0f, -1.0f, 0.0f, 0.0f};
     float lightColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -273,15 +392,13 @@ void Renderer::render(const Scene& scene, bgfx::ViewId view, const float* viewMt
         pointLights.push_back({{world[12], world[13], world[14]}, light.range, bx::mul(light.color, light.intensity)});
     }
 
-    // ponytail: world matrices are recomputed up the parent chain per entity; cache them when scenes get deep or large.
-    for (auto [entity, mesh] : registry.view<MeshRenderer>().each()) {
+    const auto draw = [&](entt::entity entity, const MeshRenderer& mesh, const Material& material) {
         float world[16];
         float inverse[16];
         float normalMatrix[16];
         scene.worldMatrix(entity, world);
         bx::mtxInverse(inverse, world);
         bx::mtxTranspose(normalMatrix, inverse);
-        const float color[4] = {mesh.color.x, mesh.color.y, mesh.color.z, 1.0f};
         // Unused slots: black, range 1, so they add nothing.
         float pointPosRange[kMaxPointLights][4] = {};
         float pointColor[kMaxPointLights][4] = {};
@@ -295,26 +412,55 @@ void Renderer::render(const Scene& scene, bgfx::ViewId view, const float* viewMt
             pointPosRange[slot][3] = light.range;
             std::memcpy(pointColor[slot], &light.color, sizeof(bx::Vec3));
         }
+        const float emissive[4] = {material.emissive.x, material.emissive.y, material.emissive.z, 0.0f};
+        const bool blend = material.alphaMode == AlphaMode::Blend;
+        // z: fragments with alpha below it are discarded (-1 = none); w: 1 outputs alpha (blend), 0 outputs 1.
+        const float params[4] = {material.metallic, material.roughness,
+                                 material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f, blend ? 1.0f : 0.0f};
 
         bgfx::setTransform(world);
         bgfx::setUniform(normalMatrix_, normalMatrix);
-        bgfx::setUniform(baseColor_, color);
+        bgfx::setUniform(baseColor_, material.baseColor.data());
+        bgfx::setUniform(emissive_, emissive);
+        bgfx::setUniform(materialParams_, params);
+        bgfx::setUniform(cameraPos_, cameraPos);
         bgfx::setUniform(lightDir_, lightDir);
         bgfx::setUniform(lightColor_, lightColor);
         bgfx::setUniform(ambient_, ambient);
         bgfx::setUniform(pointPosRange_, pointPosRange, kMaxPointLights);
         bgfx::setUniform(pointColor_, pointColor, kMaxPointLights);
+        bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
+        bgfx::setTexture(1, metallicRoughnessSampler_, texture(material.metallicRoughnessTexture, false));
         const Mesh& gpu = meshes_[static_cast<size_t>(mesh.primitive)];
         bgfx::setVertexBuffer(0, gpu.vertices);
         bgfx::setIndexBuffer(gpu.indices);
-        bgfx::setState(kState);
+        bgfx::setState(blend ? kBlendState : kState);
         bgfx::submit(view, meshProgram_);
+    };
+
+    // Opaque and mask meshes now; blended ones after the overlays, far to near by world-space center.
+    // ponytail: world matrices are recomputed up the parent chain per entity; cache them when scenes get deep or large.
+    std::vector<std::pair<entt::entity, const Material*>> blended;
+    std::vector<bx::Vec3> centers;
+    for (auto [entity, mesh] : registry.view<MeshRenderer>().each()) {
+        const auto* instance = registry.try_get<MaterialInstance>(entity);
+        const Material& material = instance ? instance->material : materials_.get(mesh.material);
+        if (material.alphaMode != AlphaMode::Blend) {
+            draw(entity, mesh, material);
+            continue;
+        }
+        float world[16];
+        scene.worldMatrix(entity, world);
+        blended.emplace_back(entity, &material);
+        centers.push_back(bx::mul(bx::Vec3{0.0f, 0.0f, 0.0f}, world)); // every primitive is centered on its origin
     }
     if (overlays) {
         drawGrid(view);
         drawCameraFrustums(scene, view);
         drawPointLightRange(scene, view, selected);
     }
+    for (size_t i : backToFront(centers, eye))
+        draw(blended[i].first, registry.get<MeshRenderer>(blended[i].first), *blended[i].second);
 }
 
 void Renderer::drawGrid(bgfx::ViewId view)

@@ -6,6 +6,7 @@
 #include "gui_builder.h"
 
 #include <components.h>
+#include <material.h>
 
 #include <nlohmann/json.hpp>
 
@@ -32,13 +33,18 @@ public:
     // Opens the Assets context menu of the entry at path ("" = the panel background) with its Create submenu open, for
     // screenshots. The entry must be listed at the top level or inside an open folder.
     void openAssetMenu(std::string path) { assetMenuRequest_ = std::move(path); }
-    enum class AssetCreate { System, StateMachine, Gui };
-    // Runs Assets Create > Lua System, State Machine or GUI in folder ("" = the project root), as the menu does.
+    enum class AssetCreate { System, StateMachine, Gui, Material };
+    // Runs Assets Create > Lua System, State Machine, GUI or Material in folder ("" = the project root), as the menu
+    // does.
     void requestAssetCreate(AssetCreate what, std::string folder)
     {
-        constexpr AssetEdit::Op ops[] = {AssetEdit::Op::NewSystem, AssetEdit::Op::NewStateMachine, AssetEdit::Op::NewGui};
+        constexpr AssetEdit::Op ops[] = {AssetEdit::Op::NewSystem, AssetEdit::Op::NewStateMachine, AssetEdit::Op::NewGui,
+                                         AssetEdit::Op::NewMaterial};
         assetEdit_ = {ops[static_cast<int>(what)], std::move(folder)};
     }
+    // Selects the Assets entry at path (project-relative), as a click does: a .mat also shows in the Inspector until an
+    // entity is selected.
+    void selectAsset(const std::string& path);
     void drawHierarchy(Document& doc);
     void drawInspector(Document& doc);
     void drawSystems(Document& doc);
@@ -65,8 +71,8 @@ private:
     // Assets panel file operations, deferred like Edit and applied at the end of drawAssets. Paths are
     // project-relative; "" is the project root.
     struct AssetEdit {
-        enum class Op { None, NewFolder, NewSystem, NewStateMachine, NewGui, Rename, Move, Delete } op = Op::None;
-        std::string path;   // the entry acted on (NewFolder, NewSystem, NewStateMachine, NewGui: the folder to create in)
+        enum class Op { None, NewFolder, NewSystem, NewStateMachine, NewGui, NewMaterial, Rename, Move, Delete } op = Op::None;
+        std::string path;   // the entry acted on (NewFolder and New*: the folder to create in)
         std::string target; // Rename: the new name; Move: the destination folder
     };
 
@@ -89,6 +95,10 @@ private:
     bool drawStateMachineComponent(Document& doc, entt::entity entity);
     // The UIDocument component's Inspector body: a combo of the project's .rml files and Visible. True if it changed.
     bool drawUIDocumentComponent(Document& doc, entt::entity entity);
+    // MeshRenderer "material": a combo of the project's .mat files and None (default). True if it changed value.
+    bool drawMaterialPicker(Document& doc, nlohmann::ordered_json& value);
+    // The Inspector for the .mat in inspectedMaterial_: every edit saves the file (the renderers reload it).
+    void drawMaterialInspector(Document& doc);
     // Generated Inspector widgets for a component field's JSON value (built-in or Lua); true if they changed it.
     bool drawField(entt::entity entity, const kast::ComponentType& type, const kast::FieldDesc& field,
                    nlohmann::ordered_json& value);
@@ -141,4 +151,15 @@ private:
     bool assetDeleteRequested_ = false;
     std::string assetsError_;
     bool assetsErrorRequested_ = false;
+
+    // The Inspector shows inspectedMaterial_ (a project-relative .mat, set by selecting it in Assets) instead of the
+    // selected entity until another entity is selected.
+    std::string inspectedMaterial_;
+    entt::entity inspectedEntity_ = entt::null; // doc.selected when last drawn
+    struct {
+        std::string path; // what value / error were loaded from
+        std::optional<std::filesystem::file_time_type> mtime;
+        kast::Material value;
+        std::string error; // why it can't be edited; empty when value is valid
+    } material_;
 };

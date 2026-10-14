@@ -64,6 +64,9 @@ bool canEditSystems(const Document& doc);
 bool addSystem(Document& doc, const std::filesystem::path& script, std::string& error);
 void removeSystem(Document& doc, size_t index);
 void moveSystem(Document& doc, size_t index, int delta); // delta -1 = up, +1 = down; no-op past either end
+// After an asset rename / move (project-relative from -> to): the scene's systems and MeshRenderer materials that
+// pointed at from or inside it follow. Marks the document dirty if any changed.
+void remapScenePaths(Document& doc, const std::string& from, const std::string& to);
 // Writes a template system as <project>/scripts/new_system[_N].lua and adds it. Needs a project and a saved scene.
 // False + error if not.
 bool newSystemFromTemplate(Document& doc, std::string& error);

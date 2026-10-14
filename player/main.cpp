@@ -163,7 +163,7 @@ int main(int argc, char** argv)
             float view[16], proj[16];
             kast::cameraMatrices(scene, camera, static_cast<float>(width) / static_cast<float>(height),
                                  bgfx::getCaps()->homogeneousDepth, view, proj);
-            renderer.render(scene, kGameView, view, proj, false);
+            renderer.render(scene, project.root, kGameView, view, proj, false);
         }
         if (width > 0 && height > 0) {
             gui.context().resize(width, height);

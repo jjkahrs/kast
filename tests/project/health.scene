@@ -16,7 +16,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [12, 1, 12] },
-        "MeshRenderer": { "primitive": "plane", "color": [0.5, 0.55, 0.5] }
+        "MeshRenderer": { "primitive": "plane", "material": "" }
       }
     },
     {
@@ -25,7 +25,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [-1.5, 0.75, 0], "rotation": [0, 0, 0, 1], "scale": [1.5, 1.5, 1.5] },
-        "MeshRenderer": { "primitive": "cube", "color": [1, 0, 0] },
+        "MeshRenderer": { "primitive": "cube", "material": "" },
         "Health": { "current": 100, "max": 100, "regen": true, "lives": 3, "title": "Hero", "tint": [1, 0, 0],
                     "facing": [0, 0, 0, 1], "faction": "ally", "drops": ["gold", "potion"] }
       }
@@ -36,7 +36,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [1.5, 0.6, 0], "rotation": [0, 0, 0, 1], "scale": [1.2, 1.2, 1.2] },
-        "MeshRenderer": { "primitive": "sphere", "color": [0.2, 0.9, 0.3] },
+        "MeshRenderer": { "primitive": "sphere", "material": "" },
         "Health": { "current": 60, "max": 60, "regen": false, "lives": 1, "title": "Slime", "tint": [0.2, 0.9, 0.3],
                     "facing": [0, 0, 0, 1], "faction": "enemy", "drops": ["goo"] }
       }

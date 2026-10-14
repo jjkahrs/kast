@@ -2,6 +2,8 @@
 
 #include "build.h"
 
+#include <files.h>
+#include <log.h>
 #include <project.h>
 
 #define NOMINMAX
@@ -198,6 +200,41 @@ bool createAssetFolder(const fs::path& dir, const std::string& name, std::string
         return true;
     error = std::format("Cannot create folder '{}': {}", name, reason);
     return false;
+}
+
+bool saveMaterial(const fs::path& file, const kast::Material& material, std::string& error)
+{
+    return writeTextFile(file, kast::materialToJson(material).dump(2) + "\n", error);
+}
+
+bool writeNewMaterial(const fs::path& dir, fs::path& file, std::string& error)
+{
+    std::string name = "new_material.mat";
+    for (int n = 2; assetNameTaken(dir, fromUtf8(name)); ++n)
+        name = std::format("new_material_{}.mat", n);
+    file = dir / fromUtf8(name); // ponytail: free when checked, not locked until written
+    return saveMaterial(file, kast::Material{}, error);
+}
+
+std::vector<std::string> remapMaterialTextures(const fs::path& root, const std::string& from, const std::string& to)
+{
+    std::vector<std::string> changed;
+    for (const fs::path& file : kast::listFiles(root)) {
+        kast::Material material;
+        std::string error;
+        if (file.extension() != ".mat" || !kast::loadMaterial(file, material, error))
+            continue; // an invalid .mat is left alone: it renders as an error anyway
+        std::vector<std::string> paths = {material.baseColorTexture, material.metallicRoughnessTexture};
+        if (!remapProjectPaths(paths, from, to))
+            continue;
+        material.baseColorTexture = paths[0];
+        material.metallicRoughnessTexture = paths[1];
+        if (saveMaterial(file, material, error))
+            changed.push_back(kast::toProjectPath(root, file).value_or(utf8(file)));
+        else
+            kast::log::error(std::format("Cannot update the texture paths in '{}': {}", utf8(file), error));
+    }
+    return changed;
 }
 
 bool writeTextFile(const fs::path& file, std::string_view text, std::string& error)

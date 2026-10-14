@@ -13,6 +13,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(sol2 CONFIG REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
 find_package(pugixml CONFIG REQUIRED)
+find_package(Stb REQUIRED) # header-only: stb_image (PNG/JPG decode), stb_image_resize2 (mips)
 # vcpkg's luajit port ships no CMake config, only headers in include/luajit and lua51.lib/.dll.
 find_path(LUAJIT_INCLUDE_DIR luajit.h PATH_SUFFIXES luajit REQUIRED)
 find_library(LUAJIT_LIBRARY lua51 REQUIRED)
@@ -75,13 +76,13 @@ inline unsigned char kRobotoRegularTtf[] = {
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
-  engine/systems.cpp engine/renderer.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
+  engine/systems.cpp engine/renderer.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp
   ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
-target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}")
+target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
 # exceptions unwind through LuaJIT by default, which reports them only as "C++ exception"; catching them in sol2
 # keeps the binding's error message (with the script's file:line). The message reaches the Console, not sol2's stdout print.
@@ -233,6 +234,80 @@ foreach(bad range lighting)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
 endforeach()
 # Projects: --project opens tests/project (its startScene, scene_a); a folder without project.kast must exit 1.
+# Materials: tests/project/materials.scene (gold / red plastic spheres at roughness 0.1, 0.5, 0.9, PNG and JPG textured
+# cubes, a metallic-roughness textured sphere, emissive, a mask cutout, two overlapping blended planes, a broken and a
+# missing .mat, a missing texture; the built game "materials" in KAST_GAMES runs it in the player). Its Game view, Play,
+# and Play of a configure-time copy with every material path emptied (all default grey), so only materials can differ.
+# A project copy with the sun off shows metals under ambient light only; the Inspector edits a .mat selected in Assets;
+# Assets > Create > Material writes a default .mat into a fresh project copy.
+set(KAST_MATERIALS "${KAST_TEST_PROJECT}/materials.scene")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_MATERIALS}")
+file(READ "${KAST_MATERIALS}" materials_scene)
+string(REGEX REPLACE "\"material\": \"[^\"]*\"" "\"material\": \"\"" materials_default "${materials_scene}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/materials_default.scene" "${materials_default}")
+set(KAST_MATERIALS_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/materials_project")
+file(REMOVE_RECURSE "${KAST_MATERIALS_PROJECT}")
+file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${KAST_MATERIALS_PROJECT}")
+string(REGEX REPLACE "(\"DirectionalLight\": {[^}]*\"intensity\": )[0-9.]+" "\\10" materials_ambient "${materials_scene}")
+file(WRITE "${KAST_MATERIALS_PROJECT}/materials_ambient.scene" "${materials_ambient}")
+add_test(NAME materials_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/materials.png"
+          "-DEXTRA_ARGS=--scene ${KAST_MATERIALS} --size 1600x900" "-DFOCUS_PANEL=Game"
+          "-DEXPECT_OUTPUT=Material 'materials/broken.mat': .metallic. must be a number between 0 and 1"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME materials_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/materials_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_MATERIALS} --play"
+          "-DEXPECT_OUTPUT=Texture 'textures/does_not_exist.png': cannot read the file"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME materials_default_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/materials_default_play.png"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_BINARY_DIR}/materials_default.scene --play"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME materials_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/materials_default_play.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/materials_play.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(materials_play_screenshot PROPERTIES FIXTURES_SETUP materials_play_shot)
+set_tests_properties(materials_default_play_screenshot PROPERTIES FIXTURES_SETUP materials_default_play_shot)
+set_tests_properties(materials_differs PROPERTIES FIXTURES_REQUIRED "materials_play_shot;materials_default_play_shot")
+add_test(NAME materials_ambient_only_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/materials_ambient_only.png"
+          "-DEXTRA_ARGS=--scene ${KAST_MATERIALS_PROJECT}/materials_ambient.scene --size 1600x900" "-DFOCUS_PANEL=Game"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME material_inspector_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/material_inspector.png"
+          "-DEXTRA_ARGS=--scene ${KAST_MATERIALS} --select 3 --assets-select materials/cutout.mat"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME mesh_renderer_material_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/mesh_renderer_material.png"
+          "-DEXTRA_ARGS=--scene ${KAST_MATERIALS} --select 3" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME materials_roundtrip
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_MATERIALS}"
+          "-DOUT_DIR=${KAST_MATERIALS_PROJECT}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
+set(KAST_NEW_MATERIAL_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/new_material_project")
+add_test(NAME new_material_project_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${KAST_NEW_MATERIAL_PROJECT}")
+add_test(NAME new_material_project_copy
+  COMMAND "${CMAKE_COMMAND}" -E copy_directory "${KAST_TEST_PROJECT}" "${KAST_NEW_MATERIAL_PROJECT}")
+add_test(NAME assets_create_material_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/assets_create_material.png"
+          "-DEXTRA_ARGS=--project ${KAST_NEW_MATERIAL_PROJECT} --assets-create material:materials" "-DFOCUS_PANEL=Assets"
+          "-DMUST_EXIST=${KAST_NEW_MATERIAL_PROJECT}/materials/new_material.mat"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME assets_create_material_written
+  COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_NEW_MATERIAL_PROJECT}/materials/new_material.mat")
+set_tests_properties(assets_create_material_written PROPERTIES PASS_REGULAR_EXPRESSION
+  "\"version\": 1,.*\"baseColor\": \\[.*0.8.*\"metallic\": 0[.0]*,.*\"roughness\": 0.5,.*\"alphaMode\": \"opaque\"")
+set_tests_properties(new_material_project_clean PROPERTIES FIXTURES_SETUP new_material_clean)
+set_tests_properties(new_material_project_copy PROPERTIES FIXTURES_REQUIRED new_material_clean
+                     FIXTURES_SETUP new_material_copy)
+set_tests_properties(assets_create_material_screenshot PROPERTIES FIXTURES_REQUIRED new_material_copy
+                     FIXTURES_SETUP new_material_made)
+set_tests_properties(assets_create_material_written PROPERTIES FIXTURES_REQUIRED new_material_made)
 add_test(NAME project_startup
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/project_startup.png"
           "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
@@ -469,7 +544,8 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "health|Health Test|health.scene|FALSE" "health_no_systems|Health Test|health.scene|TRUE"
                "events|Events Test|events.scene|FALSE" "events_no_systems|Events Test|events.scene|TRUE"
                "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow"
-               "ui|UI Test|ui.scene|FALSE" "lights|Lights Test|point_lights.scene|FALSE")
+               "ui|UI Test|ui.scene|FALSE" "lights|Lights Test|point_lights.scene|FALSE"
+               "materials|Materials Test|materials.scene|FALSE")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)

@@ -1,4 +1,4 @@
--- Drains Health over time and shows it: MeshRenderer.color fades from Health.tint (full) to dark grey (empty).
+-- Drains Health over time and shows it: its material base color fades from Health.tint (full) to dark grey (empty).
 -- Entities with regen refill once empty.
 local drainPerSecond = 40
 
@@ -13,7 +13,7 @@ return {
             kast.set(e, "Health", {current = current})
             local f = current / h.max
             local dark = 0.15 * (1 - f)
-            kast.set(e, "MeshRenderer", {color = {x = h.tint.x * f + dark, y = h.tint.y * f + dark, z = h.tint.z * f + dark}})
+            kast.setMaterialProperty(e, "baseColor", {h.tint.x * f + dark, h.tint.y * f + dark, h.tint.z * f + dark, 1})
         end
     end,
 }

@@ -16,7 +16,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [12, 1, 12] },
-        "MeshRenderer": { "primitive": "plane", "color": [0.45, 0.5, 0.45] }
+        "MeshRenderer": { "primitive": "plane", "material": "" }
       }
     },
     {
@@ -25,7 +25,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [0, 0.5, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
-        "MeshRenderer": { "primitive": "cube", "color": [0.8, 0.3, 0.2] }
+        "MeshRenderer": { "primitive": "cube", "material": "" }
       }
     },
     {

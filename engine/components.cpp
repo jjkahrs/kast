@@ -71,7 +71,7 @@ void registerBuiltins()
         .data<Primitive::Sphere>("sphere").custom<FieldInfo>("Sphere");
     registerComponent<MeshRenderer>("MeshRenderer", {"Mesh Renderer"})
         .data<&MeshRenderer::primitive>("primitive").custom<FieldInfo>("Primitive")
-        .data<&MeshRenderer::color>("color").custom<FieldInfo>("Color", true);
+        .data<&MeshRenderer::material>("material").custom<FieldInfo>("Material");
 
     registerComponent<DirectionalLight>("DirectionalLight", {"Directional Light"})
         .data<&DirectionalLight::color>("color").custom<FieldInfo>("Color", true)

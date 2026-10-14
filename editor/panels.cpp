@@ -5,6 +5,7 @@
 #include <components.h>
 #include <log.h>
 #include <lua_components.h>
+#include <material.h>
 #include <scene_io.h>
 #include <state_machines.h>
 
@@ -324,8 +325,15 @@ bool Panels::drawField(entt::entity entity, const kast::ComponentType& type, con
 
 void Panels::drawInspector(Document& doc)
 {
+    if (doc.selected != inspectedEntity_) { // a new entity selection takes the Inspector back from a material
+        inspectedEntity_ = doc.selected;
+        if (doc.scene.valid(doc.selected))
+            inspectedMaterial_.clear();
+    }
     if (ImGui::Begin("Inspector")) {
-        if (!doc.scene.valid(doc.selected)) {
+        if (!inspectedMaterial_.empty()) {
+            drawMaterialInspector(doc);
+        } else if (!doc.scene.valid(doc.selected)) {
             ImGui::TextDisabled("No entity selected");
         } else {
             entt::registry& registry = doc.scene.registry();
@@ -348,8 +356,10 @@ void Panels::drawInspector(Document& doc)
                         changed = drawUIDocumentComponent(doc, entity) || changed;
                     } else {
                         Json json = kast::componentToJson(registry, entity, type);
+                        const bool mesh = type.meta() && type.meta() == entt::resolve<kast::MeshRenderer>();
                         for (const kast::FieldDesc& field : type.fields()) {
-                            if (!drawField(entity, type, field, json[field.name]))
+                            if (!(mesh && field.name == "material" ? drawMaterialPicker(doc, json[field.name])
+                                                                    : drawField(entity, type, field, json[field.name])))
                                 continue;
                             // Rejected edits (e.g. Camera ranges) are not applied: the last valid value stays, so
                             // the scene stays loadable.
@@ -578,14 +588,43 @@ namespace {
 
 bool hasExtension(const std::string& name, std::string_view extension); // below, with the other Assets helpers
 
-void collectRmlFiles(const std::vector<AssetEntry>& entries, std::vector<std::string>& out)
+// Project-relative paths of the files with one of these extensions, in Assets panel order.
+void collectFiles(const std::vector<AssetEntry>& entries, std::initializer_list<std::string_view> extensions,
+                  std::vector<std::string>& out)
 {
     for (const AssetEntry& entry : entries) {
         if (entry.folder)
-            collectRmlFiles(entry.children, out);
-        else if (hasExtension(entry.name, ".rml"))
+            collectFiles(entry.children, extensions, out);
+        else if (std::ranges::any_of(extensions, [&](std::string_view e) { return hasExtension(entry.name, e); }))
             out.push_back(entry.path);
     }
+}
+
+// A combo of files with none first (path empty = none). A path that isn't listed is shown as missing and kept until
+// another is chosen. True if it changed path.
+bool drawFilePicker(const char* label, const std::vector<std::string>& files, const char* none, std::string& path)
+{
+    const bool listed = std::ranges::find(files, path) != files.end();
+    const std::string current = path.empty() ? none : listed ? path : "(missing) " + path;
+    bool changed = false;
+    if (ImGui::BeginCombo(label, current.c_str())) {
+        if (ImGui::Selectable(none, path.empty()) && !path.empty()) {
+            path.clear();
+            changed = true;
+        }
+        for (const std::string& file : files)
+            if (ImGui::Selectable(file.c_str(), file == path) && file != path) {
+                path = file;
+                changed = true;
+            }
+        ImGui::EndCombo();
+    }
+    if (!path.empty() && !listed) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+        ImGui::TextWrapped("No file \"%s\" in the project: kept as-is", path.c_str());
+        ImGui::PopStyleColor();
+    }
+    return changed;
 }
 
 } // namespace
@@ -596,7 +635,7 @@ bool Panels::drawUIDocumentComponent(Document& doc, entt::entity entity)
     if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
         refreshAssets(doc); // the Assets panel hasn't scanned this project yet
     std::vector<std::string> files;
-    collectRmlFiles(assets_, files);
+    collectFiles(assets_, {".rml"}, files);
     const bool listed = std::ranges::find(files, component.path) != files.end();
     const std::string label = component.path.empty() ? "(none)" : listed ? component.path : "(missing) " + component.path;
     bool changed = false;
@@ -618,6 +657,77 @@ bool Panels::drawUIDocumentComponent(Document& doc, entt::entity entity)
     }
     changed = ImGui::Checkbox("Visible", &component.visible) || changed;
     return changed;
+}
+
+void Panels::selectAsset(const std::string& path)
+{
+    assetSelected_ = path;
+    inspectedMaterial_ = hasExtension(path, ".mat") ? path : "";
+}
+
+bool Panels::drawMaterialPicker(Document& doc, Json& value)
+{
+    if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
+        refreshAssets(doc); // the Assets panel hasn't scanned this project yet
+    std::vector<std::string> files;
+    collectFiles(assets_, {".mat"}, files);
+    std::string path = value.get<std::string>();
+    if (!drawFilePicker("Material", files, "None (default)", path))
+        return false;
+    value = path;
+    return true;
+}
+
+void Panels::drawMaterialInspector(Document& doc)
+{
+    if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
+        refreshAssets(doc);
+    const std::filesystem::path file = assetsRoot_ / fromUtf8(inspectedMaterial_);
+    // Reloaded when another material is shown or its file changes on disk (an external edit).
+    const auto mtime = kast::modifiedTime(file);
+    if (material_.path != inspectedMaterial_ || material_.mtime != mtime) {
+        material_.path = inspectedMaterial_;
+        material_.mtime = mtime;
+        material_.error.clear();
+        kast::loadMaterial(file, material_.value, material_.error);
+    }
+    ImGui::TextUnformatted(inspectedMaterial_.c_str());
+    ImGui::Separator();
+    if (!material_.error.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+        ImGui::TextWrapped("Cannot edit: %s (it renders magenta until the file is fixed)", material_.error.c_str());
+        ImGui::PopStyleColor();
+        return;
+    }
+
+    std::vector<std::string> textures;
+    collectFiles(assets_, {".png", ".jpg", ".jpeg"}, textures);
+    kast::Material& m = material_.value;
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.5f); // leave room for the labels
+    bool changed = ImGui::ColorEdit4("Base Color", m.baseColor.data());
+    changed = drawFilePicker("Base Texture", textures, "None", m.baseColorTexture) || changed;
+    changed = ImGui::SliderFloat("Metallic", &m.metallic, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp) || changed;
+    changed = ImGui::SliderFloat("Roughness", &m.roughness, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp) || changed;
+    changed = drawFilePicker("MR Texture", textures, "None", m.metallicRoughnessTexture) || changed;
+    ImGui::SetItemTooltip("Metallic-roughness texture, glTF packing: G = roughness, B = metallic (times the sliders)");
+    changed = ImGui::ColorEdit3("Emissive", &m.emissive.x) || changed;
+    constexpr const char* kModeLabels[] = {"Opaque", "Mask", "Blend"}; // AlphaMode order
+    int mode = static_cast<int>(m.alphaMode);
+    if (ImGui::Combo("Alpha Mode", &mode, kModeLabels, IM_ARRAYSIZE(kModeLabels))) {
+        m.alphaMode = static_cast<kast::AlphaMode>(mode);
+        changed = true;
+    }
+    ImGui::BeginDisabled(m.alphaMode != kast::AlphaMode::Mask);
+    changed = ImGui::SliderFloat("Alpha Cutoff", &m.alphaCutoff, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp) || changed;
+    ImGui::EndDisabled();
+    ImGui::PopItemWidth();
+    if (!changed)
+        return;
+    // ponytail: saves on every changed frame while dragging (a few hundred bytes); debounce if it ever shows.
+    if (std::string error; saveMaterial(file, m, error))
+        material_.mtime = kast::modifiedTime(file);
+    else
+        kast::log::error(std::format("Cannot save material '{}': {}", inspectedMaterial_, error));
 }
 
 void Panels::openNewStateMachine(std::string name)
@@ -918,7 +1028,7 @@ bool hasExtension(const std::string& name, std::string_view extension)
 bool isTextAsset(const std::string& name)
 {
     return hasExtension(name, ".lua") || hasExtension(name, ".rcss") || hasExtension(name, ".rml") ||
-           hasExtension(name, ".json");
+           hasExtension(name, ".json") || hasExtension(name, ".mat");
 }
 
 bool acceptAssetDrop(std::string& dropped)
@@ -1074,7 +1184,7 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
 
     if ((ImGui::IsItemClicked(ImGuiMouseButton_Left) || ImGui::IsItemClicked(ImGuiMouseButton_Right)) &&
         !ImGui::IsItemToggledOpen())
-        assetSelected_ = entry.path;
+        selectAsset(entry.path);
     if (!entry.folder && hasExtension(entry.name, ".rml") && ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
         gui.open(assetsRoot_ / fromUtf8(entry.path));
@@ -1171,6 +1281,9 @@ void Panels::drawAssetCreateMenu(const std::string& folder, const char* blocker)
     disabledTooltip(fsmBlocker);
     if (ImGui::MenuItem("GUI", nullptr, false, !blocker))
         assetEdit_ = {AssetEdit::Op::NewGui, folder};
+    disabledTooltip(blocker);
+    if (ImGui::MenuItem("Material", nullptr, false, !blocker))
+        assetEdit_ = {AssetEdit::Op::NewMaterial, folder};
     disabledTooltip(blocker);
     ImGui::EndMenu();
 }
@@ -1281,6 +1394,21 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui)
         }
         break;
     }
+    case AssetEdit::Op::NewMaterial: {
+        const std::filesystem::path dir = edit.path.empty() ? root : source;
+        std::filesystem::path file;
+        if (writeNewMaterial(dir, file, error)) {
+            const std::string name = utf8(file.filename());
+            assetExpand_ = edit.path;
+            selected = joinAsset(edit.path, name);
+            kast::log::info(std::format("Created material '{}'", selected));
+            refreshAssets(doc);
+            selectAsset(selected);
+            startAssetRename(selected, name);
+            return;
+        }
+        break;
+    }
     case AssetEdit::Op::Delete:
         error = deleteBlocker(source, openScenePath(doc)); // the scene may have changed since the prompt opened
         if (error.empty() && recycleAsset(source, error))
@@ -1321,8 +1449,11 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui)
             gui.remap(source, dest);
             if (scenePath)
                 doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
-            if (remapProjectPaths(doc.scene.systems, edit.path, selected))
-                markDirty(doc);
+            remapScenePaths(doc, edit.path, selected); // systems and MeshRenderer materials
+            for (const std::string& file : remapMaterialTextures(root, edit.path, selected))
+                kast::log::info(std::format("Updated texture paths in '{}'", file));
+            if (std::vector<std::string> path = {inspectedMaterial_}; remapProjectPaths(path, edit.path, selected))
+                inspectedMaterial_ = path[0];
             if (newFsm) {
                 assetNewFsm_.clear();
                 refreshStateMachines(doc);

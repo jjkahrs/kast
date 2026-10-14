@@ -4,6 +4,7 @@
 #include "log.h"
 #include "lua_sandbox.h"
 #include "lua_state_machines.h"
+#include "material.h"
 #include "project.h"
 #include "scene_io.h"
 
@@ -46,6 +47,32 @@ struct System {
     std::string error;
 };
 
+// A kast.setMaterialProperty value as JSON for setMaterialField: numbers and strings as they are, sequences as arrays,
+// {x, y, z[, w]} tables as [x, y, z(, w)]. Anything else becomes null, which every field rejects.
+Json materialValueToJson(const sol::object& value)
+{
+    switch (value.get_type()) {
+    case sol::type::number:
+        return value.as<double>();
+    case sol::type::string:
+        return value.as<std::string>();
+    case sol::type::table: {
+        const sol::table table = value.as<sol::table>();
+        Json array = Json::array();
+        const bool vector = table["x"].valid();
+        for (int i = 1; i <= (vector ? 4 : 5); ++i) { // a 5th element makes it too long for any field
+            const sol::object element = vector ? sol::object(table[std::string(1, "xyzw"[i - 1])]) : sol::object(table[i]);
+            if (element.get_type() == sol::type::lua_nil)
+                break;
+            array.push_back(element.get_type() == sol::type::number ? Json(element.as<double>()) : Json());
+        }
+        return array;
+    }
+    default:
+        return nullptr;
+    }
+}
+
 } // namespace
 
 // A scene switch requested by kast.loadScene, applied at the end of the frame.
@@ -67,6 +94,7 @@ struct LuaSystems::State {
     const Input* input;
     EventBus& bus;
     StateMachines& fsm;
+    MaterialLibrary materials; // shared .mat files, for kast.get/setMaterialProperty
     std::optional<PendingScene> pending; // last kast.loadScene call wins
     bool inShutdown = false;             // kast.loadScene is ignored while a shutdown runs
     sol::state lua;        // declared before everything holding Lua references, so it is destroyed last
@@ -99,6 +127,7 @@ struct LuaSystems::State {
     // kast.* bindings
     entt::entity entity(lua_State* L, const sol::object& id);
     ComponentType componentType(lua_State* L, const std::string& name);
+    const Material& material(lua_State* L, entt::entity entity); // its instance, else its MeshRenderer's material
     std::string eventName(lua_State* L, const char* function, const sol::object& name);
     void bindApi();
     void bindFsmApi();
@@ -357,6 +386,18 @@ ComponentType LuaSystems::State::componentType(lua_State* L, const std::string& 
     return type;
 }
 
+const Material& LuaSystems::State::material(lua_State* L, entt::entity e)
+{
+    if (const auto* instance = scene.registry().try_get<MaterialInstance>(e))
+        return instance->material;
+    const auto* mesh = scene.registry().try_get<MeshRenderer>(e);
+    if (!mesh)
+        raise(L, std::format("entity {} has no \"MeshRenderer\"", scene.registry().get<PersistentId>(e).value));
+    materials.setRoot(projectRoot.value_or(std::filesystem::path()));
+    materials.reloadChanged();
+    return materials.get(mesh->material);
+}
+
 std::string LuaSystems::State::eventName(lua_State* L, const char* function, const sol::object& name)
 {
     if (name.get_type() != sol::type::string || name.as<std::string>().empty())
@@ -444,8 +485,12 @@ void LuaSystems::State::bindApi()
             if (!luaToFieldJson(*desc, value, json[field], error))
                 raise(L, error);
         }
+        const auto* mesh = registry.try_get<MeshRenderer>(e);
+        const std::string oldMaterial = mesh ? mesh->material : "";
         if (!setComponentJson(registry, e, type, json, error))
             raise(L, std::format("\"{}\": {}", name, error));
+        if (mesh && registry.get<MeshRenderer>(e).material != oldMaterial)
+            registry.remove<MaterialInstance>(e); // a material swap drops the entity's instance of the old one
         fsm.syncEntity(e); // a changed StateMachine "machine" enters the new machine's initial state
     });
     api.set_function("create", [this, &registry](sol::this_state L, const std::string& name, const sol::object& parent) {
@@ -456,6 +501,32 @@ void LuaSystems::State::bindApi()
         return id;
     });
     api.set_function("destroy", [this](sol::this_state L, const sol::object& id) { scene.destroy(entity(L, id)); });
+
+    // Per-entity material properties (Unity's renderer.material): the first set copies the entity's MeshRenderer
+    // material into a MaterialInstance only it renders with; reads come from the instance, else the shared .mat.
+    // Fields and checks as in .mat files; colors as {r, g, b[, a]} or {x =, y =, z =[, w =]}.
+    api.set_function("getMaterialProperty", [this](sol::this_state L, const sol::object& id, const std::string& name) {
+        const entt::entity e = entity(L, id);
+        const std::optional<Json> value = materialField(material(L, e), name);
+        if (!value)
+            raise(L, std::format("unknown material property \"{}\"", name));
+        if (!value->is_array())
+            return sol::make_object(lua, value->is_string() ? sol::make_object(lua, value->get<std::string>())
+                                                            : sol::make_object(lua, value->get<double>()));
+        sol::table table = lua.create_table();
+        for (size_t i = 0; i < value->size(); ++i)
+            table[i + 1] = (*value)[i].get<double>();
+        return sol::make_object(lua, table);
+    });
+    api.set_function("setMaterialProperty", [this, &registry](sol::this_state L, const sol::object& id,
+                                                              const std::string& name, const sol::object& value) {
+        const entt::entity e = entity(L, id);
+        Material copy = material(L, e);
+        std::string error;
+        if (!setMaterialField(copy, name, materialValueToJson(value), error))
+            raise(L, error);
+        registry.emplace_or_replace<MaterialInstance>(e, std::move(copy));
+    });
 
     const auto logger = [this](void (*write)(std::string_view)) {
         return [this, write](sol::this_state L, const sol::object& message) {

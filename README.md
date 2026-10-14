@@ -387,12 +387,12 @@ in registration order, floats in shortest round-trip form, so re-saving an uncha
     { "id": 4, "name": "Sphere", "parent": null,
       "components": {
         "Transform": { "position": [1.5, 0.75, 0], "rotation": [0, 0, 0, 1], "scale": [1.5, 1.5, 1.5] },
-        "MeshRenderer": { "primitive": "sphere", "color": [0.3, 0.45, 0.85] },
+        "MeshRenderer": { "primitive": "sphere", "material": "materials/blue.mat" },
         "Rotator": { "axis": [0, 1, 0], "degreesPerSecond": 45 } } },
     { "id": 5, "name": "Satellite", "parent": 4,
       "components": {
         "Transform": { "position": [0.9, 0.6, 0], "rotation": [0, 0, 0.258819, 0.965926], "scale": [0.3, 0.3, 0.3] },
-        "MeshRenderer": { "primitive": "cube", "color": [0.95, 0.8, 0.2] } } },
+        "MeshRenderer": { "primitive": "cube", "material": "" } } },
     { "id": 6, "name": "Main Camera", "parent": null,
       "components": {
         "Transform": { "position": [0, 2.5, 6], "rotation": [-0.173648, 0, 0, 0.984808], "scale": [1, 1, 1] },
@@ -410,7 +410,9 @@ in registration order, floats in shortest round-trip form, so re-saving an uncha
   components](#lua-components) (sorted by name), then preserved components of unknown type (sorted by name). For a
   built-in component every field is required.
   - `Transform` (required): local `position`, `rotation` (quaternion), `scale`, relative to the parent.
-  - `MeshRenderer`: `primitive` is `cube`, `plane` or `sphere`; `color` is linear RGB 0–1.
+  - `MeshRenderer`: `primitive` is `cube`, `plane` or `sphere`; `material` is a project-relative [`.mat`](#materials)
+    file, empty for the default grey material. Scenes from before materials, with a `color` field instead, still load:
+    `color` is dropped with a Console warning (the mesh renders with the default material).
   - `DirectionalLight`: `color` (linear RGB 0–1), `intensity`.
   - `PointLight`: `color` (linear RGB 0–1), `intensity` (>= 0), `range` (meters, > 0).
   - `Camera`: perspective camera looking down the entity's world -Z (scale ignored). `verticalFovDegrees` must be
@@ -431,6 +433,60 @@ in registration order, floats in shortest round-trip form, so re-saving an uncha
   cycles. It reports why and leaves the current scene untouched. Lua components are lenient (schema drift), and a
   component name that is neither built-in nor a valid Lua definition is kept verbatim with a Console warning (missing
   definitions); see [Lua components](#lua-components).
+
+### Materials
+
+Meshes render with PBR metallic-roughness materials (glTF semantics) defined in `.mat` files: JSON, any folder of the
+project, referenced by `MeshRenderer.material` (project-relative). Every field but `version` is optional (default in
+brackets); unknown keys and invalid values make the file invalid.
+
+```json
+{
+  "version": 1,
+  "baseColor": [0.8, 0.8, 0.8, 1],
+  "baseColorTexture": "textures/checker.png",
+  "metallic": 0,
+  "roughness": 0.5,
+  "metallicRoughnessTexture": "",
+  "emissive": [0, 0, 0],
+  "alphaMode": "opaque",
+  "alphaCutoff": 0.5
+}
+```
+
+- `baseColor` linear RGBA 0–1 [0.8 grey, alpha 1], times `baseColorTexture` (sRGB; project-relative, empty = none).
+- `metallic`, `roughness` 0–1 [0, 0.5], times `metallicRoughnessTexture` (linear, glTF packing: G = roughness,
+  B = metallic).
+- `emissive` linear RGB 0–1 [black], added after lighting (shows without lights).
+- `alphaMode` [`opaque`]: `mask` discards pixels whose alpha is below `alphaCutoff` [0.5]; `blend` draws after every
+  opaque mesh, far to near by the mesh's world-space center (no per-triangle sorting), alpha-blended, depth-tested but
+  not depth-written.
+- Shading: Cook-Torrance (GGX distribution, Smith / Schlick-GGX geometry, Schlick Fresnel, F0 = mix(0.04, baseColor,
+  metallic)) for the first `DirectionalLight` and up to 8 `PointLight`s per mesh; ambient adds a diffuse term and a flat
+  specular term (roughness-aware Fresnel), so metals are not black with ambient light only. No image-based lighting or
+  shadows. The shader encodes its output to sRGB (formulas in `engine/shaders/fs_mesh.sc`).
+- Textures: PNG and JPG (stb_image), mipmapped at load (sRGB-correct filtering for base color), shared by path.
+- Fallbacks (the scene always loads): a missing or invalid `.mat` renders unlit magenta; a missing or undecodable
+  texture renders as white. Each is logged once per path, with the reason.
+- **Editor**: Assets > Create > Material writes `new_material.mat` (default material) into the folder and starts a
+  rename. Selecting a `.mat` in Assets shows it in the Inspector (until an entity is selected): color pickers, sliders
+  (clamped), the alpha mode and texture combos (the project's `.png` / `.jpg`); every edit saves the file and the views
+  show it the same frame. The MeshRenderer Inspector picks a material from the project's `.mat` files or None
+  (default). Renaming or moving a `.mat` or texture (or a folder holding them) in Assets rewrites the open scene's
+  `MeshRenderer.material` paths and the texture paths inside every valid `.mat`; deleting one leaves the references to
+  fall back. `.mat` and texture files changed on disk (e.g. in an external editor; double-click opens a `.mat` there)
+  reload within a frame: the renderer checks each loaded file's modification time every frame (not in the built game).
+- **Lua** (Play): `kast.set(e, "MeshRenderer", {material = "materials/red.mat"})` swaps the material.
+  `kast.setMaterialProperty(id, name, value)` changes one field for that entity only: the first call copies its material
+  into a per-entity instance (Unity's `renderer.material`); other entities using the same `.mat` are unaffected.
+  `kast.getMaterialProperty(id, name)` reads the instance, else the `.mat`. Values are checked like `.mat` fields
+  (invalid raises); colors are `{r, g, b[, a]}` or `{x =, y =, z =[, w =]}` and come back as arrays. Instances are
+  never saved: Stop discards them, and `kast.set` to another material drops the entity's instance.
+- **Built game**: `.mat` and texture files ship in `game.pak` like every other project file; the player renders them
+  the same way.
+- **Sample**: `tests/project/materials.scene` (gold and red plastic spheres at roughness 0.1 / 0.5 / 0.9, PNG and JPG
+  textured cubes, a metallic-roughness textured sphere, an emissive sphere, a mask cutout, two overlapping blended
+  planes, a broken and a missing `.mat`, a missing texture) with its `materials/*.mat` and `textures/*`.
 
 ### Components and systems
 
@@ -490,6 +546,7 @@ a wrong argument type raises a Lua error at the calling line.
 | `kast.query(name, ...)` | iterator of ids | Entities that have every listed component, in hierarchy order: `for e in kast.query("Transform", "Rotator") do`. No names = every entity. The matches are captured when `query` is called: entities destroyed later in the loop are skipped, entities created in the loop are not visited. |
 | `kast.get(id, name)` | table | A copy of every field. Raises if the entity doesn't have the component. |
 | `kast.set(id, name, fields)` | — | **Partial**: only the listed fields change. All-or-nothing: an unknown field, a wrong type or a value the component rejects (e.g. `Camera` ranges, a zero quaternion) raises and leaves the component unchanged. |
+| `kast.getMaterialProperty(id, name)`, `kast.setMaterialProperty(id, name, value)` | value, — | The entity's material, per entity: see [Materials](#materials). Raises without a `MeshRenderer`, for an unknown property or (set) an invalid value. |
 | `kast.has(id, name)` | boolean | |
 | `kast.add(id, name)` | — | Default-constructed; no-op if already present. |
 | `kast.remove(id, name)` | — | No-op if absent. `Transform` can't be removed (raises). |
@@ -610,7 +667,7 @@ after Stop. `--focus-panel Events` brings it to the front for screenshots.
 
 **Sample**: `tests/project/events.scene` runs `scripts/health_events.lua` (a `heartbeat` every 20 frames and, on frame
 30, `health.empty` with `{id, title}` for every entity with `Health`; it changes nothing itself) and
-`scripts/on_health_empty.lua` (greys out the named entity's `MeshRenderer`).
+`scripts/on_health_empty.lua` (greys out the named entity's material with `kast.setMaterialProperty`).
 
 ### Lua components
 
@@ -850,7 +907,7 @@ is chosen) and an **Initial** combo (`(initial: <state>)` for empty, then the ma
 game machines and entity machines exactly as Play does (definitions are read from the pak; hot reload doesn't apply).
 
 **Sample**: `tests/project/fsm.scene` has two entities with `StateMachine` (`traffic_light`, from
-`fsms/entities/traffic_light.lua`, whose `enter` recolors the `MeshRenderer`) and the project lists the game machine
+`fsms/entities/traffic_light.lua`, whose `enter` recolors the entity's material) and the project lists the game machine
 `game_flow` (`fsms/game_flow.lua`). `scripts/fsm_driver.lua` moves `game_flow` from `boot` to `playing`, then steps
 each light once (red → green, green → yellow) and tries to switch both to red: the yellow one may, the green one is
 denied with a warning.
@@ -970,6 +1027,12 @@ unsaved changes it asks **Reload** / **Keep mine**. A deleted `.rml` closes a cl
 | `lua_play_screenshot`, `lua_play_no_systems_screenshot` | `--play` on `lua.scene` and on a copy with `"systems": []` generated at configure time, writing `lua_play.png` / `lua_play_no_systems.png`. |
 | `lua_play_differs` | `lua_play.png` must differ from `lua_play_no_systems.png`: only the Lua systems (lift the cube, tint the sphere) can make them differ. |
 | `scene_bad_json`, `scene_missing`, `scene_v1_rejected`, `scene_v3_rejected` | `--scene` with `tests/scenes/malformed.scene` / a missing file / the version 1 `tests/scenes/v1.scene` / the version 3 `tests/scenes/v3.scene` must exit 1. |
+| `materials_screenshot`, `materials_play_screenshot`, `materials_default_play_screenshot`, `materials_differs` | `tests/project/materials.scene` in the Game view (`materials.png`, log must name the broken `.mat`), `--play` on it (log must name the missing texture) and on a configure-time copy with every material path emptied; the two Play shots must differ. |
+| `materials_ambient_only_screenshot` | A project copy with the sun at intensity 0, writing `materials_ambient_only.png`: metals lit by ambient only (not black). |
+| `material_inspector_screenshot`, `mesh_renderer_material_screenshot` | `materials.scene --select 3` with `--assets-select materials/cutout.mat` (the Inspector edits the `.mat`) and without (the MeshRenderer material combo), writing `material_inspector.png` / `mesh_renderer_material.png`. |
+| `assets_create_material_screenshot`, `assets_create_material_written` | `--assets-create material:materials` on a fresh copy of `tests/project`: `materials/new_material.mat` exists and holds the default material. |
+| `materials_roundtrip` | `materials.scene` saved twice: byte-identical. |
+| `build_game_materials`, `player_materials_screenshot` | The build and run of a copy with startScene `materials.scene`: materials and textures from `game.pak` in the standalone player, `player_materials.png`. |
 | `point_lights_screenshot`, `lighting_panel_screenshot`, `point_lights_play_screenshot`, `point_lights_off_play_screenshot`, `point_lights_play_differs` | `tests/project/point_lights.scene` (three colored point lights, bluish ambient): editor with `--select 7` (Blue Light's range sphere) in `point_lights.png`, `--focus-panel Lighting` (opens the hidden Lighting panel) in `lighting_panel.png`, and `--play` on it and on a configure-time copy with every `PointLight` intensity 0; the two Play shots must differ. |
 | `point_lights_roundtrip`, `point_lights_bad_range_rejected`, `point_lights_bad_lighting_rejected` | Save twice gives identical bytes; configure-time copies with `"range": 0` / `"ambientIntensity": -1` must exit 1. |
 | `build_game_lights`, `player_lights_screenshot` | The build and run of a copy with startScene `point_lights.scene` (`Lights Test.exe`): point lights and ambient in the standalone player, `player_lights.png`. |
@@ -984,7 +1047,7 @@ unsaved changes it asks **Reload** / **Keep mine**. A deleted `.rml` closes a cl
 | `switch_play_screenshot`, `switch_play_no_systems_screenshot` | `--play` on `tests/project/scene_a.scene` (its script calls `kast.loadScene("scene_b.scene")` on the first frame) and on a copy with `"systems": []` generated at configure time, writing `switch_play.png` / `switch_play_no_systems.png`. |
 | `lua_components_screenshot` | `--scene tests/project/health.scene --select 3 --size 1280x1000`: the Components panel lists `Health` as OK and the Inspector shows Hero's `Health` with every widget kind, writing `lua_components.png`. |
 | `lua_components_play_screenshot`, `lua_components_play_no_systems_screenshot` | `--play` on `health.scene` and on a copy with `"systems": []` (in `build/<preset>/health_project/`, a configure-time copy of `tests/project`), writing `lua_components_play.png` / `lua_components_play_no_systems.png`. |
-| `lua_components_play_differs` | The two must differ: only `scripts/health_drain.lua` (drains `Health`, fades `MeshRenderer.color` from `Health.tint`) can change them. |
+| `lua_components_play_differs` | The two must differ: only `scripts/health_drain.lua` (drains `Health`, fades the entity's material `baseColor` from `Health.tint` with `kast.setMaterialProperty`) can change them. |
 | `events_play_screenshot`, `events_play_no_systems_screenshot` | `--play --focus-panel Events` on `tests/project/events.scene` and on a copy with `"systems": []` (in `build/<preset>/health_project/`), writing `events_play.png` (Events panel listing the sample's events) / `events_play_no_systems.png`. |
 | `events_play_differs` | The two must differ: the publisher changes nothing itself, so only the delivered `health.empty` events (greying Hero and Slime) can change them. |
 | `fsm_play_screenshot`, `fsm_play_no_systems_screenshot` | `--play --focus-panel Events` on `tests/project/fsm.scene` and on a copy with `"systems": []` (in `build/<preset>/health_project/`), writing `fsm_play.png` (Events panel listing `fsm.changed`) / `fsm_play_no_systems.png`. |
@@ -1045,7 +1108,8 @@ engine/   log (stdout + in-memory lines), app (SDL3 window, bgfx init, main loop
           lua_sandbox (shared Lua sandbox, Lua <-> field JSON), lua_components (Lua component definitions, hot
           reload, drift migration),
           input (game keyboard/mouse state),
-          renderer (primitives, lit shader, grid/axes/camera frustums as optional overlays), pak (game.pak format),
+          renderer (primitives, PBR shader, textures, grid/axes/camera frustums as optional overlays),
+          material (.mat parsing, validation, path cache), pak (game.pak format),
           files (content reads from disk or a mounted pak), play (one Play frame: C++ then Lua systems),
           gui (RmlUi setup, file/log interfaces, GuiContext: one RmlUi context drawn into a bgfx view, SDL input),
           gui_render (RmlUi render interface on bgfx), gui_events (button click -> event bus adapter),

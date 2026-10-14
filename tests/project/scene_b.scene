@@ -16,7 +16,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [12, 1, 12] },
-        "MeshRenderer": { "primitive": "plane", "color": [0.25, 0.3, 0.45] }
+        "MeshRenderer": { "primitive": "plane", "material": "" }
       }
     },
     {
@@ -25,7 +25,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [-2, 0.5, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
-        "MeshRenderer": { "primitive": "sphere", "color": [0.2, 0.8, 0.3] }
+        "MeshRenderer": { "primitive": "sphere", "material": "" }
       }
     },
     {
@@ -34,7 +34,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [0, 0.75, 0], "rotation": [0, 0, 0, 1], "scale": [1.5, 1.5, 1.5] },
-        "MeshRenderer": { "primitive": "sphere", "color": [0.2, 0.8, 0.3] }
+        "MeshRenderer": { "primitive": "sphere", "material": "" }
       }
     },
     {
@@ -43,7 +43,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [2, 0.5, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
-        "MeshRenderer": { "primitive": "sphere", "color": [0.2, 0.8, 0.3] }
+        "MeshRenderer": { "primitive": "sphere", "material": "" }
       }
     },
     {

@@ -38,7 +38,8 @@ void GameViewport::draw(Document& doc)
             if (camera != entt::null) {
                 float view[16], proj[16];
                 kast::cameraMatrices(doc.scene, camera, size.x / size.y, bgfx::getCaps()->homogeneousDepth, view, proj);
-                renderer_.render(doc.scene, target_.view(), view, proj, false);
+                renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), target_.view(), view, proj,
+                                 false);
             } else {
                 bgfx::touch(target_.view()); // just the clear, under any GUI
             }

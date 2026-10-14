@@ -46,7 +46,7 @@ constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--ui-scale F] [--projects-file list.json] "
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
-    "[--open-menu Name] [--open-build-settings] [--assets-menu path|/] [--assets-create system|fsm|gui:folder] "
+    "[--open-menu Name] [--open-build-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
     "[--focus-panel Window] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] | "
@@ -70,6 +70,7 @@ struct Options {
     std::string build;        // build the --project game into this folder and exit, without opening a window
     std::string openMenu;     // open this main menu (e.g. "Build") for screenshots
     std::optional<std::string> assetsMenu; // open this Assets entry's context menu + Create submenu ("" = background)
+    std::string assetsSelect; // select this Assets entry (project-relative) as a click does: a .mat shows in the Inspector
     std::optional<std::pair<Panels::AssetCreate, std::string>> assetsCreate; // run Assets Create in that folder
     bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
     std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting" also opens it) to the front, for screenshots
@@ -127,12 +128,13 @@ bool parseGuiKind(std::string_view label, std::optional<GuiKind>& out)
     return false;
 }
 
-// "system:<folder>", "fsm:<folder>" or "gui:<folder>".
+// "system:<folder>", "fsm:<folder>", "gui:<folder>" or "material:<folder>".
 bool parseAssetCreate(std::string_view value, std::optional<std::pair<Panels::AssetCreate, std::string>>& out)
 {
     constexpr std::pair<std::string_view, Panels::AssetCreate> kinds[] = {{"system:", Panels::AssetCreate::System},
                                                                           {"fsm:", Panels::AssetCreate::StateMachine},
-                                                                          {"gui:", Panels::AssetCreate::Gui}};
+                                                                          {"gui:", Panels::AssetCreate::Gui},
+                                                                          {"material:", Panels::AssetCreate::Material}};
     for (const auto& [prefix, kind] : kinds)
         if (value.starts_with(prefix)) {
             out.emplace(kind, std::string(value.substr(prefix.size())));
@@ -175,6 +177,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
         } else if (arg == "--assets-menu" && hasValue) {
             const std::string_view path = argv[++i];
             options.assetsMenu = std::string(path == "/" ? "" : path);
+        } else if (arg == "--assets-select" && hasValue) {
+            options.assetsSelect = argv[++i];
         } else if (arg == "--assets-create" && hasValue && parseAssetCreate(argv[i + 1], options.assetsCreate)) {
             ++i;
         } else if (arg == "--open-gui" && hasValue) {
@@ -244,14 +248,15 @@ std::optional<Options> parseArgs(int argc, char** argv)
     const bool editorFlags = options.select != 0 || options.play || options.addComponentPopup ||
                              options.newComponentPrompt || !options.newComponent.empty() || !options.openMenu.empty() ||
                              options.openBuildSettings || !options.focusPanel.empty() || options.newStateMachinePrompt ||
-                             options.assetsMenu || options.assetsCreate || !options.openGui.empty() ||
+                             options.assetsMenu || options.assetsCreate || !options.assetsSelect.empty() ||
+                             !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
                              options.guiAdd || options.guiSave || !options.guiClick.empty() || options.openPreferences ||
                              !options.openExternal.empty();
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --add-component-popup, --new-component[-prompt], "
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --focus-panel, --assets-menu, "
-                         "--assets-create, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
+                         "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
                          "--gui-click, --open-preferences and --open-external require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
@@ -600,13 +605,16 @@ int main(int argc, char** argv)
             panels.openAssetMenu(*options->assetsMenu);
         if (options->assetsCreate && frames.frame() == kAddComponentPopupFrame)
             panels.requestAssetCreate(options->assetsCreate->first, options->assetsCreate->second);
+        if (!options->assetsSelect.empty() && frames.frame() == kAddComponentPopupFrame)
+            panels.selectAsset(options->assetsSelect);
         panels.drawHierarchy(doc);
+        // Before the views render: Inspector edits (a material saved to disk) show in this frame's Scene and Game.
+        panels.drawInspector(doc);
         viewport.draw(doc); // submitted before Game so Scene is the front tab on first run
         // Layouts saved before the Game panel existed: dock it as a tab beside Scene.
         if (const ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("Scene")))
             ImGui::SetNextWindowDockID(scene->DockId, ImGuiCond_FirstUseEver);
         game.draw(doc);
-        panels.drawInspector(doc);
         // Layouts saved before the Systems panel existed: dock it as a tab beside Hierarchy.
         if (const ImGuiWindowSettings* hierarchy = ImGui::FindWindowSettingsByID(ImHashStr("Hierarchy"));
             hierarchy && !ImGui::FindWindowSettingsByID(ImHashStr("Systems")))

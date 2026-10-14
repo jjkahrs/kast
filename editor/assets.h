@@ -1,5 +1,7 @@
 #pragma once
 
+#include <material.h>
+
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -48,6 +50,14 @@ std::string deleteBlocker(const std::filesystem::path& target, const std::filesy
 
 // Writes text to file (creating its folder), replacing any file there. False + error if that fails.
 bool writeTextFile(const std::filesystem::path& file, std::string_view text, std::string& error);
+// Writes material to file as a .mat (2-space indented JSON, fixed key order).
+bool saveMaterial(const std::filesystem::path& file, const kast::Material& material, std::string& error);
+// Creates "new_material.mat" (else "new_material_2.mat", ...) with the default material in dir; file is where.
+bool writeNewMaterial(const std::filesystem::path& dir, std::filesystem::path& file, std::string& error);
+// Rewrites the texture paths of every valid .mat under root that point at from or inside it (project-relative, as
+// remapProjectPaths). Returns the .mat files changed (project-relative); a file that can't be written is logged.
+std::vector<std::string> remapMaterialTextures(const std::filesystem::path& root, const std::string& from,
+                                               const std::string& to);
 // Creates folder name in dir. False + error (nothing created) if the name is invalid or taken.
 bool createAssetFolder(const std::filesystem::path& dir, const std::string& name, std::string& error);
 // Renames source in place. A name differing only in case is allowed. False + error (disk unchanged) if the name is

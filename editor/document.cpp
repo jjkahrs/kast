@@ -282,6 +282,19 @@ void moveSystem(Document& doc, size_t index, int delta)
     markDirty(doc);
 }
 
+void remapScenePaths(Document& doc, const std::string& from, const std::string& to)
+{
+    if (remapProjectPaths(doc.scene.systems, from, to))
+        markDirty(doc);
+    for (auto [entity, mesh] : doc.scene.registry().view<kast::MeshRenderer>().each()) {
+        std::vector<std::string> path = {mesh.material};
+        if (remapProjectPaths(path, from, to)) {
+            mesh.material = path[0];
+            markDirty(doc);
+        }
+    }
+}
+
 bool newSystemFromTemplate(Document& doc, std::string& error)
 {
     if (!doc.project) {
@@ -313,11 +326,9 @@ void resetToDefault(Document& doc)
     const entt::entity ground = createObject(doc, ObjectKind::Plane, entt::null);
     registry.get<kast::Name>(ground).value = "Ground";
     registry.get<kast::Transform>(ground).scale = {10.0f, 1.0f, 10.0f};
-    registry.get<kast::MeshRenderer>(ground).color = {0.55f, 0.6f, 0.55f};
 
     const entt::entity cube = createObject(doc, ObjectKind::Cube, entt::null);
     registry.get<kast::Transform>(cube).position = {0.0f, 0.5f, 0.0f}; // unit cube resting on y=0
-    registry.get<kast::MeshRenderer>(cube).color = {0.85f, 0.45f, 0.25f};
 
     const entt::entity camera = createObject(doc, ObjectKind::Camera, entt::null);
     registry.get<kast::Name>(camera).value = "Main Camera";
