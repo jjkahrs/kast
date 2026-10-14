@@ -1,7 +1,8 @@
 // Assert-style checks for the non-trivial engine logic: rotation conventions, matrix decomposition, picking rays,
 // hierarchy edits, component registry, scene-file validation, cameras, input, systems, Lua systems, projects, scene
 // switching, editor Play mode, Lua components, game.pak, Build, state machines, Assets panel file operations and the
-// game GUI (builder document model, GUI files, UIDocument, button click events) and the external editor setting.
+// game GUI (builder document model, GUI files, UIDocument, button click events), the external editor setting and models
+// (Assimp loading, animation sampling, crossfades, skinning limits).
 // Exit 0 if every check passes. Run by CTest as engine_self_check.
 #include "assets.h"   // Assets panel file logic; links editor/assets.cpp
 #include "build.h"    // editor Build pipeline; links editor/build.cpp
@@ -20,6 +21,8 @@
 #include <lua_systems.h>
 #include <material.h>
 #include <math3d.h>
+#include <model.h>
+#include <animation.h>
 #include <pak.h>
 #include <post_process.h>
 #include <project.h>
@@ -183,8 +186,9 @@ std::vector<std::string> typeNames()
 
 void checkComponentRegistry()
 {
-    check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "DirectionalLight", "PointLight", "Camera",
-                                                 "Rotator", "StateMachine", "UIDocument"},
+    check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "ModelRenderer", "Animator",
+                                                 "DirectionalLight", "PointLight", "Camera", "Rotator", "StateMachine",
+                                                 "UIDocument"},
           "built-in component types in registration order");
     const entt::meta_type transform = kast::findComponentType("Transform");
     const entt::meta_type rotator = kast::findComponentType("Rotator");
@@ -2319,11 +2323,11 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"events.scene", "fsm.scene", "health.scene", "materials.scene",
-                                       "point_lights.scene", "post_processing.scene", "scene_a.scene", "scene_b.scene",
-                                       "ui.scene"},
-          "tests/project lists events.scene, fsm.scene, health.scene, materials.scene, point_lights.scene, "
-          "post_processing.scene, scene_a.scene, scene_b.scene, ui.scene");
+              std::vector<std::string>{"events.scene", "fsm.scene", "health.scene", "materials.scene", "models.scene",
+                                       "models_anim.scene", "models_lua.scene", "models_material.scene",
+                                       "models_missing.scene", "point_lights.scene", "post_processing.scene",
+                                       "scene_a.scene", "scene_b.scene", "ui.scene"},
+          "tests/project lists its scenes, sorted");
 
     const std::filesystem::path root = looseTestDir("kast_build_settings_check") / "game";
     std::filesystem::copy(KAST_TEST_PROJECT_DIR, root, std::filesystem::copy_options::recursive);
@@ -2334,9 +2338,11 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
     check(projectScenes(root) == std::vector<std::string>{"broken.scene", "events.scene", "fsm.scene", "health.scene",
-                                                          "levels/c.scene", "materials.scene", "point_lights.scene",
-                                                          "post_processing.scene", "scene_a.scene",
-                                                          "scene_b.scene", "ui.scene"},
+                                                          "levels/c.scene", "materials.scene", "models.scene",
+                                                          "models_anim.scene", "models_lua.scene",
+                                                          "models_material.scene", "models_missing.scene",
+                                                          "point_lights.scene", "post_processing.scene",
+                                                          "scene_a.scene", "scene_b.scene", "ui.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
     Document doc;
@@ -4479,6 +4485,382 @@ end })");
     std::filesystem::remove_all(dir);
 }
 
+// --- Models and animation ---
+
+// A GLB in memory: a chain of joints nodes and one triangle-list mesh skinned to them, vertex i fully on joint i.
+std::string skinnedGlb(int joints)
+{
+    std::string bin;
+    const auto put = [&bin](const auto& value) { bin.append(reinterpret_cast<const char*>(&value), sizeof(value)); };
+    const int vertices = joints + (3 - joints % 3) % 3; // whole triangles
+    for (int v = 0; v < vertices; ++v)
+        for (float c : {static_cast<float>(v % 7), static_cast<float>(v / 7), 0.0f})
+            put(c);
+    const size_t jointsOffset = bin.size();
+    for (int v = 0; v < vertices; ++v)
+        for (uint16_t j : {static_cast<uint16_t>(std::min(v, joints - 1)), uint16_t{0}, uint16_t{0}, uint16_t{0}})
+            put(j);
+    const size_t weightsOffset = bin.size();
+    for (int v = 0; v < vertices; ++v)
+        for (float w : {1.0f, 0.0f, 0.0f, 0.0f})
+            put(w);
+    const size_t bindsOffset = bin.size();
+    for (int j = 0; j < joints; ++j)
+        for (int i = 0; i < 16; ++i)
+            put(i % 5 == 0 ? 1.0f : 0.0f); // identity
+    nlohmann::json nodes = nlohmann::json::array();
+    for (int j = 0; j < joints; ++j) {
+        nlohmann::json node = {{"name", std::format("Joint{}", j)}, {"translation", {0.0, 0.1, 0.0}}};
+        if (j + 1 < joints)
+            node["children"] = {j + 1};
+        nodes.push_back(node);
+    }
+    nodes.push_back({{"name", "Body"}, {"mesh", 0}, {"skin", 0}});
+    nlohmann::json skinJoints = nlohmann::json::array();
+    for (int j = 0; j < joints; ++j)
+        skinJoints.push_back(j);
+    const auto count = static_cast<size_t>(vertices);
+    nlohmann::json gltf;
+    gltf["asset"] = {{"version", "2.0"}};
+    gltf["scene"] = 0;
+    gltf["scenes"] = nlohmann::json::array({{{"nodes", {0, joints}}}});
+    gltf["nodes"] = nodes;
+    gltf["skins"] = nlohmann::json::array({{{"joints", skinJoints}, {"inverseBindMatrices", 3}}});
+    nlohmann::json primitive = {{"attributes", {{"POSITION", 0}, {"JOINTS_0", 1}, {"WEIGHTS_0", 2}}}};
+    gltf["meshes"] = nlohmann::json::array({{{"primitives", nlohmann::json::array({primitive})}}});
+    gltf["buffers"] = nlohmann::json::array({{{"byteLength", bin.size()}}});
+    gltf["bufferViews"] = nlohmann::json::array(
+        {{{"buffer", 0}, {"byteOffset", 0}, {"byteLength", jointsOffset}},
+         {{"buffer", 0}, {"byteOffset", jointsOffset}, {"byteLength", weightsOffset - jointsOffset}},
+         {{"buffer", 0}, {"byteOffset", weightsOffset}, {"byteLength", bindsOffset - weightsOffset}},
+         {{"buffer", 0}, {"byteOffset", bindsOffset}, {"byteLength", bin.size() - bindsOffset}}});
+    gltf["accessors"] = nlohmann::json::array(
+        {{{"bufferView", 0}, {"componentType", 5126}, {"count", count}, {"type", "VEC3"},
+          {"min", {0.0, 0.0, 0.0}}, {"max", {6.0, static_cast<double>(vertices / 7), 0.0}}},
+         {{"bufferView", 1}, {"componentType", 5123}, {"count", count}, {"type", "VEC4"}},
+         {{"bufferView", 2}, {"componentType", 5126}, {"count", count}, {"type", "VEC4"}},
+         {{"bufferView", 3}, {"componentType", 5126}, {"count", joints}, {"type", "MAT4"}}});
+    std::string json = gltf.dump();
+    json.append((4 - json.size() % 4) % 4, ' ');
+    bin.append((4 - bin.size() % 4) % 4, '\0');
+    std::string glb;
+    const auto put32 = [&glb](uint32_t value) { glb.append(reinterpret_cast<const char*>(&value), 4); };
+    put32(0x46546C67); // "glTF"
+    put32(2);
+    put32(static_cast<uint32_t>(12 + 8 + json.size() + 8 + bin.size()));
+    put32(static_cast<uint32_t>(json.size()));
+    put32(0x4E4F534A); // "JSON"
+    glb += json;
+    put32(static_cast<uint32_t>(bin.size()));
+    put32(0x004E4942); // "BIN\0"
+    glb += bin;
+    return glb;
+}
+
+bx::Vec3 extent(const kast::Aabb& box) { return bx::sub(box.max, box.min); }
+
+void logModel(const char* name, const kast::Model& model)
+{
+    size_t joints = 0;
+    for (const kast::ModelMesh& mesh : model.meshes)
+        joints = std::max(joints, mesh.joints.size());
+    kast::log::info(std::format("{}: {} meshes, {} nodes, max {} joints, {} clips, {} materials, bounds ({:.3f} {:.3f} "
+                                "{:.3f}) to ({:.3f} {:.3f} {:.3f})",
+                                name, model.meshes.size(), model.nodes.size(), joints, model.clips.size(),
+                                model.materials.size(), model.bounds.min.x, model.bounds.min.y, model.bounds.min.z,
+                                model.bounds.max.x, model.bounds.max.y, model.bounds.max.z));
+}
+
+bool uprightHuman(const kast::Model& model)
+{
+    const bx::Vec3 size = extent(model.bounds);
+    return size.y > 1.0f && size.y < 2.5f && size.y > size.x && size.y > size.z;
+}
+
+void checkModelLoading()
+{
+    const std::filesystem::path tests = KAST_TEST_PROJECT_DIR;
+    std::string error;
+
+    const auto character = kast::loadModel(tests, "models/female-128-anim.glb", error);
+    check(character != nullptr, "female-128-anim.glb loads");
+    if (character) {
+        logModel("models/female-128-anim.glb", *character);
+        check(character->meshes.size() == 2, "the character has 2 meshes");
+        check(std::ranges::all_of(character->meshes, [](const kast::ModelMesh& m) { return m.joints.size() == 66; }),
+              "both character meshes are skinned to 66 joints");
+        check(character->clips.size() == 178, "the character has 178 clips");
+        check(std::ranges::all_of(character->clips,
+                                  [](const kast::Clip& c) { return !c.name.empty() && c.duration > 0.0f; }),
+              "every clip is named and has a duration");
+        check(kast::findClip(*character, "Idle_A") >= 0 && kast::findClip(*character, "Angry") >= 0,
+              "clips found by name");
+        check(kast::defaultClip(*character) == "Idle_A", "the default clip is Idle_A (no exact Idle)");
+        check(!character->overBoneLimit, "66 joints are within the limit");
+        check(character->materials.size() == 2, "the character has 2 embedded materials");
+        if (character->materials.size() == 2) {
+            const kast::Material& a = character->materials[0].material;
+            const kast::Material& b = character->materials[1].material;
+            check(near(a.baseColor[0], 0.5714685f) && near(a.baseColor[1], 0.1221148f) &&
+                      near(a.baseColor[2], 0.7086533f) && near(a.baseColor[3], 1.0f),
+                  "material 0 base color factor from the file");
+            check(near(b.baseColor[0], 0.7990986f) && near(b.baseColor[1], 0.4019782f) &&
+                      near(b.baseColor[2], 0.0423115f),
+                  "material 1 base color factor from the file");
+            check(near(a.metallic, 0.0f) && near(a.roughness, 0.5f) && near(b.metallic, 0.0f) && near(b.roughness, 0.5f),
+                  "metallic 0 / roughness 0.5 from the file");
+        }
+        check(uprightHuman(*character), "the character stands upright, human sized");
+        bool weightsOk = true;
+        for (const kast::ModelMesh& mesh : character->meshes)
+            for (const kast::ModelVertex& v : mesh.vertices)
+                weightsOk = weightsOk && near(v.weights[0] + v.weights[1] + v.weights[2] + v.weights[3], 1.0f, 1e-3f);
+        check(weightsOk, "skinned vertex weights sum to 1");
+    }
+
+    const auto obj = kast::loadModel(tests, "models/cube.obj", error);
+    check(obj != nullptr, "cube.obj loads");
+    const auto gltf = kast::loadModel(tests, "models/cube.gltf", error);
+    check(gltf != nullptr, "cube.gltf loads");
+    if (obj && gltf) {
+        logModel("cube.obj", *obj);
+        logModel("cube.gltf", *gltf);
+        const kast::Material& red = obj->materials.front().material;
+        check(obj->materials.size() == 1 && obj->materials[0].name == "Red" && near(red.baseColor[0], 0.8f) && near(red.baseColor[1], 0.1f) && near(red.baseColor[2], 0.1f),
+              "cube.obj gets its MTL Kd color");
+        check(near(obj->bounds.min, gltf->bounds.min) && near(obj->bounds.max, gltf->bounds.max) &&
+                  near(obj->bounds.max, {0.5f, 0.5f, 0.5f}),
+              "the same cube has the same bounds as OBJ and glTF (meters, Y-up)");
+        check(near(gltf->materials[0].material.metallic, 0.25f) && near(gltf->materials[0].material.roughness, 0.75f),
+              "cube.gltf material factors");
+    }
+
+    // Kenney's character (CC0): skinned, Blender FBX export; its clips ship as separate animation-only files.
+    const auto fbx = kast::loadModel(tests, "models/kenney/characterMedium.fbx", error);
+    check(fbx != nullptr, "characterMedium.fbx loads");
+    if (fbx) {
+        logModel("characterMedium.fbx", *fbx);
+        check(std::ranges::any_of(fbx->meshes, [](const kast::ModelMesh& m) { return !m.joints.empty(); }),
+              "characterMedium.fbx is skinned");
+        // Authored 376 units tall in a centimeter file (UnitScaleFactor 1): 3.76 m.
+        const bx::Vec3 size = extent(fbx->bounds);
+        check(near(size.y, 3.765f, 0.01f) && size.y > size.x && size.y > size.z,
+              "the FBX character stands upright (Y-up), centimeters converted to meters");
+        for (const kast::Clip& clip : fbx->clips)
+            check(!clip.name.empty() && clip.duration > 0.0f, "FBX clips are named and have a duration");
+    }
+
+    check(kast::loadModel(tests, "models/does_not_exist.glb", error) == nullptr && !error.empty(),
+          "a missing model is an error");
+    error.clear();
+    check(kast::loadModel(tests, "models/corrupt.glb", error) == nullptr && !error.empty(), "a corrupt model is an error");
+    kast::log::info(std::format("corrupt.glb: {}", error));
+    error.clear();
+    check(kast::loadModelFromMemory("garbage", "glb", error) == nullptr && !error.empty(), "garbage bytes are an error");
+
+    const auto ok = kast::loadModelFromMemory(skinnedGlb(128), "glb", error);
+    check(ok && !ok->overBoneLimit && ok->meshes.size() == 1 && ok->meshes[0].joints.size() == 128,
+          "128 joints are within the limit");
+    const auto big = kast::loadModelFromMemory(skinnedGlb(130), "glb", error);
+    check(big && big->overBoneLimit, "a model with more than 128 joints is over the limit");
+
+    check(kast::isModelFile("a/B.GLB") && kast::isModelFile("x.fbx") && !kast::isModelFile("x.mat"), "model extensions");
+}
+
+// One node, one clip: translation 0 -> 2 on X and rotation identity -> 90 degrees about Y over 2 seconds.
+kast::Model testAnimatedModel()
+{
+    kast::Model model;
+    model.nodes.push_back({"Root", -1, {}});
+    kast::Clip clip{"Move", 2.0f, {}};
+    kast::Channel channel;
+    channel.node = 0;
+    channel.translation = {{0.0f, {0.0f, 0.0f, 0.0f}}, {2.0f, {2.0f, 0.0f, 0.0f}}};
+    const float s = std::sin(bx::kPi / 4.0f), c = std::cos(bx::kPi / 4.0f);
+    channel.rotation = {{0.0f, {0.0f, 0.0f, 0.0f, 1.0f}}, {2.0f, {0.0f, s, 0.0f, c}}};
+    clip.channels.push_back(channel);
+    model.clips.push_back(clip);
+    model.clips.push_back({"Still", 1.0f, {}});
+    return model;
+}
+
+void checkAnimationSampling()
+{
+    const kast::Model model = testAnimatedModel();
+    kast::Pose pose = kast::bindPose(model);
+    kast::sampleClip(model.clips[0], 1.0f, pose);
+    check(near(pose[0].translation, {1.0f, 0.0f, 0.0f}), "translation lerps at the mid key");
+    const float s = std::sin(bx::kPi / 8.0f), c = std::cos(bx::kPi / 8.0f);
+    check(sameRotation(pose[0].rotation, {0.0f, s, 0.0f, c}), "rotation slerps to 45 degrees at the mid key");
+    kast::sampleClip(model.clips[0], 5.0f, pose);
+    check(near(pose[0].translation, {2.0f, 0.0f, 0.0f}), "past the last key the last key holds");
+
+    check(near(kast::clipTime(2.5f, 2.0f, true), 0.5f), "looping wraps the time");
+    check(near(kast::clipTime(4.0f, 2.0f, true), 0.0f), "looping wraps exactly at the end");
+    check(near(kast::clipTime(2.5f, 2.0f, false), 2.0f), "not looping clamps at the end");
+    check(near(kast::clipTime(-1.0f, 2.0f, false), 0.0f), "not looping clamps at the start");
+    check(sameRotation(kast::slerp({0, 0, 0, 1}, {0, 0, 0, -1}, 0.5f), {0, 0, 0, 1}),
+          "slerp takes the short way between q and -q");
+
+    check(near(kast::fadeWeight(0.0f, 0.5f), 0.0f) && near(kast::fadeWeight(0.25f, 0.5f), 0.5f) &&
+              near(kast::fadeWeight(0.5f, 0.5f), 1.0f) && near(kast::fadeWeight(9.0f, 0.5f), 1.0f),
+          "crossfade weight goes 0 to 1 over the fade time");
+    check(near(kast::fadeWeight(0.0f, 0.0f), 1.0f), "no fade: the new clip at once");
+
+    // Crossfade in AnimatorState: play Move to its end (x = 2, not looping), then fade to Still (bind: x = 0) over 1 s.
+    kast::AnimatorState state;
+    state.playing = true;
+    kast::playClip(state, 0, 0.0f);
+    kast::advanceAnimator(state, model, false, 1.0f, 2.0f);
+    check(near(state.pose[0].translation, {2.0f, 0.0f, 0.0f}) && !state.playing,
+          "a clip that isn't looping stops at its end");
+    state.playing = true;
+    kast::playClip(state, 1, 1.0f);
+    kast::advanceAnimator(state, model, true, 1.0f, 0.25f);
+    check(near(state.pose[0].translation, {1.5f, 0.0f, 0.0f}), "a quarter into the fade: 75% of the old pose");
+    kast::advanceAnimator(state, model, true, 1.0f, 0.5f);
+    check(near(state.pose[0].translation, {0.5f, 0.0f, 0.0f}), "three quarters into the fade");
+    kast::advanceAnimator(state, model, true, 1.0f, 0.5f);
+    check(near(state.pose[0].translation, {0.0f, 0.0f, 0.0f}), "after the fade: only the new clip");
+    check(state.globals.size() == 1 && near(state.globals[0][12], 0.0f), "globals follow the pose");
+
+    // Skinning: a joint moved by +1 on Y moves vertices bound to it by +1 (identity inverse bind).
+    kast::Model skinned;
+    skinned.nodes.push_back({"Joint", -1, {{0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}});
+    kast::ModelMesh mesh;
+    mesh.joints = {0};
+    kast::Mat4 identity;
+    bx::mtxIdentity(identity.data());
+    mesh.inverseBinds = {identity};
+    std::vector<kast::Mat4> globals, bones;
+    kast::nodeGlobals(skinned, kast::bindPose(skinned), globals);
+    kast::skinMatrices(mesh, globals, bones);
+    check(near(bx::mul(bx::Vec3{2.0f, 0.0f, 0.0f}, bones[0].data()), {2.0f, 1.0f, 0.0f}),
+          "skin matrix = inverse bind, then joint");
+}
+
+void checkAnimatorSystem()
+{
+    // Models come from the global library: point it at the test project.
+    kast::models().setRoot(KAST_TEST_PROJECT_DIR);
+    kast::Scene scene;
+    const entt::entity e = scene.create("Hero");
+    scene.registry().emplace<kast::ModelRenderer>(e, "models/female-128-anim.glb");
+    scene.registry().emplace<kast::Animator>(e, "Angry", true, 1.0f, true);
+    const entt::entity lone = scene.create("No Model");
+    scene.registry().emplace<kast::Animator>(lone);
+    kast::animatorSystem(scene, 0.1f);
+    const auto character = kast::models().get("models/female-128-anim.glb");
+    const auto* state = scene.registry().try_get<kast::AnimatorState>(e);
+    check(character && state && state->playing && state->clip == kast::findClip(*character, "Angry"),
+          "playOnStart starts the Animator's clip");
+    check(character && state && state->globals.size() == character->nodes.size(), "the system poses every node");
+    check(!scene.registry().all_of<kast::AnimatorState>(lone), "an Animator without a ModelRenderer does nothing");
+    if (state) {
+        const std::vector<kast::Mat4> before = state->globals;
+        kast::animatorSystem(scene, 0.3f);
+        check(state->globals != before, "the pose changes as time advances");
+        scene.registry().get<kast::Animator>(e).clip = "No_Such_Clip";
+        kast::animatorSystem(scene, 0.1f);
+        check(state->clip == -1, "an unknown clip shows the bind pose");
+    }
+    check(scene.registry().get<kast::Transform>(e).position.x == 0.0f, "animation never moves the entity Transform");
+
+    // Registration: scene JSON round trip of both components, with the materials list.
+    kast::Scene saved;
+    const entt::entity m = saved.create("Model");
+    saved.registry().emplace<kast::ModelRenderer>(m, "models/a.glb", std::vector<std::string>{"", "materials/x.mat"});
+    saved.registry().emplace<kast::Animator>(m, "Run", false, 2.0f, false);
+    const auto modelType = kast::findAnyComponentType("ModelRenderer");
+    const auto animatorType = kast::findAnyComponentType("Animator");
+    const nlohmann::ordered_json json = kast::componentToJson(saved.registry(), m, modelType);
+    check(json["materials"] == nlohmann::ordered_json::array({"", "materials/x.mat"}), "materials saves as a string array");
+    std::string error;
+    kast::Scene loaded;
+    const entt::entity l = loaded.create("Model");
+    check(kast::setComponentJson(loaded.registry(), l, modelType, json, error) &&
+              loaded.registry().get<kast::ModelRenderer>(l).materials.size() == 2,
+          "materials loads back");
+    nlohmann::ordered_json badMaterials = json;
+    badMaterials["materials"] = nlohmann::ordered_json::array({1});
+    check(!kast::setComponentJson(loaded.registry(), l, modelType, badMaterials, error), "a non-string material is rejected");
+    nlohmann::ordered_json badSpeed = kast::componentToJson(saved.registry(), m, animatorType);
+    badSpeed["speed"] = -1;
+    check(!kast::setComponentJson(loaded.registry(), l, animatorType, badSpeed, error), "a negative Animator speed is rejected");
+    kast::models().setRoot({});
+}
+
+void checkModelEditor()
+{
+    kast::models().setRoot(KAST_TEST_PROJECT_DIR);
+    Document doc;
+    entt::registry& registry = doc.scene.registry();
+
+    // Dropping a model from the Assets panel (viewport or Hierarchy): an entity named after the file.
+    const entt::entity hero = createModelEntity(doc, "models/female-128-anim.glb", entt::null);
+    check(registry.get<kast::Name>(hero).value == "female-128-anim" &&
+              registry.get<kast::ModelRenderer>(hero).model == "models/female-128-anim.glb" && doc.selected == hero &&
+              doc.dirty,
+          "dropping a model creates a selected ModelRenderer entity named after the file");
+    check(registry.all_of<kast::Animator>(hero) && registry.get<kast::Animator>(hero).clip == "Idle_A",
+          "an animated model gets an Animator playing the default clip");
+    const entt::entity cube = createModelEntity(doc, "models/cube.obj", hero);
+    check(!registry.all_of<kast::Animator>(cube) && doc.scene.parent(cube) == hero,
+          "a static model gets no Animator; a Hierarchy drop parents it");
+
+    // Create > Model: an empty ModelRenderer to fill in the Inspector.
+    const entt::entity empty = createObject(doc, ObjectKind::Model, entt::null);
+    check(registry.all_of<kast::ModelRenderer>(empty) && registry.get<kast::ModelRenderer>(empty).model.empty() &&
+              registry.get<kast::Name>(empty).value == "Model",
+          "Create > Model adds an empty ModelRenderer");
+
+    // Renaming / moving a model or a .mat remaps the open scene's ModelRenderers.
+    registry.get<kast::ModelRenderer>(hero).materials = {"", "materials/gold_r05.mat"};
+    doc.dirty = false;
+    remapScenePaths(doc, "models/female-128-anim.glb", "models/heroine.glb");
+    check(registry.get<kast::ModelRenderer>(hero).model == "models/heroine.glb" &&
+              registry.get<kast::ModelRenderer>(cube).model == "models/cube.obj" && doc.dirty,
+          "renaming a model remaps ModelRenderer.model");
+    remapScenePaths(doc, "materials", "art/mats");
+    check(registry.get<kast::ModelRenderer>(hero).materials ==
+              std::vector<std::string>{"", "art/mats/gold_r05.mat"},
+          "moving a .mat folder remaps ModelRenderer material overrides; embedded slots stay empty");
+    remapScenePaths(doc, "models", "art/models");
+    check(registry.get<kast::ModelRenderer>(cube).model == "art/models/cube.obj", "moving a model folder remaps it");
+
+    // Edit-mode preview: Animators pose their model without dirtying the scene, and the pose is never saved.
+    Document edit;
+    const entt::entity animated = createModelEntity(edit, "models/female-128-anim.glb", entt::null);
+    edit.dirty = false;
+    updatePlay(edit, 0.25f);
+    const auto* state = edit.scene.registry().try_get<kast::AnimatorState>(animated);
+    check(state && state->playing && !state->globals.empty(), "Edit mode plays playOnStart clips");
+    check(!edit.dirty, "the Edit-mode preview doesn't dirty the scene");
+    const std::filesystem::path file = std::filesystem::temp_directory_path() / "kast_model_preview.scene";
+    std::string error;
+    check(kast::saveScene(edit.scene, file.string(), error), "a scene with a previewed Animator saves");
+    std::string text;
+    kast::readFile(file, text);
+    check(text.find("AnimatorState") == std::string::npos && text.find("\"time\"") == std::string::npos,
+          "preview state is not in the scene file");
+    kast::Scene reloaded;
+    check(kast::loadScene(file.string(), reloaded, error), "the saved scene loads");
+    check(reloaded.registry().view<kast::AnimatorState>().empty() && !reloaded.registry().view<kast::Animator>().empty(),
+          "after reload the Animator is back without any preview state");
+    std::filesystem::remove(file);
+
+    // Play starts clips from 0 (not where the Edit preview was); Stop drops the playback state.
+    updatePlay(edit, 1.0f);
+    startPlay(edit);
+    kast::models().setRoot(KAST_TEST_PROJECT_DIR); // this Document has no project; the renderer sets it per frame
+    updatePlay(edit, 0.1f);
+    state = edit.scene.registry().try_get<kast::AnimatorState>(animated);
+    check(state && std::abs(state->time - 0.1f) < 1e-4f, "Play starts the clip from 0");
+    stopPlay(edit);
+    check(edit.scene.registry().view<kast::AnimatorState>().empty(), "Stop drops the playback state");
+    kast::models().setRoot({});
+}
+
 int main()
 {
     checkRotations();
@@ -4542,6 +4924,10 @@ int main()
     checkAssets();
     checkGui();
     checkExternalEditor();
+    checkModelLoading();
+    checkAnimationSampling();
+    checkAnimatorSystem();
+    checkModelEditor();
     checkMountedPak(); // last: the mounted pak hides the disk for the rest of the run
     if (g_failures > 0) {
         kast::log::error(std::format("{} self-check(s) failed", g_failures));

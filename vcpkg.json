@@ -14,6 +14,7 @@
     "sol2",
     "rmlui",
     "pugixml",
-    "stb"
+    "stb",
+    "assimp"
   ]
 }

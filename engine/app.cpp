@@ -15,7 +15,6 @@
 namespace kast {
 namespace {
 
-constexpr uint32_t kResetFlags = BGFX_RESET_VSYNC;
 
 // Routes bgfx callbacks to the logger and writes screenshots as PNG.
 class BgfxCallback final : public bgfx::CallbackI {
@@ -103,7 +102,8 @@ int run(const AppConfig& config, const AppHooks& hooks)
     init.platformData.nwh = SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
     init.resolution.width = static_cast<uint32_t>(width);
     init.resolution.height = static_cast<uint32_t>(height);
-    init.resolution.reset = kResetFlags;
+    const uint32_t resetFlags = config.vsync ? BGFX_RESET_VSYNC : BGFX_RESET_NONE;
+    init.resolution.reset = resetFlags;
     init.callback = &callback;
     if (!bgfx::init(init)) {
         int code = fail("bgfx::init failed (Direct3D11)", window);
@@ -127,7 +127,7 @@ int run(const AppConfig& config, const AppHooks& hooks)
             if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
                 width = event.window.data1;
                 height = event.window.data2;
-                bgfx::reset(static_cast<uint32_t>(width), static_cast<uint32_t>(height), kResetFlags);
+                bgfx::reset(static_cast<uint32_t>(width), static_cast<uint32_t>(height), resetFlags);
                 log::info(std::format("Backbuffer resized to {}x{}", width, height));
             }
             if (hooks.event)

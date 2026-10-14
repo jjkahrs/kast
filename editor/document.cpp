@@ -3,6 +3,7 @@
 #include "assets.h"
 #include "build.h"
 
+#include <animation.h>
 #include <app.h>
 #include <log.h>
 #include <lua_components.h>
@@ -127,6 +128,7 @@ const char* objectKindLabel(ObjectKind kind)
     case ObjectKind::Cube: return "Cube";
     case ObjectKind::Plane: return "Plane";
     case ObjectKind::Sphere: return "Sphere";
+    case ObjectKind::Model: return "Model";
     case ObjectKind::DirectionalLight: return "Directional Light";
     case ObjectKind::PointLight: return "Point Light";
     case ObjectKind::Camera: return "Camera";
@@ -143,6 +145,7 @@ entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent)
     case ObjectKind::Cube: scene.registry().emplace<kast::MeshRenderer>(entity, kast::Primitive::Cube); break;
     case ObjectKind::Plane: scene.registry().emplace<kast::MeshRenderer>(entity, kast::Primitive::Plane); break;
     case ObjectKind::Sphere: scene.registry().emplace<kast::MeshRenderer>(entity, kast::Primitive::Sphere); break;
+    case ObjectKind::Model: scene.registry().emplace<kast::ModelRenderer>(entity); break; // pick one in the Inspector
     case ObjectKind::DirectionalLight:
         scene.registry().emplace<kast::DirectionalLight>(entity);
         scene.registry().get<kast::Transform>(entity).rotation = kast::quatFromEulerDeg(kNewLightEuler);
@@ -151,6 +154,19 @@ entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent)
     case ObjectKind::Camera: scene.registry().emplace<kast::Camera>(entity); break;
     case ObjectKind::Empty: break;
     }
+    doc.selected = entity;
+    markDirty(doc);
+    return entity;
+}
+
+entt::entity createModelEntity(Document& doc, const std::string& path, entt::entity parent)
+{
+    const entt::entity entity = doc.scene.create(std::filesystem::path(path).stem().string(), parent);
+    doc.scene.registry().emplace<kast::ModelRenderer>(entity, path);
+    if (doc.project)
+        kast::models().setRoot(doc.project->root);
+    if (const auto model = kast::models().get(path); model && !model->clips.empty())
+        doc.scene.registry().emplace<kast::Animator>(entity, kast::defaultClip(*model));
     doc.selected = entity;
     markDirty(doc);
     return entity;
@@ -199,6 +215,7 @@ void startPlay(Document& doc)
             kast::log::warn("No Camera in scene: the Game view has nothing to render");
         doc.playSceneName.clear();
         ++doc.playGeneration;
+        doc.scene.registry().clear<kast::AnimatorState>(); // Play starts clips from 0, not from the Edit preview
         doc.lua.start(doc.scene, doc.project ? std::optional(doc.project->root) : std::nullopt, projectScenePath(doc),
                       &doc.input, doc.project ? doc.project->stateMachines.value_or(std::vector<std::string>{})
                                               : std::vector<std::string>{});
@@ -233,6 +250,12 @@ void stopPlay(Document& doc)
 
 void updatePlay(Document& doc, float dt)
 {
+    if (doc.play == PlayState::Stopped) {
+        // Edit mode previews animation (playOnStart clips, the Inspector's Play/Pause and scrub). AnimatorState is
+        // never saved and doesn't dirty the scene.
+        kast::animatorSystem(doc.scene, dt);
+        return;
+    }
     if (doc.play != PlayState::Playing)
         return;
     if (kast::tickPlay(doc.scene, doc.lua, dt)) { // kast.loadScene replaced doc.scene
@@ -292,6 +315,14 @@ void remapScenePaths(Document& doc, const std::string& from, const std::string& 
             mesh.material = path[0];
             markDirty(doc);
         }
+    }
+    for (auto [entity, model] : doc.scene.registry().view<kast::ModelRenderer>().each()) {
+        std::vector<std::string> path = {model.model};
+        const bool moved = remapProjectPaths(path, from, to);
+        model.model = path[0];
+        const bool overrides = remapProjectPaths(model.materials, from, to);
+        if (moved || overrides)
+            markDirty(doc);
     }
 }
 

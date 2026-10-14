@@ -57,6 +57,14 @@ const char* validatePointLight(const entt::meta_any& component)
     return nullptr;
 }
 
+const char* validateAnimator(const entt::meta_any& component)
+{
+    const auto& animator = component.cast<const Animator&>();
+    if (!(animator.speed >= 0.0f && animator.speed <= kMaxAnimatorSpeed))
+        return "\"speed\" must be between 0 and 10"; // kMaxAnimatorSpeed
+    return nullptr;
+}
+
 void registerBuiltins()
 {
     registerComponent<Transform>("Transform", {"Transform", false})
@@ -72,6 +80,17 @@ void registerBuiltins()
     registerComponent<MeshRenderer>("MeshRenderer", {"Mesh Renderer"})
         .data<&MeshRenderer::primitive>("primitive").custom<FieldInfo>("Primitive")
         .data<&MeshRenderer::material>("material").custom<FieldInfo>("Material");
+
+    // materials: a JSON array of strings (see FieldDesc::array); the first built-in list field.
+    registerComponent<ModelRenderer>("ModelRenderer", {"Model Renderer"})
+        .data<&ModelRenderer::model>("model").custom<FieldInfo>("Model")
+        .data<&ModelRenderer::materials>("materials").custom<FieldInfo>("Materials");
+
+    registerComponent<Animator>("Animator", {"Animator", true, validateAnimator})
+        .data<&Animator::clip>("clip").custom<FieldInfo>("Clip")
+        .data<&Animator::loop>("loop").custom<FieldInfo>("Loop")
+        .data<&Animator::speed>("speed").custom<FieldInfo>("Speed", false, 0.0, kMaxAnimatorSpeed)
+        .data<&Animator::playOnStart>("playOnStart").custom<FieldInfo>("Play On Start");
 
     registerComponent<DirectionalLight>("DirectionalLight", {"Directional Light"})
         .data<&DirectionalLight::color>("color").custom<FieldInfo>("Color", true)
@@ -129,6 +148,8 @@ Json fieldToJson(const entt::meta_any& value)
         return value.cast<bool>();
     if (isType<std::string>(type))
         return value.cast<const std::string&>();
+    if (isType<std::vector<std::string>>(type))
+        return value.cast<const std::vector<std::string>&>();
     if (isType<bx::Vec3>(type)) {
         const auto& v = value.cast<const bx::Vec3&>();
         return numbers({v.x, v.y, v.z});
@@ -178,6 +199,11 @@ entt::meta_any fieldFromJson(const entt::meta_type& type, const Json& json)
         if (!json.is_string())
             throw Invalid("must be a string");
         return json.get<std::string>();
+    }
+    if (isType<std::vector<std::string>>(type)) {
+        if (!json.is_array() || !std::ranges::all_of(json, [](const Json& e) { return e.is_string(); }))
+            throw Invalid("must be an array of strings");
+        return json.get<std::vector<std::string>>();
     }
     if (isType<bx::Vec3>(type)) {
         const auto v = floats<3>(json);
@@ -356,6 +382,9 @@ std::vector<FieldDesc> describeBuiltin(const entt::meta_type& type)
             field.kind = FieldKind::Bool;
         } else if (isType<std::string>(t)) {
             field.kind = FieldKind::String;
+        } else if (isType<std::vector<std::string>>(t)) {
+            field.kind = FieldKind::String;
+            field.array = true;
         } else if (isType<bx::Vec3>(t)) {
             field.kind = FieldKind::Vec3;
         } else if (isType<bx::Quaternion>(t)) {

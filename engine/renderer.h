@@ -1,6 +1,7 @@
 #pragma once
 
 #include "material.h"
+#include "model.h"
 #include "scene.h"
 
 #include <bgfx/bgfx.h>
@@ -9,6 +10,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -44,7 +46,8 @@ struct MipImage {
 // Decodes PNG or JPG bytes and builds the mips (filtered in linear space if srgb). nullopt if it can't be decoded.
 std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb);
 
-// Draws a Scene's MeshRenderers with their materials (PBR metallic-roughness, see fs_mesh.sc) lit by its ambient, its
+// Draws a Scene's MeshRenderers and ModelRenderers (posed by their AnimatorState, else in bind pose; skinned on the GPU)
+// with their materials (PBR metallic-roughness, see fs_mesh.sc) lit by its ambient, its
 // first DirectionalLight and up to kMaxPointLights PointLights each, fogged by its postProcessing.fog, as linear HDR
 // color (for PostProcess). Opaque and mask meshes first, then blended ones far to near. renderOverlays draws the
 // editor's: a ground grid, axis lines, a short frustum preview per Camera and the range of the selected PointLight.
@@ -67,6 +70,25 @@ private:
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
     };
+    struct ModelMeshBuffers {
+        bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
+        bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
+    };
+    // GPU copy of a Model, rebuilt when the library hands out a different (reloaded) one.
+    struct GpuModel {
+        std::shared_ptr<const Model> source;
+        std::vector<ModelMeshBuffers> meshes; // per Model::meshes
+        std::vector<Mat4> bindGlobals;        // node globals in bind pose, for models without an AnimatorState
+    };
+    // One mesh to submit: the transform, buffers and material, plus its bone matrices when skinned.
+    struct DrawItem {
+        Mat4 world{};
+        Aabb bounds{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}}; // world space, for point lights and blend sorting
+        const Material* material = nullptr;
+        bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
+        bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
+        int bones = -1; // index into the frame's bone sets; -1 = not skinned
+    };
     struct Texture {
         bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; // invalid: failed to load, white_ draws instead
         std::optional<std::filesystem::file_time_type> mtime;
@@ -76,6 +98,11 @@ private:
     bgfx::TextureHandle texture(const std::string& path, bool srgb); // white_ for none or a failed load
     void loadTexture(const std::string& path, bool srgb, Texture& texture);
     void clearTextures();
+    const GpuModel* gpuModel(const std::string& path); // null if the model fails to load
+    void clearModels();
+    // Appends the draws of a ModelRenderer entity (an error cube if its model fails to load).
+    void addModelDraws(const Scene& scene, entt::entity entity, const ModelRenderer& renderer, const float* world,
+                       std::vector<DrawItem>& draws, std::vector<std::vector<Mat4>>& boneSets);
     void drawGrid(bgfx::ViewId view);
     void drawCameraFrustums(const Scene& scene, bgfx::ViewId view);
     void drawPointLightRange(const Scene& scene, bgfx::ViewId view, entt::entity selected);
@@ -83,9 +110,12 @@ private:
     std::array<Mesh, 3> meshes_; // indexed by Primitive
     bgfx::VertexLayout lineLayout_;
     bgfx::VertexBufferHandle grid_ = BGFX_INVALID_HANDLE;
+    bgfx::VertexLayout modelLayout_; // ModelVertex
     bgfx::ProgramHandle meshProgram_ = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle skinnedProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle lineProgram_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle normalMatrix_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle bones_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle baseColor_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightDir_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightColor_ = BGFX_INVALID_HANDLE;
@@ -104,6 +134,7 @@ private:
     std::filesystem::path root_;
     MaterialLibrary materials_;
     std::map<std::pair<std::string, bool>, Texture> textures_; // by (path, srgb)
+    std::map<std::string, GpuModel> models_;                   // by project-relative path
 };
 
 } // namespace kast

@@ -1,5 +1,7 @@
 #include "systems.h"
 
+#include "animation.h"
+
 #include <cmath>
 
 namespace kast {
@@ -21,7 +23,7 @@ void rotatorSystem(Scene& scene, float dt)
 
 void tickSystems(Scene& scene, float dt)
 {
-    static constexpr System kSystems[] = {rotatorSystem};
+    static constexpr System kSystems[] = {rotatorSystem, animatorSystem};
     for (System system : kSystems)
         system(scene, dt);
 }

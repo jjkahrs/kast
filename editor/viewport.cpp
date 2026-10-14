@@ -1,6 +1,9 @@
 #include "viewport.h"
 
+#include "ui_common.h"
+
 #include <log.h>
+#include <model.h>
 
 #include <imgui.h>
 #include <imgui_internal.h> // dock tab visibility
@@ -9,6 +12,7 @@
 #include <algorithm>
 #include <format>
 #include <limits>
+#include <optional>
 
 namespace {
 
@@ -17,15 +21,28 @@ constexpr float kFastMultiplier = 4.0f;
 constexpr ImU32 kPlayTint = IM_COL32(255, 160, 40, 255); // Scene panel border and active play button while playing
 constexpr float kCameraPickHalfSize = 0.25f; // cameras have no mesh: click within this box around the origin
 
+// The entity's local mesh bounds: its primitive's, its model's (bind pose; the error cube's if the model doesn't load),
+// or none.
+std::optional<kast::Aabb> localBounds(const kast::Scene& scene, entt::entity entity)
+{
+    if (const auto* mesh = scene.registry().try_get<kast::MeshRenderer>(entity))
+        return kast::primitiveBounds(mesh->primitive);
+    const auto* renderer = scene.registry().try_get<kast::ModelRenderer>(entity);
+    if (!renderer || renderer->model.empty())
+        return std::nullopt;
+    const auto model = kast::models().get(renderer->model);
+    return model ? model->bounds : kast::primitiveBounds(kast::Primitive::Cube);
+}
+
 kast::Aabb worldBounds(const kast::Scene& scene, entt::entity entity)
 {
     float world[16];
     scene.worldMatrix(entity, world);
     const bx::Vec3 origin{world[12], world[13], world[14]};
-    const auto* mesh = scene.registry().try_get<kast::MeshRenderer>(entity);
-    if (!mesh)
+    const std::optional<kast::Aabb> bounds = localBounds(scene, entity);
+    if (!bounds)
         return {origin, origin};
-    const kast::Aabb local = kast::primitiveBounds(mesh->primitive);
+    const kast::Aabb& local = *bounds;
     kast::Aabb box{{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()},
                    {std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest()}};
     for (int corner = 0; corner < 8; ++corner) {
@@ -127,6 +144,8 @@ void SceneViewport::draw(Document& doc)
         if (target_.valid() && size.x > 0.0f && size.y > 0.0f) {
             const ImVec2 origin = ImGui::GetCursorScreenPos();
             ImGui::Image(static_cast<ImTextureID>(target_.texture().idx), size);
+            if (std::string model; acceptModelDrop(model)) // from the Assets panel: a new entity at the origin
+                createModelEntity(doc, model, entt::null);
             const bool hovered = ImGui::IsItemHovered();
             if (doc.play != PlayState::Stopped) {
                 ImGui::GetWindowDrawList()->AddRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), kPlayTint,
@@ -296,14 +315,17 @@ void SceneViewport::pick(Document& doc, const float* viewProj, float x, float y,
             nearest = entity;
         }
     };
-    for (auto [entity, mesh] : doc.scene.registry().view<kast::MeshRenderer>().each()) {
+    for (entt::entity entity : doc.scene.registry().view<kast::Transform>()) {
+        const std::optional<kast::Aabb> bounds = localBounds(doc.scene, entity);
+        if (!bounds)
+            continue;
         // Test in the mesh's local space: exact for rotated/scaled boxes. The direction is left unnormalized
         // so the hit parameter is the same distance along the world ray.
         float world[16], inverse[16];
         doc.scene.worldMatrix(entity, world);
         bx::mtxInverse(inverse, world);
         const kast::Ray local{bx::mul(ray.origin, inverse), kast::transformDir(ray.direction, inverse)};
-        consider(entity, kast::intersect(local, kast::primitiveBounds(mesh.primitive)));
+        consider(entity, kast::intersect(local, *bounds));
     }
     for (entt::entity entity : doc.scene.registry().view<kast::Camera>()) {
         float world[16];

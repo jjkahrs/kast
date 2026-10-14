@@ -49,8 +49,39 @@ constexpr const char* kUsage =
     "[--open-menu Name] [--open-build-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
     "[--focus-panel Window] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--settings-file settings.json] [--open-preferences] "
-    "[--open-external path] | "
+    "[--open-external path] [--drop-model path] [--log-fps] [--no-vsync] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
+
+// --log-fps: once a second, the frame rate (vsync caps it at the display's refresh rate) and what a frame costs below
+// that cap: the editor's CPU time per frame (update, UI and submitting draws) and bgfx's last GPU frame time.
+class FpsLog {
+public:
+    void endFrame(uint64_t frameStart)
+    {
+        const uint64_t now = SDL_GetPerformanceCounter();
+        const auto frequency = static_cast<double>(SDL_GetPerformanceFrequency());
+        cpuSeconds_ += static_cast<double>(now - frameStart) / frequency;
+        ++frames_;
+        if (windowStart_ == 0)
+            windowStart_ = now;
+        const double elapsed = static_cast<double>(now - windowStart_) / frequency;
+        if (elapsed < 1.0)
+            return;
+        const bgfx::Stats* stats = bgfx::getStats();
+        const double gpuMs = 1000.0 * static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) /
+                             static_cast<double>(stats->gpuTimerFreq);
+        kast::log::info(std::format("FPS {:.1f}, CPU {:.2f} ms/frame, GPU {:.2f} ms/frame, {} draw calls", frames_ / elapsed,
+                                    1000.0 * cpuSeconds_ / frames_, gpuMs, stats->numDraw));
+        windowStart_ = now;
+        frames_ = 0;
+        cpuSeconds_ = 0.0;
+    }
+
+private:
+    uint64_t windowStart_ = 0;
+    int frames_ = 0;
+    double cpuSeconds_ = 0.0;
+};
 
 struct Options {
     int frames = 0;         // 0 = run until quit
@@ -88,6 +119,9 @@ struct Options {
     std::string openExternal;       // open this project file (path relative to the project) in the external editor
     bool launcher = false;          // run the Project Manager (the default anyway when nothing asks for the editor)
     std::string launcherOpen;       // open this project as the Project Manager would, without a window, and exit
+    std::string dropModel;          // add this project model file as dropping it from the Assets panel does
+    bool logFps = false;            // log frames per second, editor CPU and GPU frame times once a second
+    bool noVsync = false;           // present as fast as possible, to measure the frame rate past the display's
     std::vector<std::string> childArgs; // the flags after --, passed on to the editor the Project Manager starts
 
     // The editor runs with a project or scene to edit (or to save or build from); otherwise the Project Manager does.
@@ -210,6 +244,12 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.openPreferences = true;
         } else if (arg == "--open-external" && hasValue) {
             options.openExternal = argv[++i];
+        } else if (arg == "--drop-model" && hasValue) {
+            options.dropModel = argv[++i];
+        } else if (arg == "--log-fps") {
+            options.logFps = true;
+        } else if (arg == "--no-vsync") {
+            options.noVsync = true;
         } else if (arg == "--launcher") {
             options.launcher = true;
         } else if (arg == "--launcher-open" && hasValue) {
@@ -255,7 +295,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
                              options.guiAdd || options.guiSave || !options.guiClick.empty() || options.openPreferences ||
-                             !options.openExternal.empty();
+                             !options.openExternal.empty() || !options.dropModel.empty() || options.logFps ||
+                             options.noVsync;
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --add-component-popup, --new-component[-prompt], "
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --focus-panel, --assets-menu, "
@@ -493,6 +534,8 @@ int main(int argc, char** argv)
         if (std::string error; !newLuaComponent(doc, doc.selected, options->newComponent, error))
             kast::log::error(std::format("--new-component {}: {}", options->newComponent, error));
     }
+    if (!options->dropModel.empty())
+        createModelEntity(doc, options->dropModel, entt::null);
     refreshStateMachines(doc); // the Inspector and State Machines panel list them from the first frame
     if (options->play)
         startPlay(doc);
@@ -560,7 +603,9 @@ int main(int argc, char** argv)
             game.onEvent(event);
         }
     };
+    FpsLog fpsLog;
     hooks.frame = [&] {
+        const uint64_t frameStart = SDL_GetPerformanceCounter();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
         ImGuizmo::BeginFrame();
@@ -658,6 +703,8 @@ int main(int argc, char** argv)
         bgfx::touch(kImGuiView);
         imgui_bgfx::render(ImGui::GetDrawData());
         frames.endFrame();
+        if (options->logFps)
+            fpsLog.endFrame(frameStart);
     };
     hooks.screenshotSaved = [&](const char*, bool saved) { frames.onScreenshotSaved(saved); };
     hooks.quitRequested = [&] {
@@ -677,7 +724,8 @@ int main(int argc, char** argv)
 
     const int code = kast::run({.title = "Kast Editor",
                                 .width = options->size ? options->size->first : 1280,
-                                .height = options->size ? options->size->second : 720},
+                                .height = options->size ? options->size->second : 720,
+                                .vsync = !options->noVsync},
                                hooks);
     if (code != 0)
         return code;

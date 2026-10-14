@@ -4,6 +4,7 @@
 
 #include <app.h>
 #include <log.h>
+#include <model.h>
 
 #include <SDL3/SDL.h>
 #include <bgfx/bgfx.h>
@@ -36,6 +37,19 @@ void disabledTooltip(const char* reason)
 {
     if (reason && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("%s", reason);
+}
+
+bool acceptModelDrop(std::string& path)
+{
+    const ImGuiPayload* dragged = ImGui::GetDragDropPayload();
+    if (!dragged || !dragged->IsDataType(kAssetPayload) || !kast::isModelFile(static_cast<const char*>(dragged->Data)) ||
+        !ImGui::BeginDragDropTarget())
+        return false;
+    const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kAssetPayload);
+    if (payload)
+        path = static_cast<const char*>(payload->Data);
+    ImGui::EndDragDropTarget();
+    return payload != nullptr;
 }
 
 void UiScale::init(SDL_Window* window)

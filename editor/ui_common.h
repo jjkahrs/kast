@@ -20,6 +20,11 @@ void loadFont();
 // Explains why the last (disabled) item is disabled, if it is.
 void disabledTooltip(const char* reason);
 
+constexpr const char* kAssetPayload = "KAST_ASSET"; // drag and drop from the Assets panel: a project-relative path
+// The last item as a drop target for a model file (.glb/.gltf/.fbx/.obj) dragged from the Assets panel: true and its
+// path once dropped. Other assets are not accepted.
+bool acceptModelDrop(std::string& path);
+
 // Scales ImGui text and style metrics by the window's display scale, or a fixed --ui-scale override.
 class UiScale {
 public:

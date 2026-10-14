@@ -53,7 +53,8 @@ bool selectById(Document& doc, kast::EntityId id);
 void startPlay(Document& doc); // also resumes when paused
 void togglePause(Document& doc);
 void stopPlay(Document& doc);
-void updatePlay(Document& doc, float dt); // ticks the C++ systems, then the Lua systems, while playing
+// Ticks the C++ systems, then the Lua systems, while playing; in Edit mode only poses animated models (preview).
+void updatePlay(Document& doc, float dt);
 
 // doc.path relative to the active project ('/' separators); empty if unsaved or there is no project.
 std::string projectScenePath(const Document& doc);
@@ -64,8 +65,9 @@ bool canEditSystems(const Document& doc);
 bool addSystem(Document& doc, const std::filesystem::path& script, std::string& error);
 void removeSystem(Document& doc, size_t index);
 void moveSystem(Document& doc, size_t index, int delta); // delta -1 = up, +1 = down; no-op past either end
-// After an asset rename / move (project-relative from -> to): the scene's systems and MeshRenderer materials that
-// pointed at from or inside it follow. Marks the document dirty if any changed.
+// After an asset rename / move (project-relative from -> to): the scene's systems, MeshRenderer materials and
+// ModelRenderer models and material overrides that pointed at from or inside it follow. Marks the document dirty if
+// any changed.
 void remapScenePaths(Document& doc, const std::string& from, const std::string& to);
 // Writes a template system as <project>/scripts/new_system[_N].lua and adds it. Needs a project and a saved scene.
 // False + error if not.
@@ -131,13 +133,18 @@ bool isGlobalStateMachine(const Document& doc, const std::string& name);
 // + error (nothing changed) if stateMachineEditBlocker or the write fails.
 bool setGlobalStateMachine(Document& doc, const std::string& name, bool global, std::string& error);
 
-enum class ObjectKind { Empty, Cube, Plane, Sphere, DirectionalLight, PointLight, Camera };
+enum class ObjectKind { Empty, Cube, Plane, Sphere, Model, DirectionalLight, PointLight, Camera };
 constexpr ObjectKind kObjectKinds[] = {ObjectKind::Empty, ObjectKind::Cube, ObjectKind::Plane, ObjectKind::Sphere,
-                                       ObjectKind::DirectionalLight, ObjectKind::PointLight, ObjectKind::Camera};
+                                       ObjectKind::Model, ObjectKind::DirectionalLight, ObjectKind::PointLight,
+                                       ObjectKind::Camera};
 const char* objectKindLabel(ObjectKind kind); // menu label, e.g. "Create Empty", "Cube"
 
 // Adds an object under parent (entt::null = root), selects it and marks the document dirty.
 entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent);
+// Adds an entity named after the model file (a project-relative .glb/.gltf/.fbx/.obj) under parent with a
+// ModelRenderer, plus an Animator playing kast::defaultClip if the model has clips; selects it and marks the document
+// dirty. What dropping a model from the Assets panel on the viewport or the Hierarchy does.
+entt::entity createModelEntity(Document& doc, const std::string& path, entt::entity parent);
 void deleteSelected(Document& doc);
 void duplicateSelected(Document& doc);
 

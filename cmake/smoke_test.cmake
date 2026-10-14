@@ -4,11 +4,16 @@
 # Usage: cmake -DEDITOR=<exe> -DSCREENSHOT=<png> [-DEXTRA_ARGS="<editor flags>"]
 #              [-DNEW_PROJECT_NAME=<name> -DNEW_PROJECT_DIR=<dir>] [-DMUST_NOT_EXIST=<path>] [-DMUST_EXIST=<path>]
 #              [-DPROJECTS_FROM=<json>] [-DLIST_MUST_CONTAIN=<text>] [-DFOCUS_PANEL=<window>]
-#              [-DEXPECT_OUTPUT=<regex>] -P smoke_test.cmake
+#              [-DEXPECT_OUTPUT=<regex> [-DEXPECT_COUNT=<n>]] [-DFRAMES=<n>] -P smoke_test.cmake
 # NEW_PROJECT_* pass --new-project as separate arguments, so the name may contain spaces; FOCUS_PANEL passes
 # --focus-panel the same way (e.g. "State Machines"). MUST_NOT_EXIST fails the test if that path exists after the run
 # (e.g. a folder the New Project modal must not have created); MUST_EXIST if it doesn't. PROJECTS_FROM is copied to
-# the list before the run; LIST_MUST_CONTAIN is looked for in it after. EXPECT_OUTPUT must match the editor's log.
+# the list before the run; LIST_MUST_CONTAIN is looked for in it after. EXPECT_OUTPUT must match the editor's log
+# (exactly EXPECT_COUNT times if given; for that count the log's ";" read as ","). FRAMES is how many frames run
+# before the screenshot (default 120).
+if(NOT DEFINED FRAMES)
+  set(FRAMES 120)
+endif()
 file(REMOVE "${SCREENSHOT}")
 set(work_dir "${SCREENSHOT}.run")
 file(REMOVE_RECURSE "${work_dir}")
@@ -23,7 +28,7 @@ endif()
 if(DEFINED FOCUS_PANEL)
   list(APPEND EXTRA_ARGS --focus-panel "${FOCUS_PANEL}")
 endif()
-execute_process(COMMAND "${EDITOR}" --frames 120 --screenshot "${SCREENSHOT}" --projects-file "${work_dir}/projects.json"
+execute_process(COMMAND "${EDITOR}" --frames ${FRAMES} --screenshot "${SCREENSHOT}" --projects-file "${work_dir}/projects.json"
                         ${EXTRA_ARGS}
                 WORKING_DIRECTORY "${work_dir}" RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output)
 message("${output}")
@@ -39,6 +44,14 @@ if(size EQUAL 0)
 endif()
 if(DEFINED EXPECT_OUTPUT AND NOT output MATCHES "${EXPECT_OUTPUT}")
   message(FATAL_ERROR "Output does not match '${EXPECT_OUTPUT}'")
+endif()
+if(DEFINED EXPECT_COUNT)
+  string(REPLACE ";" "," listable "${output}") # a ; in a match would split it into two list items
+  string(REGEX MATCHALL "${EXPECT_OUTPUT}" matches "${listable}")
+  list(LENGTH matches count)
+  if(NOT count EQUAL EXPECT_COUNT)
+    message(FATAL_ERROR "'${EXPECT_OUTPUT}' matched ${count} times, expected ${EXPECT_COUNT}")
+  endif()
 endif()
 if(DEFINED MUST_NOT_EXIST AND EXISTS "${MUST_NOT_EXIST}")
   message(FATAL_ERROR "Must not exist after the run: ${MUST_NOT_EXIST}")

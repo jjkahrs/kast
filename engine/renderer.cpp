@@ -4,6 +4,7 @@
 #include "fs_mesh.bin.h"
 #include "vs_line.bin.h"
 #include "vs_mesh.bin.h"
+#include "vs_mesh_skinned.bin.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -13,7 +14,9 @@
 #include <format>
 #include <vector>
 
+#include "animation.h"
 #include "files.h"
+#include "log.h"
 #include "project.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -180,6 +183,9 @@ Aabb transformBounds(const Aabb& local, const float* world)
     return result;
 }
 
+// The file a texture path reads: a model's embedded image "<model>#<i>" comes from the model file.
+std::string textureFile(const std::string& path) { return path.substr(0, path.find('#')); }
+
 } // namespace
 
 std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb)
@@ -252,6 +258,15 @@ void Renderer::init()
         meshes_[i].indices = bgfx::createIndexBuffer(copyOf(data[i].indices));
     }
 
+    modelLayout_.begin()
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Indices, 4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Weight, 4, bgfx::AttribType::Float)
+        .end();
+    static_assert(sizeof(ModelVertex) == 16 * sizeof(float), "ModelVertex must match modelLayout_");
+
     lineLayout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
@@ -259,8 +274,10 @@ void Renderer::init()
     grid_ = bgfx::createVertexBuffer(copyOf(makeGrid()), lineLayout_);
 
     meshProgram_ = makeProgram(vs_mesh, sizeof(vs_mesh), fs_mesh, sizeof(fs_mesh));
+    skinnedProgram_ = makeProgram(vs_mesh_skinned, sizeof(vs_mesh_skinned), fs_mesh, sizeof(fs_mesh));
     lineProgram_ = makeProgram(vs_line, sizeof(vs_line), fs_line, sizeof(fs_line));
     normalMatrix_ = bgfx::createUniform("u_normalMatrix", bgfx::UniformType::Mat4);
+    bones_ = bgfx::createUniform("u_bones", bgfx::UniformType::Mat4, static_cast<uint16_t>(kMaxBones));
     baseColor_ = bgfx::createUniform("u_baseColor", bgfx::UniformType::Vec4);
     lightDir_ = bgfx::createUniform("u_lightDir", bgfx::UniformType::Vec4);
     lightColor_ = bgfx::createUniform("u_lightColor", bgfx::UniformType::Vec4);
@@ -287,12 +304,14 @@ void Renderer::shutdown()
     }
     bgfx::destroy(grid_);
     bgfx::destroy(meshProgram_);
+    bgfx::destroy(skinnedProgram_);
     bgfx::destroy(lineProgram_);
-    for (bgfx::UniformHandle uniform : {normalMatrix_, baseColor_, lightDir_, lightColor_, ambient_, pointPosRange_,
+    for (bgfx::UniformHandle uniform : {normalMatrix_, bones_, baseColor_, lightDir_, lightColor_, ambient_, pointPosRange_,
                                         pointColor_, emissive_, materialParams_, cameraPos_, fogColor_, fogParams_,
                                         baseColorSampler_, metallicRoughnessSampler_})
         bgfx::destroy(uniform);
     clearTextures();
+    clearModels();
     bgfx::destroy(white_);
 }
 
@@ -301,12 +320,15 @@ void Renderer::setProjectRoot(const std::filesystem::path& root)
     if (root != root_) {
         root_ = root;
         clearTextures();
+        clearModels();
     }
     materials_.setRoot(root);
     materials_.reloadChanged();
+    models().setRoot(root);
+    models().reloadChanged();
     // ponytail: one stat per texture per frame, as for materials; watch the folder if projects grow to thousands.
     for (auto& [key, texture] : textures_)
-        if (!root_.empty() && modifiedTime(root_ / key.first) != texture.mtime)
+        if (!root_.empty() && modifiedTime(root_ / textureFile(key.first)) != texture.mtime)
             loadTexture(key.first, key.second, texture);
 }
 
@@ -326,14 +348,24 @@ void Renderer::loadTexture(const std::string& path, bool srgb, Texture& texture)
         bgfx::destroy(texture.handle);
     texture.handle = BGFX_INVALID_HANDLE;
     std::string error = "no project";
-    const std::optional<std::filesystem::path> file = root_.empty() ? std::nullopt : resolveProjectPath(root_, path, error);
+    const std::optional<std::filesystem::path> file =
+        root_.empty() ? std::nullopt : resolveProjectPath(root_, textureFile(path), error);
     texture.mtime = file ? modifiedTime(*file) : std::nullopt;
     std::string bytes;
     std::optional<MipImage> image;
-    if (file && !readFile(*file, bytes))
+    if (path.find('#') != std::string::npos) { // embedded in a model
+        const std::optional<std::string_view> embedded = models().embeddedTexture(path);
+        if (embedded)
+            bytes = *embedded;
+        else
+            error = "no such embedded image";
+        if (embedded && !(image = decodeImage(bytes, srgb)))
+            error = std::format("cannot decode it as PNG or JPG ({})", stbi_failure_reason());
+    } else if (file && !readFile(*file, bytes)) {
         error = "cannot read the file";
-    else if (file && !(image = decodeImage(bytes, srgb)))
+    } else if (file && !(image = decodeImage(bytes, srgb))) {
         error = std::format("cannot decode it as PNG or JPG ({})", stbi_failure_reason());
+    }
     if (!image) {
         warnOnce(std::format("Texture '{}': {}; using white", path, error));
         return;
@@ -349,6 +381,85 @@ void Renderer::clearTextures()
         if (bgfx::isValid(texture.handle))
             bgfx::destroy(texture.handle);
     textures_.clear();
+}
+
+void Renderer::clearModels()
+{
+    for (auto& [path, gpu] : models_)
+        for (ModelMeshBuffers& mesh : gpu.meshes) {
+            bgfx::destroy(mesh.vertices);
+            bgfx::destroy(mesh.indices);
+        }
+    models_.clear();
+}
+
+const Renderer::GpuModel* Renderer::gpuModel(const std::string& path)
+{
+    const std::shared_ptr<const Model> model = models().get(path);
+    auto it = models_.find(path);
+    if (it != models_.end() && it->second.source == model)
+        return model ? &it->second : nullptr;
+    if (it != models_.end()) { // reloaded or now failing: drop the old buffers
+        for (ModelMeshBuffers& mesh : it->second.meshes) {
+            bgfx::destroy(mesh.vertices);
+            bgfx::destroy(mesh.indices);
+        }
+        models_.erase(it);
+    }
+    if (!model)
+        return nullptr;
+    GpuModel& gpu = models_[path];
+    gpu.source = model;
+    for (const ModelMesh& mesh : model->meshes)
+        gpu.meshes.push_back({bgfx::createVertexBuffer(copyOf(mesh.vertices), modelLayout_),
+                              bgfx::createIndexBuffer(copyOf(mesh.indices), BGFX_BUFFER_INDEX32)});
+    nodeGlobals(*model, bindPose(*model), gpu.bindGlobals);
+    if (model->overBoneLimit) // once per load: the GPU copy is made once
+        log::error(std::format("Model '{}' has a mesh with more than {} joints; rendering it in bind pose, unskinned",
+                               path, kMaxBones));
+    return &gpu;
+}
+
+void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const ModelRenderer& renderer, const float* world,
+                             std::vector<DrawItem>& draws, std::vector<std::vector<Mat4>>& boneSets)
+{
+    if (renderer.model.empty())
+        return;
+    DrawItem item;
+    std::copy_n(world, 16, item.world.begin());
+    const GpuModel* gpu = gpuModel(renderer.model);
+    if (!gpu) { // missing, corrupt or unsupported: the library warned once
+        const Mesh& cube = meshes_[static_cast<size_t>(Primitive::Cube)];
+        item.bounds = transformBounds(primitiveBounds(Primitive::Cube), world);
+        item.material = &errorMaterial();
+        item.vertices = cube.vertices;
+        item.indices = cube.indices;
+        draws.push_back(item);
+        return;
+    }
+    const Model& model = *gpu->source;
+    const auto* state = scene.registry().try_get<AnimatorState>(entity);
+    const std::vector<Mat4>& globals =
+        state && state->model == &model && state->globals.size() == model.nodes.size() ? state->globals : gpu->bindGlobals;
+    item.bounds = transformBounds(model.bounds, world); // ponytail: bind-pose bounds, also for posed models
+    for (size_t i = 0; i < model.meshes.size(); ++i) {
+        const ModelMesh& mesh = model.meshes[i];
+        const std::string* slot = mesh.material < renderer.materials.size() ? &renderer.materials[mesh.material] : nullptr;
+        item.material = slot && !slot->empty() ? &materials_.get(*slot) : &model.materials[mesh.material].material;
+        item.vertices = gpu->meshes[i].vertices;
+        item.indices = gpu->meshes[i].indices;
+        item.bones = -1;
+        if (!mesh.joints.empty() && mesh.joints.size() <= kMaxBones) {
+            std::copy_n(world, 16, item.world.begin());
+            boneSets.emplace_back();
+            skinMatrices(mesh, globals, boneSets.back());
+            item.bones = static_cast<int>(boneSets.size() - 1);
+        } else { // static, or over the bone limit: at its node
+            const std::vector<Mat4>& at = mesh.joints.empty() ? globals : gpu->bindGlobals;
+            bx::mtxMul(item.world.data(), at[static_cast<size_t>(mesh.node)].data(), world);
+        }
+        draws.push_back(item);
+    }
 }
 
 void Renderer::render(const Scene& scene, const std::filesystem::path& projectRoot, bgfx::ViewId view,
@@ -397,20 +508,38 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         pointLights.push_back({{world[12], world[13], world[14]}, light.range, bx::mul(light.color, light.intensity)});
     }
 
-    const auto draw = [&](entt::entity entity, const MeshRenderer& mesh, const Material& material) {
+    // ponytail: world matrices are recomputed up the parent chain per entity; cache them when scenes get deep or large.
+    std::vector<DrawItem> draws;
+    std::vector<std::vector<Mat4>> boneSets;
+    for (auto [entity, mesh] : registry.view<MeshRenderer>().each()) {
+        const auto* instance = registry.try_get<MaterialInstance>(entity);
+        const Mesh& gpu = meshes_[static_cast<size_t>(mesh.primitive)];
+        DrawItem item;
+        scene.worldMatrix(entity, item.world.data());
+        item.bounds = transformBounds(primitiveBounds(mesh.primitive), item.world.data());
+        item.material = instance ? &instance->material : &materials_.get(mesh.material);
+        item.vertices = gpu.vertices;
+        item.indices = gpu.indices;
+        draws.push_back(item);
+    }
+    for (auto [entity, model] : registry.view<ModelRenderer>().each()) {
         float world[16];
+        scene.worldMatrix(entity, world);
+        addModelDraws(scene, entity, model, world, draws, boneSets);
+    }
+
+    const auto submit = [&](const DrawItem& item) {
+        const Material& material = *item.material;
         float inverse[16];
         float normalMatrix[16];
-        scene.worldMatrix(entity, world);
-        bx::mtxInverse(inverse, world);
+        bx::mtxInverse(inverse, item.world.data());
         bx::mtxTranspose(normalMatrix, inverse);
         // Unused slots: black, range 1, so they add nothing.
         float pointPosRange[kMaxPointLights][4] = {};
         float pointColor[kMaxPointLights][4] = {};
         for (auto& slot : pointPosRange)
             slot[3] = 1.0f;
-        const std::vector<size_t> nearest =
-            nearestPointLights(pointLights, transformBounds(primitiveBounds(mesh.primitive), world));
+        const std::vector<size_t> nearest = nearestPointLights(pointLights, item.bounds);
         for (size_t slot = 0; slot < nearest.size(); ++slot) {
             const PointLightSample& light = pointLights[nearest[slot]];
             std::memcpy(pointPosRange[slot], &light.position, sizeof(bx::Vec3));
@@ -424,8 +553,12 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         const float params[4] = {material.metallic, material.roughness,
                                  material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f, blend ? 1.0f : 0.0f};
 
-        bgfx::setTransform(world);
+        bgfx::setTransform(item.world.data());
         bgfx::setUniform(normalMatrix_, normalMatrix);
+        if (item.bones >= 0) {
+            const std::vector<Mat4>& bones = boneSets[static_cast<size_t>(item.bones)];
+            bgfx::setUniform(bones_, bones.data(), static_cast<uint16_t>(bones.size()));
+        }
         bgfx::setUniform(baseColor_, material.baseColor.data());
         bgfx::setUniform(emissive_, emissive);
         bgfx::setUniform(materialParams_, params);
@@ -439,31 +572,25 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         bgfx::setUniform(pointColor_, pointColor, kMaxPointLights);
         bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
         bgfx::setTexture(1, metallicRoughnessSampler_, texture(material.metallicRoughnessTexture, false));
-        const Mesh& gpu = meshes_[static_cast<size_t>(mesh.primitive)];
-        bgfx::setVertexBuffer(0, gpu.vertices);
-        bgfx::setIndexBuffer(gpu.indices);
+        bgfx::setVertexBuffer(0, item.vertices);
+        bgfx::setIndexBuffer(item.indices);
         bgfx::setState(blend ? kBlendState : kState);
-        bgfx::submit(view, meshProgram_);
+        bgfx::submit(view, item.bones >= 0 ? skinnedProgram_ : meshProgram_);
     };
 
-    // Opaque and mask meshes now; blended ones after, far to near by world-space center.
-    // ponytail: world matrices are recomputed up the parent chain per entity; cache them when scenes get deep or large.
-    std::vector<std::pair<entt::entity, const Material*>> blended;
+    // Opaque and mask meshes now; blended ones after, far to near by world-space bounds center.
+    std::vector<size_t> blended;
     std::vector<bx::Vec3> centers;
-    for (auto [entity, mesh] : registry.view<MeshRenderer>().each()) {
-        const auto* instance = registry.try_get<MaterialInstance>(entity);
-        const Material& material = instance ? instance->material : materials_.get(mesh.material);
-        if (material.alphaMode != AlphaMode::Blend) {
-            draw(entity, mesh, material);
+    for (size_t i = 0; i < draws.size(); ++i) {
+        if (draws[i].material->alphaMode != AlphaMode::Blend) {
+            submit(draws[i]);
             continue;
         }
-        float world[16];
-        scene.worldMatrix(entity, world);
-        blended.emplace_back(entity, &material);
-        centers.push_back(bx::mul(bx::Vec3{0.0f, 0.0f, 0.0f}, world)); // every primitive is centered on its origin
+        blended.push_back(i);
+        centers.push_back(bx::mul(bx::add(draws[i].bounds.min, draws[i].bounds.max), 0.5f));
     }
     for (size_t i : backToFront(centers, eye))
-        draw(blended[i].first, registry.get<MeshRenderer>(blended[i].first), *blended[i].second);
+        submit(draws[blended[i]]);
 }
 
 void Renderer::renderOverlays(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx,

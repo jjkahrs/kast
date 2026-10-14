@@ -42,6 +42,24 @@ struct MeshRenderer {
     std::string material;
 };
 
+// model: a project-relative .glb/.gltf/.fbx/.obj file (see model.h). materials: per-slot .mat overrides by slot index;
+// empty (or past the end) = the model's embedded material.
+struct ModelRenderer {
+    std::string model;
+    std::vector<std::string> materials;
+};
+
+constexpr float kMaxAnimatorSpeed = 10.0f;
+
+// Plays the entity's ModelRenderer's skeletal animation clips (see animation.h). Without a ModelRenderer it does
+// nothing. clip: a clip name of the model (empty: bind pose).
+struct Animator {
+    std::string clip;
+    bool loop = true;
+    float speed = 1.0f; // 0..kMaxAnimatorSpeed
+    bool playOnStart = true;
+};
+
 // Shines along the entity's world -Z axis.
 struct DirectionalLight {
     bx::Vec3 color{1.0f, 1.0f, 1.0f};

@@ -11,6 +11,7 @@ struct AppConfig {
     const char* title = "Kast";
     int width = 1280;
     int height = 720;
+    bool vsync = true; // false: present as fast as possible (frame-rate measurements)
 };
 
 // Lifecycle hooks the host (editor, game client) plugs into. All optional.

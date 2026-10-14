@@ -64,10 +64,11 @@ public:
 private:
     // Tree edits are deferred to the end of drawHierarchy so the child lists are not changed mid-iteration.
     struct Edit {
-        enum class Op { None, Create, Delete, Duplicate, Reparent } op = Op::None;
+        enum class Op { None, Create, CreateModel, Delete, Duplicate, Reparent } op = Op::None;
         entt::entity target = entt::null;
         entt::entity parent = entt::null;
         ObjectKind kind = ObjectKind::Empty;
+        std::string path; // CreateModel: the dropped model file
     };
 
     // Assets panel file operations, deferred like Edit and applied at the end of drawAssets. Paths are
@@ -99,6 +100,14 @@ private:
     bool drawUIDocumentComponent(Document& doc, entt::entity entity);
     // MeshRenderer "material": a combo of the project's .mat files and None (default). True if it changed value.
     bool drawMaterialPicker(Document& doc, nlohmann::ordered_json& value);
+    // ModelRenderer "model": a combo of the project's model files.
+    bool drawModelPicker(Document& doc, nlohmann::ordered_json& value);
+    // ModelRenderer "materials": a .mat combo per slot of the entity's model ("None (embedded)" = the model's own).
+    bool drawSlotMaterialPickers(Document& doc, entt::entity entity, nlohmann::ordered_json& value);
+    // Animator "clip": a combo of the model's clips.
+    bool drawClipPicker(Document& doc, entt::entity entity, nlohmann::ordered_json& value);
+    // Play/Pause and a time scrub on the Animator's runtime state: poses the model, never saved, never dirties.
+    void drawAnimatorPreview(Document& doc, entt::entity entity);
     // The Inspector for the .mat in inspectedMaterial_: every edit saves the file (the renderers reload it).
     void drawMaterialInspector(Document& doc);
     // Generated Inspector widgets for a component field's JSON value (built-in or Lua); true if they changed it.

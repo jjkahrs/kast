@@ -13,6 +13,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(sol2 CONFIG REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
 find_package(pugixml CONFIG REQUIRED)
+find_package(assimp CONFIG REQUIRED) # model import: glTF/GLB, FBX, OBJ
 find_package(Stb REQUIRED) # header-only: stb_image (PNG/JPG decode), stb_image_resize2 (mips)
 # vcpkg's luajit port ships no CMake config, only headers in include/luajit and lua51.lib/.dll.
 find_path(LUAJIT_INCLUDE_DIR luajit.h PATH_SUFFIXES luajit REQUIRED)
@@ -29,7 +30,8 @@ set(KAST_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 set(KAST_EDITOR_SHADERS)
 set(KAST_ENGINE_SHADERS)
 foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
-             engine/shaders/vs_mesh engine/shaders/fs_mesh engine/shaders/vs_line engine/shaders/fs_line
+             engine/shaders/vs_mesh engine/shaders/vs_mesh_skinned engine/shaders/fs_mesh engine/shaders/vs_line
+             engine/shaders/fs_line
              engine/shaders/gui/vs_gui engine/shaders/gui/fs_gui
              engine/shaders/post/vs_post engine/shaders/post/fs_post_bright engine/shaders/post/fs_post_down
              engine/shaders/post/fs_post_up engine/shaders/post/fs_post_final engine/shaders/post/fs_post_fxaa)
@@ -81,7 +83,7 @@ add_library(kast_engine STATIC
   engine/systems.cpp engine/renderer.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
-  engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp
+  engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp
   ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}")
@@ -92,7 +94,7 @@ target_compile_definitions(kast_engine PRIVATE SOL_LUAJIT=1 SOL_ALL_SAFETIES_ON=
 target_compile_options(kast_engine PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_engine
   PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json RmlUi::RmlUi
-  PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 "${LUAJIT_LIBRARY}")
+  PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 assimp::assimp "${LUAJIT_LIBRARY}")
 
 # --- player: the prebuilt game client the editor's Build menu copies; engine only, no ImGui ---
 # A Windows-subsystem app (no console window); SDL_main.h supplies WinMain.
@@ -577,6 +579,53 @@ set_tests_properties(new_component_screenshot PROPERTIES FIXTURES_REQUIRED new_c
 set_tests_properties(new_component_file_written PROPERTIES FIXTURES_REQUIRED new_component_shot)
 set_tests_properties(lua_components_screenshot PROPERTIES FIXTURES_SETUP lua_components_shot)
 set_tests_properties(new_component_differs PROPERTIES FIXTURES_REQUIRED "lua_components_shot;new_component_shot")
+# Models & animation: tests/project/models*.scene. Scene view of OBJ / glTF / GLB / FBX models next to primitives; Play
+# of an animated character at two frame counts (the pose must advance) and of a configure-time copy without its
+# Animator (bind pose); slot 0 overridden with a .mat vs a copy using the embedded material; a missing model (magenta
+# cube, one warning); the Lua animation API (log lines); the Animator Inspector preview with the character selected.
+# The copies go into a configure-time project (models + materials only) so their project-relative paths resolve.
+set(KAST_MODEL_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/model_project")
+foreach(scene models_anim.scene models_material.scene)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/${scene}")
+endforeach()
+file(REMOVE_RECURSE "${KAST_MODEL_PROJECT}")
+file(COPY "${KAST_TEST_PROJECT}/models" "${KAST_TEST_PROJECT}/materials" "${KAST_TEST_PROJECT}/textures"
+     DESTINATION "${KAST_MODEL_PROJECT}")
+file(WRITE "${KAST_MODEL_PROJECT}/project.kast"
+     "{\n  \"version\": 1,\n  \"name\": \"Model Test\",\n  \"startScene\": \"no_animator.scene\"\n}\n")
+file(READ "${KAST_TEST_PROJECT}/models_anim.scene" model_scene)
+string(REGEX REPLACE ",[ \n]*\"Animator\": {[^}]*}" "" model_scene "${model_scene}")
+file(WRITE "${KAST_MODEL_PROJECT}/no_animator.scene" "${model_scene}")
+file(READ "${KAST_TEST_PROJECT}/models_material.scene" model_scene)
+string(REGEX REPLACE "\"materials\": \\[[^]]*\\]" "\"materials\": []" model_scene "${model_scene}")
+file(WRITE "${KAST_MODEL_PROJECT}/embedded_material.scene" "${model_scene}")
+macro(kast_model_shot name)
+  add_test(NAME ${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/${name}.png"
+            ${ARGN} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+  set_tests_properties(${name} PROPERTIES FIXTURES_SETUP ${name}_shot)
+endmacro()
+macro(kast_differs name a b)
+  add_test(NAME ${name}
+    COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/${a}.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/${b}.png"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+  set_tests_properties(${name} PROPERTIES FIXTURES_REQUIRED "${a}_shot;${b}_shot")
+endmacro()
+kast_model_shot(models_screenshot "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/models.scene --size 1600x900")
+kast_model_shot(models_anim_play_60 -DFRAMES=60 "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/models_anim.scene --play")
+kast_model_shot(models_anim_play_120 "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/models_anim.scene --play")
+kast_model_shot(models_no_animator_play_120 "-DEXTRA_ARGS=--scene ${KAST_MODEL_PROJECT}/no_animator.scene --play")
+kast_differs(models_anim_advances models_anim_play_60 models_anim_play_120)
+kast_differs(models_anim_vs_bind_pose models_no_animator_play_120 models_anim_play_120)
+kast_model_shot(models_material_override "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/models_material.scene")
+kast_model_shot(models_material_embedded "-DEXTRA_ARGS=--scene ${KAST_MODEL_PROJECT}/embedded_material.scene")
+kast_differs(models_material_override_differs models_material_embedded models_material_override)
+kast_model_shot(models_missing "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/models_missing.scene"
+                "-DEXPECT_OUTPUT=Model 'models/does_not_exist.glb': cannot read the file. rendering a magenta cube"
+                -DEXPECT_COUNT=1)
+kast_model_shot(models_lua "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/models_lua.scene --play"
+                "-DEXPECT_OUTPUT=clips: 178, first Angry.*unknown clip: false [^\n]*has no clip \"No_Such_Clip\".*bad entity: false invalid entity id 999999.*no animator: false entity [0-9]+ needs an \"Animator\" and a \"ModelRenderer\".*state: Angry [0-9.]+ true, speed 1.5")
+kast_model_shot(models_inspector_preview "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/models_anim.scene --select 3 --size 1600x900")
 # Build: --build packages configure-time copies of tests/project (tests never write into them) into
 # build/<preset>/game_out/<name>/, then the built player runs from a copy of that folder. Each copy gets its own
 # project.kast; the "systems": [] variants show that only the Lua code (run from game.pak) changes the shot.
@@ -605,7 +654,8 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "events|Events Test|events.scene|FALSE" "events_no_systems|Events Test|events.scene|TRUE"
                "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow"
                "ui|UI Test|ui.scene|FALSE" "lights|Lights Test|point_lights.scene|FALSE"
-               "materials|Materials Test|materials.scene|FALSE" "post|Post Test|post_processing.scene|FALSE")
+               "materials|Materials Test|materials.scene|FALSE" "post|Post Test|post_processing.scene|FALSE"
+               "models|Models Test|models_anim.scene|FALSE")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)

@@ -2,6 +2,7 @@
 
 #include "ui_common.h"
 
+#include <animation.h>
 #include <components.h>
 #include <log.h>
 #include <lua_components.h>
@@ -65,6 +66,8 @@ void Panels::drawHierarchy(Document& doc)
             doc.selected = entt::null;
         if (entt::entity dropped = entt::null; acceptEntityDrop(dropped))
             edit_ = {Edit::Op::Reparent, dropped, entt::null};
+        if (std::string model; acceptModelDrop(model))
+            edit_ = {Edit::Op::CreateModel, entt::null, entt::null, ObjectKind::Model, model};
         if (ImGui::BeginPopupContextItem("##rootMenu")) {
             drawCreateItems(entt::null);
             ImGui::EndPopup();
@@ -115,6 +118,8 @@ void Panels::drawNode(Document& doc, entt::entity entity)
     }
     if (entt::entity dropped = entt::null; acceptEntityDrop(dropped))
         edit_ = {Edit::Op::Reparent, dropped, entity};
+    if (std::string model; acceptModelDrop(model)) // a child of this entity
+        edit_ = {Edit::Op::CreateModel, entt::null, entity, ObjectKind::Model, model};
     if (ImGui::BeginPopupContextItem("##nodeMenu")) {
         drawCreateItems(entity);
         ImGui::Separator();
@@ -172,6 +177,9 @@ void Panels::applyEdit(Document& doc)
     switch (edit.op) {
     case Edit::Op::Create:
         createObject(doc, edit.kind, edit.parent);
+        break;
+    case Edit::Op::CreateModel:
+        createModelEntity(doc, edit.path, edit.parent);
         break;
     case Edit::Op::Delete:
         doc.selected = edit.target;
@@ -357,9 +365,21 @@ void Panels::drawInspector(Document& doc)
                     } else {
                         Json json = kast::componentToJson(registry, entity, type);
                         const bool mesh = type.meta() && type.meta() == entt::resolve<kast::MeshRenderer>();
+                        const bool model = type.meta() && type.meta() == entt::resolve<kast::ModelRenderer>();
+                        const bool animator = type.meta() && type.meta() == entt::resolve<kast::Animator>();
+                        const auto drawOne = [&](const kast::FieldDesc& field, Json& value) {
+                            if (mesh && field.name == "material")
+                                return drawMaterialPicker(doc, value);
+                            if (model && field.name == "model")
+                                return drawModelPicker(doc, value);
+                            if (model && field.name == "materials")
+                                return drawSlotMaterialPickers(doc, entity, value);
+                            if (animator && field.name == "clip")
+                                return drawClipPicker(doc, entity, value);
+                            return drawField(entity, type, field, value);
+                        };
                         for (const kast::FieldDesc& field : type.fields()) {
-                            if (!(mesh && field.name == "material" ? drawMaterialPicker(doc, json[field.name])
-                                                                    : drawField(entity, type, field, json[field.name])))
+                            if (!drawOne(field, json[field.name]))
                                 continue;
                             // Rejected edits (e.g. Camera ranges) are not applied: the last valid value stays, so
                             // the scene stays loadable.
@@ -368,6 +388,8 @@ void Panels::drawInspector(Document& doc)
                             else
                                 json = kast::componentToJson(registry, entity, type);
                         }
+                        if (animator)
+                            drawAnimatorPreview(doc, entity);
                     }
                 }
                 if (!keep)
@@ -676,6 +698,102 @@ bool Panels::drawMaterialPicker(Document& doc, Json& value)
         return false;
     value = path;
     return true;
+}
+
+bool Panels::drawModelPicker(Document& doc, Json& value)
+{
+    if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
+        refreshAssets(doc);
+    std::vector<std::string> files;
+    collectFiles(assets_, {".glb", ".gltf", ".fbx", ".obj"}, files); // kast::modelExtensions()
+    std::string path = value.get<std::string>();
+    if (!drawFilePicker("Model", files, "None", path))
+        return false;
+    value = path;
+    return true;
+}
+
+bool Panels::drawSlotMaterialPickers(Document& doc, entt::entity entity, Json& value)
+{
+    const auto model = kast::models().get(doc.scene.registry().get<kast::ModelRenderer>(entity).model);
+    if (!model) {
+        ImGui::TextDisabled("Materials: no model loaded");
+        return false;
+    }
+    std::vector<std::string> files;
+    collectFiles(assets_, {".mat"}, files);
+    std::vector<std::string> slots = value.get<std::vector<std::string>>();
+    bool changed = false;
+    ImGui::SeparatorText("Materials");
+    for (size_t i = 0; i < model->materials.size(); ++i) {
+        std::string path = i < slots.size() ? slots[i] : "";
+        ImGui::PushID(static_cast<int>(i));
+        if (drawFilePicker(model->materials[i].name.c_str(), files, "None (embedded)", path)) {
+            slots.resize(std::max(slots.size(), i + 1));
+            slots[i] = path;
+            changed = true;
+        }
+        ImGui::PopID();
+    }
+    while (!slots.empty() && slots.back().empty()) // trailing embedded slots need no entry
+        slots.pop_back();
+    if (changed)
+        value = slots;
+    return changed;
+}
+
+bool Panels::drawClipPicker(Document& doc, entt::entity entity, Json& value)
+{
+    const auto* renderer = doc.scene.registry().try_get<kast::ModelRenderer>(entity);
+    const auto model = renderer ? kast::models().get(renderer->model) : nullptr;
+    if (!renderer) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+        ImGui::TextWrapped("Needs a Model Renderer on this entity: the Animator does nothing without one");
+        ImGui::PopStyleColor();
+    }
+    std::string clip = value.get<std::string>();
+    const bool known = clip.empty() || (model && kast::findClip(*model, clip) >= 0);
+    const std::string current = clip.empty() ? "None (bind pose)" : known ? clip : "(unknown) " + clip;
+    bool changed = false;
+    if (ImGui::BeginCombo("Clip", current.c_str())) {
+        if (ImGui::Selectable("None (bind pose)", clip.empty()) && !clip.empty()) {
+            clip.clear();
+            changed = true;
+        }
+        if (model)
+            for (const kast::Clip& c : model->clips)
+                if (ImGui::Selectable(c.name.c_str(), c.name == clip) && c.name != clip) {
+                    clip = c.name;
+                    changed = true;
+                }
+        ImGui::EndCombo();
+    }
+    if (changed)
+        value = clip;
+    return changed;
+}
+
+void Panels::drawAnimatorPreview(Document& doc, entt::entity entity)
+{
+    entt::registry& registry = doc.scene.registry();
+    auto* state = registry.try_get<kast::AnimatorState>(entity);
+    const auto* renderer = registry.try_get<kast::ModelRenderer>(entity);
+    const auto model = renderer ? kast::models().get(renderer->model) : nullptr;
+    ImGui::SeparatorText("Preview (not saved)");
+    if (!state || !model || state->model != model.get() || state->clip < 0) {
+        ImGui::TextDisabled("No clip: bind pose");
+        return;
+    }
+    const kast::Clip& clip = model->clips[static_cast<size_t>(state->clip)];
+    if (ImGui::Button(state->playing ? "Pause" : "Play", ImVec2(ImGui::GetFrameHeight() * 3.0f, 0.0f)))
+        state->playing = !state->playing;
+    ImGui::SameLine();
+    float time = kast::clipTime(state->time, clip.duration, registry.get<kast::Animator>(entity).loop);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::SliderFloat("##time", &time, 0.0f, clip.duration, "%.2f s")) {
+        state->time = time; // scrubbing pauses, so the pose stays where it was dragged
+        state->playing = false;
+    }
 }
 
 void Panels::drawMaterialInspector(Document& doc)
@@ -1078,8 +1196,6 @@ void Panels::drawEvents(Document& doc)
 }
 
 namespace {
-
-constexpr const char* kAssetPayload = "KAST_ASSET"; // a project-relative path, null-terminated
 
 std::string parentAsset(const std::string& path)
 {
@@ -1525,7 +1641,7 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui)
             gui.remap(source, dest);
             if (scenePath)
                 doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
-            remapScenePaths(doc, edit.path, selected); // systems and MeshRenderer materials
+            remapScenePaths(doc, edit.path, selected); // systems, MeshRenderer materials, models and overrides
             for (const std::string& file : remapMaterialTextures(root, edit.path, selected))
                 kast::log::info(std::format("Updated texture paths in '{}'", file));
             if (std::vector<std::string> path = {inspectedMaterial_}; remapProjectPaths(path, edit.path, selected))

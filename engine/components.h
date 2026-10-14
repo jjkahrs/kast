@@ -15,7 +15,8 @@
 
 // Data-driven components via entt::meta. A component type registered here (struct + fields) gets JSON save/load,
 // copy on duplicate, a generated Inspector UI and Add/Remove Component support without further code.
-// Supported field types: float, int, bool, std::string, bx::Vec3, bx::Quaternion and registered enums.
+// Supported field types: float, int, bool, std::string, std::vector<std::string>, bx::Vec3, bx::Quaternion and
+// registered enums.
 // PersistentId, Name and Hierarchy are structural and not registered.
 namespace kast {
 
@@ -92,7 +93,7 @@ struct FieldDesc {
     std::string name; // JSON key
     std::string displayName;
     FieldKind kind = FieldKind::Float;
-    bool array = false;             // a JSON array of kind (Lua types only)
+    bool array = false;             // a JSON array of kind (built-ins: std::vector<std::string> only)
     bool color = false;             // Vec3 edited as a color
     std::optional<double> min, max; // Float / Int, per element for arrays (built-ins: Inspector clamp only)
     std::vector<std::string> enumValues; // JSON names

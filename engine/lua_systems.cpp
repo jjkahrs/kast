@@ -1,5 +1,6 @@
 #include "lua_systems.h"
 
+#include "animation.h"
 #include "components.h"
 #include "log.h"
 #include "lua_sandbox.h"
@@ -532,6 +533,82 @@ void LuaSystems::State::bindApi()
         registry.emplace_or_replace<MaterialInstance>(e, std::move(copy));
     });
 
+    // Skeletal animation (see animation.h) on an entity with an Animator and a ModelRenderer. playAnimation also writes
+    // the Animator's clip / loop / speed, so kast.get shows what plays.
+    const auto animated = [this, &registry](lua_State* L, const sol::object& id) {
+        const entt::entity e = entity(L, id);
+        const auto* renderer = registry.try_get<ModelRenderer>(e);
+        if (!renderer || !registry.all_of<Animator>(e))
+            raise(L, std::format("entity {} needs an \"Animator\" and a \"ModelRenderer\"", toString(L, id)));
+        std::shared_ptr<const Model> model = models().get(renderer->model);
+        if (!model)
+            raise(L, std::format("entity {}: model '{}' is not loaded", toString(L, id), renderer->model));
+        return std::pair{e, std::move(model)};
+    };
+    api.set_function("playAnimation", [this, &registry, animated](sol::this_state L, const sol::object& id,
+                                                                  const std::string& clip, sol::optional<sol::table> opts) {
+        const auto [e, model] = animated(L, id);
+        const int index = findClip(*model, clip);
+        if (index < 0)
+            raise(L, std::format("model '{}' has no clip \"{}\"", registry.get<ModelRenderer>(e).model, clip));
+        Animator& animator = registry.get<Animator>(e);
+        bool loop = animator.loop;
+        float speed = animator.speed, fade = 0.0f;
+        if (opts) {
+            loop = opts->get_or("loop", loop);
+            speed = opts->get_or("speed", speed);
+            fade = opts->get_or("fade", fade);
+        }
+        if (!(speed >= 0.0f && speed <= kMaxAnimatorSpeed))
+            raise(L, std::format("playAnimation: speed must be between 0 and {}, got {}", kMaxAnimatorSpeed, speed));
+        if (!(fade >= 0.0f))
+            raise(L, std::format("playAnimation: fade must be >= 0 seconds, got {}", fade));
+        animator.clip = clip;
+        animator.loop = loop;
+        animator.speed = speed;
+        AnimatorState& state = registry.get_or_emplace<AnimatorState>(e);
+        if (state.model != model.get()) { // not posed yet: as animatorSystem's first tick
+            state.model = model.get();
+            state.pose.clear();
+        }
+        state.started = true;
+        state.clipName = clip;
+        state.playing = true;
+        playClip(state, index, fade);
+    });
+    // Stops at the current pose.
+    api.set_function("stopAnimation", [this, &registry, animated](sol::this_state L, const sol::object& id) {
+        const entt::entity e = animated(L, id).first;
+        AnimatorState& state = registry.get_or_emplace<AnimatorState>(e);
+        if (!state.started) { // never started: stay in bind pose instead of running playOnStart later
+            state.started = true;
+            state.clipName = registry.get<Animator>(e).clip;
+            state.clip = -1;
+        }
+        state.playing = false;
+    });
+    // {clip = name, time = seconds into the clip, playing = bool}
+    api.set_function("getAnimationState", [this, &registry, animated](sol::this_state L, const sol::object& id) {
+        const auto [e, model] = animated(L, id);
+        const Animator& animator = registry.get<Animator>(e);
+        const auto* state = registry.try_get<AnimatorState>(e);
+        float time = 0.0f;
+        if (state && state->clip >= 0 && static_cast<size_t>(state->clip) < model->clips.size())
+            time = clipTime(state->time, model->clips[static_cast<size_t>(state->clip)].duration, animator.loop);
+        sol::table table = lua.create_table();
+        table["clip"] = animator.clip;
+        table["time"] = time;
+        table["playing"] = state && state->playing;
+        return table;
+    });
+    api.set_function("getAnimationClips", [this, animated](sol::this_state L, const sol::object& id) {
+        const std::shared_ptr<const Model> model = animated(L, id).second;
+        sol::table table = lua.create_table();
+        for (size_t i = 0; i < model->clips.size(); ++i)
+            table[i + 1] = model->clips[i].name;
+        return table;
+    });
+
     const auto logger = [this](void (*write)(std::string_view)) {
         return [this, write](sol::this_state L, const sol::object& message) {
             write(std::format("{}: {}", who(), toString(L, message)));
@@ -680,6 +757,7 @@ void LuaSystems::launch(Scene& scene, const std::optional<std::filesystem::path>
 {
     fsm_.detach(); // drops callbacks into the old Lua state
     state_.reset(); // the old Lua state goes before the new one is built
+    models().setRoot(projectRoot.value_or(std::filesystem::path())); // kast.*Animation* load models before any render
     state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_);
     state_->init(scene.systems);
 }
