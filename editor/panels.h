@@ -55,6 +55,8 @@ public:
     void drawLighting(Document& doc, bool& open);
     // The scene's post-processing and fog, a section per effect (Window > Post Processing); nothing while open is false.
     void drawPostProcessing(Document& doc, bool& open);
+    // The scene's physics settings: gravity (Window > Physics); draws nothing while open is false.
+    void drawPhysics(Document& doc, bool& open);
     // Rescans the project's files for the Assets panel (main's poll). drawAssets also rescans when the project changes.
     void refreshAssets(const Document& doc);
     // Double-clicked .rml files open in gui, .lua/.rcss/.json files in editor; renames and moves of gui's open files

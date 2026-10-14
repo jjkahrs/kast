@@ -1,0 +1,99 @@
+{
+  "version": 4,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Directional Light",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 4, 0], "rotation": [-0.408218, -0.23457, -0.109382, 0.875426], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.95, 0.9], "intensity": 1 }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [12, 1, 12] },
+        "MeshRenderer": { "primitive": "plane", "material": "" },
+        "Collider": { "shape": "box", "size": [1, 0.1, 1], "radius": 0.5, "height": 2, "center": [0, -0.05, 0], "isTrigger": false, "friction": 0.5, "restitution": 0 }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Falling Cube",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-1.5, 3.5, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "" },
+        "Collider": { "shape": "box", "size": [1, 1, 1], "radius": 0.5, "height": 2, "center": [0, 0, 0], "isTrigger": false, "friction": 0.5, "restitution": 0 },
+        "Rigidbody": { "motionType": "dynamic", "mass": 1, "gravityScale": 1, "linearDamping": 0.05, "angularDamping": 0.05 }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Tumbling Cube",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0.3, 4.5, -1.5], "rotation": [0.2, 0.3, 0.1, 0.927362], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "" },
+        "Collider": { "shape": "box", "size": [1, 1, 1], "radius": 0.5, "height": 2, "center": [0, 0, 0], "isTrigger": false, "friction": 0.5, "restitution": 0 },
+        "Rigidbody": { "motionType": "dynamic", "mass": 1, "gravityScale": 1, "linearDamping": 0.05, "angularDamping": 0.05 }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Bouncy Sphere",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [1.8, 5, 0.5], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "sphere", "material": "" },
+        "Collider": { "shape": "sphere", "size": [1, 1, 1], "radius": 0.5, "height": 2, "center": [0, 0, 0], "isTrigger": false, "friction": 0.5, "restitution": 0.6 },
+        "Rigidbody": { "motionType": "dynamic", "mass": 1, "gravityScale": 1, "linearDamping": 0.05, "angularDamping": 0.05 }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Trigger Zone",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-1.5, 2.5, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "Collider": { "shape": "box", "size": [2, 1, 2], "radius": 0.5, "height": 2, "center": [0, 0, 0], "isTrigger": true, "friction": 0.5, "restitution": 0 }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Hero",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [3, 0, -2], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "CharacterController": { "radius": 0.4, "height": 1.8, "maxSlopeDegrees": 45, "stepHeight": 0.3 }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Hero Body",
+      "parent": 7,
+      "components": {
+        "Transform": { "position": [0, 0.85, 0], "rotation": [0, 0, 0, 1], "scale": [0.5, 1.7, 0.5] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 3, 8], "rotation": [-0.173648, 0, 0, 0.984808], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    }
+  ],
+  "systems": ["scripts/physics_log.lua"],
+  "lighting": { "ambientColor": [1, 1, 1], "ambientIntensity": 0.2 },
+  "physics": { "gravity": [0, -9.81, 0] },
+  "editor": {
+    "camera": { "pivot": [0, 1.5, 0], "yaw": 20, "pitch": -20, "distance": 12 }
+  }
+}

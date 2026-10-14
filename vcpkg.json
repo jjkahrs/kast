@@ -15,6 +15,7 @@
     "rmlui",
     "pugixml",
     "stb",
-    "assimp"
+    "assimp",
+    "joltphysics"
   ]
 }

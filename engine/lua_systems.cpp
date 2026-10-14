@@ -13,6 +13,7 @@
 #include <sol/sol.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cmath>
 #include <format>
@@ -86,8 +87,9 @@ struct PendingScene {
 
 struct LuaSystems::State {
     State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, std::string scenePath, const Input* input,
-          EventBus& bus, StateMachines& fsm)
-        : scene(scene), projectRoot(projectRoot), scenePath(std::move(scenePath)), input(input), bus(bus), fsm(fsm)
+          EventBus& bus, StateMachines& fsm, Physics& physics)
+        : scene(scene), projectRoot(projectRoot), scenePath(std::move(scenePath)), input(input), bus(bus), fsm(fsm),
+          physics(physics)
     {
     }
 
@@ -97,6 +99,7 @@ struct LuaSystems::State {
     const Input* input;
     EventBus& bus;
     StateMachines& fsm;
+    Physics& physics;
     MaterialLibrary materials; // shared .mat files, for kast.get/setMaterialProperty
     std::optional<PendingScene> pending; // last kast.loadScene call wins
     bool inShutdown = false;             // kast.loadScene is ignored while a shutdown runs
@@ -104,6 +107,7 @@ struct LuaSystems::State {
     sol::table api;        // kast.* functions, copied into each system's own read-only kast table
     sol::table inputApi;   // kast.input.*
     sol::table fsmApi;     // kast.fsm.*
+    sol::table physicsApi; // kast.physics.*
     DefinitionFiles fsmFiles; // state machine definition files at the last load, for hot reload
     std::string callbackPath; // the definition file whose enter/exit is running (log prefixes, event publisher)
     std::vector<System> systems;
@@ -134,6 +138,7 @@ struct LuaSystems::State {
     std::string eventName(lua_State* L, const char* function, const sol::object& name);
     void bindApi();
     void bindFsmApi();
+    void bindPhysicsApi();
 };
 
 void LuaSystems::State::init(const std::vector<std::string>& paths)
@@ -291,6 +296,7 @@ sol::environment LuaSystems::State::environment()
         kast[key] = value;
     kast["input"] = inputTable;
     kast["fsm"] = readOnly(fsmApi);
+    kast["physics"] = readOnly(physicsApi);
     env["kast"] = readOnly(kast);
     return env;
 }
@@ -692,6 +698,7 @@ void LuaSystems::State::bindApi()
         return input ? std::make_tuple(input->mouseDeltaX, input->mouseDeltaY) : std::make_tuple(0.0f, 0.0f);
     });
     bindFsmApi();
+    bindPhysicsApi();
 }
 
 // kast.fsm.*: thin wrappers over StateMachines, whose std::invalid_argument (a bad target) becomes a Lua error at the
@@ -748,6 +755,139 @@ void LuaSystems::State::bindFsmApi()
     });
 }
 
+// kast.physics.*: wrappers over Physics, whose std::invalid_argument (no body of the right kind, a bad size) becomes a
+// Lua error at the calling line. Vectors are {x =, y =, z =} or {x, y, z}; rotations {x =, y =, z =, w =} or
+// {x, y, z, w}. See README "Physics".
+void LuaSystems::State::bindPhysicsApi()
+{
+    const auto number = [](lua_State* L, const std::string& function, const char* what, const sol::object& value) {
+        if (value.get_type() != sol::type::number || !std::isfinite(value.as<double>()))
+            raise(L, std::format("{}: {} must be a finite number, got {}", function, what, toString(L, value)));
+        return value.as<float>();
+    };
+    const auto components = [number](lua_State* L, const std::string& function, const char* what,
+                                     const sol::object& value, int count) {
+        if (value.get_type() != sol::type::table)
+            raise(L, std::format("{}: {} must be a table {{x, y, z{}}}, got {}", function, what, count == 4 ? ", w" : "",
+                                 toString(L, value)));
+        const sol::table table = value.as<sol::table>();
+        const bool named = table["x"].valid();
+        std::array<float, 4> out{};
+        for (int i = 0; i < count; ++i) {
+            const sol::object element = named ? sol::object(table[std::string(1, "xyzw"[i])]) : sol::object(table[i + 1]);
+            out[i] = number(L, function, what, element);
+        }
+        return out;
+    };
+    const auto vec3 = [components](lua_State* L, const std::string& function, const char* what, const sol::object& value) {
+        const auto c = components(L, function, what, value, 3);
+        return bx::Vec3{c[0], c[1], c[2]};
+    };
+    const auto toLua = [this](const bx::Vec3& v) {
+        sol::table table = lua.create_table();
+        table["x"] = v.x;
+        table["y"] = v.y;
+        table["z"] = v.z;
+        return table;
+    };
+    const auto idOf = [this](entt::entity e) { return scene.registry().get<PersistentId>(e).value; };
+    const auto idList = [this, idOf](const std::vector<entt::entity>& entities) {
+        sol::table table = lua.create_table();
+        for (size_t i = 0; i < entities.size(); ++i)
+            table[i + 1] = idOf(entities[i]);
+        return table;
+    };
+    // Runs body; a Physics std::invalid_argument raises at the calling line.
+    const auto guarded = [](lua_State* L, const std::string& function, auto&& body) {
+        try {
+            return body();
+        } catch (const std::invalid_argument& e) {
+            raise(L, std::format("{}: {}", function, e.what()));
+        }
+    };
+
+    physicsApi = lua.create_table();
+    physicsApi.set_function("raycast", [this, vec3, number, toLua, idOf, guarded](
+                                           sol::this_state L, const sol::object& origin, const sol::object& direction,
+                                           const sol::object& maxDistance) -> sol::object {
+        const std::string fn = "kast.physics.raycast";
+        const bx::Vec3 from = vec3(L, fn, "origin", origin);
+        const bx::Vec3 dir = vec3(L, fn, "direction", direction);
+        const float distance = number(L, fn, "maxDistance", maxDistance);
+        const auto hit = guarded(L, fn, [&] { return physics.raycast(from, dir, distance); });
+        if (!hit)
+            return sol::lua_nil;
+        sol::table table = lua.create_table();
+        table["entity"] = idOf(hit->entity);
+        table["point"] = toLua(hit->point);
+        table["normal"] = toLua(hit->normal);
+        table["distance"] = hit->distance;
+        return table;
+    });
+    physicsApi.set_function("overlapSphere", [this, vec3, number, idList, guarded](
+                                                 sol::this_state L, const sol::object& center, const sol::object& radius) {
+        const std::string fn = "kast.physics.overlapSphere";
+        const bx::Vec3 c = vec3(L, fn, "center", center);
+        const float r = number(L, fn, "radius", radius);
+        return idList(guarded(L, fn, [&] { return physics.overlapSphere(c, r); }));
+    });
+    physicsApi.set_function("overlapBox", [this, vec3, components, idList, guarded](
+                                              sol::this_state L, const sol::object& center, const sol::object& halfExtents,
+                                              const sol::object& rotation) {
+        const std::string fn = "kast.physics.overlapBox";
+        const bx::Vec3 c = vec3(L, fn, "center", center);
+        const bx::Vec3 half = vec3(L, fn, "halfExtents", halfExtents);
+        bx::Quaternion q{bx::InitIdentity};
+        if (rotation.get_type() != sol::type::lua_nil && rotation.get_type() != sol::type::none) {
+            const auto r = components(L, fn, "rotation", rotation, 4);
+            q = {r[0], r[1], r[2], r[3]};
+            if (!(r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3] > 1e-12f))
+                raise(L, std::format("{}: rotation must not be zero", fn));
+        }
+        return idList(guarded(L, fn, [&] { return physics.overlapBox(c, half, q); }));
+    });
+
+    // kast.physics.<name>(id) -> {x, y, z}
+    const auto getter = [&](const char* name, bx::Vec3 (Physics::*get)(entt::entity) const) {
+        physicsApi.set_function(name, [this, fn = std::format("kast.physics.{}", name), get, toLua,
+                                       guarded](sol::this_state L, const sol::object& id) {
+            const entt::entity e = entity(L, id);
+            return toLua(guarded(L, fn, [&] { return (physics.*get)(e); }));
+        });
+    };
+    // kast.physics.<name>(id, {x, y, z})
+    const auto setter = [&](const char* name, void (Physics::*set)(entt::entity, const bx::Vec3&)) {
+        physicsApi.set_function(name, [this, fn = std::format("kast.physics.{}", name), set, vec3,
+                                       guarded](sol::this_state L, const sol::object& id, const sol::object& value) {
+            const entt::entity e = entity(L, id);
+            const bx::Vec3 v = vec3(L, fn, "value", value);
+            guarded(L, fn, [&] { (physics.*set)(e, v); });
+        });
+    };
+    getter("getVelocity", &Physics::velocity);
+    setter("setVelocity", &Physics::setVelocity);
+    getter("getAngularVelocity", &Physics::angularVelocity);
+    setter("setAngularVelocity", &Physics::setAngularVelocity);
+    setter("addForce", &Physics::addForce);
+    setter("addImpulse", &Physics::addImpulse);
+    setter("moveCharacter", &Physics::moveCharacter);
+    physicsApi.set_function("isGrounded", [this, guarded](sol::this_state L, const sol::object& id) {
+        const entt::entity e = entity(L, id);
+        return guarded(L, "kast.physics.isGrounded", [&] { return physics.isGrounded(e); });
+    });
+    physicsApi.set_function("getGround", [this, toLua, idOf, guarded](sol::this_state L,
+                                                                      const sol::object& id) -> sol::object {
+        const entt::entity e = entity(L, id);
+        const auto ground = guarded(L, "kast.physics.getGround", [&] { return physics.ground(e); });
+        if (!ground)
+            return sol::lua_nil;
+        sol::table table = lua.create_table();
+        table["entity"] = idOf(ground->entity);
+        table["normal"] = toLua(ground->normal);
+        return table;
+    });
+}
+
 LuaSystems::LuaSystems() = default;
 LuaSystems::~LuaSystems() = default;
 
@@ -766,7 +906,8 @@ void LuaSystems::launch(Scene& scene, const std::optional<std::filesystem::path>
     fsm_.detach(); // drops callbacks into the old Lua state
     state_.reset(); // the old Lua state goes before the new one is built
     models().setRoot(projectRoot.value_or(std::filesystem::path())); // kast.*Animation* load models before any render
-    state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_);
+    physics_.start(scene, bus_); // before the inits, which may query it
+    state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_, physics_);
     state_->init(scene.systems);
 }
 
@@ -793,6 +934,7 @@ void LuaSystems::endSession()
     state_->stop();
     fsm_.detach();
     state_.reset();
+    physics_.stop();
     bus_.dropQueued();
 }
 

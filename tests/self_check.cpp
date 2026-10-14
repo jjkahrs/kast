@@ -2,7 +2,8 @@
 // hierarchy edits, component registry, scene-file validation, cameras, input, systems, Lua systems, projects, scene
 // switching, editor Play mode, Lua components, game.pak, Build, state machines, Assets panel file operations and the
 // game GUI (builder document model, GUI files, UIDocument, button click events), the external editor setting and models
-// (Assimp loading, animation sampling, crossfades, skinning limits).
+// (Assimp loading, animation sampling, crossfades, skinning limits) and physics (bodies, events, kast.physics,
+// characters). --bench-physics instead times 500 dynamic boxes and exits.
 // Exit 0 if every check passes. Run by CTest as engine_self_check.
 #include "assets.h"   // Assets panel file logic; links editor/assets.cpp
 #include "build.h"    // editor Build pipeline; links editor/build.cpp
@@ -22,6 +23,8 @@
 #include <material.h>
 #include <math3d.h>
 #include <model.h>
+#include <physics.h>
+#include <play.h>
 #include <animation.h>
 #include <pak.h>
 #include <post_process.h>
@@ -46,11 +49,14 @@
 #include <fstream>
 #include <io.h> // _wsopen_s, _close
 #include <iterator>
+#include <map>
+#include <optional>
 #include <process.h> // _getpid
 #include <share.h>   // _SH_DENYRW
 #include <source_location>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 
 namespace {
@@ -288,8 +294,8 @@ std::vector<std::string> typeNames()
 void checkComponentRegistry()
 {
     check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "ModelRenderer", "Animator",
-                                                 "DirectionalLight", "PointLight", "Camera", "Rotator", "StateMachine",
-                                                 "UIDocument"},
+                                                 "DirectionalLight", "PointLight", "Camera", "Rotator", "Collider",
+                                                 "Rigidbody", "CharacterController", "StateMachine", "UIDocument"},
           "built-in component types in registration order");
     const entt::meta_type transform = kast::findComponentType("Transform");
     const entt::meta_type rotator = kast::findComponentType("Rotator");
@@ -2597,9 +2603,9 @@ void checkBuildSettings()
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
               std::vector<std::string>{"events.scene", "fsm.scene", "health.scene", "materials.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
-                                       "models_missing.scene", "point_lights.scene", "point_shadows.scene",
-                                       "post_processing.scene", "scene_a.scene", "scene_b.scene", "shadows.scene",
-                                       "ui.scene"},
+                                       "models_missing.scene", "physics.scene", "point_lights.scene",
+                                       "point_shadows.scene", "post_processing.scene", "scene_a.scene", "scene_b.scene",
+                                       "shadows.scene", "ui.scene"},
           "tests/project lists its scenes, sorted");
 
     const std::filesystem::path root = looseTestDir("kast_build_settings_check") / "game";
@@ -2613,7 +2619,7 @@ void checkBuildSettings()
     check(projectScenes(root) == std::vector<std::string>{"broken.scene", "events.scene", "fsm.scene", "health.scene",
                                                           "levels/c.scene", "materials.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
-                                                          "models_material.scene", "models_missing.scene",
+                                                          "models_material.scene", "models_missing.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "scene_a.scene", "scene_b.scene",
                                                           "shadows.scene", "ui.scene"},
@@ -5507,8 +5513,761 @@ void checkModelEditor()
     kast::models().setRoot({});
 }
 
-int main()
+// --- physics ---
+
+// A named entity with a Collider and, unless motion is nullopt (a static collider), a Rigidbody.
+entt::entity physicsBody(kast::Scene& scene, const std::string& name, bx::Vec3 position, kast::Collider collider,
+                         std::optional<kast::MotionType> motion = kast::MotionType::Dynamic,
+                         entt::entity parent = entt::null)
 {
+    const entt::entity e = scene.create(name, parent);
+    scene.registry().get<kast::Transform>(e).position = position;
+    scene.registry().emplace<kast::Collider>(e, collider);
+    if (motion)
+        scene.registry().emplace<kast::Rigidbody>(e, kast::Rigidbody{.motionType = *motion});
+    return e;
+}
+
+kast::Collider boxCollider(bx::Vec3 size)
+{
+    kast::Collider c;
+    c.size = size;
+    return c;
+}
+
+kast::Collider sphereCollider(float radius)
+{
+    kast::Collider c;
+    c.shape = kast::ColliderShape::Sphere;
+    c.radius = radius;
+    return c;
+}
+
+// A 40 x 1 x 40 static floor whose top is at y = 0.
+entt::entity physicsFloor(kast::Scene& scene)
+{
+    return physicsBody(scene, "Floor", {0.0f, -0.5f, 0.0f}, boxCollider({40.0f, 1.0f, 40.0f}), std::nullopt);
+}
+
+entt::entity physicsCharacter(kast::Scene& scene, bx::Vec3 feet)
+{
+    const entt::entity e = scene.create("Hero");
+    scene.registry().get<kast::Transform>(e).position = feet;
+    scene.registry().emplace<kast::CharacterController>(e);
+    return e;
+}
+
+void stepPhysics(kast::Physics& physics, int steps)
+{
+    for (int i = 0; i < steps; ++i)
+        physics.update(kast::kPhysicsStep);
+}
+
+size_t loggedCount(const std::string& part)
+{
+    return static_cast<size_t>(
+        std::ranges::count_if(kast::log::lines(), [&](const std::string& line) { return contains(line, part); }));
+}
+
+void checkPhysicsComponents()
+{
+    const auto valid = [](const char* type, const char* json) {
+        std::string error;
+        return static_cast<bool>(
+            kast::componentFromJson(kast::findComponentType(type), nlohmann::ordered_json::parse(json), error));
+    };
+    check(kast::findComponentType("Collider") && kast::findComponentType("Rigidbody") &&
+              kast::findComponentType("CharacterController"),
+          "physics: Collider, Rigidbody and CharacterController are registered (Add Component, Inspector)");
+    const auto collider = [](const char* shape, const char* size, double radius, double height, double friction,
+                             double restitution) {
+        return std::format(R"({{"shape": "{}", "size": {}, "radius": {}, "height": {}, "center": [0, 1, 0],
+                                "isTrigger": false, "friction": {}, "restitution": {}}})",
+                           shape, size, radius, height, friction, restitution);
+    };
+    check(valid("Collider", collider("capsule", "[1, 2, 3]", 0.5, 2, 0.4, 0.2).c_str()), "physics: a valid Collider loads");
+    check(!valid("Collider", collider("box", "[1, 0, 1]", 0.5, 2, 0.5, 0).c_str()), "physics: Collider size must be > 0");
+    check(!valid("Collider", collider("sphere", "[1, 1, 1]", -1, 2, 0.5, 0).c_str()), "physics: Collider radius must be > 0");
+    check(!valid("Collider", collider("capsule", "[1, 1, 1]", 1, 1, 0.5, 0).c_str()),
+          "physics: Collider height must be >= 2 * radius");
+    check(!valid("Collider", collider("box", "[1, 1, 1]", 0.5, 2, -1, 0).c_str()), "physics: Collider friction must be >= 0");
+    check(!valid("Collider", collider("box", "[1, 1, 1]", 0.5, 2, 0.5, 1.5).c_str()),
+          "physics: Collider restitution must be 0..1");
+    check(!valid("Collider", collider("cone", "[1, 1, 1]", 0.5, 2, 0.5, 0).c_str()), "physics: unknown Collider shape rejected");
+    check(valid("Rigidbody", R"({"motionType": "kinematic", "mass": 2, "gravityScale": 0, "linearDamping": 0, "angularDamping": 1})"),
+          "physics: a valid Rigidbody loads");
+    check(!valid("Rigidbody", R"({"motionType": "dynamic", "mass": 0, "gravityScale": 1, "linearDamping": 0, "angularDamping": 0})"),
+          "physics: Rigidbody mass must be > 0");
+    check(!valid("Rigidbody", R"({"motionType": "dynamic", "mass": 1, "gravityScale": 1, "linearDamping": -1, "angularDamping": 0})"),
+          "physics: Rigidbody damping must be >= 0");
+    check(valid("CharacterController", R"({"radius": 0.4, "height": 1.8, "maxSlopeDegrees": 45, "stepHeight": 0.3})"),
+          "physics: a valid CharacterController loads");
+    check(!valid("CharacterController", R"({"radius": 0.4, "height": 1.8, "maxSlopeDegrees": 95, "stepHeight": 0.3})"),
+          "physics: CharacterController maxSlopeDegrees must be 0..90");
+    check(!valid("CharacterController", R"({"radius": 1, "height": 1, "maxSlopeDegrees": 45, "stepHeight": 0.3})"),
+          "physics: CharacterController height must be >= 2 * radius");
+
+    // Round trip: components and gravity.
+    kast::Scene scene;
+    kast::Collider capsule = sphereCollider(0.3f);
+    capsule.shape = kast::ColliderShape::Capsule;
+    capsule.height = 1.5f;
+    capsule.center = {0.0f, 0.1f, 0.0f};
+    capsule.isTrigger = true;
+    capsule.friction = 0.7f;
+    capsule.restitution = 0.25f;
+    const entt::entity e = physicsBody(scene, "Body", {1.0f, 2.0f, 3.0f}, capsule, kast::MotionType::Kinematic);
+    scene.registry().get<kast::Rigidbody>(e).mass = 3.0f;
+    scene.registry().emplace<kast::CharacterController>(scene.create("Hero"), kast::CharacterController{.stepHeight = 0.4f});
+    scene.physics.gravity = {0.0f, -3.5f, 1.0f};
+    const nlohmann::ordered_json json = kast::sceneToJson(scene);
+    kast::Scene loaded;
+    std::string error;
+    check(kast::sceneFromJson(json, loaded, error), "physics: a scene with physics loads");
+    check(kast::sceneToJson(loaded) == json, "physics: components and gravity round-trip through the scene file");
+    check(loaded.physics.gravity.z == 1.0f && loaded.physics.gravity.y == -3.5f, "physics: gravity loads");
+
+    nlohmann::ordered_json old = json;
+    old.erase("physics");
+    kast::Scene oldScene;
+    check(kast::sceneFromJson(old, oldScene, error) && oldScene.physics.gravity.y == -9.81f &&
+              oldScene.physics.gravity.x == 0.0f && oldScene.physics.gravity.z == 0.0f,
+          "physics: a scene without \"physics\" loads with the default gravity 0, -9.81, 0");
+    nlohmann::ordered_json bad = json;
+    bad["physics"]["gravity"] = {0, "down", 0};
+    check(!kast::sceneFromJson(bad, oldScene, error) && contains(error, "gravity"), "physics: bad gravity is rejected");
+    bad["physics"] = {{"gravity", {0, -9.81, 0}}, {"drag", 1}};
+    check(!kast::sceneFromJson(bad, oldScene, error) && contains(error, "unknown field"),
+          "physics: an unknown physics field is rejected");
+}
+
+void checkPhysicsFall()
+{
+    // A dynamic box above a static floor falls and comes to rest on it (within Jolt's 2 cm penetration slop).
+    kast::Scene scene;
+    physicsFloor(scene);
+    const entt::entity cube = physicsBody(scene, "Cube", {0.0f, 5.0f, 0.0f}, boxCollider({1.0f, 1.0f, 1.0f}));
+    kast::EventBus bus;
+    kast::Physics physics;
+    physics.start(scene, bus);
+    stepPhysics(physics, 30);
+    const float falling = scene.registry().get<kast::Transform>(cube).position.y;
+    check(falling < 5.0f && falling > 0.5f, "physics: the box falls");
+    stepPhysics(physics, 300);
+    const float rest = scene.registry().get<kast::Transform>(cube).position.y;
+    check(near(rest, 0.5f, 0.025f), "physics: the box rests on the floor (y = 0.5)");
+    if (!near(rest, 0.5f, 0.025f))
+        kast::log::error(std::format("  rest y = {}", rest));
+
+    // Under a moved, rotated parent (two levels): the result lands in the local Transform.
+    kast::Scene parented;
+    physicsFloor(parented);
+    const entt::entity grand = parented.create("Grand");
+    parented.registry().get<kast::Transform>(grand).position = {4.0f, 1.0f, 0.0f};
+    const entt::entity parent = parented.create("Parent", grand);
+    parented.registry().get<kast::Transform>(parent).position = {0.0f, 1.0f, 2.0f};
+    parented.registry().get<kast::Transform>(parent).rotation = kast::quatFromEulerDeg({0.0f, 90.0f, 0.0f});
+    const entt::entity child = physicsBody(parented, "Child", {1.0f, 3.0f, 0.0f}, boxCollider({1.0f, 1.0f, 1.0f}),
+                                           kast::MotionType::Dynamic, parent);
+    const bx::Vec3 startWorld = worldPosition(parented, child);
+    kast::Physics physics2;
+    physics2.start(parented, bus);
+    stepPhysics(physics2, 300);
+    const bx::Vec3 endWorld = worldPosition(parented, child);
+    const kast::Transform& local = parented.registry().get<kast::Transform>(child);
+    check(near(endWorld, {startWorld.x, 0.5f, startWorld.z}, 0.025f),
+          "physics: a child body falls straight down in world space and rests on the floor");
+    // The parent's world position is (4, 2, 2): local y = 0.5 - 2; the yaw keeps y; x / z keep their local values.
+    check(near(local.position, {1.0f, -1.5f, 0.0f}, 0.025f),
+          "physics: the child's local Transform is relative to its rotated, moved parent");
+    if (!near(local.position, {1.0f, -1.5f, 0.0f}, 0.025f))
+        kast::log::error(std::format("  local = {} {} {}", local.position.x, local.position.y, local.position.z));
+
+    // World scale: box per axis, sphere by the largest axis.
+    kast::Scene scaled;
+    physicsFloor(scaled);
+    const entt::entity tall = physicsBody(scaled, "Tall", {0.0f, 4.0f, 0.0f}, boxCollider({1.0f, 1.0f, 1.0f}));
+    scaled.registry().get<kast::Transform>(tall).scale = {1.0f, 3.0f, 1.0f};
+    const entt::entity ball = physicsBody(scaled, "Ball", {5.0f, 4.0f, 0.0f}, sphereCollider(0.5f));
+    scaled.registry().get<kast::Transform>(ball).scale = {1.0f, 2.0f, 1.0f};
+    kast::Physics physics3;
+    physics3.start(scaled, bus);
+    stepPhysics(physics3, 300);
+    const float tallY = scaled.registry().get<kast::Transform>(tall).position.y;
+    const float ballY = scaled.registry().get<kast::Transform>(ball).position.y;
+    check(near(tallY, 1.5f, 0.03f), "physics: a box scaled 3x in y rests at y = 1.5");
+    check(near(ballY, 1.0f, 0.03f), "physics: a radius 0.5 sphere scaled (1, 2, 1) has radius 1 and rests at y = 1");
+    check(scaled.registry().get<kast::Transform>(tall).scale.y == 3.0f, "physics: scale is untouched");
+    if (!near(tallY, 1.5f, 0.03f) || !near(ballY, 1.0f, 0.03f))
+        kast::log::error(std::format("  tall y = {}, ball y = {}", tallY, ballY));
+}
+
+void checkPhysicsPlayStop()
+{
+    Document doc;
+    resetToDefault(doc);
+    const entt::entity cube = doc.scene.children(entt::null)[2];
+    doc.scene.registry().get<kast::Transform>(cube).position = {0.0f, 6.0f, 0.0f};
+    doc.scene.registry().emplace<kast::Collider>(cube);
+    doc.scene.registry().emplace<kast::Rigidbody>(cube);
+    const kast::EntityId id = idOf(doc.scene, cube);
+    const auto cubeY = [&] { // by id: Stop rebuilds the registry
+        for (auto [entity, persistent, transform] : doc.scene.registry().view<kast::PersistentId, kast::Transform>().each())
+            if (persistent.value == id)
+                return transform.position.y;
+        return -1000.0f;
+    };
+    updatePlay(doc, 1.0f);
+    check(cubeY() == 6.0f, "physics: nothing simulates in edit mode");
+    startPlay(doc);
+    for (int i = 0; i < 30; ++i)
+        updatePlay(doc, 1.0f / 60.0f);
+    check(cubeY() < 6.0f, "physics: Play simulates (the cube falls)");
+    togglePause(doc);
+    const float paused = cubeY();
+    updatePlay(doc, 1.0f / 60.0f);
+    check(cubeY() == paused, "physics: Pause stops the simulation");
+    togglePause(doc);
+    stopPlay(doc);
+    check(cubeY() == 6.0f, "physics: Stop restores the original transforms");
+}
+
+void checkPhysicsTimestep()
+{
+    const auto run = [](float frameDt, int frames) {
+        kast::Scene scene;
+        physicsFloor(scene);
+        const entt::entity cube = physicsBody(scene, "Cube", {0.3f, 3.0f, 0.1f}, boxCollider({1.0f, 1.0f, 1.0f}));
+        scene.registry().get<kast::Transform>(cube).rotation = kast::quatFromEulerDeg({20.0f, 30.0f, 10.0f});
+        kast::EventBus bus;
+        kast::Physics physics;
+        physics.start(scene, bus);
+        int steps = 0;
+        for (int i = 0; i < frames; ++i)
+            steps += physics.update(frameDt);
+        return std::pair{steps, scene.registry().get<kast::Transform>(cube)};
+    };
+    const auto [stepsA, a] = run(1.0f / 30.0f, 45);
+    const auto [stepsB, b] = run(1.0f / 60.0f, 90);
+    check(stepsA == 90 && stepsB == 90, "physics: 1/30 s frames run 2 fixed steps each, 1/60 s frames 1");
+    check(near(a.position, b.position, 1e-5f) && near(a.rotation.w, b.rotation.w, 1e-5f) && near(a.rotation.x, b.rotation.x, 1e-5f),
+          "physics: 1 x (1/30) and 2 x (1/60) frame dt give the same result (fixed 60 Hz step)");
+
+    kast::Scene scene;
+    kast::EventBus bus;
+    kast::Physics physics;
+    check(physics.update(1.0f) == 0, "physics: update before start does nothing");
+    physics.start(scene, bus);
+    check(physics.update(0.25f) == kast::kMaxPhysicsSteps && physics.update(10.0f) == kast::kMaxPhysicsSteps,
+          "physics: a huge frame dt is capped at kMaxPhysicsSteps steps");
+    check(physics.update(0.001f) <= 1, "physics: the backlog past the cap is dropped");
+    check(physics.update(0.0f) == 0 && physics.update(-1.0f) == 0, "physics: zero / negative dt takes no step");
+}
+
+void checkPhysicsEvents()
+{
+    kast::Scene scene;
+    const entt::entity floor = physicsFloor(scene);
+    const entt::entity cube = physicsBody(scene, "Cube", {0.0f, 8.0f, 0.0f}, boxCollider({1.0f, 1.0f, 1.0f}));
+    kast::Collider triggerShape = boxCollider({3.0f, 2.0f, 3.0f});
+    triggerShape.isTrigger = true;
+    const entt::entity trigger = physicsBody(scene, "Trigger", {0.0f, 4.0f, 0.0f}, triggerShape, std::nullopt);
+    kast::EventBus bus;
+    std::vector<std::pair<std::string, nlohmann::json>> events;
+    std::vector<kast::EventBus::Subscription> subscriptions;
+    for (const char* name : {"collisionEnter", "collisionExit", "triggerEnter", "triggerExit"})
+        subscriptions.push_back(bus.subscribe(name, [&events, name](const nlohmann::json& p) { events.emplace_back(name, p); }));
+    const auto count = [&](const std::string& name) {
+        return std::ranges::count_if(events, [&](const auto& e) { return e.first == name; });
+    };
+    std::map<entt::entity, kast::EntityId> ids; // kept: the cube is destroyed below
+    const auto pairIs = [&](const nlohmann::json& p, entt::entity x, entt::entity y) {
+        const kast::EntityId a = p["a"], b = p["b"];
+        return (a == ids[x] && b == ids[y]) || (a == ids[y] && b == ids[x]);
+    };
+    for (entt::entity e : {floor, cube, trigger})
+        ids[e] = idOf(scene, e);
+    kast::Physics physics;
+    physics.start(scene, bus);
+    for (int i = 0; i < 300; ++i) {
+        physics.update(kast::kPhysicsStep);
+        bus.drain();
+    }
+    check(count("triggerEnter") == 1 && count("triggerExit") == 1, "physics: the box enters and leaves the trigger once");
+    check(near(scene.registry().get<kast::Transform>(cube).position.y, 0.5f, 0.025f),
+          "physics: triggers don't block (the box falls through to the floor)");
+    check(count("collisionEnter") == 1 && count("collisionExit") == 0,
+          "physics: one collisionEnter when the box lands, no exit while it rests (no stay events)");
+    if (count("collisionEnter") != 1 || count("collisionExit") != 0)
+        for (const auto& [name, payload] : events)
+            kast::log::error(std::format("  {} {}", name, payload.dump()));
+    const auto enter = std::ranges::find(events, std::string("collisionEnter"), &std::pair<std::string, nlohmann::json>::first);
+    const auto triggered = std::ranges::find(events, std::string("triggerEnter"), &std::pair<std::string, nlohmann::json>::first);
+    if (enter != events.end() && triggered != events.end()) {
+        check(pairIs(triggered->second, cube, trigger), "physics: triggerEnter names the box and the trigger");
+        const nlohmann::json& p = enter->second;
+        check(pairIs(p, cube, floor), "physics: collisionEnter names the box and the floor");
+        // normal points from a toward b: up if a is the floor.
+        const float sign = p["a"] == ids[floor] ? 1.0f : -1.0f;
+        check(near(p["normal"]["y"].get<float>(), sign, 0.01f) && near(p["point"]["y"].get<float>(), 0.0f, 0.05f) &&
+                  std::abs(p["point"]["x"].get<float>()) <= 0.51f,
+              "physics: collisionEnter has the contact point (on the floor top) and the normal from a toward b");
+    }
+
+    // A body going away ends its contacts.
+    scene.destroy(cube);
+    physics.update(kast::kPhysicsStep);
+    bus.drain();
+    check(count("collisionExit") == 1 && pairIs(std::ranges::find(events, std::string("collisionExit"),
+                                                                  &std::pair<std::string, nlohmann::json>::first)->second,
+                                                cube, floor),
+          "physics: destroying a resting body sends collisionExit with its id");
+    // Bounce: restitution, enter and exit.
+    kast::Collider bouncy = sphereCollider(0.5f);
+    bouncy.restitution = 0.9f;
+    const entt::entity ball = physicsBody(scene, "Ball", {5.0f, 3.0f, 0.0f}, bouncy);
+    ids[ball] = idOf(scene, ball);
+    events.clear();
+    for (int i = 0; i < 60; ++i) {
+        physics.update(kast::kPhysicsStep);
+        bus.drain();
+    }
+    check(count("collisionEnter") >= 1 && count("collisionExit") >= 1 && pairIs(events.front().second, ball, floor),
+          "physics: a bouncing ball sends collisionEnter then collisionExit");
+
+    // A body asleep on the floor keeps its contact (Jolt drops it on sleep), and ends it when teleported away.
+    const entt::entity sleeper = physicsBody(scene, "Sleeper", {-6.0f, 0.5f, 0.0f}, boxCollider({1.0f, 1.0f, 1.0f}));
+    ids[sleeper] = idOf(scene, sleeper);
+    for (int i = 0; i < 300; ++i) {
+        physics.update(kast::kPhysicsStep);
+        bus.drain();
+    }
+    const auto sleeperEvents = [&](const std::string& name) {
+        return std::ranges::count_if(events, [&](const auto& e) { return e.first == name && pairIs(e.second, sleeper, floor); });
+    };
+    check(sleeperEvents("collisionEnter") == 1 && sleeperEvents("collisionExit") == 0,
+          "physics: falling asleep on the floor sends no collisionExit");
+    scene.registry().get<kast::Transform>(sleeper).position = {-6.0f, 10.0f, 0.0f};
+    for (int i = 0; i < 2; ++i) {
+        physics.update(kast::kPhysicsStep);
+        bus.drain();
+    }
+    check(sleeperEvents("collisionExit") == 1, "physics: teleporting a sleeping body off the floor sends collisionExit");
+}
+
+void checkPhysicsBodyControl()
+{
+    kast::Scene scene;
+    scene.physics.gravity = {0.0f, 0.0f, 0.0f};
+    const entt::entity ball = physicsBody(scene, "Ball", {0.0f, 0.0f, 0.0f}, sphereCollider(0.5f));
+    kast::Rigidbody& rb = scene.registry().get<kast::Rigidbody>(ball);
+    rb.mass = 2.0f;
+    rb.linearDamping = 0.0f;
+    rb.angularDamping = 0.0f;
+    const entt::entity wall = physicsBody(scene, "Wall", {50.0f, 0.0f, 0.0f}, boxCollider({1.0f, 1.0f, 1.0f}), std::nullopt);
+    const entt::entity platform = physicsBody(scene, "Platform", {0.0f, -20.0f, 0.0f}, boxCollider({2.0f, 0.5f, 2.0f}),
+                                              kast::MotionType::Kinematic);
+    kast::EventBus bus;
+    kast::Physics physics;
+    physics.start(scene, bus);
+
+    physics.setVelocity(ball, {1.0f, 0.0f, 0.0f});
+    stepPhysics(physics, 60);
+    check(near(scene.registry().get<kast::Transform>(ball).position.x, 1.0f, 0.01f) &&
+              near(physics.velocity(ball), {1.0f, 0.0f, 0.0f}, 1e-4f),
+          "physics: setVelocity / getVelocity: 1 m/s for 1 s moves 1 m");
+    physics.addImpulse(ball, {0.0f, 2.0f, 0.0f}); // mass 2: +1 m/s
+    check(near(physics.velocity(ball), {1.0f, 1.0f, 0.0f}, 1e-4f), "physics: addImpulse changes velocity by impulse / mass");
+    physics.addForce(ball, {0.0f, 0.0f, 120.0f}); // over one step: dv = 120 / 2 / 60 = 1
+    stepPhysics(physics, 1);
+    check(near(physics.velocity(ball), {1.0f, 1.0f, 1.0f}, 1e-3f), "physics: addForce acts over the next step (F / m * dt)");
+    stepPhysics(physics, 1);
+    check(near(physics.velocity(ball).z, 1.0f, 1e-3f), "physics: the force is gone after the step");
+    physics.setAngularVelocity(ball, {0.0f, 2.0f, 0.0f});
+    stepPhysics(physics, 1);
+    check(near(physics.angularVelocity(ball), {0.0f, 2.0f, 0.0f}, 1e-3f), "physics: setAngularVelocity / getAngularVelocity");
+    const bx::Quaternion before = scene.registry().get<kast::Transform>(ball).rotation;
+    stepPhysics(physics, 10);
+    const bx::Quaternion after = scene.registry().get<kast::Transform>(ball).rotation;
+    check(!sameRotation(after, before), "physics: angular velocity rotates it");
+    if (sameRotation(after, before))
+        kast::log::error(std::format("  rotation {} {} {} {}", after.x, after.y, after.z, after.w));
+
+    // Kinematic: velocity moves it, forces are refused.
+    physics.setVelocity(platform, {0.0f, 3.0f, 0.0f});
+    stepPhysics(physics, 60);
+    check(near(scene.registry().get<kast::Transform>(platform).position.y, -17.0f, 0.01f),
+          "physics: a kinematic body moves by its velocity");
+
+    const auto throws = [](auto&& f) {
+        try {
+            f();
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    check(throws([&] { physics.addForce(platform, {1.0f, 0.0f, 0.0f}); }) &&
+              throws([&] { physics.addImpulse(wall, {1.0f, 0.0f, 0.0f}); }) &&
+              throws([&] { physics.velocity(wall); }) && throws([&] { physics.setAngularVelocity(wall, {0, 1, 0}); }) &&
+              throws([&] { physics.moveCharacter(ball, {1.0f, 0.0f, 0.0f}); }) && throws([&] { physics.isGrounded(ball); }) &&
+              throws([&] { physics.addForce(scene.create("Empty"), {1.0f, 0.0f, 0.0f}); }),
+          "physics: body functions on the wrong kind of body (or none) throw");
+}
+
+void checkPhysicsRuntimeSync()
+{
+    kast::Scene scene;
+    scene.physics.gravity = {0.0f, 0.0f, 0.0f};
+    const entt::entity a = scene.create("A");
+    scene.registry().get<kast::Transform>(a).position = {0.0f, 0.0f, 0.0f};
+    kast::EventBus bus;
+    kast::Physics physics;
+    physics.start(scene, bus);
+    const auto hitAt = [&](float x) { // what a ray down at x hits
+        const auto hit = physics.raycast({x, 10.0f, 0.0f}, {0.0f, -1.0f, 0.0f}, 100.0f);
+        return hit ? hit->entity : entt::null;
+    };
+    check(hitAt(0.0f) == entt::null, "physics: no Collider, no body");
+    scene.registry().emplace<kast::Collider>(a);
+    stepPhysics(physics, 1);
+    check(hitAt(0.0f) == a, "physics: an added Collider has a body after the next step");
+    scene.registry().get<kast::Transform>(a).position = {7.0f, 0.0f, 0.0f};
+    stepPhysics(physics, 1);
+    check(hitAt(7.0f) == a && hitAt(0.0f) == entt::null, "physics: setting a static body's Transform teleports it");
+    scene.registry().get<kast::Collider>(a).size = {5.0f, 1.0f, 1.0f};
+    stepPhysics(physics, 1);
+    check(hitAt(9.2f) == a, "physics: changed Collider values rebuild the body");
+    scene.registry().remove<kast::Collider>(a);
+    stepPhysics(physics, 1);
+    check(hitAt(7.0f) == entt::null, "physics: removing the Collider removes the body");
+
+    // Dynamic teleport keeps its velocity; kinematic moves over a step and stops.
+    const entt::entity d = physicsBody(scene, "D", {0.0f, 0.0f, 20.0f}, boxCollider({1.0f, 1.0f, 1.0f}));
+    stepPhysics(physics, 1);
+    physics.setVelocity(d, {0.0f, 0.0f, 1.0f});
+    scene.registry().get<kast::Transform>(d).position = {30.0f, 0.0f, 20.0f};
+    stepPhysics(physics, 1);
+    check(near(scene.registry().get<kast::Transform>(d).position, {30.0f, 0.0f, 20.0f + kast::kPhysicsStep}, 1e-3f),
+          "physics: setting a dynamic body's Transform teleports it");
+    const entt::entity k = physicsBody(scene, "K", {0.0f, 0.0f, -20.0f}, boxCollider({1.0f, 1.0f, 1.0f}),
+                                       kast::MotionType::Kinematic);
+    stepPhysics(physics, 1);
+    scene.registry().get<kast::Transform>(k).position = {1.0f, 0.0f, -20.0f};
+    stepPhysics(physics, 1);
+    check(near(physics.velocity(k), {0.0f, 0.0f, 0.0f}, 1e-4f) &&
+              near(scene.registry().get<kast::Transform>(k).position, {1.0f, 0.0f, -20.0f}, 1e-3f),
+          "physics: a kinematic body follows its Transform (moved over one step, then still)");
+    const auto hitK = physics.raycast({1.0f, 10.0f, -20.0f}, {0.0f, -1.0f, 0.0f}, 100.0f);
+    check(hitK && hitK->entity == k, "physics: the kinematic body is at its new Transform");
+    scene.destroy(k);
+    stepPhysics(physics, 1);
+    check(!physics.raycast({1.0f, 10.0f, -20.0f}, {0.0f, -1.0f, 0.0f}, 100.0f), "physics: a destroyed entity's body goes");
+
+    // Setup problems: reported once, nothing created.
+    const entt::entity lonely = scene.create("Lonely");
+    scene.registry().emplace<kast::Rigidbody>(lonely);
+    const entt::entity both = scene.create("Both");
+    scene.registry().get<kast::Transform>(both).position = {-30.0f, 0.0f, 0.0f};
+    scene.registry().emplace<kast::Collider>(both);
+    scene.registry().emplace<kast::CharacterController>(both);
+    stepPhysics(physics, 5);
+    check(loggedCount("Physics: entity 'Lonely'") == 1 && logged("has a Rigidbody but no Collider; it is ignored"),
+          "physics: a Rigidbody without a Collider warns once, naming the entity");
+    check(loggedCount("Physics: entity 'Both'") == 1 && logged("can't be combined with a Collider or Rigidbody"),
+          "physics: CharacterController + Collider is reported once, naming the entity");
+    check(kast::physicsConflict(scene.registry(), both) && !kast::physicsConflict(scene.registry(), lonely),
+          "physics: physicsConflict (shown in the Inspector) flags CharacterController + Collider");
+    check(!physics.raycast({-30.0f, 10.0f, 0.0f}, {0.0f, -1.0f, 0.0f}, 100.0f),
+          "physics: the conflicting entity has no body");
+}
+
+void checkPhysicsCharacter()
+{
+    // Floor, a 0.25 step at x 3..5, a 0.6 block at x -3..-5... see each part.
+    const auto world = [](kast::Scene& scene) { physicsFloor(scene); };
+    kast::EventBus bus;
+
+    {
+        kast::Scene scene;
+        world(scene);
+        const entt::entity floor = scene.children(entt::null)[0];
+        const entt::entity hero = physicsCharacter(scene, {0.0f, 0.05f, 0.0f});
+        std::vector<nlohmann::json> enters;
+        auto sub = bus.subscribe("collisionEnter", [&](const nlohmann::json& p) { enters.push_back(p); });
+        kast::Physics physics;
+        physics.start(scene, bus);
+        stepPhysics(physics, 30);
+        bus.drain();
+        check(physics.isGrounded(hero), "physics: a character on the floor is grounded");
+        const auto ground = physics.ground(hero);
+        check(ground && ground->entity == floor && near(ground->normal, {0.0f, 1.0f, 0.0f}, 1e-3f),
+              "physics: getGround returns the floor and its normal");
+        check(near(scene.registry().get<kast::Transform>(hero).position.y, 0.0f, 0.05f),
+              "physics: the character's feet (Transform position) are on the floor");
+        const auto heroFloor = std::ranges::find_if(enters, [&](const nlohmann::json& p) {
+            return (p["a"] == idOf(scene, hero) && p["b"] == idOf(scene, floor)) ||
+                   (p["b"] == idOf(scene, hero) && p["a"] == idOf(scene, floor));
+        });
+        check(heroFloor != enters.end(), "physics: characters send collisionEnter like any body");
+        if (heroFloor != enters.end()) {
+            const float sign = (*heroFloor)["a"] == idOf(scene, floor) ? 1.0f : -1.0f;
+            check(near((*heroFloor)["normal"]["y"].get<float>(), sign, 0.05f),
+                  "physics: a character contact's normal points from a toward b");
+        }
+        physics.setVelocity(hero, {0.0f, 5.0f, 0.0f});
+        stepPhysics(physics, 10);
+        check(!physics.isGrounded(hero) && scene.registry().get<kast::Transform>(hero).position.y > 0.4f,
+              "physics: setVelocity upward makes the character jump (mid-air: not grounded)");
+        check(!physics.ground(hero), "physics: getGround is nil mid-air");
+        stepPhysics(physics, 120);
+        check(physics.isGrounded(hero) && near(scene.registry().get<kast::Transform>(hero).position.y, 0.0f, 0.05f),
+              "physics: gravity brings the character back down");
+        physics.moveCharacter(hero, {2.0f, 0.0f, 0.0f});
+        stepPhysics(physics, 60);
+        const bx::Vec3 p = scene.registry().get<kast::Transform>(hero).position;
+        check(near(p.x, 2.0f, 0.1f) && near(p.y, 0.0f, 0.05f), "physics: moveCharacter walks it (2 m/s for 1 s)");
+        check(near(physics.velocity(hero).x, 2.0f, 0.05f), "physics: getVelocity works on a character");
+    }
+    {
+        // Steps: 0.25 (<= stepHeight 0.3) is climbed; a 0.6 block isn't.
+        kast::Scene scene;
+        world(scene);
+        physicsBody(scene, "Step", {4.0f, 0.125f, 0.0f}, boxCollider({2.0f, 0.25f, 2.0f}), std::nullopt);
+        physicsBody(scene, "Block", {-4.0f, 0.3f, 0.0f}, boxCollider({2.0f, 0.6f, 2.0f}), std::nullopt);
+        const entt::entity up = physicsCharacter(scene, {0.0f, 0.0f, 0.0f});
+        kast::Physics physics;
+        physics.start(scene, bus);
+        stepPhysics(physics, 10);
+        physics.moveCharacter(up, {2.0f, 0.0f, 0.0f});
+        stepPhysics(physics, 120);
+        const bx::Vec3 p = scene.registry().get<kast::Transform>(up).position;
+        check(p.x > 3.5f && near(p.y, 0.25f, 0.05f), "physics: the character climbs a step <= stepHeight");
+        if (!(p.x > 3.5f && near(p.y, 0.25f, 0.05f)))
+            kast::log::error(std::format("  step: {} {} {}", p.x, p.y, p.z));
+        scene.registry().get<kast::Transform>(up).position = {0.0f, 0.0f, 0.0f}; // teleport back
+        stepPhysics(physics, 2);
+        physics.moveCharacter(up, {-2.0f, 0.0f, 0.0f});
+        stepPhysics(physics, 120);
+        const bx::Vec3 q = scene.registry().get<kast::Transform>(up).position;
+        check(q.x > -2.7f && near(q.y, 0.0f, 0.05f), "physics: a static block taller than stepHeight blocks the character");
+        if (!(q.x > -2.7f && near(q.y, 0.0f, 0.05f)))
+            kast::log::error(std::format("  block: {} {} {}", q.x, q.y, q.z));
+    }
+    {
+        // Slopes: a 30 degree ramp is walked up, a 60 degree one isn't (maxSlopeDegrees 45).
+        kast::Scene scene;
+        world(scene);
+        const auto ramp = [&](float degrees, float z) {
+            const entt::entity r = physicsBody(scene, "Ramp", {3.0f, 0.0f, z}, boxCollider({8.0f, 0.2f, 3.0f}), std::nullopt);
+            scene.registry().get<kast::Transform>(r).rotation = kast::quatFromEulerDeg({0.0f, 0.0f, degrees});
+        };
+        ramp(30.0f, 0.0f);
+        ramp(60.0f, 10.0f);
+        const entt::entity gentle = physicsCharacter(scene, {0.0f, 0.0f, 0.0f});
+        const entt::entity steep = physicsCharacter(scene, {0.0f, 0.0f, 10.0f});
+        kast::Physics physics;
+        physics.start(scene, bus);
+        stepPhysics(physics, 10);
+        physics.moveCharacter(gentle, {2.0f, 0.0f, 0.0f});
+        physics.moveCharacter(steep, {2.0f, 0.0f, 0.0f});
+        stepPhysics(physics, 150);
+        const float gentleY = scene.registry().get<kast::Transform>(gentle).position.y;
+        const float steepY = scene.registry().get<kast::Transform>(steep).position.y;
+        check(gentleY > 0.7f, "physics: the character walks up a slope <= maxSlopeDegrees");
+        check(steepY < 0.5f, "physics: the character can't walk up a slope > maxSlopeDegrees");
+        if (!(gentleY > 0.7f && steepY < 0.5f))
+            kast::log::error(std::format("  slopes: gentle y {} steep y {}", gentleY, steepY));
+    }
+    {
+        // A wall (static) and a kinematic body block; a dynamic box is pushed.
+        kast::Scene scene;
+        world(scene);
+        physicsBody(scene, "Wall", {0.0f, 1.5f, -4.0f}, boxCollider({10.0f, 3.0f, 2.0f}), std::nullopt);
+        physicsBody(scene, "Gate", {0.0f, 1.5f, 4.0f}, boxCollider({10.0f, 3.0f, 2.0f}), kast::MotionType::Kinematic);
+        const entt::entity crate = physicsBody(scene, "Crate", {-2.0f, 0.5f, 0.0f}, boxCollider({1.0f, 1.0f, 1.0f}));
+        const entt::entity hero = physicsCharacter(scene, {0.0f, 0.0f, 0.0f});
+        kast::Physics physics;
+        physics.start(scene, bus);
+        stepPhysics(physics, 10);
+        physics.moveCharacter(hero, {0.0f, 0.0f, -2.0f});
+        stepPhysics(physics, 150);
+        check(scene.registry().get<kast::Transform>(hero).position.z > -2.65f,
+              "physics: a static wall blocks the character (feet stop at the wall face + radius)");
+        physics.moveCharacter(hero, {0.0f, 0.0f, 2.0f});
+        stepPhysics(physics, 240);
+        check(scene.registry().get<kast::Transform>(hero).position.z < 2.65f, "physics: a kinematic body blocks the character");
+        scene.registry().get<kast::Transform>(hero).position = {0.0f, 0.0f, 0.0f};
+        physics.moveCharacter(hero, {-2.0f, 0.0f, 0.0f});
+        stepPhysics(physics, 90);
+        const float crateX = scene.registry().get<kast::Transform>(crate).position.x;
+        check(crateX < -2.5f, "physics: the character pushes a dynamic box");
+        if (!(crateX < -2.5f))
+            kast::log::error(std::format("  crate x {}", crateX));
+    }
+}
+
+void checkPhysicsLua()
+{
+    const std::filesystem::path dir = luaTestDir();
+    kast::Scene scene;
+    const entt::entity floor = physicsFloor(scene);
+    const entt::entity crate = physicsBody(scene, "Crate", {0.0f, 0.5f, 0.0f}, boxCollider({1.0f, 1.0f, 1.0f}));
+    const entt::entity hero = physicsCharacter(scene, {10.0f, 0.0f, 0.0f});
+    const entt::entity ghost = scene.create("Ghost");
+    scene.registry().get<kast::Transform>(ghost).position = {-10.0f, 0.5f, 0.0f};
+    writeFile(dir / "p.lua", std::format(R"(local FLOOR, CRATE, HERO, GHOST = {}, {}, {}, {}
+local frame = 0
+local function fails(pattern, f, ...)
+    local ok, err = pcall(f, ...)
+    assert(not ok, "expected an error matching " .. pattern)
+    assert(string.find(err, pattern, 1, true), "error was: " .. tostring(err))
+end
+return {{
+    update = function(dt)
+        frame = frame + 1
+        if frame == 2 then
+            local hit = kast.physics.raycast({{x = 5, y = 10, z = 0}}, {{x = 0, y = -2, z = 0}}, 100)
+            assert(hit and hit.entity == FLOOR, "ray hits the floor")
+            assert(math.abs(hit.point.y) < 1e-3 and math.abs(hit.point.x - 5) < 1e-3, "hit point")
+            assert(math.abs(hit.normal.y - 1) < 1e-3 and math.abs(hit.distance - 10) < 1e-3, "hit normal / distance")
+            hit = kast.physics.raycast({{0, 10, 0}}, {{0, -1, 0}}, 100)
+            assert(hit and hit.entity == CRATE and math.abs(hit.point.y - 1) < 1e-3, "ray hits the crate first")
+            assert(kast.physics.raycast({{0, 10, 0}}, {{0, 1, 0}}, 100) == nil, "a miss is nil")
+            assert(kast.physics.raycast({{5, 10, 0}}, {{0, -1, 0}}, 5) == nil, "maxDistance limits the ray")
+            local ids = kast.physics.overlapSphere({{x = 0, y = 0.5, z = 0}}, 0.2)
+            assert(#ids == 1 and ids[1] == CRATE, "overlapSphere finds the crate only")
+            ids = kast.physics.overlapSphere({{x = 10, y = 1, z = 0}}, 0.1)
+            assert(#ids == 1 and ids[1] == HERO, "overlapSphere finds the character")
+            ids = kast.physics.overlapBox({{x = 0, y = 0.5, z = 0}}, {{x = 1, y = 1, z = 1}})
+            local found = {{}}
+            for _, id in ipairs(ids) do found[id] = true end
+            assert(#ids == 2 and found[CRATE] and found[FLOOR], "overlapBox finds the crate and the floor")
+            ids = kast.physics.overlapBox({{x = 1.2, y = 0.5, z = 0}}, {{x = 1, y = 0.1, z = 0.1}})
+            assert(#ids == 1 and ids[1] == CRATE, "a flat box beside the crate touches it only")
+            local s = math.sin(math.rad(45))
+            ids = kast.physics.overlapBox({{x = 1.2, y = 0.5, z = 0}}, {{x = 1, y = 0.1, z = 0.1}}, {{0, 0, s, s}})
+            assert(#ids == 1 and ids[1] == FLOOR, "overlapBox takes a rotation: stood up 90 degrees it misses the crate")
+            kast.physics.setVelocity(CRATE, {{x = 0, y = 0, z = 0}})
+            local v = kast.physics.getVelocity(CRATE)
+            assert(v.x == 0 and v.y == 0 and v.z == 0, "getVelocity returns a vector")
+            kast.physics.addImpulse(CRATE, {{x = 0, y = 5, z = 0}})
+            assert(math.abs(kast.physics.getVelocity(CRATE).y - 5) < 1e-3, "addImpulse")
+            kast.physics.addForce(CRATE, {{x = 0, y = 0, z = 0}})
+            kast.physics.setAngularVelocity(CRATE, {{x = 0, y = 1, z = 0}})
+            assert(math.abs(kast.physics.getAngularVelocity(CRATE).y - 1) < 1e-3, "angular velocity")
+            kast.physics.moveCharacter(HERO, {{x = 1, y = 0, z = 0}})
+            assert(type(kast.physics.isGrounded(HERO)) == "boolean", "isGrounded")
+            fails("has no dynamic Rigidbody", kast.physics.addForce, FLOOR, {{x = 0, y = 1, z = 0}})
+            fails("has no dynamic Rigidbody", kast.physics.addImpulse, GHOST, {{x = 0, y = 1, z = 0}})
+            fails("has no dynamic or kinematic Rigidbody or CharacterController", kast.physics.getVelocity, FLOOR)
+            fails("has no CharacterController", kast.physics.moveCharacter, CRATE, {{x = 1, y = 0, z = 0}})
+            fails("has no CharacterController", kast.physics.getGround, CRATE)
+            fails("kast.physics.raycast: maxDistance must be > 0", kast.physics.raycast, {{0, 0, 0}}, {{0, 1, 0}}, 0)
+            fails("kast.physics.raycast: origin must be a table", kast.physics.raycast, "up", {{0, 1, 0}}, 1)
+            fails("kast.physics.overlapSphere: radius must be > 0", kast.physics.overlapSphere, {{0, 0, 0}}, -1)
+            fails("kast.physics.overlapBox: halfExtents must be > 0", kast.physics.overlapBox, {{0, 0, 0}}, {{0, 1, 1}})
+            fails("invalid entity id", kast.physics.getVelocity, 999999)
+            -- Runtime sync through the component API: applied by the next step (next frame).
+            kast.add(GHOST, "Collider")
+            kast.log("physics lua frame 2 ok")
+        elseif frame == 3 then
+            local hit = kast.physics.raycast({{x = -10, y = 10, z = 0}}, {{0, -1, 0}}, 100)
+            assert(hit and hit.entity == GHOST, "kast.add Collider: body by the next step")
+            kast.set(GHOST, "Transform", {{position = {{x = -20, y = 0.5, z = 0}}}})
+        elseif frame == 4 then
+            assert(kast.physics.raycast({{x = -20, y = 10, z = 0}}, {{0, -1, 0}}, 100).entity == GHOST, "kast.set Transform teleports")
+            kast.remove(GHOST, "Collider")
+        elseif frame == 5 then
+            assert(kast.physics.raycast({{x = -20, y = 10, z = 0}}, {{0, -1, 0}}, 100).entity == FLOOR, "kast.remove Collider")
+            kast.destroy(CRATE)
+        elseif frame == 6 then
+            local hit = kast.physics.raycast({{0, 10, 0}}, {{0, -1, 0}}, 100)
+            assert(hit.entity == FLOOR, "kast.destroy removes the body")
+            kast.log("physics lua done")
+        end
+    end,
+}}
+)",
+                                         idOf(scene, floor), idOf(scene, crate), idOf(scene, hero), idOf(scene, ghost)));
+    scene.systems = {"p.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr);
+    check(lua.physics().running(), "physics: the Lua session starts physics");
+    for (int i = 0; i < 6; ++i)
+        kast::tickPlay(scene, lua, kast::kPhysicsStep);
+    checkOk(lua, 0, "physics: kast.physics queries, body control, errors and runtime sync from Lua");
+    check(logged("physics lua frame 2 ok") && logged("physics lua done"), "physics: the Lua checks ran");
+    lua.stop();
+    check(!lua.physics().running(), "physics: stopping the session stops physics");
+}
+
+void checkColliderWireframe()
+{
+    kast::Scene scene;
+    const entt::entity e = physicsBody(scene, "Box", {1.0f, 2.0f, 3.0f}, boxCollider({1.0f, 1.0f, 1.0f}), std::nullopt);
+    kast::Transform& t = scene.registry().get<kast::Transform>(e);
+    t.rotation = kast::quatFromEulerDeg({0.0f, 90.0f, 0.0f});
+    t.scale = {2.0f, 1.0f, 1.0f};
+    scene.registry().get<kast::Collider>(e).center = {0.5f, 0.0f, 0.0f};
+    const auto bounds = [](const std::vector<std::pair<bx::Vec3, bx::Vec3>>& lines) {
+        kast::Aabb box{{FLT_MAX, FLT_MAX, FLT_MAX}, {-FLT_MAX, -FLT_MAX, -FLT_MAX}};
+        for (const auto& [a, b] : lines)
+            for (const bx::Vec3& p : {a, b}) {
+                box.min = bx::min(box.min, p);
+                box.max = bx::max(box.max, p);
+            }
+        return box;
+    };
+    const auto lines = kast::colliderWireframe(scene, e);
+    const kast::Aabb b = bounds(lines);
+    // Local center (0.5, 0, 0) * scale (2, 1, 1) = (1, 0, 0), yawed 90 degrees: (0, 0, -1). Half extents (1, 0.5, 0.5)
+    // yawed: (0.5, 0.5, 1) around world (1, 2, 2).
+    check(lines.size() == 12 && near(b.min, {0.5f, 1.5f, 1.0f}, 1e-4f) && near(b.max, {1.5f, 2.5f, 3.0f}, 1e-4f),
+          "physics: the box collider wireframe has the world position, rotation, scale and center offset");
+    scene.registry().remove<kast::Collider>(e);
+    check(kast::colliderWireframe(scene, e).empty(), "physics: no collider, no wireframe");
+    scene.registry().emplace<kast::CharacterController>(e);
+    const kast::Aabb c = bounds(kast::colliderWireframe(scene, e));
+    // Capsule radius 0.4 * 2 (max scale), height 1.8 * 2, feet at the entity, upright.
+    check(near(c.min, {1.0f - 0.8f, 2.0f, 3.0f - 0.8f}, 1e-3f) && near(c.max, {1.0f + 0.8f, 2.0f + 3.6f, 3.0f + 0.8f}, 1e-3f),
+          "physics: the character capsule wireframe stands on the entity's position");
+}
+
+// kast_self_check --bench-physics: average fixed step time with 500 dynamic boxes falling onto a floor and settling.
+int benchPhysics()
+{
+    kast::Scene scene;
+    physicsFloor(scene);
+    for (int i = 0; i < 500; ++i)
+        physicsBody(scene, std::format("Box {}", i),
+                    {static_cast<float>(i % 10) * 1.5f - 7.0f, 1.0f + static_cast<float>(i / 100) * 1.5f,
+                     static_cast<float>((i / 10) % 10) * 1.5f - 7.0f},
+                    boxCollider({1.0f, 1.0f, 1.0f}));
+    kast::EventBus bus;
+    kast::Physics physics;
+    physics.start(scene, bus);
+    // The first second: every box awake (falling, landing); the rest: settling and asleep.
+    const auto run = [&](int steps) {
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < steps; ++i) {
+            physics.update(kast::kPhysicsStep);
+            bus.drain();
+        }
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / steps;
+    };
+    const double awake = run(60);
+    const double settled = run(540);
+    kast::log::info(std::format("Physics: 500 dynamic boxes, {:.3f} ms average per step in the first second (all "
+                                "awake), {:.3f} ms over the next 9 s (settling, asleep)",
+                                awake, settled));
+    return 0;
+}
+
+int main(int argc, char** argv)
+{
+    if (argc == 2 && std::string_view(argv[1]) == "--bench-physics")
+        return benchPhysics();
     checkRotations();
     checkPicking();
     checkMirroredReparent();
@@ -5585,6 +6344,16 @@ int main()
     checkAnimationSampling();
     checkAnimatorSystem();
     checkModelEditor();
+    checkPhysicsComponents();
+    checkPhysicsFall();
+    checkPhysicsPlayStop();
+    checkPhysicsTimestep();
+    checkPhysicsEvents();
+    checkPhysicsBodyControl();
+    checkPhysicsRuntimeSync();
+    checkPhysicsCharacter();
+    checkPhysicsLua();
+    checkColliderWireframe();
     checkMountedPak(); // last: the mounted pak hides the disk for the rest of the run
     removeTree(testRoot());
     std::error_code ec;

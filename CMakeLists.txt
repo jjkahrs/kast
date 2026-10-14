@@ -14,6 +14,7 @@ find_package(sol2 CONFIG REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
 find_package(pugixml CONFIG REQUIRED)
 find_package(assimp CONFIG REQUIRED) # model import: glTF/GLB, FBX, OBJ
+find_package(Jolt CONFIG REQUIRED) # physics: rigid bodies, character controller (see engine/physics.h)
 find_package(Stb REQUIRED) # header-only: stb_image (PNG/JPG decode), stb_image_resize2 (mips)
 # vcpkg's luajit port ships no CMake config, only headers in include/luajit and lua51.lib/.dll.
 find_path(LUAJIT_INCLUDE_DIR luajit.h PATH_SUFFIXES luajit REQUIRED)
@@ -87,7 +88,7 @@ add_library(kast_engine STATIC
   engine/systems.cpp engine/renderer.cpp engine/shadow.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
-  engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp
+  engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
   ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}")
@@ -98,7 +99,7 @@ target_compile_definitions(kast_engine PRIVATE SOL_LUAJIT=1 SOL_ALL_SAFETIES_ON=
 target_compile_options(kast_engine PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_engine
   PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json RmlUi::RmlUi
-  PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 assimp::assimp "${LUAJIT_LIBRARY}")
+  PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 assimp::assimp Jolt::Jolt "${LUAJIT_LIBRARY}")
 
 # --- player: the prebuilt game client the editor's Build menu copies; engine only, no ImGui ---
 # A Windows-subsystem app (no console window); SDL_main.h supplies WinMain.
@@ -123,7 +124,7 @@ add_executable(kast_self_check tests/self_check.cpp editor/document.cpp editor/b
   editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/external_editor.cpp "${KAST_MANIFEST}")
 target_include_directories(kast_self_check PRIVATE editor)
 target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
-target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS})
+target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS} /bigobj) # one big file of checks
 target_link_libraries(kast_self_check PRIVATE kast_engine SDL3::SDL3 imgui::imgui pugixml::pugixml shell32)
 
 # --- tests ---
@@ -241,6 +242,56 @@ foreach(bad range lighting)
             "-DSCENE=${CMAKE_CURRENT_BINARY_DIR}/point_lights_bad_${bad}.scene"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
 endforeach()
+# Physics: tests/project/physics.scene (a ground with a scaled box collider, two falling cubes, a bouncy sphere, a
+# trigger zone the first cube falls through, a character, scripts/physics_log.lua logging the events and a raycast; the
+# built game "physics" in KAST_GAMES runs it in the player). Edit mode vs Play after 240 frames; Play vs a configure-time
+# copy with zero gravity, so only the simulation can differ; the selected Trigger Zone (no mesh) vs the same selection
+# in a copy without its Collider, so only the collider wireframe can differ; the selected character's capsule; the
+# Physics panel. A copy with bad gravity must fail to load.
+set(KAST_PHYSICS "${KAST_TEST_PROJECT}/physics.scene")
+set(KAST_PHYSICS_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/physics_project")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_PHYSICS}")
+file(READ "${KAST_PHYSICS}" physics_scene)
+file(REMOVE_RECURSE "${KAST_PHYSICS_PROJECT}")
+file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${KAST_PHYSICS_PROJECT}") # copies run physics_log.lua too
+string(REPLACE "\"gravity\": [0, -9.81, 0]" "\"gravity\": [0, 0, 0]" physics_variant "${physics_scene}")
+file(WRITE "${KAST_PHYSICS_PROJECT}/physics_no_gravity.scene" "${physics_variant}")
+string(REGEX REPLACE ",\n *\"Collider\": [^\n]*\"isTrigger\": true[^\n]*" "" physics_variant "${physics_scene}")
+file(WRITE "${KAST_PHYSICS_PROJECT}/physics_no_trigger_collider.scene" "${physics_variant}")
+string(REPLACE "\"gravity\": [0, -9.81, 0]" "\"gravity\": [0, \"down\", 0]" physics_variant "${physics_scene}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/physics_bad_gravity.scene" "${physics_variant}")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/physics_roundtrip")
+set(KAST_PHYSICS_LOG "raycast hit entity 2 at y=0.00, distance 10.00.*triggerEnter a=3 b=6.*triggerExit a=3 b=6.*collisionEnter a=2 b=3 normal=.0.00, 1.00, 0.00.*collisionExit a=2 b=5")
+# kast_physics_shot(<name> <smoke_test.cmake args...>): writes physics_<name>.png.
+function(kast_physics_shot name)
+  add_test(NAME physics_${name}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/physics_${name}.png"
+            ${ARGN} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+  set_tests_properties(physics_${name}_screenshot PROPERTIES FIXTURES_SETUP physics_${name}_shot)
+endfunction()
+# kast_physics_differs(<a> <b>): physics_<a>_vs_<b>_differs: physics_<a>.png and physics_<b>.png must differ.
+function(kast_physics_differs a b)
+  add_test(NAME physics_${a}_vs_${b}_differs
+    COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/physics_${a}.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/physics_${b}.png"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+  set_tests_properties(physics_${a}_vs_${b}_differs PROPERTIES FIXTURES_REQUIRED "physics_${a}_shot;physics_${b}_shot")
+endfunction()
+kast_physics_shot(edit "-DEXTRA_ARGS=--scene ${KAST_PHYSICS}")
+kast_physics_shot(play "-DEXTRA_ARGS=--scene ${KAST_PHYSICS} --play" -DFRAMES=240 "-DEXPECT_OUTPUT=${KAST_PHYSICS_LOG}")
+kast_physics_shot(play_no_gravity "-DEXTRA_ARGS=--scene ${KAST_PHYSICS_PROJECT}/physics_no_gravity.scene --play" -DFRAMES=240)
+kast_physics_shot(collider "-DEXTRA_ARGS=--scene ${KAST_PHYSICS} --select 6")
+kast_physics_shot(collider_none "-DEXTRA_ARGS=--scene ${KAST_PHYSICS_PROJECT}/physics_no_trigger_collider.scene --select 6")
+kast_physics_shot(character "-DEXTRA_ARGS=--scene ${KAST_PHYSICS} --select 7")
+kast_physics_shot(panel "-DEXTRA_ARGS=--scene ${KAST_PHYSICS}" -DFOCUS_PANEL=Physics)
+kast_physics_differs(edit play)
+kast_physics_differs(play_no_gravity play)
+kast_physics_differs(collider_none collider)
+add_test(NAME physics_roundtrip
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_PHYSICS}"
+          "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/physics_roundtrip" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
+add_test(NAME physics_bad_gravity_rejected
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${CMAKE_CURRENT_BINARY_DIR}/physics_bad_gravity.scene"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
 # Shadows: tests/project/shadows.scene (a sun with cascaded shadows over a cube, a sphere, a posed skinned character,
 # an alpha-mask cutout, alpha-blend glass and a pillar ~49 m out) and point_shadows.scene (5 castShadows point lights
 # with pillars; Far Right Light is the farthest from both cameras). The built games "shadows" and "point_shadows" in
@@ -761,7 +812,8 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "materials|Materials Test|materials.scene|FALSE" "post|Post Test|post_processing.scene|FALSE"
                "models|Models Test|models_anim.scene|FALSE" "shadows|Shadows Test|shadows.scene|FALSE"
                "shadows_off|Shadows Test|shadows_sun_off.scene|FALSE"
-               "point_shadows|Point Shadows Test|point_shadows.scene|FALSE")
+               "point_shadows|Point Shadows Test|point_shadows.scene|FALSE"
+               "physics|Physics Test|physics.scene|FALSE")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
@@ -789,6 +841,12 @@ foreach(game ${KAST_GAMES})
 endforeach()
 # The sun-shadow-off copy for the "shadows_off" game (configured above, under Shadows).
 file(COPY_FILE "${KAST_SHADOW_PROJECT}/shadows_sun_off.scene" "${CMAKE_CURRENT_BINARY_DIR}/game_projects/shadows_off/shadows_sun_off.scene")
+# The built physics game logs the same events from game.pak in the player.
+add_test(NAME player_physics_events
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/physics" "-DEXE=Physics Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/physics_events.run" -DEXPECT=0 "-DEXPECT_OUTPUT=${KAST_PHYSICS_LOG}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_physics_events PROPERTIES FIXTURES_REQUIRED game_physics_built TIMEOUT 90)
 add_test(NAME player_shadows_differs
   COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_shadows_off.png"
           "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_shadows.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")

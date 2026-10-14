@@ -59,7 +59,8 @@ std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb);
 // color (for PostProcess). Opaque and mask meshes first, then blended ones far to near. Shadows: cascaded shadow maps
 // for that DirectionalLight and cube shadow maps for the kMaxShadowedPointLights castShadows PointLights nearest the
 // eye, rendered in kShadowViews views before the scene's (see shadow.h). renderOverlays draws the
-// editor's: a ground grid, axis lines, a short frustum preview per Camera and the range of the selected PointLight.
+// editor's: a ground grid, axis lines, a short frustum preview per Camera, the range of the selected PointLight and
+// the selected entity's collider.
 // The caller owns the views' framebuffers, rects and clears; these set the view transform and mode and submit.
 class Renderer {
 public:
@@ -134,6 +135,7 @@ private:
     void drawGrid(bgfx::ViewId view);
     void drawCameraFrustums(const Scene& scene, bgfx::ViewId view);
     void drawPointLightRange(const Scene& scene, bgfx::ViewId view, entt::entity selected);
+    void drawColliderWireframe(const Scene& scene, bgfx::ViewId view, entt::entity selected);
 
     std::array<Mesh, 3> meshes_; // indexed by Primitive
     bgfx::VertexLayout lineLayout_;

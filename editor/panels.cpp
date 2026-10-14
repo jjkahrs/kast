@@ -7,6 +7,7 @@
 #include <log.h>
 #include <lua_components.h>
 #include <material.h>
+#include <physics.h>
 #include <scene_io.h>
 #include <state_machines.h>
 
@@ -370,6 +371,14 @@ void Panels::drawInspector(Document& doc)
                 bool keep = true;           // the header's x button (removable types only) clears it
                 if (ImGui::CollapsingHeader(type.displayName(), type.removable() ? &keep : nullptr,
                                             ImGuiTreeNodeFlags_DefaultOpen)) {
+                    const char* conflict = type.meta() && type.meta() == entt::resolve<kast::CharacterController>()
+                                               ? kast::physicsConflict(registry, entity)
+                                               : nullptr;
+                    if (conflict) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+                        ImGui::TextWrapped("%s", conflict);
+                        ImGui::PopStyleColor();
+                    }
                     if (type.meta() && type.meta() == entt::resolve<kast::StateMachine>()) {
                         changed = drawStateMachineComponent(doc, entity) || changed;
                     } else if (type.meta() && type.meta() == entt::resolve<kast::UIDocument>()) {
@@ -1091,6 +1100,21 @@ void Panels::drawLighting(Document& doc, bool& open)
             lighting.ambientColor = bx::clamp(lighting.ambientColor, bx::Vec3(0.0f), bx::Vec3(1.0f)); // typed values
             markDirty(doc);
         }
+    }
+    ImGui::End();
+}
+
+void Panels::drawPhysics(Document& doc, bool& open)
+{
+    if (!open)
+        return;
+    const float em = ImGui::GetFontSize();
+    ImGui::SetNextWindowSize(ImVec2(em * 22, em * 5), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Physics", &open)) {
+        // Read by the simulation every step, so a change in Play applies at once (and Stop reverts it).
+        if (ImGui::DragFloat3("Gravity", &doc.scene.physics.gravity.x, 0.05f, -1000.0f, 1000.0f, "%.2f",
+                              ImGuiSliderFlags_AlwaysClamp))
+            markDirty(doc);
     }
     ImGui::End();
 }

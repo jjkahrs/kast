@@ -2,6 +2,7 @@
 
 #include "event_bus.h"
 #include "input.h"
+#include "physics.h"
 #include "scene.h"
 #include "state_machines.h"
 
@@ -57,6 +58,10 @@ public:
     // The session's event bus, also for C++ publishers and subscribers. Its history outlives stop().
     EventBus& bus() { return bus_; }
     const EventBus& bus() const { return bus_; }
+    // The session's physics world (kast.physics.* from C++): started with the session (and on a scene switch),
+    // stopped with it. tickPlay steps it.
+    Physics& physics() { return physics_; }
+    const Physics& physics() const { return physics_; }
     // The session's state machines (kast.fsm.* from C++). Usable while running; reset by start() and stop().
     StateMachines& fsm() { return fsm_; }
     const StateMachines& fsm() const { return fsm_; }
@@ -68,6 +73,7 @@ private:
     void endSession(); // shutdowns, then the Lua state goes; the state machines keep their game states
 
     EventBus bus_; // declared before state_: the systems' subscriptions unsubscribe from it when state_ goes
+    Physics physics_; // publishes on bus_
     std::unique_ptr<State> state_;
     StateMachines fsm_{bus_}; // declared after state_, so its Lua callbacks are released while the Lua state lives
 };

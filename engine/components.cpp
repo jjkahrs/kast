@@ -79,6 +79,50 @@ const char* validateAnimator(const entt::meta_any& component)
     return nullptr;
 }
 
+const char* validateCollider(const entt::meta_any& component)
+{
+    const auto& c = component.cast<const Collider&>();
+    if (!(c.size.x > 0.0f && c.size.y > 0.0f && c.size.z > 0.0f))
+        return "\"size\" must be > 0 on every axis";
+    if (!(c.radius > 0.0f && c.height > 0.0f))
+        return "\"radius\" and \"height\" must be > 0";
+    if (!(c.height >= 2.0f * c.radius))
+        return "\"height\" must be >= 2 * \"radius\" (it includes both hemispheres)";
+    if (!(c.friction >= 0.0f))
+        return "\"friction\" must be >= 0";
+    if (!(c.restitution >= 0.0f && c.restitution <= 1.0f))
+        return "\"restitution\" must be between 0 and 1";
+    if (!(std::isfinite(c.center.x) && std::isfinite(c.center.y) && std::isfinite(c.center.z)))
+        return "\"center\" must be finite";
+    return nullptr;
+}
+
+const char* validateRigidbody(const entt::meta_any& component)
+{
+    const auto& body = component.cast<const Rigidbody&>();
+    if (!(body.mass > 0.0f))
+        return "\"mass\" must be > 0";
+    if (!std::isfinite(body.gravityScale))
+        return "\"gravityScale\" must be finite";
+    if (!(body.linearDamping >= 0.0f && body.angularDamping >= 0.0f))
+        return "\"linearDamping\" and \"angularDamping\" must be >= 0";
+    return nullptr;
+}
+
+const char* validateCharacterController(const entt::meta_any& component)
+{
+    const auto& c = component.cast<const CharacterController&>();
+    if (!(c.radius > 0.0f && c.height > 0.0f))
+        return "\"radius\" and \"height\" must be > 0";
+    if (!(c.height >= 2.0f * c.radius))
+        return "\"height\" must be >= 2 * \"radius\" (it includes both hemispheres)";
+    if (!(c.maxSlopeDegrees >= 0.0f && c.maxSlopeDegrees <= 90.0f))
+        return "\"maxSlopeDegrees\" must be between 0 and 90";
+    if (!(c.stepHeight >= 0.0f))
+        return "\"stepHeight\" must be >= 0";
+    return nullptr;
+}
+
 void registerBuiltins()
 {
     registerComponent<Transform>("Transform", {"Transform", false})
@@ -135,6 +179,40 @@ void registerBuiltins()
     registerComponent<Rotator>("Rotator", {"Rotator"})
         .data<&Rotator::axis>("axis").custom<FieldInfo>("Axis")
         .data<&Rotator::degreesPerSecond>("degreesPerSecond").custom<FieldInfo>("Degrees Per Second");
+
+    entt::meta_factory<ColliderShape>{}
+        .type("ColliderShape")
+        .data<ColliderShape::Box>("box").custom<FieldInfo>("Box")
+        .data<ColliderShape::Sphere>("sphere").custom<FieldInfo>("Sphere")
+        .data<ColliderShape::Capsule>("capsule").custom<FieldInfo>("Capsule");
+    registerComponent<Collider>("Collider", {"Collider", true, validateCollider})
+        .data<&Collider::shape>("shape").custom<FieldInfo>("Shape")
+        .data<&Collider::size>("size").custom<FieldInfo>("Size")
+        .data<&Collider::radius>("radius").custom<FieldInfo>("Radius", false, 0.001)
+        .data<&Collider::height>("height").custom<FieldInfo>("Height", false, 0.001)
+        .data<&Collider::center>("center").custom<FieldInfo>("Center")
+        .data<&Collider::isTrigger>("isTrigger").custom<FieldInfo>("Is Trigger")
+        .data<&Collider::friction>("friction").custom<FieldInfo>("Friction", false, 0.0)
+        .data<&Collider::restitution>("restitution").custom<FieldInfo>("Restitution", false, 0.0, 1.0);
+
+    entt::meta_factory<MotionType>{}
+        .type("MotionType")
+        .data<MotionType::Static>("static").custom<FieldInfo>("Static")
+        .data<MotionType::Dynamic>("dynamic").custom<FieldInfo>("Dynamic")
+        .data<MotionType::Kinematic>("kinematic").custom<FieldInfo>("Kinematic");
+    registerComponent<Rigidbody>("Rigidbody", {"Rigidbody", true, validateRigidbody})
+        .data<&Rigidbody::motionType>("motionType").custom<FieldInfo>("Motion Type")
+        .data<&Rigidbody::mass>("mass").custom<FieldInfo>("Mass", false, 0.001)
+        .data<&Rigidbody::gravityScale>("gravityScale").custom<FieldInfo>("Gravity Scale")
+        .data<&Rigidbody::linearDamping>("linearDamping").custom<FieldInfo>("Linear Damping", false, 0.0)
+        .data<&Rigidbody::angularDamping>("angularDamping").custom<FieldInfo>("Angular Damping", false, 0.0);
+
+    registerComponent<CharacterController>("CharacterController",
+                                           {"Character Controller", true, validateCharacterController})
+        .data<&CharacterController::radius>("radius").custom<FieldInfo>("Radius", false, 0.001)
+        .data<&CharacterController::height>("height").custom<FieldInfo>("Height", false, 0.001)
+        .data<&CharacterController::maxSlopeDegrees>("maxSlopeDegrees").custom<FieldInfo>("Max Slope Degrees", false, 0.0, 90.0)
+        .data<&CharacterController::stepHeight>("stepHeight").custom<FieldInfo>("Step Height", false, 0.0);
 
     registerComponent<StateMachine>("StateMachine", {"State Machine"})
         .data<&StateMachine::machine>("machine").custom<FieldInfo>("Machine")

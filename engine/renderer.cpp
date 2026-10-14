@@ -20,6 +20,7 @@
 #include "animation.h"
 #include "files.h"
 #include "log.h"
+#include "physics.h"
 #include "project.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -42,6 +43,7 @@ constexpr uint32_t kFrustumColor = 0xffe0e0e0;
 constexpr float kFrustumPreviewDistance = 2.0f; // meters: a short preview, not the far plane
 constexpr float kFrustumPreviewAspect = 16.0f / 9.0f; // ponytail: fixed; pass the Game panel's aspect if it matters
 constexpr uint32_t kPointLightRangeColor = 0xff40d0f0;
+constexpr uint32_t kColliderColor = 0xff40ff60; // ABGR: green
 constexpr int kRangeCircleSegments = 48;
 constexpr int kSphereStacks = 16;
 constexpr int kSphereSlices = 32;
@@ -824,6 +826,7 @@ void Renderer::renderOverlays(const Scene& scene, bgfx::ViewId view, const float
     drawGrid(view);
     drawCameraFrustums(scene, view);
     drawPointLightRange(scene, view, selected);
+    drawColliderWireframe(scene, view, selected);
 }
 
 void Renderer::drawGrid(bgfx::ViewId view)
@@ -883,6 +886,19 @@ void Renderer::drawPointLightRange(const Scene& scene, bgfx::ViewId view, entt::
             lines.push_back(point(segment));
             lines.push_back(point(segment + 1));
         }
+    }
+    submitLines(lines, lineLayout_, lineProgram_, view);
+}
+
+// The selected entity's Collider or CharacterController shape, as physics builds it (see colliderWireframe).
+void Renderer::drawColliderWireframe(const Scene& scene, bgfx::ViewId view, entt::entity selected)
+{
+    if (!scene.valid(selected))
+        return;
+    std::vector<LineVertex> lines;
+    for (const auto& [a, b] : colliderWireframe(scene, selected)) {
+        lines.push_back({a.x, a.y, a.z, kColliderColor});
+        lines.push_back({b.x, b.y, b.z, kColliderColor});
     }
     submitLines(lines, lineLayout_, lineProgram_, view);
 }

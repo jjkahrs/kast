@@ -249,6 +249,32 @@ ScenePostProcessing parsePostProcessing(const Json& json)
     return post;
 }
 
+constexpr double kMaxGravity = 1000.0; // m/s^2 per axis
+
+// "physics": every field optional (missing = default), but present ones must be valid.
+ScenePhysics parsePhysics(const Json& json)
+{
+    if (!json.is_object())
+        throw Invalid("\"physics\" must be an object");
+    for (const auto& [key, value] : json.items())
+        if (key != "gravity")
+            throw Invalid(std::format("physics: unknown field \"{}\"", key));
+    ScenePhysics physics;
+    if (json.contains("gravity")) {
+        const Json& g = json["gravity"];
+        const auto axis = [&](size_t i) {
+            const double v = g[i].is_number() ? g[i].get<double>() : NAN;
+            if (!(v >= -kMaxGravity && v <= kMaxGravity))
+                throw Invalid(std::format("physics: \"gravity\" must be 3 numbers between {} and {}", -kMaxGravity, kMaxGravity));
+            return static_cast<float>(v);
+        };
+        if (!g.is_array() || g.size() != 3)
+            throw Invalid("physics: \"gravity\" must be an array of 3 numbers");
+        physics.gravity = {axis(0), axis(1), axis(2)};
+    }
+    return physics;
+}
+
 Json postProcessingToJson(const ScenePostProcessing& post)
 {
     const auto color = [](const bx::Vec3& c) { return Json::array({jsonNumber(c.x), jsonNumber(c.y), jsonNumber(c.z)}); };
@@ -350,6 +376,8 @@ bool sceneFromJson(const Json& json, Scene& out, std::string& error, SceneLoadRe
             scene.lighting = parseLighting(json["lighting"]);
         if (json.contains("postProcessing"))
             scene.postProcessing = parsePostProcessing(json["postProcessing"]);
+        if (json.contains("physics"))
+            scene.physics = parsePhysics(json["physics"]);
         if (json.contains("systems")) {
             const Json& systems = json["systems"];
             if (!systems.is_array())
@@ -426,6 +454,8 @@ Json sceneToJson(const Scene& scene)
                                                       jsonNumber(lighting.ambientColor.z)})},
                         {"ambientIntensity", jsonNumber(lighting.ambientIntensity)}};
     root["postProcessing"] = postProcessingToJson(scene.postProcessing);
+    const bx::Vec3& gravity = scene.physics.gravity;
+    root["physics"] = {{"gravity", Json::array({jsonNumber(gravity.x), jsonNumber(gravity.y), jsonNumber(gravity.z)})}};
     root["editor"] = scene.editorData;
     return root;
 }

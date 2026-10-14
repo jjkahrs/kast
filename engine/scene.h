@@ -161,6 +161,49 @@ struct UIDocument {
     bool visible = true;
 };
 
+enum class ColliderShape { Box, Sphere, Capsule };
+
+// A physics shape (see physics.h). Without a Rigidbody the entity is a static body. size: box full extents; radius:
+// sphere / capsule; height: capsule total height including both hemispheres (>= 2 * radius), along local Y. center:
+// local offset. World scale applies: box per axis, sphere / capsule by the largest axis. isTrigger: reports
+// triggerEnter / triggerExit and blocks nothing.
+struct Collider {
+    ColliderShape shape = ColliderShape::Box;
+    bx::Vec3 size{1.0f, 1.0f, 1.0f}; // > 0
+    float radius = 0.5f;             // > 0
+    float height = 2.0f;             // > 0, >= 2 * radius
+    bx::Vec3 center{0.0f, 0.0f, 0.0f};
+    bool isTrigger = false;
+    float friction = 0.5f;    // >= 0
+    float restitution = 0.0f; // 0..1
+};
+
+enum class MotionType { Static, Dynamic, Kinematic };
+
+// Makes the entity's Collider move: Dynamic is simulated, Kinematic follows its Transform (and velocity), Static never
+// moves. Needs a Collider (without one no body is created).
+struct Rigidbody {
+    MotionType motionType = MotionType::Dynamic;
+    float mass = 1.0f;           // > 0 kg
+    float gravityScale = 1.0f;   // multiplies the scene gravity
+    float linearDamping = 0.05f; // >= 0
+    float angularDamping = 0.05f; // >= 0
+};
+
+// An upright capsule moved by kast.physics.moveCharacter (Jolt CharacterVirtual). The entity's position is the
+// capsule's bottom (feet); physics never changes its rotation. Not combinable with Collider / Rigidbody.
+struct CharacterController {
+    float radius = 0.4f;           // > 0
+    float height = 1.8f;           // total, >= 2 * radius
+    float maxSlopeDegrees = 45.0f; // 0..90, steeper slopes block
+    float stepHeight = 0.3f;       // >= 0, steps up to this tall are climbed
+};
+
+// Per-scene physics settings.
+struct ScenePhysics {
+    bx::Vec3 gravity{0.0f, -9.81f, 0.0f}; // m/s^2
+};
+
 // Local-space bounds of each built-in primitive (all fit the unit cube centered on the origin).
 Aabb primitiveBounds(Primitive primitive);
 
@@ -221,6 +264,8 @@ public:
     SceneLighting lighting;
     // Saved under "postProcessing" in the scene file.
     ScenePostProcessing postProcessing;
+    // Saved under "physics" in the scene file.
+    ScenePhysics physics;
 
     // Opaque data owned by the editor (e.g. camera pose), saved under "editor" in the scene file.
     nlohmann::ordered_json editorData = nlohmann::ordered_json::object();
