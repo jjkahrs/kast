@@ -30,7 +30,9 @@ set(KAST_EDITOR_SHADERS)
 set(KAST_ENGINE_SHADERS)
 foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
              engine/shaders/vs_mesh engine/shaders/fs_mesh engine/shaders/vs_line engine/shaders/fs_line
-             engine/shaders/gui/vs_gui engine/shaders/gui/fs_gui)
+             engine/shaders/gui/vs_gui engine/shaders/gui/fs_gui
+             engine/shaders/post/vs_post engine/shaders/post/fs_post_bright engine/shaders/post/fs_post_down
+             engine/shaders/post/fs_post_up engine/shaders/post/fs_post_final engine/shaders/post/fs_post_fxaa)
   get_filename_component(shader ${path} NAME)
   get_filename_component(dir ${path} DIRECTORY)
   set(varying "${CMAKE_CURRENT_SOURCE_DIR}/${dir}/varying.def.sc")
@@ -77,7 +79,7 @@ inline unsigned char kRobotoRegularTtf[] = {
 add_library(kast_engine STATIC
   engine/app.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
   engine/systems.cpp engine/renderer.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
-  engine/state_machines.cpp engine/lua_state_machines.cpp
+  engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp
   ${KAST_ENGINE_SHADERS})
@@ -233,6 +235,64 @@ foreach(bad range lighting)
             "-DSCENE=${CMAKE_CURRENT_BINARY_DIR}/point_lights_bad_${bad}.scene"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
 endforeach()
+# Post-processing: tests/project/post_processing.scene (every effect on: ACES, bloom, color grading, vignette, FXAA,
+# fog; an emissive sphere, bright point lights, near and far glass, pillars out to 55 m, a game GUI; the built game
+# "post" in KAST_GAMES runs it in the player). Scene view with post on and toggled off, the Post Processing panel, Play
+# (the GUI over the post-processed Game view), and Play of a project-copy scene without the "postProcessing" block, so
+# only post-processing can differ. A copy with an unknown tonemapper must fail to load.
+set(KAST_POST "${KAST_TEST_PROJECT}/post_processing.scene")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_POST}")
+file(READ "${KAST_POST}" post_scene)
+set(KAST_POST_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/post_project")
+file(REMOVE_RECURSE "${KAST_POST_PROJECT}")
+file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${KAST_POST_PROJECT}")
+string(JSON post_off REMOVE "${post_scene}" postProcessing)
+file(WRITE "${KAST_POST_PROJECT}/post_processing_off.scene" "${post_off}")
+string(REPLACE "\"ACES\"" "\"Reinhard\"" post_bad "${post_scene}")
+file(WRITE "${KAST_POST_PROJECT}/post_processing_bad.scene" "${post_bad}")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/post_processing_roundtrip")
+add_test(NAME post_processing_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/post_processing.png"
+          "-DEXTRA_ARGS=--scene ${KAST_POST} --size 1600x900" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME post_processing_toggled_off_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/post_processing_toggled_off.png"
+          "-DEXTRA_ARGS=--scene ${KAST_POST} --size 1600x900 --no-scene-post"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME post_processing_toggle_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/post_processing_toggled_off.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/post_processing.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(post_processing_screenshot PROPERTIES FIXTURES_SETUP post_processing_shot)
+set_tests_properties(post_processing_toggled_off_screenshot PROPERTIES FIXTURES_SETUP post_processing_toggled_off_shot)
+set_tests_properties(post_processing_toggle_differs PROPERTIES
+                     FIXTURES_REQUIRED "post_processing_shot;post_processing_toggled_off_shot")
+add_test(NAME post_processing_panel_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/post_processing_panel.png"
+          "-DEXTRA_ARGS=--scene ${KAST_POST} --size 1600x900" "-DFOCUS_PANEL=Post Processing"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME post_processing_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/post_processing_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_POST} --size 1600x900 --play" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME post_processing_off_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/post_processing_off_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_POST_PROJECT}/post_processing_off.scene --size 1600x900 --play"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME post_processing_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/post_processing_off_play.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/post_processing_play.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(post_processing_play_screenshot PROPERTIES FIXTURES_SETUP post_processing_play_shot)
+set_tests_properties(post_processing_off_play_screenshot PROPERTIES FIXTURES_SETUP post_processing_off_play_shot)
+set_tests_properties(post_processing_differs PROPERTIES
+                     FIXTURES_REQUIRED "post_processing_play_shot;post_processing_off_play_shot")
+add_test(NAME post_processing_roundtrip
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_POST}"
+          "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/post_processing_roundtrip" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
+add_test(NAME post_processing_bad_rejected
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_POST_PROJECT}/post_processing_bad.scene"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
 # Projects: --project opens tests/project (its startScene, scene_a); a folder without project.kast must exit 1.
 # Materials: tests/project/materials.scene (gold / red plastic spheres at roughness 0.1, 0.5, 0.9, PNG and JPG textured
 # cubes, a metallic-roughness textured sphere, emissive, a mask cutout, two overlapping blended planes, a broken and a
@@ -545,7 +605,7 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "events|Events Test|events.scene|FALSE" "events_no_systems|Events Test|events.scene|TRUE"
                "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow"
                "ui|UI Test|ui.scene|FALSE" "lights|Lights Test|point_lights.scene|FALSE"
-               "materials|Materials Test|materials.scene|FALSE")
+               "materials|Materials Test|materials.scene|FALSE" "post|Post Test|post_processing.scene|FALSE")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)

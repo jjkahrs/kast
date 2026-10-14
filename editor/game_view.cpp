@@ -7,6 +7,7 @@ void GameViewport::shutdown()
     gui_.clear();
     gui_.context().release();
     target_.destroy();
+    post_.shutdown();
     renderer_.shutdown();
 }
 
@@ -33,16 +34,16 @@ void GameViewport::draw(Document& doc)
         pixelScale_ = ImGui::GetIO().DisplayFramebufferScale.x;
         const auto width = static_cast<uint16_t>(size.x * pixelScale_);
         const auto height = static_cast<uint16_t>(size.y * ImGui::GetIO().DisplayFramebufferScale.y);
-        target_.resize(width, height);
+        post_.begin(width, height, kast::sceneClearColor(doc.scene.postProcessing, kViewportClearColor));
+        target_.resize(width, height, post_.depth());
         if (target_.valid()) {
-            if (camera != entt::null) {
+            if (camera != entt::null) { // else just the clear, under any GUI
                 float view[16], proj[16];
                 kast::cameraMatrices(doc.scene, camera, size.x / size.y, bgfx::getCaps()->homogeneousDepth, view, proj);
-                renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), target_.view(), view, proj,
-                                 false);
-            } else {
-                bgfx::touch(target_.view()); // just the clear, under any GUI
+                renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), post_.sceneView(),
+                                 view, proj);
             }
+            post_.apply(doc.scene.postProcessing, true, target_.frameBuffer());
             if (doc.play != PlayState::Stopped) {
                 gui_.context().resize(width, height);
                 gui_.context().render(guiView_, target_.frameBuffer());

@@ -710,7 +710,12 @@ void Panels::drawMaterialInspector(Document& doc)
     changed = ImGui::SliderFloat("Roughness", &m.roughness, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp) || changed;
     changed = drawFilePicker("MR Texture", textures, "None", m.metallicRoughnessTexture) || changed;
     ImGui::SetItemTooltip("Metallic-roughness texture, glTF packing: G = roughness, B = metallic (times the sliders)");
-    changed = ImGui::ColorEdit3("Emissive", &m.emissive.x) || changed;
+    changed = ImGui::Checkbox("Emissive", &m.emissiveEnabled) || changed;
+    ImGui::BeginDisabled(!m.emissiveEnabled);
+    changed = ImGui::ColorEdit3("Emissive Color", &m.emissive.x) || changed;
+    changed = ImGui::DragFloat("Intensity", &m.emissiveIntensity, 0.05f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp) || changed;
+    ImGui::SetItemTooltip("Multiplies the color; above the bloom threshold (default 1) it glows");
+    ImGui::EndDisabled();
     constexpr const char* kModeLabels[] = {"Opaque", "Mask", "Blend"}; // AlphaMode order
     int mode = static_cast<int>(m.alphaMode);
     if (ImGui::Combo("Alpha Mode", &mode, kModeLabels, IM_ARRAYSIZE(kModeLabels))) {
@@ -956,6 +961,77 @@ void Panels::drawLighting(Document& doc, bool& open)
             lighting.ambientColor = bx::clamp(lighting.ambientColor, bx::Vec3(0.0f), bx::Vec3(1.0f)); // typed values
             markDirty(doc);
         }
+    }
+    ImGui::End();
+}
+
+void Panels::drawPostProcessing(Document& doc, bool& open)
+{
+    if (!open)
+        return;
+    const float em = ImGui::GetFontSize();
+    ImGui::SetNextWindowSize(ImVec2(em * 24, em * 30), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Post Processing", &open)) {
+        kast::ScenePostProcessing& post = doc.scene.postProcessing;
+        constexpr ImGuiSliderFlags kClamp = ImGuiSliderFlags_AlwaysClamp;
+        bool changed = false;
+        // A collapsing header per effect with its enable checkbox; the controls show while it's open.
+        const auto section = [&](const char* name, bool& enabled) {
+            ImGui::PushID(name);
+            const bool expanded = ImGui::CollapsingHeader(name, ImGuiTreeNodeFlags_DefaultOpen);
+            changed |= ImGui::Checkbox("Enabled", &enabled);
+            ImGui::PopID();
+            return expanded;
+        };
+        const auto color = [&](const char* label, bx::Vec3& value) {
+            if (ImGui::ColorEdit3(label, &value.x)) {
+                value = bx::clamp(value, bx::Vec3(0.0f), bx::Vec3(1.0f)); // typed values
+                changed = true;
+            }
+        };
+        ImGui::PushID("tonemapping");
+        if (section("Tonemapping", post.tonemapping.enabled)) {
+            changed |= ImGui::SliderFloat("Exposure (EV)", &post.tonemapping.exposure, -10.0f, 10.0f, "%.2f", kClamp);
+            int op = static_cast<int>(post.tonemapping.op);
+            if (ImGui::Combo("Operator", &op, "None\0ACES\0")) {
+                post.tonemapping.op = static_cast<kast::Tonemap>(op);
+                changed = true;
+            }
+        }
+        ImGui::PopID();
+        ImGui::PushID("bloom");
+        if (section("Bloom", post.bloom.enabled)) {
+            changed |= ImGui::DragFloat("Threshold", &post.bloom.threshold, 0.01f, 0.0f, FLT_MAX, "%.2f", kClamp);
+            changed |= ImGui::DragFloat("Intensity", &post.bloom.intensity, 0.01f, 0.0f, FLT_MAX, "%.2f", kClamp);
+            changed |= ImGui::SliderFloat("Radius", &post.bloom.radius, 0.0f, 1.0f, "%.2f", kClamp);
+        }
+        ImGui::PopID();
+        ImGui::PushID("grading");
+        if (section("Color Grading", post.colorGrading.enabled)) {
+            changed |= ImGui::SliderFloat("Contrast", &post.colorGrading.contrast, 0.0f, 2.0f, "%.2f", kClamp);
+            changed |= ImGui::SliderFloat("Saturation", &post.colorGrading.saturation, 0.0f, 2.0f, "%.2f", kClamp);
+            color("Color Filter", post.colorGrading.colorFilter);
+            changed |= ImGui::SliderFloat("Temperature", &post.colorGrading.temperature, -1.0f, 1.0f, "%.2f", kClamp);
+        }
+        ImGui::PopID();
+        ImGui::PushID("vignette");
+        if (section("Vignette", post.vignette.enabled)) {
+            changed |= ImGui::SliderFloat("Intensity", &post.vignette.intensity, 0.0f, 1.0f, "%.2f", kClamp);
+            changed |= ImGui::SliderFloat("Smoothness", &post.vignette.smoothness, 0.01f, 1.0f, "%.2f", kClamp);
+        }
+        ImGui::PopID();
+        ImGui::PushID("fxaa");
+        section("FXAA", post.fxaa.enabled);
+        ImGui::PopID();
+        ImGui::PushID("fog");
+        if (section("Fog", post.fog.enabled)) {
+            color("Color", post.fog.color);
+            changed |= ImGui::DragFloat("Density", &post.fog.density, 0.001f, 0.0f, FLT_MAX, "%.3f", kClamp);
+            changed |= ImGui::DragFloat("Start", &post.fog.start, 0.1f, 0.0f, FLT_MAX, "%.1f m", kClamp);
+        }
+        ImGui::PopID();
+        if (changed)
+            markDirty(doc);
     }
     ImGui::End();
 }

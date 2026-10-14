@@ -270,6 +270,8 @@ void Renderer::init()
     emissive_ = bgfx::createUniform("u_emissive", bgfx::UniformType::Vec4);
     materialParams_ = bgfx::createUniform("u_material", bgfx::UniformType::Vec4);
     cameraPos_ = bgfx::createUniform("u_cameraPos", bgfx::UniformType::Vec4);
+    fogColor_ = bgfx::createUniform("u_fogColor", bgfx::UniformType::Vec4);
+    fogParams_ = bgfx::createUniform("u_fogParams", bgfx::UniformType::Vec4);
     baseColorSampler_ = bgfx::createUniform("s_baseColor", bgfx::UniformType::Sampler);
     metallicRoughnessSampler_ = bgfx::createUniform("s_metallicRoughness", bgfx::UniformType::Sampler);
     const uint32_t white = 0xffffffff;
@@ -287,8 +289,8 @@ void Renderer::shutdown()
     bgfx::destroy(meshProgram_);
     bgfx::destroy(lineProgram_);
     for (bgfx::UniformHandle uniform : {normalMatrix_, baseColor_, lightDir_, lightColor_, ambient_, pointPosRange_,
-                                        pointColor_, emissive_, materialParams_, cameraPos_, baseColorSampler_,
-                                        metallicRoughnessSampler_})
+                                        pointColor_, emissive_, materialParams_, cameraPos_, fogColor_, fogParams_,
+                                        baseColorSampler_, metallicRoughnessSampler_})
         bgfx::destroy(uniform);
     clearTextures();
     bgfx::destroy(white_);
@@ -350,7 +352,7 @@ void Renderer::clearTextures()
 }
 
 void Renderer::render(const Scene& scene, const std::filesystem::path& projectRoot, bgfx::ViewId view,
-                      const float* viewMtx, const float* projMtx, bool overlays, entt::entity selected)
+                      const float* viewMtx, const float* projMtx)
 {
     setProjectRoot(projectRoot);
     bgfx::setViewTransform(view, viewMtx, projMtx);
@@ -384,6 +386,9 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     const float ambient[4] = {lighting.ambientColor.x * lighting.ambientIntensity,
                               lighting.ambientColor.y * lighting.ambientIntensity,
                               lighting.ambientColor.z * lighting.ambientIntensity, 0.0f};
+    const ScenePostProcessing::Fog& fog = scene.postProcessing.fog;
+    const float fogColor[4] = {fog.color.x, fog.color.y, fog.color.z, fog.enabled ? 1.0f : 0.0f};
+    const float fogParams[4] = {fog.density, fog.start, 0.0f, 0.0f};
 
     std::vector<PointLightSample> pointLights;
     for (auto [entity, light] : registry.view<PointLight>().each()) {
@@ -412,7 +417,8 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             pointPosRange[slot][3] = light.range;
             std::memcpy(pointColor[slot], &light.color, sizeof(bx::Vec3));
         }
-        const float emissive[4] = {material.emissive.x, material.emissive.y, material.emissive.z, 0.0f};
+        const bx::Vec3 radiance = emissiveRadiance(material);
+        const float emissive[4] = {radiance.x, radiance.y, radiance.z, 0.0f};
         const bool blend = material.alphaMode == AlphaMode::Blend;
         // z: fragments with alpha below it are discarded (-1 = none); w: 1 outputs alpha (blend), 0 outputs 1.
         const float params[4] = {material.metallic, material.roughness,
@@ -424,6 +430,8 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         bgfx::setUniform(emissive_, emissive);
         bgfx::setUniform(materialParams_, params);
         bgfx::setUniform(cameraPos_, cameraPos);
+        bgfx::setUniform(fogColor_, fogColor);
+        bgfx::setUniform(fogParams_, fogParams);
         bgfx::setUniform(lightDir_, lightDir);
         bgfx::setUniform(lightColor_, lightColor);
         bgfx::setUniform(ambient_, ambient);
@@ -438,7 +446,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         bgfx::submit(view, meshProgram_);
     };
 
-    // Opaque and mask meshes now; blended ones after the overlays, far to near by world-space center.
+    // Opaque and mask meshes now; blended ones after, far to near by world-space center.
     // ponytail: world matrices are recomputed up the parent chain per entity; cache them when scenes get deep or large.
     std::vector<std::pair<entt::entity, const Material*>> blended;
     std::vector<bx::Vec3> centers;
@@ -454,13 +462,19 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         blended.emplace_back(entity, &material);
         centers.push_back(bx::mul(bx::Vec3{0.0f, 0.0f, 0.0f}, world)); // every primitive is centered on its origin
     }
-    if (overlays) {
-        drawGrid(view);
-        drawCameraFrustums(scene, view);
-        drawPointLightRange(scene, view, selected);
-    }
     for (size_t i : backToFront(centers, eye))
         draw(blended[i].first, registry.get<MeshRenderer>(blended[i].first), *blended[i].second);
+}
+
+void Renderer::renderOverlays(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx,
+                              entt::entity selected)
+{
+    bgfx::setViewTransform(view, viewMtx, projMtx);
+    // ponytail: blended meshes don't write depth, so overlays draw over glass; draw them before blended meshes in
+    // a separate HDR pass if that matters.
+    drawGrid(view);
+    drawCameraFrustums(scene, view);
+    drawPointLightRange(scene, view, selected);
 }
 
 void Renderer::drawGrid(bgfx::ViewId view)

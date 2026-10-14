@@ -17,6 +17,8 @@ uniform vec4 u_lightColor; // rgb: light color * intensity
 uniform vec4 u_ambient;    // rgb: scene ambient color * intensity
 uniform vec4 u_pointPosRange[MAX_POINT_LIGHTS]; // xyz: world position; w: range (unused slots: 1)
 uniform vec4 u_pointColor[MAX_POINT_LIGHTS];    // rgb: color * intensity (unused slots: 0)
+uniform vec4 u_fogColor;  // rgb: linear fog color; w: 1 if fog is on
+uniform vec4 u_fogParams; // x: density, y: start distance
 
 // Windowed inverse square, as pointLightFalloff in renderer.cpp: saturate(1 - (d/r)^4)^2 / (d^2 + 1).
 float falloff(float d, float range)
@@ -54,15 +56,6 @@ vec3 shade(vec3 n, vec3 v, vec3 l, vec3 light, vec3 albedo, vec3 f0, float metal
     return (kd * albedo + PI * specular) * light * nl;
 }
 
-// Linear to sRGB (piecewise IEC 61966-2-1): the backbuffer is plain UNORM, so the shader encodes for display.
-vec3 toSrgb(vec3 c)
-{
-    c = saturate(c);
-    vec3 lo = c * 12.92;
-    vec3 hi = 1.055 * pow(c, vec3_splat(1.0 / 2.4)) - 0.055;
-    return mix(lo, hi, step(vec3_splat(0.0031308), c));
-}
-
 void main()
 {
     vec4 base = u_baseColor * texture2D(s_baseColor, v_texcoord0);
@@ -92,5 +85,12 @@ void main()
     color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo + fAmbient) * u_ambient.rgb;
 
     color += u_emissive.rgb;
-    gl_FragColor = vec4(toSrgb(color), u_material.w > 0.5 ? base.a : 1.0);
+
+    // Exponential-squared distance fog, as fogFactor in post_process.cpp: 1 - exp(-(density * max(d - start, 0))^2).
+    if (u_fogColor.w > 0.5) {
+        float fd = u_fogParams.x * max(length(u_cameraPos.xyz - v_worldPos) - u_fogParams.y, 0.0);
+        color = mix(color, u_fogColor.rgb, 1.0 - exp(-fd * fd));
+    }
+    // Linear HDR: the post chain (post_process.h) tonemaps and encodes to sRGB.
+    gl_FragColor = vec4(color, u_material.w > 0.5 ? base.a : 1.0);
 }

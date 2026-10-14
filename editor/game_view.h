@@ -8,15 +8,20 @@
 
 #include <imgui.h>
 
-// The Game panel: renders the scene from its active Camera (kast::activeCamera) with no grid, gizmos or other
-// editor overlays, live in edit mode too, and the scene's game GUIs (UIDocument, see scene_gui.h) over it in Play
-// mode. Comes to the front when Play starts. While it is focused and playing, the host feeds SDL input to
+// The Game panel: renders the scene from its active Camera (kast::activeCamera) with its post-processing and no
+// grid, gizmos or other editor overlays, live in edit mode too, and the scene's game GUIs (UIDocument, see
+// scene_gui.h) over it in Play mode, not post-processed. Uses views first .. first + PostProcess::kViews - 1 and
+// guiView. Comes to the front when Play starts. While it is focused and playing, the host feeds SDL input to
 // Document::input and onEvent, and the Scene panel's shortcuts don't apply (it isn't focused).
 class GameViewport {
 public:
-    GameViewport(bgfx::ViewId view, bgfx::ViewId guiView) : target_(view, "Game"), guiView_(guiView) {}
+    GameViewport(bgfx::ViewId first, bgfx::ViewId guiView) : post_(first), target_(guiView, "Game"), guiView_(guiView) {}
 
-    void init() { renderer_.init(); }
+    void init()
+    {
+        renderer_.init();
+        post_.init();
+    }
     void shutdown();
     void draw(Document& doc);
     bool hasInput(const Document& doc) const { return focused_ && doc.play == PlayState::Playing; }
@@ -27,7 +32,8 @@ public:
 private:
     void syncGui(Document& doc);
 
-    ViewTarget target_;
+    kast::PostProcess post_;
+    ViewTarget target_; // on guiView_: the post chain's output, which the GUIs draw over
     bgfx::ViewId guiView_;
     kast::Renderer renderer_;
     kast::SceneGui gui_{"game"};

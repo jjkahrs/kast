@@ -32,10 +32,10 @@
 
 namespace {
 
-constexpr bgfx::ViewId kSceneView = 1;
-constexpr bgfx::ViewId kGameView = 2;
-constexpr bgfx::ViewId kGameGuiView = 3;    // the game GUIs, over the Game view's scene
-constexpr bgfx::ViewId kGuiPreviewView = 4; // the GUI Builder's preview
+constexpr bgfx::ViewId kSceneView = 1; // then its post passes and overlays (see SceneViewport)
+constexpr bgfx::ViewId kGameView = kSceneView + kast::PostProcess::kViews + 1; // then its post passes
+constexpr bgfx::ViewId kGameGuiView = kGameView + kast::PostProcess::kViews; // the game GUIs, over the Game view's scene
+constexpr bgfx::ViewId kGuiPreviewView = kGameGuiView + 1; // the GUI Builder's preview
 constexpr bgfx::ViewId kImGuiView = 255; // last, so the UI draws over everything
 constexpr uint32_t kBackbufferClearColor = 0x202020ff;
 // --add-component-popup, --open-menu, --open-build-settings, --open-preferences, --focus-panel and --assets-* wait this long: focus changes while the first frames dock the windows close
@@ -44,7 +44,7 @@ constexpr int kAddComponentPopupFrame = 10;
 constexpr float kComponentPollSeconds = 0.5f; // Lua definition files and the Assets tree are checked this often
 constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--ui-scale F] [--projects-file list.json] "
-    "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--add-component-popup] "
+    "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--no-scene-post] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
     "[--focus-panel Window] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
@@ -62,6 +62,7 @@ struct Options {
     std::string saveScene;        // save the startup scene here and exit, without opening a window
     kast::EntityId select = 0;    // select this entity at startup; 0 = none
     bool play = false;            // enter Play mode once the startup scene is loaded
+    bool noScenePost = false;     // start with the Scene view's "Post" toggle off
     std::optional<std::pair<std::string, std::string>> newProject; // name, dir: open the prefilled New Project modal
     bool addComponentPopup = false; // open the Inspector's Add Component popup for the --select entity
     std::optional<std::string> newComponentPrompt; // open the Inspector's New Lua Component modal with this name
@@ -73,7 +74,7 @@ struct Options {
     std::string assetsSelect; // select this Assets entry (project-relative) as a click does: a .mat shows in the Inspector
     std::optional<std::pair<Panels::AssetCreate, std::string>> assetsCreate; // run Assets Create in that folder
     bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
-    std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting" also opens it) to the front, for screenshots
+    std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting" and "Post Processing" also open it) to the front, for screenshots
     std::string openGui;            // open this .rml in the GUI Builder (relative paths: to the project, else the cwd)
     std::string guiSelect;          // then select the element with this id in it
     std::optional<std::pair<int, int>> guiPreviewSize; // add this GUI Preview resolution and pick it
@@ -220,6 +221,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.openBuildSettings = true;
         } else if (arg == "--play") {
             options.play = true;
+        } else if (arg == "--no-scene-post") {
+            options.noScenePost = true;
         } else if (arg == "--size" && hasValue) {
             if (!parseSize(argv[++i], options.size))
                 return std::nullopt;
@@ -316,9 +319,9 @@ void buildDefaultLayout(ImGuiID dockspace)
 }
 
 // openMenu: a main menu to open this frame (--open-menu), or empty. openPreferences: set when File > Preferences... is
-// chosen. showLighting: the Lighting panel's visibility, toggled by Window > Lighting.
+// chosen. showLighting, showPostProcessing: those panels' visibility, toggled in the Window menu.
 void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu, bool& openPreferences,
-                 bool& showLighting)
+                 bool& showLighting, bool& showPostProcessing)
 {
     if (ImGui::BeginMainMenuBar()) {
         if (!openMenu.empty())
@@ -360,6 +363,7 @@ void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu,
         }
         if (ImGui::BeginMenu("Window")) {
             ImGui::MenuItem("Lighting", nullptr, &showLighting);
+            ImGui::MenuItem("Post Processing", nullptr, &showPostProcessing);
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -511,6 +515,7 @@ int main(int argc, char** argv)
                                                                 : std::filesystem::absolute(options->settingsFile));
     std::string preferencesDraft; // the Preferences modal's edit of the command
     bool showLighting = options->focusPanel == "Lighting"; // hidden by default; --focus-panel Lighting opens it
+    bool showPostProcessing = options->focusPanel == "Post Processing"; // the same
     if (!options->openExternal.empty())
         externalEditor.open(doc.project->root /
                             std::filesystem::path(reinterpret_cast<const char8_t*>(options->openExternal.c_str())));
@@ -529,6 +534,7 @@ int main(int argc, char** argv)
         }
         imgui_bgfx::init(kImGuiView);
         viewport.init();
+        viewport.setPostEffects(!options->noScenePost);
         game.init();
         kast::gui::init();
         if (!options->openGui.empty()) {
@@ -571,7 +577,7 @@ int main(int argc, char** argv)
 
         bool openPreferences = options->openPreferences && frames.frame() == kAddComponentPopupFrame;
         drawMenuBar(files, doc, frames.frame() == kAddComponentPopupFrame ? options->openMenu : std::string(),
-                    openPreferences, showLighting);
+                    openPreferences, showLighting, showPostProcessing);
         const ImGuiID dockspace = ImGui::GetID("MainDockSpace");
         if (!ImGui::DockBuilderGetNode(dockspace)) // no saved layout in imgui.ini
             buildDefaultLayout(dockspace);
@@ -637,6 +643,7 @@ int main(int argc, char** argv)
             ImGui::SetNextWindowDockID(console->DockId, ImGuiCond_FirstUseEver);
         panels.drawStateMachines(doc);
         panels.drawLighting(doc, showLighting);
+        panels.drawPostProcessing(doc, showPostProcessing);
         drawGuiBuilder(guiBuilder);
         drawConsole(); // submitted after Assets, Events and State Machines so Console is the front tab on first run
         drawPreferences(externalEditor, preferencesDraft, openPreferences);

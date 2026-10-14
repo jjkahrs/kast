@@ -45,19 +45,22 @@ struct MipImage {
 std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb);
 
 // Draws a Scene's MeshRenderers with their materials (PBR metallic-roughness, see fs_mesh.sc) lit by its ambient, its
-// first DirectionalLight and up to kMaxPointLights PointLights each, plus editor overlays: a ground grid, axis lines, a
-// short frustum preview per Camera and the range of the selected PointLight. Opaque and mask meshes first, then blended
-// ones far to near. The caller owns the view's framebuffer, rect and clear; render() sets the view transform and
-// mode and submits.
+// first DirectionalLight and up to kMaxPointLights PointLights each, fogged by its postProcessing.fog, as linear HDR
+// color (for PostProcess). Opaque and mask meshes first, then blended ones far to near. renderOverlays draws the
+// editor's: a ground grid, axis lines, a short frustum preview per Camera and the range of the selected PointLight.
+// The caller owns the views' framebuffers, rects and clears; these set the view transform and mode and submit.
 class Renderer {
 public:
     void init();
     void shutdown();
     // Materials and textures load from projectRoot (empty = none: every material path renders as an error). Files
-    // changed on disk since loaded reload first. overlays = false draws the scene only, as the game sees it.
-    // selected: the editor's selection, for its overlays.
+    // changed on disk since loaded reload first.
     void render(const Scene& scene, const std::filesystem::path& projectRoot, bgfx::ViewId view, const float* viewMtx,
-                const float* projMtx, bool overlays = true, entt::entity selected = entt::null);
+                const float* projMtx);
+    // Into an already encoded (sRGB) target after post, depth-tested against the scene's depth. selected: the
+    // editor's selection.
+    void renderOverlays(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx,
+                        entt::entity selected);
 
 private:
     struct Mesh {
@@ -92,6 +95,8 @@ private:
     bgfx::UniformHandle emissive_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle cameraPos_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle fogColor_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle fogParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle baseColorSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle metallicRoughnessSampler_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle white_ = BGFX_INVALID_HANDLE; // 1x1: stands in for no texture and failed loads

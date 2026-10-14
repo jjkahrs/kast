@@ -47,13 +47,15 @@ struct System {
     std::string error;
 };
 
-// A kast.setMaterialProperty value as JSON for setMaterialField: numbers and strings as they are, sequences as arrays,
+// A kast.setMaterialProperty value as JSON for setMaterialField: numbers, booleans and strings as they are, sequences as arrays,
 // {x, y, z[, w]} tables as [x, y, z(, w)]. Anything else becomes null, which every field rejects.
 Json materialValueToJson(const sol::object& value)
 {
     switch (value.get_type()) {
     case sol::type::number:
         return value.as<double>();
+    case sol::type::boolean:
+        return value.as<bool>();
     case sol::type::string:
         return value.as<std::string>();
     case sol::type::table: {
@@ -510,6 +512,8 @@ void LuaSystems::State::bindApi()
         const std::optional<Json> value = materialField(material(L, e), name);
         if (!value)
             raise(L, std::format("unknown material property \"{}\"", name));
+        if (value->is_boolean())
+            return sol::make_object(lua, value->get<bool>());
         if (!value->is_array())
             return sol::make_object(lua, value->is_string() ? sol::make_object(lua, value->get<std::string>())
                                                             : sol::make_object(lua, value->get<double>()));

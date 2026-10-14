@@ -25,10 +25,15 @@ struct Material {
     float metallic = 0.0f;                                  // 0..1
     float roughness = 0.5f;                                 // 0..1
     std::string metallicRoughnessTexture;                   // linear; G = roughness, B = metallic (times the scalars)
-    bx::Vec3 emissive{0.0f, 0.0f, 0.0f};                    // linear RGB 0..1, added after lighting
+    bool emissiveEnabled = false;
+    bx::Vec3 emissive{0.0f, 0.0f, 0.0f};                    // linear RGB 0..1, times emissiveIntensity
+    float emissiveIntensity = 1.0f;                         // >= 0; above 1 is HDR and can bloom
     AlphaMode alphaMode = AlphaMode::Opaque;
     float alphaCutoff = 0.5f; // 0..1, mask only
 };
+
+// What the shader adds after lighting: emissive * emissiveIntensity, or black when emission is off.
+bx::Vec3 emissiveRadiance(const Material& material);
 
 // The material of a MeshRenderer with no material path: grey 0.8, dielectric, opaque.
 const Material& defaultMaterial();

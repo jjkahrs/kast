@@ -61,6 +61,45 @@ struct SceneLighting {
     float ambientIntensity = 0.2f;           // >= 0
 };
 
+enum class Tonemap { None, Aces }; // None: clamp to 0..1 (the look before post-processing)
+
+// Per-scene post-processing (see post_process.h) and distance fog (fs_mesh.sc). Every effect starts off, so a scene
+// without settings renders as it did before. Ranges are what the scene file accepts.
+struct ScenePostProcessing {
+    struct Tonemapping {
+        bool enabled = false;
+        float exposure = 0.0f; // EV, -10..10: color * 2^exposure
+        Tonemap op = Tonemap::None;
+    } tonemapping;
+    struct Bloom {
+        bool enabled = false;
+        float threshold = 1.0f; // >= 0, HDR luminance where the glow starts
+        float intensity = 0.5f; // >= 0
+        float radius = 0.5f;    // 0..1, how far the glow spreads
+    } bloom;
+    struct ColorGrading {
+        bool enabled = false;
+        float contrast = 1.0f;                // 0..2
+        float saturation = 1.0f;              // 0..2
+        bx::Vec3 colorFilter{1.0f, 1.0f, 1.0f}; // linear RGB 0..1, multiplied in
+        float temperature = 0.0f;             // -1 (cool, blue) .. 1 (warm, orange)
+    } colorGrading;
+    struct Vignette {
+        bool enabled = false;
+        float intensity = 0.3f;  // 0..1
+        float smoothness = 0.5f; // 0.01..1
+    } vignette;
+    struct Fxaa {
+        bool enabled = false;
+    } fxaa;
+    struct Fog {
+        bool enabled = false;
+        bx::Vec3 color{0.5f, 0.6f, 0.7f}; // linear RGB 0..1; the view clears to it while enabled
+        float density = 0.05f;          // >= 0, per meter
+        float start = 0.0f;             // >= 0, meters from the eye before fog begins
+    } fog;
+};
+
 // Renders the scene from the entity's world position looking down its world -Z (scale is ignored).
 struct Camera {
     float verticalFovDegrees = 60.0f;
@@ -137,6 +176,8 @@ public:
 
     // Saved under "lighting" in the scene file.
     SceneLighting lighting;
+    // Saved under "postProcessing" in the scene file.
+    ScenePostProcessing postProcessing;
 
     // Opaque data owned by the editor (e.g. camera pose), saved under "editor" in the scene file.
     nlohmann::ordered_json editorData = nlohmann::ordered_json::object();

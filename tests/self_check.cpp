@@ -21,6 +21,7 @@
 #include <material.h>
 #include <math3d.h>
 #include <pak.h>
+#include <post_process.h>
 #include <project.h>
 #include <renderer.h>
 #include <scene.h>
@@ -2319,9 +2320,10 @@ void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
               std::vector<std::string>{"events.scene", "fsm.scene", "health.scene", "materials.scene",
-                                       "point_lights.scene", "scene_a.scene", "scene_b.scene", "ui.scene"},
-          "tests/project lists events.scene, fsm.scene, health.scene, materials.scene, point_lights.scene, scene_a.scene, "
-          "scene_b.scene, ui.scene");
+                                       "point_lights.scene", "post_processing.scene", "scene_a.scene", "scene_b.scene",
+                                       "ui.scene"},
+          "tests/project lists events.scene, fsm.scene, health.scene, materials.scene, point_lights.scene, "
+          "post_processing.scene, scene_a.scene, scene_b.scene, ui.scene");
 
     const std::filesystem::path root = looseTestDir("kast_build_settings_check") / "game";
     std::filesystem::copy(KAST_TEST_PROJECT_DIR, root, std::filesystem::copy_options::recursive);
@@ -2333,7 +2335,7 @@ void checkBuildSettings()
     writeFile(root / "broken.scene", "{oops");
     check(projectScenes(root) == std::vector<std::string>{"broken.scene", "events.scene", "fsm.scene", "health.scene",
                                                           "levels/c.scene", "materials.scene", "point_lights.scene",
-                                                          "scene_a.scene",
+                                                          "post_processing.scene", "scene_a.scene",
                                                           "scene_b.scene", "ui.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
@@ -4054,6 +4056,134 @@ void checkPointLights()
           "missing lighting: default white at 0.2");
 }
 
+// --- Post-processing ---
+
+void checkPostProcessing()
+{
+    // Shader math mirrors.
+    check(kast::exposureScale(0.0f) == 1.0f && near(kast::exposureScale(1.0f), 2.0f) && near(kast::exposureScale(-1.0f), 0.5f),
+          "exposure: EV 0 identity, +1 doubles, -1 halves");
+    bool monotonic = true;
+    for (float x = 0.0f, last = -1.0f; x < 100.0f; x += 0.05f) {
+        const float y = kast::acesTonemap(x);
+        monotonic = monotonic && y >= last;
+        last = y;
+    }
+    check(monotonic, "ACES monotonic");
+    check(kast::acesTonemap(0.0f) == 0.0f, "ACES 0 -> 0");
+    check(kast::acesTonemap(4.0f) < 1.0f && kast::acesTonemap(1000.0f) > 0.99f && kast::acesTonemap(1000.0f) <= 1.0f,
+          "ACES: bright values stay below 1, large ones approach it");
+    check(kast::fogFactor(5.0f, 0.1f, 10.0f) == 0.0f && kast::fogFactor(10.0f, 0.1f, 10.0f) == 0.0f,
+          "fog: none up to start");
+    check(kast::fogFactor(1000.0f, 0.0f, 0.0f) == 0.0f, "fog: density 0 means none");
+    bool fogMonotonic = true;
+    for (float d = 0.0f, last = 0.0f; d < 200.0f; d += 0.5f) {
+        const float f = kast::fogFactor(d, 0.05f, 2.0f);
+        fogMonotonic = fogMonotonic && f >= last && f <= 1.0f;
+        last = f;
+    }
+    check(fogMonotonic && kast::fogFactor(1000.0f, 0.05f, 2.0f) > 0.999f, "fog: monotonic toward 1");
+    check(near(kast::fogFactor(12.0f, 0.1f, 2.0f), 1.0f - std::exp(-1.0f)), "fog: exp2 at density * distance 1");
+    check(near(kast::srgbToLinear(0.0f), 0.0f) && near(kast::srgbToLinear(1.0f), 1.0f) &&
+              near(kast::srgbToLinear(0.5f), 0.214041f),
+          "sRGB decode");
+    kast::ScenePostProcessing fogged;
+    check(near(kast::sceneClearColor(fogged, 0xffffffff), {1, 1, 1}), "clear: background without fog");
+    fogged.fog.enabled = true;
+    check(near(kast::sceneClearColor(fogged, 0xffffffff), fogged.fog.color), "clear: fog color with fog");
+
+    // Scene file: round trip, defaults, partial blocks, invalid values.
+    kast::Scene scene;
+    scene.create("Thing");
+    kast::ScenePostProcessing& post = scene.postProcessing;
+    post.tonemapping = {true, 1.5f, kast::Tonemap::Aces};
+    post.bloom = {true, 0.8f, 1.25f, 0.7f};
+    post.colorGrading = {true, 1.2f, 0.6f, {0.9f, 0.8f, 0.7f}, -0.4f};
+    post.vignette = {true, 0.6f, 0.25f};
+    post.fxaa.enabled = true;
+    post.fog = {true, {0.3f, 0.4f, 0.5f}, 0.08f, 3.0f};
+    const nlohmann::ordered_json json = kast::sceneToJson(scene);
+    check(json["version"] == 4 && json.contains("postProcessing"), "saved with postProcessing, still version 4");
+    kast::Scene loaded;
+    std::string error;
+    check(kast::sceneFromJson(json, loaded, error), "post scene loads");
+    const kast::ScenePostProcessing& p = loaded.postProcessing;
+    check(p.tonemapping.enabled && p.tonemapping.exposure == 1.5f && p.tonemapping.op == kast::Tonemap::Aces,
+          "tonemapping round trip");
+    check(p.bloom.enabled && p.bloom.threshold == 0.8f && p.bloom.intensity == 1.25f && p.bloom.radius == 0.7f,
+          "bloom round trip");
+    check(p.colorGrading.enabled && p.colorGrading.contrast == 1.2f && p.colorGrading.saturation == 0.6f &&
+              near(p.colorGrading.colorFilter, {0.9f, 0.8f, 0.7f}) && p.colorGrading.temperature == -0.4f,
+          "color grading round trip");
+    check(p.vignette.enabled && p.vignette.intensity == 0.6f && p.vignette.smoothness == 0.25f, "vignette round trip");
+    check(p.fxaa.enabled, "fxaa round trip");
+    check(p.fog.enabled && near(p.fog.color, {0.3f, 0.4f, 0.5f}) && p.fog.density == 0.08f && p.fog.start == 3.0f,
+          "fog round trip");
+    check(kast::sceneToJson(loaded) == json, "post: second save is identical");
+
+    const nlohmann::ordered_json defaultJson = kast::sceneToJson(kast::Scene())["postProcessing"];
+    nlohmann::ordered_json without = json;
+    without.erase("postProcessing");
+    check(kast::sceneFromJson(without, loaded, error) && kast::sceneToJson(loaded)["postProcessing"] == defaultJson,
+          "missing postProcessing: defaults");
+    const kast::ScenePostProcessing defaults;
+    check(!defaults.tonemapping.enabled && defaults.tonemapping.op == kast::Tonemap::None &&
+              defaults.tonemapping.exposure == 0.0f && !defaults.bloom.enabled && !defaults.colorGrading.enabled &&
+              !defaults.vignette.enabled && !defaults.fxaa.enabled && !defaults.fog.enabled,
+          "post defaults: everything off");
+    nlohmann::ordered_json partial = without;
+    partial["postProcessing"] = nlohmann::ordered_json::parse(R"({"bloom": {"enabled": true}, "fog": {"density": 0.2}})");
+    const kast::ScenePostProcessing& q = loaded.postProcessing;
+    check(kast::sceneFromJson(partial, loaded, error) && q.bloom.enabled && q.bloom.threshold == defaults.bloom.threshold &&
+              q.bloom.intensity == defaults.bloom.intensity && !q.fog.enabled && q.fog.density == 0.2f &&
+              near(q.fog.color, defaults.fog.color) && !q.vignette.enabled,
+          "partial postProcessing: missing fields default");
+
+    const std::pair<const char*, const char*> bad[] = {
+        {R"(3)", "postProcessing"},
+        {R"({"bloom": 1})", "bloom"},
+        {R"({"sharpen": {}})", "sharpen"},
+        {R"({"bloom": {"glow": 1}})", "glow"},
+        {R"({"bloom": {"enabled": 1}})", "enabled"},
+        {R"({"bloom": {"threshold": -1}})", "threshold"},
+        {R"({"bloom": {"intensity": "lots"}})", "intensity"},
+        {R"({"bloom": {"radius": 1.5}})", "radius"},
+        {R"({"tonemapping": {"operator": "Reinhard"}})", "operator"},
+        {R"({"tonemapping": {"operator": 1}})", "operator"},
+        {R"({"tonemapping": {"exposure": 11}})", "exposure"},
+        {R"({"colorGrading": {"contrast": 2.5}})", "contrast"},
+        {R"({"colorGrading": {"saturation": -0.1}})", "saturation"},
+        {R"({"colorGrading": {"colorFilter": [1, 1]}})", "colorFilter"},
+        {R"({"colorGrading": {"colorFilter": [1, 1.2, 1]}})", "colorFilter"},
+        {R"({"colorGrading": {"temperature": -2}})", "temperature"},
+        {R"({"vignette": {"intensity": 2}})", "intensity"},
+        {R"({"vignette": {"smoothness": 0}})", "smoothness"},
+        {R"({"fxaa": {"enabled": "yes"}})", "enabled"},
+        {R"({"fog": {"density": -0.1}})", "density"},
+        {R"({"fog": {"start": -1}})", "start"},
+        {R"({"fog": {"color": [0.5, 0.5, -1]}})", "color"},
+    };
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "kast_post_check";
+    std::filesystem::create_directories(dir);
+    const std::string path = (dir / "bad.scene").string();
+    kast::Scene current;
+    current.create("Keep me");
+    current.postProcessing.vignette.intensity = 0.9f;
+    for (const auto& [text, mention] : bad) {
+        nlohmann::ordered_json file = json;
+        file["postProcessing"] = nlohmann::ordered_json::parse(text);
+        std::ofstream(path, std::ios::binary | std::ios::trunc) << file.dump();
+        std::string reason;
+        const bool ok = kast::loadScene(path, current, reason);
+        check(!ok && reason.find(mention) != std::string::npos, text);
+        if (!ok)
+            kast::log::info(std::format("expected error ({}): {}", text, reason));
+    }
+    check(current.children(entt::null).size() == 1 && current.postProcessing.vignette.intensity == 0.9f &&
+              !current.postProcessing.bloom.enabled,
+          "failed post loads leave the scene untouched");
+}
+
 // --- Materials ---
 
 std::string materialError(const std::string& text)
@@ -4070,20 +4200,25 @@ void checkMaterialFiles()
     std::string error;
     check(kast::materialFromJson(nlohmann::ordered_json::parse(R"({"version": 1, "baseColor": [0.1, 0.2, 0.3, 0.4],
         "baseColorTexture": "textures/a.png", "metallic": 1, "roughness": 0.25, "metallicRoughnessTexture": "textures/mr.png",
-        "emissive": [0, 0.5, 1], "alphaMode": "mask", "alphaCutoff": 0.75})"), m, error),
+        "emissiveEnabled": true, "emissive": [0, 0.5, 1], "emissiveIntensity": 2.5, "alphaMode": "mask", "alphaCutoff": 0.75})"), m, error),
           "a .mat with every field parses");
     check(m.baseColor == std::array<float, 4>{0.1f, 0.2f, 0.3f, 0.4f} && m.baseColorTexture == "textures/a.png" &&
               m.metallic == 1.0f && m.roughness == 0.25f && m.metallicRoughnessTexture == "textures/mr.png" &&
-              near(m.emissive, {0, 0.5f, 1}) && m.alphaMode == kast::AlphaMode::Mask && m.alphaCutoff == 0.75f,
+              m.emissiveEnabled && near(m.emissive, {0, 0.5f, 1}) && m.emissiveIntensity == 2.5f &&
+              m.alphaMode == kast::AlphaMode::Mask && m.alphaCutoff == 0.75f,
           ".mat field values");
+    check(near(kast::emissiveRadiance(m), {0, 1.25f, 2.5f}), "emissive radiance is color * intensity");
+    m.emissiveEnabled = false;
+    check(near(kast::emissiveRadiance(m), {0, 0, 0}), "emission off: no emissive radiance");
+    m.emissiveEnabled = true;
     kast::Material back;
     check(kast::materialFromJson(kast::materialToJson(m), back, error) && kast::materialToJson(back) == kast::materialToJson(m),
           ".mat round trip");
 
     check(kast::materialFromJson(nlohmann::ordered_json::parse(R"({"version": 1})"), m, error), "a .mat with only a version parses");
     check(m.baseColor == std::array<float, 4>{0.8f, 0.8f, 0.8f, 1.0f} && m.baseColorTexture.empty() && m.metallic == 0.0f &&
-              m.roughness == 0.5f && m.metallicRoughnessTexture.empty() && near(m.emissive, {0, 0, 0}) &&
-              m.alphaMode == kast::AlphaMode::Opaque && m.alphaCutoff == 0.5f,
+              m.roughness == 0.5f && m.metallicRoughnessTexture.empty() && !m.emissiveEnabled && near(m.emissive, {0, 0, 0}) &&
+              m.emissiveIntensity == 1.0f && m.alphaMode == kast::AlphaMode::Opaque && m.alphaCutoff == 0.5f,
           "missing .mat fields get their defaults");
 
     const std::pair<const char*, const char*> bad[] = {
@@ -4098,11 +4233,26 @@ void checkMaterialFiles()
         {R"({"version": 1, "baseColor": [1, 1, 1]})", "\"baseColor\" must be an array of 4 numbers between 0 and 1"},
         {R"({"version": 1, "baseColor": [1, 1, 1, 1.2]})", "\"baseColor\" must be an array of 4 numbers"},
         {R"({"version": 1, "emissive": [1, "x", 1]})", "\"emissive\" must be an array of 3 numbers"},
+        {R"({"version": 1, "emissive": [1, -0.5, 1]})", "\"emissive\" must be an array of 3 numbers between 0 and 1"},
+        {R"({"version": 1, "emissiveEnabled": true, "emissive": [0, 2, 0]})", "\"emissive\" must be an array of 3 numbers between 0 and 1"},
+        {R"({"version": 1, "emissiveEnabled": 1})", "\"emissiveEnabled\" must be true or false"},
+        {R"({"version": 1, "emissiveIntensity": -1})", "\"emissiveIntensity\" must be a number >= 0"},
         {R"({"version": 1, "alphaMode": "additive"})", "\"alphaMode\" must be \"opaque\", \"mask\" or \"blend\""},
         {R"({"version": 1, "baseColorTexture": 7})", "\"baseColorTexture\" must be a string"},
     };
     for (const auto& [text, expected] : bad)
         check(contains(materialError(text), expected), std::format(".mat {} is rejected: {}", text, expected).c_str());
+
+    check(kast::materialFromJson(nlohmann::ordered_json::parse(R"({"version": 1, "emissive": [0, 0.5, 1]})"), m, error) &&
+              m.emissiveEnabled && near(m.emissive, {0, 0.5f, 1}) && m.emissiveIntensity == 1.0f,
+          "legacy .mat: a non-black emissive turns emission on");
+    check(kast::materialFromJson(nlohmann::ordered_json::parse(R"({"version": 1, "emissive": [0, 0, 0]})"), m, error) &&
+              !m.emissiveEnabled,
+          "legacy .mat: a black emissive leaves emission off");
+    check(kast::materialFromJson(nlohmann::ordered_json::parse(R"({"version": 1, "emissive": [0, 2, 4]})"), m, error) &&
+              m.emissiveEnabled && near(m.emissive, {0, 0.5f, 1}) && m.emissiveIntensity == 4.0f &&
+              near(kast::emissiveRadiance(m), {0, 2, 4}),
+          "legacy .mat: emissive above 1 moves into the intensity and renders the same");
 
     kast::Material field = kast::defaultMaterial();
     check(!kast::setMaterialField(field, "metallic", 3.0, error) && field.metallic == 0.0f,
@@ -4129,7 +4279,7 @@ void checkMaterialLibrary()
     check(isError(library.get("materials/missing.mat")), "missing .mat: the error material");
     check(isError(library.get("materials/bad.mat")) && isError(library.get("materials/notjson.mat")),
           "invalid .mat (bad value, bad JSON): the error material");
-    check(near(kast::errorMaterial().emissive, {1, 0, 1}), "the error material is magenta");
+    check(near(kast::emissiveRadiance(kast::errorMaterial()), {1, 0, 1}), "the error material is magenta");
     check(isError(library.get("../outside.mat")), "a path escaping the project: the error material");
     for (int i = 0; i < 3; ++i) {
         library.get("materials/missing.mat");
@@ -4229,7 +4379,8 @@ void checkMaterialScenes()
     check(mesh && mesh->primitive == kast::Primitive::Sphere && mesh->material.empty(), "old MeshRenderer: default material");
     check(report.warnings.size() == 1 && contains(report.warnings[0], "\"color\" is no longer supported"),
           "old MeshRenderer \"color\": one warning");
-    check(!contains(kast::sceneToJson(loaded).dump(), "\"color\""), "re-saving drops \"color\"");
+    check(!kast::sceneToJson(loaded)["entities"][0]["components"]["MeshRenderer"].contains("color"),
+          "re-saving drops \"color\"");
 
     const std::vector<bx::Vec3> centers = {{0, 0, 1}, {0, 0, 5}, {0, 0, 3}, {0, 0, -5}};
     check(kast::backToFront(centers, {0, 0, 0}) == std::vector<size_t>{1, 3, 2, 0}, "blend order: far to near");
@@ -4265,6 +4416,11 @@ return { update = function(dt)
     kast.setMaterialProperty(a, "baseColor", {1, 0, 0, 1})
     kast.setMaterialProperty(a, "metallic", 0.75)
     kast.setMaterialProperty(a, "emissive", {x = 0, y = 1, z = 0})
+    kast.setMaterialProperty(a, "emissiveEnabled", true)
+    kast.setMaterialProperty(a, "emissiveIntensity", 3)
+    assert(kast.getMaterialProperty(a, "emissiveEnabled") == true and kast.getMaterialProperty(a, "emissiveIntensity") == 3,
+           "get/set emission toggle and intensity")
+    fails('"emissiveEnabled" must be true or false', function() kast.setMaterialProperty(a, "emissiveEnabled", 1) end)
     kast.setMaterialProperty(a, "alphaMode", "blend")
     assert(kast.getMaterialProperty(a, "baseColor")[1] == 1 and kast.getMaterialProperty(a, "metallic") == 0.75,
            "set changes the entity's instance")
@@ -4307,7 +4463,7 @@ end })");
     checkOk(doc.lua, 0, "kast.get/setMaterialProperty asserts in Lua pass");
     const auto* instance = registry.try_get<kast::MaterialInstance>(named(doc.scene, "A"));
     check(instance && instance->material.baseColor[0] == 1.0f && instance->material.alphaMode == kast::AlphaMode::Blend &&
-              near(instance->material.emissive, {0, 1, 0}),
+              near(kast::emissiveRadiance(instance->material), {0, 3, 0}),
           "the instance holds the per-entity values");
     check(!registry.all_of<kast::MaterialInstance>(named(doc.scene, "B")), "B has no instance");
     check(registry.get<kast::MeshRenderer>(named(doc.scene, "B")).material == "materials/other.mat", "kast.set wrote the material");
@@ -4333,6 +4489,7 @@ int main()
     checkDuplicateComponents();
     checkLoadValidation();
     checkPointLights();
+    checkPostProcessing();
     checkMaterialFiles();
     checkMaterialLibrary();
     checkTextureDecode();

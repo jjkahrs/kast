@@ -8,6 +8,7 @@
 #include <lua_components.h>
 #include <lua_systems.h>
 #include <pak.h>
+#include <post_process.h>
 #include <play.h>
 #include <project.h>
 #include <renderer.h>
@@ -28,19 +29,29 @@
 
 namespace {
 
-constexpr bgfx::ViewId kGameView = 0;
-constexpr bgfx::ViewId kGuiView = 1; // the scene's game GUIs, over the scene
+constexpr bgfx::ViewId kGameView = 0; // then its post passes
+constexpr bgfx::ViewId kGuiView = kGameView + kast::PostProcess::kViews; // the scene's game GUIs, over the scene
 constexpr uint32_t kClearColor = 0x202020ff;
 constexpr int kScreenshotTimeoutFrames = 30;
 constexpr const char* kPakFileName = "game.pak";
 constexpr int kGuiClickFrame = 10; // --gui-click: once the GUIs have loaded and laid out
-constexpr const char* kUsage = "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id]";
+constexpr const char* kUsage =
+    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--size WxH] [--gpu-stats]";
+constexpr int kGpuStatsWarmupFrames = 10; // --gpu-stats: skip startup frames (shader and target creation)
 
 struct Options {
     int frames = 0;         // 0 = run until quit
     std::string screenshot; // captured after the last frame
     std::string guiClick;   // tests: click this GUI element id on frame kGuiClickFrame
+    int width = kast::AppConfig{}.width, height = kast::AppConfig{}.height; // --size: window size
+    bool gpuStats = false;  // log the average GPU frame time on exit
 };
+
+bool parseInt(std::string_view text, int& out)
+{
+    auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), out);
+    return ec == std::errc{} && ptr == text.data() + text.size() && out > 0;
+}
 
 std::optional<Options> parseArgs(int argc, char** argv)
 {
@@ -59,6 +70,16 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.screenshot = argv[++i];
         } else if (arg == "--gui-click" && hasValue) {
             options.guiClick = argv[++i];
+        } else if (arg == "--size" && hasValue) {
+            const std::string_view text = argv[++i];
+            const size_t x = text.find('x');
+            if (x == std::string_view::npos || !parseInt(text.substr(0, x), options.width) ||
+                !parseInt(text.substr(x + 1), options.height)) {
+                kast::log::error(std::format("Invalid --size '{}', expected WxH. {}", text, kUsage));
+                return std::nullopt;
+            }
+        } else if (arg == "--gpu-stats") {
+            options.gpuStats = true;
         } else {
             kast::log::error(std::format("Invalid argument '{}'. {}", arg, kUsage));
             return std::nullopt;
@@ -120,6 +141,9 @@ int main(int argc, char** argv)
     kast::LuaSystems lua;
     kast::Input input;
     kast::Renderer renderer;
+    kast::PostProcess post(kGameView);
+    double gpuMs = 0.0; // --gpu-stats: summed after the warmup
+    int gpuFrames = 0;
     kast::SceneGui gui("game");
     SDL_Window* window = nullptr;
     uint64_t lastTicks = 0;
@@ -133,8 +157,10 @@ int main(int argc, char** argv)
         window = created;
         kast::log::info(std::format("Window title: {}", SDL_GetWindowTitle(window)));
         renderer.init();
+        post.init();
         kast::gui::init();
-        bgfx::setViewClear(kGameView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, kClearColor, 1.0f, 0);
+        if (options->gpuStats)
+            bgfx::setDebug(BGFX_DEBUG_PROFILER);
         if (kast::activeCamera(scene) == entt::null)
             kast::log::warn("No Camera in scene: nothing to render");
         lua.start(scene, project.root, *project.startScene, &input,
@@ -157,13 +183,21 @@ int main(int argc, char** argv)
         int width = 0;
         int height = 0;
         SDL_GetWindowSizeInPixels(window, &width, &height);
-        bgfx::setViewRect(kGameView, 0, 0, static_cast<uint16_t>(width), static_cast<uint16_t>(height));
-        bgfx::touch(kGameView);
+        post.begin(static_cast<uint16_t>(width), static_cast<uint16_t>(height),
+                   kast::sceneClearColor(scene.postProcessing, kClearColor));
         if (const entt::entity camera = kast::activeCamera(scene); camera != entt::null && width > 0 && height > 0) {
             float view[16], proj[16];
             kast::cameraMatrices(scene, camera, static_cast<float>(width) / static_cast<float>(height),
                                  bgfx::getCaps()->homogeneousDepth, view, proj);
-            renderer.render(scene, project.root, kGameView, view, proj, false);
+            renderer.render(scene, project.root, post.sceneView(), view, proj);
+        }
+        post.apply(scene.postProcessing, true, BGFX_INVALID_HANDLE);
+        if (const bgfx::Stats* stats = bgfx::getStats(); options->gpuStats && frame >= kGpuStatsWarmupFrames) {
+            // The last frame's views (the profiler's per-view timers), so the vsync wait isn't counted.
+            for (uint16_t i = 0; i < stats->numViews; ++i)
+                gpuMs += static_cast<double>(stats->viewStats[i].gpuTimeEnd - stats->viewStats[i].gpuTimeBegin) *
+                         1000.0 / static_cast<double>(stats->gpuTimerFreq);
+            ++gpuFrames;
         }
         if (width > 0 && height > 0) {
             gui.context().resize(width, height);
@@ -193,14 +227,17 @@ int main(int argc, char** argv)
         kast::requestQuit();
     };
     hooks.shutdown = [&] {
+        if (options->gpuStats && gpuFrames > 0)
+            kast::log::info(std::format("GPU frame time: {:.3f} ms average over {} frames", gpuMs / gpuFrames, gpuFrames));
         lua.stop();
         gui.clear();
         gui.context().release();
         kast::gui::shutdown();
+        post.shutdown();
         renderer.shutdown();
     };
 
-    const int code = kast::run({.title = project.name.c_str()}, hooks);
+    const int code = kast::run({.title = project.name.c_str(), .width = options->width, .height = options->height}, hooks);
     if (code != 0)
         return code;
     if (!options->screenshot.empty() && !screenshotSaved)

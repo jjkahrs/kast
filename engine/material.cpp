@@ -61,7 +61,33 @@ Json numbers(std::initializer_list<float> values)
     return out;
 }
 
+// .mat files from before emissiveEnabled / emissiveIntensity have only "emissive" (any value >= 0): emission is on if
+// it is non-black, and channels above 1 move into the intensity (color / max channel, intensity = max channel), so
+// they render as before. Invalid colors are left for setMaterialField to reject.
+Json migrateLegacyEmissive(Json json)
+{
+    if (json.contains("emissiveEnabled") || json.contains("emissiveIntensity") || !json.contains("emissive"))
+        return json;
+    Json& color = json["emissive"];
+    if (!color.is_array() || color.size() != 3 || !std::ranges::all_of(color, [](const Json& c) { return c.is_number() && c.get<double>() >= 0.0; }))
+        return json;
+    const double max = std::max({color[0].get<double>(), color[1].get<double>(), color[2].get<double>()});
+    if (max > 1.0)
+        for (Json& c : color)
+            c = c.get<double>() / max;
+    // Adding keys last: ordered_json keeps them in a vector, so an insert can invalidate `color`.
+    json["emissiveEnabled"] = max > 0.0;
+    if (max > 1.0)
+        json["emissiveIntensity"] = max;
+    return json;
+}
+
 } // namespace
+
+bx::Vec3 emissiveRadiance(const Material& material)
+{
+    return material.emissiveEnabled ? bx::mul(material.emissive, material.emissiveIntensity) : bx::Vec3{0.0f, 0.0f, 0.0f};
+}
 
 const Material& defaultMaterial()
 {
@@ -75,6 +101,7 @@ const Material& errorMaterial()
         Material m;
         m.baseColor = {0.0f, 0.0f, 0.0f, 1.0f};
         m.roughness = 1.0f;
+        m.emissiveEnabled = true;
         m.emissive = {1.0f, 0.0f, 1.0f};
         return m;
     }();
@@ -84,7 +111,8 @@ const Material& errorMaterial()
 const std::vector<std::string>& materialFieldNames()
 {
     static const std::vector<std::string> names = {"baseColor", "baseColorTexture", "metallic", "roughness",
-                                                   "metallicRoughnessTexture", "emissive", "alphaMode", "alphaCutoff"};
+                                                   "metallicRoughnessTexture", "emissiveEnabled", "emissive", "emissiveIntensity",
+                                                   "alphaMode", "alphaCutoff"};
     return names;
 }
 
@@ -102,10 +130,22 @@ bool setMaterialField(Material& material, std::string_view name, const Json& val
         ok = unitNumber(name, value, m.roughness, error);
     } else if (name == "metallicRoughnessTexture") {
         ok = texturePath(name, value, m.metallicRoughnessTexture, error);
+    } else if (name == "emissiveEnabled") {
+        ok = value.is_boolean();
+        if (ok)
+            m.emissiveEnabled = value.get<bool>();
+        else
+            error = "\"emissiveEnabled\" must be true or false";
     } else if (name == "emissive") {
         std::array<float, 3> v{};
         ok = unitArray(name, value, v, error);
         m.emissive = {v[0], v[1], v[2]};
+    } else if (name == "emissiveIntensity") {
+        ok = value.is_number() && value.get<double>() >= 0.0 && std::isfinite(value.get<double>());
+        if (ok)
+            m.emissiveIntensity = value.get<float>();
+        else
+            error = "\"emissiveIntensity\" must be a number >= 0";
     } else if (name == "alphaMode") {
         const auto it = std::ranges::find_if(kAlphaModes, [&](const auto& mode) {
             return value.is_string() && value.get<std::string>() == mode.second;
@@ -137,8 +177,12 @@ std::optional<Json> materialField(const Material& m, std::string_view name)
         return jsonNumber(m.roughness);
     if (name == "metallicRoughnessTexture")
         return m.metallicRoughnessTexture;
+    if (name == "emissiveEnabled")
+        return m.emissiveEnabled;
     if (name == "emissive")
         return numbers({m.emissive.x, m.emissive.y, m.emissive.z});
+    if (name == "emissiveIntensity")
+        return jsonNumber(m.emissiveIntensity);
     if (name == "alphaMode")
         return std::ranges::find(kAlphaModes, m.alphaMode, &std::pair<AlphaMode, const char*>::first)->second;
     if (name == "alphaCutoff")
@@ -157,7 +201,8 @@ bool materialFromJson(const Json& json, Material& out, std::string& error)
         return false;
     }
     Material material;
-    for (const auto& [key, value] : json.items())
+    const Json fields = migrateLegacyEmissive(json);
+    for (const auto& [key, value] : fields.items())
         if (key != "version" && !setMaterialField(material, key, value, error))
             return false;
     out = std::move(material);

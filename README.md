@@ -98,7 +98,8 @@ build\release\kast_editor.exe
 | `--build <dir>` | With `--project`: build that project's game into `<dir>` (see [Build](#build)) and exit without opening a window or any dialog. Exit 0 on success, 1 on failure (no `--project`, invalid `startScene`, ...). Does not remember the folder. |
 | `--open-menu <Name>` | Open that main menu (e.g. `Build`) after the first 10 frames, for screenshots. |
 | `--open-build-settings` | With `--project`: open the Build > Build Settings modal after the first 10 frames, for screenshots. Writes nothing by itself. Without `--project` it is an invalid argument. |
-| `--focus-panel <Window>` | Bring that editor window (e.g. `Events`, `"State Machines"`, `"GUI Preview"`) to the front of its dock after the first 10 frames, for screenshots. |
+| `--focus-panel <Window>` | Bring that editor window (e.g. `Events`, `"State Machines"`, `"GUI Preview"`) to the front of its dock after the first 10 frames, for screenshots. `Lighting` and `"Post Processing"` also open those hidden panels. |
+| `--no-scene-post` | Start with the Scene toolbar's **Post** box off (scene without post effects). |
 | `--assets-menu <path>\|/` | Open that Assets entry's context menu (`/` = the panel background) with its Create submenu open, for screenshots. |
 | `--assets-create system\|fsm\|gui:<folder>` | Run Assets > Create > Lua System / State Machine / GUI in that project folder (empty = the root) after the first 10 frames, as the menu does (the new file's rename starts). |
 | `--open-gui <file.rml>` | Open that `.rml` in the [GUI Builder](#gui-builder) at startup (relative paths: to the project, else the working directory) and bring its four panels to the front. |
@@ -350,8 +351,9 @@ player checks the magic, the version and that every entry lies inside the file.
 components from it, titles its window with the project name and plays `startScene` as editor Play mode does (C++
 systems, Lua systems, Lua components, `kast.loadScene`), rendering through the scene's Main Camera. It has no console
 window and doesn't hot reload. Its scene's [game GUIs](#game-gui) show over the scene and take mouse and keyboard
-input. Flags (for tests): `--frames N` and `--screenshot out.png`, as in the editor, and `--gui-click <id>` (click that
-GUI element on frame 10). A missing
+input. Flags (for tests): `--frames N` and `--screenshot out.png`, as in the editor, `--gui-click <id>` (click that
+GUI element on frame 10), `--size WxH` (window size, default 1280x720) and `--gpu-stats` (log the average GPU time of
+the frame's views, after 10 warmup frames, on exit). A missing
 or corrupt `game.pak`, an invalid `project.kast` or a `startScene` that is missing or doesn't load shows an error
 message box and exits 1; with `--frames` the message is only logged (stdout), so tests never block.
 
@@ -426,10 +428,14 @@ in registration order, floats in shortest round-trip form, so re-saving an uncha
   [Lua systems](#lua-systems)). Always written; optional when loading (missing = none).
 - `lighting`: the scene's ambient light, `ambientColor` (linear RGB 0–1) times `ambientIntensity` (>= 0). Always
   written; optional when loading (missing = white at 0.2), but if present both fields are required.
+- `postProcessing`: the scene's [post-processing and fog](#post-processing-and-fog), blocks `tonemapping`, `bloom`,
+  `colorGrading`, `vignette`, `fxaa`, `fog`, each with `enabled`. Always written; optional when loading, and so is every
+  block and field in it (missing = default, all effects off). Unknown blocks or fields, wrong types, out-of-range
+  values and an `operator` other than `None` / `ACES` fail the load. The file stays version 4.
 - `editor` belongs to the editor (camera pivot, yaw/pitch in degrees, distance in meters); the engine keeps it as-is.
 - Loading rejects invalid JSON, a `version` other than 4 (versions 1–3 are not migrated), a `systems` that
   isn't an array of non-empty strings, a missing `Transform`, unknown, missing or mistyped fields of a built-in
-  component, unknown enum names, out-of-range `Camera` or `PointLight` values, a malformed `lighting`, duplicate ids, parents that don't exist, and parent
+  component, unknown enum names, out-of-range `Camera` or `PointLight` values, a malformed `lighting` or `postProcessing`, duplicate ids, parents that don't exist, and parent
   cycles. It reports why and leaves the current scene untouched. Lua components are lenient (schema drift), and a
   component name that is neither built-in nor a valid Lua definition is kept verbatim with a Console warning (missing
   definitions); see [Lua components](#lua-components).
@@ -448,7 +454,9 @@ brackets); unknown keys and invalid values make the file invalid.
   "metallic": 0,
   "roughness": 0.5,
   "metallicRoughnessTexture": "",
+  "emissiveEnabled": false,
   "emissive": [0, 0, 0],
+  "emissiveIntensity": 1,
   "alphaMode": "opaque",
   "alphaCutoff": 0.5
 }
@@ -457,14 +465,17 @@ brackets); unknown keys and invalid values make the file invalid.
 - `baseColor` linear RGBA 0–1 [0.8 grey, alpha 1], times `baseColorTexture` (sRGB; project-relative, empty = none).
 - `metallic`, `roughness` 0–1 [0, 0.5], times `metallicRoughnessTexture` (linear, glTF packing: G = roughness,
   B = metallic).
-- `emissive` linear RGB 0–1 [black], added after lighting (shows without lights).
+- `emissiveEnabled` [false]: when on, `emissive` (linear RGB 0–1 [black]) times `emissiveIntensity` (≥ 0 [1]) is added
+  after lighting (shows without lights); an intensity that lifts it above the bloom `threshold` glows. Older files with
+  only `emissive` load with emission on if it is non-black, and channels above 1 move into the intensity.
 - `alphaMode` [`opaque`]: `mask` discards pixels whose alpha is below `alphaCutoff` [0.5]; `blend` draws after every
   opaque mesh, far to near by the mesh's world-space center (no per-triangle sorting), alpha-blended, depth-tested but
   not depth-written.
 - Shading: Cook-Torrance (GGX distribution, Smith / Schlick-GGX geometry, Schlick Fresnel, F0 = mix(0.04, baseColor,
   metallic)) for the first `DirectionalLight` and up to 8 `PointLight`s per mesh; ambient adds a diffuse term and a flat
   specular term (roughness-aware Fresnel), so metals are not black with ambient light only. No image-based lighting or
-  shadows. The shader encodes its output to sRGB (formulas in `engine/shaders/fs_mesh.sc`).
+  shadows. The shader outputs linear HDR color (formulas in `engine/shaders/fs_mesh.sc`); the
+  [post chain](#post-processing-and-fog) tonemaps and encodes it to sRGB.
 - Textures: PNG and JPG (stb_image), mipmapped at load (sRGB-correct filtering for base color), shared by path.
 - Fallbacks (the scene always loads): a missing or invalid `.mat` renders unlit magenta; a missing or undecodable
   texture renders as white. Each is logged once per path, with the reason.
@@ -487,6 +498,35 @@ brackets); unknown keys and invalid values make the file invalid.
 - **Sample**: `tests/project/materials.scene` (gold and red plastic spheres at roughness 0.1 / 0.5 / 0.9, PNG and JPG
   textured cubes, a metallic-roughness textured sphere, an emissive sphere, a mask cutout, two overlapping blended
   planes, a broken and a missing `.mat`, a missing texture) with its `materials/*.mat` and `textures/*`.
+
+### Post-processing and fog
+
+Each scene can opt into an HDR post-processing stack and distance fog, set per scene (`"postProcessing"` in the scene
+file) and edited in **Window > Post Processing** (hidden by default; a section per effect with its **Enabled** box;
+edits show live and mark the scene dirty). Every effect is off by default, so a scene without settings renders as it
+always did. The Scene view, the Game view and the built game all apply it.
+
+- **Pipeline**: meshes render linear HDR color into an `RGBA16F` target (plus depth); `engine/post_process.h` then
+  runs, in order: bloom, exposure, tonemap, color grading, vignette, sRGB encode, FXAA, into the view's image (the
+  backbuffer in the player). Overlays (grid, axes, camera frustums, light range) and gizmos draw after it, depth-tested
+  against the scene, and are never post-processed; game GUIs draw over the final image and are never post-processed.
+- **Tonemapping**: `exposure` in EV (-10..10, color times 2^EV) and `operator` `None` (clamp to 0–1, the look without
+  post) or `ACES` (Narkowicz's filmic fit, `x(2.51x + 0.03) / (x(2.43x + 0.59) + 0.14)`: bright lights and emissive
+  surfaces roll off instead of clipping to flat white).
+- **Bloom**: a soft-knee bright pass on HDR luminance above `threshold` [1] at half resolution, blurred down 5 levels
+  (to 1/32) and back up, each level mixing in the blurred level below by the `radius` [0.5] scatter; added back times
+  `intensity` [0.5]. Raise a material's emissive intensity above the threshold to make it glow.
+- **Color grading** (after the tonemap): `contrast` [1, 0–2] (power curve around mid grey 0.18), `saturation` [1, 0–2],
+  `colorFilter` [white, linear RGB tint] and `temperature` [0, -1 cool .. 1 warm white balance].
+- **Vignette**: `intensity` [0.3, 0–1] darkens toward the corners over the outer `smoothness` [0.5, 0.01–1].
+- **FXAA**: on/off, on the final sRGB image (the FXAA 3.11 console variant).
+- **Fog** (shaded per mesh in `fs_mesh.sc`, not a post pass, so blended meshes fog by their own distance):
+  exponential-squared, `1 - exp(-(density * max(distance - start, 0))^2)` toward `color` (linear RGB) [density 0.05,
+  start 0 m]. While fog is on, the views clear to the fog color so distant meshes fade into the background.
+- **Scene view**: the toolbar's **Post** box shows the scene with or without the post effects (on by default; fog
+  always shows). `--no-scene-post` starts with it off.
+- Blended meshes now blend in linear space (before the sRGB encode), which is physically correct but looks slightly
+  different from the gamma-space blending before post-processing.
 
 ### Components and systems
 
@@ -1035,6 +1075,11 @@ unsaved changes it asks **Reload** / **Keep mine**. A deleted `.rml` closes a cl
 | `build_game_materials`, `player_materials_screenshot` | The build and run of a copy with startScene `materials.scene`: materials and textures from `game.pak` in the standalone player, `player_materials.png`. |
 | `point_lights_screenshot`, `lighting_panel_screenshot`, `point_lights_play_screenshot`, `point_lights_off_play_screenshot`, `point_lights_play_differs` | `tests/project/point_lights.scene` (three colored point lights, bluish ambient): editor with `--select 7` (Blue Light's range sphere) in `point_lights.png`, `--focus-panel Lighting` (opens the hidden Lighting panel) in `lighting_panel.png`, and `--play` on it and on a configure-time copy with every `PointLight` intensity 0; the two Play shots must differ. |
 | `point_lights_roundtrip`, `point_lights_bad_range_rejected`, `point_lights_bad_lighting_rejected` | Save twice gives identical bytes; configure-time copies with `"range": 0` / `"ambientIntensity": -1` must exit 1. |
+| `post_processing_screenshot`, `post_processing_toggled_off_screenshot`, `post_processing_toggle_differs` | `tests/project/post_processing.scene` (every effect on; emissive sphere, bright point lights, near and far glass, pillars out to 55 m, a game GUI) in the Scene view with the **Post** box on and off (`--no-scene-post`); the two must differ. |
+| `post_processing_panel_screenshot` | `--focus-panel "Post Processing"` opens the hidden panel, `post_processing_panel.png`. |
+| `post_processing_play_screenshot`, `post_processing_off_play_screenshot`, `post_processing_differs` | `--play` on it (game GUI over the post-processed Game view) and on a configure-time project copy without the `"postProcessing"` block; the two must differ. |
+| `post_processing_roundtrip`, `post_processing_bad_rejected` | Save twice gives identical bytes; a copy with `"operator": "Reinhard"` must exit 1. |
+| `build_game_post`, `player_post_screenshot` | The built game with startScene `post_processing.scene` (`Post Test.exe`): post effects and fog in the player, GUI on top, `player_post.png`. |
 | `build_game_lights`, `player_lights_screenshot` | The build and run of a copy with startScene `point_lights.scene` (`Lights Test.exe`): point lights and ambient in the standalone player, `player_lights.png`. |
 | `project_startup` | `--project tests/project`: exit 0 and a PNG (opens its `startScene`, `scene_a.scene`). |
 | `project_missing` | `--project tests/scenes/scripts` (no `project.kast`) must exit 1. |
@@ -1093,7 +1138,7 @@ always start from the default layout.
 ## Shaders
 
 Shaders (`editor/shaders/*.sc` for ImGui, `engine/shaders/*.sc` for meshes and grid lines, `engine/shaders/gui/*.sc`
-for game GUIs; each directory has its own `varying.def.sc`) are compiled at build time to Direct3D 11 bytecode headers
+for game GUIs, `engine/shaders/post/*.sc` for the post-processing passes; each directory has its own `varying.def.sc`) are compiled at build time to Direct3D 11 bytecode headers
 (`-p s_5_0`) with `shaderc` from vcpkg's `bgfx[tools]` (a host dependency in `vcpkg.json`). Sources stay editable and
 always match the installed bgfx version.
 

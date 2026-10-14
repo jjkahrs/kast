@@ -12,7 +12,6 @@
 
 namespace {
 
-constexpr uint32_t kClearColor = 0x2b3440ff;
 constexpr float kFlySpeed = 5.0f; // meters per second
 constexpr float kFastMultiplier = 4.0f;
 constexpr ImU32 kPlayTint = IM_COL32(255, 160, 40, 255); // Scene panel border and active play button while playing
@@ -60,12 +59,14 @@ bool beginViewportPanel(const char* name, Document& doc, PanelFocus panel)
 void SceneViewport::init()
 {
     renderer_.init();
+    post_.init();
     operation_ = ImGuizmo::TRANSLATE;
 }
 
 void SceneViewport::shutdown()
 {
     target_.destroy();
+    post_.shutdown();
     renderer_.shutdown();
 }
 
@@ -73,26 +74,34 @@ void ViewTarget::destroy()
 {
     if (bgfx::isValid(frameBuffer_))
         bgfx::destroy(frameBuffer_);
+    if (bgfx::isValid(color_) && bgfx::isValid(depth_))
+        bgfx::destroy(color_); // the shared depth isn't ours; otherwise the framebuffer destroyed both
     frameBuffer_ = BGFX_INVALID_HANDLE;
+    color_ = BGFX_INVALID_HANDLE;
 }
 
-void ViewTarget::resize(uint16_t width, uint16_t height)
+void ViewTarget::resize(uint16_t width, uint16_t height, bgfx::TextureHandle depth)
 {
-    if ((width == width_ && height == height_) || width == 0 || height == 0)
+    if ((width == width_ && height == height_ && depth.idx == depth_.idx) || width == 0 || height == 0)
         return;
     destroy();
+    const bool shared = bgfx::isValid(depth);
+    color_ = bgfx::createTexture2D(width, height, false, 1, bgfx::TextureFormat::BGRA8,
+                                   BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
     const bgfx::TextureHandle textures[] = {
-        bgfx::createTexture2D(width, height, false, 1, bgfx::TextureFormat::BGRA8,
-                              BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP),
-        bgfx::createTexture2D(width, height, false, 1, bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT_WRITE_ONLY),
-    };
-    frameBuffer_ = bgfx::createFrameBuffer(2, textures, true);
+        color_, shared ? depth : bgfx::createTexture2D(width, height, false, 1, bgfx::TextureFormat::D24S8,
+                                                        BGFX_TEXTURE_RT_WRITE_ONLY)};
+    frameBuffer_ = bgfx::createFrameBuffer(2, textures, !shared);
     width_ = width;
     height_ = height;
+    depth_ = depth;
     bgfx::setViewName(view_, name_);
     bgfx::setViewFrameBuffer(view_, frameBuffer_);
     bgfx::setViewRect(view_, 0, 0, width, height);
-    bgfx::setViewClear(view_, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, kClearColor, 1.0f, 0);
+    if (shared)
+        bgfx::setViewClear(view_, BGFX_CLEAR_NONE);
+    else
+        bgfx::setViewClear(view_, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, kViewportClearColor, 1.0f, 0);
     kast::log::info(std::format("{} framebuffer resized to {}x{}", name_, width, height));
 }
 
@@ -111,7 +120,10 @@ void SceneViewport::draw(Document& doc)
         drawToolbar(doc);
         const ImVec2 size = ImGui::GetContentRegionAvail();
         const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
-        target_.resize(static_cast<uint16_t>(size.x * scale.x), static_cast<uint16_t>(size.y * scale.y));
+        const auto width = static_cast<uint16_t>(size.x * scale.x);
+        const auto height = static_cast<uint16_t>(size.y * scale.y);
+        post_.begin(width, height, kast::sceneClearColor(doc.scene.postProcessing, kViewportClearColor));
+        target_.resize(width, height, post_.depth());
         if (target_.valid() && size.x > 0.0f && size.y > 0.0f) {
             const ImVec2 origin = ImGui::GetCursorScreenPos();
             ImGui::Image(static_cast<ImTextureID>(target_.texture().idx), size);
@@ -126,8 +138,10 @@ void SceneViewport::draw(Document& doc)
             doc.camera.viewMatrix(view);
             doc.camera.projMatrix(proj, size.x / size.y);
             bx::mtxMul(viewProj, view, proj);
-            renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), target_.view(), view, proj,
-                             true, doc.selected);
+            renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), post_.sceneView(), view,
+                             proj);
+            post_.apply(doc.scene.postProcessing, postEffects_, target_.frameBuffer());
+            renderer_.renderOverlays(doc.scene, target_.view(), view, proj, doc.selected);
 
             ImGuizmo::SetDrawlist();
             ImGuizmo::SetRect(origin.x, origin.y, size.x, size.y);
@@ -182,6 +196,9 @@ void SceneViewport::drawToolbar(Document& doc)
     ImGui::SameLine();
     if (ImGui::SmallButton(local_ ? "Local (X)" : "World (X)"))
         local_ = !local_;
+    ImGui::SameLine(0.0f, style.ItemSpacing.x * 3.0f);
+    ImGui::Checkbox("Post", &postEffects_);
+    ImGui::SetItemTooltip("Show the scene's post-processing effects (Window > Post Processing); fog always shows");
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + style.FramePadding.y);
 }
 

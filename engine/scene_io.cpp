@@ -4,8 +4,10 @@
 #include "files.h"
 #include "log.h"
 
+#include <algorithm>
 #include <cfloat>
 #include <charconv>
+#include <cmath>
 #include <format>
 #include <fstream>
 #include <map>
@@ -127,6 +129,149 @@ SceneLighting parseLighting(const Json& json)
     return lighting;
 }
 
+// "postProcessing": every block and field optional (missing = default), but present ones must be valid.
+class PostReader {
+public:
+    PostReader(const Json& block, const char* name) : block_(block), name_(name)
+    {
+        if (!block.is_object())
+            throw Invalid(std::format("postProcessing: \"{}\" must be an object", name));
+    }
+    void fields(std::initializer_list<std::string_view> known) const
+    {
+        for (const auto& [key, value] : block_.items())
+            if (std::ranges::find(known, std::string_view(key)) == known.end())
+                throw Invalid(std::format("postProcessing.{}: unknown field \"{}\"", name_, key));
+    }
+    void flag(const char* key, bool& out) const
+    {
+        if (!block_.contains(key))
+            return;
+        if (!block_[key].is_boolean())
+            throw Invalid(std::format("postProcessing.{}: \"{}\" must be true or false", name_, key));
+        out = block_[key].get<bool>();
+    }
+    void number(const char* key, float& out, float lo, float hi) const
+    {
+        if (block_.contains(key))
+            out = checked(block_[key], key, lo, hi);
+    }
+    void color(const char* key, bx::Vec3& out) const
+    {
+        if (!block_.contains(key))
+            return;
+        const Json& c = block_[key];
+        if (!c.is_array() || c.size() != 3)
+            throw Invalid(std::format("postProcessing.{}: \"{}\" must be an array of 3 numbers", name_, key));
+        out = {checked(c[0], key, 0.0f, 1.0f), checked(c[1], key, 0.0f, 1.0f), checked(c[2], key, 0.0f, 1.0f)};
+    }
+    void tonemap(const char* key, Tonemap& out) const
+    {
+        if (!block_.contains(key))
+            return;
+        const Json& v = block_[key];
+        if (v == "None")
+            out = Tonemap::None;
+        else if (v == "ACES")
+            out = Tonemap::Aces;
+        else
+            throw Invalid(std::format("postProcessing.{}: \"{}\" must be \"None\" or \"ACES\"", name_, key));
+    }
+
+private:
+    float checked(const Json& value, const char* key, float lo, float hi) const
+    {
+        const double v = value.is_number() ? value.get<double>() : std::nan("");
+        if (!(v >= lo && v <= hi)) // NaN fails too
+            throw Invalid(hi == FLT_MAX ? std::format("postProcessing.{}: \"{}\" must be a number >= {}", name_, key, lo)
+                                        : std::format("postProcessing.{}: \"{}\" must be a number between {} and {}",
+                                                      name_, key, lo, hi));
+        return static_cast<float>(v);
+    }
+
+    const Json& block_;
+    const char* name_;
+};
+
+ScenePostProcessing parsePostProcessing(const Json& json)
+{
+    if (!json.is_object())
+        throw Invalid("\"postProcessing\" must be an object");
+    ScenePostProcessing post;
+    const auto block = [&](const char* name) { return json.contains(name) ? &json[name] : nullptr; };
+    for (const auto& [key, value] : json.items())
+        if (key != "tonemapping" && key != "bloom" && key != "colorGrading" && key != "vignette" && key != "fxaa" &&
+            key != "fog")
+            throw Invalid(std::format("postProcessing: unknown field \"{}\"", key));
+    if (const Json* j = block("tonemapping")) {
+        const PostReader r(*j, "tonemapping");
+        r.fields({"enabled", "exposure", "operator"});
+        r.flag("enabled", post.tonemapping.enabled);
+        r.number("exposure", post.tonemapping.exposure, -10.0f, 10.0f);
+        r.tonemap("operator", post.tonemapping.op);
+    }
+    if (const Json* j = block("bloom")) {
+        const PostReader r(*j, "bloom");
+        r.fields({"enabled", "threshold", "intensity", "radius"});
+        r.flag("enabled", post.bloom.enabled);
+        r.number("threshold", post.bloom.threshold, 0.0f, FLT_MAX);
+        r.number("intensity", post.bloom.intensity, 0.0f, FLT_MAX);
+        r.number("radius", post.bloom.radius, 0.0f, 1.0f);
+    }
+    if (const Json* j = block("colorGrading")) {
+        const PostReader r(*j, "colorGrading");
+        r.fields({"enabled", "contrast", "saturation", "colorFilter", "temperature"});
+        r.flag("enabled", post.colorGrading.enabled);
+        r.number("contrast", post.colorGrading.contrast, 0.0f, 2.0f);
+        r.number("saturation", post.colorGrading.saturation, 0.0f, 2.0f);
+        r.color("colorFilter", post.colorGrading.colorFilter);
+        r.number("temperature", post.colorGrading.temperature, -1.0f, 1.0f);
+    }
+    if (const Json* j = block("vignette")) {
+        const PostReader r(*j, "vignette");
+        r.fields({"enabled", "intensity", "smoothness"});
+        r.flag("enabled", post.vignette.enabled);
+        r.number("intensity", post.vignette.intensity, 0.0f, 1.0f);
+        r.number("smoothness", post.vignette.smoothness, 0.01f, 1.0f);
+    }
+    if (const Json* j = block("fxaa")) {
+        const PostReader r(*j, "fxaa");
+        r.fields({"enabled"});
+        r.flag("enabled", post.fxaa.enabled);
+    }
+    if (const Json* j = block("fog")) {
+        const PostReader r(*j, "fog");
+        r.fields({"enabled", "color", "density", "start"});
+        r.flag("enabled", post.fog.enabled);
+        r.color("color", post.fog.color);
+        r.number("density", post.fog.density, 0.0f, FLT_MAX);
+        r.number("start", post.fog.start, 0.0f, FLT_MAX);
+    }
+    return post;
+}
+
+Json postProcessingToJson(const ScenePostProcessing& post)
+{
+    const auto color = [](const bx::Vec3& c) { return Json::array({jsonNumber(c.x), jsonNumber(c.y), jsonNumber(c.z)}); };
+    const auto& t = post.tonemapping;
+    const auto& b = post.bloom;
+    const auto& g = post.colorGrading;
+    const auto& v = post.vignette;
+    const auto& f = post.fog;
+    return {{"tonemapping", {{"enabled", t.enabled}, {"exposure", jsonNumber(t.exposure)},
+                             {"operator", t.op == Tonemap::Aces ? "ACES" : "None"}}},
+            {"bloom", {{"enabled", b.enabled}, {"threshold", jsonNumber(b.threshold)},
+                       {"intensity", jsonNumber(b.intensity)}, {"radius", jsonNumber(b.radius)}}},
+            {"colorGrading", {{"enabled", g.enabled}, {"contrast", jsonNumber(g.contrast)},
+                              {"saturation", jsonNumber(g.saturation)}, {"colorFilter", color(g.colorFilter)},
+                              {"temperature", jsonNumber(g.temperature)}}},
+            {"vignette", {{"enabled", v.enabled}, {"intensity", jsonNumber(v.intensity)},
+                          {"smoothness", jsonNumber(v.smoothness)}}},
+            {"fxaa", {{"enabled", post.fxaa.enabled}}},
+            {"fog", {{"enabled", f.enabled}, {"color", color(f.color)}, {"density", jsonNumber(f.density)},
+                     {"start", jsonNumber(f.start)}}}};
+}
+
 void build(const std::vector<Record>& records, Scene& scene)
 {
     std::map<EntityId, size_t> byId;
@@ -202,6 +347,8 @@ bool sceneFromJson(const Json& json, Scene& out, std::string& error, SceneLoadRe
         }
         if (json.contains("lighting"))
             scene.lighting = parseLighting(json["lighting"]);
+        if (json.contains("postProcessing"))
+            scene.postProcessing = parsePostProcessing(json["postProcessing"]);
         if (json.contains("systems")) {
             const Json& systems = json["systems"];
             if (!systems.is_array())
@@ -277,6 +424,7 @@ Json sceneToJson(const Scene& scene)
     root["lighting"] = {{"ambientColor", Json::array({jsonNumber(lighting.ambientColor.x), jsonNumber(lighting.ambientColor.y),
                                                       jsonNumber(lighting.ambientColor.z)})},
                         {"ambientIntensity", jsonNumber(lighting.ambientIntensity)}};
+    root["postProcessing"] = postProcessingToJson(scene.postProcessing);
     root["editor"] = scene.editorData;
     return root;
 }
