@@ -127,6 +127,10 @@ target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAK
 target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS} /bigobj) # one big file of checks
 target_link_libraries(kast_self_check PRIVATE kast_engine SDL3::SDL3 imgui::imgui pugixml::pugixml shell32)
 
+# --- focus probe: runs a command and fails if its window takes the foreground (see tests/focus_probe.cpp) ---
+add_executable(kast_focus_probe tests/focus_probe.cpp)
+target_compile_options(kast_focus_probe PRIVATE ${KAST_COMPILE_OPTIONS})
+
 # --- tests ---
 enable_testing()
 set(KAST_TEST_SCENES "${CMAKE_CURRENT_SOURCE_DIR}/tests/scenes")
@@ -1042,6 +1046,21 @@ add_test(NAME crash_assert_no_dialog
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" -DCRASH=assert
           "-DEXPECT_OUTPUT=$<$<CONFIG:Debug>:Assertion failed>"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/crash_exits_test.cmake")
+
+# --frames runs (editor, Project Manager, built game) show their window without taking focus from the user's app.
+set(KAST_NO_FOCUS_DIR "${CMAKE_CURRENT_BINARY_DIR}/no_focus.run")
+file(MAKE_DIRECTORY "${KAST_NO_FOCUS_DIR}")
+add_test(NAME editor_no_focus
+  COMMAND kast_focus_probe "$<TARGET_FILE:kast_editor>" --frames 120 --projects-file "${KAST_NO_FOCUS_DIR}/projects.json"
+  WORKING_DIRECTORY "${KAST_NO_FOCUS_DIR}")
+add_test(NAME launcher_no_focus
+  COMMAND kast_focus_probe "$<TARGET_FILE:kast_editor>" --launcher --frames 120 --projects-file "${KAST_NO_FOCUS_DIR}/projects.json"
+  WORKING_DIRECTORY "${KAST_NO_FOCUS_DIR}")
+add_test(NAME player_no_focus
+  COMMAND kast_focus_probe "${KAST_GAME_OUT}/switch/Switch Test.exe" --frames 120
+  WORKING_DIRECTORY "${KAST_GAME_OUT}/switch")
+set_tests_properties(editor_no_focus launcher_no_focus PROPERTIES TIMEOUT 120 RESOURCE_LOCK no_focus_dir)
+set_tests_properties(player_no_focus PROPERTIES FIXTURES_REQUIRED game_switch_built TIMEOUT 90)
 
 # Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.
 get_property(kast_tests DIRECTORY PROPERTY TESTS)

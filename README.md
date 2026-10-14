@@ -1363,6 +1363,7 @@ unsaved changes it asks **Reload** / **Keep mine**. A deleted `.rml` closes a cl
 | `ui_scene_roundtrip` | `ui.scene` saved twice: byte-identical. |
 | `assets_create_gui_screenshot`, `assets_create_gui_written` | `--assets-create gui:ui --focus-panel Assets` on `new_gui_project` (made by `new_gui_project_clean` / `_copy`): `ui/new_gui.rcss` exists, `ui/new_gui.rml` links `new_gui.rcss`, and the shot shows its rename. |
 | `assets_create_menu_screenshot` | `--assets-menu / --focus-panel Assets`, writing `assets_create_menu.png` (Create: Lua System, State Machine, GUI). |
+| `editor_no_focus`, `launcher_no_focus`, `player_no_focus` | `kast_focus_probe` runs `kast_editor --frames 120`, `kast_editor --launcher --frames 120` and the built `switch` game with `--frames 120`, sampling the foreground window until exit: fails if it ever belongs to the Kast process, if no window was shown, or on a nonzero exit. A `--frames` run shows its window without activating it and logs init failures instead of showing a message box. |
 
 The screenshot tests each open a real window for ~2 seconds, in a fresh working directory (`<png>.run/`) so they
 always start from the default layout.
@@ -1400,7 +1401,7 @@ editor/   main.cpp (CLI, dock layout, menus, console), document (scene, Play mod
           gui_builder (GUI Hierarchy, GUI Inspector, GUI Style, GUI Preview),
           panels (Hierarchy, Inspector, Systems, Components), build (Build: game.pak, exe, DLLs, last folder),
           imgui_bgfx (ImGui renderer for bgfx), shaders/
-tests/    self_check.cpp, scenes/ (a project: project.kast, basic.scene, lua.scene + scripts/, no_camera.scene,
+tests/    self_check.cpp, focus_probe.cpp, scenes/ (a project: project.kast, basic.scene, lua.scene + scripts/, no_camera.scene,
           malformed.scene, v1.scene, v3.scene), project/ (scene-switch and Lua components project: project.kast,
           scene_a.scene, scene_b.scene, health.scene, ui.scene + ui/main_menu.rml/.rcss, scripts/,
           components/health.lua)

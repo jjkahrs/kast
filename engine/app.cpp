@@ -59,10 +59,11 @@ private:
     const AppHooks& hooks_;
 };
 
-int fail(const std::string& message, SDL_Window* window)
+int fail(const AppConfig& config, const std::string& message, SDL_Window* window)
 {
     log::error(message);
-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Kast failed to start", message.c_str(), window);
+    if (config.activate) // a --frames run (tests) has no one to close the box
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Kast failed to start", message.c_str(), window);
     return 1;
 }
 
@@ -79,12 +80,14 @@ void shutdownSdl(SDL_Window* window)
 int run(const AppConfig& config, const AppHooks& hooks)
 {
     if (!SDL_Init(SDL_INIT_VIDEO))
-        return fail(std::format("SDL_Init failed: {}", SDL_GetError()), nullptr);
+        return fail(config, std::format("SDL_Init failed: {}", SDL_GetError()), nullptr);
     log::info("SDL initialized");
 
+    if (!config.activate) // show without taking focus from the user's app
+        SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
     SDL_Window* window = SDL_CreateWindow(config.title, config.width, config.height, SDL_WINDOW_RESIZABLE);
     if (!window) {
-        int code = fail(std::format("SDL_CreateWindow failed: {}", SDL_GetError()), nullptr);
+        int code = fail(config, std::format("SDL_CreateWindow failed: {}", SDL_GetError()), nullptr);
         shutdownSdl(nullptr);
         return code;
     }
@@ -106,14 +109,14 @@ int run(const AppConfig& config, const AppHooks& hooks)
     init.resolution.reset = resetFlags;
     init.callback = &callback;
     if (!bgfx::init(init)) {
-        int code = fail("bgfx::init failed (Direct3D11)", window);
+        int code = fail(config, "bgfx::init failed (Direct3D11)", window);
         shutdownSdl(window);
         return code;
     }
     log::info(std::format("bgfx initialized: {} {}x{}", bgfx::getRendererName(bgfx::getRendererType()), width, height));
 
     if (hooks.init && !hooks.init(window)) {
-        int code = fail("Host init hook failed (see log)", window);
+        int code = fail(config, "Host init hook failed (see log)", window);
         bgfx::shutdown();
         shutdownSdl(window);
         return code;

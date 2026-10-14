@@ -415,7 +415,9 @@ int runLauncher(const LauncherOptions& options)
         ImGui::DestroyContext();
     };
 
-    const int code = kast::run({.title = "Kast Project Manager", .width = options.width, .height = options.height}, hooks);
+    const int code = kast::run({.title = "Kast Project Manager", .width = options.width, .height = options.height,
+                                .activate = options.frames == 0},
+                               hooks);
     if (code != 0)
         return code;
     return frames.failed() ? 1 : editorCode;

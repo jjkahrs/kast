@@ -12,6 +12,7 @@ struct AppConfig {
     int width = 1280;
     int height = 720;
     bool vsync = true; // false: present as fast as possible (frame-rate measurements)
+    bool activate = true; // false (--frames test runs): show without taking focus; init failures only log
 };
 
 // Lifecycle hooks the host (editor, game client) plugs into. All optional.

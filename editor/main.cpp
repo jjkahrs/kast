@@ -743,7 +743,8 @@ int main(int argc, char** argv)
     const int code = kast::run({.title = "Kast Editor",
                                 .width = options->size ? options->size->first : 1280,
                                 .height = options->size ? options->size->second : 720,
-                                .vsync = !options->noVsync},
+                                .vsync = !options->noVsync,
+                                .activate = options->frames == 0},
                                hooks);
     if (code != 0)
         return code;

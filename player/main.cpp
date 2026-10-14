@@ -240,7 +240,9 @@ int main(int argc, char** argv)
         renderer.shutdown();
     };
 
-    const int code = kast::run({.title = project.name.c_str(), .width = options->width, .height = options->height}, hooks);
+    const int code = kast::run({.title = project.name.c_str(), .width = options->width, .height = options->height,
+                                .activate = options->frames == 0},
+                               hooks);
     if (code != 0)
         return code;
     if (!options->screenshot.empty() && !screenshotSaved)
