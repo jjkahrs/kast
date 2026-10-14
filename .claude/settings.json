@@ -1,0 +1,5 @@
+{
+  "env": {
+    "KAST_NO_CRASH_DIALOGS": "1"
+  }
+}

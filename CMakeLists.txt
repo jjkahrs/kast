@@ -84,7 +84,7 @@ inline unsigned char kRobotoRegularTtf[] = {
 
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
-  engine/app.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
+  engine/app.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
   engine/systems.cpp engine/renderer.cpp engine/shadow.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
@@ -1032,3 +1032,17 @@ set_tests_properties(gui_builder_saved_file PROPERTIES PASS_REGULAR_EXPRESSION
   "<!-- The game's main menu.*<span class=\"accent\">awaits</span>.*title=\"Begin a new game\".*<button>Button</button>")
 set_tests_properties(gui_builder_save PROPERTIES FIXTURES_REQUIRED new_gui_copy FIXTURES_SETUP gui_saved)
 set_tests_properties(gui_builder_saved_file PROPERTIES FIXTURES_REQUIRED gui_saved)
+
+# Crash dialogs: --crash makes the editor fail on purpose; with KAST_NO_CRASH_DIALOGS=1 it must exit, not wait on a
+# "Debug Error!" dialog. Debug builds also report the failed assert on stderr (release compiles assert() out).
+add_test(NAME crash_abort_no_dialog
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" -DCRASH=abort
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/crash_exits_test.cmake")
+add_test(NAME crash_assert_no_dialog
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" -DCRASH=assert
+          "-DEXPECT_OUTPUT=$<$<CONFIG:Debug>:Assertion failed>"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/crash_exits_test.cmake")
+
+# Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.
+get_property(kast_tests DIRECTORY PROPERTY TESTS)
+set_property(TEST ${kast_tests} APPEND PROPERTY ENVIRONMENT KAST_NO_CRASH_DIALOGS=1)

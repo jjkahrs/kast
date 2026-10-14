@@ -1,6 +1,7 @@
 // kast_player: the prebuilt game client the editor's Build menu copies as <Project>.exe. Plays the project in the
 // game.pak next to it from its startScene, as editor Play mode does, through the scene's Main Camera.
 #include <app.h>
+#include <crash_dialogs.h>
 #include <files.h>
 #include <gui.h>
 #include <input.h>
@@ -126,6 +127,7 @@ bool loadGame(kast::Project& project, kast::Scene& scene, std::string& error)
 
 int main(int argc, char** argv)
 {
+    kast::disableCrashDialogsIfRequested();
     const std::optional<Options> options = parseArgs(argc, argv);
     if (!options)
         return 2;

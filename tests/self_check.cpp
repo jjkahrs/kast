@@ -13,6 +13,7 @@
 #include "recent_projects.h" // Project Manager list; links editor/recent_projects.cpp
 
 #include <components.h>
+#include <crash_dialogs.h>
 #include <event_bus.h>
 #include <gui_events.h>
 #include <files.h>
@@ -6266,6 +6267,7 @@ int benchPhysics()
 
 int main(int argc, char** argv)
 {
+    kast::disableCrashDialogsIfRequested();
     if (argc == 2 && std::string_view(argv[1]) == "--bench-physics")
         return benchPhysics();
     checkRotations();

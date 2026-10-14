@@ -10,6 +10,7 @@
 #include "viewport.h"
 
 #include <app.h>
+#include <crash_dialogs.h>
 #include <gui.h>
 #include <log.h>
 
@@ -21,7 +22,9 @@
 #include <imgui_internal.h> // DockBuilder API
 #include <imgui_stdlib.h>
 
+#include <cassert>
 #include <charconv>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <optional>
@@ -51,7 +54,7 @@ constexpr const char* kUsage =
     "[--open-menu Name] [--open-build-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
     "[--focus-panel Window] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--settings-file settings.json] [--open-preferences] "
-    "[--open-external path] [--drop-model path] [--log-fps] [--no-vsync] | "
+    "[--open-external path] [--drop-model path] [--log-fps] [--no-vsync] [--crash abort|assert] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --log-fps: once a second, the frame rate (vsync caps it at the display's refresh rate) and what a frame costs below
@@ -123,6 +126,7 @@ struct Options {
     std::string launcherOpen;       // open this project as the Project Manager would, without a window, and exit
     std::string dropModel;          // add this project model file as dropping it from the Assets panel does
     bool logFps = false;            // log frames per second, editor CPU and GPU frame times once a second
+    std::string crash;              // --crash abort|assert: fail on purpose, to test KAST_NO_CRASH_DIALOGS
     bool noVsync = false;           // present as fast as possible, to measure the frame rate past the display's
     std::vector<std::string> childArgs; // the flags after --, passed on to the editor the Project Manager starts
 
@@ -252,6 +256,9 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.logFps = true;
         } else if (arg == "--no-vsync") {
             options.noVsync = true;
+        } else if (arg == "--crash" && hasValue && (argv[i + 1] == std::string_view("abort") ||
+                                                    argv[i + 1] == std::string_view("assert"))) {
+            options.crash = argv[++i];
         } else if (arg == "--launcher") {
             options.launcher = true;
         } else if (arg == "--launcher-open" && hasValue) {
@@ -478,9 +485,15 @@ void drawConsole()
 
 int main(int argc, char** argv)
 {
+    kast::disableCrashDialogsIfRequested();
     const std::optional<Options> options = parseArgs(argc, argv);
     if (!options)
         return 2;
+    if (!options->crash.empty()) {
+        kast::log::info(std::format("--crash {}", options->crash));
+        assert(options->crash != "assert");
+        std::abort(); // also ends --crash assert in a release build, where assert() is compiled out
+    }
     const std::filesystem::path projectsFile =
         options->projectsFile.empty() ? defaultRecentFile() : std::filesystem::absolute(options->projectsFile);
     if (!options->editor()) {
