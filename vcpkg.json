@@ -17,6 +17,9 @@
     "stb",
     "assimp",
     "joltphysics",
-    "miniaudio"
+    "miniaudio",
+    "boost-asio",
+    "boost-beast",
+    "openssl"
   ]
 }

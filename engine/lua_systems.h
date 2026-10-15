@@ -3,6 +3,7 @@
 #include "audio.h"
 #include "event_bus.h"
 #include "input.h"
+#include "network.h"
 #include "physics.h"
 #include "scene.h"
 #include "state_machines.h"
@@ -31,23 +32,25 @@ public:
     LuaSystems(const LuaSystems&) = delete;
     LuaSystems& operator=(const LuaSystems&) = delete;
 
-    // Starts a session: resets the event bus (queue, subscriptions, history) and the state machines, loads the
-    // project's state machine definitions (fsms/) and every script in scene.systems (paths relative to projectRoot),
-    // calls each init, then enters gameMachines (project.kast "stateMachines") and every StateMachine entity.
-    // With no project every listed system is disabled ("no project"). scenePath is the scene's project-relative
-    // path, empty if unsaved or outside a project (kast.currentScene returns nil). Stops any running session first
+    // Starts a session: resets the event bus (queue, subscriptions, history) and the state machines, closes every
+    // network connection and request, loads the project's state machine definitions (fsms/) and every script in
+    // scene.systems (paths relative to projectRoot), calls each init, then enters gameMachines (project.kast
+    // "stateMachines") and every StateMachine entity. With no project every listed system is disabled ("no
+    // project"). scenePath is the scene's project-relative path, empty if unsaved or outside a project
+    // (kast.currentScene returns nil). Stops any running session first
     // (without its shutdowns: the old scene may be gone). scene and input must outlive the session; input may be
     // null (no keys down, no mouse motion).
     void start(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, const std::string& scenePath,
                const Input* input, std::vector<std::string> gameMachines = {});
-    // Reloads scripts and state machine definitions whose file changed, enters the machines of entities that gained
-    // StateMachine, then calls each enabled system's update(dt) in listed order, then drains the event bus. Then
-    // applies a scene switch queued by kast.loadScene: the old systems' shutdowns run, queued events are dropped, the
-    // loaded scene replaces scene (same object) and a new session starts for its systems (C++ subscriptions, the bus
-    // history and the game state machines' states are kept). Returns true if the scene was switched.
+    // Publishes the network results received since the last tick, reloads scripts and state machine definitions whose
+    // file changed, enters the machines of entities that gained StateMachine, then calls each enabled system's
+    // update(dt) in listed order, then drains the event bus. Then applies a scene switch queued by kast.loadScene:
+    // the old systems' shutdowns run, queued events are dropped, the loaded scene replaces scene (same object) and a
+    // new session starts for its systems (C++ subscriptions, the bus history, the game state machines' states and the
+    // network connections are kept). Returns true if the scene was switched.
     bool tick(float dt);
-    // Calls each enabled system's shutdown, ends the session, resets the state machines and drops queued events.
-    // Does nothing if none is running.
+    // Calls each enabled system's shutdown, ends the session, resets the state machines, drops queued events and
+    // closes every network connection and request. Does nothing if none is running.
     void stop();
 
     bool running() const { return state_ != nullptr; }
@@ -69,6 +72,11 @@ public:
     // with each scene. tick() frees ended voices.
     Audio& audio() { return audio_; }
     const Audio& audio() const { return audio_; }
+    // The session's connections and HTTP requests (kast.net.* from C++, the editor's Network panel): kept across
+    // kast.loadScene switches; start(), stop() and destruction close them all. tick() publishes their results on
+    // bus() before the systems' updates.
+    Network& network() { return network_; }
+    const Network& network() const { return network_; }
     StateMachines& fsm() { return fsm_; }
     const StateMachines& fsm() const { return fsm_; }
 
@@ -81,6 +89,7 @@ private:
     EventBus bus_; // declared before state_: the systems' subscriptions unsubscribe from it when state_ goes
     Physics physics_; // publishes on bus_
     Audio audio_;
+    Network network_;
     std::unique_ptr<State> state_;
     StateMachines fsm_{bus_}; // declared after state_, so its Lua callbacks are released while the Lua state lives
 };

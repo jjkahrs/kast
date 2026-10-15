@@ -1238,6 +1238,67 @@ void Panels::drawMixer(Document& doc, bool& open)
     ImGui::End();
 }
 
+void Panels::drawNetwork(const Document& doc, bool& open)
+{
+    if (!open)
+        return;
+    const float em = ImGui::GetFontSize();
+    ImGui::SetNextWindowSize(ImVec2(em * 26, em * 20), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Network", &open)) {
+        const kast::NetStatus status =
+            doc.play != PlayState::Stopped ? doc.lua.network().status() : kast::NetStatus{};
+        if (doc.play == PlayState::Stopped) {
+            ImGui::TextDisabled("Connections and requests show here during Play");
+        } else if (status.connections.empty() && status.requests.empty()) {
+            ImGui::TextDisabled("No connections or requests (kast.net)");
+        } else {
+            ImGui::SeparatorText(std::format("Connections {}", status.connections.size()).c_str());
+            for (const kast::NetConnectionStatus& conn : status.connections) {
+                ImGui::PushID(conn.name.c_str());
+                beginCard();
+                ImGui::TextUnformatted(conn.name.c_str());
+                ImGui::SameLine();
+                const ImVec4 stateColor = conn.state == kast::NetState::Open     ? kOkColor
+                                          : conn.state == kast::NetState::Closed ? kErrorColor
+                                                                                 : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+                ImGui::TextColored(stateColor, "%s", kast::netStateName(conn.state));
+                const char* type = conn.type == kast::NetType::Ws ? (conn.tls ? "wss" : "ws") : (conn.tls ? "tcp+tls" : "tcp");
+                ImGui::TextDisabled("%s", type);
+                ImGui::SameLine();
+                ImGui::TextUnformatted(conn.address.c_str());
+                ImGui::Text("In %llu B   Out %llu B", static_cast<unsigned long long>(conn.bytesIn),
+                            static_cast<unsigned long long>(conn.bytesOut));
+                if (!conn.lastError.empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+                    ImGui::TextWrapped("%s", conn.lastError.c_str());
+                    ImGui::PopStyleColor();
+                }
+                endCard();
+                ImGui::PopID();
+            }
+            ImGui::SeparatorText(std::format("HTTP requests in flight {}", status.requests.size()).c_str());
+            if (status.requests.empty())
+                ImGui::TextDisabled("None");
+            else if (ImGui::BeginTable("requests", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+                for (const char* column : {"Id", "Method", "URL"})
+                    ImGui::TableSetupColumn(column);
+                ImGui::TableHeadersRow();
+                for (const kast::NetRequestStatus& request : status.requests) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%llu", static_cast<unsigned long long>(request.id));
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(request.method.c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(request.url.c_str());
+                }
+                ImGui::EndTable();
+            }
+        }
+    }
+    ImGui::End();
+}
+
 void Panels::drawPhysics(Document& doc, bool& open)
 {
     if (!open)

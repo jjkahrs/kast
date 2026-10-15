@@ -111,7 +111,7 @@ struct Options {
     std::string assetsSelect; // select this Assets entry (project-relative) as a click does: a .mat shows in the Inspector
     std::optional<std::pair<Panels::AssetCreate, std::string>> assetsCreate; // run Assets Create in that folder
     bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
-    std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting", "Post Processing", "Physics" and "Mixer" also open it) to the front, for screenshots
+    std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting", "Post Processing", "Physics", "Mixer" and "Network" also open it) to the front, for screenshots
     std::string openGui;            // open this .rml in the GUI Builder (relative paths: to the project, else the cwd)
     std::string guiSelect;          // then select the element with this id in it
     std::optional<std::pair<int, int>> guiPreviewSize; // add this GUI Preview resolution and pick it
@@ -373,9 +373,10 @@ void buildDefaultLayout(ImGuiID dockspace)
 }
 
 // openMenu: a main menu to open this frame (--open-menu), or empty. openPreferences: set when File > Preferences... is
-// chosen. showLighting, showPostProcessing, showPhysics, showMixer: those panels' visibility, toggled in the Window menu.
+// chosen. showLighting, showPostProcessing, showPhysics, showMixer, showNetwork: those panels' visibility, toggled in the
+// Window menu.
 void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu, bool& openPreferences,
-                 bool& showLighting, bool& showPostProcessing, bool& showPhysics, bool& showMixer)
+                 bool& showLighting, bool& showPostProcessing, bool& showPhysics, bool& showMixer, bool& showNetwork)
 {
     if (ImGui::BeginMainMenuBar()) {
         if (!openMenu.empty())
@@ -420,6 +421,7 @@ void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu,
             ImGui::MenuItem("Post Processing", nullptr, &showPostProcessing);
             ImGui::MenuItem("Physics", nullptr, &showPhysics);
             ImGui::MenuItem("Mixer", nullptr, &showMixer);
+            ImGui::MenuItem("Network", nullptr, &showNetwork);
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -584,6 +586,7 @@ int main(int argc, char** argv)
     bool showPostProcessing = options->focusPanel == "Post Processing"; // the same
     bool showPhysics = options->focusPanel == "Physics";                // the same
     bool showMixer = options->focusPanel == "Mixer";                    // the same
+    bool showNetwork = options->focusPanel == "Network";                // the same
     if (!options->openExternal.empty())
         externalEditor.open(doc.project->root /
                             std::filesystem::path(reinterpret_cast<const char8_t*>(options->openExternal.c_str())));
@@ -647,7 +650,7 @@ int main(int argc, char** argv)
 
         bool openPreferences = options->openPreferences && frames.frame() == kAddComponentPopupFrame;
         drawMenuBar(files, doc, frames.frame() == kAddComponentPopupFrame ? options->openMenu : std::string(),
-                    openPreferences, showLighting, showPostProcessing, showPhysics, showMixer);
+                    openPreferences, showLighting, showPostProcessing, showPhysics, showMixer, showNetwork);
         const ImGuiID dockspace = ImGui::GetID("MainDockSpace");
         if (!ImGui::DockBuilderGetNode(dockspace)) // no saved layout in imgui.ini
             buildDefaultLayout(dockspace);
@@ -716,6 +719,7 @@ int main(int argc, char** argv)
         panels.drawPostProcessing(doc, showPostProcessing);
         panels.drawPhysics(doc, showPhysics);
         panels.drawMixer(doc, showMixer);
+        panels.drawNetwork(doc, showNetwork);
         drawGuiBuilder(guiBuilder);
         drawConsole(); // submitted after Assets, Events and State Machines so Console is the front tab on first run
         drawPreferences(externalEditor, preferencesDraft, openPreferences);

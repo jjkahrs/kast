@@ -43,7 +43,9 @@ file(STRINGS "${OUT}/game.pak" listed REGEX "project\\.kast")
 if(NOT listed)
   message(FATAL_ERROR "game.pak has no project.kast entry")
 endif()
-file(STRINGS "${OUT}/game.pak" dot_kast REGEX "\\.kast/")
+# An entry's path follows its u32 length, whose high bytes are 0, so a .kast/ path starts a string; the anchor skips
+# "project.kast" followed by an index offset byte that happens to be '/'.
+file(STRINGS "${OUT}/game.pak" dot_kast REGEX "^\\.kast/")
 if(dot_kast)
   message(FATAL_ERROR "game.pak includes the .kast/ folder: ${dot_kast}")
 endif()

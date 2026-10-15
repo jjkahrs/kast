@@ -62,6 +62,8 @@
 #include <thread>
 #include <type_traits>
 
+int netSelfCheck(); // tests/net_self_check.cpp: returns its failure count
+
 namespace {
 
 int g_failures = 0;
@@ -2608,7 +2610,8 @@ void checkBuildSettings()
               std::vector<std::string>{"audio.scene", "events.scene", "fsm.scene", "health.scene", "materials.scene",
                                        "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
-                                       "models_missing.scene", "physics.scene", "point_lights.scene",
+                                       "models_missing.scene", "net_a.scene", "net_b.scene", "physics.scene",
+                                       "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "scene_a.scene", "scene_b.scene",
                                        "shadows.scene", "ui.scene"},
           "tests/project lists its scenes, sorted");
@@ -2625,7 +2628,8 @@ void checkBuildSettings()
                                                           "health.scene", "levels/c.scene", "materials.scene",
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
-                                                          "models_material.scene", "models_missing.scene", "physics.scene",
+                                                          "models_material.scene", "models_missing.scene", "net_a.scene",
+                                                          "net_b.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "scene_a.scene", "scene_b.scene",
                                                           "shadows.scene", "ui.scene"},
@@ -6868,6 +6872,8 @@ int main(int argc, char** argv)
     kast::Audio::setDefaultOutput(kast::Audio::Output::Offline); // no sound from the checks; render() pulls the mix
     if (argc == 2 && std::string_view(argv[1]) == "--bench-physics")
         return benchPhysics();
+    if (argc == 2 && std::string_view(argv[1]) == "--net") // only the networking checks
+        return netSelfCheck() == 0 ? 0 : 1;
     checkRotations();
     checkPicking();
     checkMirroredReparent();
@@ -6963,6 +6969,7 @@ int main(int argc, char** argv)
     checkAudioSourceComponent();
     checkAudioProjectSettings();
     checkAudioPlaySession();
+    g_failures += netSelfCheck(); // tests/net_self_check.cpp
     checkMountedPak(); // last: the mounted pak hides the disk for the rest of the run
     removeTree(testRoot());
     std::error_code ec;

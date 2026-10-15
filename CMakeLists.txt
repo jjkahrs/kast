@@ -21,6 +21,10 @@ find_path(LUAJIT_INCLUDE_DIR luajit.h PATH_SUFFIXES luajit REQUIRED)
 find_library(LUAJIT_LIBRARY lua51 REQUIRED)
 # vcpkg's miniaudio port is header-only (miniaudio.h, no CMake config); engine/audio.cpp holds its implementation.
 find_path(MINIAUDIO_INCLUDE_DIR miniaudio.h REQUIRED)
+# networking (see engine/network.h): TCP/TLS, WebSocket and HTTP clients on Boost.Asio + Beast, TLS on OpenSSL
+find_package(boost_asio CONFIG REQUIRED)
+find_package(boost_beast CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 # Kast code only; vcpkg headers are SYSTEM includes, so their warnings are suppressed. /utf-8: sources and string
 # literals are UTF-8.
@@ -91,7 +95,7 @@ add_library(kast_engine STATIC
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
-  engine/audio.cpp ${KAST_ENGINE_SHADERS})
+  engine/audio.cpp engine/network.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
@@ -99,9 +103,12 @@ target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "$
 # keeps the binding's error message (with the script's file:line). The message reaches the Console, not sol2's stdout print.
 target_compile_definitions(kast_engine PRIVATE SOL_LUAJIT=1 SOL_ALL_SAFETIES_ON=1 SOL_EXCEPTIONS_SAFE_PROPAGATION=0 SOL_PRINT_ERRORS=0)
 target_compile_options(kast_engine PRIVATE ${KAST_COMPILE_OPTIONS})
+# Asio targets Windows 10 (and its templates need /bigobj); crypt32 reads the ROOT certificate store.
+set_source_files_properties(engine/network.cpp PROPERTIES COMPILE_DEFINITIONS "_WIN32_WINNT=0x0A00" COMPILE_OPTIONS /bigobj)
 target_link_libraries(kast_engine
   PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json RmlUi::RmlUi
-  PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 assimp::assimp Jolt::Jolt "${LUAJIT_LIBRARY}")
+  PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 assimp::assimp Jolt::Jolt "${LUAJIT_LIBRARY}"
+          Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto crypt32)
 
 # --- player: the prebuilt game client the editor's Build menu copies; engine only, no ImGui ---
 # A Windows-subsystem app (no console window); SDL_main.h supplies WinMain.
@@ -122,12 +129,20 @@ add_dependencies(kast_editor kast_player) # Build copies kast_player.exe from ne
 
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
-add_executable(kast_self_check tests/self_check.cpp editor/document.cpp editor/build.cpp editor/camera.cpp
+add_executable(kast_self_check tests/self_check.cpp tests/net_self_check.cpp tests/net_test_util.cpp editor/document.cpp editor/build.cpp editor/camera.cpp
   editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/external_editor.cpp "${KAST_MANIFEST}")
 target_include_directories(kast_self_check PRIVATE editor)
 target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
 target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS} /bigobj) # one big file of checks
-target_link_libraries(kast_self_check PRIVATE kast_engine SDL3::SDL3 imgui::imgui pugixml::pugixml shell32)
+target_link_libraries(kast_self_check PRIVATE kast_engine SDL3::SDL3 imgui::imgui pugixml::pugixml shell32
+                      Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto) # Boost, OpenSSL: the loopback net servers
+set_source_files_properties(tests/net_self_check.cpp tests/net_test_util.cpp tests/net_test_server.cpp
+                            PROPERTIES COMPILE_DEFINITIONS "_WIN32_WINNT=0x0A00" COMPILE_OPTIONS /bigobj)
+
+# --- net test server: the fixed-port loopback servers the tests/project net scenes talk to (see tests/net_test_server.cpp) ---
+add_executable(kast_net_test_server tests/net_test_server.cpp tests/net_test_util.cpp "${KAST_MANIFEST}")
+target_compile_options(kast_net_test_server PRIVATE ${KAST_COMPILE_OPTIONS})
+target_link_libraries(kast_net_test_server PRIVATE Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto nlohmann_json::nlohmann_json)
 
 # --- focus probe: runs a command and fails if its window takes the foreground (see tests/focus_probe.cpp) ---
 add_executable(kast_focus_probe tests/focus_probe.cpp)
@@ -896,6 +911,32 @@ add_test(NAME player_audio_no_focus
   COMMAND kast_focus_probe "${KAST_GAME_OUT}/audio/Audio Test.exe" --frames 120 --no-audio-device
   WORKING_DIRECTORY "${KAST_GAME_OUT}/audio")
 set_tests_properties(player_audio_no_focus PROPERTIES FIXTURES_REQUIRED game_audio_built TIMEOUT 90)
+# Networking: tests/project/net_a.scene opens TCP, TLS, ws and wss connections and two requests, then switches to
+# net_b.scene, which checks they carried over (scripts/net_a.lua, net_b.lua). kast_net_test_server runs the editor or
+# the built game with its fixed-port loopback servers up, so these tests share the net_test_ports lock.
+set(KAST_NET_SERVER "$<TARGET_FILE:kast_net_test_server>;--cert;${KAST_TEST_PROJECT}/certs/net_test_ca.pem;--key;${CMAKE_CURRENT_SOURCE_DIR}/tests/net_test_server_data/net_test_key.pem;--")
+set(KAST_NET_PASS "scripts/net_b.lua: PASS: 4 connections kept across kast.loadScene, 100/100 ticks, 2/2 responses")
+add_test(NAME net_play_scene_switch
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/net_play.png"
+          "-DWRAPPER=${KAST_NET_SERVER}" "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/net_a.scene --play --no-audio-device"
+          -DFOCUS_PANEL=Network -DFRAMES=300 "-DEXPECT_OUTPUT=${KAST_NET_PASS}" -DEXPECT_COUNT=1
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(net_play_scene_switch PROPERTIES RESOURCE_LOCK net_test_ports TIMEOUT 90)
+add_test(NAME net_panel_idle_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/net_panel_idle.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT}" -DFOCUS_PANEL=Network -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+kast_game_project(net "Net Test" net_a.scene FALSE "")
+add_test(NAME build_game_net
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/net"
+          "-DOUT=${KAST_GAME_OUT}/net" "-DEXE=Net Test.exe" -DEXPECT=0 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+set_tests_properties(build_game_net PROPERTIES FIXTURES_SETUP game_net_built)
+# PATH is System32 only (player_test.cmake), so this also fails if Build left out the OpenSSL DLLs.
+add_test(NAME player_net_scene_switch
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/net" "-DEXE=Net Test.exe" "-DWORK_DIR=${KAST_GAME_OUT}/net.run"
+          "-DWRAPPER=${KAST_NET_SERVER}" -DEXPECT=0 "-DEXPECT_OUTPUT=${KAST_NET_PASS}"
+          "-DEXTRA_ARGS=--frames 300 --no-audio-device" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_net_scene_switch PROPERTIES FIXTURES_REQUIRED game_net_built RESOURCE_LOCK net_test_ports
+                     TIMEOUT 90)
 add_test(NAME player_shadows_differs
   COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_shadows_off.png"
           "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_shadows.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")

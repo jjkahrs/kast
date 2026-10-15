@@ -5,7 +5,9 @@
 #include "log.h"
 #include "lua_sandbox.h"
 #include "lua_state_machines.h"
+#include "files.h"
 #include "material.h"
+#include "network.h"
 #include "project.h"
 #include "scene_io.h"
 
@@ -87,9 +89,9 @@ struct PendingScene {
 
 struct LuaSystems::State {
     State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, std::string scenePath, const Input* input,
-          EventBus& bus, StateMachines& fsm, Physics& physics, Audio& audio)
+          EventBus& bus, StateMachines& fsm, Physics& physics, Audio& audio, Network& network)
         : scene(scene), projectRoot(projectRoot), scenePath(std::move(scenePath)), input(input), bus(bus), fsm(fsm),
-          physics(physics), audio(audio)
+          physics(physics), audio(audio), network(network)
     {
     }
 
@@ -101,6 +103,7 @@ struct LuaSystems::State {
     StateMachines& fsm;
     Physics& physics;
     Audio& audio;
+    Network& network;
     std::unordered_map<entt::entity, AudioHandle> sources; // the last voice each AudioSource started (kast.audio.stopSource)
     MaterialLibrary materials; // shared .mat files, for kast.get/setMaterialProperty
     std::optional<PendingScene> pending; // last kast.loadScene call wins
@@ -111,6 +114,7 @@ struct LuaSystems::State {
     sol::table fsmApi;     // kast.fsm.*
     sol::table physicsApi; // kast.physics.*
     sol::table audioApi;   // kast.audio.*
+    sol::table netApi;     // kast.net.*
     DefinitionFiles fsmFiles; // state machine definition files at the last load, for hot reload
     std::string callbackPath; // the definition file whose enter/exit is running (log prefixes, event publisher)
     std::vector<System> systems;
@@ -143,6 +147,7 @@ struct LuaSystems::State {
     void bindFsmApi();
     void bindPhysicsApi();
     void bindAudioApi();
+    void bindNetApi();
     // Starts entity's AudioSource. Throws std::invalid_argument (see Audio::play).
     AudioHandle playSource(entt::entity entity);
     void playOnStart(); // every AudioSource with playOnStart; a bad clip logs an error and plays nothing
@@ -305,6 +310,7 @@ sol::environment LuaSystems::State::environment()
     kast["fsm"] = readOnly(fsmApi);
     kast["physics"] = readOnly(physicsApi);
     kast["audio"] = readOnly(audioApi);
+    kast["net"] = readOnly(netApi);
     env["kast"] = readOnly(kast);
     return env;
 }
@@ -708,6 +714,7 @@ void LuaSystems::State::bindApi()
     bindFsmApi();
     bindPhysicsApi();
     bindAudioApi();
+    bindNetApi();
 }
 
 // kast.fsm.*: thin wrappers over StateMachines, whose std::invalid_argument (a bad target) becomes a Lua error at the
@@ -1034,6 +1041,218 @@ void LuaSystems::State::bindAudioApi()
     });
 }
 
+void LuaSystems::State::bindNetApi()
+{
+    const auto absent = [](const sol::object& value) {
+        return value.get_type() == sol::type::lua_nil || value.get_type() == sol::type::none;
+    };
+    const auto string = [](lua_State* L, const std::string& function, const char* what, const sol::object& value) {
+        if (value.get_type() != sol::type::string)
+            raise(L, std::format("{}: {} must be a string, got {}", function, what, toString(L, value)));
+        return value.as<std::string>();
+    };
+    // Raises unless value is one of names; returns its index.
+    const auto choice = [string](lua_State* L, const std::string& function, const char* what, const sol::object& value,
+                                 std::initializer_list<const char*> names) {
+        const std::string text = string(L, function, what, value);
+        int i = 0;
+        std::string expected;
+        for (const char* name : names) {
+            if (text == name)
+                return i;
+            expected += std::format("{}'{}'", i++ ? ", " : "", name);
+        }
+        raise(L, std::format("{}: {} must be one of {}, got '{}'", function, what, expected, text));
+    };
+    const auto timeout = [](lua_State* L, const std::string& function, const sol::object& value) {
+        const double seconds = value.get_type() == sol::type::number ? value.as<double>() : -1.0;
+        if (!(seconds > 0.0 && seconds <= 86400.0))
+            raise(L, std::format("{}: timeout must be a number of seconds in (0, 86400], got {}", function,
+                                 toString(L, value)));
+        return std::chrono::milliseconds(std::max<int64_t>(1, std::llround(seconds * 1000.0)));
+    };
+    const auto caPem = [this, string](lua_State* L, const std::string& function, const sol::object& value) {
+        const std::string path = string(L, function, "caFile", value);
+        if (!projectRoot)
+            raise(L, std::format("{}: caFile needs an active project", function));
+        std::string error, pem;
+        const std::optional<std::filesystem::path> file = resolveProjectPath(*projectRoot, path, error);
+        if (!file)
+            raise(L, std::format("{}: caFile: {}", function, error));
+        if (!readFile(*file, pem))
+            raise(L, std::format("{}: caFile '{}' can't be read", function, path));
+        return pem;
+    };
+    // Lua data as the bytes to send: the reverse of what a receive under encoding gives.
+    const auto outgoing = [string](lua_State* L, const std::string& function, NetEncoding encoding,
+                                   const sol::object& data) {
+        if (encoding == NetEncoding::Json) {
+            nlohmann::json json;
+            if (std::string error; !luaToJson(data, json, error))
+                raise(L, std::format("{}: {}", function, error));
+            return json.dump();
+        }
+        std::string text = string(L, function, "data", data);
+        if (encoding == NetEncoding::Base64) {
+            std::optional<std::string> bytes = base64Decode(text);
+            if (!bytes)
+                raise(L, std::format("{}: data is not valid base64 (encoding 'base64')", function));
+            return std::move(*bytes);
+        }
+        if (!isUtf8(text))
+            raise(L, std::format("{}: data is not valid UTF-8 (encoding 'text'; use 'base64' for bytes)", function));
+        return text;
+    };
+    // Passes each key of options (a table) to set(key, value); unknown keys raise.
+    const auto forEachOption = [](lua_State* L, const std::string& function, const sol::object& options,
+                                  std::initializer_list<const char*> allowed, auto&& set) {
+        if (options.get_type() != sol::type::table)
+            raise(L, std::format("{}: expected an options table, got {}", function, toString(L, options)));
+        for (const auto& [key, value] : options.as<sol::table>()) {
+            const std::string name = key.get_type() == sol::type::string ? key.as<std::string>() : "";
+            if (std::ranges::none_of(allowed, [&](const char* a) { return name == a; }))
+                raise(L, std::format("{}: unknown option {}", function, toString(L, key)));
+            set(name, value);
+        }
+    };
+    // Runs body; a Network std::invalid_argument raises at the calling line.
+    const auto guarded = [](lua_State* L, const std::string& function, auto&& body) {
+        try {
+            return body();
+        } catch (const std::invalid_argument& e) {
+            raise(L, std::format("{}: {}", function, e.what()));
+        }
+    };
+
+    const auto send = [this, outgoing, guarded](lua_State* L, const std::string& conn, const sol::object& data) {
+        const std::string fn = "kast.net.send";
+        const std::optional<NetEncoding> encoding = network.encoding(conn);
+        if (!encoding)
+            raise(L, std::format("{}: no connection named '{}'", fn, conn));
+        std::string bytes = outgoing(L, fn, *encoding, data);
+        guarded(L, fn, [&] { network.send(conn, std::move(bytes)); });
+    };
+    // A read-only {name, send, close, state} table. The methods take the handle first (h:send(data)) and act by name,
+    // so a handle from an earlier scene acts on whatever connection has that name now.
+    const auto handle = [this, send](const std::string& name) {
+        sol::table h = lua.create_table();
+        h["name"] = name;
+        h.set_function("send", [send, name](sol::this_state L, const sol::object&, const sol::object& data) {
+            send(L, name, data);
+        });
+        h.set_function("close", [this, name](const sol::object&) { network.close(name); });
+        h.set_function("state", [this, name](const sol::object&) {
+            return std::string(netStateName(network.state(name).value_or(NetState::Closed)));
+        });
+        return readOnly(h);
+    };
+
+    netApi = lua.create_table();
+    netApi.set_function("open", [=, this](sol::this_state L, const sol::object& opts) {
+        const std::string fn = "kast.net.open";
+        NetOpenOptions options;
+        std::vector<std::string> given;
+        forEachOption(L, fn, opts,
+                      {"name", "type", "host", "port", "url", "tls", "caFile", "encoding", "framing", "timeout"},
+                      [&](const std::string& key, const sol::object& value) {
+                          given.push_back(key);
+                          if (key == "name") {
+                              options.name = string(L, fn, "name", value);
+                          } else if (key == "type") {
+                              options.type = static_cast<NetType>(choice(L, fn, "type", value, {"tcp", "ws"}));
+                          } else if (key == "host") {
+                              options.host = string(L, fn, "host", value);
+                          } else if (key == "port") {
+                              const double port = value.get_type() == sol::type::number ? value.as<double>() : 0.0;
+                              if (!(port >= 1.0 && port <= 65535.0 && port == std::floor(port)))
+                                  raise(L, std::format("{}: port must be an integer 1..65535, got {}", fn,
+                                                       toString(L, value)));
+                              options.port = static_cast<uint16_t>(port);
+                          } else if (key == "url") {
+                              options.url = string(L, fn, "url", value);
+                          } else if (key == "tls") {
+                              if (value.get_type() != sol::type::boolean)
+                                  raise(L, std::format("{}: tls must be true or false, got {}", fn, toString(L, value)));
+                              options.tls = value.as<bool>();
+                          } else if (key == "caFile") {
+                              options.caPem = caPem(L, fn, value);
+                          } else if (key == "encoding") {
+                              options.encoding =
+                                  static_cast<NetEncoding>(choice(L, fn, "encoding", value, {"text", "base64", "json"}));
+                          } else if (key == "framing") {
+                              options.framing =
+                                  static_cast<NetFraming>(choice(L, fn, "framing", value, {"raw", "u16le", "line"}));
+                          } else {
+                              options.timeout = timeout(L, fn, value);
+                          }
+                      });
+        const auto has = [&](const char* key) { return std::ranges::find(given, key) != given.end(); };
+        if (!has("type"))
+            raise(L, std::format("{}: type must be 'tcp' or 'ws'", fn));
+        const bool tcp = options.type == NetType::Tcp;
+        for (const char* key : {"url", "host", "port", "tls", "framing"})
+            if (has(key) && tcp == (std::string_view(key) == "url"))
+                raise(L, std::format("{}: {} doesn't apply to type '{}'", fn, key, tcp ? "tcp" : "ws"));
+        const std::string name = options.name;
+        guarded(L, fn, [&] { network.open(std::move(options)); });
+        return handle(name);
+    });
+    netApi.set_function("get", [this, string, handle](sol::this_state L, const sol::object& name) -> sol::object {
+        const std::string conn = string(L, "kast.net.get", "name", name);
+        if (!network.has(conn))
+            return sol::lua_nil;
+        return handle(conn);
+    });
+    netApi.set_function("close", [this, string](sol::this_state L, const sol::object& name) {
+        network.close(string(L, "kast.net.close", "name", name));
+    });
+    netApi.set_function("request", [=, this](sol::this_state L, const sol::object& opts) {
+        const std::string fn = "kast.net.request";
+        NetRequestOptions options;
+        std::optional<sol::object> body;
+        forEachOption(L, fn, opts, {"method", "url", "headers", "body", "timeout", "encoding", "caFile"},
+                      [&](const std::string& key, const sol::object& value) {
+                          if (key == "method") {
+                              options.method = string(L, fn, "method", value);
+                          } else if (key == "url") {
+                              options.url = string(L, fn, "url", value);
+                          } else if (key == "headers") {
+                              if (value.get_type() != sol::type::table)
+                                  raise(L, std::format("{}: headers must be a table of strings, got {}", fn,
+                                                       toString(L, value)));
+                              for (const auto& [k, v] : value.as<sol::table>()) {
+                                  if (k.get_type() != sol::type::string || v.get_type() != sol::type::string)
+                                      raise(L, std::format("{}: headers must map strings to strings, got {} = {}", fn,
+                                                           toString(L, k), toString(L, v)));
+                                  options.headers.emplace_back(k.as<std::string>(), v.as<std::string>());
+                              }
+                          } else if (key == "body") {
+                              body = value;
+                          } else if (key == "timeout") {
+                              options.timeout = timeout(L, fn, value);
+                          } else if (key == "encoding") {
+                              options.encoding =
+                                  static_cast<NetEncoding>(choice(L, fn, "encoding", value, {"text", "base64", "json"}));
+                          } else {
+                              options.caPem = caPem(L, fn, value);
+                          }
+                      });
+        if (body && !absent(*body))
+            options.body = outgoing(L, fn, options.encoding, *body);
+        return static_cast<double>(guarded(L, fn, [&] { return network.request(std::move(options)); }));
+    });
+    netApi.set_function("base64Encode", [string](sol::this_state L, const sol::object& bytes) {
+        return base64Encode(string(L, "kast.net.base64Encode", "bytes", bytes));
+    });
+    netApi.set_function("base64Decode", [string](sol::this_state L, const sol::object& text) {
+        std::optional<std::string> bytes = base64Decode(string(L, "kast.net.base64Decode", "text", text));
+        if (!bytes)
+            raise(L, "kast.net.base64Decode: not valid base64");
+        return std::move(*bytes);
+    });
+}
+
+
 LuaSystems::LuaSystems() = default;
 LuaSystems::~LuaSystems() = default;
 
@@ -1043,6 +1262,7 @@ void LuaSystems::start(Scene& scene, const std::optional<std::filesystem::path>&
     fsm_.reset(std::move(gameMachines)); // its Lua callbacks go before the Lua state
     state_.reset(); // its subscriptions go first
     bus_.reset();
+    network_.stop();
     audio_.start(projectRoot);
     launch(scene, projectRoot, scenePath, input);
 }
@@ -1054,7 +1274,7 @@ void LuaSystems::launch(Scene& scene, const std::optional<std::filesystem::path>
     state_.reset(); // the old Lua state goes before the new one is built
     models().setRoot(projectRoot.value_or(std::filesystem::path())); // kast.*Animation* load models before any render
     physics_.start(scene, bus_); // before the inits, which may query it
-    state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_, physics_, audio_);
+    state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_, physics_, audio_, network_);
     state_->playOnStart(); // before the inits, which may stop them
     state_->init(scene.systems);
 }
@@ -1064,6 +1284,10 @@ bool LuaSystems::tick(float dt)
     if (!state_)
         return false;
     audio_.update();
+    // Network results wait in network_ (not the bus queue a scene switch drops), so a switch's new systems, whose
+    // inits ran at the end of the previous tick, get everything received since.
+    for (NetEvent& event : network_.poll())
+        bus_.publish(std::move(event.name), std::move(event.payload), "kast.net");
     state_->tick(dt);
     if (!state_->pending)
         return false;
@@ -1094,6 +1318,7 @@ void LuaSystems::stop()
         return;
     endSession();
     fsm_.reset();
+    network_.stop();
 }
 
 std::vector<LuaSystemStatus> LuaSystems::status() const

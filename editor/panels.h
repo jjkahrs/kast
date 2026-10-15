@@ -62,6 +62,9 @@ public:
     // The project's default bus volumes and mutes, saved in project.kast (Window > Mixer); during Play also the live
     // voices. Draws nothing while open is false.
     void drawMixer(Document& doc, bool& open);
+    // Read-only, during Play: the session's kast.net connections (a card each: type, address, state, bytes, last
+    // error) and in-flight HTTP requests (Window > Network). Draws nothing while open is false.
+    void drawNetwork(const Document& doc, bool& open);
     // Rescans the project's files for the Assets panel (main's poll). drawAssets also rescans when the project changes.
     void refreshAssets(const Document& doc);
     // Double-clicked .rml files open in gui, .lua/.rcss/.json files in editor; renames and moves of gui's open files
