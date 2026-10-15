@@ -39,3 +39,12 @@ compile_commands.json
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Node / services
+node_modules/
+dist/
+coverage/
+*.log
+.env
+!.env.example
+services/auth/keys/
