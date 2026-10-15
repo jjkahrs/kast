@@ -1,0 +1,60 @@
+// Shared bot plumbing: options, test accounts, and the connect -> login -> character -> enter-world flow.
+#pragma once
+#include "auth_client.h"
+#include "world_client.h"
+
+#include <cstdio>
+#include <map>
+#include <memory>
+#include <string>
+
+namespace kast::bot {
+
+struct Options {
+    AuthEndpoints auth;
+    std::string host = "localhost";
+    uint16_t port = 7777;
+    std::string caFile;           // server certificate / CA to trust
+    std::string runId = "run";    // namespaces the bot accounts of one run
+    std::string mode = "scenario";
+    std::string scenario;
+    std::string behaviour = "wander";
+    int count = 1;
+    int durationSec = 60;
+    int threads = 4;
+    int connectRatePerSec = 50;
+    std::string authKeyFile;      // auth's private key (test only): mints an expired token for scenario 8
+    std::string expectPos;        // "x,y,z" for restart-verify
+    std::map<std::string, std::string> extra;
+};
+
+Account bot_account(const Options& o, const std::string& tag);
+
+asio::ssl::context make_client_tls(const Options& o);
+
+// Connect + TLS + Hello + Auth. nullptr on failure (error says why).
+asio::awaitable<std::shared_ptr<WorldClient>> connect_and_login(const Options& o, asio::ssl::context& tls,
+                                                                const std::string& token, std::string& error);
+// Lists characters, creates `name` if there are none, enters the first one.
+asio::awaitable<bool> enter_world(WorldClient& c, const std::string& name, proto::EnterWorldOk& out, std::string& error);
+
+// Walks in a straight line at `speed` m/s, one Move every 100 ms. Returns the final position.
+asio::awaitable<proto::Vec3> walk(WorldClient& c, proto::Vec3 from, float dx, float dz, float speed = 9.0f);
+// Collects every message that arrives within `window`.
+asio::awaitable<std::vector<proto::Message>> drain(WorldClient& c, Millis window);
+asio::awaitable<void> sleep_for(Millis d);
+
+std::string random_name(size_t len = 12);
+float distance_xz(const proto::Vec3& a, const proto::Vec3& b);
+
+// Prints "  ok: ..." / "  FAIL: ..." and remembers failures.
+struct Checker {
+    bool ok = true;
+    void expect(bool cond, const std::string& what) {
+        std::printf("  %s: %s\n", cond ? "ok" : "FAIL", what.c_str());
+        std::fflush(stdout);
+        ok = ok && cond;
+    }
+};
+
+} // namespace kast::bot

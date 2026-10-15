@@ -1,0 +1,116 @@
+# World test stack: world + real auth (built from ../auth, unmodified) + one MySQL 8.4 + Mailpit.
+# Requires .env (cp .env.example .env). Host ports differ from the auth stack so both can run side by side.
+name: kast-world
+
+services:
+  world:
+    build: .
+    image: kast-world:dev
+    env_file: .env
+    environment:
+      # Inside the compose network these replace the host-side values from .env.
+      WORLD_PORT: 7777
+      DB_HOST: mysql
+      DB_PORT: 3306
+      AUTH_JWKS_URL: http://auth:3000/.well-known/jwks.json
+      TLS_DEV_CERT_DIR: /app/certs
+      MIGRATIONS_DIR: /app/migrations
+    ports:
+      - "${WORLD_HOST_PORT:-7777}:7777"
+    volumes:
+      - world-certs:/app/certs
+    depends_on:
+      mysql:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+    healthcheck:
+      # TCP accept only; the server drops the half-open probe after its failed TLS handshake.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7777"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    stop_grace_period: 15s # SIGTERM -> graceful shutdown (SHUTDOWN_TIMEOUT_MS) before Docker's SIGKILL
+    restart: unless-stopped
+
+  auth:
+    build: ../auth
+    environment:
+      PORT: 3000
+      # TEST ONLY: bots send a unique X-Forwarded-For each so auth's per-IP rate limits apply per bot.
+      TRUST_PROXY: "true"
+      APP_BASE_URL: http://localhost:${AUTH_HOST_PORT:-3100}
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: ${AUTH_DB_USER:-kast_auth}
+      DB_PASSWORD: ${AUTH_DB_PASSWORD:?set AUTH_DB_PASSWORD in .env}
+      DB_NAME: ${AUTH_DB_NAME:-kast_auth}
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_SECURE: "false"
+      MAIL_FROM: Kast <no-reply@kast.local>
+      JWT_ISSUER: ${JWT_ISSUER:-kast-auth}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-kast}
+      KEYS_DIR: /app/keys
+    ports:
+      - "${AUTH_HOST_PORT:-3100}:3000"
+    volumes:
+      - auth-keys:/app/keys
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      # The image creates auth's database and user, exactly what the auth container expects.
+      MYSQL_DATABASE: ${AUTH_DB_NAME:-kast_auth}
+      MYSQL_USER: ${AUTH_DB_USER:-kast_auth}
+      MYSQL_PASSWORD: ${AUTH_DB_PASSWORD:?set AUTH_DB_PASSWORD in .env}
+      # Read by docker/mysql-init.sh
+      WORLD_DB_NAME: ${DB_NAME:?set DB_NAME in .env}
+      WORLD_TEST_DB_NAME: ${TEST_DB_NAME:-kast_world_test}
+      WORLD_DB_USER: ${DB_USER:?set DB_USER in .env}
+      WORLD_DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    ports:
+      - "${MYSQL_HOST_PORT:-3307}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/mysql-init.sh:/docker-entrypoint-initdb.d/10-world.sh:ro
+    healthcheck:
+      # TCP ping fails during first-run init (server runs with skip-networking), so healthy means really ready.
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:v1.31.6
+    ports:
+      - "${MAILPIT_HOST_PORT:-8026}:8025"
+    restart: unless-stopped
+
+  # Test client, run on demand: docker compose run --rm bot --scenario auth
+  bot:
+    image: kast-world:dev
+    profiles: ["tools"]
+    entrypoint: ["./kast_bot", "--auth-url", "http://auth:3000", "--mailpit-url", "http://mailpit:8025",
+                 "--host", "world", "--port", "7777", "--ca", "/certs/server.crt"]
+    volumes:
+      - world-certs:/certs:ro
+      - auth-keys:/auth-keys:ro # test only: scenario 8 mints an expired token with auth's key
+    depends_on:
+      world:
+        condition: service_healthy
+
+volumes:
+  mysql-data:
+  auth-keys:
+  world-certs:
