@@ -51,4 +51,12 @@ Kast is a game engine focused on making it easy to build MMORPGs.
 * Authentication Server
 * World Server
 
+# Editor GUI Color Palette
+#ffaa00 Buttons, Tabs, and Header background
+#ffcc00 Hilight
+#ff9900 Darken
 
+#000000 Background
+#313131 Card background
+#454545 Text field
+#818181 Text field hilight

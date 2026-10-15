@@ -1,0 +1,14 @@
+{
+  "version": 4,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Ghost Holder",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "Ghost": { "hp": 1, "tags": ["spooky"] }
+      }
+    }
+  ]
+}

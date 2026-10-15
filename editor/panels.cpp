@@ -369,8 +369,8 @@ void Panels::drawInspector(Document& doc)
                     continue;
                 ImGui::PushID(type.name()); // field labels repeat across components
                 bool keep = true;           // the header's x button (removable types only) clears it
-                if (ImGui::CollapsingHeader(type.displayName(), type.removable() ? &keep : nullptr,
-                                            ImGuiTreeNodeFlags_DefaultOpen)) {
+                beginCard();
+                if (cardHeader(type.displayName(), type.removable() ? &keep : nullptr, ImGuiTreeNodeFlags_DefaultOpen)) {
                     const char* conflict = type.meta() && type.meta() == entt::resolve<kast::CharacterController>()
                                                ? kast::physicsConflict(registry, entity)
                                                : nullptr;
@@ -413,6 +413,7 @@ void Panels::drawInspector(Document& doc)
                             drawAnimatorPreview(doc, entity);
                     }
                 }
+                endCard();
                 if (!keep)
                     removed = type;
                 ImGui::PopID();
@@ -429,10 +430,12 @@ void Panels::drawInspector(Document& doc)
                     ImGui::PushID(("missing/" + name).c_str());
                     bool keep = true;
                     const std::string title = "Missing: " + name;
-                    if (ImGui::CollapsingHeader(title.c_str(), &keep, ImGuiTreeNodeFlags_DefaultOpen)) {
+                    beginCard();
+                    if (cardHeader(title.c_str(), &keep, ImGuiTreeNodeFlags_DefaultOpen)) {
                         ImGui::TextDisabled("No valid definition: kept as-is and saved unchanged.");
                         ImGui::TextWrapped("%s", value.dump(2).c_str());
                     }
+                    endCard();
                     if (!keep)
                         removedMissing = name;
                     ImGui::PopID();
@@ -830,12 +833,14 @@ void Panels::drawMaterialInspector(Document& doc)
         material_.error.clear();
         kast::loadMaterial(file, material_.value, material_.error);
     }
+    beginCard();
     ImGui::TextUnformatted(inspectedMaterial_.c_str());
     ImGui::Separator();
     if (!material_.error.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
         ImGui::TextWrapped("Cannot edit: %s (it renders magenta until the file is fixed)", material_.error.c_str());
         ImGui::PopStyleColor();
+        endCard();
         return;
     }
 
@@ -865,6 +870,7 @@ void Panels::drawMaterialInspector(Document& doc)
     changed = ImGui::SliderFloat("Alpha Cutoff", &m.alphaCutoff, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp) || changed;
     ImGui::EndDisabled();
     ImGui::PopItemWidth();
+    endCard();
     if (!changed)
         return;
     // ponytail: saves on every changed frame while dragging (a few hundred bytes); debounce if it ever shows.
@@ -1129,13 +1135,16 @@ void Panels::drawPostProcessing(Document& doc, bool& open)
         kast::ScenePostProcessing& post = doc.scene.postProcessing;
         constexpr ImGuiSliderFlags kClamp = ImGuiSliderFlags_AlwaysClamp;
         bool changed = false;
-        // A collapsing header per effect with its enable checkbox; the controls show while it's open.
-        const auto section = [&](const char* name, bool& enabled) {
+        // A card per effect: a collapsing header and its enable checkbox; the controls (body) show while it's open.
+        const auto section = [&](const char* name, bool& enabled, const auto& body) {
+            beginCard();
             ImGui::PushID(name);
-            const bool expanded = ImGui::CollapsingHeader(name, ImGuiTreeNodeFlags_DefaultOpen);
+            const bool expanded = cardHeader(name, nullptr, ImGuiTreeNodeFlags_DefaultOpen);
             changed |= ImGui::Checkbox("Enabled", &enabled);
             ImGui::PopID();
-            return expanded;
+            if (expanded)
+                body();
+            endCard();
         };
         const auto color = [&](const char* label, bx::Vec3& value) {
             if (ImGui::ColorEdit3(label, &value.x)) {
@@ -1144,45 +1153,45 @@ void Panels::drawPostProcessing(Document& doc, bool& open)
             }
         };
         ImGui::PushID("tonemapping");
-        if (section("Tonemapping", post.tonemapping.enabled)) {
+        section("Tonemapping", post.tonemapping.enabled, [&] {
             changed |= ImGui::SliderFloat("Exposure (EV)", &post.tonemapping.exposure, -10.0f, 10.0f, "%.2f", kClamp);
             int op = static_cast<int>(post.tonemapping.op);
             if (ImGui::Combo("Operator", &op, "None\0ACES\0")) {
                 post.tonemapping.op = static_cast<kast::Tonemap>(op);
                 changed = true;
             }
-        }
+        });
         ImGui::PopID();
         ImGui::PushID("bloom");
-        if (section("Bloom", post.bloom.enabled)) {
+        section("Bloom", post.bloom.enabled, [&] {
             changed |= ImGui::DragFloat("Threshold", &post.bloom.threshold, 0.01f, 0.0f, FLT_MAX, "%.2f", kClamp);
             changed |= ImGui::DragFloat("Intensity", &post.bloom.intensity, 0.01f, 0.0f, FLT_MAX, "%.2f", kClamp);
             changed |= ImGui::SliderFloat("Radius", &post.bloom.radius, 0.0f, 1.0f, "%.2f", kClamp);
-        }
+        });
         ImGui::PopID();
         ImGui::PushID("grading");
-        if (section("Color Grading", post.colorGrading.enabled)) {
+        section("Color Grading", post.colorGrading.enabled, [&] {
             changed |= ImGui::SliderFloat("Contrast", &post.colorGrading.contrast, 0.0f, 2.0f, "%.2f", kClamp);
             changed |= ImGui::SliderFloat("Saturation", &post.colorGrading.saturation, 0.0f, 2.0f, "%.2f", kClamp);
             color("Color Filter", post.colorGrading.colorFilter);
             changed |= ImGui::SliderFloat("Temperature", &post.colorGrading.temperature, -1.0f, 1.0f, "%.2f", kClamp);
-        }
+        });
         ImGui::PopID();
         ImGui::PushID("vignette");
-        if (section("Vignette", post.vignette.enabled)) {
+        section("Vignette", post.vignette.enabled, [&] {
             changed |= ImGui::SliderFloat("Intensity", &post.vignette.intensity, 0.0f, 1.0f, "%.2f", kClamp);
             changed |= ImGui::SliderFloat("Smoothness", &post.vignette.smoothness, 0.01f, 1.0f, "%.2f", kClamp);
-        }
+        });
         ImGui::PopID();
         ImGui::PushID("fxaa");
-        section("FXAA", post.fxaa.enabled);
+        section("FXAA", post.fxaa.enabled, [] {});
         ImGui::PopID();
         ImGui::PushID("fog");
-        if (section("Fog", post.fog.enabled)) {
+        section("Fog", post.fog.enabled, [&] {
             color("Color", post.fog.color);
             changed |= ImGui::DragFloat("Density", &post.fog.density, 0.001f, 0.0f, FLT_MAX, "%.3f", kClamp);
             changed |= ImGui::DragFloat("Start", &post.fog.start, 0.1f, 0.0f, FLT_MAX, "%.1f m", kClamp);
-        }
+        });
         ImGui::PopID();
         if (changed)
             markDirty(doc);

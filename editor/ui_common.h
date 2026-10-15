@@ -17,6 +17,11 @@ constexpr float kMaxUiScale = 3.0f;
 float clampUiScale(float scale);
 // The embedded Roboto font at the base size (ImGui default font if it fails to load).
 void loadFont();
+// The editor palette (see CLAUDE.md) on top of ImGui's dark style. Call before UiScale::init.
+void applyTheme();
+// ImGui has one text color, and white text on the accent fills (buttons, tabs, headers, selection) is unreadable: turns
+// text drawn over an accent fill black. Call after ImGui::Render, before rendering the draw data.
+void darkenTextOnAccent(ImDrawData* drawData);
 // Explains why the last (disabled) item is disabled, if it is.
 void disabledTooltip(const char* reason);
 
@@ -24,6 +29,13 @@ constexpr const char* kAssetPayload = "KAST_ASSET"; // drag and drop from the As
 // The last item as a drop target for a model file (.glb/.gltf/.fbx/.obj) dragged from the Assets panel: true and its
 // path once dropped. Other assets are not accepted.
 bool acceptModelDrop(std::string& path);
+
+// A card: a rounded, tinted, bordered panel behind everything drawn between beginCard and endCard, spanning the window's
+// width, with a gap below it. Cards do not nest. Its edges line up with collapsing headers, which cardHeader draws with
+// corners rounded to match.
+void beginCard();
+void endCard();
+bool cardHeader(const char* label, bool* open, ImGuiTreeNodeFlags flags = 0);
 
 // Scales ImGui text and style metrics by the window's display scale, or a fixed --ui-scale override.
 class UiScale {

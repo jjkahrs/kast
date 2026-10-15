@@ -584,7 +584,7 @@ int main(int argc, char** argv)
     hooks.init = [&](SDL_Window* window) {
         ImGui::CreateContext();
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-        ImGui::StyleColorsDark();
+        applyTheme();
         loadFont();
         uiScale.init(window);
         if (!ImGui_ImplSDL3_InitForOther(window)) {
@@ -719,6 +719,7 @@ int main(int argc, char** argv)
 
         ImGui::Render();
         bgfx::touch(kImGuiView);
+        darkenTextOnAccent(ImGui::GetDrawData());
         imgui_bgfx::render(ImGui::GetDrawData());
         frames.endFrame();
         if (options->logFps)

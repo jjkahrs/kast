@@ -379,7 +379,7 @@ int runLauncher(const LauncherOptions& options)
     hooks.init = [&](SDL_Window* window) {
         ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr; // one fixed full-window layout: nothing to remember
-        ImGui::StyleColorsDark();
+        applyTheme();
         loadFont();
         uiScale.init(window);
         if (!ImGui_ImplSDL3_InitForOther(window)) {
@@ -402,6 +402,7 @@ int runLauncher(const LauncherOptions& options)
         launcher.draw();
         ImGui::Render();
         bgfx::touch(kImGuiView);
+        darkenTextOnAccent(ImGui::GetDrawData());
         imgui_bgfx::render(ImGui::GetDrawData());
         frames.endFrame();
     };

@@ -18,7 +18,7 @@ namespace {
 
 constexpr float kFlySpeed = 5.0f; // meters per second
 constexpr float kFastMultiplier = 4.0f;
-constexpr ImU32 kPlayTint = IM_COL32(255, 160, 40, 255); // Scene panel border and active play button while playing
+constexpr ImU32 kPlayTint = IM_COL32(204, 85, 0, 255); // darker than the accent: Scene panel border and active play button while playing
 constexpr float kCameraPickHalfSize = 0.25f; // cameras have no mesh: click within this box around the origin
 
 // The entity's local mesh bounds: its primitive's, its model's (bind pose; the error cube's if the model doesn't load),
