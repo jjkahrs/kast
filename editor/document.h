@@ -135,6 +135,9 @@ bool isGlobalStateMachine(const Document& doc, const std::string& name);
 // Adds name to, or removes it from, project.kast "stateMachines" and saves it (other keys and their order kept). False
 // + error (nothing changed) if stateMachineEditBlocker or the write fails.
 bool setGlobalStateMachine(Document& doc, const std::string& name, bool global, std::string& error);
+// Sets the project's default level for bus and saves project.kast (Mixer panel). Needs a project; false + error if
+// there is none or the save fails (the project is unchanged).
+bool setBusDefault(Document& doc, kast::AudioBus bus, kast::BusMix level, std::string& error);
 
 enum class ObjectKind { Empty, Cube, Plane, Sphere, Model, DirectionalLight, PointLight, Camera };
 constexpr ObjectKind kObjectKinds[] = {ObjectKind::Empty, ObjectKind::Cube, ObjectKind::Plane, ObjectKind::Sphere,

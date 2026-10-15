@@ -1,0 +1,43 @@
+{
+  "version": 4,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Music",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "AudioSource": { "clip": "sounds/wave-demo.wav", "bus": "Music", "volume": 0.6, "loop": true, "playOnStart": true }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Jukebox",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0.5, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "" },
+        "AudioSource": { "clip": "sounds/tone.wav", "bus": "UI", "volume": 0.5, "loop": false, "playOnStart": false }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Directional Light",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 4, 0], "rotation": [-0.408218, -0.23457, -0.109382, 0.875426], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.95, 0.9], "intensity": 1 }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 2, 5], "rotation": [-0.173648, 0, 0, 0.984808], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    }
+  ],
+  "systems": ["scripts/audio_sfx.lua"]
+}

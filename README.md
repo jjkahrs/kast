@@ -98,7 +98,7 @@ build\release\kast_editor.exe
 | `--build <dir>` | With `--project`: build that project's game into `<dir>` (see [Build](#build)) and exit without opening a window or any dialog. Exit 0 on success, 1 on failure (no `--project`, invalid `startScene`, ...). Does not remember the folder. |
 | `--open-menu <Name>` | Open that main menu (e.g. `Build`) after the first 10 frames, for screenshots. |
 | `--open-build-settings` | With `--project`: open the Build > Build Settings modal after the first 10 frames, for screenshots. Writes nothing by itself. Without `--project` it is an invalid argument. |
-| `--focus-panel <Window>` | Bring that editor window (e.g. `Events`, `"State Machines"`, `"GUI Preview"`) to the front of its dock after the first 10 frames, for screenshots. `Lighting` and `"Post Processing"` also open those hidden panels. |
+| `--focus-panel <Window>` | Bring that editor window (e.g. `Events`, `"State Machines"`, `"GUI Preview"`) to the front of its dock after the first 10 frames, for screenshots. `Lighting`, `"Post Processing"`, `Physics` and `Mixer` also open those hidden panels. |
 | `--no-scene-post` | Start with the Scene toolbar's **Post** box off (scene without post effects). |
 | `--assets-menu <path>\|/` | Open that Assets entry's context menu (`/` = the panel background) with its Create submenu open, for screenshots. |
 | `--assets-create system\|fsm\|gui:<folder>` | Run Assets > Create > Lua System / State Machine / GUI in that project folder (empty = the root) after the first 10 frames, as the menu does (the new file's rename starts). |
@@ -110,6 +110,7 @@ build\release\kast_editor.exe
 | `--gui-save` | With `--open-gui`: save the GUI as its **Save** button does, after 19 frames. |
 | `--drop-model <path>` | Add this project model file (project-relative) as dropping it from the Assets panel on the Scene view does: an entity at the origin named after the file, with a `ModelRenderer` and, if the model has clips, an `Animator` (selected). |
 | `--no-vsync` | Present frames as fast as possible instead of at the display's refresh rate (with `--log-fps`, to measure headroom). |
+| `--no-audio-device` | Play sound on miniaudio's null backend (silent), as if there were no output device: one warning, everything else behaves normally. Tests use it. |
 | `--log-fps` | Log once a second: frames per second (vsync caps it at the display's refresh rate), the editor's CPU time per frame and bgfx's GPU frame time, and the draw call count. |
 | `--gui-click <id>` | With `--play`: click the game GUI element with this `id` (topmost visible document holding one) after 10 frames, as the mouse does; logs an error if there is none. |
 
@@ -283,7 +284,8 @@ A project is a directory marked by a `project.kast` file (exactly that name):
   "version": 1,
   "name": "My Game",
   "startScene": "scenes/start.scene",
-  "stateMachines": ["game_flow"]
+  "stateMachines": ["game_flow"],
+  "audio": {"Music": {"volume": 0.6, "muted": false}}
 }
 ```
 
@@ -293,6 +295,9 @@ A project is a directory marked by a `project.kast` file (exactly that name):
 - `stateMachines` (optional): the [game state machines](#state-machines) every Play session runs, as definition names;
   an array of unique non-empty strings. A name without a valid definition is an error at Play start, not here. The
   State Machines panel's **Global** checkbox edits it.
+- `audio` (optional): the default [bus](#audio) levels applied at Play start, `{"<bus>": {"volume": 0..1, "muted":
+  bool}}`; a missing bus or key is 1.0 / unmuted. The Mixer panel edits it. Written (every bus) only when some bus is
+  not at 1.0 unmuted.
 - Unknown keys are rejected. Saved with 2-space indent in this key order; `stateMachines` is written only if the file
   had it or a machine was made Global (unchecking the last one leaves `[]`), so other projects keep identical bytes.
 - **Active project**: opening a scene (File > Open, `--scene`) activates the project found by walking up from the
@@ -355,7 +360,7 @@ components from it, titles its window with the project name and plays `startScen
 systems, Lua systems, Lua components, `kast.loadScene`), rendering through the scene's Main Camera. It has no console
 window and doesn't hot reload. Its scene's [game GUIs](#game-gui) show over the scene and take mouse and keyboard
 input. Flags (for tests): `--frames N` and `--screenshot out.png`, as in the editor, `--gui-click <id>` (click that
-GUI element on frame 10), `--size WxH` (window size, default 1280x720) and `--gpu-stats` (log the average GPU time of
+GUI element on frame 10), `--size WxH` (window size, default 1280x720), `--no-audio-device` (silent null audio backend) and `--gpu-stats` (log the average GPU time of
 the frame's views, after 10 warmup frames, on exit). A missing
 or corrupt `game.pak`, an invalid `project.kast` or a `startScene` that is missing or doesn't load shows an error
 message box and exits 1; with `--frames` the message is only logged (stdout), so tests never block.
@@ -925,6 +930,104 @@ wrong body) and `update(dt)` returning the steps taken. `kast_self_check --bench
 trigger zone the first cube falls through, a character) runs `scripts/physics_log.lua`, which logs the four events and
 a raycast at init.
 
+### Audio
+
+2D (non-spatial) sound on [miniaudio](https://miniaud.io) (`engine/audio.h`). Editor Play and `kast_player` both run
+it; in Edit mode only the Inspector's **Preview** makes sound.
+
+**Formats**: `.wav` and `.mp3` only (extension matched ignoring case); any other extension is an error. Every file is
+read through `kast::readFile`, so a built game plays its clips from `game.pak`.
+
+**`AudioSource`** component (Add Component, Inspector, scene file):
+
+| Field | Meaning [default] |
+|-------|-------------------|
+| `clip` | project-relative `.wav` / `.mp3`; empty = none [""] |
+| `bus` | `Master` / `Music` / `SFX` / `UI` / `Voice` [SFX] |
+| `volume` | 0..1 [1] |
+| `loop` | repeat until stopped [false] |
+| `playOnStart` | start the clip when Play starts and when a scene loads during Play [false] |
+
+A volume outside 0..1 or a clip with another extension is rejected (scene load, Inspector edits). A missing or
+corrupt clip shows its error in red under the Inspector's clip picker, logs one error at Play
+(`AudioSource on '<entity>': ...`), plays nothing, and Play goes on.
+
+**Buses**: a fixed set, Master, Music, SFX, UI, Voice; every sound plays on exactly one (default SFX). Music, SFX, UI
+and Voice feed Master. Gain = sound volume x bus volume x Master volume; a muted bus (or muted Master) is silent.
+Volumes are 0..1.
+
+**Voices**: at most 32 sounds at once. A play when all 32 are busy stops the **oldest non-looping** voice and reuses
+it (its handle goes stale). Looping voices are never stolen: if all 32 loop, the new sound is dropped with a warning
+(`Sound '<clip>' dropped: all 32 voices are looping`) and `play` returns 0 (a stale handle). A non-looping voice frees
+itself when its clip ends; a looping one repeats seamlessly until stopped.
+
+**Loading**: clips on the Music bus are decoded while they play (streamed from the file's bytes, one decoder per
+voice). All other clips are decoded once, converted to the output format, and cached by project-relative path; the
+cache is dropped at each Play start, so edited files are picked up.
+
+**Lifecycle**: Play start stops every voice, sets the buses to the project defaults (below) and starts the
+`playOnStart` sources (before the Lua `init`s). Pause holds every voice where it is; resume continues them from that
+position. Stop stops and frees every voice. A `kast.loadScene` switch stops every voice, then the new scene's
+`playOnStart` sources start; runtime bus levels carry over the switch. Music does not continue across a switch.
+
+**`kast.audio`** (bus names are the strings above; errors raise at the calling line, like `kast.*`):
+
+| Function | |
+|----------|-|
+| `play(path, opts?) -> handle` | `opts = {bus = "SFX", volume = 1, loop = false}`, every key optional; returns 0 if dropped |
+| `stop(h)`, `pause(h)`, `resume(h)`, `setVolume(h, v)` | on one sound |
+| `isPlaying(h) -> bool` | true while the voice lives and is not paused by `pause(h)` |
+| `stopAll(bus?)` | every sound, or only those on `bus` |
+| `setBusVolume(bus, v)`, `getBusVolume(bus) -> v`, `setBusMuted(bus, muted)` | runtime bus levels, not saved |
+| `playSource(id) -> handle`, `stopSource(id)` | the entity's `AudioSource` (its clip, bus, volume, loop); `stopSource` stops the last voice `playSource` or `playOnStart` started for it |
+
+A handle whose voice ended, was stopped or was stolen is **stale**: `isPlaying` returns false and the other calls do
+nothing (not an error). A missing, unreadable or corrupt file, another extension, an unknown bus or option, a volume
+outside 0..1, a non-number handle and `playSource` / `stopSource` on an entity without an `AudioSource` raise a Lua
+error (`kast.audio.play: cannot read 'sounds/x.wav'`); the system keeps running.
+
+```lua
+local music, wasDown = nil, false
+return {
+    init = function()
+        music = kast.audio.play("sounds/theme.mp3", {bus = "Music", volume = 0.6, loop = true})
+    end,
+    update = function(dt)
+        local down = kast.input.keyDown("Space")
+        if down and not wasDown then
+            kast.audio.play("sounds/jump.wav", {volume = 0.8}) -- SFX, one-shot
+        end
+        wasDown = down
+        if kast.input.keyDown("P") then kast.audio.pause(music) else kast.audio.resume(music) end
+    end,
+    shutdown = function() kast.audio.stopAll("SFX") end,
+}
+```
+
+**No audio device**: if the output device can't be opened, one warning is logged
+(`No audio output device: sound plays on the null backend (silent)`) and miniaudio's null backend is used; handles,
+voices, buses and the cache behave normally. `--no-audio-device` (editor and `kast_player`) forces this; the tests use it.
+
+**Editor**:
+- Inspector `AudioSource`: a **Clip** combo of the project's `.wav` / `.mp3` files, then bus, volume, loop and
+  playOnStart. **Preview** plays the clip in Edit mode at the component's volume and bus (with the project's bus
+  defaults); **Stop Preview** stops it, and selecting another entity stops it too. Preview is disabled during Play.
+- Assets panel: `.wav` / `.mp3` files have a speaker icon.
+- **Window > Mixer**: a volume slider and Mute box per bus that edit the project's default levels, saved in
+  `project.kast` (`"audio"`, see [Projects](#projects)) when a drag ends; during Play edits also apply to the session
+  at once. During Play it also lists the active voices (clip, bus, volume, loop, Playing / Paused) and the count out
+  of 32.
+
+C++: `kast::Audio` (from `LuaSystems::audio()`); `Audio::Output::Offline` has no device and `render()` pulls the mix,
+which the self-checks use to measure output. `kast::clipInfo` reads a clip's native frames, channels and sample rate.
+
+**Limits**: no 3D / spatial sound (no listener, distance or panning), no effects, pitch or speed, no fades or
+crossfades, no OGG / FLAC, no custom buses, no voice priorities.
+
+**Sample**: `tests/project/audio.scene` (Music loops `sounds/wave-demo.wav` on the Music bus with `playOnStart`;
+Jukebox has a UI-bus `AudioSource`) runs `scripts/audio_sfx.lua`, which plays `sounds/mp3-demo.mp3` once and then a
+short tone twice a second, alternating `kast.audio.play` and `kast.audio.playSource`.
+
 ### Lua components
 
 Game developers can define data-only ECS component types in Lua, inside their project (`engine/lua_components.h`).
@@ -1269,7 +1372,7 @@ unsaved changes it asks **Reload** / **Keep mine**. A deleted `.rml` closes a cl
 
 | Test | What it checks |
 |------|----------------|
-| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, point lights (falloff 0 at and beyond `range`, positive and decreasing inside; nearest-8 selection with out-of-range lights skipped; `PointLight` validation; point light and `lighting` round trip, missing `lighting` defaults, every malformed `lighting` rejected), shadows (cascade splits near to far and lambda mix, frustum slice corners in both depth conventions, cascade bounds containing the slice and a caster toward the light, whole-texel cascade moves, the 4 nearest `castShadows` point lights with ties in list order, shadow field defaults, pre-shadow scenes loading with them, validation and round trip), component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values and versions 1–3 rejected), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits; projects: `project.kast` load/save/validation, walk-up discovery, project-relative paths and escape rejection, opening a project and Save/Save As on a `Document` (New Project folder-name sanitizing, every validation rule, creating `<dir>/my-game/project.kast` with the trimmed name, never creating missing parents or writing into an existing folder) (no rebasing, project-change warning, title format), the Project Manager's recent list (save/load round trip, newest first, case-insensitive dedupe with trailing separators, Remove leaving the project on disk, missing folder / missing or invalid `project.kast` reported, three kinds of corrupt file backed up to `projects.json.bad` with a warning and read as empty) and an editor that can't be started reporting why, no-project Lua disabling, Add Script outside the project, template location; `kast.loadScene` (end-of-frame, last call wins, ignored in `shutdown`, init calls deferred a frame, shutdown/init order, every error case keeps the current scene) and `kast.currentScene`, and Stop restoring the pre-Play scene after two switches; events: the C++ bus (publish then subscription order, next-drain re-publish, subscribe/unsubscribe during a drain, a throwing subscriber, RAII and stale handles, dropQueued, reset, the 500-event history and Clear), Lua→Lua in the same frame after every update with independent payload copies, Lua→C++ and C++→Lua payload conversion, one subscription order across C++ and Lua, every `kast.publish/subscribe/unsubscribe` rejection raising at file:line and queueing nothing (bad names, functions, userdata, threads, cycles, nesting past 32, mixed keys, NaN), a failing subscriber disabling only its system, cleanup on disable/hot reload/Stop/Play start, a scene switch dropping queued events and old Lua subscribers but keeping C++ ones, and Pause holding / Stop discarding the queue in editor Play; Lua components: definition parsing (every field type and option, recursive discovery, every invalid-definition case naming the file), name clashes (built-in, structural, both duplicate files rejected), sandbox and per-file globals, registry parity (add/has/remove, strict JSON set, Duplicate, save order, byte-identical save/load, snapshot and Document Play/Stop restore), `kast.*` on a Lua component with every `kast.set` error leaving it unchanged, drift rules (one warning per fix, dirty only when data changed, built-ins still strict), missing definitions (load with warnings, verbatim save, `kast.*` raises, later conversion), hot reload of modified/added/deleted/broken files without data loss and the Play freeze, Components panel template naming and enable rules; game.pak: write/read round trip (byte-identical, binary and empty files), directory listing, rejection of bad magic, bad version, truncated header/index/data, an offset past the end and an overflowing size; a mounted pak serving project.kast, readFile and listFiles (and not the disk); Build: exe-name sanitizing, pak contents (no dotfiles, dot-directories or output folder), every validation failure writing nothing, a full build (exe, game.pak, DLLs, other files kept), the remembered folder in `.kast/editor.json` (project.kast unchanged) and the Build menu enable rule (no project, Play, Pause); Build Settings: Start Scene choices (`tests/project` lists `events.scene`, `fsm.scene`, `health.scene`, `point_lights.scene`, `scene_a.scene`, `scene_b.scene`, `ui.scene`; a dotfile or dot-directory scene is left out), Save writing only `startScene` (same keys and order, reloads, `doc.project` updated, the open scene's dirty flag and path kept, no `.kast/editor.json`), a scene that doesn't load or escapes the project leaving `project.kast` byte-identical, opening (then Cancel) writing nothing, and Build / Build and Run with `startScene` null or missing opening Build Settings; state machines: recursive discovery, every invalid-definition case naming the file (bad or missing `name`, bad `initial`, unknown `allowedFrom` state, wrong types, unknown keys, syntax and sandbox errors, both duplicate files), `allowedFrom` / omitted / `"*"` / self-transition rules, editor rescans, entry order at Play start (after the inits, game then entity machines, no event, `initialState` fallback warning, first touch during `init`), allowed and denied transitions (return value, warning, no callbacks, no event), `exit` → switch → `enter` → `fsm.changed {machine, entity, from, to}` with the definition as publisher, queued changes from callbacks (no recursion, denial on apply), callback errors (file:line and traceback, commit, still usable), C++ misuse throwing, every `kast.fsm.*` misuse raising at the calling line, read-only `kast.fsm`, identical results from Lua and C++, game state kept across `kast.loadScene` with no callbacks and new callbacks after it, Stop then Play starting over, runtime add (`kast.add` + `kast.set`, registry edit, Duplicate), destroy/remove without `exit`, a missing definition logged once, hot reload (state kept, reset with warning when removed, last valid definition kept when broken, game machines too), `StateMachine` byte-identical save/load, Duplicate and Stop restore, `project.kast` `stateMachines` round trip and validation, New State Machine name rules / template / no overwrite, Global toggling `project.kast`, and both blocked during Play; game GUI: the builder model (malformed RML and a missing `<body>` refused, parse → serialize → parse unchanged keeping unknown elements, their children, unedited attributes, comments, entities and `<head>`, Panel/Text/Button/Unknown kinds, editable-text rule, preview numbering and inline sheet), add / delete / move up and down / reparent (own subtree and `<body>` refused, Unknown elements move with their children), `data-event` set and cleared, an edited document reopening identically, Create GUI naming (`new_gui`, `_2`, skipping a stem whose `.rcss` is taken, never overwriting, each `.rml` linking its `.rcss`), GUI rename (linked `.rcss` follows, refusal leaves the disk unchanged), `UIDocument` registration, defaults and scene JSON round trip, and the button click adapter (payload `{id, document}`, publisher `UI`, empty event publishes nothing); models: the GLB character (2 skinned meshes, 66 joints, 178 clips, 2 embedded materials with the file's factors, upright and human sized, weights summing to 1), the OBJ cube with its MTL color and the same bounds as the glTF cube, the Kenney FBX (skinned, centimeters to meters, Y-up), missing / corrupt / garbage files as errors, 128 vs 130 generated joints against the bone limit, key sampling (lerp / slerp at mid-key, loop wrap, clamp), crossfade weights 0 to 1 and a crossfaded pose, skin matrices, the Animator system (playOnStart, no ModelRenderer, unknown clip, Transform untouched), `ModelRenderer` / `Animator` JSON round trip and rejection, model drops / Create > Model / rename and move remaps on a `Document`, and the Edit-mode preview never dirtying or saving; physics: `Collider` / `Rigidbody` / `CharacterController` validation and scene round trip, gravity default / round trip / rejection, a box resting on the floor, a body under a moved and rotated two-level parent (world and local result), scaled box and sphere rest heights, nothing in Edit mode, Play / Pause / Stop restore, the same result for 1/30 and 2 x 1/60 frames, the step cap, trigger enter / exit once without blocking, one collisionEnter (point, normal from a to b) and the exit on destroy, a bouncing ball, set / get velocity, impulse, force, angular velocity, kinematic velocity, wrong-body errors, runtime add / remove / field change / destroy and Transform teleports (static, dynamic, kinematic), the Rigidbody-only warning and the CharacterController conflict reported once, characters (grounded, ground entity and normal, jump, walk, step climbed, taller block, slopes under and over the limit, static wall and kinematic body block, a dynamic crate pushed, contact events), `kast.physics` from Lua (raycast, overlaps with rotation, body control, every error, `kast.add` / `kast.set` / `kast.remove` / `kast.destroy` sync) and the collider / capsule wireframes. No window. |
+| `engine_self_check` | `kast_self_check`: rotation conventions, Euler/quaternion and matrix decomposition, picking rays and ray-box hits, reparent keeping the world transform, cycle rejection, subtree duplicate/delete, point lights (falloff 0 at and beyond `range`, positive and decreasing inside; nearest-8 selection with out-of-range lights skipped; `PointLight` validation; point light and `lighting` round trip, missing `lighting` defaults, every malformed `lighting` rejected), shadows (cascade splits near to far and lambda mix, frustum slice corners in both depth conventions, cascade bounds containing the slice and a caster toward the light, whole-texel cascade moves, the 4 nearest `castShadows` point lights with ties in list order, shadow field defaults, pre-shadow scenes loading with them, validation and round trip), component registry (add/remove/has, JSON round trip of every field type, duplicate copies all components), scene-file validation (including invalid `Camera` values and versions 1–3 rejected), active camera (first depth-first) and camera view/projection matrices, `kast::Input`, `rotatorSystem`, in-memory snapshot restore, editor Play/Pause/Stop on a `Document` (dirty flag, selection, byte-identical restore, Game/Scene focus requests, no-camera warning, default Main Camera), and Lua systems: scene `"systems"` round trip and validation, order after the C++ systems, init/update/shutdown with Play/Pause/Stop, the whole `kast.*` API and its errors, sandbox and per-system globals, syntax/runtime errors disabling only that system, hot reload, Systems panel edits; projects: `project.kast` load/save/validation, walk-up discovery, project-relative paths and escape rejection, opening a project and Save/Save As on a `Document` (New Project folder-name sanitizing, every validation rule, creating `<dir>/my-game/project.kast` with the trimmed name, never creating missing parents or writing into an existing folder) (no rebasing, project-change warning, title format), the Project Manager's recent list (save/load round trip, newest first, case-insensitive dedupe with trailing separators, Remove leaving the project on disk, missing folder / missing or invalid `project.kast` reported, three kinds of corrupt file backed up to `projects.json.bad` with a warning and read as empty) and an editor that can't be started reporting why, no-project Lua disabling, Add Script outside the project, template location; `kast.loadScene` (end-of-frame, last call wins, ignored in `shutdown`, init calls deferred a frame, shutdown/init order, every error case keeps the current scene) and `kast.currentScene`, and Stop restoring the pre-Play scene after two switches; events: the C++ bus (publish then subscription order, next-drain re-publish, subscribe/unsubscribe during a drain, a throwing subscriber, RAII and stale handles, dropQueued, reset, the 500-event history and Clear), Lua→Lua in the same frame after every update with independent payload copies, Lua→C++ and C++→Lua payload conversion, one subscription order across C++ and Lua, every `kast.publish/subscribe/unsubscribe` rejection raising at file:line and queueing nothing (bad names, functions, userdata, threads, cycles, nesting past 32, mixed keys, NaN), a failing subscriber disabling only its system, cleanup on disable/hot reload/Stop/Play start, a scene switch dropping queued events and old Lua subscribers but keeping C++ ones, and Pause holding / Stop discarding the queue in editor Play; Lua components: definition parsing (every field type and option, recursive discovery, every invalid-definition case naming the file), name clashes (built-in, structural, both duplicate files rejected), sandbox and per-file globals, registry parity (add/has/remove, strict JSON set, Duplicate, save order, byte-identical save/load, snapshot and Document Play/Stop restore), `kast.*` on a Lua component with every `kast.set` error leaving it unchanged, drift rules (one warning per fix, dirty only when data changed, built-ins still strict), missing definitions (load with warnings, verbatim save, `kast.*` raises, later conversion), hot reload of modified/added/deleted/broken files without data loss and the Play freeze, Components panel template naming and enable rules; game.pak: write/read round trip (byte-identical, binary and empty files), directory listing, rejection of bad magic, bad version, truncated header/index/data, an offset past the end and an overflowing size; a mounted pak serving project.kast, readFile and listFiles (and not the disk); Build: exe-name sanitizing, pak contents (no dotfiles, dot-directories or output folder), every validation failure writing nothing, a full build (exe, game.pak, DLLs, other files kept), the remembered folder in `.kast/editor.json` (project.kast unchanged) and the Build menu enable rule (no project, Play, Pause); Build Settings: Start Scene choices (`tests/project` lists `audio.scene`, `events.scene`, `fsm.scene`, `health.scene`, `missing_component.scene`, `point_lights.scene`, `scene_a.scene`, `scene_b.scene`, `ui.scene`; a dotfile or dot-directory scene is left out), Save writing only `startScene` (same keys and order, reloads, `doc.project` updated, the open scene's dirty flag and path kept, no `.kast/editor.json`), a scene that doesn't load or escapes the project leaving `project.kast` byte-identical, opening (then Cancel) writing nothing, and Build / Build and Run with `startScene` null or missing opening Build Settings; state machines: recursive discovery, every invalid-definition case naming the file (bad or missing `name`, bad `initial`, unknown `allowedFrom` state, wrong types, unknown keys, syntax and sandbox errors, both duplicate files), `allowedFrom` / omitted / `"*"` / self-transition rules, editor rescans, entry order at Play start (after the inits, game then entity machines, no event, `initialState` fallback warning, first touch during `init`), allowed and denied transitions (return value, warning, no callbacks, no event), `exit` → switch → `enter` → `fsm.changed {machine, entity, from, to}` with the definition as publisher, queued changes from callbacks (no recursion, denial on apply), callback errors (file:line and traceback, commit, still usable), C++ misuse throwing, every `kast.fsm.*` misuse raising at the calling line, read-only `kast.fsm`, identical results from Lua and C++, game state kept across `kast.loadScene` with no callbacks and new callbacks after it, Stop then Play starting over, runtime add (`kast.add` + `kast.set`, registry edit, Duplicate), destroy/remove without `exit`, a missing definition logged once, hot reload (state kept, reset with warning when removed, last valid definition kept when broken, game machines too), `StateMachine` byte-identical save/load, Duplicate and Stop restore, `project.kast` `stateMachines` round trip and validation, New State Machine name rules / template / no overwrite, Global toggling `project.kast`, and both blocked during Play; game GUI: the builder model (malformed RML and a missing `<body>` refused, parse → serialize → parse unchanged keeping unknown elements, their children, unedited attributes, comments, entities and `<head>`, Panel/Text/Button/Unknown kinds, editable-text rule, preview numbering and inline sheet), add / delete / move up and down / reparent (own subtree and `<body>` refused, Unknown elements move with their children), `data-event` set and cleared, an edited document reopening identically, Create GUI naming (`new_gui`, `_2`, skipping a stem whose `.rcss` is taken, never overwriting, each `.rml` linking its `.rcss`), GUI rename (linked `.rcss` follows, refusal leaves the disk unchanged), `UIDocument` registration, defaults and scene JSON round trip, and the button click adapter (payload `{id, document}`, publisher `UI`, empty event publishes nothing); models: the GLB character (2 skinned meshes, 66 joints, 178 clips, 2 embedded materials with the file's factors, upright and human sized, weights summing to 1), the OBJ cube with its MTL color and the same bounds as the glTF cube, the Kenney FBX (skinned, centimeters to meters, Y-up), missing / corrupt / garbage files as errors, 128 vs 130 generated joints against the bone limit, key sampling (lerp / slerp at mid-key, loop wrap, clamp), crossfade weights 0 to 1 and a crossfaded pose, skin matrices, the Animator system (playOnStart, no ModelRenderer, unknown clip, Transform untouched), `ModelRenderer` / `Animator` JSON round trip and rejection, model drops / Create > Model / rename and move remaps on a `Document`, and the Edit-mode preview never dirtying or saving; physics: `Collider` / `Rigidbody` / `CharacterController` validation and scene round trip, gravity default / round trip / rejection, a box resting on the floor, a body under a moved and rotated two-level parent (world and local result), scaled box and sphere rest heights, nothing in Edit mode, Play / Pause / Stop restore, the same result for 1/30 and 2 x 1/60 frames, the step cap, trigger enter / exit once without blocking, one collisionEnter (point, normal from a to b) and the exit on destroy, a bouncing ball, set / get velocity, impulse, force, angular velocity, kinematic velocity, wrong-body errors, runtime add / remove / field change / destroy and Transform teleports (static, dynamic, kinematic), the Rigidbody-only warning and the CharacterController conflict reported once, characters (grounded, ground entity and normal, jump, walk, step climbed, taller block, slopes under and over the limit, static wall and kinematic body block, a dynamic crate pushed, contact events), `kast.physics` from Lua (raycast, overlaps with rotation, body control, every error, `kast.add` / `kast.set` / `kast.remove` / `kast.destroy` sync) and the collider / capsule wireframes; audio (offline rendering, no device): the WAV and MP3 fixtures and a generated WAV decode with the expected frames, channels and sample rate (corrupt WAV / MP3, `.ogg`, missing and outside paths rejected), a playing clip is non-silent and silent with its bus or Master muted, rendered peak = amplitude x volume x bus x Master (within 0.005), Music streams through the same buses, a loop (cached and streamed) sounds past 2.5x its length with no silent chunk, a one-shot goes silent after its length and frees its voice, 33 one-shots steal the oldest (stale handle, count 32), loops never stolen and a 33rd play with 32 loops dropped with one warning, pause / resume / setPaused holding the playback position (within 64 frames), stale handles as no-ops, `play` errors taking no voice, the null backend's one warning and normal behavior, `AudioSource` validation and save/load round trip, `project.kast` `audio` defaults / partial block / round trip / rejection and the Mixer's `setBusDefault`, Play applying the defaults, and an editor Play session (`playOnStart`, a corrupt clip's one error, every `kast.audio` call and error from Lua with the system running on, Pause silence and resume, zero voices after `kast.loadScene` and Stop); a mounted pak decoding and playing a WAV and an MP3. No window. |
 | `editor_smoke` | `kast_editor --frames 120 --screenshot build/<preset>/smoke.png` with no project or scene (the Project Manager, empty list): exit 0 and a non-empty PNG. Every screenshot test passes `--projects-file <its run folder>/projects.json`. |
 | `editor_smoke_scaled` | Same, with `--ui-scale 2.0`. |
 | `scene_screenshot` | Same, with `--scene tests/scenes/basic.scene`. |
@@ -1307,6 +1410,8 @@ unsaved changes it asks **Reload** / **Keep mine**. A deleted `.rml` closes a cl
 | `physics_collider_screenshot`, `physics_collider_none_screenshot`, `physics_collider_none_vs_collider_differs`, `physics_character_screenshot` | `--select 6` (Trigger Zone, no mesh) against the same selection in a copy without its `Collider`: only the green wireframe differs; `--select 7` shows the character capsule. |
 | `physics_panel_screenshot`, `physics_roundtrip`, `physics_bad_gravity_rejected` | `--focus-panel Physics`; save twice gives identical bytes; a copy with a non-number gravity must exit 1. |
 | `build_game_physics`, `player_physics_screenshot`, `player_physics_events` | The built game runs `physics.scene` from `game.pak` in the player; its log shows the same events and raycast. |
+| `audio_inspector_screenshot`, `audio_mixer_play_screenshot`, `audio_mixer_edit_screenshot`, `audio_assets_screenshot`, `audio_play_log` | `tests/project/audio.scene` with `--no-audio-device`: `--select 1` (the Inspector's `AudioSource`: clip picker, Preview), `--play --focus-panel Mixer` (voices listed; exactly one null-backend warning), the Mixer in Edit mode, `--assets-select sounds/wave-demo.wav --focus-panel Assets` (speaker icons), and Play logging `scripts/audio_sfx.lua`'s one-shot as playing. |
+| `build_game_audio`, `player_audio_from_pak`, `player_audio_no_focus` | The built audio game (with `--no-audio-device`) decodes and plays its clips from `game.pak` (the log shows the MP3 one-shot playing), and doesn't take focus. |
 | `models_inspector_preview` | `models_anim.scene --select 3`: the Model Renderer pickers and the Animator clip dropdown and Preview row. |
 | `build_game_models`, `player_models_screenshot` | The build and run of a copy with startScene `models_anim.scene`: the animated character from `game.pak` in the player. |
 | `post_processing_play_screenshot`, `post_processing_off_play_screenshot`, `post_processing_differs` | `--play` on it (game GUI over the post-processed Game view) and on a configure-time project copy without the `"postProcessing"` block; the two must differ. |
@@ -1363,7 +1468,7 @@ unsaved changes it asks **Reload** / **Keep mine**. A deleted `.rml` closes a cl
 | `ui_scene_roundtrip` | `ui.scene` saved twice: byte-identical. |
 | `assets_create_gui_screenshot`, `assets_create_gui_written` | `--assets-create gui:ui --focus-panel Assets` on `new_gui_project` (made by `new_gui_project_clean` / `_copy`): `ui/new_gui.rcss` exists, `ui/new_gui.rml` links `new_gui.rcss`, and the shot shows its rename. |
 | `assets_create_menu_screenshot` | `--assets-menu / --focus-panel Assets`, writing `assets_create_menu.png` (Create: Lua System, State Machine, GUI). |
-| `editor_no_focus`, `launcher_no_focus`, `player_no_focus` | `kast_focus_probe` runs `kast_editor --frames 120`, `kast_editor --launcher --frames 120` and the built `switch` game with `--frames 120`, sampling the foreground window until exit: fails if it ever belongs to the Kast process, if no window was shown, or on a nonzero exit. A `--frames` run shows its window without activating it and logs init failures instead of showing a message box. |
+| `editor_no_focus`, `launcher_no_focus`, `player_no_focus`, `editor_audio_play_no_focus` | `kast_focus_probe` runs `kast_editor --frames 120`, `kast_editor --launcher --frames 120` the built `switch` game with `--frames 120` and the editor playing `audio.scene` with the Mixer open, sampling the foreground window until exit: fails if it ever belongs to the Kast process, if no window was shown, or on a nonzero exit. A `--frames` run shows its window without activating it and logs init failures instead of showing a message box. |
 
 The screenshot tests each open a real window for ~2 seconds, in a fresh working directory (`<png>.run/`) so they
 always start from the default layout.
@@ -1390,6 +1495,7 @@ engine/   log (stdout + in-memory lines), app (SDL3 window, bgfx init, main loop
           material (.mat parsing, validation, path cache), pak (game.pak format),
           files (content reads from disk or a mounted pak), play (one Play frame: C++ systems, physics, Lua systems),
           physics (Jolt world per Play session, contact events, queries, character controller, collider wireframes),
+          audio (miniaudio: voices, buses, clip cache, Music streaming, null-device fallback, offline render),
           gui (RmlUi setup, file/log interfaces, GuiContext: one RmlUi context drawn into a bgfx view, SDL input),
           gui_render (RmlUi render interface on bgfx), gui_events (button click -> event bus adapter),
           scene_gui (a scene's UIDocuments in Play: load, stack, show/hide, hot reload), shaders/
@@ -1399,12 +1505,13 @@ editor/   main.cpp (CLI, dock layout, menus, console), document (scene, Play mod
           game_view (Game panel: render from the active camera, game GUIs over it in Play),
           gui_doc (GUI Builder document model: RML tree edits, serialize, Create/rename GUI files),
           gui_builder (GUI Hierarchy, GUI Inspector, GUI Style, GUI Preview),
-          panels (Hierarchy, Inspector, Systems, Components), build (Build: game.pak, exe, DLLs, last folder),
+          panels (Hierarchy, Inspector incl. AudioSource Preview, Systems, Components, Assets, Lighting, Mixer), build (Build: game.pak, exe, DLLs, last folder),
           imgui_bgfx (ImGui renderer for bgfx), shaders/
 tests/    self_check.cpp, focus_probe.cpp, scenes/ (a project: project.kast, basic.scene, lua.scene + scripts/, no_camera.scene,
           malformed.scene, v1.scene, v3.scene), project/ (scene-switch and Lua components project: project.kast,
           scene_a.scene, scene_b.scene, health.scene, ui.scene + ui/main_menu.rml/.rcss, scripts/,
-          components/health.lua)
+          components/health.lua, audio.scene + sounds/ (tone.wav, wave-demo.wav, mp3-demo.mp3) +
+          scripts/audio_sfx.lua)
 cmake/    smoke_test.cmake, roundtrip_test.cmake, load_fails_test.cmake, differs_test.cmake, build_test.cmake,
           player_test.cmake
 ```

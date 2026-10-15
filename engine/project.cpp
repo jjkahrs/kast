@@ -14,7 +14,7 @@ namespace {
 using Json = nlohmann::ordered_json;
 
 constexpr const char* kProjectKeys[] = {"version", "name", "startScene"}; // required
-constexpr const char* kOptionalProjectKeys[] = {"stateMachines"};
+constexpr const char* kOptionalProjectKeys[] = {"stateMachines", "audio"};
 
 std::string validate(const Json& json)
 {
@@ -43,6 +43,26 @@ std::string validate(const Json& json)
             for (size_t j = 0; j < i; ++j)
                 if (machines[j] == machines[i])
                     return std::format("\"stateMachines\" lists {} twice", machines[i].dump());
+        }
+    }
+    if (json.contains("audio")) {
+        // {"<bus>": {"volume": 0..1, "muted": bool}, ...}; every key optional
+        const Json& audio = json["audio"];
+        if (!audio.is_object())
+            return "\"audio\" must be an object of buses";
+        for (const auto& [bus, level] : audio.items()) {
+            if (!busFromName(bus))
+                return std::format("\"audio\": unknown bus \"{}\"", bus);
+            if (!level.is_object())
+                return std::format("\"audio\".{} must be an object", bus);
+            for (const auto& [key, value] : level.items()) {
+                if (key == "volume" && !(value.is_number() && value.get<double>() >= 0.0 && value.get<double>() <= 1.0))
+                    return std::format("\"audio\".{}.volume must be a number between 0 and 1", bus);
+                if (key == "muted" && !value.is_boolean())
+                    return std::format("\"audio\".{}.muted must be true or false", bus);
+                if (key != "volume" && key != "muted")
+                    return std::format("\"audio\".{}: unknown key \"{}\"", bus, key);
+            }
         }
     }
     return {};
@@ -78,6 +98,12 @@ bool loadProject(const std::filesystem::path& file, Project& out, std::string& e
                 out.startScene = json["startScene"].get<std::string>();
             if (json.contains("stateMachines"))
                 out.stateMachines = json["stateMachines"].get<std::vector<std::string>>();
+            if (json.contains("audio"))
+                for (const auto& [bus, level] : json["audio"].items()) {
+                    BusMix& mix = out.audio[static_cast<int>(*busFromName(bus))];
+                    mix.volume = level.value("volume", mix.volume);
+                    mix.muted = level.value("muted", mix.muted);
+                }
             return true;
         }
     } catch (const Json::exception& e) {
@@ -95,6 +121,11 @@ bool saveProject(const Project& project, std::string& error)
     json["startScene"] = project.startScene ? Json(*project.startScene) : Json(nullptr);
     if (project.stateMachines)
         json["stateMachines"] = *project.stateMachines;
+    if (project.audio != AudioMix{}) {
+        Json& audio = json["audio"];
+        for (int i = 0; i < kAudioBusCount; ++i)
+            audio[busName(static_cast<AudioBus>(i))] = {{"volume", project.audio[i].volume}, {"muted", project.audio[i].muted}};
+    }
     const std::filesystem::path file = project.root / kProjectFileName;
     if (!writeFileAtomic(file, json.dump(2) + '\n')) {
         error = std::format("Cannot write project '{}'", file.string());

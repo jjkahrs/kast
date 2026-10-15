@@ -27,6 +27,7 @@
 #include <physics.h>
 #include <play.h>
 #include <animation.h>
+#include <audio.h>
 #include <pak.h>
 #include <post_process.h>
 #include <project.h>
@@ -58,6 +59,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 
 namespace {
@@ -296,7 +298,8 @@ void checkComponentRegistry()
 {
     check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "ModelRenderer", "Animator",
                                                  "DirectionalLight", "PointLight", "Camera", "Rotator", "Collider",
-                                                 "Rigidbody", "CharacterController", "StateMachine", "UIDocument"},
+                                                 "Rigidbody", "CharacterController", "StateMachine", "UIDocument",
+                                                 "AudioSource"},
           "built-in component types in registration order");
     const entt::meta_type transform = kast::findComponentType("Transform");
     const entt::meta_type rotator = kast::findComponentType("Rotator");
@@ -2602,7 +2605,8 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"events.scene", "fsm.scene", "health.scene", "materials.scene", "models.scene",
+              std::vector<std::string>{"audio.scene", "events.scene", "fsm.scene", "health.scene", "materials.scene",
+                                       "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
                                        "models_missing.scene", "physics.scene", "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "scene_a.scene", "scene_b.scene",
@@ -2617,8 +2621,9 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / ".dot.scene");
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
-    check(projectScenes(root) == std::vector<std::string>{"broken.scene", "events.scene", "fsm.scene", "health.scene",
-                                                          "levels/c.scene", "materials.scene", "models.scene",
+    check(projectScenes(root) == std::vector<std::string>{"audio.scene", "broken.scene", "events.scene", "fsm.scene",
+                                                          "health.scene", "levels/c.scene", "materials.scene",
+                                                          "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
                                                           "models_material.scene", "models_missing.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
@@ -2675,33 +2680,6 @@ void checkBuildSettings()
             check(buildFiles.buildSettingsOpen(), what.c_str());
         }
     }
-}
-
-// Last: mounting a pak lasts for the rest of the process, so later disk reads would fail.
-void checkMountedPak()
-{
-    const std::filesystem::path dir = looseTestDir("kast_mount_check");
-    std::filesystem::create_directories(dir / "src/components/sub");
-    writeFile(dir / "src/project.kast", R"({"version": 1, "name": "Packed", "startScene": "a.scene"})");
-    writeFile(dir / "src/components/sub/c.lua", "return 1");
-    writeFile(dir / "src/components/d.lua", "return 2");
-    std::string error;
-    check(kast::writePak(dir / "src", {"project.kast", "components/sub/c.lua", "components/d.lua"}, dir / "game.pak", error),
-          "write a pak to mount");
-    kast::Pak pak;
-    check(pak.open(dir / "game.pak", error), "open the pak to mount");
-    const std::filesystem::path root = dir / "game"; // not on disk: everything comes from the pak
-    kast::mountPak(std::move(pak), root);
-    kast::Project project;
-    check(kast::loadProject(root / "project.kast", project, error) && project.name == "Packed", "project.kast from the pak");
-    std::string text;
-    check(kast::readFile(root / "components/d.lua", text) && text == "return 2", "readFile from the pak");
-    check(!kast::readFile(dir / "src/components/d.lua", text), "with a pak mounted, the disk is not read");
-    check(kast::listFiles(root / "components") ==
-              std::vector<std::filesystem::path>{root / "components/d.lua", root / "components/sub/c.lua"},
-          "listFiles from the pak");
-    check(kast::listFiles(root).size() == 3 && kast::listFiles(root / "nothing").empty(),
-          "listFiles of the root and of a missing folder");
 }
 
 // --- Events ---
@@ -6265,9 +6243,629 @@ int benchPhysics()
     return 0;
 }
 
+// --- Audio ---
+// Offline Audio (no device, the mix pulled with render()) unless a check says otherwise; main() makes Offline the
+// default, so LuaSystems and Document sessions are offline too.
+
+constexpr uint32_t kToneRate = 48000; // the offline engine's rate: test clips play unresampled
+
+// Writes a 16-bit PCM WAV of frames frames; sample(i, channel) in -1..1.
+template <typename Sample>
+void writeWav(const std::filesystem::path& path, uint32_t frames, uint16_t channels, uint32_t rate, Sample sample)
+{
+    std::string data;
+    for (uint32_t i = 0; i < frames; ++i)
+        for (uint16_t c = 0; c < channels; ++c) {
+            const auto value = static_cast<int16_t>(std::lround(std::clamp(sample(i, c), -1.0, 1.0) * 32767.0));
+            data.append(reinterpret_cast<const char*>(&value), 2);
+        }
+    std::string out = "RIFF";
+    const auto u32 = [&](uint32_t v) { out.append(reinterpret_cast<const char*>(&v), 4); };
+    const auto u16 = [&](uint16_t v) { out.append(reinterpret_cast<const char*>(&v), 2); };
+    u32(static_cast<uint32_t>(36 + data.size()));
+    out += "WAVEfmt ";
+    u32(16);
+    u16(1); // PCM
+    u16(channels);
+    u32(rate);
+    u32(rate * channels * 2);
+    u16(static_cast<uint16_t>(channels * 2));
+    u16(16);
+    out += "data";
+    u32(static_cast<uint32_t>(data.size()));
+    writeFile(path, out + data);
+}
+
+// A sine of amplitude 0.5 (stereo, kToneRate), frames long.
+void writeTone(const std::filesystem::path& path, uint32_t frames)
+{
+    writeWav(path, frames, 2, kToneRate, [](uint32_t i, uint16_t) {
+        return 0.5 * std::sin(2.0 * 3.14159265358979 * 440.0 * i / kToneRate);
+    });
+}
+
+// A project with sounds/tone.wav (12000 frames = 0.25 s), sounds/ramp.wav (sample i = i / 65536, 48000 frames),
+// sounds/broken.wav and sounds/broken.mp3 (not audio) and sounds/tone.ogg.
+std::filesystem::path audioTestDir()
+{
+    const std::filesystem::path dir = projectTestDir("kast_audio_check", "Audio");
+    std::filesystem::create_directories(dir / "sounds");
+    writeTone(dir / "sounds/tone.wav", 12000);
+    writeWav(dir / "sounds/ramp.wav", 48000, 2, kToneRate, [](uint32_t i, uint16_t) { return i / 65536.0; });
+    writeFile(dir / "sounds/broken.wav", "this is not a wave file");
+    writeFile(dir / "sounds/broken.mp3", "this is not an mp3 file either");
+    writeFile(dir / "sounds/tone.ogg", "OggS");
+    return dir;
+}
+
+// Peak absolute sample of the next frames of the mix.
+float renderPeak(kast::Audio& audio, uint32_t frames)
+{
+    std::vector<float> out(static_cast<size_t>(frames) * audio.channels());
+    audio.render(out.data(), frames);
+    float peak = 0.0f;
+    for (float s : out)
+        peak = std::max(peak, std::abs(s));
+    return peak;
+}
+
+// miniaudio lags a change by up to a node cache (480 frames) plus a short stop fade: render past that before measuring.
+constexpr uint32_t kSettleFrames = 1024;
+void settle(kast::Audio& audio) { renderPeak(audio, kSettleFrames); }
+
+// The first sample of the next frame of the mix.
+float renderOne(kast::Audio& audio)
+{
+    std::vector<float> out(audio.channels());
+    audio.render(out.data(), 1);
+    return out[0];
+}
+
+bool throwsInvalid(const auto& body, const std::string& part)
+{
+    try {
+        body();
+    } catch (const std::invalid_argument& e) {
+        if (contains(e.what(), part))
+            return true;
+        kast::log::error(std::format("  threw '{}', expected '{}'", e.what(), part));
+        return false;
+    }
+    return false;
+}
+
+void checkAudioDecode()
+{
+    const std::filesystem::path project = KAST_TEST_PROJECT_DIR;
+    std::string error;
+    // Fixture formats read independently (Python's wave module; the MP3's frame headers: 76 MPEG-1 Layer III frames
+    // x 1152, no Xing/LAME tag).
+    const auto expect = [&](const char* path, uint64_t frames, uint32_t channels, uint32_t rate) {
+        const std::optional<kast::ClipInfo> info = kast::clipInfo(project, path, error);
+        check(info && info->frames == frames && info->channels == channels && info->sampleRate == rate,
+              std::format("decode {}: frames, channels and sample rate", path).c_str());
+        if (info)
+            kast::log::info(std::format("{}: {} frames, {} ch, {} Hz", path, info->frames, info->channels, info->sampleRate));
+        else
+            kast::log::error(std::format("  {}", error));
+    };
+    expect("sounds/tone.wav", 22050, 1, 44100);
+    expect("sounds/wave-demo.wav", 84808, 2, 44100);
+    expect("sounds/mp3-demo.mp3", 87552, 2, 44100);
+    expect("sounds/MP3-DEMO.MP3", 87552, 2, 44100); // extension case is ignored (and Windows paths are too)
+
+    const std::filesystem::path dir = audioTestDir();
+    writeWav(dir / "sounds/mono.wav", 1234, 1, 22050, [](uint32_t, uint16_t) { return 0.25; });
+    const std::optional<kast::ClipInfo> mono = kast::clipInfo(dir, "sounds/mono.wav", error);
+    check(mono && mono->frames == 1234 && mono->channels == 1 && mono->sampleRate == 22050,
+          "decode a generated WAV: frames, channels and sample rate");
+    check(!kast::clipInfo(dir, "sounds/broken.wav", error) && contains(error, "cannot decode"), "a corrupt WAV is an error");
+    check(!kast::clipInfo(dir, "sounds/broken.mp3", error) && contains(error, "cannot decode"), "a corrupt MP3 is an error");
+    check(!kast::clipInfo(dir, "sounds/tone.ogg", error) && contains(error, "not a .wav or .mp3"), ".ogg is rejected");
+    check(!kast::clipInfo(dir, "sounds/none.wav", error) && contains(error, "cannot read"), "a missing clip is an error");
+    check(!kast::clipInfo(dir, "../outside.wav", error) && !error.empty(), "a path outside the project is an error");
+    check(kast::isAudioFile("a/B.WAV") && kast::isAudioFile("x.Mp3") && !kast::isAudioFile("x.ogg") &&
+              !kast::isAudioFile("wav"),
+          "isAudioFile: .wav / .mp3, any case");
+}
+
+void checkAudioMix()
+{
+    const std::filesystem::path dir = audioTestDir();
+    kast::Audio audio(kast::Audio::Output::Offline);
+    audio.start(dir);
+    check(audio.channels() == 2 && audio.sampleRate() == kToneRate, "offline audio: stereo at 48 kHz");
+    check(renderPeak(audio, 480) == 0.0f, "nothing playing renders silence");
+
+    const kast::AudioHandle tone = audio.play("sounds/tone.wav", {.loop = true});
+    check(tone != 0 && audio.isPlaying(tone) && audio.voiceCount() == 1, "play returns a live handle");
+    const float full = renderPeak(audio, 2400);
+    check(std::abs(full - 0.5f) < 0.01f, "a playing clip renders non-silent output at its amplitude");
+    // Each change is measured after settle() (see kSettleFrames).
+    audio.setBusMuted(kast::AudioBus::SFX, true);
+    settle(audio);
+    check(renderPeak(audio, 2400) == 0.0f && audio.busMuted(kast::AudioBus::SFX), "its bus muted: silence");
+    audio.setBusMuted(kast::AudioBus::SFX, false);
+    audio.setBusMuted(kast::AudioBus::Master, true);
+    settle(audio);
+    check(renderPeak(audio, 2400) == 0.0f, "Master muted: silence");
+    audio.setBusMuted(kast::AudioBus::Master, false);
+    settle(audio);
+    check(renderPeak(audio, 2400) > 0.4f, "unmuted again: sound");
+    audio.setBusMuted(kast::AudioBus::Music, true);
+    settle(audio);
+    check(renderPeak(audio, 2400) > 0.4f, "another bus muted: still sound");
+    audio.setBusMuted(kast::AudioBus::Music, false);
+
+    // Gain = sound volume x bus volume x Master volume. Tolerance 0.005 (16-bit samples, the sine's sampled peak).
+    audio.setVolume(tone, 0.5f);
+    audio.setBusVolume(kast::AudioBus::SFX, 0.8f);
+    audio.setBusVolume(kast::AudioBus::Master, 0.5f);
+    settle(audio);
+    const float gained = renderPeak(audio, 2400);
+    check(std::abs(gained - 0.5f * 0.5f * 0.8f * 0.5f) < 0.005f, "rendered peak = amplitude x volume x bus x Master");
+    kast::log::info(std::format("audio gain: peak {:.4f}, expected {:.4f}", gained, 0.5f * 0.5f * 0.8f * 0.5f));
+    check(audio.busVolume(kast::AudioBus::SFX) == 0.8f && audio.busVolume(kast::AudioBus::Master) == 0.5f,
+          "bus volumes read back");
+    check(throwsInvalid([&] { audio.setBusVolume(kast::AudioBus::UI, 1.5f); }, "between 0 and 1") &&
+              throwsInvalid([&] { audio.setBusVolume(kast::AudioBus::UI, -0.1f); }, "between 0 and 1") &&
+              throwsInvalid([&] { audio.setVolume(tone, 2.0f); }, "between 0 and 1"),
+          "out-of-range volumes are rejected");
+    kast::AudioMix mix{};
+    mix[static_cast<int>(kast::AudioBus::Music)].volume = 2.0f;
+    check(throwsInvalid([&] { audio.setMix(mix); }, "between 0 and 1"), "setMix rejects an out-of-range volume");
+
+    audio.start(dir); // a new session: voices stopped, buses back to 1.0 unmuted
+    check(audio.voiceCount() == 0 && !audio.isPlaying(tone) && audio.busVolume(kast::AudioBus::SFX) == 1.0f &&
+              audio.busVolume(kast::AudioBus::Master) == 1.0f,
+          "start() stops every voice and resets the buses");
+
+    // Music streams (decoded while playing) through the same buses.
+    const kast::AudioHandle music = audio.play("sounds/tone.wav", {.bus = kast::AudioBus::Music, .volume = 0.5f});
+    check(std::abs(renderPeak(audio, 2400) - 0.25f) < 0.005f, "a Music (streamed) clip plays at its volume");
+    audio.setBusVolume(kast::AudioBus::Music, 0.5f);
+    settle(audio);
+    check(std::abs(renderPeak(audio, 2400) - 0.125f) < 0.005f, "the Music bus volume applies");
+    audio.stopAll(kast::AudioBus::SFX);
+    check(audio.isPlaying(music), "stopAll(SFX) leaves Music playing");
+    audio.stopAll(kast::AudioBus::Music);
+    check(audio.voiceCount() == 0, "stopAll(Music) stops it");
+}
+
+void checkAudioLooping()
+{
+    const std::filesystem::path dir = audioTestDir();
+    kast::Audio audio(kast::Audio::Output::Offline);
+    audio.start(dir);
+    constexpr uint32_t length = 12000; // tone.wav
+    const kast::AudioHandle loop = audio.play("sounds/tone.wav", {.loop = true});
+    bool silentChunk = false;
+    for (uint32_t done = 0; done < length * 5 / 2; done += 600) // 2.5x its length, in 12.5 ms chunks
+        silentChunk |= renderPeak(audio, 600) < 0.4f;
+    check(!silentChunk && audio.isPlaying(loop) && audio.voiceCount() == 1,
+          "a looping clip keeps sounding past 2x its length, with no silent gap");
+    audio.stop(loop);
+
+    const kast::AudioHandle once = audio.play("sounds/tone.wav", {.bus = kast::AudioBus::UI});
+    check(renderPeak(audio, length - 600) > 0.4f, "a one-shot sounds for its length");
+    renderPeak(audio, 1200); // past its end
+    check(renderPeak(audio, 600) == 0.0f, "a one-shot goes silent after its length");
+    check(!audio.isPlaying(once) && audio.voiceCount() == 0, "an ended one-shot frees its voice; its handle is stale");
+
+    // A streamed (Music) loop too.
+    const kast::AudioHandle music = audio.play("sounds/tone.wav", {.bus = kast::AudioBus::Music, .loop = true});
+    silentChunk = false;
+    for (uint32_t done = 0; done < length * 5 / 2; done += 600)
+        silentChunk |= renderPeak(audio, 600) < 0.4f;
+    check(!silentChunk && audio.isPlaying(music), "a looping Music stream keeps sounding past 2x its length");
+}
+
+void checkAudioVoices()
+{
+    const std::filesystem::path dir = audioTestDir();
+    kast::Audio audio(kast::Audio::Output::Offline);
+    audio.start(dir);
+    std::vector<kast::AudioHandle> handles;
+    for (int i = 0; i <= kast::kMaxVoices; ++i) // 33 one-shots
+        handles.push_back(audio.play("sounds/tone.wav", {}));
+    check(audio.voiceCount() == kast::kMaxVoices, "33 one-shots: the voice count stays at 32");
+    check(!audio.isPlaying(handles[0]), "the oldest one-shot was stolen: its handle is stale");
+    check(std::ranges::all_of(handles.begin() + 1, handles.end(), [&](kast::AudioHandle h) { return audio.isPlaying(h); }),
+          "the 32 newer one-shots play");
+    check(std::ranges::adjacent_find(handles) == handles.end() && handles[kast::kMaxVoices] != handles[0],
+          "a reused voice gets a new handle");
+    audio.stop(handles[0]); // stale: no-op, must not stop the voice that took its slot
+    check(audio.voiceCount() == kast::kMaxVoices && audio.isPlaying(handles[kast::kMaxVoices]),
+          "stopping a stolen voice's stale handle does nothing");
+
+    // Looping voices are never stolen: one loop among one-shots survives 40 more plays.
+    audio.stopAll();
+    const kast::AudioHandle keeper = audio.play("sounds/tone.wav", {.loop = true});
+    for (int i = 0; i < 40; ++i)
+        audio.play("sounds/tone.wav", {});
+    check(audio.isPlaying(keeper) && audio.voiceCount() == kast::kMaxVoices, "a looping voice is not stolen");
+
+    audio.stopAll();
+    std::vector<kast::AudioHandle> loops;
+    for (int i = 0; i < kast::kMaxVoices; ++i)
+        loops.push_back(audio.play("sounds/tone.wav", {.loop = true}));
+    const auto warnings = [] {
+        return std::ranges::count_if(kast::log::lines(), [](const std::string& line) {
+            return contains(line, "Sound 'sounds/ramp.wav' dropped: all 32 voices are looping");
+        });
+    };
+    const auto before = warnings();
+    const kast::AudioHandle dropped = audio.play("sounds/ramp.wav", {});
+    check(dropped == 0 && warnings() == before + 1, "all 32 looping: a 33rd play is dropped with a warning naming the clip");
+    check(audio.voiceCount() == kast::kMaxVoices &&
+              std::ranges::all_of(loops, [&](kast::AudioHandle h) { return audio.isPlaying(h); }),
+          "no looping voice was stolen");
+    check(!audio.isPlaying(dropped), "the dropped play's handle (0) is stale");
+
+    const std::vector<kast::Audio::Voice> voices = audio.voices();
+    check(voices.size() == kast::kMaxVoices && voices.front().handle == loops.front() && voices.front().loop &&
+              voices.front().clip == "sounds/tone.wav" && voices.front().bus == kast::AudioBus::SFX,
+          "voices() lists the live voices oldest first");
+}
+
+void checkAudioHandles()
+{
+    const std::filesystem::path dir = audioTestDir();
+    kast::Audio audio(kast::Audio::Output::Offline);
+    audio.start(dir);
+    // ramp.wav: sample i = i / 65536, so a rendered sample tells the playback position. Tolerance: 64 frames
+    // (miniaudio's stop / start fades and read-ahead move it by a few frames; 16-bit samples step by 2 / 65536).
+    const auto position = [&] {
+        renderPeak(audio, 16); // past the start fade
+        return renderOne(audio) * 65536.0f;
+    };
+    const kast::AudioHandle ramp = audio.play("sounds/ramp.wav", {});
+    renderPeak(audio, 1000);
+    audio.pause(ramp);
+    check(!audio.isPlaying(ramp) && audio.voiceCount() == 1 && audio.voices().front().paused,
+          "pause: not playing, voice kept");
+    settle(audio);
+    check(renderPeak(audio, 5000) == 0.0f, "a paused voice is silent");
+    audio.resume(ramp);
+    check(audio.isPlaying(ramp), "resume: playing again");
+    float at = position();
+    check(std::abs(at - 1017.0f) < 64.0f, "resume continues from the paused position (not reset, not advanced)");
+    kast::log::info(std::format("audio resume: position {} (paused at 1000, +17 rendered since resume)", at));
+    audio.setVolume(ramp, 0.5f);
+    check(audio.voices().front().volume == 0.5f, "setVolume sets the voice volume");
+
+    // Editor Pause (setPaused) holds every voice and keeps per-handle pauses.
+    const kast::AudioHandle held = audio.play("sounds/tone.wav", {.loop = true});
+    audio.pause(held);
+    renderPeak(audio, 1000);
+    at = position();
+    audio.setPaused(true);
+    settle(audio);
+    check(renderPeak(audio, 4800) == 0.0f, "setPaused(true): silence");
+    audio.setPaused(false);
+    const float after = position() / 0.5f; // the ramp's volume is 0.5
+    check(std::abs(after - (at / 0.5f + 18.0f)) < 64.0f && !audio.isPlaying(held),
+          "setPaused(false): the ramp continues where it was held; the handle-paused voice stays paused");
+
+    audio.stop(ramp);
+    check(!audio.isPlaying(ramp) && audio.voiceCount() == 1, "stop frees the voice; the handle is stale");
+    audio.stop(ramp);
+    audio.pause(ramp);
+    audio.resume(ramp);
+    audio.setVolume(ramp, 0.3f);
+    check(!audio.isPlaying(ramp) && audio.voiceCount() == 1, "stale handle calls are no-ops, not errors");
+    check(!audio.isPlaying(0) && !audio.isPlaying(0xFFFFFFFFFFull), "never-issued handles are stale");
+
+    check(throwsInvalid([&] { audio.play("sounds/none.wav", {}); }, "cannot read 'sounds/none.wav'"), "missing file");
+    check(throwsInvalid([&] { audio.play("sounds/broken.wav", {}); }, "cannot decode 'sounds/broken.wav'"), "corrupt WAV");
+    check(throwsInvalid([&] { audio.play("sounds/broken.mp3", {.bus = kast::AudioBus::Music}); }, "cannot decode"),
+          "corrupt MP3 (streamed)");
+    check(throwsInvalid([&] { audio.play("sounds/tone.ogg", {}); }, "not a .wav or .mp3 file"), ".ogg");
+    check(throwsInvalid([&] { audio.play("sounds/tone.wav", {.volume = 1.5f}); }, "between 0 and 1"), "volume 1.5");
+    check(audio.voiceCount() == 1, "failed plays take no voice");
+
+    kast::Audio noProject(kast::Audio::Output::Offline);
+    noProject.start(std::nullopt);
+    check(throwsInvalid([&] { noProject.play("sounds/tone.wav", {}); }, "no project"), "no project: play fails");
+}
+
+// The null backend (no device): one warning, then everything behaves normally (time passes on the null device).
+void checkAudioNullDevice()
+{
+    const std::filesystem::path dir = audioTestDir();
+    const auto warnings = [] {
+        return std::ranges::count_if(kast::log::lines(),
+                                     [](const std::string& line) { return contains(line, "No audio output device"); });
+    };
+    const auto before = warnings();
+    kast::Audio audio(kast::Audio::Output::Null);
+    audio.start(dir);
+    audio.start(dir); // a second session: no second warning
+    check(warnings() == before + 1, "no audio device: one warning");
+    const kast::AudioHandle h = audio.play("sounds/tone.wav", {.bus = kast::AudioBus::Voice, .loop = true});
+    check(audio.isPlaying(h) && audio.voiceCount() == 1 && audio.sampleRate() > 0, "the null backend plays");
+    audio.pause(h);
+    check(!audio.isPlaying(h), "pause works");
+    audio.resume(h);
+    audio.setBusVolume(kast::AudioBus::Voice, 0.25f);
+    check(audio.isPlaying(h) && audio.busVolume(kast::AudioBus::Voice) == 0.25f, "resume and bus volume work");
+    const kast::AudioHandle once = audio.play("sounds/tone.wav", {});
+    for (int i = 0; i < 200 && audio.isPlaying(once); ++i) { // 0.25 s clip; the null device consumes in real time
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        audio.update();
+    }
+    check(!audio.isPlaying(once) && audio.isPlaying(h), "a one-shot ends on the null device; the loop keeps going");
+    check(throwsInvalid([&] { audio.play("sounds/broken.wav", {}); }, "cannot decode"), "errors as with a device");
+    audio.stop();
+    check(audio.voiceCount() == 0, "stop() frees every voice");
+}
+
+// AudioSource: registry, validation, save/load round trip.
+void checkAudioSourceComponent()
+{
+    const entt::meta_type type = kast::findComponentType("AudioSource");
+    check(static_cast<bool>(type), "AudioSource is registered");
+    std::string error;
+    const auto fromJson = [&](const char* json) {
+        return static_cast<bool>(kast::componentFromJson(type, nlohmann::ordered_json::parse(json), error));
+    };
+    check(fromJson(R"({"clip": "sounds/a.WAV", "bus": "Music", "volume": 0.5, "loop": true, "playOnStart": true})"),
+          "a valid AudioSource loads");
+    check(!fromJson(R"({"clip": "a.wav", "bus": "SFX", "volume": 1.5, "loop": false, "playOnStart": false})") &&
+              contains(error, "volume"),
+          "volume 1.5 is rejected");
+    check(!fromJson(R"({"clip": "a.wav", "bus": "SFX", "volume": -0.5, "loop": false, "playOnStart": false})"),
+          "volume -0.5 is rejected");
+    check(!fromJson(R"({"clip": "a.ogg", "bus": "SFX", "volume": 1, "loop": false, "playOnStart": false})") &&
+              contains(error, ".wav or .mp3"),
+          "a .ogg clip is rejected");
+    check(!fromJson(R"({"clip": "a.wav", "bus": "Ambient", "volume": 1, "loop": false, "playOnStart": false})"),
+          "an unknown bus is rejected");
+    check(fromJson(R"({"clip": "", "bus": "SFX", "volume": 1, "loop": false, "playOnStart": false})"), "no clip is valid");
+
+    kast::Scene scene;
+    const entt::entity e = scene.create("Speaker");
+    scene.registry().emplace<kast::AudioSource>(e, "sounds/tone.wav", kast::AudioBus::UI, 0.25f, true, true);
+    const std::filesystem::path dir = looseTestDir("kast_audio_source_check");
+    check(kast::saveScene(scene, (dir / "a.scene").string(), error), "save a scene with an AudioSource");
+    kast::Scene loaded;
+    check(kast::loadScene((dir / "a.scene").string(), loaded, error), "load it back");
+    const auto* source = loaded.registry().try_get<kast::AudioSource>(named(loaded, "Speaker"));
+    check(source && source->clip == "sounds/tone.wav" && source->bus == kast::AudioBus::UI && source->volume == 0.25f &&
+              source->loop && source->playOnStart,
+          "AudioSource round-trips through save/load");
+    check(kast::sceneToJson(loaded).dump() == kast::sceneToJson(scene).dump(), "the reloaded scene saves identically");
+}
+
+void checkAudioProjectSettings()
+{
+    const std::filesystem::path dir = projectTestDir("kast_audio_project_check", "Mixed");
+    kast::Project project;
+    std::string error;
+    check(kast::loadProject(dir / kast::kProjectFileName, project, error) && project.audio == kast::AudioMix{},
+          "project.kast without \"audio\": every bus 1.0, unmuted");
+    check(std::ranges::all_of(project.audio, [](const kast::BusMix& b) { return b.volume == 1.0f && !b.muted; }),
+          "the default mix is 1.0 unmuted");
+    check(kast::saveProject(project, error), "save it");
+    std::string text;
+    kast::readFile(dir / kast::kProjectFileName, text);
+    check(!contains(text, "\"audio\""), "an all-default mix is left out of project.kast (existing files stay unchanged)");
+
+    project.audio[static_cast<int>(kast::AudioBus::Music)] = {0.25f, false};
+    project.audio[static_cast<int>(kast::AudioBus::UI)] = {0.5f, true};
+    check(kast::saveProject(project, error), "save bus defaults");
+    kast::Project reloaded;
+    check(kast::loadProject(dir / kast::kProjectFileName, reloaded, error) && reloaded.audio == project.audio,
+          "bus defaults round-trip through project.kast");
+    kast::readFile(dir / kast::kProjectFileName, text);
+    check(contains(text, "\"version\": 1") && contains(text, "\"audio\""), "kProjectFileVersion stays 1");
+
+    writeFile(dir / "partial.kast", R"({"version": 1, "name": "P", "startScene": null, "audio": {"SFX": {"volume": 0.5}}})");
+    check(kast::loadProject(dir / "partial.kast", reloaded, error) &&
+              reloaded.audio[static_cast<int>(kast::AudioBus::SFX)] == kast::BusMix{0.5f, false} &&
+              reloaded.audio[static_cast<int>(kast::AudioBus::Music)] == kast::BusMix{},
+          "a partial audio block: missing buses and keys keep their defaults");
+    for (const char* bad : {R"("audio": {"SFX": {"volume": 1.5}})", R"("audio": {"Ambient": {}})",
+                            R"("audio": {"SFX": {"muted": 1}})", R"("audio": {"SFX": {"gain": 1}})", R"("audio": [])"}) {
+        writeFile(dir / "bad.kast", std::format(R"({{"version": 1, "name": "P", "startScene": null, {}}})", bad));
+        check(!kast::loadProject(dir / "bad.kast", reloaded, error) && contains(error, "audio"),
+              std::format("invalid audio block rejected: {}", bad).c_str());
+    }
+
+    // Applied at Play start (editor): the session's buses take the project defaults.
+    kast::Scene scene;
+    scene.create("E");
+    check(kast::saveScene(scene, (dir / "a.scene").string(), error), "save a scene in the project");
+    Document doc;
+    check(openFile(doc, (dir / "a.scene").string(), error) && doc.project, "open it");
+    startPlay(doc);
+    check(doc.lua.audio().busVolume(kast::AudioBus::Music) == 0.25f && doc.lua.audio().busMuted(kast::AudioBus::UI) &&
+              doc.lua.audio().busVolume(kast::AudioBus::SFX) == 1.0f,
+          "Play start applies the project's bus defaults");
+    doc.lua.audio().setBusVolume(kast::AudioBus::Music, 0.9f); // a runtime change (kast.audio.setBusVolume)
+    stopPlay(doc);
+    check(doc.project->audio[static_cast<int>(kast::AudioBus::Music)].volume == 0.25f, "runtime changes are not saved");
+    check(setBusDefault(doc, kast::AudioBus::Voice, {0.75f, true}, error), "setBusDefault (Mixer panel)");
+    check(kast::loadProject(dir / kast::kProjectFileName, reloaded, error) &&
+              reloaded.audio[static_cast<int>(kast::AudioBus::Voice)] == kast::BusMix{0.75f, true},
+          "setBusDefault saves project.kast");
+    check(!setBusDefault(doc, kast::AudioBus::Voice, {1.5f, false}, error), "setBusDefault rejects volume 1.5");
+}
+
+// AudioSource playOnStart, kast.audio from Lua, Stop / Pause / kast.loadScene in an editor Play session.
+void checkAudioPlaySession()
+{
+    const std::filesystem::path dir = audioTestDir();
+    kast::Scene a;
+    const entt::entity music = a.create("Music");
+    a.registry().emplace<kast::AudioSource>(music, "sounds/tone.wav", kast::AudioBus::Music, 0.5f, true, true);
+    const entt::entity broken = a.create("Broken");
+    a.registry().emplace<kast::AudioSource>(broken, "sounds/broken.wav", kast::AudioBus::SFX, 1.0f, false, true);
+    const entt::entity button = a.create("Button");
+    a.registry().emplace<kast::AudioSource>(button, "sounds/ramp.wav", kast::AudioBus::UI, 1.0f, false, false);
+    const entt::entity plain = a.create("Plain");
+    a.systems = {"scripts/audio.lua"};
+    writeFile(dir / "scripts/audio.lua", std::format(R"lua(local MUSIC, BUTTON, PLAIN = {}, {}, {}
+local frame = 0
+local function fails(pattern, f, ...)
+    local ok, err = pcall(f, ...)
+    assert(not ok, "expected an error matching " .. pattern)
+    assert(string.find(err, pattern, 1, true), "error was: " .. tostring(err))
+end
+return {{
+    update = function(dt)
+        frame = frame + 1
+        if frame == 1 then
+            local h = kast.audio.play("sounds/tone.wav", {{bus = "SFX", volume = 0.5}})
+            assert(type(h) == "number" and h > 0 and kast.audio.isPlaying(h), "play returns a playing handle")
+            kast.audio.pause(h)
+            assert(not kast.audio.isPlaying(h), "pause")
+            kast.audio.resume(h)
+            assert(kast.audio.isPlaying(h), "resume")
+            kast.audio.setVolume(h, 0.25)
+            kast.audio.stop(h)
+            assert(not kast.audio.isPlaying(h), "stop")
+            kast.audio.stop(h); kast.audio.pause(h); kast.audio.resume(h); kast.audio.setVolume(h, 1)
+            assert(kast.audio.isPlaying(h) == false, "a stale handle: no-ops, no error")
+            local loop = kast.audio.play("sounds/tone.wav", {{loop = true}})
+            local ui = kast.audio.play("sounds/tone.wav", {{bus = "UI"}})
+            kast.audio.stopAll("UI")
+            assert(kast.audio.isPlaying(loop) and not kast.audio.isPlaying(ui), "stopAll(bus)")
+            kast.audio.setBusVolume("Music", 0.5)
+            assert(kast.audio.getBusVolume("Music") == 0.5, "bus volume")
+            kast.audio.setBusMuted("Voice", true)
+            local b = kast.audio.playSource(BUTTON)
+            assert(kast.audio.isPlaying(b), "playSource")
+            kast.audio.stopSource(BUTTON)
+            assert(not kast.audio.isPlaying(b), "stopSource")
+            kast.audio.stopSource(MUSIC) -- the playOnStart voice
+            kast.audio.playSource(MUSIC)
+            fails("cannot read 'sounds/none.wav'", kast.audio.play, "sounds/none.wav")
+            fails("cannot decode 'sounds/broken.wav'", kast.audio.play, "sounds/broken.wav")
+            fails("'sounds/tone.ogg' is not a .wav or .mp3 file", kast.audio.play, "sounds/tone.ogg")
+            fails("kast.audio.play: unknown bus Ambient (expected", kast.audio.play, "sounds/tone.wav", {{bus = "Ambient"}})
+            fails("kast.audio.play: volume must be a number between 0 and 1, got 1.5", kast.audio.play, "sounds/tone.wav", {{volume = 1.5}})
+            fails("kast.audio.play: unknown option pitch (expected bus, volume or loop)", kast.audio.play, "sounds/tone.wav", {{pitch = 2}})
+            fails("kast.audio.play: path must be a string", kast.audio.play, 42)
+            fails("kast.audio.setVolume: volume must be a number between 0 and 1", kast.audio.setVolume, loop, 2)
+            fails("kast.audio.setBusVolume: volume must be a number between 0 and 1", kast.audio.setBusVolume, "SFX", -1)
+            fails("kast.audio.setBusVolume: unknown bus", kast.audio.setBusVolume, "sfx", 1)
+            fails("kast.audio.stopAll: unknown bus", kast.audio.stopAll, "Everything")
+            fails("kast.audio.isPlaying: invalid sound handle", kast.audio.isPlaying, "h")
+            fails("kast.audio.playSource: entity " .. PLAIN .. " has no AudioSource", kast.audio.playSource, PLAIN)
+            fails("kast.audio.stopSource: entity " .. PLAIN .. " has no AudioSource", kast.audio.stopSource, PLAIN)
+            fails("scripts/audio.lua:", function() kast.audio.play("sounds/none.wav") end) -- raised at the calling line
+            kast.log("audio lua frame 1 ok")
+        elseif frame == 2 then
+            kast.log("audio lua frame 2 ran") -- the errors did not stop the system
+        elseif frame == 3 then
+            kast.loadScene("b.scene")
+        end
+    end,
+}}
+)lua",
+                                                     idOf(a, music), idOf(a, button), idOf(a, plain)));
+    kast::Scene b;
+    b.create("Quiet");
+    std::string error;
+    check(kast::saveScene(a, (dir / "a.scene").string(), error) && kast::saveScene(b, (dir / "b.scene").string(), error),
+          "save the audio scenes");
+
+    Document doc;
+    check(openFile(doc, (dir / "a.scene").string(), error) && doc.project, "open the audio scene");
+    const size_t errorsBefore = std::ranges::count_if(kast::log::lines(), [](const std::string& line) {
+        return contains(line, "AudioSource on 'Broken'");
+    });
+    startPlay(doc);
+    kast::Audio& audio = doc.lua.audio();
+    check(audio.voiceCount() == 1 && audio.voices().front().clip == "sounds/tone.wav" &&
+              audio.voices().front().bus == kast::AudioBus::Music && audio.voices().front().loop,
+          "Play start: the playOnStart AudioSource plays (looping, Music)");
+    check(std::ranges::count_if(kast::log::lines(), [](const std::string& line) {
+              return contains(line, "AudioSource on 'Broken': cannot decode 'sounds/broken.wav'");
+          }) == static_cast<std::ptrdiff_t>(errorsBefore) + 1,
+          "a corrupt playOnStart clip logs one error and plays nothing");
+    check(std::abs(renderPeak(audio, 2400) - 0.25f) < 0.005f, "the playOnStart clip sounds at its volume");
+
+    updatePlay(doc, 1.0f / 60.0f);
+    checkOk(doc.lua, 0, "kast.audio from Lua: handles, buses, sources and errors");
+    check(logged("audio lua frame 1 ok"), "the kast.audio checks ran");
+    check(audio.voiceCount() == 2 && audio.busVolume(kast::AudioBus::Music) == 0.5f && audio.busMuted(kast::AudioBus::Voice),
+          "after frame 1: the loop and the restarted source play; bus changes applied");
+
+    // Editor Pause holds every voice; resume continues them.
+    togglePause(doc);
+    settle(audio);
+    check(doc.play == PlayState::Paused && renderPeak(audio, 2400) == 0.0f && audio.voiceCount() == 2,
+          "Pause: every voice held (silent, kept)");
+    togglePause(doc);
+    check(renderPeak(audio, 2400) > 0.1f, "resume: sound again");
+
+    updatePlay(doc, 1.0f / 60.0f);
+    check(logged("audio lua frame 2 ran") && statusOf(doc.lua, 0).ok, "the system keeps running after its Lua errors");
+    check(audio.voiceCount() == 2, "voices before the scene switch");
+    updatePlay(doc, 1.0f / 60.0f); // frame 3: kast.loadScene("b.scene")
+    check(doc.lua.scenePath() == "b.scene" && audio.voiceCount() == 0, "kast.loadScene leaves zero active voices");
+    check(audio.busVolume(kast::AudioBus::Music) == 0.5f, "runtime bus levels carry over a scene switch");
+
+    stopPlay(doc);
+    startPlay(doc);
+    check(audio.voiceCount() == 1, "Play again: the playOnStart source plays");
+    updatePlay(doc, 1.0f / 60.0f);
+    check(audio.voiceCount() == 2, "the script played a loop");
+    stopPlay(doc);
+    check(audio.voiceCount() == 0, "Stop leaves zero active voices");
+}
+
+// Last: mounting a pak lasts for the rest of the process, so later disk reads would fail.
+void checkMountedPak()
+{
+    const std::filesystem::path dir = looseTestDir("kast_mount_check");
+    std::filesystem::create_directories(dir / "src/components/sub");
+    writeFile(dir / "src/project.kast", R"({"version": 1, "name": "Packed", "startScene": "a.scene"})");
+    writeFile(dir / "src/components/sub/c.lua", "return 1");
+    writeFile(dir / "src/components/d.lua", "return 2");
+    std::filesystem::create_directories(dir / "src/sounds");
+    writeTone(dir / "src/sounds/tone.wav", 12000);
+    std::filesystem::copy_file(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "sounds/mp3-demo.mp3",
+                               dir / "src/sounds/mp3-demo.mp3");
+    std::string error;
+    check(kast::writePak(dir / "src", {"project.kast", "components/sub/c.lua", "components/d.lua", "sounds/tone.wav",
+                                       "sounds/mp3-demo.mp3"},
+                         dir / "game.pak", error),
+          "write a pak to mount");
+    kast::Pak pak;
+    check(pak.open(dir / "game.pak", error), "open the pak to mount");
+    const std::filesystem::path root = dir / "game"; // not on disk: everything comes from the pak
+    kast::mountPak(std::move(pak), root);
+    kast::Project project;
+    check(kast::loadProject(root / "project.kast", project, error) && project.name == "Packed", "project.kast from the pak");
+    std::string text;
+    check(kast::readFile(root / "components/d.lua", text) && text == "return 2", "readFile from the pak");
+    check(!kast::readFile(dir / "src/components/d.lua", text), "with a pak mounted, the disk is not read");
+    check(kast::listFiles(root / "components") ==
+              std::vector<std::filesystem::path>{root / "components/d.lua", root / "components/sub/c.lua"},
+          "listFiles from the pak");
+    check(kast::listFiles(root).size() == 5 && kast::listFiles(root / "nothing").empty(),
+          "listFiles of the root and of a missing folder");
+
+    // Audio from the pak (as kast_player plays it): decoded through kast::readFile, never the disk.
+    std::string reason;
+    const std::optional<kast::ClipInfo> wav = kast::clipInfo(root, "sounds/tone.wav", reason);
+    check(wav && wav->frames == 12000 && wav->channels == 2 && wav->sampleRate == kToneRate, "a WAV decodes from the pak");
+    const std::optional<kast::ClipInfo> mp3 = kast::clipInfo(root, "sounds/mp3-demo.mp3", reason);
+    check(mp3 && mp3->frames == 87552 && mp3->channels == 2 && mp3->sampleRate == 44100, "an MP3 decodes from the pak");
+    kast::Audio audio(kast::Audio::Output::Offline);
+    audio.start(root);
+    audio.play("sounds/tone.wav", {});
+    audio.play("sounds/mp3-demo.mp3", {.bus = kast::AudioBus::Music});
+    check(audio.voiceCount() == 2 && renderPeak(audio, 4800) > 0.4f, "pak clips play (cached WAV, streamed MP3)");
+}
+
 int main(int argc, char** argv)
 {
     kast::disableCrashDialogsIfRequested();
+    kast::Audio::setDefaultOutput(kast::Audio::Output::Offline); // no sound from the checks; render() pulls the mix
     if (argc == 2 && std::string_view(argv[1]) == "--bench-physics")
         return benchPhysics();
     checkRotations();
@@ -6356,6 +6954,15 @@ int main(int argc, char** argv)
     checkPhysicsCharacter();
     checkPhysicsLua();
     checkColliderWireframe();
+    checkAudioDecode();
+    checkAudioMix();
+    checkAudioLooping();
+    checkAudioVoices();
+    checkAudioHandles();
+    checkAudioNullDevice();
+    checkAudioSourceComponent();
+    checkAudioProjectSettings();
+    checkAudioPlaySession();
     checkMountedPak(); // last: the mounted pak hides the disk for the rest of the run
     removeTree(testRoot());
     std::error_code ec;

@@ -223,14 +223,19 @@ void startPlay(Document& doc)
         doc.lua.start(doc.scene, doc.project ? std::optional(doc.project->root) : std::nullopt, projectScenePath(doc),
                       &doc.input, doc.project ? doc.project->stateMachines.value_or(std::vector<std::string>{})
                                               : std::vector<std::string>{});
+        if (doc.project)
+            doc.lua.audio().setMix(doc.project->audio);
     }
     doc.play = PlayState::Playing;
+    doc.lua.audio().setPaused(false);
 }
 
 void togglePause(Document& doc)
 {
-    if (doc.play != PlayState::Stopped)
-        doc.play = doc.play == PlayState::Paused ? PlayState::Playing : PlayState::Paused;
+    if (doc.play == PlayState::Stopped)
+        return;
+    doc.play = doc.play == PlayState::Paused ? PlayState::Playing : PlayState::Paused;
+    doc.lua.audio().setPaused(doc.play == PlayState::Paused); // holds every voice where it is
 }
 
 void stopPlay(Document& doc)
@@ -754,6 +759,24 @@ bool setGlobalStateMachine(Document& doc, const std::string& name, bool global, 
     doc.project = std::move(project);
     kast::log::info(std::format("State machine \"{}\" is {} global ({})", name, global ? "now" : "no longer",
                                 kast::kProjectFileName));
+    return true;
+}
+
+bool setBusDefault(Document& doc, kast::AudioBus bus, kast::BusMix level, std::string& error)
+{
+    if (!doc.project) {
+        error = "Open a project to set its bus levels";
+        return false;
+    }
+    if (!(level.volume >= 0.0f && level.volume <= 1.0f)) {
+        error = std::format("Bus volume must be between 0 and 1, got {}", level.volume);
+        return false;
+    }
+    kast::Project project = *doc.project;
+    project.audio[static_cast<int>(bus)] = level;
+    if (!kast::saveProject(project, error))
+        return false;
+    doc.project = std::move(project);
     return true;
 }
 

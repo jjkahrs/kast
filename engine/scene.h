@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio.h"
 #include "math3d.h"
 
 #include <entt/entity/registry.hpp>
@@ -197,6 +198,15 @@ struct CharacterController {
     float height = 1.8f;           // total, >= 2 * radius
     float maxSlopeDegrees = 45.0f; // 0..90, steeper slopes block
     float stepHeight = 0.3f;       // >= 0, steps up to this tall are climbed
+};
+
+// Plays a .wav / .mp3 clip (see audio.h) in Play mode: at start if playOnStart, or from Lua (kast.audio.playSource).
+struct AudioSource {
+    std::string clip; // project-relative .wav / .mp3; empty = none
+    AudioBus bus = AudioBus::SFX;
+    float volume = 1.0f; // 0..1
+    bool loop = false;
+    bool playOnStart = false;
 };
 
 // Per-scene physics settings.

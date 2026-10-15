@@ -346,8 +346,12 @@ bool Panels::drawField(entt::entity entity, const kast::ComponentType& type, con
 void Panels::drawInspector(Document& doc)
 {
     forgetStaleScene(doc);
+    preview_.update();
+    if (doc.play != PlayState::Stopped)
+        stopPreview();
     if (doc.selected != inspectedEntity_) { // a new entity selection takes the Inspector back from a material
         inspectedEntity_ = doc.selected;
+        stopPreview();
         if (doc.scene.valid(doc.selected))
             inspectedMaterial_.clear();
     }
@@ -388,6 +392,7 @@ void Panels::drawInspector(Document& doc)
                         const bool mesh = type.meta() && type.meta() == entt::resolve<kast::MeshRenderer>();
                         const bool model = type.meta() && type.meta() == entt::resolve<kast::ModelRenderer>();
                         const bool animator = type.meta() && type.meta() == entt::resolve<kast::Animator>();
+                        const bool sound = type.meta() && type.meta() == entt::resolve<kast::AudioSource>();
                         const auto drawOne = [&](const kast::FieldDesc& field, Json& value) {
                             if (mesh && field.name == "material")
                                 return drawMaterialPicker(doc, value);
@@ -397,6 +402,8 @@ void Panels::drawInspector(Document& doc)
                                 return drawSlotMaterialPickers(doc, entity, value);
                             if (animator && field.name == "clip")
                                 return drawClipPicker(doc, entity, value);
+                            if (sound && field.name == "clip")
+                                return drawSoundPicker(doc, value);
                             return drawField(entity, type, field, value);
                         };
                         for (const kast::FieldDesc& field : type.fields()) {
@@ -411,6 +418,8 @@ void Panels::drawInspector(Document& doc)
                         }
                         if (animator)
                             drawAnimatorPreview(doc, entity);
+                        if (sound)
+                            drawAudioPreview(doc, entity);
                     }
                 }
                 endCard();
@@ -709,6 +718,9 @@ void Panels::selectAsset(const std::string& path)
 {
     assetSelected_ = path;
     inspectedMaterial_ = hasExtension(path, ".mat") ? path : "";
+    if (const size_t slash = path.rfind('/'); slash != std::string::npos)
+        assetExpand_ = path.substr(0, slash); // its folder (one level), so the entry shows
+    assetScrollTo_ = true;
 }
 
 bool Panels::drawMaterialPicker(Document& doc, Json& value)
@@ -735,6 +747,62 @@ bool Panels::drawModelPicker(Document& doc, Json& value)
         return false;
     value = path;
     return true;
+}
+
+bool Panels::drawSoundPicker(Document& doc, Json& value)
+{
+    if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
+        refreshAssets(doc);
+    std::vector<std::string> files;
+    collectFiles(assets_, {".wav", ".mp3"}, files);
+    std::string path = value.get<std::string>();
+    const bool changed = drawFilePicker("Clip", files, "None", path);
+    if (changed)
+        value = path;
+    // A listed file that can't be decoded (drawFilePicker reports unlisted ones). Checked once per Assets scan.
+    if (!path.empty() && doc.project && std::ranges::find(files, path) != files.end()) {
+        auto [it, unchecked] = clipErrors_.try_emplace(path);
+        if (unchecked)
+            kast::clipInfo(doc.project->root, path, it->second);
+        if (!it->second.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+            ImGui::TextWrapped("%s", it->second.c_str());
+            ImGui::PopStyleColor();
+        }
+    }
+    return changed;
+}
+
+void Panels::drawAudioPreview(Document& doc, entt::entity entity)
+{
+    const kast::AudioSource& source = doc.scene.registry().get<kast::AudioSource>(entity);
+    const bool playing = preview_.isPlaying(previewHandle_);
+    const char* blocker = doc.play != PlayState::Stopped ? "Stop Play to preview"
+                          : !doc.project                ? "Open a project to preview"
+                          : source.clip.empty()         ? "Choose a clip to preview"
+                                                        : nullptr;
+    ImGui::BeginDisabled(blocker != nullptr);
+    if (ImGui::Button(playing ? "Stop Preview" : "Preview")) {
+        if (playing) {
+            stopPreview();
+        } else {
+            try {
+                preview_.start(doc.project->root);
+                preview_.setMix(doc.project->audio);
+                previewHandle_ = preview_.play(source.clip, {source.bus, source.volume, source.loop});
+            } catch (const std::exception& e) {
+                kast::log::error(std::format("Preview: {}", e.what()));
+            }
+        }
+    }
+    ImGui::EndDisabled();
+    disabledTooltip(blocker);
+}
+
+void Panels::stopPreview()
+{
+    preview_.stop(previewHandle_);
+    previewHandle_ = 0;
 }
 
 bool Panels::drawSlotMaterialPickers(Document& doc, entt::entity entity, Json& value)
@@ -1110,6 +1178,66 @@ void Panels::drawLighting(Document& doc, bool& open)
     ImGui::End();
 }
 
+void Panels::drawMixer(Document& doc, bool& open)
+{
+    if (!open)
+        return;
+    const float em = ImGui::GetFontSize();
+    ImGui::SetNextWindowSize(ImVec2(em * 26, em * 20), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Mixer", &open)) {
+        if (!doc.project) {
+            ImGui::TextDisabled("Open a project to set its bus levels");
+        } else {
+            ImGui::SeparatorText("Default bus levels (project.kast)");
+            for (int i = 0; i < kast::kAudioBusCount; ++i) {
+                const auto bus = static_cast<kast::AudioBus>(i);
+                kast::BusMix level = doc.project->audio[i];
+                ImGui::PushID(i);
+                bool edited = ImGui::Checkbox("Mute", &level.muted);
+                ImGui::SameLine();
+                ImGui::SliderFloat(kast::busName(bus), &level.volume, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+                // Saved once the drag ends, not every frame of it; the live session follows every frame.
+                edited |= ImGui::IsItemDeactivatedAfterEdit();
+                doc.project->audio[i].volume = level.volume;
+                if (doc.play != PlayState::Stopped) {
+                    doc.lua.audio().setBusVolume(bus, level.volume);
+                    doc.lua.audio().setBusMuted(bus, level.muted);
+                }
+                if (edited)
+                    if (std::string error; !setBusDefault(doc, bus, level, error))
+                        kast::log::error(error);
+                ImGui::PopID();
+            }
+        }
+        if (doc.play != PlayState::Stopped) {
+            const std::vector<kast::Audio::Voice> voices = doc.lua.audio().voices();
+            ImGui::SeparatorText(std::format("Voices {} / {}", voices.size(), kast::kMaxVoices).c_str());
+            if (voices.empty())
+                ImGui::TextDisabled("Nothing playing");
+            else if (ImGui::BeginTable("voices", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+                for (const char* column : {"Clip", "Bus", "Volume", "Loop", "State"})
+                    ImGui::TableSetupColumn(column);
+                ImGui::TableHeadersRow();
+                for (const kast::Audio::Voice& voice : voices) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(voice.clip.c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(kast::busName(voice.bus));
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%.2f", voice.volume);
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(voice.loop ? "Yes" : "No");
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(voice.paused || doc.play == PlayState::Paused ? "Paused" : "Playing");
+                }
+                ImGui::EndTable();
+            }
+        }
+    }
+    ImGui::End();
+}
+
 void Panels::drawPhysics(Document& doc, bool& open)
 {
     if (!open)
@@ -1261,6 +1389,21 @@ bool hasExtension(const std::string& name, std::string_view extension)
     return actual == extension;
 }
 
+// A small speaker (box, cone and a sound wave) at x in a row from y, height tall: marks audio files in Assets. Accent
+// colored, black on a selected (accent-filled) row.
+void drawSpeakerIcon(float x, float y, float height, bool selected)
+{
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float s = ImGui::GetFontSize() * 0.5f; // icon height
+    const float top = y + (height - s) * 0.5f;
+    const ImU32 color = selected ? IM_COL32_BLACK : ImGui::GetColorU32(ImGuiCol_Button);
+    draw->AddRectFilled({x, top + s * 0.3f}, {x + s * 0.35f, top + s * 0.7f}, color);
+    draw->AddQuadFilled({x + s * 0.35f, top + s * 0.3f}, {x + s * 0.8f, top}, {x + s * 0.8f, top + s},
+                        {x + s * 0.35f, top + s * 0.7f}, color);
+    draw->AddBezierQuadratic({x + s, top + s * 0.2f}, {x + s * 1.3f, top + s * 0.5f}, {x + s, top + s * 0.8f}, color,
+                             s * 0.12f);
+}
+
 // Files the external editor opens (File > Preferences...).
 bool isTextAsset(const std::string& name)
 {
@@ -1315,6 +1458,7 @@ void Panels::refreshAssets(const Document& doc)
 {
     assetsRoot_ = doc.project ? doc.project->root : std::filesystem::path();
     assets_ = assetsRoot_.empty() ? std::vector<AssetEntry>{} : scanAssets(assetsRoot_);
+    clipErrors_.clear(); // clips may have changed
     if (!findAsset(assets_, assetSelected_))
         assetSelected_.clear();
     if (!findAsset(assets_, assetRenaming_))
@@ -1418,6 +1562,12 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
     }
     const bool renaming = assetRenaming_ == entry.path;
     const bool open = ImGui::TreeNodeEx("##node", flags, "%s", renaming ? "" : entry.name.c_str());
+    if (assetSelected_ == entry.path && std::exchange(assetScrollTo_, false) && !ImGui::IsItemVisible())
+        ImGui::SetScrollHereY(); // a click's entry is already in view: no jump
+    if (!entry.folder && !renaming && kast::isAudioFile(entry.name))
+        drawSpeakerIcon(ImGui::GetItemRectMin().x + ImGui::GetTreeNodeToLabelSpacing() +
+                            ImGui::CalcTextSize(entry.name.c_str()).x + ImGui::GetStyle().ItemSpacing.x,
+                        ImGui::GetItemRectMin().y, ImGui::GetItemRectSize().y, assetSelected_ == entry.path);
 
     if ((ImGui::IsItemClicked(ImGuiMouseButton_Left) || ImGui::IsItemClicked(ImGuiMouseButton_Right)) &&
         !ImGui::IsItemToggledOpen())

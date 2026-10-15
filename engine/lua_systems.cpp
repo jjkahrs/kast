@@ -87,9 +87,9 @@ struct PendingScene {
 
 struct LuaSystems::State {
     State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, std::string scenePath, const Input* input,
-          EventBus& bus, StateMachines& fsm, Physics& physics)
+          EventBus& bus, StateMachines& fsm, Physics& physics, Audio& audio)
         : scene(scene), projectRoot(projectRoot), scenePath(std::move(scenePath)), input(input), bus(bus), fsm(fsm),
-          physics(physics)
+          physics(physics), audio(audio)
     {
     }
 
@@ -100,6 +100,8 @@ struct LuaSystems::State {
     EventBus& bus;
     StateMachines& fsm;
     Physics& physics;
+    Audio& audio;
+    std::unordered_map<entt::entity, AudioHandle> sources; // the last voice each AudioSource started (kast.audio.stopSource)
     MaterialLibrary materials; // shared .mat files, for kast.get/setMaterialProperty
     std::optional<PendingScene> pending; // last kast.loadScene call wins
     bool inShutdown = false;             // kast.loadScene is ignored while a shutdown runs
@@ -108,6 +110,7 @@ struct LuaSystems::State {
     sol::table inputApi;   // kast.input.*
     sol::table fsmApi;     // kast.fsm.*
     sol::table physicsApi; // kast.physics.*
+    sol::table audioApi;   // kast.audio.*
     DefinitionFiles fsmFiles; // state machine definition files at the last load, for hot reload
     std::string callbackPath; // the definition file whose enter/exit is running (log prefixes, event publisher)
     std::vector<System> systems;
@@ -139,6 +142,10 @@ struct LuaSystems::State {
     void bindApi();
     void bindFsmApi();
     void bindPhysicsApi();
+    void bindAudioApi();
+    // Starts entity's AudioSource. Throws std::invalid_argument (see Audio::play).
+    AudioHandle playSource(entt::entity entity);
+    void playOnStart(); // every AudioSource with playOnStart; a bad clip logs an error and plays nothing
 };
 
 void LuaSystems::State::init(const std::vector<std::string>& paths)
@@ -297,6 +304,7 @@ sol::environment LuaSystems::State::environment()
     kast["input"] = inputTable;
     kast["fsm"] = readOnly(fsmApi);
     kast["physics"] = readOnly(physicsApi);
+    kast["audio"] = readOnly(audioApi);
     env["kast"] = readOnly(kast);
     return env;
 }
@@ -699,6 +707,7 @@ void LuaSystems::State::bindApi()
     });
     bindFsmApi();
     bindPhysicsApi();
+    bindAudioApi();
 }
 
 // kast.fsm.*: thin wrappers over StateMachines, whose std::invalid_argument (a bad target) becomes a Lua error at the
@@ -888,6 +897,143 @@ void LuaSystems::State::bindPhysicsApi()
     });
 }
 
+AudioHandle LuaSystems::State::playSource(entt::entity entity)
+{
+    const AudioSource& source = scene.registry().get<AudioSource>(entity);
+    if (source.clip.empty())
+        throw std::invalid_argument("the AudioSource has no clip");
+    const AudioHandle handle = audio.play(source.clip, {source.bus, source.volume, source.loop});
+    sources[entity] = handle;
+    return handle;
+}
+
+void LuaSystems::State::playOnStart()
+{
+    scene.forEachDepthFirst([&](entt::entity e) {
+        const AudioSource* source = scene.registry().try_get<AudioSource>(e);
+        if (!source || !source->playOnStart)
+            return;
+        try {
+            playSource(e);
+        } catch (const std::invalid_argument& error) {
+            log::error(std::format("AudioSource on '{}': {}", scene.registry().get<Name>(e).value, error.what()));
+        }
+    });
+}
+
+void LuaSystems::State::bindAudioApi()
+{
+    const auto busArg = [](lua_State* L, const std::string& function, const sol::object& name) {
+        const std::optional<AudioBus> found =
+            name.get_type() == sol::type::string ? busFromName(name.as<std::string>()) : std::nullopt;
+        if (!found)
+            raise(L, std::format("{}: unknown bus {} (expected \"Master\", \"Music\", \"SFX\", \"UI\" or \"Voice\")",
+                                 function, toString(L, name)));
+        return *found;
+    };
+    const auto volume = [](lua_State* L, const std::string& function, const sol::object& value) {
+        if (value.get_type() != sol::type::number || !(value.as<double>() >= 0.0 && value.as<double>() <= 1.0))
+            raise(L, std::format("{}: volume must be a number between 0 and 1, got {}", function, toString(L, value)));
+        return value.as<float>();
+    };
+    const auto boolean = [](lua_State* L, const std::string& function, const char* what, const sol::object& value) {
+        if (value.get_type() != sol::type::boolean)
+            raise(L, std::format("{}: {} must be true or false, got {}", function, what, toString(L, value)));
+        return value.as<bool>();
+    };
+    const auto handle = [](lua_State* L, const std::string& function, const sol::object& value) {
+        const double h = value.get_type() == sol::type::number ? value.as<double>() : -1.0;
+        if (!(h >= 0.0 && h <= kMaxExactInteger && h == std::floor(h)))
+            raise(L, std::format("{}: invalid sound handle {}", function, toString(L, value)));
+        return static_cast<AudioHandle>(h);
+    };
+    // Runs body; an Audio std::invalid_argument raises at the calling line.
+    const auto guarded = [](lua_State* L, const std::string& function, auto&& body) {
+        try {
+            return body();
+        } catch (const std::invalid_argument& e) {
+            raise(L, std::format("{}: {}", function, e.what()));
+        }
+    };
+    const auto source = [this](lua_State* L, const std::string& function, const sol::object& id) {
+        const entt::entity e = entity(L, id);
+        if (!scene.registry().all_of<AudioSource>(e))
+            raise(L, std::format("{}: entity {} has no AudioSource", function, toString(L, id)));
+        return e;
+    };
+    const auto absent = [](const sol::object& value) {
+        return value.get_type() == sol::type::lua_nil || value.get_type() == sol::type::none;
+    };
+
+    audioApi = lua.create_table();
+    audioApi.set_function("play", [this, busArg, volume, boolean, guarded, absent](
+                                      sol::this_state L, const sol::object& path, const sol::object& opts) {
+        const std::string fn = "kast.audio.play";
+        if (path.get_type() != sol::type::string)
+            raise(L, std::format("{}: path must be a string, got {}", fn, toString(L, path)));
+        Audio::PlayOptions options;
+        if (opts.get_type() == sol::type::table) {
+            for (const auto& [key, value] : opts.as<sol::table>()) {
+                const std::string name = key.get_type() == sol::type::string ? key.as<std::string>() : "";
+                if (name == "bus")
+                    options.bus = busArg(L, fn, value);
+                else if (name == "volume")
+                    options.volume = volume(L, fn, value);
+                else if (name == "loop")
+                    options.loop = boolean(L, fn, "loop", value);
+                else
+                    raise(L, std::format("{}: unknown option {} (expected bus, volume or loop)", fn, toString(L, key)));
+            }
+        } else if (!absent(opts)) {
+            raise(L, std::format("{}: options must be a table, got {}", fn, toString(L, opts)));
+        }
+        return static_cast<double>(guarded(L, fn, [&] { return audio.play(path.as<std::string>(), options); }));
+    });
+    // kast.audio.<name>(handle): a stale handle is ignored.
+    const auto onHandle = [&](const char* name, void (Audio::*fn)(AudioHandle)) {
+        audioApi.set_function(name, [this, function = std::format("kast.audio.{}", name), fn,
+                                     handle](sol::this_state L, const sol::object& h) { (audio.*fn)(handle(L, function, h)); });
+    };
+    onHandle("stop", &Audio::stop);
+    onHandle("pause", &Audio::pause);
+    onHandle("resume", &Audio::resume);
+    audioApi.set_function("setVolume", [this, handle, volume](sol::this_state L, const sol::object& h,
+                                                              const sol::object& v) {
+        audio.setVolume(handle(L, "kast.audio.setVolume", h), volume(L, "kast.audio.setVolume", v));
+    });
+    audioApi.set_function("isPlaying", [this, handle](sol::this_state L, const sol::object& h) {
+        return audio.isPlaying(handle(L, "kast.audio.isPlaying", h));
+    });
+    audioApi.set_function("stopAll", [this, busArg, absent](sol::this_state L, const sol::object& name) {
+        if (absent(name))
+            audio.stopAll();
+        else
+            audio.stopAll(busArg(L, "kast.audio.stopAll", name));
+    });
+    audioApi.set_function("setBusVolume", [this, busArg, volume](sol::this_state L, const sol::object& name,
+                                                              const sol::object& v) {
+        audio.setBusVolume(busArg(L, "kast.audio.setBusVolume", name), volume(L, "kast.audio.setBusVolume", v));
+    });
+    audioApi.set_function("getBusVolume", [this, busArg](sol::this_state L, const sol::object& name) {
+        return audio.busVolume(busArg(L, "kast.audio.getBusVolume", name));
+    });
+    audioApi.set_function("setBusMuted", [this, busArg, boolean](sol::this_state L, const sol::object& name,
+                                                              const sol::object& muted) {
+        const std::string fn = "kast.audio.setBusMuted";
+        audio.setBusMuted(busArg(L, fn, name), boolean(L, fn, "muted", muted));
+    });
+    audioApi.set_function("playSource", [this, source, guarded](sol::this_state L, const sol::object& id) {
+        const std::string fn = "kast.audio.playSource";
+        const entt::entity e = source(L, fn, id);
+        return static_cast<double>(guarded(L, fn, [&] { return playSource(e); }));
+    });
+    audioApi.set_function("stopSource", [this, source](sol::this_state L, const sol::object& id) {
+        const entt::entity e = source(L, "kast.audio.stopSource", id);
+        if (const auto it = sources.find(e); it != sources.end())
+            audio.stop(it->second);
+    });
+}
+
 LuaSystems::LuaSystems() = default;
 LuaSystems::~LuaSystems() = default;
 
@@ -897,6 +1043,7 @@ void LuaSystems::start(Scene& scene, const std::optional<std::filesystem::path>&
     fsm_.reset(std::move(gameMachines)); // its Lua callbacks go before the Lua state
     state_.reset(); // its subscriptions go first
     bus_.reset();
+    audio_.start(projectRoot);
     launch(scene, projectRoot, scenePath, input);
 }
 
@@ -907,7 +1054,8 @@ void LuaSystems::launch(Scene& scene, const std::optional<std::filesystem::path>
     state_.reset(); // the old Lua state goes before the new one is built
     models().setRoot(projectRoot.value_or(std::filesystem::path())); // kast.*Animation* load models before any render
     physics_.start(scene, bus_); // before the inits, which may query it
-    state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_, physics_);
+    state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_, physics_, audio_);
+    state_->playOnStart(); // before the inits, which may stop them
     state_->init(scene.systems);
 }
 
@@ -915,6 +1063,7 @@ bool LuaSystems::tick(float dt)
 {
     if (!state_)
         return false;
+    audio_.update();
     state_->tick(dt);
     if (!state_->pending)
         return false;
@@ -935,6 +1084,7 @@ void LuaSystems::endSession()
     fsm_.detach();
     state_.reset();
     physics_.stop();
+    audio_.stop();
     bus_.dropQueued();
 }
 

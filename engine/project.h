@@ -1,5 +1,7 @@
 #pragma once
 
+#include "audio.h"
+
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -19,6 +21,9 @@ struct Project {
     // Game state machines (definition names, see state_machines.h) run in every Play session. Optional in the file:
     // nullopt = the key is absent (saving leaves it out).
     std::optional<std::vector<std::string>> stateMachines;
+    // Default bus levels applied at Play start (Mixer panel). Optional in the file ("audio"): a missing bus is 1.0
+    // unmuted, and saving leaves out the block when every bus is.
+    AudioMix audio{};
 };
 
 // file is a project.kast path. Replaces out only on success; on failure error says why.

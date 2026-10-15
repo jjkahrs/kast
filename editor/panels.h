@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -21,7 +22,8 @@
 // definitions: status, Global toggle, live game states, new from template) and Events (the Play session's recently
 // delivered events, with a name filter) and Assets (the project's files: browse, open scenes and GUIs, new folder,
 // new Lua system / state machine / GUI, rename, delete to the Recycle Bin, drag-drop move, open text files in an
-// external editor), Lighting (the scene's ambient light) and Post Processing (the scene's post effects and fog) panels.
+// external editor), Lighting (the scene's ambient light), Post Processing (the scene's post effects and fog) and Mixer
+// (the project's default bus levels, live voices during Play) panels.
 class Panels {
 public:
     // Opens the Inspector's "New Lua Component" modal (Add Component > New Lua Component...) with name prefilled.
@@ -43,7 +45,7 @@ public:
         assetEdit_ = {ops[static_cast<int>(what)], std::move(folder)};
     }
     // Selects the Assets entry at path (project-relative), as a click does: a .mat also shows in the Inspector until an
-    // entity is selected.
+    // entity is selected. Opens the entry's folder.
     void selectAsset(const std::string& path);
     void drawHierarchy(Document& doc);
     void drawInspector(Document& doc);
@@ -57,6 +59,9 @@ public:
     void drawPostProcessing(Document& doc, bool& open);
     // The scene's physics settings: gravity (Window > Physics); draws nothing while open is false.
     void drawPhysics(Document& doc, bool& open);
+    // The project's default bus volumes and mutes, saved in project.kast (Window > Mixer); during Play also the live
+    // voices. Draws nothing while open is false.
+    void drawMixer(Document& doc, bool& open);
     // Rescans the project's files for the Assets panel (main's poll). drawAssets also rescans when the project changes.
     void refreshAssets(const Document& doc);
     // Double-clicked .rml files open in gui, .lua/.rcss/.json files in editor; renames and moves of gui's open files
@@ -110,6 +115,11 @@ private:
     bool drawSlotMaterialPickers(Document& doc, entt::entity entity, nlohmann::ordered_json& value);
     // Animator "clip": a combo of the model's clips.
     bool drawClipPicker(Document& doc, entt::entity entity, nlohmann::ordered_json& value);
+    // AudioSource "clip": a combo of the project's .wav / .mp3 files; an unreadable clip shows its error.
+    bool drawSoundPicker(Document& doc, nlohmann::ordered_json& value);
+    // Preview / Stop: plays the AudioSource's clip in edit mode at its volume and bus (disabled during Play).
+    void drawAudioPreview(Document& doc, entt::entity entity);
+    void stopPreview();
     // Play/Pause and a time scrub on the Animator's runtime state: poses the model, never saved, never dirties.
     void drawAnimatorPreview(Document& doc, entt::entity entity);
     // The Inspector for the .mat in inspectedMaterial_: every edit saves the file (the renderers reload it).
@@ -162,11 +172,16 @@ private:
     bool assetCreateMenuRequested_ = false;       // open the Create submenu when it is next drawn
     std::string assetNewFsm_; // a just-created state machine: its first rename (if any) also renames the machine
     std::string assetExpand_; // a folder to expand next frame (New Folder's parent)
+    bool assetScrollTo_ = false; // selectAsset: scroll the selected entry into view when next drawn
     AssetEdit assetEdit_;
     std::string assetDeletePath_; // waiting on the delete confirmation
     bool assetDeleteRequested_ = false;
     std::string assetsError_;
     bool assetsErrorRequested_ = false;
+
+    kast::Audio preview_;                // AudioSource Preview, separate from the Play session
+    kast::AudioHandle previewHandle_ = 0; // the playing preview; stale once it ends
+    std::map<std::string, std::string> clipErrors_; // AudioSource clips checked since the last Assets scan: why each can't play ("" = ok)
 
     // The Inspector shows inspectedMaterial_ (a project-relative .mat, set by selecting it in Assets) instead of the
     // selected entity until another entity is selected.

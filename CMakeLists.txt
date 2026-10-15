@@ -19,6 +19,8 @@ find_package(Stb REQUIRED) # header-only: stb_image (PNG/JPG decode), stb_image_
 # vcpkg's luajit port ships no CMake config, only headers in include/luajit and lua51.lib/.dll.
 find_path(LUAJIT_INCLUDE_DIR luajit.h PATH_SUFFIXES luajit REQUIRED)
 find_library(LUAJIT_LIBRARY lua51 REQUIRED)
+# vcpkg's miniaudio port is header-only (miniaudio.h, no CMake config); engine/audio.cpp holds its implementation.
+find_path(MINIAUDIO_INCLUDE_DIR miniaudio.h REQUIRED)
 
 # Kast code only; vcpkg headers are SYSTEM includes, so their warnings are suppressed. /utf-8: sources and string
 # literals are UTF-8.
@@ -89,9 +91,9 @@ add_library(kast_engine STATIC
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
-  ${KAST_ENGINE_SHADERS})
+  engine/audio.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
-target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}")
+target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
 # exceptions unwind through LuaJIT by default, which reports them only as "C++ exception"; catching them in sol2
 # keeps the binding's error message (with the script's file:line). The message reaches the Console, not sol2's stdout print.
@@ -296,6 +298,32 @@ add_test(NAME physics_roundtrip
 add_test(NAME physics_bad_gravity_rejected
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${CMAKE_CURRENT_BINARY_DIR}/physics_bad_gravity.scene"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
+# Audio: tests/project/audio.scene (Music: a looping playOnStart AudioSource on the Music bus; Jukebox: a UI-bus
+# AudioSource; scripts/audio_sfx.lua fires one-shot SFX through kast.audio; the built game "audio" in KAST_GAMES runs it
+# from game.pak). Every run uses --no-audio-device: silent, and the null backend logs its one warning. The Inspector on
+# Music (clip picker, Preview), the Mixer panel during Play (voices listed) and the Assets panel with the sound files.
+set(KAST_AUDIO "${KAST_TEST_PROJECT}/audio.scene")
+set(KAST_AUDIO_LOG "audio_sfx: one-shot started, playing=true")
+add_test(NAME audio_inspector_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/audio_inspector.png"
+          "-DEXTRA_ARGS=--scene ${KAST_AUDIO} --select 1 --no-audio-device" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME audio_mixer_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/audio_mixer_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_AUDIO} --play --no-audio-device" -DFOCUS_PANEL=Mixer -DFRAMES=90
+          "-DEXPECT_OUTPUT=No audio output device" -DEXPECT_COUNT=1 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME audio_play_log
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/audio_play_log.png"
+          "-DEXTRA_ARGS=--scene ${KAST_AUDIO} --play --no-audio-device" "-DEXPECT_OUTPUT=${KAST_AUDIO_LOG}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME audio_assets_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/audio_assets.png"
+          "-DEXTRA_ARGS=--scene ${KAST_AUDIO} --no-audio-device --assets-select sounds/wave-demo.wav" -DFOCUS_PANEL=Assets
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME audio_mixer_edit_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/audio_mixer_edit.png"
+          "-DEXTRA_ARGS=--scene ${KAST_AUDIO} --no-audio-device" -DFOCUS_PANEL=Mixer
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+
 # Shadows: tests/project/shadows.scene (a sun with cascaded shadows over a cube, a sphere, a posed skinned character,
 # an alpha-mask cutout, alpha-blend glass and a pillar ~49 m out) and point_shadows.scene (5 castShadows point lights
 # with pillars; Far Right Light is the farthest from both cameras). The built games "shadows" and "point_shadows" in
@@ -851,6 +879,23 @@ add_test(NAME player_physics_events
           "-DWORK_DIR=${KAST_GAME_OUT}/physics_events.run" -DEXPECT=0 "-DEXPECT_OUTPUT=${KAST_PHYSICS_LOG}"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
 set_tests_properties(player_physics_events PROPERTIES FIXTURES_REQUIRED game_physics_built TIMEOUT 90)
+# The built audio game decodes and plays its clips from game.pak. Not in KAST_GAMES: its player runs pass
+# --no-audio-device, so tests stay silent.
+kast_game_project(audio "Audio Test" audio.scene FALSE "")
+add_test(NAME build_game_audio
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/audio"
+          "-DOUT=${KAST_GAME_OUT}/audio" "-DEXE=Audio Test.exe" -DEXPECT=0 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+set_tests_properties(build_game_audio PROPERTIES FIXTURES_SETUP game_audio_built)
+add_test(NAME player_audio_from_pak
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/audio" "-DEXE=Audio Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/audio_pak.run" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_audio.png" -DEXPECT=0
+          "-DEXPECT_OUTPUT=${KAST_AUDIO_LOG}" "-DEXTRA_ARGS=--no-audio-device"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_audio_from_pak PROPERTIES FIXTURES_REQUIRED game_audio_built TIMEOUT 90)
+add_test(NAME player_audio_no_focus
+  COMMAND kast_focus_probe "${KAST_GAME_OUT}/audio/Audio Test.exe" --frames 120 --no-audio-device
+  WORKING_DIRECTORY "${KAST_GAME_OUT}/audio")
+set_tests_properties(player_audio_no_focus PROPERTIES FIXTURES_REQUIRED game_audio_built TIMEOUT 90)
 add_test(NAME player_shadows_differs
   COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_shadows_off.png"
           "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_shadows.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
@@ -1059,7 +1104,11 @@ add_test(NAME launcher_no_focus
 add_test(NAME player_no_focus
   COMMAND kast_focus_probe "${KAST_GAME_OUT}/switch/Switch Test.exe" --frames 120
   WORKING_DIRECTORY "${KAST_GAME_OUT}/switch")
-set_tests_properties(editor_no_focus launcher_no_focus PROPERTIES TIMEOUT 120 RESOURCE_LOCK no_focus_dir)
+add_test(NAME editor_audio_play_no_focus
+  COMMAND kast_focus_probe "$<TARGET_FILE:kast_editor>" --frames 120 --projects-file "${KAST_NO_FOCUS_DIR}/projects.json"
+          --scene "${KAST_AUDIO}" --play --no-audio-device --focus-panel Mixer
+  WORKING_DIRECTORY "${KAST_NO_FOCUS_DIR}")
+set_tests_properties(editor_no_focus launcher_no_focus editor_audio_play_no_focus PROPERTIES TIMEOUT 120 RESOURCE_LOCK no_focus_dir)
 set_tests_properties(player_no_focus PROPERTIES FIXTURES_REQUIRED game_switch_built TIMEOUT 90)
 
 # Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.

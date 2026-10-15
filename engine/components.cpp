@@ -123,6 +123,16 @@ const char* validateCharacterController(const entt::meta_any& component)
     return nullptr;
 }
 
+const char* validateAudioSource(const entt::meta_any& component)
+{
+    const auto& source = component.cast<const AudioSource&>();
+    if (!(source.volume >= 0.0f && source.volume <= 1.0f))
+        return "\"volume\" must be between 0 and 1";
+    if (!source.clip.empty() && !isAudioFile(source.clip))
+        return "\"clip\" must be a .wav or .mp3 file";
+    return nullptr;
+}
+
 void registerBuiltins()
 {
     registerComponent<Transform>("Transform", {"Transform", false})
@@ -221,6 +231,19 @@ void registerBuiltins()
     registerComponent<UIDocument>("UIDocument", {"UI Document"})
         .data<&UIDocument::path>("path").custom<FieldInfo>("Path")
         .data<&UIDocument::visible>("visible").custom<FieldInfo>("Visible");
+    entt::meta_factory<AudioBus>{}
+        .type("AudioBus")
+        .data<AudioBus::Master>("Master").custom<FieldInfo>("Master")
+        .data<AudioBus::Music>("Music").custom<FieldInfo>("Music")
+        .data<AudioBus::SFX>("SFX").custom<FieldInfo>("SFX")
+        .data<AudioBus::UI>("UI").custom<FieldInfo>("UI")
+        .data<AudioBus::Voice>("Voice").custom<FieldInfo>("Voice");
+    registerComponent<AudioSource>("AudioSource", {"Audio Source", true, validateAudioSource})
+        .data<&AudioSource::clip>("clip").custom<FieldInfo>("Clip")
+        .data<&AudioSource::bus>("bus").custom<FieldInfo>("Bus")
+        .data<&AudioSource::volume>("volume").custom<FieldInfo>("Volume", false, 0.0, 1.0)
+        .data<&AudioSource::loop>("loop").custom<FieldInfo>("Loop")
+        .data<&AudioSource::playOnStart>("playOnStart").custom<FieldInfo>("Play On Start");
 }
 
 // ponytail: not thread-safe; registration happens on the main thread before any scene work.

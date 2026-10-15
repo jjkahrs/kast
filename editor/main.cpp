@@ -10,6 +10,7 @@
 #include "viewport.h"
 
 #include <app.h>
+#include <audio.h>
 #include <crash_dialogs.h>
 #include <gui.h>
 #include <log.h>
@@ -54,7 +55,7 @@ constexpr const char* kUsage =
     "[--open-menu Name] [--open-build-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
     "[--focus-panel Window] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--settings-file settings.json] [--open-preferences] "
-    "[--open-external path] [--drop-model path] [--log-fps] [--no-vsync] [--crash abort|assert] | "
+    "[--open-external path] [--drop-model path] [--log-fps] [--no-vsync] [--no-audio-device] [--crash abort|assert] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --log-fps: once a second, the frame rate (vsync caps it at the display's refresh rate) and what a frame costs below
@@ -110,7 +111,7 @@ struct Options {
     std::string assetsSelect; // select this Assets entry (project-relative) as a click does: a .mat shows in the Inspector
     std::optional<std::pair<Panels::AssetCreate, std::string>> assetsCreate; // run Assets Create in that folder
     bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
-    std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting", "Post Processing" and "Physics" also open it) to the front, for screenshots
+    std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting", "Post Processing", "Physics" and "Mixer" also open it) to the front, for screenshots
     std::string openGui;            // open this .rml in the GUI Builder (relative paths: to the project, else the cwd)
     std::string guiSelect;          // then select the element with this id in it
     std::optional<std::pair<int, int>> guiPreviewSize; // add this GUI Preview resolution and pick it
@@ -128,6 +129,7 @@ struct Options {
     bool logFps = false;            // log frames per second, editor CPU and GPU frame times once a second
     std::string crash;              // --crash abort|assert: fail on purpose, to test KAST_NO_CRASH_DIALOGS
     bool noVsync = false;           // present as fast as possible, to measure the frame rate past the display's
+    bool noAudioDevice = false;     // play sound on the null backend (silent), as if there were no output device
     std::vector<std::string> childArgs; // the flags after --, passed on to the editor the Project Manager starts
 
     // The editor runs with a project or scene to edit (or to save or build from); otherwise the Project Manager does.
@@ -256,6 +258,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.logFps = true;
         } else if (arg == "--no-vsync") {
             options.noVsync = true;
+        } else if (arg == "--no-audio-device") {
+            options.noAudioDevice = true;
         } else if (arg == "--crash" && hasValue && (argv[i + 1] == std::string_view("abort") ||
                                                     argv[i + 1] == std::string_view("assert"))) {
             options.crash = argv[++i];
@@ -369,9 +373,9 @@ void buildDefaultLayout(ImGuiID dockspace)
 }
 
 // openMenu: a main menu to open this frame (--open-menu), or empty. openPreferences: set when File > Preferences... is
-// chosen. showLighting, showPostProcessing, showPhysics: those panels' visibility, toggled in the Window menu.
+// chosen. showLighting, showPostProcessing, showPhysics, showMixer: those panels' visibility, toggled in the Window menu.
 void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu, bool& openPreferences,
-                 bool& showLighting, bool& showPostProcessing, bool& showPhysics)
+                 bool& showLighting, bool& showPostProcessing, bool& showPhysics, bool& showMixer)
 {
     if (ImGui::BeginMainMenuBar()) {
         if (!openMenu.empty())
@@ -415,6 +419,7 @@ void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu,
             ImGui::MenuItem("Lighting", nullptr, &showLighting);
             ImGui::MenuItem("Post Processing", nullptr, &showPostProcessing);
             ImGui::MenuItem("Physics", nullptr, &showPhysics);
+            ImGui::MenuItem("Mixer", nullptr, &showMixer);
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -508,6 +513,8 @@ int main(int argc, char** argv)
         return options->launcherOpen.empty() ? runLauncher(launcher) : launcherOpen(launcher, options->launcherOpen);
     }
     kast::log::info("Kast editor starting");
+    if (options->noAudioDevice)
+        kast::Audio::setDefaultOutput(kast::Audio::Output::Null);
 
     Document doc;
     std::optional<kast::Project> opened; // --project, recorded in the recent list once the editor window opens
@@ -576,6 +583,7 @@ int main(int argc, char** argv)
     bool showLighting = options->focusPanel == "Lighting"; // hidden by default; --focus-panel Lighting opens it
     bool showPostProcessing = options->focusPanel == "Post Processing"; // the same
     bool showPhysics = options->focusPanel == "Physics";                // the same
+    bool showMixer = options->focusPanel == "Mixer";                    // the same
     if (!options->openExternal.empty())
         externalEditor.open(doc.project->root /
                             std::filesystem::path(reinterpret_cast<const char8_t*>(options->openExternal.c_str())));
@@ -639,7 +647,7 @@ int main(int argc, char** argv)
 
         bool openPreferences = options->openPreferences && frames.frame() == kAddComponentPopupFrame;
         drawMenuBar(files, doc, frames.frame() == kAddComponentPopupFrame ? options->openMenu : std::string(),
-                    openPreferences, showLighting, showPostProcessing, showPhysics);
+                    openPreferences, showLighting, showPostProcessing, showPhysics, showMixer);
         const ImGuiID dockspace = ImGui::GetID("MainDockSpace");
         if (!ImGui::DockBuilderGetNode(dockspace)) // no saved layout in imgui.ini
             buildDefaultLayout(dockspace);
@@ -707,6 +715,7 @@ int main(int argc, char** argv)
         panels.drawLighting(doc, showLighting);
         panels.drawPostProcessing(doc, showPostProcessing);
         panels.drawPhysics(doc, showPhysics);
+        panels.drawMixer(doc, showMixer);
         drawGuiBuilder(guiBuilder);
         drawConsole(); // submitted after Assets, Events and State Machines so Console is the front tab on first run
         drawPreferences(externalEditor, preferencesDraft, openPreferences);

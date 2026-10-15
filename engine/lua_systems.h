@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio.h"
 #include "event_bus.h"
 #include "input.h"
 #include "physics.h"
@@ -63,6 +64,11 @@ public:
     Physics& physics() { return physics_; }
     const Physics& physics() const { return physics_; }
     // The session's state machines (kast.fsm.* from C++). Usable while running; reset by start() and stop().
+    // The session's sound (kast.audio.* from C++): start() stops every voice and resets the buses to 1.0 (apply the
+    // project's defaults after it); a scene switch and stop() stop every voice; AudioSources with playOnStart start
+    // with each scene. tick() frees ended voices.
+    Audio& audio() { return audio_; }
+    const Audio& audio() const { return audio_; }
     StateMachines& fsm() { return fsm_; }
     const StateMachines& fsm() const { return fsm_; }
 
@@ -74,6 +80,7 @@ private:
 
     EventBus bus_; // declared before state_: the systems' subscriptions unsubscribe from it when state_ goes
     Physics physics_; // publishes on bus_
+    Audio audio_;
     std::unique_ptr<State> state_;
     StateMachines fsm_{bus_}; // declared after state_, so its Lua callbacks are released while the Lua state lives
 };

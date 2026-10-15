@@ -38,7 +38,7 @@ constexpr int kScreenshotTimeoutFrames = 30;
 constexpr const char* kPakFileName = "game.pak";
 constexpr int kGuiClickFrame = 10; // --gui-click: once the GUIs have loaded and laid out
 constexpr const char* kUsage =
-    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--size WxH] [--gpu-stats]";
+    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--size WxH] [--gpu-stats] [--no-audio-device]";
 constexpr int kGpuStatsWarmupFrames = 10; // --gpu-stats: skip startup frames (shader and target creation)
 
 struct Options {
@@ -47,6 +47,7 @@ struct Options {
     std::string guiClick;   // tests: click this GUI element id on frame kGuiClickFrame
     int width = kast::AppConfig{}.width, height = kast::AppConfig{}.height; // --size: window size
     bool gpuStats = false;  // log the average GPU frame time on exit
+    bool noAudioDevice = false; // tests: sound on the null backend (silent), as if there were no output device
 };
 
 bool parseInt(std::string_view text, int& out)
@@ -82,6 +83,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             }
         } else if (arg == "--gpu-stats") {
             options.gpuStats = true;
+        } else if (arg == "--no-audio-device") {
+            options.noAudioDevice = true;
         } else {
             kast::log::error(std::format("Invalid argument '{}'. {}", arg, kUsage));
             return std::nullopt;
@@ -141,6 +144,8 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    if (options->noAudioDevice)
+        kast::Audio::setDefaultOutput(kast::Audio::Output::Null);
     kast::LuaSystems lua;
     kast::Input input;
     kast::Renderer renderer;
@@ -168,6 +173,7 @@ int main(int argc, char** argv)
             kast::log::warn("No Camera in scene: nothing to render");
         lua.start(scene, project.root, *project.startScene, &input,
                   project.stateMachines.value_or(std::vector<std::string>{}));
+        lua.audio().setMix(project.audio);
         lastTicks = SDL_GetTicksNS();
         return true;
     };

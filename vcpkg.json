@@ -16,6 +16,7 @@
     "pugixml",
     "stb",
     "assimp",
-    "joltphysics"
+    "joltphysics",
+    "miniaudio"
   ]
 }
