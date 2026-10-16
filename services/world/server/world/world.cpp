@@ -1,12 +1,25 @@
 #include "world.h"
 #include "components.h"
+#include "../core/log.h"
 
 #include <algorithm>
 
 namespace kast::world {
 
-World::World(WorldRules rules, Send send, Save save)
-    : rules_(rules), send_(std::move(send)), save_(std::move(save)), grid_(rules.cellSize, rules.viewRadius) {}
+World::World(WorldRules rules, Send send, Save save, lua::Defs defs)
+    : rules_(rules), send_(std::move(send)), save_(std::move(save)), defs_(defs), grid_(rules.cellSize, rules.viewRadius),
+      lua_(reg_, std::move(defs)) {}
+
+std::vector<std::string> World::load_scripts(const std::filesystem::path& luaRoot) { return lua_.load(luaRoot); }
+
+void World::shutdown_scripts() {
+    const auto view = reg_.view<CharacterRef>();
+    for (const std::vector<entt::entity> chars(view.begin(), view.end()); entt::entity e : chars) {
+        lua_.leave(e);
+        reg_.emplace<ScriptsLeft>(e);
+    }
+    lua_.shutdown();
+}
 
 entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint now) {
     proto::Vec3 pos = row.pos;
@@ -26,17 +39,23 @@ entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint 
     reg_.emplace<AoiCell>(e, cell);
     reg_.emplace<Visible>(e);
     reg_.emplace<SaveTimer>(e, now);
+    reg_.emplace<ReplicatedState>(e);
     grid_.insert(wire_id(e), cell);
     ++population_;
     send_(sessionId, proto::EnterWorldOk{wire_id(e), pos, row.heading});
+    lua::restore_components(reg_, e, defs_, row.components, [&](const std::string& fix) {
+        log::warn("persisted component fixed on load", {{"char", row.id}, {"fix", fix}});
+    });
+    lua_.enter(e);
     return e;
 }
 
 void World::despawn(entt::entity e) {
     if (!reg_.valid(e)) return;
+    if (!reg_.all_of<ScriptsLeft>(e)) lua_.leave(e);
     const auto& ch = reg_.get<CharacterRef>(e);
     const auto& tf = reg_.get<Transform>(e);
-    save_({ch.charId, tf.pos, tf.heading});
+    save_({ch.charId, tf.pos, tf.heading, lua::components_column(reg_, e, defs_)});
     const uint32_t id = wire_id(e);
     for (uint32_t other : reg_.get<Visible>(e).ids) {
         const auto o = entt::entity{other};
@@ -57,12 +76,16 @@ void World::push_say(entt::entity e, std::string text) {
     if (reg_.valid(e)) reg_.get<PendingSay>(e).texts.push_back(std::move(text));
 }
 
+// Lua runs after movement and chat (it sees this tick's positions) and before replication and save (its changes go
+// out and get saved this tick). aoi stays before both replications, so a Spawn always precedes component data.
 void World::tick(TimePoint now) {
     movement_system(reg_, rules_.move, send_, now);
     aoi_system(reg_, grid_, send_);
-    replication_system(reg_, send_);
     chat_system(reg_, rules_.chat, send_, now);
-    save_system(reg_, save_, rules_.saveInterval, now);
+    lua_.update(rules_.tickSeconds);
+    replication_system(reg_, send_);
+    component_replication_system(reg_, defs_, send_);
+    save_system(reg_, defs_, save_, rules_.saveInterval, now);
     end_of_tick_system(reg_);
 }
 

@@ -1326,6 +1326,13 @@ void checkWorldClient()
     w.say("secret-chat-text-1");
     const Json* chat = r.next("world.chat");
     check(chat && *chat == Json{{"from", "Hero"}, {"text", "secret-chat-text-1"}}, "world.chat {from, text}");
+    w.say("components");
+    const Json* component = r.next("world.component");
+    check(component && *component == Json{{"entityId", 2}, {"name", "Health"}, {"data", {{"current", 42.5}, {"max", 100}}}},
+          "world.component {entityId, name, data}");
+    const Json* removed = r.next("world.componentRemoved");
+    check(removed && *removed == Json{{"entityId", 2}, {"name", "Health"}} && r.count("world.component") == 1,
+          "world.componentRemoved {entityId, name}; a ComponentUpdate with invalid JSON is dropped");
     w.say("bye");
     const Json* despawn = r.next("world.despawn");
     check(despawn && *despawn == Json{{"entityId", 2}}, "world.despawn {entityId}");
@@ -1686,6 +1693,80 @@ void checkReplicationOffline()
           "replication: after a scene switch the remote players in view are cloned into the new scene");
     r.stop();
     check(r.clone(4) == entt::null, "replication: stop() forgets them");
+}
+
+// Replicated Lua components (world.component / world.componentRemoved) applied by Replication to the local player and
+// clones, with tests/project's Health definition (shared with services/world/lua).
+void checkReplicationComponents()
+{
+    kast::activateComponentDefinitions(std::filesystem::path(KAST_TEST_PROJECT_DIR), nullptr);
+    const kast::ComponentType health = kast::findAnyComponentType("Health");
+    check(health.lua() != nullptr, "replication components: tests/project defines Health (persist/replicate accepted)");
+    if (!health.lua())
+        return;
+    const auto build = [](kast::Scene& s) {
+        const entt::entity player = s.create("Player");
+        s.registry().emplace<kast::NetworkLocalPlayer>(player);
+        s.create("Template");
+        s.registry().emplace<kast::NetworkReplication>(s.create("Manager"), kast::NetworkReplication{"Template", 100.0f});
+        return player;
+    };
+    Network net;
+    kast::AuthClient auth{net};
+    kast::WorldClient world{net, auth};
+    world.reset(kast::AuthConfig{"http://127.0.0.1:1", ""});
+    kast::EventBus bus;
+    kast::Scene s;
+    const entt::entity player = build(s);
+    kast::Replication r;
+    r.start(s, bus, world);
+    bus.publish("world.entered", {{"entityId", 1}, {"position", at(0, 0, 0)}, {"heading", 0}});
+    bus.publish("world.spawn", {{"entityId", 2}, {"name", "Other"}, {"position", at(1, 0, 1)}, {"heading", 0}});
+    bus.drain();
+    const auto& reg = s.registry();
+    const auto value = [&](entt::entity e) {
+        return kast::hasComponent(reg, e, health) ? kast::componentToJson(reg, e, health) : nlohmann::ordered_json();
+    };
+    const Json full = Json::parse(R"({"current":30,"max":100,"regen":true,"lives":3,"title":"Hero","tint":[1,0,0],
+        "facing":[0,0,0,1],"faction":"ally","drops":["gold"]})");
+    bus.publish("world.component", {{"entityId", 2}, {"name", "Health"}, {"data", full}});
+    bus.drain();
+    const entt::entity other = r.clone(2);
+    check(value(other)["current"] == 30.0 && value(other)["faction"] == "ally" && value(other)["drops"].size() == 1,
+          "replication: world.component adds the Lua component to the clone with the server's values");
+    Json changed = full;
+    changed["current"] = 12.5;
+    bus.publish("world.component", {{"entityId", 2}, {"name", "Health"}, {"data", changed}});
+    bus.publish("world.component", {{"entityId", 1}, {"name", "Health"}, {"data", {{"current", 40}, {"lives", 99}}}});
+    bus.drain();
+    check(value(other)["current"] == 12.5, "replication: a later world.component replaces the clone's value");
+    check(value(player)["current"] == 40.0 && value(player)["lives"] == 3 && value(player)["max"] == 100.0,
+          "replication: the local player gets its own components, with drift rules (missing -> default, 99 > max -> default)");
+    check(logged("Replication: Entity 'Player'") && logged("\"lives\" 99 must be <= 9"), "replication: drift fixes are warned");
+    for (int i = 0; i < 3; ++i)
+        bus.publish("world.component", {{"entityId", 2}, {"name", "NoSuchComponent"}, {"data", Json::object()}});
+    bus.drain();
+    const auto unknownWarnings = std::ranges::count_if(kast::log::lines(), [](const std::string& line) {
+        return contains(line, "the server sent component \"NoSuchComponent\"");
+    });
+    check(unknownWarnings == 1 && s.valid(other), "replication: a name with no definition warns once and is ignored");
+
+    // A scene switch: the new scene's player and clones get the last replicated values.
+    r.stop(true);
+    kast::Scene next;
+    const entt::entity nextPlayer = build(next);
+    r.start(next, bus, world);
+    const auto& nreg = next.registry();
+    check(kast::hasComponent(nreg, r.clone(2), health) && kast::componentToJson(nreg, r.clone(2), health)["current"] == 12.5 &&
+              kast::hasComponent(nreg, nextPlayer, health) && kast::componentToJson(nreg, nextPlayer, health)["current"] == 40.0,
+          "replication: replicated components survive a scene switch");
+    bus.publish("world.componentRemoved", {{"entityId", 2}, {"name", "Health"}});
+    bus.publish("world.componentRemoved", {{"entityId", 1}, {"name", "Health"}});
+    bus.drain();
+    check(!kast::hasComponent(nreg, r.clone(2), health) && !kast::hasComponent(nreg, nextPlayer, health),
+          "replication: world.componentRemoved removes it from the clone and the local player");
+    r.stop();
+    kast::activateComponentDefinitions(std::nullopt, nullptr);
 }
 
 // Replication through LuaSystems against the fake world server: tests/project/online_replication.scene in an
@@ -2573,6 +2654,7 @@ int netSelfCheck()
     checkWorldClient();
     checkWorldLuaApi();
     checkReplicationOffline();
+    checkReplicationComponents();
     checkReplicationFakeServer();
     checkAuthLogs();
     checkOnlineModel();

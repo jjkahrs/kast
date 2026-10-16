@@ -495,6 +495,133 @@ asio::awaitable<void> db_down(Ctx& x) {
     if (again) again->close();
 }
 
+// --- 13: Lua components, with the sample lua/ (Health: aoi + persist, Wallet: owner + persist, systems/regen.lua) ---
+
+std::vector<proto::ComponentUpdate> updates_for(const std::vector<proto::Message>& msgs, uint32_t entity,
+                                                const std::string& name) {
+    std::vector<proto::ComponentUpdate> out;
+    for (const auto& u : only<proto::ComponentUpdate>(msgs))
+        if (u.entityId == entity && u.name == name) out.push_back(u);
+    return out;
+}
+
+nlohmann::json data_of(const proto::ComponentUpdate& u) { return nlohmann::json::parse(u.json, nullptr, false); }
+double health_of(const proto::ComponentUpdate& u) { return data_of(u).value("current", -1.0); }
+int gold_of(const proto::ComponentUpdate& u) { return data_of(u).value("gold", -1); }
+
+// Index of the first message matching pred, or msgs.size().
+template <typename Pred>
+size_t first_index(const std::vector<proto::Message>& msgs, Pred pred) {
+    for (size_t i = 0; i < msgs.size(); ++i)
+        if (pred(msgs[i])) return i;
+    return msgs.size();
+}
+
+// A and B in range: aoi Health reaches owner and observer, owner Wallet only the owner, Spawn before data,
+// unchanged values not resent, nothing after Despawn; then A relogs and its Health and Wallet were persisted.
+// Prints "COMPONENTS <gold> <health>" (A's last values) for components-verify after a restart.
+asio::awaitable<void> components(Ctx& x) {
+    const std::string tag = x.o.extra.count("tag") ? x.o.extra.at("tag") : "s13";
+    proto::EnterWorldOk ea, eb;
+    auto a = co_await x.enter(tag + "a", ea);
+    auto b = co_await x.enter(tag + "b", eb);
+    if (!a || !b) co_return;
+    const uint32_t A = ea.entityId, B = eb.entityId;
+    auto aMsgs = co_await drain(*a, Millis(1500));
+    auto bMsgs = co_await drain(*b, Millis(100));
+
+    const auto aHealth = updates_for(aMsgs, A, "Health"), aWallet = updates_for(aMsgs, A, "Wallet");
+    x.check.expect(aHealth.size() == 1 && health_of(aHealth[0]) == 100.0, "A gets its own Health once (100, standing at max)");
+    x.check.expect(aWallet.size() == 1 && gold_of(aWallet[0]) == 1, "A gets its own Wallet (gold 1: first login)");
+    x.check.expect(updates_for(aMsgs, B, "Health").size() == 1, "A gets B's Health (aoi)");
+    x.check.expect(updates_for(aMsgs, B, "Wallet").empty(), "A never gets B's Wallet (owner)");
+    x.check.expect(updates_for(bMsgs, A, "Health").size() == 1, "B gets A's Health (aoi)");
+    x.check.expect(updates_for(bMsgs, A, "Wallet").empty(), "B never gets A's Wallet (owner)");
+    x.check.expect(updates_for(bMsgs, B, "Wallet").size() == 1, "B gets its own Wallet");
+    const size_t spawnA = first_index(bMsgs, [&](const proto::Message& m) {
+        auto* sp = std::get_if<proto::Spawn>(&m);
+        return sp && sp->entityId == A;
+    });
+    const size_t dataA = first_index(bMsgs, [&](const proto::Message& m) {
+        auto* u = std::get_if<proto::ComponentUpdate>(&m);
+        return u && u->entityId == A;
+    });
+    x.check.expect(spawnA < dataA && dataA < bMsgs.size(), "B gets Spawn(A) before A's component data");
+
+    // A walks: Health drains (sent to both); B stands at max, so nothing is resent for B.
+    co_await walk(*a, ea.pos, 20, 0);
+    co_await sleep_for(Millis(300));
+    aMsgs = co_await drain(*a, Millis(200));
+    bMsgs = co_await drain(*b, Millis(100));
+    const auto walked = updates_for(bMsgs, A, "Health");
+    x.check.expect(!walked.empty() && health_of(walked.back()) < 95.0,
+                   "B sees A's Health drain while A moves (" + std::to_string(walked.size()) + " updates, last " +
+                       (walked.empty() ? std::string("-") : std::to_string(health_of(walked.back()))) + ")");
+    x.check.expect(updates_for(bMsgs, B, "Health").empty() && updates_for(aMsgs, B, "Health").empty(),
+                   "B's unchanged Health is not resent");
+    const auto ownSeen = updates_for(aMsgs, A, "Health");
+    x.check.expect(!ownSeen.empty(), "A gets its own Health changes");
+    const double before = ownSeen.empty() ? -1 : health_of(ownSeen.back());
+
+    a->close();
+    auto afterLeave = co_await drain(*b, Millis(1000));
+    const size_t despawnA = first_index(afterLeave, [&](const proto::Message& m) {
+        auto* d = std::get_if<proto::Despawn>(&m);
+        return d && d->entityId == A;
+    });
+    bool lateData = false;
+    for (size_t i = despawnA; i < afterLeave.size(); ++i)
+        if (auto* u = std::get_if<proto::ComponentUpdate>(&afterLeave[i])) lateData |= u->entityId == A;
+    x.check.expect(despawnA < afterLeave.size() && !lateData, "B gets Despawn(A) and no A component data after it");
+
+    proto::EnterWorldOk e2;
+    auto again = co_await x.enter(tag + "a", e2);
+    if (!again) co_return;
+    auto relog = co_await drain(*again, Millis(1000));
+    const auto health = updates_for(relog, e2.entityId, "Health"), wallet = updates_for(relog, e2.entityId, "Wallet");
+    const double first = health.empty() ? -1 : health_of(health.front());
+    // regen.lua's once-a-second +2 may land between the last update A saw and the save, and again on the first
+    // tick after the relog.
+    x.check.expect(first >= before - 0.01 && first <= before + 4.01,
+                   "Health persisted across logout/login: " + std::to_string(before) + " -> " + std::to_string(first));
+    x.check.expect(wallet.size() == 1 && gold_of(wallet[0]) == 2, "Wallet persisted across logout/login (gold 2)");
+    std::printf("COMPONENTS %d %.4f\n", wallet.empty() ? -1 : gold_of(wallet.back()),
+                health.empty() ? -1.0 : health_of(health.back()));
+    std::fflush(stdout);
+    again->close();
+
+    // Server-authoritative: a client's ComponentUpdate is not a valid message.
+    b->send(proto::ComponentUpdate{B, "Health", R"({"current":100})"});
+    const bool dropped = co_await b->wait_closed(Millis(3000));
+    x.check.expect(dropped && b->disconnectReason == Code::unexpected_message,
+                   "a client's ComponentUpdate gets Disconnect{unexpected_message}");
+}
+
+// After a world restart: A's Wallet and Health (from --expect-components gold,health) were persisted.
+asio::awaitable<void> components_verify(Ctx& x) {
+    const std::string tag = x.o.extra.count("tag") ? x.o.extra.at("tag") : "s13";
+    int gold = 0;
+    double health = 0;
+    char comma = 0;
+    std::istringstream in(x.o.extra.count("expect-components") ? x.o.extra.at("expect-components") : "");
+    in >> gold >> comma >> health;
+    if (!in || comma != ',') {
+        x.check.expect(false, "--expect-components gold,health");
+        co_return;
+    }
+    proto::EnterWorldOk e;
+    auto c = co_await x.enter(tag + "a", e);
+    if (!c) co_return;
+    auto msgs = co_await drain(*c, Millis(1000));
+    const auto h = updates_for(msgs, e.entityId, "Health"), w = updates_for(msgs, e.entityId, "Wallet");
+    const double got = h.empty() ? -1 : health_of(h.front());
+    x.check.expect(got >= health - 0.01 && got <= health + 4.01,
+                   "Health survived the restart: " + std::to_string(health) + " -> " + std::to_string(got));
+    x.check.expect(w.size() == 1 && gold_of(w[0]) == gold + 1,
+                   "Wallet survived the restart (gold " + std::to_string(gold) + " + 1 for this login)");
+    c->close();
+}
+
 } // namespace
 
 int run_scenario(const Options& o) {
@@ -507,7 +634,7 @@ int run_scenario(const Options& o) {
         {"aoi", aoi},                   {"chat", chat},               {"speedhack", speedhack},
         {"malformed", malformed},       {"handshake", handshake_rejects}, {"duplicate", duplicate_login},
         {"persist", persist_relogin},   {"shutdown", shutdown_phase1}, {"restart-verify", restart_verify},
-        {"dbdown", db_down},
+        {"dbdown", db_down},            {"components", components},   {"components-verify", components_verify},
     };
     auto it = all.find(o.scenario);
     if (it == all.end()) {

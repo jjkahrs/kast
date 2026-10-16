@@ -138,6 +138,7 @@ ConfigResult load_config(const EnvLookup& env) {
     if (c.saveRetryMinMs > c.saveRetryMaxMs) l.errors.push_back("SAVE_RETRY_MIN_MS: must be <= SAVE_RETRY_MAX_MS");
     l.num("SHUTDOWN_TIMEOUT_MS", c.shutdownTimeoutMs, 100, u32max);
     l.num("TICK_STATS_INTERVAL_SECONDS", c.tickStatsIntervalSec, 1, 86400);
+    l.str("LUA_ROOT", c.luaRoot);
 
     std::string level;
     l.str("LOG_LEVEL", level);

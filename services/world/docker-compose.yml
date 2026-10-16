@@ -15,10 +15,14 @@ services:
       AUTH_JWKS_URL: http://auth:3000/.well-known/jwks.json
       TLS_DEV_CERT_DIR: /app/certs
       MIGRATIONS_DIR: /app/migrations
+      LUA_ROOT: /app/lua
     ports:
       - "${WORLD_HOST_PORT:-7777}:7777"
     volumes:
       - world-certs:/app/certs
+      # Lua components and systems (README "Lua components and systems"): edit, then `docker compose restart world`.
+      # Point the left side at a game project folder to share its components/ with the client.
+      - ./lua:/app/lua:ro
     depends_on:
       mysql:
         condition: service_healthy

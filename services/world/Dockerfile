@@ -21,7 +21,7 @@ RUN cmake --preset linux-release -DVCPKG_INSTALLED_DIR=/opt/vcpkg_installed -DVC
     && cmake --build --preset linux-release \
     && ctest --preset linux-release
 
-# --- runtime: binaries + migrations, non-root ---
+# --- runtime: binaries + migrations + sample Lua, non-root ---
 FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
@@ -29,6 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /app
 COPY --from=build /src/build/linux-release/kast_world /src/build/linux-release/kast_bot ./
 COPY migrations ./migrations
+# Sample Lua components and systems (LUA_ROOT); compose bind-mounts ./lua over it.
+COPY lua ./lua
 # Dev TLS cert lands here when none is configured; mount a volume to keep it.
 RUN mkdir -p /app/certs && chown world:world /app/certs
 USER world

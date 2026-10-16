@@ -1,7 +1,7 @@
 -- Online Services replication sample (README "Online Services → Replication"): logs in, enters the world as "Demo"
 -- and walks the NetworkLocalPlayer with WASD. Replication (no code here) sends its moves, applies corrections and shows
--- every remote player as a clone of "Remote Player". Needs a project with "online" enabled; the tests run it against
--- kast_net_test_server's fake auth and fake world (realm Testgrove).
+-- every remote player as a clone of "Remote Player", with the Lua components the server replicates. Needs a project
+-- with "online" enabled; the tests run it against kast_net_test_server's fake auth and fake world (realm Testgrove).
 local EMAIL, PASSWORD = "demo@example.com", "demo-password-123"
 local REALM, CHARACTER = "Testgrove", "Demo"
 local SPEED = 5 -- m/s, under the world server's 10 m/s limit
@@ -38,6 +38,11 @@ return {
                                    e.entity, kast.get(e.entity, "NetworkEntity").entityId, p.x, p.y, p.z))
         end)
         kast.subscribe("world.despawn", function(e) kast.log("replication: server id " .. e.entityId .. " left") end)
+        -- Lua components the world server replicates (e.g. its sample Health) are applied to the clone or the player
+        -- before this runs; components/health.lua is the server's own definition file.
+        kast.subscribe("world.component", function(e)
+            kast.log(string.format("replication: server id %d %s = %s", e.entityId, e.name, tostring(e.data.current)))
+        end)
         kast.subscribe("world.correction", function(e)
             kast.log(string.format("replication: corrected to %g, %g, %g", e.position.x, e.position.y, e.position.z))
         end)

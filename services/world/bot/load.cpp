@@ -14,7 +14,8 @@ namespace {
 
 struct Stats {
     std::atomic<int> tokens{0}, connected{0}, entered{0}, unexpectedDisconnects{0}, expectedDisconnects{0}, errors{0};
-    std::atomic<uint64_t> movesSent{0}, entityMoves{0}, spawns{0}, despawns{0}, corrections{0}, chats{0}, says{0};
+    std::atomic<uint64_t> movesSent{0}, entityMoves{0}, spawns{0}, despawns{0}, corrections{0}, chats{0}, says{0},
+        componentUpdates{0}, componentBytes{0}, componentRemoves{0};
     std::mutex mu;
     std::vector<std::string> errorSamples;
 
@@ -75,6 +76,10 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
         else if (std::holds_alternative<proto::Spawn>(m)) ++st.spawns;
         else if (std::holds_alternative<proto::Despawn>(m)) ++st.despawns;
         else if (std::holds_alternative<proto::ChatMsg>(m)) ++st.chats;
+        else if (auto* cu = std::get_if<proto::ComponentUpdate>(&m)) {
+            ++st.componentUpdates;
+            st.componentBytes += cu->json.size();
+        } else if (std::holds_alternative<proto::ComponentRemove>(m)) ++st.componentRemoves;
         else if (auto* corr = std::get_if<proto::Correction>(&m)) {
             ++st.corrections;
             *pos = corr->pos;
@@ -192,6 +197,9 @@ int run_load(const Options& o) {
                               {"corrections_recv", st.corrections.load()},
                               {"says_sent", st.says.load()},
                               {"chat_recv", st.chats.load()},
+                              {"component_updates_recv", st.componentUpdates.load()},
+                              {"component_json_bytes_recv", st.componentBytes.load()},
+                              {"component_removes_recv", st.componentRemoves.load()},
                               {"error_samples", st.errorSamples}};
     std::printf("%s\n", summary.dump().c_str());
 

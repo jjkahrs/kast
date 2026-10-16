@@ -1,9 +1,13 @@
-// The zone: owns the ECS registry and AOI grid, and runs the systems in a fixed order each tick.
+// The zone: owns the ECS registry, the AOI grid and the Lua systems, and runs the systems in a fixed order each tick.
 // Talks to the outside only through Send (to a session) and Save (to the DB worker).
 #pragma once
 #include "systems.h"
 
 #include <db/char_repo.h>
+#include <lua/runtime.h>
+
+#include <filesystem>
+#include <memory>
 
 #include <entt/entity/registry.hpp>
 
@@ -17,29 +21,40 @@ struct WorldRules {
     size_t chatRateCount = 5;
     Millis chatRateWindow{10000};
     Millis saveInterval{60000};
+    float tickSeconds = 0.05f; // dt passed to Lua update
 };
 
 class World {
 public:
-    World(WorldRules rules, Send send, Save save);
+    // defs: the Lua component types (lua/components.h); their instances are restored, saved and replicated here.
+    World(WorldRules rules, Send send, Save save, lua::Defs defs = {});
 
-    // Places the character (at its saved position, or the spawn point if that is outside the zone) and sends
-    // EnterWorldOk. Other players get Spawn on the next tick.
+    // Loads the Lua systems under luaRoot/systems/ and runs their init; every error, empty if all loaded.
+    std::vector<std::string> load_scripts(const std::filesystem::path& luaRoot);
+    // Graceful shutdown, before the despawns: onLeave for every character, then every system's shutdown.
+    void shutdown_scripts();
+    std::vector<lua::SystemStatus> script_status() const { return lua_.status(); }
+
+    // Places the character (at its saved position, or the spawn point if that is outside the zone), sends
+    // EnterWorldOk, restores its persisted Lua components and runs onEnter. Other players get Spawn on the next tick.
     entt::entity spawn(uint32_t sessionId, const db::CharRow& row, TimePoint now);
-    // Saves the character, sends Despawn to everyone who could see it, removes it.
+    // Runs onLeave, saves the character, sends Despawn to everyone who could see it, removes it.
     void despawn(entt::entity e);
     void push_move(entt::entity e, const proto::Move& m);
     void push_say(entt::entity e, std::string text);
 
     void tick(TimePoint now);
     size_t population() const { return population_; }
+    entt::registry& registry() { return reg_; } // for tests
 
 private:
     WorldRules rules_;
     Send send_;
     Save save_;
+    lua::Defs defs_;
     entt::registry reg_;
     AoiGrid grid_;
+    lua::Runtime lua_; // after reg_: it holds a reference
     size_t population_ = 0;
 };
 

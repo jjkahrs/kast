@@ -16,12 +16,14 @@ struct CharRow {
     std::string name;
     proto::Vec3 pos;
     float heading = 0;
+    std::string components; // the components JSON column (Lua components, see lua/components.h); empty if NULL
 };
 
 struct CharSave {
     uint64_t charId = 0;
     proto::Vec3 pos;
     float heading = 0;
+    std::optional<std::string> components; // nullopt: leave the column as it is
 };
 
 struct CreateResult {

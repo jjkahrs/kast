@@ -300,6 +300,13 @@ void WorldClient::dispatch(const auto& m)
         emit("world.correction", {{"position", position(m.pos)}});
     } else if constexpr (std::is_same_v<T, proto::ChatMsg>) {
         emit("world.chat", {{"from", m.fromName}, {"text", m.text}}); // never logged (world server rule)
+    } else if constexpr (std::is_same_v<T, proto::ComponentUpdate>) {
+        Json data = Json::parse(m.json, nullptr, false);
+        if (data.is_discarded()) // the server only sends valid JSON; one bad value isn't worth the connection
+            return log::warn(std::format("World: ignored ComponentUpdate \"{}\" with invalid JSON", m.name));
+        emit("world.component", {{"entityId", m.entityId}, {"name", m.name}, {"data", std::move(data)}});
+    } else if constexpr (std::is_same_v<T, proto::ComponentRemove>) {
+        emit("world.componentRemoved", {{"entityId", m.entityId}, {"name", m.name}});
     } else { // a client-to-server message
         drop("unexpected_message", std::format("the server sent client message {}", proto::opcode_name(T::op)));
     }

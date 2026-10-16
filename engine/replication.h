@@ -5,7 +5,9 @@
 #include "world_client.h"
 
 #include <cstdint>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -14,7 +16,9 @@
 // client's "world.*" events from the event bus and drives the scene: the NetworkLocalPlayer entity's moves go to the
 // world server and its corrections come back; every remote player the server spawns becomes a clone of the
 // NetworkReplication's template entity (with a NetworkEntity), interpolated toward each world.entityMove and destroyed
-// on world.despawn / world.disconnected. The world client knows nothing about entities; only this unit does.
+// on world.despawn / world.disconnected. Each world.component / world.componentRemoved is applied to the same-named Lua
+// component on the clone or the local player (added if absent, drift rules for mismatches; a name with no Lua
+// definition is a Console warning, once per name). The world client knows nothing about entities; only this unit does.
 // Positions are Transform positions: keep the local player and the template at the root (clones are created there).
 namespace kast {
 
@@ -70,6 +74,7 @@ private:
         float heading = 0.0f;
         float elapsed = 0.0f;
         entt::entity entity = entt::null;
+        std::map<std::string, nlohmann::json> components; // last replicated values, re-applied to a new clone
     };
 
     entt::entity localPlayer() const;
@@ -78,6 +83,8 @@ private:
     void spawn(uint32_t id, Remote remote);
     void despawn(uint32_t id);
     void despawnAll();
+    void applyComponent(const nlohmann::json& event, bool removed);
+    void applyComponent(entt::entity entity, const std::string& name, const nlohmann::json* data);
 
     Scene* scene_ = nullptr;
     EventBus* bus_ = nullptr;
@@ -87,6 +94,9 @@ private:
     std::vector<EventBus::Subscription> subscriptions_;
     MoveThrottle throttle_;
     double time_ = 0.0;
+    std::optional<uint32_t> localId_;                             // the local player's server entity id
+    std::map<std::string, nlohmann::json> localComponents_;        // re-applied to a new scene's local player
+    std::set<std::string> warned_;                                // unknown names and drift fixes, warned once
 };
 
 } // namespace kast

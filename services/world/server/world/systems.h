@@ -5,6 +5,7 @@
 #include "rules.h"
 
 #include <db/char_repo.h>
+#include <lua/components.h>
 #include <messages.h>
 
 #include <entt/entity/registry.hpp>
@@ -26,7 +27,10 @@ void movement_system(entt::registry& reg, const MoveRules& rules, const Send& se
 void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send);
 void replication_system(entt::registry& reg, const Send& send);
 void chat_system(entt::registry& reg, const ChatRules& rules, const Send& send, TimePoint now);
-void save_system(entt::registry& reg, const Save& save, Millis interval, TimePoint now);
+// Sends replicated Lua components (README "Lua components and systems"): what changed since the last send to the
+// owner (owner, aoi) and observers (aoi), and every aoi component of an entity to a viewer it came into view of.
+void component_replication_system(entt::registry& reg, const lua::Defs& defs, const Send& send);
+void save_system(entt::registry& reg, const lua::Defs& defs, const Save& save, Millis interval, TimePoint now);
 void end_of_tick_system(entt::registry& reg);
 
 } // namespace kast::world

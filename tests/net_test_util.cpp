@@ -395,6 +395,11 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
             queue(proto::ChatMsg{playing, say->text});
             if (say->text == "bye")
                 queue(proto::Despawn{2});
+            if (say->text == "components") {
+                queue(proto::ComponentUpdate{2, "Health", R"({"current":42.5,"max":100})"});
+                queue(proto::ComponentUpdate{2, "Health", "{not json"}); // ignored with a warning
+                queue(proto::ComponentRemove{2, "Health"});
+            }
         } else {
             queue(proto::Disconnect{proto::Code::unexpected_message});
             return flush();

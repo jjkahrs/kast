@@ -11,6 +11,7 @@ namespace kast::proto {
 
 constexpr uint16_t kProtocolVersion = 1;
 constexpr size_t kHeaderSize = 4; // u16 payload length + u16 opcode
+constexpr size_t kMaxPayloadBytes = 0xFFFF; // the u16 length field's limit
 
 enum class Opcode : uint16_t {
     Hello = 0x0001,        // C
@@ -35,6 +36,8 @@ enum class Opcode : uint16_t {
     EntityMove = 0x0122,   // S
     Correction = 0x0123,   // S
     ChatMsg = 0x0124,      // S
+    ComponentUpdate = 0x0125, // S
+    ComponentRemove = 0x0126, // S
 };
 
 // Reason codes carried by Disconnect and CharError.
@@ -281,8 +284,31 @@ struct ChatMsg {
     bool operator==(const ChatMsg&) const = default;
 };
 
+// A Lua component's full value as JSON (README "Lua components and systems"). Server-authoritative: never C->S.
+struct ComponentUpdate {
+    static constexpr Opcode op = Opcode::ComponentUpdate;
+    uint32_t entityId = 0;
+    std::string name;
+    std::string json;
+    void write(Writer& w) const { w.u32(entityId); w.str(name); w.str(json); }
+    void read(Reader& r) { entityId = r.u32(); name = r.str(); json = r.str(); }
+    bool operator==(const ComponentUpdate&) const = default;
+    // Whether a component of these sizes fits one frame (str would truncate it otherwise).
+    static bool fits(size_t nameBytes, size_t jsonBytes) { return 4 + 2 + nameBytes + 2 + jsonBytes <= kMaxPayloadBytes; }
+};
+
+struct ComponentRemove {
+    static constexpr Opcode op = Opcode::ComponentRemove;
+    uint32_t entityId = 0;
+    std::string name;
+    void write(Writer& w) const { w.u32(entityId); w.str(name); }
+    void read(Reader& r) { entityId = r.u32(); name = r.str(); }
+    bool operator==(const ComponentRemove&) const = default;
+};
+
 using Message = std::variant<Hello, Auth, Ping, Pong, CharListReq, CharCreate, CharDelete, EnterWorld, Move, Say,
                              AuthOk, Disconnect, CharList, CharCreated, CharDeleted, EnterWorldOk, CharError, Spawn,
-                             Despawn, EntityMove, Correction, ChatMsg>;
+                             Despawn, EntityMove, Correction, ChatMsg, ComponentUpdate,
+                             ComponentRemove>;
 
 } // namespace kast::proto

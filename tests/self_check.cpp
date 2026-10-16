@@ -1806,10 +1806,18 @@ return { name = "Sandboxed", fields = {} })");
     writeFile(dir / "components/leaker.lua", R"(leaked = true
 return { name = "Leaker", fields = {} })");
     writeFile(dir / "components/escape.lua", R"(return { name = "Escape", fields = {}, x = io.open("x") })");
+    // World-server keys (services/world README "Lua components and systems"): accepted, so files can be shared.
+    writeFile(dir / "components/shared.lua", R"(return { name = "Shared", persist = true, replicate = "aoi", fields = {} })");
+    writeFile(dir / "components/shared_owner.lua", R"(return { name = "SharedOwner", persist = false, replicate = "owner", fields = {} })");
 
     // file, contents, text the error must mention (besides the path)
     const std::tuple<const char*, const char*, const char*> bad[] = {
         {"not_table.lua", "return 5", "must return exactly one table"},
+        {"bad_persist.lua", R"(return { name = "BadPersist", persist = "yes", fields = {} })", "\"persist\" must be true or false"},
+        {"bad_replicate.lua", R"(return { name = "BadReplicate", replicate = "all", fields = {} })",
+         "\"replicate\" must be \"none\", \"owner\" or \"aoi\", got all"},
+        {"bad_replicate_type.lua", R"(return { name = "BadReplicateType", replicate = 1, fields = {} })",
+         "\"replicate\" must be \"none\", \"owner\" or \"aoi\", got 1"},
         {"two_values.lua", R"(return { name = "Two", fields = {} }, 2)", "must return exactly one table"},
         {"no_name.lua", "return { fields = {} }", "\"name\" must be a name"},
         {"bad_name.lua", R"(return { name = "9lives", fields = {} })", "\"name\" must be a name"},
@@ -1865,6 +1873,9 @@ return { name = "Leaker", fields = {} })");
     check(kast::findAnyComponentType("Tag") && std::string(kast::findAnyComponentType("Tag").displayName()) == "Tag!",
           "displayName");
     check(statusFor("components/notes.txt") == nullptr, "only .lua files are definitions");
+    check(statusFor("components/shared.lua") && statusFor("components/shared.lua")->ok &&
+              statusFor("components/shared_owner.lua") && statusFor("components/shared_owner.lua")->ok,
+          "persist / replicate (world-server keys) are accepted");
     const kast::ComponentDefinitionStatus* sandboxed = statusFor("components/sandboxed.lua");
     check(sandboxed && sandboxed->ok, "sandbox: io/os/ffi/debug/package/require/loadfile/dofile/load unreachable");
     if (sandboxed && !sandboxed->ok)

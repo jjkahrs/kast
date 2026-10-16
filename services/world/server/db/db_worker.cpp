@@ -26,7 +26,7 @@ void DbWorker::save(const CharSave& s) {
     {
         std::lock_guard lk(mu_);
         auto& p = pending_[s.charId];
-        p.save = s; // latest position wins; keeps the retry schedule of an older pending save
+        p.save = s; // latest save wins; keeps the retry schedule of an older pending save
         if (p.attempts == 0) p.due = SteadyClock::now();
     }
     cv_.notify_one();
@@ -90,9 +90,9 @@ bool DbWorker::attempt_save(uint64_t charId) {
     auto it = pending_.find(charId);
     if (ok) {
         ++savesOk_;
-        // A newer position may have been queued while this one was written; keep it.
+        // A newer save may have been queued while this one was written; keep it.
         const auto& cur = it->second.save;
-        if (cur.pos == s.pos && cur.heading == s.heading) pending_.erase(it);
+        if (cur.pos == s.pos && cur.heading == s.heading && cur.components == s.components) pending_.erase(it);
         else {
             it->second.attempts = 0;
             it->second.due = SteadyClock::now();

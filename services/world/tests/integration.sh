@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs every integration scenario against the compose stack (docker compose up -d --build first).
 # Prints PASS/FAIL per scenario and exits non-zero if any failed.
-# Scenarios 10-12 stop/restart containers, so run this against a test stack only.
+# Scenarios 10-13 stop/restart containers, so run this against a test stack only.
 set -u
 cd "$(dirname "$0")/.."
 export MSYS_NO_PATHCONV=1 # Git Bash on Windows: keep container paths as written
@@ -132,6 +132,24 @@ wait_healthy auth
 record "$name" $ok "see $log"
 
 graceful "12 SIGTERM: server_shutdown, saves flushed, exit 0 < 10 s" s12 stop
+
+# 13: Lua components with the sample lua/ (README "Lua components and systems"): replication modes, then the
+# persisted values across a relog (inside the scenario) and across a world restart.
+name="13 Lua components: aoi/owner replication, persisted across relog and restart"
+echo "--- $name"
+log="$LOGDIR/13.log"
+ok=0
+bot --scenario components --tag s13 >"$log" 2>&1 || ok=1
+grep -v -E '^ *(Container|Network) ' "$log"
+read -r _ gold health < <(grep '^COMPONENTS' "$log") || ok=1
+if [ $ok -eq 0 ]; then
+    docker compose restart -t 15 world >/dev/null 2>&1 && echo "  world restarted"
+    wait_healthy world || ok=1
+    bot --scenario components-verify --tag s13 --expect-components "$gold,$health" 2>&1 | tee -a "$log" |
+        grep -v -E '^ *(Container|Network) '
+    [ "${PIPESTATUS[0]}" -eq 0 ] || ok=1
+fi
+record "$name" $ok "see $log"
 
 echo
 echo "================ integration summary ($RUN) ================"

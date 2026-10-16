@@ -49,6 +49,8 @@ const char* opcode_name(Opcode op) {
     case Opcode::EntityMove: return "EntityMove";
     case Opcode::Correction: return "Correction";
     case Opcode::ChatMsg: return "ChatMsg";
+    case Opcode::ComponentUpdate: return "ComponentUpdate";
+    case Opcode::ComponentRemove: return "ComponentRemove";
     }
     return "unknown";
 }

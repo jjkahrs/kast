@@ -6,6 +6,7 @@ MMORPG world server for Kast, written in C++20. It covers the following:
 - **Characters:** clients create, list and delete characters, then enter one bounded zone.
 - **Movement:** the server validates every move (bounds and max speed) and replicates it to nearby players through grid-based interest management.
 - **Chat:** "say" chat reaches everyone in range.
+- **Lua:** game-defined components and server-authoritative systems on the tick, persisted per character and replicated to clients (see "Lua components and systems").
 - **Architecture:** an EnTT ECS runs on a fixed 20 Hz tick, and characters persist to MySQL on a worker thread, so the tick never waits on the database.
 
 The wire format is in [`PROTOCOL.md`](PROTOCOL.md).
@@ -13,10 +14,11 @@ The wire format is in [`PROTOCOL.md`](PROTOCOL.md).
 | Dir | What |
 |---|---|
 | `protocol/` | Static lib: frame codec, opcodes and message structs. No Asio, DB or ECS, so a game client can reuse it |
-| `server/` | `kast_world`: `core/` (config, log, clock, limits), `net/` (TLS, sessions), `auth/` (JWKS, JWT), `db/` (MySQL, migrations, worker), `world/` (ECS components and systems), `app/` (glue) |
+| `server/` | `kast_world`: `core/` (config, log, clock, limits), `net/` (TLS, sessions), `auth/` (JWKS, JWT), `db/` (MySQL, migrations, worker), `world/` (ECS components and systems), `lua/` (Lua sandbox, component definitions, systems runtime), `app/` (glue) |
 | `bot/` | `kast_bot`: headless test client covering auth HTTP, Mailpit verification, TLS, scripted scenarios and load mode |
 | `migrations/` | `NNN_name.sql`, applied in order at startup |
-| `tests/` | `self_check.cpp` (ctest), `integration.sh`, `load.sh` |
+| `lua/` | Sample Lua components and systems (`LUA_ROOT` in the image) |
+| `tests/` | `self_check.cpp` + `lua_checks.cpp` (ctest), `integration.sh`, `load.sh`, `docs_check.sh` |
 
 ## Setup
 
@@ -61,19 +63,21 @@ To run the server on the host against the compose MySQL and auth, point `.env` a
 
 | Command | What |
 |---|---|
-| `ctest --preset debug` | Self-check: codec round trip for every message, frame rejection, names, movement, AOI, chat, rate limits, config, tick stats, JWT and JWKS with local RSA keys |
+| `ctest --preset debug` | Self-check: codec round trip for every message, frame rejection, names, movement, AOI, chat, rate limits, config, tick stats, JWT and JWKS with local RSA keys. Lua (`tests/lua_checks.cpp`): definition parsing (every type, option, new key and error case), reserved and duplicate names, sandbox, `kast.*` semantics and every `set` error, hook order, an error disabling one system, startup errors listed in full, persistence round trip + drift + verbatim preservation, and replication routing (owner / aoi / none, AOI-enter full set, unchanged not resent, nothing after `Despawn`, oversize) |
 | `docker compose build` | Linux build; the self-check runs inside it |
-| `bash tests/integration.sh` | All 12 integration scenarios against the running stack. Prints PASS/FAIL each and exits non-zero on any failure |
+| `bash tests/integration.sh` | All 13 integration scenarios against the running stack. Prints PASS/FAIL each and exits non-zero on any failure |
 | `bash tests/load.sh` | Load test: 500 `wander` bots for 300 s (`COUNT`, `DURATION`, `BEHAVIOUR`, `THREADS` override) |
 | `bash tests/docs_check.sh` | Every opcode, code and env var in the source appears in PROTOCOL.md / README.md |
 | `docker compose run --rm bot --scenario aoi` | One scenario |
 | `docker compose run --rm bot --mode load --count 50 --behaviour chat --duration 60` | Ad-hoc load |
 
-**Scenario names:** `auth`, `characters`, `ownership`, `aoi`, `chat`, `speedhack`, `malformed`, `handshake`, `duplicate`, `persist`, `shutdown`, `restart-verify`, `dbdown`.
+**Scenario names:** `auth`, `characters`, `ownership`, `aoi`, `chat`, `speedhack`, `malformed`, `handshake`, `duplicate`, `persist`, `shutdown`, `restart-verify`, `dbdown`, `components`, `components-verify` (`--expect-components gold,health`, after a restart).
+
+**Scenario 13 (`components`):** needs the sample `lua/`. A and B are in range. A gets its own `Health` and `Wallet`; B gets A's `Health` but never A's `Wallet`; `Spawn` comes before data; unchanged values are not resent; nothing follows `Despawn`. A walks and its `Health` drains. After a relog, A's `Health` and `Wallet` were persisted. A client `ComponentUpdate` gets `unexpected_message`. Then `world` restarts and `components-verify` checks both values again.
 
 **Load behaviours:** `idle`, `wander` (random valid moves at 10 Hz, 9 m/s), `chat`, `speedhack` (50 m/s, expects `Correction`), `malformed` (expects `unknown_opcode`).
 
-**Running the scripts:** they need bash, which is Git Bash on Windows. `integration.sh` stops and restarts `world` and `mysql` for scenarios 10–12, so only point it at a test stack.
+**Running the scripts:** they need bash, which is Git Bash on Windows. `integration.sh` stops and restarts `world` and `mysql` for scenarios 10–13, so only point it at a test stack.
 
 ### Migrations
 
@@ -87,7 +91,7 @@ To run the server on the host against the compose MySQL and auth, point `.env` a
 - **Source:** every setting comes from an environment variable, validated at startup.
 - **Invalid values:** the server lists every bad or missing variable and exits with status 1.
 - **Env files:** `.env.example` is committed; `.env` is gitignored.
-- **Compose overrides:** in compose, `DB_HOST`, `DB_PORT`, `AUTH_JWKS_URL`, `WORLD_PORT`, `TLS_DEV_CERT_DIR` and `MIGRATIONS_DIR` are overridden with in-network values.
+- **Compose overrides:** in compose, `DB_HOST`, `DB_PORT`, `AUTH_JWKS_URL`, `WORLD_PORT`, `TLS_DEV_CERT_DIR`, `MIGRATIONS_DIR` and `LUA_ROOT` are overridden with in-network values.
 
 | Variable | Default | Notes |
 |---|---|---|
@@ -134,6 +138,7 @@ To run the server on the host against the compose MySQL and auth, point `.env` a
 | `SAVE_RETRY_MIN_MS` / `SAVE_RETRY_MAX_MS` | `500` / `30000` | Exponential backoff for failed saves |
 | `SHUTDOWN_TIMEOUT_MS` | `10000` | Graceful-shutdown budget, from the signal to exit |
 | `TICK_STATS_INTERVAL_SECONDS` | `10` | How often tick p50/p99/max is logged |
+| `LUA_ROOT` | `/app/lua` | Folder with `components/` and `systems/` (see "Lua components and systems"). Missing or empty: no Lua. `.env.example` sets `./lua` for running on the host |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
 **Compose only** (`docker-compose.yml`, not read by the server):
@@ -202,6 +207,7 @@ All of these are configurable; see PROTOCOL.md for the exact rules.
 - **Schema:** characters live in `kast_world.characters` with these fields:
   - `id`, `realm_id`, `account_id` (the JWT `sub`) and `name`
   - `pos_x/y/z` and `heading`
+  - `components`: the persisted Lua components (JSON, see "Lua components and systems")
   - `created_at`, `last_login_at` and `deleted_at`
 - **Timestamps:** `DATETIME(3)` in UTC, written by the application.
 - **Queries:** every query is a prepared statement scoped by `realm_id`. Ownership checks use `account_id`.
@@ -211,9 +217,9 @@ All of these are configurable; see PROTOCOL.md for the exact rules.
 
 The world never touches MySQL from the game thread. One DB worker thread owns the connection. Requests come in on a queue, and results go back to the game thread through `asio::post`.
 
-- **When saves happen:** on logout or disconnect, on a duplicate-login kick, on graceful shutdown, and every `SAVE_INTERVAL_MS` while the position is dirty.
+- **When saves happen:** on logout or disconnect, on a duplicate-login kick, on graceful shutdown, and every `SAVE_INTERVAL_MS` while the position or a persisted Lua component is dirty.
 - **Never dropped:**
-  - A save sits in a pending map keyed by character, where the latest position wins.
+  - A save sits in a pending map keyed by character, where the latest save wins.
   - It is retried with exponential backoff (`SAVE_RETRY_MIN_MS` up to `SAVE_RETRY_MAX_MS`) until it lands.
   - Every failed attempt is logged (`save failed, will retry`).
 - **Ordering:** saves run before queued requests. `EnterWorld` first lands any pending save for that character, so a load never reads a stale position.
@@ -232,11 +238,155 @@ The world never touches MySQL from the game thread. One DB worker thread owns th
 
 SIGTERM, SIGINT or Ctrl+C starts the shutdown:
 1. The server stops accepting connections and logs `tick stats total`.
-2. Every character in the world is despawned and saved, and every client gets `Disconnect{server_shutdown}`.
-3. Once the clients are gone, the DB worker flushes the pending saves, ignoring backoff, until `SHUTDOWN_TIMEOUT_MS - 500 ms`.
-4. The process exits 0, or 1 if any save could not be flushed.
+2. Lua: `onLeave` runs for every character, then every system's `shutdown`.
+3. Every character in the world is despawned and saved, and every client gets `Disconnect{server_shutdown}`.
+4. Once the clients are gone, the DB worker flushes the pending saves, ignoring backoff, until `SHUTDOWN_TIMEOUT_MS - 500 ms`.
+5. The process exits 0, or 1 if any save could not be flushed.
 
 Compose gives the container a `stop_grace_period` of 15 s.
+
+## Lua components and systems
+
+Game developers define data components in Lua and write server-authoritative Lua systems that run on the 20 Hz tick
+and operate on player characters. The component file format is the engine's (root README, "Lua components"), so a
+game project's `components/` folder can be shared by the client and the server. The engine applies whatever the
+server replicates to the matching component on the local player and on remote clones (root README, "Online Services").
+
+### Layout
+
+| Path | What |
+|---|---|
+| `LUA_ROOT/components/**/*.lua` | Component definitions, scanned recursively, one type per file |
+| `LUA_ROOT/systems/*.lua` | Systems, not recursive, run in alphabetical filename order |
+
+- **`LUA_ROOT`:** defaults to `/app/lua`. The image ships the sample from `services/world/lua/` there, and compose bind-mounts `./lua` over it.
+- **Loading:** files are loaded once at startup; there is no hot reload. After an edit, restart the server (`docker compose restart world`).
+- **Errors refuse the start:** an invalid definition or system file, or an error in a system's `init`, stops the start. The server logs every error, not just the first, one `Lua error` line each. Each starts with the file path (and `path:line` for Lua errors); a `startup failed: Lua` line and exit status 1 follow.
+- **No Lua is fine:** a missing or empty `LUA_ROOT` means no custom components or systems, with an info log.
+
+**Sharing with a game project:** point the bind mount (or `LUA_ROOT`, when running on the host) at a folder whose `components/` is the game project's. For example, change the volume to `- ../../my-game:/app/lua:ro`, which holds `components/` and a `systems/` folder the client never runs. Client and server then read the same definition files.
+
+### Component definitions
+
+Exactly the engine's format: `return { name, displayName?, fields = {...} }`.
+- **Field types:** `float`, `int`, `bool`, `string`, `vec3`, `quat`, `enum`, and `array` with `of`.
+- **Field options:** `min`, `max`, `color`, `values`, `default`.
+- **Checks:** the same strict key checks and error messages as the engine.
+
+There are two more top-level keys. The engine accepts and checks both, but uses neither:
+
+| Key | Values | Default | Meaning |
+|---|---|---|---|
+| `persist` | `true` / `false` | `false` | Saved per character in MySQL (see Persistence below) |
+| `replicate` | `"none"` / `"owner"` / `"aoi"` | `"none"` | `owner`: sent to the owning player only. `aoi`: to the owner and every player who can see the character. `none`: never sent |
+
+```lua
+-- lua/components/health.lua (the sample)
+return {
+    name = "Health",
+    persist = true,
+    replicate = "aoi",
+    fields = {
+        { name = "current", type = "float", default = 100, min = 0 },
+        { name = "max",     type = "float", default = 100, min = 1 },
+        -- ...
+    },
+}
+```
+
+- **Invalid values:** a bad `persist` or `replicate` is a definition error.
+- **Reserved names:** a definition may not be named `Character` or `Transform` (the read-only built-ins), or after any server C++ component (`SessionLink`, `CharacterRef`, `MoveState`, `PendingMoves`, `PendingSay`, `ChatLimit`, `AoiCell`, `Visible`, `Moved`, `Dirty`, `SaveTimer`, `ReplicatedState`, `ScriptsLeft`, `PreservedComponents`, `ComponentData`).
+- **Duplicates:** two files declaring the same name are both rejected, each error naming the other file, whatever the scan order.
+
+### Systems
+
+A system file returns a table; only `update` is required:
+
+```lua
+return {
+    init = function() end,         -- at startup, after the file loaded; an error here refuses the start
+    update = function(dt) end,     -- every tick; dt = 1 / TICK_HZ seconds
+    shutdown = function() end,     -- graceful shutdown, before the final saves
+    onEnter = function(e) end,     -- a character spawned; its persisted components are already restored
+    onLeave = function(e) end,     -- a character is leaving; changes made here are saved
+}
+```
+
+- **One state, isolated files:** the server has one Lua state, and each system file gets its own environment, so globals never leak between files.
+- **Sandbox:** the same as the engine's. Only base, table, string and math are open, with no `io`, `os`, `ffi`, `debug`, `jit`, `package`, `require`, `loadfile`, `dofile`, `load` or `loadstring`. Definition files are sandboxed too.
+- **Runaway scripts:** a callback that runs longer than 2 s raises an error, so an infinite loop disables its system instead of hanging the server.
+- **Runtime errors:** an error in any callback is logged as `Lua system disabled`, with the system, the callback and `path:line`. That system is then disabled until restart; the server and the other systems keep running.
+
+**The `kast.*` API** has the engine's semantics and error messages, so a script behaves the same on client and server:
+
+| Function | What |
+|---|---|
+| `kast.query(names...)` | Iterator over entity ids with every listed component, in ascending id order. Captured when called: entities gone later in the loop are skipped |
+| `kast.get(e, name)` | A fresh table of the component's fields; arrays are 1-based sequences, `vec3`/`quat` are `{x=, y=, z=[, w=]}` |
+| `kast.set(e, name, fields)` | Partial: listed fields change, the others keep their values. All-or-nothing: an unknown field, a wrong type, an out-of-range value or an unknown enum value raises an error and leaves the component unchanged |
+| `kast.has(e, name)` / `kast.add(e, name)` / `kast.remove(e, name)` | `add` uses the field defaults and does nothing if the component is present; `remove` does nothing if it is absent |
+| `kast.log/warn/error(msg)` | A server log line `<system path>: <msg>` at that level |
+
+- **Entities:** an entity is the character's server wire id, the integer clients see as `entityId`.
+- **Players only:** only player characters exist. There is no `kast.create` / `kast.destroy`, and no NPCs.
+- **`kast` is read-only:** assigning to it raises an error.
+- **Read-only built-ins:** every character has these two. `get`, `has` and `query` work on them; `set` and `add` raise `"<name>" is read-only on the server`, and `remove` raises `"<name>" cannot be removed`.
+
+| Name | Fields |
+|---|---|
+| `Character` | `charId`, `name` |
+| `Transform` | `position = {x, y, z}`, `heading` (radians). Moves come only from the validated client movement |
+
+### Tick order
+
+Each tick runs, in this order:
+
+1. movement
+2. AOI (`Spawn` / `Despawn`)
+3. chat
+4. **Lua `update`**, every system in filename order
+5. replication (`EntityMove`)
+6. component replication
+7. save
+8. end of tick
+
+Lua sees this tick's validated positions. Its changes are replicated and become eligible for saving in the same tick.
+
+Lifecycle hooks run at these points:
+
+| Event | Hooks |
+|---|---|
+| `EnterWorld` | Spawn, restore the persisted components, then `onEnter` |
+| Logout, disconnect or duplicate-login kick | `onLeave`, then the save and the despawn |
+| Graceful shutdown | `onLeave` for every character, then every system's `shutdown`, then the saves and despawns |
+
+### Persistence
+
+- **Storage:** components with `persist = true` are stored in `characters.components`, a JSON column added by `migrations/002_character_components.sql`. It holds `{"<Name>": {...}, ...}` in the replication encoding.
+- **When they are saved:** with the position, through the existing save flow on the DB worker. That means on logout/disconnect and on graceful shutdown. Every `kast.set` / `add` / `remove` that changes a persisted component marks the character dirty, so the `SAVE_INTERVAL_MS` save picks it up. The tick never waits on MySQL.
+- **Loading (drift rules, as in the engine):** a missing field gets its default, an unknown field is dropped, and a wrong-typed or out-of-range value is reset to its default. Each fix logs a `persisted component fixed on load` warning naming the character and field.
+- **No data loss:** column entries with no current definition, or whose definition is no longer `persist`, are kept verbatim and written back unchanged on every save. A column that isn't a JSON object is never overwritten (and nothing is restored from it).
+
+### Replication
+
+`ComponentUpdate` and `ComponentRemove` are described in [`PROTOCOL.md`](PROTOCOL.md#lua-components).
+
+- **What is sent:** after the Lua systems run, every `owner` / `aoi` component that was added, changed or removed since it was last sent. The diff is per component against the last sent JSON, so unchanged components are never resent.
+- **Full sets:** the owner gets its full set on the first tick in the world. A viewer gets an entity's full `aoi` set when the entity comes into view, right after its `Spawn`.
+- **Ordering:** data never precedes `Spawn` or follows `Despawn`.
+- **Client writes:** there are none. A client that sends a component message is disconnected with `unexpected_message`.
+
+### Sample
+
+The `lua/` folder holds the sample:
+
+| File | What |
+|---|---|
+| `components/health.lua` | `Health`: `persist`, `replicate = "aoi"`, every field type. The same file as `tests/project/components/health.lua` |
+| `components/wallet.lua` | `Wallet { gold }`: `persist`, `replicate = "owner"` |
+| `systems/regen.lua` | `onEnter` adds `Health` and `Wallet` if absent and pays 1 gold per login. Once a second per character, each on its own phase, `update` regenerates `Health.current` toward `max` (+2) if the character stood still, or drains it by 0.5 per metre moved (`Transform` deltas). It keeps whole points and writes only on a change, so a character costs at most one `ComponentUpdate` a second per viewer |
+
+**Keep replicated components quiet.** Each change goes out in full to the owner and everyone in view. A component written every tick costs one message per tick per viewer, and in a crowd that is N² messages. An earlier sample that updated `Health` every tick made the 500-bot load test drop 378 clients on the 1 MiB send-buffer cap while they crowded the spawn point. Write replicated values at the rate clients need, and only when they change.
 
 ## Operations
 
@@ -249,10 +399,10 @@ Compose gives the container a `stop_grace_period` of 15 s.
 
 ## Tests
 
-- **Self-check** (`tests/self_check.cpp`, ctest `world_self_check`): assert-style checks of the pure logic with an injected clock, so nothing sleeps.
+- **Self-check** (`tests/self_check.cpp` + `tests/lua_checks.cpp`, ctest `world_self_check`): assert-style checks of the pure logic with an injected clock, so nothing sleeps. The Lua checks write their scripts to a temp folder and drive a `World` with captured sends and saves.
 - **Integration** (`tests/integration.sh`): drives `kast_bot` scenarios against the compose stack.
   - The bots register, verify through Mailpit and log in with real auth tokens.
-  - Scenarios 10–12 use `docker compose restart/stop/start` on `world` and `mysql`.
+  - Scenarios 10–13 use `docker compose restart/stop/start` on `world` and `mysql`.
   - Logs go to `build/integration-<run>/`.
 - **Load** (`tests/load.sh`):
   - **Setup:** restarts `world` so its totals cover only the test. It then runs `COUNT` bots in one process (8 io threads, 50 new connections per second) for `DURATION` s.
@@ -266,4 +416,6 @@ Compose gives the container a `stop_grace_period` of 15 s.
 Each is marked `// ponytail:` in the code with its limit and upgrade path:
 - **One database writer per realm:** character limits are checked with count-then-insert on the single DB thread. Several world processes per realm would need `SELECT … FOR UPDATE`.
 - **Migration splitter:** splits on `;` at the end of a line.
+- **Component replication diff:** every replicated component's full JSON is compared with the last sent value each tick, and a change is sent in full. Fine for hundreds of players with a few small components. Past that, use dirty flags set by `kast.set`, and delta or binary encoding.
+- **`kast.set` through JSON:** reuses the definition checks; convert Lua values directly if it shows in profiles.
 - **No TLS `close_notify` on disconnect:** peers see EOF.

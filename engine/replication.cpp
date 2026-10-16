@@ -2,6 +2,7 @@
 
 #include "components.h"
 #include "log.h"
+#include "lua_components.h"
 #include "math3d.h"
 
 #include <cmath>
@@ -126,7 +127,16 @@ void Replication::start(Scene& scene, EventBus& bus, WorldClient& world)
             scene_->registry().get<Transform>(remote.entity).rotation = yawRotation(remote.heading);
     }));
     subscriptions_.push_back(bus.subscribe("world.despawn", [this](const Json& e) { despawn(e.value("entityId", 0u)); }));
-    subscriptions_.push_back(bus.subscribe("world.disconnected", [this](const Json&) { despawnAll(); }));
+    subscriptions_.push_back(bus.subscribe("world.disconnected", [this](const Json&) {
+        despawnAll();
+        localId_.reset();
+        localComponents_.clear();
+    }));
+    subscriptions_.push_back(bus.subscribe("world.component", [this](const Json& e) { applyComponent(e, false); }));
+    subscriptions_.push_back(bus.subscribe("world.componentRemoved", [this](const Json& e) { applyComponent(e, true); }));
+    if (const entt::entity player = localPlayer(); player != entt::null) // a scene switch: the new scene's player
+        for (const auto& [name, data] : localComponents_)
+            applyComponent(player, name, &data);
 
     // Remote players already in view (a scene switch): their clones in the new scene, where they were last shown.
     std::unordered_map<uint32_t, Remote> known;
@@ -141,8 +151,11 @@ void Replication::stop(bool remembered)
 {
     subscriptions_.clear();
     template_.reset();
-    if (!remembered)
+    if (!remembered) {
         remotes_.clear();
+        localId_.reset();
+        localComponents_.clear();
+    }
     for (auto& [id, remote] : remotes_)
         remote.entity = entt::null; // the scene goes; start() re-creates them
     throttle_.reset();
@@ -200,6 +213,10 @@ void Replication::placeLocal(const Json& payload)
     t.position = vec3(payload.value("position", Json::object()));
     if (payload.contains("heading")) // world.entered; a correction carries the position only
         t.rotation = yawRotation(payload.value("heading", 0.0f));
+    if (payload.contains("entityId")) { // world.entered: a new character, so none of the old one's components
+        localId_ = payload.value("entityId", 0u);
+        localComponents_.clear();
+    }
     throttle_.known(t.position, headingOf(t.rotation));
 }
 
@@ -218,6 +235,8 @@ void Replication::spawn(uint32_t id, Remote remote)
     t.position = interpolate(remote.from, remote.to, remote.elapsed, interpolationSeconds());
     t.rotation = yawRotation(remote.heading);
     registry.emplace_or_replace<NetworkEntity>(remote.entity, static_cast<int>(id));
+    for (const auto& [name, data] : remote.components)
+        applyComponent(remote.entity, name, &data);
     bus_->publish("world.entitySpawned",
                   {{"entityId", id}, {"entity", registry.get<PersistentId>(remote.entity).value}, {"name", remote.name}},
                   "kast.replication");
@@ -232,6 +251,58 @@ void Replication::despawn(uint32_t id)
     if (scene_ && scene_->valid(it->second.entity))
         scene_->destroy(it->second.entity);
     remotes_.erase(it);
+}
+
+void Replication::applyComponent(const Json& event, bool removed)
+{
+    const uint32_t id = event.value("entityId", 0u);
+    const std::string name = event.value("name", "");
+    const Json data = event.value("data", Json());
+    std::map<std::string, Json>* known = nullptr;
+    entt::entity entity = entt::null;
+    if (localId_ && *localId_ == id) {
+        known = &localComponents_;
+        entity = localPlayer();
+    } else if (const auto it = remotes_.find(id); it != remotes_.end()) {
+        known = &it->second.components;
+        entity = it->second.entity;
+    } else {
+        return; // not in view (the server never sends that)
+    }
+    if (removed)
+        known->erase(name);
+    else
+        (*known)[name] = data;
+    if (scene_->valid(entity))
+        applyComponent(entity, name, removed ? nullptr : &data);
+}
+
+// data null: remove. The server's values are authoritative: whatever was there is replaced.
+void Replication::applyComponent(entt::entity entity, const std::string& name, const Json* data)
+{
+    entt::registry& registry = scene_->registry();
+    const ComponentType type = findAnyComponentType(name);
+    if (!type.lua()) {
+        if (warned_.insert(name).second)
+            log::warn(std::format("Replication: the server sent component \"{}\", which has no Lua component definition "
+                                  "in this project; ignored",
+                                  name));
+        return;
+    }
+    if (!data) {
+        if (hasComponent(registry, entity, type))
+            removeComponent(registry, entity, type);
+        return;
+    }
+    std::vector<std::string> fixes;
+    // ponytail: event payloads are unordered JSON; a dump + parse gives migrateLuaComponent its ordered form.
+    const nlohmann::ordered_json value =
+        migrateLuaComponent(*type.lua(), nlohmann::ordered_json::parse(data->dump()), fixes);
+    for (const std::string& fix : fixes)
+        if (warned_.insert(name + ": " + fix).second)
+            log::warn(std::format("Replication: {}: {}: {}", entityLabel(registry, entity), name, fix));
+    std::string error;
+    setComponentJson(registry, entity, type, value, error); // canonical after migrate: never fails
 }
 
 void Replication::despawnAll()

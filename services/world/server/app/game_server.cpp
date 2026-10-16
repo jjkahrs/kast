@@ -15,6 +15,7 @@ world::WorldRules world_rules(const Config& c) {
     r.chatRateCount = c.chatRateCount;
     r.chatRateWindow = Millis(c.chatRateWindowMs);
     r.saveInterval = Millis(c.saveIntervalMs);
+    r.tickSeconds = 1.0f / static_cast<float>(c.tickHz);
     return r;
 }
 
@@ -42,13 +43,13 @@ const char* role_name(proto::Role r) {
 } // namespace
 
 GameServer::GameServer(asio::io_context& io, const Config& cfg, asio::ssl::context& tls, db::DbWorker& db,
-                       TokenService& tokens)
+                       TokenService& tokens, lua::Defs defs)
     : io_(io), cfg_(cfg), tls_(tls), db_(db), tokens_(tokens), limits_(session_limits(cfg)), acceptor_(io),
       world_(world_rules(cfg),
              [this](uint32_t sid, const proto::Message& m) {
                  if (auto* c = find(sid)) c->session->send(m);
              },
-             [this](const db::CharSave& s) { db_.save(s); }),
+             [this](const db::CharSave& s) { db_.save(s); }, std::move(defs)),
       tickTimer_(io), tickPeriod_(Millis(1000 / cfg.tickHz)), windowTicks_(std::make_unique<TickStats>()),
       totalTicks_(std::make_unique<TickStats>()), windowLag_(std::make_unique<TickStats>()),
       totalLag_(std::make_unique<TickStats>()), shutdownTimer_(io) {}
@@ -322,6 +323,7 @@ void GameServer::shutdown(std::function<void()> onDone) {
     tickTimer_.cancel();
     log_tick_stats("tick stats total", *totalTicks_, *totalLag_);
 
+    world_.shutdown_scripts(); // onLeave changes are part of the saves below
     onShutdownDone_ = std::move(onDone);
     std::vector<std::shared_ptr<net::Session>> sessions;
     for (auto& [id, c] : clients_) {

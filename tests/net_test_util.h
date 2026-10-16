@@ -150,7 +150,9 @@ Server::Body serveFakeAuth(FakeAuth& fake);
 // (100, 0, 100)}. CharDelete / EnterWorld of an unknown id -> CharError{not_found}. EnterWorld -> EnterWorldOk{1,
 // (100, 0, 100), 0.5}, Spawn{2, "Other", (101, 0, 100), 0}, EntityMove{2, (102, 0, 100), 1}, Correction{(100, 0, 100)}
 // in one write. Move more than 20 m (x/z) from the last accepted position (at first the spawn) -> Correction{that
-// position}, else it is accepted silently. Say -> ChatMsg{the character's name, text}, then Despawn{2} if text is "bye". Anything else:
+// position}, else it is accepted silently. Say -> ChatMsg{the character's name, text}, then Despawn{2} if text is "bye", or
+// ComponentUpdate{2, Health, {current 42.5, max 100}}, a ComponentUpdate with invalid JSON and ComponentRemove{2, Health}
+// if text is "components". Anything else:
 // Disconnect{unexpected_message}.
 constexpr uint32_t kFakeWorldPing = 4242;
 

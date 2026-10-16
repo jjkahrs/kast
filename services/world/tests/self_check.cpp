@@ -1,6 +1,6 @@
 // Assert-style checks for the world server's pure logic: frame codec (every message), frame rejection, names,
 // movement, AOI sets, chat sanitizing and rate limits, config validation, tick stats and JWT/JWKS verification with
-// locally generated RSA keys. No network, database or sleeping: time is passed in.
+// locally generated RSA keys; lua_checks.cpp covers the Lua layer. No network, database or sleeping: time is passed in.
 // Exit 0 if every check passes. Run by CTest as world_self_check.
 #include "auth/jwks_cache.h"
 #include "auth/jwt_verify.h"
@@ -426,6 +426,8 @@ void checkJwksCache() {
 
 } // namespace
 
+int lua_checks(int& checks); // lua_checks.cpp
+
 int main() {
     checkCodecRoundTrip();
     checkFrameRejection();
@@ -438,6 +440,7 @@ int main() {
     checkTickStats();
     checkJwt();
     checkJwksCache();
+    g_failures += lua_checks(g_checks);
     std::printf("%d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

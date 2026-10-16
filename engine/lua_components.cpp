@@ -185,7 +185,19 @@ std::shared_ptr<LuaComponentDef> parseDefinition(sol::state& lua, const std::fil
     def->path = path;
     def->name = identifier(table, "name", path + ": ");
     declared = def->name;
-    checkKeys(table, {"name", "displayName", "fields"}, path + ": ");
+    // persist and replicate are world-server keys (services/world README "Lua components and systems"), accepted here
+    // so client and server can share definition files. The engine checks them and otherwise ignores them: it applies
+    // whatever the server replicates.
+    checkKeys(table, {"name", "displayName", "fields", "persist", "replicate"}, path + ": ");
+    if (const sol::object persist = table["persist"];
+        persist.get_type() != sol::type::lua_nil && persist.get_type() != sol::type::boolean)
+        throw Invalid(std::format("{}: \"persist\" must be true or false", path));
+    if (const sol::object replicate = table["replicate"]; replicate.get_type() != sol::type::lua_nil) {
+        const std::string mode = replicate.get_type() == sol::type::string ? replicate.as<std::string>() : "";
+        if (mode != "none" && mode != "owner" && mode != "aoi")
+            throw Invalid(std::format("{}: \"replicate\" must be \"none\", \"owner\" or \"aoi\", got {}", path,
+                                      toString(lua.lua_state(), replicate)));
+    }
     const sol::object displayName = table["displayName"];
     if (displayName.get_type() == sol::type::lua_nil)
         def->displayName = def->name;

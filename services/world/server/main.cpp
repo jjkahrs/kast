@@ -6,11 +6,14 @@
 #include "core/log.h"
 #include "db/db_worker.h"
 #include "db/migrate.h"
+#include "lua/components.h"
+#include "world/components.h"
 #include "net/tls_context.h"
 
 #include <asio.hpp>
 
 #include <cstdio>
+#include <filesystem>
 
 using namespace kast;
 
@@ -23,6 +26,13 @@ int main() {
     }
     const Config& cfg = loaded.config;
     log::set_level(cfg.logLevel);
+
+    // Lua component definitions first: a broken one stops the start before anything else happens.
+    std::error_code ec;
+    const bool haveLua = std::filesystem::is_directory(cfg.luaRoot, ec);
+    lua::DefsResult defs;
+    if (haveLua) defs = lua::load_component_defs(cfg.luaRoot, world::kReservedComponentNames);
+    else log::info("no Lua components or systems (LUA_ROOT is not a folder)", {{"luaRoot", cfg.luaRoot}});
 
     db::library_init();
     const db::ConnectOptions dbOpts{cfg.dbHost, cfg.dbPort, cfg.dbUser, cfg.dbPassword, cfg.dbName,
@@ -46,7 +56,21 @@ int main() {
                              Millis(cfg.jwksRefreshSec * 1000ull), Millis(cfg.jwksMinRefetchSec * 1000ull),
                              Millis(cfg.jwksTimeoutMs)},
                             post);
-        GameServer server(io, cfg, tls, dbWorker, tokens);
+        const size_t defCount = defs.defs.size();
+        GameServer server(io, cfg, tls, dbWorker, tokens, std::move(defs.defs));
+        std::vector<std::string> luaErrors = std::move(defs.errors);
+        if (haveLua) {
+            for (std::string& e : server.load_scripts()) luaErrors.push_back(std::move(e));
+            if (!luaErrors.empty()) {
+                for (const auto& e : luaErrors) log::error("Lua error", {{"error", e}});
+                log::error("startup failed: Lua", {{"errors", luaErrors.size()}, {"luaRoot", cfg.luaRoot}});
+                tokens.stop();
+                dbWorker.stop(SteadyClock::now());
+                return 1;
+            }
+            const auto systems = server.script_status();
+            log::info("Lua loaded", {{"luaRoot", cfg.luaRoot}, {"components", defCount}, {"systems", systems.size()}});
+        }
         server.start();
 
         TimePoint shutdownStart{};

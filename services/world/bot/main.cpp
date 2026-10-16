@@ -27,6 +27,7 @@ void usage() {
         "  --connect-rate N      load: new sessions per second (default 50)\n"
         "  --auth-key FILE       handshake scenario: auth's private key, to mint an expired token (test only)\n"
         "  --expect-pos X,Y,Z    restart-verify scenario\n"
+        "  --expect-components G,H  components-verify scenario: Wallet gold and Health current before the restart\n"
         "  --tag T               shutdown/restart-verify scenarios: account tag\n"
         "scenarios: auth characters ownership aoi chat speedhack malformed handshake duplicate persist\n"
         "           shutdown restart-verify dbdown\n");
@@ -62,6 +63,7 @@ int main(int argc, char** argv) {
         else if (a == "--auth-key") o.authKeyFile = val();
         else if (a == "--expect-pos") o.expectPos = val();
         else if (a == "--tag") o.extra["tag"] = val();
+        else if (a == "--expect-components") o.extra["expect-components"] = val();
         else if (a == "--zone") o.extra["zone"] = val();
         else {
             std::fprintf(stderr, "unknown option %s\n", a.c_str());

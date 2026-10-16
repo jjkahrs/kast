@@ -9,6 +9,8 @@
     "jwt-cpp",
     { "name": "cpp-httplib", "default-features": false, "features": ["openssl"] },
     "entt",
-    "nlohmann-json"
+    "nlohmann-json",
+    "luajit",
+    "sol2"
   ]
 }

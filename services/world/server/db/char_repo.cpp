@@ -15,6 +15,7 @@ CharRow to_row(const Row& r) {
     c.name = *r[2];
     c.pos = {std::stof(*r[3]), std::stof(*r[4]), std::stof(*r[5])};
     c.heading = std::stof(*r[6]);
+    if (r.size() > 7 && r[7]) c.components = *r[7];
     return c;
 }
 
@@ -42,7 +43,7 @@ CreateResult CharRepo::create(uint64_t accountId, const std::string& name, proto
                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                            {uint64_t{realm_}, accountId, name, double{spawn.x}, double{spawn.y}, double{spawn.z},
                             double{heading}, now_utc()});
-        result.row = {ins.insertId, accountId, name, spawn, heading};
+        result.row = {ins.insertId, accountId, name, spawn, heading, {}};
     } catch (const DbError& e) {
         if (e.code != kErDupEntry) throw;
         result.code = proto::Code::name_taken;
@@ -59,7 +60,7 @@ bool CharRepo::soft_delete(uint64_t accountId, uint64_t charId) {
 
 std::optional<CharRow> CharRepo::enter(uint64_t accountId, uint64_t charId) {
     auto res = c_.exec(std::string("SELECT ") + kColumns +
-                           " FROM characters WHERE id = ? AND realm_id = ? AND account_id = ? AND deleted_at IS NULL",
+                           ", components FROM characters WHERE id = ? AND realm_id = ? AND account_id = ? AND deleted_at IS NULL",
                        {charId, uint64_t{realm_}, accountId});
     if (res.rows.empty()) return std::nullopt;
     c_.exec("UPDATE characters SET last_login_at = ? WHERE id = ?", {now_utc(), charId});
@@ -67,8 +68,15 @@ std::optional<CharRow> CharRepo::enter(uint64_t accountId, uint64_t charId) {
 }
 
 void CharRepo::save(const CharSave& s) {
-    c_.exec("UPDATE characters SET pos_x = ?, pos_y = ?, pos_z = ?, heading = ? WHERE id = ? AND realm_id = ?",
-            {double{s.pos.x}, double{s.pos.y}, double{s.pos.z}, double{s.heading}, s.charId, uint64_t{realm_}});
+    if (!s.components) {
+        c_.exec("UPDATE characters SET pos_x = ?, pos_y = ?, pos_z = ?, heading = ? WHERE id = ? AND realm_id = ?",
+                {double{s.pos.x}, double{s.pos.y}, double{s.pos.z}, double{s.heading}, s.charId, uint64_t{realm_}});
+        return;
+    }
+    c_.exec("UPDATE characters SET pos_x = ?, pos_y = ?, pos_z = ?, heading = ?, components = ? "
+            "WHERE id = ? AND realm_id = ?",
+            {double{s.pos.x}, double{s.pos.y}, double{s.pos.z}, double{s.heading}, *s.components, s.charId,
+             uint64_t{realm_}});
 }
 
 } // namespace kast::db

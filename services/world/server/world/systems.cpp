@@ -2,6 +2,8 @@
 #include "../core/log.h"
 #include "components.h"
 
+#include <algorithm>
+
 namespace kast::world {
 namespace {
 entt::entity from_wire(uint32_t id) { return entt::entity{id}; }
@@ -54,6 +56,7 @@ void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send) {
         }
         for (uint32_t id : left) send(link.sessionId, proto::Despawn{id});
         vis.ids = std::move(now);
+        vis.entered = entered;
     }
 }
 
@@ -87,12 +90,77 @@ void chat_system(entt::registry& reg, const ChatRules& rules, const Send& send, 
     }
 }
 
-// Periodic save of characters whose position changed.
-void save_system(entt::registry& reg, const Save& save, Millis interval, TimePoint now) {
+// Runs after the Lua systems, so a change made this tick is sent this tick. Spawn always goes first: aoi_system sent
+// it earlier in the tick, and a viewer that just got it receives the full set instead of this tick's changes.
+// ponytail: diffs each replicated component's full JSON every tick; dirty flags from kast.set if entity counts grow.
+void component_replication_system(entt::registry& reg, const lua::Defs& defs, const Send& send) {
+    struct Replicated {
+        const lua::ComponentDef* def;
+        entt::storage_for_t<lua::ComponentData>* pool;
+    };
+    std::vector<Replicated> types;
+    for (const auto& def : defs)
+        if (def->replicate != lua::Replicate::none) types.push_back({def.get(), &lua::pool(reg, def->name)});
+    if (types.empty()) return;
+
+    const auto toViewers = [&](entt::entity e, const Visible& vis, const proto::Message& msg) {
+        for (uint32_t id : vis.ids) {
+            const auto viewer = from_wire(id);
+            const auto& entered = reg.get<Visible>(viewer).entered;
+            if (std::binary_search(entered.begin(), entered.end(), wire_id(e))) continue; // gets the full set below
+            send(reg.get<SessionLink>(viewer).sessionId, msg);
+        }
+    };
+    for (auto [e, rep, vis, link, ch] : reg.view<ReplicatedState, Visible, SessionLink, CharacterRef>().each()) {
+        for (const auto& [def, pool] : types) {
+            const auto sent = rep.sent.find(def->name);
+            const bool aoi = def->replicate == lua::Replicate::aoi;
+            if (!pool->contains(e)) {
+                if (sent == rep.sent.end()) continue;
+                rep.sent.erase(sent);
+                rep.oversize.erase(def->name);
+                const proto::ComponentRemove msg{wire_id(e), def->name};
+                send(link.sessionId, msg);
+                if (aoi) toViewers(e, vis, msg);
+                continue;
+            }
+            const auto& value = pool->get(e).value;
+            if (sent != rep.sent.end() && sent->second == value) continue;
+            rep.sent[def->name] = value;
+            std::string json = value.dump();
+            if (!proto::ComponentUpdate::fits(def->name.size(), json.size())) {
+                if (rep.oversize.insert(def->name).second)
+                    log::error("component too large to replicate; not sent until it fits",
+                               {{"char", ch.charId}, {"component", def->name}, {"bytes", json.size()}});
+                continue;
+            }
+            rep.oversize.erase(def->name);
+            const proto::ComponentUpdate msg{wire_id(e), def->name, std::move(json)};
+            send(link.sessionId, msg);
+            if (aoi) toViewers(e, vis, msg);
+        }
+    }
+    // Viewers that saw an entity come into view this tick (after its Spawn): every aoi component it has, as sent.
+    for (auto [viewer, vis, link] : reg.view<Visible, SessionLink>().each()) {
+        for (uint32_t id : vis.entered) {
+            const auto other = from_wire(id);
+            const auto* rep = reg.try_get<ReplicatedState>(other);
+            if (!rep) continue;
+            for (const auto& [def, pool] : types) {
+                if (def->replicate != lua::Replicate::aoi || rep->oversize.contains(def->name)) continue;
+                const auto sent = rep->sent.find(def->name);
+                if (sent != rep->sent.end()) send(link.sessionId, proto::ComponentUpdate{id, def->name, sent->second.dump()});
+            }
+        }
+    }
+}
+
+// Periodic save of characters whose position or persisted Lua components changed.
+void save_system(entt::registry& reg, const lua::Defs& defs, const Save& save, Millis interval, TimePoint now) {
     std::vector<entt::entity> saved;
     for (auto [e, timer, ch, tf] : reg.view<Dirty, SaveTimer, CharacterRef, Transform>().each()) {
         if (now - timer.lastSave < interval) continue;
-        save({ch.charId, tf.pos, tf.heading});
+        save({ch.charId, tf.pos, tf.heading, lua::components_column(reg, e, defs)});
         timer.lastSave = now;
         saved.push_back(e);
     }

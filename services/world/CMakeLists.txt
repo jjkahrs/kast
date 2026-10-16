@@ -13,6 +13,11 @@ find_package(jwt-cpp CONFIG REQUIRED)
 find_package(httplib CONFIG REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(sol2 CONFIG REQUIRED)
+# vcpkg's luajit port ships no CMake config: headers in include/luajit (Windows) or include/luajit-2.1 (Linux),
+# library lua51 (Windows) or luajit-5.1 (Linux).
+find_path(LUAJIT_INCLUDE_DIR luajit.h PATH_SUFFIXES luajit luajit-2.1 REQUIRED)
+find_library(LUAJIT_LIBRARY NAMES lua51 luajit-5.1 REQUIRED)
 
 # World code only; vcpkg headers are SYSTEM includes, so their warnings are suppressed.
 if(MSVC)
@@ -48,13 +53,22 @@ add_library(world_core STATIC
   server/world/rules.cpp
   server/world/systems.cpp
   server/world/world.cpp
+  server/lua/components.cpp
+  server/lua/runtime.cpp
+  server/lua/sandbox.cpp
   server/app/game_server.cpp
 )
 target_include_directories(world_core PUBLIC server)
 target_compile_options(world_core PRIVATE ${WORLD_COMPILE_OPTIONS})
 target_compile_definitions(world_core PUBLIC ${WORLD_DEFINITIONS})
 target_link_libraries(world_core PUBLIC kast_protocol asio::asio OpenSSL::SSL OpenSSL::Crypto
-  unofficial::libmysql::libmysql jwt-cpp::jwt-cpp httplib::httplib EnTT::EnTT nlohmann_json::nlohmann_json)
+  unofficial::libmysql::libmysql jwt-cpp::jwt-cpp httplib::httplib EnTT::EnTT nlohmann_json::nlohmann_json
+  PRIVATE sol2::sol2 "${LUAJIT_LIBRARY}" ${CMAKE_DL_LIBS})
+target_include_directories(world_core SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}")
+# As the engine: sol2 on the LuaJIT (Lua 5.1) API with argument checks; C++ exceptions in bindings are caught by
+# sol2 and become Lua errors carrying the binding's message (with the script's file:line).
+target_compile_definitions(world_core PRIVATE SOL_LUAJIT=1 SOL_ALL_SAFETIES_ON=1 SOL_EXCEPTIONS_SAFE_PROPAGATION=0
+  SOL_PRINT_ERRORS=0)
 
 add_executable(kast_world server/main.cpp)
 target_compile_options(kast_world PRIVATE ${WORLD_COMPILE_OPTIONS})
@@ -72,7 +86,7 @@ target_compile_options(kast_bot PRIVATE ${WORLD_COMPILE_OPTIONS})
 target_link_libraries(kast_bot PRIVATE kast_bot_lib)
 
 enable_testing()
-add_executable(world_self_check tests/self_check.cpp)
+add_executable(world_self_check tests/self_check.cpp tests/lua_checks.cpp)
 target_compile_options(world_self_check PRIVATE ${WORLD_COMPILE_OPTIONS})
 target_link_libraries(world_self_check PRIVATE world_core)
 add_test(NAME world_self_check COMMAND world_self_check)

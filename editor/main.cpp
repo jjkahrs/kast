@@ -54,7 +54,7 @@ constexpr int kAddComponentPopupFrame = 10;
 constexpr float kComponentPollSeconds = 0.5f; // Lua definition files and the Assets tree are checked this often
 constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--ui-scale F] [--projects-file list.json] "
-    "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--no-scene-post] [--add-component-popup] "
+    "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
     "[--focus-panel Window] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
@@ -103,6 +103,7 @@ struct Options {
     std::string saveScene;        // save the startup scene here and exit, without opening a window
     kast::EntityId select = 0;    // select this entity at startup; 0 = none
     bool play = false;            // enter Play mode once the startup scene is loaded
+    bool selectNetworkEntity = false; // with --play: select the first replicated clone (NetworkEntity) once it exists
     bool noScenePost = false;     // start with the Scene view's "Post" toggle off
     std::optional<std::pair<std::string, std::string>> newProject; // name, dir: open the prefilled New Project modal
     bool addComponentPopup = false; // open the Inspector's Add Component popup for the --select entity
@@ -256,6 +257,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.projectsFile = argv[++i];
         } else if (arg == "--settings-file" && hasValue) {
             options.settingsFile = argv[++i];
+        } else if (arg == "--select-network-entity") {
+            options.selectNetworkEntity = true;
         } else if (arg == "--open-preferences") {
             options.openPreferences = true;
         } else if (arg == "--open-external" && hasValue) {
@@ -328,7 +331,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                          "combined with --project, --scene, --save-scene or --build");
         return std::nullopt;
     }
-    const bool editorFlags = options.select != 0 || options.play || options.addComponentPopup ||
+    const bool editorFlags = options.select != 0 || options.play || options.selectNetworkEntity || options.addComponentPopup ||
                              options.newComponentPrompt || !options.newComponent.empty() || !options.openMenu.empty() ||
                              options.openBuildSettings || options.openOnlineSettings || !options.focusPanel.empty() || options.newStateMachinePrompt ||
                              options.assetsMenu || options.assetsCreate || !options.assetsSelect.empty() ||
@@ -339,7 +342,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.noVsync || !options.worldAddress.empty() || options.onlineLoginEnv ||
                              options.onlineCompose;
     if (!options.editor() && editorFlags) {
-        kast::log::error("--select, --play, --add-component-popup, --new-component[-prompt], "
+        kast::log::error("--select, --play, --select-network-entity, --add-component-popup, --new-component[-prompt], "
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, "
                          "--assets-menu, "
                          "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
@@ -742,6 +745,11 @@ int main(int argc, char** argv)
             buildDefaultLayout(dockspace);
         ImGui::DockSpaceOverViewport(dockspace);
 
+        if (options->selectNetworkEntity && doc.play != PlayState::Stopped && doc.selected == entt::null) {
+            const auto clones = doc.scene.registry().view<kast::NetworkEntity>();
+            if (!clones.empty())
+                doc.selected = clones.front(); // for screenshots of a replicated clone in the Inspector
+        }
         if (options->addComponentPopup && frames.frame() == kAddComponentPopupFrame)
             panels.openAddComponent();
         if (options->openBuildSettings && frames.frame() == kAddComponentPopupFrame)

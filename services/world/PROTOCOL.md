@@ -101,6 +101,8 @@ C = client to server, S = server to client. "Payload" lists fields in wire order
 | `0x0122` | EntityMove | S | `u32 entityId, vec3 pos, f32 heading` |
 | `0x0123` | Correction | S | `vec3 pos` (snap back to the last valid position) |
 | `0x0124` | ChatMsg | S | `str fromName, str text` |
+| `0x0125` | ComponentUpdate | S | `u32 entityId, str name, str json` (a Lua component's full value, see below) |
+| `0x0126` | ComponentRemove | S | `u32 entityId, str name` |
 
 **CharInfo:** `u64 id, str name, vec3 pos`.
 
@@ -141,6 +143,27 @@ Any other opcode, including a server-to-client opcode sent by a client, gets `Di
 - **Control characters:** C0, DEL and C1 are stripped.
 - **Rate limit:** `CHAT_RATE_COUNT` per `CHAT_RATE_WINDOW_MS` (default 5 per 10 s). Rejected messages count toward it.
 - **Rejected messages** (invalid, too long or over the rate) are dropped silently.
+
+### Lua components
+
+Game-defined Lua components (README, "Lua components and systems") reach clients as these two messages. They are
+server-authoritative: there is no client-to-server component message, and a client that sends one gets
+`Disconnect{unexpected_message}`.
+
+- **`ComponentUpdate`:** the component's full value as a JSON object, in the engine's scene-file encoding:
+  - fields in definition order, floats as the shortest decimal that reads back as the same `f32`, ints as integers;
+  - `vec3` / `quat` as arrays `[x, y, z]` / `[x, y, z, w]`, enums by name, arrays as JSON arrays.
+- **`ComponentRemove`:** the entity no longer has the component.
+- **Who gets them,** by the definition's `replicate` key:
+  - `"owner"`: only the owning player's session.
+  - `"aoi"`: the owner and every session that currently sees the entity.
+  - `"none"` (the default): never sent.
+- **When:** at most once per component per tick (20 Hz), after the Lua systems ran, and only if the value differs from what was last sent. Unchanged components are never resent.
+  - The owner gets every replicated component it has on the first tick after `EnterWorldOk`.
+  - A viewer gets every `"aoi"` component of an entity on the tick that entity comes into view, after its `Spawn`. That full set replaces the tick's changes for that viewer.
+- **Ordering:** for any entity, `ComponentUpdate` / `ComponentRemove` come after its `Spawn` (or the owner's `EnterWorldOk`) and never after its `Despawn`.
+- **Size:** a component whose frame would pass the `u16` length limit (65535-byte payload) is not sent. The server logs an error once, until the value fits again.
+- **Bandwidth:** each change is sent in full. A component that changes every tick (e.g. regenerating health) costs one message per tick for each recipient.
 
 ## Codes
 
