@@ -416,7 +416,7 @@ int runLauncher(const LauncherOptions& options)
     };
 
     const int code = kast::run({.title = "Kast Project Manager", .width = options.width, .height = options.height,
-                                .activate = options.frames == 0},
+                                .activate = options.frames == 0, .position = options.position},
                                hooks);
     if (code != 0)
         return code;

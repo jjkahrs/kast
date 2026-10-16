@@ -24,7 +24,16 @@ struct ChatRules {
     size_t maxBytes = 256;
 };
 
+// The session id of every player that currently sees e: for a player, the players in its Visible (range is
+// symmetric; the NPCs there see nothing), for an NPC, its Viewers.
+std::vector<uint32_t> audience(const entt::registry& reg, entt::entity e);
+// Spawn for entity e as a viewer gets it: a player's character name, or an NPC's name and template.
+proto::Spawn spawn_message(const entt::registry& reg, entt::entity e);
+
 void movement_system(entt::registry& reg, const MoveRules& rules, const Send& send, TimePoint now);
+// Moves every entity that moved this tick (Moved) to its new grid cell. aoi_system runs it first; World runs it
+// again after Lua, whose NPC moves would otherwise miss the next tick's view diff.
+void aoi_rebucket(entt::registry& reg, AoiGrid& grid);
 void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send);
 void replication_system(entt::registry& reg, const Send& send);
 void chat_system(entt::registry& reg, const ChatRules& rules, const Send& send, TimePoint now);
@@ -33,7 +42,7 @@ void chat_system(entt::registry& reg, const ChatRules& rules, const Send& send, 
 void component_replication_system(entt::registry& reg, const lua::Defs& defs, const Send& send);
 // Sends the client events Lua queued (kast.sendTo/sendNearby/broadcast) as ServerEvent, in call order. The audience is
 // taken now: owner = the character's session, nearby = it and every session that sees it, all = every player. A
-// target no longer in the world is skipped.
+// target no longer in the world is skipped, and an NPC target has no client of its own.
 void client_event_system(entt::registry& reg, std::vector<lua::ClientEvent> events, const Send& send);
 void save_system(entt::registry& reg, const lua::Defs& defs, const Save& save, Millis interval, TimePoint now);
 void end_of_tick_system(entt::registry& reg);

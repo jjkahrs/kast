@@ -1273,9 +1273,9 @@ void checkWorldClient()
     {
         const std::vector<proto::Message> seen = fakeWorld.seen();
         check(seen.size() >= 2 && std::get_if<proto::Hello>(&seen[0]) &&
-                  std::get_if<proto::Hello>(&seen[0])->protocolVersion == 1 && std::get_if<proto::Auth>(&seen[1]) &&
+                  std::get_if<proto::Hello>(&seen[0])->protocolVersion == 2 && std::get_if<proto::Auth>(&seen[1]) &&
                   std::get_if<proto::Auth>(&seen[1])->accessToken == fake.accessToken(),
-              "world: the handshake sends Hello{1} then Auth{the session's access token}");
+              "world: the handshake sends Hello{2} then Auth{the session's access token}");
     }
     check(throwsLogic([&] { w.connect(3); }, "connect: needs state 'disconnected', the connection is 'lobby'") &&
               throwsLogic([&] { w.say("x"); }, "say: needs state 'inWorld'"),
@@ -1314,8 +1314,9 @@ void checkWorldClient()
               entered->value("heading", 0.0) == 0.5 && w.state() == kast::WorldState::InWorld,
           "world.entered {entityId, position, heading}; state inWorld");
     const Json* spawn = r.next("world.spawn");
-    check(spawn && *spawn == Json{{"entityId", 2}, {"name", "Other"}, {"position", pos(101, 0, 100)}, {"heading", 0.0}},
-          "world.spawn {entityId, name, position, heading}");
+    check(spawn && *spawn == Json{{"entityId", 2}, {"name", "Other"}, {"position", pos(101, 0, 100)}, {"heading", 0.0},
+                                  {"kind", "player"}, {"template", ""}},
+          "world.spawn {entityId, name, position, heading, kind player, template empty}");
     const Json* moved = r.next("world.entityMove");
     check(moved && *moved == Json{{"entityId", 2}, {"position", pos(102, 0, 100)}, {"heading", 1.0}},
           "world.entityMove {entityId, position, heading}");
@@ -1333,6 +1334,11 @@ void checkWorldClient()
     const Json* removed = r.next("world.componentRemoved");
     check(removed && *removed == Json{{"entityId", 2}, {"name", "Health"}} && r.count("world.component") == 1,
           "world.componentRemoved {entityId, name}; a ComponentUpdate with invalid JSON is dropped");
+    w.say("npc");
+    const Json* npc = r.next("world.spawn");
+    check(npc && *npc == Json{{"entityId", 3}, {"name", "Guard"}, {"position", pos(103, 0, 100)}, {"heading", 0.25},
+                              {"kind", "npc"}, {"template", "Guard"}},
+          "world.spawn of a v2 NPC Spawn: kind npc, its template");
     w.say("events");
     const Json* quest = r.next("server.quest.update");
     check(quest && *quest == Json::parse(R"({"quest": 7, "steps": [1, 2], "done": false})"),
@@ -1609,8 +1615,12 @@ void checkReplicationOffline()
     check(kast::setComponentJson(scene.registry(), probe, manager, {{"templateEntity", "T"}, {"interpolationMs", 50}}, error) &&
               !kast::setComponentJson(scene.registry(), probe, manager, {{"templateEntity", "T"}, {"interpolationMs", -1}}, error) &&
               kast::componentToJson(scene.registry(), probe, manager) ==
-                  nlohmann::ordered_json{{"templateEntity", "T"}, {"interpolationMs", 50}},
-          "replication: NetworkReplication round trip, negative interpolation rejected");
+                  nlohmann::ordered_json{{"templateEntity", "T"}, {"interpolationMs", 50}, {"npcTemplates", ""}},
+          "replication: NetworkReplication round trip (npcTemplates optional), negative interpolation rejected");
+    check(kast::setComponentJson(scene.registry(), probe, manager,
+                                 {{"templateEntity", "T"}, {"interpolationMs", 50}, {"npcTemplates", "NPCs"}}, error) &&
+              kast::componentToJson(scene.registry(), probe, manager).value("npcTemplates", "") == "NPCs",
+          "replication: NetworkReplication npcTemplates round trip");
 
     // The ECS plumbing on hand-published events.
     const auto build = [](kast::Scene& s) {
@@ -1708,6 +1718,132 @@ void checkReplicationOffline()
           "replication: after a scene switch the remote players in view are cloned into the new scene");
     r.stop();
     check(r.clone(4) == entt::null, "replication: stop() forgets them");
+}
+
+// NPC spawns (world.spawn kind "npc"): clones of their own template, a child of NetworkReplication.npcTemplates, which
+// leaves the scene at start with every template under it; an empty or missing template falls back to the template
+// entity with one warning per name. Players are unchanged.
+void checkReplicationNpcs()
+{
+    const auto build = [](kast::Scene& s) {
+        s.registry().emplace<kast::NetworkLocalPlayer>(s.create("Player"));
+        const entt::entity templ = s.create("Template");
+        s.registry().emplace<kast::MeshRenderer>(s.create("Body", templ),
+                                                 kast::MeshRenderer{.primitive = kast::Primitive::Sphere});
+        const entt::entity folder = s.create("NPC Templates");
+        const entt::entity guard = s.create("Guard", folder);
+        s.registry().get<kast::Transform>(guard).scale = {3, 3, 3};
+        s.registry().emplace<kast::MeshRenderer>(s.create("Guard Body", guard),
+                                                 kast::MeshRenderer{.primitive = kast::Primitive::Cube});
+        s.create("Merchant", folder);
+        s.registry().emplace<kast::NetworkReplication>(s.create("Manager"),
+                                                       kast::NetworkReplication{"Template", 100.0f, "NPC Templates"});
+    };
+    const auto childPrimitive = [](const kast::Scene& s, entt::entity e) {
+        const auto& children = s.registry().get<kast::Hierarchy>(e).children;
+        return children.size() == 1 && s.registry().all_of<kast::MeshRenderer>(children[0])
+                   ? s.registry().get<kast::MeshRenderer>(children[0]).primitive
+                   : kast::Primitive::Plane; // no single rendered child
+    };
+    const auto warnings = [](const std::string& part) {
+        return std::ranges::count_if(kast::log::lines(), [&](const std::string& line) { return contains(line, part); });
+    };
+    Network net;
+    kast::AuthClient auth{net};
+    kast::WorldClient world{net, auth};
+    world.reset(kast::AuthConfig{"http://127.0.0.1:1", ""});
+    kast::EventBus bus;
+    kast::Scene s;
+    build(s);
+    kast::Replication r;
+    r.start(s, bus, world);
+    check(named(s, "NPC Templates") == entt::null && named(s, "Guard") == entt::null &&
+              named(s, "Guard Body") == entt::null && named(s, "Merchant") == entt::null &&
+              named(s, "Template") == entt::null && s.valid(named(s, "Player")),
+          "replication npcs: the npcTemplates entity and every template under it leave the scene at start");
+
+    const auto spawnNpc = [&](uint32_t id, const std::string& name, const std::string& templ) {
+        bus.publish("world.spawn", {{"entityId", id}, {"name", name}, {"position", at(30, 0, 40)}, {"heading", 0.5},
+                                    {"kind", "npc"}, {"template", templ}});
+        bus.drain();
+        return r.clone(id);
+    };
+    const entt::entity guard = spawnNpc(10, "Guard", "Guard");
+    const auto& reg = s.registry();
+    check(s.valid(guard) && reg.get<kast::Name>(guard).value == "Guard" &&
+              reg.get<kast::NetworkEntity>(guard).entityId == 10 && approx(reg.get<kast::Transform>(guard).scale, {3, 3, 3}) &&
+              approx(reg.get<kast::Transform>(guard).position, {30, 0, 40}) &&
+              approx(kast::headingOf(reg.get<kast::Transform>(guard).rotation), 0.5f) &&
+              childPrimitive(s, guard) == kast::Primitive::Cube,
+          "replication npcs: an NPC spawn clones its own template's subtree at the spawn position, with NetworkEntity");
+    const entt::entity merchant = spawnNpc(11, "Bob the Merchant", "Merchant");
+    check(s.valid(merchant) && reg.get<kast::Name>(merchant).value == "Bob the Merchant" &&
+              reg.get<kast::Hierarchy>(merchant).children.empty(),
+          "replication npcs: each template by its name; the clone is named after the NPC");
+
+    const auto before = warnings("no NPC template 'Ghost'");
+    const entt::entity ghost1 = spawnNpc(12, "Ghost", "Ghost");
+    const entt::entity ghost2 = spawnNpc(13, "Ghost", "Ghost");
+    const entt::entity unnamed = spawnNpc(14, "Nameless", "");
+    check(s.valid(ghost1) && s.valid(ghost2) && childPrimitive(s, ghost1) == kast::Primitive::Sphere &&
+              childPrimitive(s, ghost2) == kast::Primitive::Sphere && childPrimitive(s, unnamed) == kast::Primitive::Sphere,
+          "replication npcs: a missing or empty template falls back to the template entity");
+    check(warnings("no NPC template 'Ghost'") - before == 1 && warnings("no NPC template ''") == 1,
+          "replication npcs: one warning per missing template name");
+
+    bus.publish("world.spawn", {{"entityId", 20}, {"name", "Guard"}, {"position", at(1, 0, 1)}, {"heading", 0},
+                                {"kind", "player"}, {"template", ""}});
+    bus.publish("world.spawn", {{"entityId", 21}, {"name", "Other"}, {"position", at(2, 0, 2)}, {"heading", 0}});
+    bus.drain();
+    check(childPrimitive(s, r.clone(20)) == kast::Primitive::Sphere && childPrimitive(s, r.clone(21)) == kast::Primitive::Sphere,
+          "replication npcs: players (kind player, or no kind) still clone the template entity, even when named "
+          "like an NPC template");
+
+    bus.publish("world.entityMove", {{"entityId", 10}, {"position", at(34, 0, 40)}, {"heading", 1.0}});
+    bus.drain();
+    r.update(0.2f);
+    check(approx(reg.get<kast::Transform>(guard).position, {34, 0, 40}), "replication npcs: world.entityMove moves an NPC clone");
+    bus.publish("world.despawn", {{"entityId", 10}});
+    bus.drain();
+    check(r.clone(10) == entt::null && !s.valid(guard) && countNamed(s, "Guard Body") == 0,
+          "replication npcs: world.despawn destroys the NPC clone");
+
+    // A scene switch: the NPCs in view are cloned again from the new scene's templates.
+    r.stop(true);
+    kast::Scene next;
+    build(next);
+    r.start(next, bus, world);
+    check(next.valid(r.clone(11)) && named(next, "Merchant") == entt::null &&
+              next.registry().get<kast::Name>(r.clone(11)).value == "Bob the Merchant",
+          "replication npcs: after a scene switch NPCs are cloned from the new scene's templates");
+    r.stop();
+
+    // Editor Play / Stop on tests/project's online_npcs.scene (its script left out: no network here).
+    const std::filesystem::path dir = netProject("kast_replication_npcs_check");
+    writeFile(dir / kast::kProjectFileName, R"({"version": 1, "name": "Npcs", "startScene": null,
+"online": {"enabled": true, "authUrl": "http://127.0.0.1:1"}})");
+    std::filesystem::copy_file(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "online_npcs.scene", dir / "online_npcs.scene");
+    Document doc;
+    std::string error;
+    check(openFile(doc, (dir / "online_npcs.scene").string(), error) && doc.project,
+          "replication npcs: open online_npcs.scene in an online project " + error);
+    doc.scene.systems.clear();
+    const nlohmann::ordered_json saved = kast::sceneToJson(doc.scene);
+    startPlay(doc);
+    check(named(doc.scene, "NPC Templates") == entt::null && named(doc.scene, "Guard") == entt::null &&
+              named(doc.scene, "Guard Body") == entt::null && named(doc.scene, "Remote Player") == entt::null,
+          "replication npcs: the NPC templates are out of the Play scene");
+    doc.lua.bus().publish("world.spawn", {{"entityId", 7}, {"name", "Guard"}, {"position", at(1030, 0, 1020)},
+                                          {"heading", 0}, {"kind", "npc"}, {"template", "Guard"}});
+    updatePlay(doc, 0.016f);
+    const entt::entity clone = doc.lua.replication().clone(7);
+    check(doc.scene.valid(clone) && doc.scene.registry().get<kast::Hierarchy>(clone).children.size() == 2 &&
+              named(doc.scene, "Guard Helmet") != entt::null,
+          "replication npcs: the Guard spawn is a clone of the scene's Guard template (body and helmet)");
+    stopPlay(doc);
+    check(kast::sceneToJson(doc.scene) == saved && named(doc.scene, "Guard") != entt::null &&
+              named(doc.scene, "NPC Templates") != entt::null && doc.scene.valid(named(doc.scene, "Guard Helmet")),
+          "replication npcs: Stop restores the NPC templates and the whole scene");
 }
 
 // Replicated Lua components (world.component / world.componentRemoved) applied by Replication to the local player and
@@ -2164,8 +2300,11 @@ int liveWorldCheck(const std::string& authUrl, const std::string& mailpitUrl, co
     check(enteredB != nullptr, "live world: B enters the world at the spawn point, next to A");
     const uint32_t entityB = enteredB ? enteredB->value("entityId", 0u) : 0;
     const Json* spawn = a.next("world.spawn");
-    check(spawn && spawn->value("name", "") == heroB && spawn->value("entityId", 0u) == entityB,
-          "live world: B's arrival is world.spawn {entityId, name} on A");
+    while (spawn && spawn->value("kind", "") == "npc") // the stack's sample NPC patrols the spawn point
+        spawn = a.next("world.spawn");
+    check(spawn && spawn->value("name", "") == heroB && spawn->value("entityId", 0u) == entityB &&
+              spawn->value("kind", "") == "player",
+          "live world: B's arrival is world.spawn {entityId, name, kind player} on A");
     const std::string text = "hello from b " + stamp;
     b.world.say(text);
     const Json* chat = a.next("world.chat");
@@ -2311,9 +2450,14 @@ int liveReplicationCheck(const std::string& authUrl, const std::string& mailpitU
         check(approx(seen, startB, 0.01f) && approx(seenA, a.position(), 0.01f),
               "live replication: clones spawn at the other player's position");
     }
-    run([&] { return a.last("world.entitySpawned") != nullptr; }, 1s); // published with the clone, delivered next frame
-    check(a.last("world.entitySpawned") && a.last("world.entitySpawned")->value("entityId", 0u) == idB,
-          "live replication: world.entitySpawned on A names B's server id");
+    // Published with the clone, delivered next frame. The stack's sample Guard NPC spawns on A too, in any order.
+    const auto spawnedB = [&] {
+        return std::ranges::any_of(a.events, [&](const auto& e) {
+            return e.first == "world.entitySpawned" && e.second.value("entityId", 0u) == idB;
+        });
+    };
+    run(spawnedB, 1s);
+    check(spawnedB(), "live replication: world.entitySpawned on A names B's server id");
 
     // B walks +x at 4 m/s for 2 s; A's clone of B is sampled every frame.
     std::vector<float> trail;
@@ -2669,6 +2813,7 @@ int netSelfCheck()
     checkWorldClient();
     checkWorldLuaApi();
     checkReplicationOffline();
+    checkReplicationNpcs();
     checkReplicationComponents();
     checkReplicationFakeServer();
     checkAuthLogs();

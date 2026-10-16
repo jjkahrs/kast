@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <fstream>
+#include <set>
 #include <sstream>
 
 namespace kast::bot {
@@ -55,6 +56,16 @@ std::string fmt(const proto::Vec3& v) {
     char buf[96];
     std::snprintf(buf, sizeof buf, "(%.2f, %.2f, %.2f)", v.x, v.y, v.z);
     return buf;
+}
+
+// The next player Spawn: NPC spawns (the sample Guard patrols the spawn point) are skipped.
+asio::awaitable<std::optional<proto::Spawn>> wait_player_spawn(WorldClient& c, Millis timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    for (;;) {
+        const auto left = std::chrono::duration_cast<Millis>(deadline - std::chrono::steady_clock::now());
+        auto s = co_await c.wait_for<proto::Spawn>(std::max(left, Millis(0)));
+        if (!s || s->kind == proto::SpawnKind::player) co_return s;
+    }
 }
 
 bool same_pos(const proto::Vec3& a, const proto::Vec3& b) {
@@ -164,8 +175,8 @@ asio::awaitable<void> aoi(Ctx& x) {
     auto a = co_await x.enter("s4a", ea);
     auto b = co_await x.enter("s4b", eb);
     if (!a || !b) co_return;
-    auto sa = co_await a->wait_for<proto::Spawn>(Millis(3000));
-    auto sb = co_await b->wait_for<proto::Spawn>(Millis(3000));
+    auto sa = co_await wait_player_spawn(*a, Millis(3000));
+    auto sb = co_await wait_player_spawn(*b, Millis(3000));
     x.check.expect(sa && sa->entityId == eb.entityId, "A sees Spawn for B");
     x.check.expect(sb && sb->entityId == ea.entityId && !sb->name.empty(), "B sees Spawn for A (" + (sb ? sb->name : "") + ")");
 
@@ -173,7 +184,8 @@ asio::awaitable<void> aoi(Ctx& x) {
     auto bMsgs = co_await drain(*b, Millis(500));
     auto aMsgs = co_await drain(*a, Millis(100));
     auto moves = only<proto::EntityMove>(bMsgs);
-    const bool sawA = !moves.empty() && moves.back().entityId == ea.entityId && same_pos(moves.back().pos, p);
+    std::erase_if(moves, [&](const proto::EntityMove& m) { return m.entityId != ea.entityId; }); // not the Guard's
+    const bool sawA = !moves.empty() && same_pos(moves.back().pos, p);
     x.check.expect(sawA, "B received A's moves, last at " + fmt(p) + " (" + std::to_string(moves.size()) + " updates)");
     bool echo = false;
     for (auto& m : only<proto::EntityMove>(aMsgs)) echo |= m.entityId == ea.entityId;
@@ -340,6 +352,7 @@ asio::awaitable<void> handshake_rejects(Ctx& x) {
     if (!expired.empty())
         co_await rejected_login(x, "expired token", expired, proto::kProtocolVersion, Code::token_expired);
     co_await rejected_login(x, "wrong protocol version", good, 999, Code::protocol_mismatch);
+    co_await rejected_login(x, "protocol version 1", good, 1, Code::protocol_mismatch);
 
     {
         auto c = std::make_shared<WorldClient>(co_await asio::this_coro::executor, x.tls);
@@ -741,6 +754,57 @@ asio::awaitable<void> fsm(Ctx& x) {
     b->close();
 }
 
+// --- 16 ---
+// Needs the sample lua/systems/npcs.lua: the Guard patrols around the spawn point, where a new character enters. A gets
+// Spawn{kind npc, template "Guard"}, then EntityMoves at changing positions; walking 200 m away gives Despawn and nothing
+// more about it; walking back gives Spawn again.
+asio::awaitable<void> npcs(Ctx& x) {
+    proto::EnterWorldOk ea;
+    auto a = co_await x.enter("s16a", ea);
+    if (!a) co_return;
+    std::optional<proto::Spawn> guard;
+    while (!guard) {
+        auto s = co_await a->wait_for<proto::Spawn>(Millis(3000));
+        if (!s) break;
+        if (s->kind == proto::SpawnKind::npc && s->name == "Guard") guard = s;
+    }
+    x.check.expect(guard && guard->templateName == "Guard", "A gets Spawn{kind npc, name Guard, template Guard}");
+    if (!guard) co_return;
+    const uint32_t G = guard->entityId;
+    const auto aboutGuard = [&](const std::vector<proto::Message>& msgs) {
+        std::vector<proto::Message> out;
+        for (const auto& m : msgs)
+            std::visit([&](const auto& v) {
+                if constexpr (requires { v.entityId; })
+                    if (v.entityId == G) out.push_back(m);
+            }, m);
+        return out;
+    };
+
+    // The Guard walks for ~7 s between waypoints and waits 2 s at each: 4 s always hold some walking.
+    const auto moves = only<proto::EntityMove>(aboutGuard(co_await drain(*a, Millis(4000))));
+    std::set<std::pair<float, float>> positions;
+    for (const auto& m : moves) positions.insert({m.pos.x, m.pos.z});
+    x.check.expect(moves.size() >= 3 && positions.size() >= 3,
+                   "A gets the Guard's EntityMoves at changing positions (" + std::to_string(moves.size()) + " moves, " +
+                       std::to_string(positions.size()) + " positions)");
+
+    auto p = co_await walk(*a, ea.pos, 200, 0); // ~22 s at 9 m/s; the Guard stays within ~15 m of the spawn point
+    auto away = aboutGuard(co_await drain(*a, Millis(1000)));
+    const auto despawn = std::ranges::find_if(away, [](const auto& m) { return std::holds_alternative<proto::Despawn>(m); });
+    x.check.expect(despawn != away.end(), "walking 200 m away: Despawn for the Guard");
+    x.check.expect(despawn != away.end() && despawn + 1 == away.end(), "nothing about the Guard after its Despawn");
+    const auto later = aboutGuard(co_await drain(*a, Millis(2000)));
+    x.check.expect(later.empty(), "still nothing about the Guard while out of range (" + std::to_string(later.size()) + ")");
+
+    co_await walk(*a, p, -200, 0);
+    std::optional<proto::Spawn> again;
+    for (const auto& m : co_await drain(*a, Millis(1500)))
+        if (auto* s = std::get_if<proto::Spawn>(&m); s && s->kind == proto::SpawnKind::npc && s->name == "Guard") again = *s;
+    x.check.expect(again && again->templateName == "Guard", "walking back: Spawn for the Guard again");
+    a->close();
+}
+
 } // namespace
 
 int run_scenario(const Options& o) {
@@ -754,7 +818,7 @@ int run_scenario(const Options& o) {
         {"malformed", malformed},       {"handshake", handshake_rejects}, {"duplicate", duplicate_login},
         {"persist", persist_relogin},   {"shutdown", shutdown_phase1}, {"restart-verify", restart_verify},
         {"dbdown", db_down},            {"components", components},   {"components-verify", components_verify},
-        {"events", events},             {"fsm", fsm},
+        {"events", events},             {"fsm", fsm},                 {"npcs", npcs},
     };
     auto it = all.find(o.scenario);
     if (it == all.end()) {

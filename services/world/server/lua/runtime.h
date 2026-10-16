@@ -8,10 +8,14 @@
 #include "event_bus.h"
 #include "state_machines.h"
 
+#include <messages.h>
+
 #include <entt/entity/registry.hpp>
 
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,9 +36,20 @@ struct ClientEvent {
     std::string json;
 };
 
+// How kast.create / kast.destroy / an NPC Transform set reach the world, which owns the AOI grid and the sends.
+// Runtime checks every argument first; these only run for valid ones.
+struct NpcHooks {
+    std::function<entt::entity(std::string name, std::string templateName, std::optional<proto::Vec3> pos,
+                               float heading)>
+        create;                                     // pos empty: the spawn point
+    std::function<void(entt::entity)> destroy;      // an existing NPC
+    std::function<proto::Vec3(proto::Vec3)> clamp;  // into the zone and MIN_Y/MAX_Y
+    size_t max = 0;                                 // MAX_NPCS
+};
+
 class Runtime {
 public:
-    Runtime(entt::registry& reg, Defs defs);
+    Runtime(entt::registry& reg, Defs defs, NpcHooks npcs = {});
     ~Runtime();
     Runtime(const Runtime&) = delete;
     Runtime& operator=(const Runtime&) = delete;

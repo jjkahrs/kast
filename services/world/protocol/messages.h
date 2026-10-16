@@ -9,7 +9,7 @@
 
 namespace kast::proto {
 
-constexpr uint16_t kProtocolVersion = 1;
+constexpr uint16_t kProtocolVersion = 2;
 constexpr size_t kHeaderSize = 4; // u16 payload length + u16 opcode
 constexpr size_t kMaxPayloadBytes = 0xFFFF; // the u16 length field's limit
 
@@ -68,6 +68,7 @@ enum class Code : uint16_t {
 const char* code_name(Code c);
 
 enum class Role : uint8_t { player = 0, gm = 1, admin = 2 };
+enum class SpawnKind : uint8_t { player = 0, npc = 1 };
 
 struct Vec3 {
     float x = 0, y = 0, z = 0;
@@ -239,14 +240,26 @@ struct CharError {
     bool operator==(const CharError&) const = default;
 };
 
+// kind npc: a server-created NPC; templateName names the client's template for it (empty for players).
 struct Spawn {
     static constexpr Opcode op = Opcode::Spawn;
     uint32_t entityId = 0;
     std::string name;
     Vec3 pos;
     float heading = 0;
-    void write(Writer& w) const { w.u32(entityId); w.str(name); proto::write(w, pos); w.f32(heading); }
-    void read(Reader& r) { entityId = r.u32(); name = r.str(); proto::read(r, pos); heading = r.f32(); }
+    SpawnKind kind = SpawnKind::player;
+    std::string templateName;
+    void write(Writer& w) const {
+        w.u32(entityId); w.str(name); proto::write(w, pos); w.f32(heading);
+        w.u8(static_cast<uint8_t>(kind)); w.str(templateName);
+    }
+    void read(Reader& r) {
+        entityId = r.u32(); name = r.str(); proto::read(r, pos); heading = r.f32();
+        const uint8_t v = r.u8();
+        if (v > static_cast<uint8_t>(SpawnKind::npc)) r.fail();
+        kind = static_cast<SpawnKind>(v);
+        templateName = r.str();
+    }
     bool operator==(const Spawn&) const = default;
 };
 

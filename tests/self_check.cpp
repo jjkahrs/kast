@@ -28,6 +28,7 @@
 #include <physics.h>
 #include <play.h>
 #include <animation.h>
+#include <app.h>
 #include <audio.h>
 #include <pak.h>
 #include <post_process.h>
@@ -2630,7 +2631,7 @@ void checkBuildSettings()
               std::vector<std::string>{"audio.scene", "events.scene", "fsm.scene", "health.scene", "materials.scene",
                                        "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
-                                       "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_replication.scene", "online_session.scene", "online_world.scene",
+                                       "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene",
                                        "physics.scene",
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "scene_a.scene", "scene_b.scene",
@@ -2650,7 +2651,7 @@ void checkBuildSettings()
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
                                                           "models_material.scene", "models_missing.scene", "net_a.scene",
-                                                          "net_b.scene", "online_auth.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "physics.scene",
+                                                          "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "scene_a.scene", "scene_b.scene",
                                                           "shadows.scene", "ui.scene"},
@@ -7015,6 +7016,19 @@ void checkMountedPak()
     check(audio.voiceCount() == 2 && renderPeak(audio, 4800) > 0.4f, "pak clips play (cached WAV, streamed MP3)");
 }
 
+// --window-pos / KAST_WINDOW_POS: "X,Y" integers, negative allowed (a monitor left of or above the main one).
+void checkWindowPos()
+{
+    using P = std::optional<std::pair<int, int>>;
+    check(kast::parseWindowPos("100,200") == P{{100, 200}} && kast::parseWindowPos("-1900,40") == P{{-1900, 40}} &&
+              kast::parseWindowPos("0,-5") == P{{0, -5}},
+          "window pos: X,Y with negative values");
+    bool rejected = true;
+    for (const char* bad : {"", "100", "100,", ",5", "1x2", "1,2,3", "a,b", "1.5,2", " 1,2"})
+        rejected &= !kast::parseWindowPos(bad);
+    check(rejected, "window pos: anything but two integers is rejected");
+}
+
 int main(int argc, char** argv)
 {
     kast::disableCrashDialogsIfRequested();
@@ -7089,6 +7103,7 @@ int main(int argc, char** argv)
     checkFileWrites();
     checkBuild();
     checkBuildSettings();
+    checkWindowPos();
     checkOnlineSettings();
     checkStateMachineDefinitions();
     checkStateMachineRuntime();

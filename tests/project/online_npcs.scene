@@ -1,0 +1,116 @@
+{
+  "version": 4,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Directional Light",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [1024, 4, 1024], "rotation": [-0.408218, -0.23457, -0.109382, 0.875426], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.95, 0.9], "intensity": 1.1 }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [1024, 0, 1024], "rotation": [0, 0, 0, 1], "scale": [60, 1, 60] },
+        "MeshRenderer": { "primitive": "plane", "material": "materials/checker.mat" }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Player",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [1024, 0, 1024], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "NetworkLocalPlayer": { "sendRateHz": 10 }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Player Body",
+      "parent": 3,
+      "components": {
+        "Transform": { "position": [0, 0.5, 0], "rotation": [0, 0, 0, 1], "scale": [0.8, 1, 0.8] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/gold_r05.mat" }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Remote Player",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [1028, 0, 1024], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Remote Body",
+      "parent": 5,
+      "components": {
+        "Transform": { "position": [0, 0.5, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "sphere", "material": "materials/red_plastic_r05.mat" }
+      }
+    },
+    {
+      "id": 7,
+      "name": "NPC Templates",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [1020, 0, 1030], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Guard",
+      "parent": 7,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Guard Body",
+      "parent": 8,
+      "components": {
+        "Transform": { "position": [0, 1, 0], "rotation": [0, 0, 0, 1], "scale": [0.7, 2, 0.7] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/emissive.mat" }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Guard Helmet",
+      "parent": 8,
+      "components": {
+        "Transform": { "position": [0, 2.35, 0], "rotation": [0, 0, 0, 1], "scale": [0.7, 0.7, 0.7] },
+        "MeshRenderer": { "primitive": "sphere", "material": "materials/gold_r01.mat" }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Replication",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "NetworkReplication": { "templateEntity": "Remote Player", "interpolationMs": 100, "npcTemplates": "NPC Templates" }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [1024, 14, 1052], "rotation": [-0.233445, 0, 0, 0.97237], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    }
+  ],
+  "systems": [
+    "scripts/online_npcs_demo.lua"
+  ],
+  "editor": {
+    "camera": { "pivot": [1024, 0.5, 1024], "yaw": 0, "pitch": -30, "distance": 40 }
+  }
+}

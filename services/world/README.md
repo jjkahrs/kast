@@ -7,6 +7,7 @@ MMORPG world server for Kast, written in C++20. It covers the following:
 - **Movement:** the server validates every move (bounds and max speed) and replicates it to nearby players through grid-based interest management.
 - **Chat:** "say" chat reaches everyone in range.
 - **Lua:** game-defined components, state machines and server-authoritative systems on the tick, persisted per character and replicated to clients (see "Lua components and systems").
+- **NPCs:** Lua systems create, move and destroy server-authoritative NPCs, which reach players through the same interest management, with their components and state machines (see "NPCs").
 - **Architecture:** an EnTT ECS runs on a fixed 20 Hz tick, and characters persist to MySQL on a worker thread, so the tick never waits on the database.
 
 The wire format is in [`PROTOCOL.md`](PROTOCOL.md).
@@ -63,15 +64,15 @@ To run the server on the host against the compose MySQL and auth, point `.env` a
 
 | Command | What |
 |---|---|
-| `ctest --preset debug` | Self-check: codec round trip for every message, frame rejection, names, movement, AOI, chat, rate limits, config, tick stats, JWT and JWKS with local RSA keys. Lua (`tests/lua_checks.cpp`): definition parsing (every type, option, new key and error case), reserved and duplicate names, sandbox, `kast.*` semantics and every `set` error, hook order, an error disabling one system, startup errors listed in full, persistence round trip + drift + verbatim preservation, and replication routing (owner / aoi / none, AOI-enter full set, unchanged not resent, nothing after `Despawn`, oversize). State machines: definition parsing and every rejection, duplicate names, `GAME_STATE_MACHINES` startup errors, `allowedFrom` / omitted / `"*"` / self-transition rules, callback and event order, queued changes, callback errors and timeouts, game machine startup, the `StateMachine` built-in lifecycle (not persisted or replicated), every `kast.fsm` misuse, read-only `kast.fsm`, and C++ / Lua parity |
+| `ctest --preset debug` | Self-check: codec round trip for every message, frame rejection, names, movement, AOI, chat, rate limits, config, tick stats, JWT and JWKS with local RSA keys. Lua (`tests/lua_checks.cpp`): definition parsing (every type, option, new key and error case), reserved and duplicate names, sandbox, `kast.*` semantics and every `set` error, hook order, an error disabling one system, startup errors listed in full, persistence round trip + drift + verbatim preservation, and replication routing (owner / aoi / none, AOI-enter full set, unchanged not resent, nothing after `Despawn`, oversize). NPCs: `kast.create` / `kast.destroy` and every bad argument, `MAX_NPCS` (and `0`), the `Npc` / `Transform` built-in rules and clamping, `query` by `Character` / `Npc`, `Spawn{kind, template}` / `EntityMove` / `Despawn` routing as an NPC moves across the grid, aoi / owner components and `sendTo` / `sendNearby` on NPCs, never saved or dirty, Lua components and `kast.fsm` on NPCs, no `onEnter` / `onLeave`, a destroy in the tick it came into view, silent removal at shutdown, and the sample `lua/` (the Guard patrolling at 3 m/s). Protocol v2: the `Spawn` layout for both kinds, a bad kind and a v1 `Spawn` rejected as malformed State machines: definition parsing and every rejection, duplicate names, `GAME_STATE_MACHINES` startup errors, `allowedFrom` / omitted / `"*"` / self-transition rules, callback and event order, queued changes, callback errors and timeouts, game machine startup, the `StateMachine` built-in lifecycle (not persisted or replicated), every `kast.fsm` misuse, read-only `kast.fsm`, and C++ / Lua parity |
 | `docker compose build` | Linux build; the self-check runs inside it |
-| `bash tests/integration.sh` | All 15 integration scenarios against the running stack. Prints PASS/FAIL each and exits non-zero on any failure |
+| `bash tests/integration.sh` | All 16 integration scenarios against the running stack. Prints PASS/FAIL each and exits non-zero on any failure |
 | `bash tests/load.sh` | Load test: 500 `wander` bots for 300 s (`COUNT`, `DURATION`, `BEHAVIOUR`, `THREADS` override) |
 | `bash tests/docs_check.sh` | Every opcode, code and env var in the source appears in PROTOCOL.md / README.md |
 | `docker compose run --rm bot --scenario aoi` | One scenario |
 | `docker compose run --rm bot --mode load --count 50 --behaviour chat --duration 60` | Ad-hoc load |
 
-**Scenario names:** `auth`, `characters`, `ownership`, `aoi`, `chat`, `speedhack`, `malformed`, `handshake`, `duplicate`, `persist`, `shutdown`, `restart-verify`, `dbdown`, `components`, `components-verify` (`--expect-components gold,health`, after a restart), `events`, `fsm`.
+**Scenario names:** `auth`, `characters`, `ownership`, `aoi`, `chat`, `speedhack`, `malformed`, `handshake`, `duplicate`, `persist`, `shutdown`, `restart-verify`, `dbdown`, `components`, `components-verify` (`--expect-components gold,health`, after a restart), `events`, `fsm`, `npcs`.
 
 **Scenario 13 (`components`):** needs the sample `lua/`. A and B are in range. A gets its own `Health` and `Wallet`; B gets A's `Health` but never A's `Wallet`; `Spawn` comes before data; unchanged values are not resent; nothing follows `Despawn`. A walks and its `Health` drains. After a relog, A's `Health` and `Wallet` were persisted. A client `ComponentUpdate` gets `unexpected_message`. Then `world` restarts and `components-verify` checks both values again.
 
@@ -130,8 +131,9 @@ To run the server on the host against the compose MySQL and auth, point `.env` a
 | `SPEED_TOLERANCE` | `1` | m/s on top of `MAX_SPEED` |
 | `MOVE_BURST_SECONDS` | `1` | Movement budget cap, in seconds of travel. Absorbs jitter |
 | `AOI_CELL_SIZE` | `64` | Interest grid cell, in metres |
-| `AOI_VIEW_RADIUS` | `128` | Players within this distance see each other |
+| `AOI_VIEW_RADIUS` | `128` | Players within this distance see each other and the NPCs |
 | `MAX_CHARS_PER_ACCOUNT` | `10` | Live characters per account per realm |
+| `MAX_NPCS` | `10000` | NPCs in the zone at once, 0–100000. `kast.create` past it raises an error |
 | `CHAT_MAX_BYTES` | `256` | UTF-8 bytes per `Say` |
 | `CHAT_RATE_COUNT` / `CHAT_RATE_WINDOW_MS` | `5` / `10000` | Say rate limit |
 | `SAVE_INTERVAL_MS` | `60000` | Periodic save of characters whose position changed |
@@ -240,7 +242,7 @@ The world never touches MySQL from the game thread. One DB worker thread owns th
 SIGTERM, SIGINT or Ctrl+C starts the shutdown:
 1. The server stops accepting connections and logs `tick stats total`.
 2. Lua: `onLeave` runs for every character, then every system's `shutdown`.
-3. Every character in the world is despawned and saved, and every client gets `Disconnect{server_shutdown}`.
+3. Every character in the world is despawned and saved, and every client gets `Disconnect{server_shutdown}`. Then every NPC is removed, with nothing sent or saved.
 4. Once the clients are gone, the DB worker flushes the pending saves, ignoring backoff, until `SHUTDOWN_TIMEOUT_MS - 500 ms`.
 5. The process exits 0, or 1 if any save could not be flushed.
 
@@ -297,7 +299,7 @@ return {
 ```
 
 - **Invalid values:** a bad `persist` or `replicate` is a definition error.
-- **Reserved names:** a definition may not be named `Character`, `Transform` or `StateMachine` (the built-ins), or after any server C++ component (`SessionLink`, `CharacterRef`, `MoveState`, `PendingMoves`, `PendingSay`, `ChatLimit`, `AoiCell`, `Visible`, `Moved`, `Dirty`, `SaveTimer`, `ReplicatedState`, `ScriptsLeft`, `PreservedComponents`, `ComponentData`, `StateMachineRuntime`).
+- **Reserved names:** a definition may not be named `Character`, `Npc`, `Transform` or `StateMachine` (the built-ins), or after any server C++ component (`Viewers`, `SessionLink`, `CharacterRef`, `MoveState`, `PendingMoves`, `PendingSay`, `ChatLimit`, `AoiCell`, `Visible`, `Moved`, `Dirty`, `SaveTimer`, `ReplicatedState`, `ScriptsLeft`, `PreservedComponents`, `ComponentData`, `StateMachineRuntime`).
 - **Duplicates:** two files declaring the same name are both rejected, each error naming the other file, whatever the scan order.
 
 ### Systems
@@ -309,8 +311,8 @@ return {
     init = function() end,         -- at startup, after the file loaded; an error here refuses the start
     update = function(dt) end,     -- every tick; dt = 1 / TICK_HZ seconds
     shutdown = function() end,     -- graceful shutdown, before the final saves
-    onEnter = function(e) end,     -- a character spawned; its persisted components are already restored
-    onLeave = function(e) end,     -- a character is leaving; changes made here are saved
+    onEnter = function(e) end,     -- a character spawned; its persisted components are already restored (never an NPC)
+    onLeave = function(e) end,     -- a character is leaving; changes made here are saved (never an NPC)
 }
 ```
 
@@ -327,26 +329,64 @@ return {
 | `kast.get(e, name)` | A fresh table of the component's fields; arrays are 1-based sequences, `vec3`/`quat` are `{x=, y=, z=[, w=]}` |
 | `kast.set(e, name, fields)` | Partial: listed fields change, the others keep their values. All-or-nothing: an unknown field, a wrong type, an out-of-range value or an unknown enum value raises an error and leaves the component unchanged |
 | `kast.has(e, name)` / `kast.add(e, name)` / `kast.remove(e, name)` | `add` uses the field defaults and does nothing if the component is present; `remove` does nothing if it is absent |
+| `kast.create(name, opts)` | Creates an NPC and returns its entity id; `opts = {template = string, position = {x, y, z}?, heading = number?}` (see [NPCs](#npcs)) |
+| `kast.destroy(e)` | Removes NPC `e`; the players who see it get `Despawn` |
 | `kast.log/warn/error(msg)` | A server log line `<system path>: <msg>` at that level |
 | `kast.publish(name [, payload])` | Queues an event on the server's event bus for the next drain (see [Events](#events)) |
 | `kast.subscribe(name, fn)` | Calls `fn(payload)` for every later `name` event; returns a handle |
 | `kast.unsubscribe(handle)` | Removes the calling system's subscription; another system's or a stale handle does nothing |
-| `kast.sendTo(e, name [, payload])` | Sends the event to character `e`'s client only |
+| `kast.sendTo(e, name [, payload])` | Sends the event to character `e`'s client only (an NPC has none: nothing is sent) |
 | `kast.sendNearby(e, name [, payload])` | Sends the event to `e`'s client and every client that currently sees `e` (the `replicate = "aoi"` audience) |
 | `kast.broadcast(name [, payload])` | Sends the event to every player in the zone |
 | `kast.fsm.state/change/canChange/states(target [, state])` | Game and character state machines (see [State machines](#state-machines)) |
 
-- **Entities:** an entity is the character's server wire id, the integer clients see as `entityId`.
-- **Players only:** only player characters exist. There is no `kast.create` / `kast.destroy`, and no NPCs.
+- **Entities:** an entity is a player character's or an NPC's server wire id, the integer clients see as `entityId`. `kast.query("Character")` finds the players, `kast.query("Npc")` the NPCs, and `kast.query()` both.
 - **`kast` is read-only:** assigning to it raises an error.
-- **Read-only built-ins:** every character has these two. `get`, `has` and `query` work on them; `set` and `add` raise `"<name>" is read-only on the server`, and `remove` raises `"<name>" cannot be removed`.
+- **Read-only built-ins:** every character has `Character` and `Transform`, every NPC `Npc` and `Transform`. `get`, `has` and `query` work on them; `set` and `add` raise `"<name>" is read-only on the server`, and `remove` raises `"<name>" cannot be removed`. The one exception is `set` on an NPC's `Transform` (see [NPCs](#npcs)).
 - **Writable built-in:** `StateMachine` (`machine`, `initialState`, both strings) works with every function, like a Lua component that is never persisted or replicated (see [State machines](#state-machines)).
 
 | Name | Fields |
 |---|---|
-| `Character` | `charId`, `name` |
-| `Transform` | `position = {x, y, z}`, `heading` (radians). Moves come only from the validated client movement |
+| `Character` | `charId`, `name` (players only) |
+| `Npc` | `name`, `template` (NPCs only) |
+| `Transform` | `position = {x, y, z}`, `heading` (radians). A player moves only by the validated client movement, an NPC only by `kast.set` |
 | `StateMachine` | `machine`, `initialState` (writable; added only by `kast.add`) |
+
+### NPCs
+
+A system creates server-authoritative NPCs with `kast.create`, moves them by setting their `Transform`, and removes them
+with `kast.destroy`. Clients see them through the usual interest management: a player in range gets `Spawn` with
+`kind` npc and the NPC's `template` ([`PROTOCOL.md`](PROTOCOL.md#interest-management)), then `EntityMove` as it moves,
+and `Despawn` when it leaves the view or is destroyed. The engine shows each one as a clone of the scene entity named
+after its template (root README, "Replication").
+
+```lua
+local guard = kast.create("Guard", {template = "Guard", position = {x = 1034, y = 0, z = 1024}, heading = 0})
+kast.set(guard, "Transform", {position = {x = 1035, y = 0, z = 1024}}) -- one EntityMove to every player who sees it
+kast.destroy(guard)                                                 -- Despawn to every player who sees it
+```
+
+- **`kast.create(name, opts)`:** `name` and `opts.template` must be non-empty strings of at most 255 bytes.
+  `position` (`{x, y, z}`, finite numbers) defaults to the spawn point and `heading` (radians) to 0. A position outside
+  the zone is clamped into it, and y into `MIN_Y`/`MAX_Y`. Any other key in `opts`, a bad value, or `MAX_NPCS` NPCs
+  already in the zone raises an error at the call (`kast.create: template must be a non-empty string of at most 255
+  bytes, got nil`) and creates nothing. It works from `init` on; players in range get the `Spawn` on the next tick.
+- **`kast.destroy(e)`:** a player id (`kast.destroy: entity 7 is a player; only NPCs can be destroyed`), a stale id or
+  an invalid id raises an error. A destroyed NPC's id is stale at once: `kast.*` on it raises `invalid entity id`.
+- **Moving:** `kast.set(npc, "Transform", {position = {x, y, z}, heading = h})` is partial and all-or-nothing like any
+  `set`, and clamps like `create`. Script moves are trusted: there is no speed check. A move goes out as `EntityMove`
+  in the same tick, like an accepted player move. A move into or out of a player's view gives `Spawn` / `Despawn` on
+  the next tick.
+- **Components and machines:** `kast.add/set/get/has/remove`, and `StateMachine` with `kast.fsm.*`, work on NPCs as on
+  characters. An `aoi` component reaches the players who see the NPC, an `owner` one nobody, and `persist` is ignored.
+- **Events:** `kast.sendTo(npc, ...)` sends nothing (no error); `kast.sendNearby(npc, ...)` reaches the players who see
+  it. `onEnter` and `onLeave` never run for NPCs.
+- **Ephemeral:** NPCs are never saved and need no database. A restart starts without them, and the systems' `init`
+  creates them again. A graceful shutdown removes them silently, after the players.
+
+**NPCs cost bandwidth like players.** Each move is one `EntityMove` per tick to each player in view, so a crowd of
+walking NPCs around a crowd of players costs NPCs x players messages a tick. Move NPCs at the rate clients need and let
+the engine interpolate.
 
 ### Events
 
@@ -373,7 +413,7 @@ the three send functions put anything on the network.
     the `Spawn` and the latest component values. Sends from `onLeave` go out at the despawn, before that character's
     `Despawn`; sends from `onEnter` go out on the next tick.
   - **Targets:** a bad id (not a whole number from 0 to 2^32-1) raises `kast.sendTo: invalid entity id <value>`. A
-    valid id whose character is not in the world when the events go out (it left meanwhile) sends nothing.
+    valid id whose character or NPC is not in the world when the events go out (it left meanwhile) sends nothing.
   - **Size:** an event whose frame would pass 65535 bytes raises `kast.sendTo: event "<name>" is too large to send` at
     the call.
 
@@ -395,7 +435,7 @@ port lives in `server/lua/state_machines.*` and `server/lua/lua_state_machines.*
 - **Game machines:** `GAME_STATE_MACHINES` lists them by name. After every system's `init`, each enters its `initial`
   state: `enter` runs with `ctx.from = nil`, and no `fsm.changed` is published. A machine that `kast.fsm.*` touches during
   an `init` enters right then, once. Game machines run for the server's lifetime; shutdown runs no `exit`.
-- **Character machines:** use the writable built-in `StateMachine` (`machine`, `initialState`) through `kast.add`,
+- **Character and NPC machines:** use the writable built-in `StateMachine` (`machine`, `initialState`) through `kast.add`,
   `kast.set`, `kast.get`, `kast.has`, `kast.remove` and `kast.query`.
   - `kast.add` alone leaves `machine` empty: there is no machine yet, and `kast.fsm.*` on that character raises.
   - Setting `machine` enters that machine's initial state at once. That is `initialState` if it names a state,
@@ -421,9 +461,9 @@ port lives in `server/lua/state_machines.*` and `server/lua/lua_state_machines.*
   any other Lua error (one `Lua error` line each, `startup failed: Lua`, exit status 1). That also applies when
   `LUA_ROOT` is missing and `GAME_STATE_MACHINES` is set.
 - **C++:** `World::fsm()` (`lua::StateMachines`, also `Runtime::fsm()`) gives `state`, `change`, `canChange` and `states`
-  for a game machine name or a character wire id. It applies the same rules, events and logging as `kast.fsm`, and a bad
+  for a game machine name or a character or NPC wire id. It applies the same rules, events and logging as `kast.fsm`, and a bad
   target throws `std::invalid_argument`.
-- **Not on the server:** hot reload, scenes and `kast.loadScene`, NPCs or other non-character entities, the editor's
+- **Not on the server:** hot reload, scenes and `kast.loadScene`, the editor's
   panels.
 
 ```cpp
@@ -448,6 +488,7 @@ Each tick runs, in this order:
 10. end of tick
 
 Lua sees this tick's validated positions. Its changes are replicated and become eligible for saving in the same tick.
+An NPC that Lua creates, or moves into or out of a player's view, gets its `Spawn` / `Despawn` at the next tick's step 2.
 
 Lifecycle hooks run at these points:
 
@@ -470,6 +511,7 @@ Lifecycle hooks run at these points:
 
 - **What is sent:** after the Lua systems run, every `owner` / `aoi` component that was added, changed or removed since it was last sent. The diff is per component against the last sent JSON, so unchanged components are never resent.
 - **Full sets:** the owner gets its full set on the first tick in the world. A viewer gets an entity's full `aoi` set when the entity comes into view, right after its `Spawn`.
+- **NPCs:** the same rules without an owner: `aoi` components go to the players who see the NPC, `owner` ones to nobody.
 - **Ordering:** data never precedes `Spawn` or follows `Despawn`.
 - **Client writes:** there are none. A client that sends a component message is disconnected with `unexpected_message`.
 
@@ -483,8 +525,10 @@ The `lua/` folder holds the sample:
 | `components/wallet.lua` | `Wallet { gold }`: `persist`, `replicate = "owner"` |
 | `fsms/locomotion.lua` | Character machine `idle` / `moving`, each enterable only from the other. Every `enter` sends the owner `fsm.state` `{machine, from, to}` (`kast.sendTo`) |
 | `fsms/zone_cycle.lua` | Game machine `day` / `night` (listed in `GAME_STATE_MACHINES`). `enter` only logs |
+| `fsms/patrol.lua` | NPC machine `walking` / `waiting`, each enterable only from the other. No callbacks: it only records the phase |
 | `systems/locomotion.lua` | `onEnter` adds `StateMachine` with `locomotion`, which enters `idle`, then tries `idle` again: denied by `allowedFrom`, a warning and no event. `update` switches to `moving` when the character's `Transform` changes and back to `idle` after 1 s standing still. It flips `zone_cycle` every 5 minutes if it is listed. It sends only on transitions, never per tick |
 | `systems/events.lua` | On login, sends the player `welcome` (`sendTo`) and publishes `player.entered` on the bus. Its subscriber runs on the next tick, after the newcomer's `Spawn`, and sends `player.arrived` to the newcomer and everyone who sees it (`sendNearby`). On logout, sends the whole zone `player.left` (`broadcast`) before the `Despawn`. It sends only on login and logout, never per tick |
+| `systems/npcs.lua` | `init` creates the NPC "Guard" (template `Guard`) at the spawn point with the `patrol` machine. `update` walks it at 3 m/s around four waypoints 10 m off the spawn point on each axis, facing where it goes, and waits 2 s at each. While walking it costs one `EntityMove` per tick per viewer |
 | `systems/regen.lua` | `onEnter` adds `Health` and `Wallet` if absent and pays 1 gold per login. Once a second per character, each on its own phase, `update` regenerates `Health.current` toward `max` (+2) if the character stood still, or drains it by 0.5 per metre moved (`Transform` deltas). It keeps whole points and writes only on a change, so a character costs at most one `ComponentUpdate` a second per viewer |
 
 **Keep replicated components quiet.** Each change goes out in full to the owner and everyone in view. A component written every tick costs one message per tick per viewer, and in a crowd that is N² messages. An earlier sample that updated `Health` every tick made the 500-bot load test drop 378 clients on the 1 MiB send-buffer cap while they crowded the spawn point. Write replicated values at the rate clients need, and only when they change.
@@ -506,6 +550,7 @@ The `lua/` folder holds the sample:
   - Scenarios 10–13 use `docker compose restart/stop/start` on `world` and `mysql`.
   - Scenario 14 uses the sample `systems/events.lua`: `sendTo` reaches only its target, `sendNearby` only bots in view, and `broadcast` every bot.
   - Scenario 15 (`fsm`) uses the sample `locomotion` machine. On entering, a bot gets exactly one `fsm.state` (`nil->idle`), because the denied `idle->idle` sends nothing. Walking, then standing still, gives `idle->moving` and then `moving->idle`. A bot in view gets none of them.
+  - Scenario 16 (`npcs`) uses the sample `systems/npcs.lua`. A bot entering at the spawn point gets `Spawn` for the Guard (`kind` npc, `template` `Guard`) and `EntityMove`s at changing positions. Walking 200 m away gives `Despawn` and then nothing about it; walking back gives `Spawn` again.
   - Logs go to `build/integration-<run>/`.
 - **Load** (`tests/load.sh`):
   - **Setup:** restarts `world` so its totals cover only the test. It then runs `COUNT` bots in one process (8 io threads, 50 new connections per second) for `DURATION` s.

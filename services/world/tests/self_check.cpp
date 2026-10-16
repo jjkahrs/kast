@@ -72,7 +72,8 @@ void checkCodecRoundTrip() {
     roundtrip(CharDeleted{5}, "CharDeleted");
     roundtrip(EnterWorldOk{11, {1, 0, 1}, 1.f}, "EnterWorldOk");
     roundtrip(CharError{Opcode::CharCreate, Code::name_taken}, "CharError");
-    roundtrip(Spawn{3, "Dave", {10, 0, 10}, 0.5f}, "Spawn");
+    roundtrip(Spawn{3, "Dave", {10, 0, 10}, 0.5f, SpawnKind::player, ""}, "Spawn");
+    roundtrip(Spawn{4, "Guard", {12, 1, 10}, 1.5f, SpawnKind::npc, "Guard"}, "Spawn npc");
     roundtrip(Despawn{3}, "Despawn");
     roundtrip(EntityMove{3, {11, 0, 12}, 0.25f}, "EntityMove");
     roundtrip(Correction{{1, 2, 3}}, "Correction");
@@ -81,6 +82,19 @@ void checkCodecRoundTrip() {
     // exact byte layout: u16 len, u16 opcode, payload, little-endian
     const auto f = encode(Message{Hello{0x0102}});
     check(f == std::vector<uint8_t>{2, 0, 1, 0, 0x02, 0x01}, "Hello bytes little-endian");
+
+    check(kProtocolVersion == 2, "protocol version 2");
+    // v2 Spawn: u32 id, str name, vec3, f32 heading, u8 kind, str template
+    const auto npc = encode(Message{Spawn{1, "G", {0, 0, 0}, 0, SpawnKind::npc, "T"}});
+    check(npc.size() == 4 + 4 + 3 + 12 + 4 + 1 + 3 && npc[4 + 4 + 3 + 16] == 1 && npc.back() == 'T',
+          "Spawn kind and template follow the heading");
+    auto badKind = npc;
+    badKind[4 + 4 + 3 + 16] = 2;
+    check(decode_frame(badKind, 4096).status == DecodeStatus::malformed, "Spawn kind 2 is malformed");
+    auto v1 = encode(Message{Spawn{1, "G", {0, 0, 0}, 0, SpawnKind::player, ""}});
+    v1.resize(v1.size() - 3); // a v1 Spawn: no kind, no template
+    v1[0] = static_cast<uint8_t>(v1.size() - 4);
+    check(decode_frame(v1, 4096).status == DecodeStatus::malformed, "a v1 Spawn is malformed in v2");
 
     // two frames back to back decode one at a time
     auto two = encode(Message{Ping{1}});
@@ -274,14 +288,23 @@ void checkConfig() {
           "GAME_STATE_MACHINES: comma list, trimmed, empty entries ignored");
     env["GAME_STATE_MACHINES"] = "";
     check(load_config(lookup).config.gameStateMachines.empty(), "GAME_STATE_MACHINES empty: none");
+    check(ok.config.maxNpcs == 10000, "MAX_NPCS defaults to 10000");
+    env["MAX_NPCS"] = "0";
+    check(load_config(lookup).errors.empty() && load_config(lookup).config.maxNpcs == 0, "MAX_NPCS 0: no NPCs");
+    for (const char* badNpcs : {"-1", "100001", "many", "1.5"}) {
+        env["MAX_NPCS"] = badNpcs;
+        const auto r = load_config(lookup);
+        check(r.errors.size() == 1 && r.errors[0].starts_with("MAX_NPCS"), "MAX_NPCS out of range or not a whole number refused");
+    }
 
     env.erase("DB_HOST");
     env["REALM_ID"] = "abc";
     env["MAX_FRAME_BYTES"] = "999999";
     env["LOG_LEVEL"] = "loud";
     env["TLS_CERT_FILE"] = "/x.pem";
+    env["MAX_NPCS"] = "lots";
     auto bad = load_config(lookup);
-    check(bad.errors.size() == 5, "every bad variable reported");
+    check(bad.errors.size() == 6, "every bad variable reported, MAX_NPCS with the others");
 }
 
 void checkTickStats() {

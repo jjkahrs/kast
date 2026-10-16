@@ -15,7 +15,8 @@
 // Replication: networked players without sync code (README "Online Services → Replication"). Consumes the world
 // client's "world.*" events from the event bus and drives the scene: the NetworkLocalPlayer entity's moves go to the
 // world server and its corrections come back; every remote player the server spawns becomes a clone of the
-// NetworkReplication's template entity (with a NetworkEntity), interpolated toward each world.entityMove and destroyed
+// NetworkReplication's template entity (with a NetworkEntity) - an NPC a clone of the child of npcTemplates named by its
+// template, or of the template entity if there is none - interpolated toward each world.entityMove and destroyed
 // on world.despawn / world.disconnected. Each world.component / world.componentRemoved is applied to the same-named Lua
 // component on the clone or the local player (added if absent, drift rules for mismatches; a name with no Lua
 // definition is a Console warning, once per name). The world client knows nothing about entities; only this unit does.
@@ -54,7 +55,8 @@ private:
 class Replication {
 public:
     // Starts on a scene (Play start, each kast.loadScene switch): when world is enabled, takes the first
-    // NetworkReplication's template entity out of the scene (kept aside for cloning), subscribes to the world.* events
+    // NetworkReplication's template entity and its npcTemplates entity (with the NPC templates under it) out of the
+    // scene (kept aside for cloning), subscribes to the world.* events
     // on bus and re-creates the clones of remote players already in view. Otherwise does nothing. Call it before
     // anything (physics, scripts) looks at the scene. scene, bus and world must outlive the session (until stop()).
     void start(Scene& scene, EventBus& bus, WorldClient& world);
@@ -70,6 +72,8 @@ public:
 private:
     struct Remote {
         std::string name;
+        bool npc = false;
+        std::string templateName; // an NPC's template (world.spawn "template")
         bx::Vec3 from{0.0f, 0.0f, 0.0f}, to{0.0f, 0.0f, 0.0f};
         float heading = 0.0f;
         float elapsed = 0.0f;
@@ -80,6 +84,11 @@ private:
     entt::entity localPlayer() const;
     float interpolationSeconds() const;
     void placeLocal(const nlohmann::json& payload);
+    // Copies every child of the entity named folderName into npcTemplates_, then takes that entity out of the scene.
+    void takeNpcTemplates(Scene& scene, const std::string& folderName);
+    // What to clone for remote: an NPC's own template when there is one, else the template entity (an NPC falling back
+    // warns once per template name). Null scene: nothing to clone.
+    std::pair<const Scene*, entt::entity> cloneSource(const Remote& remote);
     void spawn(uint32_t id, Remote remote);
     void despawn(uint32_t id);
     void despawnAll();
@@ -90,6 +99,8 @@ private:
     EventBus* bus_ = nullptr;
     WorldClient* world_ = nullptr;
     std::optional<Scene> template_;          // holds the template's subtree (its root is the only root)
+    std::optional<Scene> npcTemplateScene_;  // holds the NPC templates' subtrees, one root each
+    std::map<std::string, entt::entity> npcTemplates_; // NPC template name -> its root in npcTemplateScene_
     std::unordered_map<uint32_t, Remote> remotes_;
     std::vector<EventBus::Subscription> subscriptions_;
     MoveThrottle throttle_;

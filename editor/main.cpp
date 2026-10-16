@@ -53,7 +53,7 @@ constexpr uint32_t kBackbufferClearColor = 0x202020ff;
 constexpr int kAddComponentPopupFrame = 10;
 constexpr float kComponentPollSeconds = 0.5f; // Lua definition files and the Assets tree are checked this often
 constexpr const char* kUsage =
-    "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--ui-scale F] [--projects-file list.json] "
+    "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--window-pos X,Y] [--ui-scale F] [--projects-file list.json] "
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
@@ -97,6 +97,7 @@ struct Options {
     int frames = 0;         // 0 = run until quit
     std::string screenshot; // captured after the last frame
     std::optional<std::pair<int, int>> size; // window size; default 1280x720 (editor), 1024x600 (Project Manager)
+    std::optional<std::pair<int, int>> windowPos; // window top-left (editor and Project Manager)
     std::optional<float> uiScale; // overrides the monitor's display scale
     std::string project;          // project directory opened at startup (before --scene)
     std::string scene;            // opened at startup instead of the default scene
@@ -309,6 +310,13 @@ std::optional<Options> parseArgs(int argc, char** argv)
         } else if (arg == "--size" && hasValue) {
             if (!parseSize(argv[++i], options.size))
                 return std::nullopt;
+        } else if (arg == "--window-pos" && hasValue) {
+            const std::string_view value = argv[++i];
+            options.windowPos = kast::parseWindowPos(value);
+            if (!options.windowPos) {
+                kast::log::error(std::format("Invalid --window-pos '{}', expected X,Y. {}", value, kUsage));
+                return std::nullopt;
+            }
         } else if (arg == "--ui-scale" && hasValue) {
             const std::string_view value = argv[++i];
             float scale = 0.0f;
@@ -561,6 +569,7 @@ int main(int argc, char** argv)
                                        .screenshot = options->screenshot,
                                        .width = options->size ? options->size->first : 1024,
                                        .height = options->size ? options->size->second : 600,
+                                       .position = options->windowPos,
                                        .uiScale = options->uiScale,
                                        .newProject = options->newProject};
         return options->launcherOpen.empty() ? runLauncher(launcher) : launcherOpen(launcher, options->launcherOpen);
@@ -855,7 +864,8 @@ int main(int argc, char** argv)
                                 .width = options->size ? options->size->first : 1280,
                                 .height = options->size ? options->size->second : 720,
                                 .vsync = !options->noVsync,
-                                .activate = options->frames == 0},
+                                .activate = options->frames == 0,
+                                .position = options->windowPos},
                                hooks);
     if (code != 0)
         return code;

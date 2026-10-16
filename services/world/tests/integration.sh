@@ -157,6 +157,9 @@ scenario "14 Lua server events: sendTo/sendNearby/broadcast audiences" --scenari
 # 15: state machines with the sample lua/fsms/locomotion.lua + lua/systems/locomotion.lua (README "State machines")
 scenario "15 state machines: transitions observed, denied one silent" --scenario fsm
 
+# 16: NPCs with the sample lua/systems/npcs.lua (README "NPCs"): the patrolling Guard seen, moving, leaving and returning
+scenario "16 NPCs: Spawn{npc, Guard}, moves, Despawn out of range, Spawn on return" --scenario npcs
+
 echo
 echo "================ integration summary ($RUN) ================"
 printf '%s\n' "${RESULTS[@]}"

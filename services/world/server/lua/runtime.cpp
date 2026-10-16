@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <limits>
 
 namespace kast::lua {
 namespace {
@@ -21,13 +22,19 @@ namespace {
     throw std::runtime_error(where + message);
 }
 
-// The read-only built-ins every character has, plus the Lua component types.
-enum class Builtin { none, character, transform };
+// The read-only built-ins (Character on players, Npc on NPCs, Transform on both; Transform is writable on NPCs), plus
+// the Lua component types.
+enum class Builtin { none, character, transform, npc };
 struct Type {
     Builtin builtin = Builtin::none;
     const ComponentDef* def = nullptr;
-    std::string_view name() const { return def ? std::string_view(def->name) : builtin == Builtin::character ? "Character" : "Transform"; }
+    std::string_view name() const {
+        if (def) return def->name;
+        return builtin == Builtin::character ? "Character" : builtin == Builtin::npc ? "Npc" : "Transform";
+    }
 };
+
+constexpr size_t kMaxNpcNameBytes = 255; // for name and template, each
 
 struct System {
     std::string path; // "systems/regen.lua"
@@ -62,6 +69,7 @@ Defs with_state_machine(Defs defs) {
 struct Runtime::Impl {
     entt::registry& reg;
     Defs defs;
+    NpcHooks npcs;
     sol::state lua;
     sol::table api;
     sol::table fsmApi;                     // kast.fsm.*
@@ -72,7 +80,7 @@ struct Runtime::Impl {
     System* current = nullptr;
     std::string callbackPath; // the definition file whose enter/exit is running, if no system is
 
-    Impl(entt::registry& r, Defs d) : reg(r), defs(with_state_machine(std::move(d))) {
+    Impl(entt::registry& r, Defs d, NpcHooks n) : reg(r), defs(with_state_machine(std::move(d))), npcs(std::move(n)) {
         open_sandbox(lua);
         bind_api();
         bind_fsm_api();
@@ -257,16 +265,20 @@ struct Runtime::Impl {
         });
     }
 
-    // Entities are server wire ids; only player characters exist.
-    entt::entity entity(lua_State* L, const sol::object& id) {
+    // Entities are server wire ids: player characters and NPCs.
+    static bool in_world(const entt::registry& reg, entt::entity e) {
+        return reg.valid(e) && reg.any_of<world::CharacterRef, world::Npc>(e);
+    }
+
+    entt::entity entity(lua_State* L, const sol::object& id, const char* function = nullptr) {
         if (id.get_type() == sol::type::number) {
             const double value = id.as<double>();
             if (value >= 0.0 && value <= 4294967295.0 && value == std::floor(value)) {
                 const auto e = entt::entity{static_cast<uint32_t>(value)};
-                if (reg.valid(e) && reg.all_of<world::CharacterRef>(e)) return e;
+                if (in_world(reg, e)) return e;
             }
         }
-        raise(L, std::format("invalid entity id {}", to_string(L, id)));
+        raise(L, std::format("{}invalid entity id {}", function ? std::string(function) + ": " : "", to_string(L, id)));
     }
 
     // A client event's target: any wire id; one not in the world is skipped when the events are sent.
@@ -304,12 +316,21 @@ struct Runtime::Impl {
     Type type(lua_State* L, const std::string& name) {
         if (name == "Character") return {Builtin::character, nullptr};
         if (name == "Transform") return {Builtin::transform, nullptr};
+        if (name == "Npc") return {Builtin::npc, nullptr};
         for (const auto& def : defs)
             if (def->name == name) return {Builtin::none, def.get()};
         raise(L, std::format("unknown component \"{}\"", name));
     }
 
-    bool has(entt::entity e, const Type& t) { return t.builtin != Builtin::none || pool(reg, t.def->name).contains(e); }
+    bool has(entt::entity e, const Type& t) {
+        switch (t.builtin) {
+        case Builtin::character: return reg.all_of<world::CharacterRef>(e);
+        case Builtin::npc: return reg.all_of<world::Npc>(e);
+        case Builtin::transform: return true;
+        case Builtin::none: break;
+        }
+        return pool(reg, t.def->name).contains(e);
+    }
 
     const ComponentDef& writable(lua_State* L, const Type& t) {
         if (!t.def) raise(L, std::format("\"{}\" is read-only on the server", t.name()));
@@ -317,8 +338,86 @@ struct Runtime::Impl {
     }
 
     void changed(entt::entity e, const ComponentDef& def) {
-        if (def.persist) reg.emplace_or_replace<world::Dirty>(e); // replication diffs on its own
+        // replication diffs on its own; NPCs are never saved
+        if (def.persist && reg.all_of<world::CharacterRef>(e)) reg.emplace_or_replace<world::Dirty>(e);
         if (def.name == kStateMachineComponent) fsm.syncEntity(e); // a new "machine" enters its initial state now
+    }
+
+    // A number that is finite as the wire's f32, or raises "<prefix>"<name>" must be a finite number".
+    static float finite(lua_State* L, std::string_view prefix, std::string_view name, const sol::object& value) {
+        const double number = value.get_type() == sol::type::number ? value.as<double>() : NAN;
+        if (!std::isfinite(number) || std::fabs(number) > std::numeric_limits<float>::max())
+            raise(L, std::format("{}\"{}\" must be a finite number", prefix, name));
+        return static_cast<float>(number);
+    }
+
+    // {x=, y=, z=}, each finite as an f32, or raises "<prefix>"position" must be a table ...".
+    static proto::Vec3 position(lua_State* L, std::string_view prefix, const sol::object& value) {
+        const auto bad = [&] {
+            raise(L, std::format("{}\"position\" must be a table {{x=, y=, z=}} of finite numbers", prefix));
+        };
+        if (value.get_type() != sol::type::table) bad();
+        const sol::table table = value.as<sol::table>();
+        float xyz[3];
+        for (int i = 0; i < 3; ++i) {
+            const sol::object c = table[std::string(1, "xyz"[i])];
+            const double number = c.get_type() == sol::type::number ? c.as<double>() : NAN;
+            if (!std::isfinite(number) || std::fabs(number) > std::numeric_limits<float>::max()) bad();
+            xyz[i] = static_cast<float>(number);
+        }
+        return {xyz[0], xyz[1], xyz[2]};
+    }
+
+    // kast.set(npc, "Transform", {position=, heading=}): partial and all-or-nothing like any set. The position is
+    // clamped into the zone; script moves are trusted (no speed check) and replicate as EntityMove like an accepted
+    // player move.
+    void set_npc_transform(lua_State* L, entt::entity e, const sol::table& fields) {
+        auto& tf = reg.get<world::Transform>(e);
+        proto::Vec3 pos = tf.pos;
+        float heading = tf.heading;
+        for (const auto& [key, value] : fields) {
+            if (key.get_type() != sol::type::string)
+                raise(L, std::format("\"Transform\": field names must be strings, got {}", to_string(L, key)));
+            const std::string field = key.as<std::string>();
+            if (field == "position") pos = position(L, "\"Transform\": ", value);
+            else if (field == "heading") heading = finite(L, "\"Transform\": ", "heading", value);
+            else raise(L, std::format("\"Transform\": unknown field \"{}\"", field));
+        }
+        pos = npcs.clamp(pos);
+        if (pos == tf.pos && heading == tf.heading) return;
+        tf.pos = pos;
+        tf.heading = heading;
+        reg.emplace_or_replace<world::Moved>(e);
+    }
+
+    // kast.create(name, {template=, position=?, heading=?}): every argument is checked before anything is created.
+    uint32_t create_npc(lua_State* L, const sol::object& name, const sol::object& opts) {
+        const auto text = [&](std::string_view what, const sol::object& value) {
+            if (value.get_type() != sol::type::string || value.as<std::string>().empty() ||
+                value.as<std::string>().size() > kMaxNpcNameBytes)
+                raise(L, std::format("kast.create: {} must be a non-empty string of at most {} bytes, got {}", what,
+                                     kMaxNpcNameBytes, to_string(L, value)));
+            return value.as<std::string>();
+        };
+        std::string npcName = text("name", name);
+        if (opts.get_type() != sol::type::table)
+            raise(L, std::format("kast.create: opts must be a table {{template = ...}}, got {}", to_string(L, opts)));
+        const sol::table table = opts.as<sol::table>();
+        for (const auto& [key, unused] : table) {
+            const std::string k = key.get_type() == sol::type::string ? key.as<std::string>() : "";
+            if (k != "template" && k != "position" && k != "heading")
+                raise(L, std::format("kast.create: unknown option {}", to_string(L, key)));
+        }
+        std::string templateName = text("template", table["template"]);
+        std::optional<proto::Vec3> pos;
+        if (const sol::object p = table["position"]; p.get_type() != sol::type::lua_nil)
+            pos = position(L, "kast.create: ", p);
+        float heading = 0;
+        if (const sol::object h = table["heading"]; h.get_type() != sol::type::lua_nil)
+            heading = finite(L, "kast.create: ", "heading", h);
+        if (reg.view<world::Npc>().size() >= npcs.max)
+            raise(L, std::format("kast.create: too many NPCs (MAX_NPCS is {})", npcs.max));
+        return wire(npcs.create(std::move(npcName), std::move(templateName), pos, heading));
     }
 
     void bind_api() {
@@ -333,18 +432,28 @@ struct Runtime::Impl {
                 types.push_back(type(L, name.as<std::string>()));
             }
             std::vector<uint32_t> matches;
-            for (auto e : reg.view<world::CharacterRef>())
+            for (auto e : reg.view<world::Transform>()) // every player and NPC
                 if (std::ranges::all_of(types, [&](const Type& t) { return has(e, t); })) matches.push_back(wire(e));
             std::ranges::sort(matches);
             // nil ends the generic for.
             return std::function<sol::object()>([this, matches = std::move(matches), next = size_t{0}]() mutable {
                 while (next < matches.size()) {
                     const uint32_t id = matches[next++];
-                    if (const auto e = entt::entity{id}; reg.valid(e) && reg.all_of<world::CharacterRef>(e))
+                    if (in_world(reg, entt::entity{id}))
                         return sol::make_object(lua, id);
                 }
                 return sol::make_object(lua, sol::lua_nil);
             });
+        });
+        api.set_function("create", [this](sol::this_state L, const sol::object& name, const sol::object& opts) {
+            return create_npc(L, name, opts);
+        });
+        // Players leave only by logging out: destroy takes NPCs.
+        api.set_function("destroy", [this](sol::this_state L, const sol::object& id) {
+            const entt::entity e = entity(L, id, "kast.destroy");
+            if (!reg.all_of<world::Npc>(e))
+                raise(L, std::format("kast.destroy: entity {} is a player; only NPCs can be destroyed", to_string(L, id)));
+            npcs.destroy(e);
         });
         api.set_function("has", [this](sol::this_state L, const sol::object& id, const std::string& name) {
             return has(entity(L, id), type(L, name));
@@ -375,6 +484,10 @@ struct Runtime::Impl {
                 const auto& ch = reg.get<world::CharacterRef>(e);
                 table["charId"] = static_cast<double>(ch.charId);
                 table["name"] = ch.name;
+            } else if (t.builtin == Builtin::npc) {
+                const auto& npc = reg.get<world::Npc>(e);
+                table["name"] = npc.name;
+                table["template"] = npc.templateName;
             } else if (t.builtin == Builtin::transform) {
                 const auto& tf = reg.get<world::Transform>(e);
                 table["position"] = lua.create_table_with("x", tf.pos.x, "y", tf.pos.y, "z", tf.pos.z);
@@ -393,6 +506,7 @@ struct Runtime::Impl {
             const entt::entity e = entity(L, id);
             const Type t = type(L, name);
             if (!has(e, t)) raise(L, std::format("entity {} has no \"{}\"", to_string(L, id), name));
+            if (t.builtin == Builtin::transform && reg.all_of<world::Npc>(e)) return set_npc_transform(L, e, fields);
             const ComponentDef& def = writable(L, t);
             auto& p = pool(reg, def.name);
             Json json = p.get(e).value;
@@ -470,7 +584,8 @@ struct Runtime::Impl {
     }
 };
 
-Runtime::Runtime(entt::registry& reg, Defs defs) : impl_(std::make_unique<Impl>(reg, std::move(defs))) {}
+Runtime::Runtime(entt::registry& reg, Defs defs, NpcHooks npcs)
+    : impl_(std::make_unique<Impl>(reg, std::move(defs), std::move(npcs))) {}
 Runtime::~Runtime() = default;
 
 std::vector<std::string> Runtime::load(const std::filesystem::path& root, std::vector<std::string> gameMachines) {

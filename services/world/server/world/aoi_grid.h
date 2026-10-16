@@ -33,6 +33,14 @@ private:
 void diff_sorted(const std::vector<uint32_t>& a, const std::vector<uint32_t>& b, std::vector<uint32_t>& entered,
                  std::vector<uint32_t>& left);
 
+// ids sorted ascending: adds id if absent / removes it if present, keeping the order.
+inline void insert_sorted(std::vector<uint32_t>& ids, uint32_t id) {
+    if (auto it = std::lower_bound(ids.begin(), ids.end(), id); it == ids.end() || *it != id) ids.insert(it, id);
+}
+inline void erase_sorted(std::vector<uint32_t>& ids, uint32_t id) {
+    if (auto it = std::lower_bound(ids.begin(), ids.end(), id); it != ids.end() && *it == id) ids.erase(it);
+}
+
 template <typename PosOf>
 std::vector<uint32_t> AoiGrid::query(float x, float z, uint32_t self, PosOf&& posOf) const {
     std::vector<uint32_t> out;

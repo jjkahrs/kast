@@ -17,6 +17,7 @@ struct LauncherOptions {
     std::string screenshot;
     int width = 1024;
     int height = 600;
+    std::optional<std::pair<int, int>> position; // window top-left (--window-pos)
     std::optional<float> uiScale;
     std::optional<std::pair<std::string, std::string>> newProject; // name, dir: open the prefilled New Project modal
 };

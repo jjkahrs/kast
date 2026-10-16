@@ -1,6 +1,9 @@
 #pragma once
 
 #include <functional>
+#include <optional>
+#include <string_view>
+#include <utility>
 
 union SDL_Event;
 struct SDL_Window;
@@ -13,7 +16,13 @@ struct AppConfig {
     int height = 720;
     bool vsync = true; // false: present as fast as possible (frame-rate measurements)
     bool activate = true; // false (--frames test runs): show without taking focus; init failures only log
+    // Top-left corner of the window in desktop coordinates (--window-pos). Empty: the environment variable
+    // KAST_WINDOW_POS ("X,Y", how ctest keeps test windows off the main monitor), else where the OS puts it.
+    std::optional<std::pair<int, int>> position;
 };
+
+// "X,Y": two integers (negative = left of / above the main monitor). Empty if text is anything else.
+std::optional<std::pair<int, int>> parseWindowPos(std::string_view text);
 
 // Lifecycle hooks the host (editor, game client) plugs into. All optional.
 struct AppHooks {

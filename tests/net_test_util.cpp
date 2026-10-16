@@ -405,6 +405,8 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
                 queue(proto::ServerEvent{"broken", "{not json"}); // ignored with a warning
                 queue(proto::ServerEvent{"ping", "null"});
             }
+            if (say->text == "npc")
+                queue(proto::Spawn{3, "Guard", {103, 0, 100}, 0.25f, proto::SpawnKind::npc, "Guard"});
         } else {
             queue(proto::Disconnect{proto::Code::unexpected_message});
             return flush();

@@ -224,6 +224,7 @@ struct NetworkLocalPlayer {
 struct NetworkReplication {
     std::string templateEntity;
     float interpolationMs = 100.0f; // 0..1000, 0 = snap
+    std::string npcTemplates; // an entity whose children are the NPC templates, by name; empty = none
 };
 
 // Added to each clone: the world server's entity id (an unsigned 32-bit id; ids past 2^31 read negative).

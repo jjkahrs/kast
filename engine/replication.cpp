@@ -95,7 +95,9 @@ void Replication::start(Scene& scene, EventBus& bus, WorldClient& world)
     if (managers.size() > 1)
         log::warn("Replication: more than one NetworkReplication in the scene; using the first");
     if (!managers.empty()) {
-        const std::string name = managers.get<NetworkReplication>(managers.front()).templateEntity;
+        const NetworkReplication& manager = managers.get<NetworkReplication>(managers.front());
+        const std::string npcFolder = manager.npcTemplates; // copies: destroying entities may move the component
+        const std::string name = manager.templateEntity;
         const entt::entity source = findByName(scene, name);
         if (source == entt::null) {
             log::warn(std::format("Replication: template entity '{}' not found; remote players are not shown", name));
@@ -104,13 +106,16 @@ void Replication::start(Scene& scene, EventBus& bus, WorldClient& world)
             copyInto(scene, source, *template_, entt::null);
             scene.destroy(source); // Stop restores it from the Play snapshot
         }
+        if (!npcFolder.empty())
+            takeNpcTemplates(scene, npcFolder);
     }
 
     subscriptions_.push_back(bus.subscribe("world.entered", [this](const Json& e) { placeLocal(e); }));
     subscriptions_.push_back(bus.subscribe("world.correction", [this](const Json& e) { placeLocal(e); }));
     subscriptions_.push_back(bus.subscribe("world.spawn", [this](const Json& e) {
         const bx::Vec3 at = vec3(e.value("position", Json::object()));
-        spawn(e.value("entityId", 0u), {.name = e.value("name", ""), .from = at, .to = at,
+        spawn(e.value("entityId", 0u), {.name = e.value("name", ""), .npc = e.value("kind", "") == "npc",
+                                        .templateName = e.value("template", ""), .from = at, .to = at,
                                         .heading = e.value("heading", 0.0f)});
     }));
     subscriptions_.push_back(bus.subscribe("world.entityMove", [this](const Json& e) {
@@ -151,6 +156,8 @@ void Replication::stop(bool remembered)
 {
     subscriptions_.clear();
     template_.reset();
+    npcTemplates_.clear();
+    npcTemplateScene_.reset();
     if (!remembered) {
         remotes_.clear();
         localId_.reset();
@@ -223,12 +230,12 @@ void Replication::placeLocal(const Json& payload)
 void Replication::spawn(uint32_t id, Remote remote)
 {
     despawn(id); // an id the server reuses without a despawn we saw
-    if (!template_) {
+    const auto [source, root] = cloneSource(remote);
+    if (!source) {
         remotes_[id] = std::move(remote); // remembered, so a scene with a template still shows it
         return;
     }
-    const entt::entity root = template_->children(entt::null).front();
-    remote.entity = copyInto(*template_, root, *scene_, entt::null);
+    remote.entity = copyInto(*source, root, *scene_, entt::null);
     entt::registry& registry = scene_->registry();
     registry.get<Name>(remote.entity).value = remote.name;
     Transform& t = registry.get<Transform>(remote.entity);
@@ -241,6 +248,38 @@ void Replication::spawn(uint32_t id, Remote remote)
                   {{"entityId", id}, {"entity", registry.get<PersistentId>(remote.entity).value}, {"name", remote.name}},
                   "kast.replication");
     remotes_[id] = std::move(remote);
+}
+
+void Replication::takeNpcTemplates(Scene& scene, const std::string& folderName)
+{
+    const entt::entity folder = findByName(scene, folderName);
+    if (folder == entt::null) {
+        log::warn(std::format("Replication: NPC templates entity '{}' not found; NPCs use the template entity",
+                              folderName));
+        return;
+    }
+    npcTemplateScene_.emplace();
+    for (entt::entity child : scene.children(folder)) {
+        const std::string& name = scene.registry().get<Name>(child).value;
+        if (!npcTemplates_.contains(name)) // two templates with one name: the first wins
+            npcTemplates_[name] = copyInto(scene, child, *npcTemplateScene_, entt::null);
+    }
+    scene.destroy(folder); // with every template under it; Stop restores them from the Play snapshot
+}
+
+std::pair<const Scene*, entt::entity> Replication::cloneSource(const Remote& remote)
+{
+    if (remote.npc) {
+        if (const auto it = npcTemplates_.find(remote.templateName); it != npcTemplates_.end())
+            return {&*npcTemplateScene_, it->second};
+        if (warned_.insert("npc template " + remote.templateName).second)
+            log::warn(std::format("Replication: no NPC template '{}' under npcTemplates; NPCs using it are clones "
+                                  "of the template entity",
+                                  remote.templateName));
+    }
+    if (!template_)
+        return {nullptr, entt::null};
+    return {&*template_, template_->children(entt::null).front()};
 }
 
 void Replication::despawn(uint32_t id)

@@ -16,6 +16,7 @@ world::WorldRules world_rules(const Config& c) {
     r.chatRateWindow = Millis(c.chatRateWindowMs);
     r.saveInterval = Millis(c.saveIntervalMs);
     r.tickSeconds = 1.0f / static_cast<float>(c.tickHz);
+    r.maxNpcs = c.maxNpcs;
     return r;
 }
 
@@ -330,6 +331,7 @@ void GameServer::shutdown(std::function<void()> onDone) {
         leave_world(c);
         sessions.push_back(c.session);
     }
+    world_.remove_npcs(); // no players left to tell; NPCs are never saved
     for (auto& s : sessions) s->disconnect(proto::Code::server_shutdown);
     if (clients_.empty()) {
         auto done = std::move(onShutdownDone_);

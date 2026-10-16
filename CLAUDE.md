@@ -25,6 +25,7 @@ Kast is a game engine focused on making it easy to build MMORPGs.
 # General Rules
 * Do not read any files in ./ignore
 * Never commit or push anything to git
+* Tests that open windows should not do it on the main monitor.
 
 # Project Organization
 * The game engine editor is under ./editor

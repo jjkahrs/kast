@@ -143,7 +143,7 @@ private:
 Server::Body serveFakeAuth(FakeAuth& fake);
 
 // A fake world server (services/world/PROTOCOL.md) for kast.world tests, scripted by what the client sends. Hello must
-// be protocol 1; Auth gets Ping{kFakeWorldPing} then AuthOk{42, player} (an empty token: Disconnect{invalid_token}).
+// be protocol 2 (proto::kProtocolVersion); Auth gets Ping{kFakeWorldPing} then AuthOk{42, player} (an empty token: Disconnect{invalid_token}).
 // Each connection has its own characters. CharListReq -> CharList. CharCreate: "Taken" -> CharError{name_taken};
 // "Kick<n>" -> Disconnect{code n} and close; "Garbage" -> a malformed Spawn frame; "Unknown" -> opcode 0x7777;
 // "Split" -> CharCreated written in two parts 50 ms apart; anything else -> CharCreated{id from 100, name,
@@ -153,7 +153,8 @@ Server::Body serveFakeAuth(FakeAuth& fake);
 // position}, else it is accepted silently. Say -> ChatMsg{the character's name, text}, then Despawn{2} if text is "bye", or
 // ComponentUpdate{2, Health, {current 42.5, max 100}}, a ComponentUpdate with invalid JSON and ComponentRemove{2, Health}
 // if text is "components", or ServerEvent{quest.update, {quest 7, steps [1, 2], done false}}, a ServerEvent with invalid
-// JSON and ServerEvent{ping, null} if text is "events". Anything else:
+// JSON and ServerEvent{ping, null} if text is "events", or the NPC Spawn{3, "Guard", (103, 0, 100), 0.25, npc, "Guard"} if
+// text is "npc". Anything else:
 // Disconnect{unexpected_message}.
 constexpr uint32_t kFakeWorldPing = 4242;
 

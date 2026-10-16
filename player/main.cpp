@@ -38,7 +38,7 @@ constexpr int kScreenshotTimeoutFrames = 30;
 constexpr const char* kPakFileName = "game.pak";
 constexpr int kGuiClickFrame = 10; // --gui-click: once the GUIs have loaded and laid out
 constexpr const char* kUsage =
-    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--size WxH] [--gpu-stats] [--no-audio-device]";
+    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--size WxH] [--window-pos X,Y] [--gpu-stats] [--no-audio-device]";
 constexpr int kGpuStatsWarmupFrames = 10; // --gpu-stats: skip startup frames (shader and target creation)
 
 struct Options {
@@ -46,6 +46,7 @@ struct Options {
     std::string screenshot; // captured after the last frame
     std::string guiClick;   // tests: click this GUI element id on frame kGuiClickFrame
     int width = kast::AppConfig{}.width, height = kast::AppConfig{}.height; // --size: window size
+    std::optional<std::pair<int, int>> windowPos; // --window-pos: window top-left
     bool gpuStats = false;  // log the average GPU frame time on exit
     bool noAudioDevice = false; // tests: sound on the null backend (silent), as if there were no output device
 };
@@ -79,6 +80,13 @@ std::optional<Options> parseArgs(int argc, char** argv)
             if (x == std::string_view::npos || !parseInt(text.substr(0, x), options.width) ||
                 !parseInt(text.substr(x + 1), options.height)) {
                 kast::log::error(std::format("Invalid --size '{}', expected WxH. {}", text, kUsage));
+                return std::nullopt;
+            }
+        } else if (arg == "--window-pos" && hasValue) {
+            const std::string_view text = argv[++i];
+            options.windowPos = kast::parseWindowPos(text);
+            if (!options.windowPos) {
+                kast::log::error(std::format("Invalid --window-pos '{}', expected X,Y. {}", text, kUsage));
                 return std::nullopt;
             }
         } else if (arg == "--gpu-stats") {
@@ -255,7 +263,7 @@ int main(int argc, char** argv)
     };
 
     const int code = kast::run({.title = project.name.c_str(), .width = options->width, .height = options->height,
-                                .activate = options->frames == 0},
+                                .activate = options->frames == 0, .position = options->windowPos},
                                hooks);
     if (code != 0)
         return code;

@@ -265,7 +265,8 @@ void registerBuiltins()
         .data<&NetworkLocalPlayer::sendRateHz>("sendRateHz").custom<FieldInfo>("Send Rate (Hz)", false, 1.0, double(kMaxMoveRateHz));
     registerComponent<NetworkReplication>("NetworkReplication", {"Network Replication", true, validateNetworkReplication})
         .data<&NetworkReplication::templateEntity>("templateEntity").custom<FieldInfo>("Template Entity")
-        .data<&NetworkReplication::interpolationMs>("interpolationMs").custom<FieldInfo>("Interpolation (ms)", false, 0.0, 1000.0);
+        .data<&NetworkReplication::interpolationMs>("interpolationMs").custom<FieldInfo>("Interpolation (ms)", false, 0.0, 1000.0)
+        .data<&NetworkReplication::npcTemplates>("npcTemplates").custom<FieldInfo>(FieldInfo{.displayName = "NPC Templates", .optional = true});
     registerComponent<NetworkEntity>("NetworkEntity", {"Network Entity"})
         .data<&NetworkEntity::entityId>("entityId").custom<FieldInfo>("Entity Id");
 }

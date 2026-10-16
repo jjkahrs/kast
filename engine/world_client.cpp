@@ -290,8 +290,12 @@ void WorldClient::dispatch(const auto& m)
         state_ = WorldState::InWorld;
         emit("world.entered", {{"entityId", m.entityId}, {"position", position(m.pos)}, {"heading", m.heading}});
     } else if constexpr (std::is_same_v<T, proto::Spawn>) {
-        emit("world.spawn",
-             {{"entityId", m.entityId}, {"name", m.name}, {"position", position(m.pos)}, {"heading", m.heading}});
+        emit("world.spawn", {{"entityId", m.entityId},
+                             {"name", m.name},
+                             {"position", position(m.pos)},
+                             {"heading", m.heading},
+                             {"kind", m.kind == proto::SpawnKind::npc ? "npc" : "player"},
+                             {"template", m.templateName}});
     } else if constexpr (std::is_same_v<T, proto::Despawn>) {
         emit("world.despawn", {{"entityId", m.entityId}});
     } else if constexpr (std::is_same_v<T, proto::EntityMove>) {

@@ -92,4 +92,6 @@ enable_testing()
 add_executable(world_self_check tests/self_check.cpp tests/lua_checks.cpp)
 target_compile_options(world_self_check PRIVATE ${WORLD_COMPILE_OPTIONS})
 target_link_libraries(world_self_check PRIVATE world_core)
+# The sample lua/ folder, so the checks can run it (the NPC sample).
+target_compile_definitions(world_self_check PRIVATE KAST_WORLD_LUA_SAMPLE="${CMAKE_CURRENT_SOURCE_DIR}/lua")
 add_test(NAME world_self_check COMMAND world_self_check)

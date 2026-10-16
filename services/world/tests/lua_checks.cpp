@@ -1,7 +1,8 @@
 // Assert-style checks for the Lua layer: component definitions (every type, option and error), reserved and duplicate
 // names, the sandbox, kast.* semantics, hooks, error handling, persistence + drift, component replication routing, the
 // event bus (kast.publish/subscribe/unsubscribe), client events (kast.sendTo/sendNearby/broadcast) and state machines
-// (definitions, rules, queueing, callback errors, kast.fsm, the StateMachine built-in, C++ / Lua parity).
+// (definitions, rules, queueing, callback errors, kast.fsm, the StateMachine built-in, C++ / Lua parity) and NPCs
+// (kast.create / kast.destroy, Transform rules, AOI and replication routing, shutdown, the sample lua/).
 // Lua files are written to a temp folder; the World runs with captured Send/Save, so there is no network or database.
 #include "core/log.h"
 #include "lua/components.h"
@@ -10,6 +11,7 @@
 
 #include <codec.h>
 
+#include <cmath>
 #include <cstdio>
 #include <format>
 #include <fstream>
@@ -151,7 +153,8 @@ void checkDefinitionErrors() {
 }
 
 void checkNameRules() {
-    for (const char* reserved : {"Character", "Transform", "StateMachine", "Dirty", "SessionLink", "Visible", "StateMachineRuntime"}) {
+    for (const char* reserved : {"Character", "Transform", "StateMachine", "Npc", "Viewers", "Dirty", "SessionLink", "Visible",
+                                 "StateMachineRuntime"}) {
         const std::string e = def_error(std::string("return {name='") + reserved + "', fields={}}");
         check(e == std::string("components/c.lua: name \"") + reserved + "\" is taken by a built-in component",
               "reserved name " + std::string(reserved) + ": " + e);
@@ -213,8 +216,8 @@ struct Sent {
 struct TestWorld {
     Sent sent;
     world::World world;
-    explicit TestWorld(lua::Defs defs)
-        : world({}, [this](uint32_t sid, const proto::Message& m) { sent.bySession[sid].push_back(m); },
+    explicit TestWorld(lua::Defs defs, world::WorldRules rules = {})
+        : world(rules, [this](uint32_t sid, const proto::Message& m) { sent.bySession[sid].push_back(m); },
                 [this](const db::CharSave& s) { sent.saves.push_back(s); }, std::move(defs)) {}
     entt::entity spawn(uint32_t sid, uint64_t charId, const std::string& name, float x, float z,
                        const std::string& components = "") {
@@ -1457,6 +1460,362 @@ return {
 
 } // namespace
 
+// --- NPCs (README "Lua components and systems", NPCs) ---
+
+// Every kast.create / kast.destroy / NPC Transform rule from Lua; each bad call raises and changes nothing.
+constexpr const char* kNpcApiSystem = R"lua(
+local npcs = function() local n = 0 ; for _ in kast.query("Npc") do n = n + 1 end ; return n end
+local done = false
+return { update = function()
+    if done then return end
+    done = true
+    local players = {}
+    for e in kast.query("Character") do players[#players + 1] = e end
+    local p = players[1]
+    local g = kast.create("Guard", {template = "GuardTpl"})
+    expect(type(g) == "number" and g ~= p, "create returns a new wire id")
+    expect(kast.has(g, "Npc") and kast.has(g, "Transform") and not kast.has(g, "Character"), "Npc + Transform, no Character")
+    expect(not kast.has(p, "Npc"), "players have no Npc")
+    local n = kast.get(g, "Npc")
+    expect(n.name == "Guard" and n.template == "GuardTpl", "Npc {name, template}")
+    local tf = kast.get(g, "Transform")
+    expect(tf.position.x == 1024 and tf.position.y == 0 and tf.position.z == 1024 and tf.heading == 0, "default: spawn point, heading 0")
+    raises('entity ' .. g .. ' has no "Character"', function() kast.get(g, "Character") end)
+    local h = kast.create("Far", {template = "T", position = {x = -5, y = 1000, z = 5000}, heading = 2})
+    tf = kast.get(h, "Transform")
+    expect(tf.position.x == 0 and tf.position.y == 500 and tf.position.z == 2048 and tf.heading == 2, "position clamped into the zone and MIN_Y/MAX_Y")
+    local ids, chars, all = {}, 0, {}
+    for e in kast.query("Npc") do ids[#ids + 1] = e end
+    for _ in kast.query("Character") do chars = chars + 1 end
+    for e in kast.query() do all[#all + 1] = e end
+    expect(#ids == 2 and ids[1] == g and ids[2] == h, "query Npc: NPCs only, in id order")
+    expect(chars == 1, "query Character: players only")
+    expect(#all == 3 and all[1] < all[2] and all[2] < all[3], "query(): players and NPCs in id order")
+
+    local before = npcs()
+    local long = string.rep("x", 256)
+    local nameErr = "kast.create: name must be a non-empty string of at most 255 bytes, got "
+    local tplErr = "kast.create: template must be a non-empty string of at most 255 bytes, got "
+    local posErr = 'kast.create: "position" must be a table {x=, y=, z=} of finite numbers'
+    for _, c in ipairs({
+        {nameErr .. "nil", nil, {template = "T"}},
+        {nameErr, "", {template = "T"}},
+        {nameErr .. "5", 5, {template = "T"}},
+        {nameErr .. "xxx", long, {template = "T"}},
+        {"kast.create: opts must be a table {template = ...}, got nil", "N", nil},
+        {"kast.create: opts must be a table {template = ...}, got 5", "N", 5},
+        {tplErr .. "nil", "N", {}},
+        {tplErr, "N", {template = ""}},
+        {tplErr .. "7", "N", {template = 7}},
+        {tplErr .. "xxx", "N", {template = long}},
+        {posErr, "N", {template = "T", position = 5}},
+        {posErr, "N", {template = "T", position = {x = 1, y = 2}}},
+        {posErr, "N", {template = "T", position = {x = 1 / 0, y = 0, z = 0}}},
+        {posErr, "N", {template = "T", position = {x = 1e39, y = 0, z = 0}}},
+        {'kast.create: "heading" must be a finite number', "N", {template = "T", heading = "x"}},
+        {'kast.create: "heading" must be a finite number', "N", {template = "T", heading = 0 / 0}},
+        {"kast.create: unknown option speed", "N", {template = "T", speed = 1}},
+        {"kast.create: unknown option 1", "N", {template = "T", "extra"}},
+    }) do raises(c[1], function() kast.create(c[2], c[3]) end) end
+    expect(npcs() == before, "no failed create made an NPC")
+
+    raises("kast.destroy: entity " .. p .. " is a player; only NPCs can be destroyed", function() kast.destroy(p) end)
+    raises("kast.destroy: invalid entity id 1.5", function() kast.destroy(1.5) end)
+    raises("kast.destroy: invalid entity id x", function() kast.destroy("x") end)
+    raises("kast.destroy: invalid entity id nil", function() kast.destroy() end)
+    raises("kast.destroy: invalid entity id 999999", function() kast.destroy(999999) end)
+    expect(npcs() == before, "no failed destroy removed an NPC")
+    kast.destroy(h)
+    expect(npcs() == before - 1, "destroy removes the NPC")
+    raises("kast.destroy: invalid entity id " .. h, function() kast.destroy(h) end)
+    raises("invalid entity id " .. h, function() kast.get(h, "Transform") end)
+
+    kast.set(g, "Transform", {heading = 1})
+    tf = kast.get(g, "Transform")
+    expect(tf.heading == 1 and tf.position.x == 1024, "partial Transform set: heading only")
+    kast.set(g, "Transform", {position = {x = 3000, y = -500, z = 10}})
+    tf = kast.get(g, "Transform")
+    expect(tf.position.x == 2048 and tf.position.y == -100 and tf.position.z == 10 and tf.heading == 1, "Transform set clamps")
+    raises('"Transform": unknown field "pos"', function() kast.set(g, "Transform", {heading = 2, pos = {}}) end)
+    raises('"Transform": field names must be strings, got 1', function() kast.set(g, "Transform", {5}) end)
+    raises('"Transform": "position" must be a table {x=, y=, z=} of finite numbers', function() kast.set(g, "Transform", {heading = 2, position = {x = 1}}) end)
+    raises('"Transform": "heading" must be a finite number', function() kast.set(g, "Transform", {position = {x = 1, y = 1, z = 1}, heading = 1 / 0}) end)
+    tf = kast.get(g, "Transform")
+    expect(tf.position.x == 2048 and tf.heading == 1, "every failed Transform set left it unchanged")
+    raises('"Transform" is read-only on the server', function() kast.set(p, "Transform", {heading = 1}) end)
+    raises('"Npc" is read-only on the server', function() kast.set(g, "Npc", {name = "x"}) end)
+    raises('"Npc" is read-only on the server', function() kast.add(g, "Npc") end)
+    raises('"Npc" cannot be removed', function() kast.remove(g, "Npc") end)
+    raises('"Transform" cannot be removed', function() kast.remove(g, "Transform") end)
+    raises('"Character" is read-only on the server', function() kast.add(g, "Character") end)
+
+    kast.add(g, "Stats")
+    kast.set(g, "Stats", {hp = 42})
+    expect(kast.get(g, "Stats").hp == 42 and kast.has(g, "Stats"), "Lua components work on NPCs")
+    kast.remove(g, "Stats")
+    expect(not kast.has(g, "Stats"), "remove on an NPC")
+    kast.add(g, "StateMachine")
+    kast.set(g, "StateMachine", {machine = "plain"})
+    expect(kast.fsm.state(g) == "a", "an NPC machine enters its initial state")
+    expect(kast.fsm.change(g, "b") and kast.fsm.state(g) == "b", "kast.fsm.change on an NPC")
+    kast.sendTo(g, "npc.hello", {x = 1}) -- an NPC has no client: nothing is sent, no error
+    kast.log("npc api done")
+end })lua";
+
+void checkNpcApi() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("components/stats.lua", kStats).write("fsms/plain.lua", kPlain);
+    r.write("systems/npc.lua", std::string(kLuaExpect) + kNpcApiSystem);
+    TestWorld w(r.defs().defs);
+    check(w.world.load_scripts(r.root).empty(), "npc api: loads");
+    w.spawn(1, 101, "Alice", 1000, 1000);
+    w.sent.clear();
+    w.world.tick(T0);
+    check_lua_expectations("npc api", "npc api done");
+    for (const auto& s : w.world.script_status()) check(s.ok, "npc api: system still enabled " + s.error);
+    check(w.sent.of<proto::ServerEvent>(1).empty(), "sendTo(npc) sends nothing");
+}
+
+// MAX_NPCS: create past the cap raises and creates nothing; a destroy frees a slot.
+void checkNpcCap() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("systems/cap.lua", std::string(kLuaExpect) + R"lua(return { init = function()
+    local a = kast.create("A", {template = "T"})
+    kast.create("B", {template = "T"})
+    raises("kast.create: too many NPCs (MAX_NPCS is 2)", function() kast.create("C", {template = "T"}) end)
+    local n = 0 ; for _ in kast.query("Npc") do n = n + 1 end
+    expect(n == 2, "the refused create made nothing")
+    kast.destroy(a)
+    kast.create("C", {template = "T"})
+    kast.log("cap done")
+end, update = function() end })lua");
+    world::WorldRules rules;
+    rules.maxNpcs = 2;
+    TestWorld w({}, rules);
+    check(w.world.load_scripts(r.root).empty(), "npc cap: loads (create works from init)");
+    check_lua_expectations("npc cap", "cap done");
+
+    LuaRoot zero;
+    zero.write("systems/z.lua", "return { init = function() kast.create('A', {template = 'T'}) end, update = function() end }");
+    rules.maxNpcs = 0;
+    TestWorld z({}, rules);
+    const auto errors = z.world.load_scripts(zero.root);
+    check(errors.size() == 1 && contains(errors[0], "systems/z.lua:1: kast.create: too many NPCs (MAX_NPCS is 0)"),
+          "MAX_NPCS 0: create raises at the call: " + (errors.empty() ? "" : errors[0]));
+}
+
+// AOI, replication and send routing for an NPC moved by a script (driven through the bus from C++), plus hooks,
+// persistence and destroy.
+void checkNpcRouting() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("components/health.lua", "return { name = 'Health', persist = true, replicate = 'aoi', fields = { { name = 'hp', type = 'int', default = 5 } } }");
+    r.write("components/wallet.lua", "return { name = 'Wallet', persist = true, replicate = 'owner', fields = { { name = 'gold', type = 'int', default = 1 } } }");
+    r.write("fsms/plain.lua", kPlain);
+    r.write("systems/guard.lua", R"lua(local g
+return {
+    init = function()
+        g = kast.create("Guard", {template = "GuardTpl", position = {x = 1010, y = 0, z = 1000}, heading = 0.5})
+        kast.add(g, "Health") ; kast.add(g, "Wallet") ; kast.add(g, "StateMachine")
+        kast.set(g, "StateMachine", {machine = "plain"})
+        kast.subscribe("move", function(p) kast.set(g, "Transform", {position = {x = p.x, y = 0, z = p.z}}) end)
+        kast.subscribe("hp", function(p) kast.set(g, "Health", {hp = p}) ; kast.set(g, "Wallet", {gold = p}) end)
+        kast.subscribe("nearby", function() kast.sendNearby(g, "guard.says", "hi") ; kast.sendTo(g, "guard.private") end)
+        kast.subscribe("destroy", function() kast.destroy(g) end)
+    end,
+    update = function() end,
+    onEnter = function(e) kast.log("onEnter " .. e .. (kast.has(e, "Npc") and " npc" or "")) end,
+    onLeave = function(e) kast.log("onLeave " .. e .. (kast.has(e, "Npc") and " npc" or "")) end,
+})lua");
+    TestWorld w(r.defs().defs);
+    check(w.world.load_scripts(r.root).empty(), "npc routing: loads");
+    auto& reg = w.world.registry();
+    check(reg.view<world::Npc>().size() == 1, "init created the NPC");
+    const auto g = reg.view<world::Npc>().front();
+    const uint32_t G = wire(g);
+    const auto a = w.spawn(1, 111, "Alice", 1000, 1000);
+    const auto b = w.spawn(2, 112, "Bob", 1800, 1800);
+    TimePoint t = T0;
+    const auto tick = [&] {
+        t += std::chrono::milliseconds(50);
+        w.world.tick(t);
+    };
+    // What session sid got about the NPC, in order: "spawn;update Health;move;..."
+    const auto about = [&](uint32_t sid) {
+        std::string out;
+        for (const auto& m : w.sent.bySession[sid]) {
+            if (auto* s = std::get_if<proto::Spawn>(&m); s && s->entityId == G) out += "spawn;";
+            if (auto* d = std::get_if<proto::Despawn>(&m); d && d->entityId == G) out += "despawn;";
+            if (auto* mv = std::get_if<proto::EntityMove>(&m); mv && mv->entityId == G) out += "move;";
+            if (auto* u = std::get_if<proto::ComponentUpdate>(&m); u && u->entityId == G) out += "update " + u->name + ";";
+            if (auto* x = std::get_if<proto::ComponentRemove>(&m); x && x->entityId == G) out += "remove " + x->name + ";";
+        }
+        return out;
+    };
+
+    w.sent.clear();
+    tick();
+    const auto spawns = w.sent.of<proto::Spawn>(1);
+    const auto spawnG = std::ranges::find(spawns, G, &proto::Spawn::entityId);
+    check(spawnG != spawns.end() && spawnG->kind == proto::SpawnKind::npc && spawnG->templateName == "GuardTpl" &&
+              spawnG->name == "Guard" && spawnG->pos == proto::Vec3{1010, 0, 1000} && spawnG->heading == 0.5f,
+          "a player in range gets Spawn{kind npc, template}");
+    check(about(1) == "spawn;update Health;", "then the NPC's aoi components, never its owner ones: " + about(1));
+    check(about(2).empty(), "a player out of range gets nothing about the NPC");
+    check(reg.get<world::Viewers>(g).ids == std::vector<uint32_t>{wire(a)}, "the NPC's Viewers are the players that see it");
+    check(!reg.all_of<world::Visible>(g), "an NPC has no Visible");
+
+    w.sent.clear();
+    for (int i = 1; i <= 3; ++i) {
+        w.world.bus().publish("move", {{"x", 1010 + i}, {"z", 1000}});
+        tick();
+    }
+    const auto moves = w.sent.of<proto::EntityMove>(1);
+    check(moves.size() == 3 && moves[0].pos.x == 1011 && moves[2].pos.x == 1013 && moves[2].entityId == G,
+          "each script move reaches the viewer as EntityMove, in the same tick");
+    check(about(2).empty(), "the out-of-range player gets no moves");
+
+    w.sent.clear();
+    w.world.bus().publish("hp", 9);
+    tick();
+    check(about(1) == "update Health;", "an aoi change on the NPC reaches the viewer; owner (Wallet) nobody: " + about(1));
+    bool walletSent = false;
+    for (const auto& [sid, msgs] : w.sent.bySession)
+        for (const auto& m : msgs)
+            if (auto* u = std::get_if<proto::ComponentUpdate>(&m)) walletSent |= u->name == "Wallet" && u->entityId == G;
+    check(!walletSent, "the NPC's owner component is sent to nobody");
+    check(!reg.all_of<world::Dirty>(g), "a persisted component change never marks an NPC dirty");
+
+    w.sent.clear();
+    w.world.bus().publish("nearby", nullptr);
+    tick();
+    const auto evA = w.sent.of<proto::ServerEvent>(1);
+    check(evA.size() == 1 && evA[0].name == "guard.says", "sendNearby(npc) reaches viewing players; sendTo(npc) nothing");
+    check(w.sent.of<proto::ServerEvent>(2).empty(), "sendNearby(npc) skips players out of view");
+
+    // Out of A's range and, in one jump, into B's: the grid follows (A gets Despawn, B gets Spawn and the full set).
+    w.sent.clear();
+    w.world.bus().publish("move", {{"x", 1790}, {"z", 1800}});
+    tick();
+    check(about(1) == "move;", "the jump tick: the old viewer gets the move: " + about(1));
+    w.sent.clear();
+    tick();
+    check(about(1) == "despawn;", "next tick: the NPC left A's view: Despawn: " + about(1));
+    check(about(2) == "spawn;update Health;", "and entered B's: Spawn + aoi full set: " + about(2));
+    check(reg.get<world::Viewers>(g).ids == std::vector<uint32_t>{wire(b)}, "Viewers follow");
+    w.sent.clear();
+    tick();
+    tick();
+    check(about(1).empty(), "nothing after Despawn");
+
+    // Back to A: Spawn again.
+    w.world.bus().publish("move", {{"x", 1005}, {"z", 1000}});
+    tick();
+    w.sent.clear();
+    tick();
+    check(about(1) == "spawn;update Health;", "coming back: Spawn again + full set: " + about(1));
+
+    // Both log out: the NPC is left with no viewers; it is never saved.
+    w.world.despawn(b);
+    w.world.despawn(a);
+    check(reg.get<world::Viewers>(g).ids.empty(), "a player's despawn removes it from the NPC's Viewers");
+    check(w.sent.saves.size() == 2 && w.sent.saves[0].charId == 112 && w.sent.saves[1].charId == 111,
+          "only the characters are saved");
+    w.world.bus().publish("move", {{"x", 1010}, {"z", 1000}});
+    tick(); // the NPC moves with nobody watching
+
+    // Destroy: the viewer gets Despawn, then nothing; hooks never ran for the NPC.
+    const auto c = w.spawn(3, 113, "Carol", 1000, 1000);
+    tick();
+    w.sent.clear();
+    w.world.bus().publish("destroy", nullptr);
+    tick();
+    check(about(3) == "despawn;", "kast.destroy sends Despawn to every viewer: " + about(3));
+    check(!reg.valid(g) && reg.view<world::Npc>().empty(), "the NPC is gone");
+    check(reg.get<world::Visible>(c).ids.empty(), "and out of the viewer's Visible");
+    w.sent.clear();
+    tick();
+    check(about(3).empty(), "nothing after the destroy's Despawn");
+    check(said("onEnter " + std::to_string(wire(a))) && said("onLeave " + std::to_string(wire(a))) && !said(" npc"),
+          "onEnter / onLeave fire for players, never for NPCs");
+    for (const auto& s : w.world.script_status()) check(s.ok, "npc routing: system still enabled " + s.error);
+}
+
+// An NPC destroyed in the tick a player first sees it: Spawn, then Despawn, and no component data after it.
+void checkNpcDestroyedOnEnter() {
+    LuaRoot r;
+    r.write("components/health.lua", "return { name = 'Health', replicate = 'aoi', fields = { { name = 'hp', type = 'int', default = 5 } } }");
+    r.write("systems/s.lua", R"lua(local g
+return { init = function() g = kast.create("G", {template = "T"}) ; kast.add(g, "Health") end,
+         update = function() if g then kast.destroy(g) ; g = nil end end })lua");
+    TestWorld w(r.defs().defs);
+    check(w.world.load_scripts(r.root).empty(), "destroyed-on-enter: loads");
+    w.spawn(1, 121, "Alice", 1024, 1024);
+    w.sent.clear();
+    w.world.tick(T0);
+    const auto& msgs = w.sent.bySession[1];
+    check(msgs.size() == 2 && std::holds_alternative<proto::Spawn>(msgs[0]) && std::holds_alternative<proto::Despawn>(msgs[1]),
+          "Spawn then Despawn, no component data after it (" + std::to_string(msgs.size()) + " messages)");
+}
+
+// Graceful shutdown: the players leave first, then remove_npcs removes every NPC without a message or a save.
+void checkNpcShutdown() {
+    LuaRoot r;
+    r.write("systems/s.lua", "return { init = function() kast.create('A', {template = 'T'}) ; kast.create('B', {template = 'T'}) end, update = function() end }");
+    TestWorld w({});
+    check(w.world.load_scripts(r.root).empty(), "npc shutdown: loads");
+    const auto a = w.spawn(1, 131, "Alice", 1024, 1024);
+    w.world.tick(T0);
+    w.world.shutdown_scripts();
+    w.world.despawn(a);
+    w.sent.clear();
+    w.world.remove_npcs();
+    check(w.world.registry().view<world::Npc>().empty(), "every NPC removed");
+    check(w.sent.bySession.empty() && w.sent.saves.empty(), "silently: nothing sent, nothing saved");
+}
+
+// The sample lua/ (with lua/systems/npcs.lua): the Guard is created at the spawn point, patrols its waypoints through
+// "walking" and "waiting", and a player there sees it move. 20 s of ticks.
+void checkNpcSample() {
+    LogCapture capture;
+    const fs::path root = KAST_WORLD_LUA_SAMPLE;
+    const auto defs = lua::load_component_defs(root, world::kReservedComponentNames);
+    check(defs.errors.empty(), "sample definitions load");
+    TestWorld w(defs.defs);
+    const auto errors = w.world.load_scripts(root, {"zone_cycle"});
+    check(errors.empty(), "sample systems load: " + (errors.empty() ? "" : errors[0]));
+    auto& reg = w.world.registry();
+    check(reg.view<world::Npc>().size() == 1, "the sample creates one NPC");
+    if (reg.view<world::Npc>().size() != 1) return;
+    const auto g = reg.view<world::Npc>().front();
+    check(reg.get<world::Npc>(g).name == "Guard" && reg.get<world::Npc>(g).templateName == "Guard", "Guard, template Guard");
+    w.spawn(1, 141, "Alice", 1024, 1024);
+    std::set<std::string> states;
+    float farthest = 0, maxStep = 0;
+    proto::Vec3 last = reg.get<world::Transform>(g).pos;
+    for (int i = 1; i <= 400; ++i) {
+        w.world.tick(T0 + std::chrono::milliseconds(50 * i));
+        const proto::Vec3 p = reg.get<world::Transform>(g).pos;
+        farthest = std::max(farthest, std::hypot(p.x - 1024, p.z - 1024));
+        maxStep = std::max(maxStep, std::hypot(p.x - last.x, p.z - last.z));
+        last = p;
+        states.insert(w.world.fsm().state(lua::EntityId{wire(g)}));
+    }
+    check(states == std::set<std::string>{"walking", "waiting"}, "the patrol machine walks and waits");
+    check(farthest > 10 && farthest < 15, "it patrols around the spawn point (farthest " + std::to_string(farthest) + " m)");
+    check(maxStep <= 3 * 0.05f + 1e-3f, "at 3 m/s (largest step " + std::to_string(maxStep) + " m)");
+    const auto spawns = w.sent.of<proto::Spawn>(1);
+    check(std::ranges::any_of(spawns, [](const proto::Spawn& s) { return s.kind == proto::SpawnKind::npc && s.templateName == "Guard"; }),
+          "the player at the spawn point gets the Guard's Spawn");
+    size_t moves = 0;
+    for (const auto& m : w.sent.of<proto::EntityMove>(1)) moves += m.entityId == wire(g);
+    check(moves > 200, "and its moves (" + std::to_string(moves) + ")");
+    for (const auto& s : w.world.script_status()) check(s.ok, "sample system enabled: " + s.path + " " + s.error);
+    check(!said("FAIL") && log_index("\"level\":\"error\"") == SIZE_MAX, "no Lua errors");
+}
+
 int lua_checks(int& checks) {
     checkCodec();
     checkDefinitionParsing();
@@ -1482,6 +1841,12 @@ int lua_checks(int& checks) {
     checkFsmCallbackErrors();
     checkFsmLuaApi();
     checkFsmEntities();
+    checkNpcApi();
+    checkNpcCap();
+    checkNpcRouting();
+    checkNpcDestroyedOnEnter();
+    checkNpcShutdown();
+    checkNpcSample();
     checks += g_checks;
     return g_failures;
 }

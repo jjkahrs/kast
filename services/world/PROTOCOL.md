@@ -1,6 +1,6 @@
 # Kast World Protocol
 
-**Protocol version: 1** (`kProtocolVersion` in `protocol/messages.h`, sent in `Hello`).
+**Protocol version: 2** (`kProtocolVersion` in `protocol/messages.h`, sent in `Hello`). Version 2 added `kind` and `template` to `Spawn`; a version 1 client gets `protocol_mismatch`.
 
 The encoder and decoder live in `protocol/`, a static library with no Asio, database or ECS dependency, so a game client can reuse it.
 
@@ -96,7 +96,7 @@ C = client to server, S = server to client. "Payload" lists fields in wire order
 | `0x0112` | CharDeleted | S | `u64 charId` |
 | `0x0113` | EnterWorldOk | S | `u32 entityId, vec3 pos, f32 heading` |
 | `0x0114` | CharError | S | `u16 requestOpcode, u16 code`; the request failed, the connection stays open |
-| `0x0120` | Spawn | S | `u32 entityId, str name, vec3 pos, f32 heading` |
+| `0x0120` | Spawn | S | `u32 entityId, str name, vec3 pos, f32 heading, u8 kind` (0 player, 1 npc), `str template` (an NPC's client template; empty for players) |
 | `0x0121` | Despawn | S | `u32 entityId` |
 | `0x0122` | EntityMove | S | `u32 entityId, vec3 pos, f32 heading` |
 | `0x0123` | Correction | S | `vec3 pos` (snap back to the last valid position) |
@@ -133,8 +133,9 @@ Any other opcode, including a server-to-client opcode sent by a client, gets `Di
 
 ### Interest management
 
-- **Grid:** a uniform grid with `AOI_CELL_SIZE` m cells (default 64). A player sees every other player within `AOI_VIEW_RADIUS` m (default 128) on the x/z plane.
-- **Updates:** each tick, a player gets `Spawn` for anyone who came into range and `Despawn` for anyone who left or logged out.
+- **Grid:** a uniform grid with `AOI_CELL_SIZE` m cells (default 64). A player sees every other player and every NPC within `AOI_VIEW_RADIUS` m (default 128) on the x/z plane.
+- **Updates:** each tick, a player gets `Spawn` for anyone who came into range and `Despawn` for anyone who left, logged out or (an NPC) was destroyed.
+- **NPCs:** server-side entities that Lua systems create, move and destroy (README, "Lua components and systems"). Their `Spawn` has `kind` 1 and the `template` the system chose; a client shows them however it likes (the engine clones the scene entity of that name). Their moves arrive as `EntityMove`, like a player's. NPCs see nothing themselves.
 - **Entity ids:** `entityId` is valid only while the entity exists. A later entity may reuse its slot with a different id.
 
 ### Say chat
@@ -156,7 +157,7 @@ server-authoritative: there is no client-to-server component message, and a clie
   - `vec3` / `quat` as arrays `[x, y, z]` / `[x, y, z, w]`, enums by name, arrays as JSON arrays.
 - **`ComponentRemove`:** the entity no longer has the component.
 - **Who gets them,** by the definition's `replicate` key:
-  - `"owner"`: only the owning player's session.
+  - `"owner"`: only the owning player's session. An NPC has no owner, so nobody.
   - `"aoi"`: the owner and every session that currently sees the entity.
   - `"none"` (the default): never sent.
 - **When:** at most once per component per tick (20 Hz), after the Lua systems ran, and only if the value differs from what was last sent. Unchanged components are never resent.
@@ -176,8 +177,9 @@ that sends one gets `Disconnect{unexpected_message}`.
 - **`json`:** the payload as compact JSON: any plain-data value (`null` when the system sent none). Bytes in Lua
   strings that aren't UTF-8 are replaced with U+FFFD.
 - **Who gets it:**
-  - `sendTo(e, ...)`: the session of character `e`.
-  - `sendNearby(e, ...)`: `e`'s session and every session that currently sees `e` (the `"aoi"` audience).
+  - `sendTo(e, ...)`: the session of character `e`. An NPC has no session: nobody.
+  - `sendNearby(e, ...)`: `e`'s session and every session that currently sees `e` (the `"aoi"` audience). For an NPC,
+    the sessions that see it.
   - `broadcast(...)`: every player in the zone.
   - The audience is taken when the event is sent, not when the system queued it. A character no longer in the world
     gets nothing, and neither does anyone around it.
@@ -198,7 +200,7 @@ Used in `Disconnect.reason` (D) and `CharError.code` (E).
 | Value | Name | Where | Meaning |
 |---|---|---|---|
 | 0 | `ok` | | |
-| 1 | `protocol_mismatch` | D | `Hello.protocolVersion` is not 1 |
+| 1 | `protocol_mismatch` | D | `Hello.protocolVersion` is not 2 |
 | 2 | `malformed` | D | Payload doesn't decode exactly (short, trailing bytes, bad enum, NaN) |
 | 3 | `unknown_opcode` | D | Opcode not in the table |
 | 4 | `frame_too_large` | D | Frame `length` over `MAX_FRAME_BYTES` |

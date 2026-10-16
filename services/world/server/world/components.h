@@ -69,12 +69,24 @@ struct ReplicatedState {
 
 struct ScriptsLeft {}; // tag: onLeave already ran (graceful shutdown runs it for everyone first)
 
-// Names no Lua component may take: the Lua built-ins (read-only Character and Transform, writable StateMachine) and
-// every C++ component here, in lua/components.h and in lua/state_machines.h.
+// A server-created NPC (kast.create): no session, never saved. name and templateName go to clients in Spawn.
+struct Npc {
+    std::string name;
+    std::string templateName;
+};
+
+// The players that currently see this NPC, sorted wire ids. An NPC has no Visible: it sees nothing, and AOI is
+// tracked from the players' side (aoi_system keeps this in step with their Visible).
+struct Viewers {
+    std::vector<uint32_t> ids;
+};
+
+// Names no Lua component may take: the Lua built-ins (read-only Character and Npc, Transform, writable StateMachine)
+// and every C++ component here, in lua/components.h and in lua/state_machines.h.
 inline constexpr const char* kReservedComponentNames[] = {
-    "Character",    "Transform",       "StateMachine", "SessionLink",         "CharacterRef",  "MoveState",
-    "PendingMoves", "PendingSay",      "ChatLimit",    "AoiCell",             "Visible",       "Moved",
-    "Dirty",        "SaveTimer",       "ReplicatedState", "ScriptsLeft",      "PreservedComponents",
-    "ComponentData", "StateMachineRuntime"};
+    "Character",    "Transform",       "StateMachine", "Npc",                 "SessionLink",   "CharacterRef",
+    "MoveState",    "PendingMoves",    "PendingSay",   "ChatLimit",           "AoiCell",       "Visible",
+    "Viewers",      "Moved",           "Dirty",        "SaveTimer",           "ReplicatedState", "ScriptsLeft",
+    "PreservedComponents", "ComponentData", "StateMachineRuntime"};
 
 } // namespace kast::world

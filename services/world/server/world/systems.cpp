@@ -7,7 +7,32 @@
 namespace kast::world {
 namespace {
 entt::entity from_wire(uint32_t id) { return entt::entity{id}; }
+
+// The players that currently see e (see audience).
+std::vector<entt::entity> viewers_of(const entt::registry& reg, entt::entity e) {
+    std::vector<entt::entity> out;
+    if (const auto* viewers = reg.try_get<Viewers>(e)) {
+        for (uint32_t id : viewers->ids) out.push_back(from_wire(id));
+        return out;
+    }
+    for (uint32_t id : reg.get<Visible>(e).ids)
+        if (reg.all_of<SessionLink>(from_wire(id))) out.push_back(from_wire(id));
+    return out;
+}
 } // namespace
+
+std::vector<uint32_t> audience(const entt::registry& reg, entt::entity e) {
+    std::vector<uint32_t> sessions;
+    for (entt::entity viewer : viewers_of(reg, e)) sessions.push_back(reg.get<SessionLink>(viewer).sessionId);
+    return sessions;
+}
+
+proto::Spawn spawn_message(const entt::registry& reg, entt::entity e) {
+    const auto& tf = reg.get<Transform>(e);
+    if (const auto* npc = reg.try_get<Npc>(e))
+        return {wire_id(e), npc->name, tf.pos, tf.heading, proto::SpawnKind::npc, npc->templateName};
+    return {wire_id(e), reg.get<CharacterRef>(e).name, tf.pos, tf.heading, proto::SpawnKind::player, ""};
+}
 
 // Validates each queued Move against speed and bounds; a rejected move snaps the client back with Correction.
 void movement_system(entt::registry& reg, const MoveRules& rules, const Send& send, TimePoint now) {
@@ -30,9 +55,7 @@ void movement_system(entt::registry& reg, const MoveRules& rules, const Send& se
     }
 }
 
-// Re-buckets movers, then diffs every player's view: Spawn for entities that came into range, Despawn for those
-// that left. Range is symmetric, so each player only handles its own view.
-void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send) {
+void aoi_rebucket(entt::registry& reg, AoiGrid& grid) {
     for (auto [e, tf, cell] : reg.view<Moved, Transform, AoiCell>().each()) {
         const CellKey c = grid.cell_of(tf.pos.x, tf.pos.z);
         if (c == cell.cell) continue;
@@ -40,6 +63,12 @@ void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send) {
         grid.insert(wire_id(e), c);
         cell.cell = c;
     }
+}
+
+// Re-buckets movers, then diffs every player's view: Spawn for entities that came into range, Despawn for those
+// that left. Range is symmetric, so each player only handles its own view; an NPC's Viewers follow the players'.
+void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send) {
+    aoi_rebucket(reg, grid);
     auto posOf = [&](uint32_t id, float& x, float& z) {
         const auto& t = reg.get<Transform>(from_wire(id));
         x = t.pos.x;
@@ -51,27 +80,29 @@ void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send) {
         diff_sorted(vis.ids, now, entered, left);
         for (uint32_t id : entered) {
             const auto other = from_wire(id);
-            const auto& ot = reg.get<Transform>(other);
-            send(link.sessionId, proto::Spawn{id, reg.get<CharacterRef>(other).name, ot.pos, ot.heading});
+            if (auto* viewers = reg.try_get<Viewers>(other)) insert_sorted(viewers->ids, wire_id(e));
+            send(link.sessionId, spawn_message(reg, other));
         }
-        for (uint32_t id : left) send(link.sessionId, proto::Despawn{id});
+        for (uint32_t id : left) {
+            if (auto* viewers = reg.try_get<Viewers>(from_wire(id))) erase_sorted(viewers->ids, wire_id(e));
+            send(link.sessionId, proto::Despawn{id});
+        }
         vis.ids = std::move(now);
         vis.entered = entered;
     }
 }
 
-// Accepted moves go to every observer in range; never back to the mover.
+// Accepted player moves and script NPC moves go to every player that sees the mover; never back to the mover.
 void replication_system(entt::registry& reg, const Send& send) {
-    for (auto [e, tf, vis] : reg.view<Moved, Transform, Visible>().each()) {
+    for (auto [e, tf] : reg.view<Moved, Transform>().each()) {
         const proto::EntityMove msg{wire_id(e), tf.pos, tf.heading};
-        for (uint32_t id : vis.ids) send(reg.get<SessionLink>(from_wire(id)).sessionId, msg);
+        for (uint32_t sid : audience(reg, e)) send(sid, msg);
     }
 }
 
 // "say": sanitized, rate limited, delivered to the sender and everyone in range.
 void chat_system(entt::registry& reg, const ChatRules& rules, const Send& send, TimePoint now) {
-    for (auto [e, pending, limit, ch, link, vis] :
-         reg.view<PendingSay, ChatLimit, CharacterRef, SessionLink, Visible>().each()) {
+    for (auto [e, pending, limit, ch, link] : reg.view<PendingSay, ChatLimit, CharacterRef, SessionLink>().each()) {
         for (const auto& text : pending.texts) {
             if (!limit.limiter.allow(now)) {
                 log::debug("chat rate limited", {{"char", ch.charId}});
@@ -84,7 +115,7 @@ void chat_system(entt::registry& reg, const ChatRules& rules, const Send& send, 
             }
             const proto::ChatMsg msg{ch.name, std::move(*clean)};
             send(link.sessionId, msg);
-            for (uint32_t id : vis.ids) send(reg.get<SessionLink>(from_wire(id)).sessionId, msg);
+            for (uint32_t sid : audience(reg, e)) send(sid, msg);
         }
         pending.texts.clear();
     }
@@ -103,15 +134,19 @@ void component_replication_system(entt::registry& reg, const lua::Defs& defs, co
         if (def->replicate != lua::Replicate::none) types.push_back({def.get(), &lua::pool(reg, def->name)});
     if (types.empty()) return;
 
-    const auto toViewers = [&](entt::entity e, const Visible& vis, const proto::Message& msg) {
-        for (uint32_t id : vis.ids) {
-            const auto viewer = from_wire(id);
+    const auto toViewers = [&](entt::entity e, const proto::Message& msg) {
+        for (entt::entity viewer : viewers_of(reg, e)) {
             const auto& entered = reg.get<Visible>(viewer).entered;
             if (std::binary_search(entered.begin(), entered.end(), wire_id(e))) continue; // gets the full set below
             send(reg.get<SessionLink>(viewer).sessionId, msg);
         }
     };
-    for (auto [e, rep, vis, link, ch] : reg.view<ReplicatedState, Visible, SessionLink, CharacterRef>().each()) {
+    // An NPC has no owner: its owner components reach nobody, its aoi ones only the players that see it.
+    const auto toOwner = [&](const SessionLink* link, const proto::Message& msg) {
+        if (link) send(link->sessionId, msg);
+    };
+    for (auto [e, rep] : reg.view<ReplicatedState>().each()) {
+        const auto* link = reg.try_get<SessionLink>(e);
         for (const auto& [def, pool] : types) {
             const auto sent = rep.sent.find(def->name);
             const bool aoi = def->replicate == lua::Replicate::aoi;
@@ -120,8 +155,8 @@ void component_replication_system(entt::registry& reg, const lua::Defs& defs, co
                 rep.sent.erase(sent);
                 rep.oversize.erase(def->name);
                 const proto::ComponentRemove msg{wire_id(e), def->name};
-                send(link.sessionId, msg);
-                if (aoi) toViewers(e, vis, msg);
+                toOwner(link, msg);
+                if (aoi) toViewers(e, msg);
                 continue;
             }
             const auto& value = pool->get(e).value;
@@ -131,13 +166,16 @@ void component_replication_system(entt::registry& reg, const lua::Defs& defs, co
             if (!proto::ComponentUpdate::fits(def->name.size(), json.size())) {
                 if (rep.oversize.insert(def->name).second)
                     log::error("component too large to replicate; not sent until it fits",
-                               {{"char", ch.charId}, {"component", def->name}, {"bytes", json.size()}});
+                               {{link ? "char" : "npc", link ? nlohmann::json(reg.get<CharacterRef>(e).charId)
+                                                              : nlohmann::json(reg.get<Npc>(e).name)},
+                                {"component", def->name},
+                                {"bytes", json.size()}});
                 continue;
             }
             rep.oversize.erase(def->name);
             const proto::ComponentUpdate msg{wire_id(e), def->name, std::move(json)};
-            send(link.sessionId, msg);
-            if (aoi) toViewers(e, vis, msg);
+            toOwner(link, msg);
+            if (aoi) toViewers(e, msg);
         }
     }
     // Viewers that saw an entity come into view this tick (after its Spawn): every aoi component it has, as sent.
@@ -163,10 +201,10 @@ void client_event_system(entt::registry& reg, std::vector<lua::ClientEvent> even
             continue;
         }
         const auto e = from_wire(event.entity);
-        if (!reg.valid(e) || !reg.all_of<SessionLink, Visible>(e)) continue; // left already: nothing to send
-        send(reg.get<SessionLink>(e).sessionId, msg);
+        if (!reg.valid(e) || !reg.any_of<Visible, Viewers>(e)) continue; // left already: nothing to send
+        if (const auto* link = reg.try_get<SessionLink>(e)) send(link->sessionId, msg); // an NPC has no client
         if (event.to == lua::ClientEvent::To::nearby)
-            for (uint32_t id : reg.get<Visible>(e).ids) send(reg.get<SessionLink>(from_wire(id)).sessionId, msg);
+            for (uint32_t sid : audience(reg, e)) send(sid, msg);
     }
 }
 

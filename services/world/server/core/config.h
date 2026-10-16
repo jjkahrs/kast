@@ -50,6 +50,7 @@ struct Config {
     float maxSpeed = 10, speedTolerance = 1, moveBurstSec = 1;
     float aoiCellSize = 64, aoiViewRadius = 128;
     uint32_t maxCharsPerAccount = 10;
+    uint32_t maxNpcs = 10000;
     uint32_t chatMaxBytes = 256;
     uint32_t chatRateCount = 5;
     uint32_t chatRateWindowMs = 10000;

@@ -7,6 +7,7 @@
 #include <bimg/bimg.h>
 #include <bx/file.h>
 
+#include <charconv>
 #include <cstdarg>
 #include <cstdio>
 #include <format>
@@ -15,6 +16,35 @@
 namespace kast {
 namespace {
 
+
+// Creates the window at config.position, else at KAST_WINDOW_POS, else where the OS puts it.
+SDL_Window* createWindow(const AppConfig& config)
+{
+    std::optional<std::pair<int, int>> position = config.position;
+    if (const char* env = SDL_getenv("KAST_WINDOW_POS"); !position && env && *env) {
+        position = parseWindowPos(env);
+        if (!position)
+            log::warn(std::format("Ignored KAST_WINDOW_POS '{}': expected X,Y", env));
+    }
+    const SDL_PropertiesID props = SDL_CreateProperties();
+    SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, config.title);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, config.width);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, config.height);
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
+    if (position) {
+        SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, position->first);
+        SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, position->second);
+    }
+    SDL_Window* window = SDL_CreateWindowWithProperties(props);
+    SDL_DestroyProperties(props);
+    if (window && position) {
+        int x = 0, y = 0;
+        SDL_GetWindowPosition(window, &x, &y);
+        const char* display = SDL_GetDisplayName(SDL_GetDisplayForWindow(window));
+        log::info(std::format("Window at {}, {} on display '{}'", x, y, display ? display : "?"));
+    }
+    return window;
+}
 
 // Routes bgfx callbacks to the logger and writes screenshots as PNG.
 class BgfxCallback final : public bgfx::CallbackI {
@@ -77,6 +107,21 @@ void shutdownSdl(SDL_Window* window)
 
 } // namespace
 
+std::optional<std::pair<int, int>> parseWindowPos(std::string_view text)
+{
+    const size_t comma = text.find(',');
+    if (comma == std::string_view::npos)
+        return std::nullopt;
+    const auto number = [](std::string_view part, int& out) {
+        const auto [end, ec] = std::from_chars(part.data(), part.data() + part.size(), out);
+        return ec == std::errc{} && end == part.data() + part.size() && !part.empty();
+    };
+    int x = 0, y = 0;
+    if (!number(text.substr(0, comma), x) || !number(text.substr(comma + 1), y))
+        return std::nullopt;
+    return std::pair{x, y};
+}
+
 int run(const AppConfig& config, const AppHooks& hooks)
 {
     if (!SDL_Init(SDL_INIT_VIDEO))
@@ -85,7 +130,7 @@ int run(const AppConfig& config, const AppHooks& hooks)
 
     if (!config.activate) // show without taking focus from the user's app
         SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
-    SDL_Window* window = SDL_CreateWindow(config.title, config.width, config.height, SDL_WINDOW_RESIZABLE);
+    SDL_Window* window = createWindow(config);
     if (!window) {
         int code = fail(config, std::format("SDL_CreateWindow failed: {}", SDL_GetError()), nullptr);
         shutdownSdl(nullptr);

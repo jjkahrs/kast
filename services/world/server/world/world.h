@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 
 #include <entt/entity/registry.hpp>
 
@@ -22,6 +23,7 @@ struct WorldRules {
     Millis chatRateWindow{10000};
     Millis saveInterval{60000};
     float tickSeconds = 0.05f; // dt passed to Lua update
+    size_t maxNpcs = 10000;    // kast.create raises past this
 };
 
 class World {
@@ -45,6 +47,16 @@ public:
     // Runs onLeave and sends the client events it queued, saves the character, sends Despawn to everyone who could
     // see it, removes it.
     void despawn(entt::entity e);
+    // An NPC (kast.create) at pos (clamped to the zone and MIN_Y/MAX_Y), or the spawn point. Players in range get its
+    // Spawn on the next tick. It has no session and is never saved.
+    entt::entity create_npc(std::string name, std::string templateName, std::optional<proto::Vec3> pos, float heading);
+    // Sends Despawn to every player who sees the NPC, removes it.
+    void destroy_npc(entt::entity e);
+    // Graceful shutdown, after the players are gone: removes every NPC; nothing to send, nothing to save.
+    void remove_npcs();
+    // pos inside the zone on x/z and within MIN_Y/MAX_Y.
+    proto::Vec3 clamp_to_zone(proto::Vec3 pos) const;
+
     void push_move(entt::entity e, const proto::Move& m);
     void push_say(entt::entity e, std::string text);
 
@@ -59,7 +71,7 @@ private:
     lua::Defs defs_;
     entt::registry reg_;
     AoiGrid grid_;
-    lua::Runtime lua_; // after reg_: it holds a reference
+    lua::Runtime lua_; // after reg_ and grid_: it holds a reference and creates NPCs through this World
     size_t population_ = 0;
 };
 
