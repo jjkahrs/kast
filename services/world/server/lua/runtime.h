@@ -8,6 +8,7 @@
 #include "event_bus.h"
 #include "state_machines.h"
 
+#include <map.h>
 #include <messages.h>
 
 #include <entt/entity/registry.hpp>
@@ -36,15 +37,21 @@ struct ClientEvent {
     std::string json;
 };
 
-// How kast.create / kast.destroy / an NPC Transform set reach the world, which owns the AOI grid and the sends.
+// How kast.create / kast.destroy / kast.transfer / an NPC Transform set reach the world, which owns the maps, the AOI
+// grid and the sends.
 // Runtime checks every argument first; these only run for valid ones.
 struct NpcHooks {
-    std::function<entt::entity(std::string name, std::string templateName, std::optional<proto::Vec3> pos,
-                               float heading)>
-        create;                                     // pos empty: the spawn point
-    std::function<void(entt::entity)> destroy;      // an existing NPC
-    std::function<proto::Vec3(proto::Vec3)> clamp;  // into the zone and MIN_Y/MAX_Y
-    size_t max = 0;                                 // MAX_NPCS
+    std::function<entt::entity(std::string name, std::string templateName, std::optional<uint16_t> map,
+                               std::optional<proto::Vec3> pos, float heading)>
+        create;                                               // map empty: START_MAP; pos empty: its spawn point
+    std::function<void(entt::entity)> destroy;                // an existing NPC
+    std::function<proto::Vec3(uint16_t map, proto::Vec3)> clamp; // onto the (loaded) map's ground, within MIN_Y/MAX_Y
+    std::function<const map::MapInfo*(uint16_t id)> map;      // nullptr: not loaded
+    std::function<std::optional<float>(uint16_t map, float x, float z)> ground; // Maps::ground; nullopt: off the map
+    std::function<std::vector<proto::Vec3>(uint16_t map, proto::Vec3 from, proto::Vec3 to)> path; // Nav::path
+    std::function<bool(entt::entity, uint16_t map, proto::Vec3 pos, float heading)> transfer; // World::transfer
+    std::function<const map::Spawn*(uint32_t record)> spawn;  // a SpawnRef's spawn file entry
+    size_t max = 0;                                           // MAX_NPCS
 };
 
 class Runtime {

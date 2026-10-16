@@ -19,8 +19,9 @@ namespace kast {
 
 class GameServer {
 public:
-    GameServer(asio::io_context& io, const Config& cfg, asio::ssl::context& tls, db::DbWorker& db, TokenService& tokens,
-               lua::Defs defs);
+    // maps must outlive the server and hold cfg.startMap.
+    GameServer(asio::io_context& io, const Config& cfg, const world::Maps& maps, asio::ssl::context& tls,
+               db::DbWorker& db, TokenService& tokens, lua::Defs defs);
 
     // Loads the Lua systems under LUA_ROOT and runs their init; every error (empty: OK to start).
     std::vector<std::string> load_scripts() { return world_.load_scripts(cfg_.luaRoot, cfg_.gameStateMachines); }
@@ -59,6 +60,7 @@ private:
 
     asio::io_context& io_;
     const Config& cfg_;
+    const world::Maps& maps_;
     asio::ssl::context& tls_;
     db::DbWorker& db_;
     TokenService& tokens_;

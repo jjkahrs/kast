@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "areas": [
+    {"id": "eastvale", "name": "Eastvale", "priority": 0, "rect": [0, 0, 2048, 2048],
+     "flags": {"pvp": false, "noMount": false}, "music": "sounds/eastvale.ogg"},
+    {"id": "goldshire", "name": "Goldshire", "parent": "eastvale", "priority": 10,
+     "polygon": [[1000, 980], [1035, 980], [1035, 1030], [1000, 1030]], "y": [-50, 200],
+     "flags": {"pvp": true}},
+    {"id": "cave_mouth", "name": "Cave Entrance", "parent": "eastvale", "priority": 20,
+     "rect": [1040, 990, 1050, 1000],
+     "portal": {"map": 2, "pos": [256, 0, 240], "heading": 3.14}},
+    {"id": "hills_gate", "name": "Hills Gate", "parent": "eastvale", "priority": 20,
+     "rect": [1060, 1020, 1070, 1030],
+     "portal": {"map": 3, "pos": [256, 30, 256], "heading": 0}}
+  ]
+}

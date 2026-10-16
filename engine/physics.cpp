@@ -1,6 +1,7 @@
 #include "physics.h"
 
 #include "log.h"
+#include "terrain.h"
 
 // Jolt.h must come first.
 #include <Jolt/Jolt.h>
@@ -18,6 +19,7 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/PhysicsSystem.h>
@@ -171,6 +173,26 @@ JPH::Ref<JPH::Shape> colliderShape(const Collider& c, const bx::Vec3& worldScale
     return new JPH::RotatedTranslatedShape(toJolt(offset), JPH::Quat::sIdentity(), shape);
 }
 
+// A terrain tile's ground with its (0, 0) sample at the origin: Jolt's HeightFieldShape splits each quad along the
+// same diagonal as map::for_each_triangle. 257 samples are padded to whole 8-sample blocks with no-collision (Jolt
+// reads whole blocks when sizing samples); the bits per sample keep quantization under kTerrainError.
+constexpr uint32_t kTerrainBlock = 8;
+constexpr uint32_t kTerrainSamples = (map::kTileSamples + kTerrainBlock - 1) / kTerrainBlock * kTerrainBlock; // 264
+constexpr float kTerrainError = 0.02f; // metres
+JPH::ShapeSettings::ShapeResult terrainShape(const TerrainTileData& tile)
+{
+    JPH::HeightFieldShapeSettings settings;
+    settings.mSampleCount = kTerrainSamples;
+    settings.mBlockSize = kTerrainBlock;
+    settings.mHeightSamples.resize(kTerrainSamples * kTerrainSamples, JPH::HeightFieldShapeConstants::cNoCollisionValue);
+    for (uint32_t v = 0; v < uint32_t(map::kTileSamples); ++v)
+        for (uint32_t u = 0; u < uint32_t(map::kTileSamples); ++u)
+            settings.mHeightSamples[v * kTerrainSamples + u] =
+                map::sample_height(tile.heights[v * map::kTileSamples + u], *tile.map);
+    settings.mBitsPerSample = std::clamp(settings.CalculateBitsPerSampleForError(kTerrainError), 1u, 8u);
+    return settings.Create();
+}
+
 // The character's capsule with its bottom at the origin.
 JPH::Ref<JPH::Shape> characterShape(const CharacterController& c, float scale)
 {
@@ -223,6 +245,7 @@ struct Physics::World {
         std::optional<Collider> collider;
         std::optional<Rigidbody> rigidbody;
         std::optional<CharacterController> controller;
+        std::shared_ptr<const TerrainTileData> terrain; // a TerrainTile's static ground (no collider)
         bx::Vec3 scale{1.0f, 1.0f, 1.0f};
         // The world pose physics last saw or wrote; a different one is a teleport.
         bx::Vec3 position{0.0f, 0.0f, 0.0f};
@@ -359,9 +382,18 @@ void Physics::World::step()
 {
     system.SetGravity(toJolt(scene.physics.gravity));
     sync();
+    // On terrain, characters climb what the map's navmesh will (nav.maxSlopeDeg); elsewhere their own limit.
+    std::optional<float> navSlope;
+    for (const auto& [entity, body] : bodies)
+        if (body.terrain && body.terrain->map->nav) {
+            navSlope = body.terrain->map->nav->maxSlopeDeg;
+            break;
+        }
     for (auto& [entity, body] : bodies)
-        if (body.character)
+        if (body.character) {
+            body.character->SetMaxSlopeAngle(JPH::DegreesToRadians(navSlope.value_or(body.controller->maxSlopeDegrees)));
             moveCharacter(body);
+        }
     system.Update(kPhysicsStep, 1, &temp, &jobs);
     for (auto& [entity, body] : bodies)
         if (body.movedKinematic) {
@@ -379,7 +411,7 @@ void Physics::World::sync()
     std::vector<entt::entity> gone;
     for (const auto& [entity, body] : bodies)
         if (!scene.valid(entity) || physicsConflict(registry, entity) ||
-            !registry.any_of<Collider, CharacterController>(entity))
+            !registry.any_of<Collider, CharacterController, TerrainTile>(entity))
             gone.push_back(entity);
     for (entt::entity entity : gone)
         destroy(entity);
@@ -387,6 +419,18 @@ void Physics::World::sync()
     // Depth-first, so bodies are created in a stable order (Jolt's results depend on it).
     // ponytail: visits every entity each step; keep a physics entity list if scenes get huge.
     scene.forEachDepthFirst([&](entt::entity entity) {
+        if (const auto* tile = registry.try_get<TerrainTile>(entity); tile && tile->data) {
+            const auto it = bodies.find(entity);
+            if (it != bodies.end() && it->second.terrain == tile->data)
+                return; // static at its map position: its Transform is ignored
+            if (it != bodies.end())
+                destroy(entity);
+            Body wanted;
+            wanted.terrain = tile->data;
+            wanted.position = {float(tile->data->tile.x) * map::kTileSize, 0.0f, float(tile->data->tile.z) * map::kTileSize};
+            create(entity, std::move(wanted));
+            return;
+        }
         const auto* collider = registry.try_get<Collider>(entity);
         const auto* rigidbody = registry.try_get<Rigidbody>(entity);
         const auto* controller = registry.try_get<CharacterController>(entity);
@@ -448,6 +492,19 @@ void Physics::World::create(entt::entity entity, Body body)
                                                    0, &system);
         body.character->SetListener(&characterContacts);
         body.body = body.character->GetInnerBodyID();
+    } else if (body.terrain) {
+        const JPH::ShapeSettings::ShapeResult shape = terrainShape(*body.terrain);
+        if (shape.HasError()) {
+            log::error(std::format("Physics: terrain tile {}: {}", describe(scene, entity), shape.GetError().c_str()));
+            return;
+        }
+        const JPH::BodyCreationSettings settings(shape.Get(), JPH::RVec3(toJolt(body.position)), JPH::Quat::sIdentity(),
+                                                 JPH::EMotionType::Static, kStaticLayer);
+        body.body = bi().CreateAndAddBody(settings, JPH::EActivation::DontActivate);
+        if (body.body.IsInvalid()) {
+            log::error(std::format("Physics: too many bodies, terrain tile {} has none", describe(scene, entity)));
+            return;
+        }
     } else {
         const Collider& c = *body.collider;
         const MotionType motion = body.motion();

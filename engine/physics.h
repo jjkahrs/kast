@@ -8,7 +8,8 @@
 #include <utility>
 #include <vector>
 
-// Physics: a Jolt world built from a scene's Collider / Rigidbody / CharacterController entities for one Play session
+// Physics: a Jolt world built from a scene's Collider / Rigidbody / CharacterController entities (and TerrainTiles as
+// static height fields) for one Play session
 // (owned by LuaSystems, used from Lua as kast.physics). Never runs in edit mode. See README "Physics".
 namespace kast {
 

@@ -477,7 +477,8 @@ void Panels::drawInspector(Document& doc)
                 ImGui::Separator();
                 bool any = false;
                 for (const kast::ComponentType& type : types) {
-                    if (kast::hasComponent(registry, entity, type))
+                    if (kast::hasComponent(registry, entity, type) ||
+                        (type.meta() && kast::componentInfo(type.meta()).runtime))
                         continue;
                     any = true;
                     if (ImGui::Selectable(type.displayName())) {

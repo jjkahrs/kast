@@ -13,13 +13,14 @@ CharRow to_row(const Row& r) {
     c.id = std::stoull(*r[0]);
     c.accountId = std::stoull(*r[1]);
     c.name = *r[2];
-    c.pos = {std::stof(*r[3]), std::stof(*r[4]), std::stof(*r[5])};
-    c.heading = std::stof(*r[6]);
-    if (r.size() > 7 && r[7]) c.components = *r[7];
+    c.mapId = static_cast<uint16_t>(std::stoul(*r[3]));
+    c.pos = {std::stof(*r[4]), std::stof(*r[5]), std::stof(*r[6])};
+    c.heading = std::stof(*r[7]);
+    if (r.size() > 8 && r[8]) c.components = *r[8];
     return c;
 }
 
-constexpr const char* kColumns = "id, account_id, name, pos_x, pos_y, pos_z, heading";
+constexpr const char* kColumns = "id, account_id, name, map_id, pos_x, pos_y, pos_z, heading";
 
 } // namespace
 
@@ -32,18 +33,18 @@ std::vector<CharRow> CharRepo::list(uint64_t accountId) {
     return out;
 }
 
-CreateResult CharRepo::create(uint64_t accountId, const std::string& name, proto::Vec3 spawn, float heading,
-                              uint32_t maxChars) {
+CreateResult CharRepo::create(uint64_t accountId, const std::string& name, uint16_t mapId, proto::Vec3 spawn,
+                              float heading, uint32_t maxChars) {
     CreateResult result;
     auto count = c_.exec("SELECT COUNT(*) FROM characters WHERE realm_id = ? AND account_id = ? AND deleted_at IS NULL",
                          {uint64_t{realm_}, accountId});
     if (std::stoull(*count.rows[0][0]) >= maxChars) { result.code = proto::Code::char_limit; return result; }
     try {
-        auto ins = c_.exec("INSERT INTO characters (realm_id, account_id, name, pos_x, pos_y, pos_z, heading, created_at) "
-                           "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                           {uint64_t{realm_}, accountId, name, double{spawn.x}, double{spawn.y}, double{spawn.z},
-                            double{heading}, now_utc()});
-        result.row = {ins.insertId, accountId, name, spawn, heading, {}};
+        auto ins = c_.exec("INSERT INTO characters (realm_id, account_id, name, map_id, pos_x, pos_y, pos_z, heading, "
+                           "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                           {uint64_t{realm_}, accountId, name, uint64_t{mapId}, double{spawn.x}, double{spawn.y},
+                            double{spawn.z}, double{heading}, now_utc()});
+        result.row = {ins.insertId, accountId, name, mapId, spawn, heading, {}};
     } catch (const DbError& e) {
         if (e.code != kErDupEntry) throw;
         result.code = proto::Code::name_taken;
@@ -69,14 +70,15 @@ std::optional<CharRow> CharRepo::enter(uint64_t accountId, uint64_t charId) {
 
 void CharRepo::save(const CharSave& s) {
     if (!s.components) {
-        c_.exec("UPDATE characters SET pos_x = ?, pos_y = ?, pos_z = ?, heading = ? WHERE id = ? AND realm_id = ?",
-                {double{s.pos.x}, double{s.pos.y}, double{s.pos.z}, double{s.heading}, s.charId, uint64_t{realm_}});
+        c_.exec("UPDATE characters SET map_id = ?, pos_x = ?, pos_y = ?, pos_z = ?, heading = ? WHERE id = ? AND realm_id = ?",
+                {uint64_t{s.mapId}, double{s.pos.x}, double{s.pos.y}, double{s.pos.z}, double{s.heading}, s.charId,
+                 uint64_t{realm_}});
         return;
     }
-    c_.exec("UPDATE characters SET pos_x = ?, pos_y = ?, pos_z = ?, heading = ?, components = ? "
+    c_.exec("UPDATE characters SET map_id = ?, pos_x = ?, pos_y = ?, pos_z = ?, heading = ?, components = ? "
             "WHERE id = ? AND realm_id = ?",
-            {double{s.pos.x}, double{s.pos.y}, double{s.pos.z}, double{s.heading}, *s.components, s.charId,
-             uint64_t{realm_}});
+            {uint64_t{s.mapId}, double{s.pos.x}, double{s.pos.y}, double{s.pos.z}, double{s.heading}, *s.components,
+             s.charId, uint64_t{realm_}});
 }
 
 } // namespace kast::db

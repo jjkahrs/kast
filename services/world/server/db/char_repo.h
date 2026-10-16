@@ -14,6 +14,7 @@ struct CharRow {
     uint64_t id = 0;
     uint64_t accountId = 0;
     std::string name;
+    uint16_t mapId = 0;
     proto::Vec3 pos;
     float heading = 0;
     std::string components; // the components JSON column (Lua components, see lua/components.h); empty if NULL
@@ -21,6 +22,7 @@ struct CharRow {
 
 struct CharSave {
     uint64_t charId = 0;
+    uint16_t mapId = 0;
     proto::Vec3 pos;
     float heading = 0;
     std::optional<std::string> components; // nullopt: leave the column as it is
@@ -38,7 +40,7 @@ public:
     std::vector<CharRow> list(uint64_t accountId);
     // ponytail: count-then-insert is race-free only with one writer per realm (this server's single DB thread);
     // several world processes per realm would need SELECT ... FOR UPDATE in a transaction.
-    CreateResult create(uint64_t accountId, const std::string& name, proto::Vec3 spawn, float heading,
+    CreateResult create(uint64_t accountId, const std::string& name, uint16_t mapId, proto::Vec3 spawn, float heading,
                         uint32_t maxChars);
     bool soft_delete(uint64_t accountId, uint64_t charId); // false = not found / not owned / already deleted
     std::optional<CharRow> enter(uint64_t accountId, uint64_t charId); // also stamps last_login_at

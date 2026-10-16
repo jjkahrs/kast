@@ -1,8 +1,10 @@
 #include "scenarios.h"
 
+#include <heights.h>
 #include <jwt-cpp/traits/nlohmann-json/defaults.h>
 
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -399,6 +401,7 @@ asio::awaitable<void> persist_relogin(Ctx& x) {
     proto::EnterWorldOk e1;
     auto c = co_await x.enter("s10", e1);
     if (!c) co_return;
+    x.check.expect(e1.map == 1, "new character enters START_MAP: EnterWorldOk.map " + std::to_string(e1.map));
     const auto p = co_await walk(*c, e1.pos, -15, 9);
     co_await sleep_for(Millis(300));
     c->close();
@@ -406,6 +409,7 @@ asio::awaitable<void> persist_relogin(Ctx& x) {
     proto::EnterWorldOk e2;
     auto again = co_await x.enter("s10", e2);
     x.check.expect(again && same_pos(e2.pos, p), "position kept across logout/login: " + fmt(p) + " (got " + fmt(e2.pos) + ")");
+    x.check.expect(again && e2.map == e1.map, "map kept across logout/login: " + std::to_string(e2.map));
     if (again) again->close();
 }
 
@@ -452,8 +456,8 @@ asio::awaitable<void> db_down(Ctx& x) {
     proto::Vec3 p = ea.pos;
     int step = 0, corrections = 0;
     bool sawUnavailable = false;
-    auto move_a = [&] {
-        static const float dirs[4][2] = {{0.9f, 0}, {0, 0.9f}, {-0.9f, 0}, {0, -0.9f}};
+    auto move_a = [&] { // a 45 m square west and south of the spawn point: clear of the sample portals (all east)
+        static const float dirs[4][2] = {{-0.9f, 0}, {0, -0.9f}, {0.9f, 0}, {0, 0.9f}};
         const auto& d = dirs[(step / 50) % 4];
         p.x += d[0];
         p.z += d[1];
@@ -563,7 +567,9 @@ asio::awaitable<void> components(Ctx& x) {
 
     // A walks: Health drains (sent to both); B stands at max, so nothing is resent for B.
     co_await walk(*a, ea.pos, 20, 0);
-    co_await sleep_for(Millis(300));
+    // Over one regen.lua period (1 s, phased by entity id): the drain for the last metres walked has gone out, so A's
+    // last Health seen below is settled and only regen (+) can follow it.
+    co_await sleep_for(Millis(1200));
     aMsgs = co_await drain(*a, Millis(200));
     bMsgs = co_await drain(*b, Millis(100));
     const auto walked = updates_for(bMsgs, A, "Health");
@@ -789,7 +795,8 @@ asio::awaitable<void> npcs(Ctx& x) {
                    "A gets the Guard's EntityMoves at changing positions (" + std::to_string(moves.size()) + " moves, " +
                        std::to_string(positions.size()) + " positions)");
 
-    auto p = co_await walk(*a, ea.pos, 200, 0); // ~22 s at 9 m/s; the Guard stays within ~15 m of the spawn point
+    // West: east of the spawn point lie the sample portals. ~22 s at 9 m/s; the Guard stays within ~15 m of the spawn point.
+    auto p = co_await walk(*a, ea.pos, -200, 0);
     auto away = aboutGuard(co_await drain(*a, Millis(1000)));
     const auto despawn = std::ranges::find_if(away, [](const auto& m) { return std::holds_alternative<proto::Despawn>(m); });
     x.check.expect(despawn != away.end(), "walking 200 m away: Despawn for the Guard");
@@ -797,11 +804,249 @@ asio::awaitable<void> npcs(Ctx& x) {
     const auto later = aboutGuard(co_await drain(*a, Millis(2000)));
     x.check.expect(later.empty(), "still nothing about the Guard while out of range (" + std::to_string(later.size()) + ")");
 
-    co_await walk(*a, p, -200, 0);
+    co_await walk(*a, p, 200, 0);
     std::optional<proto::Spawn> again;
     for (const auto& m : co_await drain(*a, Millis(1500)))
         if (auto* s = std::get_if<proto::Spawn>(&m); s && s->kind == proto::SpawnKind::npc && s->name == "Guard") again = *s;
     x.check.expect(again && again->templateName == "Guard", "walking back: Spawn for the Guard again");
+    a->close();
+}
+
+// --- 17: areas with the sample maps (README "Areas"): start's "cave_mouth" portal sends A to map 2 (the cave) ---
+asio::awaitable<void> portal(Ctx& x) {
+    proto::EnterWorldOk ea, eb;
+    auto a = co_await x.enter("s17a", ea);
+    auto b = co_await x.enter("s17b", eb);
+    if (!a || !b) co_return;
+    x.check.expect(ea.map == 1 && eb.map == 1, "A and B enter map 1");
+    auto sa = co_await wait_player_spawn(*a, Millis(3000));
+    x.check.expect(sa && sa->entityId == eb.entityId, "A sees B on map 1");
+    co_await drain(*a, Millis(300));
+
+    // From the spawn point (1024, 1024) to (1042, 999): into cave_mouth [1040..1050] x [990..1000] at the very end.
+    co_await walk(*a, ea.pos, 1042 - ea.pos.x, 999 - ea.pos.z);
+    const auto msgs = co_await drain(*a, Millis(1500));
+    const size_t change = first_index(msgs, [](const auto& m) { return std::holds_alternative<proto::MapChange>(m); });
+    const size_t despawn = first_index(msgs, [](const auto& m) { return std::holds_alternative<proto::Despawn>(m); });
+    const size_t spawn = first_index(msgs, [](const auto& m) { return std::holds_alternative<proto::Spawn>(m); });
+    const auto* mc = change < msgs.size() ? &std::get<proto::MapChange>(msgs[change]) : nullptr;
+    x.check.expect(mc && mc->map == 2 && same_pos(mc->pos, {256, 0, 240}),
+                   "walking into the portal: MapChange{2} at (256, 0, 240)" + (mc ? " (got map " + std::to_string(mc->map) + " " + fmt(mc->pos) + ")" : ""));
+    x.check.expect(mc && change < despawn && change < spawn, "MapChange arrives before any Despawn/Spawn");
+    bool lostB = false, sawBat = false;
+    for (const auto& d : only<proto::Despawn>(msgs)) lostB |= d.entityId == eb.entityId;
+    for (const auto& s : only<proto::Spawn>(msgs)) sawBat |= s.kind == proto::SpawnKind::npc && s.name == "Bat";
+    x.check.expect(lostB, "A loses sight of B (Despawn) on leaving map 1");
+    x.check.expect(sawBat, "A sees the Bat on map 2");
+    bool bLostA = false;
+    for (const auto& d : only<proto::Despawn>(co_await drain(*b, Millis(200)))) bLostA |= d.entityId == ea.entityId;
+    x.check.expect(bLostA, "B gets A's Despawn");
+
+    a->close();
+    co_await sleep_for(Millis(500));
+    proto::EnterWorldOk again;
+    auto a2 = co_await x.enter("s17a", again);
+    x.check.expect(a2 && again.map == 2 && same_pos(again.pos, {256, 0, 240}),
+                   "relog keeps A on map 2 at " + fmt(again.pos) + " (map " + std::to_string(again.map) + ")");
+    if (a2) a2->close();
+    b->close();
+}
+
+// --- 18: NPC spawns (README "NPC spawns") ---
+// Needs the sample lua/systems/test_hooks.lua and the Guard's spawn file (maps/start/.server/spawns/4_4.json,
+// respawnSec 5). A at the spawn point sees the Guard; B enters as "Respawntest..." and the hook destroys it; A gets its
+// Despawn, then about 5 s later the Spawn of a new Guard at its spawn point.
+asio::awaitable<void> respawn(Ctx& x) {
+    proto::EnterWorldOk ea;
+    auto a = co_await x.enter("s18a", ea);
+    if (!a) co_return;
+    std::optional<proto::Spawn> guard;
+    while (!guard) {
+        auto s = co_await a->wait_for<proto::Spawn>(Millis(8000)); // 8 s: it may still be respawning from a last run
+        if (!s) break;
+        if (s->kind == proto::SpawnKind::npc && s->name == "Guard") guard = s;
+    }
+    x.check.expect(guard.has_value(), "A sees the Guard");
+    if (!guard) co_return;
+
+    auto b = co_await x.login(x.token("s18b"), "s18b");
+    if (!b) co_return;
+    proto::EnterWorldOk eb;
+    std::string err;
+    const bool in = co_await enter_world(*b, "Respawntest" + random_name(5), eb, err);
+    x.check.expect(in, "B enters as Respawntest... (" + err + ")");
+    if (!in) co_return;
+
+    std::optional<proto::Despawn> gone;
+    while (!gone) {
+        auto d = co_await a->wait_for<proto::Despawn>(Millis(3000));
+        if (!d) break;
+        if (d->entityId == guard->entityId) gone = d;
+    }
+    const auto killed = std::chrono::steady_clock::now();
+    x.check.expect(gone.has_value(), "A gets the Guard's Despawn when the test hook destroys it");
+    if (!gone) co_return;
+
+    std::optional<proto::Spawn> again;
+    while (!again) {
+        auto s = co_await a->wait_for<proto::Spawn>(Millis(10000));
+        if (!s) break;
+        if (s->kind == proto::SpawnKind::npc && s->name == "Guard") again = s;
+    }
+    const double after = std::chrono::duration<double>(std::chrono::steady_clock::now() - killed).count();
+    x.check.expect(again.has_value(), "A gets a Spawn for the respawned Guard");
+    if (!again) co_return;
+    x.check.expect(after >= 4.5 && after <= 6.5, "it is back respawnSec (5 s) later (" + std::to_string(after) + " s)");
+    x.check.expect(again->entityId != guard->entityId && again->templateName == "Guard",
+                   "as a new entity with template Guard");
+    x.check.expect(std::hypot(again->pos.x - 1024, again->pos.z - 1024) < 1,
+                   "at its spawn point (1024, 1024): " + fmt(again->pos));
+    a->close();
+    b->close();
+}
+
+// --- 19: ground on the sample "hills" map (README "Ground") ---
+// A map's manifest and heights, read the way the server reads them (needs --map-root: the server's maps/ folder).
+struct Terrain {
+    map::MapInfo info;
+    map::TileHeights heights;
+    float ground(float x, float z) const { return map::ground_at(info, heights, x, z).value_or(NAN); }
+};
+
+std::optional<Terrain> load_terrain(const std::filesystem::path& folder, std::string& err) {
+    const auto read = [](const std::filesystem::path& p) {
+        std::ifstream in(p, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), {});
+    };
+    auto info = map::parse_manifest(nlohmann::json::parse(read(folder / "map.json"), nullptr, false), err);
+    if (!info) { err = (folder / "map.json").string() + ": " + err; return std::nullopt; }
+    Terrain t{std::move(*info), {}};
+    for (const auto& r : t.info.tiles)
+        for (int32_t tz = r.z0; tz <= r.z1; ++tz)
+            for (int32_t tx = r.x0; tx <= r.x1; ++tx) {
+                for (const char* ext : {".r16", ".png"}) {
+                    const auto file = folder / "heights" / (std::to_string(tx) + "_" + std::to_string(tz) + ext);
+                    if (!std::filesystem::exists(file)) continue;
+                    auto h = map::decode_heights(read(file), ext, err);
+                    if (!h) { err = file.string() + ": " + err; return std::nullopt; }
+                    t.heights[{tx, tz}] = std::move(*h);
+                    break;
+                }
+            }
+    return t;
+}
+
+// A and B take start's "hills_gate" portal to map 3 and land on the ground; A walks up the slope at ground height (no
+// Correction) and B sees its EntityMoves along the ground; then A flies up and is snapped back with Correction.
+// The walk stays under hills' 40 degree nav.maxSlopeDeg: steeper is off the navmesh (scenario 20).
+asio::awaitable<void> terrain(Ctx& x) {
+    std::string err;
+    const auto hills = load_terrain(std::filesystem::path(x.o.mapRoot) / "hills", err);
+    x.check.expect(hills.has_value(), "maps/hills loaded from --map-root '" + x.o.mapRoot + "' " + err);
+    if (!hills) co_return;
+    const auto groundY = [&](float px, float pz) { return hills->ground(px, pz); };
+
+    proto::EnterWorldOk ea, eb;
+    auto a = co_await x.enter("s19a", ea);
+    auto b = co_await x.enter("s19b", eb);
+    if (!a || !b) co_return;
+    // From the spawn point (1024, 1024) into hills_gate [1060..1070] x [1020..1030].
+    std::optional<proto::MapChange> mcA, mcB;
+    co_await walk(*a, ea.pos, 1065 - ea.pos.x, 1025 - ea.pos.z);
+    if (auto m = only<proto::MapChange>(co_await drain(*a, Millis(1000))); !m.empty()) mcA = m[0];
+    co_await walk(*b, eb.pos, 1065 - eb.pos.x, 1025 - eb.pos.z);
+    if (auto m = only<proto::MapChange>(co_await drain(*b, Millis(1000))); !m.empty()) mcB = m[0];
+    const float gate = hills->ground(256, 256);
+    x.check.expect(mcA && mcA->map == 3 && std::fabs(mcA->pos.y - gate) < 0.01f,
+                   "A: MapChange{3} on the ground at the portal (ground " + std::to_string(gate) + ", got " +
+                       (mcA ? fmt(mcA->pos) : "none") + ")");
+    x.check.expect(mcB && mcB->map == 3, "B: MapChange{3}");
+    if (!mcA || !mcB) co_return;
+    co_await drain(*b, Millis(500)); // B's Spawn of A
+
+    // 40 m down the slope at the ground's height (9 m down; at most 36.5 degrees, so on the navmesh: hills'
+    // nav.maxSlopeDeg is 40, and up toward (286, 281) the hill reaches 43).
+    const proto::Vec3 top = co_await walk(*a, mcA->pos, -30, 25, 9.0f, groundY);
+    const auto aMsgs = co_await drain(*a, Millis(500));
+    x.check.expect(only<proto::Correction>(aMsgs).empty(), "walking the slope at ground height: no Correction");
+    const auto seen = only<proto::EntityMove>(co_await drain(*b, Millis(300)));
+    size_t moves = 0, onGround = 0;
+    for (const auto& m : seen)
+        if (m.entityId == ea.entityId) { ++moves; onGround += std::fabs(m.pos.y - hills->ground(m.pos.x, m.pos.z)) < 0.05f; }
+    x.check.expect(moves > 10 && onGround == moves, "B sees A's EntityMoves along the ground (" + std::to_string(onGround) +
+                                                         "/" + std::to_string(moves) + " within 5 cm)");
+    x.check.expect(std::fabs(top.y - mcA->pos.y) > 1, "the walk climbed or dropped > 1 m: " + fmt(mcA->pos) + " -> " + fmt(top));
+
+    // Fly hack: rising to 20 m and 30 m above the ground.
+    a->send(proto::Move{{top.x + 1, hills->ground(top.x + 1, top.z) + 20, top.z}, 0, 90000});
+    a->send(proto::Move{{top.x + 2, hills->ground(top.x + 2, top.z) + 30, top.z}, 0, 90100});
+    const auto corr = co_await a->wait_for<proto::Correction>(Millis(2000));
+    x.check.expect(corr && same_pos(corr->pos, top), "fly hack -> Correction back to " + fmt(top) +
+                                                         (corr ? " (got " + fmt(corr->pos) + ")" : " (none)"));
+    a->close();
+    b->close();
+}
+
+// --- 20: navmesh on the sample "hills" map (README "Navmesh") ---
+// hills has a mesa (x 170..200, z 316..346, ~81 degree walls) and the Sentry patrolling from (150, 331) to (215, 331),
+// straight through it (maps/hills/.server/spawns/0_1.json). A takes hills_gate to map 3 and walks at ground height to
+// the mesa's south foot (no Correction), then into its wall: Correction. Over 30 s (more than one leg) the Sentry's
+// EntityMoves pass the mesa's x range but stay on the ground and off its walls: it walks the navmesh path around.
+asio::awaitable<void> navmesh(Ctx& x) {
+    std::string err;
+    const auto hills = load_terrain(std::filesystem::path(x.o.mapRoot) / "hills", err);
+    x.check.expect(hills.has_value(), "maps/hills loaded from --map-root '" + x.o.mapRoot + "' " + err);
+    if (!hills) co_return;
+    const auto groundY = [&](float px, float pz) { return hills->ground(px, pz); };
+
+    proto::EnterWorldOk ea;
+    auto a = co_await x.enter("s20a", ea);
+    if (!a) co_return;
+    co_await walk(*a, ea.pos, 1065 - ea.pos.x, 1025 - ea.pos.z);
+    auto msgs = co_await drain(*a, Millis(1000));
+    const auto mc = only<proto::MapChange>(msgs);
+    x.check.expect(!mc.empty() && mc[0].map == 3, "A: MapChange{3}");
+    if (mc.empty()) co_return;
+
+    const proto::Vec3 foot = co_await walk(*a, mc[0].pos, 185 - mc[0].pos.x, 310 - mc[0].pos.z, 9.0f, groundY);
+    auto toFoot = co_await drain(*a, Millis(500));
+    x.check.expect(only<proto::Correction>(toFoot).empty(),
+                   "walking to the mesa's south foot " + fmt(foot) + " at ground height: no Correction");
+    msgs.insert(msgs.end(), toFoot.begin(), toFoot.end());
+
+    co_await walk(*a, foot, 0, 12, 4.0f, groundY); // up the wall (z 316..319) at ground height
+    auto wall = co_await drain(*a, Millis(1000));
+    const auto corr = only<proto::Correction>(wall);
+    x.check.expect(!corr.empty() && corr.back().pos.z < 317,
+                   "walking into the mesa's wall -> Correction at its foot" +
+                       (corr.empty() ? std::string(" (none)") : " (got " + fmt(corr.back().pos) + ")"));
+    msgs.insert(msgs.end(), wall.begin(), wall.end());
+
+    const auto more = co_await drain(*a, Millis(30000));
+    msgs.insert(msgs.end(), more.begin(), more.end());
+    std::optional<uint32_t> sentry;
+    for (const auto& s : only<proto::Spawn>(msgs))
+        if (s.kind == proto::SpawnKind::npc && s.name == "Sentry") sentry = s.entityId;
+    x.check.expect(sentry.has_value(), "A gets Spawn{npc, Sentry}");
+    if (!sentry) co_return;
+    size_t moves = 0, onGround = 0, pastMesa = 0;
+    float intoWall = 0; // deepest move into the mesa's footprint: its 3 m walls start at the edge
+    for (const auto& m : only<proto::EntityMove>(msgs)) {
+        if (m.entityId != *sentry) continue;
+        ++moves;
+        onGround += std::fabs(m.pos.y - hills->ground(m.pos.x, m.pos.z)) < 0.05f;
+        intoWall = std::max(intoWall, std::min({m.pos.x - 170, 200 - m.pos.x, m.pos.z - 316, 346 - m.pos.z}));
+        pastMesa += m.pos.x > 180 && m.pos.x < 190;
+    }
+    x.check.expect(moves > 100 && onGround == moves, "the Sentry's EntityMoves are on the ground (" +
+                                                         std::to_string(onGround) + "/" + std::to_string(moves) + ")");
+    // The navmesh's edges may sit up to ~0.5 m off the eroded raster (Recast's contour simplification): a corner can
+    // graze the wall's foot, never more.
+    char into[48];
+    std::snprintf(into, sizeof into, "%.2f m", intoWall);
+    x.check.expect(pastMesa > 0 && intoWall < 0.5f, "it passes the mesa (" + std::to_string(pastMesa) +
+                                                       " moves at x 180..190) without climbing it (at most " + into +
+                                                       " into its wall's foot)");
     a->close();
 }
 
@@ -819,6 +1064,8 @@ int run_scenario(const Options& o) {
         {"persist", persist_relogin},   {"shutdown", shutdown_phase1}, {"restart-verify", restart_verify},
         {"dbdown", db_down},            {"components", components},   {"components-verify", components_verify},
         {"events", events},             {"fsm", fsm},                 {"npcs", npcs},
+        {"portal", portal},             {"respawn", respawn},         {"terrain", terrain},
+        {"navmesh", navmesh},
     };
     auto it = all.find(o.scenario);
     if (it == all.end()) {

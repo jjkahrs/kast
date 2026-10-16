@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "areas": [
+    {"id": "cave", "name": "The Cave", "priority": 0, "rect": [0, 0, 512, 512], "flags": {"noMount": true}},
+    {"id": "cave_exit", "name": "Cave Exit", "parent": "cave", "priority": 10, "rect": [250, 270, 262, 280],
+     "portal": {"map": 1, "pos": [1024, 0, 1024], "heading": 0}}
+  ]
+}

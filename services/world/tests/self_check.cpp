@@ -1,6 +1,6 @@
 // Assert-style checks for the world server's pure logic: frame codec (every message), frame rejection, names,
 // movement, AOI sets, chat sanitizing and rate limits, config validation, tick stats and JWT/JWKS verification with
-// locally generated RSA keys; lua_checks.cpp covers the Lua layer. No network, database or sleeping: time is passed in.
+// locally generated RSA keys; lua_checks.cpp covers the Lua layer and the maps (manifests, World on several maps). No network, database or sleeping: time is passed in.
 // Exit 0 if every check passes. Run by CTest as world_self_check.
 #include "auth/jwks_cache.h"
 #include "auth/jwt_verify.h"
@@ -70,7 +70,8 @@ void checkCodecRoundTrip() {
     roundtrip(CharList{}, "CharList empty");
     roundtrip(CharCreated{{5, "Carol", {7, 8, 9}}}, "CharCreated");
     roundtrip(CharDeleted{5}, "CharDeleted");
-    roundtrip(EnterWorldOk{11, {1, 0, 1}, 1.f}, "EnterWorldOk");
+    roundtrip(EnterWorldOk{11, 2, {1, 0, 1}, 1.f}, "EnterWorldOk");
+    roundtrip(MapChange{65535, {-3, 4, 5000}, 2.5f}, "MapChange");
     roundtrip(CharError{Opcode::CharCreate, Code::name_taken}, "CharError");
     roundtrip(Spawn{3, "Dave", {10, 0, 10}, 0.5f, SpawnKind::player, ""}, "Spawn");
     roundtrip(Spawn{4, "Guard", {12, 1, 10}, 1.5f, SpawnKind::npc, "Guard"}, "Spawn npc");
@@ -83,7 +84,14 @@ void checkCodecRoundTrip() {
     const auto f = encode(Message{Hello{0x0102}});
     check(f == std::vector<uint8_t>{2, 0, 1, 0, 0x02, 0x01}, "Hello bytes little-endian");
 
-    check(kProtocolVersion == 2, "protocol version 2");
+    check(kProtocolVersion == 3, "protocol version 3");
+    // v3 EnterWorldOk: u32 entityId, u16 map, vec3 pos, f32 heading; MapChange: u16 map, vec3 pos, f32 heading
+    const auto ewo = encode(Message{EnterWorldOk{1, 0x0201, {0, 0, 0}, 0}});
+    check(ewo.size() == 4 + 4 + 2 + 12 + 4 && ewo[8] == 0x01 && ewo[9] == 0x02, "EnterWorldOk map follows entityId");
+    const auto mc = encode(Message{MapChange{0x0201, {0, 0, 0}, 0}});
+    check(mc.size() == 4 + 2 + 12 + 4 && mc[2] == 0x28 && mc[3] == 0x01 && mc[4] == 0x01 && mc[5] == 0x02,
+          "MapChange opcode 0x0128, map first");
+    check(std::string(opcode_name(Opcode::MapChange)) == "MapChange", "MapChange name");
     // v2 Spawn: u32 id, str name, vec3, f32 heading, u8 kind, str template
     const auto npc = encode(Message{Spawn{1, "G", {0, 0, 0}, 0, SpawnKind::npc, "T"}});
     check(npc.size() == 4 + 4 + 3 + 12 + 4 + 1 + 3 && npc[4 + 4 + 3 + 16] == 1 && npc.back() == 'T',
@@ -151,82 +159,108 @@ void checkNames() {
 }
 
 void checkMovement() {
-    MoveRules rules; // 10 m/s + 1 tolerance, 1 s burst, 2048x2048, y [-100, 500]
+    MoveRules rules; // 10 m/s + 1 tolerance, 1 s burst, y [-100, 500]; map bounds: lua_checks checkMaps
     MoveBudget b{0, T0};
     proto::Vec3 from{100, 0, 100};
 
     proto::Vec3 to{101, 0, 100};
-    check(validate_move(rules, b, from, to, T0 + 100ms) == MoveVerdict::accepted, "1 m in 100 ms accepted");
+    check(validate_move(rules, b, from, to, 0, T0 + 100ms) == MoveVerdict::accepted, "1 m in 100 ms accepted");
     from = to;
     to = {102.5f, 0, 100}; // budget: 0.1 left + 1.1 refill = 1.2 m
-    check(validate_move(rules, b, from, to, T0 + 200ms) == MoveVerdict::too_fast, "1.5 m in 100 ms rejected");
+    check(validate_move(rules, b, from, to, 0, T0 + 200ms) == MoveVerdict::too_fast, "1.5 m in 100 ms rejected");
     // within tolerance: 10.5 m/s sustained for 10 moves
     MoveBudget b2{0, T0};
     proto::Vec3 p{500, 0, 500};
     bool allOk = true;
     for (int i = 1; i <= 10; ++i) {
         proto::Vec3 n{p.x + 1.05f, 0, p.z};
-        allOk &= validate_move(rules, b2, p, n, T0 + std::chrono::milliseconds(100 * i)) == MoveVerdict::accepted;
+        allOk &= validate_move(rules, b2, p, n, 0, T0 + std::chrono::milliseconds(100 * i)) == MoveVerdict::accepted;
         p = n;
     }
     check(allOk, "10.5 m/s accepted within tolerance");
     // jitter: two moves arrive in the same instant after a pause are absorbed by the burst budget
     MoveBudget b3{0, T0};
     proto::Vec3 q{500, 0, 500}, q1{501, 0, 500}, q2{502, 0, 500};
-    check(validate_move(rules, b3, q, q1, T0 + 200ms) == MoveVerdict::accepted, "jitter move 1");
-    check(validate_move(rules, b3, q1, q2, T0 + 200ms) == MoveVerdict::accepted, "jitter move 2 same instant");
+    check(validate_move(rules, b3, q, q1, 0, T0 + 200ms) == MoveVerdict::accepted, "jitter move 1");
+    check(validate_move(rules, b3, q1, q2, 0, T0 + 200ms) == MoveVerdict::accepted, "jitter move 2 same instant");
     // sustained speedhack: 30 m/s fails within the first second
     MoveBudget b4{0, T0};
     proto::Vec3 s{500, 0, 500};
     bool rejected = false;
     for (int i = 1; i <= 10 && !rejected; ++i) {
         proto::Vec3 n{s.x + 3, 0, s.z};
-        if (validate_move(rules, b4, s, n, T0 + std::chrono::milliseconds(100 * i)) == MoveVerdict::too_fast) rejected = true;
+        if (validate_move(rules, b4, s, n, 0, T0 + std::chrono::milliseconds(100 * i)) == MoveVerdict::too_fast) rejected = true;
         else s = n;
     }
     check(rejected, "30 m/s rejected");
     // teleport
     MoveBudget b5{0, T0};
     proto::Vec3 tp{1000, 0, 1000};
-    check(validate_move(rules, b5, {0, 0, 0}, tp, T0 + 10s) == MoveVerdict::too_fast, "teleport rejected even after idle");
-    // bounds
-    MoveBudget b6{0, T0};
-    proto::Vec3 out1{-0.5f, 0, 1};
-    check(validate_move(rules, b6, {0.5f, 0, 1}, out1, T0 + 1s) == MoveVerdict::out_of_bounds, "x < 0 rejected");
-    proto::Vec3 out2{2047.5f, 0, 2048.5f};
-    check(validate_move(rules, b6, {2047.5f, 0, 2047.9f}, out2, T0 + 2s) == MoveVerdict::out_of_bounds, "z > size rejected");
-    proto::Vec3 edge{2048, 0, 2048};
-    check(validate_move(rules, b6, {2047.5f, 0, 2047.5f}, edge, T0 + 3s) == MoveVerdict::accepted, "edge accepted");
-    // y clamp, not counted in speed
+    check(validate_move(rules, b5, {0, 0, 0}, tp, 0, T0 + 10s) == MoveVerdict::too_fast, "teleport rejected even after idle");
+    // y clamp, not counted in speed (falling from 9000 m)
     MoveBudget b7{0, T0};
-    proto::Vec3 high{10, 9000, 10};
-    check(validate_move(rules, b7, {10, 0, 10}, high, T0 + 1s) == MoveVerdict::accepted && high.y == 500,
+    proto::Vec3 high{10, 8000, 10};
+    check(validate_move(rules, b7, {10, 9000, 10}, high, 0, T0 + 1s) == MoveVerdict::accepted && high.y == 500,
           "y clamped to MAX_Y, vertical not counted as speed");
+
+    // ground at 10 m: groundTolerance 0.5, maxAir 6
+    const float g = 10;
+    MoveBudget b8{0, T0};
+    proto::Vec3 at{10, g, 10}, under{11, g - 3, 10};
+    check(validate_move(rules, b8, at, under, g, T0 + 1s) == MoveVerdict::accepted && under.y == g,
+          "3 m under the ground: accepted, lifted onto it");
+    proto::Vec3 slightly{12, g - 0.4f, 10};
+    check(validate_move(rules, b8, under, slightly, g, T0 + 1s) == MoveVerdict::accepted && slightly.y == g - 0.4f,
+          "0.4 m under (within groundTolerance): accepted as-is");
+    proto::Vec3 edge{13, g + 6, 10};
+    check(validate_move(rules, b8, slightly, edge, g, T0 + 2s) == MoveVerdict::accepted && edge.y == g + 6,
+          "rising to exactly ground + maxAir: accepted");
+    MoveBudget b9{0, T0};
+    proto::Vec3 fly{11, g + 6.5f, 10};
+    check(validate_move(rules, b9, at, fly, g, T0 + 1s) == MoveVerdict::in_air && fly.y == g + 6.5f,
+          "rising past ground + maxAir: in_air");
+    check(b9.meters > 10.9f, "in_air spends no budget");
+    proto::Vec3 hoverFrom{10, g + 20, 10}, hover{11, g + 20, 10};
+    check(validate_move(rules, b9, hoverFrom, hover, g, T0 + 1s) == MoveVerdict::in_air, "level flight 20 m up: in_air");
+    proto::Vec3 sky{10, g + 50, 10}, falling{11, g + 49, 10};
+    check(validate_move(rules, b9, sky, falling, g, T0 + 1s) == MoveVerdict::accepted && falling.y == g + 49,
+          "falling from 50 m above the ground: accepted");
+    proto::Vec3 down{12, g + 20, 10};
+    check(validate_move(rules, b9, falling, down, g, T0 + 2s) == MoveVerdict::accepted, "still falling: accepted");
 }
 
 void checkAoi() {
     AoiGrid grid(64, 128);
     std::map<uint32_t, std::pair<float, float>> pos = {{1, {100.f, 100.f}}, {2, {200.f, 100.f}}, {3, {100.f, 229.f}}, {4, {500.f, 500.f}}};
-    for (auto& [id, p] : pos) grid.insert(id, grid.cell_of(p.first, p.second));
+    for (auto& [id, p] : pos) grid.insert(id, grid.cell_of(1, p.first, p.second));
     auto posOf = [&](uint32_t id, float& x, float& z) { x = pos[id].first; z = pos[id].second; };
 
-    auto seen = grid.query(100, 100, 1, posOf);
+    auto seen = grid.query(1, 100, 100, 1, posOf);
     check(seen == std::vector<uint32_t>{2}, "1 sees 2 (100 m) not 3 (129 m) or 4");
-    check(grid.query(200, 100, 2, posOf) == std::vector<uint32_t>{1}, "visibility is symmetric");
+    check(grid.query(1, 200, 100, 2, posOf) == std::vector<uint32_t>{1}, "visibility is symmetric");
 
     // 3 walks into range, 2 walks out
-    grid.remove(3, grid.cell_of(100, 229));
+    grid.remove(3, grid.cell_of(1, 100, 229));
     pos[3] = {100.f, 220.f};
-    grid.insert(3, grid.cell_of(100, 220));
-    grid.remove(2, grid.cell_of(200, 100));
+    grid.insert(3, grid.cell_of(1, 100, 220));
+    grid.remove(2, grid.cell_of(1, 200, 100));
     pos[2] = {300.f, 100.f};
-    grid.insert(2, grid.cell_of(300, 100));
-    auto now = grid.query(100, 100, 1, posOf);
+    grid.insert(2, grid.cell_of(1, 300, 100));
+    auto now = grid.query(1, 100, 100, 1, posOf);
     std::vector<uint32_t> entered, left;
     diff_sorted(seen, now, entered, left);
     check(entered == std::vector<uint32_t>{3}, "3 entered");
     check(left == std::vector<uint32_t>{2}, "2 left");
-    check(grid.query(1900, 1900, 0, posOf).empty(), "empty corner");
+    check(grid.query(1, 1900, 1900, 0, posOf).empty(), "empty corner");
+    // maps: same x/z on another map is another cell; negative cells and big map ids keep apart
+    pos[5] = {100.f, 100.f};
+    grid.insert(5, grid.cell_of(2, 100, 100));
+    check(grid.query(1, 100, 100, 1, posOf) == std::vector<uint32_t>{3}, "map 1 never sees map 2's entity at the same x/z");
+    check(grid.query(2, 100, 100, 0, posOf) == std::vector<uint32_t>{5}, "map 2 sees only its own");
+    pos[6] = {-100.f, -100.f};
+    grid.insert(6, grid.cell_of(65535, -100, -100));
+    check(grid.query(65535, -100, -100, 0, posOf) == std::vector<uint32_t>{6} && grid.query(0, -100, -100, 0, posOf).empty(),
+          "negative cells and map 65535 keyed apart");
 }
 
 void checkChat() {
@@ -281,13 +315,39 @@ void checkConfig() {
     };
     auto ok = load_config(lookup);
     check(ok.errors.empty(), "minimal config valid");
-    check(ok.config.spawn_x() == 1024 && ok.config.port == 7777, "defaults applied");
+    check(ok.config.mapRoot == "/app/maps" && ok.config.startMap == 1 && ok.config.port == 7777, "defaults applied");
+    for (const char* bad : {"48", "100", "0.5"}) {
+        env["AOI_CELL_SIZE"] = bad;
+        const auto r = load_config(lookup);
+        check(r.errors.size() == 1 && r.errors[0].starts_with("AOI_CELL_SIZE"), "AOI_CELL_SIZE must divide 256");
+    }
+    env["AOI_CELL_SIZE"] = "128";
+    check(load_config(lookup).errors.empty(), "AOI_CELL_SIZE 128 divides 256");
+    env.erase("AOI_CELL_SIZE");
+    env["START_MAP"] = "65536";
+    check(load_config(lookup).errors.size() == 1, "START_MAP above 65535 refused");
+    env["START_MAP"] = "2";
+    env["MAP_ROOT"] = "/maps";
+    check(load_config(lookup).config.startMap == 2 && load_config(lookup).config.mapRoot == "/maps", "START_MAP/MAP_ROOT read");
+    env.erase("START_MAP");
+    env.erase("MAP_ROOT");
     check(ok.config.gameStateMachines.empty(), "GAME_STATE_MACHINES unset: no game machines");
     env["GAME_STATE_MACHINES"] = " zone_cycle ,, quest_flow,\t";
     check(load_config(lookup).config.gameStateMachines == std::vector<std::string>{"zone_cycle", "quest_flow"},
           "GAME_STATE_MACHINES: comma list, trimmed, empty entries ignored");
     env["GAME_STATE_MACHINES"] = "";
     check(load_config(lookup).config.gameStateMachines.empty(), "GAME_STATE_MACHINES empty: none");
+    check(ok.config.groundTolerance == 0.5f && ok.config.maxAir == 6, "MOVE_GROUND_TOLERANCE / MOVE_MAX_AIR default 0.5 / 6");
+    env["MOVE_GROUND_TOLERANCE"] = "1";
+    env["MOVE_MAX_AIR"] = "2.5";
+    const auto ground = load_config(lookup);
+    check(ground.errors.empty() && ground.config.groundTolerance == 1 && ground.config.maxAir == 2.5f,
+          "MOVE_GROUND_TOLERANCE / MOVE_MAX_AIR read");
+    env["MOVE_MAX_AIR"] = "-1";
+    const auto negative = load_config(lookup);
+    check(negative.errors.size() == 1 && negative.errors[0].starts_with("MOVE_MAX_AIR"), "negative MOVE_MAX_AIR refused");
+    env.erase("MOVE_GROUND_TOLERANCE");
+    env.erase("MOVE_MAX_AIR");
     check(ok.config.maxNpcs == 10000, "MAX_NPCS defaults to 10000");
     env["MAX_NPCS"] = "0";
     check(load_config(lookup).errors.empty() && load_config(lookup).config.maxNpcs == 0, "MAX_NPCS 0: no NPCs");

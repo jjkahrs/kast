@@ -6,8 +6,8 @@
 
 namespace kast {
 
-CellKey AoiGrid::cell_of(float x, float z) const {
-    return {static_cast<int32_t>(std::floor(x / cell_)), static_cast<int32_t>(std::floor(z / cell_))};
+CellKey AoiGrid::cell_of(uint16_t map, float x, float z) const {
+    return {map, static_cast<int32_t>(std::floor(x / cell_)), static_cast<int32_t>(std::floor(z / cell_))};
 }
 
 void AoiGrid::insert(uint32_t id, CellKey c) { cells_[pack(c)].push_back(id); }

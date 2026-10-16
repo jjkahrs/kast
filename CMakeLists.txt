@@ -94,6 +94,14 @@ add_library(kast_protocol STATIC services/world/protocol/codec.cpp)
 target_include_directories(kast_protocol PUBLIC services/world/protocol)
 target_compile_options(kast_protocol PRIVATE ${KAST_COMPILE_OPTIONS})
 
+# --- map: the world server's map manifests, tile math and heightmaps (services/world/map), compiled from its sources
+# unchanged; std + nlohmann_json + stb only ---
+add_library(kast_map STATIC services/world/map/map.cpp services/world/map/heights.cpp)
+target_include_directories(kast_map PUBLIC services/world/map)
+target_include_directories(kast_map SYSTEM PRIVATE "${Stb_INCLUDE_DIR}")
+target_compile_options(kast_map PRIVATE ${KAST_COMPILE_OPTIONS})
+target_link_libraries(kast_map PUBLIC nlohmann_json::nlohmann_json)
+
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
@@ -101,7 +109,7 @@ add_library(kast_engine STATIC
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
-  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/world_client.cpp engine/replication.cpp ${KAST_ENGINE_SHADERS})
+  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/world_client.cpp engine/replication.cpp engine/terrain.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
@@ -112,7 +120,7 @@ target_compile_options(kast_engine PRIVATE ${KAST_COMPILE_OPTIONS})
 # Asio targets Windows 10 (and its templates need /bigobj); crypt32 reads the ROOT certificate store.
 set_source_files_properties(engine/network.cpp PROPERTIES COMPILE_DEFINITIONS "_WIN32_WINNT=0x0A00" COMPILE_OPTIONS /bigobj)
 target_link_libraries(kast_engine
-  PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json RmlUi::RmlUi
+  PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json RmlUi::RmlUi kast_map
   PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 assimp::assimp Jolt::Jolt "${LUAJIT_LIBRARY}" kast_protocol
           Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto crypt32)
 
@@ -474,6 +482,56 @@ foreach(scene shadows point_shadows)
     COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_SHADOW_PROJECT}/${scene}.scene"
             "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${scene}_roundtrip" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
 endforeach()
+# Terrain: tests/project/terrain.scene (Terrain on map 3 "hills", 2x2 PNG16 tiles; a CharacterController dropped
+# above the ground; README "Terrain"). Play of it, of a copy without the Terrain component (the hills must show) and of
+# a copy whose sun casts no shadows (the hills' and the character's shadows must show).
+set(KAST_TERRAIN "${KAST_TEST_PROJECT}/terrain.scene")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TERRAIN}")
+file(READ "${KAST_TERRAIN}" terrain_scene)
+kast_shadow_variant(terrain_off "${terrain_scene}" ",\n *\"Terrain\": {[^}]*}" "")
+kast_shadow_variant(terrain_sun_cast_off "${terrain_scene}" "(\"intensity\": 1)( })" "\\1, \"castShadows\": false\\2")
+file(COPY_FILE "${KAST_TERRAIN}" "${KAST_SHADOW_PROJECT}/terrain.scene")
+# Map switch (what Replication does on world.mapChanged, by scripts/terrain_map_switch.lua): start on map 1 (flat),
+# then map 3 (the hills). The "before" copy has no script, so it stays on map 1.
+string(REGEX REPLACE "(\"Terrain\": { \"map\": )3" "\\11" terrain_map1 "${terrain_scene}")
+if(terrain_map1 STREQUAL terrain_scene)
+  message(FATAL_ERROR "terrain.scene: no \"Terrain\": { \"map\": 3")
+endif()
+file(WRITE "${KAST_SHADOW_PROJECT}/terrain_switch_before.scene" "${terrain_map1}")
+kast_shadow_variant(terrain_switch_after "${terrain_map1}" "\"systems\": \\[\\]"
+                    "\"systems\": [\"scripts/terrain_map_switch.lua\"]")
+
+foreach(shot terrain terrain_off terrain_sun_cast_off terrain_switch_before)
+  add_test(NAME ${shot}_play_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/${shot}_play.png"
+            "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/${shot}.scene --play" -DFOCUS_PANEL=Assets
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+  set_tests_properties(${shot}_play_screenshot PROPERTIES FIXTURES_SETUP ${shot}_play_shot)
+endforeach()
+add_test(NAME terrain_play_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/terrain_play.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/terrain_off_play.png"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(terrain_play_differs PROPERTIES FIXTURES_REQUIRED "terrain_play_shot;terrain_off_play_shot")
+add_test(NAME terrain_sun_cast_off_play_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/terrain_play.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/terrain_sun_cast_off_play.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+add_test(NAME terrain_switch_after_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/terrain_switch_after_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/terrain_switch_after.scene --play" -DFOCUS_PANEL=Assets
+          "-DEXPECT_OUTPUT=terrain switch: 4 tiles on map 3" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(terrain_switch_after_play_screenshot PROPERTIES FIXTURES_SETUP terrain_switch_after_play_shot)
+add_test(NAME terrain_switch_play_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/terrain_switch_before_play.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/terrain_switch_after_play.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(terrain_switch_play_differs PROPERTIES
+                     FIXTURES_REQUIRED "terrain_switch_before_play_shot;terrain_switch_after_play_shot")
+set_tests_properties(terrain_sun_cast_off_play_differs PROPERTIES
+                     FIXTURES_REQUIRED "terrain_play_shot;terrain_sun_cast_off_play_shot")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/terrain_roundtrip")
+add_test(NAME terrain_roundtrip
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_SHADOW_PROJECT}/terrain.scene"
+          "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/terrain_roundtrip" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
 # Post-processing: tests/project/post_processing.scene (every effect on: ACES, bloom, color grading, vignette, FXAA,
 # fog; an emissive sphere, bright point lights, near and far glass, pillars out to 55 m, a game GUI; the built game
 # "post" in KAST_GAMES runs it in the player). Scene view with post on and toggled off, the Post Processing panel, Play
@@ -895,7 +953,8 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "models|Models Test|models_anim.scene|FALSE" "shadows|Shadows Test|shadows.scene|FALSE"
                "shadows_off|Shadows Test|shadows_sun_off.scene|FALSE"
                "point_shadows|Point Shadows Test|point_shadows.scene|FALSE"
-               "physics|Physics Test|physics.scene|FALSE")
+               "physics|Physics Test|physics.scene|FALSE"
+               "terrain|Terrain Test|terrain.scene|FALSE" "terrain_off|Terrain Test|terrain_off.scene|FALSE")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
@@ -923,6 +982,13 @@ foreach(game ${KAST_GAMES})
 endforeach()
 # The sun-shadow-off copy for the "shadows_off" game (configured above, under Shadows).
 file(COPY_FILE "${KAST_SHADOW_PROJECT}/shadows_sun_off.scene" "${CMAKE_CURRENT_BINARY_DIR}/game_projects/shadows_off/shadows_sun_off.scene")
+# The terrain-less copy for the "terrain_off" game (configured above, under Terrain): the built player streams the
+# hills from game.pak, so the two shots must differ.
+file(COPY_FILE "${KAST_SHADOW_PROJECT}/terrain_off.scene" "${CMAKE_CURRENT_BINARY_DIR}/game_projects/terrain_off/terrain_off.scene")
+add_test(NAME player_terrain_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_terrain_off.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_terrain.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(player_terrain_differs PROPERTIES FIXTURES_REQUIRED "player_terrain_shot;player_terrain_off_shot")
 # The built physics game logs the same events from game.pak in the player.
 add_test(NAME player_physics_events
   COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/physics" "-DEXE=Physics Test.exe"

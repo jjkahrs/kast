@@ -378,7 +378,7 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
             if (const auto it = find(enter->charId); it != chars.end()) {
                 playing = it->name;
                 valid = spawn;
-                queue(proto::EnterWorldOk{1, spawn, 0.5f});
+                queue(proto::EnterWorldOk{1, 1, spawn, 0.5f});
                 queue(proto::Spawn{2, "Other", {101, 0, 100}, 0});
                 queue(proto::EntityMove{2, {102, 0, 100}, 1});
                 queue(proto::Correction{spawn});
@@ -407,6 +407,11 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
             }
             if (say->text == "npc")
                 queue(proto::Spawn{3, "Guard", {103, 0, 100}, 0.25f, proto::SpawnKind::npc, "Guard"});
+            if (say->text == "mapchange") { // like a transfer: MapChange, then the old neighbour's Despawn
+                valid = {300, 0, 310};
+                queue(proto::MapChange{2, valid, 1.5f});
+                queue(proto::Despawn{3});
+            }
         } else {
             queue(proto::Disconnect{proto::Code::unexpected_message});
             return flush();

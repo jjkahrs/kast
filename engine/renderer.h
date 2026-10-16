@@ -123,6 +123,9 @@ private:
     void clearTextures();
     const GpuModel* gpuModel(const std::string& path); // null if the model fails to load
     void clearModels();
+    // Builds, rebuilds (new data) and drops the GPU meshes of the scene's TerrainTiles, then appends their draws.
+    void addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws);
+    void clearTerrain();
     // Appends the draws of a ModelRenderer entity (an error cube if its model fails to load).
     void addModelDraws(const Scene& scene, entt::entity entity, const ModelRenderer& renderer, const float* world,
                        std::vector<DrawItem>& draws, std::vector<std::vector<Mat4>>& boneSets);
@@ -137,7 +140,17 @@ private:
     void drawPointLightRange(const Scene& scene, bgfx::ViewId view, entt::entity selected);
     void drawColliderWireframe(const Scene& scene, bgfx::ViewId view, entt::entity selected);
 
+    // GPU copy of a TerrainTile's heights: kTileSamples^2 vertices in tile-local metres; indices are terrainIndices_.
+    struct TerrainMesh {
+        std::shared_ptr<const TerrainTileData> data; // rebuilt when the tile's data changes
+        bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
+        Aabb bounds{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}}; // world space
+    };
+
     std::array<Mesh, 3> meshes_; // indexed by Primitive
+    bgfx::VertexLayout meshLayout_;  // MeshVertex: primitives and terrain
+    bgfx::IndexBufferHandle terrainIndices_ = BGFX_INVALID_HANDLE; // 32-bit, map::for_each_triangle, shared by tiles
+    std::map<entt::entity, TerrainMesh> terrain_;
     bgfx::VertexLayout lineLayout_;
     bgfx::VertexBufferHandle grid_ = BGFX_INVALID_HANDLE;
     bgfx::VertexLayout modelLayout_; // ModelVertex

@@ -22,15 +22,20 @@ namespace {
     throw std::runtime_error(where + message);
 }
 
-// The read-only built-ins (Character on players, Npc on NPCs, Transform on both; Transform is writable on NPCs), plus
-// the Lua component types.
-enum class Builtin { none, character, transform, npc };
+// The read-only built-ins (Character on players, Npc on NPCs, Spawn on spawn-file NPCs, Transform on both; Transform is
+// writable on NPCs), plus the Lua component types.
+enum class Builtin { none, character, transform, npc, spawn };
 struct Type {
     Builtin builtin = Builtin::none;
     const ComponentDef* def = nullptr;
     std::string_view name() const {
         if (def) return def->name;
-        return builtin == Builtin::character ? "Character" : builtin == Builtin::npc ? "Npc" : "Transform";
+        switch (builtin) {
+        case Builtin::character: return "Character";
+        case Builtin::npc: return "Npc";
+        case Builtin::spawn: return "Spawn";
+        default: return "Transform";
+        }
     }
 };
 
@@ -73,6 +78,7 @@ struct Runtime::Impl {
     sol::state lua;
     sol::table api;
     sol::table fsmApi;                     // kast.fsm.*
+    sol::table mapApi;                     // kast.map.*
     EventBus bus;                          // after lua: Lua subscribers hold functions of that state
     StateMachines fsm{bus, reg};           // after lua: its definitions hold Lua callbacks
     std::vector<System> systems;           // after bus: their subscriptions unsubscribe from it
@@ -84,6 +90,7 @@ struct Runtime::Impl {
         open_sandbox(lua);
         bind_api();
         bind_fsm_api();
+        bind_map_api();
     }
 
     std::string who() const { return current ? current->path : callbackPath.empty() ? std::string("lua") : callbackPath; }
@@ -174,6 +181,7 @@ struct Runtime::Impl {
         sol::table kast = lua.create_table();
         for (const auto& [key, value] : api) kast[key] = value;
         kast["fsm"] = read_only(fsmApi);
+        kast["map"] = read_only(mapApi);
         env["kast"] = read_only(kast);
         return env;
     }
@@ -317,6 +325,7 @@ struct Runtime::Impl {
         if (name == "Character") return {Builtin::character, nullptr};
         if (name == "Transform") return {Builtin::transform, nullptr};
         if (name == "Npc") return {Builtin::npc, nullptr};
+        if (name == "Spawn") return {Builtin::spawn, nullptr};
         for (const auto& def : defs)
             if (def->name == name) return {Builtin::none, def.get()};
         raise(L, std::format("unknown component \"{}\"", name));
@@ -326,6 +335,7 @@ struct Runtime::Impl {
         switch (t.builtin) {
         case Builtin::character: return reg.all_of<world::CharacterRef>(e);
         case Builtin::npc: return reg.all_of<world::Npc>(e);
+        case Builtin::spawn: return reg.all_of<world::SpawnRef>(e);
         case Builtin::transform: return true;
         case Builtin::none: break;
         }
@@ -351,10 +361,11 @@ struct Runtime::Impl {
         return static_cast<float>(number);
     }
 
-    // {x=, y=, z=}, each finite as an f32, or raises "<prefix>"position" must be a table ...".
-    static proto::Vec3 position(lua_State* L, std::string_view prefix, const sol::object& value) {
+    // {x=, y=, z=}, each finite as an f32, or raises "<prefix>"<name>" must be a table ...".
+    static proto::Vec3 position(lua_State* L, std::string_view prefix, const sol::object& value,
+                                std::string_view name = "position") {
         const auto bad = [&] {
-            raise(L, std::format("{}\"position\" must be a table {{x=, y=, z=}} of finite numbers", prefix));
+            raise(L, std::format("{}\"{}\" must be a table {{x=, y=, z=}} of finite numbers", prefix, name));
         };
         if (value.get_type() != sol::type::table) bad();
         const sol::table table = value.as<sol::table>();
@@ -368,9 +379,17 @@ struct Runtime::Impl {
         return {xyz[0], xyz[1], xyz[2]};
     }
 
+    // A loaded map's id, or raises "<prefix>"map" must be ...".
+    uint16_t map_id(lua_State* L, std::string_view prefix, const sol::object& value) {
+        const double number = value.get_type() == sol::type::number ? value.as<double>() : NAN;
+        if (!(number >= 0 && number <= 65535 && number == std::floor(number)) || !npcs.map(static_cast<uint16_t>(number)))
+            raise(L, std::format("{}\"map\" must be the id of a loaded map, got {}", prefix, to_string(L, value)));
+        return static_cast<uint16_t>(number);
+    }
+
     // kast.set(npc, "Transform", {position=, heading=}): partial and all-or-nothing like any set. The position is
-    // clamped into the zone; script moves are trusted (no speed check) and replicate as EntityMove like an accepted
-    // player move.
+    // clamped onto the NPC's map, on its ground (y is ignored); script moves are trusted (no speed check) and replicate as EntityMove like an
+    // accepted player move. The map is read-only: kast.transfer changes it.
     void set_npc_transform(lua_State* L, entt::entity e, const sol::table& fields) {
         auto& tf = reg.get<world::Transform>(e);
         proto::Vec3 pos = tf.pos;
@@ -381,16 +400,18 @@ struct Runtime::Impl {
             const std::string field = key.as<std::string>();
             if (field == "position") pos = position(L, "\"Transform\": ", value);
             else if (field == "heading") heading = finite(L, "\"Transform\": ", "heading", value);
+            else if (field == "map") raise(L, "\"Transform\": \"map\" is read-only; use kast.transfer");
             else raise(L, std::format("\"Transform\": unknown field \"{}\"", field));
         }
-        pos = npcs.clamp(pos);
+        pos = npcs.clamp(reg.get<world::MapRef>(e).map, pos);
         if (pos == tf.pos && heading == tf.heading) return;
         tf.pos = pos;
         tf.heading = heading;
         reg.emplace_or_replace<world::Moved>(e);
     }
 
-    // kast.create(name, {template=, position=?, heading=?}): every argument is checked before anything is created.
+    // kast.create(name, {template=, map=?, position=?, heading=?}): every argument is checked before anything is
+    // created.
     uint32_t create_npc(lua_State* L, const sol::object& name, const sol::object& opts) {
         const auto text = [&](std::string_view what, const sol::object& value) {
             if (value.get_type() != sol::type::string || value.as<std::string>().empty() ||
@@ -405,10 +426,12 @@ struct Runtime::Impl {
         const sol::table table = opts.as<sol::table>();
         for (const auto& [key, unused] : table) {
             const std::string k = key.get_type() == sol::type::string ? key.as<std::string>() : "";
-            if (k != "template" && k != "position" && k != "heading")
+            if (k != "template" && k != "map" && k != "position" && k != "heading")
                 raise(L, std::format("kast.create: unknown option {}", to_string(L, key)));
         }
         std::string templateName = text("template", table["template"]);
+        std::optional<uint16_t> map;
+        if (const sol::object m = table["map"]; m.get_type() != sol::type::lua_nil) map = map_id(L, "kast.create: ", m);
         std::optional<proto::Vec3> pos;
         if (const sol::object p = table["position"]; p.get_type() != sol::type::lua_nil)
             pos = position(L, "kast.create: ", p);
@@ -417,7 +440,71 @@ struct Runtime::Impl {
             heading = finite(L, "kast.create: ", "heading", h);
         if (reg.view<world::Npc>().size() >= npcs.max)
             raise(L, std::format("kast.create: too many NPCs (MAX_NPCS is {})", npcs.max));
-        return wire(npcs.create(std::move(npcName), std::move(templateName), pos, heading));
+        return wire(npcs.create(std::move(npcName), std::move(templateName), map, pos, heading));
+    }
+
+    // kast.transfer(e, map, position, heading?): a player or NPC to a point on a declared tile of a loaded map (the same
+    // map too). heading defaults to the current one. false: this process does not own the destination (logged).
+    bool transfer(lua_State* L, const sol::object& id, const sol::object& mapValue, const sol::object& posValue,
+                  const sol::object& headingValue) {
+        const entt::entity e = entity(L, id, "kast.transfer");
+        const uint16_t map = map_id(L, "kast.transfer: ", mapValue);
+        const proto::Vec3 pos = position(L, "kast.transfer: ", posValue);
+        if (!npcs.map(map)->contains(pos.x, pos.z))
+            raise(L, std::format("kast.transfer: position ({}, {}) is not on a declared tile of map {}", pos.x, pos.z, map));
+        const float heading = headingValue.get_type() == sol::type::lua_nil
+                                  ? reg.get<world::Transform>(e).heading
+                                  : finite(L, "kast.transfer: ", "heading", headingValue);
+        return npcs.transfer(e, map, pos, heading);
+    }
+
+    // kast.map.area(e) / kast.map.areaAt(map, x, y, z): {id, name, flags, music} of the highest-priority area there
+    // (flags include the parent's), or nil. Read-only: what an area's flags mean is up to the game's Lua.
+    sol::object area_table(uint16_t map, float x, float y, float z) {
+        const auto& areas = npcs.map(map)->areas;
+        const int16_t i = map::area_at(areas, x, y, z);
+        if (i < 0) return sol::make_object(lua, sol::lua_nil);
+        const map::Area& a = areas.list[i];
+        sol::table t = lua.create_table();
+        t["id"] = a.id;
+        t["name"] = a.name;
+        t["flags"] = json_to_lua(lua, a.flags);
+        if (!a.music.empty()) t["music"] = a.music;
+        return t;
+    }
+
+    void bind_map_api() {
+        mapApi = lua.create_table();
+        mapApi.set_function("area", [this](sol::this_state L, const sol::object& id) {
+            const entt::entity e = entity(L, id, "kast.map.area");
+            const auto& pos = reg.get<world::Transform>(e).pos;
+            return area_table(reg.get<world::MapRef>(e).map, pos.x, pos.y, pos.z);
+        });
+        mapApi.set_function("areaAt", [this](sol::this_state L, const sol::object& map, const sol::object& x,
+                                             const sol::object& y, const sol::object& z) {
+            const uint16_t id = map_id(L, "kast.map.areaAt: ", map);
+            return area_table(id, finite(L, "kast.map.areaAt: ", "x", x), finite(L, "kast.map.areaAt: ", "y", y),
+                              finite(L, "kast.map.areaAt: ", "z", z));
+        });
+        // kast.map.ground(map, x, z): the ground's height there, or nil off the map's tiles.
+        mapApi.set_function("ground", [this](sol::this_state L, const sol::object& map, const sol::object& x,
+                                             const sol::object& z) {
+            const uint16_t id = map_id(L, "kast.map.ground: ", map);
+            const auto y = npcs.ground(id, finite(L, "kast.map.ground: ", "x", x), finite(L, "kast.map.ground: ", "z", z));
+            return y ? sol::make_object(lua, *y) : sol::make_object(lua, sol::lua_nil);
+        });
+        // kast.map.path(map, from, to): the navmesh path from `from` to `to` ({x=, y=, z=} each) as a list of points,
+        // `from` snapped onto the mesh first and `to` last, or nil (no navmesh on the map, an end not near it, or no way).
+        mapApi.set_function("path", [this](sol::this_state L, const sol::object& map, const sol::object& from,
+                                           const sol::object& to) {
+            const uint16_t id = map_id(L, "kast.map.path: ", map);
+            const auto points = npcs.path(id, position(L, "kast.map.path: ", from, "from"),
+                                          position(L, "kast.map.path: ", to, "to"));
+            if (points.empty()) return sol::make_object(lua, sol::lua_nil);
+            sol::table list = lua.create_table(int(points.size()), 0);
+            for (const auto& p : points) list.add(lua.create_table_with("x", p.x, "y", p.y, "z", p.z));
+            return sol::make_object(lua, list);
+        });
     }
 
     void bind_api() {
@@ -447,6 +534,10 @@ struct Runtime::Impl {
         });
         api.set_function("create", [this](sol::this_state L, const sol::object& name, const sol::object& opts) {
             return create_npc(L, name, opts);
+        });
+        api.set_function("transfer", [this](sol::this_state L, const sol::object& id, const sol::object& map,
+                                            const sol::object& pos, const sol::object& heading) {
+            return transfer(L, id, map, pos, heading);
         });
         // Players leave only by logging out: destroy takes NPCs.
         api.set_function("destroy", [this](sol::this_state L, const sol::object& id) {
@@ -488,10 +579,21 @@ struct Runtime::Impl {
                 const auto& npc = reg.get<world::Npc>(e);
                 table["name"] = npc.name;
                 table["template"] = npc.templateName;
+            } else if (t.builtin == Builtin::spawn) {
+                const map::Spawn& s = *npcs.spawn(reg.get<world::SpawnRef>(e).record);
+                table["id"] = s.id;
+                if (s.path) {
+                    sol::table points = lua.create_table();
+                    for (const auto& p : s.path->points) points.add(lua.create_table_with("x", p[0], "y", p[1], "z", p[2]));
+                    table["path"] = points;
+                    table["wait"] = s.path->wait;
+                    table["loop"] = s.path->loop;
+                }
             } else if (t.builtin == Builtin::transform) {
                 const auto& tf = reg.get<world::Transform>(e);
                 table["position"] = lua.create_table_with("x", tf.pos.x, "y", tf.pos.y, "z", tf.pos.z);
                 table["heading"] = tf.heading;
+                table["map"] = reg.get<world::MapRef>(e).map;
             } else {
                 const Json& json = pool(reg, t.def->name).get(e).value;
                 for (const FieldDesc& field : t.def->fields) table[field.name] = field_json_to_lua(lua, field, json[field.name]);

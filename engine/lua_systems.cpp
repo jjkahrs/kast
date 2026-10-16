@@ -1371,6 +1371,7 @@ void LuaSystems::start(Scene& scene, const std::optional<std::filesystem::path>&
     world_.reset(auth);
     auth_.reset(std::move(auth));
     audio_.start(projectRoot);
+    terrain_.start(projectRoot);
     launch(scene, projectRoot, scenePath, input);
 }
 

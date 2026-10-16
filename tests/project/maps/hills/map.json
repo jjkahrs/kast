@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": 3,
+  "name": "Hills",
+  "tiles": [[0, 0, 1, 1]],
+  "heightRange": [0, 80],
+  "material": "materials/terrain_grass.mat",
+  "nav": {"maxSlopeDeg": 40},
+  "spawn": {"pos": [256, 30, 256], "heading": 0}
+}

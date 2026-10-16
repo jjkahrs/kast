@@ -110,8 +110,17 @@ void Replication::start(Scene& scene, EventBus& bus, WorldClient& world)
             takeNpcTemplates(scene, npcFolder);
     }
 
-    subscriptions_.push_back(bus.subscribe("world.entered", [this](const Json& e) { placeLocal(e); }));
+    subscriptions_.push_back(bus.subscribe("world.entered", [this](const Json& e) {
+        setMap(e);
+        placeLocal(e);
+    }));
     subscriptions_.push_back(bus.subscribe("world.correction", [this](const Json& e) { placeLocal(e); }));
+    // Moved by the server (another map, or a teleport): everyone around is gone; the new neighbours Spawn next.
+    subscriptions_.push_back(bus.subscribe("world.mapChanged", [this](const Json& e) {
+        despawnAll();
+        setMap(e);
+        placeLocal(e);
+    }));
     subscriptions_.push_back(bus.subscribe("world.spawn", [this](const Json& e) {
         const bx::Vec3 at = vec3(e.value("position", Json::object()));
         spawn(e.value("entityId", 0u), {.name = e.value("name", ""), .npc = e.value("kind", "") == "npc",
@@ -136,9 +145,11 @@ void Replication::start(Scene& scene, EventBus& bus, WorldClient& world)
         despawnAll();
         localId_.reset();
         localComponents_.clear();
+        map_.reset();
     }));
     subscriptions_.push_back(bus.subscribe("world.component", [this](const Json& e) { applyComponent(e, false); }));
     subscriptions_.push_back(bus.subscribe("world.componentRemoved", [this](const Json& e) { applyComponent(e, true); }));
+    applyMap(); // a scene switch: the new scene's terrain shows the map the player is on
     if (const entt::entity player = localPlayer(); player != entt::null) // a scene switch: the new scene's player
         for (const auto& [name, data] : localComponents_)
             applyComponent(player, name, &data);
@@ -162,6 +173,7 @@ void Replication::stop(bool remembered)
         remotes_.clear();
         localId_.reset();
         localComponents_.clear();
+        map_.reset();
     }
     for (auto& [id, remote] : remotes_)
         remote.entity = entt::null; // the scene goes; start() re-creates them
@@ -211,6 +223,19 @@ void Replication::update(float dt)
     }
 }
 
+void Replication::setMap(const Json& payload)
+{
+    map_ = payload.value("map", 0);
+    applyMap();
+}
+
+void Replication::applyMap()
+{
+    if (map_)
+        for (auto [entity, terrain] : scene_->registry().view<Terrain>().each())
+            terrain.map = *map_;
+}
+
 void Replication::placeLocal(const Json& payload)
 {
     const entt::entity player = localPlayer();
@@ -218,7 +243,7 @@ void Replication::placeLocal(const Json& payload)
         return;
     Transform& t = scene_->registry().get<Transform>(player);
     t.position = vec3(payload.value("position", Json::object()));
-    if (payload.contains("heading")) // world.entered; a correction carries the position only
+    if (payload.contains("heading")) // world.entered / world.mapChanged; a correction carries the position only
         t.rotation = yawRotation(payload.value("heading", 0.0f));
     if (payload.contains("entityId")) { // world.entered: a new character, so none of the old one's components
         localId_ = payload.value("entityId", 0u);

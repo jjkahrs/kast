@@ -1273,7 +1273,7 @@ void checkWorldClient()
     {
         const std::vector<proto::Message> seen = fakeWorld.seen();
         check(seen.size() >= 2 && std::get_if<proto::Hello>(&seen[0]) &&
-                  std::get_if<proto::Hello>(&seen[0])->protocolVersion == 2 && std::get_if<proto::Auth>(&seen[1]) &&
+                  std::get_if<proto::Hello>(&seen[0])->protocolVersion == 3 && std::get_if<proto::Auth>(&seen[1]) &&
                   std::get_if<proto::Auth>(&seen[1])->accessToken == fake.accessToken(),
               "world: the handshake sends Hello{2} then Auth{the session's access token}");
     }
@@ -1310,9 +1310,10 @@ void checkWorldClient()
 
     w.enterWorld(100);
     const Json* entered = r.next("world.entered");
-    check(entered && entered->value("entityId", 0) == 1 && entered->at("position") == pos(100, 0, 100) &&
-              entered->value("heading", 0.0) == 0.5 && w.state() == kast::WorldState::InWorld,
-          "world.entered {entityId, position, heading}; state inWorld");
+    check(entered && entered->value("entityId", 0) == 1 && entered->value("map", 0) == 1 &&
+              entered->at("position") == pos(100, 0, 100) && entered->value("heading", 0.0) == 0.5 &&
+              w.state() == kast::WorldState::InWorld,
+          "world.entered {entityId, map, position, heading}; state inWorld");
     const Json* spawn = r.next("world.spawn");
     check(spawn && *spawn == Json{{"entityId", 2}, {"name", "Other"}, {"position", pos(101, 0, 100)}, {"heading", 0.0},
                                   {"kind", "player"}, {"template", ""}},
@@ -1339,6 +1340,13 @@ void checkWorldClient()
     check(npc && *npc == Json{{"entityId", 3}, {"name", "Guard"}, {"position", pos(103, 0, 100)}, {"heading", 0.25},
                               {"kind", "npc"}, {"template", "Guard"}},
           "world.spawn of a v2 NPC Spawn: kind npc, its template");
+    w.say("mapchange");
+    const Json* mapChanged = r.next("world.mapChanged");
+    check(mapChanged && *mapChanged == Json{{"map", 2}, {"position", pos(300, 0, 310)}, {"heading", 1.5}},
+          "MapChange -> world.mapChanged {map, position, heading}");
+    const Json* gone = r.next("world.despawn");
+    check(gone && gone->value("entityId", 0) == 3 && w.state() == kast::WorldState::InWorld,
+          "after world.mapChanged: the old neighbour's world.despawn; still inWorld");
     w.say("events");
     const Json* quest = r.next("server.quest.update");
     check(quest && *quest == Json::parse(R"({"quest": 7, "steps": [1, 2], "done": false})"),
@@ -1669,6 +1677,28 @@ void checkReplicationOffline()
     const kast::Transform& pt = s.registry().get<kast::Transform>(player);
     check(approx(pt.position, {50, 1, 60}) && approx(kast::headingOf(pt.rotation), 0.5f),
           "replication: world.entered places the local player (position and heading)");
+    {
+        // world.mapChanged: remote clones gone, the local player placed; spawns after it clone again
+        kast::EventBus mbus; // its own bus: the outer Replication must not see these
+        kast::Scene ms;
+        const entt::entity localPlayer = build(ms);
+        kast::Replication mr;
+        mr.start(ms, mbus, world);
+        mbus.publish("world.entered", {{"entityId", 1}, {"map", 1}, {"position", at(50, 1, 60)}, {"heading", 0.5}});
+        mbus.publish("world.spawn", {{"entityId", 7}, {"name", "Old"}, {"position", at(10, 0, 10)}, {"heading", 0}});
+        mbus.drain();
+        const entt::entity old = mr.clone(7);
+        mbus.publish("world.mapChanged", {{"map", 2}, {"position", at(300, 0, 310)}, {"heading", 1.5}});
+        mbus.drain();
+        const kast::Transform& lt = ms.registry().get<kast::Transform>(localPlayer);
+        check(ms.valid(old) == false && mr.clone(7) == entt::null && approx(lt.position, {300, 0, 310}) &&
+                  approx(kast::headingOf(lt.rotation), 1.5f),
+              "replication: world.mapChanged clears remote clones and places the local player");
+        mbus.publish("world.spawn", {{"entityId", 8}, {"name", "New"}, {"position", at(305, 0, 310)}, {"heading", 0}});
+        mbus.drain();
+        check(ms.valid(mr.clone(8)), "replication: a spawn after world.mapChanged clones again");
+        mr.stop();
+    }
     const entt::entity other = r.clone(2);
     const auto& reg = s.registry();
     check(s.valid(other) && reg.get<kast::Name>(other).value == "Other" && reg.get<kast::NetworkEntity>(other).entityId == 2 &&
@@ -2367,7 +2397,7 @@ int liveReplicationCheck(const std::string& authUrl, const std::string& mailpitU
             lua.start(scene, std::nullopt, "", nullptr, {}, config);
             for (const char* name : {"auth.realms", "world.connected", "world.charCreated", "world.entered",
                                      "world.spawn", "world.despawn", "world.correction", "world.disconnected",
-                                     "world.entitySpawned", "world.charError"})
+                                     "world.entitySpawned", "world.charError", "world.mapChanged"})
                 subs.push_back(lua.bus().subscribe(name, [this, name](const Json& e) { events.emplace_back(name, e); }));
         }
         const Json* last(const std::string& name) const
@@ -2381,6 +2411,16 @@ int liveReplicationCheck(const std::string& authUrl, const std::string& mailpitU
     };
     const kast::AuthConfig config{authUrl, caPem};
     Player a(config), b(config);
+    // A shows terrain: the test project's maps (the stack's MAP_ROOT), map set by the server.
+    a.lua.terrain().start(std::filesystem::path(KAST_TEST_PROJECT_DIR));
+    const entt::entity terrainA = a.scene.create("Terrain");
+    a.scene.registry().emplace<kast::Terrain>(terrainA);
+    const auto tilesOf = [&](int map) {
+        size_t count = 0;
+        for (auto [e, tile] : a.scene.registry().view<kast::TerrainTile>().each())
+            count += tile.map == map ? 1 : 0;
+        return a.scene.registry().view<kast::TerrainTile>().size() == count ? count : 0;
+    };
     // Ticks both sessions on a ~60 fps clock until done() (true) or timeout (false); step runs before each tick.
     auto previous = std::chrono::steady_clock::now();
     const auto run = [&](const std::function<bool()>& done, std::chrono::milliseconds timeout,
@@ -2509,6 +2549,64 @@ int liveReplicationCheck(const std::string& authUrl, const std::string& mailpitU
     b.lua.world().disconnect();
     check(run([&] { return a.lua.replication().clone(idB) == entt::null; }, 10s) && !a.scene.valid(cloneB),
           "live replication: B leaving despawns its clone on A");
+    // Terrain: A entered on map 1 (start) and shows its 3 x 3 tiles; walking into start's hills_gate portal moves A to
+    // map 3 (hills), and A's terrain follows.
+    check(a.last("world.entered")->value("map", 0) == 1 && a.scene.registry().get<kast::Terrain>(terrainA).map == 1,
+          "live replication: entering puts the local player on map 1 (Terrain.map 1)");
+    check(run([&] { return tilesOf(1) == 9; }, 2s), "live replication: map 1's 3 x 3 tiles stream in around A");
+    const bx::Vec3 gate{1065.0f, a.position().y, 1025.0f};
+    run([&] { return a.last("world.mapChanged") != nullptr; }, 20s, [&](float dt) {
+        const bx::Vec3 to = bx::sub(gate, a.position());
+        const float left = bx::length(to);
+        if (left > 1e-3f)
+            a.position() = bx::add(a.position(), bx::mul(to, std::min(1.0f, 4.0f * dt / left))); // 4 m/s
+    });
+    const Json* changed = a.last("world.mapChanged");
+    kast::log::info(std::format("live replication: A walked to {:.1f}, {:.1f}; mapChanged {}", a.position().x,
+                                a.position().z, changed ? changed->dump() : "none"));
+    check(changed && changed->value("map", 0) == 3, "live replication: walking into hills_gate moves A to map 3");
+    check(a.scene.registry().get<kast::Terrain>(terrainA).map == 3,
+          "live replication: world.mapChanged switches Terrain.map to the destination");
+    check(run([&] { return tilesOf(3) == 4; }, 2s),
+          "live replication: the hills' 4 tiles replace map 1's (no map 1 tile left)");
+    kast::log::info(std::format("live replication: A on map 3 at {:.1f}, {:.1f}, {:.1f} with {} terrain tiles",
+                                a.position().x, a.position().y, a.position().z,
+                                a.scene.registry().view<kast::TerrainTile>().size()));
+
+    // Ground (services/world README "Ground"): the server put A on the ground its own heightmaps describe, the same
+    // as A's terrain tiles; walking down the slope at that ground is never corrected. The walk stays under the hills'
+    // nav.maxSlopeDeg (40; at most 36.5 here): steeper ground is off the server's navmesh ("Navmesh").
+    std::shared_ptr<const kast::map::MapInfo> hills;
+    kast::map::TileHeights hillsGround;
+    for (auto [e, tile] : a.scene.registry().view<kast::TerrainTile>().each())
+        if (tile.data) {
+            hills = tile.data->map;
+            hillsGround[{tile.tx, tile.tz}] = tile.data->heights;
+        }
+    const auto groundAt = [&](const bx::Vec3& p) {
+        return hills ? kast::map::ground_at(*hills, hillsGround, p.x, p.z).value_or(-1e9f) : -1e9f;
+    };
+    const bx::Vec3 arrived = a.position();
+    check(std::abs(arrived.y - groundAt(arrived)) < 0.05f,
+          "live replication: the portal lands A on the ground of A's own terrain (server and client agree)");
+    const auto correctionsOf = [](const Player& p) {
+        return std::ranges::count_if(p.events, [](const auto& e) { return e.first == "world.correction"; });
+    };
+    const auto correctionsBefore = correctionsOf(a);
+    const bx::Vec3 goal{arrived.x - 24.0f, 0.0f, arrived.z + 18.0f};
+    run([&] { return std::hypot(goal.x - a.position().x, goal.z - a.position().z) < 1e-3f; }, 15s, [&](float dt) {
+        const float dx = goal.x - a.position().x, dz = goal.z - a.position().z, left = std::hypot(dx, dz);
+        const float k = std::min(1.0f, 4.0f * dt / left); // 4 m/s
+        a.position().x += dx * k;
+        a.position().z += dz * k;
+        a.position().y = groundAt(a.position());
+    });
+    run([] { return false; }, 500ms); // the server's answer to the last moves
+    kast::log::info(std::format("live replication: A walked the hills from y {:.2f} to {:.2f} at ({:.1f}, {:.1f})",
+                                arrived.y, a.position().y, a.position().x, a.position().z));
+    check(correctionsOf(a) == correctionsBefore && std::abs(a.position().y - arrived.y) > 1.0f,
+          "live replication: walking 30 m of the hills at the ground's height is never corrected");
+
     a.lua.world().disconnect();
     a.lua.stop();
     b.lua.stop();

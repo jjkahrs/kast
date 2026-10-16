@@ -8,6 +8,7 @@
 #include "physics.h"
 #include "scene.h"
 #include "state_machines.h"
+#include "terrain.h"
 #include "replication.h"
 #include "world_client.h"
 
@@ -94,6 +95,9 @@ public:
     // The session's entity replication (README "Online Services → Replication"): started with each scene before
     // physics and the inits (it takes the template entity out), updated by tick() after the systems.
     Replication& replication() { return replication_; }
+    // The session's terrain streaming (README "Terrain"): its maps load with start(), tickPlay updates it before
+    // physics so new tiles collide on the step they appear.
+    TerrainStreamer& terrain() { return terrain_; }
     StateMachines& fsm() { return fsm_; }
     const StateMachines& fsm() const { return fsm_; }
 
@@ -105,6 +109,7 @@ private:
 
     EventBus bus_; // declared before state_: the systems' subscriptions unsubscribe from it when state_ goes
     Physics physics_; // publishes on bus_
+    TerrainStreamer terrain_;
     Audio audio_;
     Network network_;
     AuthClient auth_{network_};

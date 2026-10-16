@@ -22,6 +22,7 @@
 #include "log.h"
 #include "physics.h"
 #include "project.h"
+#include "terrain.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
@@ -276,17 +277,20 @@ std::vector<size_t> shadowedPointLights(const std::vector<PointLightSample>& lig
 
 void Renderer::init()
 {
-    bgfx::VertexLayout meshLayout;
-    meshLayout.begin()
+    meshLayout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
         .end();
     const MeshData data[3] = {makeCube(), makePlane(), makeSphere()}; // Primitive order
     for (size_t i = 0; i < meshes_.size(); ++i) {
-        meshes_[i].vertices = bgfx::createVertexBuffer(copyOf(data[i].vertices), meshLayout);
+        meshes_[i].vertices = bgfx::createVertexBuffer(copyOf(data[i].vertices), meshLayout_);
         meshes_[i].indices = bgfx::createIndexBuffer(copyOf(data[i].indices));
     }
+    std::vector<uint32_t> terrainIndices;
+    terrainIndices.reserve(size_t(map::kTileSamples - 1) * (map::kTileSamples - 1) * 6);
+    map::for_each_triangle([&](uint32_t a, uint32_t b, uint32_t c) { terrainIndices.insert(terrainIndices.end(), {a, b, c}); });
+    terrainIndices_ = bgfx::createIndexBuffer(copyOf(terrainIndices), BGFX_BUFFER_INDEX32);
 
     modelLayout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
@@ -347,6 +351,8 @@ void Renderer::shutdown()
         bgfx::destroy(mesh.vertices);
         bgfx::destroy(mesh.indices);
     }
+    clearTerrain();
+    bgfx::destroy(terrainIndices_);
     bgfx::destroy(grid_);
     bgfx::destroy(meshProgram_);
     bgfx::destroy(skinnedProgram_);
@@ -377,6 +383,63 @@ void Renderer::shutdown()
     clearTextures();
     clearModels();
     bgfx::destroy(white_);
+}
+
+// ponytail: full-res tiles (66049 vertices, 131072 triangles each); LOD and skirts when the draw distance grows.
+void Renderer::addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws)
+{
+    const entt::registry& registry = scene.registry();
+    for (auto it = terrain_.begin(); it != terrain_.end();) {
+        const auto* tile = scene.valid(it->first) ? registry.try_get<TerrainTile>(it->first) : nullptr;
+        if (tile && tile->data == it->second.data) {
+            ++it;
+            continue;
+        }
+        bgfx::destroy(it->second.vertices);
+        it = terrain_.erase(it);
+    }
+    for (auto [entity, tile] : registry.view<TerrainTile>().each()) {
+        if (!tile.data)
+            continue;
+        const TerrainTileData& data = *tile.data;
+        const map::MapInfo& info = *data.map;
+        auto [it, added] = terrain_.try_emplace(entity);
+        TerrainMesh& mesh = it->second;
+        if (added) {
+            constexpr int n = map::kTileSamples;
+            std::vector<MeshVertex> vertices;
+            vertices.reserve(size_t(n) * n);
+            float lo = FLT_MAX, hi = -FLT_MAX;
+            for (int v = 0; v < n; ++v)
+                for (int u = 0; u < n; ++u) {
+                    const float y = map::sample_height(data.heights[size_t(v) * n + size_t(u)], info);
+                    const auto normal = map::normal_at(data.heights, info, u, v);
+                    // UV = world xz / 8; tile-local gives the same wrap (256 / 8 is whole) without float drift far out.
+                    vertices.push_back({float(u), y, float(v), normal[0], normal[1], normal[2], float(u) / 8.0f,
+                                        float(v) / 8.0f});
+                    lo = std::min(lo, y);
+                    hi = std::max(hi, y);
+                }
+            mesh.data = tile.data;
+            mesh.vertices = bgfx::createVertexBuffer(copyOf(vertices), meshLayout_);
+            const bx::Vec3 origin{float(data.tile.x) * map::kTileSize, 0.0f, float(data.tile.z) * map::kTileSize};
+            mesh.bounds = {{origin.x, lo, origin.z}, {origin.x + map::kTileSize, hi, origin.z + map::kTileSize}};
+        }
+        DrawItem item;
+        bx::mtxTranslate(item.world.data(), mesh.bounds.min.x, 0.0f, mesh.bounds.min.z);
+        item.bounds = mesh.bounds;
+        item.material = &materials_.get(info.material);
+        item.vertices = mesh.vertices;
+        item.indices = terrainIndices_;
+        draws.push_back(item);
+    }
+}
+
+void Renderer::clearTerrain()
+{
+    for (auto& [entity, mesh] : terrain_)
+        bgfx::destroy(mesh.vertices);
+    terrain_.clear();
 }
 
 void Renderer::setProjectRoot(const std::filesystem::path& root)
@@ -727,6 +790,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         scene.worldMatrix(entity, world);
         addModelDraws(scene, entity, model, world, draws, boneSets);
     }
+    addTerrainDraws(scene, draws);
 
     const ShadowFrame shadows = renderShadows(sun, {lightDir[0], lightDir[1], lightDir[2]}, draws, boneSets,
                                               pointLights, viewMtx, projMtx, shadowViews);

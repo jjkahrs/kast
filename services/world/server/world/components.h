@@ -28,6 +28,18 @@ struct Transform {
     float heading = 0;
 };
 
+// The map every player and NPC is on (map.json "id"). Changed only by World::transfer.
+struct MapRef {
+    uint16_t map = 0;
+};
+
+// The area a player is in: an index into map's areas (map::area_at), -1 for none. Kept by set_area; map is the map
+// the index belongs to, which a transfer changes before set_area runs.
+struct AreaRef {
+    uint16_t map = 0;
+    int16_t area = -1;
+};
+
 struct MoveState {
     MoveBudget budget;
 };
@@ -75,18 +87,25 @@ struct Npc {
     std::string templateName;
 };
 
+// An NPC placed by a spawn file: record indexes World's spawn records (SpawnRecord). Read in Lua as "Spawn".
+struct SpawnRef {
+    uint32_t record = 0;
+};
+
 // The players that currently see this NPC, sorted wire ids. An NPC has no Visible: it sees nothing, and AOI is
 // tracked from the players' side (aoi_system keeps this in step with their Visible).
 struct Viewers {
     std::vector<uint32_t> ids;
 };
 
-// Names no Lua component may take: the Lua built-ins (read-only Character and Npc, Transform, writable StateMachine)
+// Names no Lua component may take: the Lua built-ins (read-only Character, Npc and Spawn, Transform, writable
+// StateMachine)
 // and every C++ component here, in lua/components.h and in lua/state_machines.h.
 inline constexpr const char* kReservedComponentNames[] = {
     "Character",    "Transform",       "StateMachine", "Npc",                 "SessionLink",   "CharacterRef",
     "MoveState",    "PendingMoves",    "PendingSay",   "ChatLimit",           "AoiCell",       "Visible",
     "Viewers",      "Moved",           "Dirty",        "SaveTimer",           "ReplicatedState", "ScriptsLeft",
-    "PreservedComponents", "ComponentData", "StateMachineRuntime"};
+    "PreservedComponents", "ComponentData", "StateMachineRuntime", "MapRef",
+    "AreaRef",      "Spawn",           "SpawnRef"};
 
 } // namespace kast::world

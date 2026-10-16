@@ -16,6 +16,7 @@ services:
       TLS_DEV_CERT_DIR: /app/certs
       MIGRATIONS_DIR: /app/migrations
       LUA_ROOT: /app/lua
+      MAP_ROOT: /app/maps
       # The sample's game state machine (lua/fsms/zone_cycle.lua); set GAME_STATE_MACHINES in .env to override.
       GAME_STATE_MACHINES: ${GAME_STATE_MACHINES-zone_cycle}
     ports:
@@ -26,6 +27,8 @@ services:
       # `docker compose restart world`.
       # Point the left side at a game project folder to share its components/ with the client.
       - ./lua:/app/lua:ro
+      # Maps (README "Maps"): the game project's maps/ folder, <folder>/map.json each; restart world after edits.
+      - ../../tests/project/maps:/app/maps:ro
     depends_on:
       mysql:
         condition: service_healthy
@@ -109,9 +112,10 @@ services:
     image: kast-world:dev
     profiles: ["tools"]
     entrypoint: ["./kast_bot", "--auth-url", "http://auth:3000", "--mailpit-url", "http://mailpit:8025",
-                 "--host", "world", "--port", "7777", "--ca", "/certs/server.crt"]
+                 "--host", "world", "--port", "7777", "--ca", "/certs/server.crt", "--map-root", "/app/maps"]
     volumes:
       - world-certs:/certs:ro
+      - ../../tests/project/maps:/app/maps:ro # terrain scenario: the world's maps, for ground heights
       - auth-keys:/auth-keys:ro # test only: scenario 8 mints an expired token with auth's key
     depends_on:
       world:

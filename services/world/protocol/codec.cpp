@@ -52,6 +52,7 @@ const char* opcode_name(Opcode op) {
     case Opcode::ComponentUpdate: return "ComponentUpdate";
     case Opcode::ComponentRemove: return "ComponentRemove";
     case Opcode::ServerEvent: return "ServerEvent";
+    case Opcode::MapChange: return "MapChange";
     }
     return "unknown";
 }

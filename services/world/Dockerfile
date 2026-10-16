@@ -21,13 +21,14 @@ RUN cmake --preset linux-release -DVCPKG_INSTALLED_DIR=/opt/vcpkg_installed -DVC
     && cmake --build --preset linux-release \
     && ctest --preset linux-release
 
-# --- runtime: binaries + migrations + sample Lua, non-root ---
+# --- runtime: binaries (server, bot, navmesh bake) + migrations + sample Lua, non-root ---
 FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --create-home --uid 10001 world
 WORKDIR /app
-COPY --from=build /src/build/linux-release/kast_world /src/build/linux-release/kast_bot ./
+COPY --from=build /src/build/linux-release/kast_world /src/build/linux-release/kast_bot \
+     /src/build/linux-release/kast_mapbake ./
 COPY migrations ./migrations
 # Sample Lua components and systems (LUA_ROOT); compose bind-mounts ./lua over it.
 COPY lua ./lua

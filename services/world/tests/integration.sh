@@ -88,6 +88,17 @@ graceful() {
 echo "run id: $RUN   logs: $LOGDIR"
 wait_healthy world || { echo "world is not healthy; run docker compose up -d --build"; exit 1; }
 
+# 0: kast_mapbake in the image (README "Navmesh") bakes every tile of the mounted (read-only) hills into a temp dir;
+# the server keeps the navtiles stored in the repo. Checksums are logged to compare with a Windows bake.
+log="$LOGDIR/0.log"
+echo "--- 0 kast_mapbake bakes maps/hills in the image"
+docker compose run --rm -T --entrypoint sh bot -c \
+    './kast_mapbake /app/maps/hills --out /tmp/nav && sha256sum /tmp/nav/* /app/maps/hills/.server/nav/*' 2>&1 |
+    tee "$log" | grep -v -E '^ *(Container|Network) '
+ok=${PIPESTATUS[0]}
+grep -q '^4 navtile(s) -> /tmp/nav' "$log" || ok=1
+record "0 kast_mapbake bakes maps/hills in the image" "$ok" "see $log"
+
 scenario "1 register/verify/login + TLS + AuthOk" --scenario auth
 scenario "2 character create/list/delete, limits, names" --scenario characters
 scenario "3 characters are owner-only" --scenario ownership
@@ -159,6 +170,18 @@ scenario "15 state machines: transitions observed, denied one silent" --scenario
 
 # 16: NPCs with the sample lua/systems/npcs.lua (README "NPCs"): the patrolling Guard seen, moving, leaving and returning
 scenario "16 NPCs: Spawn{npc, Guard}, moves, Despawn out of range, Spawn on return" --scenario npcs
+
+# 17: areas with the sample maps' areas.json (README "Areas"): start's cave_mouth portal to map 2, kept across a relog
+scenario "17 portal: MapChange{2} first, Bat seen, B lost, relog stays on map 2" --scenario portal
+
+# 18: NPC spawns (README "NPC spawns"): the test hook destroys the Guard; it respawns after the fixture's respawnSec (5 s)
+scenario "18 NPC respawn: Guard destroyed by lua/systems/test_hooks.lua, back 5 s later at its spawn" --scenario respawn
+
+# 19: ground on the sample hills map (README "Ground"): slope walk accepted and seen on the ground, fly hack corrected
+scenario "19 terrain: hills_gate lands on the ground, slope walk accepted, fly hack -> Correction" --scenario terrain
+
+# 20: navmesh on the sample hills map (README "Navmesh"): walking into the mesa's wall is corrected; the Sentry walks around it
+scenario "20 navmesh: mesa wall -> Correction, Sentry patrols around it on the ground" --scenario navmesh
 
 echo
 echo "================ integration summary ($RUN) ================"

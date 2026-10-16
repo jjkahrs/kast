@@ -9,7 +9,7 @@
 
 namespace kast::proto {
 
-constexpr uint16_t kProtocolVersion = 2;
+constexpr uint16_t kProtocolVersion = 3;
 constexpr size_t kHeaderSize = 4; // u16 payload length + u16 opcode
 constexpr size_t kMaxPayloadBytes = 0xFFFF; // the u16 length field's limit
 
@@ -39,6 +39,7 @@ enum class Opcode : uint16_t {
     ComponentUpdate = 0x0125, // S
     ComponentRemove = 0x0126, // S
     ServerEvent = 0x0127,     // S
+    MapChange = 0x0128,       // S
 };
 
 // Reason codes carried by Disconnect and CharError.
@@ -223,10 +224,11 @@ struct CharDeleted {
 struct EnterWorldOk {
     static constexpr Opcode op = Opcode::EnterWorldOk;
     uint32_t entityId = 0;
+    uint16_t map = 0; // map.json "id"
     Vec3 pos;
     float heading = 0;
-    void write(Writer& w) const { w.u32(entityId); proto::write(w, pos); w.f32(heading); }
-    void read(Reader& r) { entityId = r.u32(); proto::read(r, pos); heading = r.f32(); }
+    void write(Writer& w) const { w.u32(entityId); w.u16(map); proto::write(w, pos); w.f32(heading); }
+    void read(Reader& r) { entityId = r.u32(); map = r.u16(); proto::read(r, pos); heading = r.f32(); }
     bool operator==(const EnterWorldOk&) const = default;
 };
 
@@ -332,9 +334,21 @@ struct ServerEvent {
     static bool fits(size_t nameBytes, size_t jsonBytes) { return 2 + nameBytes + 2 + jsonBytes <= kMaxPayloadBytes; }
 };
 
+// The player was moved to another map (or another place on its own): drop every remote entity, place yourself here.
+// Comes before the Despawns and Spawns of the move (PROTOCOL.md "Maps").
+struct MapChange {
+    static constexpr Opcode op = Opcode::MapChange;
+    uint16_t map = 0;
+    Vec3 pos;
+    float heading = 0;
+    void write(Writer& w) const { w.u16(map); proto::write(w, pos); w.f32(heading); }
+    void read(Reader& r) { map = r.u16(); proto::read(r, pos); heading = r.f32(); }
+    bool operator==(const MapChange&) const = default;
+};
+
 using Message = std::variant<Hello, Auth, Ping, Pong, CharListReq, CharCreate, CharDelete, EnterWorld, Move, Say,
                              AuthOk, Disconnect, CharList, CharCreated, CharDeleted, EnterWorldOk, CharError, Spawn,
                              Despawn, EntityMove, Correction, ChatMsg, ComponentUpdate,
-                             ComponentRemove, ServerEvent>;
+                             ComponentRemove, ServerEvent, MapChange>;
 
 } // namespace kast::proto

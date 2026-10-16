@@ -7,11 +7,11 @@ namespace {
 
 world::WorldRules world_rules(const Config& c) {
     world::WorldRules r;
-    r.move = {c.maxSpeed, c.speedTolerance, c.moveBurstSec, c.zoneSizeX, c.zoneSizeZ, c.minY, c.maxY};
+    r.move = {c.maxSpeed, c.speedTolerance, c.moveBurstSec, c.minY, c.maxY, c.groundTolerance, c.maxAir, c.moveNavCheck};
     r.chat.maxBytes = c.chatMaxBytes;
     r.cellSize = c.aoiCellSize;
     r.viewRadius = c.aoiViewRadius;
-    r.spawn = {c.spawn_x(), c.spawnY, c.spawn_z()};
+    r.startMap = c.startMap;
     r.chatRateCount = c.chatRateCount;
     r.chatRateWindow = Millis(c.chatRateWindowMs);
     r.saveInterval = Millis(c.saveIntervalMs);
@@ -43,10 +43,10 @@ const char* role_name(proto::Role r) {
 
 } // namespace
 
-GameServer::GameServer(asio::io_context& io, const Config& cfg, asio::ssl::context& tls, db::DbWorker& db,
-                       TokenService& tokens, lua::Defs defs)
-    : io_(io), cfg_(cfg), tls_(tls), db_(db), tokens_(tokens), limits_(session_limits(cfg)), acceptor_(io),
-      world_(world_rules(cfg),
+GameServer::GameServer(asio::io_context& io, const Config& cfg, const world::Maps& maps, asio::ssl::context& tls,
+                       db::DbWorker& db, TokenService& tokens, lua::Defs defs)
+    : io_(io), cfg_(cfg), maps_(maps), tls_(tls), db_(db), tokens_(tokens), limits_(session_limits(cfg)), acceptor_(io),
+      world_(world_rules(cfg), maps,
              [this](uint32_t sid, const proto::Message& m) {
                  if (auto* c = find(sid)) c->session->send(m);
              },
@@ -190,11 +190,14 @@ void GameServer::handle_lobby(Client& c, proto::Message&& m) {
     } else if (auto* create = std::get_if<proto::CharCreate>(&m)) {
         if (!valid_character_name(create->name)) return char_error(c, op, proto::Code::name_invalid);
         c.requestInFlight = true;
-        const proto::Vec3 spawn{cfg_.spawn_x(), cfg_.spawnY, cfg_.spawn_z()};
+        const auto& start = maps_.info(cfg_.startMap);
+        const uint16_t map = start.id;
+        const proto::Vec3 spawn{start.spawn[0], start.spawn[1], start.spawn[2]};
+        const float heading = start.spawnHeading;
         const uint32_t maxChars = cfg_.maxCharsPerAccount;
         db_.query<db::CreateResult>(
-            [acc, name = create->name, spawn, maxChars](db::CharRepo& repo) {
-                return repo.create(acc, name, spawn, 0, maxChars);
+            [acc, name = create->name, map, spawn, heading, maxChars](db::CharRepo& repo) {
+                return repo.create(acc, name, map, spawn, heading, maxChars);
             },
             [this, reply](std::optional<db::CreateResult> res) {
                 Client* cl = reply();

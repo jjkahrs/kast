@@ -68,7 +68,8 @@ asio::awaitable<void> sleep_for(Millis d) {
     co_await t.async_wait(use_awaitable);
 }
 
-asio::awaitable<proto::Vec3> walk(WorldClient& c, proto::Vec3 from, float dx, float dz, float speed) {
+asio::awaitable<proto::Vec3> walk(WorldClient& c, proto::Vec3 from, float dx, float dz, float speed,
+                                  const std::function<float(float x, float z)>& groundY) {
     const float dist = std::hypot(dx, dz);
     const int steps = static_cast<int>(std::ceil(dist / (speed * 0.1f)));
     const float heading = std::atan2(dx, dz);
@@ -80,6 +81,7 @@ asio::awaitable<proto::Vec3> walk(WorldClient& c, proto::Vec3 from, float dx, fl
         t.expires_at(next);
         co_await t.async_wait(use_awaitable);
         p = {from.x + dx * i / steps, from.y, from.z + dz * i / steps};
+        if (groundY) p.y = groundY(p.x, p.z);
         c.send(proto::Move{p, heading, static_cast<uint32_t>(i * 100)});
     }
     co_return p;

@@ -1,0 +1,186 @@
+#include "terrain.h"
+
+#include "files.h"
+#include "log.h"
+
+#include <algorithm>
+#include <cmath>
+#include <format>
+#include <set>
+
+namespace kast {
+namespace {
+
+using Json = nlohmann::json;
+
+std::optional<Json> readJson(const std::filesystem::path& file, bool& exists)
+{
+    std::string text;
+    exists = readFile(file, text);
+    if (!exists)
+        return std::nullopt;
+    Json j = Json::parse(text, nullptr, false);
+    if (j.is_discarded())
+        return std::nullopt;
+    return j;
+}
+
+bx::Vec3 worldPosition(const Scene& scene, entt::entity entity)
+{
+    float m[16];
+    scene.worldMatrix(entity, m);
+    return {m[12], m[13], m[14]};
+}
+
+} // namespace
+
+std::vector<map::TileKey> tiles_around(const map::MapInfo& info, std::array<float, 2> centre, int radius)
+{
+    const map::TileKey c = map::tile_of(centre[0], centre[1]);
+    std::vector<map::TileKey> tiles;
+    for (int32_t z = c.z - radius; z <= c.z + radius; ++z)
+        for (int32_t x = c.x - radius; x <= c.x + radius; ++x)
+            if (info.has_tile({x, z}))
+                tiles.push_back({x, z});
+    return tiles;
+}
+
+void TerrainStreamer::start(const std::optional<std::filesystem::path>& projectRoot)
+{
+    maps_.clear();
+    areaMap_ = 0;
+    area_ = -1;
+    warnedMap_ = -1;
+    if (!projectRoot)
+        return;
+    const std::filesystem::path root = *projectRoot / "maps";
+    for (const std::filesystem::path& file : listFiles(root)) {
+        const std::filesystem::path folder = file.parent_path();
+        if (file.filename() != "map.json" || folder.parent_path().lexically_normal() != root.lexically_normal() ||
+            folder.filename().string().starts_with('.'))
+            continue;
+        bool exists = false;
+        std::string err;
+        const std::optional<Json> manifest = readJson(file, exists);
+        std::optional<map::MapInfo> info = manifest ? map::parse_manifest(*manifest, err) : std::nullopt;
+        if (!info) {
+            log::error(std::format("Terrain: {}: {}", file.string(), manifest ? err : "not valid JSON"));
+            continue;
+        }
+        if (const std::optional<Json> areas = readJson(folder / "areas.json", exists)) {
+            if (std::optional<map::Areas> parsed = map::parse_areas(*areas, err))
+                info->areas = std::move(*parsed);
+            else
+                log::error(std::format("Terrain: {}: {}", (folder / "areas.json").string(), err));
+        } else if (exists) {
+            log::error(std::format("Terrain: {}: not valid JSON", (folder / "areas.json").string()));
+        }
+        if (maps_.contains(info->id)) {
+            log::error(std::format("Terrain: {}: map id {} is already used", file.string(), info->id));
+            continue;
+        }
+        const uint16_t id = info->id;
+        maps_[id] = {std::make_shared<const map::MapInfo>(std::move(*info)), folder};
+    }
+}
+
+const map::MapInfo* TerrainStreamer::map(uint16_t id) const
+{
+    const auto it = maps_.find(id);
+    return it == maps_.end() ? nullptr : it->second.info.get();
+}
+
+// ponytail: sync load on the main thread; move to a worker thread if tile crossings hitch.
+std::shared_ptr<const TerrainTileData> TerrainStreamer::load(const LoadedMap& map, map::TileKey tile) const
+{
+    auto data = std::make_shared<TerrainTileData>();
+    data->map = map.info;
+    data->tile = tile;
+    const std::string stem = std::format("{}_{}", tile.x, tile.z);
+    for (const char* ext : {".r16", ".png"}) {
+        const std::filesystem::path file = map.folder / "heights" / (stem + ext);
+        std::string bytes;
+        if (!readFile(file, bytes))
+            continue;
+        std::string err;
+        if (std::optional<map::Heights> heights = map::decode_heights(bytes, ext, err)) {
+            data->heights = std::move(*heights);
+            return data;
+        }
+        log::error(std::format("Terrain: {}: {}; the tile is flat", file.string(), err));
+        break;
+    }
+    data->heights = map::flat_heights(); // no heights file: flat at heightMin
+    return data;
+}
+
+void TerrainStreamer::update(Scene& scene, EventBus& bus)
+{
+    entt::registry& registry = scene.registry();
+    auto terrains = registry.view<Terrain>();
+    const entt::entity owner = terrains.empty() ? entt::null : terrains.front();
+    const Terrain* terrain = owner == entt::null ? nullptr : &registry.get<Terrain>(owner);
+    const auto loaded = terrain ? maps_.find(static_cast<uint16_t>(terrain->map)) : maps_.end();
+    if (terrain && loaded == maps_.end() && warnedMap_ != terrain->map) {
+        warnedMap_ = terrain->map;
+        log::warn(std::format("Terrain: no map with id {} under maps/", terrain->map));
+    }
+
+    std::optional<bx::Vec3> centre;
+    if (auto players = registry.view<NetworkLocalPlayer>(); !players.empty())
+        centre = worldPosition(scene, players.front());
+    else if (const entt::entity camera = activeCamera(scene); camera != entt::null)
+        centre = worldPosition(scene, camera);
+    const bx::Vec3 at = centre.value_or(bx::Vec3{0.0f, 0.0f, 0.0f});
+
+    std::vector<map::TileKey> wanted;
+    if (loaded != maps_.end())
+        wanted = tiles_around(*loaded->second.info, {at.x, at.z}, terrain->radius);
+    const auto isWanted = [&](const TerrainTile& t) {
+        return loaded != maps_.end() && t.map == terrain->map &&
+               std::ranges::find(wanted, map::TileKey{t.tx, t.tz}) != wanted.end();
+    };
+
+    std::set<std::pair<int32_t, int32_t>> have;
+    std::vector<entt::entity> gone;
+    for (auto [entity, tile] : registry.view<TerrainTile>().each()) {
+        if (isWanted(tile) && have.insert({tile.tx, tile.tz}).second)
+            continue;
+        gone.push_back(entity);
+    }
+    for (entt::entity entity : gone)
+        scene.destroy(entity);
+    for (const map::TileKey key : wanted) {
+        if (have.contains({key.x, key.z}))
+            continue;
+        const entt::entity entity = scene.create(std::format("Terrain Tile {}_{}", key.x, key.z), owner);
+        if (entity == entt::null)
+            continue;
+        registry.get<Transform>(entity).position = {float(key.x) * map::kTileSize, 0.0f, float(key.z) * map::kTileSize};
+        registry.emplace<TerrainTile>(entity, terrain->map, key.x, key.z, load(loaded->second, key));
+    }
+
+    if (loaded == maps_.end())
+        setArea(bus, 0, -1);
+    else
+        setArea(bus, loaded->first, map::area_at(loaded->second.info->areas, at.x, at.y, at.z));
+}
+
+void TerrainStreamer::setArea(EventBus& bus, uint16_t mapId, int16_t area)
+{
+    if (mapId == areaMap_ && area == area_)
+        return;
+    const auto publish = [&](const char* name, uint16_t id, int16_t index) {
+        const auto it = maps_.find(id);
+        if (index < 0 || it == maps_.end())
+            return;
+        const map::Area& a = it->second.info->areas.list[static_cast<size_t>(index)];
+        bus.publish(name, {{"map", id}, {"id", a.id}, {"name", a.name}}, "kast.terrain");
+    };
+    publish("area.left", areaMap_, area_);
+    areaMap_ = mapId;
+    area_ = area;
+    publish("area.entered", areaMap_, area_);
+}
+
+} // namespace kast

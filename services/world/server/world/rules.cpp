@@ -41,15 +41,17 @@ std::optional<std::string> sanitize_chat(std::string_view text, size_t maxBytes)
 }
 
 MoveVerdict validate_move(const MoveRules& rules, MoveBudget& budget, const proto::Vec3& from, proto::Vec3& to,
-                          TimePoint now) {
-    if (to.x < 0 || to.x > rules.sizeX || to.z < 0 || to.z > rules.sizeZ) return MoveVerdict::out_of_bounds;
+                          float ground, TimePoint now, bool onMesh) {
     const float speed = rules.maxSpeed + rules.tolerance;
     const float elapsed = static_cast<float>(std::max(0.0, seconds_between(budget.lastRefill, now)));
     budget.meters = std::min(speed * rules.burstSeconds, budget.meters + speed * elapsed);
     budget.lastRefill = now;
     const float dist = std::hypot(to.x - from.x, to.z - from.z);
     if (dist > budget.meters) return MoveVerdict::too_fast;
+    if (to.y > ground + rules.maxAir && to.y >= from.y) return MoveVerdict::in_air;
+    if (!onMesh) return MoveVerdict::off_mesh;
     budget.meters -= dist;
+    if (to.y < ground - rules.groundTolerance) to.y = ground;
     to.y = std::clamp(to.y, rules.minY, rules.maxY);
     return MoveVerdict::accepted;
 }

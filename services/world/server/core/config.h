@@ -43,11 +43,12 @@ struct Config {
     // world
     uint32_t realmId = 0;
     uint32_t tickHz = 20;
-    float zoneSizeX = 2048, zoneSizeZ = 2048;
-    std::optional<float> spawnX, spawnZ; // default: zone centre
-    float spawnY = 0;
+    std::string mapRoot = "/app/maps"; // <folder>/map.json per map
+    uint16_t startMap = 1;             // map id new characters start on (its spawn)
     float minY = -100, maxY = 500;
     float maxSpeed = 10, speedTolerance = 1, moveBurstSec = 1;
+    float groundTolerance = 0.5f, maxAir = 6; // m below / above the ground (rules.h MoveRules)
+    bool moveNavCheck = true;                 // moves must end on the map's navmesh, if it has one
     float aoiCellSize = 64, aoiViewRadius = 128;
     uint32_t maxCharsPerAccount = 10;
     uint32_t maxNpcs = 10000;
@@ -63,9 +64,6 @@ struct Config {
     std::string luaRoot = "/app/lua"; // components/, fsms/ and systems/
     std::vector<std::string> gameStateMachines; // game state machine names (fsms/ definitions) run for the lifetime
     log::Level logLevel = log::Level::info;
-
-    float spawn_x() const { return spawnX.value_or(zoneSizeX / 2); }
-    float spawn_z() const { return spawnZ.value_or(zoneSizeZ / 2); }
 };
 
 using EnvLookup = std::function<std::optional<std::string>(const char* name)>;

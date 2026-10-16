@@ -39,6 +39,7 @@
 #include <shadow.h>
 #include <state_machines.h>
 #include <systems.h>
+#include <terrain.h>
 
 #include <SDL3/SDL.h>
 
@@ -56,6 +57,7 @@
 #include <map>
 #include <optional>
 #include <process.h> // _getpid
+#include <random>
 #include <share.h>   // _SH_DENYRW
 #include <source_location>
 #include <stdexcept>
@@ -311,8 +313,11 @@ void checkComponentRegistry()
                                                  "DirectionalLight", "PointLight", "Camera", "Rotator", "Collider",
                                                  "Rigidbody", "CharacterController", "StateMachine", "UIDocument",
                                                  "AudioSource", "NetworkLocalPlayer", "NetworkReplication",
-                                                 "NetworkEntity"},
+                                                 "NetworkEntity", "Terrain", "TerrainTile"},
           "built-in component types in registration order");
+    check(kast::componentInfo(kast::findComponentType("TerrainTile")).runtime &&
+              !kast::componentInfo(kast::findComponentType("Terrain")).runtime,
+          "TerrainTile is runtime only (not in Add Component); Terrain is authored");
     const entt::meta_type transform = kast::findComponentType("Transform");
     const entt::meta_type rotator = kast::findComponentType("Rotator");
     check(transform && rotator && !kast::findComponentType("Name") && !kast::findComponentType("Bogus"),
@@ -2635,7 +2640,7 @@ void checkBuildSettings()
                                        "physics.scene",
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "scene_a.scene", "scene_b.scene",
-                                       "shadows.scene", "ui.scene"},
+                                       "shadows.scene", "terrain.scene", "ui.scene"},
           "tests/project lists its scenes, sorted");
 
     const std::filesystem::path root = looseTestDir("kast_build_settings_check") / "game";
@@ -2654,7 +2659,7 @@ void checkBuildSettings()
                                                           "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "scene_a.scene", "scene_b.scene",
-                                                          "shadows.scene", "ui.scene"},
+                                                          "shadows.scene", "terrain.scene", "ui.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
     Document doc;
@@ -6207,6 +6212,292 @@ return {{
     check(!lua.physics().running(), "physics: stopping the session stops physics");
 }
 
+// --- Terrain (README "Terrain"): heightmap decoding, the shared ground, Jolt parity, streaming ---
+
+std::optional<kast::map::MapInfo> hillsMap()
+{
+    std::string text, err;
+    if (!kast::readFile(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "maps/hills/map.json", text))
+        return std::nullopt;
+    return kast::map::parse_manifest(nlohmann::json::parse(text), err);
+}
+
+std::optional<kast::map::Heights> hillsHeights(int tx, int tz)
+{
+    std::string bytes, err;
+    if (!kast::readFile(std::filesystem::path(KAST_TEST_PROJECT_DIR) / std::format("maps/hills/heights/{}_{}.png", tx, tz),
+                        bytes))
+        return std::nullopt;
+    return kast::map::decode_heights(bytes, ".png", err);
+}
+
+void checkTerrainHeights()
+{
+    namespace m = kast::map;
+    constexpr size_t n = m::kTileSamples;
+    std::string err;
+    std::string r16(n * n * 2, '\0');
+    r16[0] = '\x34';
+    r16[1] = '\x12';                   // sample (0, 0) = 0x1234, little-endian
+    r16[(n * 1 + 2) * 2 + 1] = '\xff'; // sample u=2, v=1 = 0xff00
+    const auto decoded = m::decode_heights(r16, ".r16", err);
+    check(decoded && decoded->size() == n * n && (*decoded)[0] == 0x1234 && (*decoded)[n + 2] == 0xff00,
+          "terrain: .r16 decodes 257 x 257 little-endian samples, row-major [v][u]");
+    err.clear();
+    check(!m::decode_heights(r16.substr(2), ".r16", err) && err.find("need 132098") != std::string::npos,
+          "terrain: a wrong-size .r16 is refused, naming the size it needs");
+    const auto png = hillsHeights(0, 0);
+    check(png && png->size() == n * n && *std::ranges::max_element(*png) > *std::ranges::min_element(*png),
+          "terrain: the hills' 16-bit grayscale PNG decodes (and has slopes)");
+    std::string bytes;
+    check(kast::readFile(std::filesystem::path(KAST_SOURCE_DIR) / "tests/heights_8bit.png", bytes) &&
+              !m::decode_heights(bytes, ".png", err) && err.find("8-bit") != std::string::npos &&
+              err.find("need 16-bit grayscale") != std::string::npos,
+          "terrain: an 8-bit PNG (right size) is refused: need 16-bit grayscale");
+    check(kast::readFile(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "textures/checker.png", bytes) &&
+              !m::decode_heights(bytes, ".png", err) && err.find("need 257 x 257") != std::string::npos,
+          "terrain: a PNG of the wrong size is refused");
+    check(!m::decode_heights("junk", ".png", err) && err.starts_with("png:"), "terrain: a broken PNG is refused");
+    check(!m::decode_heights(r16, ".raw", err) && err.find("need .r16 or .png") != std::string::npos,
+          "terrain: an unknown heights format is refused");
+
+    // ground(): the triangle under the point, split along (u, v)-(u+1, v+1) like Jolt; not bilinear.
+    m::MapInfo info;
+    info.heightRange = {{0.0f, 65535.0f}}; // sample s = s metres
+    m::Heights h = m::flat_heights();
+    h[n * 1 + 0] = 10; // (u 0, v 1)
+    check(near(m::ground(h, info, 0.0f, 1.0f), 10.0f) && near(m::ground(h, info, 0.5f, 0.5f), 0.0f) &&
+              near(m::ground(h, info, 0.25f, 0.75f), 5.0f) && near(m::ground(h, info, 0.75f, 0.25f), 0.0f),
+          "terrain: ground uses the (u,v)-(u+1,v+1) diagonal: the far corner only lifts its own triangle");
+    check(near(m::sample_height(65535, *hillsMap()), 80.0f) && near(m::sample_height(0, *hillsMap()), 0.0f),
+          "terrain: samples map onto the manifest's heightRange");
+    size_t triangles = 0;
+    bool inRange = true, ccw = true;
+    m::for_each_triangle([&](uint32_t a, uint32_t b, uint32_t c) {
+        ++triangles;
+        inRange = inRange && a < n * n && b < n * n && c < n * n;
+        // Seen from +y (x = u, z = v): (b - a) x (c - a) has +y.
+        const float ux = float(b % n) - float(a % n), uz = float(b / n) - float(a / n);
+        const float vx = float(c % n) - float(a % n), vz = float(c / n) - float(a / n);
+        ccw = ccw && uz * vx - ux * vz > 0.0f;
+    });
+    check(triangles == 256 * 256 * 2 && inRange && ccw,
+          "terrain: for_each_triangle gives 2 counter-clockwise (from above) triangles per quad");
+
+    // Seams: column 256 of tile tx is column 0 of tile tx+1, row 256 of tz is row 0 of tz+1.
+    const auto t00 = hillsHeights(0, 0), t10 = hillsHeights(1, 0), t01 = hillsHeights(0, 1);
+    bool seamX = t00 && t10, seamZ = t00 && t01;
+    for (size_t i = 0; i < n && seamX && seamZ; ++i) {
+        seamX = (*t00)[i * n + 256] == (*t10)[i * n + 0];
+        seamZ = (*t00)[256 * n + i] == (*t01)[0 * n + i];
+    }
+    check(seamX && seamZ, "terrain: hills tiles share their edge samples (x and z seams)");
+}
+
+void checkTilesAround()
+{
+    namespace m = kast::map;
+    m::MapInfo start;
+    start.tiles = {{0, 0, 7, 7}};
+    const auto keys = [](const std::vector<m::TileKey>& tiles) {
+        std::string out;
+        for (const m::TileKey t : tiles)
+            out += std::format("{}_{} ", t.x, t.z);
+        return out;
+    };
+    check(keys(kast::tiles_around(start, {1024.0f, 1024.0f}, 1)) == "3_3 4_3 5_3 3_4 4_4 5_4 3_5 4_5 5_5 ",
+          "tiles_around: radius 1 is the 3 x 3 tiles around the centre's");
+    check(keys(kast::tiles_around(start, {1300.0f, 1024.0f}, 1)) == "4_3 5_3 6_3 4_4 5_4 6_4 4_5 5_5 6_5 ",
+          "tiles_around: crossing into tile 5 shifts the set");
+    check(keys(kast::tiles_around(start, {10.0f, 2040.0f}, 1)) == "0_6 1_6 0_7 1_7 ",
+          "tiles_around: clipped to the declared tiles at a corner");
+    check(keys(kast::tiles_around(start, {10.0f, 10.0f}, 0)) == "0_0 ", "tiles_around: radius 0 is the centre tile");
+    check(kast::tiles_around(start, {-600.0f, -600.0f}, 1).empty(), "tiles_around: none far off the map");
+    m::MapInfo ell; // an L of two rects
+    ell.tiles = {{0, 0, 1, 0}, {0, 1, 0, 1}};
+    check(keys(kast::tiles_around(ell, {300.0f, 300.0f}, 1)) == "0_0 1_0 0_1 ",
+          "tiles_around: only tiles some rect declares");
+}
+
+// A TerrainTile entity for tile (tx, tz) of the hills, as the streamer makes it.
+entt::entity hillsTile(kast::Scene& scene, const std::shared_ptr<const kast::map::MapInfo>& info, int tx, int tz)
+{
+    auto data = std::make_shared<kast::TerrainTileData>();
+    data->map = info;
+    data->tile = {tx, tz};
+    data->heights = *hillsHeights(tx, tz);
+    const entt::entity e = scene.create(std::format("Tile {}_{}", tx, tz));
+    scene.registry().emplace<kast::TerrainTile>(e, 3, tx, tz, std::shared_ptr<const kast::TerrainTileData>(data));
+    return e;
+}
+
+void checkTerrainPhysics()
+{
+    const auto info = std::make_shared<const kast::map::MapInfo>(*hillsMap());
+    kast::Scene scene;
+    std::map<std::pair<int, int>, entt::entity> tiles;
+    for (int tz = 0; tz < 2; ++tz)
+        for (int tx = 0; tx < 2; ++tx)
+            tiles[{tx, tz}] = hillsTile(scene, info, tx, tz);
+    kast::EventBus bus;
+    kast::Physics physics;
+    physics.start(scene, bus);
+    stepPhysics(physics, 1);
+
+    // The shared ground() against a Jolt raycast down onto the height fields, at 1000 random points.
+    std::mt19937 rng(1234);
+    std::uniform_real_distribution<float> coord(0.01f, 511.99f);
+    float worst = 0.0f;
+    int misses = 0, wrongTile = 0;
+    for (int i = 0; i < 1000; ++i) {
+        const float x = coord(rng), z = coord(rng);
+        const int tx = int(x / 256.0f), tz = int(z / 256.0f);
+        const auto hit = physics.raycast({x, 200.0f, z}, {0.0f, -1.0f, 0.0f}, 400.0f);
+        if (!hit) {
+            ++misses;
+            continue;
+        }
+        if (hit->entity != tiles[{tx, tz}])
+            ++wrongTile;
+        const kast::TerrainTileData& data = *scene.registry().get<kast::TerrainTile>(tiles[{tx, tz}]).data;
+        worst = std::max(worst, std::abs(hit->point.y - kast::map::ground(data.heights, *info, x - float(tx) * 256.0f,
+                                                                          z - float(tz) * 256.0f)));
+    }
+    check(misses == 0 && wrongTile == 0, "terrain: a raycast down hits the height field of the tile under it");
+    check(worst < 0.05f,
+          std::format("terrain: ground() matches Jolt within 5 cm at 1000 points (worst {:.4f} m)", worst).c_str());
+    kast::log::info(std::format("terrain: ground() vs Jolt height field: worst {:.4f} m over 1000 points", worst));
+
+    // Smooth hills barely show the diagonal; random 0..2 m samples make the wrong triangle off by up to a metre.
+    {
+        auto rough = std::make_shared<kast::TerrainTileData>();
+        rough->map = info;
+        rough->tile = {5, 5}; // off the hills tiles
+        std::uniform_int_distribution<int> sample(0, 1638); // 0..2 m in [0, 80]
+        rough->heights = kast::map::flat_heights();
+        for (uint16_t& s : rough->heights)
+            s = static_cast<uint16_t>(sample(rng));
+        kast::Scene roughScene;
+        const entt::entity e = roughScene.create("Rough");
+        roughScene.registry().emplace<kast::TerrainTile>(e, 3, 5, 5, std::shared_ptr<const kast::TerrainTileData>(rough));
+        kast::Physics roughPhysics;
+        roughPhysics.start(roughScene, bus);
+        stepPhysics(roughPhysics, 1);
+        float roughWorst = 0.0f;
+        for (int i = 0; i < 1000; ++i) {
+            const float u = coord(rng) / 2.0f, v = coord(rng) / 2.0f;
+            const auto hit = roughPhysics.raycast({1280.0f + u, 50.0f, 1280.0f + v}, {0.0f, -1.0f, 0.0f}, 100.0f);
+            roughWorst = std::max(roughWorst, hit ? std::abs(hit->point.y - kast::map::ground(rough->heights, *info, u, v))
+                                                  : 1000.0f);
+        }
+        check(roughWorst < 0.05f,
+              std::format("terrain: ground() matches Jolt on a rough tile too (same diagonal; worst {:.4f} m)",
+                          roughWorst).c_str());
+        kast::log::info(std::format("terrain: rough tile ground() vs Jolt: worst {:.4f} m over 1000 points", roughWorst));
+    }
+
+    // Streamed out: its body goes.
+    scene.destroy(tiles[{1, 1}]);
+    stepPhysics(physics, 1);
+    check(!physics.raycast({400.0f, 200.0f, 400.0f}, {0.0f, -1.0f, 0.0f}, 400.0f) &&
+              physics.raycast({100.0f, 200.0f, 100.0f}, {0.0f, -1.0f, 0.0f}, 400.0f),
+          "terrain: a destroyed TerrainTile's height field is removed, the others stay");
+}
+
+void checkTerrainStreaming()
+{
+    kast::TerrainStreamer streamer;
+    streamer.start(std::filesystem::path(KAST_TEST_PROJECT_DIR));
+    check(streamer.map(1) && streamer.map(2) && streamer.map(3) && streamer.map(3)->name == "Hills" &&
+              streamer.map(3)->areas.list.empty() && streamer.map(1)->areas.list.size() == 4,
+          "terrain: the project's maps (and areas) load from maps/");
+    kast::Scene scene;
+    const entt::entity terrain = scene.create("Terrain");
+    scene.registry().emplace<kast::Terrain>(terrain, 3, 1);
+    const entt::entity player = scene.create("Player");
+    scene.registry().emplace<kast::NetworkLocalPlayer>(player);
+    scene.registry().get<kast::Transform>(player).position = {100.0f, 30.0f, 100.0f};
+    kast::EventBus bus;
+    std::vector<std::string> areaEvents;
+    auto entered = bus.subscribe("area.entered", [&](const nlohmann::json& p) {
+        areaEvents.push_back(std::format("enter {} {}", p["map"].get<int>(), p["id"].get<std::string>()));
+    });
+    auto left = bus.subscribe("area.left", [&](const nlohmann::json& p) {
+        areaEvents.push_back(std::format("leave {} {}", p["map"].get<int>(), p["id"].get<std::string>()));
+    });
+    const auto tileKeys = [&] {
+        std::vector<std::string> out;
+        for (auto [e, tile] : scene.registry().view<kast::TerrainTile>().each())
+            out.push_back(std::format("{}:{}_{}{}", tile.map, tile.tx, tile.tz,
+                                      tile.data && scene.parent(e) == terrain ? "" : "!"));
+        std::ranges::sort(out);
+        return out;
+    };
+    streamer.update(scene, bus);
+    check(tileKeys() == std::vector<std::string>{"3:0_0", "3:0_1", "3:1_0", "3:1_1"},
+          "terrain: map 3, radius 1 around the player: the 4 declared tiles, children of Terrain, with data");
+    const auto first = scene.registry().view<kast::TerrainTile>().front();
+    streamer.update(scene, bus);
+    check(scene.valid(first) && tileKeys().size() == 4, "terrain: a frame without change keeps the tile entities");
+
+    scene.registry().get<kast::Terrain>(terrain).map = 1; // world.mapChanged, as Replication sets it
+    scene.registry().get<kast::Transform>(player).position = {1024.0f, 0.0f, 1024.0f};
+    streamer.update(scene, bus);
+    bus.drain();
+    check(tileKeys() == std::vector<std::string>{"1:3_3", "1:3_4", "1:3_5", "1:4_3", "1:4_4", "1:4_5", "1:5_3",
+                                                 "1:5_4", "1:5_5"},
+          "terrain: another map swaps every tile for the new map's 3 x 3");
+    const auto flat = scene.registry().view<kast::TerrainTile>().front();
+    const auto& flatData = *scene.registry().get<kast::TerrainTile>(flat).data;
+    check(near(kast::map::ground(flatData.heights, *flatData.map, 10.0f, 10.0f), 0.0f),
+          "terrain: a tile without a heights file is flat at heightMin");
+    check(areaEvents == std::vector<std::string>{"enter 1 goldshire"},
+          "terrain: area.entered for the centre's area (no area on the hills)");
+    areaEvents.clear();
+    scene.registry().get<kast::Transform>(player).position = {1065.0f, 0.0f, 1025.0f};
+    streamer.update(scene, bus);
+    bus.drain();
+    check(areaEvents == std::vector<std::string>{"leave 1 goldshire", "enter 1 hills_gate"},
+          "terrain: walking into another area: area.left, then area.entered");
+    scene.registry().get<kast::Terrain>(terrain).radius = 0;
+    streamer.update(scene, bus);
+    check(tileKeys() == std::vector<std::string>{"1:4_4"}, "terrain: radius 0 keeps the centre tile only");
+    scene.destroy(terrain);
+    streamer.update(scene, bus);
+    check(scene.registry().view<kast::TerrainTile>().empty(), "terrain: no Terrain, no tiles");
+}
+
+// tests/project/terrain.scene in editor Play: the tiles stream in, and the Hero (dropped ~6.5 m above the hills) is on
+// the ground after 2 s.
+void checkTerrainPlay()
+{
+    Document doc;
+    std::string error;
+    const std::filesystem::path root = KAST_TEST_PROJECT_DIR;
+    check(openProject(doc, root / kast::kProjectFileName, error) && openFile(doc, (root / "terrain.scene").string(), error),
+          ("terrain: opens terrain.scene: " + error).c_str());
+    startPlay(doc);
+    for (int i = 0; i < 120; ++i)
+        updatePlay(doc, 1.0f / 60.0f);
+    check(doc.scene.registry().view<kast::TerrainTile>().size() == 4,
+          "terrain Play: the hills' 4 tiles stream in around the camera");
+    const entt::entity hero = named(doc.scene, "Hero");
+    const auto info = hillsMap();
+    const bx::Vec3 p = hero != entt::null ? doc.scene.registry().get<kast::Transform>(hero).position : bx::Vec3{0, 0, 0};
+    const kast::map::TileKey tile = kast::map::tile_of(p.x, p.z);
+    const auto heights = hillsHeights(tile.x, tile.z);
+    check(hero != entt::null && info && heights, "terrain Play: Hero over a hills tile");
+    if (hero != entt::null && info && heights) {
+        const float ground = kast::map::ground(*heights, *info, p.x - float(tile.x) * 256.0f, p.z - float(tile.z) * 256.0f);
+        check(near(p.y, ground, 0.1f) && doc.lua.physics().isGrounded(hero),
+              std::format("terrain Play: the dropped CharacterController is grounded at ground +- 0.1 after 2 s "
+                          "(y {:.3f}, ground {:.3f})", p.y, ground).c_str());
+        kast::log::info(std::format("terrain Play: hero y {:.3f}, ground {:.3f}", p.y, ground));
+    }
+    stopPlay(doc);
+    check(doc.scene.registry().view<kast::TerrainTile>().empty(), "terrain Play: Stop leaves no tiles in the scene");
+}
+
 void checkColliderWireframe()
 {
     kast::Scene scene;
@@ -7132,6 +7423,11 @@ int main(int argc, char** argv)
     checkPhysicsRuntimeSync();
     checkPhysicsCharacter();
     checkPhysicsLua();
+    checkTerrainHeights();
+    checkTilesAround();
+    checkTerrainPhysics();
+    checkTerrainStreaming();
+    checkTerrainPlay();
     checkColliderWireframe();
     checkAudioDecode();
     checkAudioMix();

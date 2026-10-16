@@ -1,4 +1,5 @@
-// Kast World Server: TLS game connections, auth-service JWTs, one zone on a fixed tick, MySQL persistence.
+// Kast World Server: TLS game connections, auth-service JWTs, every map under MAP_ROOT on a fixed tick, MySQL
+// persistence.
 // Threads: io (network + tick), DB worker, token verifier.
 #include "app/game_server.h"
 #include "auth/token_service.h"
@@ -8,6 +9,7 @@
 #include "db/migrate.h"
 #include "lua/components.h"
 #include "world/components.h"
+#include "world/maps.h"
 #include "net/tls_context.h"
 
 #include <asio.hpp>
@@ -27,7 +29,24 @@ int main() {
     const Config& cfg = loaded.config;
     log::set_level(cfg.logLevel);
 
-    // Lua component definitions first: a broken one stops the start before anything else happens.
+    // Maps, then the Lua component definitions: a broken one stops the start before anything else happens.
+    std::vector<std::string> mapErrors;
+    const world::Maps maps = world::Maps::load(cfg.mapRoot, mapErrors);
+    if (mapErrors.empty() && !maps.by_id(cfg.startMap))
+        mapErrors.push_back("START_MAP " + std::to_string(cfg.startMap) + ": no such map under MAP_ROOT");
+    for (const auto& [id, m] : maps.all())
+        if (m.spawn[1] < cfg.minY || m.spawn[1] > cfg.maxY)
+            mapErrors.push_back("map " + std::to_string(id) + ": spawn y outside [MIN_Y, MAX_Y]");
+    if (!mapErrors.empty()) {
+        for (const auto& e : mapErrors) log::error("map error", {{"error", e}});
+        log::error("startup failed: maps", {{"errors", mapErrors.size()}, {"mapRoot", cfg.mapRoot}});
+        return 1;
+    }
+    nlohmann::json loadedMaps = nlohmann::json::array();
+    for (const auto& [id, m] : maps.all()) loadedMaps.push_back({{"id", id}, {"name", m.name}, {"tileRects", m.tiles.size()}, {"areas", m.areas.list.size()}, {"spawns", m.spawns.size()}});
+    log::info("maps loaded", {{"mapRoot", cfg.mapRoot}, {"startMap", cfg.startMap}, {"maps", loadedMaps}});
+
+    // Lua component definitions: a broken one stops the start too.
     std::error_code ec;
     const bool haveLua = std::filesystem::is_directory(cfg.luaRoot, ec);
     lua::DefsResult defs;
@@ -57,7 +76,7 @@ int main() {
                              Millis(cfg.jwksTimeoutMs)},
                             post);
         const size_t defCount = defs.defs.size();
-        GameServer server(io, cfg, tls, dbWorker, tokens, std::move(defs.defs));
+        GameServer server(io, cfg, maps, tls, dbWorker, tokens, std::move(defs.defs));
         std::vector<std::string> luaErrors = std::move(defs.errors);
         // Also without LUA_ROOT: a GAME_STATE_MACHINES name then has no definition, which refuses the start.
         for (std::string& e : server.load_scripts()) luaErrors.push_back(std::move(e));

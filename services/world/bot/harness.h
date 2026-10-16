@@ -4,6 +4,7 @@
 #include "world_client.h"
 
 #include <cstdio>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -25,6 +26,7 @@ struct Options {
     int connectRatePerSec = 50;
     std::string authKeyFile;      // auth's private key (test only): mints an expired token for scenario 8
     std::string expectPos;        // "x,y,z" for restart-verify
+    std::string mapRoot;          // the server's maps/ folder (terrain scenario: ground heights)
     std::map<std::string, std::string> extra;
 };
 
@@ -38,8 +40,10 @@ asio::awaitable<std::shared_ptr<WorldClient>> connect_and_login(const Options& o
 // Lists characters, creates `name` if there are none, enters the first one.
 asio::awaitable<bool> enter_world(WorldClient& c, const std::string& name, proto::EnterWorldOk& out, std::string& error);
 
-// Walks in a straight line at `speed` m/s, one Move every 100 ms. Returns the final position.
-asio::awaitable<proto::Vec3> walk(WorldClient& c, proto::Vec3 from, float dx, float dz, float speed = 9.0f);
+// Walks in a straight line at `speed` m/s, one Move every 100 ms, at from.y or groundY(x, z) if given. Returns the
+// final position.
+asio::awaitable<proto::Vec3> walk(WorldClient& c, proto::Vec3 from, float dx, float dz, float speed = 9.0f,
+                                  const std::function<float(float x, float z)>& groundY = nullptr);
 // Collects every message that arrives within `window`.
 asio::awaitable<std::vector<proto::Message>> drain(WorldClient& c, Millis window);
 asio::awaitable<void> sleep_for(Millis d);

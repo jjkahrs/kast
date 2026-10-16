@@ -20,8 +20,10 @@ struct MoveRules {
     float maxSpeed = 10;       // m/s
     float tolerance = 1;       // m/s on top of maxSpeed
     float burstSeconds = 1;    // distance budget cap, in seconds of travel; absorbs network jitter
-    float sizeX = 2048, sizeZ = 2048;
     float minY = -100, maxY = 500;
+    float groundTolerance = 0.5f; // m below the ground accepted as-is; deeper is lifted onto it
+    float maxAir = 6;             // m above the ground past which a move may not rise (no flying)
+    bool navCheck = true;         // moves must end on the map's navmesh, if it has one (movement_system)
 };
 
 // Distance budget: refills at (maxSpeed + tolerance) per second of server time, capped at burstSeconds of travel.
@@ -31,10 +33,15 @@ struct MoveBudget {
     TimePoint lastRefill{};
 };
 
-enum class MoveVerdict { accepted, out_of_bounds, too_fast };
+enum class MoveVerdict { accepted, too_fast, in_air, off_mesh };
 
-// On accepted, `to.y` is clamped and the budget is spent. Speed is measured on x/z only.
+// `ground` is the ground's height under `to`. A move ending more than maxAir above it must descend (falling): level or
+// rising is in_air. On accepted, `to.y` is lifted to the ground if more than groundTolerance below it, then clamped to
+// [minY, maxY], and the budget is spent. Speed is measured on x/z only. `onMesh` false (movement_system: `to` is off the
+// map's navmesh) is off_mesh. Map bounds (x/z on a declared tile) and the navmesh are checked by movement_system, which
+// knows the maps.
+// ponytail: no jump in the client yet, so maxAir is headroom; a jump arc or flying mounts need a per-entity allowance.
 MoveVerdict validate_move(const MoveRules& rules, MoveBudget& budget, const proto::Vec3& from, proto::Vec3& to,
-                          TimePoint now);
+                          float ground, TimePoint now, bool onMesh = true);
 
 } // namespace kast

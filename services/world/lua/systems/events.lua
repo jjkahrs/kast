@@ -5,11 +5,24 @@
 --
 -- Bandwidth: each client event is a message per recipient, and broadcast reaches every player in the zone. So this
 -- sends only on login and logout, never per tick: in a crowd of N that is about N messages per login or logout.
+--
+-- It also logs the server's area events (README "Areas"): "area.leave" then "area.enter" when a player crosses into
+-- another area of maps/<map>/areas.json, and "area.enter" alone on login. flags are the area's, with its parent's.
+local function log_area(event, p)
+    local flags = {}
+    for k, v in pairs(p.flags) do flags[#flags + 1] = k .. "=" .. tostring(v) end
+    table.sort(flags)
+    kast.log(string.format("%s entity %d map %d area %s (%s) flags {%s}", event, p.entity, p.map, p.area, p.name,
+                           table.concat(flags, ", ")))
+end
+
 return {
     init = function()
         kast.subscribe("player.entered", function(p)
             kast.sendNearby(p.entity, "player.arrived", {entity = p.entity, name = p.name})
         end)
+        kast.subscribe("area.leave", function(p) log_area("area.leave", p) end)
+        kast.subscribe("area.enter", function(p) log_area("area.enter", p) end)
     end,
 
     onEnter = function(e)

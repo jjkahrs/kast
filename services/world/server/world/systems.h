@@ -2,6 +2,7 @@
 #pragma once
 #include "../core/clock.h"
 #include "aoi_grid.h"
+#include "maps.h"
 #include "rules.h"
 
 #include <db/char_repo.h>
@@ -30,7 +31,31 @@ std::vector<uint32_t> audience(const entt::registry& reg, entt::entity e);
 // Spawn for entity e as a viewer gets it: a player's character name, or an NPC's name and template.
 proto::Spawn spawn_message(const entt::registry& reg, entt::entity e);
 
-void movement_system(entt::registry& reg, const MoveRules& rules, const Send& send, TimePoint now);
+// A spawn file entry (map::Spawn) and when its NPC is due: alive while the NPC exists, else at respawnAt.
+struct SpawnRecord {
+    uint16_t map = 0;
+    const map::Spawn* spawn = nullptr; // in Maps, which outlives the World
+    TimePoint respawnAt{};             // epoch: due at the first tick
+    bool alive = false;
+};
+struct Spawner {
+    std::vector<SpawnRecord> records;
+    bool capped = false; // MAX_NPCS hit: warned once until spawning works again
+};
+
+// Creates the NPC of every due record (create, then SpawnRef{record}). At maxNpcs NPCs it creates nothing more this
+// tick and tries again the next.
+// ponytail: always-on spawns; activate per tile near players if NPC counts grow.
+void spawner_system(entt::registry& reg, Spawner& spawner, size_t maxNpcs, TimePoint now,
+                    const std::function<entt::entity(const SpawnRecord&)>& create);
+// A move off the player's map (onto an undeclared tile) is rejected like a speedhack.
+void movement_system(entt::registry& reg, const MoveRules& rules, const Maps& maps, const Send& send, TimePoint now);
+// Updates player e's AreaRef from its map and position. On a change it publishes "area.leave" for the old area, then
+// "area.enter" for the new one ({entity, map, area, name, flags}; none for "no area"). Returns the area it is in now.
+const map::Area* set_area(entt::registry& reg, const Maps& maps, EventBus& bus, entt::entity e);
+// set_area for every player that moved this tick; returns those now in a portal area, with the portal, for the
+// caller to transfer.
+std::vector<std::pair<entt::entity, map::Portal>> area_system(entt::registry& reg, const Maps& maps, EventBus& bus);
 // Moves every entity that moved this tick (Moved) to its new grid cell. aoi_system runs it first; World runs it
 // again after Lua, whose NPC moves would otherwise miss the next tick's view diff.
 void aoi_rebucket(entt::registry& reg, AoiGrid& grid);

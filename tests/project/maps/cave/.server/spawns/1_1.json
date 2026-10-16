@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "spawns": [
+    {"id": "bat_1", "name": "Bat", "template": "Guard", "pos": [256, 0, 256], "respawnSec": -1}
+  ]
+}

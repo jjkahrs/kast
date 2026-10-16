@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "baseColor": [
+    0.45,
+    0.7,
+    0.3,
+    1
+  ],
+  "baseColorTexture": "textures/checker.png",
+  "metallic": 0,
+  "roughness": 0.9,
+  "metallicRoughnessTexture": "",
+  "emissive": [
+    0,
+    0,
+    0
+  ],
+  "alphaMode": "opaque",
+  "alphaCutoff": 0.5
+}

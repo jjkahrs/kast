@@ -26,6 +26,7 @@ struct ComponentInfo {
     bool removable = true;
     // Checks values beyond their field types: returns why the component is invalid, or nullptr. Optional.
     const char* (*validate)(const entt::meta_any& component) = nullptr;
+    bool runtime = false; // made by Play, never authored: left out of Add Component
     entt::sparse_set& (*storage)(entt::registry&) = nullptr; // ensures the pool exists; set by registerComponent
 };
 

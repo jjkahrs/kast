@@ -20,6 +20,7 @@
 // on world.despawn / world.disconnected. Each world.component / world.componentRemoved is applied to the same-named Lua
 // component on the clone or the local player (added if absent, drift rules for mismatches; a name with no Lua
 // definition is a Console warning, once per name). The world client knows nothing about entities; only this unit does.
+// world.entered / world.mapChanged also set every Terrain's map (terrain.h streams it).
 // Positions are Transform positions: keep the local player and the template at the root (clones are created there).
 namespace kast {
 
@@ -84,6 +85,8 @@ private:
     entt::entity localPlayer() const;
     float interpolationSeconds() const;
     void placeLocal(const nlohmann::json& payload);
+    void setMap(const nlohmann::json& payload); // world.entered / world.mapChanged "map", then applyMap
+    void applyMap();                            // every Terrain shows map_ (if known)
     // Copies every child of the entity named folderName into npcTemplates_, then takes that entity out of the scene.
     void takeNpcTemplates(Scene& scene, const std::string& folderName);
     // What to clone for remote: an NPC's own template when there is one, else the template entity (an NPC falling back
@@ -105,6 +108,7 @@ private:
     std::vector<EventBus::Subscription> subscriptions_;
     MoveThrottle throttle_;
     double time_ = 0.0;
+    std::optional<int> map_;                                      // the map the server put the local player on
     std::optional<uint32_t> localId_;                             // the local player's server entity id
     std::map<std::string, nlohmann::json> localComponents_;        // re-applied to a new scene's local player
     std::set<std::string> warned_;                                // unknown names and drift fixes, warned once

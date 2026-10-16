@@ -1,0 +1,115 @@
+// Map manifests (map.json): a map is a set of 256 m tiles, joined to other maps only by transfers. Pure data: no file
+// IO, no server deps, so the server, the engine, the bot and tools all share it. Coordinates: Y up, metres, the
+// map's origin is the corner of tile (0,0), heading = atan2(dx, dz).
+#pragma once
+#include <nlohmann/json.hpp>
+
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace kast::map {
+
+constexpr float kTileSize = 256;   // metres per tile edge
+constexpr int kTileSamples = 257;  // height samples per tile edge (shared border)
+
+struct TileKey {
+    int32_t x = 0, z = 0;
+    bool operator==(const TileKey&) const = default;
+};
+
+// The tile containing (x, z): floor(x / 256), floor(z / 256).
+TileKey tile_of(float x, float z);
+
+struct TileKeyHash {
+    size_t operator()(TileKey t) const { return std::hash<uint64_t>{}((uint64_t(uint32_t(t.x)) << 32) | uint32_t(t.z)); }
+};
+
+struct TileRect {
+    int32_t x0 = 0, z0 = 0, x1 = 0, z1 = 0; // inclusive
+};
+
+struct NavParams {
+    float agentRadius = 0.4f, agentHeight = 1.8f, maxClimb = 0.5f, maxSlopeDeg = 45, cellSize = 0.5f;
+};
+
+// Where a portal area sends whoever walks into it.
+struct Portal {
+    uint16_t map = 0;
+    std::array<float, 3> pos{};
+    float heading = 0;
+};
+
+// A named region of a map (areas.json): a 2D rect or polygon on x/z, optionally limited to a y range.
+struct Area {
+    std::string id, name, parent, music;
+    int priority = 0;
+    std::vector<std::array<float, 2>> polygon; // a rect is stored as its 4 corners
+    std::array<float, 4> bounds{};             // x0, z0, x1, z1 of the polygon
+    std::optional<std::array<float, 2>> y;     // [min, max]
+    nlohmann::json flags = nlohmann::json::object(); // own flags over the parent's (resolved at parse)
+    std::optional<Portal> portal;
+};
+
+struct Areas {
+    std::vector<Area> list;
+    // Every tile an area's bounds touch -> those areas' indices, highest priority first.
+    std::unordered_map<TileKey, std::vector<int16_t>, TileKeyHash> byTile;
+};
+
+// A route an NPC walks (spawns/<tx>_<tz>.json "paths"): the points in order, wait seconds at each, then back to the
+// first (loop) or back along the route (ping-pong).
+struct PatrolPath {
+    std::vector<std::array<float, 3>> points;
+    float wait = 0;
+    bool loop = true;
+};
+
+// One NPC a tile's spawn file places (server only: <map>/.server/spawns/). respawnSec -1: never comes back.
+struct Spawn {
+    std::string id, name, templateName;
+    std::array<float, 3> pos{};
+    float heading = 0;
+    float respawnSec = -1;
+    std::optional<PatrolPath> path; // the file's named path, copied in at parse
+};
+
+struct MapInfo {
+    uint16_t id = 0;
+    std::string name;
+    std::vector<TileRect> tiles; // the map = union of these
+    std::array<float, 3> spawn{};
+    float spawnHeading = 0;
+    std::optional<std::array<float, 2>> heightRange; // phases 4-6
+    std::string material;                            // phases 4-6
+    std::optional<NavParams> nav;                    // phase 6
+    Areas areas;                                     // areas.json, loaded separately (parse_areas); empty if none
+    std::vector<Spawn> spawns;                       // every owned tile's spawn file (parse_spawns); empty if none
+
+    // ponytail: linear scan of the rects; a tile set if maps grow many rects.
+    bool has_tile(TileKey t) const;
+    bool contains(float x, float z) const { return has_tile(tile_of(x, z)); }
+    // The nearest point to (x, z) on a declared tile (itself if already on one).
+    std::array<float, 2> clamp(float x, float z) const;
+};
+
+// Parses and validates a map.json document. nullopt with err set ("tiles[1]: x0 > x1") on any problem.
+std::optional<MapInfo> parse_manifest(const nlohmann::json& j, std::string& err);
+
+// Parses and validates an areas.json document: shapes, unknown or cyclic parents, and equal-priority areas that
+// overlap. Portals are checked against the other maps by the loader. nullopt with err set on any problem.
+std::optional<Areas> parse_areas(const nlohmann::json& j, std::string& err);
+
+// Parses and validates one tile's spawn file (.server/spawns/<tx>_<tz>.json): every spawn's pos inside tile, ids unique
+// within the file, every "path" one of the file's "paths". Ids across a map's files are checked by the loader. nullopt
+// with err set on any problem.
+std::optional<std::vector<Spawn>> parse_spawns(const nlohmann::json& j, TileKey tile, std::string& err);
+
+// The index in areas.list of the highest-priority area containing (x, y, z), or -1. Edges: a point on a boundary may
+// fall either side.
+int16_t area_at(const Areas& areas, float x, float y, float z);
+
+} // namespace kast::map

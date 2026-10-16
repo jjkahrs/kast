@@ -1,4 +1,5 @@
-// Uniform grid for interest management: which ids are within view radius of a point (x/z plane).
+// Uniform grid for interest management: which ids are within view radius of a point (x/z plane) on the same map.
+// Maps share one grid; the map is part of every cell key, so entities on different maps never meet.
 #pragma once
 #include <algorithm>
 #include <cstdint>
@@ -8,6 +9,7 @@
 namespace kast {
 
 struct CellKey {
+    uint16_t map = 0;
     int32_t cx = 0, cz = 0;
     bool operator==(const CellKey&) const = default;
 };
@@ -16,15 +18,19 @@ class AoiGrid {
 public:
     AoiGrid(float cellSize, float viewRadius) : cell_(cellSize), radius_(viewRadius) {}
 
-    CellKey cell_of(float x, float z) const;
+    CellKey cell_of(uint16_t map, float x, float z) const;
     void insert(uint32_t id, CellKey c);
     void remove(uint32_t id, CellKey c);
-    // Ids within view radius of (x, z), sorted ascending; `self` is excluded. posOf(id, x, z) gives current positions.
+    // Ids on map within view radius of (x, z), sorted ascending; `self` is excluded. posOf(id, x, z) gives current
+    // positions.
     template <typename PosOf>
-    std::vector<uint32_t> query(float x, float z, uint32_t self, PosOf&& posOf) const;
+    std::vector<uint32_t> query(uint16_t map, float x, float z, uint32_t self, PosOf&& posOf) const;
 
 private:
-    static uint64_t pack(CellKey c) { return (uint64_t(uint32_t(c.cx)) << 32) | uint32_t(c.cz); }
+    // map:16 | cx:24 | cz:24 (cells wrap past +-2^23, far beyond any map at a sane cell size).
+    static uint64_t pack(CellKey c) {
+        return (uint64_t(c.map) << 48) | (uint64_t(uint32_t(c.cx) & 0xFFFFFF) << 24) | (uint32_t(c.cz) & 0xFFFFFF);
+    }
     float cell_, radius_;
     std::unordered_map<uint64_t, std::vector<uint32_t>> cells_;
 };
@@ -42,13 +48,13 @@ inline void erase_sorted(std::vector<uint32_t>& ids, uint32_t id) {
 }
 
 template <typename PosOf>
-std::vector<uint32_t> AoiGrid::query(float x, float z, uint32_t self, PosOf&& posOf) const {
+std::vector<uint32_t> AoiGrid::query(uint16_t map, float x, float z, uint32_t self, PosOf&& posOf) const {
     std::vector<uint32_t> out;
-    const CellKey lo = cell_of(x - radius_, z - radius_), hi = cell_of(x + radius_, z + radius_);
+    const CellKey lo = cell_of(map, x - radius_, z - radius_), hi = cell_of(map, x + radius_, z + radius_);
     const float r2 = radius_ * radius_;
     for (int32_t cx = lo.cx; cx <= hi.cx; ++cx)
         for (int32_t cz = lo.cz; cz <= hi.cz; ++cz) {
-            auto it = cells_.find(pack({cx, cz}));
+            auto it = cells_.find(pack({map, cx, cz}));
             if (it == cells_.end()) continue;
             for (uint32_t id : it->second) {
                 if (id == self) continue;

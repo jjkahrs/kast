@@ -6,14 +6,26 @@
 
 namespace kast::world {
 
-World::World(WorldRules rules, Send send, Save save, lua::Defs defs)
-    : rules_(rules), send_(std::move(send)), save_(std::move(save)), defs_(defs), grid_(rules.cellSize, rules.viewRadius),
+World::World(WorldRules rules, const Maps& maps, Send send, Save save, lua::Defs defs)
+    : rules_(rules), maps_(maps), send_(std::move(send)), save_(std::move(save)), defs_(defs),
+      grid_(rules.cellSize, rules.viewRadius),
       lua_(reg_, std::move(defs),
-           {.create = [this](std::string name, std::string templateName, std::optional<proto::Vec3> pos,
-                             float heading) { return create_npc(std::move(name), std::move(templateName), pos, heading); },
+           {.create = [this](std::string name, std::string templateName, std::optional<uint16_t> map,
+                             std::optional<proto::Vec3> pos, float heading) {
+                return create_npc(std::move(name), std::move(templateName), map, pos, heading);
+            },
             .destroy = [this](entt::entity e) { destroy_npc(e); },
-            .clamp = [this](proto::Vec3 pos) { return clamp_to_zone(pos); },
-            .max = rules.maxNpcs}) {}
+            .clamp = [this](uint16_t map, proto::Vec3 pos) { return clamp_to_map(map, pos); },
+            .map = [this](uint16_t id) { return maps_.by_id(id); },
+            .ground = [this](uint16_t map, float x, float z) { return maps_.ground(map, x, z); },
+            .path = [this](uint16_t map, proto::Vec3 from, proto::Vec3 to) { return maps_.nav().path(map, from, to); },
+            .transfer = [this](entt::entity e, uint16_t map, proto::Vec3 pos,
+                               float heading) { return transfer(e, {map, pos, heading}); },
+            .spawn = [this](uint32_t record) { return spawner_.records.at(record).spawn; },
+            .max = rules.maxNpcs}) {
+    for (const auto& [id, info] : maps_.all())
+        for (const map::Spawn& s : info.spawns) spawner_.records.push_back({id, &s});
+}
 
 std::vector<std::string> World::load_scripts(const std::filesystem::path& luaRoot, std::vector<std::string> gameMachines) {
     return lua_.load(luaRoot, std::move(gameMachines));
@@ -30,27 +42,40 @@ void World::shutdown_scripts() {
 }
 
 entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint now) {
+    now_ = now;
+    uint16_t map = row.mapId == 0 ? rules_.startMap : row.mapId; // 0: saved before maps (migration 003)
     proto::Vec3 pos = row.pos;
-    const auto& m = rules_.move;
-    if (pos.x < 0 || pos.x > m.sizeX || pos.z < 0 || pos.z > m.sizeZ) pos = rules_.spawn; // zone shrank since save
-    pos.y = std::clamp(pos.y, m.minY, m.maxY);
+    float heading = row.heading;
+    if (!maps_.has_tile(map, pos.x, pos.z)) { // map removed or shrunk since the save
+        const auto& start = maps_.info(rules_.startMap);
+        log::warn("saved position not on a loaded map; using START_MAP spawn",
+                  {{"char", row.id}, {"map", map}, {"x", pos.x}, {"z", pos.z}});
+        map = start.id;
+        pos = {start.spawn[0], start.spawn[1], start.spawn[2]};
+        heading = start.spawnHeading;
+    }
+    if (const float ground = *maps_.ground(map, pos.x, pos.z); pos.y < ground - rules_.move.groundTolerance)
+        pos.y = ground; // saved under the ground (heights edited since): onto it
+    pos.y = std::clamp(pos.y, rules_.move.minY, rules_.move.maxY);
 
     const auto e = reg_.create();
     reg_.emplace<SessionLink>(e, sessionId);
     reg_.emplace<CharacterRef>(e, row.id, row.name);
-    reg_.emplace<Transform>(e, pos, row.heading);
+    reg_.emplace<Transform>(e, pos, heading);
+    reg_.emplace<MapRef>(e, map);
     reg_.emplace<MoveState>(e, MoveBudget{0, now});
     reg_.emplace<PendingMoves>(e);
     reg_.emplace<PendingSay>(e);
     reg_.emplace<ChatLimit>(e, WindowLimiter(rules_.chatRateCount, rules_.chatRateWindow));
-    const CellKey cell = grid_.cell_of(pos.x, pos.z);
+    const CellKey cell = grid_.cell_of(map, pos.x, pos.z);
     reg_.emplace<AoiCell>(e, cell);
     reg_.emplace<Visible>(e);
     reg_.emplace<SaveTimer>(e, now);
     reg_.emplace<ReplicatedState>(e);
     grid_.insert(wire_id(e), cell);
+    set_area(reg_, maps_, lua_.bus(), e);
     ++population_;
-    send_(sessionId, proto::EnterWorldOk{wire_id(e), pos, row.heading});
+    send_(sessionId, proto::EnterWorldOk{wire_id(e), map, pos, heading});
     lua::restore_components(reg_, e, defs_, row.components, [&](const std::string& fix) {
         log::warn("persisted component fixed on load", {{"char", row.id}, {"fix", fix}});
     });
@@ -66,34 +91,58 @@ void World::despawn(entt::entity e) {
     }
     const auto& ch = reg_.get<CharacterRef>(e);
     const auto& tf = reg_.get<Transform>(e);
-    save_({ch.charId, tf.pos, tf.heading, lua::components_column(reg_, e, defs_)});
-    const uint32_t id = wire_id(e);
-    for (uint32_t other : reg_.get<Visible>(e).ids) {
-        const auto o = entt::entity{other};
-        if (auto* viewers = reg_.try_get<Viewers>(o)) { // an NPC it saw: it no longer has this viewer
-            erase_sorted(viewers->ids, id);
-            continue;
-        }
-        erase_sorted(reg_.get<Visible>(o).ids, id);
-        send_(reg_.get<SessionLink>(o).sessionId, proto::Despawn{id});
-    }
-    grid_.remove(id, reg_.get<AoiCell>(e).cell);
+    save_({ch.charId, reg_.get<MapRef>(e).map, tf.pos, tf.heading, lua::components_column(reg_, e, defs_)});
+    leave_views(e);
+    grid_.remove(wire_id(e), reg_.get<AoiCell>(e).cell);
     reg_.destroy(e);
     --population_;
 }
 
-proto::Vec3 World::clamp_to_zone(proto::Vec3 pos) const {
-    const auto& m = rules_.move;
-    return {std::clamp(pos.x, 0.0f, m.sizeX), std::clamp(pos.y, m.minY, m.maxY), std::clamp(pos.z, 0.0f, m.sizeZ)};
+proto::Vec3 World::clamp_to_map(uint16_t map, proto::Vec3 pos) const {
+    const auto [x, z] = maps_.info(map).clamp(pos.x, pos.z);
+    // ponytail: no flying NPCs; add a flag when one exists
+    return {x, std::clamp(*maps_.ground(map, x, z), rules_.move.minY, rules_.move.maxY), z};
 }
 
-entt::entity World::create_npc(std::string name, std::string templateName, std::optional<proto::Vec3> pos,
-                               float heading) {
-    const proto::Vec3 at = clamp_to_zone(pos.value_or(rules_.spawn));
+bool World::transfer(entt::entity e, const Destination& to) {
+    const uint32_t id = wire_id(e);
+    if (!maps_.owns(to.map, map::tile_of(to.pos.x, to.pos.z))) {
+        // ponytail: one process owns every tile; future = save + Redirect{host,port,ticket} to the owning process.
+        log::warn("transfer refused: destination tile not owned by this process",
+                  {{"entity", id}, {"map", to.map}, {"x", to.pos.x}, {"z", to.pos.z}});
+        return false;
+    }
+    const proto::Vec3 pos = clamp_to_map(to.map, to.pos); // owned, so on the map: only y changes, onto the ground
+    reg_.get<MapRef>(e).map = to.map;
+    reg_.get<Transform>(e) = {pos, to.heading};
+    auto& cell = reg_.get<AoiCell>(e);
+    grid_.remove(id, cell.cell);
+    cell.cell = grid_.cell_of(to.map, pos.x, pos.z);
+    grid_.insert(id, cell.cell);
+    if (auto* ms = reg_.try_get<MoveState>(e)) ms->budget = {0, now_}; // in-flight moves from the old map: Correction
+    reg_.remove<Moved>(e); // a move this tick must not reach the new neighbours as EntityMove
+    // Out of every view at once, both ways: the mover gets MapChange, then a Despawn per old neighbour; they get its
+    // Despawn. The next aoi pass sends Spawns for whoever is in range now, on the new map or (a teleport within
+    // the map) the same neighbours again at the new position. No Moved: nobody may see an EntityMove to where it went.
+    if (const auto* link = reg_.try_get<SessionLink>(e)) {
+        reg_.emplace_or_replace<Dirty>(e);
+        send_(link->sessionId, proto::MapChange{to.map, pos, to.heading});
+        for (uint32_t other : reg_.get<Visible>(e).ids) send_(link->sessionId, proto::Despawn{other});
+        set_area(reg_, maps_, lua_.bus(), e);
+    }
+    leave_views(e);
+    return true;
+}
+
+entt::entity World::create_npc(std::string name, std::string templateName, std::optional<uint16_t> map,
+                               std::optional<proto::Vec3> pos, float heading) {
+    const auto& info = maps_.info(map.value_or(rules_.startMap));
+    const proto::Vec3 at = clamp_to_map(info.id, pos.value_or(proto::Vec3{info.spawn[0], info.spawn[1], info.spawn[2]}));
     const auto e = reg_.create();
     reg_.emplace<Npc>(e, std::move(name), std::move(templateName));
     reg_.emplace<Transform>(e, at, heading);
-    const CellKey cell = grid_.cell_of(at.x, at.z);
+    reg_.emplace<MapRef>(e, info.id);
+    const CellKey cell = grid_.cell_of(info.id, at.x, at.z);
     reg_.emplace<AoiCell>(e, cell);
     reg_.emplace<Viewers>(e);
     reg_.emplace<ReplicatedState>(e);
@@ -102,15 +151,38 @@ entt::entity World::create_npc(std::string name, std::string templateName, std::
 }
 
 void World::destroy_npc(entt::entity e) {
+    if (const auto* ref = reg_.try_get<SpawnRef>(e)) {
+        SpawnRecord& r = spawner_.records[ref->record];
+        r.alive = false;
+        r.respawnAt = r.spawn->respawnSec < 0
+                          ? TimePoint::max()
+                          : now_ + std::chrono::duration_cast<TimePoint::duration>(std::chrono::duration<double>(r.spawn->respawnSec));
+    }
+    leave_views(e);
+    grid_.remove(wire_id(e), reg_.get<AoiCell>(e).cell);
+    reg_.destroy(e);
+}
+
+void World::leave_views(entt::entity e) {
     const uint32_t id = wire_id(e);
-    for (uint32_t viewer : reg_.get<Viewers>(e).ids) {
+    const auto unsee = [&](uint32_t viewer) { // a player that saw e
         auto& vis = reg_.get<Visible>(entt::entity{viewer});
         erase_sorted(vis.ids, id);
-        erase_sorted(vis.entered, id); // destroyed in the tick it came into view: no component full set either
+        erase_sorted(vis.entered, id); // gone in the tick it came into view: no component full set either
         send_(reg_.get<SessionLink>(entt::entity{viewer}).sessionId, proto::Despawn{id});
+    };
+    if (auto* viewers = reg_.try_get<Viewers>(e)) { // an NPC
+        for (uint32_t viewer : viewers->ids) unsee(viewer);
+        viewers->ids.clear();
+        return;
     }
-    grid_.remove(id, reg_.get<AoiCell>(e).cell);
-    reg_.destroy(e);
+    auto& vis = reg_.get<Visible>(e); // a player: range is symmetric, so the players it sees see it
+    for (uint32_t other : vis.ids) {
+        if (auto* viewers = reg_.try_get<Viewers>(entt::entity{other})) erase_sorted(viewers->ids, id); // an NPC it saw
+        else unsee(other);
+    }
+    vis.ids.clear();
+    vis.entered.clear();
 }
 
 void World::remove_npcs() {
@@ -126,15 +198,26 @@ void World::push_say(entt::entity e, std::string text) {
     if (reg_.valid(e)) reg_.get<PendingSay>(e).texts.push_back(std::move(text));
 }
 
+// area runs right after movement: a player who walked into a portal is transferred before aoi, so this tick's view
+// diff already sends the Spawns on the new map (MapChange and the old Despawns went out in transfer).
+// The spawner runs right before Lua, so a system's update already sees (and can move) the NPCs due this tick; like the
+// ones Lua creates, players get their Spawn in the next tick's aoi diff.
 // Lua runs after movement and chat (it sees this tick's positions) and before replication and save (its changes go
 // out and get saved this tick). aoi stays before both replications, so a Spawn always precedes component data; the
 // NPCs Lua creates or moves out of a view show up in the next tick's aoi diff. The events Lua published are delivered
 // right after update; client events go out after component replication, so a client already has the Spawn and the
 // latest component values they may refer to.
 void World::tick(TimePoint now) {
-    movement_system(reg_, rules_.move, send_, now);
+    now_ = now;
+    movement_system(reg_, rules_.move, maps_, send_, now);
+    for (const auto& [e, portal] : area_system(reg_, maps_, lua_.bus()))
+        transfer(e, {portal.map, {portal.pos[0], portal.pos[1], portal.pos[2]}, portal.heading});
     aoi_system(reg_, grid_, send_);
     chat_system(reg_, rules_.chat, send_, now);
+    spawner_system(reg_, spawner_, rules_.maxNpcs, now, [this](const SpawnRecord& r) {
+        const auto& s = *r.spawn;
+        return create_npc(s.name, s.templateName, r.map, proto::Vec3{s.pos[0], s.pos[1], s.pos[2]}, s.heading);
+    });
     lua_.update(rules_.tickSeconds);
     lua_.drain_events();
     aoi_rebucket(reg_, grid_); // NPCs Lua moved: in their new cell for the next tick's view diff

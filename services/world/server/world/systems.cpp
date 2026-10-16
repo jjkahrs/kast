@@ -34,14 +34,18 @@ proto::Spawn spawn_message(const entt::registry& reg, entt::entity e) {
     return {wire_id(e), reg.get<CharacterRef>(e).name, tf.pos, tf.heading, proto::SpawnKind::player, ""};
 }
 
-// Validates each queued Move against speed and bounds; a rejected move snaps the client back with Correction.
-void movement_system(entt::registry& reg, const MoveRules& rules, const Send& send, TimePoint now) {
-    for (auto [e, pending, tf, ms, link] : reg.view<PendingMoves, Transform, MoveState, SessionLink>().each()) {
+// Validates each queued Move against map bounds, the navmesh (if the map has one and rules.navCheck), speed and the
+// ground; a rejected move snaps the client back with Correction.
+// ponytail: off_mesh corrects at once, so a player cannot drop off a cliff face; a grace period if falls are wanted.
+void movement_system(entt::registry& reg, const MoveRules& rules, const Maps& maps, const Send& send, TimePoint now) {
+    for (auto [e, pending, tf, mr, ms, link] : reg.view<PendingMoves, Transform, MapRef, MoveState, SessionLink>().each()) {
         if (pending.moves.empty()) continue;
         bool corrected = false;
         for (const auto& m : pending.moves) {
             proto::Vec3 to = m.pos;
-            if (validate_move(rules, ms.budget, tf.pos, to, now) == MoveVerdict::accepted) {
+            const auto ground = maps.ground(mr.map, to.x, to.z); // nullopt: off the map
+            const bool onMesh = !rules.navCheck || !maps.nav().has(mr.map) || maps.nav().on_mesh(mr.map, to, rules.maxAir);
+            if (ground && validate_move(rules, ms.budget, tf.pos, to, *ground, now, onMesh) == MoveVerdict::accepted) {
                 tf.pos = to;
                 tf.heading = m.heading;
                 reg.emplace_or_replace<Moved>(e);
@@ -55,9 +59,33 @@ void movement_system(entt::registry& reg, const MoveRules& rules, const Send& se
     }
 }
 
+const map::Area* set_area(entt::registry& reg, const Maps& maps, EventBus& bus, entt::entity e) {
+    const auto& tf = reg.get<Transform>(e);
+    const uint16_t mapId = reg.get<MapRef>(e).map;
+    const auto& areas = maps.info(mapId).areas;
+    const int16_t now = map::area_at(areas, tf.pos.x, tf.pos.y, tf.pos.z);
+    auto& ref = reg.get_or_emplace<AreaRef>(e);
+    const auto publish = [&](const char* event, uint16_t onMap, const map::Area& a) {
+        bus.publish(event, {{"entity", wire_id(e)}, {"map", onMap}, {"area", a.id}, {"name", a.name}, {"flags", a.flags}});
+    };
+    if (ref.area != now || ref.map != mapId) {
+        if (ref.area >= 0) publish("area.leave", ref.map, maps.info(ref.map).areas.list[ref.area]);
+        if (now >= 0) publish("area.enter", mapId, areas.list[now]);
+        ref = {mapId, now};
+    }
+    return now >= 0 ? &areas.list[now] : nullptr;
+}
+
+std::vector<std::pair<entt::entity, map::Portal>> area_system(entt::registry& reg, const Maps& maps, EventBus& bus) {
+    std::vector<std::pair<entt::entity, map::Portal>> portals;
+    for (auto e : reg.view<Moved, SessionLink>())
+        if (const auto* area = set_area(reg, maps, bus, e); area && area->portal) portals.emplace_back(e, *area->portal);
+    return portals;
+}
+
 void aoi_rebucket(entt::registry& reg, AoiGrid& grid) {
-    for (auto [e, tf, cell] : reg.view<Moved, Transform, AoiCell>().each()) {
-        const CellKey c = grid.cell_of(tf.pos.x, tf.pos.z);
+    for (auto [e, tf, mr, cell] : reg.view<Moved, Transform, MapRef, AoiCell>().each()) {
+        const CellKey c = grid.cell_of(mr.map, tf.pos.x, tf.pos.z);
         if (c == cell.cell) continue;
         grid.remove(wire_id(e), cell.cell);
         grid.insert(wire_id(e), c);
@@ -75,8 +103,8 @@ void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send) {
         z = t.pos.z;
     };
     std::vector<uint32_t> entered, left;
-    for (auto [e, tf, vis, link] : reg.view<Transform, Visible, SessionLink>().each()) {
-        auto now = grid.query(tf.pos.x, tf.pos.z, wire_id(e), posOf);
+    for (auto [e, tf, mr, vis, link] : reg.view<Transform, MapRef, Visible, SessionLink>().each()) {
+        auto now = grid.query(mr.map, tf.pos.x, tf.pos.z, wire_id(e), posOf);
         diff_sorted(vis.ids, now, entered, left);
         for (uint32_t id : entered) {
             const auto other = from_wire(id);
@@ -211,13 +239,29 @@ void client_event_system(entt::registry& reg, std::vector<lua::ClientEvent> even
 // Periodic save of characters whose position or persisted Lua components changed.
 void save_system(entt::registry& reg, const lua::Defs& defs, const Save& save, Millis interval, TimePoint now) {
     std::vector<entt::entity> saved;
-    for (auto [e, timer, ch, tf] : reg.view<Dirty, SaveTimer, CharacterRef, Transform>().each()) {
+    for (auto [e, timer, ch, tf, mr] : reg.view<Dirty, SaveTimer, CharacterRef, Transform, MapRef>().each()) {
         if (now - timer.lastSave < interval) continue;
-        save({ch.charId, tf.pos, tf.heading, lua::components_column(reg, e, defs)});
+        save({ch.charId, mr.map, tf.pos, tf.heading, lua::components_column(reg, e, defs)});
         timer.lastSave = now;
         saved.push_back(e);
     }
     reg.remove<Dirty>(saved.begin(), saved.end());
+}
+
+void spawner_system(entt::registry& reg, Spawner& spawner, size_t maxNpcs, TimePoint now,
+                    const std::function<entt::entity(const SpawnRecord&)>& create) {
+    size_t npcs = reg.view<Npc>().size();
+    bool capped = false;
+    for (uint32_t i = 0; i < spawner.records.size(); ++i) {
+        SpawnRecord& r = spawner.records[i];
+        if (r.alive || now < r.respawnAt) continue;
+        if (npcs >= maxNpcs) { capped = true; break; }
+        reg.emplace<SpawnRef>(create(r), i);
+        r.alive = true;
+        ++npcs;
+    }
+    if (capped && !spawner.capped) log::warn("spawns deferred: MAX_NPCS reached", {{"max", maxNpcs}});
+    spawner.capped = capped;
 }
 
 void end_of_tick_system(entt::registry& reg) { reg.clear<Moved>(); }

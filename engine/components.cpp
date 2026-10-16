@@ -149,6 +149,16 @@ const char* validateNetworkReplication(const entt::meta_any& component)
     return nullptr;
 }
 
+const char* validateTerrain(const entt::meta_any& component)
+{
+    const auto& terrain = component.cast<const Terrain&>();
+    if (terrain.map < 0 || terrain.map > 65535)
+        return "\"map\" must be between 0 and 65535";
+    if (terrain.radius < 0 || terrain.radius > 4)
+        return "\"radius\" must be between 0 and 4";
+    return nullptr;
+}
+
 void registerBuiltins()
 {
     registerComponent<Transform>("Transform", {"Transform", false})
@@ -269,6 +279,13 @@ void registerBuiltins()
         .data<&NetworkReplication::npcTemplates>("npcTemplates").custom<FieldInfo>(FieldInfo{.displayName = "NPC Templates", .optional = true});
     registerComponent<NetworkEntity>("NetworkEntity", {"Network Entity"})
         .data<&NetworkEntity::entityId>("entityId").custom<FieldInfo>("Entity Id");
+    registerComponent<Terrain>("Terrain", {"Terrain", true, validateTerrain})
+        .data<&Terrain::map>("map").custom<FieldInfo>("Map", false, 0.0, 65535.0)
+        .data<&Terrain::radius>("radius").custom<FieldInfo>("Radius (tiles)", false, 0.0, 4.0);
+    registerComponent<TerrainTile>("TerrainTile", {"Terrain Tile", true, nullptr, true})
+        .data<&TerrainTile::map>("map").custom<FieldInfo>("Map")
+        .data<&TerrainTile::tx>("tx").custom<FieldInfo>("Tile X")
+        .data<&TerrainTile::tz>("tz").custom<FieldInfo>("Tile Z");
 }
 
 // ponytail: not thread-safe; registration happens on the main thread before any scene work.

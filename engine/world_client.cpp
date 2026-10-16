@@ -288,7 +288,10 @@ void WorldClient::dispatch(const auto& m)
         emit("world.charError", {{"request", proto::opcode_name(m.request)}, {"code", proto::code_name(m.code)}});
     } else if constexpr (std::is_same_v<T, proto::EnterWorldOk>) {
         state_ = WorldState::InWorld;
-        emit("world.entered", {{"entityId", m.entityId}, {"position", position(m.pos)}, {"heading", m.heading}});
+        emit("world.entered",
+             {{"entityId", m.entityId}, {"map", m.map}, {"position", position(m.pos)}, {"heading", m.heading}});
+    } else if constexpr (std::is_same_v<T, proto::MapChange>) {
+        emit("world.mapChanged", {{"map", m.map}, {"position", position(m.pos)}, {"heading", m.heading}});
     } else if constexpr (std::is_same_v<T, proto::Spawn>) {
         emit("world.spawn", {{"entityId", m.entityId},
                              {"name", m.name},

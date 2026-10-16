@@ -1,6 +1,12 @@
 # Kast World Protocol
 
-**Protocol version: 2** (`kProtocolVersion` in `protocol/messages.h`, sent in `Hello`). Version 2 added `kind` and `template` to `Spawn`; a version 1 client gets `protocol_mismatch`.
+**Protocol version: 3** (`kProtocolVersion` in `protocol/messages.h`, sent in `Hello`). A client on any other version gets `protocol_mismatch`.
+
+| Version | Changes |
+|---|---|
+| 3 | Maps: `EnterWorldOk` gains `u16 map` after `entityId`; new `MapChange` (`0x0128`). See [Maps](#maps) |
+| 2 | `Spawn` gains `kind` and `template` (NPCs) |
+| 1 | First version |
 
 The encoder and decoder live in `protocol/`, a static library with no Asio, database or ECS dependency, so a game client can reuse it.
 
@@ -45,7 +51,7 @@ client                                 server
   |---- CharListReq / CharCreate / ... ---->|   lobby: character requests
   |<--- CharList / CharCreated / CharError -|
   |---- EnterWorld{charId} ---------------->|
-  |<--- EnterWorldOk{entityId, pos, ...} ---|   in world
+  |<--- EnterWorldOk{entityId, map, ...} ---|   in world
   |---- Move / Say ------------------------>|
   |<--- Spawn / Despawn / EntityMove / ... -|
 ```
@@ -94,7 +100,7 @@ C = client to server, S = server to client. "Payload" lists fields in wire order
 | `0x0110` | CharList | S | `u8 count`, then `count` × CharInfo |
 | `0x0111` | CharCreated | S | CharInfo |
 | `0x0112` | CharDeleted | S | `u64 charId` |
-| `0x0113` | EnterWorldOk | S | `u32 entityId, vec3 pos, f32 heading` |
+| `0x0113` | EnterWorldOk | S | `u32 entityId, u16 map, vec3 pos, f32 heading` (`map`: the map's id, see below) |
 | `0x0114` | CharError | S | `u16 requestOpcode, u16 code`; the request failed, the connection stays open |
 | `0x0120` | Spawn | S | `u32 entityId, str name, vec3 pos, f32 heading, u8 kind` (0 player, 1 npc), `str template` (an NPC's client template; empty for players) |
 | `0x0121` | Despawn | S | `u32 entityId` |
@@ -104,6 +110,7 @@ C = client to server, S = server to client. "Payload" lists fields in wire order
 | `0x0125` | ComponentUpdate | S | `u32 entityId, str name, str json` (a Lua component's full value, see below) |
 | `0x0126` | ComponentRemove | S | `u32 entityId, str name` |
 | `0x0127` | ServerEvent | S | `str name, str json` (a named event a Lua system sent, see below) |
+| `0x0128` | MapChange | S | `u16 map, vec3 pos, f32 heading` (you were moved: to another map, or within yours) |
 
 **CharInfo:** `u64 id, str name, vec3 pos`.
 
@@ -114,7 +121,7 @@ Any other opcode, including a server-to-client opcode sent by a client, gets `Di
 - **Name rules:** `CharCreate` names are 3–16 ASCII letters (`name_invalid` otherwise).
 - **Uniqueness:** names are unique per realm, case-insensitively (`name_taken`). A deleted character's name stays reserved.
 - **Character limit:** at most `MAX_CHARS_PER_ACCOUNT` (default 10) live characters per account per realm (`char_limit`).
-- **Spawn point:** new characters start at the spawn point (default: centre of the zone, y = `SPAWN_Y`).
+- **Spawn point:** new characters start on map `START_MAP` (default 1) at its `map.json` spawn.
 - **Ownership:** `CharDelete` (a soft delete) and `EnterWorld` only work on the caller's own live characters. Anything else gets `not_found`, whether the character doesn't exist, belongs to another account or is deleted.
 - **Database down:** every character request answers `CharError{service_unavailable}` while the database is down.
 
@@ -122,8 +129,10 @@ Any other opcode, including a server-to-client opcode sent by a client, gets `Di
 
 - **Sending moves:** the client sends `Move` with its new position. The server validates it on the next tick (20 Hz).
 - **Bounds:**
-  - x must be in `[0, ZONE_SIZE_X]` and z in `[0, ZONE_SIZE_Z]`.
-  - y is clamped to `[MIN_Y, MAX_Y]` and does not count toward speed.
+  - x/z must be on a tile the player's map declares (see [Maps](#maps)); x = 256 is already tile 1.
+  - y does not count toward speed. It is checked against the ground under the new x/z (README "Ground"): more than
+    `MOVE_GROUND_TOLERANCE` (0.5 m) below it is lifted onto it, and a move ending more than `MOVE_MAX_AIR` (6 m) above
+    it is rejected unless it descends (falling is always allowed). Then y is clamped to `[MIN_Y, MAX_Y]`.
 - **Speed:**
   - **Budget:** distance on the x/z plane is paid from a budget. It refills at `MAX_SPEED + SPEED_TOLERANCE` m/s (default 10 + 1) of server time and is capped at `MOVE_BURST_SECONDS` (default 1 s) of travel.
   - **Effect:** packet timing jitter is absorbed, but sustained speed can never exceed the limit.
@@ -133,10 +142,22 @@ Any other opcode, including a server-to-client opcode sent by a client, gets `Di
 
 ### Interest management
 
-- **Grid:** a uniform grid with `AOI_CELL_SIZE` m cells (default 64). A player sees every other player and every NPC within `AOI_VIEW_RADIUS` m (default 128) on the x/z plane.
+- **Grid:** a uniform grid with `AOI_CELL_SIZE` m cells (default 64). A player sees every other player and every NPC on the same map within `AOI_VIEW_RADIUS` m (default 128) on the x/z plane. Entities on other maps are never seen, whatever their x/z.
 - **Updates:** each tick, a player gets `Spawn` for anyone who came into range and `Despawn` for anyone who left, logged out or (an NPC) was destroyed.
 - **NPCs:** server-side entities that Lua systems create, move and destroy (README, "Lua components and systems"). Their `Spawn` has `kind` 1 and the `template` the system chose; a client shows them however it likes (the engine clones the scene entity of that name). Their moves arrive as `EntityMove`, like a player's. NPCs see nothing themselves.
 - **Entity ids:** `entityId` is valid only while the entity exists. A later entity may reuse its slot with a different id.
+
+### Maps
+
+- **Model:** the world is a set of maps (continents, dungeons), each made of 256 m tiles. Tile `(tx, tz)` holds x/z
+  in `[256 tx, 256 (tx + 1))`; the map's origin is the corner of tile (0, 0). Coordinates: y up, metres,
+  `heading = atan2(dx, dz)` (0 faces +z). A map is identified by its `u16` id (`map.json` `id`, README "Maps").
+- **Entering:** `EnterWorldOk.map` is the map the character is on. Load it before showing the world.
+- **`MapChange`:** the server moved you (a portal, a script). Drop every remote entity you know, load `map` if it
+  differs, and place yourself at `pos` / `heading`. It is sent at once, so it always arrives before the `Despawn`s of
+  your old neighbours and the `Spawn`s of your new ones (both on the next tick). A `Move` you sent before it arrived is
+  checked from the new position with an empty speed budget, so it gets `Correction`.
+- **Others:** a player who changes map is a plain `Despawn` to its old neighbours and a `Spawn` to its new ones.
 
 ### Say chat
 

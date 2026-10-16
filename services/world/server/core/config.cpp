@@ -1,7 +1,10 @@
 #include "config.h"
 
+#include <map.h>
+
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <cstdlib>
 #include <limits>
 
@@ -50,11 +53,6 @@ public:
             if (!item.empty()) out.push_back(std::move(item));
             start = end + 1;
         }
-    }
-
-    void opt_float(const char* name, std::optional<float>& out, double min, double max) {
-        float v = 0;
-        if (num(name, v, min, max)) out = v;
     }
 
 private:
@@ -127,20 +125,19 @@ ConfigResult load_config(const EnvLookup& env) {
 
     l.num("REALM_ID", c.realmId, 1, u32max, true);
     l.num("TICK_HZ", c.tickHz, 1, 1000);
-    l.num("ZONE_SIZE_X", c.zoneSizeX, 1, 1e6);
-    l.num("ZONE_SIZE_Z", c.zoneSizeZ, 1, 1e6);
-    l.opt_float("SPAWN_X", c.spawnX, 0, 1e6);
-    l.opt_float("SPAWN_Z", c.spawnZ, 0, 1e6);
-    l.num("SPAWN_Y", c.spawnY, -1e6, 1e6);
+    l.str("MAP_ROOT", c.mapRoot);
+    l.num("START_MAP", c.startMap, 0, 65535);
     l.num("MIN_Y", c.minY, -1e6, 1e6);
     l.num("MAX_Y", c.maxY, -1e6, 1e6);
     if (c.minY > c.maxY) l.errors.push_back("MIN_Y/MAX_Y: MIN_Y must be <= MAX_Y");
-    if (c.spawn_x() > c.zoneSizeX || c.spawn_z() > c.zoneSizeZ) l.errors.push_back("SPAWN_X/SPAWN_Z: outside the zone");
-    if (c.spawnY < c.minY || c.spawnY > c.maxY) l.errors.push_back("SPAWN_Y: outside [MIN_Y, MAX_Y]");
     l.num("MAX_SPEED", c.maxSpeed, 0.1, 1e4);
     l.num("SPEED_TOLERANCE", c.speedTolerance, 0, 1e4);
     l.num("MOVE_BURST_SECONDS", c.moveBurstSec, 0.05, 60);
+    l.num("MOVE_GROUND_TOLERANCE", c.groundTolerance, 0, 1e4);
+    l.num("MOVE_MAX_AIR", c.maxAir, 0, 1e4);
+    if (uint32_t navCheck = 1; l.num("MOVE_NAV_CHECK", navCheck, 0, 1)) c.moveNavCheck = navCheck == 1;
     l.num("AOI_CELL_SIZE", c.aoiCellSize, 1, 1e5);
+    if (std::fmod(map::kTileSize, c.aoiCellSize) != 0) l.errors.push_back("AOI_CELL_SIZE: must divide the 256 m tile size");
     l.num("AOI_VIEW_RADIUS", c.aoiViewRadius, 1, 1e5);
     l.num("MAX_CHARS_PER_ACCOUNT", c.maxCharsPerAccount, 1, 255);
     l.num("MAX_NPCS", c.maxNpcs, 0, 100000);

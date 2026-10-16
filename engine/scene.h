@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -230,6 +231,21 @@ struct NetworkReplication {
 // Added to each clone: the world server's entity id (an unsigned 32-bit id; ids past 2^31 read negative).
 struct NetworkEntity {
     int entityId = 0;
+};
+
+// Heightmap terrain (README "Terrain"): in Play, the tiles of map `map` within `radius` tiles of the local player
+// (else the camera) stream in as TerrainTile children. Online, the world server's map replaces `map`.
+struct Terrain {
+    int map = 0;    // map.json id, 0..65535
+    int radius = 1; // 0..4 tiles around the centre tile
+};
+
+struct TerrainTileData; // terrain.h: the tile's heights and its map
+// One streamed tile (runtime only, made by TerrainStreamer): rendered and collided at its map position; the entity's
+// Transform is ignored.
+struct TerrainTile {
+    int map = 0, tx = 0, tz = 0;
+    std::shared_ptr<const TerrainTileData> data; // not saved
 };
 
 // Per-scene physics settings.

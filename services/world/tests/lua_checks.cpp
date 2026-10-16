@@ -2,20 +2,29 @@
 // names, the sandbox, kast.* semantics, hooks, error handling, persistence + drift, component replication routing, the
 // event bus (kast.publish/subscribe/unsubscribe), client events (kast.sendTo/sendNearby/broadcast) and state machines
 // (definitions, rules, queueing, callback errors, kast.fsm, the StateMachine built-in, C++ / Lua parity) and NPCs
-// (kast.create / kast.destroy, Transform rules, AOI and replication routing, shutdown, the sample lua/).
+// (kast.create / kast.destroy, Transform rules, AOI and replication routing, shutdown, the sample lua/), NPC spawns
+// (parse_spawns, spawn file loading errors, respawn timing, MAX_NPCS, the Spawn built-in) and maps (tile math,
+// manifests and Maps::load errors, bounds, per-map AOI, World::transfer, kast.transfer / Transform.map), ground and the
+// navmesh (an in-memory bake, Nav::path / on_mesh, navtile load errors, off_mesh moves, kast.map.path).
 // Lua files are written to a temp folder; the World runs with captured Send/Save, so there is no network or database.
 #include "core/log.h"
 #include "lua/components.h"
 #include "world/components.h"
+#include "world/maps.h"
 #include "world/world.h"
+#include <bake.h>
+#include <heights.h>
+#include <navtile.h>
 
 #include <codec.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <format>
 #include <fstream>
 #include <map>
+#include <numbers>
 #include <random>
 #include <set>
 #include <source_location>
@@ -213,15 +222,36 @@ struct Sent {
     }
 };
 
+// Map 1 "start": tiles 0..7 (the old 2048 m zone), spawn (1024, 0, 1024). Map 2 "cave": tiles 0..1, spawn
+// (256, 0, 256).
+world::Maps test_maps() {
+    world::Maps maps;
+    map::MapInfo start;
+    start.id = 1;
+    start.name = "start";
+    start.tiles = {{0, 0, 7, 7}};
+    start.spawn = {1024, 0, 1024};
+    maps.add(start);
+    map::MapInfo cave;
+    cave.id = 2;
+    cave.name = "cave";
+    cave.tiles = {{0, 0, 1, 1}};
+    cave.spawn = {256, 0, 256};
+    cave.spawnHeading = 1;
+    maps.add(cave);
+    return maps;
+}
+
 struct TestWorld {
     Sent sent;
+    world::Maps maps; // before world: it holds a reference
     world::World world;
-    explicit TestWorld(lua::Defs defs, world::WorldRules rules = {})
-        : world(rules, [this](uint32_t sid, const proto::Message& m) { sent.bySession[sid].push_back(m); },
+    explicit TestWorld(lua::Defs defs, world::WorldRules rules = {}, world::Maps m = test_maps())
+        : maps(std::move(m)), world(rules, maps, [this](uint32_t sid, const proto::Message& m) { sent.bySession[sid].push_back(m); },
                 [this](const db::CharSave& s) { sent.saves.push_back(s); }, std::move(defs)) {}
     entt::entity spawn(uint32_t sid, uint64_t charId, const std::string& name, float x, float z,
-                       const std::string& components = "") {
-        db::CharRow row{charId, 1, name, {x, 0, z}, 0.5f, components};
+                       const std::string& components = "", uint16_t map = 1) {
+        db::CharRow row{charId, 1, name, map, {x, 0, z}, 0.5f, components};
         return world.spawn(sid, row, T0);
     }
     Json value(entt::entity e, const std::string& name) {
@@ -1464,6 +1494,7 @@ return {
 
 // Every kast.create / kast.destroy / NPC Transform rule from Lua; each bad call raises and changes nothing.
 constexpr const char* kNpcApiSystem = R"lua(
+local EDGE = 2048 - 2 ^ -13 -- the largest float below 2048: still on tile 7
 local npcs = function() local n = 0 ; for _ in kast.query("Npc") do n = n + 1 end ; return n end
 local done = false
 return { update = function()
@@ -1483,7 +1514,7 @@ return { update = function()
     raises('entity ' .. g .. ' has no "Character"', function() kast.get(g, "Character") end)
     local h = kast.create("Far", {template = "T", position = {x = -5, y = 1000, z = 5000}, heading = 2})
     tf = kast.get(h, "Transform")
-    expect(tf.position.x == 0 and tf.position.y == 500 and tf.position.z == 2048 and tf.heading == 2, "position clamped into the zone and MIN_Y/MAX_Y")
+    expect(tf.position.x == 0 and tf.position.y == 0 and tf.position.z == EDGE and tf.heading == 2 and tf.map == 1, "position clamped onto the map (tile 7's far edge belongs to tile 8), y onto the ground")
     local ids, chars, all = {}, 0, {}
     for e in kast.query("Npc") do ids[#ids + 1] = e end
     for _ in kast.query("Character") do chars = chars + 1 end
@@ -1535,13 +1566,13 @@ return { update = function()
     expect(tf.heading == 1 and tf.position.x == 1024, "partial Transform set: heading only")
     kast.set(g, "Transform", {position = {x = 3000, y = -500, z = 10}})
     tf = kast.get(g, "Transform")
-    expect(tf.position.x == 2048 and tf.position.y == -100 and tf.position.z == 10 and tf.heading == 1, "Transform set clamps")
+    expect(tf.position.x == EDGE and tf.position.y == 0 and tf.position.z == 10 and tf.heading == 1, "Transform set clamps, y onto the ground")
     raises('"Transform": unknown field "pos"', function() kast.set(g, "Transform", {heading = 2, pos = {}}) end)
     raises('"Transform": field names must be strings, got 1', function() kast.set(g, "Transform", {5}) end)
     raises('"Transform": "position" must be a table {x=, y=, z=} of finite numbers', function() kast.set(g, "Transform", {heading = 2, position = {x = 1}}) end)
     raises('"Transform": "heading" must be a finite number', function() kast.set(g, "Transform", {position = {x = 1, y = 1, z = 1}, heading = 1 / 0}) end)
     tf = kast.get(g, "Transform")
-    expect(tf.position.x == 2048 and tf.heading == 1, "every failed Transform set left it unchanged")
+    expect(tf.position.x == EDGE and tf.heading == 1, "every failed Transform set left it unchanged")
     raises('"Transform" is read-only on the server', function() kast.set(p, "Transform", {heading = 1}) end)
     raises('"Npc" is read-only on the server', function() kast.set(g, "Npc", {name = "x"}) end)
     raises('"Npc" is read-only on the server', function() kast.add(g, "Npc") end)
@@ -1778,43 +1809,1135 @@ void checkNpcShutdown() {
 
 // The sample lua/ (with lua/systems/npcs.lua): the Guard is created at the spawn point, patrols its waypoints through
 // "walking" and "waiting", and a player there sees it move. 20 s of ticks.
+#ifdef KAST_SAMPLE_MAPS
+// The sample lua/ on the sample maps: the Guard and the Bat come from the spawn files; the Guard patrols its path; the
+// test hook (systems/test_hooks.lua) destroys it for a "Respawntest..." character and it is back 5 s later.
 void checkNpcSample() {
     LogCapture capture;
     const fs::path root = KAST_WORLD_LUA_SAMPLE;
     const auto defs = lua::load_component_defs(root, world::kReservedComponentNames);
     check(defs.errors.empty(), "sample definitions load");
-    TestWorld w(defs.defs);
+    std::vector<std::string> mapErrors;
+    auto maps = world::Maps::load(KAST_SAMPLE_MAPS, mapErrors);
+    check(mapErrors.empty(), "sample maps load: " + (mapErrors.empty() ? "" : mapErrors[0]));
+    TestWorld w(defs.defs, {}, std::move(maps));
     const auto errors = w.world.load_scripts(root, {"zone_cycle"});
     check(errors.empty(), "sample systems load: " + (errors.empty() ? "" : errors[0]));
     auto& reg = w.world.registry();
-    check(reg.view<world::Npc>().size() == 1, "the sample creates one NPC");
-    if (reg.view<world::Npc>().size() != 1) return;
-    const auto g = reg.view<world::Npc>().front();
-    check(reg.get<world::Npc>(g).name == "Guard" && reg.get<world::Npc>(g).templateName == "Guard", "Guard, template Guard");
+    check(reg.view<world::Npc>().empty(), "no NPC before the first tick (no Lua creates any)");
+    const auto npc = [&](const std::string& name) {
+        for (auto [e, n] : reg.view<world::Npc>().each())
+            if (n.name == name) return e;
+        return entt::entity{entt::null};
+    };
+    w.world.tick(T0);
+    const auto g = npc("Guard"), bat = npc("Bat"), sentry = npc("Sentry");
+    check(reg.view<world::Npc>().size() == 3 && g != entt::null && bat != entt::null && sentry != entt::null,
+          "the spawn files place the Guard, the Bat and the Sentry");
+    if (g == entt::null || bat == entt::null || sentry == entt::null) return;
+    check(reg.get<world::MapRef>(sentry).map == 3, "the Sentry is on the hills (map 3)");
+    check(reg.get<world::Npc>(g).templateName == "Guard" && reg.get<world::MapRef>(g).map == 1 && reg.all_of<world::SpawnRef>(g),
+          "Guard, template Guard, map 1, from a spawn file");
+    check(reg.get<world::MapRef>(bat).map == 2 && reg.get<world::Transform>(bat).pos == proto::Vec3{256, 0, 256},
+          "Bat at map 2's spawn");
     w.spawn(1, 141, "Alice", 1024, 1024);
     std::set<std::string> states;
     float farthest = 0, maxStep = 0;
     proto::Vec3 last = reg.get<world::Transform>(g).pos;
-    for (int i = 1; i <= 400; ++i) {
+    std::set<std::pair<int, int>> corners;
+    // The Sentry (maps/hills/.server/spawns/0_1.json) patrols (150, 331) <-> (215, 331), through the mesa
+    // (x 170..200, z 316..346) as the crow flies: on the hills' navmesh it walks round it, on the ground.
+    float sentryEnd = 1e9f, sentryOffGround = 0, sentryInWall = 0;
+    for (int i = 1; i <= 800; ++i) {
         w.world.tick(T0 + std::chrono::milliseconds(50 * i));
+        const proto::Vec3 s = reg.get<world::Transform>(sentry).pos;
+        sentryEnd = std::min(sentryEnd, std::hypot(s.x - 215, s.z - 331));
+        sentryOffGround = std::max(sentryOffGround, std::fabs(s.y - *w.maps.ground(3, s.x, s.z)));
+        sentryInWall = std::max(sentryInWall, std::min({s.x - 170, 200 - s.x, s.z - 316, 346 - s.z}));
         const proto::Vec3 p = reg.get<world::Transform>(g).pos;
         farthest = std::max(farthest, std::hypot(p.x - 1024, p.z - 1024));
         maxStep = std::max(maxStep, std::hypot(p.x - last.x, p.z - last.z));
+        if (std::abs(std::abs(p.x - 1024) - 10) < 1e-3f && std::abs(std::abs(p.z - 1024) - 10) < 1e-3f)
+            corners.insert({int(std::lround(p.x)), int(std::lround(p.z))});
         last = p;
         states.insert(w.world.fsm().state(lua::EntityId{wire(g)}));
     }
     check(states == std::set<std::string>{"walking", "waiting"}, "the patrol machine walks and waits");
+    check(corners == std::set<std::pair<int, int>>{{1034, 1034}, {1034, 1014}, {1014, 1014}, {1014, 1034}},
+          "it visits the 4 points of gate_patrol (" + std::to_string(corners.size()) + ")");
     check(farthest > 10 && farthest < 15, "it patrols around the spawn point (farthest " + std::to_string(farthest) + " m)");
     check(maxStep <= 3 * 0.05f + 1e-3f, "at 3 m/s (largest step " + std::to_string(maxStep) + " m)");
+    check(reg.get<world::Transform>(bat).pos == proto::Vec3{256, 0, 256}, "the Bat (no path) never moves");
+    check(sentryEnd < 1 && sentryInWall < 0.5f && sentryOffGround < 0.01f,
+          std::format("the Sentry reaches (215, 331) round the mesa ({:.2f} m off; at most {:.2f} m into its 3 m wall's "
+                      "foot), on the ground ({:.3f} m off)", sentryEnd, sentryInWall, sentryOffGround));
     const auto spawns = w.sent.of<proto::Spawn>(1);
     check(std::ranges::any_of(spawns, [](const proto::Spawn& s) { return s.kind == proto::SpawnKind::npc && s.templateName == "Guard"; }),
           "the player at the spawn point gets the Guard's Spawn");
     size_t moves = 0;
     for (const auto& m : w.sent.of<proto::EntityMove>(1)) moves += m.entityId == wire(g);
-    check(moves > 200, "and its moves (" + std::to_string(moves) + ")");
+    check(moves > 400, "and its moves (" + std::to_string(moves) + ")");
+
+    // The test hook: a "Respawntest..." character destroys the Guard; respawnSec 5 brings it back.
+    const TimePoint t = T0 + std::chrono::milliseconds(50 * 801);
+    w.world.tick(t);
+    db::CharRow row{142, 1, "RespawntestAbc", 1, {1024, 0, 1024}, 0, ""};
+    w.world.spawn(2, row, t);
+    check(!reg.valid(g) && npc("Guard") == entt::null, "test hook: the Guard is destroyed on entering");
+    w.world.tick(t + std::chrono::milliseconds(4950));
+    check(npc("Guard") == entt::null, "test hook: not back after 4.95 s");
+    w.world.tick(t + std::chrono::milliseconds(5000));
+    const auto again = npc("Guard");
+    check(again != entt::null && std::hypot(reg.get<world::Transform>(again).pos.x - 1024, reg.get<world::Transform>(again).pos.z - 1024) < 0.2f,
+          "test hook: back at its spawn point after 5 s");
     for (const auto& s : w.world.script_status()) check(s.ok, "sample system enabled: " + s.path + " " + s.error);
     check(!said("FAIL") && log_index("\"level\":\"error\"") == SIZE_MAX, "no Lua errors");
 }
+#endif
+
+// --- NPC spawns (README "NPC spawns") ---
+
+void checkSpawnParsing() {
+    std::string err;
+    const auto good = map::parse_spawns(Json::parse(R"({"version": 1,
+        "paths": {"p": {"loop": false, "wait": 1.5, "points": [[1, 2, 3], [4, 5, 6]]}, "q": {"points": [[0, 0, 0]]}},
+        "spawns": [{"id": "a", "name": "Guard", "template": "GuardTpl", "pos": [300, 1, 260], "heading": 2, "respawnSec": 30,
+                    "path": "p"},
+                   {"id": "b", "template": "Bat", "pos": [256, 0, 256], "respawnSec": -1}]})"),
+                                        {1, 1}, err);
+    check(good && good->size() == 2, "spawn file parses: " + err);
+    if (good && good->size() == 2) {
+        const auto& a = (*good)[0];
+        check(a.id == "a" && a.name == "Guard" && a.templateName == "GuardTpl" && a.pos == std::array<float, 3>{300, 1, 260} &&
+                  a.heading == 2 && a.respawnSec == 30 && a.path && a.path->points.size() == 2 &&
+                  a.path->points[1] == std::array<float, 3>{4, 5, 6} && a.path->wait == 1.5f && !a.path->loop,
+              "every spawn field and its path");
+        const auto& b = (*good)[1];
+        check(b.name == "Bat" && b.heading == 0 && b.respawnSec == -1 && !b.path, "name defaults to template; no path");
+    }
+    const auto q = map::parse_spawns(Json::parse(R"({"version":1,"paths":{"q":{"points":[[0,0,0]]}},
+        "spawns":[{"id":"c","template":"T","pos":[1,0,1],"respawnSec":0,"path":"q"}]})"), {0, 0}, err);
+    check(q && (*q)[0].path->wait == 0 && (*q)[0].path->loop, "path wait defaults to 0, loop to true");
+    check(map::parse_spawns(Json::parse(R"({"version":1,"spawns":[]})"), {0, 0}, err).has_value(), "no spawns is fine");
+    check(map::parse_spawns(Json::parse(R"({"version":1,"spawns":[{"id":"e","template":"T","pos":[0,0,0],"respawnSec":0}]})"),
+                            {0, 0}, err).has_value(), "the tile's low corner is inside it");
+
+    const std::string s = R"("template":"T","pos":[10,0,10],"respawnSec":5)";
+    const std::pair<std::string, const char*> bad[] = {
+        {R"([1])", "must be a JSON object"},
+        {R"({"spawns":[]})", "\"version\" must be 1"},
+        {R"({"version":1})", "\"spawns\" must be a list"},
+        {R"({"version":1,"paths":[],"spawns":[]})", "\"paths\" must be an object"},
+        {R"({"version":1,"paths":{"p":{"points":[]}},"spawns":[]})", "path \"p\": \"points\" must be a non-empty list"},
+        {R"({"version":1,"paths":{"p":{"points":[[1,2]]}},"spawns":[]})", "path \"p\": \"points\" must be"},
+        {R"({"version":1,"paths":{"p":{"points":[[1,2,3]],"wait":-1}},"spawns":[]})", "path \"p\": \"wait\" must be a number >= 0"},
+        {R"({"version":1,"paths":{"p":{"points":[[1,2,3]],"loop":1}},"spawns":[]})", "path \"p\": \"loop\" must be true or false"},
+        {R"({"version":1,"spawns":[7]})", "spawns[0]: must be an object"},
+        {R"({"version":1,"spawns":[{)" + s + "}]}", "spawns[0]: \"id\" must be a non-empty string"},
+        {R"({"version":1,"spawns":[{"id":"",)" + s + "}]}", "spawns[0]: \"id\" must be a non-empty string"},
+        {R"({"version":1,"spawns":[{"id":"a",)" + s + R"(},{"id":"a",)" + s + "}]}", "spawn \"a\": duplicate id"},
+        {R"({"version":1,"spawns":[{"id":"a","pos":[10,0,10],"respawnSec":5}]})", "spawn \"a\": \"template\" must be a non-empty string"},
+        {R"({"version":1,"spawns":[{"id":"a","template":")" + std::string(256, 'x') + R"(","pos":[10,0,10],"respawnSec":5}]})",
+         "\"template\" must be a non-empty string of at most 255 bytes"},
+        {R"({"version":1,"spawns":[{"id":"a","name":3,)" + s + "}]}", "spawn \"a\": \"name\" must be a non-empty string"},
+        {R"({"version":1,"spawns":[{"id":"a","template":"T","pos":[10,0],"respawnSec":5}]})", "spawn \"a\": \"pos\" must be [x, y, z]"},
+        {R"({"version":1,"spawns":[{"id":"a","template":"T","pos":[256,0,10],"respawnSec":5}]})",
+         "spawn \"a\": \"pos\" is outside tile 0_0"},
+        {R"({"version":1,"spawns":[{"id":"a","template":"T","pos":[-0.5,0,10],"respawnSec":5}]})", "\"pos\" is outside tile 0_0"},
+        {R"({"version":1,"spawns":[{"id":"a","heading":"n",)" + s + "}]}", "spawn \"a\": \"heading\" must be a number"},
+        {R"({"version":1,"spawns":[{"id":"a","template":"T","pos":[10,0,10]}]})", "spawn \"a\": \"respawnSec\" must be a number"},
+        {R"({"version":1,"spawns":[{"id":"a","template":"T","pos":[10,0,10],"respawnSec":-2}]})", "\"respawnSec\" must be a number in [0, 31536000]"},
+        {R"({"version":1,"spawns":[{"id":"a","template":"T","pos":[10,0,10],"respawnSec":31536001}]})", "\"respawnSec\" must be"},
+        {R"({"version":1,"spawns":[{"id":"a","path":"nope",)" + s + "}]}", "spawn \"a\": unknown path \"nope\""},
+        {R"({"version":1,"spawns":[{"id":"a","path":3,)" + s + "}]}", "spawn \"a\": unknown path 3"},
+    };
+    for (const auto& [text, want] : bad) {
+        err.clear();
+        const bool rejected = !map::parse_spawns(Json::parse(text), {0, 0}, err);
+        check(rejected && contains(err, want), "spawn file rejected: want [" + std::string(want) + "] got [" + err + "]");
+    }
+}
+
+void checkSpawnLoading() {
+    LuaRoot r;
+    const auto one = [](const std::string& pos) {
+        return R"({"version":1,"spawns":[{"id":"x","template":"T","pos":[)" + pos + R"(],"respawnSec":5}]})";
+    };
+    r.write("a/map.json", R"({"version":1,"id":1,"tiles":[[0,0,1,1]],"spawn":{"pos":[10,0,10]}})");
+    r.write("a/.server/spawns/0_0.json", one("10,0,10"));
+    r.write("a/.server/spawns/-1_0.json", one("-10,0,10"));
+    r.write("a/.server/spawns/1_0.json", one("300,0,10"));
+    r.write("a/.server/spawns/1_1.json", one("10,0,10"));
+    r.write("a/.server/spawns/0_1.json", R"({"version":1,"spawns":[{"id":"y","template":"T","pos":[10,0,300],"respawnSec":5}]})");
+    r.write("a/.server/spawns/notes.txt", "hi");
+    r.write("a/.server/spawns/0_0_old.json", one("10,0,10"));
+    r.write("b/map.json", R"({"version":1,"id":2,"tiles":[[0,0,0,0]],"spawn":{"pos":[10,0,10]}})");
+    r.write("b/.server/spawns/0_0.json", one("10,0,10")); // same id, other map: fine
+    std::vector<std::string> errors;
+    const auto maps = world::Maps::load(r.root, errors);
+    const std::set<std::string> got(errors.begin(), errors.end());
+    const std::set<std::string> want = {
+        "maps/a/.server/spawns/-1_0.json: tile is not on the map",
+        "maps/a/.server/spawns/1_0.json: spawn \"x\": duplicate id on this map",
+        "maps/a/.server/spawns/1_1.json: spawn \"x\": \"pos\" is outside tile 1_1",
+        "maps/a/.server/spawns/notes.txt: file name must be <tx>_<tz>.json",
+        "maps/a/.server/spawns/0_0_old.json: file name must be <tx>_<tz>.json",
+    };
+    std::string all;
+    for (const auto& e : errors) all += e + "; ";
+    check(got == want, "every bad spawn file reported: " + all);
+    check(maps.info(1).spawns.size() == 2 && maps.info(1).spawns[0].id == "x" && maps.info(1).spawns[1].id == "y" &&
+              maps.info(2).spawns.size() == 1,
+          "the good spawns load, in file order");
+
+    LuaRoot none;
+    none.write("a/map.json", R"({"version":1,"id":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[10,0,10]}})");
+    errors.clear();
+    check(world::Maps::load(none.root, errors).info(1).spawns.empty() && errors.empty(), "no .server/spawns: no spawns, no error");
+}
+
+// test_maps with spawn "a" (respawn 30 s, a one-point path) and "b" (never respawns, no path) on map 1.
+world::Maps spawn_maps() {
+    world::Maps maps = test_maps();
+    map::MapInfo start = maps.info(1);
+    start.spawns = {
+        {"a", "Guard", "GuardTpl", {1024, 0, 1024}, 0.5f, 30, map::PatrolPath{{{1030, 0, 1024}}, 1, false}},
+        {"b", "Bat", "BatTpl", {1030, 5000, 1030}, 0, -1, std::nullopt},
+    };
+    maps.add(start);
+    return maps;
+}
+
+void checkRespawn() {
+    LogCapture capture;
+    TestWorld w({}, {}, spawn_maps());
+    auto& reg = w.world.registry();
+    const auto find = [&](const std::string& name) {
+        for (auto [e, n] : reg.view<world::Npc>().each())
+            if (n.name == name) return e;
+        return entt::entity{entt::null};
+    };
+    check(reg.view<world::Npc>().empty(), "respawn: nothing before the first tick");
+    w.world.tick(T0);
+    const auto a = find("Guard"), b = find("Bat");
+    check(a != entt::null && b != entt::null, "respawn: every spawn is created on the first tick");
+    if (a == entt::null || b == entt::null) return;
+    check(reg.get<world::Npc>(a).templateName == "GuardTpl" && reg.get<world::Transform>(a).pos == proto::Vec3{1024, 0, 1024} &&
+              reg.get<world::Transform>(a).heading == 0.5f && reg.get<world::MapRef>(a).map == 1 &&
+              reg.get<world::SpawnRef>(a).record == 0 && reg.get<world::SpawnRef>(b).record == 1,
+          "respawn: name, template, pos, heading, map, record");
+    check(reg.get<world::Transform>(b).pos.y == 0, "respawn: pos on the ground like kast.create");
+    const TimePoint killed = T0 + std::chrono::seconds(10);
+    w.world.tick(killed);
+    check(reg.view<world::Npc>().size() == 2, "respawn: alive spawns are not created again");
+
+    w.world.destroy_npc(a);
+    w.world.destroy_npc(b);
+    w.world.tick(killed + std::chrono::milliseconds(29950));
+    check(reg.view<world::Npc>().empty(), "respawn: not back before respawnSec");
+    w.world.tick(killed + std::chrono::seconds(30));
+    const auto a2 = find("Guard");
+    check(a2 != entt::null && reg.get<world::Transform>(a2).pos == proto::Vec3{1024, 0, 1024} && reg.get<world::SpawnRef>(a2).record == 0,
+          "respawn: back at its spawn point respawnSec (30 s) after it was destroyed");
+    w.world.tick(killed + std::chrono::hours(24 * 400));
+    check(reg.view<world::Npc>().size() == 1 && find("Bat") == entt::null, "respawn: respawnSec -1 never comes back");
+
+    // MAX_NPCS: 1 of the 2 due spawns, one warning; the other once there is room.
+    world::WorldRules rules;
+    rules.maxNpcs = 1;
+    TestWorld capped({}, rules, spawn_maps());
+    capped.world.tick(T0);
+    capped.world.tick(T0 + std::chrono::milliseconds(50));
+    auto& creg = capped.world.registry();
+    check(creg.view<world::Npc>().size() == 1 && said_at("spawns deferred: MAX_NPCS reached").size() == 1,
+          "respawn: MAX_NPCS caps the spawner, warned once");
+    capped.world.destroy_npc(creg.view<world::Npc>().front());
+    capped.world.tick(T0 + std::chrono::milliseconds(100));
+    check(creg.view<world::Npc>().size() == 1 && creg.get<world::Npc>(creg.view<world::Npc>().front()).name == "Bat",
+          "respawn: the deferred spawn is created once there is room");
+}
+
+constexpr const char* kSpawnLuaSystem = R"(
+local done = false
+return { update = function()
+    if done then return end
+    done = true
+    local seen = {}
+    for e in kast.query("Spawn") do
+        expect(kast.has(e, "Npc") and kast.has(e, "Spawn"), "a Spawn entity is an NPC")
+        local s = kast.get(e, "Spawn")
+        seen[s.id] = s
+    end
+    local a, b = seen.a, seen.b
+    expect(a and b, "query Spawn finds both spawns")
+    expect(#a.path == 1 and a.path[1].x == 1030 and a.path[1].y == 0 and a.path[1].z == 1024, "path points as {x, y, z}")
+    expect(a.wait == 1 and a.loop == false, "wait and loop")
+    expect(b.path == nil and b.wait == nil and b.loop == nil, "no path: no path, wait or loop")
+    local plain = kast.create("Plain", {template = "T"})
+    expect(not kast.has(plain, "Spawn"), "kast.create NPCs have no Spawn")
+    local n = 0
+    for _ in kast.query("Spawn") do n = n + 1 end
+    expect(n == 2, "query Spawn skips them")
+    raises("has no \"Spawn\"", function() kast.get(plain, "Spawn") end)
+    for e in kast.query("Spawn") do
+        raises("\"Spawn\" is read-only on the server", function() kast.set(e, "Spawn", {id = "x"}) end)
+        raises("\"Spawn\" cannot be removed", function() kast.remove(e, "Spawn") end)
+    end
+    raises("\"Spawn\" is read-only on the server", function() kast.add(plain, "Spawn") end)
+    kast.log("spawn lua done")
+end }
+)";
+
+void checkSpawnLua() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("systems/spawns.lua", std::string(kLuaExpect) + kSpawnLuaSystem);
+    TestWorld w({}, {}, spawn_maps());
+    check(w.world.load_scripts(r.root).empty(), "spawn lua: loads");
+    w.world.tick(T0);
+    check_lua_expectations("spawn lua", "spawn lua done");
+    for (const auto& s : w.world.script_status()) check(s.ok, "spawn lua: system still enabled " + s.error);
+}
+
+// --- maps (README "Maps") ---
+
+void checkTileMath() {
+    using map::tile_of;
+    check(tile_of(255.999f, 0) == map::TileKey{0, 0}, "255.999 is tile 0");
+    check(tile_of(256, 256) == map::TileKey{1, 1}, "256 is tile 1");
+    check(tile_of(-0.001f, -256) == map::TileKey{-1, -1}, "-0.001 and -256 are tile -1");
+    check(tile_of(-256.001f, 0) == map::TileKey{-2, 0}, "-256.001 is tile -2");
+    map::MapInfo m;
+    m.tiles = {{0, 0, 1, 0}, {5, 5, 5, 5}};
+    check(m.has_tile({1, 0}) && m.has_tile({5, 5}) && !m.has_tile({2, 0}) && !m.has_tile({0, 1}), "union of rects");
+    check(m.contains(511.9f, 10) && !m.contains(512, 10) && !m.contains(-0.1f, 10), "far edge is the next tile");
+    check(m.clamp(1300, 1300) == std::array<float, 2>{1300, 1300}, "clamp keeps an on-map point");
+    check(m.clamp(600, 10)[0] < 512 && m.clamp(600, 10)[0] > 511.99f && m.clamp(600, 10)[1] == 10,
+          "clamp pulls an off-map point to the nearest declared tile");
+    const auto c = m.clamp(1600, 1600);
+    check(c[0] < 1536 && c[1] < 1536 && m.contains(c[0], c[1]), "clamp lands on the nearest rect");
+}
+
+// map/heights.h links into the server too (stb's PNG decoder included); the engine's self-check covers it in depth.
+void checkHeights() {
+    std::string err;
+    map::MapInfo info;
+    info.heightRange = {{-10, 90}};
+    std::string r16(size_t(map::kTileSamples) * map::kTileSamples * 2, '\0');
+    const auto flat = map::decode_heights(r16, ".r16", err);
+    check(flat && flat->size() == size_t(map::kTileSamples) * map::kTileSamples &&
+              map::ground(*flat, info, 100.5f, 3.25f) == -10, "heights: a zero .r16 is flat at heightMin");
+    check(!map::decode_heights(r16.substr(1), ".r16", err) && err.find("need 132098") != std::string::npos,
+          "heights: a wrong-size .r16 is refused");
+    check(!map::decode_heights("not a png", ".png", err) && err.rfind("png:", 0) == 0, "heights: a bad PNG is refused");
+}
+
+void checkManifests() {
+    std::string err;
+    const auto good = Json::parse(R"({"version": 1, "id": 7, "name": "Eastlands", "tiles": [[0,0,7,7], [-2,0,-1,0]],
+        "heightRange": [-100, 500], "spawn": {"pos": [1024, 0, 1024], "heading": 0.5},
+        "material": "materials/terrain_grass.mat",
+        "nav": {"agentRadius": 0.4, "agentHeight": 1.8, "maxClimb": 0.5, "maxSlopeDeg": 45, "cellSize": 0.5}})");
+    const auto m = map::parse_manifest(good, err);
+    check(m && m->id == 7 && m->name == "Eastlands" && m->tiles.size() == 2 && m->spawn[0] == 1024 &&
+              m->spawnHeading == 0.5f && m->heightRange && (*m->heightRange)[1] == 500 &&
+              m->material == "materials/terrain_grass.mat" && m->nav && m->nav->maxSlopeDeg == 45,
+          "full manifest parses: " + err);
+    check(m && m->has_tile({-2, 0}) && !m->has_tile({-3, 0}), "negative tiles");
+    const auto minimal =
+        map::parse_manifest(Json::parse(R"({"version":1,"id":2,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]}})"), err);
+    check(minimal && !minimal->heightRange && !minimal->nav && minimal->material.empty(), "heightRange/material/nav optional");
+
+    const std::pair<const char*, const char*> bad[] = {
+        {R"([1])", "must be a JSON object"},
+        {R"({"id":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]}})", "\"version\" must be 1"},
+        {R"({"version":2,"id":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]}})", "\"version\" must be 1"},
+        {R"({"version":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]}})", "\"id\" must be an integer in [0, 65535]"},
+        {R"({"version":1,"id":65536,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]}})", "\"id\" must be an integer"},
+        {R"({"version":1,"id":-1,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]}})", "\"id\" must be an integer"},
+        {R"({"version":1,"id":1,"tiles":[],"spawn":{"pos":[1,0,1]}})", "\"tiles\" must be a non-empty list"},
+        {R"({"version":1,"id":1,"tiles":[[0,0,0]],"spawn":{"pos":[1,0,1]}})", "tiles[0]: must be [x0, z0, x1, z1] integers"},
+        {R"({"version":1,"id":1,"tiles":[[0,0,0,0],[0,0,0.5,0]],"spawn":{"pos":[1,0,1]}})", "tiles[1]: must be"},
+        {R"({"version":1,"id":1,"tiles":[[3,0,2,0]],"spawn":{"pos":[1,0,1]}})", "tiles[0]: x0 <= x1 and z0 <= z1 required"},
+        {R"({"version":1,"id":1,"tiles":[[0,0,0,0]]})", "\"spawn\" must be {\"pos\": [x, y, z]"},
+        {R"({"version":1,"id":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0]}})", "\"spawn\" must be"},
+        {R"({"version":1,"id":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1],"heading":"n"}})", "\"spawn.heading\" must be a number"},
+        {R"({"version":1,"id":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[300,0,1]}})", "\"spawn.pos\" is not on a declared tile"},
+        {R"({"version":1,"id":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]},"heightRange":[5,1]})", "\"heightRange\" must be [min, max]"},
+        {R"({"version":1,"id":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]},"material":3})", "\"material\" must be a string"},
+        {R"({"version":1,"id":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]},"nav":{"cellSize":-1}})", "\"nav.cellSize\" must be a number >= 0"},
+    };
+    for (const auto& [text, want] : bad) {
+        err.clear();
+        const bool refused = !map::parse_manifest(Json::parse(text), err);
+        check(refused && contains(err, want), std::string("manifest refused: ") + want + " (got: " + err + ")");
+    }
+
+    // Maps::load: every folder's map.json; one line per problem, naming the file.
+    LuaRoot r;
+    r.write("start/map.json", R"({"version":1,"id":1,"name":"start","tiles":[[0,0,7,7]],"spawn":{"pos":[1024,0,1024]}})");
+    r.write("cave/map.json", R"({"version":1,"id":2,"name":"cave","tiles":[[0,0,1,1]],"spawn":{"pos":[256,0,256]}})");
+    r.write(".server/map.json", "not even json"); // dot-folders are server data, never maps
+    std::vector<std::string> errors;
+    const auto ok = world::Maps::load(r.root, errors);
+    check(errors.empty() && ok.all().size() == 2 && ok.info(2).name == "cave" && ok.has_tile(1, 2047, 0) &&
+              !ok.has_tile(1, 2048, 0) && !ok.has_tile(3, 0, 0) && ok.owns(2, {1, 1}) && !ok.owns(2, {2, 1}),
+          "two maps load; dot-folder skipped");
+    r.write("dup/map.json", R"({"version":1,"id":2,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]}})");
+    r.write("junk/map.json", "{not json");
+    r.write("rect/map.json", R"({"version":1,"id":3,"tiles":[[1,0,0,0]],"spawn":{"pos":[1,0,1]}})");
+    r.write("nospawn/map.json", R"({"version":1,"id":4,"tiles":[[0,0,0,0]]})");
+    fs::create_directories(r.root / "empty");
+    errors.clear();
+    world::Maps::load(r.root, errors);
+    const std::set<std::string> got(errors.begin(), errors.end());
+    const std::set<std::string> want = {
+        "maps/dup/map.json: id 2 already used by maps/cave",
+        "maps/empty/map.json: missing",
+        "maps/junk/map.json: not valid JSON",
+        "maps/nospawn/map.json: \"spawn\" must be {\"pos\": [x, y, z], \"heading\": h}",
+        "maps/rect/map.json: tiles[0]: x0 <= x1 and z0 <= z1 required",
+    };
+    std::string all;
+    for (const auto& e : errors) all += e + "; ";
+    check(got == want, "every bad map reported: " + all);
+    errors.clear();
+    world::Maps::load(r.root / "nowhere", errors);
+    check(errors.size() == 1 && contains(errors[0], "nowhere"), "missing MAP_ROOT refused");
+    LuaRoot none;
+    errors.clear();
+    world::Maps::load(none.root, errors);
+    check(errors.size() == 1 && contains(errors[0], ": no maps"), "no maps refused");
+}
+
+// Index of the first message of type T on sid, or SIZE_MAX.
+template <typename T>
+size_t first_of(const Sent& sent, uint32_t sid) {
+    const auto it = sent.bySession.find(sid);
+    if (it == sent.bySession.end()) return SIZE_MAX;
+    for (size_t i = 0; i < it->second.size(); ++i)
+        if (std::holds_alternative<T>(it->second[i])) return i;
+    return SIZE_MAX;
+}
+
+void checkMapWorld() {
+    LogCapture capture;
+    TestWorld w({});
+    // spawn: saved map kept, unknown map / off-map position -> START_MAP spawn, 0 (before migration 003) -> START_MAP
+    w.spawn(1, 1, "Onstart", 1000, 1000);
+    w.spawn(2, 2, "Incave", 300, 300, "", 2);
+    w.spawn(3, 3, "Lost", 1000, 1000, "", 99);
+    w.spawn(4, 4, "Offcave", 1000, 1000, "", 2);
+    w.spawn(5, 5, "Legacy", 900, 900, "", 0);
+    const auto ok = [&](uint32_t sid) { return w.sent.of<proto::EnterWorldOk>(sid).at(0); };
+    check(ok(1).map == 1 && ok(1).pos == proto::Vec3{1000, 0, 1000}, "EnterWorldOk map 1 at the saved position");
+    check(ok(2).map == 2 && ok(2).pos == proto::Vec3{300, 0, 300}, "saved map 2 kept");
+    check(ok(3).map == 1 && ok(3).pos == proto::Vec3{1024, 0, 1024} && ok(3).heading == 0, "unknown map 99 -> START_MAP spawn");
+    check(ok(4).map == 1 && ok(4).pos == proto::Vec3{1024, 0, 1024}, "position off its map -> START_MAP spawn");
+    check(ok(5).map == 1 && ok(5).pos == proto::Vec3{900, 0, 900}, "map 0 (pre-maps row) reads as START_MAP, position kept");
+    check(logged("saved position not on a loaded map"), "fallback logged");
+    const auto a = entt::entity{ok(1).entityId}, cave = entt::entity{ok(2).entityId};
+    for (uint32_t sid = 3; sid <= 5; ++sid) w.world.despawn(entt::entity{ok(sid).entityId});
+    w.sent.clear();
+
+    // Same x/z, different maps: never see each other. A third player next to the first on map 1 does.
+    w.spawn(6, 6, "Twin", 300, 300); // map 1 at the cave player's x/z
+    const auto near = w.spawn(7, 7, "Near", 1010, 1000);
+    w.world.tick(T0);
+    const auto spawnsOf = [&](uint32_t sid) {
+        std::set<uint32_t> ids;
+        for (const auto& s : w.sent.of<proto::Spawn>(sid)) ids.insert(s.entityId);
+        return ids;
+    };
+    check(spawnsOf(2).empty() && spawnsOf(6).empty(), "same x/z on different maps: no Spawn either way");
+    check(spawnsOf(1) == std::set<uint32_t>{wire(near)} && spawnsOf(7) == std::set<uint32_t>{wire(a)}, "same map in range: seen");
+
+    // Move onto an undeclared tile: Correction, not applied. A move on the map is.
+    w.sent.clear();
+    w.world.push_move(near, {{1015, 0, 1000}, 0, 0});
+    w.world.tick(T0 + std::chrono::seconds(1));
+    check(w.sent.of<proto::Correction>(7).empty() && w.world.registry().get<world::Transform>(near).pos.x == 1015, "on-map move accepted");
+    w.sent.clear();
+    const auto edger = w.spawn(8, 8, "Edger", 2045, 500);
+    w.world.push_move(edger, {{2050, 0, 500}, 0, 0});
+    w.world.tick(T0 + std::chrono::seconds(3));
+    const auto corr = w.sent.of<proto::Correction>(8);
+    check(corr.size() == 1 && corr[0].pos == proto::Vec3{2045, 0, 500}, "move onto undeclared tile 8 -> Correction");
+    w.sent.clear();
+    w.world.push_move(edger, {{2048, 0, 500}, 0, 0});
+    w.world.tick(T0 + std::chrono::seconds(4));
+    check(w.sent.of<proto::Correction>(8).size() == 1, "x = 2048 exactly is tile 8: Correction");
+    w.world.despawn(edger);
+
+    // Transfer A from map 1 (sees Near) to map 2 next to the cave player.
+    w.sent.clear();
+    check(w.world.transfer(a, {2, {310, 9000, 300}, 1.5f}), "transfer accepted");
+    const auto mc = w.sent.of<proto::MapChange>(1);
+    check(mc.size() == 1 && mc[0].map == 2 && mc[0].pos == proto::Vec3{310, 0, 300} && mc[0].heading == 1.5f,
+          "MapChange{map, pos (y onto the ground), heading} sent at once");
+    check(w.world.registry().get<world::MapRef>(a).map == 2 && w.world.registry().all_of<world::Dirty>(a), "MapRef changed, Dirty");
+    w.world.tick(T0 + std::chrono::seconds(5));
+    const size_t change = first_of<proto::MapChange>(w.sent, 1), despawn = first_of<proto::Despawn>(w.sent, 1),
+                 spawn = first_of<proto::Spawn>(w.sent, 1);
+    check(change == 0 && despawn != SIZE_MAX && spawn != SIZE_MAX && change < despawn && change < spawn,
+          "mover: MapChange before the Despawn of old neighbours and the Spawn of new ones");
+    check(w.sent.of<proto::Despawn>(1).size() == 1 && w.sent.of<proto::Despawn>(1)[0].entityId == wire(near), "mover: Despawn Near");
+    check(w.sent.of<proto::Spawn>(1).size() == 1 && w.sent.of<proto::Spawn>(1)[0].entityId == wire(cave), "mover: Spawn the cave player");
+    check(w.sent.of<proto::Despawn>(7).size() == 1 && w.sent.of<proto::Despawn>(7)[0].entityId == wire(a), "old neighbour: Despawn mover");
+    check(w.sent.of<proto::EntityMove>(7).empty(), "old neighbour never sees where it went");
+    check(w.sent.of<proto::Spawn>(2).size() == 1 && w.sent.of<proto::Spawn>(2)[0].pos == proto::Vec3{310, 0, 300},
+          "new neighbour: Spawn at the destination");
+    check(spawnsOf(6).empty(), "the map-1 player at the same x/z still sees nothing");
+
+    // A move from before the client got MapChange (old-map coordinates): Correction to the new position.
+    w.sent.clear();
+    w.world.push_move(a, {{1001, 0, 1000}, 0, 0});
+    w.world.tick(T0 + std::chrono::seconds(6));
+    check(w.sent.of<proto::Correction>(1).size() == 1 && w.sent.of<proto::Correction>(1)[0].pos == proto::Vec3{310, 0, 300},
+          "stale old-map move corrected");
+
+    // Teleport within the map, next to the same neighbour: both get Despawn now and Spawn again on the next tick, so a
+    // client that dropped its remotes on MapChange gets them back.
+    const auto p = w.spawn(9, 9, "Porter", 1500, 1500), q = w.spawn(10, 10, "Stayer", 1510, 1500);
+    w.world.tick(T0 + std::chrono::seconds(7));
+    w.sent.clear();
+    check(w.world.transfer(p, {1, {1505, 0, 1500}, 0}), "teleport within the map");
+    check(first_of<proto::MapChange>(w.sent, 9) == 0 && w.sent.of<proto::Despawn>(9).size() == 1 &&
+              w.sent.of<proto::Despawn>(10).size() == 1 && w.sent.of<proto::Despawn>(10)[0].entityId == wire(p),
+          "teleport: MapChange then Despawn Stayer; Stayer gets Despawn Porter");
+    w.world.tick(T0 + std::chrono::seconds(8));
+    check(spawnsOf(9) == std::set<uint32_t>{wire(q)} && w.sent.of<proto::Spawn>(10).size() == 1 &&
+              w.sent.of<proto::Spawn>(10)[0].pos == proto::Vec3{1505, 0, 1500},
+          "teleport: both Spawn again on the next tick, at the new position");
+    w.world.despawn(p);
+    w.world.despawn(q);
+
+    // Refused: not owned (undeclared tile, unknown map); nothing changes, nothing sent.
+    w.sent.clear();
+    check(!w.world.transfer(a, {2, {600, 0, 100}, 0}) && !w.world.transfer(a, {9, {1, 0, 1}, 0}), "unowned destination refused");
+    check(w.sent.bySession.empty() && w.world.registry().get<world::MapRef>(a).map == 2, "refusal changes nothing");
+    check(logged("transfer refused"), "refusal logged");
+
+    // Save carries the map.
+    w.world.despawn(a);
+    check(!w.sent.saves.empty() && w.sent.saves.back().charId == 1 && w.sent.saves.back().mapId == 2, "save includes map");
+
+    // NPCs: created on a map, transferred like players.
+    w.sent.clear();
+    const auto npc = w.world.create_npc("Bat", "Bat", uint16_t{2}, proto::Vec3{290, 0, 300}, 0);
+    w.world.tick(T0 + std::chrono::seconds(9));
+    check(spawnsOf(2).contains(wire(npc)) && !spawnsOf(6).contains(wire(npc)), "NPC on map 2 seen only there");
+    w.sent.clear();
+    check(w.world.transfer(npc, {1, {305, 0, 300}, 0}), "NPC transfer");
+    w.world.tick(T0 + std::chrono::seconds(10));
+    check(w.sent.of<proto::Despawn>(2).size() == 1 && spawnsOf(6).contains(wire(npc)), "NPC: Despawn on map 2, Spawn on map 1");
+    check(w.sent.of<proto::MapChange>(2).empty() && w.sent.of<proto::MapChange>(6).empty(), "an NPC transfer sends no MapChange");
+}
+
+// kast.transfer and Transform.map from Lua (players and NPCs), with every argument check.
+constexpr const char* kMapLuaSystem = R"lua(
+local done = false
+return { update = function()
+    if done then return end
+    done = true
+    local p
+    for e in kast.query("Character") do p = e end
+    expect(kast.get(p, "Transform").map == 1, "Transform.map: player on map 1")
+    local g = kast.create("Bat", {template = "Bat"})
+    expect(kast.get(g, "Transform").map == 1, "kast.create defaults to START_MAP")
+    local c = kast.create("Cave", {template = "Bat", map = 2})
+    local tf = kast.get(c, "Transform")
+    expect(tf.map == 2 and tf.position.x == 256 and tf.position.z == 256, "create map = 2: at its spawn")
+    local far = kast.create("Far", {template = "Bat", map = 2, position = {x = 5000, y = 0, z = 100}})
+    expect(kast.get(far, "Transform").position.x < 512, "create clamps onto its map")
+    raises('kast.create: "map" must be the id of a loaded map, got 9', function() kast.create("X", {template = "T", map = 9}) end)
+    raises('kast.create: "map" must be the id of a loaded map, got 1.5', function() kast.create("X", {template = "T", map = 1.5}) end)
+
+    expect(kast.transfer(p, 2, {x = 300, y = 0, z = 310}, 0.25) == true, "kast.transfer player returns true")
+    tf = kast.get(p, "Transform")
+    expect(tf.map == 2 and tf.position.x == 300 and tf.position.z == 310 and tf.heading == 0.25, "player moved to map 2")
+    expect(kast.transfer(g, 2, {x = 100, y = 0, z = 100}) and kast.get(g, "Transform").map == 2, "kast.transfer NPC")
+    expect(kast.get(g, "Transform").heading == 0, "heading defaults to the current one")
+    kast.set(g, "Transform", {position = {x = 4000, y = 0, z = 100}})
+    expect(kast.get(g, "Transform").position.x < 512, "NPC Transform set clamps onto its new map")
+    raises('"Transform": "map" is read-only; use kast.transfer', function() kast.set(g, "Transform", {map = 1}) end)
+    raises('kast.transfer: "map" must be the id of a loaded map, got 9', function() kast.transfer(p, 9, {x = 1, y = 0, z = 1}) end)
+    raises('kast.transfer: "map" must be the id of a loaded map, got nil', function() kast.transfer(p) end)
+    raises('kast.transfer: position (600, 1) is not on a declared tile of map 2', function() kast.transfer(p, 2, {x = 600, y = 0, z = 1}) end)
+    raises('kast.transfer: "position" must be a table', function() kast.transfer(p, 2, 5) end)
+    raises('kast.transfer: "heading" must be a finite number', function() kast.transfer(p, 2, {x = 1, y = 0, z = 1}, "n") end)
+    raises("kast.transfer: invalid entity id 999999", function() kast.transfer(999999, 1, {x = 1, y = 0, z = 1}) end)
+    expect(kast.get(p, "Transform").map == 2 and kast.get(p, "Transform").position.x == 300, "failed transfers changed nothing")
+    kast.log("map lua done")
+end })lua";
+
+void checkMapLua() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("systems/maps.lua", std::string(kLuaExpect) + kMapLuaSystem);
+    TestWorld w({});
+    check(w.world.load_scripts(r.root).empty(), "map lua: loads");
+    w.spawn(1, 1, "Alice", 1000, 1000);
+    w.sent.clear();
+    w.world.tick(T0);
+    check_lua_expectations("map lua", "map lua done");
+    for (const auto& s : w.world.script_status()) check(s.ok, "map lua: system still enabled " + s.error);
+    const auto mc = w.sent.of<proto::MapChange>(1);
+    check(mc.size() == 1 && mc[0].map == 2 && mc[0].pos == proto::Vec3{300, 0, 310}, "kast.transfer sends the player MapChange");
+}
+
+// --- areas (README "Areas") ---
+
+std::optional<map::Areas> areas_of(const std::string& text, std::string& err) {
+    err.clear();
+    return map::parse_areas(nlohmann::json::parse(text), err);
+}
+
+std::string joined(const std::vector<std::string>& items) {
+    std::string out;
+    for (const auto& item : items) out += (out.empty() ? "" : "; ") + item;
+    return out;
+}
+
+std::string area_id(const map::Areas& a, float x, float y, float z) {
+    const int16_t i = map::area_at(a, x, y, z);
+    return i < 0 ? "-" : a.list[i].id;
+}
+
+void checkAreaShapes() {
+    std::string err;
+    // world: 3x3 tiles. town: an L-shaped polygon, only for 0 <= y <= 10. tower: a rect inside town's corner.
+    const auto a = areas_of(R"({"version": 1, "areas": [
+        {"id": "world", "rect": [0, 0, 768, 768], "flags": {"pvp": false, "noMount": true, "zone": 1}, "music": "w.ogg"},
+        {"id": "town", "name": "Town", "parent": "world", "priority": 5, "y": [0, 10], "flags": {"pvp": true},
+         "polygon": [[10, 10], [60, 10], [60, 30], [30, 30], [30, 60], [10, 60]]},
+        {"id": "tower", "parent": "town", "priority": 9, "rect": [12, 12, 20, 20], "flags": {"zone": 3}},
+        {"id": "east", "rect": [700, 0, 800, 10], "priority": 1}
+    ]})", err);
+    check(a.has_value(), "areas parse: " + err);
+    if (!a) return;
+    check(area_id(*a, 500, 0, 500) == "world" && area_id(*a, 1, 0, 1) == "world", "rect: inside");
+    check(area_id(*a, 800.5f, 0, 5) == "-" && area_id(*a, -1, 0, 5) == "-" && area_id(*a, 5, 0, 900) == "-", "outside all: none");
+    check(area_id(*a, 750, 0, 5) == "east", "higher priority wins where areas overlap");
+    check(area_id(*a, 20, 5, 50) == "town" && area_id(*a, 50, 5, 20) == "town", "polygon: both arms of the L");
+    check(area_id(*a, 50, 5, 50) == "world", "polygon: the L's notch is outside (inside its bounds)");
+    check(area_id(*a, 20, 10.5f, 50) == "world" && area_id(*a, 20, -0.5f, 50) == "world" && area_id(*a, 20, 0, 50) == "town",
+          "y range: above and below fall through to the parent, the bound itself is inside");
+    check(area_id(*a, 15, 100, 15) == "tower", "priority: tower over town over world (no y range on tower)");
+    const auto& tower = a->list[2];
+    check(tower.flags == nlohmann::json{{"pvp", true}, {"noMount", true}, {"zone", 3}},
+          "flags: own over parent's over grandparent's: " + tower.flags.dump());
+    check(a->list[1].name == "Town" && tower.name == "tower" && tower.music.empty() && a->list[0].music == "w.ogg",
+          "name defaults to id; music is not inherited");
+    check(a->byTile.at({0, 0}).size() == 3 && a->byTile.at({0, 0})[0] == 2 && !a->byTile.contains({4, 4}),
+          "tile buckets: highest priority first, only tiles an area touches");
+
+    // Not overlaps: a shared edge, disjoint y ranges, different priorities.
+    check(areas_of(R"({"version":1,"areas":[{"id":"a","rect":[0,0,10,10]},{"id":"b","rect":[10,0,20,10]},
+        {"id":"c","polygon":[[0,10],[10,10],[5,20]]}]})", err).has_value(), "equal priority sharing an edge: fine " + err);
+    check(areas_of(R"({"version":1,"areas":[{"id":"a","rect":[0,0,10,10],"y":[0,5]},{"id":"b","rect":[0,0,10,10],"y":[5,9]}]})",
+                   err).has_value(), "equal priority, same rect, disjoint y: fine " + err);
+    check(areas_of(R"({"version":1,"areas":[]})", err).has_value(), "no areas: fine");
+
+    const std::pair<const char*, const char*> bad[] = {
+        {R"({"version":1,"areas":[{"id":"a","rect":[0,0,10,10]},{"id":"b","rect":[5,5,15,15]}]})",
+         "areas \"a\" and \"b\" overlap with equal priority 0"},
+        {R"({"version":1,"areas":[{"id":"a","rect":[0,0,10,10]},{"id":"b","rect":[0,0,10,10]}]})", "overlap with equal priority"},
+        {R"({"version":1,"areas":[{"id":"a","rect":[0,0,10,10],"priority":3},{"id":"b","polygon":[[-5,-5],[20,-5],[5,20]],"priority":3}]})",
+         "areas \"a\" and \"b\" overlap with equal priority 3"},
+        {R"({"version":1,"areas":[{"id":"a","rect":[0,0,10,10]},{"id":"b","rect":[2,2,4,4],"y":[0,1]}]})", "overlap with equal priority"},
+        {R"({"version":1,"areas":[{"id":"a","rect":[0,0,10,10],"parent":"nope"}]})", "area \"a\": unknown parent \"nope\""},
+        {R"({"version":1,"areas":[{"id":"a","rect":[0,0,1,1],"parent":"b","priority":1},{"id":"b","rect":[5,5,6,6],"parent":"a"}]})",
+         "parent cycle"},
+        {R"({"version":1,"areas":[{"id":"a","rect":[0,0,1,1]},{"id":"a","rect":[5,5,6,6]}]})", "area \"a\": duplicate id"},
+        {R"({"version":1,"areas":[{"id":"a"}]})", "area \"a\": needs exactly one of \"rect\" and \"polygon\""},
+        {R"({"version":1,"areas":[{"id":"a","rect":[0,0,1,1],"polygon":[[0,0],[1,0],[0,1]]}]})", "needs exactly one of"},
+        {R"({"version":1,"areas":[{"id":"a","rect":[5,0,1,1]}]})", "\"rect\" must be [x0, z0, x1, z1] with x0 < x1"},
+        {R"({"version":1,"areas":[{"id":"a","polygon":[[0,0],[1,0]]}]})", "\"polygon\" must be a list of at least 3"},
+        {R"({"version":1,"areas":[{"id":"a","rect":[0,0,1,1],"y":[5,1]}]})", "\"y\" must be [min, max]"},
+        {R"({"version":1,"areas":[{"id":"a","rect":[0,0,1,1],"flags":[1]}]})", "\"flags\" must be an object"},
+        {R"({"version":1,"areas":[{"id":"a","rect":[0,0,1,1],"portal":{"map":2}}]})", "\"portal\" must be {\"map\": id"},
+        {R"({"version":1,"areas":[{"id":"a","rect":[0,0,1e9,1]}]})", "spans more than 65536 tiles"},
+        {R"({"version":1,"areas":[{"rect":[0,0,1,1]}]})", "areas[0]: \"id\" must be a non-empty string"},
+        {R"({"version":2,"areas":[]})", "\"version\" must be 1"},
+        {R"({"version":1})", "\"areas\" must be a list"},
+    };
+    for (const auto& [text, want] : bad) {
+        const bool refused = !areas_of(text, err);
+        check(refused && contains(err, want), std::string("areas refused: ") + want + " (got: " + err + ")");
+    }
+}
+
+// Maps::load: areas.json per map, and the portals between maps.
+void checkAreaLoading() {
+    std::vector<std::string> errors;
+    LuaRoot r;
+    r.write("a/map.json", R"({"version":1,"id":1,"tiles":[[0,0,1,1]],"spawn":{"pos":[10,0,10]}})");
+    r.write("b/map.json", R"({"version":1,"id":2,"tiles":[[0,0,0,0]],"spawn":{"pos":[10,0,10]}})");
+    r.write("b/areas.json", R"({"version":1,"areas":[{"id":"door","rect":[0,0,20,20],"portal":{"map":1,"pos":[300,0,300]}}]})");
+    r.write("a/areas.json", R"({"version":1,"areas":[
+        {"id":"ok","rect":[0,0,20,20],"portal":{"map":2,"pos":[100,0,100],"heading":1}},
+        {"id":"lost","rect":[30,0,40,10],"portal":{"map":7,"pos":[1,0,1]}},
+        {"id":"off","rect":[50,0,60,10],"portal":{"map":2,"pos":[300,0,1]}},
+        {"id":"bounce","rect":[70,0,80,10],"portal":{"map":2,"pos":[5,0,5]}}]})");
+    errors.clear();
+    const auto maps = world::Maps::load(r.root, errors);
+    const std::set<std::string> got(errors.begin(), errors.end());
+    const std::set<std::string> want = {
+        "maps/a/areas.json: area \"lost\": portal to unknown map 7",
+        "maps/a/areas.json: area \"off\": portal destination is not on a tile of map 2",
+        "maps/a/areas.json: area \"bounce\": portal destination is inside portal area \"door\" of map 2",
+    };
+    std::string all;
+    for (const auto& e : errors) all += e + "; ";
+    check(got == want, "every bad portal reported: " + all);
+    const auto& ok = maps.info(1).areas.list[0];
+    check(ok.portal && ok.portal->map == 2 && ok.portal->pos == std::array<float, 3>{100, 0, 100} && ok.portal->heading == 1,
+          "portal parsed");
+
+    r.write("b/areas.json", R"({"version":1,"areas":[{"id":"x","rect":[0,0,1,1],"parent":"y"}]})");
+    r.write("a/areas.json", "{nope");
+    errors.clear();
+    world::Maps::load(r.root, errors);
+    const std::set<std::string> got2(errors.begin(), errors.end());
+    check(got2 == std::set<std::string>{"maps/a/areas.json: not valid JSON", "maps/b/areas.json: area \"x\": unknown parent \"y\""},
+          "bad areas.json reported per file, its map not loaded");
+}
+
+#ifdef KAST_SAMPLE_MAPS
+// The sample maps and lua/: area events on spawn and on crossing a border, then a walk into the cave portal.
+void checkAreaWorld() {
+    {
+        std::vector<std::string> errors;
+        const auto sample = world::Maps::load(KAST_SAMPLE_MAPS, errors);
+        check(errors.empty() && sample.info(1).areas.list.size() == 4 && sample.info(2).areas.list.size() == 2,
+              "sample maps and their areas load" + (errors.empty() ? "" : ": " + errors[0]));
+    }
+    LogCapture capture;
+    std::vector<std::string> mapErrors;
+    TestWorld w({}, {}, world::Maps::load(KAST_SAMPLE_MAPS, mapErrors));
+    const auto errors = w.world.load_scripts(KAST_WORLD_LUA_SAMPLE, {"zone_cycle"});
+    check(mapErrors.empty() && errors.empty(), "area world: sample maps and lua load");
+    std::vector<std::string> events;
+    const auto record = [&](const char* what) {
+        return [&events, what](const nlohmann::json& p) {
+            events.push_back(std::format("{} {} {} {} pvp={}", what, p["entity"].get<uint32_t>(), p["map"].get<int>(),
+                                         p["area"].get<std::string>(), p["flags"].value("pvp", false)));
+        };
+    };
+    auto enter = w.world.bus().subscribe("area.enter", record("enter"));
+    auto leave = w.world.bus().subscribe("area.leave", record("leave"));
+    auto& reg = w.world.registry();
+
+    // Cora waits on map 2 next to the portal destination.
+    const auto a = w.spawn(1, 1, "Alice", 1024, 1024), b = w.spawn(2, 2, "Bob", 1046, 1010);
+    const auto c = w.spawn(3, 3, "Cora", 256, 230, "", 2);
+    const uint32_t A = wire(a), B = wire(b), C = wire(c);
+    w.world.tick(T0);
+    check(events == std::vector<std::string>{std::format("enter {} 1 goldshire pvp=true", A),
+                                             std::format("enter {} 1 eastvale pvp=false", B),
+                                             std::format("enter {} 2 cave pvp=false", C)},
+          "spawn: area.enter only, flags inherited (pvp from goldshire)");
+    check(reg.get<world::AreaRef>(a).area == 1 && reg.get<world::AreaRef>(b).area == 0, "AreaRef set on spawn");
+    check(logged(std::format("area.enter entity {} map 1 area goldshire (Goldshire) flags {{noMount=false, pvp=true}}", A)),
+          "events.lua logs area.enter");
+
+    // A walks toward the portal in steps under the speed limit; it leaves goldshire at x = 1035.
+    const proto::Vec3 path[] = {{1030, 0, 1018}, {1036, 0, 1012}, {1042, 0, 1006}};
+    std::vector<std::vector<std::string>> perStep;
+    for (int i = 0; i < 3; ++i) {
+        events.clear();
+        w.world.push_move(a, {path[i], 2.4f, 0});
+        w.world.tick(T0 + std::chrono::seconds(i + 1));
+        perStep.push_back(events);
+    }
+    check(perStep[0].empty() && perStep[2].empty(), "no events while inside one area");
+    check(perStep[1] == std::vector<std::string>{std::format("leave {} 1 goldshire pvp=true", A),
+                                                 std::format("enter {} 1 eastvale pvp=false", A)},
+          "crossing a border: area.leave then area.enter, once each");
+    check(std::ranges::any_of(w.sent.of<proto::Spawn>(1), [&](const proto::Spawn& s) { return s.entityId == B; }),
+          "A sees B before the portal");
+
+    // Into cave_mouth: transferred in the same tick, before the aoi pass.
+    w.sent.clear();
+    events.clear();
+    w.world.push_move(a, {{1045, 0, 998}, 2.8f, 0});
+    w.world.tick(T0 + std::chrono::seconds(4));
+    const auto& tf = reg.get<world::Transform>(a);
+    check(reg.get<world::MapRef>(a).map == 2 && tf.pos == proto::Vec3{256, 0, 240} && tf.heading == 3.14f,
+          "portal: on map 2 at the portal pos and heading");
+    check(events == std::vector<std::string>{std::format("leave {} 1 eastvale pvp=false", A),
+                                             std::format("enter {} 1 cave_mouth pvp=false", A),
+                                             std::format("leave {} 1 cave_mouth pvp=false", A),
+                                             std::format("enter {} 2 cave pvp=false", A)},
+          "portal: leave eastvale, enter cave_mouth, leave it, enter the cave on map 2: " + joined(events));
+    check(reg.get<world::AreaRef>(a).map == 2 && reg.get<world::AreaRef>(a).area == 0, "AreaRef: cave on map 2");
+    const auto& toA = w.sent.bySession[1];
+    const size_t change = first_of<proto::MapChange>(w.sent, 1), despawn = first_of<proto::Despawn>(w.sent, 1),
+                 spawn = first_of<proto::Spawn>(w.sent, 1);
+    check(change == 0 && std::get<proto::MapChange>(toA[0]).map == 2 && change < despawn && despawn < spawn &&
+              spawn != SIZE_MAX,
+          "portal: MapChange, then Despawn, then Spawn, all in the portal tick");
+    bool despawnedB = false, sawBat = false;
+    for (const auto& d : w.sent.of<proto::Despawn>(1)) despawnedB |= d.entityId == B;
+    for (const auto& s : w.sent.of<proto::Spawn>(1)) sawBat |= s.name == "Bat";
+    check(despawnedB && sawBat, "portal: A loses B and sees the Bat on map 2");
+    bool bLostA = false;
+    for (const auto& d : w.sent.of<proto::Despawn>(2)) bLostA |= d.entityId == A;
+    check(bLostA, "B gets A's Despawn");
+    bool leaked = false;
+    for (uint32_t sid : {2u, 3u})
+        for (const auto& m : w.sent.of<proto::EntityMove>(sid)) leaked |= m.entityId == A;
+    check(!leaked, "no EntityMove for A's portal step, to B on map 1 or Cora on map 2");
+    check(std::ranges::any_of(w.sent.of<proto::Spawn>(3), [&](const proto::Spawn& s) { return s.entityId == A; }),
+          "Cora gets A's Spawn in the portal tick");
+
+    // No ping-pong: the destination is not in a portal, and staying put fires nothing more.
+    events.clear();
+    w.world.push_move(a, {{256, 0, 241}, 0, 0});
+    w.world.tick(T0 + std::chrono::seconds(5));
+    check(reg.get<world::MapRef>(a).map == 2 && events.empty(), "moving on the cave map: no transfer, no events");
+    w.world.despawn(a);
+    check(!w.sent.saves.empty() && w.sent.saves.back().mapId == 2, "save keeps map 2");
+}
+
+// kast.map.area / kast.map.areaAt over the sample maps.
+constexpr const char* kAreaLuaSystem = R"lua(
+local done = false
+return { update = function()
+    if done then return end
+    done = true
+    local p
+    for e in kast.query("Character") do p = e end
+    local a = kast.map.area(p)
+    expect(a and a.id == "goldshire" and a.name == "Goldshire", "area(player): goldshire")
+    expect(a.flags.pvp == true and a.flags.noMount == false, "area flags inherited")
+    expect(a.music == nil, "music not inherited")
+    local e = kast.map.areaAt(1, 1100, 0, 1100)
+    expect(e.id == "eastvale" and e.music == "sounds/eastvale.ogg" and e.flags.pvp == false, "areaAt eastvale with music")
+    expect(kast.map.areaAt(1, 1024, 300, 1024).id == "eastvale", "areaAt above goldshire's y range: eastvale")
+    expect(kast.map.areaAt(1, 1045, 0, 995).id == "cave_mouth", "areaAt the portal")
+    expect(kast.map.areaAt(2, 256, 0, 256).flags.noMount == true, "areaAt map 2")
+    expect(kast.map.areaAt(1, 5000, 0, 5000) == nil, "areaAt outside every area: nil")
+    local bat = kast.create("Bat2", {template = "Bat", map = 2, position = {x = 256, y = 0, z = 275}})
+    expect(kast.map.area(bat).id == "cave_exit", "area(NPC)")
+    raises('kast.map.areaAt: "map" must be the id of a loaded map, got 9', function() kast.map.areaAt(9, 1, 1, 1) end)
+    raises('kast.map.areaAt: "y" must be a finite number', function() kast.map.areaAt(1, 1, "y", 1) end)
+    raises("kast.map.area: invalid entity id 999999", function() kast.map.area(999999) end)
+    raises("kast is read-only", function() kast.map.area = nil end)
+    kast.log("area lua done")
+end })lua";
+
+void checkAreaLua() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("systems/areas.lua", std::string(kLuaExpect) + kAreaLuaSystem);
+    std::vector<std::string> mapErrors;
+    TestWorld w({}, {}, world::Maps::load(KAST_SAMPLE_MAPS, mapErrors));
+    check(w.world.load_scripts(r.root).empty(), "area lua: loads");
+    w.spawn(1, 1, "Alice", 1024, 1024);
+    w.world.tick(T0);
+    check_lua_expectations("area lua", "area lua done");
+    for (const auto& s : w.world.script_status()) check(s.ok, "area lua: system still enabled " + s.error);
+}
+#endif
+
+// --- ground (README "Ground") ---
+
+float ramp(float x, float z) { return 0.1f * x + 0.05f * z; }
+
+// The ramp as tile (tx, tz)'s .r16 on a map with heightRange [0, 100].
+std::string ramp_r16(int tx, int tz) {
+    constexpr int n = map::kTileSamples;
+    std::string bytes(size_t(n) * n * 2, '\0');
+    for (int v = 0; v < n; ++v)
+        for (int u = 0; u < n; ++u) {
+            const auto sample = uint16_t(std::lround(ramp(float(tx * 256 + u), float(tz * 256 + v)) / 100 * 65535));
+            bytes[2 * (size_t(v) * n + u)] = char(sample & 0xFF);
+            bytes[2 * (size_t(v) * n + u) + 1] = char(sample >> 8);
+        }
+    return bytes;
+}
+
+constexpr float kGroundTol = 0.002f; // 16-bit samples over a 100 m range: 0.8 mm steps
+bool on_ramp(std::optional<float> y, float x, float z) { return y && std::fabs(*y - ramp(x, z)) < kGroundTol; }
+
+constexpr const char* kGroundLuaSystem = R"lua(
+local done = false
+return { update = function()
+    if done then return end
+    done = true
+    local y = kast.map.ground(1, 10.3, 20.7)
+    expect(y ~= nil and math.abs(y - (0.1 * 10.3 + 0.05 * 20.7)) < 0.002, "kast.map.ground on the ramp: " .. tostring(y))
+    expect(kast.map.ground(1, 300, 300) == 0, "kast.map.ground on a tile without heights: heightMin")
+    expect(kast.map.ground(1, 512, 10) == nil, "kast.map.ground off the map: nil")
+    raises('kast.map.ground: "map" must be the id of a loaded map, got 9', function() kast.map.ground(9, 0, 0) end)
+    raises('kast.map.ground: "x" must be a finite number', function() kast.map.ground(1, 0 / 0, 0) end)
+    kast.log("ground lua done")
+end }
+)lua";
+
+void checkGround() {
+    // A 2 x 2 tile ramp: three tiles with a heights file, tile 1_1 without (flat at heightMin).
+    LuaRoot r;
+    r.write("ramp/map.json", R"({"version":1,"id":1,"tiles":[[0,0,1,1]],"heightRange":[0,100],"spawn":{"pos":[100,0,100]}})");
+    r.write("ramp/heights/0_0.r16", ramp_r16(0, 0));
+    r.write("ramp/heights/1_0.r16", ramp_r16(1, 0));
+    r.write("ramp/heights/0_1.r16", ramp_r16(0, 1));
+    r.write("ramp/.server/spawns/0_0.json",
+            R"({"version":1,"spawns":[{"id":"high","template":"T","pos":[50,100,60],"respawnSec":-1}]})");
+    std::vector<std::string> errors;
+    world::Maps maps = world::Maps::load(r.root, errors);
+    check(errors.empty(), "ground: the ramp map loads " + joined(errors));
+    check(on_ramp(maps.ground(1, 10, 20), 10, 20), "ground: at a sample");
+    check(on_ramp(maps.ground(1, 10.3f, 20.7f), 10.3f, 20.7f) && on_ramp(maps.ground(1, 10.8f, 20.1f), 10.8f, 20.1f),
+          "ground: between samples, in both triangles");
+    check(on_ramp(maps.ground(1, 255.999f, 100), 255.999f, 100) && on_ramp(maps.ground(1, 256, 100), 256, 100) &&
+              on_ramp(maps.ground(1, 100, 256), 100, 256),
+          "ground: either side of the x tile edge and on the z tile edge");
+    check(maps.ground(1, 300, 300) == 0.f, "ground: a tile without a heights file is flat at heightMin");
+    check(!maps.ground(1, 512, 10) && !maps.ground(1, -0.1f, 10) && !maps.ground(9, 10, 10),
+          "ground: nullopt off the map's tiles and on an unknown map");
+    std::string err;
+    const auto tile = map::decode_heights(ramp_r16(1, 0), ".r16", err);
+    bool same = tile.has_value();
+    for (float x = 256; same && x < 512; x += 7.37f)
+        for (float z = 0; same && z < 256; z += 11.13f) same = *maps.ground(1, x, z) == map::ground(*tile, maps.info(1), x - 256, z);
+    check(same, "ground: Maps::ground is the shared map::ground on the tile's heights");
+
+    LuaRoot bad;
+    bad.write("b/map.json", R"({"version":1,"id":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[10,0,10]}})");
+    bad.write("b/heights/0_0.r16", "short");
+    bad.write("b/heights/5_5.r16", "not a tile of the map: never read");
+    errors.clear();
+    world::Maps::load(bad.root, errors);
+    check(errors == std::vector<std::string>{"maps/b/heights/0_0.r16: r16: 5 bytes, need 132098 (257 x 257 x 2)"},
+          "ground: a bad heights file is a load error: " + joined(errors));
+
+    LogCapture capture;
+    LuaRoot scripts;
+    scripts.write("systems/ground.lua", std::string(kLuaExpect) + kGroundLuaSystem);
+    TestWorld w({}, {}, std::move(maps));
+    const auto luaErrors = w.world.load_scripts(scripts.root);
+    check(luaErrors.empty(), "ground lua: loads " + joined(luaErrors));
+    const auto& reg = w.world.registry();
+    const auto at = [](int s) { return T0 + std::chrono::seconds(s); };
+
+    // Entering: a saved position under the ground is lifted onto it; above it is kept (the client falls).
+    const auto under = w.world.spawn(1, {1, 1, "Under", 1, {100, -50, 100}, 0, ""}, T0);
+    const auto sky = w.world.spawn(2, {2, 1, "Sky", 1, {120, ramp(120, 100) + 50, 100}, 0, ""}, T0);
+    check(on_ramp(w.sent.of<proto::EnterWorldOk>(1).at(0).pos.y, 100, 100), "saved under the ground: enters on it");
+    check(on_ramp(w.sent.of<proto::EnterWorldOk>(2).at(0).pos.y - 50, 120, 100), "saved 50 m above the ground: kept");
+    w.world.tick(T0);
+    check_lua_expectations("ground lua", "ground lua done");
+
+    // Moves: under the ground lifted, rising into the air corrected, falling accepted.
+    w.sent.clear();
+    w.world.push_move(under, {{101, ramp(101, 100) - 5, 100}, 0, 0});
+    w.world.tick(at(1));
+    check(w.sent.of<proto::Correction>(1).empty() && on_ramp(reg.get<world::Transform>(under).pos.y, 101, 100),
+          "move 5 m under the ground: accepted, lifted onto it");
+    w.world.push_move(under, {{102, ramp(102, 100) + 10, 100}, 0, 0});
+    w.world.tick(at(2));
+    const auto fly = w.sent.of<proto::Correction>(1);
+    check(fly.size() == 1 && fly[0].pos == reg.get<world::Transform>(under).pos && fly[0].pos.x == 101,
+          "rising 10 m above the ground: Correction to the last position");
+    w.world.push_move(sky, {{121, ramp(121, 100) + 49, 100}, 0, 0});
+    w.world.tick(at(3));
+    check(w.sent.of<proto::Correction>(2).empty() && on_ramp(reg.get<world::Transform>(sky).pos.y - 49, 121, 100),
+          "falling from 50 m above the ground: accepted");
+
+    // NPCs stand on the ground: kast.create / create_npc, spawn files. Transfers land on it.
+    const auto npc = w.world.create_npc("Up", "T", 1, proto::Vec3{200, 100, 30}, 0);
+    check(on_ramp(reg.get<world::Transform>(npc).pos.y, 200, 30), "NPC created at y = 100 stands on the ground");
+    bool spawned = false;
+    for (auto [e, ref, tf] : reg.view<world::SpawnRef, world::Transform>().each()) spawned = on_ramp(tf.pos.y, 50, 60);
+    check(spawned, "spawn file pos y = 100: the NPC stands on the ground");
+    w.sent.clear();
+    check(w.world.transfer(under, {1, {400, 999, 50}, 0}), "ground: transfer accepted");
+    const auto mc = w.sent.of<proto::MapChange>(1);
+    check(mc.size() == 1 && on_ramp(mc[0].pos.y, 400, 50), "transfer to y = 999: MapChange on the ground");
+}
+
+// --- navmesh (README "Navmesh") ---
+
+// A 2 x 1 tile fixture: a gentle ramp up x (~3 degrees) and a block across the straight line from (100, 100) to
+// (450, 100): x 310..350, z 0..200, 22 m high, its sides 8 m wide 70 degree slopes. The way round is z > 200.
+float cliff(float x, float z) {
+    const float inside = std::min({x - 310, 350 - x, 200 - z});
+    return 0.05f * x + 22 * std::clamp(inside / 8, 0.0f, 1.0f);
+}
+
+std::string r16_of(float (*height)(float, float), int tx, int tz) {
+    constexpr int n = map::kTileSamples;
+    std::string bytes(size_t(n) * n * 2, '\0');
+    for (int v = 0; v < n; ++v)
+        for (int u = 0; u < n; ++u) {
+            const auto sample = uint16_t(std::lround(height(float(tx * 256 + u), float(tz * 256 + v)) / 100 * 65535));
+            bytes[2 * (size_t(v) * n + u)] = char(sample & 0xFF);
+            bytes[2 * (size_t(v) * n + u) + 1] = char(sample >> 8);
+        }
+    return bytes;
+}
+
+constexpr const char* kCliffManifest =
+    R"({"version":1,"id":1,"tiles":[[0,0,1,0]],"heightRange":[0,100],"nav":{"maxSlopeDeg":45},"spawn":{"pos":[100,0,100]}})";
+
+constexpr const char* kNavLuaSystem = R"lua(
+local done = false
+return { update = function()
+    if done then return end
+    done = true
+    local from = {x = 100, y = kast.map.ground(1, 100, 100), z = 100}
+    local to = {x = 450, y = kast.map.ground(1, 450, 100), z = 100}
+    local path = kast.map.path(1, from, to)
+    expect(type(path) == "table" and #path > 2, "kast.map.path: a list of more than 2 points")
+    local first, last = path[1], path[#path]
+    expect(math.abs(first.x - 100) < 1 and math.abs(first.z - 100) < 1, "kast.map.path: starts at from")
+    expect(math.abs(last.x - 450) < 1 and math.abs(last.z - 100) < 1, "kast.map.path: ends at to")
+    local around = false
+    for _, p in ipairs(path) do
+        expect(type(p.x) == "number" and type(p.y) == "number" and type(p.z) == "number", "kast.map.path: {x, y, z} points")
+        around = around or p.z > 200
+    end
+    expect(around, "kast.map.path: goes round the block (z > 200)")
+    expect(kast.map.path(2, {x = 10, y = 0, z = 10}, {x = 20, y = 0, z = 20}) == nil, "kast.map.path: nil without a navmesh")
+    expect(kast.map.path(1, from, {x = 330, y = 1000, z = 100}) == nil, "kast.map.path: nil when to is not near the mesh")
+    raises('kast.map.path: "from" must be a table {x=, y=, z=} of finite numbers', function() kast.map.path(1, 5, to) end)
+    raises('kast.map.path: "map" must be the id of a loaded map, got 9', function() kast.map.path(9, from, to) end)
+    kast.log("nav lua done")
+end }
+)lua";
+
+void checkNavmesh() {
+    std::string err;
+    const auto info = map::parse_manifest(nlohmann::json::parse(kCliffManifest), err);
+    map::TileHeights heights;
+    for (int tx : {0, 1}) heights[{tx, 0}] = *map::decode_heights(r16_of(cliff, tx, 0), ".r16", err);
+    check(mapbake::seam_errors(*info, heights).empty(), "bake: the fixture's seam matches");
+    map::TileHeights torn = heights;
+    torn.at({1, 0})[size_t(40) * map::kTileSamples] += 4000; // column 0 of tile 1_0 at z 40
+    const auto seams = mapbake::seam_errors(*info, torn);
+    check(seams == std::vector<std::string>{"seam 0_0 | 1_0: 1 samples differ, worst 6.10 m at z 40"},
+          "bake: a torn seam is reported: " + joined(seams));
+
+    LuaRoot r;
+    r.write("cliff/map.json", kCliffManifest);
+    r.write("flat/map.json", R"({"version":1,"id":2,"tiles":[[0,0,0,0]],"spawn":{"pos":[10,0,10]}})");
+    std::map<int, std::string> navtiles;
+    for (int tx : {0, 1}) {
+        r.write(std::format("cliff/heights/{}_0.r16", tx), r16_of(cliff, tx, 0));
+        const auto baked = mapbake::bake_tile(*info, heights, {tx, 0}, err);
+        check(baked && baked->polys > 0 && baked->navtile.starts_with("KNAV"),
+              std::format("bake: tile {}_0 in memory ({} polys) {}", tx, baked ? baked->polys : 0, err));
+        if (baked) r.write(std::format("cliff/.server/nav/{}_0.navtile", tx), navtiles[tx] = baked->navtile);
+    }
+    std::vector<std::string> errors;
+    world::Maps maps = world::Maps::load(r.root, errors);
+    check(errors.empty() && maps.nav().has(1) && !maps.nav().has(2),
+          "nav: navtiles load; only the baked map has a navmesh " + joined(errors));
+
+    const auto at = [&](float x, float z) { return proto::Vec3{x, *maps.ground(1, x, z), z}; };
+    const auto path = maps.nav().path(1, at(100, 100), at(450, 100));
+    float length = 0;
+    bool around = false, throughBlock = false;
+    for (size_t i = 0; i < path.size(); ++i) {
+        if (i) length += std::hypot(path[i].x - path[i - 1].x, path[i].z - path[i - 1].z);
+        around |= path[i].z > 200;
+        throughBlock |= path[i].x > 310 && path[i].x < 350 && path[i].z < 200;
+    }
+    check(path.size() > 2 && std::hypot(path.back().x - 450, path.back().z - 100) < 1,
+          std::format("nav: a path from tile 0_0 to tile 1_0 ({} points)", path.size()));
+    check(around && !throughBlock && length > 400,
+          std::format("nav: it goes round the block, not through it ({:.0f} m against 350 m straight)", length));
+    check(maps.nav().path(1, at(100, 100), {330, 1000, 100}).empty() && maps.nav().path(2, {1, 0, 1}, {9, 0, 9}).empty(),
+          "nav: no path to a point off the mesh, or on a map without one");
+    const float slopeDeg = std::atan(cliff(314.5f, 100) - cliff(313.5f, 100)) * 180 / std::numbers::pi_v<float>;
+    check(std::fabs(slopeDeg - 70) < 0.5f && !maps.nav().on_mesh(1, at(314, 100), 6),
+          std::format("nav: on_mesh false on the {:.1f} degree slope", slopeDeg));
+    check(maps.nav().on_mesh(1, at(100, 100), 6) && maps.nav().on_mesh(1, at(256, 230), 6) &&
+              maps.nav().on_mesh(1, {100, at(100, 100).y + 5, 100}, 6),
+          "nav: on_mesh true on walkable ground, at the tile seam and 5 m above it (jumping)");
+    check(!maps.nav().on_mesh(1, {100, at(100, 100).y + 20, 100}, 6) && !maps.nav().on_mesh(2, {10, 0, 10}, 6),
+          "nav: on_mesh false 20 m above (maxAir 6) and on a map without a navmesh");
+
+    // Bad navtiles: load errors naming the file.
+    const auto load_error = [&](const std::string& bytes) {
+        LuaRoot bad;
+        bad.write("cliff/map.json", kCliffManifest).write("cliff/.server/nav/0_0.navtile", bytes);
+        std::vector<std::string> errs;
+        world::Maps::load(bad.root, errs);
+        return joined(errs);
+    };
+    const std::string body = navtiles[0].substr(map::kNavtileHeaderBytes);
+    const std::string badMagic = load_error("XNAV" + navtiles[0].substr(4));
+    check(badMagic == "maps/cliff/.server/nav/0_0.navtile: not a navtile (bad magic, want 'KNAV')",
+          "nav: bad magic rejected: " + badMagic);
+    std::string v99 = navtiles[0];
+    v99[4] = 99;
+    const std::string badVersion = load_error(v99);
+    check(badVersion == "maps/cliff/.server/nav/0_0.navtile: navtile version 99, this server reads 1 (rebake with kast_mapbake)",
+          "nav: bad navtile version rejected: " + badVersion);
+    const std::string badDetour = load_error(map::navtile_header(6) + body);
+    check(contains(badDetour, "0_0.navtile: Detour version 6, this server has "), "nav: bad Detour version rejected: " + badDetour);
+    const std::string otherTile = load_error(navtiles[1]);
+    check(otherTile == "maps/cliff/.server/nav/0_0.navtile: baked for tile 1_0", "nav: a tile baked for another rejected: " + otherTile);
+    const std::string truncated = load_error(navtiles[0].substr(0, map::kNavtileHeaderBytes + 3));
+    check(truncated == "maps/cliff/.server/nav/0_0.navtile: truncated Detour tile", "nav: a truncated navtile rejected: " + truncated);
+
+    // Moves: off the navmesh -> Correction; MOVE_NAV_CHECK=0 or a map without navtiles: phase 5 rules only.
+    const auto corrections = [&](bool navCheck, uint16_t map, proto::Vec3 from, proto::Vec3 to) {
+        world::WorldRules rules;
+        rules.move.navCheck = navCheck;
+        std::vector<std::string> errs;
+        TestWorld w({}, rules, world::Maps::load(r.root, errs));
+        const auto e = w.world.spawn(1, {1, 1, "Walker", map, from, 0, ""}, T0);
+        w.world.tick(T0);
+        w.sent.clear();
+        w.world.push_move(e, {to, 0, 0});
+        w.world.tick(T0 + std::chrono::seconds(1));
+        return w.sent.of<proto::Correction>(1).size();
+    };
+    check(corrections(true, 1, at(305, 100), at(314, 100)) == 1, "move onto the 70 degree slope: off_mesh -> Correction");
+    check(corrections(true, 1, at(300, 100), at(308, 100)) == 0, "move along walkable ground: accepted");
+    check(corrections(false, 1, at(305, 100), at(314, 100)) == 0, "MOVE_NAV_CHECK=0: the same move onto the slope accepted");
+    check(corrections(true, 2, {10, 0, 10}, {18, 0, 10}) == 0 && corrections(true, 2, {10, 0, 10}, {10, 20, 10}) == 1,
+          "a map without navtiles: phase 5 rules (walk accepted, flying corrected)");
+    proto::Vec3 slope = at(314, 100);
+    MoveBudget budget{11, T0};
+    check(validate_move({}, budget, at(305, 100), slope, slope.y, T0, false) == MoveVerdict::off_mesh && budget.meters == 11,
+          "validate_move: onMesh false is off_mesh, spending no budget");
+
+    LogCapture capture;
+    LuaRoot scripts;
+    scripts.write("systems/nav.lua", std::string(kLuaExpect) + kNavLuaSystem);
+    TestWorld w({}, {}, std::move(maps));
+    const auto luaErrors = w.world.load_scripts(scripts.root);
+    check(luaErrors.empty(), "nav lua: loads " + joined(luaErrors));
+    w.world.tick(T0);
+    check_lua_expectations("nav lua", "nav lua done");
+}
+
+#ifdef KAST_SAMPLE_MAPS
+// The sample hills map (id 3): its four PNG heightmaps load, and the ground at the portal destination is the
+// terrain's, not hills_gate's y = 30.
+void checkGroundSample() {
+    std::vector<std::string> errors;
+    const auto maps = world::Maps::load(KAST_SAMPLE_MAPS, errors);
+    check(errors.empty(), "sample maps load with their heights " + joined(errors));
+    const auto y = maps.ground(3, 256, 256);
+    check(y && *y > 1 && *y < 79 && *y != 30, "hills: ground at (256, 256) from its heightmaps: " + std::to_string(y.value_or(-1)));
+    check(maps.ground(1, 1024, 1024) == 0.f, "start: no heights files, flat at heightMin 0");
+    // Its baked navtiles (maps/hills/.server/nav): the bake's slope limit is the client's nav.maxSlopeDeg (40).
+    const auto at = [&](float x, float z) { return proto::Vec3{x, *maps.ground(3, x, z), z}; };
+    check(maps.nav().has(3) && !maps.nav().has(1), "hills has a navmesh, start none");
+    check(maps.nav().on_mesh(3, at(215, 331), 6) && maps.nav().on_mesh(3, at(256, 256), 6),
+          "hills: on_mesh on a 32 degree slope (215, 331) and at the portal destination");
+    check(!maps.nav().on_mesh(3, at(185, 317.5f), 6) && maps.nav().on_mesh(3, at(185, 331), 6) &&
+              maps.nav().path(3, at(185, 310), at(185, 331)).empty(),
+          "hills: on_mesh false on the mesa's 81 degree wall; its top is walkable but no path leads up");
+}
+#endif
 
 int lua_checks(int& checks) {
     checkCodec();
@@ -1846,7 +2969,28 @@ int lua_checks(int& checks) {
     checkNpcRouting();
     checkNpcDestroyedOnEnter();
     checkNpcShutdown();
+    checkSpawnParsing();
+    checkSpawnLoading();
+    checkRespawn();
+    checkSpawnLua();
+    checkTileMath();
+    checkManifests();
+    checkHeights();
+    checkMapWorld();
+    checkMapLua();
+    checkAreaShapes();
+    checkAreaLoading();
+    checkGround();
+    checkNavmesh();
+#ifdef KAST_SAMPLE_MAPS
+    checkGroundSample();
     checkNpcSample();
+    checkAreaWorld();
+    checkAreaLua();
+#else
+    std::printf("sample maps not in this build: NPC sample, area world and Lua checks skipped (integration scenarios "
+                "16-18 cover them)\n");
+#endif
     checks += g_checks;
     return g_failures;
 }

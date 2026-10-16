@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "id": 2,
+  "name": "Cave",
+  "tiles": [[0, 0, 1, 1]],
+  "heightRange": [0, 500],
+  "spawn": {"pos": [256, 0, 256], "heading": 0}
+}

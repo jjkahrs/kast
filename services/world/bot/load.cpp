@@ -14,7 +14,7 @@ namespace {
 
 struct Stats {
     std::atomic<int> tokens{0}, connected{0}, entered{0}, unexpectedDisconnects{0}, expectedDisconnects{0}, errors{0};
-    std::atomic<uint64_t> movesSent{0}, entityMoves{0}, spawns{0}, despawns{0}, corrections{0}, chats{0}, says{0},
+    std::atomic<uint64_t> movesSent{0}, entityMoves{0}, spawns{0}, despawns{0}, corrections{0}, mapChanges{0}, chats{0}, says{0},
         componentUpdates{0}, componentBytes{0}, componentRemoves{0}, serverEvents{0};
     std::mutex mu;
     std::vector<std::string> errorSamples;
@@ -71,7 +71,11 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
     ++st.entered;
 
     auto pos = std::make_shared<proto::Vec3>(ok.pos);
-    c->onMessage = [&st, pos](const proto::Message& m) {
+    // A wanderer that walks into a portal (README "Areas") is parked on the other map: it stops moving, and the
+    // Corrections for its moves still in flight from the old map are not counted.
+    // ponytail: parked, not wandering on; give the bot the destination map's bounds if load tests need cross-map moves.
+    auto parked = std::make_shared<bool>(false);
+    c->onMessage = [&st, pos, parked](const proto::Message& m) {
         if (std::holds_alternative<proto::EntityMove>(m)) ++st.entityMoves;
         else if (std::holds_alternative<proto::Spawn>(m)) ++st.spawns;
         else if (std::holds_alternative<proto::Despawn>(m)) ++st.despawns;
@@ -82,8 +86,11 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
         } else if (std::holds_alternative<proto::ComponentRemove>(m)) ++st.componentRemoves;
         else if (std::holds_alternative<proto::ServerEvent>(m)) ++st.serverEvents;
         else if (auto* corr = std::get_if<proto::Correction>(&m)) {
-            ++st.corrections;
+            if (!*parked) ++st.corrections;
             *pos = corr->pos;
+        } else if (std::holds_alternative<proto::MapChange>(m)) {
+            ++st.mapChanges;
+            *parked = true;
         }
     };
 
@@ -99,6 +106,7 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
         t.expires_at(next);
         co_await t.async_wait(asio::use_awaitable);
         ++tick;
+        if (*parked) continue;
         if (o.behaviour == "wander" || o.behaviour == "chat") {
             *pos = wander.step(*pos, zone);
             c->send(proto::Move{*pos, wander.heading, tick * 100});
@@ -196,6 +204,7 @@ int run_load(const Options& o) {
                               {"spawns_recv", st.spawns.load()},
                               {"despawns_recv", st.despawns.load()},
                               {"corrections_recv", st.corrections.load()},
+                              {"map_changes_recv", st.mapChanges.load()},
                               {"says_sent", st.says.load()},
                               {"chat_recv", st.chats.load()},
                               {"component_updates_recv", st.componentUpdates.load()},
