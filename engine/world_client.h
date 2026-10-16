@@ -54,6 +54,8 @@ public:
     void deleteCharacter(uint64_t charId);
     void enterWorld(uint64_t charId);
     void say(const std::string& text);
+    // Move{position, heading (radians, atan2(dx, dz)), clientTimeMs}. Rejected moves come back as world.correction.
+    void move(float x, float y, float z, float heading);
 
     // Takes a Network result of this client's connections (true), else leaves it alone (false).
     bool handle(const NetEvent& event);

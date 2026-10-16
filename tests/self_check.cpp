@@ -67,6 +67,8 @@ int netSelfCheck(); // tests/net_self_check.cpp: returns its failure count
 int liveAuthCheck(const std::string& authUrl, const std::string& mailpitUrl); // the same file: 0, 1 or 77 (skipped)
 int liveWorldCheck(const std::string& authUrl, const std::string& mailpitUrl, const std::string& caFile,
                    const std::string& realmName); // the same file: 0, 1 or 77 (skipped)
+int liveReplicationCheck(const std::string& authUrl, const std::string& mailpitUrl, const std::string& caFile,
+                         const std::string& realmName); // the same file: 0, 1 or 77 (skipped)
 
 namespace {
 
@@ -305,7 +307,8 @@ void checkComponentRegistry()
     check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "ModelRenderer", "Animator",
                                                  "DirectionalLight", "PointLight", "Camera", "Rotator", "Collider",
                                                  "Rigidbody", "CharacterController", "StateMachine", "UIDocument",
-                                                 "AudioSource"},
+                                                 "AudioSource", "NetworkLocalPlayer", "NetworkReplication",
+                                                 "NetworkEntity"},
           "built-in component types in registration order");
     const entt::meta_type transform = kast::findComponentType("Transform");
     const entt::meta_type rotator = kast::findComponentType("Rotator");
@@ -2614,7 +2617,7 @@ void checkBuildSettings()
               std::vector<std::string>{"audio.scene", "events.scene", "fsm.scene", "health.scene", "materials.scene",
                                        "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
-                                       "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_world.scene",
+                                       "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_replication.scene", "online_world.scene",
                                        "physics.scene",
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "scene_a.scene", "scene_b.scene",
@@ -2634,7 +2637,7 @@ void checkBuildSettings()
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
                                                           "models_material.scene", "models_missing.scene", "net_a.scene",
-                                                          "net_b.scene", "online_auth.scene", "online_world.scene", "physics.scene",
+                                                          "net_b.scene", "online_auth.scene", "online_replication.scene", "online_world.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "scene_a.scene", "scene_b.scene",
                                                           "shadows.scene", "ui.scene"},
@@ -7011,6 +7014,8 @@ int main(int argc, char** argv)
         return liveAuthCheck(argv[2], argv[3]);
     if (argc == 6 && std::string_view(argv[1]) == "--live-world") // the same stack, plus its world server
         return liveWorldCheck(argv[2], argv[3], argv[4], argv[5]);
+    if (argc == 6 && std::string_view(argv[1]) == "--live-replication") // the same stack: two replicated players
+        return liveReplicationCheck(argv[2], argv[3], argv[4], argv[5]);
     checkRotations();
     checkPicking();
     checkMirroredReparent();

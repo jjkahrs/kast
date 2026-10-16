@@ -75,6 +75,8 @@ void setComponent(entt::registry& registry, entt::entity entity, const entt::met
 // Copies every registered component, every active Lua component and the PreservedComponents of source onto target
 // (overwriting ones target already has).
 void copyComponents(entt::registry& registry, entt::entity source, entt::entity target);
+// The same between registries (e.g. into or out of a scene kept aside).
+void copyComponents(const entt::registry& from, entt::entity source, entt::registry& to, entt::entity target);
 
 // Fields in registration order.
 nlohmann::ordered_json componentToJson(const entt::meta_any& component);

@@ -6,6 +6,7 @@
 #include <openssl/x509v3.h>
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <stdexcept>
 
@@ -231,6 +232,7 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
     uint64_t nextId = 100;
     std::string playing;
     const proto::Vec3 spawn{100, 0, 100};
+    proto::Vec3 valid = spawn; // the last accepted Move
     for (;;) {
         uint8_t header[proto::kHeaderSize];
         asio::read(socket, asio::buffer(header));
@@ -291,6 +293,7 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
         } else if (const auto* enter = std::get_if<proto::EnterWorld>(&message)) {
             if (const auto it = find(enter->charId); it != chars.end()) {
                 playing = it->name;
+                valid = spawn;
                 queue(proto::EnterWorldOk{1, spawn, 0.5f});
                 queue(proto::Spawn{2, "Other", {101, 0, 100}, 0});
                 queue(proto::EntityMove{2, {102, 0, 100}, 1});
@@ -298,6 +301,12 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
             } else {
                 queue(proto::CharError{proto::Opcode::EnterWorld, proto::Code::not_found});
             }
+        } else if (const auto* move = std::get_if<proto::Move>(&message)) {
+            // Like the real server's speed check, coarsely: a jump over 20 m on x/z is rejected.
+            if (std::hypot(move->pos.x - valid.x, move->pos.z - valid.z) > 20.0f)
+                queue(proto::Correction{valid});
+            else
+                valid = move->pos;
         } else if (const auto* say = std::get_if<proto::Say>(&message)) {
             queue(proto::ChatMsg{playing, say->text});
             if (say->text == "bye")

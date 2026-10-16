@@ -5,6 +5,7 @@
 #include <codec.h>
 
 #include <charconv>
+#include <chrono>
 #include <format>
 #include <stdexcept>
 
@@ -195,6 +196,15 @@ void WorldClient::say(const std::string& text)
 {
     require(WorldState::InWorld, "say");
     send(proto::Say{text});
+}
+
+void WorldClient::move(float x, float y, float z, float heading)
+{
+    require(WorldState::InWorld, "move");
+    // clientTimeMs is informational (the server trusts its own clock): wraps after 49 days, which is fine.
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    send(proto::Move{{x, y, z}, heading,
+                     static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now).count())});
 }
 
 void WorldClient::send(const auto& message)

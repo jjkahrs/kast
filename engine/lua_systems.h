@@ -8,6 +8,7 @@
 #include "physics.h"
 #include "scene.h"
 #include "state_machines.h"
+#include "replication.h"
 #include "world_client.h"
 
 #include <filesystem>
@@ -90,6 +91,9 @@ public:
     // drop the connection. Its address override (editor only) outlives them.
     WorldClient& world() { return world_; }
     const WorldClient& world() const { return world_; }
+    // The session's entity replication (README "Online Services → Replication"): started with each scene before
+    // physics and the inits (it takes the template entity out), updated by tick() after the systems.
+    Replication& replication() { return replication_; }
     StateMachines& fsm() { return fsm_; }
     const StateMachines& fsm() const { return fsm_; }
 
@@ -105,6 +109,7 @@ private:
     Network network_;
     AuthClient auth_{network_};
     WorldClient world_{network_, auth_};
+    Replication replication_; // subscribes on bus_, sends through world_
     std::unique_ptr<State> state_;
     StateMachines fsm_{bus_}; // declared after state_, so its Lua callbacks are released while the Lua state lives
 };

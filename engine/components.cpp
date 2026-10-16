@@ -133,6 +133,22 @@ const char* validateAudioSource(const entt::meta_any& component)
     return nullptr;
 }
 
+const char* validateNetworkLocalPlayer(const entt::meta_any& component)
+{
+    const float rate = component.cast<const NetworkLocalPlayer&>().sendRateHz;
+    if (!(rate >= 1.0f && rate <= kMaxMoveRateHz))
+        return "\"sendRateHz\" must be between 1 and 30"; // kMaxMoveRateHz
+    return nullptr;
+}
+
+const char* validateNetworkReplication(const entt::meta_any& component)
+{
+    const float ms = component.cast<const NetworkReplication&>().interpolationMs;
+    if (!(ms >= 0.0f && ms <= 1000.0f))
+        return "\"interpolationMs\" must be between 0 and 1000";
+    return nullptr;
+}
+
 void registerBuiltins()
 {
     registerComponent<Transform>("Transform", {"Transform", false})
@@ -244,6 +260,14 @@ void registerBuiltins()
         .data<&AudioSource::volume>("volume").custom<FieldInfo>("Volume", false, 0.0, 1.0)
         .data<&AudioSource::loop>("loop").custom<FieldInfo>("Loop")
         .data<&AudioSource::playOnStart>("playOnStart").custom<FieldInfo>("Play On Start");
+
+    registerComponent<NetworkLocalPlayer>("NetworkLocalPlayer", {"Network Local Player", true, validateNetworkLocalPlayer})
+        .data<&NetworkLocalPlayer::sendRateHz>("sendRateHz").custom<FieldInfo>("Send Rate (Hz)", false, 1.0, double(kMaxMoveRateHz));
+    registerComponent<NetworkReplication>("NetworkReplication", {"Network Replication", true, validateNetworkReplication})
+        .data<&NetworkReplication::templateEntity>("templateEntity").custom<FieldInfo>("Template Entity")
+        .data<&NetworkReplication::interpolationMs>("interpolationMs").custom<FieldInfo>("Interpolation (ms)", false, 0.0, 1000.0);
+    registerComponent<NetworkEntity>("NetworkEntity", {"Network Entity"})
+        .data<&NetworkEntity::entityId>("entityId").custom<FieldInfo>("Entity Id");
 }
 
 // ponytail: not thread-safe; registration happens on the main thread before any scene work.
@@ -436,28 +460,34 @@ void setComponent(entt::registry& registry, entt::entity entity, const entt::met
 
 void copyComponents(entt::registry& registry, entt::entity source, entt::entity target)
 {
+    copyComponents(registry, source, registry, target);
+}
+
+void copyComponents(const entt::registry& from, entt::entity source, entt::registry& to, entt::entity target)
+{
     for (const entt::meta_type& type : componentTypes()) {
-        if (!hasComponent(registry, source, type))
+        if (!hasComponent(from, source, type))
             continue;
         // Copy by value first (copying a reference meta_any makes an owning copy): adding to the pool may move
         // the source component.
-        const entt::meta_any reference = getComponent(std::as_const(registry), source, type);
+        const entt::meta_any reference = getComponent(from, source, type);
         const entt::meta_any value = reference;
-        setComponent(registry, target, value);
+        setComponent(to, target, value);
     }
     for (const auto& def : luaTypes()) {
-        auto& pool = registry.storage<LuaComponentData>(luaStorageId(def->name));
-        if (!pool.contains(source))
+        const auto* sourcePool = from.storage<LuaComponentData>(luaStorageId(def->name));
+        if (!sourcePool || !sourcePool->contains(source))
             continue;
-        LuaComponentData value = pool.get(source); // copy first: emplacing may move the source
+        LuaComponentData value = sourcePool->get(source); // copy first: emplacing may move the source
+        auto& pool = to.storage<LuaComponentData>(luaStorageId(def->name));
         if (pool.contains(target))
             pool.get(target) = std::move(value);
         else
             pool.emplace(target, std::move(value));
     }
-    if (const auto* preserved = registry.try_get<PreservedComponents>(source)) {
+    if (const auto* preserved = from.try_get<PreservedComponents>(source)) {
         PreservedComponents value = *preserved;
-        registry.emplace_or_replace<PreservedComponents>(target, std::move(value));
+        to.emplace_or_replace<PreservedComponents>(target, std::move(value));
     }
 }
 

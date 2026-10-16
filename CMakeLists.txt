@@ -101,7 +101,7 @@ add_library(kast_engine STATIC
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
-  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/world_client.cpp ${KAST_ENGINE_SHADERS})
+  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/world_client.cpp engine/replication.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
@@ -173,6 +173,10 @@ set_tests_properties(world_live_setup PROPERTIES FIXTURES_SETUP world_live_ready
 add_test(NAME world_live COMMAND kast_self_check --live-world http://localhost:3100 http://localhost:8026
                                  "${CMAKE_CURRENT_BINARY_DIR}/world_live_ca.pem" "Kast Live")
 set_tests_properties(world_live PROPERTIES FIXTURES_REQUIRED world_live_ready SKIP_RETURN_CODE 77 TIMEOUT 240)
+# Replication against the same stack: two players see each other cloned, smooth remote motion, a corrected teleport.
+add_test(NAME replication_live COMMAND kast_self_check --live-replication http://localhost:3100 http://localhost:8026
+                                       "${CMAKE_CURRENT_BINARY_DIR}/world_live_ca.pem" "Kast Live")
+set_tests_properties(replication_live PROPERTIES FIXTURES_REQUIRED world_live_ready SKIP_RETURN_CODE 77 TIMEOUT 120)
 add_test(NAME editor_smoke
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/smoke.png"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
@@ -1138,6 +1142,55 @@ add_test(NAME world_play_network_panel
           "-DEXPECT_OUTPUT=world: chat from Demo: hello world" -DFOCUS_PANEL=Network -DFRAMES=180
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(world_play_network_panel PROPERTIES RESOURCE_LOCK net_test_ports TIMEOUT 90)
+# Replication: tests/project/online_replication.scene (scripts/online_replication_demo.lua) enters the fake world, whose
+# Spawn{2, "Other"} appears as a clone of "Remote Player". The built game logs it; replication_play_game shows the clone
+# in the Game view; the Inspector shots show the Network components with Online Services enabled (the copy) and
+# disabled (tests/project itself, with its warning).
+kast_game_project(online_replication "Online Replication Test" online_replication.scene FALSE)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_replication/project.kast"
+     "{
+  \"version\": 1,
+  \"name\": \"Online Replication Test\",
+  \"startScene\": \"online_replication.scene\",
+"
+     "  \"online\": {
+    \"enabled\": true,
+    \"authUrl\": \"http://127.0.0.1:47705\",
+"
+     "    \"caFile\": \"certs/net_test_ca.pem\"
+  }
+}
+")
+set(KAST_REPLICATION_DEMO_PASS "replication: entered, player at 100, 0, 100.*replication: Other spawned as entity [0-9]+ .server id 2. at 10[12][.0-9]*, 0, 100")
+add_test(NAME build_game_online_replication
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_replication"
+          "-DOUT=${KAST_GAME_OUT}/online_replication" "-DEXE=Online Replication Test.exe" -DEXPECT=0
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+set_tests_properties(build_game_online_replication PROPERTIES FIXTURES_SETUP game_online_replication_built)
+add_test(NAME player_online_replication_demo
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/online_replication" "-DEXE=Online Replication Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/online_replication.run" "-DWRAPPER=${KAST_NET_SERVER}" -DEXPECT=0
+          "-DEXPECT_OUTPUT=${KAST_REPLICATION_DEMO_PASS}" "-DEXTRA_ARGS=--frames 300 --no-audio-device"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_online_replication_demo PROPERTIES FIXTURES_REQUIRED game_online_replication_built
+                     RESOURCE_LOCK net_test_ports TIMEOUT 90)
+add_test(NAME replication_play_game
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/replication_play_game.png"
+          "-DWRAPPER=${KAST_NET_SERVER}"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_replication/online_replication.scene --play --no-audio-device"
+          "-DEXPECT_OUTPUT=${KAST_REPLICATION_DEMO_PASS}" -DFRAMES=180 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(replication_play_game PROPERTIES RESOURCE_LOCK net_test_ports TIMEOUT 90)
+foreach(shot "replication_inspector_player|${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_replication|3"
+             "replication_inspector_manager|${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_replication|7"
+             "replication_inspector_disabled|${KAST_TEST_PROJECT}|7")
+  string(REPLACE "|" ";" shot "${shot}")
+  list(GET shot 0 name)
+  list(GET shot 1 dir)
+  list(GET shot 2 entity)
+  add_test(NAME ${name}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/${name}.png"
+            "-DEXTRA_ARGS=--scene ${dir}/online_replication.scene --select ${entity}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endforeach()
 # --world-address: a copy of the demo aimed at realm Ashenvale (127.0.0.1:4000, nothing listens) still reaches the fake
 # world, because the editor's override replaces the realm's address.
 set(world_dir "${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_world")

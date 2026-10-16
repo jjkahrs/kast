@@ -378,6 +378,12 @@ void Panels::drawInspector(Document& doc)
                     const char* conflict = type.meta() && type.meta() == entt::resolve<kast::CharacterController>()
                                                ? kast::physicsConflict(registry, entity)
                                                : nullptr;
+                    const bool network = type.meta() && (type.meta() == entt::resolve<kast::NetworkLocalPlayer>() ||
+                                                         type.meta() == entt::resolve<kast::NetworkReplication>() ||
+                                                         type.meta() == entt::resolve<kast::NetworkEntity>());
+                    if (network && !(doc.project && doc.project->online.enabled))
+                        conflict = "Online Services disabled for this project (Build > Online Services...): this "
+                                   "component does nothing";
                     if (conflict) {
                         ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
                         ImGui::TextWrapped("%s", conflict);

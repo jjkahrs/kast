@@ -5,12 +5,15 @@
 #include "auth_client.h"
 #include "document.h"
 #include "log.h"
+#include "math3d.h"
 #include "lua_systems.h"
 #include "network.h"
+#include "play.h"
 #include "project.h"
 #include "scene_io.h"
 #include "world_client.h"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -1235,6 +1238,7 @@ void checkWorldClient()
     WorldRun r(std::format("http://127.0.0.1:{}", authServer.port()), cert.certPem);
     auto& w = r.world;
     check(w.enabled() && kast::worldStateName(w.state()) == std::string("disconnected"), "world: starts disconnected");
+    check(throwsLogic([&] { w.move(1, 2, 3, 0); }, "move: needs state 'inWorld'"), "world: move outside the world throws");
 
     w.connect(3);
     const Json* noSession = r.next("world.disconnected");
@@ -1479,6 +1483,324 @@ return {{
           "Stop drops the world connection");
 }
 
+// --- Replication (engine/replication.h) ---
+namespace {
+
+bool approx(float a, float b, float tolerance = 1e-4f) { return std::abs(a - b) <= tolerance; }
+bool approx(const bx::Vec3& a, const bx::Vec3& b, float tolerance = 1e-4f)
+{
+    return approx(a.x, b.x, tolerance) && approx(a.y, b.y, tolerance) && approx(a.z, b.z, tolerance);
+}
+
+entt::entity named(const kast::Scene& scene, const std::string& name)
+{
+    entt::entity found = entt::null;
+    for (auto [e, n] : scene.registry().view<kast::Name>().each())
+        if (n.value == name)
+            found = e;
+    return found;
+}
+
+int countNamed(const kast::Scene& scene, const std::string& name)
+{
+    int n = 0;
+    for (auto [e, value] : scene.registry().view<kast::Name>().each())
+        n += value.value == name;
+    return n;
+}
+
+std::vector<proto::Move> moves(const FakeWorld& fake)
+{
+    std::vector<proto::Move> out;
+    for (const proto::Message& m : fake.seen())
+        if (const auto* move = std::get_if<proto::Move>(&m))
+            out.push_back(*move);
+    return out;
+}
+
+Json at(float x, float y, float z) { return {{"x", x}, {"y", y}, {"z", z}}; }
+
+} // namespace
+
+// The pure helpers and the ECS plumbing driven by hand-published world.* events (no network).
+void checkReplicationOffline()
+{
+    using kast::interpolate;
+    const bx::Vec3 a{0, 0, 0}, b{10, 2, -4};
+    check(approx(interpolate(a, b, 0.0f, 0.1f), a) && approx(interpolate(a, b, 0.05f, 0.1f), {5, 1, -2}) &&
+              approx(interpolate(a, b, 0.1f, 0.1f), b) && approx(interpolate(a, b, 0.5f, 0.1f), b) &&
+              approx(interpolate(a, b, -1.0f, 0.1f), a) && approx(interpolate(a, b, 0.0f, 0.0f), b),
+          "replication: interpolate is a straight line over the duration, held at the target, 0 snaps");
+    const float pi = 3.14159265f;
+    bool turns = true;
+    for (float h : {0.0f, 0.5f, -1.0f, pi / 2, 3.0f})
+        turns &= approx(kast::headingOf(kast::yawRotation(h)), h);
+    float m[16];
+    kast::mtxFromQuat(m, kast::yawRotation(pi / 2));
+    check(turns && approx(kast::transformDir({0, 0, 1}, m), {1, 0, 0}) &&
+              approx(kast::headingOf(bx::Quaternion{bx::InitIdentity}), 0.0f),
+          "replication: heading <-> yaw round trip, heading pi/2 faces +X (atan2(dx, dz))");
+
+    kast::MoveThrottle throttle;
+    check(throttle.shouldSend({1, 0, 1}, 0, 0.0, 10) && !throttle.shouldSend({1, 0, 1}, 0, 1.0, 10),
+          "replication: the first position is sent, an unchanged one never");
+    check(throttle.shouldSend({2, 0, 1}, 0, 1.05, 10), "replication: a change after the interval is sent");
+    check(!throttle.shouldSend({3, 0, 1}, 0, 1.1, 10) && throttle.shouldSend({3, 0, 1}, 0, 1.16, 10),
+          "replication: a change within 1/rate waits for the interval");
+    check(!throttle.shouldSend({3.00001f, 0, 1}, 0, 5.0, 10) && throttle.shouldSend({3, 0, 1}, 0.2f, 5.0, 10),
+          "replication: sub-0.1 mm jitter is not a move; a heading change is");
+    throttle.known({7, 0, 7}, 0.2f);
+    check(!throttle.shouldSend({7, 0, 7}, 0.2f, 9.0, 10), "replication: a server-known position is not sent back");
+    for (float rate : {10.0f, 30.0f}) {
+        kast::MoveThrottle t;
+        int sent = 0;
+        for (int frame = 0; frame < 600; ++frame) // 10 s at 60 fps, moving every frame
+            sent += t.shouldSend({frame * 0.05f, 0, 0}, 0, frame / 60.0, rate);
+        int idle = 0;
+        for (int frame = 600; frame < 1200; ++frame) // then 10 s standing still
+            idle += t.shouldSend({599 * 0.05f, 0, 0}, 0, frame / 60.0, rate);
+        check(sent == static_cast<int>(rate) * 10 && idle == 1,
+              std::format("replication: {} Hz while moving: {} sends in 10 s (want {}), {} while idle (want 1: the "
+                          "final position)", rate, sent, static_cast<int>(rate) * 10, idle));
+    }
+
+    // Components: registered, round trip, validation.
+    kast::Scene scene;
+    std::string error;
+    for (const char* name : {"NetworkLocalPlayer", "NetworkReplication", "NetworkEntity"})
+        check(static_cast<bool>(kast::findAnyComponentType(name)), std::string("replication: ") + name + " is registered");
+    const entt::entity probe = scene.create("probe");
+    const kast::ComponentType local = kast::findAnyComponentType("NetworkLocalPlayer");
+    const kast::ComponentType manager = kast::findAnyComponentType("NetworkReplication");
+    check(kast::setComponentJson(scene.registry(), probe, local, {{"sendRateHz", 20}}, error) &&
+              !kast::setComponentJson(scene.registry(), probe, local, {{"sendRateHz", 31}}, error) &&
+              !kast::setComponentJson(scene.registry(), probe, local, {{"sendRateHz", 0.5}}, error) &&
+              kast::componentToJson(scene.registry(), probe, local) == nlohmann::ordered_json{{"sendRateHz", 20}},
+          "replication: sendRateHz 1..30, out of range rejected and the value kept");
+    check(kast::setComponentJson(scene.registry(), probe, manager, {{"templateEntity", "T"}, {"interpolationMs", 50}}, error) &&
+              !kast::setComponentJson(scene.registry(), probe, manager, {{"templateEntity", "T"}, {"interpolationMs", -1}}, error) &&
+              kast::componentToJson(scene.registry(), probe, manager) ==
+                  nlohmann::ordered_json{{"templateEntity", "T"}, {"interpolationMs", 50}},
+          "replication: NetworkReplication round trip, negative interpolation rejected");
+
+    // The ECS plumbing on hand-published events.
+    const auto build = [](kast::Scene& s) {
+        const entt::entity player = s.create("Player");
+        s.registry().emplace<kast::NetworkLocalPlayer>(player);
+        const entt::entity templ = s.create("Template");
+        s.registry().get<kast::Transform>(templ).scale = {2, 2, 2};
+        const entt::entity body = s.create("Body", templ);
+        s.registry().emplace<kast::MeshRenderer>(body, kast::MeshRenderer{.primitive = kast::Primitive::Sphere});
+        const entt::entity m = s.create("Manager");
+        s.registry().emplace<kast::NetworkReplication>(m, kast::NetworkReplication{"Template", 100.0f});
+        return player;
+    };
+    {
+        Network net;
+        kast::AuthClient auth{net};
+        kast::WorldClient world{net, auth}; // disabled
+        kast::EventBus bus;
+        kast::Scene s;
+        build(s);
+        kast::Replication r;
+        r.start(s, bus, world);
+        bus.publish("world.spawn", {{"entityId", 2}, {"name", "Other"}, {"position", at(1, 0, 1)}, {"heading", 0}});
+        bus.drain();
+        r.update(0.1f);
+        check(named(s, "Template") != entt::null && named(s, "Other") == entt::null && r.clone(2) == entt::null,
+              "replication: Online Services disabled -> the template stays, world events do nothing");
+    }
+    Network net;
+    kast::AuthClient auth{net};
+    kast::WorldClient world{net, auth};
+    world.reset(kast::AuthConfig{"http://127.0.0.1:1", ""});
+    kast::EventBus bus;
+    kast::Scene s;
+    const entt::entity player = build(s);
+    kast::Replication r;
+    r.start(s, bus, world);
+    check(named(s, "Template") == entt::null && named(s, "Body") == entt::null,
+          "replication: the template subtree leaves the scene at start");
+    std::vector<Json> spawned;
+    kast::EventBus::Subscription sub = bus.subscribe("world.entitySpawned", [&](const Json& e) { spawned.push_back(e); });
+    bus.publish("world.entered", {{"entityId", 1}, {"position", at(50, 1, 60)}, {"heading", 0.5}});
+    bus.publish("world.spawn", {{"entityId", 2}, {"name", "Other"}, {"position", at(10, 0, 10)}, {"heading", 1.0}});
+    bus.publish("world.spawn", {{"entityId", 3}, {"name", "Third"}, {"position", at(20, 0, 20)}, {"heading", 0}});
+    bus.drain();
+    const kast::Transform& pt = s.registry().get<kast::Transform>(player);
+    check(approx(pt.position, {50, 1, 60}) && approx(kast::headingOf(pt.rotation), 0.5f),
+          "replication: world.entered places the local player (position and heading)");
+    const entt::entity other = r.clone(2);
+    const auto& reg = s.registry();
+    check(s.valid(other) && reg.get<kast::Name>(other).value == "Other" && reg.get<kast::NetworkEntity>(other).entityId == 2 &&
+              approx(reg.get<kast::Transform>(other).position, {10, 0, 10}) &&
+              approx(reg.get<kast::Transform>(other).scale, {2, 2, 2}) &&
+              approx(kast::headingOf(reg.get<kast::Transform>(other).rotation), 1.0f) &&
+              reg.get<kast::Hierarchy>(other).children.size() == 1 &&
+              reg.get<kast::MeshRenderer>(reg.get<kast::Hierarchy>(other).children[0]).primitive == kast::Primitive::Sphere,
+          "replication: world.spawn clones the template subtree at the spawn position (snapped), with NetworkEntity");
+    bus.drain();
+    check(spawned.size() == 2 && spawned[0].value("entityId", 0) == 2 && spawned[0].value("name", "") == "Other" &&
+              spawned[0].value("entity", uint64_t{0}) == reg.get<kast::PersistentId>(other).value,
+          "replication: world.entitySpawned {entityId, entity, name} follows each clone");
+    bus.publish("world.entityMove", {{"entityId", 2}, {"position", at(20, 0, 10)}, {"heading", 1.0}});
+    bus.drain();
+    r.update(0.025f);
+    const float quarter = reg.get<kast::Transform>(other).position.x;
+    r.update(0.025f);
+    const float half = reg.get<kast::Transform>(other).position.x;
+    r.update(0.1f);
+    const float done = reg.get<kast::Transform>(other).position.x;
+    check(approx(quarter, 12.5f) && approx(half, 15.0f) && approx(done, 20.0f),
+          std::format("replication: world.entityMove interpolates over 100 ms (want 12.5, 15, 20; got {}, {}, {})",
+                      quarter, half, done));
+    bus.publish("world.correction", {{"position", at(49, 1, 60)}});
+    bus.drain();
+    check(approx(pt.position, {49, 1, 60}) && approx(kast::headingOf(pt.rotation), 0.5f),
+          "replication: world.correction snaps the local player's position, heading kept");
+    bus.publish("world.despawn", {{"entityId", 2}});
+    bus.drain();
+    check(r.clone(2) == entt::null && !s.valid(other) && named(s, "Other") == entt::null && countNamed(s, "Body") == 1,
+          "replication: world.despawn destroys that clone and its children");
+    bus.publish("world.disconnected", {{"code", "connection_closed"}, {"reason", "x"}});
+    bus.drain();
+    check(r.clone(3) == entt::null && countNamed(s, "Body") == 0 && s.valid(player),
+          "replication: world.disconnected destroys every clone; the local player stays");
+
+    // A scene switch keeps the remote players in view: the new scene gets their clones.
+    bus.publish("world.spawn", {{"entityId", 4}, {"name", "Fourth"}, {"position", at(5, 0, 5)}, {"heading", 0}});
+    bus.drain();
+    r.stop(true);
+    kast::Scene next;
+    build(next);
+    r.start(next, bus, world);
+    check(next.valid(r.clone(4)) && next.registry().get<kast::Name>(r.clone(4)).value == "Fourth" &&
+              approx(next.registry().get<kast::Transform>(r.clone(4)).position, {5, 0, 5}),
+          "replication: after a scene switch the remote players in view are cloned into the new scene");
+    r.stop();
+    check(r.clone(4) == entt::null, "replication: stop() forgets them");
+}
+
+// Replication through LuaSystems against the fake world server: tests/project/online_replication.scene in an
+// online-enabled copy, with its demo script logging in and entering the world.
+void checkReplicationFakeServer()
+{
+    FakeAuth fake;
+    Server authServer(serveFakeAuth(fake));
+    const Cert cert = makeCert("DNS:localhost,IP:127.0.0.1");
+    FakeWorld fakeWorld;
+    Server worldServer(serveFakeWorld(fakeWorld), 0, &cert);
+    fake.worldPort = worldServer.port();
+    const std::filesystem::path dir = netProject("kast_replication_check");
+    writeFile(dir / "certs/world_ca.pem", cert.certPem);
+    writeFile(dir / kast::kProjectFileName,
+              std::format(R"({{"version": 1, "name": "Replication", "startScene": null,
+"online": {{"enabled": true, "authUrl": "http://127.0.0.1:{}", "caFile": "certs/world_ca.pem"}}}})",
+                          authServer.port()));
+    const std::filesystem::path source = KAST_TEST_PROJECT_DIR;
+    std::filesystem::copy_file(source / "online_replication.scene", dir / "online_replication.scene");
+    std::filesystem::copy_file(source / "scripts/online_replication_demo.lua", dir / "scripts/online_replication_demo.lua");
+    // A teleport from a script, 50 m in one frame: the server must reject it.
+    writeFile(dir / "scripts/teleport.lua", R"(return {
+    init = function()
+        kast.subscribe("test.teleport", function()
+            for e in kast.query("NetworkLocalPlayer") do
+                local p = kast.get(e, "Transform").position
+                kast.set(e, "Transform", {position = {x = p.x + 50, y = p.y, z = p.z}})
+            end
+        end)
+    end,
+    update = function(dt) end,
+}
+)");
+    Document doc;
+    std::string error;
+    check(openFile(doc, (dir / "online_replication.scene").string(), error) && doc.project,
+          "replication: open the sample scene in an online project");
+    doc.scene.systems.push_back("scripts/teleport.lua");
+    const nlohmann::ordered_json before = kast::sceneToJson(doc.scene);
+    startPlay(doc);
+    kast::Scene& scene = doc.scene;
+    check(named(scene, "Remote Player") == entt::null && named(scene, "Remote Body") == entt::null,
+          "replication: the template is out of the Play scene (never rendered or simulated)");
+    check(playUntil(doc, "replication: entered, player at 100, 0, 100"), "replication: world.entered places the player");
+    check(playUntil(doc, "replication: Other spawned as entity"), "replication: world.spawn -> a clone + world.entitySpawned");
+    const entt::entity clone = doc.lua.replication().clone(2);
+    const auto& reg = scene.registry();
+    check(scene.valid(clone) && reg.get<kast::NetworkEntity>(clone).entityId == 2 && countNamed(scene, "Remote Body") == 1 &&
+              logged(std::format("replication: Other spawned as entity {} (server id 2)",
+                                 reg.get<kast::PersistentId>(clone).value)),
+          "replication: the clone carries NetworkEntity 2, the template's child, and Lua gets its entity id");
+    // Spawn (101) and EntityMove (102) came in one write: the clone glides to 102 over 100 ms of frames.
+    std::vector<float> xs;
+    for (int frame = 0; frame < 12; ++frame) {
+        xs.push_back(reg.get<kast::Transform>(clone).position.x);
+        updatePlay(doc, 0.016f);
+    }
+    xs.push_back(reg.get<kast::Transform>(clone).position.x);
+    const auto between = std::ranges::count_if(xs, [](float x) { return x > 101.01f && x < 101.99f; });
+    check(std::ranges::is_sorted(xs) && between >= 3 && approx(xs.back(), 102.0f),
+          std::format("replication: smooth remote motion ({} in-between frames, ends at {})", between, xs.back()));
+
+    // Idle: nothing sent.
+    for (int frame = 0; frame < 60; ++frame) {
+        updatePlay(doc, 0.016f);
+        std::this_thread::sleep_for(1ms);
+    }
+    std::this_thread::sleep_for(100ms);
+    check(moves(fakeWorld).empty(), std::format("replication: an idle player sends no Move ({} sent)", moves(fakeWorld).size()));
+
+    // Walking 1 s of game time at 3 m/s: about 10 Moves at 10 Hz, the last at the final position.
+    const entt::entity player = named(scene, "Player");
+    for (int frame = 0; frame < 63; ++frame) { // 63 x 16 ms = 1.008 s
+        scene.registry().get<kast::Transform>(player).position.x += 0.048f;
+        updatePlay(doc, 0.016f);
+    }
+    for (int frame = 0; frame < 20; ++frame) // standing: one more Move with the final position, then nothing
+        updatePlay(doc, 0.016f);
+    const bx::Vec3 walked = reg.get<kast::Transform>(player).position;
+    const auto end = std::chrono::steady_clock::now() + 3s;
+    while (std::chrono::steady_clock::now() < end &&
+           (moves(fakeWorld).empty() || !approx(moves(fakeWorld).back().pos.x, walked.x)))
+        std::this_thread::sleep_for(5ms);
+    const std::vector<proto::Move> sent = moves(fakeWorld);
+    check(sent.size() >= 10 && sent.size() <= 12,
+          std::format("replication: 1 s of walking at sendRateHz 10 sent {} Moves (want 10-12)", sent.size()));
+    check(!sent.empty() && approx(sent.back().pos.x, walked.x) && approx(sent.back().pos.z, 100.0f) &&
+              approx(sent.back().heading, 0.5f),
+          "replication: the last Move carries the final Transform position and its yaw as heading");
+
+    // A teleport from a script is rejected; the correction snaps the player back.
+    doc.lua.bus().publish("test.teleport", Json::object());
+    updatePlay(doc, 0.016f); // the teleport, and its Move
+    check(approx(reg.get<kast::Transform>(player).position.x, walked.x + 50, 1e-3f), "replication: the script teleported");
+    const auto corrections = std::ranges::count_if(kast::log::lines(), [](const std::string& line) {
+        return contains(line, "replication: corrected to");
+    }); // one so far: the fake's Correction after EnterWorldOk
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (std::chrono::steady_clock::now() < deadline &&
+           std::ranges::count_if(kast::log::lines(), [](const std::string& line) {
+               return contains(line, "replication: corrected to");
+           }) == corrections) {
+        updatePlay(doc, 0.016f);
+        std::this_thread::sleep_for(1ms);
+    }
+    check(approx(reg.get<kast::Transform>(player).position, walked, 1e-3f),
+          std::format("replication: the player is snapped back to x {} (now {})", walked.x,
+                      reg.get<kast::Transform>(player).position.x));
+
+    doc.lua.world().say("bye"); // the fake world despawns entity 2
+    check(playUntil(doc, "replication: server id 2 left"), "replication: world.despawn arrives");
+    check(doc.lua.replication().clone(2) == entt::null && countNamed(scene, "Remote Body") == 0 &&
+              countNamed(scene, "Other") == 0,
+          "replication: despawn removes the clone");
+    for (const kast::LuaSystemStatus& s : doc.lua.status())
+        check(s.ok, std::format("replication: {} runs without errors {}", s.path, s.error));
+    stopPlay(doc);
+    check(kast::sceneToJson(doc.scene) == before,
+          "replication: Stop restores the pre-Play scene exactly (template back, no clones)");
+}
+
 // --- live: kast::AuthClient against the real services/auth (the services/world compose stack) ---
 
 // One GET on net, waited for; the response body as text, or nullopt on any failure.
@@ -1615,8 +1937,8 @@ std::string uniqueName(const char* prefix)
     return name;
 }
 
-// A verified, logged-in account adopted into r.auth; false if any step failed (logged).
-bool liveAccount(WorldRun& r, Network& probe, const std::string& authUrl, const std::string& mailpitUrl,
+// A verified, logged-in account adopted into auth; false if any step failed (logged).
+bool liveAccount(kast::AuthClient& auth, Network& probe, const std::string& authUrl, const std::string& mailpitUrl,
                  const std::string& email, const std::string& password, const std::string& ip)
 {
     const auto reg = post(probe, authUrl + "/v1/auth/register", {{"email", email}, {"password", password}}, ip);
@@ -1632,10 +1954,10 @@ bool liveAccount(WorldRun& r, Network& probe, const std::string& authUrl, const 
         kast::log::error(std::format("live world: verify / login of {} failed", email));
         return false;
     }
-    r.auth.adopt({.accessToken = login->second["accessToken"],
-                  .refreshToken = login->second["refreshToken"],
-                  .expiresIn = std::chrono::seconds(login->second.value("expiresIn", 900)),
-                  .account = {{"email", email}}});
+    auth.adopt({.accessToken = login->second["accessToken"],
+                .refreshToken = login->second["refreshToken"],
+                .expiresIn = std::chrono::seconds(login->second.value("expiresIn", 900)),
+                .account = {{"email", email}}});
     return true;
 }
 
@@ -1664,8 +1986,8 @@ int liveWorldCheck(const std::string& authUrl, const std::string& mailpitUrl, co
     WorldRun a(authUrl, caPem), b(authUrl, caPem);
     const uint64_t n = std::stoull(stamp) / 1000; // a new X-Forwarded-For per run and account
     const auto ip = [&](int account) { return std::format("10.{}.{}.{}", 70 + account, (n >> 8) % 256, n % 256); };
-    if (!liveAccount(a, probe, authUrl, mailpitUrl, std::format("kast-world-a-{}@example.com", stamp), password, ip(1)) ||
-        !liveAccount(b, probe, authUrl, mailpitUrl, std::format("kast-world-b-{}@example.com", stamp), password, ip(2))) {
+    if (!liveAccount(a.auth, probe, authUrl, mailpitUrl, std::format("kast-world-a-{}@example.com", stamp), password, ip(1)) ||
+        !liveAccount(b.auth, probe, authUrl, mailpitUrl, std::format("kast-world-b-{}@example.com", stamp), password, ip(2))) {
         check(false, "live world: two verified accounts");
         return 1;
     }
@@ -1759,6 +2081,188 @@ int liveWorldCheck(const std::string& authUrl, const std::string& mailpitUrl, co
     return g_failures == 0 ? 0 : 1;
 }
 
+// kast_self_check --live-replication <authUrl> <mailpitUrl> <caFile> <realmName>: two players (each a LuaSystems
+// session on its own scene with a NetworkLocalPlayer, a "Remote" template and a NetworkReplication, no scripts) enter
+// the services/world compose stack's world next to each other. Each sees the other cloned; B walks 2 s at 4 m/s and
+// A's clone of B follows smoothly; B's 50 m teleport is corrected; B leaving removes the clone on A. 77 (skipped) when
+// the stack isn't up; 0 pass, 1 fail.
+int liveReplicationCheck(const std::string& authUrl, const std::string& mailpitUrl, const std::string& caFile,
+                         const std::string& realmName)
+{
+    constexpr int kSkipped = 77;
+    Network probe;
+    std::ifstream caIn(caFile, std::ios::binary);
+    const std::string caPem((std::istreambuf_iterator<char>(caIn)), std::istreambuf_iterator<char>());
+    if (!fetch(probe, authUrl + "/health") || !fetch(probe, mailpitUrl + "/api/v1/info") || caPem.empty()) {
+        kast::log::warn(std::format("SKIPPED: auth ({}), Mailpit ({}) or the world CA ({}) is missing; start the stack "
+                                    "with 'cd services/world && docker compose up -d --build' and re-run ctest",
+                                    authUrl, mailpitUrl, caFile));
+        return kSkipped;
+    }
+
+    struct Player {
+        kast::Scene scene;
+        kast::LuaSystems lua;
+        std::vector<std::pair<std::string, Json>> events;
+        std::vector<kast::EventBus::Subscription> subs;
+        entt::entity local = entt::null;
+
+        explicit Player(const kast::AuthConfig& config)
+        {
+            local = scene.create("Player");
+            scene.registry().emplace<kast::NetworkLocalPlayer>(local);
+            const entt::entity templ = scene.create("Remote");
+            scene.registry().emplace<kast::MeshRenderer>(templ);
+            const entt::entity manager = scene.create("Replication");
+            scene.registry().emplace<kast::NetworkReplication>(manager, kast::NetworkReplication{"Remote", 100.0f});
+            lua.start(scene, std::nullopt, "", nullptr, {}, config);
+            for (const char* name : {"auth.realms", "world.connected", "world.charCreated", "world.entered",
+                                     "world.spawn", "world.despawn", "world.correction", "world.disconnected",
+                                     "world.entitySpawned", "world.charError"})
+                subs.push_back(lua.bus().subscribe(name, [this, name](const Json& e) { events.emplace_back(name, e); }));
+        }
+        const Json* last(const std::string& name) const
+        {
+            for (auto it = events.rbegin(); it != events.rend(); ++it)
+                if (it->first == name)
+                    return &it->second;
+            return nullptr;
+        }
+        bx::Vec3& position() { return scene.registry().get<kast::Transform>(local).position; }
+    };
+    const kast::AuthConfig config{authUrl, caPem};
+    Player a(config), b(config);
+    // Ticks both sessions on a ~60 fps clock until done() (true) or timeout (false); step runs before each tick.
+    auto previous = std::chrono::steady_clock::now();
+    const auto run = [&](const std::function<bool()>& done, std::chrono::milliseconds timeout,
+                         const std::function<void(float)>& step = {}) {
+        const auto end = std::chrono::steady_clock::now() + timeout;
+        while (!done()) {
+            if (std::chrono::steady_clock::now() > end)
+                return false;
+            std::this_thread::sleep_for(15ms);
+            const auto now = std::chrono::steady_clock::now();
+            const float dt = std::chrono::duration<float>(now - previous).count();
+            previous = now;
+            if (step)
+                step(dt);
+            kast::tickPlay(a.scene, a.lua, dt);
+            kast::tickPlay(b.scene, b.lua, dt);
+        }
+        return true;
+    };
+
+    const std::string password = "live-replication-password-1";
+    const std::string stamp = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    const uint64_t n = std::stoull(stamp) / 1000;
+    const auto ip = [&](int account) { return std::format("10.{}.{}.{}", 80 + account, (n >> 8) % 256, n % 256); };
+    if (!liveAccount(a.lua.auth(), probe, authUrl, mailpitUrl, std::format("kast-repl-a-{}@example.com", stamp),
+                     password, ip(1)) ||
+        !liveAccount(b.lua.auth(), probe, authUrl, mailpitUrl, std::format("kast-repl-b-{}@example.com", stamp),
+                     password, ip(2))) {
+        check(false, "live replication: two verified accounts");
+        return 1;
+    }
+    a.lua.auth().realms();
+    uint64_t realm = 0;
+    run([&] {
+        if (const Json* list = a.last("auth.realms"))
+            for (const Json& r : list->at("realms"))
+                if (r.value("name", "") == realmName)
+                    realm = r.value("id", uint64_t{0});
+        return realm != 0;
+    }, 5s);
+    if (!realm) {
+        kast::log::warn(std::format("SKIPPED: no realm named '{}' (the ctest setup step adds it)", realmName));
+        return kSkipped;
+    }
+
+    // Both enter the world.
+    for (Player* p : {&a, &b}) {
+        p->lua.world().connect(realm);
+        check(run([&] { return p->last("world.connected") != nullptr; }, 10s), "live replication: connected");
+        p->lua.world().createCharacter(uniqueName(p == &a ? "Ra" : "Rb"));
+        check(run([&] { return p->last("world.charCreated") != nullptr; }, 10s), "live replication: character created");
+        p->lua.world().enterWorld(p->last("world.charCreated")->at("character").value("id", uint64_t{0}));
+        check(run([&] { return p->last("world.entered") != nullptr; }, 10s), "live replication: entered the world");
+    }
+    const uint32_t idA = a.last("world.entered")->value("entityId", 0u);
+    const uint32_t idB = b.last("world.entered")->value("entityId", 0u);
+    check(run([&] { return a.scene.valid(a.lua.replication().clone(idB)) && b.scene.valid(b.lua.replication().clone(idA)); }, 10s),
+          "live replication: each player sees the other as a clone");
+    const bx::Vec3 startB = b.position();
+    {
+        const bx::Vec3 seen = a.scene.registry().get<kast::Transform>(a.lua.replication().clone(idB)).position;
+        const bx::Vec3 seenA = b.scene.registry().get<kast::Transform>(b.lua.replication().clone(idA)).position;
+        kast::log::info(std::format("live replication: A sees B (server id {}) at {:.2f}, {:.2f}, {:.2f}; B is at "
+                                    "{:.2f}, {:.2f}, {:.2f}", idB, seen.x, seen.y, seen.z, startB.x, startB.y, startB.z));
+        kast::log::info(std::format("live replication: B sees A (server id {}) at {:.2f}, {:.2f}, {:.2f}", idA, seenA.x,
+                                    seenA.y, seenA.z));
+        check(approx(seen, startB, 0.01f) && approx(seenA, a.position(), 0.01f),
+              "live replication: clones spawn at the other player's position");
+    }
+    run([&] { return a.last("world.entitySpawned") != nullptr; }, 1s); // published with the clone, delivered next frame
+    check(a.last("world.entitySpawned") && a.last("world.entitySpawned")->value("entityId", 0u) == idB,
+          "live replication: world.entitySpawned on A names B's server id");
+
+    // B walks +x at 4 m/s for 2 s; A's clone of B is sampled every frame.
+    std::vector<float> trail;
+    float walked = 0;
+    const entt::entity cloneB = a.lua.replication().clone(idB);
+    run([&] { return walked >= 2.0f; }, 5s, [&](float dt) {
+        b.position().x += 4.0f * dt;
+        walked += dt;
+        trail.push_back(a.scene.registry().get<kast::Transform>(cloneB).position.x);
+    });
+    run([] { return false; }, 600ms); // settle: the last Move, then 100 ms of interpolation
+    const float finalB = b.position().x;
+    const float finalSeen = a.scene.registry().get<kast::Transform>(cloneB).position.x;
+    int still = 0;
+    float biggest = 0;
+    // Past the first update's latency, the clone should move on (nearly) every frame: 20 Hz or 10 Hz stepping would
+    // leave runs of frames standing still and then jump.
+    const size_t from = trail.size() / 4;
+    for (size_t i = from + 1; i < trail.size(); ++i) {
+        const float step = trail[i] - trail[i - 1];
+        still += step < 1e-4f;
+        biggest = std::max(biggest, step);
+    }
+    const int frames = static_cast<int>(trail.size() - from - 1);
+    kast::log::info(std::format("live replication: B walked to x {:.2f}; A shows B at x {:.2f}; {} frames, {} standing "
+                                "still, largest step {:.3f} m", finalB, finalSeen, frames, still, biggest));
+    check(std::abs(finalSeen - finalB) < 0.05f, "live replication: A's clone of B ends where B is");
+    check(still * 10 <= frames && biggest < 0.25f,
+          "live replication: B's clone moves smoothly on A (no 10/20 Hz stepping)");
+
+    // Speedhack: B teleports 50 m; the server rejects it and B is snapped back.
+    const size_t corrections = static_cast<size_t>(std::ranges::count_if(b.events, [](const auto& e) {
+        return e.first == "world.correction";
+    }));
+    const bx::Vec3 before = b.position();
+    b.position().x += 50.0f;
+    const bool corrected = run([&] {
+        return static_cast<size_t>(std::ranges::count_if(b.events, [](const auto& e) {
+                   return e.first == "world.correction";
+               })) > corrections;
+    }, 5s);
+    run([] { return false; }, 300ms); // the server may repeat it once per tick; nothing moves meanwhile
+    kast::log::info(std::format("live replication: B teleported to x {:.2f}, corrected back to x {:.2f}",
+                                before.x + 50.0f, b.position().x));
+    check(corrected && approx(b.position(), before, 0.05f), "live replication: a speedhack move is corrected and B snapped back");
+    check(approx(a.scene.registry().get<kast::Transform>(cloneB).position, before, 0.05f),
+          "live replication: A never saw the rejected move");
+
+    b.lua.world().disconnect();
+    check(run([&] { return a.lua.replication().clone(idB) == entt::null; }, 10s) && !a.scene.valid(cloneB),
+          "live replication: B leaving despawns its clone on A");
+    a.lua.world().disconnect();
+    a.lua.stop();
+    b.lua.stop();
+    if (g_failures == 0)
+        kast::log::info("live replication check passed");
+    return g_failures == 0 ? 0 : 1;
+}
+
 int netSelfCheck()
 {
     checkNetHelpers();
@@ -1776,6 +2280,8 @@ int netSelfCheck()
     checkAuthLuaApi();
     checkWorldClient();
     checkWorldLuaApi();
+    checkReplicationOffline();
+    checkReplicationFakeServer();
     checkAuthLogs();
     std::error_code ec;
     std::filesystem::remove_all(netRoot(), ec);

@@ -1367,6 +1367,7 @@ void LuaSystems::start(Scene& scene, const std::optional<std::filesystem::path>&
     state_.reset(); // its subscriptions go first
     bus_.reset();
     network_.stop();
+    replication_.stop(); // forgets the remote players
     world_.reset(auth);
     auth_.reset(std::move(auth));
     audio_.start(projectRoot);
@@ -1379,6 +1380,7 @@ void LuaSystems::launch(Scene& scene, const std::optional<std::filesystem::path>
     fsm_.detach(); // drops callbacks into the old Lua state
     state_.reset(); // the old Lua state goes before the new one is built
     models().setRoot(projectRoot.value_or(std::filesystem::path())); // kast.*Animation* load models before any render
+    replication_.start(scene, bus_, world_); // takes the template out before physics and scripts see it
     physics_.start(scene, bus_); // before the inits, which may query it
     state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_, physics_, audio_, network_, auth_,
                                      world_);
@@ -1404,6 +1406,7 @@ bool LuaSystems::tick(float dt)
     for (NetEvent& event : world_.poll())
         bus_.publish(std::move(event.name), std::move(event.payload), "kast.world");
     state_->tick(dt);
+    replication_.update(dt); // sends what this frame's systems did to the local player
     if (!state_->pending)
         return false;
     PendingScene next = std::move(*state_->pending);
@@ -1420,6 +1423,7 @@ bool LuaSystems::tick(float dt)
 void LuaSystems::endSession()
 {
     state_->stop();
+    replication_.stop(true); // the scene goes; the remote players stay in view on the connection
     fsm_.detach();
     state_.reset();
     physics_.stop();
@@ -1433,6 +1437,7 @@ void LuaSystems::stop()
         return;
     endSession();
     fsm_.reset();
+    replication_.stop();
     network_.stop();
     world_.reset();
     auth_.reset(); // memory only: Stop logs out

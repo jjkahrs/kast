@@ -209,6 +209,28 @@ struct AudioSource {
     bool playOnStart = false;
 };
 
+// Online Services replication (see replication.h; does nothing while the project's Online Services are disabled).
+constexpr float kMaxMoveRateHz = 30.0f; // half the world server's 60 messages/s, leaving room for chat and pings
+
+// The local player: while in the world its Transform position (and yaw as heading) is sent as Move at most
+// sendRateHz times a second, only when it changed; world.entered places it, world.correction snaps it back.
+struct NetworkLocalPlayer {
+    float sendRateHz = 10.0f; // 1..kMaxMoveRateHz
+};
+
+// One per scene. templateEntity: the name of the entity cloned (with its subtree) for every remote player the world
+// server spawns; it is taken out of the scene for Play, so it never renders, simulates or reaches scripts.
+// interpolationMs: how long a clone takes to reach each new server position (about the senders' Move interval).
+struct NetworkReplication {
+    std::string templateEntity;
+    float interpolationMs = 100.0f; // 0..1000, 0 = snap
+};
+
+// Added to each clone: the world server's entity id (an unsigned 32-bit id; ids past 2^31 read negative).
+struct NetworkEntity {
+    int entityId = 0;
+};
+
 // Per-scene physics settings.
 struct ScenePhysics {
     bx::Vec3 gravity{0.0f, -9.81f, 0.0f}; // m/s^2

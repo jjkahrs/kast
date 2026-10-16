@@ -1,0 +1,82 @@
+{
+  "version": 4,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Directional Light",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [100, 4, 100], "rotation": [-0.408218, -0.23457, -0.109382, 0.875426], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.95, 0.9], "intensity": 1.1 }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [100, 0, 100], "rotation": [0, 0, 0, 1], "scale": [40, 1, 40] },
+        "MeshRenderer": { "primitive": "plane", "material": "materials/checker.mat" }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Player",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [100, 0, 100], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "NetworkLocalPlayer": { "sendRateHz": 10 }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Player Body",
+      "parent": 3,
+      "components": {
+        "Transform": { "position": [0, 0.5, 0], "rotation": [0, 0, 0, 1], "scale": [0.8, 1, 0.8] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/gold_r05.mat" }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Remote Player",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [104, 0, 100], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Remote Body",
+      "parent": 5,
+      "components": {
+        "Transform": { "position": [0, 0.5, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "sphere", "material": "materials/red_plastic_r05.mat" }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Replication",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "NetworkReplication": { "templateEntity": "Remote Player", "interpolationMs": 100 }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [101, 2.5, 105], "rotation": [-0.173648, 0, 0, 0.984808], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    }
+  ],
+  "systems": [
+    "scripts/online_replication_demo.lua"
+  ],
+  "editor": {
+    "camera": { "pivot": [101, 0.5, 100], "yaw": 20, "pitch": -20, "distance": 8 }
+  }
+}
