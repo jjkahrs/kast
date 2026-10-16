@@ -97,8 +97,9 @@ std::optional<Options> parseArgs(int argc, char** argv)
     return options;
 }
 
-// Loads the project and its startScene from the pak next to the exe. False + error (a readable message) on failure.
-bool loadGame(kast::Project& project, kast::Scene& scene, std::string& error)
+// Loads the project, its Online Services auth config (nullopt while disabled) and its startScene from the pak next to
+// the exe. False + error (a readable message) on failure.
+bool loadGame(kast::Project& project, std::optional<kast::AuthConfig>& auth, kast::Scene& scene, std::string& error)
 {
     const char* base = SDL_GetBasePath();
     if (!base) {
@@ -112,13 +113,12 @@ bool loadGame(kast::Project& project, kast::Scene& scene, std::string& error)
     kast::mountPak(std::move(pak), root);
     if (!kast::loadProject(root / kast::kProjectFileName, project, error))
         return false;
-    // ponytail: only checked here for now; the kast.auth / kast.world phases keep caPem for their connections.
-    if (std::string caPem; !kast::loadOnlineCa(project, caPem, error)) {
+    auth = kast::authConfig(project, error);
+    if (!error.empty())
         return false;
-    } else if (project.online.enabled) {
-        kast::log::info(std::format("Online Services enabled: auth {}{}", project.online.authUrl,
-                                    caPem.empty() ? "" : std::format(", CA file '{}'", *project.online.caFile)));
-    }
+    if (auth)
+        kast::log::info(std::format("Online Services enabled: auth {}{}", auth->url,
+                                    auth->caPem.empty() ? "" : std::format(", CA file '{}'", *project.online.caFile)));
     if (!project.startScene) {
         error = std::format("Project '{}' has no startScene", project.name);
         return false;
@@ -143,8 +143,9 @@ int main(int argc, char** argv)
         return 2;
 
     kast::Project project;
+    std::optional<kast::AuthConfig> auth;
     kast::Scene scene;
-    if (std::string error; !loadGame(project, scene, error)) {
+    if (std::string error; !loadGame(project, auth, scene, error)) {
         kast::log::error(error);
         if (options->frames == 0) // a --frames run (tests) has no one to close the box
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Game failed to start", error.c_str(), nullptr);
@@ -179,7 +180,7 @@ int main(int argc, char** argv)
         if (kast::activeCamera(scene) == entt::null)
             kast::log::warn("No Camera in scene: nothing to render");
         lua.start(scene, project.root, *project.startScene, &input,
-                  project.stateMachines.value_or(std::vector<std::string>{}));
+                  project.stateMachines.value_or(std::vector<std::string>{}), auth);
         lua.audio().setMix(project.audio);
         lastTicks = SDL_GetTicksNS();
         return true;

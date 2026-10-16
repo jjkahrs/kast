@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio.h"
+#include "auth_client.h"
 #include "event_bus.h"
 #include "input.h"
 #include "network.h"
@@ -39,9 +40,11 @@ public:
     // project"). scenePath is the scene's project-relative path, empty if unsaved or outside a project
     // (kast.currentScene returns nil). Stops any running session first
     // (without its shutdowns: the old scene may be gone). scene and input must outlive the session; input may be
-    // null (no keys down, no mouse motion).
+    // null (no keys down, no mouse motion). auth: the project's Online Services auth endpoint (authConfig in auth_client.h);
+    // nullopt leaves kast.auth nil. The session starts logged out.
     void start(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, const std::string& scenePath,
-               const Input* input, std::vector<std::string> gameMachines = {});
+               const Input* input, std::vector<std::string> gameMachines = {},
+               std::optional<AuthConfig> auth = std::nullopt);
     // Publishes the network results received since the last tick, reloads scripts and state machine definitions whose
     // file changed, enters the machines of entities that gained StateMachine, then calls each enabled system's
     // update(dt) in listed order, then drains the event bus. Then applies a scene switch queued by kast.loadScene:
@@ -77,6 +80,10 @@ public:
     // bus() before the systems' updates.
     Network& network() { return network_; }
     const Network& network() const { return network_; }
+    // The session's auth client (kast.auth.* from C++): its requests run on network(), its "auth.*" events are
+    // published on bus() by tick(). Kept across kast.loadScene switches; start() and stop() log it out (memory only).
+    AuthClient& auth() { return auth_; }
+    const AuthClient& auth() const { return auth_; }
     StateMachines& fsm() { return fsm_; }
     const StateMachines& fsm() const { return fsm_; }
 
@@ -90,6 +97,7 @@ private:
     Physics physics_; // publishes on bus_
     Audio audio_;
     Network network_;
+    AuthClient auth_{network_};
     std::unique_ptr<State> state_;
     StateMachines fsm_{bus_}; // declared after state_, so its Lua callbacks are released while the Lua state lives
 };

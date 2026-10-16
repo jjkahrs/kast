@@ -1,7 +1,8 @@
-// kast::Network and kast.net checks for kast_self_check, against loopback servers (tests/net_test_util.h) on ephemeral
+// kast::Network, kast.net, kast::AuthClient and kast.auth checks for kast_self_check, against loopback servers (tests/net_test_util.h) on ephemeral
 // ports with certificates made at run time. Kept out of self_check.cpp so only this file compiles Boost.Asio / Beast.
 #include "net_test_util.h"
 
+#include "auth_client.h"
 #include "document.h"
 #include "log.h"
 #include "lua_systems.h"
@@ -784,7 +785,420 @@ return {{
     stopPlay(doc);
 }
 
+// --- kast::AuthClient and kast.auth, against FakeAuth (tests/net_test_util.h) ---
+
+// An AuthClient on its own Network, pumped the way LuaSystems::tick does.
+struct AuthRun {
+    Network net;
+    kast::AuthClient auth{net};
+    std::vector<NetEvent> events;
+    int maxRefreshes = 0;   // most refresh requests in flight at once
+    bool unowned = false;   // a Network result the client didn't take
+    std::optional<std::chrono::steady_clock::time_point> firstRefresh; // when one was first seen in flight
+
+    explicit AuthRun(const std::string& url) { auth.reset(kast::AuthConfig{url, ""}); }
+    int refreshesInFlight() const
+    {
+        return static_cast<int>(std::ranges::count_if(
+            net.status().requests, [](const kast::NetRequestStatus& r) { return contains(r.url, "/v1/auth/refresh"); }));
+    }
+    void pump()
+    {
+        for (NetEvent& e : net.poll())
+            unowned |= !auth.handle(e);
+        for (NetEvent& e : auth.poll())
+            events.push_back(std::move(e));
+        const int refreshing = refreshesInFlight();
+        maxRefreshes = std::max(maxRefreshes, refreshing);
+        if (refreshing && !firstRefresh)
+            firstRefresh = std::chrono::steady_clock::now();
+    }
+    bool waitFor(const std::function<bool()>& done, std::chrono::milliseconds timeout = 5s)
+    {
+        const auto end = std::chrono::steady_clock::now() + timeout;
+        for (;;) {
+            pump();
+            if (done())
+                return true;
+            if (std::chrono::steady_clock::now() > end)
+                return false;
+            std::this_thread::sleep_for(1ms);
+        }
+    }
+    void pumpFor(std::chrono::milliseconds time)
+    {
+        waitFor([] { return false; }, time);
+    }
+    const Json* event(const std::string& name, uint64_t id = 0) const
+    {
+        for (const NetEvent& e : events)
+            if (e.name == name && (!id || e.payload.value("id", uint64_t(0)) == id))
+                return &e.payload;
+        return nullptr;
+    }
+    // Waits for call id's result: its auth.error, or any other event carrying its id.
+    const Json* result(uint64_t id)
+    {
+        const NetEvent* found = nullptr;
+        waitFor([&] {
+            for (const NetEvent& e : events)
+                if (e.payload.is_object() && e.payload.value("id", uint64_t(0)) == id)
+                    found = &e;
+            return found != nullptr;
+        });
+        return found ? &found->payload : nullptr;
+    }
+    std::string nameOf(uint64_t id) const
+    {
+        for (const NetEvent& e : events)
+            if (e.payload.is_object() && e.payload.value("id", uint64_t(0)) == id)
+                return e.name;
+        return "";
+    }
+    // call id ended in auth.error with code (and status, if given).
+    bool failed(uint64_t id, const std::string& op, const std::string& code, int status = -1)
+    {
+        const Json* r = result(id);
+        return r && nameOf(id) == "auth.error" && r->value("op", "") == op && r->value("code", "") == code &&
+               (status < 0 || r->value("status", -1) == status) && r->contains("message");
+    }
+    bool succeeded(uint64_t id, const std::string& name) { return result(id) && nameOf(id) == name; }
+};
+
+void checkAuthClient()
+{
+    using std::chrono::seconds;
+    check(kast::authRefreshDelay(seconds(900)) == 720s && kast::authRefreshDelay(seconds(120)) == 60s &&
+              kast::authRefreshDelay(seconds(1)) == 500ms,
+          "auth: refresh at 80% of the lifetime or 60 s before expiry, whichever is earlier, not before half");
+    FakeAuth fake;
+    Server server(serveFakeAuth(fake));
+    AuthRun r(std::format("http://127.0.0.1:{}/", server.port())); // the trailing '/' is dropped
+    auto& a = r.auth;
+    check(a.enabled() && !a.loggedIn() && !a.accessToken() && a.account().is_null(), "auth: starts logged out");
+
+    check(r.failed(a.me(), "me", "not_logged_in", 0), "auth: me while logged out -> auth.error not_logged_in");
+    check(r.failed(a.realms(), "realms", "not_logged_in", 0), "auth: realms while logged out -> not_logged_in");
+    check(r.failed(a.logout(), "logout", "not_logged_in", 0), "auth: logout while logged out -> not_logged_in");
+    check(r.failed(a.login(kDemoEmail, "wrong-password"), "login", "invalid_credentials", 401),
+          "auth: a wrong password -> 401 invalid_credentials");
+    {
+        const uint64_t id = a.login("locked@test", "whatever-password");
+        check(r.failed(id, "login", "account_locked", 423) &&
+                  r.result(id)->at("details").at("lockedUntil") == "2099-01-01T00:15:00.000Z",
+              "auth: 423 account_locked carries details.lockedUntil");
+    }
+    {
+        const uint64_t id = a.login("banned@test", "whatever-password");
+        check(r.failed(id, "login", "account_banned", 403) && r.result(id)->at("details").at("reason") == "cheating",
+              "auth: 403 account_banned carries the ban details");
+    }
+    {
+        const uint64_t id = a.registerAccount("new@test", "short");
+        check(r.failed(id, "register", "validation_error", 400) &&
+                  r.result(id)->at("details").at(0).at("path") == "password",
+              "auth: 400 validation_error carries the details array");
+    }
+    check(r.failed(a.verifyEmail("bad"), "verifyEmail", "invalid_token", 400), "auth: verifyEmail invalid_token");
+    check(r.failed(a.resetPassword("bad", "long-enough-password"), "resetPassword", "invalid_token", 400),
+          "auth: resetPassword invalid_token");
+    check(r.succeeded(a.registerAccount("new@test", "long-enough-password"), "auth.registered"), "auth: register ok");
+    check(r.succeeded(a.resendVerification("new@test"), "auth.verificationResent"), "auth: resendVerification ok");
+    check(r.succeeded(a.verifyEmail("good"), "auth.emailVerified"), "auth: verifyEmail ok");
+    check(r.succeeded(a.forgotPassword("new@test"), "auth.passwordResetSent"), "auth: forgotPassword ok");
+    check(r.succeeded(a.resetPassword("good", "long-enough-password"), "auth.passwordReset"), "auth: resetPassword ok");
+
+    const uint64_t login = a.login(kDemoEmail, kDemoPassword);
+    check(r.failed(a.login(kDemoEmail, kDemoPassword), "login", "already_logged_in", 0),
+          "auth: a second login while one is in flight -> already_logged_in");
+    const Json* ok = r.result(login);
+    check(ok && r.nameOf(login) == "auth.login.ok", "auth: login ok");
+    if (ok)
+        check(ok->value("accountId", 0) == 42 && ok->value("email", "") == kDemoEmail &&
+                  ok->value("role", "") == "player" && !ok->contains("accessToken") && !ok->contains("refreshToken"),
+              "auth.login.ok: {id, accountId, email, role} from the token's claims, no tokens");
+    check(a.loggedIn() && a.accessToken() == fake.accessToken() && a.account().value("accountId", 0) == 42,
+          "auth: the session holds the access token for C++ and the account");
+    check(r.failed(a.login(kDemoEmail, kDemoPassword), "login", "already_logged_in", 0),
+          "auth: login while logged in -> already_logged_in");
+    {
+        const uint64_t id = a.me();
+        check(r.succeeded(id, "auth.me") && r.result(id)->at("account").at("email") == kDemoEmail,
+              "auth.me: {id, account} (the server checked the Bearer token)");
+    }
+    {
+        const uint64_t id = a.realms();
+        const Json* realms = r.result(id);
+        check(r.nameOf(id) == "auth.realms" && realms && realms->at("realms").size() == 2 &&
+                  realms->at("realms").at(0).at("name") == "Ashenvale" &&
+                  realms->at("realms").at(1).at("status") == "maintenance",
+              "auth.realms: {id, realms:[{id, name, host, port, region, status, sortOrder}]}");
+    }
+    const uint64_t logout = a.logout();
+    check(!a.loggedIn() && !a.accessToken(), "auth: logout clears the session at once");
+    check(r.succeeded(logout, "auth.loggedOut"), "auth: logout -> auth.loggedOut");
+    const std::vector<FakeAuth::Seen> seen = fake.seen();
+    check(!seen.empty() && seen.back().path == "/v1/auth/logout" && seen.back().body.value("refreshToken", "") == "refresh-1",
+          "auth: logout sends the session's refresh token");
+    check(std::ranges::all_of(seen, [](const FakeAuth::Seen& s) { return s.path.starts_with("/v1/"); }),
+          "auth: requests go to <authUrl>/v1/...");
+    check(!r.unowned, "auth: every Network result of its requests went to the client");
+
+    AuthRun down("http://127.0.0.1:1");
+    check(down.failed(down.auth.registerAccount("a@test", "long-enough-password"), "register", "network_error", 0),
+          "auth: an unreachable server -> auth.error network_error, status 0");
+    AuthRun boom(std::format("http://127.0.0.1:{}/boom", server.port()));
+    check(boom.failed(boom.auth.forgotPassword("a@test"), "forgotPassword", "http_error", 500),
+          "auth: a non-JSON error response -> auth.error http_error with the status");
+}
+
+void checkAuthRefresh()
+{
+    FakeAuth fake;
+    fake.expiresIn = 1; // refreshed after 0.5 s
+    fake.refreshDelayMs = 300;
+    Server server(serveFakeAuth(fake));
+    AuthRun r(std::format("http://127.0.0.1:{}", server.port()));
+    auto& a = r.auth;
+    const uint64_t login = a.login(kDemoEmail, kDemoPassword);
+    check(r.succeeded(login, "auth.login.ok"), "auth refresh: login");
+    const auto loggedInAt = std::chrono::steady_clock::now();
+    const std::string first = a.accessToken().value_or("");
+    check(r.waitFor([&] { return r.refreshesInFlight() > 0; }), "auth refresh: a refresh starts");
+    check(r.firstRefresh && *r.firstRefresh - loggedInAt < 1s, "auth refresh: it starts before the token expires");
+    const uint64_t me = a.me(); // held until the refresh answers, then sent with the new token
+    check(r.succeeded(me, "auth.me"), "auth refresh: me during a refresh waits for it and uses the new token");
+    r.pumpFor(2000ms);
+    check(fake.refreshes() >= 2, std::format("auth refresh: keeps refreshing ({} refreshes in 2.5 s)", fake.refreshes()));
+    check(r.maxRefreshes == 1, std::format("auth refresh: at most one in flight (saw {})", r.maxRefreshes));
+    check(a.loggedIn() && a.accessToken() != first && !r.event("auth.error") && !r.event("auth.session.expired"),
+          "auth refresh: the session continues with new tokens, no errors");
+
+    fake.refreshFails = true;
+    check(r.waitFor([&] { return r.event("auth.session.expired") != nullptr; }),
+          "auth refresh: a failed refresh publishes auth.session.expired");
+    if (const Json* e = r.event("auth.session.expired"))
+        check(e->value("code", "") == "invalid_refresh_token" && !a.loggedIn() && !a.accessToken(),
+              "auth.session.expired: {code, message}; the session is cleared");
+    check(!r.event("auth.error"), "auth refresh: an expired session is not also an auth.error");
+
+    // A refresh still in flight at logout is ignored when it answers.
+    fake.refreshFails = false;
+    r.events.clear();
+    check(r.succeeded(a.login(kDemoEmail, kDemoPassword), "auth.login.ok"), "auth refresh: log in again");
+    check(r.waitFor([&] { return r.refreshesInFlight() > 0; }), "auth refresh: a refresh starts again");
+    check(r.succeeded(a.logout(), "auth.loggedOut"), "auth refresh: logout during a refresh");
+    r.pumpFor(600ms);
+    check(!a.loggedIn() && r.events.size() == 2, "auth refresh: the late refresh answer doesn't log back in");
+
+    kast::AuthSession adopted{.accessToken = "a", .refreshToken = "r", .expiresIn = 900s,
+                              .account = {{"accountId", 7}, {"email", "editor@test"}, {"role", "gm"}}};
+    a.adopt(adopted);
+    r.pump();
+    const Json* session = r.event("auth.session");
+    check(a.loggedIn() && a.accessToken() == "a" && session && session->value("accountId", 0) == 7,
+          "auth: adopt starts that session and queues auth.session {accountId, email, role}");
+    a.reset();
+    check(!a.enabled() && !a.loggedIn(), "auth: reset() disables and logs out");
+}
+
+// kast.auth in Play: nil while Online Services are off; with them on, every function, events from "kast.auth", the
+// session kept across kast.loadScene, no auth bodies on the bus as net.* events, logged out by Stop.
+void checkAuthLuaApi()
+{
+    const std::filesystem::path off = netProject("kast_auth_off_check");
+    saveScene(off / "off.scene", {"scripts/off.lua"});
+    writeFile(off / "scripts/off.lua", R"(return { init = function() kast.log("auth off: " .. tostring(kast.auth)) end, update = function(dt) end })");
+    {
+        Document doc;
+        std::string error;
+        check(openFile(doc, (off / "off.scene").string(), error), "open the auth-off scene");
+        startPlay(doc);
+        check(playUntil(doc, "auth off: nil"), "kast.auth is nil while Online Services are disabled");
+        stopPlay(doc);
+    }
+
+    FakeAuth fake;
+    Server server(serveFakeAuth(fake));
+    const std::filesystem::path dir = netProject("kast_auth_api_check");
+    writeFile(dir / kast::kProjectFileName,
+              std::format(R"({{"version": 1, "name": "Auth", "startScene": null,
+"online": {{"enabled": true, "authUrl": "http://127.0.0.1:{}"}}}})",
+                          server.port()));
+    saveScene(dir / "a.scene", {"scripts/a.lua"});
+    saveScene(dir / "b.scene", {"scripts/b.lua"});
+    writeFile(dir / "scripts/a.lua", std::format(R"(local function fails(part, fn, ...)
+    local ok, err = pcall(fn, ...)
+    assert(not ok and string.find(err, part, 1, true), "expected '" .. part .. "', got " .. tostring(err))
+end
+return {{
+    init = function()
+        for _, name in ipairs({{"register", "resendVerification", "verifyEmail", "login", "logout", "forgotPassword",
+                               "resetPassword", "me", "realms", "isLoggedIn", "account"}}) do
+            assert(type(kast.auth[name]) == "function", name .. " missing")
+        end
+        assert(kast.auth.accessToken == nil, "no raw tokens in Lua")
+        fails("kast.auth.login: email must be a string, got 1", kast.auth.login, 1, "x")
+        fails("kast.auth.register: password must be a string, got nil", kast.auth.register, "a@b")
+        fails("kast.auth.verifyEmail: token must be a string", kast.auth.verifyEmail, {{}})
+        assert(kast.auth.isLoggedIn() == false and kast.auth.account() == nil)
+        kast.subscribe("auth.login.ok", function(e)
+            assert(kast.auth.isLoggedIn() and kast.auth.account().accountId == 42)
+            kast.log("lua auth login " .. e.accountId .. " " .. e.email .. " " .. e.role)
+            kast.loadScene("b.scene")
+        end)
+        local id = kast.auth.login("{}", "{}")
+        assert(type(id) == "number" and id >= 1)
+    end,
+    update = function(dt) end,
+}}
+)",
+                                                 kDemoEmail, kDemoPassword));
+    writeFile(dir / "scripts/b.lua", R"(return {
+    init = function()
+        assert(kast.auth.isLoggedIn(), "the session survives kast.loadScene")
+        kast.subscribe("auth.realms", function(e) kast.log("lua auth realms " .. #e.realms .. " " .. e.realms[1].name) end)
+        kast.subscribe("auth.me", function(e) kast.log("lua auth me " .. e.account.email) end)
+        kast.subscribe("auth.error", function(e)
+            kast.log(string.format("lua auth error %s %s %d %s", e.op, e.code, e.status, e.details[1].path))
+        end)
+        kast.subscribe("auth.loggedOut", function(e)
+            kast.log("lua auth logged out " .. tostring(kast.auth.isLoggedIn()))
+        end)
+        kast.auth.realms()
+        kast.auth.me()
+        kast.auth.register("x@test", "short")
+    end,
+    update = function(dt) end,
+}
+)");
+    Document doc;
+    std::string error;
+    check(openFile(doc, (dir / "a.scene").string(), error) && doc.project, "open the kast.auth scene");
+    int netResponses = 0;
+    startPlay(doc);
+    kast::EventBus::Subscription sub =
+        doc.lua.bus().subscribe("net.http.response", [&](const nlohmann::json&) { ++netResponses; });
+    check(playUntil(doc, std::format("lua auth login 42 {} player", kDemoEmail)), "kast.auth.login -> auth.login.ok");
+    check(playUntil(doc, "lua auth realms 2 Ashenvale"), "kast.auth.realms -> auth.realms (after a scene switch)");
+    check(playUntil(doc, std::format("lua auth me {}", kDemoEmail)), "kast.auth.me -> auth.me");
+    check(playUntil(doc, "lua auth error register validation_error 400 password"),
+          "kast.auth.register -> auth.error {op, code, status, details}");
+    for (const kast::LuaSystemStatus& s : doc.lua.status())
+        if (!s.ok)
+            kast::log::error(std::format("  {}: {}", s.path, s.error));
+    check(netResponses == 0, "kast.auth's responses are not published as net.http.response");
+    bool fromAuth = false;
+    for (const kast::EventBus::Delivered& d : doc.lua.bus().history())
+        fromAuth |= d.name == "auth.login.ok" && d.publisher == "kast.auth";
+    check(fromAuth, "auth.* events are published by \"kast.auth\"");
+    check(doc.lua.auth().loggedIn() && doc.lua.auth().accessToken() == fake.accessToken(),
+          "C++ reads the Play session's access token through LuaSystems::auth()");
+    std::string history;
+    for (const kast::EventBus::Delivered& d : doc.lua.bus().history())
+        history += d.payload;
+    check(!contains(history, fake.accessToken()) && !contains(history, "refresh-") && !contains(history, kDemoPassword),
+          "no event payload holds a token or the password");
+    stopPlay(doc);
+    check(!doc.lua.auth().loggedIn() && !doc.lua.auth().enabled(), "Stop logs out (the session is memory only)");
+    startPlay(doc);
+    check(doc.lua.auth().enabled() && !doc.lua.auth().loggedIn(), "Play again starts logged out");
+    stopPlay(doc);
+}
+
+// The checks above logged in, refreshed and failed with the demo password and many tokens; none reached the log.
+void checkAuthLogs()
+{
+    const bool leaked = std::ranges::any_of(kast::log::lines(), [](const std::string& line) {
+        // every fake access token starts with base64url({"alg":"none" ...); refresh tokens are "refresh-<n>"
+        return contains(line, kDemoPassword) || contains(line, "long-enough-password") ||
+               contains(line, "eyJhbGciOiJub25lIi") || contains(line, "refresh-");
+    });
+    check(!leaked, "auth: no password or token in the log");
+}
+
+// --- live: kast::AuthClient against the real services/auth (the services/world compose stack) ---
+
+// One GET on net, waited for; the response body as text, or nullopt on any failure.
+std::optional<std::string> fetch(Network& net, const std::string& url)
+{
+    Events ev{net};
+    const uint64_t id = net.request({.url = url, .timeout = 3s});
+    if (!ev.waitFor([&] { return ev.response(id) || ev.response(id, "net.http.error"); }, 5s) || !ev.response(id) ||
+        ev.response(id)->value("status", 0) != 200)
+        return std::nullopt;
+    return ev.response(id)->at("body").get<std::string>();
+}
+
 } // namespace
+
+// kast_self_check --live-auth <authUrl> <mailpitUrl>: registers a fresh account, reads the verification token from
+// Mailpit, verifies, logs in, reads me and realms and logs out. 77 (skipped) when the stack isn't up or registration
+// is rate limited (5/hour/IP); 0 pass, 1 fail.
+int liveAuthCheck(const std::string& authUrl, const std::string& mailpitUrl)
+{
+    constexpr int kSkipped = 77;
+    Network probe;
+    if (!fetch(probe, authUrl + "/health") || !fetch(probe, mailpitUrl + "/api/v1/info")) {
+        kast::log::warn(std::format("SKIPPED: auth ({}) or Mailpit ({}) is not running; start it with "
+                                    "'cd services/world && docker compose up -d --build'",
+                                    authUrl, mailpitUrl));
+        return kSkipped;
+    }
+    const std::string email = std::format("kast-live-{}@example.com",
+                                          std::chrono::system_clock::now().time_since_epoch().count());
+    const std::string password = "live-check-password-1";
+    AuthRun r(authUrl);
+    auto& a = r.auth;
+    const uint64_t reg = a.registerAccount(email, password);
+    if (r.failed(reg, "register", "rate_limited")) {
+        kast::log::warn("SKIPPED: registration is rate limited (5/hour/IP); try again later");
+        return kSkipped;
+    }
+    check(r.nameOf(reg) == "auth.registered", "live: register");
+    std::string token;
+    const auto end = std::chrono::steady_clock::now() + 15s;
+    while (token.empty() && std::chrono::steady_clock::now() < end) {
+        const std::optional<std::string> found = fetch(probe, std::format("{}/api/v1/search?query=to:{}", mailpitUrl, email));
+        const Json list = found ? Json::parse(*found, nullptr, false) : Json();
+        if (list.is_object() && list.contains("messages") && !list["messages"].empty()) {
+            const std::string id = list["messages"][0].value("ID", "");
+            const std::optional<std::string> message = fetch(probe, std::format("{}/api/v1/message/{}", mailpitUrl, id));
+            const Json body = message ? Json::parse(*message, nullptr, false) : Json();
+            const std::string text = body.is_object() ? body.value("Text", "") : "";
+            const std::string marker = "Verification token: ";
+            if (const size_t at = text.find(marker); at != std::string::npos)
+                token = text.substr(at + marker.size(),
+                                    text.find_first_of("\r\n", at + marker.size()) - at - marker.size());
+        }
+        if (token.empty())
+            std::this_thread::sleep_for(250ms);
+    }
+    check(!token.empty(), "live: the verification email reaches Mailpit");
+    check(r.succeeded(a.verifyEmail(token), "auth.emailVerified"), "live: verifyEmail");
+    const uint64_t login = a.login(email, password);
+    check(r.succeeded(login, "auth.login.ok") && r.result(login)->value("email", "") == email, "live: login");
+    const std::string access = a.accessToken().value_or("no token");
+    const uint64_t me = a.me();
+    check(r.succeeded(me, "auth.me") && r.result(me)->at("account").value("emailVerified", false),
+          "live: me (verified)");
+    const uint64_t realms = a.realms();
+    check(r.succeeded(realms, "auth.realms") && r.result(realms)->at("realms").is_array(), "live: realms");
+    if (r.nameOf(realms) == "auth.realms")
+        kast::log::info(std::format("live: {} realm(s)", r.result(realms)->at("realms").size()));
+    check(r.succeeded(a.logout(), "auth.loggedOut") && !a.loggedIn(), "live: logout");
+    for (const NetEvent& e : r.events)
+        if (e.name == "auth.error")
+            kast::log::error(std::format("live: auth.error {}", e.payload.dump()));
+    check(std::ranges::none_of(kast::log::lines(),
+                               [&](const std::string& line) {
+                                   return contains(line, password) || (!token.empty() && contains(line, token)) || contains(line, access);
+                               }),
+          "live: no password or token in the log");
+    if (g_failures == 0)
+        kast::log::info("live auth check passed");
+    return g_failures == 0 ? 0 : 1;
+}
 
 int netSelfCheck()
 {
@@ -798,6 +1212,10 @@ int netSelfCheck()
     checkNetStop();
     checkNetLuaApi();
     checkNetSceneSwitch();
+    checkAuthClient();
+    checkAuthRefresh();
+    checkAuthLuaApi();
+    checkAuthLogs();
     std::error_code ec;
     std::filesystem::remove_all(netRoot(), ec);
     return g_failures;

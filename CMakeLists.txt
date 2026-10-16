@@ -95,7 +95,7 @@ add_library(kast_engine STATIC
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
-  engine/audio.cpp engine/network.cpp ${KAST_ENGINE_SHADERS})
+  engine/audio.cpp engine/network.cpp engine/auth_client.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
@@ -153,6 +153,10 @@ enable_testing()
 set(KAST_TEST_SCENES "${CMAKE_CURRENT_SOURCE_DIR}/tests/scenes")
 set(KAST_TEST_PROJECT "${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
 add_test(NAME engine_self_check COMMAND kast_self_check)
+# kast.auth against the real auth service in the services/world compose stack (cd services/world && docker compose
+# up -d --build); skipped, not failed, when it isn't running.
+add_test(NAME auth_live COMMAND kast_self_check --live-auth http://localhost:3100 http://localhost:8026)
+set_tests_properties(auth_live PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
 add_test(NAME editor_smoke
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/smoke.png"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
@@ -1040,6 +1044,47 @@ add_test(NAME build_online_bad_ca
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_bad_ca"
           "-DOUT=${KAST_GAME_OUT}/online_bad_ca" -DEXPECT=1 "-DEXPECT_OUTPUT=CA file 'certs/missing.pem' is missing"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+# kast.auth: tests/project/online_auth.scene (scripts/online_auth_demo.lua) logs in and lists the realms against
+# kast_net_test_server's fake auth service. online_auth's Network panel screenshot uses the "/stall" base path, so the
+# login request is still in flight when it is taken.
+foreach(online "online_auth|Online Auth Test|http://127.0.0.1:47705" "online_auth_stall|Online Auth Test|http://127.0.0.1:47705/stall")
+  string(REPLACE "|" ";" online "${online}")
+  list(GET online 0 name)
+  list(GET online 1 project_name)
+  list(GET online 2 auth_url)
+  kast_game_project(${name} "${project_name}" online_auth.scene FALSE)
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/game_projects/${name}/project.kast"
+       "{
+  \"version\": 1,
+  \"name\": \"${project_name}\",
+  \"startScene\": \"online_auth.scene\",
+"
+       "  \"online\": {
+    \"enabled\": true,
+    \"authUrl\": \"${auth_url}\"
+  }
+}
+")
+endforeach()
+set(KAST_AUTH_DEMO_PASS "scripts/online_auth_demo.lua: 2 realm.s.: Ashenvale .online. 127.0.0.1:4000, Duskmoor .maintenance. 127.0.0.1:4001")
+add_test(NAME build_game_online_auth
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_auth"
+          "-DOUT=${KAST_GAME_OUT}/online_auth" "-DEXE=Online Auth Test.exe" -DEXPECT=0
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+set_tests_properties(build_game_online_auth PROPERTIES FIXTURES_SETUP game_online_auth_built)
+add_test(NAME player_online_auth_demo
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/online_auth" "-DEXE=Online Auth Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/online_auth.run" "-DWRAPPER=${KAST_NET_SERVER}" -DEXPECT=0
+          "-DEXPECT_OUTPUT=${KAST_AUTH_DEMO_PASS}" "-DEXTRA_ARGS=--frames 300 --no-audio-device"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_online_auth_demo PROPERTIES FIXTURES_REQUIRED game_online_auth_built
+                     RESOURCE_LOCK net_test_ports TIMEOUT 90)
+add_test(NAME auth_play_network_panel
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/auth_play_network.png"
+          "-DWRAPPER=${KAST_NET_SERVER}"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_auth_stall/online_auth.scene --play --no-audio-device"
+          -DFOCUS_PANEL=Network -DFRAMES=120 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(auth_play_network_panel PROPERTIES RESOURCE_LOCK net_test_ports TIMEOUT 90)
 
 # --- game GUI (RmlUi) and the GUI Builder ---
 # Play: tests/project/ui.scene shows ui/main_menu.rml over the Game view; configure-time copies (in health_project) with

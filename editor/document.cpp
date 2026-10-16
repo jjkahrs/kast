@@ -222,9 +222,13 @@ void startPlay(Document& doc)
         doc.playSceneName.clear();
         ++doc.playGeneration;
         doc.scene.registry().clear<kast::AnimatorState>(); // Play starts clips from 0, not from the Edit preview
+        std::optional<kast::AuthConfig> auth;
+        if (std::string error; doc.project && !(auth = kast::authConfig(*doc.project, error)) && !error.empty())
+            kast::log::error(std::format("Online Services: {}; kast.auth is off for this Play session", error));
         doc.lua.start(doc.scene, doc.project ? std::optional(doc.project->root) : std::nullopt, projectScenePath(doc),
                       &doc.input, doc.project ? doc.project->stateMachines.value_or(std::vector<std::string>{})
-                                              : std::vector<std::string>{});
+                                              : std::vector<std::string>{},
+                      std::move(auth));
         if (doc.project)
             doc.lua.audio().setMix(doc.project->audio);
     }
