@@ -1,6 +1,7 @@
 #include "runtime.h"
 #include "../core/log.h"
 #include "../world/components.h"
+#include "lua_state_machines.h"
 #include "sandbox.h"
 
 #include <messages.h>
@@ -40,6 +41,22 @@ struct System {
 
 uint32_t wire(entt::entity e) { return entt::to_integral(e); }
 
+// The writable StateMachine built-in, stored like a Lua component that is never persisted or replicated: kast.add/set/
+// get/has/remove/query and their checks work on it unchanged, and World (persistence, replication) never sees it.
+Defs with_state_machine(Defs defs) {
+    auto def = std::make_shared<ComponentDef>();
+    def->name = def->displayName = kStateMachineComponent;
+    def->path = "(built-in)";
+    for (const char* name : {"machine", "initialState"}) {
+        FieldDesc& field = def->fields.emplace_back();
+        field.name = name;
+        field.kind = FieldKind::String;
+        field.defaultValue = "";
+    }
+    defs.push_back(std::move(def));
+    return defs;
+}
+
 } // namespace
 
 struct Runtime::Impl {
@@ -47,17 +64,21 @@ struct Runtime::Impl {
     Defs defs;
     sol::state lua;
     sol::table api;
+    sol::table fsmApi;                     // kast.fsm.*
     EventBus bus;                          // after lua: Lua subscribers hold functions of that state
+    StateMachines fsm{bus, reg};           // after lua: its definitions hold Lua callbacks
     std::vector<System> systems;           // after bus: their subscriptions unsubscribe from it
     std::vector<ClientEvent> clientEvents; // kast.sendTo/sendNearby/broadcast since the last take
     System* current = nullptr;
+    std::string callbackPath; // the definition file whose enter/exit is running, if no system is
 
-    Impl(entt::registry& r, Defs d) : reg(r), defs(std::move(d)) {
+    Impl(entt::registry& r, Defs d) : reg(r), defs(with_state_machine(std::move(d))) {
         open_sandbox(lua);
         bind_api();
+        bind_fsm_api();
     }
 
-    std::string who() const { return current ? current->path : std::string("lua"); }
+    std::string who() const { return current ? current->path : callbackPath.empty() ? std::string("lua") : callbackPath; }
 
     // Runs fn; returns the error ("path:line: message"), empty on success.
     template <class... Args>
@@ -142,8 +163,98 @@ struct Runtime::Impl {
 
     sol::environment environment() {
         sol::environment env = sandbox_environment(lua);
-        env["kast"] = read_only(api);
+        sol::table kast = lua.create_table();
+        for (const auto& [key, value] : api) kast[key] = value;
+        kast["fsm"] = read_only(fsmApi);
+        env["kast"] = read_only(kast);
         return env;
+    }
+
+    // Loads the definitions (callbacks bound to this state) and lists the game machines; every error.
+    std::vector<std::string> load_machines(const std::filesystem::path& root, std::vector<std::string> gameMachines) {
+        StateMachineDefinitions loaded = parse_state_machine_definitions(
+            lua, root, [this] { return environment(); },
+            [this](const sol::protected_function& fn, const std::string& path, const std::string& what) {
+                return bind_callback(fn, path, what);
+            });
+        for (std::string& e : fsm.setup(std::move(loaded.valid), std::move(gameMachines)))
+            loaded.errors.push_back(std::move(e));
+        return std::move(loaded.errors);
+    }
+
+    // An enter/exit callback: an error (with its traceback) is logged, and no system is disabled.
+    StateCallback bind_callback(const sol::protected_function& fn, const std::string& path, const std::string& what) {
+        return [this, callback = fn, path, what](const Transition& t) {
+            sol::table ctx = lua.create_table();
+            ctx["machine"] = t.machine;
+            if (t.entity) ctx["entity"] = *t.entity;
+            if (t.from) ctx["from"] = *t.from;
+            ctx["to"] = t.to;
+            System* caller = std::exchange(current, nullptr); // a system's kast.fsm.change may have called this
+            std::string callerPath = std::exchange(callbackPath, path);
+            std::string error;
+            try {
+                const ScriptBudget budget(lua.lua_state());
+                sol::protected_function_result result = callback(ctx);
+                if (!result.valid()) error = result.get<sol::error>().what();
+            } catch (const std::exception& e) { // sol2 conversions; nothing may escape to the tick
+                error = std::format("{}: {}", path, e.what());
+            }
+            current = caller;
+            callbackPath = std::move(callerPath);
+            if (!error.empty()) log::error(std::format("State machine {}: {} failed: {}", path, what, error));
+        };
+    }
+
+    // kast.fsm.*: thin wrappers over StateMachines, whose std::invalid_argument (a bad target) becomes a Lua error at
+    // the calling line. Copied from the engine's bindFsmApi.
+    void bind_fsm_api() {
+        using Target = StateMachines::Target;
+        const auto target = [](lua_State* L, const char* function, const sol::object& value) -> Target {
+            if (value.get_type() == sol::type::string) return value.as<std::string>();
+            if (value.get_type() == sol::type::number) {
+                const double id = value.as<double>();
+                if (id >= 0.0 && id <= 4294967295.0 && id == std::floor(id)) return static_cast<EntityId>(id);
+                raise(L, std::format("{}: invalid entity id {}", function, to_string(L, value)));
+            }
+            raise(L, std::format("{}: target must be a state machine name or an entity id, got {}", function,
+                                 to_string(L, value)));
+        };
+        const auto stateName = [](lua_State* L, const char* function, const sol::object& value) {
+            if (value.get_type() != sol::type::string)
+                raise(L, std::format("{}: state must be a string, got {}", function, to_string(L, value)));
+            return value.as<std::string>();
+        };
+        // Runs body; a bad target raises at the calling line.
+        const auto guarded = [](lua_State* L, const char* function, auto&& body) {
+            try {
+                return body();
+            } catch (const std::invalid_argument& e) {
+                raise(L, std::format("{}: {}", function, e.what()));
+            }
+        };
+
+        fsmApi = lua.create_table();
+        fsmApi.set_function("state", [this, target, guarded](sol::this_state L, const sol::object& t) {
+            const Target machine = target(L, "kast.fsm.state", t);
+            return guarded(L, "kast.fsm.state", [&] { return fsm.state(machine); });
+        });
+        fsmApi.set_function("change", [this, target, stateName, guarded](sol::this_state L, const sol::object& t,
+                                                                         const sol::object& state) {
+            const Target machine = target(L, "kast.fsm.change", t);
+            const std::string to = stateName(L, "kast.fsm.change", state);
+            return guarded(L, "kast.fsm.change", [&] { return fsm.change(machine, to); });
+        });
+        fsmApi.set_function("canChange", [this, target, stateName, guarded](sol::this_state L, const sol::object& t,
+                                                                            const sol::object& state) {
+            const Target machine = target(L, "kast.fsm.canChange", t);
+            const std::string to = stateName(L, "kast.fsm.canChange", state);
+            return guarded(L, "kast.fsm.canChange", [&] { return fsm.canChange(machine, to); });
+        });
+        fsmApi.set_function("states", [this, target, guarded](sol::this_state L, const sol::object& t) {
+            const Target machine = target(L, "kast.fsm.states", t);
+            return sol::as_table(guarded(L, "kast.fsm.states", [&] { return fsm.states(machine); }));
+        });
     }
 
     // Entities are server wire ids; only player characters exist.
@@ -207,6 +318,7 @@ struct Runtime::Impl {
 
     void changed(entt::entity e, const ComponentDef& def) {
         if (def.persist) reg.emplace_or_replace<world::Dirty>(e); // replication diffs on its own
+        if (def.name == kStateMachineComponent) fsm.syncEntity(e); // a new "machine" enters its initial state now
     }
 
     void bind_api() {
@@ -361,7 +473,9 @@ struct Runtime::Impl {
 Runtime::Runtime(entt::registry& reg, Defs defs) : impl_(std::make_unique<Impl>(reg, std::move(defs))) {}
 Runtime::~Runtime() = default;
 
-std::vector<std::string> Runtime::load(const std::filesystem::path& root) {
+std::vector<std::string> Runtime::load(const std::filesystem::path& root, std::vector<std::string> gameMachines) {
+    // Definitions first: an init may already use kast.fsm.
+    std::vector<std::string> errors = impl_->load_machines(root, std::move(gameMachines));
     std::vector<std::filesystem::path> files;
     std::error_code ec;
     for (auto it = std::filesystem::directory_iterator(root / "systems", ec);
@@ -369,7 +483,6 @@ std::vector<std::string> Runtime::load(const std::filesystem::path& root) {
         if (it->is_regular_file(ec) && it->path().extension() == ".lua") files.push_back(it->path());
     std::ranges::sort(files, {}, [](const auto& f) { return f.filename(); });
 
-    std::vector<std::string> errors;
     impl_->systems.reserve(files.size()); // subscriptions point at their System
     for (const auto& file : files) {
         System& system = impl_->systems.emplace_back();
@@ -380,6 +493,7 @@ std::vector<std::string> Runtime::load(const std::filesystem::path& root) {
             errors.push_back(std::move(error));
         }
     }
+    if (errors.empty()) impl_->fsm.enterAll(); // the server won't start otherwise
     return errors;
 }
 
@@ -403,6 +517,8 @@ void Runtime::shutdown() {
 void Runtime::drain_events() { impl_->bus.drain(); }
 
 EventBus& Runtime::bus() { return impl_->bus; }
+
+StateMachines& Runtime::fsm() { return impl_->fsm; }
 
 std::vector<ClientEvent> Runtime::take_client_events() { return std::exchange(impl_->clientEvents, {}); }
 

@@ -1,10 +1,12 @@
 // Server Lua systems: LUA_ROOT/systems/*.lua, run in alphabetical filename order on the tick thread, one Lua state,
 // each file in its own sandboxed environment. A file returns { init?, update(dt), shutdown?, onEnter?(e), onLeave?(e) }
-// and reaches the world only through kast.* over the registry and the event bus (README "Lua components and systems").
+// and reaches the world only through kast.* over the registry, the event bus and the state machines (README "Lua
+// components and systems").
 // sol2 stays inside runtime.cpp: World holds a Runtime without seeing Lua types.
 #pragma once
 #include "components.h"
 #include "event_bus.h"
+#include "state_machines.h"
 
 #include <entt/entity/registry.hpp>
 
@@ -37,9 +39,11 @@ public:
     Runtime(const Runtime&) = delete;
     Runtime& operator=(const Runtime&) = delete;
 
-    // Loads every system under root/systems/ and runs each init. Returns every error; non-empty means the server must
-    // not start. A missing folder is no systems.
-    std::vector<std::string> load(const std::filesystem::path& root);
+    // Loads the state machine definitions under root/fsms/, then every system under root/systems/ and runs each init,
+    // then the game machines (gameMachines, by name) enter their initial state. Returns every error (a rejected
+    // definition, a listed machine without one, a bad system); non-empty means the server must not start. A missing
+    // folder is no machines / no systems.
+    std::vector<std::string> load(const std::filesystem::path& root, std::vector<std::string> gameMachines = {});
     // A runtime error in any of these disables only that system (logged with path:line) until restart.
     void update(float dt);
     void enter(entt::entity e); // onEnter: after the character spawned and its persisted components were restored
@@ -50,6 +54,7 @@ public:
     // Delivers the bus events queued so far (see EventBus::drain). A failing Lua subscriber disables its system.
     void drain_events();
     EventBus& bus();
+    StateMachines& fsm();
     // The client events queued since the last call, in call order.
     std::vector<ClientEvent> take_client_events();
 

@@ -16,11 +16,14 @@ services:
       TLS_DEV_CERT_DIR: /app/certs
       MIGRATIONS_DIR: /app/migrations
       LUA_ROOT: /app/lua
+      # The sample's game state machine (lua/fsms/zone_cycle.lua); set GAME_STATE_MACHINES in .env to override.
+      GAME_STATE_MACHINES: ${GAME_STATE_MACHINES-zone_cycle}
     ports:
       - "${WORLD_HOST_PORT:-7777}:7777"
     volumes:
       - world-certs:/app/certs
-      # Lua components and systems (README "Lua components and systems"): edit, then `docker compose restart world`.
+      # Lua components, state machines and systems (README "Lua components and systems"): edit, then
+      # `docker compose restart world`.
       # Point the left side at a game project folder to share its components/ with the client.
       - ./lua:/app/lua:ro
     depends_on:

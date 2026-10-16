@@ -55,8 +55,10 @@ add_library(world_core STATIC
   server/world/world.cpp
   server/lua/components.cpp
   server/lua/event_bus.cpp
+  server/lua/lua_state_machines.cpp
   server/lua/runtime.cpp
   server/lua/sandbox.cpp
+  server/lua/state_machines.cpp
   server/app/game_server.cpp
 )
 target_include_directories(world_core PUBLIC server)

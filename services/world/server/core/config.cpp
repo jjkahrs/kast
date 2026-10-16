@@ -1,5 +1,6 @@
 #include "config.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cstdlib>
 #include <limits>
@@ -35,6 +36,20 @@ public:
         }
         out = parsed;
         return true;
+    }
+
+    // Comma-separated; spaces around names and empty entries are ignored.
+    void list(const char* name, std::vector<std::string>& out) {
+        auto v = env_(name);
+        if (!v) return;
+        for (size_t start = 0; start <= v->size();) {
+            const size_t end = std::min(v->find(',', start), v->size());
+            std::string item = v->substr(start, end - start);
+            item.erase(0, item.find_first_not_of(" \t"));
+            item.erase(item.find_last_not_of(" \t") + 1);
+            if (!item.empty()) out.push_back(std::move(item));
+            start = end + 1;
+        }
     }
 
     void opt_float(const char* name, std::optional<float>& out, double min, double max) {
@@ -139,6 +154,7 @@ ConfigResult load_config(const EnvLookup& env) {
     l.num("SHUTDOWN_TIMEOUT_MS", c.shutdownTimeoutMs, 100, u32max);
     l.num("TICK_STATS_INTERVAL_SECONDS", c.tickStatsIntervalSec, 1, 86400);
     l.str("LUA_ROOT", c.luaRoot);
+    l.list("GAME_STATE_MACHINES", c.gameStateMachines);
 
     std::string level;
     l.str("LOG_LEVEL", level);

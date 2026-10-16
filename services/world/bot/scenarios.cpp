@@ -701,6 +701,46 @@ asio::awaitable<void> events(Ctx& x) {
     a->close();
 }
 
+// --- 15: state machines, with the sample lua/fsms/locomotion.lua and lua/systems/locomotion.lua ---
+
+// The locomotion machine's "fsm.state" events as "from->to" ("nil" on the first entry), in arrival order.
+std::vector<std::string> transitions(const std::vector<proto::Message>& msgs) {
+    std::vector<std::string> out;
+    for (const auto& e : only<proto::ServerEvent>(msgs)) {
+        auto data = nlohmann::json::parse(e.json, nullptr, false);
+        if (e.name != "fsm.state" || !data.is_object() || data.value("machine", "") != "locomotion") continue;
+        out.push_back((data.contains("from") ? data["from"].get<std::string>() : "nil") + "->" + data.value("to", ""));
+    }
+    return out;
+}
+
+std::string joined(const std::vector<std::string>& items) {
+    std::string out;
+    for (const auto& i : items) out += (out.empty() ? "" : ", ") + i;
+    return "[" + out + "]";
+}
+
+// A enters: only nil->idle (onEnter's idle->idle is denied and sends nothing). A walks: idle->moving, then, after
+// standing still for a second, moving->idle. B, in view all along, gets only its own nil->idle (sendTo is owner-only).
+asio::awaitable<void> fsm(Ctx& x) {
+    proto::EnterWorldOk ea, eb;
+    auto b = co_await x.enter("s15b", eb);
+    if (!b) co_return;
+    auto a = co_await x.enter("s15a", ea);
+    if (!a) co_return;
+    const auto entered = transitions(co_await drain(*a, Millis(1000)));
+    x.check.expect(entered == std::vector<std::string>{"nil->idle"},
+                   "entering: nil->idle only, the denied idle->idle sends nothing (got " + joined(entered) + ")");
+    co_await walk(*a, ea.pos, 10, 0);
+    const auto walked = transitions(co_await drain(*a, Millis(2000)));
+    x.check.expect(walked == std::vector<std::string>{"idle->moving", "moving->idle"},
+                   "walking then stopping: idle->moving, moving->idle (got " + joined(walked) + ")");
+    const auto seen = transitions(co_await drain(*b, Millis(100)));
+    x.check.expect(seen == std::vector<std::string>{"nil->idle"}, "B gets only its own transition (got " + joined(seen) + ")");
+    a->close();
+    b->close();
+}
+
 } // namespace
 
 int run_scenario(const Options& o) {
@@ -714,7 +754,7 @@ int run_scenario(const Options& o) {
         {"malformed", malformed},       {"handshake", handshake_rejects}, {"duplicate", duplicate_login},
         {"persist", persist_relogin},   {"shutdown", shutdown_phase1}, {"restart-verify", restart_verify},
         {"dbdown", db_down},            {"components", components},   {"components-verify", components_verify},
-        {"events", events},
+        {"events", events},             {"fsm", fsm},
     };
     auto it = all.find(o.scenario);
     if (it == all.end()) {

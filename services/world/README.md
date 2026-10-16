@@ -6,7 +6,7 @@ MMORPG world server for Kast, written in C++20. It covers the following:
 - **Characters:** clients create, list and delete characters, then enter one bounded zone.
 - **Movement:** the server validates every move (bounds and max speed) and replicates it to nearby players through grid-based interest management.
 - **Chat:** "say" chat reaches everyone in range.
-- **Lua:** game-defined components and server-authoritative systems on the tick, persisted per character and replicated to clients (see "Lua components and systems").
+- **Lua:** game-defined components, state machines and server-authoritative systems on the tick, persisted per character and replicated to clients (see "Lua components and systems").
 - **Architecture:** an EnTT ECS runs on a fixed 20 Hz tick, and characters persist to MySQL on a worker thread, so the tick never waits on the database.
 
 The wire format is in [`PROTOCOL.md`](PROTOCOL.md).
@@ -14,10 +14,10 @@ The wire format is in [`PROTOCOL.md`](PROTOCOL.md).
 | Dir | What |
 |---|---|
 | `protocol/` | Static lib: frame codec, opcodes and message structs. No Asio, DB or ECS, so a game client can reuse it |
-| `server/` | `kast_world`: `core/` (config, log, clock, limits), `net/` (TLS, sessions), `auth/` (JWKS, JWT), `db/` (MySQL, migrations, worker), `world/` (ECS components and systems), `lua/` (Lua sandbox, component definitions, systems runtime), `app/` (glue) |
+| `server/` | `kast_world`: `core/` (config, log, clock, limits), `net/` (TLS, sessions), `auth/` (JWKS, JWT), `db/` (MySQL, migrations, worker), `world/` (ECS components and systems), `lua/` (Lua sandbox, component and state machine definitions, systems runtime, event bus, state machines), `app/` (glue) |
 | `bot/` | `kast_bot`: headless test client covering auth HTTP, Mailpit verification, TLS, scripted scenarios and load mode |
 | `migrations/` | `NNN_name.sql`, applied in order at startup |
-| `lua/` | Sample Lua components and systems (`LUA_ROOT` in the image) |
+| `lua/` | Sample Lua components, state machines and systems (`LUA_ROOT` in the image) |
 | `tests/` | `self_check.cpp` + `lua_checks.cpp` (ctest), `integration.sh`, `load.sh`, `docs_check.sh` |
 
 ## Setup
@@ -63,15 +63,15 @@ To run the server on the host against the compose MySQL and auth, point `.env` a
 
 | Command | What |
 |---|---|
-| `ctest --preset debug` | Self-check: codec round trip for every message, frame rejection, names, movement, AOI, chat, rate limits, config, tick stats, JWT and JWKS with local RSA keys. Lua (`tests/lua_checks.cpp`): definition parsing (every type, option, new key and error case), reserved and duplicate names, sandbox, `kast.*` semantics and every `set` error, hook order, an error disabling one system, startup errors listed in full, persistence round trip + drift + verbatim preservation, and replication routing (owner / aoi / none, AOI-enter full set, unchanged not resent, nothing after `Despawn`, oversize) |
+| `ctest --preset debug` | Self-check: codec round trip for every message, frame rejection, names, movement, AOI, chat, rate limits, config, tick stats, JWT and JWKS with local RSA keys. Lua (`tests/lua_checks.cpp`): definition parsing (every type, option, new key and error case), reserved and duplicate names, sandbox, `kast.*` semantics and every `set` error, hook order, an error disabling one system, startup errors listed in full, persistence round trip + drift + verbatim preservation, and replication routing (owner / aoi / none, AOI-enter full set, unchanged not resent, nothing after `Despawn`, oversize). State machines: definition parsing and every rejection, duplicate names, `GAME_STATE_MACHINES` startup errors, `allowedFrom` / omitted / `"*"` / self-transition rules, callback and event order, queued changes, callback errors and timeouts, game machine startup, the `StateMachine` built-in lifecycle (not persisted or replicated), every `kast.fsm` misuse, read-only `kast.fsm`, and C++ / Lua parity |
 | `docker compose build` | Linux build; the self-check runs inside it |
-| `bash tests/integration.sh` | All 13 integration scenarios against the running stack. Prints PASS/FAIL each and exits non-zero on any failure |
+| `bash tests/integration.sh` | All 15 integration scenarios against the running stack. Prints PASS/FAIL each and exits non-zero on any failure |
 | `bash tests/load.sh` | Load test: 500 `wander` bots for 300 s (`COUNT`, `DURATION`, `BEHAVIOUR`, `THREADS` override) |
 | `bash tests/docs_check.sh` | Every opcode, code and env var in the source appears in PROTOCOL.md / README.md |
 | `docker compose run --rm bot --scenario aoi` | One scenario |
 | `docker compose run --rm bot --mode load --count 50 --behaviour chat --duration 60` | Ad-hoc load |
 
-**Scenario names:** `auth`, `characters`, `ownership`, `aoi`, `chat`, `speedhack`, `malformed`, `handshake`, `duplicate`, `persist`, `shutdown`, `restart-verify`, `dbdown`, `components`, `components-verify` (`--expect-components gold,health`, after a restart).
+**Scenario names:** `auth`, `characters`, `ownership`, `aoi`, `chat`, `speedhack`, `malformed`, `handshake`, `duplicate`, `persist`, `shutdown`, `restart-verify`, `dbdown`, `components`, `components-verify` (`--expect-components gold,health`, after a restart), `events`, `fsm`.
 
 **Scenario 13 (`components`):** needs the sample `lua/`. A and B are in range. A gets its own `Health` and `Wallet`; B gets A's `Health` but never A's `Wallet`; `Spawn` comes before data; unchanged values are not resent; nothing follows `Despawn`. A walks and its `Health` drains. After a relog, A's `Health` and `Wallet` were persisted. A client `ComponentUpdate` gets `unexpected_message`. Then `world` restarts and `components-verify` checks both values again.
 
@@ -91,7 +91,7 @@ To run the server on the host against the compose MySQL and auth, point `.env` a
 - **Source:** every setting comes from an environment variable, validated at startup.
 - **Invalid values:** the server lists every bad or missing variable and exits with status 1.
 - **Env files:** `.env.example` is committed; `.env` is gitignored.
-- **Compose overrides:** in compose, `DB_HOST`, `DB_PORT`, `AUTH_JWKS_URL`, `WORLD_PORT`, `TLS_DEV_CERT_DIR`, `MIGRATIONS_DIR` and `LUA_ROOT` are overridden with in-network values.
+- **Compose overrides:** in compose, `DB_HOST`, `DB_PORT`, `AUTH_JWKS_URL`, `WORLD_PORT`, `TLS_DEV_CERT_DIR`, `MIGRATIONS_DIR` and `LUA_ROOT` are overridden with in-network values. `GAME_STATE_MACHINES` defaults to the sample's `zone_cycle` unless `.env` sets it.
 
 | Variable | Default | Notes |
 |---|---|---|
@@ -138,7 +138,8 @@ To run the server on the host against the compose MySQL and auth, point `.env` a
 | `SAVE_RETRY_MIN_MS` / `SAVE_RETRY_MAX_MS` | `500` / `30000` | Exponential backoff for failed saves |
 | `SHUTDOWN_TIMEOUT_MS` | `10000` | Graceful-shutdown budget, from the signal to exit |
 | `TICK_STATS_INTERVAL_SECONDS` | `10` | How often tick p50/p99/max is logged |
-| `LUA_ROOT` | `/app/lua` | Folder with `components/` and `systems/` (see "Lua components and systems"). Missing or empty: no Lua. `.env.example` sets `./lua` for running on the host |
+| `LUA_ROOT` | `/app/lua` | Folder with `components/`, `fsms/` and `systems/` (see "Lua components and systems"). Missing or empty: no Lua. `.env.example` sets `./lua` for running on the host |
+| `GAME_STATE_MACHINES` | *(empty)* | Comma-separated names of `fsms/` definitions to run as game state machines (see "State machines"). Empty or unset: none. A name with no valid definition refuses the start. `.env.example` and compose set `zone_cycle` |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
 **Compose only** (`docker-compose.yml`, not read by the server):
@@ -257,14 +258,15 @@ server replicates to the matching component on the local player and on remote cl
 | Path | What |
 |---|---|
 | `LUA_ROOT/components/**/*.lua` | Component definitions, scanned recursively, one type per file |
+| `LUA_ROOT/fsms/**/*.lua` | State machine definitions, scanned recursively, one machine per file |
 | `LUA_ROOT/systems/*.lua` | Systems, not recursive, run in alphabetical filename order |
 
 - **`LUA_ROOT`:** defaults to `/app/lua`. The image ships the sample from `services/world/lua/` there, and compose bind-mounts `./lua` over it.
 - **Loading:** files are loaded once at startup; there is no hot reload. After an edit, restart the server (`docker compose restart world`).
-- **Errors refuse the start:** an invalid definition or system file, or an error in a system's `init`, stops the start. The server logs every error, not just the first, one `Lua error` line each. Each starts with the file path (and `path:line` for Lua errors); a `startup failed: Lua` line and exit status 1 follow.
-- **No Lua is fine:** a missing or empty `LUA_ROOT` means no custom components or systems, with an info log.
+- **Errors refuse the start:** an invalid component or state machine definition, an invalid system file, a `GAME_STATE_MACHINES` name with no valid definition, or an error in a system's `init` stops the start. The server logs every error, not just the first, one `Lua error` line each. Each starts with the file path (and `path:line` for Lua errors); a `startup failed: Lua` line and exit status 1 follow.
+- **No Lua is fine:** a missing or empty `LUA_ROOT` means no custom components, state machines or systems, with an info log.
 
-**Sharing with a game project:** point the bind mount (or `LUA_ROOT`, when running on the host) at a folder whose `components/` is the game project's. For example, change the volume to `- ../../my-game:/app/lua:ro`, which holds `components/` and a `systems/` folder the client never runs. Client and server then read the same definition files.
+**Sharing with a game project:** point the bind mount (or `LUA_ROOT`, when running on the host) at a folder whose `components/` and `fsms/` are the game project's. For example, change the volume to `- ../../my-game:/app/lua:ro`, which holds `components/`, `fsms/` and a `systems/` folder the client never runs. Client and server then read the same definition files.
 
 ### Component definitions
 
@@ -295,7 +297,7 @@ return {
 ```
 
 - **Invalid values:** a bad `persist` or `replicate` is a definition error.
-- **Reserved names:** a definition may not be named `Character` or `Transform` (the read-only built-ins), or after any server C++ component (`SessionLink`, `CharacterRef`, `MoveState`, `PendingMoves`, `PendingSay`, `ChatLimit`, `AoiCell`, `Visible`, `Moved`, `Dirty`, `SaveTimer`, `ReplicatedState`, `ScriptsLeft`, `PreservedComponents`, `ComponentData`).
+- **Reserved names:** a definition may not be named `Character`, `Transform` or `StateMachine` (the built-ins), or after any server C++ component (`SessionLink`, `CharacterRef`, `MoveState`, `PendingMoves`, `PendingSay`, `ChatLimit`, `AoiCell`, `Visible`, `Moved`, `Dirty`, `SaveTimer`, `ReplicatedState`, `ScriptsLeft`, `PreservedComponents`, `ComponentData`, `StateMachineRuntime`).
 - **Duplicates:** two files declaring the same name are both rejected, each error naming the other file, whatever the scan order.
 
 ### Systems
@@ -332,16 +334,19 @@ return {
 | `kast.sendTo(e, name [, payload])` | Sends the event to character `e`'s client only |
 | `kast.sendNearby(e, name [, payload])` | Sends the event to `e`'s client and every client that currently sees `e` (the `replicate = "aoi"` audience) |
 | `kast.broadcast(name [, payload])` | Sends the event to every player in the zone |
+| `kast.fsm.state/change/canChange/states(target [, state])` | Game and character state machines (see [State machines](#state-machines)) |
 
 - **Entities:** an entity is the character's server wire id, the integer clients see as `entityId`.
 - **Players only:** only player characters exist. There is no `kast.create` / `kast.destroy`, and no NPCs.
 - **`kast` is read-only:** assigning to it raises an error.
 - **Read-only built-ins:** every character has these two. `get`, `has` and `query` work on them; `set` and `add` raise `"<name>" is read-only on the server`, and `remove` raises `"<name>" cannot be removed`.
+- **Writable built-in:** `StateMachine` (`machine`, `initialState`, both strings) works with every function, like a Lua component that is never persisted or replicated (see [State machines](#state-machines)).
 
 | Name | Fields |
 |---|---|
 | `Character` | `charId`, `name` |
 | `Transform` | `position = {x, y, z}`, `heading` (radians). Moves come only from the validated client movement |
+| `StateMachine` | `machine`, `initialState` (writable; added only by `kast.add`) |
 
 ### Events
 
@@ -376,6 +381,56 @@ the three send functions put anything on the network.
 existing 1 MiB per-session send-buffer cap stops a flood, by disconnecting the client. `broadcast` reaches every
 player, so one call per player costs N² messages in a zone of N. `sendNearby` in a crowd costs about the same. Send on
 game events (a login, a kill, a quest step), never every tick.
+
+### State machines
+
+Server Lua and server C++ can drive finite state machines with the engine's definition files and rules (root README,
+"State machines"). That section is the spec for the file format, validation and its messages, `ctx`, the transition
+rules, and the `kast.fsm` API. A game project's `fsms/` folder can be shared with the server like `components/`. The
+port lives in `server/lua/state_machines.*` and `server/lua/lua_state_machines.*`.
+
+- **Definitions:** `LUA_ROOT/fsms/**/*.lua`, one machine per file, loaded once at startup before the systems' `init`.
+  Each file runs in its own sandboxed environment with the full read-only `kast` API. `kast.log` from a callback is
+  prefixed with the definition path (`fsms/door.lua: ...`). A missing `fsms/` folder means no machines.
+- **Game machines:** `GAME_STATE_MACHINES` lists them by name. After every system's `init`, each enters its `initial`
+  state: `enter` runs with `ctx.from = nil`, and no `fsm.changed` is published. A machine that `kast.fsm.*` touches during
+  an `init` enters right then, once. Game machines run for the server's lifetime; shutdown runs no `exit`.
+- **Character machines:** use the writable built-in `StateMachine` (`machine`, `initialState`) through `kast.add`,
+  `kast.set`, `kast.get`, `kast.has`, `kast.remove` and `kast.query`.
+  - `kast.add` alone leaves `machine` empty: there is no machine yet, and `kast.fsm.*` on that character raises.
+  - Setting `machine` enters that machine's initial state at once. That is `initialState` if it names a state,
+    otherwise the definition's `initial`, with a warning. `from` is `nil` and no event is published.
+  - Changing `machine` enters the new machine's initial state, with no `exit` of the old one. Changing only
+    `initialState` does nothing. A `machine` with no valid definition is logged once.
+  - Removal, logout and graceful shutdown just drop the machine, with no `exit`.
+  - The typical use is a system's `onEnter` adding and setting it (see the sample).
+- **Not persisted, not replicated:** `StateMachine` and the current state never reach MySQL (the `components` column)
+  or clients. A character starts its machine again from the initial state on every login. To tell clients about a
+  transition, send it from `enter` (`kast.sendTo` / `sendNearby`).
+- **Events:** `fsm.changed` `{machine, entity, from, to}` goes on the server's event bus, with `entity` `null` for game
+  machines and the publisher set to the definition path. It is delivered at the normal drain (see [Events](#events)), so
+  a transition made in `update` reaches subscribers in the same tick.
+- **Callback errors:** an error in `enter` or `exit` is logged as `State machine fsms/door.lua: enter "open" failed:
+  fsms/door.lua:5: ...` with a traceback. The transition still commits and the machine stays usable; no system is
+  disabled. A callback runs under the 2 s script budget of whatever entered Lua. When a system's `kast.fsm.change`
+  triggers a runaway callback, the callback is stopped and logged, and then that system is disabled too, because they
+  share one budget (as in the engine).
+- **Misuse:** every bad `kast.fsm.*` argument raises at the calling line, which a system callback treats like any other
+  error (the system is disabled). An unknown state name passed to `change` is a denial (`false` and a warning).
+- **Startup:** a rejected `fsms/` file or a `GAME_STATE_MACHINES` name with no valid definition refuses the start, like
+  any other Lua error (one `Lua error` line each, `startup failed: Lua`, exit status 1). That also applies when
+  `LUA_ROOT` is missing and `GAME_STATE_MACHINES` is set.
+- **C++:** `World::fsm()` (`lua::StateMachines`, also `Runtime::fsm()`) gives `state`, `change`, `canChange` and `states`
+  for a game machine name or a character wire id. It applies the same rules, events and logging as `kast.fsm`, and a bad
+  target throws `std::invalid_argument`.
+- **Not on the server:** hot reload, scenes and `kast.loadScene`, NPCs or other non-character entities, the editor's
+  panels.
+
+```cpp
+lua::StateMachines& fsm = world.fsm();
+std::string phase = fsm.state("zone_cycle");          // a game machine by name
+bool moved = fsm.change(lua::EntityId{7}, "moving");  // a character's machine by wire id
+```
 
 ### Tick order
 
@@ -426,6 +481,9 @@ The `lua/` folder holds the sample:
 |---|---|
 | `components/health.lua` | `Health`: `persist`, `replicate = "aoi"`, every field type. The same file as `tests/project/components/health.lua` |
 | `components/wallet.lua` | `Wallet { gold }`: `persist`, `replicate = "owner"` |
+| `fsms/locomotion.lua` | Character machine `idle` / `moving`, each enterable only from the other. Every `enter` sends the owner `fsm.state` `{machine, from, to}` (`kast.sendTo`) |
+| `fsms/zone_cycle.lua` | Game machine `day` / `night` (listed in `GAME_STATE_MACHINES`). `enter` only logs |
+| `systems/locomotion.lua` | `onEnter` adds `StateMachine` with `locomotion`, which enters `idle`, then tries `idle` again: denied by `allowedFrom`, a warning and no event. `update` switches to `moving` when the character's `Transform` changes and back to `idle` after 1 s standing still. It flips `zone_cycle` every 5 minutes if it is listed. It sends only on transitions, never per tick |
 | `systems/events.lua` | On login, sends the player `welcome` (`sendTo`) and publishes `player.entered` on the bus. Its subscriber runs on the next tick, after the newcomer's `Spawn`, and sends `player.arrived` to the newcomer and everyone who sees it (`sendNearby`). On logout, sends the whole zone `player.left` (`broadcast`) before the `Despawn`. It sends only on login and logout, never per tick |
 | `systems/regen.lua` | `onEnter` adds `Health` and `Wallet` if absent and pays 1 gold per login. Once a second per character, each on its own phase, `update` regenerates `Health.current` toward `max` (+2) if the character stood still, or drains it by 0.5 per metre moved (`Transform` deltas). It keeps whole points and writes only on a change, so a character costs at most one `ComponentUpdate` a second per viewer |
 
@@ -442,11 +500,12 @@ The `lua/` folder holds the sample:
 
 ## Tests
 
-- **Self-check** (`tests/self_check.cpp` + `tests/lua_checks.cpp`, ctest `world_self_check`): assert-style checks of the pure logic with an injected clock, so nothing sleeps. The Lua checks write their scripts to a temp folder and drive a `World` with captured sends, saves and log lines. They cover the event bus (the engine's cases), `kast.publish/subscribe/unsubscribe` and the client sends: audiences, order, rejections and timing.
+- **Self-check** (`tests/self_check.cpp` + `tests/lua_checks.cpp`, ctest `world_self_check`): assert-style checks of the pure logic with an injected clock, so nothing sleeps. The Lua checks write their scripts to a temp folder and drive a `World` with captured sends, saves and log lines. They cover the event bus (the engine's cases), `kast.publish/subscribe/unsubscribe` and the client sends: audiences, order, rejections and timing. They also cover state machines, from definitions to C++ / Lua parity.
 - **Integration** (`tests/integration.sh`): drives `kast_bot` scenarios against the compose stack.
   - The bots register, verify through Mailpit and log in with real auth tokens.
   - Scenarios 10–13 use `docker compose restart/stop/start` on `world` and `mysql`.
   - Scenario 14 uses the sample `systems/events.lua`: `sendTo` reaches only its target, `sendNearby` only bots in view, and `broadcast` every bot.
+  - Scenario 15 (`fsm`) uses the sample `locomotion` machine. On entering, a bot gets exactly one `fsm.state` (`nil->idle`), because the denied `idle->idle` sends nothing. Walking, then standing still, gives `idle->moving` and then `moving->idle`. A bot in view gets none of them.
   - Logs go to `build/integration-<run>/`.
 - **Load** (`tests/load.sh`):
   - **Setup:** restarts `world` so its totals cover only the test. It then runs `COUNT` bots in one process (8 io threads, 50 new connections per second) for `DURATION` s.

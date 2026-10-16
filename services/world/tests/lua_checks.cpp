@@ -1,6 +1,7 @@
 // Assert-style checks for the Lua layer: component definitions (every type, option and error), reserved and duplicate
 // names, the sandbox, kast.* semantics, hooks, error handling, persistence + drift, component replication routing, the
-// event bus (kast.publish/subscribe/unsubscribe) and client events (kast.sendTo/sendNearby/broadcast).
+// event bus (kast.publish/subscribe/unsubscribe), client events (kast.sendTo/sendNearby/broadcast) and state machines
+// (definitions, rules, queueing, callback errors, kast.fsm, the StateMachine built-in, C++ / Lua parity).
 // Lua files are written to a temp folder; the World runs with captured Send/Save, so there is no network or database.
 #include "core/log.h"
 #include "lua/components.h"
@@ -14,6 +15,7 @@
 #include <fstream>
 #include <map>
 #include <random>
+#include <set>
 #include <source_location>
 
 using namespace kast;
@@ -149,7 +151,7 @@ void checkDefinitionErrors() {
 }
 
 void checkNameRules() {
-    for (const char* reserved : {"Character", "Transform", "Dirty", "SessionLink", "Visible"}) {
+    for (const char* reserved : {"Character", "Transform", "StateMachine", "Dirty", "SessionLink", "Visible", "StateMachineRuntime"}) {
         const std::string e = def_error(std::string("return {name='") + reserved + "', fields={}}");
         check(e == std::string("components/c.lua: name \"") + reserved + "\" is taken by a built-in component",
               "reserved name " + std::string(reserved) + ": " + e);
@@ -985,6 +987,474 @@ void checkCodec() {
     check(proto::ServerEvent::fits(3, 65535 - 7) && !proto::ServerEvent::fits(3, 65535 - 6), "ServerEvent frame size limit");
 }
 
+// --- state machines (README "Lua components and systems", State machines) ---
+
+// Indexes of the captured log lines whose "msg" contains part (log lines are JSON: quotes in msg are escaped).
+std::vector<size_t> said_at(const std::string& part) {
+    std::vector<size_t> out;
+    for (size_t i = 0; i < g_log.size(); ++i) {
+        const auto line = nlohmann::json::parse(g_log[i], nullptr, false);
+        if (line.is_object() && contains(line.value("msg", ""), part)) out.push_back(i);
+    }
+    return out;
+}
+bool said(const std::string& part) { return !said_at(part).empty(); }
+size_t said_first(const std::string& part) {
+    const auto at = said_at(part);
+    return at.empty() ? SIZE_MAX : at[0];
+}
+
+// Every "FAIL ..." a Lua expect/raises logged becomes a failed check; done must have been logged.
+void check_lua_expectations(const std::string& what, const std::string& done) {
+    for (size_t i : said_at("FAIL ")) check(false, what + ": " + nlohmann::json::parse(g_log[i]).value("msg", ""));
+    check(said(done), what + ": the Lua checks ran (" + done + ")");
+}
+
+constexpr const char* kLuaExpect = R"(local function expect(ok, what) if not ok then kast.error("FAIL " .. what) end end
+local function raises(want, f)
+    local ok, err = pcall(f)
+    if ok then kast.error("FAIL no error, wanted: " .. want)
+    elseif not string.find(err, want, 1, true) then kast.error("FAIL got [" .. tostring(err) .. "] wanted [" .. want .. "]") end
+end
+)";
+
+// Every callback logs "<enter|exit> <from>-><to> entity <id>".
+constexpr const char* kDoor = R"(local function note(what) return function(ctx)
+    kast.log(what .. " " .. tostring(ctx.from) .. "->" .. ctx.to .. " entity " .. tostring(ctx.entity))
+end end
+return {
+    name = "door",
+    initial = "closed",
+    states = {
+        closed = { allowedFrom = {"open"}, enter = note("enter"), exit = note("exit") },
+        open   = { allowedFrom = {"closed", "locked"}, enter = note("enter"), exit = note("exit") },
+        locked = { enter = note("enter"), exit = note("exit") },
+        broken = { allowedFrom = {"*"}, enter = note("enter"), exit = note("exit") },
+    },
+})";
+constexpr const char* kPlain = "return { name = 'plain', initial = 'a', states = { a = {}, b = { allowedFrom = {'a'} } } }";
+
+void checkFsmDefinitions() {
+    LuaRoot r;
+    r.write("fsms/sub/door.lua", kDoor).write("fsms/plain.lua", kPlain).write("fsms/notes.txt", "not lua");
+    TestWorld w({});
+    const auto errors = w.world.load_scripts(r.root);
+    check(errors.empty(), "fsm: valid definitions load" + (errors.empty() ? "" : ": " + errors[0]));
+    const lua::StateMachineDef* door = w.world.fsm().definition("door");
+    check(door && door->path == "fsms/sub/door.lua" && door->initial == "closed" &&
+              door->stateNames() == std::vector<std::string>{"broken", "closed", "locked", "open"},
+          "fsm: recursive scan; name, path, initial, sorted states");
+    check(door && door->states.at("locked").fromAny && door->states.at("broken").fromAny &&
+              !door->states.at("open").fromAny && door->states.at("open").from == std::set<std::string>{"closed", "locked"} &&
+              door->states.at("closed").enter && door->states.at("closed").exit && !w.world.fsm().definition("notes"),
+          "fsm: allowedFrom omitted / \"*\" / listed; callbacks bound; .lua files only");
+    check(w.world.fsm().definition("plain") && !w.world.fsm().definition("plain")->states.at("a").enter,
+          "fsm: a state without callbacks");
+
+    const auto machine = [](const std::string& states, const std::string& extra = "") {
+        return "return {name='m', initial='a', states={" + states + "}" + extra + "}";
+    };
+    const std::pair<std::string, std::string> cases[] = {
+        {"return {", "fsms/m.lua:1:"},
+        {"error('nope')", "fsms/m.lua:1: nope"},
+        {"io.write('x')", "fsms/m.lua:1:"},
+        {"return 5", "fsms/m.lua: must return exactly one table {name = ..., initial = ..., states = {...}}"},
+        {machine("a={}") + ", 2", "fsms/m.lua: must return exactly one table"},
+        {"return setmetatable({name='m', initial='a', states={a={}}}, {})", "fsms/m.lua: tables must be plain data"},
+        {"return {initial='a', states={a={}}}", "fsms/m.lua: \"name\" must be a non-empty string"},
+        {"return {name=5, initial='a', states={a={}}}", "fsms/m.lua: \"name\" must be a non-empty string"},
+        {"return {name='m', initial='z', states={a={}}}", "fsms/m.lua: \"initial\" must name one of its states, got z"},
+        {"return {name='m', states={a={}}}", "\"initial\" must name one of its states, got nil"},
+        {machine("a={}", ", colour=1"), "fsms/m.lua: unknown key colour"},
+        {"return {name='m', initial='a', states=5}", "fsms/m.lua: \"states\" must be a table {name = {...}, ...}"},
+        {"return {name='m', initial='a', states={}}", "fsms/m.lua: \"states\" must not be empty"},
+        {machine("['*']={}"), "fsms/m.lua: state names must be non-empty strings other than \"*\", got *"},
+        {machine("a=5"), "fsms/m.lua: state \"a\" must be a table"},
+        {machine("a={allowedFrom={'q'}}"), "fsms/m.lua: state \"a\": \"allowedFrom\" names unknown state \"q\""},
+        {machine("a={allowedFrom='a'}"), "fsms/m.lua: state \"a\": \"allowedFrom\" must be a list {...}"},
+        {machine("a={allowedFrom={5}}"), "fsms/m.lua: state \"a\": \"allowedFrom\" must hold state names, got 5"},
+        {machine("a={enter=5}"), "fsms/m.lua: state \"a\": \"enter\" must be a function"},
+        {machine("a={exit='x'}"), "fsms/m.lua: state \"a\": \"exit\" must be a function"},
+        {machine("a={update=function() end}"), "fsms/m.lua: state \"a\": unknown key update"},
+    };
+    for (const auto& [body, want] : cases) {
+        LuaRoot c;
+        c.write("fsms/m.lua", body);
+        TestWorld cw({});
+        const auto e = cw.world.load_scripts(c.root);
+        check(e.size() == 1 && contains(e[0], want) && !cw.world.fsm().definition("m"),
+              "fsm: rejected with \"" + want + "\" (got " + (e.empty() ? "nothing" : e[0]) + ")");
+    }
+
+    LuaRoot d;
+    d.write("fsms/a.lua", kPlain).write("fsms/z/b.lua", kPlain).write("fsms/door.lua", kDoor);
+    TestWorld dw({});
+    const auto dup = dw.world.load_scripts(d.root);
+    check(dup.size() == 2 && dup[0] == "fsms/a.lua: name \"plain\" is also declared in fsms/z/b.lua" &&
+              dup[1] == "fsms/z/b.lua: name \"plain\" is also declared in fsms/a.lua",
+          "fsm: two files with the same name are both rejected, each naming the other");
+    check(!dw.world.fsm().definition("plain") && dw.world.fsm().definition("door"), "fsm: the other definitions still load");
+
+    // GAME_STATE_MACHINES: an unknown name (or one whose file was rejected, or with no fsms/ folder) refuses the start.
+    TestWorld gw({});
+    const auto unknown = gw.world.load_scripts(d.root, {"door", "nope", "plain"});
+    check(unknown.size() == 4 && unknown[2] == "GAME_STATE_MACHINES: game state machine \"nope\" has no valid definition in fsms/" &&
+              unknown[3] == "GAME_STATE_MACHINES: game state machine \"plain\" has no valid definition in fsms/",
+          "fsm: listed game machines without a valid definition are startup errors");
+    LuaRoot none;
+    TestWorld nw({});
+    check(nw.world.load_scripts(none.root).empty(), "fsm: no fsms/ folder and no game machines is fine");
+    TestWorld lw({});
+    const auto listed = lw.world.load_scripts(none.root, {"door"});
+    check(listed.size() == 1 && contains(listed[0], "\"door\" has no valid definition"),
+          "fsm: a listed game machine with no fsms/ folder refuses the start");
+}
+
+// Transition rules, callback and event order, C++ API (game machine), and the Lua subscriber.
+void checkFsmRules() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("fsms/door.lua", kDoor);
+    r.write("systems/s.lua", R"(return {
+    init = function()
+        kast.subscribe("fsm.changed", function(p)
+            kast.log("lua got " .. p.machine .. " " .. p.from .. "->" .. p.to .. " entity " .. tostring(p.entity))
+        end)
+    end,
+    update = function(dt) end,
+})");
+    TestWorld w({});
+    const auto errors = w.world.load_scripts(r.root, {"door"});
+    check(errors.empty(), "fsm rules: loads" + (errors.empty() ? "" : ": " + errors[0]));
+    auto& fsm = w.world.fsm();
+    check(said_at("fsms/door.lua: enter nil->closed entity nil").size() == 1 && said_at("fsms/door.lua:").size() == 1,
+          "fsm: a game machine enters its initial state after init, once, with from = nil (kast.log prefixed by path)");
+    std::vector<nlohmann::json> changed;
+    EventBus::Subscription sub = w.world.bus().subscribe("fsm.changed", [&](const nlohmann::json& p) { changed.push_back(p); });
+    w.world.tick(T0);
+    check(changed.empty() && fsm.state("door") == "closed", "fsm: no fsm.changed for the first entry");
+
+    g_log.clear();
+    check(fsm.canChange("door", "open") && fsm.canChange("door", "locked") && fsm.canChange("door", "broken") &&
+              !fsm.canChange("door", "closed") && !fsm.canChange("door", "flying"),
+          "fsm: canChange: listed, omitted and \"*\" allowed; self not listed and unknown denied");
+    check(g_log.empty() && fsm.state("door") == "closed", "fsm: canChange has no side effects and logs nothing");
+
+    check(!fsm.change("door", "closed") &&
+              said(R"(State machine "door": "closed" can't be entered from "closed" (allowedFrom); staying in "closed")"),
+          "fsm: a self-transition not allowed by allowedFrom is denied with the engine's warning");
+    check(!fsm.change("door", "flying") && said(R"(State machine "door": unknown state "flying"; staying in "closed")"),
+          "fsm: an unknown state is denied with a warning");
+    check(said_at("fsms/door.lua:").empty() && fsm.state("door") == "closed", "fsm: a denial runs no callbacks");
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    check(changed.empty(), "fsm: a denial publishes no event");
+
+    g_log.clear();
+    check(fsm.change("door", "open") && fsm.state("door") == "open", "fsm: an allowed change applies immediately");
+    check(said_first("exit closed->open") < said_first("enter closed->open") && said("enter closed->open entity nil"),
+          "fsm: exit(old), then enter(new) with the same ctx");
+    check(changed.empty(), "fsm: fsm.changed waits for the drain");
+    w.world.tick(T0 + std::chrono::milliseconds(100));
+    check(changed.size() == 1 &&
+              changed[0] == nlohmann::json{{"machine", "door"}, {"entity", nullptr}, {"from", "closed"}, {"to", "open"}},
+          "fsm: fsm.changed {machine, entity = null, from, to} delivered to C++ at the drain");
+    check(said("systems/s.lua: lua got door closed->open entity nil"), "fsm: ... and to Lua subscribers");
+
+    changed.clear();
+    check(fsm.change("door", "broken"), "fsm: \"*\" from open");
+    g_log.clear();
+    check(fsm.change("door", "broken") && said("exit broken->broken") && said("enter broken->broken"),
+          "fsm: a self-transition allowed by \"*\" runs exit and enter");
+    check(fsm.change("door", "locked") && fsm.change("door", "locked"), "fsm: a self-transition allowed by an omitted allowedFrom");
+    check(fsm.change("door", "open") && fsm.change("door", "closed"), "fsm: locked -> open -> closed");
+    check(fsm.states("door") == std::vector<std::string>{"broken", "closed", "locked", "open"}, "fsm: states() sorted");
+    w.world.tick(T0 + std::chrono::milliseconds(150));
+    check(changed.size() == 6 && changed[1]["from"] == "broken" && changed[1]["to"] == "broken" &&
+              changed[3]["from"] == "locked" && changed[3]["to"] == "locked" && changed[5]["to"] == "closed",
+          "fsm: one event per transition, self-transitions included, in order");
+    for (const auto& s : w.world.script_status()) check(s.ok, "fsm rules: system still enabled: " + s.error);
+}
+
+// Changes requested inside enter/exit are queued and applied after the transition, in order; a queued denial warns.
+void checkFsmQueue() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("fsms/q.lua", R"(return { name = "q", initial = "a", states = {
+    a = { allowedFrom = {"c"}, exit = function(ctx) kast.log("exit a") end },
+    b = {
+        enter = function(ctx)
+            kast.log("enter b")
+            kast.log("queued c " .. tostring(kast.fsm.change("q", "c")))
+            kast.log("queued y " .. tostring(kast.fsm.change("r", "y")))
+            kast.log("still " .. kast.fsm.state("q"))
+            kast.log("enter b done")
+        end,
+        exit = function(ctx) kast.log("exit b") end,
+    },
+    c = { allowedFrom = {"b"}, enter = function(ctx)
+        kast.log("enter c")
+        kast.log("queued c again " .. tostring(kast.fsm.change("q", "c")))
+    end },
+} })");
+    r.write("fsms/r.lua", R"(return { name = "r", initial = "x", states = {
+    x = {}, y = { enter = function(ctx) kast.log("enter y") end },
+} })");
+    TestWorld w({});
+    check(w.world.load_scripts(r.root, {"q", "r"}).empty(), "fsm queue: loads");
+    std::vector<nlohmann::json> changed;
+    EventBus::Subscription sub = w.world.bus().subscribe("fsm.changed", [&](const nlohmann::json& p) { changed.push_back(p); });
+    g_log.clear();
+    check(w.world.fsm().change("q", "b"), "fsm queue: change returns true");
+    const std::vector<size_t> order = {said_first("exit a"),      said_first("enter b"),     said_first("queued c true"),
+                                       said_first("queued y true"), said_first("still b"),   said_first("enter b done"),
+                                       said_first("exit b"),      said_first("enter c"),     said_first("queued c again true"),
+                                       said_first("enter y"),
+                                       said_first(R"(State machine "q": "c" can't be entered from "c" (allowedFrom))")};
+    check(std::ranges::is_sorted(order) && order.back() != SIZE_MAX,
+          "fsm queue: requests inside callbacks return true, wait for the transition, then apply in request order; the "
+          "denied one warns");
+    check(w.world.fsm().state("q") == "c" && w.world.fsm().state("r") == "y", "fsm queue: final states");
+    w.world.tick(T0);
+    check(changed.size() == 3 && changed[0]["to"] == "b" && changed[1]["to"] == "c" && changed[2]["machine"] == "r",
+          "fsm queue: one event per applied transition, in order");
+}
+
+// A failing or runaway callback is logged with path:line and a traceback; the transition commits and nothing is
+// disabled. A runaway callback that a system triggered also uses up that system's budget: the system is disabled.
+void checkFsmCallbackErrors() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("fsms/err.lua", R"(return { name = "err", initial = "ok", states = {
+    ok = {},
+    bad = { enter = function(ctx)
+        error("kaput")
+    end },
+    slow = { exit = function(ctx) kast.log("slow exit") end, enter = function(ctx) while true do end end },
+} })");
+    r.write("systems/a_count.lua", "local n = 0\nreturn { update = function() n = n + 1 ; kast.log('tick ' .. n) end }");
+    r.write("systems/b_trigger.lua", R"(local go = false
+return { update = function()
+    if go then kast.fsm.change("err", "slow") end
+end, onEnter = function(e) go = true end })");
+    TestWorld w({});
+    check(w.world.load_scripts(r.root, {"err"}).empty(), "fsm errors: loads");
+    auto& fsm = w.world.fsm();
+    std::vector<nlohmann::json> changed;
+    EventBus::Subscription sub = w.world.bus().subscribe("fsm.changed", [&](const nlohmann::json& p) { changed.push_back(p); });
+
+    check(fsm.change("err", "bad") && fsm.state("err") == "bad", "fsm: a failing enter still commits; change returns true");
+    check(said(R"(State machine fsms/err.lua: enter "bad" failed: fsms/err.lua:4: kaput)") && said("stack traceback"),
+          "fsm: the callback error is logged with path:line and a traceback");
+    check(fsm.change("err", "ok") && fsm.state("err") == "ok", "fsm: the machine stays usable");
+
+    const auto start = std::chrono::steady_clock::now();
+    check(fsm.change("err", "slow") && fsm.state("err") == "slow", "fsm: a runaway enter commits too");
+    check(std::chrono::steady_clock::now() - start < std::chrono::seconds(5) &&
+              said(R"(State machine fsms/err.lua: enter "slow" failed: fsms/err.lua:6: script ran longer than 2 seconds)"),
+          "fsm: a runaway callback is stopped by the script budget and logged");
+    check(fsm.change("err", "ok") && said("slow exit"), "fsm: Lua runs again after the timeout; the machine still works");
+    w.world.tick(T0);
+    check(changed.size() == 4, "fsm: failing callbacks still publish fsm.changed");
+    check(said("systems/a_count.lua: tick 1"), "fsm: systems keep running after a callback error");
+    for (const auto& s : w.world.script_status()) check(s.ok, "fsm errors: no system disabled: " + s.error);
+
+    // From inside a system's update: the shared 2 s budget runs out in the callback, so the system is disabled too.
+    w.spawn(1, 91, "Alice", 1000, 1000);
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    const auto status = w.world.script_status();
+    check(status.size() == 2 && status[0].ok && !status[1].ok && contains(status[1].error, "script ran longer than 2 seconds"),
+          "fsm: a runaway callback triggered by a system disables that system (shared budget), only that one");
+    check(fsm.state("err") == "slow" && fsm.change("err", "ok"), "fsm: ... and the machine still works");
+}
+
+// kast.fsm misuse raises at the calling line; kast.fsm is read-only; an init touching a game machine enters it once.
+void checkFsmLuaApi() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("fsms/door.lua", kDoor).write("fsms/plain.lua", kPlain);
+    r.write("systems/a_line.lua", R"(local ok, err = pcall(function()
+    local state = kast.fsm.state("nope") -- not a tail call: that would drop this frame and its line
+end)
+kast.log("line err " .. tostring(err))
+return { init = function() kast.log("init sees " .. kast.fsm.state("door")) end, update = function() end })");
+    r.write("systems/b_api.lua", std::string(kLuaExpect) + R"(local done = false
+return { update = function(dt)
+    if done then return end
+    done = true
+    local bob
+    for e in kast.query("Character") do bob = e end
+    raises('kast.fsm.state: no game state machine "nope" (GAME_STATE_MACHINES)', function() return kast.fsm.state("nope") end)
+    raises('kast.fsm.change: no game state machine "plain"', function() return kast.fsm.change("plain", "b") end)
+    raises('kast.fsm.state: invalid entity id 4000000000', function() return kast.fsm.state(4000000000) end)
+    raises('kast.fsm.state: invalid entity id 1.5', function() return kast.fsm.state(1.5) end)
+    raises('kast.fsm.canChange: invalid entity id -1', function() return kast.fsm.canChange(-1, "a") end)
+    raises('kast.fsm.states: entity ' .. bob .. ' has no "StateMachine"', function() return kast.fsm.states(bob) end)
+    raises('kast.fsm.state: target must be a state machine name or an entity id, got true', function() return kast.fsm.state(true) end)
+    raises('kast.fsm.change: state must be a string, got 5', function() return kast.fsm.change("door", 5) end)
+    raises('kast.fsm.canChange: state must be a string, got nil', function() return kast.fsm.canChange("door") end)
+    expect(kast.fsm.change("door", "nowhere") == false, "an unknown state is a denial, not an error")
+    expect(kast.fsm.canChange("door", "open") == true and kast.fsm.state("door") == "closed", "canChange / state")
+    local names = kast.fsm.states("door")
+    expect(#names == 4 and names[1] == "broken" and names[4] == "open", "states: a sorted table")
+    raises("kast is read-only", function() kast.fsm.change = nil end)
+    raises("kast is read-only", function() kast.fsm = nil end)
+    raises("kast is read-only", function() kast.fsm.x = 1 end)
+    expect(type(kast.fsm.change) == "function", "kast.fsm unchanged")
+    kast.log("api checks done")
+end })");
+    r.write("systems/c_raise.lua", "return { update = function()\n kast.fsm.state('nope')\nend }");
+    TestWorld w({});
+    check(w.world.load_scripts(r.root, {"door"}).empty(), "fsm api: loads");
+    check(said_first("fsms/door.lua: enter nil->closed") < said_first("systems/a_line.lua: init sees closed") &&
+              said_at("fsms/door.lua: enter").size() == 1,
+          "fsm: a game machine touched during init enters right then, and only once");
+    check(said(R"(systems/a_line.lua: line err systems/a_line.lua:2: kast.fsm.state: no game state machine "nope")"),
+          "fsm: a misuse raises at the calling line");
+    w.spawn(1, 92, "Bob", 1000, 1000);
+    w.world.tick(T0);
+    check_lua_expectations("fsm api", "api checks done");
+    const auto status = w.world.script_status();
+    check(status.size() == 3 && status[1].ok && !status[2].ok &&
+              contains(status[2].error, "systems/c_raise.lua:2: kast.fsm.state: no game state machine \"nope\""),
+          "fsm: an uncaught misuse in a system follows the system error policy");
+}
+
+// The StateMachine built-in on characters: add, set machine / initialState, changes, remove, despawn, shutdown, not
+// persisted or replicated; and C++ / Lua parity on entity machines.
+void checkFsmEntities() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("components/health.lua", "return { name = 'Health', persist = true, replicate = 'aoi', fields = { { name = 'hp', type = 'int' } } }");
+    r.write("fsms/door.lua", kDoor).write("fsms/plain.lua", kPlain);
+    r.write("systems/sm.lua", std::string(kLuaExpect) + R"lua(local parity = {}
+local function run(e)
+    local out = {}
+    local function add(v) out[#out + 1] = tostring(v) end
+    add(kast.fsm.state(e)); add(kast.fsm.canChange(e, "open")); add(kast.fsm.canChange(e, "closed"))
+    add(kast.fsm.change(e, "closed")); add(kast.fsm.change(e, "flying")); add(kast.fsm.change(e, "open"))
+    add(kast.fsm.state(e)); add(kast.fsm.change(e, "broken")); add(kast.fsm.change(e, "broken"))
+    add(table.concat(kast.fsm.states(e), ","))
+    return table.concat(out, " ")
+end
+return {
+    onEnter = function(e)
+        kast.add(e, "Health")
+        local name = kast.get(e, "Character").name
+        kast.add(e, "StateMachine")
+        if name ~= "Alice" then
+            kast.set(e, "StateMachine", {machine = "door"})
+            parity[e] = name == "Carol"
+            return
+        end
+        expect(kast.has(e, "StateMachine"), "has after add")
+        local sm = kast.get(e, "StateMachine")
+        expect(sm.machine == "" and sm.initialState == "", "add leaves machine and initialState empty")
+        raises('kast.fsm.state: entity ' .. e .. ': StateMachine has no "machine"', function() return kast.fsm.state(e) end)
+        kast.set(e, "StateMachine", {machine = "door", initialState = "bogus"})
+        expect(kast.fsm.state(e) == "closed", "machine set: enters the definition's initial (bad initialState)")
+        kast.set(e, "StateMachine", {initialState = "open"})
+        expect(kast.fsm.state(e) == "closed", "changing only initialState does nothing")
+        expect(kast.fsm.change(e, "open"), "change on an entity machine")
+        kast.set(e, "StateMachine", {machine = "plain", initialState = "b"})
+        expect(kast.fsm.state(e) == "b", "changing machine enters the new machine's initialState")
+        kast.set(e, "StateMachine", {machine = "nope"})
+        raises('kast.fsm.state: entity ' .. e .. ': no valid state machine definition "nope"', function() return kast.fsm.state(e) end)
+        kast.set(e, "StateMachine", {initialState = ""})
+        kast.set(e, "StateMachine", {machine = "door"})
+        expect(kast.fsm.state(e) == "closed", "back to door: its initial (empty initialState)")
+        kast.remove(e, "StateMachine")
+        raises('kast.fsm.state: entity ' .. e .. ' has no "StateMachine"', function() return kast.fsm.state(e) end)
+        kast.add(e, "StateMachine")
+        kast.set(e, "StateMachine", {machine = "door", initialState = "locked"})
+        expect(kast.fsm.state(e) == "locked", "re-added: enters a valid initialState")
+        raises('"StateMachine": unknown field "current"', function() kast.set(e, "StateMachine", {current = "x"}) end)
+        raises('must be a string', function() kast.set(e, "StateMachine", {machine = 5}) end)
+        kast.log("entity checks done")
+    end,
+    update = function(dt)
+        for e, lua in pairs(parity) do
+            if lua then kast.log("parity " .. run(e)) end
+            parity[e] = nil
+        end
+    end,
+})lua");
+    TestWorld w(r.defs().defs);
+    check(w.world.load_scripts(r.root).empty(), "fsm entities: loads");
+    const auto alice = w.spawn(1, 93, "Alice", 1000, 1000);
+    const uint32_t A = wire(alice);
+    check_lua_expectations("fsm entities", "entity checks done");
+    const std::string who = "entity " + std::to_string(A);
+    check(said(who + R"(: StateMachine "door": initialState "bogus" is not one of its states; using "closed")"),
+          "fsm: a bad initialState falls back to initial with a warning");
+    check(said(who + R"(: StateMachine "door": initialState is empty; using "closed")"), "fsm: an empty initialState warns");
+    check(said_at(who + R"(: StateMachine: no valid state machine definition "nope")").size() == 1,
+          "fsm: a machine with no valid definition is logged once");
+    check(said("fsms/door.lua: enter nil->closed entity " + std::to_string(A)) &&
+              said("fsms/door.lua: enter nil->locked entity " + std::to_string(A)),
+          "fsm: entity machines enter with ctx.entity = the wire id and from = nil");
+    check(said_at("fsms/door.lua: exit").size() == 1, "fsm: only the explicit change ran an exit (machine swap and remove don't)");
+
+    // C++ / Lua parity: Carol is driven from Lua, Dave from C++, with the same operations.
+    const auto carol = w.spawn(2, 94, "Carol", 1010, 1000);
+    const auto dave = w.spawn(3, 95, "Dave", 1020, 1000);
+    std::vector<nlohmann::json> changed;
+    EventBus::Subscription sub = w.world.bus().subscribe("fsm.changed", [&](const nlohmann::json& p) { changed.push_back(p); });
+    g_log.clear();
+    w.world.tick(T0);
+    auto& fsm = w.world.fsm();
+    const lua::StateMachines::Target d = wire(dave);
+    std::string cpp = fsm.state(d) + " " + (fsm.canChange(d, "open") ? "true" : "false") + " " +
+                      (fsm.canChange(d, "closed") ? "true" : "false");
+    for (const char* to : {"closed", "flying", "open"}) cpp += std::string(" ") + (fsm.change(d, to) ? "true" : "false");
+    cpp += " " + fsm.state(d);
+    for (const char* to : {"broken", "broken"}) cpp += std::string(" ") + (fsm.change(d, to) ? "true" : "false");
+    std::string names;
+    for (const auto& n : fsm.states(d)) names += (names.empty() ? "" : ",") + n;
+    cpp += " " + names;
+    check(cpp == "closed true false false false true open true true broken,closed,locked,open", "fsm C++: " + cpp);
+    check(said("systems/sm.lua: parity " + cpp), "fsm: Lua gives the same results as C++");
+    const auto warnings = [&](entt::entity e) {
+        return said_at("State machine \"door\" (entity " + std::to_string(wire(e)) + ")").size();
+    };
+    check(warnings(carol) == 2 && warnings(dave) == 2, "fsm: the same warnings from Lua and C++");
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    const auto events_of = [&](entt::entity e) {
+        return std::ranges::count_if(changed, [&](const nlohmann::json& p) { return p["entity"] == wire(e); });
+    };
+    check(events_of(carol) == 3 && events_of(dave) == 3, "fsm: the same events from Lua and C++, entity = wire id");
+
+    try {
+        fsm.state(std::string("nope"));
+        check(false, "fsm C++: an unknown game machine throws");
+    } catch (const std::invalid_argument& e) {
+        check(contains(e.what(), "no game state machine \"nope\""), std::string("fsm C++: ") + e.what());
+    }
+    for (const lua::StateMachines::Target& bad : {lua::StateMachines::Target{std::string("door")}, lua::StateMachines::Target{999999u}}) {
+        bool threw = false;
+        try { fsm.change(bad, "open"); } catch (const std::invalid_argument&) { threw = true; }
+        check(threw, "fsm C++: bad targets throw std::invalid_argument");
+    }
+
+    // Not persisted, not replicated; despawn and shutdown run no exit.
+    bool replicated = false;
+    for (const auto& [sid, msgs] : w.sent.bySession)
+        for (const auto& m : msgs)
+            if (auto* u = std::get_if<proto::ComponentUpdate>(&m); u && u->name == "StateMachine") replicated = true;
+    check(!replicated, "fsm: StateMachine is never replicated");
+    check(w.sent.of<proto::ComponentUpdate>(1).size() > 0, "fsm: other components still replicate");
+    g_log.clear();
+    w.sent.clear();
+    w.world.despawn(alice);
+    check(w.sent.saves.size() == 1 && w.sent.saves[0].components && contains(*w.sent.saves[0].components, "Health") &&
+              !contains(*w.sent.saves[0].components, "StateMachine"),
+          "fsm: StateMachine is not persisted");
+    w.world.shutdown_scripts();
+    w.world.despawn(carol);
+    w.world.despawn(dave);
+    check(said_at("fsms/door.lua: exit").empty(), "fsm: despawn and shutdown run no exit");
+    check(w.world.registry().view<lua::StateMachineRuntime>().empty(), "fsm: machines go away with their characters");
+}
+
 } // namespace
 
 int lua_checks(int& checks) {
@@ -1006,6 +1476,12 @@ int lua_checks(int& checks) {
     checkLuaEventFailures();
     checkLuaEventHooks();
     checkClientEvents();
+    checkFsmDefinitions();
+    checkFsmRules();
+    checkFsmQueue();
+    checkFsmCallbackErrors();
+    checkFsmLuaApi();
+    checkFsmEntities();
     checks += g_checks;
     return g_failures;
 }

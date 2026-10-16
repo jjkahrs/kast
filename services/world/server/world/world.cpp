@@ -10,7 +10,9 @@ World::World(WorldRules rules, Send send, Save save, lua::Defs defs)
     : rules_(rules), send_(std::move(send)), save_(std::move(save)), defs_(defs), grid_(rules.cellSize, rules.viewRadius),
       lua_(reg_, std::move(defs)) {}
 
-std::vector<std::string> World::load_scripts(const std::filesystem::path& luaRoot) { return lua_.load(luaRoot); }
+std::vector<std::string> World::load_scripts(const std::filesystem::path& luaRoot, std::vector<std::string> gameMachines) {
+    return lua_.load(luaRoot, std::move(gameMachines));
+}
 
 void World::shutdown_scripts() {
     const auto view = reg_.view<CharacterRef>();

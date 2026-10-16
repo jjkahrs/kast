@@ -59,7 +59,8 @@ struct Config {
     uint32_t saveRetryMaxMs = 30000;
     uint32_t shutdownTimeoutMs = 10000;
     uint32_t tickStatsIntervalSec = 10;
-    std::string luaRoot = "/app/lua"; // components/ and systems/
+    std::string luaRoot = "/app/lua"; // components/, fsms/ and systems/
+    std::vector<std::string> gameStateMachines; // game state machine names (fsms/ definitions) run for the lifetime
     log::Level logLevel = log::Level::info;
 
     float spawn_x() const { return spawnX.value_or(zoneSizeX / 2); }

@@ -30,7 +30,7 @@ void usage() {
         "  --expect-components G,H  components-verify scenario: Wallet gold and Health current before the restart\n"
         "  --tag T               shutdown/restart-verify scenarios: account tag\n"
         "scenarios: auth characters ownership aoi chat speedhack malformed handshake duplicate persist\n"
-        "           shutdown restart-verify dbdown\n");
+        "           shutdown restart-verify dbdown components components-verify events fsm\n");
 }
 
 } // namespace

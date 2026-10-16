@@ -268,6 +268,12 @@ void checkConfig() {
     auto ok = load_config(lookup);
     check(ok.errors.empty(), "minimal config valid");
     check(ok.config.spawn_x() == 1024 && ok.config.port == 7777, "defaults applied");
+    check(ok.config.gameStateMachines.empty(), "GAME_STATE_MACHINES unset: no game machines");
+    env["GAME_STATE_MACHINES"] = " zone_cycle ,, quest_flow,\t";
+    check(load_config(lookup).config.gameStateMachines == std::vector<std::string>{"zone_cycle", "quest_flow"},
+          "GAME_STATE_MACHINES: comma list, trimmed, empty entries ignored");
+    env["GAME_STATE_MACHINES"] = "";
+    check(load_config(lookup).config.gameStateMachines.empty(), "GAME_STATE_MACHINES empty: none");
 
     env.erase("DB_HOST");
     env["REALM_ID"] = "abc";

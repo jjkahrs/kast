@@ -29,13 +29,15 @@ public:
     // defs: the Lua component types (lua/components.h); their instances are restored, saved and replicated here.
     World(WorldRules rules, Send send, Save save, lua::Defs defs = {});
 
-    // Loads the Lua systems under luaRoot/systems/ and runs their init; every error, empty if all loaded.
-    std::vector<std::string> load_scripts(const std::filesystem::path& luaRoot);
+    // Loads the state machine definitions under luaRoot/fsms/ and the Lua systems under luaRoot/systems/, runs their
+    // init, then starts the game machines (by name); every error, empty if all loaded.
+    std::vector<std::string> load_scripts(const std::filesystem::path& luaRoot, std::vector<std::string> gameMachines = {});
     // Graceful shutdown, before the despawns: onLeave for every character, then every system's shutdown, then the
     // client events they queued. Undelivered bus events are dropped.
     void shutdown_scripts();
     std::vector<lua::SystemStatus> script_status() const { return lua_.status(); }
     EventBus& bus() { return lua_.bus(); } // the Lua systems' event bus, for server C++
+    lua::StateMachines& fsm() { return lua_.fsm(); } // the game and character state machines, for server C++
 
     // Places the character (at its saved position, or the spawn point if that is outside the zone), sends
     // EnterWorldOk, restores its persisted Lua components and runs onEnter. Other players get Spawn on the next tick.

@@ -59,17 +59,19 @@ int main() {
         const size_t defCount = defs.defs.size();
         GameServer server(io, cfg, tls, dbWorker, tokens, std::move(defs.defs));
         std::vector<std::string> luaErrors = std::move(defs.errors);
+        // Also without LUA_ROOT: a GAME_STATE_MACHINES name then has no definition, which refuses the start.
+        for (std::string& e : server.load_scripts()) luaErrors.push_back(std::move(e));
+        if (!luaErrors.empty()) {
+            for (const auto& e : luaErrors) log::error("Lua error", {{"error", e}});
+            log::error("startup failed: Lua", {{"errors", luaErrors.size()}, {"luaRoot", cfg.luaRoot}});
+            tokens.stop();
+            dbWorker.stop(SteadyClock::now());
+            return 1;
+        }
         if (haveLua) {
-            for (std::string& e : server.load_scripts()) luaErrors.push_back(std::move(e));
-            if (!luaErrors.empty()) {
-                for (const auto& e : luaErrors) log::error("Lua error", {{"error", e}});
-                log::error("startup failed: Lua", {{"errors", luaErrors.size()}, {"luaRoot", cfg.luaRoot}});
-                tokens.stop();
-                dbWorker.stop(SteadyClock::now());
-                return 1;
-            }
             const auto systems = server.script_status();
-            log::info("Lua loaded", {{"luaRoot", cfg.luaRoot}, {"components", defCount}, {"systems", systems.size()}});
+            log::info("Lua loaded", {{"luaRoot", cfg.luaRoot}, {"components", defCount}, {"systems", systems.size()},
+                                     {"gameStateMachines", cfg.gameStateMachines}});
         }
         server.start();
 

@@ -154,6 +154,9 @@ record "$name" $ok "see $log"
 # 14: server events with the sample lua/systems/events.lua (README "Lua components and systems", Events)
 scenario "14 Lua server events: sendTo/sendNearby/broadcast audiences" --scenario events
 
+# 15: state machines with the sample lua/fsms/locomotion.lua + lua/systems/locomotion.lua (README "State machines")
+scenario "15 state machines: transitions observed, denied one silent" --scenario fsm
+
 echo
 echo "================ integration summary ($RUN) ================"
 printf '%s\n' "${RESULTS[@]}"

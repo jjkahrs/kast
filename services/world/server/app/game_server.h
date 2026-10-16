@@ -23,7 +23,7 @@ public:
                lua::Defs defs);
 
     // Loads the Lua systems under LUA_ROOT and runs their init; every error (empty: OK to start).
-    std::vector<std::string> load_scripts() { return world_.load_scripts(cfg_.luaRoot); }
+    std::vector<std::string> load_scripts() { return world_.load_scripts(cfg_.luaRoot, cfg_.gameStateMachines); }
     std::vector<lua::SystemStatus> script_status() const { return world_.script_status(); }
     void start();
     // Stops accepting, saves and disconnects everyone with server_shutdown, then calls onDone.

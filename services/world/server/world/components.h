@@ -69,10 +69,12 @@ struct ReplicatedState {
 
 struct ScriptsLeft {}; // tag: onLeave already ran (graceful shutdown runs it for everyone first)
 
-// Names no Lua component may take: the read-only Lua built-ins and every C++ component here and in lua/components.h.
+// Names no Lua component may take: the Lua built-ins (read-only Character and Transform, writable StateMachine) and
+// every C++ component here, in lua/components.h and in lua/state_machines.h.
 inline constexpr const char* kReservedComponentNames[] = {
-    "Character", "Transform",   "SessionLink",     "CharacterRef",        "MoveState",     "PendingMoves",
-    "PendingSay", "ChatLimit",  "AoiCell",         "Visible",             "Moved",         "Dirty",
-    "SaveTimer", "ReplicatedState", "ScriptsLeft", "PreservedComponents", "ComponentData"};
+    "Character",    "Transform",       "StateMachine", "SessionLink",         "CharacterRef",  "MoveState",
+    "PendingMoves", "PendingSay",      "ChatLimit",    "AoiCell",             "Visible",       "Moved",
+    "Dirty",        "SaveTimer",       "ReplicatedState", "ScriptsLeft",      "PreservedComponents",
+    "ComponentData", "StateMachineRuntime"};
 
 } // namespace kast::world
