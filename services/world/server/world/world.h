@@ -31,14 +31,17 @@ public:
 
     // Loads the Lua systems under luaRoot/systems/ and runs their init; every error, empty if all loaded.
     std::vector<std::string> load_scripts(const std::filesystem::path& luaRoot);
-    // Graceful shutdown, before the despawns: onLeave for every character, then every system's shutdown.
+    // Graceful shutdown, before the despawns: onLeave for every character, then every system's shutdown, then the
+    // client events they queued. Undelivered bus events are dropped.
     void shutdown_scripts();
     std::vector<lua::SystemStatus> script_status() const { return lua_.status(); }
+    EventBus& bus() { return lua_.bus(); } // the Lua systems' event bus, for server C++
 
     // Places the character (at its saved position, or the spawn point if that is outside the zone), sends
     // EnterWorldOk, restores its persisted Lua components and runs onEnter. Other players get Spawn on the next tick.
     entt::entity spawn(uint32_t sessionId, const db::CharRow& row, TimePoint now);
-    // Runs onLeave, saves the character, sends Despawn to everyone who could see it, removes it.
+    // Runs onLeave and sends the client events it queued, saves the character, sends Despawn to everyone who could
+    // see it, removes it.
     void despawn(entt::entity e);
     void push_move(entt::entity e, const proto::Move& m);
     void push_say(entt::entity e, std::string text);

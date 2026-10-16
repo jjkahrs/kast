@@ -307,6 +307,11 @@ void WorldClient::dispatch(const auto& m)
         emit("world.component", {{"entityId", m.entityId}, {"name", m.name}, {"data", std::move(data)}});
     } else if constexpr (std::is_same_v<T, proto::ComponentRemove>) {
         emit("world.componentRemoved", {{"entityId", m.entityId}, {"name", m.name}});
+    } else if constexpr (std::is_same_v<T, proto::ServerEvent>) {
+        Json payload = Json::parse(m.json, nullptr, false);
+        if (payload.is_discarded())
+            return log::warn(std::format("World: ignored ServerEvent \"{}\" with invalid JSON", m.name));
+        emit("server." + m.name, std::move(payload));
     } else { // a client-to-server message
         drop("unexpected_message", std::format("the server sent client message {}", proto::opcode_name(T::op)));
     }

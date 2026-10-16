@@ -326,6 +326,12 @@ return {
 | `kast.set(e, name, fields)` | Partial: listed fields change, the others keep their values. All-or-nothing: an unknown field, a wrong type, an out-of-range value or an unknown enum value raises an error and leaves the component unchanged |
 | `kast.has(e, name)` / `kast.add(e, name)` / `kast.remove(e, name)` | `add` uses the field defaults and does nothing if the component is present; `remove` does nothing if it is absent |
 | `kast.log/warn/error(msg)` | A server log line `<system path>: <msg>` at that level |
+| `kast.publish(name [, payload])` | Queues an event on the server's event bus for the next drain (see [Events](#events)) |
+| `kast.subscribe(name, fn)` | Calls `fn(payload)` for every later `name` event; returns a handle |
+| `kast.unsubscribe(handle)` | Removes the calling system's subscription; another system's or a stale handle does nothing |
+| `kast.sendTo(e, name [, payload])` | Sends the event to character `e`'s client only |
+| `kast.sendNearby(e, name [, payload])` | Sends the event to `e`'s client and every client that currently sees `e` (the `replicate = "aoi"` audience) |
+| `kast.broadcast(name [, payload])` | Sends the event to every player in the zone |
 
 - **Entities:** an entity is the character's server wire id, the integer clients see as `entityId`.
 - **Players only:** only player characters exist. There is no `kast.create` / `kast.destroy`, and no NPCs.
@@ -337,6 +343,40 @@ return {
 | `Character` | `charId`, `name` |
 | `Transform` | `position = {x, y, z}`, `heading` (radians). Moves come only from the validated client movement |
 
+### Events
+
+The server has one event bus with the engine's API and rules (root README, "Events"). Systems use it to talk to each
+other, and server C++ can publish and subscribe through `World::bus()`. Events never reach clients on their own: only
+the three send functions put anything on the network.
+
+- **Delivery:** `kast.publish` only queues. The queue is drained once per tick, right after every system's `update`
+  (step 5 below). Events are delivered in publish order, and each event's subscribers run in subscription order, C++
+  and Lua alike. Events published during the drain (by a subscriber), or from `init`, `onEnter` or `onLeave`, wait for
+  the next tick's drain. A graceful shutdown drops the queue.
+- **Payloads:** plain data. That is `nil`, booleans, finite numbers, strings, and tables whose keys are exactly 1..n
+  (arrays) or all strings (objects), nested at most 32 deep. Functions, userdata, threads, cycles, mixed keys, NaN and
+  infinities raise an error at the call (`kast.publish: payload.x must be a finite number`), and nothing is queued.
+  Every subscriber gets its own copy.
+- **Names:** non-empty strings. Anything else raises `<function>: event name must be a non-empty string, got <value>`.
+- **Subscriptions belong to the calling system.** When that system is disabled by any error, all of its subscriptions
+  are removed. A failing subscriber is logged as `Lua system disabled` (callback `event '<name>'`, with `path:line`),
+  and the event's other subscribers still run.
+- **Client events:** `kast.sendTo`, `kast.sendNearby` and `kast.broadcast` take the same names and payloads. Each
+  recipient gets a `ServerEvent` ([`PROTOCOL.md`](PROTOCOL.md#server-events)), and the engine publishes it on the
+  client's bus as `server.<name>`.
+  - **When:** sends are queued and go out in call order after component replication (step 8), so a client already has
+    the `Spawn` and the latest component values. Sends from `onLeave` go out at the despawn, before that character's
+    `Despawn`; sends from `onEnter` go out on the next tick.
+  - **Targets:** a bad id (not a whole number from 0 to 2^32-1) raises `kast.sendTo: invalid entity id <value>`. A
+    valid id whose character is not in the world when the events go out (it left meanwhile) sends nothing.
+  - **Size:** an event whose frame would pass 65535 bytes raises `kast.sendTo: event "<name>" is too large to send` at
+    the call.
+
+**Client events cost bandwidth.** Each send is one message per recipient, and nothing rate-limits them: only the
+existing 1 MiB per-session send-buffer cap stops a flood, by disconnecting the client. `broadcast` reaches every
+player, so one call per player costs N² messages in a zone of N. `sendNearby` in a crowd costs about the same. Send on
+game events (a login, a kill, a quest step), never every tick.
+
 ### Tick order
 
 Each tick runs, in this order:
@@ -345,10 +385,12 @@ Each tick runs, in this order:
 2. AOI (`Spawn` / `Despawn`)
 3. chat
 4. **Lua `update`**, every system in filename order
-5. replication (`EntityMove`)
-6. component replication
-7. save
-8. end of tick
+5. **event drain:** the events queued since the last drain go to their subscribers
+6. replication (`EntityMove`)
+7. component replication
+8. **client events:** `ServerEvent` for every `kast.sendTo` / `sendNearby` / `broadcast` since the last flush
+9. save
+10. end of tick
 
 Lua sees this tick's validated positions. Its changes are replicated and become eligible for saving in the same tick.
 
@@ -357,8 +399,8 @@ Lifecycle hooks run at these points:
 | Event | Hooks |
 |---|---|
 | `EnterWorld` | Spawn, restore the persisted components, then `onEnter` |
-| Logout, disconnect or duplicate-login kick | `onLeave`, then the save and the despawn |
-| Graceful shutdown | `onLeave` for every character, then every system's `shutdown`, then the saves and despawns |
+| Logout, disconnect or duplicate-login kick | `onLeave` and its client events, then the save and the despawn |
+| Graceful shutdown | `onLeave` for every character, then every system's `shutdown`, then their client events, then the saves and despawns. Undelivered bus events are dropped |
 
 ### Persistence
 
@@ -384,6 +426,7 @@ The `lua/` folder holds the sample:
 |---|---|
 | `components/health.lua` | `Health`: `persist`, `replicate = "aoi"`, every field type. The same file as `tests/project/components/health.lua` |
 | `components/wallet.lua` | `Wallet { gold }`: `persist`, `replicate = "owner"` |
+| `systems/events.lua` | On login, sends the player `welcome` (`sendTo`) and publishes `player.entered` on the bus. Its subscriber runs on the next tick, after the newcomer's `Spawn`, and sends `player.arrived` to the newcomer and everyone who sees it (`sendNearby`). On logout, sends the whole zone `player.left` (`broadcast`) before the `Despawn`. It sends only on login and logout, never per tick |
 | `systems/regen.lua` | `onEnter` adds `Health` and `Wallet` if absent and pays 1 gold per login. Once a second per character, each on its own phase, `update` regenerates `Health.current` toward `max` (+2) if the character stood still, or drains it by 0.5 per metre moved (`Transform` deltas). It keeps whole points and writes only on a change, so a character costs at most one `ComponentUpdate` a second per viewer |
 
 **Keep replicated components quiet.** Each change goes out in full to the owner and everyone in view. A component written every tick costs one message per tick per viewer, and in a crowd that is N² messages. An earlier sample that updated `Health` every tick made the 500-bot load test drop 378 clients on the 1 MiB send-buffer cap while they crowded the spawn point. Write replicated values at the rate clients need, and only when they change.
@@ -399,10 +442,11 @@ The `lua/` folder holds the sample:
 
 ## Tests
 
-- **Self-check** (`tests/self_check.cpp` + `tests/lua_checks.cpp`, ctest `world_self_check`): assert-style checks of the pure logic with an injected clock, so nothing sleeps. The Lua checks write their scripts to a temp folder and drive a `World` with captured sends and saves.
+- **Self-check** (`tests/self_check.cpp` + `tests/lua_checks.cpp`, ctest `world_self_check`): assert-style checks of the pure logic with an injected clock, so nothing sleeps. The Lua checks write their scripts to a temp folder and drive a `World` with captured sends, saves and log lines. They cover the event bus (the engine's cases), `kast.publish/subscribe/unsubscribe` and the client sends: audiences, order, rejections and timing.
 - **Integration** (`tests/integration.sh`): drives `kast_bot` scenarios against the compose stack.
   - The bots register, verify through Mailpit and log in with real auth tokens.
   - Scenarios 10–13 use `docker compose restart/stop/start` on `world` and `mysql`.
+  - Scenario 14 uses the sample `systems/events.lua`: `sendTo` reaches only its target, `sendNearby` only bots in view, and `broadcast` every bot.
   - Logs go to `build/integration-<run>/`.
 - **Load** (`tests/load.sh`):
   - **Setup:** restarts `world` so its totals cover only the test. It then runs `COUNT` bots in one process (8 io threads, 50 new connections per second) for `DURATION` s.

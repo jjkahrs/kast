@@ -19,6 +19,7 @@ void World::shutdown_scripts() {
         reg_.emplace<ScriptsLeft>(e);
     }
     lua_.shutdown();
+    client_event_system(reg_, lua_.take_client_events(), send_); // before the despawns
 }
 
 entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint now) {
@@ -52,7 +53,10 @@ entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint 
 
 void World::despawn(entt::entity e) {
     if (!reg_.valid(e)) return;
-    if (!reg_.all_of<ScriptsLeft>(e)) lua_.leave(e);
+    if (!reg_.all_of<ScriptsLeft>(e)) {
+        lua_.leave(e);
+        client_event_system(reg_, lua_.take_client_events(), send_); // before the Despawn, while e can still be seen
+    }
     const auto& ch = reg_.get<CharacterRef>(e);
     const auto& tf = reg_.get<Transform>(e);
     save_({ch.charId, tf.pos, tf.heading, lua::components_column(reg_, e, defs_)});
@@ -77,14 +81,18 @@ void World::push_say(entt::entity e, std::string text) {
 }
 
 // Lua runs after movement and chat (it sees this tick's positions) and before replication and save (its changes go
-// out and get saved this tick). aoi stays before both replications, so a Spawn always precedes component data.
+// out and get saved this tick). aoi stays before both replications, so a Spawn always precedes component data. The
+// events Lua published are delivered right after update; client events go out after component replication, so a
+// client already has the Spawn and the latest component values they may refer to.
 void World::tick(TimePoint now) {
     movement_system(reg_, rules_.move, send_, now);
     aoi_system(reg_, grid_, send_);
     chat_system(reg_, rules_.chat, send_, now);
     lua_.update(rules_.tickSeconds);
+    lua_.drain_events();
     replication_system(reg_, send_);
     component_replication_system(reg_, defs_, send_);
+    client_event_system(reg_, lua_.take_client_events(), send_);
     save_system(reg_, defs_, save_, rules_.saveInterval, now);
     end_of_tick_system(reg_);
 }

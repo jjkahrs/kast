@@ -38,6 +38,7 @@ enum class Opcode : uint16_t {
     ChatMsg = 0x0124,      // S
     ComponentUpdate = 0x0125, // S
     ComponentRemove = 0x0126, // S
+    ServerEvent = 0x0127,     // S
 };
 
 // Reason codes carried by Disconnect and CharError.
@@ -306,9 +307,21 @@ struct ComponentRemove {
     bool operator==(const ComponentRemove&) const = default;
 };
 
+// A named event a Lua system sent with kast.sendTo/sendNearby/broadcast (PROTOCOL.md "Server events"). Never C->S.
+struct ServerEvent {
+    static constexpr Opcode op = Opcode::ServerEvent;
+    std::string name;
+    std::string json;
+    void write(Writer& w) const { w.str(name); w.str(json); }
+    void read(Reader& r) { name = r.str(); json = r.str(); }
+    bool operator==(const ServerEvent&) const = default;
+    // Whether an event of these sizes fits one frame (str would truncate it otherwise).
+    static bool fits(size_t nameBytes, size_t jsonBytes) { return 2 + nameBytes + 2 + jsonBytes <= kMaxPayloadBytes; }
+};
+
 using Message = std::variant<Hello, Auth, Ping, Pong, CharListReq, CharCreate, CharDelete, EnterWorld, Move, Say,
                              AuthOk, Disconnect, CharList, CharCreated, CharDeleted, EnterWorldOk, CharError, Spawn,
                              Despawn, EntityMove, Correction, ChatMsg, ComponentUpdate,
-                             ComponentRemove>;
+                             ComponentRemove, ServerEvent>;
 
 } // namespace kast::proto

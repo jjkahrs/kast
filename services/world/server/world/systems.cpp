@@ -155,6 +155,21 @@ void component_replication_system(entt::registry& reg, const lua::Defs& defs, co
     }
 }
 
+void client_event_system(entt::registry& reg, std::vector<lua::ClientEvent> events, const Send& send) {
+    for (auto& event : events) {
+        const proto::ServerEvent msg{std::move(event.name), std::move(event.json)};
+        if (event.to == lua::ClientEvent::To::all) {
+            for (auto [e, link] : reg.view<SessionLink>().each()) send(link.sessionId, msg);
+            continue;
+        }
+        const auto e = from_wire(event.entity);
+        if (!reg.valid(e) || !reg.all_of<SessionLink, Visible>(e)) continue; // left already: nothing to send
+        send(reg.get<SessionLink>(e).sessionId, msg);
+        if (event.to == lua::ClientEvent::To::nearby)
+            for (uint32_t id : reg.get<Visible>(e).ids) send(reg.get<SessionLink>(from_wire(id)).sessionId, msg);
+    }
+}
+
 // Periodic save of characters whose position or persisted Lua components changed.
 void save_system(entt::registry& reg, const lua::Defs& defs, const Save& save, Millis interval, TimePoint now) {
     std::vector<entt::entity> saved;

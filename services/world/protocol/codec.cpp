@@ -51,6 +51,7 @@ const char* opcode_name(Opcode op) {
     case Opcode::ChatMsg: return "ChatMsg";
     case Opcode::ComponentUpdate: return "ComponentUpdate";
     case Opcode::ComponentRemove: return "ComponentRemove";
+    case Opcode::ServerEvent: return "ServerEvent";
     }
     return "unknown";
 }

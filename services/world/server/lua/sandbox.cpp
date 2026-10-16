@@ -73,6 +73,77 @@ sol::object scalar_to_lua(sol::state_view lua, FieldKind kind, const Json& value
     return sol::make_object(lua, value.get<std::string>()); // strings and enum names
 }
 
+// label names the value in errors: "payload", "payload.id", "payload[2]". path holds the tables being converted,
+// outermost first, to catch cycles.
+bool payload_to_json(const sol::object& value, const std::string& label, std::vector<const void*>& path,
+                     nlohmann::json& out, std::string& error) {
+    switch (value.get_type()) {
+    case sol::type::lua_nil:
+    case sol::type::none: out = nullptr; return true;
+    case sol::type::boolean: out = value.as<bool>(); return true;
+    case sol::type::string: out = value.as<std::string>(); return true;
+    case sol::type::number: {
+        const double number = value.as<double>();
+        if (!std::isfinite(number)) {
+            error = std::format("{} must be a finite number", label);
+            return false;
+        }
+        if (exact_integer(number))
+            out = static_cast<int64_t>(number);
+        else
+            out = number;
+        return true;
+    }
+    case sol::type::table: break;
+    default:
+        error = std::format("{}: a {} can't be sent in an event (only nil, booleans, numbers, strings and tables)",
+                            label, sol::type_name(value.lua_state(), value.get_type()));
+        return false;
+    }
+    const sol::table table = value.as<sol::table>();
+    if (std::ranges::find(path, table.pointer()) != path.end()) {
+        error = std::format("{}: the table contains itself (cycle)", label);
+        return false;
+    }
+    if (path.size() >= static_cast<size_t>(kMaxPayloadDepth)) {
+        error = std::format("{}: tables are nested more than {} deep", label, kMaxPayloadDepth);
+        return false;
+    }
+    // Keys exactly 1..n: n distinct positive integers whose largest is n.
+    size_t count = 0, strings = 0;
+    double largest = 0.0;
+    bool positiveIntegers = true;
+    for (const auto& [key, unused] : table) {
+        ++count;
+        if (key.get_type() == sol::type::string) {
+            ++strings;
+            positiveIntegers = false;
+            continue;
+        }
+        const double k = key.get_type() == sol::type::number ? key.as<double>() : 0.0;
+        positiveIntegers = positiveIntegers && k >= 1.0 && k == std::floor(k);
+        largest = std::max(largest, k);
+    }
+    path.push_back(table.pointer());
+    bool ok = true;
+    if (count > 0 && positiveIntegers && largest == static_cast<double>(count)) {
+        out = nlohmann::json::array();
+        for (size_t i = 1; ok && i <= count; ++i)
+            ok = payload_to_json(table[i], std::format("{}[{}]", label, i), path, out.emplace_back(), error);
+    } else if (strings == count) { // also the empty table
+        out = nlohmann::json::object();
+        for (const auto& [key, item] : table) {
+            const std::string name = key.as<std::string>();
+            if (!(ok = payload_to_json(item, std::format("{}.{}", label, name), path, out[name], error))) break;
+        }
+    } else {
+        error = std::format("{}: table keys must be exactly 1..n (an array) or all strings (an object)", label);
+        ok = false;
+    }
+    path.pop_back();
+    return ok;
+}
+
 } // namespace
 
 void open_sandbox(sol::state& lua) {
@@ -211,6 +282,32 @@ sol::object field_json_to_lua(sol::state_view lua, const FieldDesc& field, const
     sol::table table = lua.create_table();
     for (size_t i = 0; i < value.size(); ++i) table[i + 1] = scalar_to_lua(lua, field.kind, value[i]);
     return table;
+}
+
+bool lua_to_json(const sol::object& value, nlohmann::json& out, std::string& error) {
+    std::vector<const void*> path;
+    return payload_to_json(value, "payload", path, out, error);
+}
+
+sol::object json_to_lua(sol::state_view lua, const nlohmann::json& value) {
+    switch (value.type()) {
+    case nlohmann::json::value_t::boolean: return sol::make_object(lua, value.get<bool>());
+    case nlohmann::json::value_t::number_integer:
+    case nlohmann::json::value_t::number_unsigned:
+    case nlohmann::json::value_t::number_float: return sol::make_object(lua, value.get<double>());
+    case nlohmann::json::value_t::string: return sol::make_object(lua, value.get_ref<const std::string&>());
+    case nlohmann::json::value_t::array: {
+        sol::table table = lua.create_table(static_cast<int>(value.size()), 0);
+        for (size_t i = 0; i < value.size(); ++i) table[i + 1] = json_to_lua(lua, value[i]);
+        return table;
+    }
+    case nlohmann::json::value_t::object: {
+        sol::table table = lua.create_table(0, static_cast<int>(value.size()));
+        for (const auto& [key, item] : value.items()) table[key] = json_to_lua(lua, item);
+        return table;
+    }
+    default: return sol::make_object(lua, sol::lua_nil); // null (and discarded)
+    }
 }
 
 } // namespace kast::lua

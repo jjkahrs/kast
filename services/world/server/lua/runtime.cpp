@@ -3,6 +3,8 @@
 #include "../world/components.h"
 #include "sandbox.h"
 
+#include <messages.h>
+
 #include <algorithm>
 #include <cmath>
 #include <format>
@@ -31,6 +33,7 @@ struct System {
     std::filesystem::path file;
     sol::environment env;
     sol::protected_function update, shutdown, onEnter, onLeave;
+    std::vector<EventBus::Subscription> subscriptions; // kast.subscribe; cleared when the system is disabled
     bool ok = false;
     std::string error;
 };
@@ -44,7 +47,9 @@ struct Runtime::Impl {
     Defs defs;
     sol::state lua;
     sol::table api;
-    std::vector<System> systems;
+    EventBus bus;                          // after lua: Lua subscribers hold functions of that state
+    std::vector<System> systems;           // after bus: their subscriptions unsubscribe from it
+    std::vector<ClientEvent> clientEvents; // kast.sendTo/sendNearby/broadcast since the last take
     System* current = nullptr;
 
     Impl(entt::registry& r, Defs d) : reg(r), defs(std::move(d)) {
@@ -76,9 +81,14 @@ struct Runtime::Impl {
         if (!system.ok || !fn.valid()) return;
         std::string error = call(system, fn, what, std::forward<Args>(args)...);
         if (error.empty()) return;
+        disable(system, std::move(error));
+        log::error("Lua system disabled", {{"system", system.path}, {"callback", what}, {"error", system.error}});
+    }
+
+    void disable(System& system, std::string error) {
         system.ok = false;
         system.error = std::move(error);
-        log::error("Lua system disabled", {{"system", system.path}, {"callback", what}, {"error", system.error}});
+        system.subscriptions.clear();
     }
 
     std::string load(System& system) {
@@ -111,7 +121,7 @@ struct Runtime::Impl {
         system.ok = true;
         if (sol::object init = table["init"]; init.get_type() == sol::type::function)
             if (std::string e = call(system, init, "init"); !e.empty()) {
-                system.ok = false;
+                disable(system, e);
                 return e;
             }
         return {};
@@ -146,6 +156,38 @@ struct Runtime::Impl {
             }
         }
         raise(L, std::format("invalid entity id {}", to_string(L, id)));
+    }
+
+    // A client event's target: any wire id; one not in the world is skipped when the events are sent.
+    uint32_t target(lua_State* L, const char* function, const sol::object& id) {
+        if (id.get_type() == sol::type::number) {
+            const double value = id.as<double>();
+            if (value >= 0.0 && value <= 4294967295.0 && value == std::floor(value)) return static_cast<uint32_t>(value);
+        }
+        raise(L, std::format("{}: invalid entity id {}", function, to_string(L, id)));
+    }
+
+    std::string event_name(lua_State* L, const char* function, const sol::object& name) {
+        if (name.get_type() != sol::type::string || name.as<std::string>().empty())
+            raise(L, std::format("{}: event name must be a non-empty string, got {}", function, to_string(L, name)));
+        return name.as<std::string>();
+    }
+
+    nlohmann::json payload(lua_State* L, const char* function, const sol::object& value) {
+        nlohmann::json json;
+        if (std::string error; !lua_to_json(value, json, error)) raise(L, std::format("{}: {}", function, error));
+        return json;
+    }
+
+    void queue_client_event(lua_State* L, const char* function, ClientEvent::To to, uint32_t entity,
+                            const sol::object& name, const sol::object& value) {
+        std::string event = event_name(L, function, name);
+        // replace: a Lua string may hold bytes that aren't UTF-8, which JSON can't carry
+        std::string json = payload(L, function, value).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        if (!proto::ServerEvent::fits(event.size(), json.size()))
+            raise(L, std::format("{}: event \"{}\" is too large to send: {} bytes of name and JSON payload, at most {}",
+                                 function, event, event.size() + json.size(), proto::kMaxPayloadBytes - 4));
+        clientEvents.push_back({to, entity, std::move(event), std::move(json)});
     }
 
     Type type(lua_State* L, const std::string& name) {
@@ -258,6 +300,53 @@ struct Runtime::Impl {
             changed(e, def);
         });
 
+        // Events: queued, delivered by drain_events() after every update (README "Events"). Subscriptions belong to
+        // the calling system; a handle is a light userdata holding the subscription id (no metatable a script could
+        // edit).
+        api.set_function("publish", [this](sol::this_state L, const sol::object& name, const sol::object& value) {
+            std::string event = event_name(L, "kast.publish", name);
+            bus.publish(std::move(event), payload(L, "kast.publish", value), who());
+        });
+        api.set_function("subscribe", [this](sol::this_state L, const sol::object& name, const sol::object& fn) {
+            std::string event = event_name(L, "kast.subscribe", name);
+            if (fn.get_type() != sol::type::function)
+                raise(L, std::format("kast.subscribe: callback must be a function, got {}", to_string(L, fn)));
+            if (!current) raise(L, "kast.subscribe: only a system can subscribe");
+            System* owner = current; // systems never move: load() reserved them
+            std::string what = std::format("event '{}'", event);
+            EventBus::Subscription subscription = bus.subscribe(
+                std::move(event), [this, owner, what = std::move(what),
+                                   // on the main thread: fn's own may be a coroutine, collected before the drain
+                                   callback = sol::protected_function(lua.lua_state(), fn)](const nlohmann::json& p) {
+                    run(*owner, callback, what, json_to_lua(lua, p)); // skipped once the owner is disabled
+                });
+            const uint64_t id = subscription.id();
+            owner->subscriptions.push_back(std::move(subscription));
+            return reinterpret_cast<void*>(static_cast<uintptr_t>(id)); // ponytail: 64-bit ids in a pointer, x64 only
+        });
+        api.set_function("unsubscribe", [this](sol::this_state L, const sol::object& handle) {
+            if (handle.get_type() != sol::type::lightuserdata)
+                raise(L, std::format("kast.unsubscribe: expected a handle from kast.subscribe, got {}", to_string(L, handle)));
+            const uint64_t id = reinterpret_cast<uintptr_t>(handle.as<void*>());
+            // Another system's handle, or one already unsubscribed, isn't in current's list: nothing happens.
+            if (current)
+                std::erase_if(current->subscriptions, [id](const EventBus::Subscription& s) { return s.id() == id; });
+        });
+
+        // Client events: queued, sent as ServerEvent after component replication (README "Events").
+        api.set_function("sendTo", [this](sol::this_state L, const sol::object& id, const sol::object& name,
+                                          const sol::object& value) {
+            queue_client_event(L, "kast.sendTo", ClientEvent::To::owner, target(L, "kast.sendTo", id), name, value);
+        });
+        api.set_function("sendNearby", [this](sol::this_state L, const sol::object& id, const sol::object& name,
+                                              const sol::object& value) {
+            queue_client_event(L, "kast.sendNearby", ClientEvent::To::nearby, target(L, "kast.sendNearby", id), name,
+                               value);
+        });
+        api.set_function("broadcast", [this](sol::this_state L, const sol::object& name, const sol::object& value) {
+            queue_client_event(L, "kast.broadcast", ClientEvent::To::all, 0, name, value);
+        });
+
         const auto logger = [this](void (*write)(std::string_view, nlohmann::json)) {
             return [this, write](sol::this_state L, const sol::object& message) {
                 write(std::format("{}: {}", who(), to_string(L, message)), nlohmann::json::object());
@@ -281,13 +370,15 @@ std::vector<std::string> Runtime::load(const std::filesystem::path& root) {
     std::ranges::sort(files, {}, [](const auto& f) { return f.filename(); });
 
     std::vector<std::string> errors;
+    impl_->systems.reserve(files.size()); // subscriptions point at their System
     for (const auto& file : files) {
         System& system = impl_->systems.emplace_back();
         system.path = "systems/" + file.filename().generic_string();
         system.file = file;
-        system.error = impl_->load(system);
-        system.ok = system.error.empty();
-        if (!system.ok) errors.push_back(system.error);
+        if (std::string error = impl_->load(system); !error.empty()) {
+            impl_->disable(system, error);
+            errors.push_back(std::move(error));
+        }
     }
     return errors;
 }
@@ -306,7 +397,14 @@ void Runtime::leave(entt::entity e) {
 
 void Runtime::shutdown() {
     for (System& s : impl_->systems) impl_->run(s, s.shutdown, "shutdown");
+    impl_->bus.dropQueued();
 }
+
+void Runtime::drain_events() { impl_->bus.drain(); }
+
+EventBus& Runtime::bus() { return impl_->bus; }
+
+std::vector<ClientEvent> Runtime::take_client_events() { return std::exchange(impl_->clientEvents, {}); }
 
 std::vector<SystemStatus> Runtime::status() const {
     std::vector<SystemStatus> out;

@@ -9,10 +9,16 @@ namespace kast::log {
 namespace {
 std::atomic<Level> g_level{Level::info};
 std::mutex g_mutex;
+std::function<void(const std::string&)> g_sink; // under g_mutex
 constexpr const char* kNames[] = {"debug", "info", "warn", "error"};
 } // namespace
 
 void set_level(Level l) { g_level = l; }
+
+void set_test_sink(std::function<void(const std::string& line)> sink) {
+    std::lock_guard lock(g_mutex);
+    g_sink = std::move(sink);
+}
 
 bool parse_level(std::string_view s, Level& out) {
     for (int i = 0; i < 4; ++i)
@@ -31,6 +37,7 @@ void write(Level l, std::string_view msg, nlohmann::json fields) {
     std::lock_guard lock(g_mutex);
     std::fwrite(out.data(), 1, out.size(), stdout);
     std::fflush(stdout);
+    if (g_sink) g_sink(out.substr(0, out.size() - 1));
 }
 
 } // namespace kast::log

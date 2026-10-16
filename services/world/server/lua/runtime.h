@@ -1,9 +1,10 @@
 // Server Lua systems: LUA_ROOT/systems/*.lua, run in alphabetical filename order on the tick thread, one Lua state,
 // each file in its own sandboxed environment. A file returns { init?, update(dt), shutdown?, onEnter?(e), onLeave?(e) }
-// and reaches the world only through kast.* over the registry (README "Lua components and systems").
+// and reaches the world only through kast.* over the registry and the event bus (README "Lua components and systems").
 // sol2 stays inside runtime.cpp: World holds a Runtime without seeing Lua types.
 #pragma once
 #include "components.h"
+#include "event_bus.h"
 
 #include <entt/entity/registry.hpp>
 
@@ -20,6 +21,15 @@ struct SystemStatus {
     std::string error; // why it is disabled ("path:line: ..."), empty when ok
 };
 
+// A kast.sendTo/sendNearby/broadcast call, queued until World sends it as ServerEvent.
+struct ClientEvent {
+    enum class To { owner, nearby, all };
+    To to = To::all;
+    uint32_t entity = 0; // wire id; unused for all
+    std::string name;
+    std::string json;
+};
+
 class Runtime {
 public:
     Runtime(entt::registry& reg, Defs defs);
@@ -34,8 +44,14 @@ public:
     void update(float dt);
     void enter(entt::entity e); // onEnter: after the character spawned and its persisted components were restored
     void leave(entt::entity e); // onLeave: before it is saved and despawned
-    void shutdown();
+    void shutdown(); // also drops the events still queued on the bus
     std::vector<SystemStatus> status() const;
+
+    // Delivers the bus events queued so far (see EventBus::drain). A failing Lua subscriber disables its system.
+    void drain_events();
+    EventBus& bus();
+    // The client events queued since the last call, in call order.
+    std::vector<ClientEvent> take_client_events();
 
 private:
     struct Impl;

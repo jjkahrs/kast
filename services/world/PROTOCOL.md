@@ -103,6 +103,7 @@ C = client to server, S = server to client. "Payload" lists fields in wire order
 | `0x0124` | ChatMsg | S | `str fromName, str text` |
 | `0x0125` | ComponentUpdate | S | `u32 entityId, str name, str json` (a Lua component's full value, see below) |
 | `0x0126` | ComponentRemove | S | `u32 entityId, str name` |
+| `0x0127` | ServerEvent | S | `str name, str json` (a named event a Lua system sent, see below) |
 
 **CharInfo:** `u64 id, str name, vec3 pos`.
 
@@ -164,6 +165,31 @@ server-authoritative: there is no client-to-server component message, and a clie
 - **Ordering:** for any entity, `ComponentUpdate` / `ComponentRemove` come after its `Spawn` (or the owner's `EnterWorldOk`) and never after its `Despawn`.
 - **Size:** a component whose frame would pass the `u16` length limit (65535-byte payload) is not sent. The server logs an error once, until the value fits again.
 - **Bandwidth:** each change is sent in full. A component that changes every tick (e.g. regenerating health) costs one message per tick for each recipient.
+
+### Server events
+
+A server Lua system sends a named event to clients with `kast.sendTo`, `kast.sendNearby` or `kast.broadcast` (README,
+"Lua components and systems", Events). Each recipient gets one `ServerEvent`. It is server-to-client only: a client
+that sends one gets `Disconnect{unexpected_message}`.
+
+- **`name`:** the non-empty name the system chose, e.g. `player.left`. The engine publishes it as `server.<name>`.
+- **`json`:** the payload as compact JSON: any plain-data value (`null` when the system sent none). Bytes in Lua
+  strings that aren't UTF-8 are replaced with U+FFFD.
+- **Who gets it:**
+  - `sendTo(e, ...)`: the session of character `e`.
+  - `sendNearby(e, ...)`: `e`'s session and every session that currently sees `e` (the `"aoi"` audience).
+  - `broadcast(...)`: every player in the zone.
+  - The audience is taken when the event is sent, not when the system queued it. A character no longer in the world
+    gets nothing, and neither does anyone around it.
+- **When:** once per tick, after `ComponentUpdate` / `ComponentRemove`, in the order the systems queued them. So a
+  client already has the `Spawn` and the latest component values of any entity the event refers to. Events queued in
+  `onLeave` go out at the despawn, before that character's `Despawn`; events queued in `onEnter` go out on the next tick.
+- **Ordering:** no `ServerEvent` about or to an entity comes before its `Spawn` (or the owner's `EnterWorldOk`) or
+  after its `Despawn`.
+- **Size:** the frame must fit the `u16` length limit: `4 + name + json` bytes at most 65535. A bigger event is
+  rejected by the Lua call with an error; nothing is sent.
+- **Bandwidth:** each event is one message per recipient. `broadcast` reaches every player, so one call costs N
+  messages in a zone of N players, and a call per player costs N².
 
 ## Codes
 

@@ -400,6 +400,11 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
                 queue(proto::ComponentUpdate{2, "Health", "{not json"}); // ignored with a warning
                 queue(proto::ComponentRemove{2, "Health"});
             }
+            if (say->text == "events") {
+                queue(proto::ServerEvent{"quest.update", R"({"quest":7,"steps":[1,2],"done":false})"});
+                queue(proto::ServerEvent{"broken", "{not json"}); // ignored with a warning
+                queue(proto::ServerEvent{"ping", "null"});
+            }
         } else {
             queue(proto::Disconnect{proto::Code::unexpected_message});
             return flush();

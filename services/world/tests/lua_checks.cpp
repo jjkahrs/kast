@@ -1,6 +1,8 @@
 // Assert-style checks for the Lua layer: component definitions (every type, option and error), reserved and duplicate
-// names, the sandbox, kast.* semantics, hooks, error handling, persistence + drift, and component replication routing.
+// names, the sandbox, kast.* semantics, hooks, error handling, persistence + drift, component replication routing, the
+// event bus (kast.publish/subscribe/unsubscribe) and client events (kast.sendTo/sendNearby/broadcast).
 // Lua files are written to a temp folder; the World runs with captured Send/Save, so there is no network or database.
+#include "core/log.h"
 #include "lua/components.h"
 #include "world/components.h"
 #include "world/world.h"
@@ -8,6 +10,7 @@
 #include <codec.h>
 
 #include <cstdio>
+#include <format>
 #include <fstream>
 #include <map>
 #include <random>
@@ -537,14 +540,449 @@ void checkReplication() {
     (void)b;
 }
 
+// --- events (README "Lua components and systems", Events): the same cases as the engine's checks ---
+
+std::vector<std::string> g_log; // log lines while a LogCapture lives
+
+struct LogCapture {
+    LogCapture() {
+        g_log.clear();
+        log::set_test_sink([](const std::string& line) { g_log.push_back(line); });
+    }
+    ~LogCapture() { log::set_test_sink(nullptr); }
+};
+
+// Index of the first captured log line containing part, or SIZE_MAX.
+size_t log_index(const std::string& part) {
+    for (size_t i = 0; i < g_log.size(); ++i)
+        if (contains(g_log[i], part)) return i;
+    return SIZE_MAX;
+}
+bool logged(const std::string& part) { return log_index(part) != SIZE_MAX; }
+
+void checkEventBus() {
+    LogCapture capture;
+    EventBus bus;
+    std::vector<std::string> seen;
+    const auto record = [&](std::string tag) {
+        return [&seen, tag](const nlohmann::json& payload) { seen.push_back(tag + payload.dump()); };
+    };
+    EventBus::Subscription a1 = bus.subscribe("a", record("a1"));
+    EventBus::Subscription b1 = bus.subscribe("b", record("b1"));
+    EventBus::Subscription a2 = bus.subscribe("a", record("a2"));
+    bus.publish("b", 1);
+    bus.publish("a", 2);
+    check(seen.empty(), "bus: publish only queues");
+    bus.drain();
+    check(seen == std::vector<std::string>{"b11", "a12", "a22"}, "bus: publish order, then subscription order");
+
+    // A subscriber that re-publishes, subscribes and unsubscribes during a drain.
+    seen.clear();
+    std::vector<EventBus::Subscription> added;
+    EventBus::Subscription cut;
+    EventBus::Subscription actor = bus.subscribe("act", [&](const nlohmann::json&) {
+        seen.push_back("actor");
+        bus.publish("act", "again");                      // next drain
+        added.push_back(bus.subscribe("act", record("late"))); // from the next event
+        cut.unsubscribe();                                  // immediately, even for this event
+        cut.unsubscribe();                                  // twice: no-op
+    });
+    cut = bus.subscribe("act", record("cut"));
+    bus.publish("act", nullptr);
+    bus.drain();
+    check(seen == std::vector<std::string>{"actor"}, "bus: unsubscribe mid-drain is immediate; a new subscription waits");
+    seen.clear();
+    bus.drain();
+    check(seen == std::vector<std::string>{"actor", "late\"again\""}, "bus: an event published in a drain arrives in the next");
+    actor.unsubscribe();
+    added.clear();
+    bus.drain(); // the last "again"
+    seen.clear();
+
+    bool after = false;
+    EventBus::Subscription thrower = bus.subscribe("t", [](const nlohmann::json&) { throw std::runtime_error("bad"); });
+    EventBus::Subscription next = bus.subscribe("t", [&](const nlohmann::json&) { after = true; });
+    bus.publish("t", nullptr);
+    bus.drain();
+    check(after && logged("Event 't': C++ subscriber failed: bad"), "bus: a throwing C++ subscriber is logged, the rest run");
+
+    {
+        EventBus::Subscription scoped = bus.subscribe("s", record("scoped"));
+        EventBus::Subscription moved = std::move(scoped);
+    }
+    bus.publish("s", nullptr);
+    bus.drain();
+    check(seen.empty(), "bus: a destroyed handle unsubscribes (after a move too)");
+
+    bus.publish("a", 3);
+    bus.dropQueued();
+    bus.drain();
+    check(seen.empty(), "bus: dropQueued discards undelivered events");
+
+    const uint64_t staleId = a1.id();
+    a1.unsubscribe();
+    a1.unsubscribe(); // stale: no-op
+    EventBus::Subscription fresh = bus.subscribe("a", record("fresh"));
+    check(fresh.id() > staleId, "bus: ids are never reused");
+    a2.unsubscribe();
+    bus.publish("a", 6);
+    bus.drain();
+    check(seen == std::vector<std::string>{"fresh6"}, "bus: stale handles never remove newer subscriptions");
+}
+
+// Lua -> Lua and Lua -> C++: same tick after every update, one subscription order across Lua and C++, independent
+// payload copies, payload conversion.
+void checkLuaEvents() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("systems/a.lua", R"(local tick = 0
+assert(type(kast.publish) == "function" and type(kast.subscribe) == "function" and type(kast.unsubscribe) == "function")
+assert(not pcall(function() kast.publish = nil end), "kast.publish can't be overwritten")
+return { update = function(dt)
+    tick = tick + 1
+    kast.log("ev a update " .. tick)
+    if tick == 1 then
+        kast.publish("first", {n = 1})
+        kast.publish("data", {list = {1, 2, 3}, obj = {a = "x"}, empty = {}, flag = true, s = "str", f = 1.5, i = -7})
+        kast.publish("bare")
+    end
+end })");
+    r.write("systems/b.lua", R"(return {
+    init = function()
+        kast.subscribe("first", function(p) kast.log("ev b first " .. p.n); p.n = 99; p.extra = true end)
+        kast.subscribe("data", function(p) kast.log("ev b data") end)
+    end,
+    update = function(dt) kast.log("ev b update") end,
+})");
+    r.write("systems/d.lua", R"(local subscribed = false
+return { update = function(dt)
+    if not subscribed then
+        subscribed = true
+        kast.subscribe("first", function(p)
+            assert(p.n == 1 and p.extra == nil, "each subscriber gets its own copy")
+            kast.log("ev d first")
+        end)
+    end
+end })");
+    TestWorld w({});
+    const auto errors = w.world.load_scripts(r.root);
+    check(errors.empty(), "event systems load" + (errors.empty() ? "" : ": " + errors[0]));
+    nlohmann::json first, data, bare = "unset";
+    EventBus::Subscription s1 = w.world.bus().subscribe("first", [&](const nlohmann::json& p) {
+        log::info("ev C++ first");
+        first = p;
+    });
+    EventBus::Subscription s2 = w.world.bus().subscribe("data", [&](const nlohmann::json& p) { data = p; });
+    EventBus::Subscription s3 = w.world.bus().subscribe("bare", [&](const nlohmann::json& p) { bare = p; });
+    w.world.tick(T0);
+    for (const auto& s : w.world.script_status()) check(s.ok, "events: system still enabled: " + s.path + " " + s.error);
+    check(log_index("ev a update 1") < log_index("ev b update") && log_index("ev b update") < log_index("ev b first 1"),
+          "events: Lua -> Lua in the same tick, after every update");
+    check(log_index("ev b first 1") < log_index("ev C++ first") && log_index("ev C++ first") < log_index("ev d first") &&
+              log_index("ev d first") < log_index("ev b data") && logged("ev b data"),
+          "events: publish order, then one subscription order across Lua and C++");
+    check(first == nlohmann::json{{"n", 1}}, "events: Lua -> C++ payload, unchanged by Lua subscribers");
+    check(data == nlohmann::json::parse(
+                      R"({"list": [1, 2, 3], "obj": {"a": "x"}, "empty": {}, "flag": true, "s": "str", "f": 1.5, "i": -7})"),
+          "events: payload conversion (arrays, objects, empty table, scalars)");
+    check(data["i"].is_number_integer() && bare.is_null(), "events: integral numbers are integers; no payload is null");
+}
+
+// C++ -> Lua, JSON -> Lua conversion, re-publish and subscribe during a drain, unsubscribe during a drain.
+void checkLuaEventsFromCpp() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("systems/r.lua", R"(local late = 0
+local second
+return {
+    init = function()
+        kast.subscribe("cpp", function(p)
+            assert(#p.arr == 2 and p.arr[1] == 1 and p.arr[2] == 2, "array -> sequence")
+            assert(p.o.k == "v" and p.b == false and p.nul == nil and p.i == 7 and p.s == "x", "object -> table")
+            assert(next(p.e) == nil, "empty object -> empty table")
+            kast.log("ev r cpp")
+            kast.publish("pong", {from = "r"}) -- next tick
+            kast.subscribe("cpp", function() late = late + 1; kast.log("ev r late " .. late) end) -- from the next event
+        end)
+        kast.subscribe("cut", function()
+            kast.unsubscribe(second)
+            kast.unsubscribe(second) -- twice: no-op
+            kast.log("ev r cutter")
+        end)
+        second = kast.subscribe("cut", function() kast.log("ev r second") end)
+    end,
+    update = function(dt) end,
+})");
+    TestWorld w({});
+    check(w.world.load_scripts(r.root).empty(), "C++ -> Lua system loads");
+    int pongs = 0;
+    EventBus::Subscription thrower =
+        w.world.bus().subscribe("pong", [](const nlohmann::json&) { throw std::runtime_error("pong failed"); });
+    EventBus::Subscription counter = w.world.bus().subscribe("pong", [&](const nlohmann::json&) { ++pongs; });
+    const nlohmann::json payload =
+        nlohmann::json::parse(R"({"arr": [1, 2], "o": {"k": "v"}, "b": false, "nul": null, "i": 7, "s": "x", "e": {}})");
+    w.world.bus().publish("cpp", payload);
+    w.world.bus().publish("cut", nullptr);
+    w.world.tick(T0);
+    check(w.world.script_status()[0].ok, "events: C++ -> Lua payload converts to tables");
+    check(logged("ev r cpp") && pongs == 0 && !logged("ev r late"),
+          "events: published during a drain waits; a subscription added during a drain misses the current event");
+    check(logged("ev r cutter") && !logged("ev r second"), "events: unsubscribe during a drain is immediate");
+    w.world.bus().publish("cpp", payload);
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    check(pongs == 1 && logged("Event 'pong': C++ subscriber failed: pong failed"),
+          "events: re-published event arrives next tick; a throwing C++ subscriber doesn't stop the rest");
+    check(logged("ev r late 1") && !logged("ev r late 2"), "events: the late subscription gets later events only");
+    check(w.world.script_status()[0].ok, "events: the system is still fine");
+}
+
+// Rejections raise at the calling file:line and queue nothing; the same for the client sends.
+void checkLuaEventErrors() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("systems/rej.lua", R"(local cyc = {}; cyc.self = cyc
+local deep = {}; local t = deep; for i = 1, 32 do t.x = {}; t = t.x end
+local ok32 = {}; t = ok32; for i = 1, 31 do t.x = {}; t = t.x end
+local function try(f) local ok, err = pcall(f); kast.log("rej " .. tostring(ok) .. " " .. tostring(err)) end
+return { update = function(dt)
+    try(function() kast.publish(42) end)
+    try(function() kast.publish("") end)
+    try(function() kast.publish("e", {f = print}) end)
+    try(function() kast.publish("e", {u = newproxy()}) end)
+    try(function() kast.publish("e", {co = coroutine.create(print)}) end)
+    try(function() kast.publish("e", cyc) end)
+    try(function() kast.publish("e", deep) end)
+    try(function() kast.publish("e", {1, a = 2}) end)
+    try(function() kast.publish("e", {1, nil, 3}) end)
+    try(function() kast.publish("e", {[0] = 1}) end)
+    try(function() kast.publish("e", {x = 0 / 0}) end)
+    try(function() kast.subscribe("e", 5) end)
+    try(function() kast.subscribe("", print) end)
+    try(function() kast.unsubscribe(5) end)
+    try(function() kast.unsubscribe({}) end)
+    kast.publish("ok32", ok32)
+    try(function() kast.sendTo("x", "e") end)
+    try(function() kast.sendTo(1.5, "e") end)
+    try(function() kast.sendNearby(-1, "e") end)
+    try(function() kast.sendTo(0, 5) end)
+    try(function() kast.sendNearby(0, "") end)
+    try(function() kast.broadcast(nil) end)
+    try(function() kast.sendTo(0, "e", {f = print}) end)
+    try(function() kast.broadcast("e", {x = 1 / 0}) end)
+    try(function() kast.broadcast("e", cyc) end)
+    try(function() kast.broadcast("big", string.rep("x", 65527)) end)
+    kast.broadcast("big", string.rep("x", 65526))
+end })");
+    TestWorld w({});
+    check(w.world.load_scripts(r.root).empty(), "rejection system loads");
+    int queued = 0, ok32 = 0;
+    EventBus::Subscription e = w.world.bus().subscribe("e", [&](const nlohmann::json&) { ++queued; });
+    EventBus::Subscription deep = w.world.bus().subscribe("ok32", [&](const nlohmann::json&) { ++ok32; });
+    const auto sid = 9u;
+    w.spawn(sid, 61, "Watcher", 1000, 1000);
+    w.sent.clear();
+    w.world.tick(T0);
+    check(w.world.script_status()[0].ok, "events: rejections are catchable Lua errors");
+    const std::pair<int, const char*> cases[] = {
+        {6, "kast.publish: event name must be a non-empty string, got 42"},
+        {7, "kast.publish: event name must be a non-empty string"},
+        {8, "kast.publish: payload.f: a function can't be sent in an event"},
+        {9, "kast.publish: payload.u: a userdata can't be sent in an event"},
+        {10, "kast.publish: payload.co: a thread can't be sent in an event"},
+        {11, "kast.publish: payload.self: the table contains itself (cycle)"},
+        {12, "kast.publish: payload.x.x.x"}, // ... 32 levels: checked below
+        {13, "kast.publish: payload: table keys must be exactly 1..n (an array) or all strings (an object)"},
+        {14, "kast.publish: payload: table keys must be exactly 1..n"},
+        {15, "kast.publish: payload: table keys must be exactly 1..n"},
+        {16, "kast.publish: payload.x must be a finite number"},
+        {17, "kast.subscribe: callback must be a function, got 5"},
+        {18, "kast.subscribe: event name must be a non-empty string"},
+        {19, "kast.unsubscribe: expected a handle from kast.subscribe, got 5"},
+        {20, "kast.unsubscribe: expected a handle from kast.subscribe, got table"},
+        {22, "kast.sendTo: invalid entity id x"},
+        {23, "kast.sendTo: invalid entity id 1.5"},
+        {24, "kast.sendNearby: invalid entity id -1"},
+        {25, "kast.sendTo: event name must be a non-empty string, got 5"},
+        {26, "kast.sendNearby: event name must be a non-empty string"},
+        {27, "kast.broadcast: event name must be a non-empty string, got nil"},
+        {28, "kast.sendTo: payload.f: a function can't be sent in an event"},
+        {29, "kast.broadcast: payload.x must be a finite number"},
+        {30, "kast.broadcast: payload.self: the table contains itself (cycle)"},
+        {31, "kast.broadcast: event \\\"big\\\" is too large to send: 65532 bytes of name and JSON payload, at most 65531"},
+    };
+    for (const auto& [line, message] : cases)
+        check(logged(std::format("rej false systems/rej.lua:{}: {}", line, message)),
+              std::format("events: rejected at systems/rej.lua:{}: {}", line, message));
+    check(logged("x: tables are nested more than 32 deep"), "events: nesting deeper than 32 is rejected");
+    check(queued == 0 && ok32 == 1, "events: rejected calls queue nothing; 32 nested tables are fine");
+    const auto events = w.sent.of<proto::ServerEvent>(sid);
+    check(events.size() == 1 && events[0].name == "big" && events[0].json.size() == 65528 &&
+              proto::encode(events[0]).size() == proto::kHeaderSize + proto::kMaxPayloadBytes,
+          "events: rejected sends send nothing; one at the frame limit goes out");
+}
+
+// A failing subscriber disables only its system and removes its subscriptions.
+void checkLuaEventFailures() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("systems/bad.lua", R"(return {
+    init = function()
+        kast.subscribe("hit", function(p)
+            error("subscriber failed")
+        end)
+        kast.subscribe("hit", function(p) kast.log("ev bad second") end)
+        kast.subscribe("other", function(p) kast.log("ev bad other") end)
+    end,
+    update = function(dt) end,
+})");
+    r.write("systems/good.lua", R"(return {
+    init = function() kast.subscribe("hit", function(p) kast.log("ev good " .. p.n) end) end,
+    update = function(dt) end,
+})");
+    TestWorld w({});
+    check(w.world.load_scripts(r.root).empty(), "failure systems load");
+    w.world.bus().publish("hit", {{"n", 1}});
+    w.world.tick(T0);
+    const auto status = w.world.script_status();
+    check(!status[0].ok && contains(status[0].error, "systems/bad.lua:4: subscriber failed") &&
+              logged(R"("msg":"Lua system disabled")") && logged(R"("callback":"event 'hit'")") &&
+              logged(R"("error":"systems/bad.lua:4: subscriber failed)"),
+          "events: a failing subscriber disables its system, logged with the callback and path:line");
+    check(!logged("ev bad second") && logged("ev good 1") && status[1].ok,
+          "events: the failed system's other subscribers stop; other systems' still run");
+    w.world.bus().publish("other", nullptr);
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    check(!logged("ev bad other"), "events: disabling removes all of the system's subscriptions");
+}
+
+// Events published from init, onEnter, onLeave and subscribers wait for the next tick's drain; a graceful shutdown
+// drops the queue.
+void checkLuaEventHooks() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("systems/h.lua", R"(return {
+    init = function() kast.publish("hook", {from = "init"}) end,
+    onEnter = function(e) kast.publish("hook", {from = "enter"}) end,
+    onLeave = function(e) kast.publish("hook", {from = "leave"}) end,
+    shutdown = function() kast.publish("hook", {from = "shutdown"}) end,
+    update = function(dt) end,
+})");
+    TestWorld w({});
+    check(w.world.load_scripts(r.root).empty(), "hook event system loads");
+    std::vector<std::string> got;
+    EventBus::Subscription sub =
+        w.world.bus().subscribe("hook", [&](const nlohmann::json& p) { got.push_back(p["from"].get<std::string>()); });
+    const auto a = w.spawn(1, 71, "Alice", 1000, 1000);
+    check(got.empty(), "events: init and onEnter events wait for the tick");
+    w.world.tick(T0);
+    check(got == std::vector<std::string>{"init", "enter"}, "events: init and onEnter events arrive in the next tick's drain");
+    w.world.despawn(a);
+    check(got.size() == 2, "events: onLeave events wait for the tick");
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    check(got.size() == 3 && got[2] == "leave", "events: onLeave events arrive in the next tick's drain");
+
+    w.spawn(2, 72, "Bob", 1000, 1000);
+    w.world.shutdown_scripts();
+    w.world.bus().drain();
+    check(got.size() == 3, "events: a graceful shutdown drops the queued events (onEnter, onLeave, shutdown)");
+}
+
+// kast.sendTo / sendNearby / broadcast: audiences, call order, after component replication, before Despawn.
+void checkClientEvents() {
+    LuaRoot r;
+    r.write("components/health.lua", "return { name = 'Health', replicate = 'aoi', fields = { { name = 'hp', type = 'int' } } }");
+    r.write("systems/send.lua", R"(local ids, tick = {}, 0
+local gone
+return {
+    onEnter = function(e) ids[kast.get(e, "Character").name] = e ; kast.add(e, "Health") end,
+    onLeave = function(e)
+        kast.sendNearby(e, "bye", {who = e})
+        gone = e
+    end,
+    update = function(dt)
+        tick = tick + 1
+        if tick == 1 then
+            kast.set(ids.Alice, "Health", {hp = 5}) -- replicated this tick, before the events
+            kast.sendTo(ids.Alice, "to", {n = 1})
+            kast.sendNearby(ids.Alice, "near", {n = 2})
+            kast.broadcast("all", {n = 3})
+            kast.sendTo(ids.Bob, "bob")
+            kast.sendTo(4000000000, "nobody") -- a valid id not in the world: nothing
+        elseif gone then
+            kast.sendTo(gone, "late")    -- left: nothing
+            kast.sendNearby(gone, "late")
+            gone = nil
+        end
+    end,
+})");
+    TestWorld w(r.defs().defs);
+    check(w.world.load_scripts(r.root).empty(), "client event system loads");
+    const auto a = w.spawn(1, 81, "Alice", 1000, 1000);
+    w.spawn(2, 82, "Bob", 1010, 1000);
+    w.spawn(3, 83, "Carol", 1800, 1800); // out of view
+    const uint32_t A = wire(a);
+    w.sent.clear();
+    w.world.tick(T0);
+    const auto names = [&](uint32_t sid) {
+        std::vector<std::string> out;
+        for (const auto& e : w.sent.of<proto::ServerEvent>(sid)) out.push_back(e.name);
+        return out;
+    };
+    check(names(1) == std::vector<std::string>{"to", "near", "all"}, "sendTo/sendNearby/broadcast reach the owner, in call order");
+    check(names(2) == std::vector<std::string>{"near", "all", "bob"}, "sendNearby reaches a viewer; sendTo only its target");
+    check(names(3) == std::vector<std::string>{"all"}, "broadcast reaches a player out of view; nothing else does");
+    check(w.sent.of<proto::ServerEvent>(1)[0].json == R"({"n":1})", "the payload is compact JSON");
+    const auto index = [&](uint32_t sid, auto pred) {
+        const auto& msgs = w.sent.bySession[sid];
+        for (size_t i = 0; i < msgs.size(); ++i)
+            if (pred(msgs[i])) return i;
+        return msgs.size();
+    };
+    const auto isEvent = [](const proto::Message& m) { return std::holds_alternative<proto::ServerEvent>(m); };
+    const auto isHealthA = [&](const proto::Message& m) {
+        auto* u = std::get_if<proto::ComponentUpdate>(&m);
+        return u && u->entityId == A && u->json == R"({"hp":5})";
+    };
+    const auto isSpawnA = [&](const proto::Message& m) {
+        auto* s = std::get_if<proto::Spawn>(&m);
+        return s && s->entityId == A;
+    };
+    check(index(1, isHealthA) < index(1, isEvent) && index(2, isHealthA) < index(2, isEvent) &&
+              index(2, isSpawnA) < index(2, isEvent),
+          "client events go out after Spawn and component replication");
+
+    w.sent.clear();
+    w.world.despawn(a);
+    const auto isDespawnA = [&](const proto::Message& m) {
+        auto* d = std::get_if<proto::Despawn>(&m);
+        return d && d->entityId == A;
+    };
+    check(names(1) == std::vector<std::string>{"bye"} && names(2) == std::vector<std::string>{"bye"} && names(3).empty(),
+          "onLeave sends go out at the despawn, to the leaver and its viewers");
+    check(index(2, isEvent) < index(2, isDespawnA) && index(2, isDespawnA) < w.sent.bySession[2].size(),
+          "onLeave sends go out before the Despawn");
+    w.sent.clear();
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    check(names(1).empty() && names(2).empty() && names(3).empty(), "a target that left is a silent no-op");
+    for (const auto& s : w.world.script_status()) check(s.ok, "client events: system still enabled: " + s.error);
+
+    // Graceful shutdown: onLeave sends go out before the despawns.
+    w.sent.clear();
+    w.world.shutdown_scripts();
+    check(names(2) == std::vector<std::string>{"bye"} && names(3) == std::vector<std::string>{"bye"},
+          "shutdown: onLeave sends go out before the despawns");
+}
+
 void checkCodec() {
     for (const proto::Message& m : {proto::Message{proto::ComponentUpdate{7, "Health", R"({"current":1.5})"}},
-                                    proto::Message{proto::ComponentRemove{7, "Health"}}}) {
+                                    proto::Message{proto::ComponentRemove{7, "Health"}},
+                                    proto::Message{proto::ServerEvent{"quest.update", R"({"quest":7})"}}}) {
         const auto frame = proto::encode(m);
         const auto d = proto::decode_frame(frame, proto::kMaxPayloadBytes);
         check(d.status == proto::DecodeStatus::ok && d.msg == m, std::string("codec round trip ") + proto::opcode_name(proto::opcode_of(m)));
     }
     check(proto::ComponentUpdate::fits(6, 65535 - 14) && !proto::ComponentUpdate::fits(6, 65535 - 13), "frame size limit");
+    check(proto::ServerEvent::fits(3, 65535 - 7) && !proto::ServerEvent::fits(3, 65535 - 6), "ServerEvent frame size limit");
 }
 
 } // namespace
@@ -561,6 +999,13 @@ int lua_checks(int& checks) {
     checkStartupErrors();
     checkPersistence();
     checkReplication();
+    checkEventBus();
+    checkLuaEvents();
+    checkLuaEventsFromCpp();
+    checkLuaEventErrors();
+    checkLuaEventFailures();
+    checkLuaEventHooks();
+    checkClientEvents();
     checks += g_checks;
     return g_failures;
 }

@@ -6,6 +6,7 @@
 
 #include <db/char_repo.h>
 #include <lua/components.h>
+#include <lua/runtime.h>
 #include <messages.h>
 
 #include <entt/entity/registry.hpp>
@@ -30,6 +31,10 @@ void chat_system(entt::registry& reg, const ChatRules& rules, const Send& send, 
 // Sends replicated Lua components (README "Lua components and systems"): what changed since the last send to the
 // owner (owner, aoi) and observers (aoi), and every aoi component of an entity to a viewer it came into view of.
 void component_replication_system(entt::registry& reg, const lua::Defs& defs, const Send& send);
+// Sends the client events Lua queued (kast.sendTo/sendNearby/broadcast) as ServerEvent, in call order. The audience is
+// taken now: owner = the character's session, nearby = it and every session that sees it, all = every player. A
+// target no longer in the world is skipped.
+void client_event_system(entt::registry& reg, std::vector<lua::ClientEvent> events, const Send& send);
 void save_system(entt::registry& reg, const lua::Defs& defs, const Save& save, Millis interval, TimePoint now);
 void end_of_tick_system(entt::registry& reg);
 

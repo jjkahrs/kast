@@ -151,6 +151,9 @@ if [ $ok -eq 0 ]; then
 fi
 record "$name" $ok "see $log"
 
+# 14: server events with the sample lua/systems/events.lua (README "Lua components and systems", Events)
+scenario "14 Lua server events: sendTo/sendNearby/broadcast audiences" --scenario events
+
 echo
 echo "================ integration summary ($RUN) ================"
 printf '%s\n' "${RESULTS[@]}"

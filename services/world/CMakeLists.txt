@@ -54,6 +54,7 @@ add_library(world_core STATIC
   server/world/systems.cpp
   server/world/world.cpp
   server/lua/components.cpp
+  server/lua/event_bus.cpp
   server/lua/runtime.cpp
   server/lua/sandbox.cpp
   server/app/game_server.cpp

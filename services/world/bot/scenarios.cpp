@@ -622,6 +622,85 @@ asio::awaitable<void> components_verify(Ctx& x) {
     c->close();
 }
 
+// --- 14: server events, with the sample lua/systems/events.lua ---
+
+// The ServerEvents named name whose payload's "entity" is entity.
+std::vector<nlohmann::json> events_about(const std::vector<proto::Message>& msgs, const std::string& name, uint32_t entity) {
+    std::vector<nlohmann::json> out;
+    for (const auto& e : only<proto::ServerEvent>(msgs)) {
+        auto data = nlohmann::json::parse(e.json, nullptr, false);
+        if (e.name == name && data.is_object() && data.value("entity", 0u) == entity) out.push_back(std::move(data));
+    }
+    return out;
+}
+
+size_t count_named(const std::vector<proto::Message>& msgs, const std::string& name) {
+    size_t n = 0;
+    for (const auto& e : only<proto::ServerEvent>(msgs)) n += e.name == name;
+    return n;
+}
+
+// A walks out of view; B and C stand at the spawn point. When C logs in: only C gets "welcome" (sendTo); C and B,
+// not A, get "player.arrived" (sendNearby, after Spawn(C)). When C logs out: A and B get "player.left" (broadcast),
+// B before Despawn(C).
+asio::awaitable<void> events(Ctx& x) {
+    proto::EnterWorldOk ea, eb, ec;
+    auto a = co_await x.enter("s14a", ea);
+    if (!a) co_return;
+    auto own = co_await drain(*a, Millis(500));
+    x.check.expect(count_named(own, "welcome") == 1, "A gets its own welcome");
+    co_await walk(*a, ea.pos, 150, 0); // past the 128 m view radius of the spawn point
+    auto b = co_await x.enter("s14b", eb);
+    if (!b) co_return;
+    co_await drain(*b, Millis(500));
+    co_await drain(*a, Millis(100));
+    auto c = co_await x.enter("s14c", ec);
+    if (!c) co_return;
+    const uint32_t C = ec.entityId;
+    auto cMsgs = co_await drain(*c, Millis(1000));
+    auto bMsgs = co_await drain(*b, Millis(100));
+    auto aMsgs = co_await drain(*a, Millis(100));
+
+    x.check.expect(count_named(cMsgs, "welcome") == 1 && count_named(bMsgs, "welcome") == 0 &&
+                       count_named(aMsgs, "welcome") == 0,
+                   "sendTo: only C gets its welcome");
+    x.check.expect(events_about(cMsgs, "player.arrived", C).size() == 1, "sendNearby: C (the owner) gets player.arrived");
+    const auto arrived = events_about(bMsgs, "player.arrived", C);
+    x.check.expect(arrived.size() == 1 && !arrived[0].value("name", "").empty(), "sendNearby: B (in view) gets player.arrived for C");
+    x.check.expect(events_about(aMsgs, "player.arrived", C).empty(), "sendNearby: A (out of view) gets nothing");
+    const size_t spawnC = first_index(bMsgs, [&](const proto::Message& m) {
+        auto* sp = std::get_if<proto::Spawn>(&m);
+        return sp && sp->entityId == C;
+    });
+    const size_t arrivedC = first_index(bMsgs, [&](const proto::Message& m) {
+        auto* e = std::get_if<proto::ServerEvent>(&m);
+        return e && e->name == "player.arrived";
+    });
+    x.check.expect(spawnC < arrivedC && arrivedC < bMsgs.size(), "B gets Spawn(C) before player.arrived");
+
+    c->close();
+    bMsgs = co_await drain(*b, Millis(1000));
+    aMsgs = co_await drain(*a, Millis(100));
+    x.check.expect(events_about(aMsgs, "player.left", C).size() == 1, "broadcast: A (out of view) gets player.left");
+    x.check.expect(events_about(bMsgs, "player.left", C).size() == 1, "broadcast: B gets player.left");
+    const size_t leftC = first_index(bMsgs, [&](const proto::Message& m) {
+        auto* e = std::get_if<proto::ServerEvent>(&m);
+        return e && e->name == "player.left";
+    });
+    const size_t despawnC = first_index(bMsgs, [&](const proto::Message& m) {
+        auto* d = std::get_if<proto::Despawn>(&m);
+        return d && d->entityId == C;
+    });
+    x.check.expect(leftC < despawnC && despawnC < bMsgs.size(), "B gets player.left before Despawn(C)");
+
+    // Server-to-client only: a client's ServerEvent is not a valid message.
+    b->send(proto::ServerEvent{"cheat", "{}"});
+    const bool dropped = co_await b->wait_closed(Millis(3000));
+    x.check.expect(dropped && b->disconnectReason == Code::unexpected_message,
+                   "a client's ServerEvent gets Disconnect{unexpected_message}");
+    a->close();
+}
+
 } // namespace
 
 int run_scenario(const Options& o) {
@@ -635,6 +714,7 @@ int run_scenario(const Options& o) {
         {"malformed", malformed},       {"handshake", handshake_rejects}, {"duplicate", duplicate_login},
         {"persist", persist_relogin},   {"shutdown", shutdown_phase1}, {"restart-verify", restart_verify},
         {"dbdown", db_down},            {"components", components},   {"components-verify", components_verify},
+        {"events", events},
     };
     auto it = all.find(o.scenario);
     if (it == all.end()) {

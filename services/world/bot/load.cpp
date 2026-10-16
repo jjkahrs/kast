@@ -15,7 +15,7 @@ namespace {
 struct Stats {
     std::atomic<int> tokens{0}, connected{0}, entered{0}, unexpectedDisconnects{0}, expectedDisconnects{0}, errors{0};
     std::atomic<uint64_t> movesSent{0}, entityMoves{0}, spawns{0}, despawns{0}, corrections{0}, chats{0}, says{0},
-        componentUpdates{0}, componentBytes{0}, componentRemoves{0};
+        componentUpdates{0}, componentBytes{0}, componentRemoves{0}, serverEvents{0};
     std::mutex mu;
     std::vector<std::string> errorSamples;
 
@@ -80,6 +80,7 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
             ++st.componentUpdates;
             st.componentBytes += cu->json.size();
         } else if (std::holds_alternative<proto::ComponentRemove>(m)) ++st.componentRemoves;
+        else if (std::holds_alternative<proto::ServerEvent>(m)) ++st.serverEvents;
         else if (auto* corr = std::get_if<proto::Correction>(&m)) {
             ++st.corrections;
             *pos = corr->pos;
@@ -200,6 +201,7 @@ int run_load(const Options& o) {
                               {"component_updates_recv", st.componentUpdates.load()},
                               {"component_json_bytes_recv", st.componentBytes.load()},
                               {"component_removes_recv", st.componentRemoves.load()},
+                              {"server_events_recv", st.serverEvents.load()},
                               {"error_samples", st.errorSamples}};
     std::printf("%s\n", summary.dump().c_str());
 

@@ -1333,6 +1333,14 @@ void checkWorldClient()
     const Json* removed = r.next("world.componentRemoved");
     check(removed && *removed == Json{{"entityId", 2}, {"name", "Health"}} && r.count("world.component") == 1,
           "world.componentRemoved {entityId, name}; a ComponentUpdate with invalid JSON is dropped");
+    w.say("events");
+    const Json* quest = r.next("server.quest.update");
+    check(quest && *quest == Json::parse(R"({"quest": 7, "steps": [1, 2], "done": false})"),
+          "ServerEvent -> server.<name> with the parsed payload");
+    const Json* serverPing = r.next("server.ping");
+    check(serverPing && serverPing->is_null() && r.count("server.broken") == 0 &&
+              logged("World: ignored ServerEvent \"broken\" with invalid JSON"),
+          "a ServerEvent with invalid JSON is warned and dropped; the next one still arrives");
     w.say("bye");
     const Json* despawn = r.next("world.despawn");
     check(despawn && *despawn == Json{{"entityId", 2}}, "world.despawn {entityId}");
@@ -1453,6 +1461,9 @@ return {{
         assert(kast.world.state() == "inWorld", "the connection survives kast.loadScene")
         kast.subscribe("world.spawn", function(e) kast.log("lua world spawn " .. e.entityId .. " " .. e.name) end)
         kast.subscribe("world.chat", function(e) kast.log("lua world chat from " .. e.from) end)
+        kast.subscribe("server.quest.update", function(e)
+            kast.log(string.format("lua server event quest %d steps %d", e.quest, #e.steps))
+        end)
         kast.subscribe("world.despawn", function(e)
             kast.log("lua world despawn " .. e.entityId)
             kast.world.disconnect()
@@ -1460,6 +1471,7 @@ return {{
         kast.subscribe("world.disconnected", function(e)
             kast.log("lua world b disconnected " .. e.code .. " " .. kast.world.state())
         end)
+        kast.world.say("events")
         kast.world.say("bye")
     end,
     update = function(dt) end,
@@ -1477,6 +1489,7 @@ return {{
     check(playUntil(doc, "lua world created Hero 100"), "kast.world.createCharacter -> world.charCreated");
     check(playUntil(doc, "lua world entered 1 at 100,0,100"), "kast.world.enterWorld -> world.entered");
     check(playUntil(doc, "lua world chat from Hero"), "kast.world.say -> world.chat (after a scene switch)");
+    check(playUntil(doc, "lua server event quest 7 steps 2"), "kast.subscribe(\"server.<name>\") gets the ServerEvent payload");
     check(playUntil(doc, "lua world despawn 2"), "world.despawn");
     check(playUntil(doc, "lua world b disconnected client_disconnect disconnected"),
           "kast.world.disconnect -> world.disconnected client_disconnect");
@@ -1484,13 +1497,15 @@ return {{
         if (!s.ok)
             kast::log::error(std::format("  {}: {}", s.path, s.error));
     check(netMessages == 0, "kast.world's frames are not published as net.message");
-    bool fromWorld = false;
+    bool fromWorld = false, serverFromWorld = false;
     std::string history;
     for (const kast::EventBus::Delivered& d : doc.lua.bus().history()) {
         fromWorld |= d.name == "world.connected" && d.publisher == "kast.world";
+        serverFromWorld |= d.name == "server.quest.update" && d.publisher == "kast.world";
         history += d.payload;
     }
     check(fromWorld, "world.* events are published by \"kast.world\"");
+    check(serverFromWorld, "server.* events are published by \"kast.world\"");
     check(!contains(history, fake.accessToken()), "no event payload holds the access token");
     stopPlay(doc);
     check(!doc.lua.world().enabled() && doc.lua.world().state() == kast::WorldState::Disconnected,

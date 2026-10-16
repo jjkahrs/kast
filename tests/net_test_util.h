@@ -152,7 +152,8 @@ Server::Body serveFakeAuth(FakeAuth& fake);
 // in one write. Move more than 20 m (x/z) from the last accepted position (at first the spawn) -> Correction{that
 // position}, else it is accepted silently. Say -> ChatMsg{the character's name, text}, then Despawn{2} if text is "bye", or
 // ComponentUpdate{2, Health, {current 42.5, max 100}}, a ComponentUpdate with invalid JSON and ComponentRemove{2, Health}
-// if text is "components". Anything else:
+// if text is "components", or ServerEvent{quest.update, {quest 7, steps [1, 2], done false}}, a ServerEvent with invalid
+// JSON and ServerEvent{ping, null} if text is "events". Anything else:
 // Disconnect{unexpected_message}.
 constexpr uint32_t kFakeWorldPing = 4242;
 
