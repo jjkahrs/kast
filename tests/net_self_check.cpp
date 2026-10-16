@@ -9,6 +9,7 @@
 #include "network.h"
 #include "project.h"
 #include "scene_io.h"
+#include "world_client.h"
 
 #include <chrono>
 #include <filesystem>
@@ -17,6 +18,7 @@
 #include <fstream>
 #include <source_location>
 #include <thread>
+#include <unordered_map>
 
 namespace {
 
@@ -30,6 +32,7 @@ using kast::NetState;
 using kast::NetType;
 using kast::Network;
 using Json = nlohmann::json;
+namespace proto = kast::proto;
 using namespace std::chrono_literals;
 
 int g_failures = 0;
@@ -929,7 +932,7 @@ void checkAuthClient()
     {
         const uint64_t id = a.realms();
         const Json* realms = r.result(id);
-        check(r.nameOf(id) == "auth.realms" && realms && realms->at("realms").size() == 2 &&
+        check(r.nameOf(id) == "auth.realms" && realms && realms->at("realms").size() == 3 &&
                   realms->at("realms").at(0).at("name") == "Ashenvale" &&
                   realms->at("realms").at(1).at("status") == "maintenance",
               "auth.realms: {id, realms:[{id, name, host, port, region, status, sortOrder}]}");
@@ -1008,13 +1011,13 @@ void checkAuthLuaApi()
 {
     const std::filesystem::path off = netProject("kast_auth_off_check");
     saveScene(off / "off.scene", {"scripts/off.lua"});
-    writeFile(off / "scripts/off.lua", R"(return { init = function() kast.log("auth off: " .. tostring(kast.auth)) end, update = function(dt) end })");
+    writeFile(off / "scripts/off.lua", R"(return { init = function() kast.log("auth off: " .. tostring(kast.auth) .. " world off: " .. tostring(kast.world)) end, update = function(dt) end })");
     {
         Document doc;
         std::string error;
         check(openFile(doc, (off / "off.scene").string(), error), "open the auth-off scene");
         startPlay(doc);
-        check(playUntil(doc, "auth off: nil"), "kast.auth is nil while Online Services are disabled");
+        check(playUntil(doc, "auth off: nil world off: nil"), "kast.auth and kast.world are nil while Online Services are disabled");
         stopPlay(doc);
     }
 
@@ -1080,7 +1083,7 @@ return {{
     kast::EventBus::Subscription sub =
         doc.lua.bus().subscribe("net.http.response", [&](const nlohmann::json&) { ++netResponses; });
     check(playUntil(doc, std::format("lua auth login 42 {} player", kDemoEmail)), "kast.auth.login -> auth.login.ok");
-    check(playUntil(doc, "lua auth realms 2 Ashenvale"), "kast.auth.realms -> auth.realms (after a scene switch)");
+    check(playUntil(doc, "lua auth realms 3 Ashenvale"), "kast.auth.realms -> auth.realms (after a scene switch)");
     check(playUntil(doc, std::format("lua auth me {}", kDemoEmail)), "kast.auth.me -> auth.me");
     check(playUntil(doc, "lua auth error register validation_error 400 password"),
           "kast.auth.register -> auth.error {op, code, status, details}");
@@ -1115,6 +1118,365 @@ void checkAuthLogs()
                contains(line, "eyJhbGciOiJub25lIi") || contains(line, "refresh-");
     });
     check(!leaked, "auth: no password or token in the log");
+}
+
+// --- kast::WorldClient and kast.world, against FakeAuth + FakeWorld (tests/net_test_util.h) ---
+
+// A WorldClient with its AuthClient on their own Network, pumped the way LuaSystems::tick does.
+struct WorldRun {
+    Network net;
+    kast::AuthClient auth{net};
+    kast::WorldClient world{net, auth};
+    std::vector<NetEvent> events;     // world.*
+    std::vector<NetEvent> authEvents; // auth.*
+    std::unordered_map<std::string, size_t> taken; // per event name: how many next() returned
+    bool unowned = false;
+
+    WorldRun(const std::string& authUrl, const std::string& caPem)
+    {
+        auth.reset(kast::AuthConfig{authUrl, caPem});
+        world.reset(kast::AuthConfig{authUrl, caPem});
+    }
+    void pump()
+    {
+        for (NetEvent& e : net.poll())
+            unowned |= !auth.handle(e) && !world.handle(e);
+        for (NetEvent& e : auth.poll()) {
+            world.observe(e);
+            authEvents.push_back(std::move(e));
+        }
+        for (NetEvent& e : world.poll())
+            events.push_back(std::move(e));
+    }
+    bool waitFor(const std::function<bool()>& done, std::chrono::milliseconds timeout = 5s)
+    {
+        const auto end = std::chrono::steady_clock::now() + timeout;
+        for (;;) {
+            pump();
+            if (done())
+                return true;
+            if (std::chrono::steady_clock::now() > end)
+                return false;
+            std::this_thread::sleep_for(1ms);
+        }
+    }
+    // The next event called name not returned before (waits for it); nullptr on timeout.
+    const Json* next(const std::string& name, std::chrono::milliseconds timeout = 5s)
+    {
+        const Json* found = nullptr;
+        waitFor([&] {
+            size_t seen = 0;
+            for (const NetEvent& e : events)
+                if (e.name == name && seen++ == taken[name]) {
+                    found = &e.payload;
+                    return true;
+                }
+            return false;
+        }, timeout);
+        if (found)
+            ++taken[name];
+        return found;
+    }
+    size_t count(const std::string& name) const
+    {
+        return static_cast<size_t>(std::ranges::count_if(events, [&](const NetEvent& e) { return e.name == name; }));
+    }
+    bool login()
+    {
+        auth.login(kDemoEmail, kDemoPassword);
+        return waitFor([&] { return auth.loggedIn(); });
+    }
+    // connect(realm) answered by world.connected
+    bool connect(uint64_t realm)
+    {
+        world.connect(realm);
+        const Json* e = next("world.connected");
+        return e && world.state() == kast::WorldState::Lobby;
+    }
+};
+
+bool throwsLogic(const std::function<void()>& fn, const std::string& part)
+{
+    try {
+        fn();
+    } catch (const std::logic_error& e) {
+        return contains(e.what(), part);
+    }
+    return false;
+}
+
+Json pos(float x, float y, float z) { return {{"x", x}, {"y", y}, {"z", z}}; }
+
+void checkWorldClient()
+{
+    check(kast::parseHostPort("127.0.0.1:7777") == std::pair(std::string("127.0.0.1"), uint16_t{7777}) &&
+              kast::parseHostPort("world.example.com:1") && !kast::parseHostPort("host") &&
+              !kast::parseHostPort(":7777") && !kast::parseHostPort("host:") && !kast::parseHostPort("host:0") &&
+              !kast::parseHostPort("host:65536") && !kast::parseHostPort("host:77x"),
+          "world: parseHostPort accepts host:port only");
+    {
+        Network net;
+        kast::AuthClient auth{net};
+        kast::WorldClient world{net, auth};
+        check(!world.enabled() && world.state() == kast::WorldState::Disconnected &&
+                  throwsLogic([&] { world.connect(1); }, "connect: Online Services are disabled"),
+              "world: disabled until reset with a config; calls throw");
+        check(throwsInvalid([&] { world.setAddressOverride("no-port"); }, "is not host:port") &&
+                  !world.addressOverride(),
+              "world: a bad address override is refused");
+    }
+
+    FakeAuth fake;
+    Server authServer(serveFakeAuth(fake));
+    const Cert cert = makeCert("DNS:localhost,IP:127.0.0.1");
+    FakeWorld fakeWorld;
+    Server worldServer(serveFakeWorld(fakeWorld), 0, &cert);
+    fake.worldPort = worldServer.port();
+    WorldRun r(std::format("http://127.0.0.1:{}", authServer.port()), cert.certPem);
+    auto& w = r.world;
+    check(w.enabled() && kast::worldStateName(w.state()) == std::string("disconnected"), "world: starts disconnected");
+
+    w.connect(3);
+    const Json* noSession = r.next("world.disconnected");
+    check(noSession && noSession->value("code", "") == "not_logged_in" && w.state() == kast::WorldState::Disconnected,
+          "world: connect without an auth session -> world.disconnected not_logged_in");
+    check(r.net.status().connections.empty() && r.net.status().requests.empty() && fake.seen().empty(),
+          "world: ... and no network attempt");
+
+    check(r.login(), "world: log in to the fake auth");
+    w.connect(99);
+    check(w.state() == kast::WorldState::Connecting, "world: connecting while the realm list is fetched");
+    const Json* unknown = r.next("world.disconnected");
+    check(unknown && unknown->value("code", "") == "unknown_realm" && contains(unknown->value("reason", ""), "99"),
+          "world: an unknown realm id -> world.disconnected unknown_realm");
+    check(fake.seen().back().path == "/v1/realms", "world: connect fetched the realm list");
+    const size_t requestsBefore = fake.seen().size();
+
+    w.connect(3); // Testgrove, from the cached list
+    const Json* connected = r.next("world.connected");
+    check(connected && connected->value("accountId", 0) == 42 && connected->value("role", "") == "player" &&
+              w.state() == kast::WorldState::Lobby,
+          "world: Hello + Auth -> world.connected {accountId, role}; state lobby");
+    check(fake.seen().size() == requestsBefore, "world: a cached realm needs no new realm request");
+    check(r.waitFor([&] { return fakeWorld.pongs() == 1; }), "world: the server's Ping is answered with its nonce");
+    {
+        const std::vector<proto::Message> seen = fakeWorld.seen();
+        check(seen.size() >= 2 && std::get_if<proto::Hello>(&seen[0]) &&
+                  std::get_if<proto::Hello>(&seen[0])->protocolVersion == 1 && std::get_if<proto::Auth>(&seen[1]) &&
+                  std::get_if<proto::Auth>(&seen[1])->accessToken == fake.accessToken(),
+              "world: the handshake sends Hello{1} then Auth{the session's access token}");
+    }
+    check(throwsLogic([&] { w.connect(3); }, "connect: needs state 'disconnected', the connection is 'lobby'") &&
+              throwsLogic([&] { w.say("x"); }, "say: needs state 'inWorld'"),
+          "world: connect while connected and say in the lobby throw");
+
+    w.listCharacters();
+    const Json* empty = r.next("world.charList");
+    check(empty && empty->at("characters").empty(), "world.charList {characters = {}}");
+    w.createCharacter("Taken");
+    const Json* taken = r.next("world.charError");
+    check(taken && taken->value("request", "") == "CharCreate" && taken->value("code", "") == "name_taken" &&
+              w.state() == kast::WorldState::Lobby,
+          "world.charError {request, code}; the connection stays");
+    w.createCharacter("Hero");
+    const Json* hero = r.next("world.charCreated");
+    check(hero && hero->at("character") == Json{{"id", 100}, {"name", "Hero"}, {"position", pos(100, 0, 100)}},
+          "world.charCreated {character = {id, name, position}}");
+    w.createCharacter("Split");
+    const Json* split = r.next("world.charCreated");
+    check(split && split->at("character").value("id", 0) == 101, "world: a frame split across reads is reassembled");
+    w.deleteCharacter(101);
+    const Json* deleted = r.next("world.charDeleted");
+    check(deleted && deleted->value("charId", 0) == 101, "world.charDeleted {charId}");
+    w.deleteCharacter(999);
+    const Json* notFound = r.next("world.charError");
+    check(notFound && notFound->value("request", "") == "CharDelete" && notFound->value("code", "") == "not_found",
+          "world: deleting an unknown character -> world.charError not_found");
+    w.listCharacters();
+    const Json* one = r.next("world.charList");
+    check(one && one->at("characters").size() == 1 && one->at("characters")[0].value("name", "") == "Hero",
+          "world.charList lists the characters");
+
+    w.enterWorld(100);
+    const Json* entered = r.next("world.entered");
+    check(entered && entered->value("entityId", 0) == 1 && entered->at("position") == pos(100, 0, 100) &&
+              entered->value("heading", 0.0) == 0.5 && w.state() == kast::WorldState::InWorld,
+          "world.entered {entityId, position, heading}; state inWorld");
+    const Json* spawn = r.next("world.spawn");
+    check(spawn && *spawn == Json{{"entityId", 2}, {"name", "Other"}, {"position", pos(101, 0, 100)}, {"heading", 0.0}},
+          "world.spawn {entityId, name, position, heading}");
+    const Json* moved = r.next("world.entityMove");
+    check(moved && *moved == Json{{"entityId", 2}, {"position", pos(102, 0, 100)}, {"heading", 1.0}},
+          "world.entityMove {entityId, position, heading}");
+    const Json* correction = r.next("world.correction");
+    check(correction && *correction == Json{{"position", pos(100, 0, 100)}}, "world.correction {position}");
+    check(throwsLogic([&] { w.listCharacters(); }, "listCharacters: needs state 'lobby'"),
+          "world: character calls in the world throw");
+    w.say("secret-chat-text-1");
+    const Json* chat = r.next("world.chat");
+    check(chat && *chat == Json{{"from", "Hero"}, {"text", "secret-chat-text-1"}}, "world.chat {from, text}");
+    w.say("bye");
+    const Json* despawn = r.next("world.despawn");
+    check(despawn && *despawn == Json{{"entityId", 2}}, "world.despawn {entityId}");
+
+    w.disconnect();
+    const Json* bye = r.next("world.disconnected");
+    check(bye && bye->value("code", "") == "client_disconnect" && w.state() == kast::WorldState::Disconnected,
+          "world: disconnect -> world.disconnected client_disconnect");
+    w.disconnect();
+    r.pump();
+    check(r.count("world.disconnected") == 3, "world: disconnect while disconnected publishes nothing");
+
+    // Every code the server can send maps to its PROTOCOL.md name; an unknown value to "unknown".
+    for (const int code : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 20, 21, 22, 23, 24, 99}) {
+        const char* name = code == 99 ? "unknown" : proto::code_name(static_cast<proto::Code>(code));
+        if (!r.connect(3)) {
+            check(false, std::format("world: connect for Disconnect code {}", code));
+            break;
+        }
+        w.createCharacter(std::format("Kick{}", code));
+        const Json* kicked = r.next("world.disconnected");
+        check(kicked && kicked->value("code", "") == name &&
+                  contains(kicked->value("reason", ""), std::format("code {}", code)) &&
+                  w.state() == kast::WorldState::Disconnected,
+              std::format("world: Disconnect{{{}}} -> world.disconnected {{code = {}}}", code, name));
+    }
+    r.pump();
+    check(r.count("world.disconnected") == 24, "world: one world.disconnected per Disconnect (not another for the close)");
+
+    check(r.connect(3), "world: connect for a malformed frame");
+    w.createCharacter("Garbage");
+    const Json* garbage = r.next("world.disconnected");
+    check(garbage && garbage->value("code", "") == "malformed" && contains(garbage->value("reason", ""), "Spawn"),
+          "world: a malformed frame -> world.disconnected malformed, closed");
+    check(r.connect(3), "world: connect for an unknown opcode");
+    w.createCharacter("Unknown");
+    const Json* unknownOp = r.next("world.disconnected");
+    check(unknownOp && unknownOp->value("code", "") == "unknown_opcode" &&
+              contains(unknownOp->value("reason", ""), "0x7777"),
+          "world: an unknown opcode -> world.disconnected unknown_opcode, closed");
+
+    w.connect(1); // Ashenvale: 127.0.0.1:4000, nothing listening
+    const Json* refused = r.next("world.disconnected", 15s);
+    check(refused && refused->value("code", "") == "connect_failed", "world: an unreachable realm -> connect_failed");
+    w.setAddressOverride(std::format("127.0.0.1:{}", worldServer.port()));
+    check(r.connect(1), "world: the address override replaces the realm's host:port");
+    w.setAddressOverride(std::nullopt);
+    w.disconnect();
+    r.next("world.disconnected");
+    check(!r.unowned, "world: every Network result of its connections went to the client");
+    check(std::ranges::none_of(kast::log::lines(),
+                               [&](const std::string& line) {
+                                   return contains(line, "secret-chat-text") || contains(line, fake.accessToken());
+                               }),
+          "world: no chat text or access token in the log");
+    w.reset();
+    check(!w.enabled(), "world: reset() disables");
+}
+
+// kast.world in Play: nil while Online Services are off (checkAuthLuaApi), every function and its errors, the whole
+// flow from Lua, the connection kept across kast.loadScene, events from "kast.world", no raw frames on the bus.
+void checkWorldLuaApi()
+{
+    FakeAuth fake;
+    Server authServer(serveFakeAuth(fake));
+    const Cert cert = makeCert("DNS:localhost,IP:127.0.0.1");
+    FakeWorld fakeWorld;
+    Server worldServer(serveFakeWorld(fakeWorld), 0, &cert);
+    fake.worldPort = worldServer.port();
+    const std::filesystem::path dir = netProject("kast_world_api_check");
+    writeFile(dir / "certs/world_ca.pem", cert.certPem);
+    writeFile(dir / kast::kProjectFileName,
+              std::format(R"({{"version": 1, "name": "World", "startScene": null,
+"online": {{"enabled": true, "authUrl": "http://127.0.0.1:{}", "caFile": "certs/world_ca.pem"}}}})",
+                          authServer.port()));
+    saveScene(dir / "a.scene", {"scripts/a.lua"});
+    saveScene(dir / "b.scene", {"scripts/b.lua"});
+    writeFile(dir / "scripts/a.lua", std::format(R"(local function fails(part, fn, ...)
+    local ok, err = pcall(fn, ...)
+    assert(not ok and string.find(err, part, 1, true), "expected '" .. part .. "', got " .. tostring(err))
+end
+return {{
+    init = function()
+        for _, name in ipairs({{"connect", "disconnect", "listCharacters", "createCharacter", "deleteCharacter",
+                               "enterWorld", "say", "state"}}) do
+            assert(type(kast.world[name]) == "function", name .. " missing")
+        end
+        assert(kast.world.state() == "disconnected")
+        fails("kast.world.connect: realmId must be a whole number >= 0, got x", kast.world.connect, "x")
+        fails("kast.world.connect: realmId must be a whole number >= 0, got 1.5", kast.world.connect, 1.5)
+        fails("kast.world.createCharacter: name must be a string, got nil", kast.world.createCharacter)
+        fails("kast.world.say: needs state 'inWorld', the connection is 'disconnected'", kast.world.say, "hi")
+        fails("kast.world.listCharacters: needs state 'lobby'", kast.world.listCharacters)
+        kast.subscribe("world.disconnected", function(e) kast.log("lua world disconnected " .. e.code) end)
+        kast.subscribe("world.connected", function(e)
+            kast.log(string.format("lua world connected %d %s %s", e.accountId, e.role, kast.world.state()))
+            kast.world.createCharacter("Hero")
+        end)
+        kast.subscribe("world.charCreated", function(e)
+            kast.log("lua world created " .. e.character.name .. " " .. e.character.id)
+            kast.world.enterWorld(e.character.id)
+        end)
+        kast.subscribe("world.entered", function(e)
+            kast.log(string.format("lua world entered %d at %g,%g,%g", e.entityId, e.position.x, e.position.y,
+                                   e.position.z))
+            kast.loadScene("b.scene")
+        end)
+        kast.subscribe("auth.login.ok", function() kast.world.connect(3) end)
+        kast.world.connect(3) -- no session yet
+        kast.auth.login("{}", "{}")
+    end,
+    update = function(dt) end,
+}}
+)",
+                                                 kDemoEmail, kDemoPassword));
+    writeFile(dir / "scripts/b.lua", R"(return {
+    init = function()
+        assert(kast.world.state() == "inWorld", "the connection survives kast.loadScene")
+        kast.subscribe("world.spawn", function(e) kast.log("lua world spawn " .. e.entityId .. " " .. e.name) end)
+        kast.subscribe("world.chat", function(e) kast.log("lua world chat from " .. e.from) end)
+        kast.subscribe("world.despawn", function(e)
+            kast.log("lua world despawn " .. e.entityId)
+            kast.world.disconnect()
+        end)
+        kast.subscribe("world.disconnected", function(e)
+            kast.log("lua world b disconnected " .. e.code .. " " .. kast.world.state())
+        end)
+        kast.world.say("bye")
+    end,
+    update = function(dt) end,
+}
+)");
+    Document doc;
+    std::string error;
+    check(openFile(doc, (dir / "a.scene").string(), error) && doc.project, "open the kast.world scene");
+    int netMessages = 0;
+    startPlay(doc);
+    kast::EventBus::Subscription sub =
+        doc.lua.bus().subscribe("net.message", [&](const nlohmann::json&) { ++netMessages; });
+    check(playUntil(doc, "lua world disconnected not_logged_in"), "kast.world.connect before login -> not_logged_in");
+    check(playUntil(doc, "lua world connected 42 player lobby"), "kast.world.connect -> world.connected, state lobby");
+    check(playUntil(doc, "lua world created Hero 100"), "kast.world.createCharacter -> world.charCreated");
+    check(playUntil(doc, "lua world entered 1 at 100,0,100"), "kast.world.enterWorld -> world.entered");
+    check(playUntil(doc, "lua world chat from Hero"), "kast.world.say -> world.chat (after a scene switch)");
+    check(playUntil(doc, "lua world despawn 2"), "world.despawn");
+    check(playUntil(doc, "lua world b disconnected client_disconnect disconnected"),
+          "kast.world.disconnect -> world.disconnected client_disconnect");
+    for (const kast::LuaSystemStatus& s : doc.lua.status())
+        if (!s.ok)
+            kast::log::error(std::format("  {}: {}", s.path, s.error));
+    check(netMessages == 0, "kast.world's frames are not published as net.message");
+    bool fromWorld = false;
+    std::string history;
+    for (const kast::EventBus::Delivered& d : doc.lua.bus().history()) {
+        fromWorld |= d.name == "world.connected" && d.publisher == "kast.world";
+        history += d.payload;
+    }
+    check(fromWorld, "world.* events are published by \"kast.world\"");
+    check(!contains(history, fake.accessToken()), "no event payload holds the access token");
+    stopPlay(doc);
+    check(!doc.lua.world().enabled() && doc.lua.world().state() == kast::WorldState::Disconnected,
+          "Stop drops the world connection");
 }
 
 // --- live: kast::AuthClient against the real services/auth (the services/world compose stack) ---
@@ -1200,6 +1562,203 @@ int liveAuthCheck(const std::string& authUrl, const std::string& mailpitUrl)
     return g_failures == 0 ? 0 : 1;
 }
 
+namespace {
+
+// The verification token from the newest Mailpit message to email ("" if none arrives within 15 s).
+std::string mailToken(Network& probe, const std::string& mailpitUrl, const std::string& email)
+{
+    const auto end = std::chrono::steady_clock::now() + 15s;
+    while (std::chrono::steady_clock::now() < end) {
+        const std::optional<std::string> found = fetch(probe, std::format("{}/api/v1/search?query=to:{}", mailpitUrl, email));
+        const Json list = found ? Json::parse(*found, nullptr, false) : Json();
+        if (list.is_object() && list.contains("messages") && !list["messages"].empty()) {
+            const std::string id = list["messages"][0].value("ID", "");
+            const std::optional<std::string> message = fetch(probe, std::format("{}/api/v1/message/{}", mailpitUrl, id));
+            const Json body = message ? Json::parse(*message, nullptr, false) : Json();
+            const std::string text = body.is_object() ? body.value("Text", "") : "";
+            const std::string marker = "Verification token: ";
+            if (const size_t at = text.find(marker); at != std::string::npos)
+                return text.substr(at + marker.size(),
+                                   text.find_first_of("\r\n", at + marker.size()) - at - marker.size());
+        }
+        std::this_thread::sleep_for(250ms);
+    }
+    return "";
+}
+
+// One JSON POST on net with X-Forwarded-For (the test stack's auth trusts it, so its per-IP limits apply per account);
+// {status, body} or nullopt if the request failed.
+std::optional<std::pair<int, Json>> post(Network& net, const std::string& url, const Json& body, const std::string& ip)
+{
+    Events ev{net};
+    const uint64_t id = net.request({.method = "POST",
+                                     .url = url,
+                                     .headers = {{"Content-Type", "application/json"}, {"X-Forwarded-For", ip}},
+                                     .body = body.dump(),
+                                     .timeout = 5s});
+    if (!ev.waitFor([&] { return ev.response(id) || ev.response(id, "net.http.error"); }, 10s) || !ev.response(id))
+        return std::nullopt;
+    const Json* r = ev.response(id);
+    return std::pair(r->value("status", 0), Json::parse(r->value("body", ""), nullptr, false));
+}
+
+// 3-16 ASCII letters, new every run (world names stay reserved after delete).
+std::string uniqueName(const char* prefix)
+{
+    static uint64_t bump = 0;
+    uint64_t n = static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count()) + ++bump;
+    std::string name = prefix;
+    while (name.size() < 14) {
+        name += static_cast<char>('a' + n % 26);
+        n /= 26;
+    }
+    return name;
+}
+
+// A verified, logged-in account adopted into r.auth; false if any step failed (logged).
+bool liveAccount(WorldRun& r, Network& probe, const std::string& authUrl, const std::string& mailpitUrl,
+                 const std::string& email, const std::string& password, const std::string& ip)
+{
+    const auto reg = post(probe, authUrl + "/v1/auth/register", {{"email", email}, {"password", password}}, ip);
+    if (!reg || reg->first != 202) {
+        kast::log::error(std::format("live world: register {} -> {}", email, reg ? reg->first : 0));
+        return false;
+    }
+    const std::string token = mailToken(probe, mailpitUrl, email);
+    const auto verified = post(probe, authUrl + "/v1/auth/verify-email", {{"token", token}}, ip);
+    const auto login = post(probe, authUrl + "/v1/auth/login", {{"email", email}, {"password", password}}, ip);
+    if (token.empty() || !verified || verified->first != 200 || !login || login->first != 200 ||
+        !login->second.contains("accessToken")) {
+        kast::log::error(std::format("live world: verify / login of {} failed", email));
+        return false;
+    }
+    r.auth.adopt({.accessToken = login->second["accessToken"],
+                  .refreshToken = login->second["refreshToken"],
+                  .expiresIn = std::chrono::seconds(login->second.value("expiresIn", 900)),
+                  .account = {{"email", email}}});
+    return true;
+}
+
+} // namespace
+
+// kast_self_check --live-world <authUrl> <mailpitUrl> <caFile> <realmName>: two fresh accounts on the services/world
+// compose stack, through the realm called realmName (which must point at the world server). A: lobby characters
+// (create, duplicate, delete, list), idles in the lobby past IDLE_TIMEOUT_MS + a heartbeat (Ping answered), enters the world. B enters
+// next to it: A gets world.spawn, B's chat reaches A as world.chat, B's disconnect is world.despawn on A. 77 (skipped)
+// when the stack isn't up or caFile is missing; 0 pass, 1 fail.
+int liveWorldCheck(const std::string& authUrl, const std::string& mailpitUrl, const std::string& caFile,
+                   const std::string& realmName)
+{
+    constexpr int kSkipped = 77;
+    Network probe;
+    std::ifstream caIn(caFile, std::ios::binary);
+    const std::string caPem((std::istreambuf_iterator<char>(caIn)), std::istreambuf_iterator<char>());
+    if (!fetch(probe, authUrl + "/health") || !fetch(probe, mailpitUrl + "/api/v1/info") || caPem.empty()) {
+        kast::log::warn(std::format("SKIPPED: auth ({}), Mailpit ({}) or the world CA ({}) is missing; start the stack "
+                                    "with 'cd services/world && docker compose up -d --build' and re-run ctest",
+                                    authUrl, mailpitUrl, caFile));
+        return kSkipped;
+    }
+    const std::string password = "live-world-password-1";
+    const std::string stamp = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    WorldRun a(authUrl, caPem), b(authUrl, caPem);
+    const uint64_t n = std::stoull(stamp) / 1000; // a new X-Forwarded-For per run and account
+    const auto ip = [&](int account) { return std::format("10.{}.{}.{}", 70 + account, (n >> 8) % 256, n % 256); };
+    if (!liveAccount(a, probe, authUrl, mailpitUrl, std::format("kast-world-a-{}@example.com", stamp), password, ip(1)) ||
+        !liveAccount(b, probe, authUrl, mailpitUrl, std::format("kast-world-b-{}@example.com", stamp), password, ip(2))) {
+        check(false, "live world: two verified accounts");
+        return 1;
+    }
+
+    // The realm id, from the auth service's list.
+    uint64_t realm = 0;
+    const uint64_t realmsCall = a.auth.realms();
+    a.waitFor([&] {
+        for (const NetEvent& e : a.authEvents)
+            if (e.name == "auth.realms" && e.payload.value("id", uint64_t{0}) == realmsCall)
+                for (const Json& r : e.payload["realms"])
+                    if (r.value("name", "") == realmName)
+                        realm = r.value("id", uint64_t{0});
+        return realm != 0;
+    });
+    if (!realm) {
+        kast::log::warn(std::format("SKIPPED: no realm named '{}' (the ctest setup step adds it)", realmName));
+        return kSkipped;
+    }
+
+    check(a.connect(realm), "live world: A connects (Hello, Auth with the session token -> world.connected)");
+    a.world.listCharacters();
+    const Json* none = a.next("world.charList");
+    check(none && none->at("characters").empty(), "live world: a new account has no characters");
+    const std::string heroA = uniqueName("Ka"), spare = uniqueName("Ks"), heroB = uniqueName("Kb");
+    a.world.createCharacter(heroA);
+    const Json* created = a.next("world.charCreated");
+    check(created && created->at("character").value("name", "") == heroA, "live world: create a character");
+    const uint64_t idA = created ? created->at("character").value("id", uint64_t{0}) : 0;
+    a.world.createCharacter(heroA);
+    const Json* taken = a.next("world.charError");
+    check(taken && taken->value("code", "") == "name_taken" && taken->value("request", "") == "CharCreate",
+          "live world: the same name again -> world.charError name_taken");
+    a.world.createCharacter("x");
+    const Json* invalid = a.next("world.charError");
+    check(invalid && invalid->value("code", "") == "name_invalid", "live world: a 1-letter name -> name_invalid");
+    a.world.createCharacter(spare);
+    const Json* spareMade = a.next("world.charCreated");
+    const uint64_t spareId = spareMade ? spareMade->at("character").value("id", uint64_t{0}) : 0;
+    a.world.deleteCharacter(spareId);
+    const Json* deleted = a.next("world.charDeleted");
+    check(deleted && deleted->value("charId", uint64_t{0}) == spareId, "live world: delete a character");
+    a.world.listCharacters();
+    const Json* listed = a.next("world.charList");
+    check(listed && listed->at("characters").size() == 1 && listed->at("characters")[0].value("id", uint64_t{0}) == idA,
+          "live world: the list holds the live character only");
+
+    // The server checks idleness on its heartbeat (every PING_INTERVAL_MS, 20 s), so a silent client is dropped within
+    // IDLE_TIMEOUT_MS + 20 s = 80 s of its last message.
+    kast::log::info("live world: idling in the lobby for 85 s (IDLE_TIMEOUT_MS 60 s + one 20 s heartbeat)");
+    a.waitFor([&] { return a.count("world.disconnected") > 0; }, 85s);
+    check(a.count("world.disconnected") == 0 && a.world.state() == kast::WorldState::Lobby,
+          "live world: Ping answered, the idle connection survives past IDLE_TIMEOUT_MS");
+
+    a.world.enterWorld(idA);
+    const Json* enteredA = a.next("world.entered");
+    check(enteredA && a.world.state() == kast::WorldState::InWorld, "live world: A enters the world");
+
+    check(b.connect(realm), "live world: B connects");
+    b.world.createCharacter(heroB);
+    const Json* createdB = b.next("world.charCreated");
+    b.world.enterWorld(createdB ? createdB->at("character").value("id", uint64_t{0}) : 0);
+    const Json* enteredB = b.next("world.entered");
+    check(enteredB != nullptr, "live world: B enters the world at the spawn point, next to A");
+    const uint32_t entityB = enteredB ? enteredB->value("entityId", 0u) : 0;
+    const Json* spawn = a.next("world.spawn");
+    check(spawn && spawn->value("name", "") == heroB && spawn->value("entityId", 0u) == entityB,
+          "live world: B's arrival is world.spawn {entityId, name} on A");
+    const std::string text = "hello from b " + stamp;
+    b.world.say(text);
+    const Json* chat = a.next("world.chat");
+    check(chat && chat->value("from", "") == heroB && chat->value("text", "") == text,
+          "live world: B's say reaches A as world.chat {from, text}");
+    b.world.disconnect();
+    const Json* gone = a.next("world.despawn");
+    check(gone && gone->value("entityId", 0u) == entityB, "live world: B's disconnect is world.despawn on A");
+    a.world.disconnect();
+    for (WorldRun* r : {&a, &b})
+        for (const NetEvent& e : r->events)
+            if (e.name == "world.disconnected" && e.payload.value("code", "") != "client_disconnect")
+                kast::log::error(std::format("live world: {}", e.payload.dump()));
+    check(std::ranges::none_of(kast::log::lines(),
+                               [&](const std::string& line) {
+                                   return contains(line, password) || contains(line, text) ||
+                                          contains(line, a.auth.accessToken().value_or("no token")) ||
+                                          contains(line, b.auth.accessToken().value_or("no token"));
+                               }),
+          "live world: no password, token or chat text in the log");
+    if (g_failures == 0)
+        kast::log::info("live world check passed");
+    return g_failures == 0 ? 0 : 1;
+}
+
 int netSelfCheck()
 {
     checkNetHelpers();
@@ -1215,6 +1774,8 @@ int netSelfCheck()
     checkAuthClient();
     checkAuthRefresh();
     checkAuthLuaApi();
+    checkWorldClient();
+    checkWorldLuaApi();
     checkAuthLogs();
     std::error_code ec;
     std::filesystem::remove_all(netRoot(), ec);

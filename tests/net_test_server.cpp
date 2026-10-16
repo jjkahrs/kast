@@ -1,5 +1,6 @@
 // kast_net_test_server: loopback servers for the tests/project net scenes (net_a.scene -> net_b.scene), on fixed ports
-// since Lua can't be told others: 47701 TCP, 47702 TLS TCP, 47703 ws, 47704 wss, 47705 http, 47706 https. TLS uses
+// since Lua can't be told others: 47701 TCP, 47702 TLS TCP, 47703 ws, 47704 wss, 47705 http, 47706 https, 47707 a fake
+// world server (FakeWorld in net_test_util.h, TLS; the fake auth's realm 3, Testgrove, points at it). TLS uses
 // --cert/--key (tests/project/certs/net_test_ca.pem is the certificate, which net_a.lua passes as caFile).
 //
 // TCP / TLS: '\n'-terminated lines. "id" -> "id <n>" (n: this server's accept count when the connection came, so 1
@@ -79,6 +80,7 @@ void messages(Ws ws, int id)
 }
 
 FakeAuth g_auth;
+FakeWorld g_world;
 
 template <class Stream>
 void respond(Stream stream)
@@ -138,6 +140,7 @@ int run(const Cert& cert, std::vector<std::string> command)
     Server httpServer(serve([](Server&, Socket socket, int) { respond(std::move(socket)); }), 47705);
     Server httpsServer(serve([](Server& s, Socket socket, int) { respond(handshake(s, std::move(socket))); }), 47706,
                        &cert);
+    Server worldServer(serveFakeWorld(g_world), 47707, &cert);
     std::vector<std::string> quoted;
     for (const std::string& arg : command)
         quoted.push_back('"' + arg + '"'); // ponytail: no embedded quotes in test arguments

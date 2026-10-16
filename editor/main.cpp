@@ -14,6 +14,7 @@
 #include <crash_dialogs.h>
 #include <gui.h>
 #include <log.h>
+#include <world_client.h>
 
 #include <SDL3/SDL.h>
 #include <bgfx/bgfx.h>
@@ -55,7 +56,7 @@ constexpr const char* kUsage =
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
     "[--focus-panel Window] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--settings-file settings.json] [--open-preferences] "
-    "[--open-external path] [--drop-model path] [--log-fps] [--no-vsync] [--no-audio-device] [--crash abort|assert] | "
+    "[--open-external path] [--drop-model path] [--world-address host:port] [--log-fps] [--no-vsync] [--no-audio-device] [--crash abort|assert] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --log-fps: once a second, the frame rate (vsync caps it at the display's refresh rate) and what a frame costs below
@@ -127,6 +128,7 @@ struct Options {
     bool launcher = false;          // run the Project Manager (the default anyway when nothing asks for the editor)
     std::string launcherOpen;       // open this project as the Project Manager would, without a window, and exit
     std::string dropModel;          // add this project model file as dropping it from the Assets panel does
+    std::string worldAddress;       // host:port replacing every realm's world address in Play (kast.world), editor only
     bool logFps = false;            // log frames per second, editor CPU and GPU frame times once a second
     std::string crash;              // --crash abort|assert: fail on purpose, to test KAST_NO_CRASH_DIALOGS
     bool noVsync = false;           // present as fast as possible, to measure the frame rate past the display's
@@ -277,6 +279,13 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.openOnlineSettings = true;
         } else if (arg == "--play") {
             options.play = true;
+        } else if (arg == "--world-address" && hasValue) {
+            options.worldAddress = argv[++i];
+            if (!kast::parseHostPort(options.worldAddress)) {
+                kast::log::error(std::format("Invalid --world-address '{}', expected host:port. {}", options.worldAddress,
+                                             kUsage));
+                return std::nullopt;
+            }
         } else if (arg == "--no-scene-post") {
             options.noScenePost = true;
         } else if (arg == "--size" && hasValue) {
@@ -312,13 +321,13 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
                              options.guiAdd || options.guiSave || !options.guiClick.empty() || options.openPreferences ||
                              !options.openExternal.empty() || !options.dropModel.empty() || options.logFps ||
-                             options.noVsync;
+                             options.noVsync || !options.worldAddress.empty();
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --add-component-popup, --new-component[-prompt], "
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, "
                          "--assets-menu, "
                          "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
-                         "--gui-click, --open-preferences and --open-external require "
+                         "--gui-click, --open-preferences, --open-external and --world-address require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
     }
@@ -572,6 +581,8 @@ int main(int argc, char** argv)
     if (!options->dropModel.empty())
         createModelEntity(doc, options->dropModel, entt::null);
     refreshStateMachines(doc); // the Inspector and State Machines panel list them from the first frame
+    if (!options->worldAddress.empty())
+        doc.lua.world().setAddressOverride(options->worldAddress); // kept by every Play start
     if (options->play)
         startPlay(doc);
     if (std::string error; opened && !recordRecent(projectsFile, *opened, error))

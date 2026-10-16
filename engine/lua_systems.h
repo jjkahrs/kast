@@ -8,6 +8,7 @@
 #include "physics.h"
 #include "scene.h"
 #include "state_machines.h"
+#include "world_client.h"
 
 #include <filesystem>
 #include <memory>
@@ -41,7 +42,7 @@ public:
     // (kast.currentScene returns nil). Stops any running session first
     // (without its shutdowns: the old scene may be gone). scene and input must outlive the session; input may be
     // null (no keys down, no mouse motion). auth: the project's Online Services auth endpoint (authConfig in auth_client.h);
-    // nullopt leaves kast.auth nil. The session starts logged out.
+    // nullopt leaves kast.auth and kast.world nil. The session starts logged out.
     void start(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, const std::string& scenePath,
                const Input* input, std::vector<std::string> gameMachines = {},
                std::optional<AuthConfig> auth = std::nullopt);
@@ -84,6 +85,11 @@ public:
     // published on bus() by tick(). Kept across kast.loadScene switches; start() and stop() log it out (memory only).
     AuthClient& auth() { return auth_; }
     const AuthClient& auth() const { return auth_; }
+    // The session's world server client (kast.world.* from C++): enabled with auth, its connection runs on network(),
+    // its "world.*" events are published on bus() by tick(). Kept across kast.loadScene switches; start() and stop()
+    // drop the connection. Its address override (editor only) outlives them.
+    WorldClient& world() { return world_; }
+    const WorldClient& world() const { return world_; }
     StateMachines& fsm() { return fsm_; }
     const StateMachines& fsm() const { return fsm_; }
 
@@ -98,6 +104,7 @@ private:
     Audio audio_;
     Network network_;
     AuthClient auth_{network_};
+    WorldClient world_{network_, auth_};
     std::unique_ptr<State> state_;
     StateMachines fsm_{bus_}; // declared after state_, so its Lua callbacks are released while the Lua state lives
 };

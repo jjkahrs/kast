@@ -88,6 +88,12 @@ inline unsigned char kRobotoRegularTtf[] = {
 };
 ")
 
+# --- protocol: the world server's frame codec (services/world/protocol), compiled from its sources unchanged; it needs
+# only the standard library, none of the server's vcpkg deps ---
+add_library(kast_protocol STATIC services/world/protocol/codec.cpp)
+target_include_directories(kast_protocol PUBLIC services/world/protocol)
+target_compile_options(kast_protocol PRIVATE ${KAST_COMPILE_OPTIONS})
+
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
@@ -95,7 +101,7 @@ add_library(kast_engine STATIC
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
-  engine/audio.cpp engine/network.cpp engine/auth_client.cpp ${KAST_ENGINE_SHADERS})
+  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/world_client.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
@@ -107,7 +113,7 @@ target_compile_options(kast_engine PRIVATE ${KAST_COMPILE_OPTIONS})
 set_source_files_properties(engine/network.cpp PROPERTIES COMPILE_DEFINITIONS "_WIN32_WINNT=0x0A00" COMPILE_OPTIONS /bigobj)
 target_link_libraries(kast_engine
   PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json RmlUi::RmlUi
-  PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 assimp::assimp Jolt::Jolt "${LUAJIT_LIBRARY}"
+  PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 assimp::assimp Jolt::Jolt "${LUAJIT_LIBRARY}" kast_protocol
           Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto crypt32)
 
 # --- player: the prebuilt game client the editor's Build menu copies; engine only, no ImGui ---
@@ -134,7 +140,7 @@ add_executable(kast_self_check tests/self_check.cpp tests/net_self_check.cpp tes
 target_include_directories(kast_self_check PRIVATE editor)
 target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
 target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS} /bigobj) # one big file of checks
-target_link_libraries(kast_self_check PRIVATE kast_engine SDL3::SDL3 imgui::imgui pugixml::pugixml shell32
+target_link_libraries(kast_self_check PRIVATE kast_engine kast_protocol SDL3::SDL3 imgui::imgui pugixml::pugixml shell32
                       Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto) # Boost, OpenSSL: the loopback net servers
 set_source_files_properties(tests/net_self_check.cpp tests/net_test_util.cpp tests/net_test_server.cpp
                             PROPERTIES COMPILE_DEFINITIONS "_WIN32_WINNT=0x0A00" COMPILE_OPTIONS /bigobj)
@@ -142,7 +148,7 @@ set_source_files_properties(tests/net_self_check.cpp tests/net_test_util.cpp tes
 # --- net test server: the fixed-port loopback servers the tests/project net scenes talk to (see tests/net_test_server.cpp) ---
 add_executable(kast_net_test_server tests/net_test_server.cpp tests/net_test_util.cpp "${KAST_MANIFEST}")
 target_compile_options(kast_net_test_server PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_net_test_server PRIVATE Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto nlohmann_json::nlohmann_json)
+target_link_libraries(kast_net_test_server PRIVATE kast_protocol Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto nlohmann_json::nlohmann_json)
 
 # --- focus probe: runs a command and fails if its window takes the foreground (see tests/focus_probe.cpp) ---
 add_executable(kast_focus_probe tests/focus_probe.cpp)
@@ -157,6 +163,16 @@ add_test(NAME engine_self_check COMMAND kast_self_check)
 # up -d --build); skipped, not failed, when it isn't running.
 add_test(NAME auth_live COMMAND kast_self_check --live-auth http://localhost:3100 http://localhost:8026)
 set_tests_properties(auth_live PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+# kast.world against the same stack's world server: world_live_setup copies its dev certificate out of the container and
+# adds the realm "Kast Live" (127.0.0.1:7777) to auth's database; world_live then plays two accounts through it (about
+# 90 s: it idles 85 s, past the server's 60 s idle timeout plus one 20 s heartbeat). Both skip when the stack isn't running.
+add_test(NAME world_live_setup
+  COMMAND "${CMAKE_COMMAND}" "-DWORLD_DIR=${CMAKE_CURRENT_SOURCE_DIR}/services/world"
+          "-DCA_OUT=${CMAKE_CURRENT_BINARY_DIR}/world_live_ca.pem" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/world_live_setup.cmake")
+set_tests_properties(world_live_setup PROPERTIES FIXTURES_SETUP world_live_ready TIMEOUT 60)
+add_test(NAME world_live COMMAND kast_self_check --live-world http://localhost:3100 http://localhost:8026
+                                 "${CMAKE_CURRENT_BINARY_DIR}/world_live_ca.pem" "Kast Live")
+set_tests_properties(world_live PROPERTIES FIXTURES_REQUIRED world_live_ready SKIP_RETURN_CODE 77 TIMEOUT 240)
 add_test(NAME editor_smoke
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/smoke.png"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
@@ -1066,7 +1082,7 @@ foreach(online "online_auth|Online Auth Test|http://127.0.0.1:47705" "online_aut
 }
 ")
 endforeach()
-set(KAST_AUTH_DEMO_PASS "scripts/online_auth_demo.lua: 2 realm.s.: Ashenvale .online. 127.0.0.1:4000, Duskmoor .maintenance. 127.0.0.1:4001")
+set(KAST_AUTH_DEMO_PASS "scripts/online_auth_demo.lua: 3 realm.s.: Ashenvale .online. 127.0.0.1:4000, Duskmoor .maintenance. 127.0.0.1:4001, Testgrove .online. 127.0.0.1:47707")
 add_test(NAME build_game_online_auth
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_auth"
           "-DOUT=${KAST_GAME_OUT}/online_auth" "-DEXE=Online Auth Test.exe" -DEXPECT=0
@@ -1085,6 +1101,59 @@ add_test(NAME auth_play_network_panel
           "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_auth_stall/online_auth.scene --play --no-audio-device"
           -DFOCUS_PANEL=Network -DFRAMES=120 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(auth_play_network_panel PROPERTIES RESOURCE_LOCK net_test_ports TIMEOUT 90)
+# kast.world: tests/project/online_world.scene (scripts/online_world_demo.lua) logs in, connects to the fake auth's realm
+# Testgrove (kast_net_test_server's fake world on 47707, trusted through certs/net_test_ca.pem), creates a character,
+# enters the world and chats. world_play_network_panel shows the world's TLS connection in the Network panel.
+kast_game_project(online_world "Online World Test" online_world.scene FALSE)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_world/project.kast"
+     "{
+  \"version\": 1,
+  \"name\": \"Online World Test\",
+  \"startScene\": \"online_world.scene\",
+"
+     "  \"online\": {
+    \"enabled\": true,
+    \"authUrl\": \"http://127.0.0.1:47705\",
+"
+     "    \"caFile\": \"certs/net_test_ca.pem\"
+  }
+}
+")
+add_test(NAME build_game_online_world
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_world"
+          "-DOUT=${KAST_GAME_OUT}/online_world" "-DEXE=Online World Test.exe" -DEXPECT=0
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+set_tests_properties(build_game_online_world PROPERTIES FIXTURES_SETUP game_online_world_built)
+add_test(NAME player_online_world_demo
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/online_world" "-DEXE=Online World Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/online_world.run" "-DWRAPPER=${KAST_NET_SERVER}" -DEXPECT=0
+          "-DEXPECT_OUTPUT=connecting to Testgrove .127.0.0.1:47707.*world: connected as account 42 .player.*world: created Demo .100.*world: entered as entity 1 at 100, 0, 100.*world: Other is nearby.*world: chat from Demo: hello world"
+          "-DEXTRA_ARGS=--frames 300 --no-audio-device" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_online_world_demo PROPERTIES FIXTURES_REQUIRED game_online_world_built
+                     RESOURCE_LOCK net_test_ports TIMEOUT 90)
+add_test(NAME world_play_network_panel
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/world_play_network.png"
+          "-DWRAPPER=${KAST_NET_SERVER}"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_world/online_world.scene --play --no-audio-device"
+          "-DEXPECT_OUTPUT=world: chat from Demo: hello world" -DFOCUS_PANEL=Network -DFRAMES=180
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(world_play_network_panel PROPERTIES RESOURCE_LOCK net_test_ports TIMEOUT 90)
+# --world-address: a copy of the demo aimed at realm Ashenvale (127.0.0.1:4000, nothing listens) still reaches the fake
+# world, because the editor's override replaces the realm's address.
+set(world_dir "${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_world")
+file(READ "${world_dir}/scripts/online_world_demo.lua" world_demo)
+string(REPLACE "local REALM, CHARACTER = \"Testgrove\"" "local REALM, CHARACTER = \"Ashenvale\"" world_demo "${world_demo}")
+file(WRITE "${world_dir}/scripts/online_world_override.lua" "${world_demo}")
+file(READ "${world_dir}/online_world.scene" world_scene)
+string(REPLACE "online_world_demo.lua" "online_world_override.lua" world_scene "${world_scene}")
+file(WRITE "${world_dir}/online_world_override.scene" "${world_scene}")
+add_test(NAME world_address_override
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/world_address_override.png"
+          "-DWRAPPER=${KAST_NET_SERVER}"
+          "-DEXTRA_ARGS=--scene ${world_dir}/online_world_override.scene --play --no-audio-device --world-address 127.0.0.1:47707"
+          "-DEXPECT_OUTPUT=World: connecting to realm 1 at 127.0.0.1:47707 .address override.*world: chat from Demo: hello world"
+          -DFRAMES=180 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(world_address_override PROPERTIES RESOURCE_LOCK net_test_ports TIMEOUT 90)
 
 # --- game GUI (RmlUi) and the GUI Builder ---
 # Play: tests/project/ui.scene shows ui/main_menu.rml over the Game view; configure-time copies (in health_project) with

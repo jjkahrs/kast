@@ -5,6 +5,7 @@
 #include <openssl/rsa.h>
 #include <openssl/x509v3.h>
 
+#include <algorithm>
 #include <format>
 #include <stdexcept>
 
@@ -147,6 +148,8 @@ http::response<http::string_body> FakeAuth::answer(const http::request<http::str
                           {"region", "us-east"}, {"status", "online"}, {"sortOrder", 0}});
         realms.push_back({{"id", 2}, {"name", "Duskmoor"}, {"host", "127.0.0.1"}, {"port", 4001},
                           {"region", "eu-west"}, {"status", "maintenance"}, {"sortOrder", 1}});
+        realms.push_back({{"id", 3}, {"name", "Testgrove"}, {"host", "127.0.0.1"}, {"port", worldPort.load()},
+                          {"region", "us-west"}, {"status", "online"}, {"sortOrder", 2}});
         return reply(200, {{"realms", realms}});
     }
     return error(404, "not_found", "Not found");
@@ -180,6 +183,144 @@ Server::Body serveFakeAuth(FakeAuth& fake)
                 http::request<http::string_body> req;
                 http::read(socket, buffer, req);
                 http::write(socket, fake.answer(req));
+            } catch (const std::exception&) { // the client went away, or the destructor's wake-up connect
+            }
+        }
+    };
+}
+
+void FakeWorld::record(proto::Message message)
+{
+    const std::lock_guard lock(mutex_);
+    seen_.push_back(std::move(message));
+}
+
+std::vector<proto::Message> FakeWorld::seen() const
+{
+    const std::lock_guard lock(mutex_);
+    return seen_;
+}
+
+int FakeWorld::pongs() const
+{
+    const std::lock_guard lock(mutex_);
+    return static_cast<int>(std::ranges::count_if(seen_, [](const proto::Message& m) {
+        const auto* pong = std::get_if<proto::Pong>(&m);
+        return pong && pong->nonce == kFakeWorldPing;
+    }));
+}
+
+namespace {
+
+// One world connection until either side closes it.
+void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
+{
+    std::vector<uint8_t> out; // frames of the current answer, written at once
+    const auto queue = [&](const proto::Message& m) { proto::encode(out, m); };
+    const auto raw = [&](uint16_t opcode, std::vector<uint8_t> payload) {
+        const auto n = static_cast<uint16_t>(payload.size());
+        out.insert(out.end(), {static_cast<uint8_t>(n), static_cast<uint8_t>(n >> 8), static_cast<uint8_t>(opcode),
+                               static_cast<uint8_t>(opcode >> 8)});
+        out.insert(out.end(), payload.begin(), payload.end());
+    };
+    const auto flush = [&] {
+        asio::write(socket, asio::buffer(out));
+        out.clear();
+    };
+    std::vector<proto::CharInfo> chars;
+    uint64_t nextId = 100;
+    std::string playing;
+    const proto::Vec3 spawn{100, 0, 100};
+    for (;;) {
+        uint8_t header[proto::kHeaderSize];
+        asio::read(socket, asio::buffer(header));
+        const proto::Header h = proto::parse_header(header);
+        std::vector<uint8_t> payload(h.length);
+        asio::read(socket, asio::buffer(payload));
+        proto::Message message;
+        if (proto::decode_payload(h.opcode, payload, message) != proto::DecodeStatus::ok) {
+            queue(proto::Disconnect{proto::Code::malformed});
+            return flush();
+        }
+        fake.record(message);
+        const auto find = [&](uint64_t id) {
+            return std::ranges::find_if(chars, [&](const proto::CharInfo& c) { return c.id == id; });
+        };
+        if (const auto* hello = std::get_if<proto::Hello>(&message)) {
+            if (hello->protocolVersion != proto::kProtocolVersion) {
+                queue(proto::Disconnect{proto::Code::protocol_mismatch});
+                return flush();
+            }
+        } else if (const auto* auth = std::get_if<proto::Auth>(&message)) {
+            if (auth->accessToken.empty()) {
+                queue(proto::Disconnect{proto::Code::invalid_token});
+                return flush();
+            }
+            queue(proto::Ping{kFakeWorldPing});
+            queue(proto::AuthOk{42, proto::Role::player});
+        } else if (std::holds_alternative<proto::Pong>(message)) {
+        } else if (std::holds_alternative<proto::CharListReq>(message)) {
+            queue(proto::CharList{chars});
+        } else if (const auto* create = std::get_if<proto::CharCreate>(&message)) {
+            const std::string& name = create->name;
+            if (name == "Taken") {
+                queue(proto::CharError{proto::Opcode::CharCreate, proto::Code::name_taken});
+            } else if (name.starts_with("Kick")) {
+                queue(proto::Disconnect{static_cast<proto::Code>(std::stoi(name.substr(4)))});
+                return flush();
+            } else if (name == "Garbage") {
+                raw(static_cast<uint16_t>(proto::Opcode::Spawn), {1, 2, 3}); // a Spawn needs 4 + 2 + 12 + 4 bytes
+            } else if (name == "Unknown") {
+                raw(0x7777, {});
+            } else {
+                chars.push_back({nextId++, name, spawn});
+                queue(proto::CharCreated{chars.back()});
+                if (name == "Split") {
+                    asio::write(socket, asio::buffer(out.data(), 3));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    out.erase(out.begin(), out.begin() + 3);
+                }
+            }
+        } else if (const auto* del = std::get_if<proto::CharDelete>(&message)) {
+            if (const auto it = find(del->charId); it != chars.end()) {
+                chars.erase(it);
+                queue(proto::CharDeleted{del->charId});
+            } else {
+                queue(proto::CharError{proto::Opcode::CharDelete, proto::Code::not_found});
+            }
+        } else if (const auto* enter = std::get_if<proto::EnterWorld>(&message)) {
+            if (const auto it = find(enter->charId); it != chars.end()) {
+                playing = it->name;
+                queue(proto::EnterWorldOk{1, spawn, 0.5f});
+                queue(proto::Spawn{2, "Other", {101, 0, 100}, 0});
+                queue(proto::EntityMove{2, {102, 0, 100}, 1});
+                queue(proto::Correction{spawn});
+            } else {
+                queue(proto::CharError{proto::Opcode::EnterWorld, proto::Code::not_found});
+            }
+        } else if (const auto* say = std::get_if<proto::Say>(&message)) {
+            queue(proto::ChatMsg{playing, say->text});
+            if (say->text == "bye")
+                queue(proto::Despawn{2});
+        } else {
+            queue(proto::Disconnect{proto::Code::unexpected_message});
+            return flush();
+        }
+        flush();
+    }
+}
+
+} // namespace
+
+Server::Body serveFakeWorld(FakeWorld& fake)
+{
+    return [&fake](Server& server) {
+        while (!server.stopping()) {
+            try {
+                TlsSocket socket = server.acceptTls();
+                runFakeWorld(fake, socket);
+                boost::system::error_code ec;
+                socket.lowest_layer().shutdown(tcp::socket::shutdown_both, ec);
             } catch (const std::exception&) { // the client went away, or the destructor's wake-up connect
             }
         }

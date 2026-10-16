@@ -89,9 +89,10 @@ struct PendingScene {
 
 struct LuaSystems::State {
     State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, std::string scenePath, const Input* input,
-          EventBus& bus, StateMachines& fsm, Physics& physics, Audio& audio, Network& network, AuthClient& auth)
+          EventBus& bus, StateMachines& fsm, Physics& physics, Audio& audio, Network& network, AuthClient& auth,
+          WorldClient& world)
         : scene(scene), projectRoot(projectRoot), scenePath(std::move(scenePath)), input(input), bus(bus), fsm(fsm),
-          physics(physics), audio(audio), network(network), auth(auth)
+          physics(physics), audio(audio), network(network), auth(auth), world(world)
     {
     }
 
@@ -105,6 +106,7 @@ struct LuaSystems::State {
     Audio& audio;
     Network& network;
     AuthClient& auth;
+    WorldClient& world;
     std::unordered_map<entt::entity, AudioHandle> sources; // the last voice each AudioSource started (kast.audio.stopSource)
     MaterialLibrary materials; // shared .mat files, for kast.get/setMaterialProperty
     std::optional<PendingScene> pending; // last kast.loadScene call wins
@@ -117,6 +119,7 @@ struct LuaSystems::State {
     sol::table audioApi;   // kast.audio.*
     sol::table netApi;     // kast.net.*
     sol::table authApi;    // kast.auth.*, only while Online Services are enabled
+    sol::table worldApi;   // kast.world.*, likewise
     DefinitionFiles fsmFiles; // state machine definition files at the last load, for hot reload
     std::string callbackPath; // the definition file whose enter/exit is running (log prefixes, event publisher)
     std::vector<System> systems;
@@ -151,6 +154,7 @@ struct LuaSystems::State {
     void bindAudioApi();
     void bindNetApi();
     void bindAuthApi();
+    void bindWorldApi();
     // Starts entity's AudioSource. Throws std::invalid_argument (see Audio::play).
     AudioHandle playSource(entt::entity entity);
     void playOnStart(); // every AudioSource with playOnStart; a bad clip logs an error and plays nothing
@@ -316,6 +320,8 @@ sol::environment LuaSystems::State::environment()
     kast["net"] = readOnly(netApi);
     if (auth.enabled())
         kast["auth"] = readOnly(authApi);
+    if (world.enabled())
+        kast["world"] = readOnly(worldApi);
     env["kast"] = readOnly(kast);
     return env;
 }
@@ -721,6 +727,7 @@ void LuaSystems::State::bindApi()
     bindAudioApi();
     bindNetApi();
     bindAuthApi();
+    bindWorldApi();
 }
 
 // kast.fsm.*: thin wrappers over StateMachines, whose std::invalid_argument (a bad target) becomes a Lua error at the
@@ -1087,6 +1094,56 @@ void LuaSystems::State::bindAuthApi()
     });
 }
 
+// kast.world.*: thin wrappers over WorldClient; a bad argument or a call in the wrong state raises at the calling line,
+// everything the server or network decides is a world.* event.
+void LuaSystems::State::bindWorldApi()
+{
+    const auto guarded = [](lua_State* L, auto&& body) {
+        try {
+            return body();
+        } catch (const std::logic_error& e) { // WorldClient's messages start with the function's name
+            raise(L, std::format("kast.world.{}", e.what()));
+        }
+    };
+    // ids are numbers in Lua (accountId, charId): whole, 0 .. 2^53
+    const auto id = [](lua_State* L, const char* function, const char* what, const sol::object& value) {
+        const double n = value.get_type() == sol::type::number ? value.as<double>() : -1.0;
+        if (n < 0 || n > 9007199254740992.0 || n != std::floor(n))
+            raise(L, std::format("kast.world.{}: {} must be a whole number >= 0, got {}", function, what,
+                                 toString(L, value)));
+        return static_cast<uint64_t>(n);
+    };
+    const auto text = [](lua_State* L, const char* function, const char* what, const sol::object& value) {
+        if (value.get_type() != sol::type::string)
+            raise(L, std::format("kast.world.{}: {} must be a string, got {}", function, what, toString(L, value)));
+        return value.as<std::string>();
+    };
+    worldApi = lua.create_table();
+    worldApi.set_function("connect", [=, this](sol::this_state L, const sol::object& realmId) {
+        const uint64_t realm = id(L, "connect", "realmId", realmId);
+        guarded(L, [&] { world.connect(realm); });
+    });
+    worldApi.set_function("disconnect", [this]() { world.disconnect(); });
+    worldApi.set_function("listCharacters", [=, this](sol::this_state L) { guarded(L, [&] { world.listCharacters(); }); });
+    worldApi.set_function("createCharacter", [=, this](sol::this_state L, const sol::object& name) {
+        const std::string n = text(L, "createCharacter", "name", name);
+        guarded(L, [&] { world.createCharacter(n); });
+    });
+    worldApi.set_function("deleteCharacter", [=, this](sol::this_state L, const sol::object& charId) {
+        const uint64_t c = id(L, "deleteCharacter", "charId", charId);
+        guarded(L, [&] { world.deleteCharacter(c); });
+    });
+    worldApi.set_function("enterWorld", [=, this](sol::this_state L, const sol::object& charId) {
+        const uint64_t c = id(L, "enterWorld", "charId", charId);
+        guarded(L, [&] { world.enterWorld(c); });
+    });
+    worldApi.set_function("say", [=, this](sol::this_state L, const sol::object& message) {
+        const std::string t = text(L, "say", "text", message);
+        guarded(L, [&] { world.say(t); });
+    });
+    worldApi.set_function("state", [this]() { return std::string(worldStateName(world.state())); });
+}
+
 void LuaSystems::State::bindNetApi()
 {
     const auto absent = [](const sol::object& value) {
@@ -1310,6 +1367,7 @@ void LuaSystems::start(Scene& scene, const std::optional<std::filesystem::path>&
     state_.reset(); // its subscriptions go first
     bus_.reset();
     network_.stop();
+    world_.reset(auth);
     auth_.reset(std::move(auth));
     audio_.start(projectRoot);
     launch(scene, projectRoot, scenePath, input);
@@ -1322,7 +1380,8 @@ void LuaSystems::launch(Scene& scene, const std::optional<std::filesystem::path>
     state_.reset(); // the old Lua state goes before the new one is built
     models().setRoot(projectRoot.value_or(std::filesystem::path())); // kast.*Animation* load models before any render
     physics_.start(scene, bus_); // before the inits, which may query it
-    state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_, physics_, audio_, network_, auth_);
+    state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_, physics_, audio_, network_, auth_,
+                                     world_);
     state_->playOnStart(); // before the inits, which may stop them
     state_->init(scene.systems);
 }
@@ -1334,12 +1393,16 @@ bool LuaSystems::tick(float dt)
     audio_.update();
     // Network results wait in network_ (not the bus queue a scene switch drops), so a switch's new systems, whose
     // inits ran at the end of the previous tick, get everything received since.
-    // The auth client's own requests answer only to it: their bodies hold tokens.
+    // The auth and world clients' own results answer only to them: they hold tokens and raw frames.
     for (NetEvent& event : network_.poll())
-        if (!auth_.handle(event))
+        if (!auth_.handle(event) && !world_.handle(event))
             bus_.publish(std::move(event.name), std::move(event.payload), "kast.net");
-    for (NetEvent& event : auth_.poll())
+    for (NetEvent& event : auth_.poll()) {
+        world_.observe(event); // realm lists, for kast.world.connect
         bus_.publish(std::move(event.name), std::move(event.payload), "kast.auth");
+    }
+    for (NetEvent& event : world_.poll())
+        bus_.publish(std::move(event.name), std::move(event.payload), "kast.world");
     state_->tick(dt);
     if (!state_->pending)
         return false;
@@ -1371,6 +1434,7 @@ void LuaSystems::stop()
     endSession();
     fsm_.reset();
     network_.stop();
+    world_.reset();
     auth_.reset(); // memory only: Stop logs out
 }
 

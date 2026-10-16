@@ -15,6 +15,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <codec.h>
+
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -91,7 +93,8 @@ std::string readLine(Stream& stream, std::string& buffer)
 // gets 423 account_locked and "banned@test" 403 account_banned (both with details); register rejects passwords under
 // 10 characters (400 validation_error with details); verify-email and reset-password reject the token "bad"
 // (400 invalid_token); /v1/me and /v1/realms need "Authorization: Bearer <the latest access token>" (401 unauthorized);
-// a "/boom/..." target answers 500 with a non-JSON body. Any path prefix before /v1/ is ignored; "/stall/..." waits `stall`
+// a "/boom/..." target answers 500 with a non-JSON body. /v1/realms lists Ashenvale (1, 127.0.0.1:4000, online), Duskmoor
+// (2, 127.0.0.1:4001, maintenance) and Testgrove (3, 127.0.0.1:worldPort, online: the FakeWorld). Any path prefix before /v1/ is ignored; "/stall/..." waits `stall`
 // first (to catch requests in flight for screenshots). Tokens are unsigned JWTs with sub "42".
 constexpr const char* kDemoEmail = "demo@example.com";
 constexpr const char* kDemoPassword = "demo-password-123";
@@ -102,6 +105,7 @@ public:
     std::atomic<bool> refreshFails = false; // refresh answers 401 invalid_refresh_token
     std::atomic<int> refreshDelayMs = 0;
     std::chrono::milliseconds stall{3000};
+    std::atomic<int> worldPort = 47707; // Testgrove's port
 
     http::response<http::string_body> answer(const http::request<http::string_body>& req);
 
@@ -124,5 +128,30 @@ private:
 
 // A Server body answering fake's requests, one connection after another.
 Server::Body serveFakeAuth(FakeAuth& fake);
+
+// A fake world server (services/world/PROTOCOL.md) for kast.world tests, scripted by what the client sends. Hello must
+// be protocol 1; Auth gets Ping{kFakeWorldPing} then AuthOk{42, player} (an empty token: Disconnect{invalid_token}).
+// Each connection has its own characters. CharListReq -> CharList. CharCreate: "Taken" -> CharError{name_taken};
+// "Kick<n>" -> Disconnect{code n} and close; "Garbage" -> a malformed Spawn frame; "Unknown" -> opcode 0x7777;
+// "Split" -> CharCreated written in two parts 50 ms apart; anything else -> CharCreated{id from 100, name,
+// (100, 0, 100)}. CharDelete / EnterWorld of an unknown id -> CharError{not_found}. EnterWorld -> EnterWorldOk{1,
+// (100, 0, 100), 0.5}, Spawn{2, "Other", (101, 0, 100), 0}, EntityMove{2, (102, 0, 100), 1}, Correction{(100, 0, 100)}
+// in one write. Say -> ChatMsg{the character's name, text}, then Despawn{2} if text is "bye". Anything else:
+// Disconnect{unexpected_message}.
+constexpr uint32_t kFakeWorldPing = 4242;
+
+class FakeWorld {
+public:
+    void record(proto::Message message);
+    std::vector<proto::Message> seen() const; // every client message so far, all connections
+    int pongs() const;                        // Pong{kFakeWorldPing} received
+
+private:
+    mutable std::mutex mutex_;
+    std::vector<proto::Message> seen_;
+};
+
+// A TLS Server body (construct the Server with a cert) running fake's connections one after another.
+Server::Body serveFakeWorld(FakeWorld& fake);
 
 } // namespace kast::nettest
