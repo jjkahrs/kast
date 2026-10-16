@@ -84,6 +84,9 @@ struct NetUrl {
 std::optional<NetUrl> parseNetUrl(std::string_view url, std::initializer_list<std::string_view> schemes,
                                   std::string& error);
 
+// pem holds at least one certificate OpenSSL can parse: what a caPem (or a caFile's contents) must be.
+bool isValidCaPem(const std::string& pem);
+
 std::string base64Encode(std::string_view bytes);
 std::optional<std::string> base64Decode(std::string_view text); // nullopt unless padded standard base64
 bool isUtf8(std::string_view text);

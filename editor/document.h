@@ -201,10 +201,15 @@ public:
     // Opens the Build Settings modal (Start Scene choice, saved to project.kast); reason is shown in it, may be empty.
     void openBuildSettings(std::string reason = "");
     bool buildSettingsOpen() const { return buildSettingsOpen_; }
-    // File actions are available: no dialog, unsaved-changes prompt or Build Settings modal open and not in Play mode.
+    // Opens the Online Services modal (project.online: Enabled, Auth URL, CA file; checkOnlineConfig shown inline, Save
+    // writes project.kast via setOnlineConfig).
+    void openOnlineSettings();
+    bool onlineSettingsOpen() const { return onlineSettingsOpen_; }
+    // File actions are available: no dialog, unsaved-changes prompt or settings modal open and not in Play mode.
     bool idle() const
     {
-        return !dialogOpen_ && pending_ == Pending::None && !buildSettingsOpen_ && doc_.play == PlayState::Stopped;
+        return !dialogOpen_ && pending_ == Pending::None && !buildSettingsOpen_ && !onlineSettingsOpen_ &&
+               doc_.play == PlayState::Stopped;
     }
     // Build menu items are available: idle and a project is open.
     bool canBuild() const { return idle() && doc_.project.has_value(); }
@@ -216,7 +221,7 @@ public:
 
 private:
     enum class Pending { None, New, Open, OpenPath, Quit, Build, BuildAndRun };
-    enum class DialogKind { Open, SaveAs, BuildFolder };
+    enum class DialogKind { Open, SaveAs, BuildFolder, CaFile };
 
     // Runs action now, or after the unsaved-changes modal if the document is dirty.
     void request(Pending action);
@@ -226,6 +231,7 @@ private:
     void saveTo(const std::string& path, Pending after);
     void drawModals();
     void drawBuildSettingsModal();
+    void drawOnlineSettingsModal();
     // Build / Build and Run: false (Build Settings opened instead) if the project's startScene can't be built.
     bool startSceneReady();
     void browseBuildFolder(bool run);
@@ -250,6 +256,11 @@ private:
     std::string buildSettingsError_;
     bool buildSettingsRequested_ = false;
     bool buildSettingsOpen_ = false;
+    kast::OnlineConfig online_;        // Online Services modal: the edited copy of project.online
+    kast::OnlineConfig onlineChecked_; // the online_ that onlineError_ belongs to (checked again when online_ changes)
+    std::string onlineError_;
+    bool onlineSettingsRequested_ = false;
+    bool onlineSettingsOpen_ = false;
 
     // SDL calls onDialogDone on any thread; the main thread picks the result up in update().
     bool dialogOpen_ = false;

@@ -704,6 +704,14 @@ const char* netStateName(NetState state)
     return "closed";
 }
 
+bool isValidCaPem(const std::string& pem)
+{
+    ssl::context ctx(ssl::context::tls_client);
+    error_code ec;
+    ctx.add_certificate_authority(asio::buffer(pem), ec);
+    return !pem.empty() && !ec;
+}
+
 std::optional<NetUrl> parseNetUrl(std::string_view url, std::initializer_list<std::string_view> schemes,
                                   std::string& error)
 {

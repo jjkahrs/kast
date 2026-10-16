@@ -13,6 +13,7 @@
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
+#include <imgui_stdlib.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -41,6 +42,7 @@ bool isInvalidFolderChar(char c)
 }
 
 constexpr SDL_DialogFileFilter kSceneFilter{"Kast scene (*.scene)", "scene"};
+constexpr SDL_DialogFileFilter kPemFilter{"PEM certificate (*.pem, *.crt)", "pem;crt"};
 constexpr bx::Vec3 kNewLightEuler{-50.0f, -30.0f, 0.0f}; // ~50 deg down, slightly from the side so faces shade differently
 constexpr bx::Vec3 kMainCameraPosition{0.0f, 3.0f, 7.0f};
 constexpr bx::Vec3 kMainCameraEuler{-20.0f, 0.0f, 0.0f}; // looks down at the origin from kMainCameraPosition
@@ -995,6 +997,10 @@ void FileActions::handleDialogResult()
         if (openFile(doc_, path, error))
             return;
         error_ = error;
+    } else if (dialogKind_ == DialogKind::CaFile) {
+        if (doc_.project) // a file outside the project stays absolute, so the modal's check explains it
+            online_.caFile = kast::toProjectPath(doc_.project->root, fromUtf8(path)).value_or(path);
+        return;
     } else if (dialogKind_ == DialogKind::BuildFolder) {
         buildTo(std::filesystem::path(reinterpret_cast<const char8_t*>(path.c_str())), runAfterBuild_); // SDL gives UTF-8
         return;
@@ -1068,6 +1074,7 @@ void FileActions::drawModals()
     }
 
     drawBuildSettingsModal();
+    drawOnlineSettingsModal();
 
     if (std::exchange(errorRequested_, false))
         ImGui::OpenPopup("Error");
@@ -1128,6 +1135,69 @@ void FileActions::drawBuildSettingsModal()
         else
             kast::log::error(buildSettingsError_);
     } else if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+void FileActions::openOnlineSettings()
+{
+    if (!doc_.project)
+        return;
+    online_ = onlineChecked_ = doc_.project->online;
+    onlineError_.clear();
+    checkOnlineConfig(*doc_.project, online_, onlineError_); // e.g. a CA file deleted since it was saved
+    onlineSettingsRequested_ = true;
+    onlineSettingsOpen_ = true;
+}
+
+void FileActions::drawOnlineSettingsModal()
+{
+    if (std::exchange(onlineSettingsRequested_, false))
+        ImGui::OpenPopup("Online Services");
+    // Tracks the popup itself, so idle() also sees it closed when another popup (an Error) replaced it.
+    onlineSettingsOpen_ = ImGui::BeginPopupModal("Online Services", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+    if (!onlineSettingsOpen_)
+        return;
+    const float fieldWidth = ImGui::GetFontSize() * 24.0f;
+    ImGui::Checkbox("Enabled", &online_.enabled);
+    ImGui::SetNextItemWidth(fieldWidth);
+    ImGui::InputTextWithHint("Auth URL", "https://auth.example.com", &online_.authUrl);
+    std::string caFile = online_.caFile.value_or("");
+    ImGui::SetNextItemWidth(fieldWidth);
+    if (ImGui::InputTextWithHint("CA File", "optional: project-relative .pem", &caFile))
+        online_.caFile = caFile.empty() ? std::nullopt : std::optional(caFile);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(dialogOpen_);
+    if (ImGui::Button("Browse...")) {
+        dialogOpen_ = true;
+        dialogKind_ = DialogKind::CaFile;
+        const std::string root = utf8(doc_.project->root);
+        SDL_ShowOpenFileDialog(onDialogDone, this, window_, &kPemFilter, 1, root.c_str(), false);
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Clear"))
+        online_.caFile.reset();
+    ImGui::TextDisabled("The CA file is trusted besides the Windows root certificates (auth and world TLS).");
+    if (online_ != onlineChecked_) {
+        onlineChecked_ = online_;
+        onlineError_.clear();
+        checkOnlineConfig(*doc_.project, online_, onlineError_);
+    }
+    if (!onlineError_.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", onlineError_.c_str());
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!onlineError_.empty() || dialogOpen_);
+    const bool save = ImGui::Button("Save");
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (save) {
+        if (setOnlineConfig(*doc_.project, online_, onlineError_))
+            ImGui::CloseCurrentPopup();
+        else
+            kast::log::error(onlineError_);
+    } else if (ImGui::Button("Cancel") || (ImGui::IsKeyPressed(ImGuiKey_Escape) && !dialogOpen_)) {
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();

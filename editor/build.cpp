@@ -145,11 +145,42 @@ bool setStartScene(kast::Project& project, const std::string& scene, std::string
     return true;
 }
 
+bool checkOnlineConfig(const kast::Project& project, const kast::OnlineConfig& online, std::string& error)
+{
+    kast::Project candidate = project;
+    candidate.online = online;
+    std::string reason = kast::onlineConfigError(project.root, online), caPem;
+    if (reason.empty() && kast::loadOnlineCa(candidate, caPem, reason) && online.enabled && online.caFile &&
+        !shipsInPak(*online.caFile))
+        reason = std::format("CA file '{}' is a dotfile or in a dot-folder, which game.pak leaves out", *online.caFile);
+    if (reason.empty())
+        return true;
+    error = "Online Services: " + reason;
+    return false;
+}
+
+bool setOnlineConfig(kast::Project& project, const kast::OnlineConfig& online, std::string& error)
+{
+    if (!checkOnlineConfig(project, online, error))
+        return false;
+    kast::Project updated = project;
+    updated.online = online;
+    if (!kast::saveProject(updated, error))
+        return false;
+    project = std::move(updated);
+    kast::log::info(std::format("Online Services {} in {}", online.enabled ? "enabled" : "disabled", kast::kProjectFileName));
+    return true;
+}
+
 bool buildGame(const kast::Project& project, const std::filesystem::path& outDir, const std::filesystem::path& playerDir,
                std::filesystem::path& exe, std::string& error)
 {
     if (!checkStartScene(project, error))
         return false;
+    if (std::string reason; !checkOnlineConfig(project, project.online, reason)) {
+        error = "Build failed: " + reason;
+        return false;
+    }
     const std::filesystem::path out = std::filesystem::absolute(outDir).lexically_normal();
     const std::filesystem::path root = std::filesystem::absolute(project.root);
     if (isSameOrInside(out, root) && isSameOrInside(root, out)) { // ignoring case and a trailing separator

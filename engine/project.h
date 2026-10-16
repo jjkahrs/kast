@@ -14,6 +14,17 @@ namespace kast {
 constexpr const char* kProjectFileName = "project.kast";
 constexpr int kProjectFileVersion = 1;
 
+// Online Services: the project's opt-in to the built-in auth/world integration (README "Online Services"). Optional in
+// the file ("online"): absent = disabled with no endpoint, and saving leaves out the block while it is all defaults.
+// Never holds secrets: it ships in game.pak.
+struct OnlineConfig {
+    bool enabled = false;
+    std::string authUrl;               // http:// or https:// auth service base URL; required when enabled
+    std::optional<std::string> caFile; // project-relative PEM trusted besides the Windows ROOT store (auth and world TLS)
+
+    bool operator==(const OnlineConfig&) const = default;
+};
+
 struct Project {
     std::filesystem::path root; // absolute directory holding project.kast
     std::string name;
@@ -24,7 +35,15 @@ struct Project {
     // Default bus levels applied at Play start (Mixer panel). Optional in the file ("audio"): a missing bus is 1.0
     // unmuted, and saving leaves out the block when every bus is.
     AudioMix audio{};
+    OnlineConfig online{};
 };
+
+// online's own rules, without touching files: authUrl empty or an http(s) URL (set when enabled), caFile a path inside
+// root. Empty if valid, else why. loadProject applies it, so a project.kast that loads always passes.
+std::string onlineConfigError(const std::filesystem::path& root, const OnlineConfig& online);
+// What online services need at run time: the caFile's PEM text in caPem (empty without a caFile or while disabled).
+// False + error if enabled and the caFile can't be read or holds no valid certificate. Reads through a mounted pak.
+bool loadOnlineCa(const Project& project, std::string& caPem, std::string& error);
 
 // file is a project.kast path. Replaces out only on success; on failure error says why.
 bool loadProject(const std::filesystem::path& file, Project& out, std::string& error);

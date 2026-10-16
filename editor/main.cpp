@@ -44,7 +44,7 @@ constexpr bgfx::ViewId kGameGuiView = kGameView + kViewportViews; // the game GU
 constexpr bgfx::ViewId kGuiPreviewView = kGameGuiView + 1; // the GUI Builder's preview
 constexpr bgfx::ViewId kImGuiView = 255; // last, so the UI draws over everything
 constexpr uint32_t kBackbufferClearColor = 0x202020ff;
-// --add-component-popup, --open-menu, --open-build-settings, --open-preferences, --focus-panel and --assets-* wait this long: focus changes while the first frames dock the windows close
+// --add-component-popup, --open-menu, --open-build-settings, --open-online-settings, --open-preferences, --focus-panel and --assets-* wait this long: focus changes while the first frames dock the windows close
 // popups.
 constexpr int kAddComponentPopupFrame = 10;
 constexpr float kComponentPollSeconds = 0.5f; // Lua definition files and the Assets tree are checked this often
@@ -52,7 +52,7 @@ constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--ui-scale F] [--projects-file list.json] "
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--no-scene-post] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
-    "[--open-menu Name] [--open-build-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
+    "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
     "[--focus-panel Window] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--log-fps] [--no-vsync] [--no-audio-device] [--crash abort|assert] | "
@@ -111,6 +111,7 @@ struct Options {
     std::string assetsSelect; // select this Assets entry (project-relative) as a click does: a .mat shows in the Inspector
     std::optional<std::pair<Panels::AssetCreate, std::string>> assetsCreate; // run Assets Create in that folder
     bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
+    bool openOnlineSettings = false; // open the Online Services modal (needs --project) for screenshots
     std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting", "Post Processing", "Physics", "Mixer" and "Network" also open it) to the front, for screenshots
     std::string openGui;            // open this .rml in the GUI Builder (relative paths: to the project, else the cwd)
     std::string guiSelect;          // then select the element with this id in it
@@ -272,6 +273,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             break;
         } else if (arg == "--open-build-settings") {
             options.openBuildSettings = true;
+        } else if (arg == "--open-online-settings") {
+            options.openOnlineSettings = true;
         } else if (arg == "--play") {
             options.play = true;
         } else if (arg == "--no-scene-post") {
@@ -303,7 +306,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     const bool editorFlags = options.select != 0 || options.play || options.addComponentPopup ||
                              options.newComponentPrompt || !options.newComponent.empty() || !options.openMenu.empty() ||
-                             options.openBuildSettings || !options.focusPanel.empty() || options.newStateMachinePrompt ||
+                             options.openBuildSettings || options.openOnlineSettings || !options.focusPanel.empty() || options.newStateMachinePrompt ||
                              options.assetsMenu || options.assetsCreate || !options.assetsSelect.empty() ||
                              !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
@@ -312,7 +315,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.noVsync;
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --add-component-popup, --new-component[-prompt], "
-                         "--new-state-machine-prompt, --open-menu, --open-build-settings, --focus-panel, --assets-menu, "
+                         "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, "
+                         "--assets-menu, "
                          "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
                          "--gui-click, --open-preferences and --open-external require "
                          "--project <dir> or --scene <file>");
@@ -336,6 +340,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     if (options.openBuildSettings && options.project.empty()) {
         kast::log::error("--open-build-settings requires --project <dir>");
+        return std::nullopt;
+    }
+    if (options.openOnlineSettings && options.project.empty()) {
+        kast::log::error("--open-online-settings requires --project <dir>");
         return std::nullopt;
     }
     if (!options.screenshot.empty() && options.frames == 0) {
@@ -409,6 +417,8 @@ void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu,
             const bool canBuild = files.canBuild();
             if (ImGui::MenuItem("Build Settings...", nullptr, false, canBuild))
                 files.openBuildSettings();
+            if (ImGui::MenuItem("Online Services...", nullptr, false, canBuild))
+                files.openOnlineSettings();
             ImGui::Separator();
             if (ImGui::MenuItem("Build...", nullptr, false, canBuild))
                 files.build();
@@ -660,6 +670,8 @@ int main(int argc, char** argv)
             panels.openAddComponent();
         if (options->openBuildSettings && frames.frame() == kAddComponentPopupFrame)
             files.openBuildSettings();
+        if (options->openOnlineSettings && frames.frame() == kAddComponentPopupFrame)
+            files.openOnlineSettings();
         if (!options->focusPanel.empty() && frames.frame() == kAddComponentPopupFrame) {
             // Applied when that window is submitted below. Builder panels go by their "###" id.
             const std::string id = "###" + options->focusPanel;

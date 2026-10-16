@@ -2,6 +2,7 @@
 
 #include "files.h"
 #include "log.h"
+#include "network.h"
 
 #include <nlohmann/json.hpp>
 
@@ -14,7 +15,7 @@ namespace {
 using Json = nlohmann::ordered_json;
 
 constexpr const char* kProjectKeys[] = {"version", "name", "startScene"}; // required
-constexpr const char* kOptionalProjectKeys[] = {"stateMachines", "audio"};
+constexpr const char* kOptionalProjectKeys[] = {"stateMachines", "audio", "online"};
 
 std::string validate(const Json& json)
 {
@@ -65,6 +66,20 @@ std::string validate(const Json& json)
             }
         }
     }
+    if (json.contains("online")) {
+        // {"enabled": bool, "authUrl": "...", "caFile": "..."}; every key optional, values checked by onlineConfigError
+        const Json& online = json["online"];
+        if (!online.is_object())
+            return "\"online\" must be an object";
+        for (const auto& [key, value] : online.items()) {
+            if (key == "enabled" && !value.is_boolean())
+                return "\"online\".enabled must be true or false";
+            if ((key == "authUrl" || key == "caFile") && !value.is_string())
+                return std::format("\"online\".{} must be a string", key);
+            if (key != "enabled" && key != "authUrl" && key != "caFile")
+                return std::format("\"online\": unknown key \"{}\"", key);
+        }
+    }
     return {};
 }
 
@@ -93,18 +108,30 @@ bool loadProject(const std::filesystem::path& file, Project& out, std::string& e
         const Json json = Json::parse(text);
         reason = validate(json);
         if (reason.empty()) {
-            out = Project{.root = normalized(file).parent_path(), .name = json["name"].get<std::string>()};
+            Project loaded{.root = normalized(file).parent_path(), .name = json["name"].get<std::string>()};
             if (json["startScene"].is_string())
-                out.startScene = json["startScene"].get<std::string>();
+                loaded.startScene = json["startScene"].get<std::string>();
             if (json.contains("stateMachines"))
-                out.stateMachines = json["stateMachines"].get<std::vector<std::string>>();
+                loaded.stateMachines = json["stateMachines"].get<std::vector<std::string>>();
             if (json.contains("audio"))
                 for (const auto& [bus, level] : json["audio"].items()) {
-                    BusMix& mix = out.audio[static_cast<int>(*busFromName(bus))];
+                    BusMix& mix = loaded.audio[static_cast<int>(*busFromName(bus))];
                     mix.volume = level.value("volume", mix.volume);
                     mix.muted = level.value("muted", mix.muted);
                 }
-            return true;
+            if (json.contains("online")) {
+                const Json& online = json["online"];
+                loaded.online.enabled = online.value("enabled", false);
+                loaded.online.authUrl = online.value("authUrl", "");
+                if (online.contains("caFile"))
+                    loaded.online.caFile = online["caFile"].get<std::string>();
+                if (const std::string onlineError = onlineConfigError(loaded.root, loaded.online); !onlineError.empty())
+                    reason = "\"online\": " + onlineError;
+            }
+            if (reason.empty()) {
+                out = std::move(loaded);
+                return true;
+            }
         }
     } catch (const Json::exception& e) {
         reason = e.what();
@@ -126,12 +153,52 @@ bool saveProject(const Project& project, std::string& error)
         for (int i = 0; i < kAudioBusCount; ++i)
             audio[busName(static_cast<AudioBus>(i))] = {{"volume", project.audio[i].volume}, {"muted", project.audio[i].muted}};
     }
+    if (project.online != OnlineConfig{}) {
+        Json& online = json["online"];
+        online["enabled"] = project.online.enabled;
+        online["authUrl"] = project.online.authUrl;
+        if (project.online.caFile)
+            online["caFile"] = *project.online.caFile;
+    }
     const std::filesystem::path file = project.root / kProjectFileName;
     if (!writeFileAtomic(file, json.dump(2) + '\n')) {
         error = std::format("Cannot write project '{}'", file.string());
         return false;
     }
     return true;
+}
+
+std::string onlineConfigError(const std::filesystem::path& root, const OnlineConfig& online)
+{
+    std::string error;
+    if (online.enabled && online.authUrl.empty())
+        return "Auth URL is required when Online Services are enabled";
+    if (!online.authUrl.empty() && !parseNetUrl(online.authUrl, {"http", "https"}, error))
+        return std::format("Auth URL: {}", error);
+    if (online.caFile && !resolveProjectPath(root, *online.caFile, error))
+        return std::format("CA file: {}", error);
+    return {};
+}
+
+bool loadOnlineCa(const Project& project, std::string& caPem, std::string& error)
+{
+    caPem.clear();
+    if (!project.online.enabled || !project.online.caFile)
+        return true;
+    const std::string& path = *project.online.caFile;
+    const std::optional<std::filesystem::path> file = resolveProjectPath(project.root, path, error);
+    std::string pem;
+    if (!file) {
+        error = std::format("CA file: {}", error);
+    } else if (!readFile(*file, pem)) {
+        error = std::format("CA file '{}' is missing or can't be read", path);
+    } else if (!isValidCaPem(pem)) {
+        error = std::format("CA file '{}' holds no valid PEM certificate", path);
+    } else {
+        caPem = std::move(pem);
+        return true;
+    }
+    return false;
 }
 
 std::optional<std::filesystem::path> findProjectDir(const std::filesystem::path& dir)

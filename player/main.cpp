@@ -112,6 +112,13 @@ bool loadGame(kast::Project& project, kast::Scene& scene, std::string& error)
     kast::mountPak(std::move(pak), root);
     if (!kast::loadProject(root / kast::kProjectFileName, project, error))
         return false;
+    // ponytail: only checked here for now; the kast.auth / kast.world phases keep caPem for their connections.
+    if (std::string caPem; !kast::loadOnlineCa(project, caPem, error)) {
+        return false;
+    } else if (project.online.enabled) {
+        kast::log::info(std::format("Online Services enabled: auth {}{}", project.online.authUrl,
+                                    caPem.empty() ? "" : std::format(", CA file '{}'", *project.online.caFile)));
+    }
     if (!project.startScene) {
         error = std::format("Project '{}' has no startScene", project.name);
         return false;

@@ -22,6 +22,7 @@
 #include <lua_components.h>
 #include <lua_systems.h>
 #include <material.h>
+#include <network.h>
 #include <math3d.h>
 #include <model.h>
 #include <physics.h>
@@ -6696,6 +6697,125 @@ void checkAudioProjectSettings()
     check(!setBusDefault(doc, kast::AudioBus::Voice, {1.5f, false}, error), "setBusDefault rejects volume 1.5");
 }
 
+// Online Services (phase 1): the project.kast "online" block, its checks, the modal's Save and what Build packs.
+void checkOnlineSettings()
+{
+    const std::filesystem::path dir = projectTestDir("kast_online_check", "Online");
+    const std::filesystem::path file = dir / kast::kProjectFileName;
+    const std::string testCa = readText(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "certs/net_test_ca.pem");
+    std::filesystem::create_directories(dir / "certs");
+    std::filesystem::create_directories(dir / ".secret");
+    writeFile(dir / "certs/ca.pem", testCa);
+    writeFile(dir / ".secret/ca.pem", testCa);
+    writeFile(dir / "certs/bad.pem", "-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n");
+    check(kast::isValidCaPem(testCa) && !kast::isValidCaPem("") && !kast::isValidCaPem("hello") &&
+              !kast::isValidCaPem(readText(dir / "certs/bad.pem")),
+          "isValidCaPem accepts the test CA, rejects empty, plain text and a broken PEM");
+
+    // Old files: no "online" block = disabled, and saving keeps it out (older readers reject unknown keys).
+    kast::Project project;
+    std::string error;
+    check(kast::loadProject(file, project, error) && project.online == kast::OnlineConfig{} && !project.online.enabled,
+          "project.kast without \"online\" loads with Online Services disabled");
+    check(kast::saveProject(project, error) && !contains(readText(file), "online"),
+          "saving an all-default online config leaves the block out");
+
+    // Modal Save: checked first, project.kast byte-identical and project unchanged on failure.
+    const std::string before = readText(file);
+    const auto rejected = [&](const kast::OnlineConfig& online, const char* why, const char* what) {
+        check(!setOnlineConfig(project, online, error) && contains(error, why) && readText(file) == before &&
+                  project.online == kast::OnlineConfig{},
+              what);
+        if (!contains(error, why))
+            kast::log::error(std::format("  got: {}", error));
+    };
+    rejected({.enabled = true}, "Auth URL is required", "enabled without an Auth URL is rejected");
+    rejected({.enabled = true, .authUrl = "ftp://auth.example.com"}, "Auth URL", "a non-http(s) Auth URL is rejected");
+    rejected({.enabled = false, .authUrl = "not a url"}, "Auth URL", "a bad Auth URL is rejected even while disabled");
+    rejected({.enabled = true, .authUrl = "https://localhost:3100", .caFile = "certs/none.pem"}, "missing",
+             "a missing CA file is rejected");
+    rejected({.enabled = true, .authUrl = "https://localhost:3100", .caFile = "certs/bad.pem"}, "no valid PEM",
+             "a CA file without a valid certificate is rejected");
+    rejected({.enabled = true, .authUrl = "https://localhost:3100", .caFile = "../ca.pem"}, "outside the project",
+             "a CA file outside the project is rejected");
+    rejected({.enabled = true, .authUrl = "https://localhost:3100", .caFile = (dir / "certs/ca.pem").string()},
+             "relative to the project root", "an absolute CA file path is rejected");
+    rejected({.enabled = true, .authUrl = "https://localhost:3100", .caFile = ".secret/ca.pem"}, "game.pak",
+             "a CA file in a dot-folder (left out of game.pak) is rejected");
+
+    // Round trip: enable, set URL and CA file, save, reopen.
+    const kast::OnlineConfig online{.enabled = true, .authUrl = "https://localhost:3100", .caFile = "certs/ca.pem"};
+    check(setOnlineConfig(project, online, error) && project.online == online, "Save a valid online config");
+    check(readText(file) == "{\n  \"version\": 1,\n  \"name\": \"Online\",\n  \"startScene\": null,\n"
+                            "  \"online\": {\n    \"enabled\": true,\n    \"authUrl\": \"https://localhost:3100\",\n"
+                            "    \"caFile\": \"certs/ca.pem\"\n  }\n}\n",
+          "project.kast gains the online block, version stays 1");
+    kast::Project reloaded;
+    check(kast::loadProject(file, reloaded, error) && reloaded.online == online, "the online block round-trips");
+    std::string caPem;
+    check(kast::loadOnlineCa(reloaded, caPem, error) && caPem == testCa, "loadOnlineCa reads the CA file");
+
+    // Disabled: values kept (toggling off loses nothing), no CA file required, no CA read.
+    const kast::OnlineConfig off{.enabled = false, .authUrl = "http://localhost:3100", .caFile = "certs/none.pem"};
+    check(setOnlineConfig(project, off, error) && kast::loadProject(file, reloaded, error) && reloaded.online == off,
+          "disabled with a missing CA file saves and round-trips (no CA file required)");
+    check(kast::loadOnlineCa(reloaded, caPem, error) && caPem.empty(), "loadOnlineCa reads nothing while disabled");
+
+    // loadProject checks the block's shape and values but not files: a deleted CA file still opens the project.
+    for (const char* bad : {R"("online": [])", R"("online": {"enabled": 1})", R"("online": {"authUrl": 5})",
+                            R"("online": {"token": "x"})", R"("online": {"enabled": true})",
+                            R"("online": {"authUrl": "ws://a"})", R"("online": {"caFile": "../ca.pem"})"}) {
+        writeFile(dir / "bad.kast", std::format(R"({{"version": 1, "name": "P", "startScene": null, {}}})", bad));
+        reloaded = kast::Project{.name = "untouched"};
+        check(!kast::loadProject(dir / "bad.kast", reloaded, error) && contains(error, "online") &&
+                  reloaded.name == "untouched",
+              std::format("invalid online block rejected, out untouched: {}", bad).c_str());
+    }
+    writeFile(dir / "gone.kast", R"({"version": 1, "name": "P", "startScene": null,
+        "online": {"enabled": true, "authUrl": "https://a", "caFile": "certs/gone.pem"}})");
+    check(kast::loadProject(dir / "gone.kast", reloaded, error) && !kast::loadOnlineCa(reloaded, caPem, error) &&
+              contains(error, "certs/gone.pem"),
+          "a missing CA file loads, then loadOnlineCa reports it");
+
+    // Build: checks the config, and game.pak carries project.kast's block and the CA file.
+    const std::filesystem::path playerDir = std::filesystem::path(SDL_GetBasePath());
+    saveTestScene(dir / "a.scene", "Thing", {});
+    project.startScene = "a.scene";
+    project.online = {.enabled = true, .authUrl = "https://localhost:3100", .caFile = "certs/none.pem"};
+    std::filesystem::path exe;
+    const std::filesystem::path out = looseTestDir("kast_online_out");
+    check(!buildGame(project, out / "bad", playerDir, exe, error) && contains(error, "Online Services") &&
+              !std::filesystem::exists(out / "bad"),
+          "Build fails on a missing CA file while enabled, writing nothing");
+    project.online = online;
+    check(kast::saveProject(project, error) && buildGame(project, out / "on", playerDir, exe, error),
+          "Build an online project");
+    kast::Pak pak;
+    const std::optional<std::string_view> packedProject =
+        pak.open(out / "on" / kGamePakName, error) ? pak.find("project.kast") : std::nullopt;
+    check(packedProject && contains(std::string(*packedProject), "\"authUrl\": \"https://localhost:3100\"") &&
+              pak.find("certs/ca.pem") == std::optional<std::string_view>(testCa),
+          "game.pak holds the online block and the CA file");
+
+    // Disabled: no CA file needed and nothing online-specific packed.
+    const std::filesystem::path plain = projectTestDir("kast_online_off_check", "Offline");
+    saveTestScene(plain / "a.scene", "Thing", {});
+    const kast::Project offline{.root = plain, .name = "Offline", .startScene = "a.scene"};
+    check(kast::saveProject(offline, error) && buildGame(offline, out / "off", playerDir, exe, error) &&
+              pak.open(out / "off" / kGamePakName, error) &&
+              pak.list("") == std::vector<std::string>{"a.scene", "project.kast"} &&
+              !contains(std::string(*pak.find("project.kast")), "online"),
+          "a disabled project builds without a CA file and packs no online block");
+
+    // Modal state: open blocks other file actions.
+    Document doc;
+    resetToDefault(doc);
+    doc.project = project;
+    FileActions files(doc);
+    files.openOnlineSettings();
+    check(files.onlineSettingsOpen() && !files.idle() && !files.canBuild(), "Online Services open: not idle, Build disabled");
+}
+
 // AudioSource playOnStart, kast.audio from Lua, Stop / Pause / kast.loadScene in an editor Play session.
 void checkAudioPlaySession()
 {
@@ -6826,7 +6946,10 @@ void checkMountedPak()
 {
     const std::filesystem::path dir = looseTestDir("kast_mount_check");
     std::filesystem::create_directories(dir / "src/components/sub");
-    writeFile(dir / "src/project.kast", R"({"version": 1, "name": "Packed", "startScene": "a.scene"})");
+    writeFile(dir / "src/project.kast", R"({"version": 1, "name": "Packed", "startScene": "a.scene",
+        "online": {"enabled": true, "authUrl": "https://localhost:3100", "caFile": "certs/ca.pem"}})");
+    std::filesystem::create_directories(dir / "src/certs");
+    std::filesystem::copy_file(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "certs/net_test_ca.pem", dir / "src/certs/ca.pem");
     writeFile(dir / "src/components/sub/c.lua", "return 1");
     writeFile(dir / "src/components/d.lua", "return 2");
     std::filesystem::create_directories(dir / "src/sounds");
@@ -6835,7 +6958,7 @@ void checkMountedPak()
                                dir / "src/sounds/mp3-demo.mp3");
     std::string error;
     check(kast::writePak(dir / "src", {"project.kast", "components/sub/c.lua", "components/d.lua", "sounds/tone.wav",
-                                       "sounds/mp3-demo.mp3"},
+                                       "sounds/mp3-demo.mp3", "certs/ca.pem"},
                          dir / "game.pak", error),
           "write a pak to mount");
     kast::Pak pak;
@@ -6844,13 +6967,19 @@ void checkMountedPak()
     kast::mountPak(std::move(pak), root);
     kast::Project project;
     check(kast::loadProject(root / "project.kast", project, error) && project.name == "Packed", "project.kast from the pak");
+    // As kast_player loads it: the online config and its CA file come from the pak.
+    std::string caPem;
+    check(project.online == kast::OnlineConfig{.enabled = true, .authUrl = "https://localhost:3100", .caFile = "certs/ca.pem"} &&
+              kast::loadOnlineCa(project, caPem, error) &&
+              caPem == readText(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "certs/net_test_ca.pem"),
+          "the online config and CA file load from the pak");
     std::string text;
     check(kast::readFile(root / "components/d.lua", text) && text == "return 2", "readFile from the pak");
     check(!kast::readFile(dir / "src/components/d.lua", text), "with a pak mounted, the disk is not read");
     check(kast::listFiles(root / "components") ==
               std::vector<std::filesystem::path>{root / "components/d.lua", root / "components/sub/c.lua"},
           "listFiles from the pak");
-    check(kast::listFiles(root).size() == 5 && kast::listFiles(root / "nothing").empty(),
+    check(kast::listFiles(root).size() == 6 && kast::listFiles(root / "nothing").empty(),
           "listFiles of the root and of a missing folder");
 
     // Audio from the pak (as kast_player plays it): decoded through kast::readFile, never the disk.
@@ -6932,6 +7061,7 @@ int main(int argc, char** argv)
     checkFileWrites();
     checkBuild();
     checkBuildSettings();
+    checkOnlineSettings();
     checkStateMachineDefinitions();
     checkStateMachineRuntime();
     checkLuaStateMachineApi();

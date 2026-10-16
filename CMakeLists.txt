@@ -1005,6 +1005,41 @@ add_test(NAME build_no_start_scene
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${KAST_NO_SCENES_PROJECT}"
           "-DOUT=${KAST_GAME_OUT}/no_start" -DEXPECT=1 "-DEXPECT_OUTPUT=Build Settings"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+# Online Services (project.kast "online"): copies of tests/project enabled with the net test CA, and with a CA file that
+# doesn't exist. --open-online-settings shows the modal for each and for tests/project (disabled, no block); the
+# online game builds and its player logs the config it read from game.pak; the bad CA copy fails to build.
+foreach(online "online|Online Test|certs/net_test_ca.pem" "online_bad_ca|Online Bad CA|certs/missing.pem")
+  string(REPLACE "|" ";" online "${online}")
+  list(GET online 0 name)
+  list(GET online 1 project_name)
+  list(GET online 2 ca_file)
+  kast_game_project(${name} "${project_name}" scene_a.scene FALSE)
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/game_projects/${name}/project.kast"
+       "{\n  \"version\": 1,\n  \"name\": \"${project_name}\",\n  \"startScene\": \"scene_a.scene\",\n  \"online\": {\n"
+       "    \"enabled\": true,\n    \"authUrl\": \"https://localhost:3100\",\n    \"caFile\": \"${ca_file}\"\n  }\n}\n")
+endforeach()
+foreach(shot "online_settings_disabled|${KAST_TEST_PROJECT}" "online_settings|${CMAKE_CURRENT_BINARY_DIR}/game_projects/online"
+             "online_settings_error|${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_bad_ca")
+  string(REPLACE "|" ";" shot "${shot}")
+  list(GET shot 0 name)
+  list(GET shot 1 dir)
+  add_test(NAME ${name}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/${name}.png"
+            "-DEXTRA_ARGS=--project ${dir} --open-online-settings" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endforeach()
+add_test(NAME build_game_online
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/online"
+          "-DOUT=${KAST_GAME_OUT}/online" "-DEXE=Online Test.exe" -DEXPECT=0 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+set_tests_properties(build_game_online PROPERTIES FIXTURES_SETUP game_online_built)
+add_test(NAME player_online_config
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/online" "-DEXE=Online Test.exe" "-DWORK_DIR=${KAST_GAME_OUT}/online.run"
+          -DEXPECT=0 "-DEXPECT_OUTPUT=Online Services enabled: auth https://localhost:3100, CA file 'certs/net_test_ca.pem'"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_online_config PROPERTIES FIXTURES_REQUIRED game_online_built TIMEOUT 90)
+add_test(NAME build_online_bad_ca
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_bad_ca"
+          "-DOUT=${KAST_GAME_OUT}/online_bad_ca" -DEXPECT=1 "-DEXPECT_OUTPUT=CA file 'certs/missing.pem' is missing"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
 
 # --- game GUI (RmlUi) and the GUI Builder ---
 # Play: tests/project/ui.scene shows ui/main_menu.rml over the Game view; configure-time copies (in health_project) with
