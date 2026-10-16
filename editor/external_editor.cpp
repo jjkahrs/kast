@@ -1,12 +1,9 @@
 #include "external_editor.h"
 
 #include "assets.h" // utf8, fromUtf8
+#include "editor_settings.h"
 
-#include <files.h>
 #include <log.h>
-
-#include <SDL3/SDL.h>
-#include <nlohmann/json.hpp>
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -14,7 +11,6 @@
 #include <shellapi.h>
 
 #include <format>
-#include <fstream>
 
 namespace {
 
@@ -67,42 +63,14 @@ void openWithAssociation(const std::filesystem::path& file)
 
 } // namespace
 
-std::filesystem::path defaultEditorSettingsFile()
-{
-    char* dir = SDL_GetPrefPath("Kast", "Editor");
-    if (!dir) {
-        kast::log::error(std::format("Cannot find the editor settings folder: {}", SDL_GetError()));
-        return {};
-    }
-    const std::filesystem::path file = fromUtf8(dir) / "editor_settings.json";
-    SDL_free(dir);
-    return file;
-}
-
 std::string loadEditorCommand(const std::filesystem::path& file)
 {
-    std::error_code ec;
-    if (file.empty() || !std::filesystem::exists(file, ec))
-        return kDefaultEditorCommand;
-    try {
-        std::ifstream in(file, std::ios::binary);
-        return nlohmann::json::parse(in).at(kCommandKey).get<std::string>();
-    } catch (const nlohmann::json::exception& e) {
-        kast::log::warn(std::format("Editor settings '{}' are invalid ({}); using the default external editor command",
-                                    utf8(file), e.what()));
-        return kDefaultEditorCommand;
-    }
+    return editorSetting(loadEditorSettings(file), kCommandKey, kDefaultEditorCommand);
 }
 
 bool saveEditorCommand(const std::filesystem::path& file, const std::string& command, std::string& error)
 {
-    std::error_code ec;
-    std::filesystem::create_directories(file.parent_path(), ec);
-    if (file.empty() || !kast::writeFileAtomic(file, nlohmann::ordered_json{{kCommandKey, command}}.dump(2) + '\n')) {
-        error = std::format("Cannot write the editor settings '{}'", utf8(file));
-        return false;
-    }
-    return true;
+    return saveEditorSetting(file, kCommandKey, command, error);
 }
 
 std::string expandEditorCommand(std::string_view command, const std::filesystem::path& file)

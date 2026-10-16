@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -42,6 +43,10 @@ struct Document {
     uint32_t sceneGeneration = 0;
 
     PanelFocus focusRequest = PanelFocus::None; // set by Play/Stop, cleared by the panel that takes focus
+
+    // Called by startPlay once the Lua session has started (its inits ran) and by stopPlay before it stops: main's
+    // hand-off of the Online panel's login to kast.auth. Unset: nothing.
+    std::function<void(kast::LuaSystems&)> onPlayStarted, onPlayStopping;
 };
 
 // Sets dirty, except during Play: play-mode edits are discarded on Stop.

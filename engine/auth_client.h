@@ -70,6 +70,10 @@ public:
     // Starts from a session obtained elsewhere (the editor's own login, at Play start): replaces any session and
     // queues "auth.session" {accountId, email, role}.
     void adopt(AuthSession session);
+    // The current session with expiresIn cut to what is left of the access token's lifetime at now (at least 1 s), so
+    // another client can adopt it; nullopt when logged out. Hand it off, don't share it: refresh tokens rotate, and
+    // two clients refreshing the same one end the session.
+    std::optional<AuthSession> session(Clock::time_point now = Clock::now()) const;
 
     // Takes a Network result if it answers one of this client's requests (true), else leaves it alone (false).
     bool handle(const NetEvent& event);
@@ -98,6 +102,7 @@ private:
     std::optional<AuthConfig> config_;
     std::optional<AuthSession> session_;
     Clock::time_point refreshAt_{};
+    Clock::time_point receivedAt_{}; // when session_ started (login, refresh or adopt)
     uint64_t refreshRequest_ = 0; // the Network request of the refresh in flight, 0 if none
     bool loggingIn_ = false;
     uint64_t nextId_ = 1;

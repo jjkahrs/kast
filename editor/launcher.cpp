@@ -27,7 +27,6 @@ constexpr bgfx::ViewId kImGuiView = 255;
 constexpr uint32_t kBackbufferClearColor = 0x202020ff;
 constexpr const char* kEditorExeName = "kast_editor.exe";
 constexpr float kNameScale = 1.3f; // project names are drawn this much larger than the base font
-constexpr ImVec4 kErrorColor{1.0f, 0.45f, 0.45f, 1.0f};
 // SDL filters match extensions only; Import rejects any other *.kast file name.
 constexpr SDL_DialogFileFilter kProjectFilter{"Kast project (project.kast)", "kast"};
 

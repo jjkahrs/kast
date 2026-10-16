@@ -6,16 +6,14 @@
 #include <string_view>
 #include <vector>
 
-// Opens text assets in the user's own code editor (Assets panel). The command is a per-user template stored in
-// editor_settings.json next to projects.json, shared by every project. No ImGui.
+// Opens text assets in the user's own code editor (Assets panel). The command is a per-user template stored under
+// "externalEditor" in editor_settings.json (editor_settings.h), shared by every project. No ImGui.
 
 constexpr const char* kDefaultEditorCommand = "code \"{file}\"";
 
-// <SDL_GetPrefPath("Kast", "Editor")>/editor_settings.json (%APPDATA%/Kast/Editor). Empty if SDL can't make that folder.
-std::filesystem::path defaultEditorSettingsFile();
 // The "externalEditor" command in file; kDefaultEditorCommand if the file is missing, or (with a warning) invalid.
 std::string loadEditorCommand(const std::filesystem::path& file);
-// Writes {"externalEditor": command}, creating file's folder if needed. False + error on failure.
+// Sets "externalEditor" to command in file, keeping its other settings. False + error on failure.
 bool saveEditorCommand(const std::filesystem::path& file, const std::string& command, std::string& error);
 // command with every "{file}" replaced by file's path (UTF-8); without "{file}", the quoted path is appended.
 std::string expandEditorCommand(std::string_view command, const std::filesystem::path& file);

@@ -96,7 +96,13 @@ std::string readLine(Stream& stream, std::string& buffer)
 // a "/boom/..." target answers 500 with a non-JSON body. /v1/realms lists Ashenvale (1, 127.0.0.1:4000, online), Duskmoor
 // (2, 127.0.0.1:4001, maintenance) and Testgrove (3, 127.0.0.1:worldPort, online: the FakeWorld). Any path prefix before /v1/ is ignored; "/stall/..." waits `stall`
 // first (to catch requests in flight for screenshots). Tokens are unsigned JWTs with sub "42".
+// Also GET /health (200 {status, db}, or 503 db_unavailable while dbDown) and the admin endpoints: kAdminEmail /
+// kDemoPassword logs in as account 1 with role admin; /v1/admin/* need its latest token (else 401 unauthorized, or 403
+// forbidden for a player token). Realm create / update / delete edit the list /v1/realms answers (409
+// realm_name_taken, 404 realm_not_found, 400 validation_error without name / host / port / region); ban, unban and
+// role answer 400 cannot_modify_self for account 1, 404 account_not_found for ids from 1000, and ban needs a reason.
 constexpr const char* kDemoEmail = "demo@example.com";
+constexpr const char* kAdminEmail = "admin@example.com";
 constexpr const char* kDemoPassword = "demo-password-123";
 
 class FakeAuth {
@@ -106,6 +112,7 @@ public:
     std::atomic<int> refreshDelayMs = 0;
     std::chrono::milliseconds stall{3000};
     std::atomic<int> worldPort = 47707; // Testgrove's port
+    std::atomic<bool> dbDown = false;   // /health answers 503
 
     http::response<http::string_body> answer(const http::request<http::string_body>& req);
 
@@ -119,10 +126,16 @@ public:
 
 private:
     nlohmann::json session(const std::string& email);
+    // An /v1/admin/... request, with mutex_ held and the caller checked as admin.
+    http::response<http::string_body> admin(const std::string& method, const std::string& path, const nlohmann::json& body);
+    nlohmann::json& realms(); // the realm list, made on first use
 
     mutable std::mutex mutex_;
     std::vector<Seen> seen_;
     std::string accessToken_;
+    std::string sessionEmail_ = kDemoEmail; // whose session the latest token is
+    nlohmann::json realms_;
+    int nextRealmId_ = 4;
     int issued_ = 0, refreshes_ = 0;
 };
 

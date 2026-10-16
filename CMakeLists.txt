@@ -126,9 +126,12 @@ target_link_libraries(kast_player PRIVATE kast_engine SDL3::SDL3)
 add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
-  editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp editor/kast_editor.rc
+  editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp editor/editor_settings.cpp
+  editor/online.cpp editor/online_panel.cpp editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
+# The Online panel's default compose folder: services/world of this source tree, if it is still there at run time.
+target_compile_definitions(kast_editor PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 imgui::imgui imguizmo::imguizmo pugixml::pugixml shell32) # shell32: Recycle Bin
 add_dependencies(kast_editor kast_player) # Build copies kast_player.exe from next to kast_editor.exe
@@ -136,9 +139,11 @@ add_dependencies(kast_editor kast_player) # Build copies kast_player.exe from ne
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
 add_executable(kast_self_check tests/self_check.cpp tests/net_self_check.cpp tests/net_test_util.cpp editor/document.cpp editor/build.cpp editor/camera.cpp
-  editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/external_editor.cpp "${KAST_MANIFEST}")
+  editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/external_editor.cpp editor/editor_settings.cpp
+  editor/online.cpp "${KAST_MANIFEST}")
 target_include_directories(kast_self_check PRIVATE editor)
-target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
+target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project"
+                           KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS} /bigobj) # one big file of checks
 target_link_libraries(kast_self_check PRIVATE kast_engine kast_protocol SDL3::SDL3 imgui::imgui pugixml::pugixml shell32
                       Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto) # Boost, OpenSSL: the loopback net servers
@@ -177,6 +182,12 @@ set_tests_properties(world_live PROPERTIES FIXTURES_REQUIRED world_live_ready SK
 add_test(NAME replication_live COMMAND kast_self_check --live-replication http://localhost:3100 http://localhost:8026
                                        "${CMAKE_CURRENT_BINARY_DIR}/world_live_ca.pem" "Kast Live")
 set_tests_properties(replication_live PROPERTIES FIXTURES_REQUIRED world_live_ready SKIP_RETURN_CODE 77 TIMEOUT 120)
+# The editor's Online panel model against the same stack (README "Online Services → Editor tooling"): starts it through
+# the panel's Start if it isn't running (and stops it again after), health, an admin login, realm create/delete, Play
+# started logged in, no secrets on disk. Skipped without docker.
+add_test(NAME online_live COMMAND kast_self_check --live-online http://localhost:3100 http://localhost:8026
+                                  "${CMAKE_CURRENT_SOURCE_DIR}/services/world")
+set_tests_properties(online_live PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 1200 RUN_SERIAL TRUE)
 add_test(NAME editor_smoke
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/smoke.png"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
@@ -1207,6 +1218,115 @@ add_test(NAME world_address_override
           "-DEXPECT_OUTPUT=World: connecting to realm 1 at 127.0.0.1:47707 .address override.*world: chat from Demo: hello world"
           -DFRAMES=180 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(world_address_override PROPERTIES RESOURCE_LOCK net_test_ports TIMEOUT 90)
+
+# --- Online panel (Window > Online, README "Online Services → Editor tooling") ---
+# online_session: tests/project's online_session.scene (scripts/online_session_demo.lua logs auth.session and whether
+# Play started logged in) with Online Services on against kast_net_test_server's fake auth (47705) and world (47707,
+# trusted through certs/net_test_ca.pem). online_down: the same, its auth URL on a port nothing listens on.
+foreach(online "online_session|http://127.0.0.1:47705" "online_down|http://127.0.0.1:47799")
+  string(REPLACE "|" ";" online "${online}")
+  list(GET online 0 name)
+  list(GET online 1 auth_url)
+  kast_game_project(${name} "Online Session Test" online_session.scene FALSE)
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/game_projects/${name}/project.kast"
+       "{\n  \"version\": 1,\n  \"name\": \"Online Session Test\",\n  \"startScene\": \"online_session.scene\",\n"
+       "  \"online\": {\n    \"enabled\": true,\n    \"authUrl\": \"${auth_url}\",\n    \"caFile\": \"certs/net_test_ca.pem\"\n  }\n}\n")
+endforeach()
+set(KAST_SESSION_DIR "${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_session")
+# The fake auth's accounts (net_test_util.h); its demo password is public test data. Through the environment, as
+# --online-login-env reads it, never on the editor's command line.
+set(KAST_ONLINE_ADMIN_ENV "${CMAKE_COMMAND};-E;env;KAST_ONLINE_EMAIL=admin@example.com;KAST_ONLINE_PASSWORD=demo-password-123")
+set(KAST_ONLINE_PLAYER_ENV "${CMAKE_COMMAND};-E;env;KAST_ONLINE_EMAIL=demo@example.com;KAST_ONLINE_PASSWORD=demo-password-123")
+# Never in the settings file: the password, the fake's tokens (their JWT header) and refresh tokens.
+set(KAST_ONLINE_SECRETS "demo-password-123$<SEMICOLON>eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0$<SEMICOLON>refresh-$<SEMICOLON>Token")
+add_test(NAME online_panel_disabled_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/online_panel_disabled.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT}" -DFOCUS_PANEL=Online
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME online_panel_down_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/online_panel_down.png"
+          "-DEXTRA_ARGS=--project ${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_down --size 1280x900" -DFOCUS_PANEL=Online
+          -DFRAMES=300 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# Refused connections to 127.0.0.1 take about 2 s on Windows: 300 frames shows auth unreachable, not still checking.
+# No docker on PATH (only System32): Start / Stop / Status disabled with the reason.
+add_test(NAME online_panel_no_docker_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/online_panel_no_docker.png"
+          "-DWRAPPER=${CMAKE_COMMAND};-E;env;PATH=C:/Windows/System32"
+          "-DEXTRA_ARGS=--project ${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_down --size 1280x900" -DFOCUS_PANEL=Online
+          -DFRAMES=300 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME online_panel_admin_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/online_panel_admin.png"
+          "-DWRAPPER=${KAST_ONLINE_ADMIN_ENV};${KAST_NET_SERVER}"
+          "-DEXTRA_ARGS=--project ${KAST_SESSION_DIR} --online-login-env --size 1280x1400" -DFOCUS_PANEL=Online
+          "-DEXPECT_OUTPUT=Online: logged in as admin@example.com .admin." "-DSETTINGS_MUST_NOT_CONTAIN=${KAST_ONLINE_SECRETS}"
+          -DFRAMES=150 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(online_panel_admin_screenshot PROPERTIES RESOURCE_LOCK net_test_ports TIMEOUT 90)
+# A player login: no Admin section (compare with the admin shot).
+add_test(NAME online_panel_player_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/online_panel_player.png"
+          "-DWRAPPER=${KAST_ONLINE_PLAYER_ENV};${KAST_NET_SERVER}"
+          "-DEXTRA_ARGS=--project ${KAST_SESSION_DIR} --online-login-env --size 1280x1400" -DFOCUS_PANEL=Online
+          "-DEXPECT_OUTPUT=Online: logged in as demo@example.com .player." -DFRAMES=150
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(online_panel_player_screenshot PROPERTIES RESOURCE_LOCK net_test_ports TIMEOUT 90)
+# Play after the panel's test login starts logged in (auth.session reaches Lua); without one it starts logged out.
+add_test(NAME online_play_logged_in
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/online_play_logged_in.png"
+          "-DWRAPPER=${KAST_ONLINE_PLAYER_ENV};${KAST_NET_SERVER}"
+          "-DEXTRA_ARGS=--scene ${KAST_SESSION_DIR}/online_session.scene --online-login-env --play --no-audio-device"
+          "-DEXPECT_OUTPUT=Play started logged in as demo@example.com.*auth.session: demo@example.com .account 42, player."
+          "-DSETTINGS_MUST_NOT_CONTAIN=${KAST_ONLINE_SECRETS}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(online_play_logged_in PROPERTIES RESOURCE_LOCK net_test_ports TIMEOUT 90)
+add_test(NAME online_play_logged_out
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/online_play_logged_out.png"
+          "-DWRAPPER=${KAST_NET_SERVER}" "-DEXTRA_ARGS=--scene ${KAST_SESSION_DIR}/online_session.scene --play --no-audio-device"
+          "-DEXPECT_OUTPUT=Play started logged out" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(online_play_logged_out PROPERTIES RESOURCE_LOCK net_test_ports TIMEOUT 90)
+add_test(NAME preferences_compose_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/preferences_compose.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --open-preferences" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# The panel's world override (saved in the editor settings) aims editor Play at the fake world as --world-address does;
+# the built game, started on the same scene, ignores it and tries the realm's own address.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/online_override_settings.json" "{\n  \"worldOverride\": \"127.0.0.1:47707\"\n}\n")
+add_test(NAME world_override_setting
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/world_override_setting.png"
+          "-DWRAPPER=${KAST_NET_SERVER}" "-DSETTINGS_FROM=${CMAKE_CURRENT_BINARY_DIR}/online_override_settings.json"
+          "-DEXTRA_ARGS=--scene ${world_dir}/online_world_override.scene --play --no-audio-device"
+          "-DEXPECT_OUTPUT=World: connecting to realm 1 at 127.0.0.1:47707 .address override.*world: chat from Demo: hello world"
+          -DFRAMES=180 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(world_override_setting PROPERTIES RESOURCE_LOCK net_test_ports TIMEOUT 90)
+set(override_game "${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_world_override")
+file(REMOVE_RECURSE "${override_game}")
+file(COPY "${world_dir}/" DESTINATION "${override_game}")
+file(READ "${override_game}/project.kast" override_project)
+string(REPLACE "\"online_world.scene\"" "\"online_world_override.scene\"" override_project "${override_project}")
+file(WRITE "${override_game}/project.kast" "${override_project}")
+add_test(NAME build_game_online_world_override
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${override_game}"
+          "-DOUT=${KAST_GAME_OUT}/online_world_override" "-DEXE=Online World Test.exe" -DEXPECT=0
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+set_tests_properties(build_game_online_world_override PROPERTIES FIXTURES_SETUP game_online_world_override_built)
+add_test(NAME player_ignores_world_override
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/online_world_override" "-DEXE=Online World Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/online_world_override.run" "-DWRAPPER=${KAST_NET_SERVER}" -DEXPECT=0
+          "-DEXPECT_OUTPUT=World: connecting to realm 1 at 127.0.0.1:4000[^ ]"
+          "-DEXTRA_ARGS=--frames 200 --no-audio-device" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_ignores_world_override PROPERTIES FIXTURES_REQUIRED game_online_world_override_built
+                     RESOURCE_LOCK net_test_ports TIMEOUT 90)
+# Secrets: an admin test login and Play, then a Build of the same project; the password and token texts appear in none
+# of the settings file, the project and game.pak (cmake/online_secrets_test.cmake).
+set(secrets_project "${CMAKE_CURRENT_BINARY_DIR}/game_projects/online_secrets")
+file(REMOVE_RECURSE "${secrets_project}")
+file(MAKE_DIRECTORY "${secrets_project}/scripts" "${secrets_project}/certs")
+file(COPY_FILE "${KAST_SESSION_DIR}/project.kast" "${secrets_project}/project.kast")
+file(COPY_FILE "${KAST_TEST_PROJECT}/online_session.scene" "${secrets_project}/online_session.scene")
+file(COPY_FILE "${KAST_TEST_PROJECT}/scripts/online_session_demo.lua" "${secrets_project}/scripts/online_session_demo.lua")
+file(COPY_FILE "${KAST_TEST_PROJECT}/certs/net_test_ca.pem" "${secrets_project}/certs/net_test_ca.pem")
+add_test(NAME online_secrets
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${secrets_project}"
+          "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/online_secrets.run" "-DWRAPPER=${KAST_ONLINE_ADMIN_ENV};${KAST_NET_SERVER}"
+          "-DSECRETS=${KAST_ONLINE_SECRETS}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/online_secrets_test.cmake")
+set_tests_properties(online_secrets PROPERTIES RESOURCE_LOCK net_test_ports TIMEOUT 120)
 
 # --- game GUI (RmlUi) and the GUI Builder ---
 # Play: tests/project/ui.scene shows ui/main_menu.rml over the Game view; configure-time copies (in health_project) with

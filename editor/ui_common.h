@@ -22,6 +22,9 @@ void applyTheme();
 // ImGui has one text color, and white text on the accent fills (buttons, tabs, headers, selection) is unreadable: turns
 // text drawn over an accent fill black. Call after ImGui::Render, before rendering the draw data.
 void darkenTextOnAccent(ImDrawData* drawData);
+constexpr ImVec4 kOkColor{0.4f, 0.85f, 0.4f, 1.0f};
+constexpr ImVec4 kErrorColor{1.0f, 0.45f, 0.4f, 1.0f};
+
 // Explains why the last (disabled) item is disabled, if it is.
 void disabledTooltip(const char* reason);
 

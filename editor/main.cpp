@@ -1,9 +1,12 @@
 #include "build.h"
 #include "document.h"
+#include "editor_settings.h"
 #include "external_editor.h"
 #include "game_view.h"
 #include "imgui_bgfx.h"
 #include "launcher.h"
+#include "online.h"
+#include "online_panel.h"
 #include "panels.h"
 #include "recent_projects.h"
 #include "ui_common.h"
@@ -56,7 +59,7 @@ constexpr const char* kUsage =
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
     "[--focus-panel Window] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--settings-file settings.json] [--open-preferences] "
-    "[--open-external path] [--drop-model path] [--world-address host:port] [--log-fps] [--no-vsync] [--no-audio-device] [--crash abort|assert] | "
+    "[--open-external path] [--drop-model path] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--no-vsync] [--no-audio-device] [--crash abort|assert] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --log-fps: once a second, the frame rate (vsync caps it at the display's refresh rate) and what a frame costs below
@@ -113,7 +116,7 @@ struct Options {
     std::optional<std::pair<Panels::AssetCreate, std::string>> assetsCreate; // run Assets Create in that folder
     bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
     bool openOnlineSettings = false; // open the Online Services modal (needs --project) for screenshots
-    std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting", "Post Processing", "Physics", "Mixer" and "Network" also open it) to the front, for screenshots
+    std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting", "Post Processing", "Physics", "Mixer", "Network" and "Online" also open it) to the front, for screenshots
     std::string openGui;            // open this .rml in the GUI Builder (relative paths: to the project, else the cwd)
     std::string guiSelect;          // then select the element with this id in it
     std::optional<std::pair<int, int>> guiPreviewSize; // add this GUI Preview resolution and pick it
@@ -122,13 +125,15 @@ struct Options {
     bool guiSave = false;          // then save the GUI as its Save button does
     std::string guiClick;           // with --play: click the game GUI element with this id (frame kAddComponentPopupFrame)
     std::string projectsFile;       // the recent-projects list; empty = the one in %APPDATA%
-    std::string settingsFile;       // the editor settings (external editor command); empty = the one in %APPDATA%
+    std::string settingsFile;       // the editor settings (editor_settings.h); empty = the one in %APPDATA%
     bool openPreferences = false;   // open the File > Preferences modal for screenshots
     std::string openExternal;       // open this project file (path relative to the project) in the external editor
     bool launcher = false;          // run the Project Manager (the default anyway when nothing asks for the editor)
     std::string launcherOpen;       // open this project as the Project Manager would, without a window, and exit
     std::string dropModel;          // add this project model file as dropping it from the Assets panel does
     std::string worldAddress;       // host:port replacing every realm's world address in Play (kast.world), editor only
+    bool onlineLoginEnv = false;    // Online panel test login from KAST_ONLINE_EMAIL / KAST_ONLINE_PASSWORD (--play waits for it)
+    std::optional<OnlineModel::Compose> onlineCompose; // press the Online panel's Start, Stop or Status at startup
     bool logFps = false;            // log frames per second, editor CPU and GPU frame times once a second
     std::string crash;              // --crash abort|assert: fail on purpose, to test KAST_NO_CRASH_DIALOGS
     bool noVsync = false;           // present as fast as possible, to measure the frame rate past the display's
@@ -286,6 +291,16 @@ std::optional<Options> parseArgs(int argc, char** argv)
                                              kUsage));
                 return std::nullopt;
             }
+        } else if (arg == "--online-login-env") {
+            options.onlineLoginEnv = true;
+        } else if (arg == "--online-compose" && hasValue) {
+            const std::string_view what = argv[++i];
+            if (what != "up" && what != "down" && what != "ps") {
+                kast::log::error(std::format("Invalid --online-compose '{}', expected up, down or ps. {}", what, kUsage));
+                return std::nullopt;
+            }
+            options.onlineCompose = what == "up" ? OnlineModel::Compose::Up
+                                    : what == "down" ? OnlineModel::Compose::Down : OnlineModel::Compose::Ps;
         } else if (arg == "--no-scene-post") {
             options.noScenePost = true;
         } else if (arg == "--size" && hasValue) {
@@ -321,13 +336,14 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
                              options.guiAdd || options.guiSave || !options.guiClick.empty() || options.openPreferences ||
                              !options.openExternal.empty() || !options.dropModel.empty() || options.logFps ||
-                             options.noVsync || !options.worldAddress.empty();
+                             options.noVsync || !options.worldAddress.empty() || options.onlineLoginEnv ||
+                             options.onlineCompose;
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --add-component-popup, --new-component[-prompt], "
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, "
                          "--assets-menu, "
                          "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
-                         "--gui-click, --open-preferences, --open-external and --world-address require "
+                         "--gui-click, --open-preferences, --open-external, --world-address, --online-login-env and --online-compose require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
     }
@@ -390,10 +406,11 @@ void buildDefaultLayout(ImGuiID dockspace)
 }
 
 // openMenu: a main menu to open this frame (--open-menu), or empty. openPreferences: set when File > Preferences... is
-// chosen. showLighting, showPostProcessing, showPhysics, showMixer, showNetwork: those panels' visibility, toggled in the
-// Window menu.
+// chosen. showLighting, showPostProcessing, showPhysics, showMixer, showNetwork, showOnline: those panels' visibility,
+// toggled in the Window menu.
 void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu, bool& openPreferences,
-                 bool& showLighting, bool& showPostProcessing, bool& showPhysics, bool& showMixer, bool& showNetwork)
+                 bool& showLighting, bool& showPostProcessing, bool& showPhysics, bool& showMixer, bool& showNetwork,
+                 bool& showOnline)
 {
     if (ImGui::BeginMainMenuBar()) {
         if (!openMenu.empty())
@@ -441,18 +458,20 @@ void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu,
             ImGui::MenuItem("Physics", nullptr, &showPhysics);
             ImGui::MenuItem("Mixer", nullptr, &showMixer);
             ImGui::MenuItem("Network", nullptr, &showNetwork);
+            ImGui::MenuItem("Online", nullptr, &showOnline);
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
     }
 }
 
-// File > Preferences...: the external editor command (per user, every project). open: open it this frame, showing the
-// current setting.
-void drawPreferences(ExternalEditor& editor, std::string& draft, bool open)
+// File > Preferences...: the external editor command and the local services compose folder (per user, every project).
+// open: open it this frame, showing the current settings.
+void drawPreferences(ExternalEditor& editor, OnlineModel& online, std::string& draft, std::string& composeDraft, bool open)
 {
     if (open) {
         draft = editor.command();
+        composeDraft = online.composeFolder();
         ImGui::OpenPopup("Preferences");
     }
     if (!ImGui::BeginPopupModal("Preferences", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
@@ -461,8 +480,18 @@ void drawPreferences(ExternalEditor& editor, std::string& draft, bool open)
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 25.0f);
     ImGui::InputText("##externalEditor", &draft);
     ImGui::TextDisabled("{file} is replaced with the file's full path. Default: %s", kDefaultEditorCommand);
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Local services compose folder");
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 25.0f);
+    ImGui::InputText("##composeFolder", &composeDraft);
+    const std::string defaultFolder = defaultComposeFolder();
+    ImGui::TextDisabled("Holds docker-compose.yml (Window > Online). Default: %s",
+                        defaultFolder.empty() ? "none found" : defaultFolder.c_str());
+    if (const std::string blocker = composeBlocker(true, composeDraft); !composeDraft.empty() && !blocker.empty())
+        ImGui::TextColored(kErrorColor, "%s", blocker.c_str());
     if (ImGui::Button("Save")) {
-        if (std::string error; editor.setCommand(draft, error))
+        std::string error;
+        if (editor.setCommand(draft, error) && online.setComposeFolder(composeDraft, error))
             ImGui::CloseCurrentPopup();
         else
             kast::log::error(error);
@@ -581,10 +610,38 @@ int main(int argc, char** argv)
     if (!options->dropModel.empty())
         createModelEntity(doc, options->dropModel, entt::null);
     refreshStateMachines(doc); // the Inspector and State Machines panel list them from the first frame
-    if (!options->worldAddress.empty())
-        doc.lua.world().setAddressOverride(options->worldAddress); // kept by every Play start
-    if (options->play)
+    const std::filesystem::path settingsFile =
+        options->settingsFile.empty() ? defaultEditorSettingsFile() : std::filesystem::absolute(options->settingsFile);
+    // The Online panel's login goes to each Play session and comes back at Stop (refresh tokens rotate: one holder).
+    OnlineModel online(settingsFile);
+    doc.onPlayStarted = [&online](kast::LuaSystems& lua) { online.lendSession(lua.auth()); };
+    doc.onPlayStopping = [&online](kast::LuaSystems& lua) { online.reclaimSession(lua.auth()); };
+    // Editor Play's world address: --world-address, else the Online panel's override (applied every frame below).
+    const auto applyWorldOverride = [&] {
+        const std::string& address = options->worldAddress.empty() ? online.worldOverride() : options->worldAddress;
+        const std::optional<std::string> wanted = address.empty() ? std::nullopt : std::optional(address);
+        if (doc.lua.world().addressOverride() != wanted)
+            doc.lua.world().setAddressOverride(wanted); // kept by every Play start
+    };
+    applyWorldOverride();
+    bool playAfterLogin = false; // --play waiting for --online-login-env's answer
+    if (options->onlineLoginEnv) {
+        online.poll(doc.project ? &*doc.project : nullptr, false);
+        const char* email = SDL_getenv("KAST_ONLINE_EMAIL");
+        const char* password = SDL_getenv("KAST_ONLINE_PASSWORD");
+        if (!email || !password) {
+            kast::log::error("--online-login-env needs KAST_ONLINE_EMAIL and KAST_ONLINE_PASSWORD set");
+        } else {
+            std::string secret = password;
+            online.login(email, secret); // wipes secret
+            playAfterLogin = options->play;
+        }
+    }
+    if (options->play && !playAfterLogin)
         startPlay(doc);
+    if (options->onlineCompose && !online.runCompose(*options->onlineCompose))
+        kast::log::error(std::format("--online-compose: {}", online.composeBlocker().empty() ? "could not start docker"
+                                                                                            : online.composeBlocker()));
     if (std::string error; opened && !recordRecent(projectsFile, *opened, error))
         kast::log::warn(error);
 
@@ -600,14 +657,16 @@ int main(int argc, char** argv)
     UiScale uiScale(options->uiScale);
     FrameLimit frames(options->frames, options->screenshot);
     float componentPollSeconds = 0.0f;
-    ExternalEditor externalEditor(options->settingsFile.empty() ? defaultEditorSettingsFile()
-                                                                : std::filesystem::absolute(options->settingsFile));
+    ExternalEditor externalEditor(settingsFile);
     std::string preferencesDraft; // the Preferences modal's edit of the command
+    std::string composeDraft;     // and of the compose folder
+    OnlinePanel onlinePanel;
     bool showLighting = options->focusPanel == "Lighting"; // hidden by default; --focus-panel Lighting opens it
     bool showPostProcessing = options->focusPanel == "Post Processing"; // the same
     bool showPhysics = options->focusPanel == "Physics";                // the same
     bool showMixer = options->focusPanel == "Mixer";                    // the same
     bool showNetwork = options->focusPanel == "Network";                // the same
+    bool showOnline = options->focusPanel == "Online";                  // the same
     if (!options->openExternal.empty())
         externalEditor.open(doc.project->root /
                             std::filesystem::path(reinterpret_cast<const char8_t*>(options->openExternal.c_str())));
@@ -658,6 +717,12 @@ int main(int argc, char** argv)
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
         ImGuizmo::BeginFrame();
+        online.poll(doc.project ? &*doc.project : nullptr, onlinePanel.visible());
+        applyWorldOverride();
+        if (playAfterLogin && !online.loggingIn()) {
+            playAfterLogin = false;
+            startPlay(doc);
+        }
         updatePlay(doc, ImGui::GetIO().DeltaTime);
         componentPollSeconds += ImGui::GetIO().DeltaTime;
         if (componentPollSeconds >= kComponentPollSeconds) { // Lua component hot reload (does nothing during Play)
@@ -671,7 +736,7 @@ int main(int argc, char** argv)
 
         bool openPreferences = options->openPreferences && frames.frame() == kAddComponentPopupFrame;
         drawMenuBar(files, doc, frames.frame() == kAddComponentPopupFrame ? options->openMenu : std::string(),
-                    openPreferences, showLighting, showPostProcessing, showPhysics, showMixer, showNetwork);
+                    openPreferences, showLighting, showPostProcessing, showPhysics, showMixer, showNetwork, showOnline);
         const ImGuiID dockspace = ImGui::GetID("MainDockSpace");
         if (!ImGui::DockBuilderGetNode(dockspace)) // no saved layout in imgui.ini
             buildDefaultLayout(dockspace);
@@ -743,9 +808,10 @@ int main(int argc, char** argv)
         panels.drawPhysics(doc, showPhysics);
         panels.drawMixer(doc, showMixer);
         panels.drawNetwork(doc, showNetwork);
+        onlinePanel.draw(doc, online, files, options->worldAddress, showOnline);
         drawGuiBuilder(guiBuilder);
         drawConsole(); // submitted after Assets, Events and State Machines so Console is the front tab on first run
-        drawPreferences(externalEditor, preferencesDraft, openPreferences);
+        drawPreferences(externalEditor, online, preferencesDraft, composeDraft, openPreferences);
         externalEditor.poll();
         files.update();
         if (game.hasInput(doc))

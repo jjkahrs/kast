@@ -7,7 +7,8 @@
 // means nothing reconnected); "stream <n>" -> "tick 1" .. "tick <n>" in bursts, then "done <n>"; anything else is
 // echoed. ws / wss: messages, the same commands. http / https: any request -> 200 JSON {method, target, body};
 // "/slow" waits 300 ms first. A target holding "/v1/" goes to a fake auth service instead (FakeAuth in
-// net_test_util.h: kast.auth scenes log in as demo@example.com / demo-password-123; "/stall/v1/..." answers after 3 s).
+// net_test_util.h: kast.auth scenes log in as demo@example.com / demo-password-123; "/stall/v1/..." answers after 3 s),
+// and so does a target ending in "/health".
 //
 // Usage: kast_net_test_server --cert <pem> --key <pem> -- <exe> [args...]   runs exe with the servers up and exits with
 //        its exit code (its output goes to ours)
@@ -88,7 +89,7 @@ void respond(Stream stream)
     beast::flat_buffer buffer;
     http::request<http::string_body> req;
     http::read(stream, buffer, req);
-    if (req.target().find("/v1/") != std::string_view::npos)
+    if (req.target().find("/v1/") != std::string_view::npos || req.target().ends_with("/health"))
         return (void)http::write(stream, g_auth.answer(req));
     if (req.target().starts_with("/slow"))
         std::this_thread::sleep_for(std::chrono::milliseconds(300));

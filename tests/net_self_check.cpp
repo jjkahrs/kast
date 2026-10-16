@@ -3,7 +3,10 @@
 #include "net_test_util.h"
 
 #include "auth_client.h"
+#include "build.h"
 #include "document.h"
+#include "external_editor.h"
+#include "online.h"
 #include "log.h"
 #include "math3d.h"
 #include "lua_systems.h"
@@ -13,12 +16,16 @@
 #include "scene_io.h"
 #include "world_client.h"
 
+#include <SDL3/SDL.h>
+
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <format>
 #include <process.h>
 #include <fstream>
+#include <iterator>
+#include <ranges>
 #include <source_location>
 #include <thread>
 #include <unordered_map>
@@ -1814,6 +1821,30 @@ std::optional<std::string> fetch(Network& net, const std::string& url)
     return ev.response(id)->at("body").get<std::string>();
 }
 
+// The verification token Mailpit received for email (waits up to 15 s), or "".
+std::string mailpitToken(Network& probe, const std::string& mailpitUrl, const std::string& email)
+{
+    std::string token;
+    const auto end = std::chrono::steady_clock::now() + 15s;
+    while (token.empty() && std::chrono::steady_clock::now() < end) {
+        const std::optional<std::string> found = fetch(probe, std::format("{}/api/v1/search?query=to:{}", mailpitUrl, email));
+        const Json list = found ? Json::parse(*found, nullptr, false) : Json();
+        if (list.is_object() && list.contains("messages") && !list["messages"].empty()) {
+            const std::string id = list["messages"][0].value("ID", "");
+            const std::optional<std::string> message = fetch(probe, std::format("{}/api/v1/message/{}", mailpitUrl, id));
+            const Json body = message ? Json::parse(*message, nullptr, false) : Json();
+            const std::string text = body.is_object() ? body.value("Text", "") : "";
+            const std::string marker = "Verification token: ";
+            if (const size_t at = text.find(marker); at != std::string::npos)
+                token = text.substr(at + marker.size(),
+                                    text.find_first_of("\r\n", at + marker.size()) - at - marker.size());
+        }
+        if (token.empty())
+            std::this_thread::sleep_for(250ms);
+    }
+    return token;
+}
+
 } // namespace
 
 // kast_self_check --live-auth <authUrl> <mailpitUrl>: registers a fresh account, reads the verification token from
@@ -1840,24 +1871,7 @@ int liveAuthCheck(const std::string& authUrl, const std::string& mailpitUrl)
         return kSkipped;
     }
     check(r.nameOf(reg) == "auth.registered", "live: register");
-    std::string token;
-    const auto end = std::chrono::steady_clock::now() + 15s;
-    while (token.empty() && std::chrono::steady_clock::now() < end) {
-        const std::optional<std::string> found = fetch(probe, std::format("{}/api/v1/search?query=to:{}", mailpitUrl, email));
-        const Json list = found ? Json::parse(*found, nullptr, false) : Json();
-        if (list.is_object() && list.contains("messages") && !list["messages"].empty()) {
-            const std::string id = list["messages"][0].value("ID", "");
-            const std::optional<std::string> message = fetch(probe, std::format("{}/api/v1/message/{}", mailpitUrl, id));
-            const Json body = message ? Json::parse(*message, nullptr, false) : Json();
-            const std::string text = body.is_object() ? body.value("Text", "") : "";
-            const std::string marker = "Verification token: ";
-            if (const size_t at = text.find(marker); at != std::string::npos)
-                token = text.substr(at + marker.size(),
-                                    text.find_first_of("\r\n", at + marker.size()) - at - marker.size());
-        }
-        if (token.empty())
-            std::this_thread::sleep_for(250ms);
-    }
+    const std::string token = mailpitToken(probe, mailpitUrl, email);
     check(!token.empty(), "live: the verification email reaches Mailpit");
     check(r.succeeded(a.verifyEmail(token), "auth.emailVerified"), "live: verifyEmail");
     const uint64_t login = a.login(email, password);
@@ -2263,6 +2277,284 @@ int liveReplicationCheck(const std::string& authUrl, const std::string& mailpitU
     return g_failures == 0 ? 0 : 1;
 }
 
+namespace {
+
+// --- the editor's Online panel model (editor/online.h), against FakeAuth and the fake world server ---
+
+// Polls online (for project) until done() or timeout; false on timeout.
+bool pollUntil(OnlineModel& online, const kast::Project* project, const std::function<bool()>& done,
+               std::chrono::milliseconds timeout = 5s)
+{
+    const auto end = std::chrono::steady_clock::now() + timeout;
+    for (;;) {
+        online.poll(project, false);
+        if (done())
+            return true;
+        if (std::chrono::steady_clock::now() > end)
+            return false;
+        std::this_thread::sleep_for(1ms);
+    }
+}
+
+std::string readAll(const std::filesystem::path& file)
+{
+    std::ifstream in(file, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), {}};
+}
+
+void checkOnlineHelpers()
+{
+    using State = OnlineProbe::State;
+    check(contains(composeBlocker(false, "C:/anything"), "docker was not found on PATH"), "online: no docker -> reason");
+    check(contains(composeBlocker(true, ""), "File > Preferences"), "online: no compose folder -> set it in Preferences");
+    const std::filesystem::path dir = netRoot() / "kast_compose_check";
+    std::filesystem::create_directories(dir);
+    check(contains(composeBlocker(true, (dir / "missing").string()), "does not exist"), "online: a missing folder -> reason");
+    check(contains(composeBlocker(true, dir.string()), "has no docker-compose.yml"), "online: no compose file -> reason");
+    writeFile(dir / "docker-compose.yml", "services: {}\n");
+    check(composeBlocker(true, dir.string()).empty(), "online: docker + a folder with docker-compose.yml -> can run");
+    const std::filesystem::path world = std::filesystem::path(KAST_SOURCE_DIR) / "services/world";
+    check(std::filesystem::path(defaultComposeFolder()) == world.lexically_normal(),
+          "online: the default compose folder is services/world of the source tree");
+
+    const std::vector<ComposeService> lines = parseComposePs(
+        "{\"Service\":\"world\",\"State\":\"running\",\"Health\":\"healthy\"}\n"
+        "not json\n{\"Service\":\"auth\",\"State\":\"exited\",\"Health\":\"\"}\n");
+    check(lines.size() == 2 && lines[0].name == "auth" && lines[0].state == "exited" && lines[1].health == "healthy",
+          "online: compose ps as one object per line, sorted by service, junk skipped");
+    const std::vector<ComposeService> array =
+        parseComposePs("[{\"Service\":\"mysql\",\"State\":\"running\"},{\"Name\":\"no service\"}]");
+    check(array.size() == 1 && array[0].name == "mysql" && array[0].health.empty(), "online: compose ps as a JSON array");
+    check(OnlineProbe{}.state == State::Unknown, "online: probes start unknown");
+}
+
+void checkOnlineModel()
+{
+    using State = OnlineProbe::State;
+    checkOnlineHelpers();
+    const std::filesystem::path settings = netRoot() / "kast_online_settings/editor_settings.json";
+    std::string error;
+    check(saveEditorCommand(settings, "notepad {file}", error), "online: an existing externalEditor setting");
+
+    // Disabled: no checks, no login.
+    const std::filesystem::path offDir = netProject("kast_online_off_check");
+    kast::Project off;
+    check(kast::loadProject(offDir / kast::kProjectFileName, off, error), "online: load the disabled project");
+    {
+        OnlineModel online(settings, "");
+        online.poll(&off, true);
+        std::string password = "x-password";
+        online.login("someone@test", password);
+        check(!online.enabled() && online.authHealth().state == State::Unknown && online.loginError().code == "disabled" &&
+                  password.empty(),
+              "online: disabled project -> no health check, login refused inline, password wiped");
+        check(contains(online.composeBlocker(), "Preferences") || contains(online.composeBlocker(), "docker"),
+              "online: no compose folder -> Start/Stop/Status blocked with a reason");
+    }
+
+    // Auth down.
+    const std::filesystem::path downDir = netProject("kast_online_down_check");
+    writeFile(downDir / kast::kProjectFileName, R"({"version": 1, "name": "Down", "startScene": null,
+"online": {"enabled": true, "authUrl": "http://127.0.0.1:1"}})");
+    kast::Project down;
+    check(kast::loadProject(downDir / kast::kProjectFileName, down, error), "online: load the auth-down project");
+    {
+        OnlineModel online(settings, "");
+        online.poll(&down, true); // visible: the first refresh starts at once
+        check(online.authHealth().state == State::Checking, "online: a visible panel checks /health at once");
+        check(pollUntil(online, &down, [&] { return online.authHealth().state == State::Down; }),
+              "online: auth not running -> unreachable");
+    }
+
+    FakeAuth fake;
+    Server authServer(serveFakeAuth(fake));
+    const Cert cert = makeCert("DNS:localhost,IP:127.0.0.1");
+    const Cert stranger = makeCert("DNS:localhost,IP:127.0.0.1"); // a world server whose certificate isn't the CA file's
+    FakeWorld fakeWorld, untrustedWorld;
+    Server worldServer(serveFakeWorld(fakeWorld), 0, &cert);
+    Server untrustedServer(serveFakeWorld(untrustedWorld), 0, &stranger);
+    fake.worldPort = worldServer.port();
+    const std::filesystem::path dir = netProject("kast_online_check");
+    writeFile(dir / "certs/world_ca.pem", cert.certPem);
+    writeFile(dir / kast::kProjectFileName,
+              std::format(R"({{"version": 1, "name": "Online", "startScene": null,
+"online": {{"enabled": true, "authUrl": "http://127.0.0.1:{}", "caFile": "certs/world_ca.pem"}}}})",
+                          authServer.port()));
+    saveScene(dir / "a.scene", {"scripts/session.lua"});
+    writeFile(dir / "scripts/session.lua", R"(local reported = false
+return {
+    init = function()
+        kast.subscribe("auth.session", function(e) kast.log("online check auth.session " .. e.email .. " " .. e.role) end)
+    end,
+    update = function(dt)
+        if reported then return end
+        reported = true
+        local account = kast.auth.account()
+        kast.log("online check first update " .. (account and account.email or "logged out"))
+    end,
+}
+)");
+    Document doc;
+    check(openFile(doc, (dir / "a.scene").string(), error) && doc.project, "online: open the online project");
+    const kast::Project* project = &*doc.project;
+    OnlineModel online(settings, "");
+    doc.onPlayStarted = [&online](kast::LuaSystems& lua) { online.lendSession(lua.auth()); };
+    doc.onPlayStopping = [&online](kast::LuaSystems& lua) { online.reclaimSession(lua.auth()); };
+
+    online.poll(project, false);
+    check(online.enabled() && online.authHealth().state == State::Unknown, "online: a hidden panel checks nothing");
+    online.refresh();
+    check(pollUntil(online, project, [&] { return online.authHealth().state == State::Ok; }), "online: /health ok");
+    fake.dbDown = true;
+    online.refresh();
+    check(pollUntil(online, project, [&] { return online.authHealth().state == State::Warning; }) &&
+              contains(online.authHealth().detail, "db_unavailable"),
+          "online: /health 503 -> database down (db_unavailable)");
+    fake.dbDown = false;
+    check(online.realms().empty(), "online: no realms while logged out");
+
+    std::string password = "wrong-password";
+    online.login(kDemoEmail, password);
+    check(password.empty() && online.loggingIn(), "online: Log in wipes the password field at once");
+    check(pollUntil(online, project, [&] { return !online.loggingIn(); }) &&
+              online.loginError().code == "invalid_credentials" && !online.loggedIn(),
+          "online: a wrong password -> invalid_credentials inline");
+    password = kDemoPassword;
+    online.login(kDemoEmail, password);
+    check(pollUntil(online, project, [&] { return online.loggedIn(); }) && online.loginError().code.empty() &&
+              online.account().value("email", "") == kDemoEmail && online.account().value("role", "") == "player" &&
+              !online.isAdmin(),
+          "online: login shows email and role; a player is no admin");
+    check(pollUntil(online, project, [&] {
+              return online.realms().size() == 3 && std::ranges::none_of(online.realms(), [](const OnlineRealm& r) {
+                         return r.world.state == State::Checking || r.world.state == State::Unknown;
+                     });
+          }),
+          "online: logged in -> the realm list, each world server checked");
+    if (online.realms().size() == 3) {
+        check(online.realms()[0].name == "Ashenvale" && online.realms()[0].world.state == State::Down,
+              "online: a realm with nothing listening -> world unreachable");
+        check(online.realms()[2].name == "Testgrove" && online.realms()[2].world.state == State::Ok,
+              "online: a world server trusted through the project's CA file -> reachable");
+    }
+    online.createRealm({{"name", "Nope"}, {"host", "127.0.0.1"}, {"port", 1}, {"region", "x"}});
+    check(online.adminResult().error.code == "not_admin" && !online.adminResult().busy,
+          "online: admin calls refused without an admin login");
+
+    // Play hand-off.
+    startPlay(doc);
+    check(online.sessionLent() && !online.loggedIn(), "online: Play takes the login; the editor holds none");
+    check(doc.lua.auth().loggedIn() && doc.lua.auth().accessToken() == fake.accessToken(),
+          "online: the Play session adopted the editor's tokens");
+    check(playUntil(doc, std::format("online check auth.session {} player", kDemoEmail)) &&
+              playUntil(doc, std::format("online check first update {}", kDemoEmail)),
+          "online: Lua gets auth.session and is logged in from the first update");
+    password = kDemoPassword;
+    online.login(kDemoEmail, password);
+    check(online.loginError().code == "playing" && password.empty(), "online: no login during Play");
+    stopPlay(doc);
+    check(!online.sessionLent() && online.loggedIn() && online.account().value("email", "") == kDemoEmail,
+          "online: Stop gives the login back to the editor");
+    const int refreshes = fake.refreshes();
+    startPlay(doc);
+    check(playUntil(doc, "online check auth.session"), "online: a second Play gets the session again");
+    doc.lua.auth().logout();
+    stopPlay(doc);
+    check(!online.loggedIn() && !online.sessionLent() && logged("Play ended logged out"),
+          "online: Lua logging out in Play logs the editor out too");
+    check(fake.refreshes() == refreshes, "online: the hand-off itself refreshes nothing");
+    startPlay(doc);
+    check(playUntil(doc, "online check first update logged out"), "online: not logged in -> Play starts logged out");
+    stopPlay(doc);
+
+    // Admin.
+    password = kDemoPassword;
+    online.login(kAdminEmail, password);
+    check(pollUntil(online, project, [&] { return online.isAdmin(); }), "online: an admin login");
+    check(pollUntil(online, project, [&] { return online.realms().size() == 3; }), "online: the admin sees the realms");
+    const auto admin = [&](const std::function<void()>& call) {
+        call();
+        return pollUntil(online, project, [&] { return !online.adminResult().busy; });
+    };
+    const auto failedWith = [&](const char* code) {
+        return !online.adminResult().ok && online.adminResult().error.code == code;
+    };
+    const Json realm{{"name", "Untrusted"}, {"host", "127.0.0.1"}, {"port", untrustedServer.port()},
+                     {"region", "local"}, {"status", "online"}, {"sortOrder", 5}};
+    check(admin([&] { online.createRealm({{"name", "Ashenvale"}, {"host", "h"}, {"port", 1}, {"region", "r"}}); }) &&
+              failedWith("realm_name_taken"),
+          "online: create with a taken name -> realm_name_taken inline");
+    check(admin([&] { online.createRealm(realm); }) && online.adminResult().ok && online.adminResult().op == "createRealm",
+          "online: create a realm");
+    check(pollUntil(online, project, [&] {
+              const auto it = std::ranges::find(online.realms(), "Untrusted", &OnlineRealm::name);
+              return it != online.realms().end() && it->world.state == State::Warning &&
+                     contains(it->world.detail, "not trusted");
+          }),
+          "online: the new realm listed; its world server's certificate isn't trusted -> warning");
+    const auto created = std::ranges::find(online.realms(), "Untrusted", &OnlineRealm::name);
+    const int64_t id = created == online.realms().end() ? 0 : created->id;
+    Json renamed = realm;
+    renamed["name"] = "Untrusted 2";
+    check(admin([&] { online.updateRealm(id, renamed); }) && online.adminResult().ok, "online: edit a realm");
+    check(pollUntil(online, project, [&] { return std::ranges::any_of(online.realms(), [](const OnlineRealm& r) { return r.name == "Untrusted 2"; }); }),
+          "online: the edit shows in the list");
+    check(admin([&] { online.deleteRealm(id); }) && online.adminResult().ok, "online: delete a realm");
+    check(pollUntil(online, project, [&] { return online.realms().size() == 3; }), "online: the deleted realm is gone");
+    check(admin([&] { online.deleteRealm(999); }) && failedWith("realm_not_found"), "online: delete unknown -> realm_not_found");
+    check(admin([&] { online.ban(1, "self", ""); }) && failedWith("cannot_modify_self"),
+          "online: banning yourself -> cannot_modify_self inline");
+    check(admin([&] { online.ban(5, "", ""); }) && failedWith("validation_error"), "online: ban without a reason -> validation_error");
+    check(admin([&] { online.ban(5, "cheating", "2030-01-01T00:00:00Z"); }) && online.adminResult().ok, "online: ban");
+    check(admin([&] { online.unban(5); }) && online.adminResult().ok, "online: unban");
+    check(admin([&] { online.setRole(1, "player"); }) && failedWith("cannot_modify_self"),
+          "online: changing your own role -> cannot_modify_self");
+    check(admin([&] { online.setRole(2000, "gm"); }) && failedWith("account_not_found"), "online: unknown account");
+    check(admin([&] { online.setRole(5, "gm"); }) && online.adminResult().ok, "online: set role");
+    const std::vector<FakeAuth::Seen> seen = fake.seen();
+    const auto adminCall = [](const FakeAuth::Seen& s) { return s.path.starts_with("/v1/admin/"); };
+    check(std::ranges::count_if(seen, adminCall) >= 10 &&
+              std::ranges::all_of(seen | std::views::filter(adminCall),
+                                  [](const FakeAuth::Seen& s) { return s.authorization.starts_with("Bearer "); }),
+          "online: admin calls carry the admin's Bearer token");
+    check(std::ranges::any_of(seen, [](const FakeAuth::Seen& s) {
+              return s.path == "/v1/admin/accounts/5/ban" && s.method == "POST" && s.body.is_object() &&
+                     s.body.contains("expiresAt") && s.body["expiresAt"] == "2030-01-01T00:00:00Z";
+          }),
+          "online: ban sends reason and expiresAt");
+
+    online.logout();
+    check(!online.loggedIn() && online.realms().empty(), "online: Log out");
+    check(pollUntil(online, project, [&] { return fake.seen().back().path == "/v1/auth/logout"; }),
+          "online: Log out revokes the session on the server");
+
+    // Settings: the email, compose folder and override persist; no secret does.
+    check(!online.setWorldOverride("nonsense", error) && online.worldOverride().empty(), "online: a bad override is refused");
+    check(online.setWorldOverride("127.0.0.1:7777", error) && online.setComposeFolder("C:/stack", error),
+          "online: save the override and compose folder");
+    const std::string saved = readAll(settings);
+    check(contains(saved, std::format("\"onlineEmail\": \"{}\"", kAdminEmail)) &&
+              contains(saved, "\"worldOverride\": \"127.0.0.1:7777\"") && contains(saved, "\"composeFolder\": \"C:/stack\"") &&
+              contains(saved, "\"externalEditor\": \"notepad {file}\""),
+          "online: email, override and compose folder saved beside the external editor command");
+    check(!contains(saved, kDemoPassword) && !contains(saved, "eyJ") && !contains(saved, "refresh-") &&
+              !contains(saved, "Token"),
+          "online: no password or token in the settings file");
+    {
+        OnlineModel again(settings, "C:/default");
+        check(again.email() == kAdminEmail && again.worldOverride() == "127.0.0.1:7777" && again.composeFolder() == "C:/stack",
+              "online: a new editor run remembers email, override and compose folder");
+    }
+    std::string logText;
+    for (const std::string& line : kast::log::lines())
+        logText += line + "\n";
+    check(!contains(logText, kDemoPassword) && !contains(logText, "wrong-password") && !contains(logText, "eyJ") &&
+              !contains(logText, "refresh-"),
+          "online: no password or token in the log");
+}
+
+} // namespace
+
 int netSelfCheck()
 {
     checkNetHelpers();
@@ -2283,7 +2575,187 @@ int netSelfCheck()
     checkReplicationOffline();
     checkReplicationFakeServer();
     checkAuthLogs();
+    checkOnlineModel();
     std::error_code ec;
     std::filesystem::remove_all(netRoot(), ec);
     return g_failures;
+}
+
+// kast_self_check --live-online <authUrl> <mailpitUrl> <composeFolder>: the editor's Online panel model against the
+// services/world compose stack. Starts it through the model's Start (docker compose up -d --build) unless it is already
+// running; /health ok; a fresh account verified through Mailpit and made admin in auth's database (test data only);
+// login; realm create, list and delete; a Play session started logged in (auth.session reaches Lua); then no password
+// or token in the editor settings, the project or a built game.pak. Stops the stack again (docker compose down) only if
+// it started it. 77 (skipped) without docker, without a running Docker engine or when registration is rate limited.
+int liveOnlineCheck(const std::string& authUrl, const std::string& mailpitUrl, const std::string& composeFolder)
+{
+    constexpr int kSkipped = 77;
+    using State = OnlineProbe::State;
+    const std::filesystem::path settings = netRoot() / "kast_online_live/editor_settings.json";
+    const std::filesystem::path dir = netProject("kast_online_live_project");
+    writeFile(dir / kast::kProjectFileName,
+              std::format(R"({{"version": 1, "name": "Online Live", "startScene": "a.scene",
+"online": {{"enabled": true, "authUrl": "{}"}}}})",
+                          authUrl));
+    saveScene(dir / "a.scene", {"scripts/session.lua"});
+    writeFile(dir / "scripts/session.lua", R"(return {
+    init = function()
+        kast.subscribe("auth.session", function(e) kast.log("live online auth.session " .. e.email .. " " .. e.role) end)
+    end,
+    update = function(dt) end,
+}
+)");
+    Document doc;
+    std::string error;
+    check(openFile(doc, (dir / "a.scene").string(), error) && doc.project, "live online: open the project");
+    if (!doc.project)
+        return 1;
+    const kast::Project* project = &*doc.project;
+    OnlineModel online(settings, composeFolder);
+    doc.onPlayStarted = [&online](kast::LuaSystems& lua) { online.lendSession(lua.auth()); };
+    doc.onPlayStopping = [&online](kast::LuaSystems& lua) { online.reclaimSession(lua.auth()); };
+    online.poll(project, false);
+    if (!online.composeBlocker().empty()) {
+        kast::log::warn(std::format("SKIPPED: {}", online.composeBlocker()));
+        return kSkipped;
+    }
+    const auto compose = [&](OnlineModel::Compose what, std::chrono::milliseconds timeout) {
+        check(online.runCompose(what), std::format("live online: start {}", static_cast<int>(what)));
+        // Up and Down chain a Ps: wait for that one too.
+        return pollUntil(online, project, [&] { return !online.composeBusy(); }, timeout) &&
+               (what == OnlineModel::Compose::Ps || pollUntil(online, project, [&] { return !online.composeBusy(); }, 60s));
+    };
+    const auto running = [&] {
+        return online.services().size() >= 4 &&
+               std::ranges::all_of(online.services(), [](const ComposeService& s) { return s.state == "running"; });
+    };
+    if (!compose(OnlineModel::Compose::Ps, 60s) || !online.composeError().empty()) {
+        kast::log::warn(std::format("SKIPPED: docker compose ps failed ({}); is Docker Desktop running?", online.composeError()));
+        return kSkipped;
+    }
+    const bool wasUp = running();
+    kast::log::info(wasUp ? "live online: the stack is already running" : "live online: starting the stack");
+    if (!wasUp) {
+        check(compose(OnlineModel::Compose::Up, 900s) && online.composeError().empty(),
+              "live online: Start (docker compose up -d --build) succeeds");
+        check(running(), "live online: every service is running after Start");
+    }
+    const auto healthy = [&] {
+        return pollUntil(online, project, [&] {
+            if (online.authHealth().state == State::Ok)
+                return true;
+            if (online.authHealth().state != State::Checking)
+                online.refresh();
+            return false;
+        }, 120s);
+    };
+    check(healthy(), "live online: auth /health ok");
+
+    // A fresh account, verified, then made admin straight in auth's database: the stack seeds no admin.
+    const std::string email = std::format("kast-editor-{}@example.com",
+                                          std::chrono::system_clock::now().time_since_epoch().count());
+    const std::string password = "live-online-password-1";
+    {
+        AuthRun r(authUrl);
+        const uint64_t reg = r.auth.registerAccount(email, password);
+        if (r.failed(reg, "register", "rate_limited")) {
+            kast::log::warn("SKIPPED: registration is rate limited (5/hour/IP); try again later");
+            return kSkipped;
+        }
+        Network probe;
+        const std::string token = mailpitToken(probe, mailpitUrl, email);
+        check(!token.empty() && r.succeeded(r.auth.verifyEmail(token), "auth.emailVerified"), "live online: verify the account");
+    }
+    const std::string sql = std::format("mysql -uroot -p\"$MYSQL_ROOT_PASSWORD\" \"$MYSQL_DATABASE\" -e \"UPDATE accounts "
+                                        "SET role='admin' WHERE email='{}'\"",
+                                        email);
+    const std::string file = (std::filesystem::path(composeFolder) / "docker-compose.yml").string();
+    const char* args[] = {"docker", "compose", "-f", file.c_str(), "exec", "-T", "mysql", "sh", "-c", sql.c_str(), nullptr};
+    SDL_Process* promote = SDL_CreateProcess(args, false);
+    int code = -1;
+    check(promote && SDL_WaitProcess(promote, true, &code) && code == 0, "live online: make the account admin (test data)");
+    if (promote)
+        SDL_DestroyProcess(promote);
+
+    std::string typed = password;
+    online.login(email, typed);
+    check(pollUntil(online, project, [&] { return !online.loggingIn(); }, 10s) && online.isAdmin() &&
+              online.account().value("email", "") == email,
+          "live online: Log in shows the account as admin");
+    check(pollUntil(online, project, [&] { return !online.realms().empty(); }, 10s), "live online: the realm list");
+
+    const std::string realmName = std::format("Editor Live {}", std::chrono::system_clock::now().time_since_epoch().count() % 1000000);
+    online.createRealm({{"name", realmName}, {"host", "127.0.0.1"}, {"port", 7777}, {"region", "local"}, {"status", "offline"}});
+    check(pollUntil(online, project, [&] { return !online.adminResult().busy; }, 10s) && online.adminResult().ok,
+          "live online: create a realm");
+    const auto find = [&] { return std::ranges::find(online.realms(), realmName, &OnlineRealm::name); };
+    check(pollUntil(online, project, [&] { return find() != online.realms().end(); }, 10s), "live online: the new realm is listed");
+    if (find() != online.realms().end()) {
+        const int64_t id = find()->id;
+        online.createRealm({{"name", realmName}, {"host", "127.0.0.1"}, {"port", 7777}, {"region", "local"}});
+        check(pollUntil(online, project, [&] { return !online.adminResult().busy; }, 10s) &&
+                  online.adminResult().error.code == "realm_name_taken",
+              "live online: a taken name -> realm_name_taken");
+        online.deleteRealm(id);
+        check(pollUntil(online, project, [&] { return !online.adminResult().busy; }, 10s) && online.adminResult().ok,
+              "live online: delete the realm");
+        check(pollUntil(online, project, [&] { return find() == online.realms().end(); }, 10s), "live online: the realm is gone");
+    }
+    online.ban(0, "x", ""); // id 0: the service's own validation, nothing banned
+    check(pollUntil(online, project, [&] { return !online.adminResult().busy; }, 10s) && !online.adminResult().ok &&
+              !online.adminResult().error.code.empty(),
+          "live online: an invalid ban shows the service's error code");
+    const int64_t self = online.account().value("accountId", int64_t{0});
+    online.setRole(self, "player");
+    check(pollUntil(online, project, [&] { return !online.adminResult().busy; }, 10s) &&
+              online.adminResult().error.code == "cannot_modify_self",
+          "live online: changing your own role -> cannot_modify_self");
+
+    startPlay(doc);
+    check(playUntil(doc, std::format("live online auth.session {} admin", email), 10s),
+          "live online: Play starts logged in, auth.session reaches Lua");
+    const std::optional<kast::AuthSession> tokens = doc.lua.auth().session();
+    stopPlay(doc);
+    check(tokens && online.loggedIn(), "live online: Stop gives the login back");
+
+    // No secret anywhere on disk: the settings, the project and a built game.pak.
+    std::filesystem::path exe;
+    const std::filesystem::path out = netRoot() / "kast_online_live_build";
+    const char* base = SDL_GetBasePath();
+    check(base && buildGame(*doc.project, out, std::filesystem::path(reinterpret_cast<const char8_t*>(base)), exe, error),
+          std::format("live online: build the game ({})", error));
+    std::vector<std::filesystem::path> files{settings, out / kGamePakName};
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(dir))
+        if (entry.is_regular_file())
+            files.push_back(entry.path());
+    std::vector<std::string> secrets{password};
+    if (tokens)
+        secrets.insert(secrets.end(), {tokens->accessToken, tokens->refreshToken});
+    for (const std::filesystem::path& f : files) {
+        const std::string text = readAll(f);
+        for (const std::string& secret : secrets)
+            check(!contains(text, secret), std::format("live online: no password or token in {}", f.string()));
+    }
+    check(contains(readAll(settings), email), "live online: the email is remembered");
+    std::string logText;
+    for (const std::string& line : kast::log::lines())
+        logText += line + "\n";
+    for (const std::string& secret : secrets)
+        check(!contains(logText, secret), "live online: no password or token in the log");
+
+    online.logout();
+    if (!wasUp) {
+        check(compose(OnlineModel::Compose::Down, 300s) && online.composeError().empty(),
+              "live online: Stop (docker compose down) succeeds");
+        check(std::ranges::none_of(online.services(), [](const ComposeService& s) { return s.state == "running"; }),
+              "live online: nothing is running after Stop");
+        online.refresh();
+        check(pollUntil(online, project, [&] { return online.authHealth().state == State::Down; }, 20s),
+              "live online: auth unreachable after Stop");
+    } else {
+        kast::log::info("live online: the stack was already running, so it is left running");
+    }
+    if (g_failures == 0)
+        kast::log::info("live online check passed");
+    return g_failures == 0 ? 0 : 1;
 }

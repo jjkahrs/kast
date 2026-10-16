@@ -69,6 +69,8 @@ int liveWorldCheck(const std::string& authUrl, const std::string& mailpitUrl, co
                    const std::string& realmName); // the same file: 0, 1 or 77 (skipped)
 int liveReplicationCheck(const std::string& authUrl, const std::string& mailpitUrl, const std::string& caFile,
                          const std::string& realmName); // the same file: 0, 1 or 77 (skipped)
+int liveOnlineCheck(const std::string& authUrl, const std::string& mailpitUrl,
+                    const std::string& composeFolder); // the same file: 0, 1 or 77 (skipped)
 
 namespace {
 
@@ -2617,7 +2619,7 @@ void checkBuildSettings()
               std::vector<std::string>{"audio.scene", "events.scene", "fsm.scene", "health.scene", "materials.scene",
                                        "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
-                                       "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_replication.scene", "online_world.scene",
+                                       "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_replication.scene", "online_session.scene", "online_world.scene",
                                        "physics.scene",
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "scene_a.scene", "scene_b.scene",
@@ -2637,7 +2639,7 @@ void checkBuildSettings()
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
                                                           "models_material.scene", "models_missing.scene", "net_a.scene",
-                                                          "net_b.scene", "online_auth.scene", "online_replication.scene", "online_world.scene", "physics.scene",
+                                                          "net_b.scene", "online_auth.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "scene_a.scene", "scene_b.scene",
                                                           "shadows.scene", "ui.scene"},
@@ -7016,6 +7018,8 @@ int main(int argc, char** argv)
         return liveWorldCheck(argv[2], argv[3], argv[4], argv[5]);
     if (argc == 6 && std::string_view(argv[1]) == "--live-replication") // the same stack: two replicated players
         return liveReplicationCheck(argv[2], argv[3], argv[4], argv[5]);
+    if (argc == 5 && std::string_view(argv[1]) == "--live-online") // the editor's Online panel model, same stack
+        return liveOnlineCheck(argv[2], argv[3], argv[4]);
     checkRotations();
     checkPicking();
     checkMirroredReparent();

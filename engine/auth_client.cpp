@@ -139,8 +139,19 @@ void AuthClient::adopt(AuthSession session)
 {
     session_ = std::move(session);
     refreshRequest_ = 0; // a refresh of the old session, if any, is ignored when it answers
-    refreshAt_ = Clock::now() + authRefreshDelay(session_->expiresIn);
+    receivedAt_ = Clock::now();
+    refreshAt_ = receivedAt_ + authRefreshDelay(session_->expiresIn);
     emit("auth.session", session_->account);
+}
+
+std::optional<AuthSession> AuthClient::session(Clock::time_point now) const
+{
+    if (!session_)
+        return std::nullopt;
+    AuthSession left = *session_;
+    const auto used = std::chrono::duration_cast<std::chrono::seconds>(now - receivedAt_);
+    left.expiresIn = std::max(session_->expiresIn - used, std::chrono::seconds(1));
+    return left;
 }
 
 uint64_t AuthClient::call(const char* op, const char* path, Json body)
@@ -290,7 +301,8 @@ bool AuthClient::startSession(const Json& body)
         return false;
     }
     session_ = std::move(session);
-    refreshAt_ = Clock::now() + authRefreshDelay(session_->expiresIn);
+    receivedAt_ = Clock::now();
+    refreshAt_ = receivedAt_ + authRefreshDelay(session_->expiresIn);
     return true;
 }
 

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <format>
 #include <stdexcept>
 
@@ -72,7 +73,9 @@ http::response<http::string_body> error(unsigned status, const std::string& code
 nlohmann::json FakeAuth::session(const std::string& email) // mutex_ held
 {
     const int n = ++issued_;
-    const nlohmann::json claims{{"sub", "42"}, {"email", email}, {"role", "player"}, {"n", n}};
+    const bool admin = email == kAdminEmail;
+    sessionEmail_ = email;
+    const nlohmann::json claims{{"sub", admin ? "1" : "42"}, {"email", email}, {"role", admin ? "admin" : "player"}, {"n", n}};
     accessToken_ = base64Url(R"({"alg":"none","typ":"JWT"})") + "." + base64Url(claims.dump()) + ".sig";
     return {{"tokenType", "Bearer"},
             {"accessToken", accessToken_},
@@ -105,14 +108,26 @@ http::response<http::string_body> FakeAuth::answer(const http::request<http::str
                      body.is_discarded() ? nlohmann::json() : body});
     const bool bearer = !accessToken_.empty() && req[http::field::authorization] == "Bearer " + accessToken_;
     const nlohmann::json checkEmail{{"message", "Check your email"}};
+    if (target.ends_with("/health")) {
+        if (dbDown)
+            return error(503, "db_unavailable", "Database unavailable");
+        return reply(200, {{"status", "ok"}, {"db", "ok"}});
+    }
+    if (path.starts_with("/v1/admin/")) {
+        if (!bearer)
+            return error(401, "unauthorized", "Missing or invalid access token");
+        if (sessionEmail_ != kAdminEmail)
+            return error(403, "forbidden", "Admin role required");
+        return admin(std::string(req.method_string()), path, body);
+    }
     if (path == "/v1/auth/login") {
         if (field("email") == "locked@test")
             return error(423, "account_locked", "Account locked", {{"lockedUntil", "2099-01-01T00:15:00.000Z"}});
         if (field("email") == "banned@test")
             return error(403, "account_banned", "Account banned", {{"reason", "cheating"}, {"expiresAt", nullptr}});
-        if (field("email") != kDemoEmail || field("password") != kDemoPassword)
+        if ((field("email") != kDemoEmail && field("email") != kAdminEmail) || field("password") != kDemoPassword)
             return error(401, "invalid_credentials", "Invalid email or password");
-        return reply(200, session(kDemoEmail));
+        return reply(200, session(field("email")));
     }
     if (path == "/v1/auth/refresh") {
         ++refreshes_;
@@ -121,7 +136,7 @@ http::response<http::string_body> FakeAuth::answer(const http::request<http::str
         lock.lock();
         if (refreshFails)
             return error(401, "invalid_refresh_token", "Invalid refresh token");
-        return reply(200, session(kDemoEmail));
+        return reply(200, session(sessionEmail_));
     }
     if (path == "/v1/auth/register") {
         if (field("password").size() < 10)
@@ -144,14 +159,83 @@ http::response<http::string_body> FakeAuth::answer(const http::request<http::str
         if (path == "/v1/me")
             return reply(200, {{"id", 42}, {"email", kDemoEmail}, {"role", "player"}, {"emailVerified", true},
                                {"createdAt", "2026-01-01T00:00:00.000Z"}});
-        nlohmann::json realms = nlohmann::json::array();
-        realms.push_back({{"id", 1}, {"name", "Ashenvale"}, {"host", "127.0.0.1"}, {"port", 4000},
-                          {"region", "us-east"}, {"status", "online"}, {"sortOrder", 0}});
-        realms.push_back({{"id", 2}, {"name", "Duskmoor"}, {"host", "127.0.0.1"}, {"port", 4001},
-                          {"region", "eu-west"}, {"status", "maintenance"}, {"sortOrder", 1}});
-        realms.push_back({{"id", 3}, {"name", "Testgrove"}, {"host", "127.0.0.1"}, {"port", worldPort.load()},
-                          {"region", "us-west"}, {"status", "online"}, {"sortOrder", 2}});
-        return reply(200, {{"realms", realms}});
+        return reply(200, {{"realms", realms()}});
+    }
+    return error(404, "not_found", "Not found");
+}
+
+nlohmann::json& FakeAuth::realms() // mutex_ held
+{
+    if (realms_.is_null()) {
+        realms_ = nlohmann::json::array();
+        realms_.push_back({{"id", 1}, {"name", "Ashenvale"}, {"host", "127.0.0.1"}, {"port", 4000},
+                           {"region", "us-east"}, {"status", "online"}, {"sortOrder", 0}});
+        realms_.push_back({{"id", 2}, {"name", "Duskmoor"}, {"host", "127.0.0.1"}, {"port", 4001},
+                           {"region", "eu-west"}, {"status", "maintenance"}, {"sortOrder", 1}});
+        realms_.push_back({{"id", 3}, {"name", "Testgrove"}, {"host", "127.0.0.1"}, {"port", worldPort.load()},
+                           {"region", "us-west"}, {"status", "online"}, {"sortOrder", 2}});
+    }
+    return realms_;
+}
+
+http::response<http::string_body> FakeAuth::admin(const std::string& method, const std::string& path,
+                                                  const nlohmann::json& body) // mutex_ held
+{
+    nlohmann::json& list = realms();
+    const auto realmWith = [&](const char* key, const nlohmann::json& value) {
+        return std::ranges::find_if(list, [&](const nlohmann::json& r) { return r[key] == value; });
+    };
+    // "/v1/admin/<kind>/<id>[/<action>]"
+    const std::string rest = path.substr(std::string_view("/v1/admin/").size());
+    const size_t slash = rest.find('/');
+    const std::string kind = rest.substr(0, slash);
+    std::string idText = slash == std::string::npos ? "" : rest.substr(slash + 1);
+    const std::string action = idText.find('/') == std::string::npos ? "" : idText.substr(idText.find('/') + 1);
+    idText = idText.substr(0, idText.find('/'));
+    const long long id = idText.empty() ? 0 : std::atoll(idText.c_str());
+    if (kind == "realms") {
+        const bool valid = body.is_object() && body.contains("name") && body["name"].is_string() &&
+                           body.contains("host") && body["host"].is_string() && body.contains("port") &&
+                           body["port"].is_number_integer() && body.contains("region") && body["region"].is_string();
+        if (idText.empty() && method == "GET")
+            return reply(200, {{"realms", list}});
+        if ((method == "POST" || method == "PUT") && !valid)
+            return error(400, "validation_error", "Request validation failed");
+        const auto it = realmWith("id", id);
+        if (!idText.empty() && it == list.end())
+            return error(404, "realm_not_found", "Realm not found");
+        if (method == "GET")
+            return reply(200, *it);
+        if (method == "DELETE") {
+            list.erase(it);
+            return reply(204, nullptr);
+        }
+        if (const auto named = realmWith("name", body["name"]); named != list.end() && named != it)
+            return error(409, "realm_name_taken", "A realm with that name exists");
+        nlohmann::json realm{{"id", idText.empty() ? nextRealmId_++ : id}, {"name", body["name"]}, {"host", body["host"]},
+                             {"port", body["port"]}, {"region", body["region"]},
+                             {"status", body.value("status", "offline")}, {"sortOrder", body.value("sortOrder", 0)}};
+        if (method == "POST") {
+            list.push_back(realm);
+            return reply(201, realm);
+        }
+        *it = realm;
+        return reply(200, realm);
+    }
+    if (kind == "accounts" && (action == "ban" || action == "role")) {
+        if (id == 1)
+            return error(400, "cannot_modify_self", "You cannot do that to your own account");
+        if (id <= 0 || id >= 1000)
+            return error(404, "account_not_found", "Account not found");
+        if (action == "role")
+            return reply(200, {{"id", id}, {"email", std::format("user{}@example.com", id)}, {"role", body.value("role", "")},
+                               {"emailVerified", true}, {"createdAt", "2026-01-01T00:00:00.000Z"}});
+        if (method == "DELETE")
+            return reply(204, nullptr);
+        if (!body.is_object() || body.value("reason", "").empty())
+            return error(400, "validation_error", "Request validation failed");
+        return reply(201, {{"accountId", id}, {"reason", body["reason"]}, {"expiresAt", body.value("expiresAt", nlohmann::json())},
+                           {"createdAt", "2026-01-01T00:00:00.000Z"}});
     }
     return error(404, "not_found", "Not found");
 }

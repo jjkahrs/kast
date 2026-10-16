@@ -231,6 +231,8 @@ void startPlay(Document& doc)
                       std::move(auth));
         if (doc.project)
             doc.lua.audio().setMix(doc.project->audio);
+        if (doc.onPlayStarted)
+            doc.onPlayStarted(doc.lua);
     }
     doc.play = PlayState::Playing;
     doc.lua.audio().setPaused(false);
@@ -248,6 +250,8 @@ void stopPlay(Document& doc)
 {
     if (doc.play == PlayState::Stopped)
         return;
+    if (doc.onPlayStopping)
+        doc.onPlayStopping(doc.lua);
     doc.lua.stop(); // shutdowns see the play-mode scene
     // Ids are only unique per scene file: after a kast.loadScene switch the selection's id means nothing in the snapshot.
     const kast::EntityId selected = doc.playSceneName.empty() && doc.scene.valid(doc.selected)

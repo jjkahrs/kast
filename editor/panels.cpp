@@ -33,8 +33,6 @@ using Json = nlohmann::ordered_json;
 
 constexpr const char* kEntityPayload = "KAST_ENTITY";
 constexpr SDL_DialogFileFilter kLuaFilter{"Lua script (*.lua)", "lua"};
-constexpr ImVec4 kOkColor{0.4f, 0.85f, 0.4f, 1.0f};
-constexpr ImVec4 kErrorColor{1.0f, 0.45f, 0.4f, 1.0f};
 
 bool sameBits(const bx::Quaternion& a, const bx::Quaternion& b) { return std::memcmp(&a, &b, sizeof(a)) == 0; }
 

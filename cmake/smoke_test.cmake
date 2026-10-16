@@ -4,7 +4,8 @@
 # Usage: cmake -DEDITOR=<exe> -DSCREENSHOT=<png> [-DEXTRA_ARGS="<editor flags>"]
 #              [-DNEW_PROJECT_NAME=<name> -DNEW_PROJECT_DIR=<dir>] [-DMUST_NOT_EXIST=<path>] [-DMUST_EXIST=<path>]
 #              [-DPROJECTS_FROM=<json>] [-DLIST_MUST_CONTAIN=<text>] [-DFOCUS_PANEL=<window>]
-#              [-DEXPECT_OUTPUT=<regex> [-DEXPECT_COUNT=<n>]] [-DFRAMES=<n>] [-DWRAPPER=<exe;args>] -P smoke_test.cmake
+#              [-DEXPECT_OUTPUT=<regex> [-DEXPECT_COUNT=<n>]] [-DFRAMES=<n>] [-DWRAPPER=<exe;args>]
+#              [-DSETTINGS_FROM=<json>] [-DSETTINGS_MUST_NOT_CONTAIN=<text;...>] -P smoke_test.cmake
 # NEW_PROJECT_* pass --new-project as separate arguments, so the name may contain spaces; FOCUS_PANEL passes
 # --focus-panel the same way (e.g. "State Machines"). MUST_NOT_EXIST fails the test if that path exists after the run
 # (e.g. a folder the New Project modal must not have created); MUST_EXIST if it doesn't. PROJECTS_FROM is copied to
@@ -12,6 +13,8 @@
 # (exactly EXPECT_COUNT times if given; for that count the log's ";" read as ","). FRAMES is how many frames run
 # before the screenshot (default 120). WRAPPER (a list) runs the editor through another program, e.g.
 # kast_net_test_server <args> -- (its servers are up while the editor runs).
+# The editor settings are <work dir>/editor_settings.json (--settings-file), never the user's: SETTINGS_FROM is copied
+# there before the run; SETTINGS_MUST_NOT_CONTAIN (a list) fails the test if the file holds any of those texts after.
 if(NOT DEFINED FRAMES)
   set(FRAMES 120)
 endif()
@@ -22,6 +25,9 @@ file(MAKE_DIRECTORY "${work_dir}")
 if(DEFINED PROJECTS_FROM)
   file(COPY_FILE "${PROJECTS_FROM}" "${work_dir}/projects.json")
 endif()
+if(DEFINED SETTINGS_FROM)
+  file(COPY_FILE "${SETTINGS_FROM}" "${work_dir}/editor_settings.json")
+endif()
 separate_arguments(EXTRA_ARGS)
 if(DEFINED NEW_PROJECT_NAME)
   list(APPEND EXTRA_ARGS --new-project "${NEW_PROJECT_NAME}" "${NEW_PROJECT_DIR}")
@@ -29,7 +35,7 @@ endif()
 if(DEFINED FOCUS_PANEL)
   list(APPEND EXTRA_ARGS --focus-panel "${FOCUS_PANEL}")
 endif()
-execute_process(COMMAND ${WRAPPER} "${EDITOR}" --frames ${FRAMES} --screenshot "${SCREENSHOT}" --projects-file "${work_dir}/projects.json"
+execute_process(COMMAND ${WRAPPER} "${EDITOR}" --frames ${FRAMES} --screenshot "${SCREENSHOT}" --projects-file "${work_dir}/projects.json" --settings-file "${work_dir}/editor_settings.json"
                         ${EXTRA_ARGS}
                 WORKING_DIRECTORY "${work_dir}" RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output)
 message("${output}")
@@ -68,3 +74,12 @@ if(DEFINED LIST_MUST_CONTAIN)
   endif()
 endif()
 message(STATUS "OK: exit 0, ${SCREENSHOT} is ${size} bytes")
+if(DEFINED SETTINGS_MUST_NOT_CONTAIN AND EXISTS "${work_dir}/editor_settings.json")
+  file(READ "${work_dir}/editor_settings.json" settings)
+  foreach(secret IN LISTS SETTINGS_MUST_NOT_CONTAIN)
+    string(FIND "${settings}" "${secret}" at)
+    if(NOT at EQUAL -1)
+      message(FATAL_ERROR "editor_settings.json holds '${secret}'")
+    endif()
+  endforeach()
+endif()
