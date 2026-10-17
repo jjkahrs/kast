@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Physics - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html" class="active">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li></ul></nav>
+<main>
+<h1 id="physics">Physics</h1>
+<p>3D physics on <a href="https://github.com/jrouwe/JoltPhysics">Jolt</a> (<code>engine/physics.h</code>). One Jolt world per Play session,
+built from the scene at Play start (and on a <code>kast.loadScene</code> switch) and dropped at Stop; the editor's Stop then
+restores the pre-Play scene as usual. Nothing simulates in Edit mode or while paused. Editor Play and <code>kast_player</code>
+both run it.</p>
+<p><strong>Components</strong> (Add Component, Inspector, scene file; values outside the ranges are rejected):</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Fields [default]</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Collider</code></td>
+<td><code>shape</code> <code>box</code> / <code>sphere</code> / <code>capsule</code> [box]; <code>size</code> box full extents [1, 1, 1] (&gt; 0); <code>radius</code> sphere / capsule [0.5] (&gt; 0); <code>height</code> capsule <strong>total</strong> height along local Y, both hemispheres included [2] (&gt;= 2 * radius); <code>center</code> local offset [0, 0, 0]; <code>isTrigger</code> [false]; <code>friction</code> [0.5] (&gt;= 0); <code>restitution</code> [0] (0..1)</td>
+</tr>
+<tr>
+<td><code>Rigidbody</code></td>
+<td><code>motionType</code> <code>static</code> / <code>dynamic</code> / <code>kinematic</code> [dynamic]; <code>mass</code> kg [1] (&gt; 0); <code>gravityScale</code> [1]; <code>linearDamping</code> [0.05] (&gt;= 0); <code>angularDamping</code> [0.05] (&gt;= 0)</td>
+</tr>
+<tr>
+<td><code>CharacterController</code></td>
+<td><code>radius</code> [0.4]; <code>height</code> total [1.8] (&gt;= 2 * radius); <code>maxSlopeDegrees</code> [45] (0..90); <code>stepHeight</code> [0.3] (&gt;= 0)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>A <code>Collider</code> without a <code>Rigidbody</code> is a static body. A <code>Rigidbody</code> without a <code>Collider</code> is ignored, with one warning
+  naming the entity. <code>CharacterController</code> plus <code>Collider</code> or <code>Rigidbody</code> is an error: logged once naming the entity,
+  shown in red in the Inspector, and the entity gets no physics.</li>
+<li>Bodies use the entity's <strong>world</strong> transform at any hierarchy depth. World scale applies: a box per axis, a sphere or
+  capsule by the largest axis; <code>center</code> is scaled too. After each step dynamic and kinematic bodies and characters
+  write their pose back into the entity's local <code>Transform</code> (relative to its parent; scale untouched).</li>
+<li><strong>Kinematic</strong> bodies follow their <code>Transform</code> (moved over one step, so they push dynamic bodies) and move by a
+  velocity set with <code>kast.physics.setVelocity</code>.</li>
+<li><strong>Runtime changes</strong> apply before the next step: adding / removing <code>Collider</code> / <code>Rigidbody</code> / <code>CharacterController</code>
+  (<code>kast.add</code> / <code>kast.remove</code>, the Inspector) creates or removes the body; changing their fields rebuilds it;
+  destroying the entity removes it. A <code>Transform</code> changed by anything (<code>kast.set</code>, <code>Rotator</code>, the gizmo in Play, a
+  moved parent) teleports a static or dynamic body (a dynamic one keeps its velocity), moves a kinematic one and sets
+  a character's position.</li>
+</ul>
+<p><strong>Gravity</strong>: per scene, <code>"physics": {"gravity": [x, y, z]}</code> in the scene file [0, -9.81, 0] (each axis -1000..1000;
+missing = default, so older scenes load unchanged), edited in <strong>Window &gt; Physics</strong> (hidden by default; changes apply
+at once, also in Play, and Stop reverts them). <code>--focus-panel Physics</code> opens it.</p>
+<p><strong>Timestep</strong>: a fixed 60 Hz step (<code>kPhysicsStep</code>) with an accumulator, independent of the frame rate; at most 4 steps
+per frame (<code>kMaxPhysicsSteps</code>), time beyond that is dropped (the game slows down instead of spiralling). Each Play
+frame: C++ systems, then the physics steps (contact events queued), then the Lua <code>update</code>s, then the event drain; so
+contact events reach subscribers in the same frame, and what Lua changes applies at the next frame's step. Rendering
+shows the last step's pose (no interpolation).</p>
+<p><strong>Events</strong> (on the session's event bus, publisher <code>C++</code>; ids are the entity ids <code>kast.*</code> uses; no "stay" events):</p>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Payload</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>collisionEnter</code></td>
+<td><code>{a, b, point = {x, y, z}, normal = {x, y, z}}</code>: the first contact point; <code>normal</code> points from <code>a</code> toward <code>b</code></td>
+</tr>
+<tr>
+<td><code>collisionExit</code></td>
+<td><code>{a, b}</code></td>
+</tr>
+<tr>
+<td><code>triggerEnter</code> / <code>triggerExit</code></td>
+<td><code>{a, b}</code>, when either collider <code>isTrigger</code> (triggers block nothing)</td>
+</tr>
+</tbody>
+</table>
+<p>Each fires once per pair when it starts / stops touching (a bouncing ball sends enter, exit, enter...; a body falling
+asleep on the floor does not end its contact). Destroying an entity or removing its body sends the exits of its
+contacts at once. Characters send these like any body.</p>
+<p><strong>Lua: <code>kast.physics</code></strong> (vectors <code>{x =, y =, z =}</code> or <code>{x, y, z}</code>; rotations <code>{x, y, z, w}</code>; bad arguments and the
+wrong kind of body raise at the calling line):</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>raycast(origin, direction, maxDistance)</code></td>
+<td><code>nil</code> or <code>{entity, point, normal, distance}</code>, the closest hit; <code>direction</code> need not be normalized</td>
+</tr>
+<tr>
+<td><code>overlapSphere(center, radius)</code>, <code>overlapBox(center, halfExtents[, rotation])</code></td>
+<td>list of entity ids touching the shape</td>
+</tr>
+<tr>
+<td><code>getVelocity(id)</code> / <code>setVelocity(id, v)</code></td>
+<td>dynamic or kinematic body, or character</td>
+</tr>
+<tr>
+<td><code>getAngularVelocity(id)</code> / <code>setAngularVelocity(id, v)</code></td>
+<td>dynamic or kinematic body (radians / s)</td>
+</tr>
+<tr>
+<td><code>addForce(id, f)</code> / <code>addImpulse(id, i)</code></td>
+<td>dynamic body; a force acts over the next step, an impulse at once (<code>dv = i / mass</code>)</td>
+</tr>
+<tr>
+<td><code>moveCharacter(id, v)</code></td>
+<td>character: walk at <code>v</code>'s horizontal part from now on (call again to change or stop; gravity is added)</td>
+</tr>
+<tr>
+<td><code>isGrounded(id)</code></td>
+<td>character: standing on walkable ground</td>
+</tr>
+<tr>
+<td><code>getGround(id)</code></td>
+<td>character: <code>nil</code> or <code>{entity, normal}</code> of what it stands on</td>
+</tr>
+</tbody>
+</table>
+<p>Queries see triggers and characters too. A raycast from inside a character hits that character.</p>
+<pre><code class="language-lua">local hero
+return {
+    init = function()
+        hero = kast.query(&quot;CharacterController&quot;)()
+        kast.subscribe(&quot;triggerEnter&quot;, function(e) kast.log(&quot;trigger &quot; .. e.a .. &quot; &quot; .. e.b) end)
+    end,
+    update = function(dt)
+        local x = (kast.input.keyDown(&quot;D&quot;) and 3 or 0) - (kast.input.keyDown(&quot;A&quot;) and 3 or 0)
+        kast.physics.moveCharacter(hero, {x, 0, 0})
+        if kast.input.keyDown(&quot;Space&quot;) and kast.physics.isGrounded(hero) then
+            local v = kast.physics.getVelocity(hero)
+            kast.physics.setVelocity(hero, {v.x, 5, v.z})  -- jump
+        end
+    end,
+}
+</code></pre>
+<p><strong>Character controller</strong> (Jolt <code>CharacterVirtual</code>): an upright capsule whose bottom is the entity's position (feet,
+like imported characters' pivot); physics never changes its rotation. It is blocked by static and kinematic bodies,
+pushes dynamic ones, walks up steps up to <code>stepHeight</code> and slopes up to <code>maxSlopeDegrees</code>, sticks to the floor going
+down steps, and falls with the scene gravity (characters are Y-up: only gravity's Y part pulls them). <code>setVelocity</code>
+sets walk and vertical speed together (a jump). It also has an inner body, so bodies, queries and triggers see it.</p>
+<p><strong>Editor</strong>: the selected entity's collider (or character capsule) draws as a green wireframe in the Scene view, as
+physics builds it (world position, rotation, scale, center).</p>
+<p><strong>Limits</strong>: box, sphere and capsule colliders only (no mesh or convex hull), one collider per entity, no joints, no
+collision layers (everything collides with everything), no stay events, no interpolation, client-side only (not
+networked). Resting bodies sink up to 2 cm into each other (Jolt's penetration slop). Capacity: 65536 bodies.</p>
+<p>C++: <code>kast::Physics</code> (from <code>LuaSystems::physics()</code>) has the same queries and controls (<code>std::invalid_argument</code> for the
+wrong body) and <code>update(dt)</code> returning the steps taken. <code>kast_self_check --bench-physics</code> times 500 dynamic boxes.</p>
+<p><strong>Sample</strong>: <code>tests/project/physics.scene</code> (ground with a scaled box collider, two falling cubes, a bouncy sphere, a
+trigger zone the first cube falls through, a character) runs <code>scripts/physics_log.lua</code>, which logs the four events and
+a raycast at init.</p>
+</main>
+</div>
+</body>
+</html>

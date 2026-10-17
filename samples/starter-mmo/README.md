@@ -28,9 +28,12 @@ The same folder is the game project (client) **and** the world server's Lua and 
 | `docker-compose.override.yml` | dev | runs the `services/world` stack with this folder's Lua and maps |
 | `setup_realm.cmake` | dev | copies the stack's dev CA into `certs/` and adds the realm `Starter Realm` |
 
-The engine docs for everything used here: root `README.md` sections "Online Services" (`kast.auth`, `kast.world`,
-Replication), "Lua components", "State machines", "Game GUI" (`kast.gui`), "Terrain"; and `services/world/README.md`
-("Maps", "Areas", "Lua components and systems", "NPCs", "NPC spawns").
+The engine docs for everything used here: [Online Services](../../docs/engine/online-services.html) (`kast.auth`,
+`kast.world`, Replication), [Lua components](../../docs/engine/lua-components.html),
+[State machines](../../docs/engine/state-machines.html), [Game GUI](../../docs/engine/game-gui.html) (`kast.gui`),
+[Terrain](../../docs/engine/terrain.html); and the World Server's [Maps](../../docs/services/world/maps.html),
+[Areas](../../docs/services/world/areas.html), [Lua components and systems](../../docs/services/world/lua.html),
+[NPCs](../../docs/services/world/npcs.html) and [NPC spawns](../../docs/services/world/npcs.html#npc-spawns).
 
 ## Walkthrough
 

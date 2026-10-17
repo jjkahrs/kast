@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maps - Kast World Server</title>
+<link rel="stylesheet" href="../../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="../auth/index.html">Auth Server</a><a href="index.html">World Server</a><a href="../../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html" class="active">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
+<main>
+<h1 id="maps">Maps</h1>
+<p>The world is a set of maps (continents, dungeons), all run by this one process. A map is seamless inside; maps are
+joined only by transfers. Players and NPCs on different maps never see each other, even at the same x/z.</p>
+<pre><code>&lt;MAP_ROOT&gt;/&lt;folder&gt;/map.json        one folder per map; dot-folders (.server/) are skipped
+&lt;MAP_ROOT&gt;/&lt;folder&gt;/areas.json      optional: the map's named areas (see Areas)
+&lt;MAP_ROOT&gt;/&lt;folder&gt;/heights/&lt;tx&gt;_&lt;tz&gt;.r16|.png   optional: tile heightmaps (docs/engine/terrain.html; see Ground)
+&lt;MAP_ROOT&gt;/&lt;folder&gt;/.server/spawns/&lt;tx&gt;_&lt;tz&gt;.json   optional, server only: the NPCs a tile places (see NPC spawns)
+&lt;MAP_ROOT&gt;/&lt;folder&gt;/.server/nav/&lt;tx&gt;_&lt;tz&gt;.navtile   optional, server only: the tile's baked navmesh (see Navmesh)
+</code></pre>
+<pre><code class="language-json">{ &quot;version&quot;: 1, &quot;id&quot;: 1, &quot;name&quot;: &quot;Eastlands&quot;,
+  &quot;tiles&quot;: [[0, 0, 7, 7]],
+  &quot;heightRange&quot;: [-100, 500],
+  &quot;spawn&quot;: {&quot;pos&quot;: [1024, 0, 1024], &quot;heading&quot;: 0},
+  &quot;material&quot;: &quot;materials/terrain_grass.mat&quot;,
+  &quot;nav&quot;: {&quot;agentRadius&quot;: 0.4, &quot;agentHeight&quot;: 1.8, &quot;maxClimb&quot;: 0.5, &quot;maxSlopeDeg&quot;: 45, &quot;cellSize&quot;: 0.5} }
+</code></pre>
+<ul>
+<li><strong>Tiles:</strong> a map is made of 256 m tiles; tile <code>(tx, tz)</code> = <code>(floor(x / 256), floor(z / 256))</code>, so x = 256 is tile 1.
+  The map's origin is the corner of tile (0, 0). <code>tiles</code> lists inclusive rectangles <code>[x0, z0, x1, z1]</code>; the map is
+  their union, and negative tiles are fine.</li>
+<li><strong>Identity:</strong> <code>id</code> (0-65535) is what the database, the wire and Lua use. It must be unique across maps; the folder
+  name only locates the files. <code>version</code> must be 1.</li>
+<li><strong>Required:</strong> <code>version</code>, <code>id</code>, <code>tiles</code> and <code>spawn.pos</code> (on a declared tile). <code>name</code>, <code>spawn.heading</code>, <code>heightRange</code>,
+  <code>material</code> and <code>nav</code> are optional. The game client's terrain uses <code>heightRange</code>, <code>material</code> and <code>nav.maxSlopeDeg</code>
+  (<a href="../../engine/terrain.html">Engine, Terrain</a>); the server uses <code>heightRange</code> and the heightmaps for the <a href="#ground">ground</a>. <code>map/heights.h</code> (heightmap decoding and the shared
+  ground triangles) is part of <code>kast_map</code>, so the server build needs vcpkg's <code>stb</code>.</li>
+<li><strong>Startup:</strong> every map is loaded and logged (<code>maps loaded</code>). Any bad manifest (with the file and the problem, such as
+  <code>maps/cave/map.json: tiles[0]: x0 &lt;= x1 and z0 &lt;= z1 required</code>), a duplicate id, no maps, a missing <code>START_MAP</code>, or a
+  spawn y outside <code>MIN_Y</code>/<code>MAX_Y</code> refuses the start.</li>
+<li><strong>Bounds:</strong> a move onto a tile the map does not declare is rejected with <code>Correction</code>.</li>
+<li><strong>Characters:</strong> <code>characters.map_id</code> (<code>migrations/003_character_map.sql</code>) is saved with the position. On enter, a map
+  that is no longer loaded, or a position no longer on its map, puts the character at <code>START_MAP</code>'s spawn (logged).
+  Rows from before the migration have <code>map_id</code> 0, read as <code>START_MAP</code> with their position kept.</li>
+<li><strong>Transfers:</strong> <code>World::transfer(e, {map, pos, heading})</code> (and <code>kast.transfer</code> from Lua) is the only way to change map,
+  for players and NPCs alike, and also teleports within a map. It moves the entity at once, resets a player's move
+  budget and sends it <code>MapChange</code>, then <code>Despawn</code> for its old neighbours, who get its <code>Despawn</code>. The next interest pass
+  sends the <code>Spawn</code>s at the destination: in the same tick for a <a href="areas.html#areas">portal</a>, the next tick for <code>kast.transfer</code>. So
+  <code>MapChange</code> always reaches the client first (<a href="protocol.html#maps">protocol</a>).</li>
+<li><strong>Ownership:</strong> a transfer to a tile this process does not own is refused and logged. Every loaded tile is owned for
+  now; the check is the seam for running maps in several processes later.</li>
+</ul>
+<h2 id="ground">Ground</h2>
+<p>The server has no physics engine; it knows the ground from the same heightmaps the client stands on.</p>
+<ul>
+<li><strong>Loading:</strong> at startup, each owned tile's <code>heights/&lt;tx&gt;_&lt;tz&gt;.r16</code> (tried first) or <code>.png</code> is decoded with
+  <code>kast_map</code>'s <code>decode_heights</code>. A tile without a file is flat at the map's <code>heightMin</code> (0 without <code>heightRange</code>). A
+  file that fails to decode refuses the start (<code>maps/hills/heights/0_0.png: png: 8-bit with 1 channel(s), need 16-bit
+  grayscale</code>).</li>
+<li><strong>Height:</strong> <code>Maps::ground(map, x, z)</code> is <code>kast_map</code>'s <code>ground_at</code>: the triangle under the point, the same triangles as
+  the client's Jolt heightfield, so client and server agree to within float rounding. Off the map's tiles it is empty.</li>
+<li><strong>Player moves:</strong> after the speed check, against the ground under the new position:<ul>
+<li>more than <code>MOVE_GROUND_TOLERANCE</code> (0.5 m) below it: accepted and lifted onto it;</li>
+<li>more than <code>MOVE_MAX_AIR</code> (6 m) above it and not lower than the last position: rejected (<code>Correction</code>), so no
+  flying or hovering;</li>
+<li>lower than the last position: accepted, however high (falling).</li>
+</ul>
+</li>
+<li><strong>Placement:</strong> NPCs always stand on the ground (<code>kast.create</code>, spawn files and <code>kast.set</code> of <code>Transform</code> ignore y).
+  Transfers and portals put players and NPCs on the ground at the destination. A character saved under the ground
+  (the heights changed since) enters on it.</li>
+<li><strong>Lua:</strong> <code>kast.map.ground(map, x, z)</code> is the height there, or <code>nil</code> off the map.</li>
+</ul>
+<h2 id="navmesh">Navmesh</h2>
+<p>The ground says how high a player is, not whether they could have walked there. A map can carry a baked navmesh
+(Recast/Detour) of where its agents can walk; the server checks player moves against it and NPCs path on it.</p>
+<ul>
+<li>
+<p><strong>Baking:</strong> <code>kast_mapbake</code> lints a map and bakes its navtiles: see the <a href="../../../services/world/tools/mapbake/docs/index.html">Map Bake docs</a>.</p>
+</li>
+<li>
+<p><strong>Navtile format:</strong> a 12-byte little-endian header, <code>{'KNAV', u32 version (1), u32 Detour DT_NAVMESH_VERSION (7)}</code>,
+  then the Detour tile from <code>dtCreateNavMeshData</code> for tile (tx, tz) (<code>map/navtile.h</code>).</p>
+</li>
+<li><strong>Loading:</strong> at startup, each owned tile's navtile goes into one <code>dtNavMesh</code> per map (<code>server/world/nav.cpp</code>, the only
+  file that includes Detour), sized for the map's declared tiles. A bad magic, an unknown navtile or Detour version, a
+  tile baked for another tile, or too many polygons refuses the start with the file and the reason
+  (<code>maps/hills/.server/nav/0_0.navtile: navtile version 99, this server reads 1 (rebake with kast_mapbake)</code>). A map
+  without navtiles has no navmesh and keeps the <a href="#ground">Ground</a> rules only.</li>
+<li><strong>Player moves:</strong> with <code>MOVE_NAV_CHECK=1</code> (default), on a map with a navmesh, a move must end within 0.5 m across
+  (the bake's <code>agentRadius</code> shrink at walkable edges) and <code>MOVE_MAX_AIR</code> up or down of a navmesh polygon. Otherwise
+  the verdict is <code>off_mesh</code> and the client gets <code>Correction</code> at once, spending no move budget: walking up a cliff face
+  or onto a slope steeper than <code>maxSlopeDeg</code> is snapped back. No grace period, so a player cannot drop off a cliff
+  face either.</li>
+<li><strong>NPC paths:</strong> <code>kast.map.path(map, from, to)</code> (<code>{x, y, z}</code> tables) is the straight path along the navmesh: a list of
+  <code>{x, y, z}</code> points from <code>from</code> snapped onto the mesh to <code>to</code> snapped onto it, with the corners between. It is <code>nil</code>
+  when the map has no navmesh, either end is more than 2 m across (or 4 m up or down) from it, or <code>to</code> cannot be
+  reached. The sample <code>systems/npcs.lua</code> walks these corners between a patrol's points, so the hills' Sentry goes
+  round the mesa its route crosses.</li>
+<li><strong>Limits:</strong> Detour's poly refs are 32-bit here: tile bits + polygon bits &lt;= 22, so a map of 1024 tiles allows 4096
+  polygons per tile (more tiles, fewer polygons). A navtile over the limit refuses the start; <code>DT_POLYREF64</code> (Detour
+  rebuilt) lifts it. No dynamic obstacles, off-mesh links (jumps, ladders) or static props in the bake, and the client
+  does no pathing.</li>
+<li><strong>Sample:</strong> <code>tests/project/maps/hills</code> has a mesa (x 170-200, z 316-346, 25 m flat top, 81 degree walls) and the
+  Sentry (<code>.server/spawns/0_1.json</code>) patrolling from (150, 331) to (215, 331), straight through it. Its baked navtiles
+  are in <code>.server/nav/</code>; ctest <code>mapbake_cli</code> fails if they no longer match a fresh bake.</li>
+</ul>
+</main>
+</div>
+</body>
+</html>

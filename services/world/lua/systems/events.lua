@@ -6,7 +6,7 @@
 -- Bandwidth: each client event is a message per recipient, and broadcast reaches every player in the zone. So this
 -- sends only on login and logout, never per tick: in a crowd of N that is about N messages per login or logout.
 --
--- It also logs the server's area events (README "Areas"): "area.leave" then "area.enter" when a player crosses into
+-- It also logs the server's area events (docs/services/world/areas.html): "area.leave" then "area.enter" when a player crosses into
 -- another area of maps/<map>/areas.json, and "area.enter" alone on login. flags are the area's, with its parent's.
 local function log_area(event, p)
     local flags = {}

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Components and systems - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="components-systems.html" class="active">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li></ul></nav>
+<main>
+<h1 id="components-and-systems">Components and systems</h1>
+<p>Components are registered once with <code>entt::meta</code> in <code>engine/components.cpp</code> (<code>registerComponent&lt;T&gt;</code>, a stable type
+name, then each field with a display name and an optional color hint). <code>ComponentInfo::validate</code> optionally checks
+values beyond their types (e.g. <code>Camera</code> ranges); loading rejects and the Inspector reverts what it refuses. Field types: <code>float</code>, <code>int</code>, <code>bool</code>,
+<code>std::string</code>, <code>std::vector&lt;std::string&gt;</code> (a JSON array of strings), <code>bx::Vec3</code>, <code>bx::Quaternion</code> and registered enums. Registration alone gives a component scene-file
+save/load, copy on Duplicate, Inspector widgets and Add/Remove Component. <code>PersistentId</code>, <code>Name</code> and <code>Hierarchy</code> are
+structural and not registered.</p>
+<p>The uniform layer at the end of <code>engine/components.h</code> (<code>ComponentType</code>, <code>FieldDesc</code>, <code>allComponentTypes</code>,
+<code>findAnyComponentType</code>, <code>hasComponent/addComponent/removeComponent/componentToJson/setComponentJson</code>) covers built-in
+and <a href="lua-components.html#lua-components">Lua components</a> alike, with JSON as the common value form; scene IO, the Inspector,
+Add/Remove Component, Duplicate, Play snapshots and <code>kast.*</code> use it. The <code>entt::meta</code> functions above stay for C++ code
+working with built-ins.</p>
+<p>Systems (<code>engine/systems.h</code>) are plain functions <code>void(Scene&amp;, float dt)</code>, listed in update order in
+<code>engine/systems.cpp</code>. Only Play mode runs them, once per frame with the real frame time, never while paused or editing
+(except that the editor also runs <code>animatorSystem</code> in Edit mode, for the <a href="models-animation.html#models--animation">animation preview</a>).</p>
+</main>
+</div>
+</body>
+</html>

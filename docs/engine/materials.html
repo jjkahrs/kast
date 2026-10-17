@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Materials - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html" class="active">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li></ul></nav>
+<main>
+<h1 id="materials">Materials</h1>
+<p>Meshes render with PBR metallic-roughness materials (glTF semantics) defined in <code>.mat</code> files: JSON, any folder of the
+project, referenced by <code>MeshRenderer.material</code> (project-relative). Every field but <code>version</code> is optional (default in
+brackets); unknown keys and invalid values make the file invalid.</p>
+<pre><code class="language-json">{
+  &quot;version&quot;: 1,
+  &quot;baseColor&quot;: [0.8, 0.8, 0.8, 1],
+  &quot;baseColorTexture&quot;: &quot;textures/checker.png&quot;,
+  &quot;metallic&quot;: 0,
+  &quot;roughness&quot;: 0.5,
+  &quot;metallicRoughnessTexture&quot;: &quot;&quot;,
+  &quot;emissiveEnabled&quot;: false,
+  &quot;emissive&quot;: [0, 0, 0],
+  &quot;emissiveIntensity&quot;: 1,
+  &quot;alphaMode&quot;: &quot;opaque&quot;,
+  &quot;alphaCutoff&quot;: 0.5
+}
+</code></pre>
+<ul>
+<li><code>baseColor</code> linear RGBA 0–1 [0.8 grey, alpha 1], times <code>baseColorTexture</code> (sRGB; project-relative, empty = none).</li>
+<li><code>metallic</code>, <code>roughness</code> 0–1 [0, 0.5], times <code>metallicRoughnessTexture</code> (linear, glTF packing: G = roughness,
+  B = metallic).</li>
+<li><code>emissiveEnabled</code> [false]: when on, <code>emissive</code> (linear RGB 0–1 [black]) times <code>emissiveIntensity</code> (≥ 0 [1]) is added
+  after lighting (shows without lights); an intensity that lifts it above the bloom <code>threshold</code> glows. Older files with
+  only <code>emissive</code> load with emission on if it is non-black, and channels above 1 move into the intensity.</li>
+<li><code>alphaMode</code> [<code>opaque</code>]: <code>mask</code> discards pixels whose alpha is below <code>alphaCutoff</code> [0.5]; <code>blend</code> draws after every
+  opaque mesh, far to near by the mesh's world-space center (no per-triangle sorting), alpha-blended, depth-tested but
+  not depth-written.</li>
+<li>Shading: Cook-Torrance (GGX distribution, Smith / Schlick-GGX geometry, Schlick Fresnel, F0 = mix(0.04, baseColor,
+  metallic)) for the first <code>DirectionalLight</code> and up to 8 <code>PointLight</code>s per mesh; ambient adds a diffuse term and a flat
+  specular term (roughness-aware Fresnel), so metals are not black with ambient light only. Direct light is scaled by
+  the <a href="coordinates-and-scenes.html#coordinates-and-scenes">shadow maps</a> (the directional term by its cascade, each shadowed point light by its
+  cube) unless the mesh's <code>receiveShadows</code> is off. No image-based lighting. The shader outputs linear HDR color
+  (formulas in <code>engine/shaders/fs_mesh.sc</code>); the <a href="post-processing.html#post-processing-and-fog">post chain</a> tonemaps and encodes it to sRGB.</li>
+<li>Textures: PNG and JPG (stb_image), mipmapped at load (sRGB-correct filtering for base color), shared by path.</li>
+<li>Fallbacks (the scene always loads): a missing or invalid <code>.mat</code> renders unlit magenta; a missing or undecodable
+  texture renders as white. Each is logged once per path, with the reason.</li>
+<li><strong>Editor</strong>: Assets &gt; Create &gt; Material writes <code>new_material.mat</code> (default material) into the folder and starts a
+  rename. Selecting a <code>.mat</code> in Assets shows it in the Inspector (until an entity is selected): color pickers, sliders
+  (clamped), the alpha mode and texture combos (the project's <code>.png</code> / <code>.jpg</code>); every edit saves the file and the views
+  show it the same frame. The MeshRenderer Inspector picks a material from the project's <code>.mat</code> files or None
+  (default). Renaming or moving a <code>.mat</code> or texture (or a folder holding them) in Assets rewrites the open scene's
+  <code>MeshRenderer.material</code> paths and the texture paths inside every valid <code>.mat</code>; deleting one leaves the references to
+  fall back. <code>.mat</code> and texture files changed on disk (e.g. in an external editor; double-click opens a <code>.mat</code> there)
+  reload within a frame: the renderer checks each loaded file's modification time every frame (not in the built game).</li>
+<li><strong>Lua</strong> (Play): <code>kast.set(e, "MeshRenderer", {material = "materials/red.mat"})</code> swaps the material.
+  <code>kast.setMaterialProperty(id, name, value)</code> changes one field for that entity only: the first call copies its material
+  into a per-entity instance (Unity's <code>renderer.material</code>); other entities using the same <code>.mat</code> are unaffected.
+  <code>kast.getMaterialProperty(id, name)</code> reads the instance, else the <code>.mat</code>. Values are checked like <code>.mat</code> fields
+  (invalid raises); colors are <code>{r, g, b[, a]}</code> or <code>{x =, y =, z =[, w =]}</code> and come back as arrays. Instances are
+  never saved: Stop discards them, and <code>kast.set</code> to another material drops the entity's instance.</li>
+<li><strong>Built game</strong>: <code>.mat</code> and texture files ship in <code>game.pak</code> like every other project file; the player renders them
+  the same way.</li>
+<li><strong>Sample</strong>: <code>tests/project/materials.scene</code> (gold and red plastic spheres at roughness 0.1 / 0.5 / 0.9, PNG and JPG
+  textured cubes, a metallic-roughness textured sphere, an emissive sphere, a mask cutout, two overlapping blended
+  planes, a broken and a missing <code>.mat</code>, a missing texture) with its <code>materials/*.mat</code> and <code>textures/*</code>.</li>
+</ul>
+</main>
+</div>
+</body>
+</html>

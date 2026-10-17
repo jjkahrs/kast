@@ -144,7 +144,7 @@ target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 imgui::imgui imguizmo::imguizmo pugixml::pugixml shell32) # shell32: Recycle Bin
 add_dependencies(kast_editor kast_player) # Build copies kast_player.exe from next to kast_editor.exe
 
-# --- zone builder: standalone zone map editor (tools/zone-builder, README "Zone Builder") ---
+# --- zone builder: standalone zone map editor (tools/zone-builder, tools/zone-builder/docs/index.html) ---
 # The document, file and terrain logic, without a window, shared with its self-check. editor/assets.cpp: Recycle Bin.
 add_library(kast_zone_core STATIC
   tools/zone-builder/zone_doc.cpp tools/zone-builder/zone_io.cpp tools/zone-builder/terrain_edit.cpp
@@ -215,7 +215,7 @@ set_tests_properties(world_live PROPERTIES FIXTURES_REQUIRED world_live_ready SK
 add_test(NAME replication_live COMMAND kast_self_check --live-replication http://localhost:3100 http://localhost:8026
                                        "${CMAKE_CURRENT_BINARY_DIR}/world_live_ca.pem" "Kast Live")
 set_tests_properties(replication_live PROPERTIES FIXTURES_REQUIRED world_live_ready SKIP_RETURN_CODE 77 TIMEOUT 120)
-# The editor's Online panel model against the same stack (README "Online Services → Editor tooling"): starts it through
+# The editor's Online panel model against the same stack (docs/editor/online-tooling.html): starts it through
 # the panel's Start if it isn't running (and stops it again after), health, an admin login, realm create/delete, Play
 # started logged in, no secrets on disk. Skipped without docker.
 add_test(NAME online_live COMMAND kast_self_check --live-online http://localhost:3100 http://localhost:8026
@@ -508,7 +508,7 @@ foreach(scene shadows point_shadows)
             "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${scene}_roundtrip" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
 endforeach()
 # Terrain: tests/project/terrain.scene (Terrain on map 3 "hills", 2x2 PNG16 tiles; a CharacterController dropped
-# above the ground; README "Terrain"). Play of it, of a copy without the Terrain component (the hills must show) and of
+# above the ground; docs/engine/terrain.html). Play of it, of a copy without the Terrain component (the hills must show) and of
 # a copy whose sun casts no shadows (the hills' and the character's shadows must show).
 set(KAST_TERRAIN "${KAST_TEST_PROJECT}/terrain.scene")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TERRAIN}")
@@ -1310,7 +1310,7 @@ add_test(NAME world_address_override
           -DFRAMES=180 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(world_address_override PROPERTIES RESOURCE_LOCK net_test_ports TIMEOUT 90)
 
-# --- Online panel (Window > Online, README "Online Services → Editor tooling") ---
+# --- Online panel (Window > Online, docs/editor/online-tooling.html) ---
 # online_session: tests/project's online_session.scene (scripts/online_session_demo.lua logs auth.session and whether
 # Play started logged in) with Online Services on against kast_net_test_server's fake auth (47705) and world (47707,
 # trusted through certs/net_test_ca.pem). online_down: the same, its auth URL on a port nothing listens on.

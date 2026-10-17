@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-// The Project Manager: the window kast_editor opens without a project or scene (see README "Project Manager"). It lists
+// The Project Manager: the window kast_editor opens without a project or scene (see docs/editor/project-manager.html). It lists
 // recent projects and creates, imports or opens one by starting a new kast_editor --project <dir>, then closes and waits
 // for that editor.
 

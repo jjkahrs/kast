@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>State machines - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html" class="active">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li></ul></nav>
+<main>
+<h1 id="state-machines">State machines</h1>
+<p>Game logic can be organised as finite state machines defined in Lua (<code>engine/state_machines.h</code>): named states, at most
+one current, with rules on which state each may be entered from and optional <code>enter</code>/<code>exit</code> callbacks. There are two
+kinds, built from the same definition files:</p>
+<ul>
+<li><strong>Game state machines</strong>: project-wide, one instance per Play session, listed by name in <code>project.kast</code>
+  <code>"stateMachines"</code> (the State Machines panel's Global checkbox). They keep their state across <code>kast.loadScene</code>.</li>
+<li><strong>Entity state machines</strong>: one instance per entity with the built-in <code>StateMachine</code> component (<code>machine</code>,
+  <code>initialState</code>).</li>
+</ul>
+<p><strong>Files</strong>: every <code>.lua</code> file under <code>&lt;project&gt;/fsms/</code>, scanned recursively, is one definition. Each returns exactly one
+table:</p>
+<pre><code class="language-lua">-- fsms/door.lua
+return {
+    name = &quot;door&quot;,              -- required, unique: kast.fsm.* game target and StateMachine &quot;machine&quot;
+    initial = &quot;closed&quot;,         -- required: one of the states
+    states = {                  -- required, non-empty: name -&gt; state
+        closed = { allowedFrom = {&quot;open&quot;}, enter = function(ctx) end, exit = function(ctx) end },
+        open   = { allowedFrom = {&quot;closed&quot;, &quot;locked&quot;} },
+        locked = { },                      -- no allowedFrom: enterable from any state
+        broken = { allowedFrom = {&quot;*&quot;} },  -- &quot;*&quot;: from any state
+    },
+}
+</code></pre>
+<ul>
+<li><code>name</code> is a non-empty string; state names are non-empty strings other than <code>"*"</code>. <code>allowedFrom</code> is a list of state
+  names of this machine, or <code>"*"</code>. <code>enter</code> and <code>exit</code> are optional functions. There is no per-state <code>update</code>: drive
+  machines from Lua systems.</li>
+<li>A file that isn't valid Lua, raises, doesn't return exactly one table, has a missing or non-string <code>name</code>, an
+  <code>initial</code> that isn't one of its states, an <code>allowedFrom</code> entry naming an unknown state, a wrong type or an unknown
+  key is rejected. The message starts with the project-relative path (and the line for Lua errors), is logged as
+  <code>State machine rejected: ...</code> and shown in the State Machines panel. If two files declare the same <code>name</code>, <strong>both</strong>
+  are rejected, each naming the other.</li>
+<li>Callbacks run sandboxed like <a href="lua-systems.html#lua-systems">Lua systems</a>: each definition file has its own environment with the full
+  read-only <code>kast</code> API. <code>kast.log</code> and events published from a callback are prefixed / attributed with the definition's
+  path (<code>fsms/door.lua</code>).</li>
+</ul>
+<p><strong>Callbacks</strong> get one argument, <code>ctx</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ctx.machine</code></td>
+<td>The definition's <code>name</code>.</td>
+</tr>
+<tr>
+<td><code>ctx.entity</code></td>
+<td>The entity id for an entity machine; <code>nil</code> for a game machine.</td>
+</tr>
+<tr>
+<td><code>ctx.from</code></td>
+<td>The state being left; <code>nil</code> when the machine enters its first state (Play start, runtime add, hot reload reset).</td>
+</tr>
+<tr>
+<td><code>ctx.to</code></td>
+<td>The state being entered.</td>
+</tr>
+</tbody>
+</table>
+<p><code>exit</code> and <code>enter</code> of one transition get the same <code>ctx</code>.</p>
+<p><strong>Transition rules</strong> (<code>kast.fsm.change</code> / <code>StateMachines::change</code>):</p>
+<ul>
+<li>A state may be entered from the current one if its <code>allowedFrom</code> is omitted, contains <code>"*"</code>, or lists the current
+  state. That includes a <strong>self-transition</strong> (target == current): it is allowed only by the same rule (omitted or
+  <code>"*"</code> count as listing itself), and then runs <code>exit</code> and <code>enter</code> and publishes an event like any other.</li>
+<li>Denied (not allowed, or an unknown target state): returns <code>false</code> with a Console warning
+  (<code>State machine "door" (entity 3): "open" can't be entered from "open" (allowedFrom); staying in "open"</code>). Nothing
+  else happens: same state, no callbacks, no event.</li>
+<li>Allowed: applied <strong>immediately</strong>, in this order: <code>exit</code> of the old state, the switch, <code>enter</code> of the new state, then
+  <code>fsm.changed</code> is published on the <a href="events.html#events">event bus</a> with <code>{machine, entity, from, to}</code> (<code>entity</code> is <code>null</code> for a
+  game machine; the publisher is the definition's path). Returns <code>true</code>.</li>
+<li>A change requested from inside <code>enter</code> or <code>exit</code> (of any machine) is <strong>queued</strong> and returns <code>true</code>; queued changes
+  are applied after the current transition finishes, in request order (no recursion). One that turns out denied when
+  applied logs the usual warning.</li>
+<li>An error in <code>enter</code> or <code>exit</code> is logged with file:line and a traceback (<code>State machine fsms/door.lua: enter "open"
+  failed: fsms/door.lua:5: ...</code>). The transition still commits and returns <code>true</code>; the machine stays usable.</li>
+</ul>
+<p><strong>Lifecycle</strong>:</p>
+<ul>
+<li>Play start: definitions load into the session's Lua state, then every scene system's <code>init</code> runs, then each listed
+  game machine enters its <code>initial</code> state, then every <code>StateMachine</code> entity (depth-first) enters its <code>initialState</code>.
+  An empty or unknown <code>initialState</code> falls back to the definition's <code>initial</code>, with a warning. Entering a first state
+  calls <code>enter</code> with <code>from = nil</code> and publishes no event. A machine touched by <code>kast.fsm.*</code> before that (from an
+  <code>init</code>) enters right then, once.</li>
+<li>A listed game machine without a valid definition is logged as an error (once per Play) and unavailable:
+  <code>kast.fsm.*</code> on it raises.</li>
+<li>An entity that gains <code>StateMachine</code> during Play (<code>kast.add</code> then <code>kast.set</code> of <code>machine</code>, an Inspector edit, a
+  Duplicate) enters its initial state: at once from <code>kast.add</code>/<code>kast.set</code>, otherwise at the start of the next frame.
+  Changing <code>machine</code> enters the new machine's initial state (no <code>exit</code> of the old one); changing only <code>initialState</code>
+  does nothing until the next Play. <code>kast.add</code> alone leaves <code>machine</code> empty: no machine yet, and <code>kast.fsm.*</code> on it
+  raises. A <code>machine</code> with no valid definition is logged once. A destroyed entity's machine, or one whose
+  <code>StateMachine</code> is removed, just goes away: no <code>exit</code>.</li>
+<li><code>kast.loadScene</code>: game machines keep their current state name, with no callbacks; their definitions (and callbacks)
+  reload into the new scene's Lua state. The new scene's entity machines enter after its systems' <code>init</code>s.</li>
+<li>Stop resets everything; the next Play starts every machine from its initial state again. The current state is never
+  saved: Stop restores the scene (and its <code>StateMachine</code> data) as it was.</li>
+</ul>
+<p><strong>Lua API</strong> (<code>kast.fsm</code>, read-only). <code>target</code> is a game machine's name (string) or an entity id (number):</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Returns</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>kast.fsm.state(target)</code></td>
+<td>string</td>
+<td>The current state.</td>
+</tr>
+<tr>
+<td><code>kast.fsm.change(target, state)</code></td>
+<td>boolean</td>
+<td>The transition rules above.</td>
+</tr>
+<tr>
+<td><code>kast.fsm.canChange(target, state)</code></td>
+<td>boolean</td>
+<td>The same check against the current state, with no side effects and no log.</td>
+</tr>
+<tr>
+<td><code>kast.fsm.states(target)</code></td>
+<td>table</td>
+<td>The machine's state names, sorted.</td>
+</tr>
+</tbody>
+</table>
+<p>A bad argument raises a Lua error at the calling line: an unknown or unavailable game machine, an invalid entity id,
+an entity without <code>StateMachine</code> (or with no valid <code>machine</code>), a target that is neither a string nor a number, a
+non-string <code>state</code>. An unknown <strong>state name</strong> passed to <code>change</code> is a denial (false and a warning), not an error.</p>
+<pre><code class="language-lua">local door
+return {
+    init = function()
+        for e in kast.query(&quot;StateMachine&quot;) do door = e end
+    end,
+    update = function(dt)
+        if kast.input.keyDown(&quot;E&quot;) and kast.fsm.canChange(door, &quot;open&quot;) then
+            kast.fsm.change(door, &quot;open&quot;)
+        end
+        if kast.fsm.state(&quot;game_flow&quot;) == &quot;paused&quot; then return end
+    end,
+}
+</code></pre>
+<p><strong>C++ API</strong> (<code>kast::StateMachines</code>, from <code>LuaSystems::fsm()</code>; no Lua or ImGui dependency), same rules, events and
+logging; a bad target throws <code>std::invalid_argument</code> (which <code>kast.fsm</code> turns into the Lua error):</p>
+<pre><code class="language-cpp">kast::StateMachines&amp; fsm = lua.fsm();
+std::string state = fsm.state(&quot;game_flow&quot;);           // a game machine by name
+bool opened = fsm.change(kast::EntityId{7}, &quot;open&quot;);  // an entity machine by persistent id
+bool can = fsm.canChange(&quot;game_flow&quot;, &quot;paused&quot;);
+std::vector&lt;std::string&gt; names = fsm.states(kast::EntityId{7});
+std::optional&lt;std::string&gt; shown = fsm.peek(&quot;game_flow&quot;); // editor display: never enters or throws
+</code></pre>
+<p><strong>Hot reload</strong>: while playing, the <code>fsms/</code> folder is checked every frame; on any added, removed or modified file
+every definition reloads (each in a fresh environment). A running machine keeps its current state if the new
+definition still has it; otherwise it resets to its initial state with a warning and <code>enter</code> runs with <code>from = nil</code>.
+New callbacks are used from then on. A definition that becomes invalid (or whose file is deleted) logs the error, and
+its machines keep their last valid definition until it is fixed.</p>
+<p><strong>Editor</strong>: the Inspector shows <code>StateMachine</code> as a <strong>Machine</strong> combo (valid definitions; a name with no valid
+definition is shown as <code>(missing) &lt;name&gt;</code> with a red "No valid definition" note, and kept as-is until another machine
+is chosen) and an <strong>Initial</strong> combo (<code>(initial: &lt;state&gt;)</code> for empty, then the machine's states; an unknown one shown as
+<code>(missing) &lt;state&gt;</code>), plus the live <strong>Current</strong> state while playing. See the State Machines panel under
+<a href="../editor/controls.html#editor-controls">Editor controls</a>.</p>
+<p><strong>Built games</strong>: <code>fsms/</code> is packed into <code>game.pak</code> like every project file, and <code>kast_player</code> runs the project's
+game machines and entity machines exactly as Play does (definitions are read from the pak; hot reload doesn't apply).</p>
+<p><strong>Sample</strong>: <code>tests/project/fsm.scene</code> has two entities with <code>StateMachine</code> (<code>traffic_light</code>, from
+<code>fsms/entities/traffic_light.lua</code>, whose <code>enter</code> recolors the entity's material) and the project lists the game machine
+<code>game_flow</code> (<code>fsms/game_flow.lua</code>). <code>scripts/fsm_driver.lua</code> moves <code>game_flow</code> from <code>boot</code> to <code>playing</code>, then steps
+each light once (red → green, green → yellow) and tries to switch both to red: the yellow one may, the green one is
+denied with a warning.</p>
+<p>The dock layout is saved to <code>imgui.ini</code> in the working directory; delete it to get the default layout back.</p>
+</main>
+</div>
+</body>
+</html>

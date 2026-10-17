@@ -1,5 +1,5 @@
 // NPC definition files (LUA_ROOT/npcs/**/*.lua, server only: the engine never reads npcs/) read with Lua, and the
-// components table they share with kast.create's opts.components. See README "NPC definitions".
+// components table they share with kast.create's opts.components. See docs/services/world/npcs.html#npc-definitions.
 // Only lua/*.cpp include this (sol2 stays out of every other header).
 #pragma once
 #include "runtime.h"

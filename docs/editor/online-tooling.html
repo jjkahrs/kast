@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Online Services tooling - Kast Editor</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html" class="active">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li></ul></nav>
+<main>
+<h1 id="editor-tooling">Editor tooling</h1>
+<p><strong>Window &gt; Online</strong> (<code>editor/online.h</code> is the model, no ImGui; <code>editor/online_panel.h</code> draws it) lets you run and test
+the backend from the editor. For a project with Online Services disabled it only says "Online Services disabled for this
+project", with a button opening <strong>Build &gt; Online Services...</strong>. Otherwise it has five sections:</p>
+<ul>
+<li><strong>Status</strong>: auth's <code>GET /health</code> (<strong>ok</strong>, <strong>database down</strong> on a 503 <code>db_unavailable</code>, or <strong>unreachable</strong>; hover for
+  why) and, while logged in, the realm list (name, host:port, region, status) with each realm's world server checked by
+  a TLS connect (<strong>reachable</strong>, <strong>TLS certificate not trusted</strong> when the project's CA file doesn't cover it, or
+  <strong>unreachable</strong>). <strong>Refresh</strong> checks at once; while the panel is shown it also checks every 10 s. Every check is
+  asynchronous: the editor never waits on the network.</li>
+<li><strong>Local services (docker compose)</strong>: <strong>Start</strong> (<code>docker compose up -d --build</code>), <strong>Stop</strong> (<code>docker compose down</code>,
+  never <code>-v</code>: the databases survive) and <strong>Status</strong> (<code>docker compose ps</code>, shown as a service / state / health table)
+  in the compose folder. They run in the background; their output streams to the Console line by line, and Start and
+  Stop end with Status and a status refresh. Disabled, with the reason, when <code>docker</code> is not on PATH or the folder is
+  unset, missing or has no <code>docker-compose.yml</code>. The folder is <strong>File &gt; Preferences &gt; Local services compose folder</strong>;
+  by default <code>services/world</code> of the Kast source tree the editor was built from, if it is there (an editor copied
+  elsewhere starts with none).</li>
+<li><strong>Test login</strong>: email and password; <strong>Log in</strong> shows the account's email and role, <strong>Log out</strong> ends the session (and
+  revokes it on the server). While logged in, <strong>Play starts logged in as that account</strong>: <code>kast.auth</code> adopts the session
+  before the first update and Lua gets <code>auth.session {accountId, email, role}</code>. Not logged in, Play starts logged out
+  as before. Refresh tokens rotate (reusing one ends the session), so the session is handed to Play, not shared: the
+  editor stops refreshing it during Play and takes it back at Stop, refreshed or not; if the game logged out during
+  Play, the editor is logged out too. Errors (<code>invalid_credentials</code>, <code>account_locked</code>, ...) show under the button.</li>
+<li><strong>World server override (Editor Play only)</strong>: a <code>host:port</code> every realm connects to in editor Play (<code>kast.world</code>),
+  e.g. a world server on your machine. Built games ignore it; <code>--world-address</code> wins over it.</li>
+<li><strong>Admin</strong>, only for an <code>admin</code> login: the realms with <strong>Edit</strong> / <strong>Delete</strong> and <strong>New realm...</strong> (name, host, port,
+  region, status, sort order); <strong>Ban</strong> (account id, reason, optional ISO 8601 expiry), <strong>Unban</strong> and <strong>Set role</strong>
+  (player / gm / admin). Delete, Ban and Set role ask first. The service's error code and message show inline
+  (<code>realm_name_taken</code>, <code>cannot_modify_self</code>, <code>validation_error</code>, ...). Accounts are picked by id: the auth service has
+  no account search or listing. The admin calls are editor code only; they never ship in the player.</li>
+</ul>
+<p><strong>Secrets</strong>: the password field is wiped when you press Log in, and tokens live in editor memory only. The per-user
+editor settings (<code>%APPDATA%/Kast/Editor/editor_settings.json</code>, also holding the external editor command) remember the
+email (<code>onlineEmail</code>), compose folder (<code>composeFolder</code>) and override (<code>worldOverride</code>), never a password or token;
+nothing goes into <code>project.kast</code> or <code>game.pak</code>, and nothing logs a password or token.</p>
+<p><strong>Seeding an admin</strong>: the compose stack creates no admin account unless <code>SEED_ADMIN_EMAIL</code> / <code>SEED_ADMIN_PASSWORD</code> are set
+in <code>services/world/.env</code> (see <a href="../services/auth/configuration.html">Auth Server configuration</a>). Otherwise register an account (e.g. with the <code>kast.auth</code>
+sample), verify it through Mailpit (http://localhost:8026) and promote it in a MySQL shell
+(<code>docker compose exec mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'</code> in <code>services/world</code>):
+<code>UPDATE accounts SET role='admin' WHERE email='you@example.com';</code>, then log in again.</p>
+<p><strong>Sample</strong>: <code>tests/project/online_session.scene</code> (<code>scripts/online_session_demo.lua</code>) logs <code>auth.session</code> and whether
+Play started logged in.</p>
+</main>
+</div>
+</body>
+</html>

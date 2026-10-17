@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-// .scene files: JSON, see README "Scene file format".
+// .scene files: JSON, see docs/engine/coordinates-and-scenes.html.
 namespace kast {
 
 constexpr int kSceneFileVersion = 4; // the only version that loads; older files are not migrated

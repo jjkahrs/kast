@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project Manager - Kast Editor</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="project-manager.html" class="active">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li></ul></nav>
+<main>
+<h1 id="project-manager">Project Manager</h1>
+<p>Running <code>kast_editor.exe</code> with no project or scene (or with <code>--launcher</code>) opens the <strong>Kast Project Manager</strong> window
+(1024×600, resizable) instead of the editor. Opening or creating a project there starts a new
+<code>kast_editor.exe --project &lt;dir&gt;</code> process (<code>SDL_CreateProcess</code>, sharing the console) and closes the Project Manager's
+window. Its process then waits for that editor and exits with the editor's exit code, so a terminal (<code>run.bat</code>) stays
+attached until the editor closes and its log stays in the terminal. Closing the Project Manager without choosing exits
+0 and starts nothing.</p>
+<ul>
+<li><strong>List</strong> (left), most recently opened first: the project name, its folder and when it was last opened. Click selects;
+  double-click, Enter or <strong>Open</strong> opens the selected project. A project whose folder is missing or whose <code>project.kast</code>
+  is missing or invalid (checked when the window opens) is greyed out with the reason, and can't be opened (Open's
+  tooltip says why); it stays listed until removed.</li>
+<li><strong>New Project</strong>: a modal with <strong>Name</strong>, <strong>Directory</strong> (type a parent directory or pick one with <strong>Browse...</strong>;
+  cancelling the picker keeps the field) and a <code>Will create: &lt;directory&gt;\&lt;folder&gt;</code> preview. The folder name is the name
+  trimmed, with ASCII letters lower-cased and each run of whitespace replaced by <code>-</code> (<code>"  My   Game  "</code> → <code>my-game</code>);
+  non-ASCII characters are kept. <strong>Create</strong> is disabled, with a one-line reason, if that folder name is empty,
+  <code>.</code>/<code>..</code>, ends with <code>.</code> or contains <code>&lt; &gt; : " / \ | ? *</code> or a control character, if the directory is empty, missing or
+  not a directory (parent directories are never created), or if <code>&lt;directory&gt;\&lt;folder&gt;</code> already exists. Create makes
+  that one folder, writes <code>scenes/main.scene</code> in it (the editor's default scene: light, ground, cube, Main Camera and
+  the editor camera framing them) and <code>project.kast</code> (<code>"name"</code> = the trimmed typed name,
+  <code>"startScene": "scenes/main.scene"</code>), adds it to the list and opens it, so the editor starts in <code>main</code>. A failure shows under the list and removes the folder if this attempt made it. Cancel or Esc
+  writes nothing.</li>
+<li><strong>Import</strong>: pick a <code>project.kast</code> (the dialog filters <code>*.kast</code>; other file names are rejected). An invalid file shows
+  the error under the list and changes nothing. Otherwise the project is added to the top of the list (an already
+  listed folder just moves there, never twice) and opened.</li>
+<li><strong>Remove</strong>: drops the selected entry from the list. Files on disk are never touched; no confirmation.</li>
+<li>If the editor can't be started, the error shows under the list (and in the log) and the Project Manager stays open;
+  the list keeps the update.</li>
+</ul>
+<p><strong>Recent-projects list</strong>: <code>%APPDATA%\Kast\Editor\projects.json</code> (<code>SDL_GetPrefPath("Kast", "Editor")</code>), or
+<code>--projects-file &lt;path&gt;</code>. A JSON array, most recent first, 2-space indent:</p>
+<pre><code class="language-json">[
+  {
+    &quot;path&quot;: &quot;C:/dev/games/my-game&quot;,
+    &quot;name&quot;: &quot;My Game&quot;,
+    &quot;lastOpened&quot;: 1791900000
+  }
+]
+</code></pre>
+<p><code>path</code> is the absolute, normalized project folder (<code>/</code> separators; compared case-insensitively, so a folder is listed
+once), <code>name</code> the project name when last opened, <code>lastOpened</code> Unix seconds. Every successful open adds or moves the
+project to the top: Open/double-click/Enter, Import, New Project, <code>--launcher-open</code>, and the editor's own <code>--project</code>
+startup once its window opens (not <code>--build</code> / <code>--save-scene</code>). An unreadable or invalid file is copied to
+<code>projects.json.bad</code>, a warning is logged, and the list starts empty.</p>
+</main>
+</div>
+</body>
+</html>

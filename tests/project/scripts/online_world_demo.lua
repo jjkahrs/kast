@@ -1,6 +1,5 @@
 -- Online Services sample: logs in through kast.auth, connects to a realm's world server through kast.world, makes (or
--- reuses) a character, enters the world and says hello. Needs a project with "online" enabled (README "Online
--- Services"); the tests run it against kast_net_test_server's fake auth and fake world (realm Testgrove).
+-- reuses) a character, enters the world and says hello. Needs a project with "online" enabled (docs/engine/online-services.html); the tests run it against kast_net_test_server's fake auth and fake world (realm Testgrove).
 local EMAIL, PASSWORD = "demo@example.com", "demo-password-123"
 local REALM, CHARACTER = "Testgrove", "Demo"
 

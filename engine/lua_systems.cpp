@@ -680,7 +680,7 @@ void LuaSystems::State::bindApi()
         return scenePath.empty() ? sol::nullopt : sol::optional<std::string>(scenePath);
     });
 
-    // Events: queued, delivered by bus.drain() after every update (see README "Events"). Subscriptions belong to the
+    // Events: queued, delivered by bus.drain() after every update (see docs/engine/events.html). Subscriptions belong to the
     // calling system; a handle is a light userdata holding the subscription id (no metatable a script could edit).
     api.set_function("publish", [this](sol::this_state L, const sol::object& name, const sol::object& payload) {
         std::string event = eventName(L, "kast.publish", name);
@@ -754,7 +754,7 @@ void LuaSystems::State::bindApi()
 }
 
 // kast.fsm.*: thin wrappers over StateMachines, whose std::invalid_argument (a bad target) becomes a Lua error at the
-// calling line. See README "State machines".
+// calling line. See docs/engine/state-machines.html.
 void LuaSystems::State::bindFsmApi()
 {
     using Target = StateMachines::Target;
@@ -809,7 +809,7 @@ void LuaSystems::State::bindFsmApi()
 
 // kast.physics.*: wrappers over Physics, whose std::invalid_argument (no body of the right kind, a bad size) becomes a
 // Lua error at the calling line. Vectors are {x =, y =, z =} or {x, y, z}; rotations {x =, y =, z =, w =} or
-// {x, y, z, w}. See README "Physics".
+// {x, y, z, w}. See docs/engine/physics.html.
 void LuaSystems::State::bindPhysicsApi()
 {
     const auto number = [](lua_State* L, const std::string& function, const char* what, const sol::object& value) {
@@ -1117,7 +1117,7 @@ void LuaSystems::State::bindAuthApi()
     });
 }
 
-// kast.gui.*: the scene's game GUIs through GuiAccess (README "Game GUI"). Values and texts are never logged: a text
+// kast.gui.*: the scene's game GUIs through GuiAccess (docs/engine/game-gui.html). Values and texts are never logged: a text
 // field may hold a password.
 void LuaSystems::State::bindGuiApi()
 {

@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lua systems - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html" class="active">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li></ul></nav>
+<main>
+<h1 id="lua-systems">Lua systems</h1>
+<p>Game logic can be written as global ECS systems in Lua (LuaJIT, bound with sol2; <code>engine/lua_systems.h</code>). A scene
+lists its system files in <code>"systems"</code>; Play runs each once per frame, <strong>after</strong> the C++ systems and in listed order.
+They don't run while stopped or paused.</p>
+<p><strong>File shape</strong>: one <code>.lua</code> file is one system and returns a table:</p>
+<pre><code class="language-lua">local speed = 2 -- file-level locals and globals are private to this system
+
+return {
+    init = function() kast.log(&quot;ready&quot;) end,           -- optional: once when Play starts (or after a hot reload)
+    update = function(dt)                                -- required: every Play frame, dt in seconds
+        for e in kast.query(&quot;Transform&quot;, &quot;MeshRenderer&quot;) do
+            local p = kast.get(e, &quot;Transform&quot;).position
+            p.y = p.y + speed * dt
+            kast.set(e, &quot;Transform&quot;, {position = p})
+        end
+    end,
+    shutdown = function() kast.log(&quot;bye&quot;) end,          -- optional: on Stop (or before a hot reload)
+}
+</code></pre>
+<p>A file that doesn't return a table with an <code>update</code> function, or whose <code>init</code>/<code>shutdown</code> isn't a function, is an
+error for that system.</p>
+<p><strong>Paths</strong>: <code>"systems": ["scripts/spin.lua", "shared/ai.lua"]</code> are relative to the active project's root (<code>/</code>
+separators), wherever the scene file is. The Systems panel stores paths that way; Save As does not rewrite them. With no
+active project, or for a path outside the project, that system is disabled with the reason.</p>
+<p><strong><code>kast</code> API</strong> (one read-only table per system; assigning to <code>kast</code>, <code>kast.input</code> or <code>kast.fsm</code> is an error). Entities are
+persistent ids (<code>EntityId</code> integers, the scene file's <code>id</code>). An invalid or destroyed id, an unknown component name or
+a wrong argument type raises a Lua error at the calling line.</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Returns</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>kast.query(name, ...)</code></td>
+<td>iterator of ids</td>
+<td>Entities that have every listed component, in hierarchy order: <code>for e in kast.query("Transform", "Rotator") do</code>. No names = every entity. The matches are captured when <code>query</code> is called: entities destroyed later in the loop are skipped, entities created in the loop are not visited.</td>
+</tr>
+<tr>
+<td><code>kast.get(id, name)</code></td>
+<td>table</td>
+<td>A copy of every field. Raises if the entity doesn't have the component.</td>
+</tr>
+<tr>
+<td><code>kast.set(id, name, fields)</code></td>
+<td>—</td>
+<td><strong>Partial</strong>: only the listed fields change. All-or-nothing: an unknown field, a wrong type or a value the component rejects (e.g. <code>Camera</code> ranges, a zero quaternion) raises and leaves the component unchanged.</td>
+</tr>
+<tr>
+<td><code>kast.getMaterialProperty(id, name)</code>, <code>kast.setMaterialProperty(id, name, value)</code></td>
+<td>value, —</td>
+<td>The entity's material, per entity: see <a href="materials.html#materials">Materials</a>. Raises without a <code>MeshRenderer</code>, for an unknown property or (set) an invalid value.</td>
+</tr>
+<tr>
+<td><code>kast.has(id, name)</code></td>
+<td>boolean</td>
+<td></td>
+</tr>
+<tr>
+<td><code>kast.add(id, name)</code></td>
+<td>—</td>
+<td>Default-constructed; no-op if already present.</td>
+</tr>
+<tr>
+<td><code>kast.remove(id, name)</code></td>
+<td>—</td>
+<td>No-op if absent. <code>Transform</code> can't be removed (raises).</td>
+</tr>
+<tr>
+<td><code>kast.create(name [, parentId])</code></td>
+<td>id</td>
+<td>New entity with a <code>Transform</code>, at the root or as the last child of <code>parentId</code>.</td>
+</tr>
+<tr>
+<td><code>kast.destroy(id)</code></td>
+<td>—</td>
+<td>Destroys the entity and its children immediately.</td>
+</tr>
+<tr>
+<td><code>kast.log(msg)</code>, <code>kast.warn(msg)</code>, <code>kast.error(msg)</code></td>
+<td>—</td>
+<td>To the Console, prefixed with the system's path: <code>[info] scripts/spin.lua: msg</code>.</td>
+</tr>
+<tr>
+<td><code>kast.input.keyDown(name)</code></td>
+<td>boolean</td>
+<td>SDL scancode names (<code>SDL_GetScancodeFromName</code>): <code>"W"</code>, <code>"Space"</code>, <code>"Left Shift"</code>, <code>"Up"</code>... An unknown name raises.</td>
+</tr>
+<tr>
+<td><code>kast.input.mouseDelta()</code></td>
+<td><code>dx, dy</code></td>
+<td>Pixels moved this frame (also while the cursor is locked).</td>
+</tr>
+<tr>
+<td><code>kast.input.mouseDown(button)</code></td>
+<td>boolean</td>
+<td><code>"left"</code>, <code>"middle"</code>, <code>"right"</code>, <code>"x1"</code> or <code>"x2"</code> held down. Any other value raises.</td>
+</tr>
+<tr>
+<td><code>kast.input.wheelDelta()</code></td>
+<td>number</td>
+<td>Wheel notches this frame; + = away from the user (up), whatever the OS scroll direction.</td>
+</tr>
+<tr>
+<td><code>kast.input.setCursorLocked(locked)</code></td>
+<td>—</td>
+<td><code>true</code> hides the cursor and locks it in the window (relative mode; <code>mouseDelta</code> keeps reporting motion); <code>false</code> shows it where the lock began. Released automatically when the game loses input (see the Game panel above). A non-boolean raises.</td>
+</tr>
+<tr>
+<td><code>kast.loadScene(path)</code></td>
+<td>—</td>
+<td>Switches the running scene. <code>path</code> is project-relative. Checked <strong>at call time</strong>, reading the file from disk (unsaved editor edits are not seen): no active project, a path outside the project, a missing file or a scene that fails to load (including an old version) raises at the calling line, and nothing is queued. On success the switch is applied at the <strong>end of the frame</strong>, after every system's <code>update</code>; the last call in a frame wins. Applying it calls the old scene's enabled systems' <code>shutdown</code>, discards the Lua state, replaces the scene, and starts a new session for the new scene's own <code>systems</code> (each <code>init</code> runs). Nothing persists across the switch. Calls from a <code>shutdown</code> are ignored; a call from an <code>init</code> is applied at the end of the next ticked frame.</td>
+</tr>
+<tr>
+<td><code>kast.publish(name [, payload])</code>, <code>kast.subscribe(name, fn)</code>, <code>kast.unsubscribe(handle)</code></td>
+<td>—, handle, —</td>
+<td>Events between systems and C++: see <a href="events.html#events">Events</a>.</td>
+</tr>
+<tr>
+<td><code>kast.currentScene()</code></td>
+<td>string or <code>nil</code></td>
+<td>The running scene's project-relative path (<code>"levels/b.scene"</code>), or <code>nil</code> with no active project or for an Untitled scene.</td>
+</tr>
+<tr>
+<td><code>kast.fsm.state(target)</code>, <code>kast.fsm.change(target, state)</code>, <code>kast.fsm.canChange(target, state)</code>, <code>kast.fsm.states(target)</code></td>
+<td>string, boolean, boolean, table</td>
+<td>Game and entity state machines: see <a href="state-machines.html#state-machines">State machines</a>. <code>kast.fsm</code> is read-only too.</td>
+</tr>
+</tbody>
+</table>
+<p>Input is only live while the Game panel is focused and playing; otherwise every key is up and the delta is 0.</p>
+<p>These work the same on <a href="lua-components.html#lua-components">Lua components</a> (<code>kast.get(e, "Health")</code>, ...), whose <code>array</code> fields are
+1-based Lua sequences (<code>{"gold", "potion"}</code>); <code>kast.set</code> replaces an array field as a whole.</p>
+<p>Field values: <code>float</code>/<code>int</code> are Lua numbers (an <code>int</code> field needs an integral number; numbers must be finite),
+<code>bool</code> is a boolean, <code>std::string</code> a string, <code>bx::Vec3</code> a table <code>{x=, y=, z=}</code>, <code>bx::Quaternion</code> <code>{x=, y=, z=, w=}</code>
+(all keys required when setting), and enums their scene-file names (<code>"cube"</code>, <code>"plane"</code>, <code>"sphere"</code>). Component and
+field names are the scene file's (<code>"MeshRenderer"</code>, <code>"degreesPerSecond"</code>).</p>
+<p><strong>Sandbox</strong>: one LuaJIT state per Play session; each file runs in its own environment with its own copies of the
+globals and of the <code>table</code>, <code>string</code> and <code>math</code> libraries, so two systems can use the same global names. Only the
+<code>base</code>, <code>table</code>, <code>string</code> and <code>math</code> libraries are loaded, and <code>dofile</code>, <code>loadfile</code>, <code>load</code>, <code>loadstring</code>, <code>require</code>,
+<code>module</code>, <code>getfenv</code> and <code>setfenv</code> are removed: <code>io</code>, <code>os</code>, <code>ffi</code>, <code>debug</code>, <code>jit</code>, <code>bit</code> and <code>package</code> are not
+reachable. Files are loaded as text only (no precompiled bytecode).</p>
+<p><strong>Errors</strong>: a syntax error, a missing file, a bad returned table or an error in <code>init</code>, <code>update</code> or <code>shutdown</code> (Lua
+or raised by <code>kast.*</code>) is logged to the Console with the file and line (<code>Lua system disabled: scripts/spin.lua:12:
+...</code>, plus a traceback for runtime errors) and disables that system until the next Play or a successful hot reload.
+Play and the other systems keep running. Disabled systems' <code>shutdown</code> is not called. With no active project, every
+listed system is disabled with <code>no project (open a scene inside a project to run Lua systems)</code>.</p>
+<p><strong>Hot reload</strong>: while playing, each listed file's modification time is checked every frame. When it changes, the old
+instance's <code>shutdown</code> runs (if it was enabled), the file is reloaded into a fresh environment and its <code>init</code> runs.
+A successful reload clears the error; the scene and entities are not reset, but the system's Lua locals start over.</p>
+</main>
+</div>
+</body>
+</html>

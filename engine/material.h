@@ -11,7 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
-// Materials: PBR metallic-roughness parameters (glTF semantics) in .mat files (JSON, see README "Materials").
+// Materials: PBR metallic-roughness parameters (glTF semantics) in .mat files (JSON, see docs/engine/materials.html).
 // Texture paths are project-relative. GPU-free: parsing, validation and the path cache; the renderer owns the textures.
 namespace kast {
 

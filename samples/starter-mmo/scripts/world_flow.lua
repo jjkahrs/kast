@@ -1,5 +1,5 @@
 -- World scene flow: shows the props of the map the player is on (MapProps groups) on entering and after a portal (the
--- Terrain switches by itself, README "Terrain"), and sends the player back to login when the world connection drops or
+-- Terrain switches by itself, docs/engine/terrain.html), and sends the player back to login when the world connection drops or
 -- the auth session expires, telling the login screen why through the "session" game machine (fsms/session.lua).
 local PARKED = -1000 -- ponytail: props of other maps are moved out of view, not destroyed; fine for a few props
 

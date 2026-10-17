@@ -88,7 +88,7 @@ graceful() {
 echo "run id: $RUN   logs: $LOGDIR"
 wait_healthy world || { echo "world is not healthy; run docker compose up -d --build"; exit 1; }
 
-# 0: kast_mapbake in the image (README "Navmesh") bakes every tile of the mounted (read-only) hills into a temp dir;
+# 0: kast_mapbake in the image (docs/services/world/maps.html#navmesh) bakes every tile of the mounted (read-only) hills into a temp dir;
 # the server keeps the navtiles stored in the repo. Checksums are logged to compare with a Windows bake.
 log="$LOGDIR/0.log"
 echo "--- 0 kast_mapbake bakes maps/hills in the image"
@@ -144,7 +144,7 @@ record "$name" $ok "see $log"
 
 graceful "12 SIGTERM: server_shutdown, saves flushed, exit 0 < 10 s" s12 stop
 
-# 13: Lua components with the sample lua/ (README "Lua components and systems"): replication modes, then the
+# 13: Lua components with the sample lua/ (docs/services/world/lua.html): replication modes, then the
 # persisted values across a relog (inside the scenario) and across a world restart.
 name="13 Lua components: aoi/owner replication, persisted across relog and restart"
 echo "--- $name"
@@ -162,25 +162,25 @@ if [ $ok -eq 0 ]; then
 fi
 record "$name" $ok "see $log"
 
-# 14: server events with the sample lua/systems/events.lua (README "Lua components and systems", Events)
+# 14: server events with the sample lua/systems/events.lua (docs/services/world/events.html)
 scenario "14 Lua server events: sendTo/sendNearby/broadcast audiences" --scenario events
 
-# 15: state machines with the sample lua/fsms/locomotion.lua + lua/systems/locomotion.lua (README "State machines")
+# 15: state machines with the sample lua/fsms/locomotion.lua + lua/systems/locomotion.lua (docs/services/world/state-machines.html)
 scenario "15 state machines: transitions observed, denied one silent" --scenario fsm
 
-# 16: NPCs with the sample lua/systems/npcs.lua (README "NPCs"): the patrolling Guard seen, moving, leaving and returning
+# 16: NPCs with the sample lua/systems/npcs.lua (docs/services/world/npcs.html): the patrolling Guard seen, moving, leaving and returning
 scenario "16 NPCs: Spawn{npc, Guard}, Health from its definition, moves, Despawn out of range, Spawn on return" --scenario npcs
 
-# 17: areas with the sample maps' areas.json (README "Areas"): start's cave_mouth portal to map 2, kept across a relog
+# 17: areas with the sample maps' areas.json (docs/services/world/areas.html): start's cave_mouth portal to map 2, kept across a relog
 scenario "17 portal: MapChange{2} first, Bat seen, B lost, relog stays on map 2" --scenario portal
 
-# 18: NPC spawns (README "NPC spawns"): the test hook destroys the Guard; it respawns after the fixture's respawnSec (5 s)
+# 18: NPC spawns (docs/services/world/npcs.html#npc-spawns): the test hook destroys the Guard; it respawns after the fixture's respawnSec (5 s)
 scenario "18 NPC respawn: Guard destroyed by lua/systems/test_hooks.lua, back 5 s later at its spawn" --scenario respawn
 
-# 19: ground on the sample hills map (README "Ground"): slope walk accepted and seen on the ground, fly hack corrected
+# 19: ground on the sample hills map (docs/services/world/maps.html#ground): slope walk accepted and seen on the ground, fly hack corrected
 scenario "19 terrain: hills_gate lands on the ground, slope walk accepted, fly hack -> Correction" --scenario terrain
 
-# 20: navmesh on the sample hills map (README "Navmesh"): walking into the mesa's wall is corrected; the Sentry walks around it
+# 20: navmesh on the sample hills map (docs/services/world/maps.html#navmesh): walking into the mesa's wall is corrected; the Sentry walks around it
 scenario "20 navmesh: mesa wall -> Correction, Sentry patrols around it on the ground" --scenario navmesh
 
 echo

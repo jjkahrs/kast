@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audio - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html" class="active">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li></ul></nav>
+<main>
+<h1 id="audio">Audio</h1>
+<p>2D (non-spatial) sound on <a href="https://miniaud.io">miniaudio</a> (<code>engine/audio.h</code>). Editor Play and <code>kast_player</code> both run
+it; in Edit mode only the Inspector's <strong>Preview</strong> makes sound.</p>
+<p><strong>Formats</strong>: <code>.wav</code> and <code>.mp3</code> only (extension matched ignoring case); any other extension is an error. Every file is
+read through <code>kast::readFile</code>, so a built game plays its clips from <code>game.pak</code>.</p>
+<p><strong><code>AudioSource</code></strong> component (Add Component, Inspector, scene file):</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning [default]</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>clip</code></td>
+<td>project-relative <code>.wav</code> / <code>.mp3</code>; empty = none [""]</td>
+</tr>
+<tr>
+<td><code>bus</code></td>
+<td><code>Master</code> / <code>Music</code> / <code>SFX</code> / <code>UI</code> / <code>Voice</code> [SFX]</td>
+</tr>
+<tr>
+<td><code>volume</code></td>
+<td>0..1 [1]</td>
+</tr>
+<tr>
+<td><code>loop</code></td>
+<td>repeat until stopped [false]</td>
+</tr>
+<tr>
+<td><code>playOnStart</code></td>
+<td>start the clip when Play starts and when a scene loads during Play [false]</td>
+</tr>
+</tbody>
+</table>
+<p>A volume outside 0..1 or a clip with another extension is rejected (scene load, Inspector edits). A missing or
+corrupt clip shows its error in red under the Inspector's clip picker, logs one error at Play
+(<code>AudioSource on '&lt;entity&gt;': ...</code>), plays nothing, and Play goes on.</p>
+<p><strong>Buses</strong>: a fixed set, Master, Music, SFX, UI, Voice; every sound plays on exactly one (default SFX). Music, SFX, UI
+and Voice feed Master. Gain = sound volume x bus volume x Master volume; a muted bus (or muted Master) is silent.
+Volumes are 0..1.</p>
+<p><strong>Voices</strong>: at most 32 sounds at once. A play when all 32 are busy stops the <strong>oldest non-looping</strong> voice and reuses
+it (its handle goes stale). Looping voices are never stolen: if all 32 loop, the new sound is dropped with a warning
+(<code>Sound '&lt;clip&gt;' dropped: all 32 voices are looping</code>) and <code>play</code> returns 0 (a stale handle). A non-looping voice frees
+itself when its clip ends; a looping one repeats seamlessly until stopped.</p>
+<p><strong>Loading</strong>: clips on the Music bus are decoded while they play (streamed from the file's bytes, one decoder per
+voice). All other clips are decoded once, converted to the output format, and cached by project-relative path; the
+cache is dropped at each Play start, so edited files are picked up.</p>
+<p><strong>Lifecycle</strong>: Play start stops every voice, sets the buses to the project defaults (below) and starts the
+<code>playOnStart</code> sources (before the Lua <code>init</code>s). Pause holds every voice where it is; resume continues them from that
+position. Stop stops and frees every voice. A <code>kast.loadScene</code> switch stops every voice, then the new scene's
+<code>playOnStart</code> sources start; runtime bus levels carry over the switch. Music does not continue across a switch.</p>
+<p><strong><code>kast.audio</code></strong> (bus names are the strings above; errors raise at the calling line, like <code>kast.*</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>play(path, opts?) -&gt; handle</code></td>
+<td><code>opts = {bus = "SFX", volume = 1, loop = false}</code>, every key optional; returns 0 if dropped</td>
+</tr>
+<tr>
+<td><code>stop(h)</code>, <code>pause(h)</code>, <code>resume(h)</code>, <code>setVolume(h, v)</code></td>
+<td>on one sound</td>
+</tr>
+<tr>
+<td><code>isPlaying(h) -&gt; bool</code></td>
+<td>true while the voice lives and is not paused by <code>pause(h)</code></td>
+</tr>
+<tr>
+<td><code>stopAll(bus?)</code></td>
+<td>every sound, or only those on <code>bus</code></td>
+</tr>
+<tr>
+<td><code>setBusVolume(bus, v)</code>, <code>getBusVolume(bus) -&gt; v</code>, <code>setBusMuted(bus, muted)</code></td>
+<td>runtime bus levels, not saved</td>
+</tr>
+<tr>
+<td><code>playSource(id) -&gt; handle</code>, <code>stopSource(id)</code></td>
+<td>the entity's <code>AudioSource</code> (its clip, bus, volume, loop); <code>stopSource</code> stops the last voice <code>playSource</code> or <code>playOnStart</code> started for it</td>
+</tr>
+</tbody>
+</table>
+<p>A handle whose voice ended, was stopped or was stolen is <strong>stale</strong>: <code>isPlaying</code> returns false and the other calls do
+nothing (not an error). A missing, unreadable or corrupt file, another extension, an unknown bus or option, a volume
+outside 0..1, a non-number handle and <code>playSource</code> / <code>stopSource</code> on an entity without an <code>AudioSource</code> raise a Lua
+error (<code>kast.audio.play: cannot read 'sounds/x.wav'</code>); the system keeps running.</p>
+<pre><code class="language-lua">local music, wasDown = nil, false
+return {
+    init = function()
+        music = kast.audio.play(&quot;sounds/theme.mp3&quot;, {bus = &quot;Music&quot;, volume = 0.6, loop = true})
+    end,
+    update = function(dt)
+        local down = kast.input.keyDown(&quot;Space&quot;)
+        if down and not wasDown then
+            kast.audio.play(&quot;sounds/jump.wav&quot;, {volume = 0.8}) -- SFX, one-shot
+        end
+        wasDown = down
+        if kast.input.keyDown(&quot;P&quot;) then kast.audio.pause(music) else kast.audio.resume(music) end
+    end,
+    shutdown = function() kast.audio.stopAll(&quot;SFX&quot;) end,
+}
+</code></pre>
+<p><strong>No audio device</strong>: if the output device can't be opened, one warning is logged
+(<code>No audio output device: sound plays on the null backend (silent)</code>) and miniaudio's null backend is used; handles,
+voices, buses and the cache behave normally. <code>--no-audio-device</code> (editor and <code>kast_player</code>) forces this; the tests use it.</p>
+<p><strong>Editor</strong>:</p>
+<ul>
+<li>Inspector <code>AudioSource</code>: a <strong>Clip</strong> combo of the project's <code>.wav</code> / <code>.mp3</code> files, then bus, volume, loop and
+  playOnStart. <strong>Preview</strong> plays the clip in Edit mode at the component's volume and bus (with the project's bus
+  defaults); <strong>Stop Preview</strong> stops it, and selecting another entity stops it too. Preview is disabled during Play.</li>
+<li>Assets panel: <code>.wav</code> / <code>.mp3</code> files have a speaker icon.</li>
+<li><strong>Window &gt; Mixer</strong>: a volume slider and Mute box per bus that edit the project's default levels, saved in
+  <code>project.kast</code> (<code>"audio"</code>, see <a href="../editor/projects.html#projects">Projects</a>) when a drag ends; during Play edits also apply to the session
+  at once. During Play it also lists the active voices (clip, bus, volume, loop, Playing / Paused) and the count out
+  of 32.</li>
+</ul>
+<p>C++: <code>kast::Audio</code> (from <code>LuaSystems::audio()</code>); <code>Audio::Output::Offline</code> has no device and <code>render()</code> pulls the mix,
+which the self-checks use to measure output. <code>kast::clipInfo</code> reads a clip's native frames, channels and sample rate.</p>
+<p><strong>Limits</strong>: no 3D / spatial sound (no listener, distance or panning), no effects, pitch or speed, no fades or
+crossfades, no OGG / FLAC, no custom buses, no voice priorities.</p>
+<p><strong>Sample</strong>: <code>tests/project/audio.scene</code> (Music loops <code>sounds/wave-demo.wav</code> on the Music bus with <code>playOnStart</code>;
+Jukebox has a UI-bus <code>AudioSource</code>) runs <code>scripts/audio_sfx.lua</code>, which plays <code>sounds/mp3-demo.mp3</code> once and then a
+short tone twice a second, alternating <code>kast.audio.play</code> and <code>kast.audio.playSource</code>.</p>
+</main>
+</div>
+</body>
+</html>

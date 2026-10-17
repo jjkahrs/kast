@@ -61,3 +61,13 @@ Kast is a game engine focused on making it easy to build MMORPGs.
 #313131 Card background
 #454545 Text field
 #818181 Text field hilight
+
+
+# Documentation
+* Top level README.md should contain discription of the project and how to build and start the editor and services
+* Editor documentation should be HTML/CSS under ./docs/editor
+* Engine documentation should be HTML/CSS under ./docs/engine
+* Auth documentation should be HTML/CSS under ./docs/services/auth
+* World server documentation should be HTML/CSS under ./docs/services/world
+* All tool documentation should be under the ./tools subdirectory the tool is in.
+

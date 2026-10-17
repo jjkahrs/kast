@@ -1,4 +1,4 @@
--- Sample NPC definition (README "NPC definitions"): the Guard at the start map's gate (maps/start/.server/spawns/4_4.json).
+-- Sample NPC definition (docs/services/world/npcs.html#npc-definitions): the Guard at the start map's gate (maps/start/.server/spawns/4_4.json).
 -- It patrols its spawn's path: systems/npcs.lua moves it, the patrol machine (fsms/patrol.lua) says whether it walks or
 -- waits. Health replicates to the players who see it.
 return {

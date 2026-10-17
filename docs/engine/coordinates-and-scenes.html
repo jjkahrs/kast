@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coordinates and scenes - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html" class="active">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li></ul></nav>
+<main>
+<h1 id="coordinates-and-scenes">Coordinates and scenes</h1>
+<ul>
+<li>Right-handed, <strong>Y up</strong>, 1 unit = 1 meter. Cameras and directional lights look down their local <strong>-Z</strong>.</li>
+<li>Rotations are stored as standard (Hamilton, glTF-style) quaternions <code>[x, y, z, w]</code>. The Inspector shows Euler
+  degrees (X pitch, Y yaw, Z roll), applied Z, then X, then Y.</li>
+<li>Matrices follow bgfx/bx: row vectors, translation in elements 12–14, <code>world = local * parentWorld</code>.</li>
+<li>Built-in primitives fit the unit cube centered on the origin: <code>cube</code> (1 m), <code>plane</code> (1x1 m on XZ, facing +Y),
+  <code>sphere</code> (0.5 m radius).</li>
+<li>Lighting (forward; shading model under <a href="materials.html#materials">Materials</a>): <code>ambient + directional + point lights</code>.<ul>
+<li><strong>Ambient</strong>: per scene, <code>"lighting"</code> in the scene file, edited in <strong>Window &gt; Lighting</strong>. Default white at 0.2.</li>
+<li><strong>Directional</strong>: the first <code>DirectionalLight</code> in hierarchy order; others are ignored.</li>
+<li><strong>Point</strong>: every <code>PointLight</code>, from its entity's world position, falling off smoothly to exactly 0 at <code>range</code>
+  (<code>saturate(1 - (d/r)^4)^2 / (d^2 + 1)</code>). <strong>At most 8 per mesh</strong>: the ones nearest the mesh's bounds center
+  whose range reaches its bounds; the rest don't light that mesh. Selecting one in the Scene view shows its range.</li>
+<li><strong>Shadows</strong> (realtime shadow maps, in the Scene view, the Game view and the built game; no ambient occlusion,
+  baked or contact shadows):<ul>
+<li><strong>Directional</strong>: cascaded shadow maps when the <code>DirectionalLight</code>'s <code>castShadows</code> is on (default). The view
+  from the camera's near plane to <code>maxDistance</code> (default 100 m, or the camera's far plane if nearer) splits into
+  <code>cascadeCount</code> (1–4, default 4) cascades (a 0.75 mix of logarithmic and uniform splits), each 2048x2048 in one
+  4096x4096 16-bit depth atlas. Each cascade is fit to a bounding sphere of its slice and moves in whole texels,
+  so shadow edges don't shimmer as the camera moves or turns. Beyond <code>maxDistance</code> nothing is shadowed (a hard
+  cut, no fade). Hardware depth comparison with 3x3 PCF.</li>
+<li><strong>Point</strong>: a 1024x1024-per-face 32-bit cube shadow map for each <code>PointLight</code> with <code>castShadows</code> on (default
+  off), shadowing in every direction from 0.05 m to its <code>range</code>. <strong>At most 4 per frame</strong>: the <code>castShadows</code> lights
+  nearest the camera; the rest still light, unshadowed. 3x3 PCF across the face.</li>
+<li><strong>Acne vs. peter-panning</strong>: <code>DirectionalLight.bias</code> (meters along the light, default 0.05) and <code>normalBias</code>
+  (shadow-map texels along the surface normal, default 1.5); <code>PointLight.bias</code> (meters toward the light, default
+  0.05; plus a fixed one-texel normal offset). Raise them for acne (striped self-shadowing), lower them if
+  shadows detach from their casters.</li>
+<li><strong>Per mesh</strong>: <code>MeshRenderer</code> / <code>ModelRenderer</code> <code>castShadows</code> and <code>receiveShadows</code> (both default on). Alpha-mask
+  materials cast a cutout shadow (alpha-tested in the depth pass); alpha-blend materials never cast but do
+  receive. Skinned models cast their current pose.</li>
+<li>Resolutions are engine constants (<code>engine/shadow.h</code>); shadow maps are created on first use, per renderer
+  (the editor's Scene and Game views have one each). Each render path reserves <code>Renderer::kShadowViews</code> (28) bgfx
+  views before its scene view: editor Scene view shadows 1–28, scene and post 29–40, overlays 41; Game view
+  shadows 42–69, scene and post 70–81, game GUIs 82, GUI Builder preview 83, ImGui 255; player shadows 0–27, scene
+  and post 28–39, GUIs 40.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p>Scene file format (<code>.scene</code>: JSON with 2-space indent, entities depth-first in hierarchy order, components and fields
+in registration order, floats in shortest round-trip form, so re-saving an unchanged scene gives identical bytes):</p>
+<pre><code class="language-json">{
+  &quot;version&quot;: 4,
+  &quot;entities&quot;: [
+    { &quot;id&quot;: 1, &quot;name&quot;: &quot;Directional Light&quot;, &quot;parent&quot;: null,
+      &quot;components&quot;: {
+        &quot;Transform&quot;: { &quot;position&quot;: [0, 4, 0], &quot;rotation&quot;: [-0.408218, -0.23457, -0.109382, 0.875426], &quot;scale&quot;: [1, 1, 1] },
+        &quot;DirectionalLight&quot;: { &quot;color&quot;: [1, 0.95, 0.9], &quot;intensity&quot;: 1.1 } } },
+    { &quot;id&quot;: 4, &quot;name&quot;: &quot;Sphere&quot;, &quot;parent&quot;: null,
+      &quot;components&quot;: {
+        &quot;Transform&quot;: { &quot;position&quot;: [1.5, 0.75, 0], &quot;rotation&quot;: [0, 0, 0, 1], &quot;scale&quot;: [1.5, 1.5, 1.5] },
+        &quot;MeshRenderer&quot;: { &quot;primitive&quot;: &quot;sphere&quot;, &quot;material&quot;: &quot;materials/blue.mat&quot; },
+        &quot;Rotator&quot;: { &quot;axis&quot;: [0, 1, 0], &quot;degreesPerSecond&quot;: 45 } } },
+    { &quot;id&quot;: 5, &quot;name&quot;: &quot;Satellite&quot;, &quot;parent&quot;: 4,
+      &quot;components&quot;: {
+        &quot;Transform&quot;: { &quot;position&quot;: [0.9, 0.6, 0], &quot;rotation&quot;: [0, 0, 0.258819, 0.965926], &quot;scale&quot;: [0.3, 0.3, 0.3] },
+        &quot;MeshRenderer&quot;: { &quot;primitive&quot;: &quot;cube&quot;, &quot;material&quot;: &quot;&quot; } } },
+    { &quot;id&quot;: 6, &quot;name&quot;: &quot;Main Camera&quot;, &quot;parent&quot;: null,
+      &quot;components&quot;: {
+        &quot;Transform&quot;: { &quot;position&quot;: [0, 2.5, 6], &quot;rotation&quot;: [-0.173648, 0, 0, 0.984808], &quot;scale&quot;: [1, 1, 1] },
+        &quot;Camera&quot;: { &quot;verticalFovDegrees&quot;: 60, &quot;nearPlane&quot;: 0.1, &quot;farPlane&quot;: 1000 } } }
+  ],
+  &quot;systems&quot;: [],
+  &quot;lighting&quot;: { &quot;ambientColor&quot;: [1, 1, 1], &quot;ambientIntensity&quot;: 0.2 },
+  &quot;editor&quot;: { &quot;camera&quot;: { &quot;pivot&quot;: [0, 0.75, 0], &quot;yaw&quot;: 20, &quot;pitch&quot;: -20, &quot;distance&quot;: 8 } }
+}
+</code></pre>
+<ul>
+<li><code>id</code>: persistent nonzero integer, unique in the file. <code>parent</code> is the parent's <code>id</code>, or <code>null</code> for a root. Children
+  keep file order.</li>
+<li><code>components</code>: keyed by component type name; built-ins first (registration order), then <a href="lua-components.html#lua-components">Lua
+  components</a> (sorted by name), then preserved components of unknown type (sorted by name). For a
+  built-in component every field is required, except the shadow fields below: added after scenes were saved without
+  them, a missing one takes its default (no scene version change).<ul>
+<li><code>Transform</code> (required): local <code>position</code>, <code>rotation</code> (quaternion), <code>scale</code>, relative to the parent.</li>
+<li><code>MeshRenderer</code>: <code>primitive</code> is <code>cube</code>, <code>plane</code> or <code>sphere</code>; <code>material</code> is a project-relative <a href="materials.html#materials"><code>.mat</code></a>
+  file, empty for the default grey material. Scenes from before materials, with a <code>color</code> field instead, still load:
+  <code>color</code> is dropped with a Console warning (the mesh renders with the default material). <code>castShadows</code> [true],
+  <code>receiveShadows</code> [true] (see Shadows above).</li>
+<li><code>DirectionalLight</code>: <code>color</code> (linear RGB 0–1), <code>intensity</code>, <code>castShadows</code> [true], <code>bias</code> [0.05, &gt;= 0],
+  <code>normalBias</code> [1.5, &gt;= 0], <code>maxDistance</code> [100, &gt; 0], <code>cascadeCount</code> [4, 1–4].</li>
+<li><code>PointLight</code>: <code>color</code> (linear RGB 0–1), <code>intensity</code> (&gt;= 0), <code>range</code> (meters, &gt; 0), <code>castShadows</code> [false],
+  <code>bias</code> [0.05, &gt;= 0].</li>
+<li><code>Camera</code>: perspective camera looking down the entity's world -Z (scale ignored). <code>verticalFovDegrees</code> must be
+  between 0 and 180 (exclusive), and <code>0 &lt; nearPlane &lt; farPlane</code>. The Inspector keeps the last valid value if an
+  edit would break that.</li>
+<li><code>Rotator</code>: spins the entity in Play mode, <code>degreesPerSecond</code> around its local <code>axis</code> (normalized; zero = no spin).</li>
+<li><code>StateMachine</code>: gives the entity its own <a href="state-machines.html#state-machines">state machine</a> in Play mode. <code>machine</code> is a definition
+  name, <code>initialState</code> the state it enters at Play start (empty = the definition's <code>initial</code>). Both are plain
+  strings: a name with no valid definition still loads and saves unchanged. Scene files stay version 4.</li>
+</ul>
+</li>
+<li><code>systems</code>: Lua system scripts in run order, as paths relative to the <strong>project root</strong> (see <a href="../editor/projects.html#projects">Projects</a> and
+  <a href="lua-systems.html#lua-systems">Lua systems</a>). Always written; optional when loading (missing = none).</li>
+<li><code>lighting</code>: the scene's ambient light, <code>ambientColor</code> (linear RGB 0–1) times <code>ambientIntensity</code> (&gt;= 0). Always
+  written; optional when loading (missing = white at 0.2), but if present both fields are required.</li>
+<li><code>postProcessing</code>: the scene's <a href="post-processing.html#post-processing-and-fog">post-processing and fog</a>, blocks <code>tonemapping</code>, <code>bloom</code>,
+  <code>colorGrading</code>, <code>vignette</code>, <code>fxaa</code>, <code>fog</code>, each with <code>enabled</code>. Always written; optional when loading, and so is every
+  block and field in it (missing = default, all effects off). Unknown blocks or fields, wrong types, out-of-range
+  values and an <code>operator</code> other than <code>None</code> / <code>ACES</code> fail the load. The file stays version 4.</li>
+<li><code>editor</code> belongs to the editor (camera pivot, yaw/pitch in degrees, distance in meters); the engine keeps it as-is.</li>
+<li>Loading rejects invalid JSON, a <code>version</code> other than 4 (versions 1–3 are not migrated), a <code>systems</code> that
+  isn't an array of non-empty strings, a missing <code>Transform</code>, unknown, missing or mistyped fields of a built-in
+  component, unknown enum names, out-of-range <code>Camera</code> or <code>PointLight</code> values, a malformed <code>lighting</code> or <code>postProcessing</code>, duplicate ids, parents that don't exist, and parent
+  cycles. It reports why and leaves the current scene untouched. Lua components are lenient (schema drift), and a
+  component name that is neither built-in nor a valid Lua definition is kept verbatim with a Console warning (missing
+  definitions); see <a href="lua-components.html#lua-components">Lua components</a>.</li>
+</ul>
+</main>
+</div>
+</body>
+</html>

@@ -100,7 +100,7 @@ add_executable(kast_bot bot/main.cpp)
 target_compile_options(kast_bot PRIVATE ${WORLD_COMPILE_OPTIONS})
 target_link_libraries(kast_bot PRIVATE kast_bot_lib)
 
-# --- mapbake: offline navmesh bake + map lint (README "Navmesh"); the lib is pure, so the self-check bakes fixtures ---
+# --- mapbake: offline navmesh bake + map lint (docs/services/world/maps.html#navmesh); the lib is pure, so the self-check bakes fixtures ---
 add_library(kast_mapbake_lib STATIC tools/mapbake/bake.cpp)
 target_include_directories(kast_mapbake_lib PUBLIC tools/mapbake)
 target_compile_options(kast_mapbake_lib PRIVATE ${WORLD_COMPILE_OPTIONS})

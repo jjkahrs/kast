@@ -71,7 +71,7 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
     ++st.entered;
 
     auto pos = std::make_shared<proto::Vec3>(ok.pos);
-    // A wanderer that walks into a portal (README "Areas") is parked on the other map: it stops moving, and the
+    // A wanderer that walks into a portal (docs/services/world/areas.html) is parked on the other map: it stops moving, and the
     // Corrections for its moves still in flight from the old map are not counted.
     // ponytail: parked, not wandering on; give the bot the destination map's bounds if load tests need cross-map moves.
     auto parked = std::make_shared<bool>(false);

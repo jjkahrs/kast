@@ -48,7 +48,7 @@ constexpr bx::Vec3 kMainCameraPosition{0.0f, 3.0f, 7.0f};
 constexpr bx::Vec3 kMainCameraEuler{-20.0f, 0.0f, 0.0f}; // looks down at the origin from kMainCameraPosition
 
 constexpr const char* kSystemTemplate = R"(-- A Lua system: update(dt) runs once per frame in Play mode, after the C++ systems.
--- See README "Lua systems" for the full kast.* API.
+-- See docs/engine/lua-systems.html for the full kast.* API.
 local elapsed = 0
 
 return {
@@ -68,7 +68,7 @@ return {
 }
 )";
 
-constexpr const char* kComponentTemplate = R"(-- A Lua component: a data-only component type. The file returns one table; see README "Lua components".
+constexpr const char* kComponentTemplate = R"(-- A Lua component: a data-only component type. The file returns one table; see docs/engine/lua-components.html.
 return {
     name = "%NAME%",              -- type name and scene-file key; unique, letters/digits/_
     -- displayName = "%NAME%",    -- Inspector / Add Component label (defaults to name)
@@ -87,7 +87,7 @@ return {
 }
 )";
 
-constexpr const char* kStateMachineTemplate = R"(-- A state machine: named states, entered one at a time. The file returns one table; see README "State machines".
+constexpr const char* kStateMachineTemplate = R"(-- A state machine: named states, entered one at a time. The file returns one table; see docs/engine/state-machines.html.
 -- Use it as a game machine (State Machines panel > Global) or on entities (StateMachine component).
 return {
     name = "%NAME%",       -- unique machine name: kast.fsm.* targets and StateMachine "machine"

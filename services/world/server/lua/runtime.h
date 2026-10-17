@@ -1,7 +1,6 @@
 // Server Lua systems: LUA_ROOT/systems/*.lua, run in alphabetical filename order on the tick thread, one Lua state,
 // each file in its own sandboxed environment. A file returns { init?, update(dt), shutdown?, onEnter?(e), onLeave?(e) }
-// and reaches the world only through kast.* over the registry, the event bus and the state machines (README "Lua
-// components and systems").
+// and reaches the world only through kast.* over the registry, the event bus and the state machines (docs/services/world/lua.html).
 // sol2 stays inside runtime.cpp: World holds a Runtime without seeing Lua types.
 #pragma once
 #include "components.h"
@@ -38,7 +37,7 @@ struct ClientEvent {
     std::string json;
 };
 
-// An NPC type (LUA_ROOT/npcs/, README "NPC definitions"): the name and template its NPCs get, and the components they
+// An NPC type (LUA_ROOT/npcs/, docs/services/world/npcs.html#npc-definitions): the name and template its NPCs get, and the components they
 // start with.
 struct NpcDef {
     std::string name, templateName;

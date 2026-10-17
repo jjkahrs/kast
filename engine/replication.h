@@ -12,7 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
-// Replication: networked players without sync code (README "Online Services → Replication"). Consumes the world
+// Replication: networked players without sync code (docs/engine/online-services.html#replication). Consumes the world
 // client's "world.*" events from the event bus and drives the scene: the NetworkLocalPlayer entity's moves go to the
 // world server and its corrections come back; every remote player the server spawns becomes a clone of the
 // NetworkReplication's template entity (with a NetworkEntity) - an NPC a clone of the child of npcTemplates named by its

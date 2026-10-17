@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kast Zone Builder</title>
+<link rel="stylesheet" href="../../../docs/style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../../../docs/index.html">Kast Docs</a><nav><a href="../../../docs/editor/index.html">Editor</a><a href="../../../docs/engine/index.html">Engine</a><a href="../../../docs/services/auth/index.html">Auth Server</a><a href="../../../docs/services/world/index.html">World Server</a><a href="../../../docs/development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Zone Builder</h2><ul><li><a href="index.html" class="active">Zone Builder</a></li></ul></nav>
+<main>
+<h1 id="zone-builder">Zone Builder</h1>
+<p><code>kast_zone_builder</code> (<code>tools/zone-builder/</code>, built with everything else: <code>build\&lt;preset&gt;\kast_zone_builder.exe</code>) creates
+and edits a project's zone maps (<code>maps/&lt;folder&gt;/</code>, see <a href="../../../docs/services/world/maps.html#maps">Maps</a> and <a href="../../../docs/engine/terrain.html#terrain">Terrain</a>)
+in 3D and saves them in place, in the formats the engine and the world server load. It is a standalone app; the editor
+does not need to be open.</p>
+<p><strong>Open.</strong> File &gt; Open Project... (or <code>--project &lt;dir&gt;</code>) lists <code>maps/*/map.json</code> in the <strong>Maps</strong> panel; click one to open
+it (one map at a time; unsaved edits ask Save / Don't Save / Cancel first, and so does closing the window). <strong>New
+Map...</strong> asks for a folder (letters, digits, <code>_</code>, <code>-</code>), a name, an id (the lowest unused; a used id is refused) and 1-8
+by 1-8 tiles; nothing is written until you save. The title shows <code>*</code> while there are unsaved edits.</p>
+<p><strong>3D view</strong> (behind the panels): the map's tiles with its material, lit like the game. Right drag (or Alt + left drag)
+orbits, middle drag pans, the wheel zooms, <strong>F</strong> frames the map. Overlays: tile borders, the player spawn (with its
+heading), areas (portals in blue, the selected one with corner handles), spawns (with heading), patrol paths, the
+brush ring. They are drawn over the terrain, not hidden by hills.</p>
+<table>
+<thead>
+<tr>
+<th>Panel</th>
+<th>Edits</th>
+<th>Writes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Map</strong></td>
+<td>id, name, material (a project <code>.mat</code>), player spawn (x, z on the ground, heading; <strong>Place on terrain</strong> then click), own <code>nav</code> settings, and the <strong>tile grid</strong>: click a free cell to add a tile (its edges take its neighbours' heights, so no seam), a tile to remove it (a dialog lists the files that go and the spawns lost)</td>
+<td><code>map.json</code>; on save, a removed tile's <code>heights/</code>, <code>.server/spawns/</code> and <code>.server/nav/</code> files are deleted (to the Recycle Bin)</td>
+</tr>
+<tr>
+<td><strong>Terrain</strong></td>
+<td><strong>Raise</strong>, <strong>Lower</strong>, <strong>Flatten</strong> brushes (left drag; radius, strength, falloff; Shift+click picks Flatten's height), the <strong>height range</strong> (Apply re-quantizes every tile so world heights stay put; a confirm shows how many samples clip), <strong>Import PNG...</strong> / <strong>Export PNG...</strong> of the last clicked tile (257 x 257 16-bit grayscale; anything else is refused with the reason; an import's edges are copied onto its neighbours)</td>
+<td><code>heights/&lt;tx&gt;_&lt;tz&gt;.r16</code> for each edited tile only; an edited tile's old <code>.png</code> is deleted (the loaders read <code>.r16</code> first)</td>
+</tr>
+<tr>
+<td><strong>Areas</strong></td>
+<td><strong>Draw Rect</strong> (drag), <strong>Draw Polygon</strong> (click points; click the first point or Enter closes, Backspace drops one, Esc cancels); select by clicking, drag corners (a rect stays a rect); id (children follow a rename), name, priority (new areas get one above the highest), parent, portal (target map from the project, arrival position and heading); <code>y</code>, <code>music</code>, <code>flags</code> and unknown keys are kept, not edited</td>
+<td><code>areas.json</code></td>
+</tr>
+<tr>
+<td><strong>Spawns</strong></td>
+<td><strong>Place Spawn</strong> (click), drag to move (snapped to the ground), id, NPC (the <code>name</code> of each <code>npcs/*.lua</code>, or any text), position, heading, respawn seconds or never; the spawn's patrol path: <strong>Add Path Points</strong> (click), wait, loop or walk back, remove the last point, delete</td>
+<td><code>.server/spawns/&lt;tx&gt;_&lt;tz&gt;.json</code> of the tile each spawn stands in: moving one across a tile border moves it to that file with its path (copied if other spawns still use it, renamed if the name is taken)</td>
+</tr>
+<tr>
+<td><strong>Bake</strong></td>
+<td><strong>Bake Navmesh</strong>: runs <code>kast_mapbake &lt;mapDir&gt;</code> on the saved, valid map in the background, its output and exit code below. The exe path is a setting (<code>%APPDATA%/Kast/ZoneBuilder/zone_builder.json</code>, <code>"mapbake"</code>); empty means <code>services/world/build/{release,debug}/kast_mapbake.exe</code> of this source tree, then next to <code>kast_zone_builder.exe</code></td>
+<td><code>.server/nav/*.navtile</code> (by <code>kast_mapbake</code>)</td>
+</tr>
+<tr>
+<td><strong>Problems</strong>, <strong>Log</strong></td>
+<td>the last validation, and what happened</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Save</strong> (Ctrl+S, File &gt; Save) first checks the map as the world server would load it: <code>kast_map</code>'s <code>parse_manifest</code>,
+<code>parse_areas</code> and <code>parse_spawns</code> for every tile's file, spawn ids unique on the map, spawn files on declared tiles, the
+map id unused by the project's other maps, and portals to an existing map, onto its tiles and not into a portal there.
+Any problem: nothing is written, and <strong>Problems</strong> lists them all (file and message, as the server reports them). Only
+files that changed are written; a map opened and saved unchanged keeps every byte. <strong>Undo</strong> / <strong>Redo</strong> (Ctrl+Z /
+Ctrl+Y, Edit menu) cover every edit; a brush stroke or a drag is one step.</p>
+<p><strong>Command line</strong> (tests and scripts; edits run in order, each one undo step):</p>
+<pre><code>kast_zone_builder [--project dir] [--map folder] [edits...] [--frames N] [--screenshot out.png] [--size WxH]
+                  [--window-pos X,Y] [--no-vsync] [--log-fps] [--sculpt-loop] [--headless] [--no-recycle]
+                  [--focus x,z,distance] [--panel name] [--select id] [--prompt-remove-tile tx,tz]
+                  [--mapbake exe] [--bake]
+edits: --new-map folder[,W,H[,id]]  --map-id N  --material path  --set-spawn x,z[,heading]  --add-tile tx,tz
+       --remove-tile tx,tz  --falloff F  --sculpt x,z,radius,metres (negative lowers)  --flatten x,z,radius,height[,f]
+       --height-range min,max  --import-png tx,tz,file  --export-png tx,tz,file
+       --add-area id,priority,x0,z0,x1,z1  --add-polygon id,priority,x,z,x,z,x,z...  --area-parent id,parent
+       --area-portal id,map,x,y,z,heading  --move-area-vertex id,i,x,z  --delete-area id
+       --add-spawn id,npc,x,z[,heading[,respawnSec]]  --move-spawn id,x,z  --delete-spawn id
+       --add-path spawnId,wait,loop(0|1),x,z,x,z...  --undo  --redo  --validate  --save  --expect-save-fail
+</code></pre>
+<p>A failed edit or save exits 1. <code>--headless</code> runs the edits (and <code>--bake</code>, waiting for it) without a window.
+<code>--frames</code> runs show the window without taking focus; <code>KAST_WINDOW_POS</code> / <code>--window-pos</code> place it. <code>--bake</code> holds the
+frame count until <code>kast_mapbake</code> ends and logs how many frames were drawn meanwhile. <code>--log-fps</code> logs the frame rate
+once a second; <code>--sculpt-loop</code> raises and lowers a brush circling the map every frame (the sculpting benchmark: a
+Release build with <code>--no-vsync</code> on an 8 x 8 map draws about 300 fps on an RTX 4070 Ti SUPER, rebuilding only the
+touched tiles' meshes). <code>--no-recycle</code> deletes files for good (the tests use it).</p>
+</main>
+</div>
+</body>
+</html>

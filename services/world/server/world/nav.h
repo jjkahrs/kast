@@ -1,4 +1,4 @@
-// Baked navmeshes (README "Navmesh"): one Detour dtNavMesh per map, built from the owned tiles' navtiles
+// Baked navmeshes (docs/services/world/maps.html#navmesh): one Detour dtNavMesh per map, built from the owned tiles' navtiles
 // (<map>/.server/nav/<tx>_<tz>.navtile, tools/mapbake). The only server code that sees Detour.
 #pragma once
 #include <map.h>

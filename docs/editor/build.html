@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build - Kast Editor</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html" class="active">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li></ul></nav>
+<main>
+<h1 id="build">Build</h1>
+<p><strong>Build</strong> menu (enabled when a project is open and Play is stopped):</p>
+<ul>
+<li><strong>Build Settings...</strong> opens a modal with one setting, <strong>Start Scene</strong>: a dropdown of every <code>*.scene</code> in the project
+  that would ship in <code>game.pak</code> (no dotfiles or dot-directories), as sorted project-relative <code>/</code> paths, listed when the
+  modal opens. It starts on the current <code>startScene</code>; one that is set but not listed shows as <code>&lt;path&gt; (missing)</code>. With
+  no scenes the dropdown is disabled and the modal says <code>No scenes in project. Save a scene first.</code> <strong>Save</strong> (enabled
+  once a listed scene is chosen) checks that the scene loads, then writes it as <code>startScene</code> to <code>project.kast</code>
+  (nothing else changes: not the open scene, its unsaved changes or <code>.kast/editor.json</code>); a failure shows in the modal
+  and writes nothing. <strong>Cancel</strong> / Escape closes without writing. There is no way to set <code>startScene</code> back to <code>null</code>
+  here.</li>
+<li><strong>Online Services...</strong> opens a modal editing the project's <a href="projects.html#projects"><code>online</code></a> block: <strong>Enabled</strong>, <strong>Auth URL</strong> and
+  <strong>CA File</strong> (typed as a project-relative path, or <strong>Browse...</strong> for a <code>.pem</code>/<code>.crt</code>; a file outside the project shows
+  as an error; <strong>Clear</strong> removes it). It is checked as you edit (while enabled: URL set and http(s), CA file exists
+  inside the project, holds a valid PEM certificate and is not in a dot-folder); the first problem shows in red and
+  disables <strong>Save</strong>. Opening it shows a problem already in the saved settings (e.g. a deleted CA file). <strong>Save</strong> writes
+  only the <code>online</code> block to <code>project.kast</code>; <strong>Cancel</strong> / Escape writes nothing.</li>
+<li><strong>Build...</strong> asks for an output folder, then builds the game into it.</li>
+<li><strong>Build and Run</strong> builds into the project's last output folder (asks if there is none), then starts the game as a
+  separate process.</li>
+</ul>
+<p>Both first offer to save unsaved scene changes (the same prompt as File &gt; Open), because the game is built from the
+files on disk. The last output folder is remembered per project in <code>&lt;project&gt;/.kast/editor.json</code>
+(<code>{"buildFolder": "..."}</code>), never in <code>project.kast</code>. Errors go to the Console and an Error popup.</p>
+<p>If <code>startScene</code> is not set, outside the project or doesn't load, <strong>Build...</strong> and <strong>Build and Run</strong> log why and open
+Build Settings instead (after the unsaved-changes prompt, before any folder dialog); saving there doesn't resume the
+build, run it again. Headless <code>--build</code> fails instead (exit 1), its error pointing at Build &gt; Build Settings.</p>
+<p>Before writing anything, Build checks that <code>startScene</code> is set, inside the project and loads, that the Online Services
+settings pass the modal's checks (nothing extra while disabled), that the output folder
+isn't the project folder itself, and that <code>kast_player.exe</code> and its DLLs are next to the editor. Then it writes, into
+the output folder (created if needed, overwriting only these files):</p>
+<pre><code>&lt;Name&gt;.exe   copy of kast_player.exe
+game.pak     the project's files
+SDL3.dll     runtime DLLs kast_player.exe imports, directly or through RmlUi (dumpbin /dependents)
+lua51.dll
+rmlui.dll    game GUI, with FreeType and its libraries: freetype.dll, zlib1.dll, bz2.dll, libpng16.dll,
+             brotlidec.dll, brotlicommon.dll (a debug build: freetyped.dll, zlibd1.dll, bz2d.dll, libpng16d.dll)
+</code></pre>
+<p><code>&lt;Name&gt;</code> is the project name with each of <code>&lt; &gt; : " / \ | ? *</code> and control characters replaced by <code>_</code>, surrounding
+spaces and trailing dots removed, <code>_</code> appended to a reserved device name (<code>CON</code>, <code>NUL</code>, <code>COM1</code>, ...) and <code>Game</code> if
+nothing is left: <code>Switch Test</code> -&gt; <code>Switch Test.exe</code>, <code>My: Game?</code> -&gt; <code>My_ Game_.exe</code>.</p>
+<p><strong>game.pak</strong> holds every file under the project folder except dotfiles, anything in a dot-directory (<code>.kast/</code>, <code>.git/</code>)
+and the output folder if it is inside the project. It is uncompressed: a <code>KPAK</code> magic and format version, an index of
+(project-relative <code>/</code> path, offset, size) entries, then the raw bytes. The exact byte layout is in <code>engine/pak.h</code>. The
+player checks the magic, the version and that every entry lies inside the file.</p>
+<p><strong>The game</strong> (<code>kast_player.exe</code> under its new name) opens the <code>game.pak</code> next to it, loads <code>project.kast</code> and its Lua
+components from it, titles its window with the project name and plays <code>startScene</code> as editor Play mode does (C++
+systems, Lua systems, Lua components, <code>kast.loadScene</code>), rendering through the scene's Main Camera. It has no console
+window and doesn't hot reload. Its scene's <a href="../engine/game-gui.html#game-gui">game GUIs</a> show over the scene and take mouse and keyboard
+input. Flags (for tests): <code>--frames N</code> and <code>--screenshot out.png</code>, as in the editor, <code>--gui-click &lt;id&gt;</code> (click that
+GUI element on frame 10), <code>--size WxH</code> (window size, default 1280x720), <code>--window-pos X,Y</code> (window position, as in the editor; also <code>KAST_WINDOW_POS</code>), <code>--no-audio-device</code> (silent null audio backend) and <code>--gpu-stats</code> (log the average GPU time of
+the frame's views, after 10 warmup frames, on exit). A missing
+or corrupt <code>game.pak</code>, an invalid <code>project.kast</code>, Online Services enabled with a CA file missing from <code>game.pak</code> or
+not a valid certificate, or a <code>startScene</code> that is missing or doesn't load shows an error
+message box and exits 1; with <code>--frames</code> the message is only logged (stdout), so tests never block.</p>
+<p>Ship from a <code>release</code> build: a <code>debug</code> build copies the debug player, which needs Visual Studio's debug runtime. Players
+need the Microsoft Visual C++ Redistributable (x64); Build doesn't copy it.</p>
+</main>
+</div>
+</body>
+</html>

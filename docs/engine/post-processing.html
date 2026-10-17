@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Post-processing and fog - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html" class="active">Post-processing and fog</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li></ul></nav>
+<main>
+<h1 id="post-processing-and-fog">Post-processing and fog</h1>
+<p>Each scene can opt into an HDR post-processing stack and distance fog, set per scene (<code>"postProcessing"</code> in the scene
+file) and edited in <strong>Window &gt; Post Processing</strong> (hidden by default; a section per effect with its <strong>Enabled</strong> box;
+edits show live and mark the scene dirty). Every effect is off by default, so a scene without settings renders as it
+always did. The Scene view, the Game view and the built game all apply it.</p>
+<ul>
+<li><strong>Pipeline</strong>: meshes render linear HDR color into an <code>RGBA16F</code> target (plus depth); <code>engine/post_process.h</code> then
+  runs, in order: bloom, exposure, tonemap, color grading, vignette, sRGB encode, FXAA, into the view's image (the
+  backbuffer in the player). Overlays (grid, axes, camera frustums, light range) and gizmos draw after it, depth-tested
+  against the scene, and are never post-processed; game GUIs draw over the final image and are never post-processed.</li>
+<li><strong>Tonemapping</strong>: <code>exposure</code> in EV (-10..10, color times 2^EV) and <code>operator</code> <code>None</code> (clamp to 0–1, the look without
+  post) or <code>ACES</code> (Narkowicz's filmic fit, <code>x(2.51x + 0.03) / (x(2.43x + 0.59) + 0.14)</code>: bright lights and emissive
+  surfaces roll off instead of clipping to flat white).</li>
+<li><strong>Bloom</strong>: a soft-knee bright pass on HDR luminance above <code>threshold</code> [1] at half resolution, blurred down 5 levels
+  (to 1/32) and back up, each level mixing in the blurred level below by the <code>radius</code> [0.5] scatter; added back times
+  <code>intensity</code> [0.5]. Raise a material's emissive intensity above the threshold to make it glow.</li>
+<li><strong>Color grading</strong> (after the tonemap): <code>contrast</code> [1, 0–2] (power curve around mid grey 0.18), <code>saturation</code> [1, 0–2],
+  <code>colorFilter</code> [white, linear RGB tint] and <code>temperature</code> [0, -1 cool .. 1 warm white balance].</li>
+<li><strong>Vignette</strong>: <code>intensity</code> [0.3, 0–1] darkens toward the corners over the outer <code>smoothness</code> [0.5, 0.01–1].</li>
+<li><strong>FXAA</strong>: on/off, on the final sRGB image (the FXAA 3.11 console variant).</li>
+<li><strong>Fog</strong> (shaded per mesh in <code>fs_mesh.sc</code>, not a post pass, so blended meshes fog by their own distance):
+  exponential-squared, <code>1 - exp(-(density * max(distance - start, 0))^2)</code> toward <code>color</code> (linear RGB) [density 0.05,
+  start 0 m]. While fog is on, the views clear to the fog color so distant meshes fade into the background.</li>
+<li><strong>Scene view</strong>: the toolbar's <strong>Post</strong> box shows the scene with or without the post effects (on by default; fog
+  always shows). <code>--no-scene-post</code> starts with it off.</li>
+<li>Blended meshes now blend in linear space (before the sRGB encode), which is physically correct but looks slightly
+  different from the gamma-space blending before post-processing.</li>
+</ul>
+</main>
+</div>
+</body>
+</html>

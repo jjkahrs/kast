@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Source layout - Kast Development</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Development</h2><ul><li><a href="tests.html">Tests</a></li><li><a href="layout.html" class="active">Source layout</a></li></ul></nav>
+<main>
+<h1 id="layout">Layout</h1>
+<pre><code>engine/   log (stdout + in-memory lines), app (SDL3 window, bgfx init, main loop, resize, quit hook, shutdown),
+          math3d (quaternion/Euler/TRS helpers, picking rays), scene (EnTT components + hierarchy),
+          components (entt::meta component registry, generic JSON/copy), scene_io (.scene load/save),
+          project (project.kast load/save, walk-up discovery, project-relative paths),
+          systems (Play-mode systems, rotatorSystem), lua_systems (Lua systems: LuaJIT/sol2 session, kast.* API),
+          lua_sandbox (shared Lua sandbox, Lua &lt;-&gt; field JSON), lua_components (Lua component definitions, hot
+          reload, drift migration),
+          input (game keyboard/mouse state),
+          renderer (primitives, PBR shader, textures, grid/axes/camera frustums as optional overlays),
+          material (.mat parsing, validation, path cache), pak (game.pak format),
+          files (content reads from disk or a mounted pak), play (one Play frame: C++ systems, physics, Lua systems),
+          physics (Jolt world per Play session, contact events, queries, character controller, collider wireframes),
+          audio (miniaudio: voices, buses, clip cache, Music streaming, null-device fallback, offline render),
+          network (kast.net: TCP/TLS, WebSocket and HTTP clients on Boost.Asio/Beast, one background thread),
+          gui (RmlUi setup, file/log interfaces, GuiContext: one RmlUi context drawn into a bgfx view, SDL input),
+          gui_render (RmlUi render interface on bgfx), gui_events (button click -&gt; event bus adapter),
+          scene_gui (a scene's UIDocuments in Play: load, stack, show/hide, hot reload, kast.gui access),
+          gui_access (what kast.gui may do to the GUIs), shaders/
+player/   main.cpp (kast_player: the built game client)
+tools/    zone-builder/ (kast_zone_builder, its README.md and docs/): zone_doc (map JSON + heights, undo snapshots),
+          zone_io (project maps, load, validate, save, npc names), terrain_edit (picking, brushes, height range, PNG16,
+          tiles), zone_edit (areas, spawns, paths), process_runner (kast_mapbake in the background), zone_view
+          (Renderer + PostProcess into the backbuffer, camera, overlays), zone_panels + zone_objects (ImGui panels and
+          3D tools), main.cpp (CLI)
+editor/   main.cpp (CLI, dock layout, menus, console), document (scene, Play mode, file actions, dialogs, modals, title),
+          camera (editor camera), viewport (Scene panel: render, camera input, picking, gizmo),
+          game_view (Game panel: render from the active camera, game GUIs over it in Play),
+          gui_doc (GUI Builder document model: RML tree edits, serialize, Create/rename GUI files),
+          gui_builder (GUI Hierarchy, GUI Inspector, GUI Style, GUI Preview),
+          panels (Hierarchy, Inspector incl. AudioSource Preview, Systems, Components, Assets, Lighting, Mixer, Network), build (Build: game.pak, exe, DLLs, last folder),
+          imgui_bgfx (ImGui renderer for bgfx), shaders/
+tests/    self_check.cpp, zone_builder_self_check.cpp, net_self_check.cpp, net_test_util (loopback servers, test certificates),
+          net_test_server.cpp (kast_net_test_server) + net_test_server_data/ (its key), focus_probe.cpp, scenes/ (a project: project.kast, basic.scene, lua.scene + scripts/, no_camera.scene,
+          malformed.scene, v1.scene, v3.scene), project/ (scene-switch and Lua components project: project.kast,
+          scene_a.scene, scene_b.scene, health.scene, ui.scene + ui/main_menu.rml/.rcss, scripts/,
+          components/health.lua, audio.scene + sounds/ (tone.wav, wave-demo.wav, mp3-demo.mp3) +
+          scripts/audio_sfx.lua, net_a.scene, net_b.scene + scripts/net_a.lua, net_b.lua + certs/net_test_ca.pem)
+cmake/    smoke_test.cmake, roundtrip_test.cmake, load_fails_test.cmake, differs_test.cmake, build_test.cmake,
+          player_test.cmake, starter_mmo_*.cmake / .ps1 / .lua (the samples/starter-mmo tests),
+          zone_builder_tests.cmake + zone_builder_test.cmake (the zone builder's)
+docs/     HTML/CSS documentation: editor/, engine/, services/auth/, services/world/, development/ (style.css shared)
+samples/  starter-mmo/ (an online game project that is also the world server's Lua and maps: its README.md)
+</code></pre>
+<p>bgfx views: 1 = Scene panel, 2 = Game panel (each an offscreen color + depth target), 3 = game GUIs (into the Game
+panel's target), 4 = GUI Preview (its own target), 255 = ImGui (backbuffer). kast_player: 0 = scene, 1 = game GUIs.</p>
+</main>
+</div>
+</body>
+</html>

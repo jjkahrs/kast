@@ -1,4 +1,4 @@
-// All settings come from environment variables, validated at startup (see README.md for the table).
+// All settings come from environment variables, validated at startup (see docs/services/world/configuration.html for the table).
 #pragma once
 #include "log.h"
 

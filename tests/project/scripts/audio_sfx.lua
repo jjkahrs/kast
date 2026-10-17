@@ -1,4 +1,4 @@
--- Sample kast.audio use (see README "Audio"): audio.scene's Music entity loops on the Music bus (AudioSource
+-- Sample kast.audio use (see docs/engine/audio.html): audio.scene's Music entity loops on the Music bus (AudioSource
 -- playOnStart); this system fires one-shot SFX and clicks the Jukebox's AudioSource (UI bus).
 local JUKEBOX = 2
 local elapsed, shots = 0, 0

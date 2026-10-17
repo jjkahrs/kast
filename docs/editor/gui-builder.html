@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GUI Builder - Kast Editor</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html" class="active">GUI Builder</a></li></ul></nav>
+<main>
+<h1 id="gui-builder">GUI Builder</h1>
+<p>Four editor panels on one open GUI. <strong>Assets &gt; Create &gt; GUI</strong> writes <code>new_gui.rml</code> + <code>new_gui.rcss</code> (a Panel holding a
+Text and a Button with <code>data-event="ui.clicked"</code>, the <code>.rml</code> linking the <code>.rcss</code>) into the chosen folder, as
+<code>new_gui_2</code>, <code>new_gui_3</code>, ... when a name is taken (ignoring case), never overwriting, and starts renaming the
+<code>.rml</code>. Renaming an <code>.rml</code> in Assets also renames the sibling <code>&lt;stem&gt;.rcss</code> it links and rewrites the link (refused,
+nothing changed, if either new name is taken); moves and renames of the open files are followed. <strong>Double-click</strong> an
+<code>.rml</code> in Assets to open it (one GUI at a time; with unsaved builder changes, Save / Discard / Cancel first); its
+four panels come to the front.</p>
+<ul>
+<li><strong>GUI Hierarchy</strong> (tab beside Hierarchy): the elements under <strong>Body</strong>. <strong>+ Panel / + Text / + Button</strong> add into the
+  selected Panel, else into Body; <strong>Delete</strong>, <strong>Up</strong>, <strong>Down</strong> act on the selection; the right-click menu has the same.
+  Drag an element onto a Panel or Body to move it there (into itself or its own children is refused). Unknown elements
+  are greyed and labelled <code>&lt;tag&gt;</code>.</li>
+<li><strong>GUI Inspector</strong> (tab beside Inspector): the selection's <code>id</code> and <code>class</code>, its text (Text and Button holding only
+  text; one with child elements says so) and, for a Button, <code>data-event</code>. Other attributes are listed read-only.
+  Unknown elements are read-only. Edits apply as you type.</li>
+<li><strong>GUI Style</strong> (tab beside Console): the <code>.rcss</code> text, applied to the preview 0.3 s after the last keystroke. A sheet
+  RmlUi reports problems for (in the Console) is not applied: the preview keeps the last good style and the panel
+  says so in red.</li>
+<li><strong>GUI Preview</strong> (tab beside Scene and Game): the document as RmlUi renders it at <strong>1280x720</strong>, <strong>1920x1080</strong> or the
+  <strong>Panel size</strong>, scaled to fit. Click selects the deepest element under the cursor (Body if none); the selection has a
+  yellow outline, drawn by the editor, never saved.</li>
+</ul>
+<p>Selection is shared by the three. Any edit marks the GUI dirty: <code>*</code> after the file name in the builder panels'
+titles. <strong>Save</strong> (GUI Hierarchy, GUI Style) or <strong>Ctrl+S</strong> while a builder panel is focused writes the <code>.rml</code> and
+<code>.rcss</code> (elsewhere Ctrl+S still saves the scene). Quitting with unsaved builder changes asks Save / Discard / Cancel
+first, then the scene's own prompt if it is dirty. When the open files change on disk (the 0.5 s poll), a clean
+builder reloads them (keeping the selection by <code>id</code> and, if the new sheet is broken, the last good style); with
+unsaved changes it asks <strong>Reload</strong> / <strong>Keep mine</strong>. A deleted <code>.rml</code> closes a clean builder.</p>
+</main>
+</div>
+</body>
+</html>

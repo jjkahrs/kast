@@ -3,7 +3,7 @@
 // warnings and fsm.changed event) without the editor's display helpers (peek, gameStates), Play sessions and scene
 // switches (reset, attach, detach), hot reload (define replacing running definitions, rescans) and the per-frame
 // syncAll. Game machines (GAME_STATE_MACHINES) run for the server's lifetime; entity machines come from the
-// StateMachine built-in on characters. One per lua::Runtime (fsm()). See README "Lua components and systems".
+// StateMachine built-in on characters. One per lua::Runtime (fsm()). See docs/services/world/lua.html.
 #pragma once
 #include "event_bus.h"
 

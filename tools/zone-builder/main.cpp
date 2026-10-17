@@ -1,5 +1,5 @@
 // kast_zone_builder: opens a Kast project and creates and edits its zone maps (maps/<folder>/) in 3D, saving them in
-// the formats the engine and the world server load (README "Zone Builder"). The command line opens a project and a
+// the formats the engine and the world server load (tools/zone-builder/docs/index.html). The command line opens a project and a
 // map and runs edits in order, for tests and scripts.
 #include "zone_edit.h"
 #include "zone_panels.h"

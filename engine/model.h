@@ -14,7 +14,7 @@
 #include <vector>
 
 // Models: glTF/GLB, FBX and OBJ files loaded at runtime through Assimp into GPU-free data (meshes, node hierarchy,
-// skins, animation clips, embedded materials). Normalized on load to meters and Y-up (see README "Models & Animation").
+// skins, animation clips, embedded materials). Normalized on load to meters and Y-up (see docs/engine/models-animation.html).
 namespace kast {
 
 constexpr size_t kMaxBones = 128; // MAX_BONES in vs_mesh_skinned.sc: joints per skinned mesh

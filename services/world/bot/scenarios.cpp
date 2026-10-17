@@ -824,7 +824,7 @@ asio::awaitable<void> npcs(Ctx& x) {
     a->close();
 }
 
-// --- 17: areas with the sample maps (README "Areas"): start's "cave_mouth" portal sends A to map 2 (the cave) ---
+// --- 17: areas with the sample maps (docs/services/world/areas.html): start's "cave_mouth" portal sends A to map 2 (the cave) ---
 asio::awaitable<void> portal(Ctx& x) {
     proto::EnterWorldOk ea, eb;
     auto a = co_await x.enter("s17a", ea);
@@ -864,7 +864,7 @@ asio::awaitable<void> portal(Ctx& x) {
     b->close();
 }
 
-// --- 18: NPC spawns (README "NPC spawns") ---
+// --- 18: NPC spawns (docs/services/world/npcs.html#npc-spawns) ---
 // Needs the sample lua/systems/test_hooks.lua and the Guard's spawn file (maps/start/.server/spawns/4_4.json,
 // respawnSec 5). A at the spawn point sees the Guard; B enters as "Respawntest..." and the hook destroys it; A gets its
 // Despawn, then about 5 s later the Spawn of a new Guard at its spawn point.
@@ -917,7 +917,7 @@ asio::awaitable<void> respawn(Ctx& x) {
     b->close();
 }
 
-// --- 19: ground on the sample "hills" map (README "Ground") ---
+// --- 19: ground on the sample "hills" map (docs/services/world/maps.html#ground) ---
 // A map's manifest and heights, read the way the server reads them (needs --map-root: the server's maps/ folder).
 struct Terrain {
     map::MapInfo info;
@@ -999,7 +999,7 @@ asio::awaitable<void> terrain(Ctx& x) {
     b->close();
 }
 
-// --- 20: navmesh on the sample "hills" map (README "Navmesh") ---
+// --- 20: navmesh on the sample "hills" map (docs/services/world/maps.html#navmesh) ---
 // hills has a mesa (x 170..200, z 316..346, ~81 degree walls) and the Sentry patrolling from (150, 331) to (215, 331),
 // straight through it (maps/hills/.server/spawns/0_1.json). A takes hills_gate to map 3 and walks at ground height to
 // the mesa's south foot (no Correction), then into its wall: Correction. Over 30 s (more than one leg) the Sentry's

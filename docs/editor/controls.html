@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor controls - Kast Editor</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html" class="active">Editor controls</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li></ul></nav>
+<main>
+<h1 id="editor-controls">Editor controls</h1>
+<p>Scene view (only while the mouse is over the Scene panel; a drag that starts there keeps control until released):</p>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RMB held + mouse</td>
+<td>Look around (fly)</td>
+</tr>
+<tr>
+<td>RMB held + W/A/S/D, Q/E</td>
+<td>Fly forward/left/back/right, down/up. Shift = 4x speed</td>
+</tr>
+<tr>
+<td>Alt + LMB drag</td>
+<td>Orbit around the pivot</td>
+</tr>
+<tr>
+<td>MMB drag</td>
+<td>Pan</td>
+</tr>
+<tr>
+<td>Mouse wheel</td>
+<td>Zoom (dolly toward the pivot)</td>
+</tr>
+<tr>
+<td>LMB click</td>
+<td>Select the nearest mesh or camera under the cursor (a camera is picked within 0.25 m of its origin); empty space clears the selection</td>
+</tr>
+<tr>
+<td>F</td>
+<td>Frame the selected entity</td>
+</tr>
+<tr>
+<td>W / E / R</td>
+<td>Gizmo: move / rotate / scale (also the toolbar)</td>
+</tr>
+<tr>
+<td>X</td>
+<td>Toggle gizmo Local / World space (also the toolbar button)</td>
+</tr>
+<tr>
+<td>Delete, Ctrl+D</td>
+<td>Delete / duplicate the selected entity and its children</td>
+</tr>
+<tr>
+<td>Ctrl+P</td>
+<td>Play / Stop (works anywhere in the editor)</td>
+</tr>
+</tbody>
+</table>
+<p>Letter shortcuts work only when the Scene panel is focused and no text field is active.</p>
+<p>The Scene view draws each <code>Camera</code> as white frustum lines out to 2 m (a preview at 16:9, not the far plane). Select a
+camera and the gizmo moves/rotates it like any entity.</p>
+<p><strong>Game panel</strong> (a tab beside Scene; Scene is the front tab on first run): renders the scene through the <strong>active
+camera</strong>, the first entity with a <code>Camera</code> component in hierarchy (depth-first) order, at the panel's aspect ratio.
+No grid, axes, gizmos or frustum lines. It renders live in edit mode too; systems only tick while playing, so it
+animates while playing and holds still while paused. With no camera it shows "No Camera in scene", and Play logs a
+warning but still runs. Layouts saved before the Game panel existed get it docked beside Scene automatically.</p>
+<p>While the Game panel is focused and playing, editor shortcuts (W/E/R, X, F, Delete, Ctrl+D, Hierarchy keys) don't
+apply, since they need their own panel focused; Ctrl+P still stops Play. Keyboard and mouse input then goes to
+<code>Document::input</code> (<code>kast::Input</code> in <code>engine/input.h</code>: scancodes and mouse buttons held down, mouse delta and wheel
+notches this frame) for game systems to read; Lua systems read it through <code>kast.input</code>. It is cleared (keys and buttons
+released, cursor unlocked) whenever the Game panel or the editor window loses focus, Play stops or <code>kast.loadScene</code>
+switches scenes; <code>kast_player.exe</code> clears it the same way on window focus loss and scene switches. The cursor stays
+normal unless a system locks it with <code>kast.input.setCursorLocked(true)</code> (<code>kast::CursorLock</code>: SDL relative mouse mode,
+the cursor hidden; on unlock it reappears where the lock began).</p>
+<p><strong>Systems panel</strong> (below Hierarchy): the scene's Lua systems in run order. <strong>Add Script...</strong> picks an existing <code>.lua</code>
+file inside the active project (a file outside it is rejected with an error), <strong>New from Template</strong> writes
+<code>&lt;project&gt;/scripts/new_system.lua</code> (then <code>new_system_2.lua</code>, ...) and adds it; both store project-relative paths. The
+arrows reorder and <strong>Remove</strong> drops an entry (the file stays). With no active project both add buttons are disabled
+(tooltip "Open a scene inside a project"); New from Template also needs a saved scene (tooltip "Save the scene
+first"). The list can't be edited during Play. Each edit marks the scene dirty. While playing,
+each entry shows <strong>OK</strong> or <strong>Disabled</strong> with its last error. Layouts saved before the panel existed get it docked as a
+tab beside Hierarchy.</p>
+<p><strong>Components panel</strong> (below Systems): the active project's <a href="../engine/lua-components.html#lua-components">Lua components</a>, one row per definition
+file: <strong>OK</strong> or <strong>Error</strong>, the type name and its project-relative path, and the error message for a rejected file.
+<strong>New from Template</strong> writes <code>&lt;project&gt;/components/new_component.lua</code> (type <code>NewComponent</code>; then
+<code>new_component_2.lua</code> with <code>NewComponent2</code>, ...), a valid definition with one field and every field type shown
+commented, and loads it at once. It is disabled with no active project (tooltip "Open a scene inside a project") and
+during Play ("Stop Play to add components"). Layouts saved before the panel existed get it docked as a tab beside
+Systems.</p>
+<p><strong>State Machines panel</strong> (tabbed with Console): the active project's <a href="../engine/state-machines.html#state-machines">state machine</a> definitions, one
+row per file: <strong>OK</strong> or <strong>Error</strong>, the machine name and its project-relative path, and the error message for a
+rejected file. A valid one has a <strong>Global</strong> checkbox that adds it to (or removes it from) <code>project.kast</code>
+<code>"stateMachines"</code> and saves that file at once; while playing, a Global machine shows its live <code>State:</code>. A listed name
+with no valid definition is shown in red with <strong>Remove</strong>. <strong>New State Machine...</strong> opens a modal like New Lua
+Component: type a name (e.g. <code>TrafficSignal</code>), Create writes a template definition (states <code>idle</code> and <code>active</code>, every
+option shown) to <code>&lt;project&gt;/fsms/&lt;snake_case&gt;.lua</code> and rescans. Create is disabled, with the reason in red, for an
+empty name, a non-identifier, the name of any listed definition (even one in error) or an existing file
+(case-insensitive); it never overwrites. Global and New State Machine are disabled with no active project and during
+Play ("Stop Play to change state machines"). The list is rescanned every 0.5 s, also during Play (Play itself reloads
+its own copy). Layouts saved before the panel existed get it docked as a tab beside Console.</p>
+<p><strong>New Lua Component...</strong> (first item of the Inspector's Add Component popup) creates a Lua component and adds it to the
+selected entity in one step. Type a name (e.g. <code>PlayerHealth</code>) and choose Create (or Enter; Esc cancels): it writes the
+New from Template definition with that type name to <code>&lt;project&gt;/components/&lt;snake_case&gt;.lua</code> (<code>player_health.lua</code>;
+<code>HTTPServer</code> -&gt; <code>http_server.lua</code>), loads it and adds it. The name is checked as you type, with the reason shown in red
+and Create disabled: empty, not an identifier (letters, digits, <code>_</code>; not starting with a digit), a built-in name, the
+name of any listed definition (even one in error), or a file that already exists (case-insensitive). It never
+overwrites a file. Disabled with the same tooltips as New from Template.</p>
+<p>Hierarchy: click to select, right-click for Create / Rename (F2) / Duplicate (Ctrl+D) / Delete (Del). Creating from an
+entity's menu makes the new entity its child; right-click empty space creates at the root. Drag an entity onto another
+to reparent it (world transform kept; dropping onto a descendant is rejected), or onto empty space to move it to the
+root. The <strong>GameObject</strong> menu creates at the root.</p>
+<p>Inspector: the name, then one collapsible section per component, with widgets generated from the component's
+registered fields (rotation as Euler degrees, colors as color pickers, enums as combos). The <strong>x</strong> on a section header
+removes that component (not shown for Transform); <strong>Add Component</strong> lists the registered types the entity doesn't have.</p>
+<p><strong>Play mode</strong> (Scene toolbar Play / Pause / Stop, or Ctrl+P): Play snapshots the scene in memory and runs the systems
+(e.g. <code>Rotator</code>) every frame; Pause holds them, Play or Pause again resumes; Stop restores the snapshot exactly (scene,
+unsaved-changes flag, selection by id; the editor camera stays where it is). Play (from stopped, including <code>--play</code>)
+brings the Game tab to the front; Stop brings the Scene tab back; Pause and resume leave the tabs alone. While
+playing, the Scene panel has an orange border and the title says <code>(Playing)</code> or <code>(Paused)</code>. Edits during Play are allowed and are discarded on Stop;
+they never mark the scene dirty. File New/Open/Save/Save As are disabled during Play; Exit or
+closing the window stops Play first. A Lua <code>kast.loadScene</code> switch replaces the running scene: Hierarchy, Inspector,
+Scene, Game and the Systems panel status show the new scene, the selection is cleared, the editor camera stays, and the
+title shows <code>(Playing: &lt;scene&gt;)</code> / <code>(Paused: &lt;scene&gt;)</code>. The edited scene's file and path are never touched; Stop
+restores the pre-Play scene, path, project, dirty flag and selection however many switches happened.</p>
+<p><strong>GUI Builder</strong> (GUI Hierarchy, GUI Inspector, GUI Style, GUI Preview): double-click a <code>.rml</code> in Assets. See
+<a href="gui-builder.html#gui-builder">GUI Builder</a>.</p>
+<p><strong>File</strong>: New (Ctrl+N), Open... (Ctrl+O), Save (Ctrl+S), Save As... (Ctrl+Shift+S), Exit. Projects are created and
+opened from the <a href="project-manager.html#project-manager">Project Manager</a>, not the editor. The title shows <code>Kast Editor - &lt;project&gt; - &lt;scene&gt;</code>
+with an active project, <code>Kast Editor - &lt;scene&gt;</code> without, plus <code>*</code> when there are unsaved changes; New, Open, Exit and
+closing the window ask Save / Don't Save / Cancel first. Opening an invalid scene shows an error and keeps the current
+scene. Moving the camera does not mark the scene dirty, but Save stores the current camera pose.</p>
+<ul>
+<li>Save / Save As never rewrite <code>systems</code> paths. If Save As moves a scene with systems into another project or out of
+  any project, the Console warns that its system paths may no longer resolve.</li>
+</ul>
+</main>
+</div>
+</body>
+</html>

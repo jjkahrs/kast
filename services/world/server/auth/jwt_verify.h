@@ -1,4 +1,4 @@
-// Access-token verification, following services/auth/README.md "Verifying access tokens from the World Server":
+// Access-token verification, following docs/services/auth/token-verification.html:
 // RS256 only, key chosen by `kid`, iss/aud from config, exp checked with a little clock skew.
 #pragma once
 #include "../core/clock.h"

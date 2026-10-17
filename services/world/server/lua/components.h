@@ -1,5 +1,5 @@
 // Lua components: data-only component types defined by Lua files under LUA_ROOT/components/ (scanned recursively), one
-// type per file. The file format is the engine's (engine/lua_components.cpp, root README "Lua components") plus two
+// type per file. The file format is the engine's (engine/lua_components.cpp, docs/engine/lua-components.html) plus two
 // server keys, persist and replicate, so a game project's components/ folder can be shared with the server.
 // Instances live in EnTT named storage (one pool per type, holding the canonical JSON), as in the engine.
 // Ported from engine/components.cpp + engine/lua_components.cpp: keep error messages and drift rules identical.

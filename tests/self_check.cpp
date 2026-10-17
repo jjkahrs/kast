@@ -1985,7 +1985,7 @@ return { name = "Sandboxed", fields = {} })");
     writeFile(dir / "components/leaker.lua", R"(leaked = true
 return { name = "Leaker", fields = {} })");
     writeFile(dir / "components/escape.lua", R"(return { name = "Escape", fields = {}, x = io.open("x") })");
-    // World-server keys (services/world README "Lua components and systems"): accepted, so files can be shared.
+    // World-server keys (docs/services/world/lua.html): accepted, so files can be shared.
     writeFile(dir / "components/shared.lua", R"(return { name = "Shared", persist = true, replicate = "aoi", fields = {} })");
     writeFile(dir / "components/shared_owner.lua", R"(return { name = "SharedOwner", persist = false, replicate = "owner", fields = {} })");
 
@@ -6453,7 +6453,7 @@ return {{
     check(!lua.physics().running(), "physics: stopping the session stops physics");
 }
 
-// --- Terrain (README "Terrain"): heightmap decoding, the shared ground, Jolt parity, streaming ---
+// --- Terrain (docs/engine/terrain.html): heightmap decoding, the shared ground, Jolt parity, streaming ---
 
 std::optional<kast::map::MapInfo> hillsMap()
 {

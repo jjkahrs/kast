@@ -1,6 +1,6 @@
 -- Online Services sample: logs the login the editor's Online panel hands to Play (Window > Online > Test login).
 -- Play starts logged in as that account (kast.auth.account() is set from the first update; auth.session is delivered
--- with that frame's events); without one it starts logged out. Needs a project with "online" enabled (README "Online Services").
+-- with that frame's events); without one it starts logged out. Needs a project with "online" enabled (docs/engine/online-services.html).
 local reported = false
 
 return {

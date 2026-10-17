@@ -1,6 +1,6 @@
--- Sample Lua component: every field type, an enum, an array and min/max. See README "Lua components".
+-- Sample Lua component: every field type, an enum, an array and min/max. See docs/engine/lua-components.html.
 -- One file in two places: services/world/lua/components/ and tests/project/components/. persist and replicate are
--- world-server keys (services/world/README.md "Lua components and systems"); the engine accepts and ignores them.
+-- world-server keys (docs/services/world/lua.html); the engine accepts and ignores them.
 return {
     name = "Health",
     displayName = "Health",

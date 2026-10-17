@@ -9,7 +9,7 @@
 #include <string>
 
 // Event bus: named events with plain-data JSON payloads, queued on publish and delivered by drain(). One per Play
-// session (owned by LuaSystems); Lua systems use it through kast.publish/subscribe/unsubscribe. See README "Events".
+// session (owned by LuaSystems); Lua systems use it through kast.publish/subscribe/unsubscribe. See docs/engine/events.html.
 namespace kast {
 
 class EventBus {

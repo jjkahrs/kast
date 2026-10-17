@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Projects - Kast Editor</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html" class="active">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li></ul></nav>
+<main>
+<h1 id="projects">Projects</h1>
+<p>A project is a directory marked by a <code>project.kast</code> file (exactly that name):</p>
+<pre><code class="language-json">{
+  &quot;version&quot;: 1,
+  &quot;name&quot;: &quot;My Game&quot;,
+  &quot;startScene&quot;: &quot;scenes/start.scene&quot;,
+  &quot;stateMachines&quot;: [&quot;game_flow&quot;],
+  &quot;audio&quot;: {&quot;Music&quot;: {&quot;volume&quot;: 0.6, &quot;muted&quot;: false}},
+  &quot;online&quot;: {&quot;enabled&quot;: true, &quot;authUrl&quot;: &quot;https://auth.example.com&quot;, &quot;caFile&quot;: &quot;certs/dev_ca.pem&quot;}
+}
+</code></pre>
+<ul>
+<li><code>version</code> must be 1, <code>name</code> a non-empty string, <code>startScene</code> a project-relative path or <code>null</code> (only its type is
+  checked; opening the project opens it, and a built game starts there, see <a href="build.html#build">Build</a>). These three keys are
+  required.</li>
+<li><code>stateMachines</code> (optional): the <a href="../engine/state-machines.html#state-machines">game state machines</a> every Play session runs, as definition names;
+  an array of unique non-empty strings. A name without a valid definition is an error at Play start, not here. The
+  State Machines panel's <strong>Global</strong> checkbox edits it.</li>
+<li><code>audio</code> (optional): the default <a href="../engine/audio.html#audio">bus</a> levels applied at Play start, <code>{"&lt;bus&gt;": {"volume": 0..1, "muted":
+  bool}}</code>; a missing bus or key is 1.0 / unmuted. The Mixer panel edits it. Written (every bus) only when some bus is
+  not at 1.0 unmuted.</li>
+<li>
+<p><code>online</code> (optional): the project's opt-in to <strong>Online Services</strong>, the built-in integration with the repo's auth and
+  world servers (<code>services/</code>); while <code>enabled</code>, Lua gets <a href="../engine/online-services.html#kastauth"><code>kast.auth</code></a> (later engine features check it too). A
+  missing block (every older project) means disabled. Keys, all optional:</p>
+<ul>
+<li><code>enabled</code> (bool, default <code>false</code>).</li>
+<li><code>authUrl</code>: the auth service's <code>http://</code> or <code>https://</code> base URL. Required while enabled; checked whenever set.
+  World server addresses are not configured here: they come from the auth service's realm list.</li>
+<li><code>caFile</code>: a project-relative PEM file of extra trusted CA certificates (e.g. the world stack's self-signed dev
+  certificate), trusted besides the Windows ROOT store for both auth HTTPS and world TLS. It ships in <code>game.pak</code> like
+  every project file, so it must not be in a dot-folder.</li>
+</ul>
+<p>Loading checks the shape, the URL and that <code>caFile</code> is a path inside the project; that the file exists and holds a
+valid certificate is checked by the <strong>Online Services</strong> modal's Save, by Build and when the built game starts (only
+while enabled), so a deleted CA file never stops the project from opening. Written only when some key differs from
+the defaults, so disabling keeps the URL and CA file. Older editors reject the <code>online</code> key; projects that never
+set it stay readable by them. Never put secrets (tokens, passwords, admin credentials) here: it ships in <code>game.pak</code>.</p>
+</li>
+<li>
+<p>Unknown keys are rejected. Saved with 2-space indent in this key order; <code>stateMachines</code> is written only if the file
+  had it or a machine was made Global (unchecking the last one leaves <code>[]</code>), so other projects keep identical bytes.</p>
+</li>
+<li><strong>Active project</strong>: opening a scene (File &gt; Open, <code>--scene</code>) activates the project found by walking up from the
+  scene's directory (the nearest ancestor-or-self with a <code>project.kast</code>; none = no project; an invalid one is warned
+  about and treated as none). New (Untitled) keeps the current project. Save / Save As re-run the walk-up from the saved
+  file. <code>--project</code> (how the Project Manager opens a project) sets it directly.</li>
+<li><strong>Project-relative paths</strong> (<code>systems</code>, <code>kast.loadScene</code>, <code>startScene</code>) use <code>/</code> separators and must stay inside the
+  project: absolute paths and <code>..</code> out of the root are rejected.</li>
+<li>Without an active project the scene can still be edited and played (C++ systems run), but every Lua system is
+  disabled with a "no project" error.</li>
+</ul>
+</main>
+</div>
+</body>
+</html>

@@ -10,7 +10,7 @@
 
 // Physics: a Jolt world built from a scene's Collider / Rigidbody / CharacterController entities (and TerrainTiles as
 // static height fields) for one Play session
-// (owned by LuaSystems, used from Lua as kast.physics). Never runs in edit mode. See README "Physics".
+// (owned by LuaSystems, used from Lua as kast.physics). Never runs in edit mode. See docs/engine/physics.html.
 namespace kast {
 
 constexpr float kPhysicsStep = 1.0f / 60.0f; // fixed simulation step, seconds

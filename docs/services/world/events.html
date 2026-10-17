@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Events - Kast World Server</title>
+<link rel="stylesheet" href="../../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="../auth/index.html">Auth Server</a><a href="index.html">World Server</a><a href="../../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html" class="active">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
+<main>
+<h1 id="events">Events</h1>
+<p>The server has one event bus with the engine's API and rules (<a href="../../engine/events.html">Engine, Events</a>). Systems use it to talk to each
+other, and server C++ can publish and subscribe through <code>World::bus()</code>. Events never reach clients on their own: only
+the three send functions put anything on the network.</p>
+<ul>
+<li><strong>Delivery:</strong> <code>kast.publish</code> only queues. The queue is drained once per tick, right after every system's <code>update</code>
+  (step 6 below). Events are delivered in publish order, and each event's subscribers run in subscription order, C++
+  and Lua alike. Events published during the drain (by a subscriber), or from <code>init</code>, <code>onEnter</code> or <code>onLeave</code>, wait for
+  the next tick's drain. A graceful shutdown drops the queue.</li>
+<li><strong>Payloads:</strong> plain data. That is <code>nil</code>, booleans, finite numbers, strings, and tables whose keys are exactly 1..n
+  (arrays) or all strings (objects), nested at most 32 deep. Functions, userdata, threads, cycles, mixed keys, NaN and
+  infinities raise an error at the call (<code>kast.publish: payload.x must be a finite number</code>), and nothing is queued.
+  Every subscriber gets its own copy.</li>
+<li><strong>Names:</strong> non-empty strings. Anything else raises <code>&lt;function&gt;: event name must be a non-empty string, got &lt;value&gt;</code>.</li>
+<li><strong>Subscriptions belong to the calling system.</strong> When that system is disabled by any error, all of its subscriptions
+  are removed. A failing subscriber is logged as <code>Lua system disabled</code> (callback <code>event '&lt;name&gt;'</code>, with <code>path:line</code>),
+  and the event's other subscribers still run.</li>
+<li><strong>Client events:</strong> <code>kast.sendTo</code>, <code>kast.sendNearby</code> and <code>kast.broadcast</code> take the same names and payloads. Each
+  recipient gets a <code>ServerEvent</code> (<a href="protocol.html#server-events">protocol</a>), and the engine publishes it on the
+  client's bus as <code>server.&lt;name&gt;</code>.<ul>
+<li><strong>When:</strong> sends are queued and go out in call order after component replication (step 8), so a client already has
+  the <code>Spawn</code> and the latest component values. Sends from <code>onLeave</code> go out at the despawn, before that character's
+  <code>Despawn</code>; sends from <code>onEnter</code> go out on the next tick.</li>
+<li><strong>Targets:</strong> a bad id (not a whole number from 0 to 2^32-1) raises <code>kast.sendTo: invalid entity id &lt;value&gt;</code>. A
+  valid id whose character or NPC is not in the world when the events go out (it left meanwhile) sends nothing.</li>
+<li><strong>Size:</strong> an event whose frame would pass 65535 bytes raises <code>kast.sendTo: event "&lt;name&gt;" is too large to send</code> at
+  the call.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Client events cost bandwidth.</strong> Each send is one message per recipient, and nothing rate-limits them: only the
+existing 1 MiB per-session send-buffer cap stops a flood, by disconnecting the client. <code>broadcast</code> reaches every
+player, so one call per player costs N² messages in a zone of N. <code>sendNearby</code> in a crowd costs about the same. Send on
+game events (a login, a kill, a quest step), never every tick.</p>
+</main>
+</div>
+</body>
+</html>

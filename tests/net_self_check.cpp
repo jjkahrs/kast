@@ -1367,7 +1367,7 @@ void checkWorldClient()
     r.pump();
     check(r.count("world.disconnected") == 3, "world: disconnect while disconnected publishes nothing");
 
-    // Every code the server can send maps to its PROTOCOL.md name; an unknown value to "unknown".
+    // Every code the server can send maps to its name in docs/services/world/protocol.html; an unknown value to "unknown".
     for (const int code : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 20, 21, 22, 23, 24, 99}) {
         const char* name = code == 99 ? "unknown" : proto::code_name(static_cast<proto::Code>(code));
         if (!r.connect(3)) {
@@ -2573,7 +2573,7 @@ int liveReplicationCheck(const std::string& authUrl, const std::string& mailpitU
                                 a.position().x, a.position().y, a.position().z,
                                 a.scene.registry().view<kast::TerrainTile>().size()));
 
-    // Ground (services/world README "Ground"): the server put A on the ground its own heightmaps describe, the same
+    // Ground (docs/services/world/maps.html#ground): the server put A on the ground its own heightmaps describe, the same
     // as A's terrain tiles; walking down the slope at that ground is never corrected. The walk stays under the hills'
     // nav.maxSlopeDeg (40; at most 36.5 here): steeper ground is off the server's navmesh ("Navmesh").
     std::shared_ptr<const kast::map::MapInfo> hills;

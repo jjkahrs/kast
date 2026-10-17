@@ -575,7 +575,7 @@ void checkReplication() {
     (void)b;
 }
 
-// --- events (README "Lua components and systems", Events): the same cases as the engine's checks ---
+// --- events (docs/services/world/events.html): the same cases as the engine's checks ---
 
 std::vector<std::string> g_log; // log lines while a LogCapture lives
 
@@ -1020,7 +1020,7 @@ void checkCodec() {
     check(proto::ServerEvent::fits(3, 65535 - 7) && !proto::ServerEvent::fits(3, 65535 - 6), "ServerEvent frame size limit");
 }
 
-// --- state machines (README "Lua components and systems", State machines) ---
+// --- state machines (docs/services/world/state-machines.html) ---
 
 // Indexes of the captured log lines whose "msg" contains part (log lines are JSON: quotes in msg are escaped).
 std::vector<size_t> said_at(const std::string& part) {
@@ -1490,7 +1490,7 @@ return {
 
 } // namespace
 
-// --- NPCs (README "Lua components and systems", NPCs) ---
+// --- NPCs (docs/services/world/npcs.html) ---
 
 // Every kast.create / kast.destroy / NPC Transform rule from Lua; each bad call raises and changes nothing.
 constexpr const char* kNpcApiSystem = R"lua(
@@ -1918,7 +1918,7 @@ void checkNpcSample() {
 }
 #endif
 
-// --- NPC spawns (README "NPC spawns") ---
+// --- NPC spawns (docs/services/world/npcs.html#npc-spawns) ---
 
 void checkSpawnParsing() {
     std::string err;
@@ -2139,7 +2139,7 @@ void checkSpawnLua() {
     for (const auto& s : w.world.script_status()) check(s.ok, "spawn lua: system still enabled " + s.error);
 }
 
-// --- maps (README "Maps") ---
+// --- maps (docs/services/world/maps.html) ---
 
 void checkTileMath() {
     using map::tile_of;
@@ -2426,7 +2426,7 @@ void checkMapLua() {
     check(mc.size() == 1 && mc[0].map == 2 && mc[0].pos == proto::Vec3{300, 0, 310}, "kast.transfer sends the player MapChange");
 }
 
-// --- areas (README "Areas") ---
+// --- areas (docs/services/world/areas.html) ---
 
 std::optional<map::Areas> areas_of(const std::string& text, std::string& err) {
     err.clear();
@@ -2686,7 +2686,7 @@ void checkAreaLua() {
 }
 #endif
 
-// --- ground (README "Ground") ---
+// --- ground (docs/services/world/maps.html#ground) ---
 
 float ramp(float x, float z) { return 0.1f * x + 0.05f * z; }
 
@@ -2804,7 +2804,7 @@ void checkGround() {
     check(mc.size() == 1 && on_ramp(mc[0].pos.y, 400, 50), "transfer to y = 999: MapChange on the ground");
 }
 
-// --- navmesh (README "Navmesh") ---
+// --- navmesh (docs/services/world/maps.html#navmesh) ---
 
 // A 2 x 1 tile fixture: a gentle ramp up x (~3 degrees) and a block across the straight line from (100, 100) to
 // (450, 100): x 310..350, z 0..200, 22 m high, its sides 8 m wide 70 degree slopes. The way round is z > 200.
@@ -2963,7 +2963,7 @@ void checkNavmesh() {
     check_lua_expectations("nav lua", "nav lua done");
 }
 
-// --- NPC definitions (README "NPC definitions") ---
+// --- NPC definitions (docs/services/world/npcs.html#npc-definitions) ---
 
 constexpr const char* kHp = R"(return { name = "Hp", replicate = "aoi", fields = {
     { name = "cur", type = "float", default = 10, min = 0 }, { name = "max", type = "float", default = 10 } } })";

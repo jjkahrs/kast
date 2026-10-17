@@ -4,7 +4,7 @@
 #include <string>
 #include <string_view>
 
-// What Lua systems may do to the running scene's game GUIs (kast.gui.*, README "Game GUI"). SceneGui implements it;
+// What Lua systems may do to the running scene's game GUIs (kast.gui.*, docs/engine/game-gui.html). SceneGui implements it;
 // LuaSystems only sees this, so it needs no RmlUi. Elements are found by id in the loaded documents, topmost first.
 namespace kast {
 

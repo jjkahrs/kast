@@ -13,7 +13,7 @@
 
 // AuthClient: the player-facing calls of the auth service (services/auth/openapi.yaml) over a Network, plus the
 // logged-in session, kept in memory only. Calls return an id at once; their results come back from poll() as
-// "auth.*" events (README "Online Services"), echoing that id. The access token is refreshed before it expires, one
+// "auth.*" events (docs/engine/online-services.html), echoing that id. The access token is refreshed before it expires, one
 // refresh at a time; a failed refresh ends the session ("auth.session.expired"). No Lua, no EventBus: LuaSystems owns
 // one per Play session, routes the Network results it owns to it and publishes what poll() returns. Never logs
 // passwords, tokens or bodies. Same threading rule as Network: everything on the Network's owner thread.

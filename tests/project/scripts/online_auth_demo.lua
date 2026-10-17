@@ -1,5 +1,5 @@
 -- Online Services sample: logs in through kast.auth, then lists the realms. Needs a project with "online" enabled
--- (README "Online Services"); the tests run it against kast_net_test_server's fake auth routes.
+-- (docs/engine/online-services.html); the tests run it against kast_net_test_server's fake auth routes.
 local EMAIL, PASSWORD = "demo@example.com", "demo-password-123"
 
 return {

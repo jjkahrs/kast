@@ -13,7 +13,7 @@
 #include <optional>
 #include <vector>
 
-// Heightmap terrain (README "Terrain"): the project's maps (maps/<folder>/map.json, areas.json and
+// Heightmap terrain (docs/engine/terrain.html): the project's maps (maps/<folder>/map.json, areas.json and
 // heights/<tx>_<tz>.r16|.png, see heights.h) streamed as TerrainTile entities around the local player in Play. The
 // renderer and physics react to those entities; neither reads files nor knows about maps.
 namespace kast {

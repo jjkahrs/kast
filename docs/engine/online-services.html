@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Online Services - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html" class="active">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li></ul></nav>
+<main>
+<h1 id="online-services">Online Services</h1>
+<p>The built-in integration with the repo's services (<code>services/auth</code>, <code>services/world</code>), switched on per project by
+<code>project.kast</code>'s <a href="../editor/projects.html#projects"><code>online</code></a> block. The whole flow in one project: <a href="../../samples/starter-mmo/README.md"><code>samples/starter-mmo</code></a>. While it is disabled none of it exists (<code>kast.auth</code> and <code>kast.world</code> are
+nil). If the CA file can't be loaded at editor Play start, the error is logged and that Play session runs without
+<code>kast.auth</code> and <code>kast.world</code>; a built game refuses to start.</p>
+<h2 id="kastauth">kast.auth</h2>
+<p>Lua access to the auth service's player endpoints (<code>services/auth/openapi.yaml</code>), at <code>online.authUrl</code>, trusting
+<code>online.caFile</code> besides the Windows ROOT store. Built on <a href="networking.html#networking"><code>kast.net</code></a>'s HTTP client (<code>engine/auth_client.h</code>,
+<code>kast::AuthClient</code>), so its requests show in the Network panel. Every call returns an <code>id</code> (a number) at once; its
+result arrives later as one event carrying that <code>id</code>: the call's success event or <code>auth.error</code>. There are no callbacks.
+Arguments that aren't strings raise at the calling line (<code>kast.auth.login: email must be a string, got 1</code>); everything
+else, including "not logged in", is an <code>auth.error</code> event.</p>
+<p><strong>The session</strong> (access + refresh token) lives in engine memory only: nothing is written to disk, Lua never sees the
+tokens, and nothing logs passwords, tokens or request bodies. One session per Play session: kept across
+<code>kast.loadScene</code>, cleared by editor <strong>Stop</strong> and at Play start; in a built game, one per process. The access token is
+refreshed automatically at 80% of its lifetime or 60 s before it expires, whichever is earlier (never before half of
+it), with at most one refresh in flight (the service revokes the whole session if a refresh token is used twice).
+<code>me</code> / <code>realms</code> called during a refresh wait for it and use the new token. A refresh that fails for any reason (the
+service says <code>invalid_refresh_token</code> or <code>account_banned</code>, or the request itself fails) clears the session and publishes
+<code>auth.session.expired</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Request</th>
+<th>Success event</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>register(email, password) -&gt; id</code></td>
+<td><code>POST /v1/auth/register</code></td>
+<td><code>auth.registered</code></td>
+</tr>
+<tr>
+<td><code>resendVerification(email) -&gt; id</code></td>
+<td><code>POST /v1/auth/resend-verification</code></td>
+<td><code>auth.verificationResent</code></td>
+</tr>
+<tr>
+<td><code>verifyEmail(token) -&gt; id</code></td>
+<td><code>POST /v1/auth/verify-email</code></td>
+<td><code>auth.emailVerified</code></td>
+</tr>
+<tr>
+<td><code>login(email, password) -&gt; id</code></td>
+<td><code>POST /v1/auth/login</code></td>
+<td><code>auth.login.ok</code></td>
+</tr>
+<tr>
+<td><code>logout() -&gt; id</code></td>
+<td><code>POST /v1/auth/logout</code></td>
+<td><code>auth.loggedOut</code></td>
+</tr>
+<tr>
+<td><code>forgotPassword(email) -&gt; id</code></td>
+<td><code>POST /v1/auth/forgot-password</code></td>
+<td><code>auth.passwordResetSent</code></td>
+</tr>
+<tr>
+<td><code>resetPassword(token, password) -&gt; id</code></td>
+<td><code>POST /v1/auth/reset-password</code></td>
+<td><code>auth.passwordReset</code></td>
+</tr>
+<tr>
+<td><code>me() -&gt; id</code></td>
+<td><code>GET /v1/me</code></td>
+<td><code>auth.me</code></td>
+</tr>
+<tr>
+<td><code>realms() -&gt; id</code></td>
+<td><code>GET /v1/realms</code></td>
+<td><code>auth.realms</code></td>
+</tr>
+<tr>
+<td><code>isLoggedIn() -&gt; bool</code></td>
+<td>none</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>account() -&gt; {accountId, email, role} \| nil</code></td>
+<td>none</td>
+<td>none</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><code>login</code> while logged in, or while another login is in flight: <code>auth.error</code> <code>already_logged_in</code> (log out first; a
+  second session would never be revoked).</li>
+<li><code>logout</code>, <code>me</code>, <code>realms</code> while logged out: <code>auth.error</code> <code>not_logged_in</code>.</li>
+<li><code>logout</code> clears the session at once (<code>isLoggedIn()</code> is false right after the call), then tells the service;
+  <code>auth.loggedOut</code> follows its answer, or <code>auth.error</code> if it can't be reached (the game is logged out either way).</li>
+<li><code>register</code>, <code>resendVerification</code> and <code>forgotPassword</code> succeed for every email (the service never reveals whether an
+  account exists). The tokens for <code>verifyEmail</code> / <code>resetPassword</code> come from the emails the service sends.</li>
+</ul>
+<p><strong>Events</strong> (on the session's <a href="events.html#events">event bus</a>, publisher <code>kast.auth</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Payload</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>auth.registered</code>, <code>auth.verificationResent</code>, <code>auth.emailVerified</code>, <code>auth.passwordResetSent</code>, <code>auth.passwordReset</code>, <code>auth.loggedOut</code></td>
+<td><code>{id}</code></td>
+</tr>
+<tr>
+<td><code>auth.login.ok</code></td>
+<td><code>{id, accountId, email, role}</code>: from the access token's claims (<code>role</code> is <code>player</code>, <code>gm</code> or <code>admin</code>)</td>
+</tr>
+<tr>
+<td><code>auth.me</code></td>
+<td><code>{id, account = {id, email, role, emailVerified, createdAt}}</code></td>
+</tr>
+<tr>
+<td><code>auth.realms</code></td>
+<td><code>{id, realms = {{id, name, host, port, region, status, sortOrder}, ...}}</code>: ordered by <code>sortOrder</code>; <code>status</code> is <code>online</code>, <code>offline</code> or <code>maintenance</code></td>
+</tr>
+<tr>
+<td><code>auth.error</code></td>
+<td><code>{id, op, status, code, message, details?}</code>: <code>op</code> is the function's name; for an error the service answered, <code>status</code> is the HTTP status and <code>code</code> / <code>message</code> / <code>details</code> are its <code>{"error": ...}</code> body's (e.g. <code>invalid_credentials</code>, <code>email_not_verified</code>, <code>account_locked</code> with <code>details.lockedUntil</code>, <code>account_banned</code> with <code>details.reason</code> / <code>expiresAt</code>, <code>validation_error</code> with <code>details = {{path, message}, ...}</code>, <code>rate_limited</code>, <code>invalid_token</code>, <code>unauthorized</code>). Client-side codes, all with <code>status</code> 0 unless noted: <code>network_error</code> (unreachable, TLS failure, timeout), <code>not_logged_in</code>, <code>already_logged_in</code>, <code>http_error</code> (an error response without a JSON error body; <code>status</code> set), <code>bad_response</code> (a success response that isn't what the API promises)</td>
+</tr>
+<tr>
+<td><code>auth.session.expired</code></td>
+<td><code>{code, message}</code>: the refresh failed (<code>code</code> as in <code>auth.error</code>); the session is already cleared</td>
+</tr>
+<tr>
+<td><code>auth.session</code></td>
+<td><code>{accountId, email, role}</code>: Play started with a session handed in from C++ (<code>AuthClient::adopt</code>, for the editor's own login)</td>
+</tr>
+</tbody>
+</table>
+<pre><code class="language-lua">return {
+    init = function()
+        kast.subscribe(&quot;auth.login.ok&quot;, function(e)
+            kast.log(&quot;hello &quot; .. e.email)
+            kast.auth.realms()
+        end)
+        kast.subscribe(&quot;auth.realms&quot;, function(e)
+            for _, realm in ipairs(e.realms) do kast.log(realm.name .. &quot; &quot; .. realm.status) end
+        end)
+        kast.subscribe(&quot;auth.error&quot;, function(e) kast.warn(e.op .. &quot;: &quot; .. e.code .. &quot; &quot; .. e.message) end)
+        kast.subscribe(&quot;auth.session.expired&quot;, function(e) kast.loadScene(&quot;login.scene&quot;) end)
+        kast.auth.login(&quot;me@example.com&quot;, &quot;my password&quot;)
+    end,
+    update = function(dt) end,
+}
+</code></pre>
+<p>C++: <code>LuaSystems::auth()</code> is the session's <code>kast::AuthClient</code> (no Lua or bus): the same calls, <code>loggedIn()</code>,
+<code>account()</code>, <code>accessToken()</code> (for engine code that calls other services, e.g. the world server) and <code>adopt(session)</code>.
+<code>LuaSystems::start(..., authConfig(project, error))</code> turns it on; <code>tick()</code> hands it the Network results of its own
+requests (never published as <code>net.http.*</code>, since their bodies hold tokens) and publishes its events.</p>
+<p><strong>Sample</strong>: <code>tests/project/online_auth.scene</code> (<code>scripts/online_auth_demo.lua</code>) logs in as <code>demo@example.com</code> and logs
+the realms. It needs a copy of <code>tests/project</code> with <code>online</code> enabled; the tests build one pointing at
+<code>kast_net_test_server</code>, whose <code>/v1/...</code> routes are a fake auth service.</p>
+<h2 id="kastworld">kast.world</h2>
+<p>Lua access to a realm's world server (<code>services/world</code>, wire format in the <a href="../services/world/protocol.html">World Server protocol</a>), with the
+current <code>kast.auth</code> session. The engine owns the connection (<code>engine/world_client.h</code>, <code>kast::WorldClient</code>): TLS over
+<a href="networking.html#networking"><code>kast.net</code></a>'s TCP client, trusting <code>online.caFile</code> besides the Windows ROOT store; the <code>Hello</code> +
+<code>Auth{access token}</code> handshake; answering the server's <code>Ping</code>; and encoding / decoding every message with the world
+server's own codec (<code>services/world/protocol</code>, compiled into the engine unchanged). Scripts never see bytes, frames or
+the token. One connection at a time, kept across <code>kast.loadScene</code>, dropped by editor <strong>Stop</strong> and at Play start. It shows
+in the Network panel as <code>kast.world.&lt;n&gt;</code> (a new number per connection); its <code>net.*</code> results are never published.</p>
+<p>Calls in the wrong state, and arguments of the wrong type, raise at the calling line
+(<code>kast.world.say: needs state 'inWorld', the connection is 'lobby'</code>, <code>kast.world.connect: realmId must be a whole
+number &gt;= 0, got x</code>). Everything the server or the network decides arrives as an event.</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Needs state</th>
+<th>Sends</th>
+<th>Answered by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>connect(realmId)</code></td>
+<td><code>disconnected</code></td>
+<td><code>Hello</code>, <code>Auth</code> to the realm's <code>host:port</code></td>
+<td><code>world.connected</code>, or <code>world.disconnected</code></td>
+</tr>
+<tr>
+<td><code>disconnect()</code></td>
+<td>any</td>
+<td>closes the connection</td>
+<td><code>world.disconnected</code> <code>client_disconnect</code> (nothing if already disconnected)</td>
+</tr>
+<tr>
+<td><code>listCharacters()</code></td>
+<td><code>lobby</code></td>
+<td><code>CharListReq</code></td>
+<td><code>world.charList</code></td>
+</tr>
+<tr>
+<td><code>createCharacter(name)</code></td>
+<td><code>lobby</code></td>
+<td><code>CharCreate</code> (3–16 ASCII letters, unique per realm)</td>
+<td><code>world.charCreated</code> or <code>world.charError</code></td>
+</tr>
+<tr>
+<td><code>deleteCharacter(charId)</code></td>
+<td><code>lobby</code></td>
+<td><code>CharDelete</code></td>
+<td><code>world.charDeleted</code> or <code>world.charError</code></td>
+</tr>
+<tr>
+<td><code>enterWorld(charId)</code></td>
+<td><code>lobby</code></td>
+<td><code>EnterWorld</code></td>
+<td><code>world.entered</code> or <code>world.charError</code></td>
+</tr>
+<tr>
+<td><code>say(text)</code></td>
+<td><code>inWorld</code></td>
+<td><code>Say</code> (UTF-8, at most 256 bytes; the server drops invalid or rate-limited ones silently)</td>
+<td><code>world.chat</code>, to the sender too</td>
+</tr>
+<tr>
+<td><code>state() -&gt; string</code></td>
+<td>any</td>
+<td>none</td>
+<td><code>disconnected</code>, <code>connecting</code>, <code>lobby</code> or <code>inWorld</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><code>connect</code> needs a logged-in <code>kast.auth</code> session: without one it publishes <code>world.disconnected</code> <code>not_logged_in</code> and
+  touches no network. It looks <code>realmId</code> up in the last <code>auth.realms</code> list (from any <code>kast.auth.realms()</code> call), and
+  fetches the list itself when the id isn't in it.</li>
+<li>The server takes one character request at a time (a second while one is in flight: <code>world.charError</code>
+  <code>rate_limited</code>). Character ids are numbers.</li>
+<li>The access token is checked only at the handshake; logging out of <code>kast.auth</code> doesn't close the world connection.</li>
+<li>The engine never logs the token, and never logs chat text.</li>
+</ul>
+<p><strong>Events</strong> (on the session's <a href="events.html#events">event bus</a>, publisher <code>kast.world</code>). Positions are <code>{x, y, z}</code> tables (x/z the
+ground plane, y up); <code>heading</code> is a number:</p>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Payload</th>
+<th>From</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>world.connected</code></td>
+<td><code>{accountId, role}</code>; <code>role</code> is <code>player</code>, <code>gm</code> or <code>admin</code></td>
+<td><code>AuthOk</code>; state <code>lobby</code></td>
+</tr>
+<tr>
+<td><code>world.charList</code></td>
+<td><code>{characters = {{id, name, position}, ...}}</code></td>
+<td><code>CharList</code></td>
+</tr>
+<tr>
+<td><code>world.charCreated</code></td>
+<td><code>{character = {id, name, position}}</code></td>
+<td><code>CharCreated</code></td>
+</tr>
+<tr>
+<td><code>world.charDeleted</code></td>
+<td><code>{charId}</code></td>
+<td><code>CharDeleted</code></td>
+</tr>
+<tr>
+<td><code>world.charError</code></td>
+<td><code>{request, code}</code>: <code>request</code> is the failed request's opcode name (<code>CharListReq</code>, <code>CharCreate</code>, <code>CharDelete</code>, <code>EnterWorld</code>); <code>code</code> is <code>name_taken</code>, <code>name_invalid</code>, <code>char_limit</code>, <code>not_found</code>, <code>already_in_world</code>, <code>rate_limited</code> or <code>service_unavailable</code>. The connection stays.</td>
+<td><code>CharError</code></td>
+</tr>
+<tr>
+<td><code>world.entered</code></td>
+<td><code>{entityId, map, position, heading}</code>: <code>map</code> is the id of the map the character is on (<a href="../services/world/maps.html">World Server, Maps</a>)</td>
+<td><code>EnterWorldOk</code>; state <code>inWorld</code></td>
+</tr>
+<tr>
+<td><code>world.mapChanged</code></td>
+<td><code>{map, position, heading}</code>: the server moved the player (another map, or a teleport); every entity in view is gone, the new neighbours come as <code>world.spawn</code></td>
+<td><code>MapChange</code></td>
+</tr>
+<tr>
+<td><code>world.spawn</code></td>
+<td><code>{entityId, name, position, heading, kind, template}</code>: a player (<code>kind</code> <code>"player"</code>, <code>template</code> <code>""</code>) or a server NPC (<code>kind</code> <code>"npc"</code>, <code>template</code> the client template it names) came into view</td>
+<td><code>Spawn</code></td>
+</tr>
+<tr>
+<td><code>world.despawn</code></td>
+<td><code>{entityId}</code>: left view or logged out</td>
+<td><code>Despawn</code></td>
+</tr>
+<tr>
+<td><code>world.entityMove</code></td>
+<td><code>{entityId, position, heading}</code></td>
+<td><code>EntityMove</code></td>
+</tr>
+<tr>
+<td><code>world.correction</code></td>
+<td><code>{position}</code>: snap back to the last valid position</td>
+<td><code>Correction</code></td>
+</tr>
+<tr>
+<td><code>world.chat</code></td>
+<td><code>{from, text}</code></td>
+<td><code>ChatMsg</code></td>
+</tr>
+<tr>
+<td><code>world.component</code></td>
+<td><code>{entityId, name, data}</code>: a server Lua component's full value; <code>data</code> is its JSON object (scene-file encoding: vec3/quat as arrays, enums by name). The local player's own components come with its <code>entityId</code> from <code>world.entered</code></td>
+<td><code>ComponentUpdate</code></td>
+</tr>
+<tr>
+<td><code>world.componentRemoved</code></td>
+<td><code>{entityId, name}</code></td>
+<td><code>ComponentRemove</code></td>
+</tr>
+<tr>
+<td><code>server.&lt;name&gt;</code></td>
+<td>the payload the server's Lua system sent (any plain data, <code>nil</code> if none): an event its <code>kast.sendTo</code>, <code>kast.sendNearby</code> or <code>kast.broadcast</code> sent this player (<a href="../services/world/lua.html">World Server, Lua components and systems</a>). Subscribe with <code>kast.subscribe("server.&lt;name&gt;", fn)</code>. A payload that isn't valid JSON is warned and ignored</td>
+<td><code>ServerEvent</code></td>
+</tr>
+<tr>
+<td><code>world.disconnected</code></td>
+<td><code>{code, reason}</code>; state <code>disconnected</code></td>
+<td>see below</td>
+</tr>
+</tbody>
+</table>
+<p><code>world.disconnected</code> <code>code</code>:</p>
+<ul>
+<li><strong>The server's <code>Disconnect</code> reason</strong>, named as in the <a href="../services/world/protocol.html#codes">protocol's code table</a>: <code>protocol_mismatch</code>, <code>malformed</code>,
+  <code>unknown_opcode</code>, <code>frame_too_large</code>, <code>rate_limited</code>, <code>handshake_timeout</code>, <code>idle_timeout</code>, <code>invalid_token</code>,
+  <code>token_expired</code>, <code>service_unavailable</code>, <code>logged_in_elsewhere</code>, <code>server_shutdown</code>, <code>server_full</code>,
+  <code>unexpected_message</code> (and <code>ok</code>, or <code>unknown</code> for a value not in the table). <code>reason</code> is
+  <code>disconnected by the server (code &lt;n&gt;)</code>.</li>
+<li><strong>Client-side</strong>:<ul>
+<li><code>not_logged_in</code>: <code>connect</code> without a session, or the session ended before the connection started.</li>
+<li><code>unknown_realm</code>: no realm with that id in the auth service's list.</li>
+<li><code>realm_lookup_failed</code>: the realm list request failed (<code>reason</code> has its <code>auth.error</code> code; that <code>auth.error</code> is
+  published too).</li>
+<li><code>connect_failed</code>: DNS, TCP or TLS failed, it timed out (10 s), or the connection closed before <code>AuthOk</code>;
+  <code>reason</code> says which.</li>
+<li><code>connection_closed</code>: the connection dropped without a <code>Disconnect</code>.</li>
+<li><code>malformed</code> / <code>unknown_opcode</code>: the server sent a frame that doesn't decode, or an opcode not in the protocol
+  (<code>reason</code> names it); the client closes the connection.</li>
+<li><code>unexpected_message</code>: the server sent a message out of order, e.g. lobby or world messages before <code>AuthOk</code>, or a
+  client-to-server message.</li>
+<li><code>client_disconnect</code>: <code>kast.world.disconnect()</code>.</li>
+</ul>
+</li>
+</ul>
+<pre><code class="language-lua">return {
+    init = function()
+        kast.subscribe(&quot;auth.login.ok&quot;, function() kast.world.connect(1) end)
+        kast.subscribe(&quot;world.connected&quot;, function() kast.world.listCharacters() end)
+        kast.subscribe(&quot;world.charList&quot;, function(e)
+            if #e.characters &gt; 0 then kast.world.enterWorld(e.characters[1].id)
+            else kast.world.createCharacter(&quot;Hero&quot;) end
+        end)
+        kast.subscribe(&quot;world.charCreated&quot;, function(e) kast.world.enterWorld(e.character.id) end)
+        kast.subscribe(&quot;world.entered&quot;, function() kast.world.say(&quot;hello&quot;) end)
+        kast.subscribe(&quot;world.chat&quot;, function(e) kast.log(e.from .. &quot;: &quot; .. e.text) end)
+        kast.subscribe(&quot;world.disconnected&quot;, function(e) kast.warn(&quot;world: &quot; .. e.code .. &quot; &quot; .. e.reason) end)
+        kast.auth.login(&quot;me@example.com&quot;, &quot;my password&quot;)
+    end,
+    update = function(dt) end,
+}
+</code></pre>
+<p><strong>World address override (editor only)</strong>: <code>kast_editor --world-address host:port</code> (or
+<code>LuaSystems::world().setAddressOverride("host:port")</code> from editor C++) makes every <code>connect</code> in editor Play use that
+address instead of the realm's, e.g. a world server on your own machine. It lasts across Play sessions; the shipped
+player has no such flag and never sets it.</p>
+<p>C++: <code>LuaSystems::world()</code> is the session's <code>kast::WorldClient</code> (no Lua or bus): the same calls and <code>state()</code>.
+<code>tick()</code> hands it the Network results of its connections and the auth events (for realm lists), then publishes its
+events after the <code>auth.*</code> ones.</p>
+<p><strong>Sample</strong>: <code>tests/project/online_world.scene</code> (<code>scripts/online_world_demo.lua</code>) logs in, picks the realm named
+<code>Testgrove</code>, connects, reuses or creates the character <code>Demo</code>, enters the world and says <code>hello world</code>. The tests run it
+against <code>kast_net_test_server</code>, whose fake auth lists Testgrove at its fake world server (127.0.0.1:47707).</p>
+<p><strong>Against the real servers</strong>: start the stack (<code>cd services/world &amp;&amp; cp .env.example .env</code> once, then
+<code>docker compose up -d --build</code>; world on 7777, auth on 3100), then run <code>ctest -R world_live</code>. <code>world_live_setup</code> copies
+the world's dev certificate out of the container (<code>docker compose cp world:/app/certs/server.crt</code>) and adds a realm
+<code>Kast Live</code> (127.0.0.1:7777) to auth's database; <code>world_live</code> drives two accounts through it.</p>
+<h2 id="replication">Replication</h2>
+<p>Networked players without sync code (<code>engine/replication.h</code>). Three built-in components, edited in the Inspector and
+saved in scenes like any other:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Fields</th>
+<th>What it does in Play</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>NetworkLocalPlayer</code></td>
+<td><code>sendRateHz</code> (1–30, default 10)</td>
+<td>Marks the local player. <code>world.entered</code> sets its Transform position and yaw (from the server's heading). While <code>inWorld</code>, its Transform position and yaw go to the server as <code>Move</code> — only when they changed (by more than 0.1 mm / 0.0001 rad) and at most <code>sendRateHz</code> times a second on average, so an idle player sends nothing. <code>world.correction</code> snaps its position to the server's; <code>world.mapChanged</code> places it like <code>world.entered</code> and destroys every remote clone.</td>
+</tr>
+<tr>
+<td><code>NetworkReplication</code></td>
+<td><code>templateEntity</code> (an entity name), <code>interpolationMs</code> (0–1000, default 100), <code>npcTemplates</code> (an entity name, optional, default empty)</td>
+<td>One per scene (more: the first is used, with a warning). At Play start (and after each <code>kast.loadScene</code>) the named entity and its children are taken out of the scene, so the template is never rendered, simulated or seen by scripts; Stop restores it with the rest of the pre-Play scene. Each <code>world.spawn</code> adds a clone of it at the scene root, named after the character and placed at the spawn position and heading (snapped). Each <code>world.entityMove</code> moves the clone in a straight line from where it is shown to the new position over <code>interpolationMs</code> (0 snaps); heading snaps. <code>world.despawn</code> destroys that clone, <code>world.disconnected</code> all of them. NPCs (<code>world.spawn</code> with <code>kind</code> <code>"npc"</code>) are cloned from the child of the <code>npcTemplates</code> entity whose name is the spawn's <code>template</code>; at Play start (and after each <code>kast.loadScene</code>) that entity and every template under it leave the scene too, and Stop restores them. A spawn whose <code>template</code> is empty or has no such child is a clone of <code>templateEntity</code>, with one Console warning per template name.</td>
+</tr>
+<tr>
+<td><code>NetworkEntity</code></td>
+<td><code>entityId</code> (the server's id)</td>
+<td>Added to each clone. Server ids are unsigned 32-bit; one past 2^31 reads negative.</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Replicated Lua components</strong>: each <code>world.component</code> is applied to the same-named <a href="lua-components.html#lua-components">Lua component</a>
+  on the clone with that <code>entityId</code>, or on the <code>NetworkLocalPlayer</code> entity when it is the local player's id: added if
+  absent, replaced otherwise. The server's value goes through the drift rules, so a definition that differs from the
+  server's still loads (each fix a Console warning, once per component and fix). <code>world.componentRemoved</code> removes it.
+  A name with no Lua definition in the project is a Console warning, once per name, and is ignored. The last values
+  are kept per player, so a clone re-created after a scene switch (and the new scene's local player) gets them again.
+  Scripts get the same events to react to (e.g. <code>kast.subscribe("world.component", ...)</code>).</li>
+<li><strong>Event</strong>: after each clone is made, <code>world.entitySpawned {entityId, entity, name}</code> (publisher <code>kast.replication</code>,
+  delivered the frame after <code>world.spawn</code>), so scripts can decorate it: <code>entity</code> is the clone's id for <code>kast.get</code> /
+  <code>kast.set</code> / <code>kast.add</code>. Scripts still get every <code>world.*</code> event; the clone exists before any <code>world.spawn</code> subscriber
+  runs.</li>
+<li><strong>Positions</strong> are Transform positions, so keep the local player and the template at the scene root (x/z the ground
+  plane, y up, as the protocol). Heading is radians, <code>atan2(dx, dz)</code>: 0 faces +Z.</li>
+<li><strong>Rates</strong>: the world server accepts 60 messages a second per connection; <code>sendRateHz</code> is capped at 30 to leave room
+  for chat and pings. Remote players send about 10 moves a second, so keep <code>interpolationMs</code> near their interval
+  (100 ms): shorter makes clones stop between updates, longer adds lag.</li>
+<li><strong>Scene switches</strong> keep the connection: the new scene's template is cloned for every remote player still in view,
+  where it was last shown (an NPC from the new scene's NPC templates), and the new scene's local player is sent once.</li>
+<li><strong>NPCs</strong>: the world server's NPCs (<a href="../services/world/npcs.html">World Server, NPCs</a>) arrive like players, with <code>kind</code> <code>"npc"</code> and a
+  <code>template</code>. Put one entity per NPC type under an entity named in <code>npcTemplates</code> (e.g. <code>NPC Templates</code> &gt; <code>Guard</code>,
+  <code>Merchant</code>), named after the template the server's <code>kast.create</code> uses. Players are never cloned from them.</li>
+<li><strong>Not replicated</strong>: rotation other than yaw, animation, or anything the protocol doesn't carry; no client-side
+  prediction beyond snapping on corrections.</li>
+<li><strong>Online Services disabled</strong>: the three components show "Online Services disabled for this project" in the Inspector
+  and do nothing at run time (the template stays in the scene).</li>
+<li>C++: <code>LuaSystems::replication()</code>; <code>clone(entityId)</code> gives a server id's clone. <code>interpolate</code>, <code>MoveThrottle</code>,
+  <code>yawRotation</code> and <code>headingOf</code> are the pure parts.</li>
+</ul>
+<p><strong>Sample</strong>: <code>tests/project/online_replication.scene</code> (<code>scripts/online_replication_demo.lua</code>): a <code>Player</code> (gold box,
+<code>NetworkLocalPlayer</code>, walk with WASD at 5 m/s), a <code>Remote Player</code> template (red sphere) and a <code>Replication</code> manager. The
+script only logs in, enters the world and logs <code>world.entitySpawned</code>; the tests run it against <code>kast_net_test_server</code>,
+whose <code>Other</code> appears as a red sphere next to the player. <code>tests/project/online_npcs.scene</code>
+(<code>scripts/online_npcs_demo.lua</code>) adds an <code>NPC Templates</code> entity holding a <code>Guard</code> (a glowing cyan pillar with a gold
+helmet), set as <code>npcTemplates</code>; played against the <code>services/world</code> compose stack with the editor's test login (realm
+<code>Kast Live</code>, character <code>Watcher</code>), the sample Guard NPC patrols around the player as a clone of it.</p>
+</main>
+</div>
+</body>
+</html>

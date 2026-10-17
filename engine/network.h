@@ -14,7 +14,7 @@
 // Beast + OpenSSL. One background thread runs every socket; results wait in a queue until poll() hands them to the
 // owner's thread as plain JSON events (always valid UTF-8). No Lua, no EventBus: LuaSystems owns one per Play session,
 // binds it as kast.net and publishes what poll() returns. Every public function must be called on the thread that
-// constructed the Network (checked in debug builds). See README "Networking".
+// constructed the Network (checked in debug builds). See docs/engine/networking.html.
 namespace kast {
 
 enum class NetType { Tcp, Ws };

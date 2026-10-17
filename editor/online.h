@@ -16,7 +16,7 @@
 
 struct SDL_Process;
 
-// The Online panel's model (README "Online Services → Editor tooling"), no ImGui: the project's auth service health and
+// The Online panel's model (docs/editor/online-tooling.html), no ImGui: the project's auth service health and
 // realms with each realm's world server reachability, the local docker compose stack, the editor's test login (handed
 // to each Play session) and the admin calls. Everything is asynchronous on its own Network; poll() every frame on the
 // thread that made it. The login lives in memory only: passwords and tokens are never stored or logged. Remembers the

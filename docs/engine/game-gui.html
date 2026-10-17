@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Game GUI - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html" class="active">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li></ul></nav>
+<main>
+<h1 id="game-gui">Game GUI</h1>
+<p>Game GUIs are HTML/CSS-like documents rendered by <a href="https://mikke89.github.io/RmlUiDoc/">RmlUi</a> (<code>engine/gui*.h</code>,
+<code>engine/scene_gui.h</code>): an <code>.rml</code> file for the elements and a sibling <code>.rcss</code> file for their style. RmlUi reads them
+through the engine's file access (disk in the editor, <code>game.pak</code> in the player), logs to the Console as
+<code>RmlUi: ...</code>, and draws with bgfx (<code>engine/shaders/gui/</code>).</p>
+<p><strong>Files</strong>: an <code>.rml</code> links its style sheet in its <code>&lt;head&gt;</code>; the builder edits the elements under <code>&lt;body&gt;</code>:</p>
+<pre><code class="language-html">&lt;rml&gt;
+    &lt;head&gt;
+        &lt;title&gt;Main Menu&lt;/title&gt;
+        &lt;link type=&quot;text/rcss&quot; href=&quot;main_menu.rcss&quot;/&gt;
+    &lt;/head&gt;
+    &lt;body&gt;
+        &lt;div id=&quot;menu&quot; class=&quot;panel&quot;&gt;
+            &lt;p id=&quot;title&quot;&gt;Kast Quest&lt;/p&gt;
+            &lt;button id=&quot;start_button&quot; data-event=&quot;menu.start&quot;&gt;Start&lt;/button&gt;
+        &lt;/div&gt;
+    &lt;/body&gt;
+&lt;/rml&gt;
+</code></pre>
+<p><strong>Elements</strong>: <strong>Panel</strong> = <code>&lt;div&gt;</code>, <strong>Text</strong> = <code>&lt;p&gt;</code>, <strong>Button</strong> = <code>&lt;button&gt;</code>. A Button's <code>data-event</code> names the event
+its click publishes (see below). Any other element (hand-written <code>&lt;span&gt;</code>, <code>&lt;img&gt;</code>, ...) is <strong>Unknown</strong> to the builder:
+listed and movable/deletable there, never created or edited, and kept with its attributes and children on save.
+Attributes the builder doesn't edit (<code>style</code>, <code>title</code>, <code>data-*</code>, ...) and comments are kept too; saving only
+normalizes whitespace and indentation.</p>
+<p><strong>Style sheets</strong> are RCSS (CSS2-like; see the RmlUi docs). RmlUi has no built-in styles: elements are inline until a
+rule says otherwise, so sheets start with <code>div, p { display: block; }</code>. The only font is the bundled Roboto
+(<code>font-family: Roboto;</code>, set on <code>body</code>); text without a <code>font-family</code> doesn't show (RmlUi warns). Images
+(<code>&lt;img&gt;</code>, image decorators) are not supported yet: they log a warning and draw nothing.</p>
+<p><strong>UIDocument</strong> (built-in component, <em>UI Document</em> in the Inspector): <code>path</code> (project-relative <code>.rml</code>; the Inspector
+offers a combo of the project's <code>.rml</code> files, an unknown path shows as <code>(missing) &lt;path&gt;</code> and is kept) and <code>visible</code>
+(default true). Saved with the scene like any component. In Play (and in the built game), every <code>UIDocument</code> in the
+scene loads at Play start and shows over the Game view while <code>visible</code>, stacked in entity creation order (later
+entities on top); they unload on Stop and on a <code>kast.loadScene</code> switch (the new scene's load instead). Adding,
+removing or editing a <code>UIDocument</code> during Play applies at once. A missing <code>.rml</code>, an <code>.rml</code> RmlUi can't parse or a
+linked <code>.rcss</code> with problems logs an error naming the file and that document shows nothing; Play goes on. While the
+Game panel has input (focused and playing) the GUIs get the mouse, wheel and keys too (the game's <code>kast.*</code> input
+still sees them).</p>
+<p><strong>Button events</strong>: clicking a <code>&lt;button&gt;</code> with a non-empty <code>data-event</code> publishes that event on the Play session's
+<a href="events.html#events">event bus</a>, publisher <code>UI</code>, payload <code>{"id": "&lt;button id or empty&gt;", "document": "&lt;rml path&gt;"}</code> (the
+UIDocument's <code>path</code>). No or empty <code>data-event</code>: nothing is published. Lua subscribes as to any event:</p>
+<pre><code class="language-lua">kast.subscribe(&quot;menu.start&quot;, function(event)
+    kast.log(&quot;Menu start clicked: &quot; .. event.id .. &quot; in &quot; .. event.document)
+end)
+</code></pre>
+<p><strong><code>kast.gui</code></strong> (Lua, in Play and the built game; nil where no game GUI runs): reads and writes elements of the scene's
+loaded documents by <code>id</code>, topmost document first (<code>engine/gui_access.h</code>).</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Returns</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>kast.gui.value(id)</code></td>
+<td>string or <code>nil</code></td>
+<td>The current text of the <code>&lt;input&gt;</code> / <code>&lt;textarea&gt;</code> with that id; <code>nil</code> if no loaded document has one.</td>
+</tr>
+<tr>
+<td><code>kast.gui.setText(id, text)</code></td>
+<td>—</td>
+<td>A text field's value; any other element's content as plain text (escaped, <code>"\n"</code> is a line break).</td>
+</tr>
+<tr>
+<td><code>kast.gui.setVisible(id, visible)</code></td>
+<td>—</td>
+<td><code>false</code> hides the element (<code>display: none</code>), <code>true</code> gives it back its style sheet's <code>display</code>.</td>
+</tr>
+<tr>
+<td><code>kast.gui.focusedField()</code></td>
+<td>string or <code>nil</code></td>
+<td>The id of the text field (<code>&lt;input type="text"&gt;</code>, <code>"password"</code>, <code>&lt;textarea&gt;</code>) with keyboard focus, e.g. to ignore movement keys while the player types.</td>
+</tr>
+<tr>
+<td><code>kast.gui.mouseOver()</code></td>
+<td>boolean</td>
+<td>The mouse is over a GUI element (RmlUi's hover element is something other than a document's own <code>&lt;body&gt;</code>, so a full-screen body doesn't count). Checked when a button goes down, it tells a press on the chat box from a press on the world.</td>
+</tr>
+</tbody>
+</table>
+<p>Writes are kept and applied again to every document that loads later, so a system's <code>init</code> (which runs before the
+scene's documents load) and hot reloads see them; they are forgotten when the scene switches (<code>kast.loadScene</code>) and at
+each Play start. A write to an id no document has does nothing. Arguments that aren't strings (or, for
+<code>setVisible</code>, a boolean) raise at the calling line. Values and texts are never logged: a field may hold a password,
+so clear it after reading (<code>kast.gui.setText("password", "")</code>). Typed text reaches the fields because SDL text input is
+on while one has focus (editor: while the Game view has input).</p>
+<pre><code class="language-lua">kast.subscribe(&quot;login.submit&quot;, function()
+    local email, password = kast.gui.value(&quot;email&quot;), kast.gui.value(&quot;password&quot;)
+    kast.gui.setText(&quot;password&quot;, &quot;&quot;)
+    kast.gui.setText(&quot;status&quot;, &quot;Logging in...&quot;)
+    kast.auth.login(email, password)
+end)
+</code></pre>
+<p><strong>Hot reload</strong> (Play): when a loaded <code>.rml</code> or a <code>.rcss</code> it links changes on disk (the editor's 0.5 s file poll), that
+document reloads; fix a broken file and it shows again. Not in the built game.</p>
+<p><strong>Sample</strong>: <code>tests/project/ui.scene</code> has a <em>Main Menu</em> entity with a <code>UIDocument</code> for <code>ui/main_menu.rml</code>
+(+ <code>main_menu.rcss</code>: a panel with a title, a subtitle holding an unknown <code>&lt;span&gt;</code>, and Start / Quit buttons publishing
+<code>menu.start</code> / <code>menu.quit</code>); <code>scripts/ui_menu.lua</code> logs both events.</p>
+</main>
+</div>
+</body>
+</html>

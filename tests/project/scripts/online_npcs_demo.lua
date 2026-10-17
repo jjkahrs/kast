@@ -1,4 +1,4 @@
--- Online Services NPC sample (README "Online Services → Replication"): Play with the editor's test login (Window >
+-- Online Services NPC sample (docs/engine/online-services.html#replication): Play with the editor's test login (Window >
 -- Online > Test login, or --online-login-env) enters the world as "Watcher" on the realm "Kast Live". The world
 -- server's sample lua/systems/npcs.lua patrols a "Guard" NPC around the spawn point; replication shows it as a clone of
 -- the "Guard" entity under "NPC Templates" (NetworkReplication.npcTemplates) and remote players as clones of

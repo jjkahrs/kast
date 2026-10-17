@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Events - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html" class="active">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li></ul></nav>
+<main>
+<h1 id="events">Events</h1>
+<p>Lua systems and engine C++ code exchange named events with plain-data payloads through one event bus per Play session
+(<code>engine/event_bus.h</code>, built on <code>entt::dispatcher</code>; owned by <code>LuaSystems</code>, so editor Play and <code>kast_player</code> both have
+it). Publishing only queues an event; the queue is delivered once per frame at a fixed point.</p>
+<pre><code class="language-lua">local handle
+return {
+    init = function()
+        handle = kast.subscribe(&quot;health.empty&quot;, function(event)  -- event: a fresh copy of the payload
+            kast.log(&quot;empty: &quot; .. event.id)
+        end)
+    end,
+    update = function(dt)
+        kast.publish(&quot;heartbeat&quot;, {time = dt, tags = {&quot;a&quot;, &quot;b&quot;}})
+        if kast.input.keyDown(&quot;U&quot;) then kast.unsubscribe(handle) end
+    end,
+}
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Returns</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>kast.publish(name [, payload])</code></td>
+<td>—</td>
+<td>Queues an event. <code>name</code>: a non-empty string. <code>payload</code>: plain data (below); omitted or <code>nil</code> is JSON <code>null</code>. The payload is deep-copied now: later changes to the table don't affect the event.</td>
+</tr>
+<tr>
+<td><code>kast.subscribe(name, fn)</code></td>
+<td>handle</td>
+<td><code>fn(payload)</code> is called for every later event named exactly <code>name</code> (no wildcards). <code>name</code>: a non-empty string, <code>fn</code>: a function.</td>
+</tr>
+<tr>
+<td><code>kast.unsubscribe(handle)</code></td>
+<td>—</td>
+<td>Stops deliveries at once, including the rest of the current drain. A handle already unsubscribed, or one owned by another system, is a no-op; any value that isn't a handle raises.</td>
+</tr>
+</tbody>
+</table>
+<p>A wrong argument raises a Lua error at the calling line, and nothing is queued or subscribed.</p>
+<p><strong>Payloads</strong> are plain data: <code>nil</code>, booleans, finite numbers, strings, and tables of these. A table whose keys are
+exactly <code>1..n</code> becomes a JSON array; one with only string keys becomes an object; an empty table is <code>{}</code>. Mixed or
+other keys (<code>{1, x = 2}</code>, <code>{1, nil, 3}</code>, <code>{[0] = 1}</code>, <code>{[true] = 1}</code>), functions, userdata, threads, cycles, NaN or
+infinity, and tables nested more than <strong>32</strong> deep raise at the <code>publish</code> call (<code>payload.a.b: ...</code> names the bad
+value). Integral numbers travel as JSON integers. Each subscriber gets its own fresh copy: mutating it affects no one
+else. JSON arrays arrive as 1-based sequences, objects as string-keyed tables; a <code>null</code> inside a payload arrives as
+<code>nil</code> (in an array that leaves a hole).</p>
+<p><strong>Delivery</strong>: the queue drains once per frame in <code>LuaSystems::tick</code>, <strong>after</strong> every Lua system's <code>update</code> and before
+a <code>kast.loadScene</code> switch is applied, so an event published in <code>update</code> reaches subscribers in the same frame. Events
+are delivered in publish order; each event goes to its subscribers in subscription order, C++ and Lua subscribers in
+one shared order. Events published while the queue drains (by Lua or C++ subscribers) are delivered <strong>next frame</strong>,
+so a subscriber that re-publishes can't loop within a frame. A subscription added during a drain takes effect from the
+next event.</p>
+<p><strong>Ownership</strong>: a Lua subscription belongs to the system whose code called <code>kast.subscribe</code> (from <code>init</code>, <code>update</code>, a
+subscriber or the file body). It is removed when that system is disabled (by any error), when it is hot-reloaded (the
+old instance's subscriptions go before the new file runs), and when the Lua state goes on Stop or a scene switch. The
+publisher recorded for a Lua event is the system's path as listed in the scene (<code>scripts/health_events.lua</code>).</p>
+<p><strong>Errors, Pause, Stop, scene switch</strong>:</p>
+<ul>
+<li>A Lua subscriber that raises is logged with file:line and its system is disabled exactly like an <code>update</code> error
+  (which also removes all its subscriptions until a successful hot reload). The event's other subscribers still run,
+  and Play continues.</li>
+<li>A C++ subscriber that throws is caught and logged (<code>Event 'x': C++ subscriber failed: ...</code>); delivery continues.</li>
+<li>Paused: nothing is delivered; the queue is held until Play resumes.</li>
+<li>Stop: queued events are discarded (including any published by <code>shutdown</code>). Play start resets the bus: queue, every
+  subscription (C++ ones too), the history and the frame count.</li>
+<li><code>kast.loadScene</code> switch: undelivered events (published during that frame's drain or by the old <code>shutdown</code>s) are
+  dropped and the old scene's Lua subscriptions go with its Lua state. C++ subscriptions and the history carry over.</li>
+</ul>
+<p><strong>C++ API</strong> (<code>kast::EventBus</code>, from <code>LuaSystems::bus()</code>; no Lua or ImGui dependency):</p>
+<pre><code class="language-cpp">kast::EventBus&amp; bus = lua.bus();
+kast::EventBus::Subscription sub = bus.subscribe(&quot;health.empty&quot;, [](const nlohmann::json&amp; payload) { /* ... */ });
+bus.publish(&quot;door.opened&quot;, {{&quot;id&quot;, 7}});   // publisher &quot;C++&quot;; delivered at the next drain
+sub.unsubscribe();                          // or let the handle go out of scope (RAII, move-only)
+</code></pre>
+<p><code>drain()</code> delivers (<code>LuaSystems::tick</code> calls it), <code>dropQueued()</code> discards the queue, <code>reset()</code> clears everything, and
+<code>history()</code> returns the last 500 delivered events (<code>frame</code> = drains since Play start, <code>name</code>, compact one-line JSON
+<code>payload</code>, <code>publisher</code>). A <code>Subscription</code> must not outlive its bus; after <code>reset()</code> it is a harmless no-op. Physics
+publishes the <a href="physics.html#physics">collision and trigger events</a>.</p>
+<p><strong>Events panel</strong> (editor, tabbed with Console): the last 500 delivered events, oldest first, following new ones while
+scrolled to the bottom. Columns: frame, event name, compact payload, publisher (script path or <code>C++</code>). <strong>Clear</strong>
+empties it; the filter shows events whose name contains the text (case-sensitive). Play start clears it; it stays
+after Stop. <code>--focus-panel Events</code> brings it to the front for screenshots.</p>
+<p><strong>Sample</strong>: <code>tests/project/events.scene</code> runs <code>scripts/health_events.lua</code> (a <code>heartbeat</code> every 20 frames and, on frame
+30, <code>health.empty</code> with <code>{id, title}</code> for every entity with <code>Health</code>; it changes nothing itself) and
+<code>scripts/on_health_empty.lua</code> (greys out the named entity's material with <code>kast.setMaterialProperty</code>).</p>
+</main>
+</div>
+</body>
+</html>

@@ -12,7 +12,7 @@
 // Audio: 2D sound on miniaudio. .wav and .mp3 clips play one-shot or looping on a pool of kMaxVoices voices, each on
 // one of a fixed set of buses (gain = sound volume * bus volume * Master volume). Owned by LuaSystems for a Play
 // session (kast.audio) and by the editor for clip Preview. Every file is read through kast::readFile, so a mounted
-// game.pak works. See README "Audio".
+// game.pak works. See docs/engine/audio.html.
 namespace kast {
 
 enum class AudioBus { Master, Music, SFX, UI, Voice };

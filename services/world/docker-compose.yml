@@ -23,11 +23,11 @@ services:
       - "${WORLD_HOST_PORT:-7777}:7777"
     volumes:
       - world-certs:/app/certs
-      # Lua components, state machines and systems (README "Lua components and systems"): edit, then
+      # Lua components, state machines and systems (docs/services/world/lua.html): edit, then
       # `docker compose restart world`.
       # Point the left side at a game project folder to share its components/ with the client.
       - ./lua:/app/lua:ro
-      # Maps (README "Maps"): the game project's maps/ folder, <folder>/map.json each; restart world after edits.
+      # Maps (docs/services/world/maps.html): the game project's maps/ folder, <folder>/map.json each; restart world after edits.
       - ../../tests/project/maps:/app/maps:ro
     depends_on:
       mysql:

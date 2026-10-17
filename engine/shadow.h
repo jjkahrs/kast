@@ -7,7 +7,7 @@
 #include <array>
 #include <cstdint>
 
-// Shadow map math for the Renderer, GPU-free so self_check can test it. See README.md, Lighting.
+// Shadow map math for the Renderer, GPU-free so self_check can test it. See docs/engine/coordinates-and-scenes.html (Lighting).
 namespace kast {
 
 constexpr uint16_t kCascadeSize = 2048;   // texels per side of one directional light cascade

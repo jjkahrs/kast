@@ -11,10 +11,10 @@
 #include <utility>
 #include <vector>
 
-// WorldClient: the game side of the world server protocol (services/world/PROTOCOL.md) over a Network TLS connection,
+// WorldClient: the game side of the world server protocol (docs/services/world/protocol.html) over a Network TLS connection,
 // encoded and decoded by services/world/protocol (kast_protocol). Connects to a realm from the auth service's realm
 // list with the AuthClient's access token, answers Ping, and turns every server message and the connection's life
-// into "world.*" events (README "kast.world"). One connection at a time. No Lua, no EventBus, no scene: LuaSystems owns
+// into "world.*" events (docs/engine/online-services.html#kastworld). One connection at a time. No Lua, no EventBus, no scene: LuaSystems owns
 // one per Play session, routes the Network results and auth events to it and publishes what poll() returns. Never logs
 // the access token; chat text only at debug level. Same threading rule as Network.
 namespace kast {

@@ -233,7 +233,7 @@ struct NetworkEntity {
     int entityId = 0;
 };
 
-// Heightmap terrain (README "Terrain"): in Play, the tiles of map `map` within `radius` tiles of the local player
+// Heightmap terrain (docs/engine/terrain.html): in Play, the tiles of map `map` within `radius` tiles of the local player
 // (else the camera) stream in as TerrainTile children. Online, the world server's map replaces `map`.
 struct Terrain {
     int map = 0;    // map.json id, 0..65535

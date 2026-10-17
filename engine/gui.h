@@ -14,7 +14,7 @@ class Context;
 
 // Game GUI on RmlUi (HTML/CSS-like .rml documents styled by .rcss sheets). RmlUi reads files through kast::readFile
 // (disk, or the mounted pak in kast_player), logs to kast::log ("RmlUi: ..."), draws with bgfx and has the bundled
-// Roboto as its fallback font face. See README "Game GUI".
+// Roboto as its fallback font face. See docs/engine/game-gui.html.
 namespace kast::gui {
 
 // Starts RmlUi; call after bgfx::init. False (logged) if it fails; GUI calls then do nothing.

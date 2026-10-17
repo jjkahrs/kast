@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Models &amp; Animation - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html" class="active">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li></ul></nav>
+<main>
+<h1 id="models--animation">Models &amp; Animation</h1>
+<p>Model files placed anywhere in the project render through a <code>ModelRenderer</code>; skinned characters play skeletal
+animation clips through an <code>Animator</code>. Loading uses Assimp at runtime (no cooked format), straight from the source file.</p>
+<ul>
+<li><strong>Formats</strong>: glTF 2.0 (<code>.gltf</code> with its <code>.bin</code> and images, or <code>.glb</code>), FBX (<code>.fbx</code>) and OBJ (<code>.obj</code> with its <code>.mtl</code>).
+  Sidecar files resolve next to the model through the engine's file layer, so they also load from <code>game.pak</code>.</li>
+<li><strong>Units and axes</strong>: everything is normalized to meters and Y-up on load. glTF is meters / Y-up; OBJ has no unit and
+  is taken as meters; FBX is converted from its <code>UnitScaleFactor</code> (centimeters per unit) and its up / front / coord
+  axis metadata (e.g. Z-up files are turned Y-up). The same 1 m cube lines up as OBJ and glTF. Entity
+  <code>Transform.scale</code> is the only user scale. (The sample Kenney FBX character is authored 3.76 m tall; <code>models.scene</code>
+  scales it by 0.5.)</li>
+<li><strong>What loads</strong>: meshes (one submesh per material slot; positions, normals, UV0, up to 4 joint weights per vertex,
+  renormalized), the node hierarchy, skins (bind poses), animation clips (name, duration, per-node translation /
+  rotation / scale keys) and embedded materials mapped onto <a href="materials.html#materials"><code>.mat</code> fields</a>: base color factor and texture,
+  metallic, roughness, metallic-roughness texture, emissive, alpha mode and cutoff (OBJ <code>Kd</code> / <code>d</code>). Embedded GLB
+  images decode like other textures (PNG/JPG). A mesh on a node without a skin renders at that node's transform.</li>
+<li><strong>Caching</strong>: each model loads once per project-relative path and is shared by every entity using it; a changed file
+  reloads within a frame (modification time, as <code>.mat</code> files; not in the built game).</li>
+<li>
+<p><strong><code>ModelRenderer</code></strong>: <code>model</code> (project-relative <code>.glb/.gltf/.fbx/.obj</code>; empty = renders nothing) and <code>materials</code>, the
+  per-slot <code>.mat</code> overrides by slot index: a JSON array of strings, <code>""</code> (or no entry) = the model's embedded material.
+  <code>castShadows</code> / <code>receiveShadows</code> [true] as for <code>MeshRenderer</code> (skinned meshes cast their animated pose).
+  It is the first built-in field that is a list (<code>std::vector&lt;std::string&gt;</code>); it saves, loads, duplicates and goes
+  through <code>kast.get</code> / <code>kast.set</code> like any other field. No scene version change.</p>
+<pre><code>"ModelRenderer": { "model": "models/female-128-anim.glb", "materials": ["materials/gold_r05.mat"] },
+"Animator": { "clip": "Idle_A", "loop": true, "speed": 1, "playOnStart": true }
+</code></pre>
+</li>
+<li>
+<p><strong><code>Animator</code></strong>: <code>clip</code> (a clip name of the model; empty = bind pose), <code>loop</code> [true], <code>speed</code> [1, 0–10; values
+  outside are rejected] and <code>playOnStart</code> [true]. It drives the <code>ModelRenderer</code> on the same entity: <strong>without one it
+  does nothing</strong> (the Inspector says so, <code>kast.*Animation*</code> raise). Keys are sampled with lerp (translation, scale) and
+  slerp (rotation), looping wraps and not looping holds the last frame (then <code>playing</code> turns false). Switching clips
+  crossfades from the current pose over the fade time. Root-motion clips (<code>*_RM</code>) play in place: the root bone moves as
+  authored, the entity <code>Transform</code> never moves. Playback state (clip, time, fade, pose) is runtime-only: never saved,
+  reset by Stop.</p>
+</li>
+<li><strong>GPU skinning</strong>: <code>vs_mesh_skinned.sc</code> (same PBR fragment shader, lights, alpha modes and fog), 4 weights per vertex,
+  bone matrices in a uniform array of <strong>at most 128 bones per skinned mesh</strong>. A model over the limit logs one error and renders
+  that mesh in bind pose, unskinned.</li>
+<li><strong>Edit mode</strong>: Animators preview in the Scene view: a <code>playOnStart</code> clip plays; otherwise the clip's first frame shows,
+  paused. The Animator Inspector has a <strong>Clip</strong> dropdown (the model's clips) and a <strong>Preview</strong> row: Play / Pause and a
+  time scrub (dragging pauses). The preview never saves and never marks the scene dirty; Play mode starts every
+  <code>playOnStart</code> clip from 0.</li>
+<li><strong>Editor</strong>: drag a model from the Assets panel onto the Scene view (an entity at the origin) or the Hierarchy (at the
+  root, or onto an entity for a child): the entity is named after the file and gets a <code>ModelRenderer</code>, plus an
+  <code>Animator</code> if the model has clips, playing <code>Idle</code> if there is one, else <code>Idle_A</code>, else the first clip whose name
+  contains "idle" (any case), else the first clip. <strong>GameObject &gt; Model</strong> (and the Hierarchy's right-click menu) adds an
+  empty <code>ModelRenderer</code>. Its Inspector has a <strong>Model</strong> combo (the project's model files) and a <code>.mat</code> combo per
+  material slot, named as in the file, with <strong>None (embedded)</strong>. Scene view picking and focus use the model's bind-pose
+  bounds. Renaming or moving a model, a <code>.mat</code> or a folder holding them in Assets rewrites the open scene's
+  <code>ModelRenderer.model</code> and override paths.</li>
+<li>
+<p><strong>Lua</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>kast.playAnimation(id, clip, opts)</code></td>
+<td>Plays <code>clip</code>; optional <code>opts = {loop =, speed =, fade = seconds}</code> (fade crossfades from the current pose, default 0). Writes the Animator's <code>clip</code>, <code>loop</code>, <code>speed</code>.</td>
+</tr>
+<tr>
+<td><code>kast.stopAnimation(id)</code></td>
+<td>Stops at the current pose.</td>
+</tr>
+<tr>
+<td><code>kast.getAnimationState(id)</code></td>
+<td><code>{clip = name, time = seconds into the clip, playing = bool}</code>.</td>
+</tr>
+<tr>
+<td><code>kast.getAnimationClips(id)</code></td>
+<td>The model's clip names, in file order.</td>
+</tr>
+</tbody>
+</table>
+<p><code>kast.get</code> / <code>kast.set</code> work on <code>Animator</code> fields (a <code>clip</code> change starts that clip). An invalid entity, an entity
+without <code>Animator</code> + <code>ModelRenderer</code>, a model that didn't load, an unknown clip, or a speed / fade out of range raise a
+Lua error naming the problem.</p>
+</li>
+<li>
+<p><strong>Fallbacks</strong> (the scene always loads): a missing, corrupt or unsupported model renders a magenta cube at the entity
+  and warns once per path; an unknown <code>Animator.clip</code> (from the scene or the Inspector) shows the bind pose and warns
+  once; over 128 bones, see above.</p>
+</li>
+<li><strong>Built game</strong>: model files and their sidecars ship in <code>game.pak</code> like every other project file (with the Assimp DLLs
+  next to the exe); the player renders and animates them the same way.</li>
+<li><strong>Limits</strong>: 128 bones per skinned mesh, 4 weights per vertex, one UV set; no morph targets, no node (non-skinned)
+  animation playback, no animation layers / blend trees / events / IK, no root-motion extraction, no LOD or instancing,
+  embedded images only as PNG/JPG. Animations stored in separate animation-only files (e.g. Kenney's <code>run.fbx</code>) are not
+  merged into a model. Assimp 6.0.4 crashes on a glTF skin without <code>inverseBindMatrices</code> (valid glTF); such files must
+  include them.</li>
+<li><strong>Samples</strong> (<code>tests/project/</code>): <code>models.scene</code> (OBJ cube, glTF cube, the GLB character, Kenney's CC0 FBX character
+  with a <code>.mat</code> skin override, next to primitives), <code>models_anim.scene</code> (Cheering_Two_Hands on start),
+  <code>models_material.scene</code> (slot 0 overridden with gold), <code>models_missing.scene</code> (missing model), <code>models_lua.scene</code>
+  (<code>scripts/animation_test.lua</code>), with <code>models/</code> (<code>models/kenney/License.txt</code>: CC0).</li>
+</ul>
+</main>
+</div>
+</body>
+</html>

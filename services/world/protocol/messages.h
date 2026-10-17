@@ -1,4 +1,4 @@
-// Every wire message: opcode, struct and payload layout (see PROTOCOL.md). C = client->server, S = server->client.
+// Every wire message: opcode, struct and payload layout (see docs/services/world/protocol.html). C = client->server, S = server->client.
 #pragma once
 #include "wire.h"
 
@@ -300,7 +300,7 @@ struct ChatMsg {
     bool operator==(const ChatMsg&) const = default;
 };
 
-// A Lua component's full value as JSON (README "Lua components and systems"). Server-authoritative: never C->S.
+// A Lua component's full value as JSON (docs/services/world/lua.html). Server-authoritative: never C->S.
 struct ComponentUpdate {
     static constexpr Opcode op = Opcode::ComponentUpdate;
     uint32_t entityId = 0;
@@ -322,7 +322,7 @@ struct ComponentRemove {
     bool operator==(const ComponentRemove&) const = default;
 };
 
-// A named event a Lua system sent with kast.sendTo/sendNearby/broadcast (PROTOCOL.md "Server events"). Never C->S.
+// A named event a Lua system sent with kast.sendTo/sendNearby/broadcast (docs/services/world/protocol.html#server-events). Never C->S.
 struct ServerEvent {
     static constexpr Opcode op = Opcode::ServerEvent;
     std::string name;
@@ -335,7 +335,7 @@ struct ServerEvent {
 };
 
 // The player was moved to another map (or another place on its own): drop every remote entity, place yourself here.
-// Comes before the Despawns and Spawns of the move (PROTOCOL.md "Maps").
+// Comes before the Despawns and Spawns of the move (docs/services/world/protocol.html#maps).
 struct MapChange {
     static constexpr Opcode op = Opcode::MapChange;
     uint16_t map = 0;

@@ -2,7 +2,7 @@
 
 #include <bx/math.h>
 
-// Small math helpers on top of bx. Conventions (see README):
+// Small math helpers on top of bx. Conventions (see docs/engine/coordinates-and-scenes.html):
 // - Right-handed, Y-up, 1 unit = 1 meter. Cameras and lights look down their local -Z.
 // - Matrices are bgfx/bx layout: float[16], row vectors (p' = p * M), translation in [12..14].
 // - Quaternions are standard Hamilton rotations (x, y, z, w), the same convention as glTF.

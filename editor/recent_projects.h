@@ -7,8 +7,8 @@
 #include <string>
 #include <vector>
 
-// The Project Manager's recent-projects list: a JSON array in projects.json, most recent first (see README
-// "Project Manager"). No ImGui; shared by the launcher and the editor's --project startup.
+// The Project Manager's recent-projects list: a JSON array in projects.json, most recent first (see
+// docs/editor/project-manager.html). No ImGui; shared by the launcher and the editor's --project startup.
 
 struct RecentProject {
     std::filesystem::path dir; // absolute, lexically normal

@@ -1,9 +1,9 @@
--- Sample server system: NPC patrols. The NPCs themselves come from the maps' spawn files (README "NPC spawns"); this
+-- Sample server system: NPC patrols. The NPCs themselves come from the maps' spawn files (docs/services/world/npcs.html#npc-spawns); this
 -- walks every one whose Spawn has a path. Its NPC definition (npcs/guard.lua, npcs/sentry.lua) gives it the "patrol"
 -- machine (fsms/patrol.lua), which starts in "walking". While "walking", update moves it at SPEED m/s toward its next
 -- path point, facing where it goes; on arrival it switches to "waiting" for the path's wait seconds, then walks to the
 -- next point: back to the first after the last (loop), or back along the path (loop = false). A respawned NPC is a new entity and starts over at the first point.
--- On a map with a navmesh (README "Navmesh") it walks kast.map.path's corners from where it is to the next point, so it
+-- On a map with a navmesh (docs/services/world/maps.html#navmesh) it walks kast.map.path's corners from where it is to the next point, so it
 -- goes around cliffs; without one (or no path), straight there. The server keeps it on the ground.
 --
 -- Bandwidth: every kast.set of an NPC's Transform is one EntityMove per tick (20 Hz) to each player that sees it, so a

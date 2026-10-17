@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lua components - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html" class="active">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li></ul></nav>
+<main>
+<h1 id="lua-components">Lua components</h1>
+<p>Game developers can define data-only ECS component types in Lua, inside their project (<code>engine/lua_components.h</code>).
+Once defined, a Lua component behaves like a built-in one: saved in scenes, edited in the Inspector, listed by Add
+Component, copied on Duplicate, snapshot/restored by Play and reachable from Lua systems through <code>kast.*</code>.</p>
+<p><strong>Files</strong>: every <code>.lua</code> file under <code>&lt;project&gt;/components/</code>, scanned recursively, is one definition. They are loaded when
+a project becomes active (opening a scene or project, New Project, <code>--project</code> / <code>--scene</code> at startup). No project =
+no Lua components. Each file returns exactly one table:</p>
+<pre><code class="language-lua">-- components/health.lua
+return {
+  name = &quot;Health&quot;,          -- type name and scene-file key; required, unique
+  displayName = &quot;Health&quot;,   -- optional: Inspector header / Add Component label, defaults to name
+  fields = {                -- required list (may be empty), in save and Inspector order
+    { name = &quot;current&quot;, type = &quot;float&quot;,  default = 100, min = 0 },
+    { name = &quot;lives&quot;,   type = &quot;int&quot;,    default = 3, min = 0, max = 9 },
+    { name = &quot;regen&quot;,   type = &quot;bool&quot;,   default = true },
+    { name = &quot;title&quot;,   type = &quot;string&quot;, default = &quot;Hero&quot; },
+    { name = &quot;tint&quot;,    type = &quot;vec3&quot;,   color = true, default = {x = 1, y = 0, z = 0} },
+    { name = &quot;facing&quot;,  type = &quot;quat&quot; },                                     -- identity
+    { name = &quot;faction&quot;, type = &quot;enum&quot;,   values = {&quot;neutral&quot;, &quot;ally&quot;, &quot;enemy&quot;}, default = &quot;neutral&quot; },
+    { name = &quot;drops&quot;,   type = &quot;array&quot;,  of = &quot;string&quot;, default = {} },
+  },
+}
+</code></pre>
+<table>
+<thead>
+<tr>
+<th><code>type</code></th>
+<th>Value (Lua / JSON)</th>
+<th>Options</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>float</code></td>
+<td>number (stored as a 32-bit float)</td>
+<td><code>min</code>, <code>max</code></td>
+</tr>
+<tr>
+<td><code>int</code></td>
+<td>integral number (32-bit)</td>
+<td><code>min</code>, <code>max</code> (integers)</td>
+</tr>
+<tr>
+<td><code>bool</code></td>
+<td>boolean</td>
+<td></td>
+</tr>
+<tr>
+<td><code>string</code></td>
+<td>string</td>
+<td></td>
+</tr>
+<tr>
+<td><code>vec3</code></td>
+<td><code>{x=, y=, z=}</code> / <code>[x, y, z]</code></td>
+<td><code>color = true</code>: color picker in the Inspector</td>
+</tr>
+<tr>
+<td><code>quat</code></td>
+<td><code>{x=, y=, z=, w=}</code> / <code>[x, y, z, w]</code>, nonzero</td>
+<td></td>
+</tr>
+<tr>
+<td><code>enum</code></td>
+<td>one of <code>values</code>, as a string</td>
+<td><code>values</code>: non-empty list of unique non-empty strings (required)</td>
+</tr>
+<tr>
+<td><code>array</code></td>
+<td>Lua sequence / JSON array of <code>of</code></td>
+<td><code>of</code>: any type above except <code>array</code> (no nesting); an enum array also takes <code>values</code>; <code>min</code>/<code>max</code> on a float/int array apply to each element; <code>color</code> on a vec3 array</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Names (<code>name</code> of the type and of each field) are letters, digits and <code>_</code>, not starting with a digit. Field names are
+  unique within the type.</li>
+<li><code>default</code> is optional. Without it a field gets its type's zero value moved into <code>min</code>/<code>max</code>: <code>0</code>, <code>false</code>, <code>""</code>,
+  <code>{0,0,0}</code>, the identity quaternion, the first enum value, an empty array. A given default that violates the field's
+  type, range or <code>values</code> is a definition error.</li>
+<li>Unknown keys (at the top level or in a field) are errors, so typos don't pass silently.</li>
+<li>
+<p>Two optional top-level keys belong to the world server, so a game project's <code>components/</code> can be shared with it
+  (<a href="../services/world/lua.html">World Server, Lua components and systems</a>):</p>
+<ul>
+<li><code>persist = true|false</code> (default <code>false</code>): the server saves the component per character.</li>
+<li><code>replicate = "none"|"owner"|"aoi"</code> (default <code>"none"</code>): who the server sends it to.</li>
+</ul>
+<p>The engine checks them (a non-boolean <code>persist</code> or another <code>replicate</code> value is a definition error) and otherwise
+ignores them: it applies whatever the server replicates (see <a href="online-services.html#replication">Replication</a>).</p>
+</li>
+</ul>
+<p><strong>Sandbox</strong>: one Lua state per scan, separate from Play's, each file in its own environment with the same rules as
+<a href="lua-systems.html#lua-systems">Lua systems</a>: only <code>base</code>, <code>table</code>, <code>string</code> and <code>math</code>; <code>io</code>, <code>os</code>, <code>ffi</code>, <code>debug</code>, <code>jit</code>, <code>package</code>,
+<code>require</code>, <code>dofile</code>, <code>loadfile</code>, <code>load</code> and <code>loadstring</code> are not reachable; text only.</p>
+<p><strong>Errors</strong>: a file that isn't valid Lua, raises, doesn't return exactly one table, or breaks any rule above is
+rejected. The message starts with the project-relative path (and the line for Lua errors, e.g.
+<code>components/health.lua:3: ...</code>), is logged as <code>Lua component rejected: ...</code> and shown in the Components panel. Valid
+files in the same project still load.</p>
+<p><strong>Name clashes</strong>: a name equal to a built-in component (<code>Transform</code>, <code>MeshRenderer</code>, <code>DirectionalLight</code>, <code>Camera</code>,
+<code>Rotator</code>, <code>StateMachine</code>) or a structural one (<code>PersistentId</code>, <code>Name</code>, <code>Hierarchy</code>, <code>PreservedComponents</code>) is rejected. If two files
+declare the same name, <strong>both</strong> are rejected, each error naming the other file, so the result never depends on scan
+order.</p>
+<p><strong>Scene files</strong>: same shape as built-ins, after them, sorted by type name:
+<code>"Health": { "current": 100.0, "lives": 3, ..., "tint": [1.0, 0.0, 0.0], "faction": "neutral", "drops": ["gold"] }</code>
+(vec3/quat as arrays, enums by name, arrays as arrays, floats rounded to 32-bit). Output is deterministic; re-saving
+gives identical bytes. Scene files stay version 4.</p>
+<p><strong>Inspector</strong>: one collapsible section per Lua component with generated widgets, removable with its <strong>x</strong>: drag fields
+clamped to <code>min</code>/<code>max</code>, a checkbox, a text box, a color picker for <code>color</code> vec3s, Euler degrees for quats (as for
+<code>Transform</code>), a combo for enums. Arrays show <code>name [count]</code> with one row per element (value, move up, move down,
+remove <strong>x</strong>) and <strong>Add Element</strong> (appends the zero value moved into <code>min</code>/<code>max</code>). Edits are checked like <code>kast.set</code>.
+Add Component lists Lua types the entity doesn't have; adding one gives the declared defaults.</p>
+<p><strong>Lua systems</strong>: <code>kast.query/get/set/has/add/remove</code> take Lua component names like built-in ones. <code>kast.set</code> stays
+partial and all-or-nothing: an unknown field, a wrong type, an enum name not in <code>values</code>, a value outside <code>min</code>/<code>max</code>
+(including one array element) or a non-sequence table for an array raises at the calling line and leaves the
+component unchanged.</p>
+<p><strong>Schema drift</strong> (lenient, unlike built-ins): when stored data doesn't match the current definition, on scene load and
+on definition hot reload, missing fields get their default, unknown fields are dropped, and mistyped or out-of-range
+values (including a bad array element or an unknown enum name; a bad element resets the whole array) are reset to the
+field default. Each change is a Console warning naming the entity, component and field, e.g.
+<code>Entity 'Hero' (id 3): Health: "lives" 12 must be &lt;= 9; reset to default 3</code>. The scene still loads. The document is
+marked dirty only if some instance's data was changed this way.</p>
+<p><strong>Missing definitions</strong>: a component name that is neither built-in nor a valid Lua definition (never defined, file
+deleted, or now broken) doesn't stop the scene from loading: a Console warning is logged, and its JSON is kept verbatim
+on the entity (<code>PreservedComponents</code>), written back unchanged on Save (after the known components) and carried through
+Duplicate and Play/Stop. The Inspector shows it read-only as <code>Missing: &lt;name&gt;</code> with its raw JSON, removable with <strong>x</strong>.
+Lua systems can't reach it (<code>kast.*</code> raises <code>unknown component "&lt;name&gt;"</code>). When a valid definition for that name
+appears (hot reload, or opening the scene in a project that has it), the preserved data is converted with the drift
+rules.</p>
+<p><strong>Hot reload</strong>: while stopped, the editor checks the <code>components/</code> folder every 0.5 s for added, removed and modified
+<code>.lua</code> files (modification time) and reloads the definitions: existing instances migrate with the drift rules, and a
+removed or now-broken definition turns its instances into preserved Missing data (nothing is lost; restoring the file
+converts them back). During Play definitions are frozen; changes made meanwhile apply after Stop, to the restored scene.</p>
+</main>
+</div>
+</body>
+</html>

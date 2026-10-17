@@ -142,7 +142,7 @@ private:
 // A Server body answering fake's requests, one connection after another.
 Server::Body serveFakeAuth(FakeAuth& fake);
 
-// A fake world server (services/world/PROTOCOL.md) for kast.world tests, scripted by what the client sends. Hello must
+// A fake world server (docs/services/world/protocol.html) for kast.world tests, scripted by what the client sends. Hello must
 // be protocol 2 (proto::kProtocolVersion); Auth gets Ping{kFakeWorldPing} then AuthOk{42, player} (an empty token: Disconnect{invalid_token}).
 // Each connection has its own characters. CharListReq -> CharList. CharCreate: "Taken" -> CharError{name_taken};
 // "Kick<n>" -> Disconnect{code n} and close; "Garbage" -> a malformed Spawn frame; "Unknown" -> opcode 0x7777;

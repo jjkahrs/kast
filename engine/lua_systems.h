@@ -20,8 +20,8 @@
 #include <vector>
 
 // Lua systems: global ECS systems written in Lua, listed in Scene::systems and run once per frame in Play mode after
-// the C++ systems. One LuaJIT state per Play session; each file runs in its own sandboxed environment. See README
-// "Lua systems" for the file shape and the kast.* API.
+// the C++ systems. One LuaJIT state per Play session; each file runs in its own sandboxed environment. See
+// docs/engine/lua-systems.html for the file shape and the kast.* API.
 namespace kast {
 
 struct LuaSystemStatus {
@@ -93,10 +93,10 @@ public:
     // drop the connection. Its address override (editor only) outlives them.
     WorldClient& world() { return world_; }
     const WorldClient& world() const { return world_; }
-    // The session's entity replication (README "Online Services → Replication"): started with each scene before
+    // The session's entity replication (docs/engine/online-services.html#replication): started with each scene before
     // physics and the inits (it takes the template entity out), updated by tick() after the systems.
     Replication& replication() { return replication_; }
-    // The session's terrain streaming (README "Terrain"): its maps load with start(), tickPlay updates it before
+    // The session's terrain streaming (docs/engine/terrain.html): its maps load with start(), tickPlay updates it before
     // physics so new tiles collide on the step they appear.
     TerrainStreamer& terrain() { return terrain_; }
     StateMachines& fsm() { return fsm_; }

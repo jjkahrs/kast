@@ -2,8 +2,8 @@
 -- regenerates toward max while the character stands still and drains slowly while it moves (Transform deltas). Each
 -- login pays one gold, so a relog shows the Wallet persisted.
 --
--- Bandwidth: every change of a replicated component is sent in full to the owner and everyone in view (PROTOCOL.md
--- "Lua components"). So this runs once a second per character, each on its own phase (no burst tick), and keeps
+-- Bandwidth: every change of a replicated component is sent in full to the owner and everyone in view
+-- (docs/services/world/protocol.html#lua-components). So this runs once a second per character, each on its own phase (no burst tick), and keeps
 -- Health in whole points, written only when it changes: at most one update a second per character, not one a tick.
 local PERIOD = 1             -- seconds between updates of one character
 local REGEN_PER_SECOND = 2

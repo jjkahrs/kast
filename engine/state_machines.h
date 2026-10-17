@@ -18,7 +18,7 @@
 // Finite state machines: named states with optional allowedFrom rules and enter/exit callbacks, defined by Lua files
 // under <project>/fsms/ (scanned recursively, one machine per file). Game machines are project-wide (project.kast
 // "stateMachines") and keep their state across kast.loadScene; entity machines come from the StateMachine component.
-// See README "State machines".
+// See docs/engine/state-machines.html.
 namespace kast {
 
 constexpr const char* kStateMachinesDir = "fsms";

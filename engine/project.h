@@ -7,14 +7,14 @@
 #include <string>
 #include <vector>
 
-// Projects: a directory marked by a project.kast file (JSON, see README "Projects"). Scene "systems" and
+// Projects: a directory marked by a project.kast file (JSON, see docs/editor/projects.html). Scene "systems" and
 // kast.loadScene paths are relative to the project root, with '/' separators.
 namespace kast {
 
 constexpr const char* kProjectFileName = "project.kast";
 constexpr int kProjectFileVersion = 1;
 
-// Online Services: the project's opt-in to the built-in auth/world integration (README "Online Services"). Optional in
+// Online Services: the project's opt-in to the built-in auth/world integration (docs/engine/online-services.html). Optional in
 // the file ("online"): absent = disabled with no endpoint, and saving leaves out the block while it is all defaults.
 // Never holds secrets: it ships in game.pak.
 struct OnlineConfig {

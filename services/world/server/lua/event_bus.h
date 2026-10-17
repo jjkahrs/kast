@@ -1,6 +1,6 @@
 // Event bus: named events with plain-data JSON payloads, queued on publish and delivered by drain(). Copied from
 // engine/event_bus.h (same behaviour) without the editor's history. One per lua::Runtime; Lua systems use it through
-// kast.publish/subscribe/unsubscribe (README "Lua components and systems").
+// kast.publish/subscribe/unsubscribe (docs/services/world/lua.html).
 #pragma once
 #include <entt/signal/dispatcher.hpp>
 #include <nlohmann/json.hpp>

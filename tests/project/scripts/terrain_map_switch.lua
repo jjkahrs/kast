@@ -1,6 +1,6 @@
 -- Terrain sample: what Replication does on world.mapChanged, offline. After 0.5 s the Terrain's map becomes 3 (the
 -- hills) and the hero is placed above the ground there (as the server places a player at a portal's destination); the
--- streamer swaps the tiles on the next frame. Used by the terrain_switch screenshot tests (README "Terrain").
+-- streamer swaps the tiles on the next frame. Used by the terrain_switch screenshot tests (docs/engine/terrain.html).
 local t, switched, reported = 0, false, false
 
 return {

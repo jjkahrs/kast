@@ -648,7 +648,7 @@ struct Runtime::Impl {
             changed(e, def);
         });
 
-        // Events: queued, delivered by drain_events() after every update (README "Events"). Subscriptions belong to
+        // Events: queued, delivered by drain_events() after every update (docs/services/world/events.html). Subscriptions belong to
         // the calling system; a handle is a light userdata holding the subscription id (no metatable a script could
         // edit).
         api.set_function("publish", [this](sol::this_state L, const sol::object& name, const sol::object& value) {
@@ -681,7 +681,7 @@ struct Runtime::Impl {
                 std::erase_if(current->subscriptions, [id](const EventBus::Subscription& s) { return s.id() == id; });
         });
 
-        // Client events: queued, sent as ServerEvent after component replication (README "Events").
+        // Client events: queued, sent as ServerEvent after component replication (docs/services/world/events.html).
         api.set_function("sendTo", [this](sol::this_state L, const sol::object& id, const sol::object& name,
                                           const sol::object& value) {
             queue_client_event(L, "kast.sendTo", ClientEvent::To::owner, target(L, "kast.sendTo", id), name, value);

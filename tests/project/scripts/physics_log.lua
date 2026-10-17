@@ -1,4 +1,4 @@
--- Logs the physics events (see README "Physics") and, at init, a raycast straight down onto the ground.
+-- Logs the physics events (see docs/engine/physics.html) and, at init, a raycast straight down onto the ground.
 local function logEvent(name)
     kast.subscribe(name, function(e)
         if e.normal then

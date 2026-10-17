@@ -185,7 +185,7 @@ std::shared_ptr<LuaComponentDef> parseDefinition(sol::state& lua, const std::fil
     def->path = path;
     def->name = identifier(table, "name", path + ": ");
     declared = def->name;
-    // persist and replicate are world-server keys (services/world README "Lua components and systems"), accepted here
+    // persist and replicate are world-server keys (docs/services/world/lua.html), accepted here
     // so client and server can share definition files. The engine checks them and otherwise ignores them: it applies
     // whatever the server replicates.
     checkKeys(table, {"name", "displayName", "fields", "persist", "replicate"}, path + ": ");

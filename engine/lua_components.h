@@ -11,7 +11,7 @@
 
 // Lua components: data-only component types defined by Lua files under <project>/components/ (scanned recursively),
 // one type per file. Once active they behave like built-in components through the uniform layer in components.h.
-// See README "Lua components" for the file shape, field types, drift rules and hot reload.
+// See docs/engine/lua-components.html for the file shape, field types, drift rules and hot reload.
 namespace kast {
 
 constexpr const char* kComponentsDir = "components";
