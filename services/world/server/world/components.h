@@ -81,10 +81,12 @@ struct ReplicatedState {
 
 struct ScriptsLeft {}; // tag: onLeave already ran (graceful shutdown runs it for everyone first)
 
-// A server-created NPC (kast.create): no session, never saved. name and templateName go to clients in Spawn.
+// A server-created NPC (kast.create or a spawn file): no session, never saved. name and templateName go to clients in
+// Spawn. npc: the NPC definition it was made from (lua::NpcDef), "" for kast.create with a template.
 struct Npc {
     std::string name;
     std::string templateName;
+    std::string npc;
 };
 
 // An NPC placed by a spawn file: record indexes World's spawn records (SpawnRecord). Read in Lua as "Spawn".

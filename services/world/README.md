@@ -65,7 +65,7 @@ To run the server on the host against the compose MySQL and auth, point `.env` a
 
 | Command | What |
 |---|---|
-| `ctest --preset debug` | Self-check: codec round trip for every message, frame rejection, names, movement, AOI, chat, rate limits, config, tick stats, JWT and JWKS with local RSA keys. Lua (`tests/lua_checks.cpp`): definition parsing (every type, option, new key and error case), reserved and duplicate names, sandbox, `kast.*` semantics and every `set` error, hook order, an error disabling one system, startup errors listed in full, persistence round trip + drift + verbatim preservation, and replication routing (owner / aoi / none, AOI-enter full set, unchanged not resent, nothing after `Despawn`, oversize). NPCs: `kast.create` / `kast.destroy` and every bad argument, `MAX_NPCS` (and `0`), the `Npc` / `Transform` built-in rules and clamping, `query` by `Character` / `Npc`, `Spawn{kind, template}` / `EntityMove` / `Despawn` routing as an NPC moves across the grid, aoi / owner components and `sendTo` / `sendNearby` on NPCs, never saved or dirty, Lua components and `kast.fsm` on NPCs, no `onEnter` / `onLeave`, a destroy in the tick it came into view, silent removal at shutdown, and the sample `lua/` (the Guard from its spawn file patrolling at 3 m/s). NPC spawns: `parse_spawns` and every spawn file error, respawn timing on the injected clock, `MAX_NPCS` deferral, the `Spawn` built-in. Protocol v2: the `Spawn` layout for both kinds, a bad kind and a v1 `Spawn` rejected as malformed State machines: definition parsing and every rejection, duplicate names, `GAME_STATE_MACHINES` startup errors, `allowedFrom` / omitted / `"*"` / self-transition rules, callback and event order, queued changes, callback errors and timeouts, game machine startup, the `StateMachine` built-in lifecycle (not persisted or replicated), every `kast.fsm` misuse, read-only `kast.fsm`, and C++ / Lua parity |
+| `ctest --preset debug` | Self-check: codec round trip for every message, frame rejection, names, movement, AOI, chat, rate limits, config, tick stats, JWT and JWKS with local RSA keys. Lua (`tests/lua_checks.cpp`): definition parsing (every type, option, new key and error case), reserved and duplicate names, sandbox, `kast.*` semantics and every `set` error, hook order, an error disabling one system, startup errors listed in full, persistence round trip + drift + verbatim preservation, and replication routing (owner / aoi / none, AOI-enter full set, unchanged not resent, nothing after `Despawn`, oversize). NPCs: `kast.create` / `kast.destroy` and every bad argument, `MAX_NPCS` (and `0`), the `Npc` / `Transform` built-in rules and clamping, `query` by `Character` / `Npc`, `Spawn{kind, template}` / `EntityMove` / `Despawn` routing as an NPC moves across the grid, aoi / owner components and `sendTo` / `sendNearby` on NPCs, never saved or dirty, Lua components and `kast.fsm` on NPCs, no `onEnter` / `onLeave`, a destroy in the tick it came into view, silent removal at shutdown, and the sample `lua/` (the Guard from its spawn file patrolling at 3 m/s). NPC spawns: `parse_spawns` (version 2, and version 1 / leftover `name` / `template` / missing `npc` rejected) and every spawn file error, respawn timing on the injected clock, `MAX_NPCS` deferral, the `Spawn` built-in. NPC definitions: parsing and every rejection (keys, duplicates, unknown and read-only components, every field error, an unknown `StateMachine.machine`), `kast.create` with `npc` / `components` / `template` and every bad option (nothing created), per-field merge, `Npc.npc`, an unknown spawn `npc` refusing the start, exact components and fresh data on respawn, `Spawn` then `aoi` data on AOI enter, and the sample definitions (Health data, the Guard and Sentry's `patrol` from their definitions). Protocol v2: the `Spawn` layout for both kinds, a bad kind and a v1 `Spawn` rejected as malformed State machines: definition parsing and every rejection, duplicate names, `GAME_STATE_MACHINES` startup errors, `allowedFrom` / omitted / `"*"` / self-transition rules, callback and event order, queued changes, callback errors and timeouts, game machine startup, the `StateMachine` built-in lifecycle (not persisted or replicated), every `kast.fsm` misuse, read-only `kast.fsm`, and C++ / Lua parity |
 | `docker compose build` | Linux build; the self-check runs inside it |
 | `bash tests/integration.sh` | All 18 integration scenarios (1–18) against the running stack. Prints PASS/FAIL each and exits non-zero on any failure |
 | `bash tests/load.sh` | Load test: 500 `wander` bots for 300 s (`COUNT`, `DURATION`, `BEHAVIOUR`, `THREADS` override) |
@@ -425,14 +425,15 @@ server replicates to the matching component on the local player and on remote cl
 |---|---|
 | `LUA_ROOT/components/**/*.lua` | Component definitions, scanned recursively, one type per file |
 | `LUA_ROOT/fsms/**/*.lua` | State machine definitions, scanned recursively, one machine per file |
+| `LUA_ROOT/npcs/**/*.lua` | NPC definitions, scanned recursively, one NPC type per file; server only (the engine never reads `npcs/`) |
 | `LUA_ROOT/systems/*.lua` | Systems, not recursive, run in alphabetical filename order |
 
 - **`LUA_ROOT`:** defaults to `/app/lua`. The image ships the sample from `services/world/lua/` there, and compose bind-mounts `./lua` over it.
 - **Loading:** files are loaded once at startup; there is no hot reload. After an edit, restart the server (`docker compose restart world`).
-- **Errors refuse the start:** an invalid component or state machine definition, an invalid system file, a `GAME_STATE_MACHINES` name with no valid definition, or an error in a system's `init` stops the start. The server logs every error, not just the first, one `Lua error` line each. Each starts with the file path (and `path:line` for Lua errors); a `startup failed: Lua` line and exit status 1 follow.
-- **No Lua is fine:** a missing or empty `LUA_ROOT` means no custom components, state machines or systems, with an info log.
+- **Errors refuse the start:** an invalid component, state machine or NPC definition, an invalid system file, a `GAME_STATE_MACHINES` name with no valid definition, a spawn whose `npc` has no definition, or an error in a system's `init` stops the start. The server logs every error, not just the first, one `Lua error` line each. Each starts with the file path (and `path:line` for Lua errors); a `startup failed: Lua` line and exit status 1 follow.
+- **No Lua is fine:** a missing or empty `LUA_ROOT` means no custom components, state machines, NPC definitions or systems, with an info log. Spawn files then refuse the start: their `npc` names no definition.
 
-**Sharing with a game project:** point the bind mount (or `LUA_ROOT`, when running on the host) at a folder whose `components/` and `fsms/` are the game project's. For example, change the volume to `- ../../my-game:/app/lua:ro`, which holds `components/`, `fsms/` and a `systems/` folder the client never runs. Client and server then read the same definition files.
+**Sharing with a game project:** point the bind mount (or `LUA_ROOT`, when running on the host) at a folder whose `components/` and `fsms/` are the game project's. For example, change the volume to `- ../../my-game:/app/lua:ro`, which holds `components/`, `fsms/`, and the `npcs/` and `systems/` folders the client never reads. Client and server then read the same definition files.
 
 ### Component definitions
 
@@ -493,7 +494,7 @@ return {
 | `kast.get(e, name)` | A fresh table of the component's fields; arrays are 1-based sequences, `vec3`/`quat` are `{x=, y=, z=[, w=]}` |
 | `kast.set(e, name, fields)` | Partial: listed fields change, the others keep their values. All-or-nothing: an unknown field, a wrong type, an out-of-range value or an unknown enum value raises an error and leaves the component unchanged |
 | `kast.has(e, name)` / `kast.add(e, name)` / `kast.remove(e, name)` | `add` uses the field defaults and does nothing if the component is present; `remove` does nothing if it is absent |
-| `kast.create(name, opts)` | Creates an NPC and returns its entity id; `opts = {template = string, map = id?, position = {x, y, z}?, heading = number?}` (see [NPCs](#npcs)) |
+| `kast.create(name, opts)` | Creates an NPC and returns its entity id; `opts = {npc = string \| template = string, components = {...}?, map = id?, position = {x, y, z}?, heading = number?}` (see [NPCs](#npcs)) |
 | `kast.transfer(e, map, position [, heading])` | Moves player or NPC `e` to `position` (`{x, y, z}`) on map `map`; `heading` defaults to the current one. Returns `true`, or `false` if this process does not own the destination (see [Maps](#maps)) |
 | `kast.destroy(e)` | Removes NPC `e`; the players who see it get `Despawn` |
 | `kast.log/warn/error(msg)` | A server log line `<system path>: <msg>` at that level |
@@ -516,10 +517,10 @@ return {
 | Name | Fields |
 |---|---|
 | `Character` | `charId`, `name` (players only) |
-| `Npc` | `name`, `template` (NPCs only) |
+| `Npc` | `name`, `template`, `npc` (its [NPC definition](#npc-definitions), `""` if made with `template`; NPCs only) |
 | `Spawn` | `id`, and with a path `path = {{x, y, z}, ...}`, `wait` (seconds), `loop` (NPCs from a spawn file only; see [NPC spawns](#npc-spawns)) |
 | `Transform` | `position = {x, y, z}`, `heading` (radians), `map` (id, read-only). A player moves only by the validated client movement, an NPC only by `kast.set`; either changes map only by `kast.transfer` |
-| `StateMachine` | `machine`, `initialState` (writable; added only by `kast.add`) |
+| `StateMachine` | `machine`, `initialState` (writable; added by `kast.add`, an NPC definition or `kast.create`'s `components`) |
 
 ### NPCs
 
@@ -530,17 +531,25 @@ and `Despawn` when it leaves the view or is destroyed. The engine shows each one
 after its template (root README, "Replication").
 
 ```lua
-local guard = kast.create("Guard", {template = "Guard", position = {x = 1034, y = 0, z = 1024}, heading = 0})
+local guard = kast.create("Guard", {npc = "Guard", position = {x = 1034, y = 0, z = 1024}, heading = 0})
+local boss = kast.create("Gate Boss", {npc = "Guard", components = {Health = {max = 500, current = 500}}})
+local prop = kast.create("Crate", {template = "Crate"})            -- no definition, no components
 kast.set(guard, "Transform", {position = {x = 1035, y = 0, z = 1024}}) -- one EntityMove to every player who sees it
 kast.destroy(guard)                                                 -- Despawn to every player who sees it
 ```
 
-- **`kast.create(name, opts)`:** `name` and `opts.template` must be non-empty strings of at most 255 bytes.
-  `map` defaults to `START_MAP` and must be a loaded map's id. `position` (`{x, y, z}`, finite numbers) defaults to that
+- **`kast.create(name, opts)`:** `name` (the `Npc.name` clients see) must be a non-empty string of at most 255 bytes.
+  `opts` needs exactly one of `npc` (an [NPC definition](#npc-definitions)'s name: its `template` and components) and
+  `template` (non-empty, at most 255 bytes; no components); both or neither raises (`kast.create: opts needs exactly
+  one of npc (an npcs/ definition) and template`), as does an unknown `npc`. `components` has a definition's
+  `components` shape and is merged per field over the definition's data (or over the field defaults with `template`),
+  with the same checks (`kast.create: "Health": "current" must be >= 0`). `map` defaults to `START_MAP` and must be a
+  loaded map's id. `position` (`{x, y, z}`, finite numbers) defaults to that
   map's spawn point and `heading` (radians) to 0. A position off the map is clamped to the nearest point on a declared
   tile, and y is the [ground](#ground) there (no flying NPCs). Any other key in `opts`, a bad value, or `MAX_NPCS` NPCs
-  already in the world raises an error at the call (`kast.create: template must be a non-empty string of at most 255
-  bytes, got nil`) and creates nothing. It works from `init` on; players in range get the `Spawn` on the next tick.
+  already in the world raises an error at the call and creates nothing. It works from `init` on; the components are
+  there when it returns (a `StateMachine` has entered its initial state), and players in range get the `Spawn` on the
+  next tick, followed by its `aoi` components.
 - **`kast.destroy(e)`:** a player id (`kast.destroy: entity 7 is a player; only NPCs can be destroyed`), a stale id or
   an invalid id raises an error. A destroyed NPC's id is stale at once: `kast.*` on it raises `invalid entity id`.
 - **Moving:** `kast.set(npc, "Transform", {position = {x, y, z}, heading = h})` is partial and all-or-nothing like any
@@ -549,7 +558,7 @@ kast.destroy(guard)                                                 -- Despawn t
   in the same tick, like an accepted player move. A move into or out of a player's view gives `Spawn` / `Despawn` on
   the next tick.
 - **Components and machines:** `kast.add/set/get/has/remove`, and `StateMachine` with `kast.fsm.*`, work on NPCs as on
-  characters. An `aoi` component reaches the players who see the NPC, an `owner` one nobody, and `persist` is ignored.
+  characters, whether the components came from a definition or a system. An `aoi` component reaches the players who see the NPC, an `owner` one nobody, and `persist` is ignored.
 - **Events:** `kast.sendTo(npc, ...)` sends nothing (no error); `kast.sendNearby(npc, ...)` reaches the players who see
   it. `onEnter` and `onLeave` never run for NPCs.
 - **Ephemeral:** NPCs are never saved and need no database. A restart starts without them: the spawn files and the
@@ -559,26 +568,58 @@ kast.destroy(guard)                                                 -- Despawn t
 walking NPCs around a crowd of players costs NPCs x players messages a tick. Move NPCs at the rate clients need and let
 the engine interpolate.
 
+### NPC definitions
+
+An NPC type is data: one file per type under `LUA_ROOT/npcs/` (scanned recursively), listing the Lua components every
+NPC of that type starts with. Spawn files (`npc`) and `kast.create` (`opts.npc`) make NPCs from them.
+
+```lua
+return {
+    name = "Guard",          -- the NPC's Npc.name and Npc.npc
+    template = "Guard",      -- the scene entity clients clone
+    components = {           -- optional; omitted: none
+        Health = { current = 50, max = 50 },   -- partial: unlisted fields take their defaults; {} is all defaults
+        StateMachine = { machine = "patrol" }, -- enters "patrol"'s initial state when the NPC is created
+    },
+}
+```
+
+- **Keys:** `name` (unique across `npcs/`) and `template` are required, non-empty strings of at most 255 bytes. Any
+  other key is an error.
+- **Components:** any [Lua component](#component-definitions), and the writable built-in `StateMachine`, whose `machine`
+  must name a valid [state machine](#state-machines). The read-only built-ins (`Npc`, `Transform`, `Spawn`,
+  `Character`) and unknown names are errors. Field values are checked like `kast.set` (unknown field, wrong type,
+  min/max, enum values, array elements).
+- **Loading:** once at startup, after `fsms/` and before the systems' `init`, in the definition sandbox. Every invalid
+  file is one `Lua error` starting with its path (`npcs/guard.lua: "Health": unknown field "hp"`) and refuses the
+  start. Two files with the same `name` are both rejected, each error naming the other file. A missing or empty `npcs/`
+  is fine.
+- **When:** an NPC gets its components when it is created, so the first `Spawn` a player gets is followed by its `aoi`
+  components in the usual AOI-enter full set. A respawned NPC starts with fresh definition data. `persist` is ignored
+  and `owner` components reach nobody, as for every NPC.
+
 ### NPC spawns
 
 A map's NPCs are data: one file per tile, `<MAP_ROOT>/<folder>/.server/spawns/<tx>_<tz>.json`. The dot-folder keeps it
 server only (the editor's Build leaves dot-folders out of `game.pak`).
 
 ```json
-{ "version": 1,
+{ "version": 2,
   "paths": {"gate_patrol": {"loop": true, "wait": 2,
             "points": [[1034, 0, 1034], [1034, 0, 1014], [1014, 0, 1014], [1014, 0, 1034]]}},
   "spawns": [
-    {"id": "guard_1", "name": "Guard", "template": "Guard", "pos": [1024, 0, 1024], "heading": 0,
-     "respawnSec": 30, "path": "gate_patrol"}
+    {"id": "guard_1", "npc": "Guard", "pos": [1024, 0, 1024], "heading": 0, "respawnSec": 30, "path": "gate_patrol"}
   ]}
 ```
 
-- **Spawn:** `id` (non-empty, unique on the map), `template` (the clone clients show, as in `kast.create`), `pos` and
-  `respawnSec` are required. `name` defaults to `template` (both at most 255 bytes), `heading` (radians) to 0. `pos` must
-  lie inside the file's tile; its y is replaced by the [ground](#ground) there, like `kast.create`.
+- **Version:** `version` must be `2`. A version 1 file (`name` / `template` per spawn) is rejected: replace both with
+  `npc`.
+- **Spawn:** `id` (non-empty, unique on the map), `npc` (an [NPC definition](#npc-definitions)'s name, at most 255
+  bytes: the NPC's name, template and components), `pos` and `respawnSec` are required; `heading` (radians) defaults to
+  0, `path` is optional. Any other key is an error. `pos` must lie inside the file's tile; its y is replaced by the
+  [ground](#ground) there, like `kast.create`.
 - **Respawn:** `respawnSec` (0 to 31536000, a year) is how long after an NPC is destroyed (`kast.destroy`) the spawn
-  places a new one, at `pos` again, as a new entity id. `-1` never respawns.
+  places a new one, at `pos` again, as a new entity id, with fresh definition data. `-1` never respawns.
 - **Paths:** named in the file's `paths` and used by its spawns. `points` (at least one `[x, y, z]`) is the route,
   `wait` (seconds, default 0) the pause at each point, and `loop` (default `true`) goes from the last point back to the
   first; `false` walks back along the route. The server does not move NPCs: a Lua system reads the path from the
@@ -587,7 +628,9 @@ server only (the editor's Build leaves dot-folders out of `game.pak`).
 - **Loading:** at startup, the spawn files of every tile this process owns (every tile, for now). A file name that is
   not `<tx>_<tz>.json`, a tile not on the map, an invalid file (each problem named, such as
   `maps/start/.server/spawns/4_4.json: spawn "guard_1": "pos" is outside tile 4_4`), an unknown `path` or an `id` used
-  twice on a map refuses the start. `map::parse_spawns` (the `kast_map` library) checks one file without the server.
+  twice on a map refuses the start, and so does an `npc` with no definition, once `LUA_ROOT` is loaded
+  (`maps/start/.server/spawns/4_4.json: spawn "guard_1": unknown npc "Gaurd" (no definition in npcs/)`).
+  `map::parse_spawns` (the `kast_map` library) checks one file's shape without the server or Lua.
 - **Spawning:** every spawn is placed on the first tick, and each tick the spawner places the ones due, before the Lua
   `update`, so systems see them that tick; players get the `Spawn` on the next. They count toward `MAX_NPCS`: at the
   cap the due spawns wait (one warning, `spawns deferred: MAX_NPCS reached`) and go in once there is room. Every spawn
@@ -733,9 +776,11 @@ The `lua/` folder holds the sample:
 | `fsms/locomotion.lua` | Character machine `idle` / `moving`, each enterable only from the other. Every `enter` sends the owner `fsm.state` `{machine, from, to}` (`kast.sendTo`) |
 | `fsms/zone_cycle.lua` | Game machine `day` / `night` (listed in `GAME_STATE_MACHINES`). `enter` only logs |
 | `fsms/patrol.lua` | NPC machine `walking` / `waiting`, each enterable only from the other. No callbacks: it only records the phase |
+| `npcs/guard.lua`, `npcs/sentry.lua` | NPC definitions "Guard" and "Sentry" (template `Guard`): `Health` data and `StateMachine` with `patrol` |
+| `npcs/bat.lua` | NPC definition "Bat" (template `Guard`): `Health` data, no machine |
 | `systems/locomotion.lua` | `onEnter` adds `StateMachine` with `locomotion`, which enters `idle`, then tries `idle` again: denied by `allowedFrom`, a warning and no event. `update` switches to `moving` when the character's `Transform` changes and back to `idle` after 1 s standing still. It flips `zone_cycle` every 5 minutes if it is listed. It sends only on transitions, never per tick |
 | `systems/events.lua` | On login, sends the player `welcome` (`sendTo`) and publishes `player.entered` on the bus. Its subscriber runs on the next tick, after the newcomer's `Spawn`, and sends `player.arrived` to the newcomer and everyone who sees it (`sendNearby`). On logout, sends every player `player.left` (`broadcast`) before the `Despawn`. It sends only on login and logout, never per tick. It also subscribes to `area.enter` / `area.leave` and logs each (`area.enter entity 5 map 1 area goldshire (Goldshire) flags {noMount=false, pvp=true}`) |
-| `systems/npcs.lua` | Patrols every NPC whose `Spawn` has a path: the first time it sees one it adds `StateMachine` with `patrol`, then walks it at 3 m/s to each point in turn, facing where it goes, and waits the path's `wait` at each (`loop`, or back along the path). While walking it costs one `EntityMove` per tick per viewer. No NPCs or waypoints of its own: the sample maps' spawn files place the "Guard" (template `Guard`, `tests/project/maps/start/.server/spawns/4_4.json`: respawn 5 s, a 20 m square around the spawn point, 2 s waits) and a still "Bat" (template `Guard`, never respawns) at map 2's spawn point, the far side of the sample portal |
+| `systems/npcs.lua` | Patrols every NPC whose `Spawn` has a path (its definition gives it the `patrol` machine): it walks it at 3 m/s to each point in turn, facing where it goes, and waits the path's `wait` at each (`loop`, or back along the path). While walking it costs one `EntityMove` per tick per viewer. No NPCs or waypoints of its own: the sample maps' spawn files place the "Guard" (`npc` Guard, `tests/project/maps/start/.server/spawns/4_4.json`: respawn 5 s, a 20 m square around the spawn point, 2 s waits), the "Sentry" on the hills and a still "Bat" (never respawns) at map 2's spawn point, the far side of the sample portal |
 | `systems/test_hooks.lua` | Test only, for scenario 18: a character whose name starts with `Respawntest` destroys the Guard (spawn `guard_1`) when it enters. Remove it from a real game |
 | `systems/regen.lua` | `onEnter` adds `Health` and `Wallet` if absent and pays 1 gold per login. Once a second per character, each on its own phase, `update` regenerates `Health.current` toward `max` (+2) if the character stood still, or drains it by 0.5 per metre moved (`Transform` deltas). It keeps whole points and writes only on a change, so a character costs at most one `ComponentUpdate` a second per viewer |
 
@@ -788,7 +833,7 @@ The `lua/` folder holds the sample:
   - Scenarios 10–13 use `docker compose restart/stop/start` on `world` and `mysql`.
   - Scenario 14 uses the sample `systems/events.lua`: `sendTo` reaches only its target, `sendNearby` only bots in view, and `broadcast` every bot.
   - Scenario 15 (`fsm`) uses the sample `locomotion` machine. On entering, a bot gets exactly one `fsm.state` (`nil->idle`), because the denied `idle->idle` sends nothing. Walking, then standing still, gives `idle->moving` and then `moving->idle`. A bot in view gets none of them.
-  - Scenario 16 (`npcs`) uses the sample `systems/npcs.lua` and the Guard's spawn file. A bot entering at the spawn point gets `Spawn` for the Guard (`kind` npc, `template` `Guard`) and `EntityMove`s at changing positions. Walking 200 m away gives `Despawn` and then nothing about it; walking back gives `Spawn` again.
+  - Scenario 16 (`npcs`) uses the sample `systems/npcs.lua`, `npcs/guard.lua` and the Guard's spawn file. A bot entering at the spawn point gets `Spawn` for the Guard (`kind` npc, `template` `Guard`), its `Health` from the definition (`current` 50, `max` 50) and `EntityMove`s at changing positions. Walking 200 m away gives `Despawn` and then nothing about it; walking back gives `Spawn` and the `Health` again.
   - Scenario 17 (`portal`) uses the sample `areas.json` files. Bot A walks from the spawn point into `cave_mouth`.
     It gets `MapChange{2}` at the portal destination before any `Despawn`/`Spawn`, then sees the Bat and loses bot B,
     who gets A's `Despawn`. After a relog A is still on map 2.

@@ -108,7 +108,10 @@ void Maps::load_spawns(uint16_t id, const std::filesystem::path& folder, std::ve
         if (!spawns) { errors.push_back(where + ": " + err); continue; }
         for (auto& spawn : *spawns) {
             if (!ids.insert(spawn.id).second) errors.push_back(where + ": spawn \"" + spawn.id + "\": duplicate id on this map");
-            else info.spawns.push_back(std::move(spawn));
+            else {
+                spawn.file = where;
+                info.spawns.push_back(std::move(spawn));
+            }
         }
     }
     if (ec) errors.push_back("maps/" + folder.filename().string() + "/.server/spawns: " + ec.message());

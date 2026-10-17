@@ -24,6 +24,19 @@
 #include <map>
 #include <source_location>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#include <crtdbg.h>
+#include <cstdlib>
+#endif
+
 using namespace kast;
 using namespace std::chrono_literals;
 
@@ -517,7 +530,25 @@ void checkJwksCache() {
 
 int lua_checks(int& checks); // lua_checks.cpp
 
+// A test never waits for a click: abort(), failed asserts, debug-CRT reports (STL debug checks) and crashes write to
+// stderr and end the process instead of opening a modal dialog. Same as engine/crash_dialogs.cpp, without its
+// KAST_NO_CRASH_DIALOGS switch.
+static void disable_crash_dialogs() {
+#ifdef _WIN32
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT); // abort(): no "Debug Error!" box, no WER report
+    _set_error_mode(_OUT_TO_STDERR);                               // assert() in a release build
+#ifdef _DEBUG
+    for (const int type : {_CRT_WARN, _CRT_ERROR, _CRT_ASSERT}) {
+        _CrtSetReportMode(type, _CRTDBG_MODE_FILE);
+        _CrtSetReportFile(type, _CRTDBG_FILE_STDERR);
+    }
+#endif
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX); // access violations: no "has stopped working" box
+#endif
+}
+
 int main() {
+    disable_crash_dialogs();
     checkCodecRoundTrip();
     checkFrameRejection();
     checkNames();

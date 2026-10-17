@@ -277,6 +277,25 @@ bool lua_to_field_json(const FieldDesc& field, const sol::object& value, Json& o
     return true;
 }
 
+std::optional<Json> set_fields(const ComponentDef& def, Json value, const sol::table& fields, std::string& error) {
+    for (const auto& [key, item] : fields) {
+        if (key.get_type() != sol::type::string) {
+            error = std::format("\"{}\": field names must be strings, got {}", def.name, to_string(fields.lua_state(), key));
+            return std::nullopt;
+        }
+        const std::string field = key.as<std::string>();
+        const auto desc = std::ranges::find(def.fields, field, &FieldDesc::name);
+        if (desc == def.fields.end()) {
+            error = std::format("\"{}\": unknown field \"{}\"", def.name, field);
+            return std::nullopt;
+        }
+        if (!lua_to_field_json(*desc, item, value[field], error)) return std::nullopt;
+    }
+    std::optional<Json> valid = component_from_json(def, value, error);
+    if (!valid) error = std::format("\"{}\": {}", def.name, error);
+    return valid;
+}
+
 sol::object field_json_to_lua(sol::state_view lua, const FieldDesc& field, const Json& value, bool element) {
     if (!field.array || element) return scalar_to_lua(lua, field.kind, value);
     sol::table table = lua.create_table();

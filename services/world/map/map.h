@@ -69,12 +69,14 @@ struct PatrolPath {
 };
 
 // One NPC a tile's spawn file places (server only: <map>/.server/spawns/). respawnSec -1: never comes back.
+// npc names a server NPC definition (LUA_ROOT/npcs/), checked by the server; file is set by the loader, for errors.
 struct Spawn {
-    std::string id, name, templateName;
+    std::string id, npc;
     std::array<float, 3> pos{};
     float heading = 0;
     float respawnSec = -1;
     std::optional<PatrolPath> path; // the file's named path, copied in at parse
+    std::string file;               // "maps/<folder>/.server/spawns/<tx>_<tz>.json"; empty from parse_spawns
 };
 
 struct MapInfo {
@@ -103,9 +105,9 @@ std::optional<MapInfo> parse_manifest(const nlohmann::json& j, std::string& err)
 // overlap. Portals are checked against the other maps by the loader. nullopt with err set on any problem.
 std::optional<Areas> parse_areas(const nlohmann::json& j, std::string& err);
 
-// Parses and validates one tile's spawn file (.server/spawns/<tx>_<tz>.json): every spawn's pos inside tile, ids unique
-// within the file, every "path" one of the file's "paths". Ids across a map's files are checked by the loader. nullopt
-// with err set on any problem.
+// Parses and validates one tile's spawn file (.server/spawns/<tx>_<tz>.json, version 2): only known keys per spawn,
+// every spawn's pos inside tile, ids unique within the file, every "path" one of the file's "paths". Ids across a map's
+// files are checked by the loader, "npc" names by the server. nullopt with err set on any problem.
 std::optional<std::vector<Spawn>> parse_spawns(const nlohmann::json& j, TileKey tile, std::string& err);
 
 // The index in areas.list of the highest-priority area containing (x, y, z), or -1. Edges: a point on a boundary may

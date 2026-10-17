@@ -15,6 +15,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -37,13 +38,21 @@ struct ClientEvent {
     std::string json;
 };
 
+// An NPC type (LUA_ROOT/npcs/, README "NPC definitions"): the name and template its NPCs get, and the components they
+// start with.
+struct NpcDef {
+    std::string name, templateName;
+    Json components = Json::object(); // {"<Type>": canonical value, ...}: the listed fields over the defaults
+};
+using NpcDefs = std::map<std::string, NpcDef, std::less<>>; // by name
+
 // How kast.create / kast.destroy / kast.transfer / an NPC Transform set reach the world, which owns the maps, the AOI
 // grid and the sends.
 // Runtime checks every argument first; these only run for valid ones.
 struct NpcHooks {
     std::function<entt::entity(std::string name, std::string templateName, std::optional<uint16_t> map,
-                               std::optional<proto::Vec3> pos, float heading)>
-        create;                                               // map empty: START_MAP; pos empty: its spawn point
+                               std::optional<proto::Vec3> pos, float heading, std::string npc, const Json& components)>
+        create; // map empty: START_MAP; pos empty: its spawn point; npc: the definition ("" for none)
     std::function<void(entt::entity)> destroy;                // an existing NPC
     std::function<proto::Vec3(uint16_t map, proto::Vec3)> clamp; // onto the (loaded) map's ground, within MIN_Y/MAX_Y
     std::function<const map::MapInfo*(uint16_t id)> map;      // nullptr: not loaded
@@ -61,10 +70,10 @@ public:
     Runtime(const Runtime&) = delete;
     Runtime& operator=(const Runtime&) = delete;
 
-    // Loads the state machine definitions under root/fsms/, then every system under root/systems/ and runs each init,
-    // then the game machines (gameMachines, by name) enter their initial state. Returns every error (a rejected
-    // definition, a listed machine without one, a bad system); non-empty means the server must not start. A missing
-    // folder is no machines / no systems.
+    // Loads the state machine definitions under root/fsms/, then the NPC definitions under root/npcs/, then every
+    // system under root/systems/ and runs each init, then the game machines (gameMachines, by name) enter their initial
+    // state. Returns every error (a rejected definition, a listed machine without one, a bad system); non-empty means
+    // the server must not start. A missing folder is no machines / NPC definitions / systems.
     std::vector<std::string> load(const std::filesystem::path& root, std::vector<std::string> gameMachines = {});
     // A runtime error in any of these disables only that system (logged with path:line) until restart.
     void update(float dt);
@@ -72,6 +81,8 @@ public:
     void leave(entt::entity e); // onLeave: before it is saved and despawned
     void shutdown(); // also drops the events still queued on the bus
     std::vector<SystemStatus> status() const;
+    // The NPC definition named name (loaded by load), or nullptr.
+    const NpcDef* npc(std::string_view name) const;
 
     // Delivers the bus events queued so far (see EventBus::drain). A failing Lua subscriber disables its system.
     void drain_events();

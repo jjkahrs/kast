@@ -2,6 +2,7 @@
 #include "../core/log.h"
 #include "../world/components.h"
 #include "lua_state_machines.h"
+#include "npcs.h"
 #include "sandbox.h"
 
 #include <messages.h>
@@ -83,6 +84,7 @@ struct Runtime::Impl {
     StateMachines fsm{bus, reg};           // after lua: its definitions hold Lua callbacks
     std::vector<System> systems;           // after bus: their subscriptions unsubscribe from it
     std::vector<ClientEvent> clientEvents; // kast.sendTo/sendNearby/broadcast since the last take
+    NpcDefs npcDefs;                       // npcs/, loaded after the machines (StateMachine data names one)
     System* current = nullptr;
     std::string callbackPath; // the definition file whose enter/exit is running, if no system is
 
@@ -195,6 +197,14 @@ struct Runtime::Impl {
             });
         for (std::string& e : fsm.setup(std::move(loaded.valid), std::move(gameMachines)))
             loaded.errors.push_back(std::move(e));
+        return std::move(loaded.errors);
+    }
+
+    bool machine_exists(const std::string& name) const { return fsm.definition(name) != nullptr; }
+
+    std::vector<std::string> load_npcs(const std::filesystem::path& root) {
+        NpcDefsResult loaded = load_npc_defs(lua, root, defs, [this](const std::string& n) { return machine_exists(n); });
+        npcDefs = std::move(loaded.defs);
         return std::move(loaded.errors);
     }
 
@@ -410,8 +420,8 @@ struct Runtime::Impl {
         reg.emplace_or_replace<world::Moved>(e);
     }
 
-    // kast.create(name, {template=, map=?, position=?, heading=?}): every argument is checked before anything is
-    // created.
+    // kast.create(name, {npc= | template=, components=?, map=?, position=?, heading=?}): every argument is checked
+    // before anything is created.
     uint32_t create_npc(lua_State* L, const sol::object& name, const sol::object& opts) {
         const auto text = [&](std::string_view what, const sol::object& value) {
             if (value.get_type() != sol::type::string || value.as<std::string>().empty() ||
@@ -422,14 +432,31 @@ struct Runtime::Impl {
         };
         std::string npcName = text("name", name);
         if (opts.get_type() != sol::type::table)
-            raise(L, std::format("kast.create: opts must be a table {{template = ...}}, got {}", to_string(L, opts)));
+            raise(L, std::format("kast.create: opts must be a table {{npc = ...}} or {{template = ...}}, got {}",
+                                 to_string(L, opts)));
         const sol::table table = opts.as<sol::table>();
         for (const auto& [key, unused] : table) {
             const std::string k = key.get_type() == sol::type::string ? key.as<std::string>() : "";
-            if (k != "template" && k != "map" && k != "position" && k != "heading")
+            if (k != "npc" && k != "template" && k != "components" && k != "map" && k != "position" && k != "heading")
                 raise(L, std::format("kast.create: unknown option {}", to_string(L, key)));
         }
-        std::string templateName = text("template", table["template"]);
+        const sol::object npcOpt = table["npc"], templateOpt = table["template"];
+        if ((npcOpt.get_type() == sol::type::lua_nil) == (templateOpt.get_type() == sol::type::lua_nil))
+            raise(L, "kast.create: opts needs exactly one of npc (an npcs/ definition) and template");
+        const NpcDef* def = nullptr;
+        if (npcOpt.get_type() != sol::type::lua_nil) {
+            const std::string wanted = text("npc", npcOpt);
+            const auto it = npcDefs.find(wanted);
+            if (it == npcDefs.end())
+                raise(L, std::format("kast.create: unknown npc \"{}\" (no definition in {}/)", wanted, kNpcsDir));
+            def = &it->second;
+        }
+        std::string templateName = def ? def->templateName : text("template", templateOpt);
+        std::string error;
+        std::optional<Json> components =
+            merge_components(table["components"], def ? def->components : Json::object(), defs,
+                             [this](const std::string& n) { return machine_exists(n); }, error);
+        if (!components) raise(L, "kast.create: " + error);
         std::optional<uint16_t> map;
         if (const sol::object m = table["map"]; m.get_type() != sol::type::lua_nil) map = map_id(L, "kast.create: ", m);
         std::optional<proto::Vec3> pos;
@@ -440,7 +467,8 @@ struct Runtime::Impl {
             heading = finite(L, "kast.create: ", "heading", h);
         if (reg.view<world::Npc>().size() >= npcs.max)
             raise(L, std::format("kast.create: too many NPCs (MAX_NPCS is {})", npcs.max));
-        return wire(npcs.create(std::move(npcName), std::move(templateName), map, pos, heading));
+        return wire(npcs.create(std::move(npcName), std::move(templateName), map, pos, heading, def ? def->name : "",
+                                *components));
     }
 
     // kast.transfer(e, map, position, heading?): a player or NPC to a point on a declared tile of a loaded map (the same
@@ -579,6 +607,7 @@ struct Runtime::Impl {
                 const auto& npc = reg.get<world::Npc>(e);
                 table["name"] = npc.name;
                 table["template"] = npc.templateName;
+                table["npc"] = npc.npc;
             } else if (t.builtin == Builtin::spawn) {
                 const map::Spawn& s = *npcs.spawn(reg.get<world::SpawnRef>(e).record);
                 table["id"] = s.id;
@@ -611,18 +640,9 @@ struct Runtime::Impl {
             if (t.builtin == Builtin::transform && reg.all_of<world::Npc>(e)) return set_npc_transform(L, e, fields);
             const ComponentDef& def = writable(L, t);
             auto& p = pool(reg, def.name);
-            Json json = p.get(e).value;
             std::string error;
-            for (const auto& [key, value] : fields) {
-                if (key.get_type() != sol::type::string)
-                    raise(L, std::format("\"{}\": field names must be strings, got {}", name, to_string(L, key)));
-                const std::string field = key.as<std::string>();
-                const auto desc = std::ranges::find(def.fields, field, &FieldDesc::name);
-                if (desc == def.fields.end()) raise(L, std::format("\"{}\": unknown field \"{}\"", name, field));
-                if (!lua_to_field_json(*desc, value, json[field], error)) raise(L, error);
-            }
-            std::optional<Json> valid = component_from_json(def, json, error);
-            if (!valid) raise(L, std::format("\"{}\": {}", name, error));
+            std::optional<Json> valid = set_fields(def, p.get(e).value, fields, error);
+            if (!valid) raise(L, error);
             if (*valid == p.get(e).value) return;
             p.get(e).value = std::move(*valid);
             changed(e, def);
@@ -693,6 +713,7 @@ Runtime::~Runtime() = default;
 std::vector<std::string> Runtime::load(const std::filesystem::path& root, std::vector<std::string> gameMachines) {
     // Definitions first: an init may already use kast.fsm.
     std::vector<std::string> errors = impl_->load_machines(root, std::move(gameMachines));
+    for (std::string& e : impl_->load_npcs(root)) errors.push_back(std::move(e)); // before init: it may kast.create one
     std::vector<std::filesystem::path> files;
     std::error_code ec;
     for (auto it = std::filesystem::directory_iterator(root / "systems", ec);
@@ -738,6 +759,11 @@ EventBus& Runtime::bus() { return impl_->bus; }
 StateMachines& Runtime::fsm() { return impl_->fsm; }
 
 std::vector<ClientEvent> Runtime::take_client_events() { return std::exchange(impl_->clientEvents, {}); }
+
+const NpcDef* Runtime::npc(std::string_view name) const {
+    const auto it = impl_->npcDefs.find(name);
+    return it == impl_->npcDefs.end() ? nullptr : &it->second;
+}
 
 std::vector<SystemStatus> Runtime::status() const {
     std::vector<SystemStatus> out;

@@ -3,6 +3,8 @@
 #include "../core/log.h"
 
 #include <algorithm>
+#include <format>
+#include <stdexcept>
 
 namespace kast::world {
 
@@ -11,8 +13,8 @@ World::World(WorldRules rules, const Maps& maps, Send send, Save save, lua::Defs
       grid_(rules.cellSize, rules.viewRadius),
       lua_(reg_, std::move(defs),
            {.create = [this](std::string name, std::string templateName, std::optional<uint16_t> map,
-                             std::optional<proto::Vec3> pos, float heading) {
-                return create_npc(std::move(name), std::move(templateName), map, pos, heading);
+                             std::optional<proto::Vec3> pos, float heading, std::string npc, const lua::Json& components) {
+                return create_npc(std::move(name), std::move(templateName), map, pos, heading, std::move(npc), components);
             },
             .destroy = [this](entt::entity e) { destroy_npc(e); },
             .clamp = [this](uint16_t map, proto::Vec3 pos) { return clamp_to_map(map, pos); },
@@ -28,7 +30,12 @@ World::World(WorldRules rules, const Maps& maps, Send send, Save save, lua::Defs
 }
 
 std::vector<std::string> World::load_scripts(const std::filesystem::path& luaRoot, std::vector<std::string> gameMachines) {
-    return lua_.load(luaRoot, std::move(gameMachines));
+    std::vector<std::string> errors = lua_.load(luaRoot, std::move(gameMachines));
+    for (const SpawnRecord& r : spawner_.records)
+        if (!lua_.npc(r.spawn->npc))
+            errors.push_back(std::format("{}: spawn \"{}\": unknown npc \"{}\" (no definition in npcs/)", r.spawn->file,
+                                         r.spawn->id, r.spawn->npc));
+    return errors;
 }
 
 void World::shutdown_scripts() {
@@ -135,11 +142,12 @@ bool World::transfer(entt::entity e, const Destination& to) {
 }
 
 entt::entity World::create_npc(std::string name, std::string templateName, std::optional<uint16_t> map,
-                               std::optional<proto::Vec3> pos, float heading) {
+                               std::optional<proto::Vec3> pos, float heading, std::string npc,
+                               const lua::Json& components) {
     const auto& info = maps_.info(map.value_or(rules_.startMap));
     const proto::Vec3 at = clamp_to_map(info.id, pos.value_or(proto::Vec3{info.spawn[0], info.spawn[1], info.spawn[2]}));
     const auto e = reg_.create();
-    reg_.emplace<Npc>(e, std::move(name), std::move(templateName));
+    reg_.emplace<Npc>(e, std::move(name), std::move(templateName), std::move(npc));
     reg_.emplace<Transform>(e, at, heading);
     reg_.emplace<MapRef>(e, info.id);
     const CellKey cell = grid_.cell_of(info.id, at.x, at.z);
@@ -147,6 +155,8 @@ entt::entity World::create_npc(std::string name, std::string templateName, std::
     reg_.emplace<Viewers>(e);
     reg_.emplace<ReplicatedState>(e);
     grid_.insert(wire_id(e), cell);
+    for (const auto& [type, value] : components.items()) lua::pool(reg_, type).emplace(e, lua::ComponentData{value});
+    if (components.contains(lua::kStateMachineComponent)) lua_.fsm().syncEntity(e); // as kast.add + kast.set would
     return e;
 }
 
@@ -216,7 +226,10 @@ void World::tick(TimePoint now) {
     chat_system(reg_, rules_.chat, send_, now);
     spawner_system(reg_, spawner_, rules_.maxNpcs, now, [this](const SpawnRecord& r) {
         const auto& s = *r.spawn;
-        return create_npc(s.name, s.templateName, r.map, proto::Vec3{s.pos[0], s.pos[1], s.pos[2]}, s.heading);
+        const lua::NpcDef* def = lua_.npc(s.npc); // load_scripts refused the start without one
+        if (!def) throw std::logic_error("spawn \"" + s.id + "\": npc \"" + s.npc + "\" not loaded");
+        return create_npc(def->name, def->templateName, r.map, proto::Vec3{s.pos[0], s.pos[1], s.pos[2]}, s.heading,
+                          def->name, def->components); // fresh definition data on every respawn
     });
     lua_.update(rules_.tickSeconds);
     lua_.drain_events();

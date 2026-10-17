@@ -42,8 +42,9 @@ public:
     // instances are restored, saved and replicated here.
     World(WorldRules rules, const Maps& maps, Send send, Save save, lua::Defs defs = {});
 
-    // Loads the state machine definitions under luaRoot/fsms/ and the Lua systems under luaRoot/systems/, runs their
-    // init, then starts the game machines (by name); every error, empty if all loaded.
+    // Loads the state machine definitions under luaRoot/fsms/, the NPC definitions under luaRoot/npcs/ and the Lua
+    // systems under luaRoot/systems/, runs their init, then starts the game machines (by name); every error, empty if
+    // all loaded. A spawn whose "npc" has no definition is one too.
     std::vector<std::string> load_scripts(const std::filesystem::path& luaRoot, std::vector<std::string> gameMachines = {});
     // Graceful shutdown, before the despawns: onLeave for every character, then every system's shutdown, then the
     // client events they queued. Undelivered bus events are dropped.
@@ -59,10 +60,13 @@ public:
     // Runs onLeave and sends the client events it queued, saves the character, sends Despawn to everyone who could
     // see it, removes it.
     void despawn(entt::entity e);
-    // An NPC (kast.create) on map (default START_MAP, must be loaded) at pos (clamp_to_map: on the ground), or the
-    // map's spawn point (on the ground too). Players in range get its Spawn on the next tick. It has no session and is never saved.
+    // An NPC (kast.create, a spawn) on map (default START_MAP, must be loaded) at pos (clamp_to_map: on the ground), or
+    // the map's spawn point (on the ground too), made from definition npc ("" for none) with components ({"<Type>":
+    // valid value}; a StateMachine enters its initial state now). Players in range get its Spawn on the next tick. It
+    // has no session and is never saved.
     entt::entity create_npc(std::string name, std::string templateName, std::optional<uint16_t> map,
-                            std::optional<proto::Vec3> pos, float heading);
+                            std::optional<proto::Vec3> pos, float heading, std::string npc = "",
+                            const lua::Json& components = lua::Json::object());
     // Sends Despawn to every player who sees the NPC, removes it. One from a spawn file (SpawnRef) comes back
     // respawnSec after this (never for -1).
     void destroy_npc(entt::entity e);

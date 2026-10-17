@@ -761,9 +761,10 @@ asio::awaitable<void> fsm(Ctx& x) {
 }
 
 // --- 16 ---
-// Needs the sample lua/systems/npcs.lua: the Guard patrols around the spawn point, where a new character enters. A gets
-// Spawn{kind npc, template "Guard"}, then EntityMoves at changing positions; walking 200 m away gives Despawn and nothing
-// more about it; walking back gives Spawn again.
+// Needs the sample lua/systems/npcs.lua and lua/npcs/guard.lua: the Guard patrols around the spawn point, where a new
+// character enters. A gets Spawn{kind npc, template "Guard"}, then its Health from the definition (current 50), then
+// EntityMoves at changing positions; walking 200 m away gives Despawn and nothing more about it; walking back gives
+// Spawn and the Health again.
 asio::awaitable<void> npcs(Ctx& x) {
     proto::EnterWorldOk ea;
     auto a = co_await x.enter("s16a", ea);
@@ -787,8 +788,17 @@ asio::awaitable<void> npcs(Ctx& x) {
         return out;
     };
 
+    // Its Health (aoi) follows the Spawn in the same tick: the AOI-enter full set, with the definition's data.
+    const auto fromDefinition = [](const std::vector<proto::ComponentUpdate>& health) {
+        return !health.empty() && health_of(health.front()) == 50 && data_of(health.front()).value("max", -1.0) == 50;
+    };
     // The Guard walks for ~7 s between waypoints and waits 2 s at each: 4 s always hold some walking.
-    const auto moves = only<proto::EntityMove>(aboutGuard(co_await drain(*a, Millis(4000))));
+    const auto first = aboutGuard(co_await drain(*a, Millis(4000)));
+    const auto health = updates_for(first, G, "Health");
+    x.check.expect(fromDefinition(health),
+                   "A gets the Guard's Health from its definition (current 50, max 50)" +
+                       (health.empty() ? std::string(", got none") : ", got " + health.front().json));
+    const auto moves = only<proto::EntityMove>(first);
     std::set<std::pair<float, float>> positions;
     for (const auto& m : moves) positions.insert({m.pos.x, m.pos.z});
     x.check.expect(moves.size() >= 3 && positions.size() >= 3,
@@ -806,9 +816,11 @@ asio::awaitable<void> npcs(Ctx& x) {
 
     co_await walk(*a, p, 200, 0);
     std::optional<proto::Spawn> again;
-    for (const auto& m : co_await drain(*a, Millis(1500)))
+    const auto back = co_await drain(*a, Millis(1500));
+    for (const auto& m : back)
         if (auto* s = std::get_if<proto::Spawn>(&m); s && s->kind == proto::SpawnKind::npc && s->name == "Guard") again = *s;
     x.check.expect(again && again->templateName == "Guard", "walking back: Spawn for the Guard again");
+    x.check.expect(fromDefinition(updates_for(back, G, "Health")), "walking back: its Health again");
     a->close();
 }
 

@@ -1508,7 +1508,7 @@ return { update = function()
     expect(kast.has(g, "Npc") and kast.has(g, "Transform") and not kast.has(g, "Character"), "Npc + Transform, no Character")
     expect(not kast.has(p, "Npc"), "players have no Npc")
     local n = kast.get(g, "Npc")
-    expect(n.name == "Guard" and n.template == "GuardTpl", "Npc {name, template}")
+    expect(n.name == "Guard" and n.template == "GuardTpl" and n.npc == "", "Npc {name, template, npc}; npc empty with a template")
     local tf = kast.get(g, "Transform")
     expect(tf.position.x == 1024 and tf.position.y == 0 and tf.position.z == 1024 and tf.heading == 0, "default: spawn point, heading 0")
     raises('entity ' .. g .. ' has no "Character"', function() kast.get(g, "Character") end)
@@ -1533,9 +1533,8 @@ return { update = function()
         {nameErr, "", {template = "T"}},
         {nameErr .. "5", 5, {template = "T"}},
         {nameErr .. "xxx", long, {template = "T"}},
-        {"kast.create: opts must be a table {template = ...}, got nil", "N", nil},
-        {"kast.create: opts must be a table {template = ...}, got 5", "N", 5},
-        {tplErr .. "nil", "N", {}},
+        {"kast.create: opts must be a table {npc = ...} or {template = ...}, got nil", "N", nil},
+        {"kast.create: opts must be a table {npc = ...} or {template = ...}, got 5", "N", 5},
         {tplErr, "N", {template = ""}},
         {tplErr .. "7", "N", {template = 7}},
         {tplErr .. "xxx", "N", {template = long}},
@@ -1841,6 +1840,16 @@ void checkNpcSample() {
     check(reg.get<world::MapRef>(bat).map == 2 && reg.get<world::Transform>(bat).pos == proto::Vec3{256, 0, 256},
           "Bat at map 2's spawn");
     w.spawn(1, 141, "Alice", 1024, 1024);
+    // Their definitions (lua/npcs/): Health data, and the patrol machine for the two with a path.
+    const auto health = [&](entt::entity e) { return w.value(e, "Health"); };
+    check(reg.get<world::Npc>(g).npc == "Guard" && reg.get<world::Npc>(sentry).npc == "Sentry" && reg.get<world::Npc>(bat).npc == "Bat",
+          "each spawn's NPC is made from its definition");
+    check(health(g)["current"] == 50 && health(g)["max"] == 50 && health(g)["lives"] == 3 && health(sentry)["max"] == 80 &&
+              health(bat)["current"] == 10 && health(bat)["regen"] == false,
+          "the definitions' Health data, unlisted fields at their defaults: " + health(g).dump());
+    check(w.value(g, "StateMachine")["machine"] == "patrol" && w.value(sentry, "StateMachine")["machine"] == "patrol" &&
+              !lua::pool(reg, "StateMachine").contains(bat),
+          "Guard and Sentry get the patrol machine from their definitions, the Bat none");
     std::set<std::string> states;
     float farthest = 0, maxStep = 0;
     proto::Vec3 last = reg.get<world::Transform>(g).pos;
@@ -1874,6 +1883,20 @@ void checkNpcSample() {
     const auto spawns = w.sent.of<proto::Spawn>(1);
     check(std::ranges::any_of(spawns, [](const proto::Spawn& s) { return s.kind == proto::SpawnKind::npc && s.templateName == "Guard"; }),
           "the player at the spawn point gets the Guard's Spawn");
+    {
+        const auto& toA = w.sent.bySession[1];
+        size_t spawnAt = SIZE_MAX, healthAt = SIZE_MAX;
+        for (size_t i = 0; i < toA.size(); ++i) {
+            if (const auto* m = std::get_if<proto::Spawn>(&toA[i]); m && m->entityId == wire(g) && spawnAt == SIZE_MAX) spawnAt = i;
+            if (const auto* u = std::get_if<proto::ComponentUpdate>(&toA[i]);
+                u && u->entityId == wire(g) && u->name == "Health" && healthAt == SIZE_MAX) {
+                healthAt = i;
+                check(Json::parse(u->json)["current"] == 50, "the Guard's Health from its definition: " + u->json);
+            }
+        }
+        check(spawnAt != SIZE_MAX && healthAt != SIZE_MAX && spawnAt < healthAt,
+              "the player gets the Guard's Spawn, then its Health (aoi) in the AOI-enter full set");
+    }
     size_t moves = 0;
     for (const auto& m : w.sent.of<proto::EntityMove>(1)) moves += m.entityId == wire(g);
     check(moves > 400, "and its moves (" + std::to_string(moves) + ")");
@@ -1899,57 +1922,63 @@ void checkNpcSample() {
 
 void checkSpawnParsing() {
     std::string err;
-    const auto good = map::parse_spawns(Json::parse(R"({"version": 1,
+    const auto good = map::parse_spawns(Json::parse(R"({"version": 2,
         "paths": {"p": {"loop": false, "wait": 1.5, "points": [[1, 2, 3], [4, 5, 6]]}, "q": {"points": [[0, 0, 0]]}},
-        "spawns": [{"id": "a", "name": "Guard", "template": "GuardTpl", "pos": [300, 1, 260], "heading": 2, "respawnSec": 30,
+        "spawns": [{"id": "a", "npc": "Guard", "pos": [300, 1, 260], "heading": 2, "respawnSec": 30,
                     "path": "p"},
-                   {"id": "b", "template": "Bat", "pos": [256, 0, 256], "respawnSec": -1}]})"),
+                   {"id": "b", "npc": "Bat", "pos": [256, 0, 256], "respawnSec": -1}]})"),
                                         {1, 1}, err);
     check(good && good->size() == 2, "spawn file parses: " + err);
     if (good && good->size() == 2) {
         const auto& a = (*good)[0];
-        check(a.id == "a" && a.name == "Guard" && a.templateName == "GuardTpl" && a.pos == std::array<float, 3>{300, 1, 260} &&
+        check(a.id == "a" && a.npc == "Guard" && a.file.empty() && a.pos == std::array<float, 3>{300, 1, 260} &&
                   a.heading == 2 && a.respawnSec == 30 && a.path && a.path->points.size() == 2 &&
                   a.path->points[1] == std::array<float, 3>{4, 5, 6} && a.path->wait == 1.5f && !a.path->loop,
               "every spawn field and its path");
         const auto& b = (*good)[1];
-        check(b.name == "Bat" && b.heading == 0 && b.respawnSec == -1 && !b.path, "name defaults to template; no path");
+        check(b.npc == "Bat" && b.heading == 0 && b.respawnSec == -1 && !b.path, "heading defaults to 0; no path");
     }
-    const auto q = map::parse_spawns(Json::parse(R"({"version":1,"paths":{"q":{"points":[[0,0,0]]}},
-        "spawns":[{"id":"c","template":"T","pos":[1,0,1],"respawnSec":0,"path":"q"}]})"), {0, 0}, err);
+    const auto q = map::parse_spawns(Json::parse(R"({"version":2,"paths":{"q":{"points":[[0,0,0]]}},
+        "spawns":[{"id":"c","npc":"T","pos":[1,0,1],"respawnSec":0,"path":"q"}]})"), {0, 0}, err);
     check(q && (*q)[0].path->wait == 0 && (*q)[0].path->loop, "path wait defaults to 0, loop to true");
-    check(map::parse_spawns(Json::parse(R"({"version":1,"spawns":[]})"), {0, 0}, err).has_value(), "no spawns is fine");
-    check(map::parse_spawns(Json::parse(R"({"version":1,"spawns":[{"id":"e","template":"T","pos":[0,0,0],"respawnSec":0}]})"),
+    check(map::parse_spawns(Json::parse(R"({"version":2,"spawns":[]})"), {0, 0}, err).has_value(), "no spawns is fine");
+    check(map::parse_spawns(Json::parse(R"({"version":2,"spawns":[{"id":"e","npc":"T","pos":[0,0,0],"respawnSec":0}]})"),
                             {0, 0}, err).has_value(), "the tile's low corner is inside it");
 
-    const std::string s = R"("template":"T","pos":[10,0,10],"respawnSec":5)";
+    const std::string s = R"("npc":"T","pos":[10,0,10],"respawnSec":5)";
     const std::pair<std::string, const char*> bad[] = {
         {R"([1])", "must be a JSON object"},
-        {R"({"spawns":[]})", "\"version\" must be 1"},
-        {R"({"version":1})", "\"spawns\" must be a list"},
-        {R"({"version":1,"paths":[],"spawns":[]})", "\"paths\" must be an object"},
-        {R"({"version":1,"paths":{"p":{"points":[]}},"spawns":[]})", "path \"p\": \"points\" must be a non-empty list"},
-        {R"({"version":1,"paths":{"p":{"points":[[1,2]]}},"spawns":[]})", "path \"p\": \"points\" must be"},
-        {R"({"version":1,"paths":{"p":{"points":[[1,2,3]],"wait":-1}},"spawns":[]})", "path \"p\": \"wait\" must be a number >= 0"},
-        {R"({"version":1,"paths":{"p":{"points":[[1,2,3]],"loop":1}},"spawns":[]})", "path \"p\": \"loop\" must be true or false"},
-        {R"({"version":1,"spawns":[7]})", "spawns[0]: must be an object"},
-        {R"({"version":1,"spawns":[{)" + s + "}]}", "spawns[0]: \"id\" must be a non-empty string"},
-        {R"({"version":1,"spawns":[{"id":"",)" + s + "}]}", "spawns[0]: \"id\" must be a non-empty string"},
-        {R"({"version":1,"spawns":[{"id":"a",)" + s + R"(},{"id":"a",)" + s + "}]}", "spawn \"a\": duplicate id"},
-        {R"({"version":1,"spawns":[{"id":"a","pos":[10,0,10],"respawnSec":5}]})", "spawn \"a\": \"template\" must be a non-empty string"},
-        {R"({"version":1,"spawns":[{"id":"a","template":")" + std::string(256, 'x') + R"(","pos":[10,0,10],"respawnSec":5}]})",
-         "\"template\" must be a non-empty string of at most 255 bytes"},
-        {R"({"version":1,"spawns":[{"id":"a","name":3,)" + s + "}]}", "spawn \"a\": \"name\" must be a non-empty string"},
-        {R"({"version":1,"spawns":[{"id":"a","template":"T","pos":[10,0],"respawnSec":5}]})", "spawn \"a\": \"pos\" must be [x, y, z]"},
-        {R"({"version":1,"spawns":[{"id":"a","template":"T","pos":[256,0,10],"respawnSec":5}]})",
+        {R"({"spawns":[]})", "\"version\" must be 2"},
+        {R"({"version":3,"spawns":[]})", "\"version\" must be 2"},
+        {R"({"version":1,"spawns":[]})", "\"version\" 1 is no longer supported: use 2, with \"npc\""},
+        {R"({"version":2})", "\"spawns\" must be a list"},
+        {R"({"version":2,"paths":[],"spawns":[]})", "\"paths\" must be an object"},
+        {R"({"version":2,"paths":{"p":{"points":[]}},"spawns":[]})", "path \"p\": \"points\" must be a non-empty list"},
+        {R"({"version":2,"paths":{"p":{"points":[[1,2]]}},"spawns":[]})", "path \"p\": \"points\" must be"},
+        {R"({"version":2,"paths":{"p":{"points":[[1,2,3]],"wait":-1}},"spawns":[]})", "path \"p\": \"wait\" must be a number >= 0"},
+        {R"({"version":2,"paths":{"p":{"points":[[1,2,3]],"loop":1}},"spawns":[]})", "path \"p\": \"loop\" must be true or false"},
+        {R"({"version":2,"spawns":[7]})", "spawns[0]: must be an object"},
+        {R"({"version":2,"spawns":[{)" + s + "}]}", "spawns[0]: \"id\" must be a non-empty string"},
+        {R"({"version":2,"spawns":[{"id":"",)" + s + "}]}", "spawns[0]: \"id\" must be a non-empty string"},
+        {R"({"version":2,"spawns":[{"id":"a",)" + s + R"(},{"id":"a",)" + s + "}]}", "spawn \"a\": duplicate id"},
+        {R"({"version":2,"spawns":[{"id":"a","pos":[10,0,10],"respawnSec":5}]})", "spawn \"a\": \"npc\" must be a non-empty string"},
+        {R"({"version":2,"spawns":[{"id":"a","npc":"","pos":[10,0,10],"respawnSec":5}]})", "spawn \"a\": \"npc\" must be a non-empty string"},
+        {R"({"version":2,"spawns":[{"id":"a","npc":3,"pos":[10,0,10],"respawnSec":5}]})", "spawn \"a\": \"npc\" must be a non-empty string"},
+        {R"({"version":2,"spawns":[{"id":"a","npc":")" + std::string(256, 'x') + R"(","pos":[10,0,10],"respawnSec":5}]})",
+         "\"npc\" must be a non-empty string of at most 255 bytes"},
+        {R"({"version":2,"spawns":[{"id":"a","name":"Guard",)" + s + "}]}", "spawn \"a\": unknown key \"name\""},
+        {R"({"version":2,"spawns":[{"id":"a","template":"Guard",)" + s + "}]}", "spawn \"a\": unknown key \"template\""},
+        {R"({"version":2,"spawns":[{"id":"a","components":{},)" + s + "}]}", "spawn \"a\": unknown key \"components\""},
+        {R"({"version":2,"spawns":[{"id":"a","npc":"T","pos":[10,0],"respawnSec":5}]})", "spawn \"a\": \"pos\" must be [x, y, z]"},
+        {R"({"version":2,"spawns":[{"id":"a","npc":"T","pos":[256,0,10],"respawnSec":5}]})",
          "spawn \"a\": \"pos\" is outside tile 0_0"},
-        {R"({"version":1,"spawns":[{"id":"a","template":"T","pos":[-0.5,0,10],"respawnSec":5}]})", "\"pos\" is outside tile 0_0"},
-        {R"({"version":1,"spawns":[{"id":"a","heading":"n",)" + s + "}]}", "spawn \"a\": \"heading\" must be a number"},
-        {R"({"version":1,"spawns":[{"id":"a","template":"T","pos":[10,0,10]}]})", "spawn \"a\": \"respawnSec\" must be a number"},
-        {R"({"version":1,"spawns":[{"id":"a","template":"T","pos":[10,0,10],"respawnSec":-2}]})", "\"respawnSec\" must be a number in [0, 31536000]"},
-        {R"({"version":1,"spawns":[{"id":"a","template":"T","pos":[10,0,10],"respawnSec":31536001}]})", "\"respawnSec\" must be"},
-        {R"({"version":1,"spawns":[{"id":"a","path":"nope",)" + s + "}]}", "spawn \"a\": unknown path \"nope\""},
-        {R"({"version":1,"spawns":[{"id":"a","path":3,)" + s + "}]}", "spawn \"a\": unknown path 3"},
+        {R"({"version":2,"spawns":[{"id":"a","npc":"T","pos":[-0.5,0,10],"respawnSec":5}]})", "\"pos\" is outside tile 0_0"},
+        {R"({"version":2,"spawns":[{"id":"a","heading":"n",)" + s + "}]}", "spawn \"a\": \"heading\" must be a number"},
+        {R"({"version":2,"spawns":[{"id":"a","npc":"T","pos":[10,0,10]}]})", "spawn \"a\": \"respawnSec\" must be a number"},
+        {R"({"version":2,"spawns":[{"id":"a","npc":"T","pos":[10,0,10],"respawnSec":-2}]})", "\"respawnSec\" must be a number in [0, 31536000]"},
+        {R"({"version":2,"spawns":[{"id":"a","npc":"T","pos":[10,0,10],"respawnSec":31536001}]})", "\"respawnSec\" must be"},
+        {R"({"version":2,"spawns":[{"id":"a","path":"nope",)" + s + "}]}", "spawn \"a\": unknown path \"nope\""},
+        {R"({"version":2,"spawns":[{"id":"a","path":3,)" + s + "}]}", "spawn \"a\": unknown path 3"},
     };
     for (const auto& [text, want] : bad) {
         err.clear();
@@ -1961,14 +1990,14 @@ void checkSpawnParsing() {
 void checkSpawnLoading() {
     LuaRoot r;
     const auto one = [](const std::string& pos) {
-        return R"({"version":1,"spawns":[{"id":"x","template":"T","pos":[)" + pos + R"(],"respawnSec":5}]})";
+        return R"({"version":2,"spawns":[{"id":"x","npc":"T","pos":[)" + pos + R"(],"respawnSec":5}]})";
     };
     r.write("a/map.json", R"({"version":1,"id":1,"tiles":[[0,0,1,1]],"spawn":{"pos":[10,0,10]}})");
     r.write("a/.server/spawns/0_0.json", one("10,0,10"));
     r.write("a/.server/spawns/-1_0.json", one("-10,0,10"));
     r.write("a/.server/spawns/1_0.json", one("300,0,10"));
     r.write("a/.server/spawns/1_1.json", one("10,0,10"));
-    r.write("a/.server/spawns/0_1.json", R"({"version":1,"spawns":[{"id":"y","template":"T","pos":[10,0,300],"respawnSec":5}]})");
+    r.write("a/.server/spawns/0_1.json", R"({"version":2,"spawns":[{"id":"y","npc":"T","pos":[10,0,300],"respawnSec":5}]})");
     r.write("a/.server/spawns/notes.txt", "hi");
     r.write("a/.server/spawns/0_0_old.json", one("10,0,10"));
     r.write("b/map.json", R"({"version":1,"id":2,"tiles":[[0,0,0,0]],"spawn":{"pos":[10,0,10]}})");
@@ -1996,13 +2025,19 @@ void checkSpawnLoading() {
     check(world::Maps::load(none.root, errors).info(1).spawns.empty() && errors.empty(), "no .server/spawns: no spawns, no error");
 }
 
+// The definitions spawn_maps' spawns name: Guard (template GuardTpl) and Bat (template BatTpl).
+void write_spawn_npcs(LuaRoot& r) {
+    r.write("npcs/guard.lua", "return {name = 'Guard', template = 'GuardTpl'}");
+    r.write("npcs/bat.lua", "return {name = 'Bat', template = 'BatTpl'}");
+}
+
 // test_maps with spawn "a" (respawn 30 s, a one-point path) and "b" (never respawns, no path) on map 1.
 world::Maps spawn_maps() {
     world::Maps maps = test_maps();
     map::MapInfo start = maps.info(1);
     start.spawns = {
-        {"a", "Guard", "GuardTpl", {1024, 0, 1024}, 0.5f, 30, map::PatrolPath{{{1030, 0, 1024}}, 1, false}},
-        {"b", "Bat", "BatTpl", {1030, 5000, 1030}, 0, -1, std::nullopt},
+        {"a", "Guard", {1024, 0, 1024}, 0.5f, 30, map::PatrolPath{{{1030, 0, 1024}}, 1, false}, "spawns/a.json"},
+        {"b", "Bat", {1030, 5000, 1030}, 0, -1, std::nullopt, "spawns/b.json"},
     };
     maps.add(start);
     return maps;
@@ -2010,7 +2045,10 @@ world::Maps spawn_maps() {
 
 void checkRespawn() {
     LogCapture capture;
+    LuaRoot r;
+    write_spawn_npcs(r);
     TestWorld w({}, {}, spawn_maps());
+    check(w.world.load_scripts(r.root).empty(), "respawn: definitions load");
     auto& reg = w.world.registry();
     const auto find = [&](const std::string& name) {
         for (auto [e, n] : reg.view<world::Npc>().each())
@@ -2046,6 +2084,7 @@ void checkRespawn() {
     world::WorldRules rules;
     rules.maxNpcs = 1;
     TestWorld capped({}, rules, spawn_maps());
+    capped.world.load_scripts(r.root);
     capped.world.tick(T0);
     capped.world.tick(T0 + std::chrono::milliseconds(50));
     auto& creg = capped.world.registry();
@@ -2092,6 +2131,7 @@ void checkSpawnLua() {
     LogCapture capture;
     LuaRoot r;
     r.write("systems/spawns.lua", std::string(kLuaExpect) + kSpawnLuaSystem);
+    write_spawn_npcs(r);
     TestWorld w({}, {}, spawn_maps());
     check(w.world.load_scripts(r.root).empty(), "spawn lua: loads");
     w.world.tick(T0);
@@ -2515,7 +2555,9 @@ void checkAreaWorld() {
     }
     LogCapture capture;
     std::vector<std::string> mapErrors;
-    TestWorld w({}, {}, world::Maps::load(KAST_SAMPLE_MAPS, mapErrors));
+    // The sample components: the sample NPC definitions give their NPCs Health.
+    TestWorld w(lua::load_component_defs(KAST_WORLD_LUA_SAMPLE, world::kReservedComponentNames).defs, {},
+                world::Maps::load(KAST_SAMPLE_MAPS, mapErrors));
     const auto errors = w.world.load_scripts(KAST_WORLD_LUA_SAMPLE, {"zone_cycle"});
     check(mapErrors.empty() && errors.empty(), "area world: sample maps and lua load");
     std::vector<std::string> events;
@@ -2632,6 +2674,8 @@ void checkAreaLua() {
     LogCapture capture;
     LuaRoot r;
     r.write("systems/areas.lua", std::string(kLuaExpect) + kAreaLuaSystem);
+    for (const char* name : {"Guard", "Sentry", "Bat"}) // the sample spawn files' NPCs
+        r.write(std::format("npcs/{}.lua", name), std::format("return {{name = '{}', template = 'Guard'}}", name));
     std::vector<std::string> mapErrors;
     TestWorld w({}, {}, world::Maps::load(KAST_SAMPLE_MAPS, mapErrors));
     check(w.world.load_scripts(r.root).empty(), "area lua: loads");
@@ -2685,7 +2729,7 @@ void checkGround() {
     r.write("ramp/heights/1_0.r16", ramp_r16(1, 0));
     r.write("ramp/heights/0_1.r16", ramp_r16(0, 1));
     r.write("ramp/.server/spawns/0_0.json",
-            R"({"version":1,"spawns":[{"id":"high","template":"T","pos":[50,100,60],"respawnSec":-1}]})");
+            R"({"version":2,"spawns":[{"id":"high","npc":"T","pos":[50,100,60],"respawnSec":-1}]})");
     std::vector<std::string> errors;
     world::Maps maps = world::Maps::load(r.root, errors);
     check(errors.empty(), "ground: the ramp map loads " + joined(errors));
@@ -2717,6 +2761,7 @@ void checkGround() {
     LogCapture capture;
     LuaRoot scripts;
     scripts.write("systems/ground.lua", std::string(kLuaExpect) + kGroundLuaSystem);
+    scripts.write("npcs/t.lua", "return {name = 'T', template = 'T'}");
     TestWorld w({}, {}, std::move(maps));
     const auto luaErrors = w.world.load_scripts(scripts.root);
     check(luaErrors.empty(), "ground lua: loads " + joined(luaErrors));
@@ -2918,6 +2963,238 @@ void checkNavmesh() {
     check_lua_expectations("nav lua", "nav lua done");
 }
 
+// --- NPC definitions (README "NPC definitions") ---
+
+constexpr const char* kHp = R"(return { name = "Hp", replicate = "aoi", fields = {
+    { name = "cur", type = "float", default = 10, min = 0 }, { name = "max", type = "float", default = 10 } } })";
+constexpr const char* kSecret = R"(return { name = "Secret", replicate = "owner", fields = { { name = "v", type = "int" } } })";
+
+// The component types (Stats, aoi Hp, owner Secret) and the plain machine the NPC definitions below use.
+LuaRoot& npc_root(LuaRoot& r) {
+    r.write("components/stats.lua", kStats).write("components/hp.lua", kHp).write("components/secret.lua", kSecret);
+    r.write("fsms/plain.lua", kPlain);
+    return r;
+}
+
+// Every error World::load_scripts reports for these files on top of npc_root.
+std::vector<std::string> npc_errors(const std::vector<std::pair<std::string, std::string>>& files) {
+    LuaRoot r;
+    npc_root(r);
+    for (const auto& [path, body] : files) r.write(path, body);
+    TestWorld w(r.defs().defs);
+    return w.world.load_scripts(r.root);
+}
+
+void checkNpcDefinitionErrors() {
+    LogCapture capture;
+    const std::string longName(256, 'x');
+    const std::string name = "npcs/a.lua: \"name\" must be a non-empty string of at most 255 bytes";
+    const std::string tpl = "npcs/a.lua: \"template\" must be a non-empty string of at most 255 bytes";
+    const auto with = [](const std::string& c) { return "return {name = 'A', template = 'T', components = " + c + "}"; };
+    for (const auto& [body, want] : std::vector<std::pair<std::string, std::string>>{
+             {"return {template = 'T'}", name},
+             {"return {name = '', template = 'T'}", name},
+             {"return {name = 5, template = 'T'}", name},
+             {"return {name = '" + longName + "', template = 'T'}", name},
+             {"return {name = 'A'}", tpl},
+             {"return {name = 'A', template = ''}", tpl},
+             {"return {name = 'A', template = '" + longName + "'}", tpl},
+             {"return {name = 'A', template = 'T', extra = 1}", "npcs/a.lua: unknown key extra"},
+             {"return 5", "npcs/a.lua: must return exactly one table {name = ..., template = ..., components = {...}}"},
+             {with("5"), "npcs/a.lua: \"components\" must be a table {Type = {field = value, ...}, ...}, got 5"},
+             {with("{'x'}"), "npcs/a.lua: \"components\": component names must be strings, got 1"},
+             {with("{Nope = {}}"), "npcs/a.lua: unknown component \"Nope\""},
+             {with("{Npc = {}}"), "npcs/a.lua: \"Npc\" is read-only on the server"},
+             {with("{Transform = {}}"), "npcs/a.lua: \"Transform\" is read-only on the server"},
+             {with("{Spawn = {}}"), "npcs/a.lua: \"Spawn\" is read-only on the server"},
+             {with("{Character = {}}"), "npcs/a.lua: \"Character\" is read-only on the server"},
+             {with("{Stats = 5}"), "npcs/a.lua: \"Stats\" must be a table {field = value, ...}, got 5"},
+             {with("{Stats = {nope = 1}}"), "npcs/a.lua: \"Stats\": unknown field \"nope\""},
+             {with("{Stats = {flag = 'x'}}"), "npcs/a.lua: \"Stats\": \"flag\" must be true or false"},
+             {with("{Stats = {hp = 1.5}}"), "npcs/a.lua: \"Stats\": \"hp\" must be an integer"},
+             {with("{Stats = {hp = 101}}"), "npcs/a.lua: \"Stats\": \"hp\" must be <= 100"},
+             {with("{Stats = {hp = -1}}"), "npcs/a.lua: \"Stats\": \"hp\" must be >= 0"},
+             {with("{Stats = {kind = 'zzz'}}"), "npcs/a.lua: \"Stats\": \"kind\" unknown value \"zzz\" (expected one of \"a\", \"b\")"},
+             {with("{Stats = {tags = {'a', 3}}}"), "npcs/a.lua: \"Stats\": \"tags\" element 2 must be a string"},
+             {with("{StateMachine = {machine = 'nope'}}"),
+              "npcs/a.lua: \"StateMachine\": \"machine\" \"nope\" names no valid state machine definition in fsms/"},
+             {with("{StateMachine = {}}"),
+              "npcs/a.lua: \"StateMachine\": \"machine\" \"\" names no valid state machine definition in fsms/"},
+         }) {
+        const auto errors = npc_errors({{"npcs/a.lua", body}});
+        const std::string got = errors.size() == 1 ? errors[0] : "<" + std::to_string(errors.size()) + " errors: " + joined(errors) + ">";
+        check(got == want, "npc definition rejected: want [" + want + "] got [" + got + "]");
+    }
+    const auto boom = npc_errors({{"npcs/a.lua", "error('boom')"}});
+    check(boom.size() == 1 && boom[0].starts_with("npcs/a.lua:1: boom"), "npc definition: a Lua error is path:line " + joined(boom));
+
+    check(npc_errors({{"npcs/d1.lua", "return {name = 'D', template = 'T'}"}, {"npcs/sub/d2.lua", "return {name = 'D', template = 'T'}"}}) ==
+              std::vector<std::string>{"npcs/d1.lua: name \"D\" is also declared in npcs/sub/d2.lua",
+                                       "npcs/sub/d2.lua: name \"D\" is also declared in npcs/d1.lua"},
+          "npc definitions: a duplicate name rejects both files, each naming the other");
+    check(npc_errors({{"npcs/a.lua", "return {}"}, {"npcs/b.lua", "return {name = 'B'}"}, {"npcs/c.lua", "return {name = 'C', template = 'T'}"}})
+                  .size() == 2,
+          "npc definitions: every bad file is reported, not just the first");
+    check(npc_errors({}).empty(), "npc definitions: no npcs/ folder is fine");
+    check(npc_errors({{"npcs/readme.txt", "not lua"}}).empty(), "npc definitions: an npcs/ folder without .lua files is fine");
+    check(npc_errors({{"npcs/sandbox.lua", "return {name = io and 'X' or 'S', template = os and 'X' or 'T'}"}}).empty(),
+          "npc definitions: run sandboxed (no io, os)");
+}
+
+constexpr const char* kNpcDefs[][2] = {
+    {"npcs/guard.lua", "return {name = 'Guard', template = 'GuardTpl', components = {Stats = {hp = 50, tags = {'x', 'y'}}, "
+                       "Hp = {cur = 7}, StateMachine = {machine = 'plain'}}}"},
+    {"npcs/sub/rat.lua", "return {name = 'Rat', template = 'RatTpl', components = {Stats = {}}}"},
+    {"npcs/ghost.lua", "return {name = 'Ghost', template = 'GhostTpl'}"},
+};
+
+void write_npc_defs(LuaRoot& r) {
+    npc_root(r);
+    for (const auto& [path, body] : kNpcDefs) r.write(path, body);
+}
+
+// kast.create with opts.npc / opts.components / opts.template; every bad call raises and creates nothing.
+constexpr const char* kNpcCreateSystem = R"lua(
+local g
+local done = false
+return {
+init = function() g = kast.create("G1", {npc = "Guard", position = {x = 1010, y = 0, z = 1000}}) end,
+update = function()
+    if done then return end
+    done = true
+    local n = kast.get(g, "Npc")
+    expect(n.name == "G1" and n.template == "GuardTpl" and n.npc == "Guard", "{npc}: name from the call, template and npc from the definition")
+    local s = kast.get(g, "Stats")
+    expect(s.hp == 50 and #s.tags == 2 and s.tags[2] == "y" and s.kind == "b" and s.flag == false and s.pos.x == 1, "{npc}: definition data over the field defaults")
+    expect(kast.get(g, "Hp").cur == 7 and kast.get(g, "Hp").max == 10, "{npc}: unlisted fields at their defaults")
+    expect(kast.fsm.state(g) == "a", "{npc}: the definition's StateMachine entered its initial state at create (in init)")
+    expect(not kast.has(g, "Secret") and not kast.has(g, "Spawn"), "{npc}: only the listed components")
+    local rat = kast.create("R", {npc = "Rat"})
+    local rs = kast.get(rat, "Stats")
+    expect(rs.hp == 10 and rs.kind == "b" and rs.tags[1] == "a" and not kast.has(rat, "Hp") and not kast.has(rat, "StateMachine"), "Stats = {}: all defaults")
+    local ghost = kast.create("Gh", {npc = "Ghost"})
+    expect(not kast.has(ghost, "Stats") and not kast.has(ghost, "Hp") and not kast.has(ghost, "StateMachine"), "no components: none")
+    local o = kast.create("G2", {npc = "Guard", components = {Stats = {kind = "a"}, Secret = {v = 3}, StateMachine = {initialState = "b"}}})
+    local os = kast.get(o, "Stats")
+    expect(os.kind == "a" and os.hp == 50 and os.tags[2] == "y", "opts.components merges per field over the definition")
+    expect(kast.get(o, "Secret").v == 3, "opts.components adds a type the definition lacks")
+    expect(kast.fsm.state(o) == "b", "opts.components: StateMachine initialState over the definition")
+    local again = kast.create("G3", {npc = "Guard"})
+    expect(kast.get(again, "Stats").kind == "b" and not kast.has(again, "Secret"), "an override leaves the definition unchanged")
+    local t = kast.create("T1", {template = "Tpl", components = {Stats = {hp = 5}}})
+    local tn = kast.get(t, "Npc")
+    expect(tn.npc == "" and tn.template == "Tpl" and kast.get(t, "Stats").hp == 5 and kast.get(t, "Stats").kind == "b", "{template, components}: npc empty, data over the defaults")
+    local plain = kast.create("P", {template = "Tpl"})
+    expect(kast.get(plain, "Npc").npc == "" and not kast.has(plain, "Stats"), "{template}: npc empty, no components")
+    local count = function() local c = 0 ; for _ in kast.query("Npc") do c = c + 1 end ; return c end
+    local before = count()
+    local one = "kast.create: opts needs exactly one of npc (an npcs/ definition) and template"
+    for _, c in ipairs({
+        {one, {npc = "Guard", template = "T"}},
+        {one, {}},
+        {one, {components = {Stats = {}}}},
+        {'kast.create: unknown npc "Nope" (no definition in npcs/)', {npc = "Nope"}},
+        {"kast.create: npc must be a non-empty string of at most 255 bytes, got 5", {npc = 5}},
+        {"kast.create: npc must be a non-empty string of at most 255 bytes, got ", {npc = ""}},
+        {'kast.create: "Stats": "hp" must be <= 100', {npc = "Guard", components = {Stats = {hp = 101}}}},
+        {'kast.create: "Stats": unknown field "nope"', {npc = "Guard", components = {Stats = {nope = 1}}}},
+        {'kast.create: "Stats": "kind" unknown value "z"', {template = "T", components = {Stats = {kind = "z"}}}},
+        {'kast.create: unknown component "Nope"', {npc = "Guard", components = {Nope = {}}}},
+        {'kast.create: "Npc" is read-only on the server', {template = "T", components = {Npc = {}}}},
+        {'kast.create: "Transform" is read-only on the server', {npc = "Guard", components = {Transform = {}}}},
+        {'kast.create: "StateMachine": "machine" "nope" names no valid state machine definition in fsms/', {npc = "Guard", components = {StateMachine = {machine = "nope"}}}},
+        {'kast.create: "components" must be a table {Type = {field = value, ...}, ...}, got 5', {npc = "Guard", components = 5}},
+        {'kast.create: "position" must be a table', {npc = "Guard", components = {Stats = {hp = 1}}, position = 5}},
+    }) do raises(c[1], function() kast.create("N", c[2]) end) end
+    expect(count() == before, "no failed create made an NPC")
+    kast.log("npc create done")
+end }
+)lua";
+
+void checkNpcCreateFromDefinitions() {
+    LogCapture capture;
+    LuaRoot r;
+    write_npc_defs(r);
+    r.write("systems/create.lua", std::string(kLuaExpect) + kNpcCreateSystem);
+    TestWorld w(r.defs().defs);
+    const auto errors = w.world.load_scripts(r.root);
+    check(errors.empty(), "npc create: loads " + joined(errors));
+    w.spawn(1, 301, "Alice", 1000, 1000);
+    auto& reg = w.world.registry();
+    w.world.tick(T0);
+    check_lua_expectations("npc create", "npc create done");
+    for (const auto& s : w.world.script_status()) check(s.ok, "npc create: system still enabled " + s.error);
+    w.world.tick(T0 + std::chrono::milliseconds(50)); // the NPCs update created come into view
+
+    // AOI enter: the Spawn, then the aoi components of the full set; none / owner ones reach nobody.
+    entt::entity g = entt::null, o = entt::null;
+    for (auto [e, n] : reg.view<world::Npc>().each()) {
+        if (n.name == "G1") g = e;
+        if (n.name == "G2") o = e;
+    }
+    check(g != entt::null && o != entt::null, "npc create: G1 and G2 exist");
+    if (g == entt::null || o == entt::null) return;
+    const auto& toA = w.sent.bySession[1];
+    size_t spawnAt = SIZE_MAX, hpAt = SIZE_MAX;
+    for (size_t i = 0; i < toA.size(); ++i) {
+        if (const auto* s = std::get_if<proto::Spawn>(&toA[i]); s && s->entityId == wire(g) && spawnAt == SIZE_MAX) spawnAt = i;
+        if (const auto* u = std::get_if<proto::ComponentUpdate>(&toA[i]); u && u->entityId == wire(g) && u->name == "Hp" && hpAt == SIZE_MAX)
+            hpAt = i;
+    }
+    check(spawnAt != SIZE_MAX && hpAt != SIZE_MAX && spawnAt < hpAt, "npc create: a player gets the NPC's Spawn, then its aoi Hp");
+    const auto hp = w.sent.updates(1, wire(g), "Hp");
+    check(hp.size() == 1 && Json::parse(hp[0].json) == Json::parse(R"({"cur":7.0,"max":10.0})"),
+          "npc create: Hp sent once, with the definition's data: " + (hp.empty() ? std::string() : hp[0].json));
+    check(w.sent.updates(1, wire(g), "Stats").empty() && w.sent.updates(1, wire(o), "Secret").empty() &&
+              !w.sent.updates(1, wire(o), "Hp").empty(),
+          "npc create: replicate none and owner components reach nobody; G2's Hp reaches the viewer");
+}
+
+// Spawn files instantiate definitions: exactly the definition's components and data, fresh on every respawn; an
+// unknown "npc" refuses the start, naming the file and the spawn.
+void checkNpcSpawnDefinitions() {
+    LogCapture capture;
+    LuaRoot lua, maps;
+    write_npc_defs(lua);
+    maps.write("a/map.json", R"({"version":1,"id":1,"tiles":[[0,0,7,7]],"spawn":{"pos":[1024,0,1024]}})");
+    maps.write("a/.server/spawns/4_4.json", R"({"version":2,"spawns":[{"id":"g","npc":"Guard","pos":[1030,0,1030],"respawnSec":1}]})");
+    std::vector<std::string> mapErrors;
+    TestWorld w(lua.defs().defs, {}, world::Maps::load(maps.root, mapErrors));
+    const auto errors = w.world.load_scripts(lua.root);
+    check(mapErrors.empty() && errors.empty(), "npc spawn: loads " + joined(mapErrors) + joined(errors));
+    auto& reg = w.world.registry();
+    w.world.tick(T0);
+    const auto first = [&] { return reg.view<world::Npc>().empty() ? entt::entity{entt::null} : reg.view<world::Npc>().front(); };
+    const auto g = first();
+    check(g != entt::null, "npc spawn: placed on the first tick");
+    if (g == entt::null) return;
+    const auto& npc = reg.get<world::Npc>(g);
+    check(npc.name == "Guard" && npc.templateName == "GuardTpl" && npc.npc == "Guard", "npc spawn: name, template, npc from the definition");
+    const auto has = [&](entt::entity e, const char* type) { return lua::pool(reg, type).contains(e); };
+    const Json stats = Json::parse(R"({"hp":50,"flag":false,"kind":"b","pos":[1.0,2.0,3.0],"tags":["x","y"]})");
+    check(has(g, "Stats") && has(g, "Hp") && has(g, "StateMachine") && !has(g, "Secret") && w.value(g, "Stats") == stats &&
+              w.value(g, "Hp") == Json::parse(R"({"cur":7.0,"max":10.0})"),
+          "npc spawn: exactly the definition's components, with its data: " + w.value(g, "Stats").dump());
+    check(w.world.fsm().state(lua::EntityId{wire(g)}) == "a", "npc spawn: StateMachine in its initial state");
+
+    lua::pool(reg, "Stats").get(g).value["hp"] = 1;
+    w.world.fsm().change(lua::EntityId{wire(g)}, "b");
+    w.world.destroy_npc(g);
+    w.world.tick(T0 + std::chrono::seconds(1));
+    const auto again = first();
+    check(again != entt::null && w.value(again, "Stats") == stats && w.world.fsm().state(lua::EntityId{wire(again)}) == "a",
+          "npc spawn: a respawned NPC starts with fresh definition data and machine state");
+
+    LuaRoot badMaps;
+    badMaps.write("a/map.json", R"({"version":1,"id":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[10,0,10]}})");
+    badMaps.write("a/.server/spawns/0_0.json", R"({"version":2,"spawns":[{"id":"x","npc":"Nope","pos":[10,0,10],"respawnSec":5},
+        {"id":"y","npc":"Guard","pos":[20,0,10],"respawnSec":5}]})");
+    TestWorld bad(lua.defs().defs, {}, world::Maps::load(badMaps.root, mapErrors));
+    check(bad.world.load_scripts(lua.root) ==
+              std::vector<std::string>{"maps/a/.server/spawns/0_0.json: spawn \"x\": unknown npc \"Nope\" (no definition in npcs/)"},
+          "npc spawn: an npc with no definition refuses the start, naming the file and the spawn");
+}
+
 #ifdef KAST_SAMPLE_MAPS
 // The sample hills map (id 3): its four PNG heightmaps load, and the ground at the portal destination is the
 // terrain's, not hills_gate's y = 30.
@@ -2973,6 +3250,9 @@ int lua_checks(int& checks) {
     checkSpawnLoading();
     checkRespawn();
     checkSpawnLua();
+    checkNpcDefinitionErrors();
+    checkNpcCreateFromDefinitions();
+    checkNpcSpawnDefinitions();
     checkTileMath();
     checkManifests();
     checkHeights();

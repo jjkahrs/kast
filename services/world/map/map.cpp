@@ -161,7 +161,7 @@ std::optional<PatrolPath> parse_path(const Json& p, const std::string& at, std::
     return path;
 }
 
-constexpr size_t kMaxNameBytes = 255;     // NPC name and template, as kast.create allows
+constexpr size_t kMaxNameBytes = 255;     // an NPC definition name, as npcs/ allows
 constexpr double kMaxRespawnSec = 31536000; // a year: keeps now + respawnSec far from TimePoint overflow
 
 } // namespace
@@ -169,7 +169,9 @@ constexpr double kMaxRespawnSec = 31536000; // a year: keeps now + respawnSec fa
 std::optional<std::vector<Spawn>> parse_spawns(const Json& j, TileKey tile, std::string& err) {
     const auto fail = [&](std::string message) -> std::optional<std::vector<Spawn>> { err = std::move(message); return std::nullopt; };
     if (!j.is_object()) return fail("must be a JSON object");
-    if (!j.contains("version") || j["version"] != 1) return fail("\"version\" must be 1");
+    if (j.contains("version") && j["version"] == 1)
+        return fail("\"version\" 1 is no longer supported: use 2, with \"npc\" (an npcs/ definition) in place of \"name\" and \"template\"");
+    if (!j.contains("version") || j["version"] != 2) return fail("\"version\" must be 2");
 
     std::map<std::string, PatrolPath> paths;
     if (j.contains("paths")) {
@@ -195,16 +197,13 @@ std::optional<std::vector<Spawn>> parse_spawns(const Json& j, TileKey tile, std:
         spawn.id = id.get<std::string>();
         const std::string at = "spawn \"" + spawn.id + "\": ";
         if (!ids.insert(spawn.id).second) return fail(at + "duplicate id");
-        const Json& templateName = s.value("template", Json());
-        if (!templateName.is_string() || templateName.get<std::string>().empty() || templateName.get<std::string>().size() > kMaxNameBytes)
-            return fail(at + "\"template\" must be a non-empty string of at most 255 bytes");
-        spawn.templateName = templateName.get<std::string>();
-        spawn.name = spawn.templateName;
-        if (s.contains("name")) {
-            if (!s["name"].is_string() || s["name"].get<std::string>().empty() || s["name"].get<std::string>().size() > kMaxNameBytes)
-                return fail(at + "\"name\" must be a non-empty string of at most 255 bytes");
-            spawn.name = s["name"].get<std::string>();
-        }
+        for (const auto& [key, value] : s.items())
+            if (key != "id" && key != "npc" && key != "pos" && key != "heading" && key != "respawnSec" && key != "path")
+                return fail(at + "unknown key \"" + key + "\"");
+        const Json& npc = s.value("npc", Json());
+        if (!npc.is_string() || npc.get<std::string>().empty() || npc.get<std::string>().size() > kMaxNameBytes)
+            return fail(at + "\"npc\" must be a non-empty string of at most 255 bytes");
+        spawn.npc = npc.get<std::string>();
         if (!numbers(s.value("pos", Json()), 3)) return fail(at + "\"pos\" must be [x, y, z]");
         spawn.pos = {s["pos"][0].get<float>(), s["pos"][1].get<float>(), s["pos"][2].get<float>()};
         if (tile_of(spawn.pos[0], spawn.pos[2]) != tile)

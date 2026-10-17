@@ -169,7 +169,7 @@ scenario "14 Lua server events: sendTo/sendNearby/broadcast audiences" --scenari
 scenario "15 state machines: transitions observed, denied one silent" --scenario fsm
 
 # 16: NPCs with the sample lua/systems/npcs.lua (README "NPCs"): the patrolling Guard seen, moving, leaving and returning
-scenario "16 NPCs: Spawn{npc, Guard}, moves, Despawn out of range, Spawn on return" --scenario npcs
+scenario "16 NPCs: Spawn{npc, Guard}, Health from its definition, moves, Despawn out of range, Spawn on return" --scenario npcs
 
 # 17: areas with the sample maps' areas.json (README "Areas"): start's cave_mouth portal to map 2, kept across a relog
 scenario "17 portal: MapChange{2} first, Bat seen, B lost, relog stays on map 2" --scenario portal

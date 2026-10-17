@@ -1,11 +1,11 @@
 {
-  "version": 1,
+  "version": 2,
   "paths": {
     "gate_patrol": {"loop": true, "wait": 2,
                     "points": [[1034, 0, 1034], [1034, 0, 1014], [1014, 0, 1014], [1014, 0, 1034]]}
   },
   "spawns": [
-    {"id": "guard_1", "name": "Guard", "template": "Guard", "pos": [1024, 0, 1024], "heading": 0,
+    {"id": "guard_1", "npc": "Guard", "pos": [1024, 0, 1024], "heading": 0,
      "respawnSec": 5, "path": "gate_patrol"}
   ]
 }

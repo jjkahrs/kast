@@ -1,8 +1,8 @@
 -- Sample server system: NPC patrols. The NPCs themselves come from the maps' spawn files (README "NPC spawns"); this
--- walks every one whose Spawn has a path. Each gets the "patrol" machine (fsms/patrol.lua) the first time it is seen.
--- While "walking", update moves it at SPEED m/s toward its next path point, facing where it goes; on arrival it
--- switches to "waiting" for the path's wait seconds, then walks to the next point: back to the first after the last
--- (loop), or back along the path (loop = false). A respawned NPC is a new entity and starts over at the first point.
+-- walks every one whose Spawn has a path. Its NPC definition (npcs/guard.lua, npcs/sentry.lua) gives it the "patrol"
+-- machine (fsms/patrol.lua), which starts in "walking". While "walking", update moves it at SPEED m/s toward its next
+-- path point, facing where it goes; on arrival it switches to "waiting" for the path's wait seconds, then walks to the
+-- next point: back to the first after the last (loop), or back along the path (loop = false). A respawned NPC is a new entity and starts over at the first point.
 -- On a map with a navmesh (README "Navmesh") it walks kast.map.path's corners from where it is to the next point, so it
 -- goes around cliffs; without one (or no path), straight there. The server keeps it on the ground.
 --
@@ -67,11 +67,7 @@ return {
             local spawn = kast.get(e, "Spawn")
             if spawn.path then
                 local p = patrols[e]
-                if not p then
-                    p = {target = 1, step = 1, waited = 0}
-                    kast.add(e, "StateMachine")
-                    kast.set(e, "StateMachine", {machine = "patrol"}) -- enters "walking" now
-                end
+                if not p then p = {target = 1, step = 1, waited = 0} end
                 live[e] = p
                 walk(e, spawn, p, dt)
             end

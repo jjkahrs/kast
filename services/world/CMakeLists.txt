@@ -67,6 +67,7 @@ add_library(world_core STATIC
   server/lua/components.cpp
   server/lua/event_bus.cpp
   server/lua/lua_state_machines.cpp
+  server/lua/npcs.cpp
   server/lua/runtime.cpp
   server/lua/sandbox.cpp
   server/lua/state_machines.cpp
