@@ -17,6 +17,7 @@
 #include <event_bus.h>
 #include <gui_events.h>
 #include <files.h>
+#include <gui.h>
 #include <input.h>
 #include <log.h>
 #include <lua_components.h>
@@ -42,6 +43,7 @@
 #include <systems.h>
 #include <terrain.h>
 
+#include <RmlUi/Core.h>
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -4514,6 +4516,56 @@ void checkGuiStylesheetBounds()
     check(linkedStylesheet(loose / "a.rml").empty(), "a GUI in no project links only sheets in its own folder");
 }
 
+// Ctrl+V / Ctrl+C in an RmlUi text field use the OS clipboard (SDL's), through GuiContext::onEvent like the game.
+// Headless: bgfx's Noop renderer, no window. Saves and restores the clipboard's text.
+void checkGuiClipboard()
+{
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        check(false, "SDL video starts for the clipboard check");
+        return;
+    }
+    char* saved = SDL_HasClipboardText() ? SDL_GetClipboardText() : nullptr;
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    check(bgfx::init(init) && kast::gui::init(), "headless bgfx and RmlUi start");
+    {
+        kast::GuiContext gui("clipboard_check");
+        gui.resize(400, 200);
+        Rml::Context* rml = gui.context();
+        Rml::ElementDocument* doc =
+            rml ? rml->LoadDocumentFromMemory(R"(<rml><body><input type="text" id="field"/></body></rml>)") : nullptr;
+        check(doc != nullptr, "clipboard: the document loads");
+        if (doc) {
+            doc->Show();
+            rml->Update();
+            auto* field = dynamic_cast<Rml::ElementFormControl*>(doc->GetElementById("field"));
+            check(field && field->Focus(), "clipboard: the text field takes focus");
+            const auto keyDown = [&](SDL_Keycode key) {
+                SDL_Event event{};
+                event.type = SDL_EVENT_KEY_DOWN;
+                event.key.key = key;
+                event.key.mod = SDL_KMOD_LCTRL;
+                gui.onEvent(event);
+                rml->Update();
+            };
+            SDL_SetClipboardText("pasted-token_123");
+            keyDown(SDLK_V);
+            check(field && field->GetValue() == "pasted-token_123", "Ctrl+V pastes the OS clipboard into the field");
+            SDL_SetClipboardText("other");
+            keyDown(SDLK_A);
+            keyDown(SDLK_C);
+            char* copied = SDL_GetClipboardText();
+            check(std::string_view(copied) == "pasted-token_123", "Ctrl+A, Ctrl+C copies the field to the OS clipboard");
+            SDL_free(copied);
+        }
+    }
+    kast::gui::shutdown();
+    bgfx::shutdown();
+    SDL_SetClipboardText(saved ? saved : "");
+    SDL_free(saved);
+    SDL_QuitSubSystem(SDL_INIT_VIDEO);
+}
+
 void checkGui()
 {
     checkGuiDocRoundTrip();
@@ -7534,6 +7586,7 @@ int main(int argc, char** argv)
     checkStateMachineEditor();
     checkAssets();
     checkGui();
+    checkGuiClipboard();
     checkExternalEditor();
     checkModelLoading();
     checkAnimationSampling();

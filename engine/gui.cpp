@@ -46,6 +46,15 @@ public:
         return true;
     }
 
+    // The OS clipboard, so Ctrl+V / Ctrl+C in text fields work with other programs.
+    void SetClipboardText(const Rml::String& text) override { SDL_SetClipboardText(text.c_str()); }
+    void GetClipboardText(Rml::String& text) override
+    {
+        char* clip = SDL_GetClipboardText();
+        text = clip ? clip : "";
+        SDL_free(clip);
+    }
+
     uint64_t problems = 0;
 };
 
