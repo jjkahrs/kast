@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
@@ -79,4 +80,17 @@ private:
     bool requested_ = false;
     bool saved_ = false;
     bool failed_ = false;
+};
+
+// --log-fps: once a second, the frame rate (vsync caps it at the display's refresh rate) and what a frame costs below
+// that cap: the app's CPU time per frame (update, UI and submitting draws) and bgfx's last GPU frame time.
+class FpsLog {
+public:
+    // frameStart: SDL_GetPerformanceCounter() at the start of the frame.
+    void endFrame(uint64_t frameStart);
+
+private:
+    uint64_t windowStart_ = 0;
+    int frames_ = 0;
+    double cpuSeconds_ = 0.0;
 };

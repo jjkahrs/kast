@@ -46,7 +46,7 @@ void EditorCamera::viewMatrix(float* out) const
 
 void EditorCamera::projMatrix(float* out, float aspect) const
 {
-    bx::mtxProj(out, kFovY, aspect, kNear, kFar, bgfx::getCaps()->homogeneousDepth, bx::Handedness::Right);
+    bx::mtxProj(out, kFovY, aspect, nearPlane, farPlane, bgfx::getCaps()->homogeneousDepth, bx::Handedness::Right);
 }
 
 void EditorCamera::look(float dx, float dy)

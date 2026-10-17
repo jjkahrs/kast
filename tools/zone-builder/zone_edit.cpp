@@ -1,0 +1,227 @@
+#include "zone_edit.h"
+
+#include <scene_io.h> // jsonNumber
+
+#include <algorithm>
+#include <utility>
+
+namespace zone {
+namespace {
+
+double num(float v) { return kast::jsonNumber(v); }
+
+float as_float(const Json& v) { return v.is_number() ? v.get<float>() : 0.0f; }
+
+// name if free in obj, else name_2, name_3...
+std::string unique_key(const Json& obj, const std::string& name) {
+    std::string candidate = name;
+    for (int n = 2; obj.is_object() && obj.contains(candidate); ++n) candidate = name + "_" + std::to_string(n);
+    return candidate;
+}
+
+bool uses_path(const Json& file, const std::string& name) {
+    const Json& spawns = file.value("spawns", Json::array());
+    return std::any_of(spawns.begin(), spawns.end(), [&](const Json& s) { return s.value("path", Json()) == name; });
+}
+
+} // namespace
+
+Json point_json(Point p) { return Json::array({num(p[0]), num(p[1])}); }
+Json vec3_json(const Vec3& v) { return Json::array({num(v[0]), num(v[1]), num(v[2])}); }
+
+Json& areas_list(ZoneState& state) {
+    if (!state.areas.is_object()) state.areas = {{"version", 1}, {"areas", Json::array()}};
+    if (!state.areas.contains("areas") || !state.areas["areas"].is_array()) state.areas["areas"] = Json::array();
+    return state.areas["areas"];
+}
+
+std::optional<size_t> find_area(const ZoneState& state, const std::string& id) {
+    if (!state.areas.is_object() || !state.areas.contains("areas")) return std::nullopt;
+    const Json& list = state.areas["areas"];
+    for (size_t i = 0; i < list.size(); ++i)
+        if (list[i].value("id", Json()) == id) return i;
+    return std::nullopt;
+}
+
+std::string unique_area_id(const ZoneState& state, const std::string& base) {
+    std::string id = base;
+    for (int n = 2; find_area(state, id); ++n) id = base + "_" + std::to_string(n);
+    return id;
+}
+
+size_t add_rect_area(ZoneState& state, const std::string& id, Point a, Point b, int priority) {
+    Json& list = areas_list(state);
+    list.push_back({{"id", id},
+                    {"name", id},
+                    {"priority", priority},
+                    {"rect", Json::array({num(std::min(a[0], b[0])), num(std::min(a[1], b[1])), num(std::max(a[0], b[0])),
+                                          num(std::max(a[1], b[1]))})}});
+    return list.size() - 1;
+}
+
+size_t add_polygon_area(ZoneState& state, const std::string& id, const std::vector<Point>& points, int priority) {
+    Json polygon = Json::array();
+    for (const Point& p : points) polygon.push_back(point_json(p));
+    Json& list = areas_list(state);
+    list.push_back({{"id", id}, {"name", id}, {"priority", priority}, {"polygon", std::move(polygon)}});
+    return list.size() - 1;
+}
+
+std::vector<Point> area_points(const Json& area) {
+    if (const Json& r = area.value("rect", Json()); r.is_array() && r.size() == 4) {
+        const float x0 = as_float(r[0]), z0 = as_float(r[1]), x1 = as_float(r[2]), z1 = as_float(r[3]);
+        return {{x0, z0}, {x1, z0}, {x1, z1}, {x0, z1}};
+    }
+    std::vector<Point> points;
+    for (const Json& p : area.value("polygon", Json::array()))
+        if (p.is_array() && p.size() == 2) points.push_back({as_float(p[0]), as_float(p[1])});
+    return points;
+}
+
+void move_area_vertex(Json& area, size_t vertex, Point to) {
+    if (area.contains("rect")) {
+        std::vector<Point> c = area_points(area);
+        if (vertex >= c.size()) return;
+        // Corners x0z0, x1z0, x1z1, x0z1: which of x0/x1 and z0/z1 this one owns.
+        float x[2] = {c[0][0], c[2][0]}, z[2] = {c[0][1], c[2][1]};
+        x[vertex == 1 || vertex == 2 ? 1 : 0] = to[0];
+        z[vertex >= 2 ? 1 : 0] = to[1];
+        area["rect"] = Json::array({num(std::min(x[0], x[1])), num(std::min(z[0], z[1])), num(std::max(x[0], x[1])),
+                                    num(std::max(z[0], z[1]))});
+    } else if (area.contains("polygon") && vertex < area["polygon"].size()) {
+        area["polygon"][vertex] = point_json(to);
+    }
+}
+
+void move_area(Json& area, float dx, float dz) {
+    if (area.contains("rect")) {
+        const auto c = area_points(area);
+        area["rect"] = Json::array({num(c[0][0] + dx), num(c[0][1] + dz), num(c[2][0] + dx), num(c[2][1] + dz)});
+    } else {
+        auto points = area_points(area);
+        Json polygon = Json::array();
+        for (const Point& p : points) polygon.push_back(point_json({p[0] + dx, p[1] + dz}));
+        area["polygon"] = std::move(polygon);
+    }
+}
+
+void rename_area(ZoneState& state, size_t index, const std::string& id) {
+    Json& list = areas_list(state);
+    const Json old = list[index].value("id", Json());
+    for (Json& a : list)
+        if (a.value("parent", Json()) == old) a["parent"] = id;
+    list[index]["id"] = id;
+}
+
+void delete_area(ZoneState& state, size_t index) {
+    Json& list = areas_list(state);
+    const Json old = list[index].value("id", Json());
+    list.erase(index);
+    for (Json& a : list)
+        if (a.value("parent", Json()) == old) a.erase("parent");
+}
+
+std::vector<SpawnRef> all_spawns(const ZoneState& state) {
+    std::vector<SpawnRef> refs;
+    for (const auto& [tile, file] : state.spawns) {
+        const Json& spawns = file.value("spawns", Json::array());
+        for (size_t i = 0; i < spawns.size(); ++i) refs.push_back({tile, i});
+    }
+    return refs;
+}
+
+const Json& spawn_json(const ZoneState& state, SpawnRef ref) { return state.spawns.at(ref.tile)["spawns"][ref.index]; }
+Json& spawn_json(ZoneState& state, SpawnRef ref) { return state.spawns.at(ref.tile)["spawns"][ref.index]; }
+
+std::optional<SpawnRef> find_spawn(const ZoneState& state, const std::string& id) {
+    for (const SpawnRef& ref : all_spawns(state))
+        if (spawn_json(state, ref).value("id", Json()) == id) return ref;
+    return std::nullopt;
+}
+
+std::string unique_spawn_id(const ZoneState& state, const std::string& base) {
+    std::string id = base;
+    for (int n = 2; find_spawn(state, id); ++n) id = base + "_" + std::to_string(n);
+    return id;
+}
+
+Json& spawn_file(ZoneState& state, TileKey tile) {
+    Json& file = state.spawns[tile];
+    if (!file.is_object()) file = {{"version", 2}, {"paths", Json::object()}, {"spawns", Json::array()}};
+    if (!file.contains("spawns")) file["spawns"] = Json::array();
+    return file;
+}
+
+SpawnRef add_spawn(ZoneState& state, const std::string& id, const std::string& npc, const Vec3& pos, float heading,
+                   float respawnSec) {
+    const TileKey tile = kast::map::tile_of(pos[0], pos[2]);
+    Json& spawns = spawn_file(state, tile)["spawns"];
+    spawns.push_back({{"id", id}, {"npc", npc}, {"pos", vec3_json(pos)}, {"heading", num(heading)}, {"respawnSec", num(respawnSec)}});
+    return {tile, spawns.size() - 1};
+}
+
+SpawnRef move_spawn(ZoneState& state, SpawnRef ref, const Vec3& pos) {
+    const TileKey tile = kast::map::tile_of(pos[0], pos[2]);
+    if (tile == ref.tile) {
+        spawn_json(state, ref)["pos"] = vec3_json(pos);
+        return ref;
+    }
+    Json& from = state.spawns.at(ref.tile);
+    Json spawn = from["spawns"][ref.index];
+    from["spawns"].erase(ref.index);
+    spawn["pos"] = vec3_json(pos);
+    Json& to = spawn_file(state, tile);
+    if (const Json path = spawn.value("path", Json()); path.is_string() && from.contains("paths") && from["paths"].contains(path)) {
+        const std::string name = path.get<std::string>();
+        const Json route = from["paths"][name];
+        if (!to.contains("paths")) to["paths"] = Json::object();
+        std::string target = name;
+        if (to["paths"].contains(name) && to["paths"][name] != route) target = unique_key(to["paths"], name);
+        to["paths"][target] = route;
+        spawn["path"] = target;
+        if (!uses_path(from, name)) from["paths"].erase(name); // moved with its last user
+    }
+    to["spawns"].push_back(std::move(spawn));
+    return {tile, to["spawns"].size() - 1};
+}
+
+void delete_spawn(ZoneState& state, SpawnRef ref) { state.spawns.at(ref.tile)["spawns"].erase(ref.index); }
+
+std::string add_path(ZoneState& state, SpawnRef ref, const std::string& name, const std::vector<Vec3>& points,
+                     float wait, bool loop) {
+    Json& file = spawn_file(state, ref.tile);
+    if (!file.contains("paths") || !file["paths"].is_object()) file["paths"] = Json::object();
+    const std::string key = unique_key(file["paths"], name);
+    Json route = Json::array();
+    for (const Vec3& p : points) route.push_back(vec3_json(p));
+    file["paths"][key] = {{"loop", loop}, {"wait", num(wait)}, {"points", std::move(route)}};
+    spawn_json(state, ref)["path"] = key;
+    return key;
+}
+
+void delete_path(ZoneState& state, TileKey tile, const std::string& name) {
+    Json& file = spawn_file(state, tile);
+    if (file.contains("paths")) file["paths"].erase(name);
+    for (Json& s : file["spawns"])
+        if (s.value("path", Json()) == name) s.erase("path");
+}
+
+Json* spawn_path(ZoneState& state, SpawnRef ref) {
+    Json& file = state.spawns.at(ref.tile);
+    const Json name = spawn_json(state, ref).value("path", Json());
+    if (!name.is_string() || !file.contains("paths") || !file["paths"].contains(name)) return nullptr;
+    return &file["paths"][name.get<std::string>()];
+}
+
+void add_path_point(ZoneState& state, SpawnRef ref, const Vec3& point) {
+    if (Json* route = spawn_path(state, ref)) {
+        (*route)["points"].push_back(vec3_json(point));
+        return;
+    }
+    const Json& s = spawn_json(state, ref);
+    const Json& pos = s.value("pos", Json::array({0, 0, 0}));
+    const Vec3 start{as_float(pos[0]), as_float(pos[1]), as_float(pos[2])};
+    add_path(state, ref, s.value("id", std::string("spawn")) + "_path", {start, point}, 0, true);
+}
+
+} // namespace zone

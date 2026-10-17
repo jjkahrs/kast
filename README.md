@@ -403,6 +403,62 @@ message box and exits 1; with `--frames` the message is only logged (stdout), so
 Ship from a `release` build: a `debug` build copies the debug player, which needs Visual Studio's debug runtime. Players
 need the Microsoft Visual C++ Redistributable (x64); Build doesn't copy it.
 
+## Zone Builder
+
+`kast_zone_builder` (`tools/zone-builder/`, built with everything else: `build\<preset>\kast_zone_builder.exe`) creates
+and edits a project's zone maps (`maps/<folder>/`, see [Maps](services/world/README.md#maps) and [Terrain](#terrain))
+in 3D and saves them in place, in the formats the engine and the world server load. It is a standalone app; the editor
+does not need to be open.
+
+**Open.** File > Open Project... (or `--project <dir>`) lists `maps/*/map.json` in the **Maps** panel; click one to open
+it (one map at a time; unsaved edits ask Save / Don't Save / Cancel first, and so does closing the window). **New
+Map...** asks for a folder (letters, digits, `_`, `-`), a name, an id (the lowest unused; a used id is refused) and 1-8
+by 1-8 tiles; nothing is written until you save. The title shows `*` while there are unsaved edits.
+
+**3D view** (behind the panels): the map's tiles with its material, lit like the game. Right drag (or Alt + left drag)
+orbits, middle drag pans, the wheel zooms, **F** frames the map. Overlays: tile borders, the player spawn (with its
+heading), areas (portals in blue, the selected one with corner handles), spawns (with heading), patrol paths, the
+brush ring. They are drawn over the terrain, not hidden by hills.
+
+| Panel | Edits | Writes |
+|---|---|---|
+| **Map** | id, name, material (a project `.mat`), player spawn (x, z on the ground, heading; **Place on terrain** then click), own `nav` settings, and the **tile grid**: click a free cell to add a tile (its edges take its neighbours' heights, so no seam), a tile to remove it (a dialog lists the files that go and the spawns lost) | `map.json`; on save, a removed tile's `heights/`, `.server/spawns/` and `.server/nav/` files are deleted (to the Recycle Bin) |
+| **Terrain** | **Raise**, **Lower**, **Flatten** brushes (left drag; radius, strength, falloff; Shift+click picks Flatten's height), the **height range** (Apply re-quantizes every tile so world heights stay put; a confirm shows how many samples clip), **Import PNG...** / **Export PNG...** of the last clicked tile (257 x 257 16-bit grayscale; anything else is refused with the reason; an import's edges are copied onto its neighbours) | `heights/<tx>_<tz>.r16` for each edited tile only; an edited tile's old `.png` is deleted (the loaders read `.r16` first) |
+| **Areas** | **Draw Rect** (drag), **Draw Polygon** (click points; click the first point or Enter closes, Backspace drops one, Esc cancels); select by clicking, drag corners (a rect stays a rect); id (children follow a rename), name, priority (new areas get one above the highest), parent, portal (target map from the project, arrival position and heading); `y`, `music`, `flags` and unknown keys are kept, not edited | `areas.json` |
+| **Spawns** | **Place Spawn** (click), drag to move (snapped to the ground), id, NPC (the `name` of each `npcs/*.lua`, or any text), position, heading, respawn seconds or never; the spawn's patrol path: **Add Path Points** (click), wait, loop or walk back, remove the last point, delete | `.server/spawns/<tx>_<tz>.json` of the tile each spawn stands in: moving one across a tile border moves it to that file with its path (copied if other spawns still use it, renamed if the name is taken) |
+| **Bake** | **Bake Navmesh**: runs `kast_mapbake <mapDir>` on the saved, valid map in the background, its output and exit code below. The exe path is a setting (`%APPDATA%/Kast/ZoneBuilder/zone_builder.json`, `"mapbake"`); empty means `services/world/build/{release,debug}/kast_mapbake.exe` of this source tree, then next to `kast_zone_builder.exe` | `.server/nav/*.navtile` (by `kast_mapbake`) |
+| **Problems**, **Log** | the last validation, and what happened | |
+
+**Save** (Ctrl+S, File > Save) first checks the map as the world server would load it: `kast_map`'s `parse_manifest`,
+`parse_areas` and `parse_spawns` for every tile's file, spawn ids unique on the map, spawn files on declared tiles, the
+map id unused by the project's other maps, and portals to an existing map, onto its tiles and not into a portal there.
+Any problem: nothing is written, and **Problems** lists them all (file and message, as the server reports them). Only
+files that changed are written; a map opened and saved unchanged keeps every byte. **Undo** / **Redo** (Ctrl+Z /
+Ctrl+Y, Edit menu) cover every edit; a brush stroke or a drag is one step.
+
+**Command line** (tests and scripts; edits run in order, each one undo step):
+
+```
+kast_zone_builder [--project dir] [--map folder] [edits...] [--frames N] [--screenshot out.png] [--size WxH]
+                  [--window-pos X,Y] [--no-vsync] [--log-fps] [--sculpt-loop] [--headless] [--no-recycle]
+                  [--focus x,z,distance] [--panel name] [--select id] [--prompt-remove-tile tx,tz]
+                  [--mapbake exe] [--bake]
+edits: --new-map folder[,W,H[,id]]  --map-id N  --material path  --set-spawn x,z[,heading]  --add-tile tx,tz
+       --remove-tile tx,tz  --falloff F  --sculpt x,z,radius,metres (negative lowers)  --flatten x,z,radius,height[,f]
+       --height-range min,max  --import-png tx,tz,file  --export-png tx,tz,file
+       --add-area id,priority,x0,z0,x1,z1  --add-polygon id,priority,x,z,x,z,x,z...  --area-parent id,parent
+       --area-portal id,map,x,y,z,heading  --move-area-vertex id,i,x,z  --delete-area id
+       --add-spawn id,npc,x,z[,heading[,respawnSec]]  --move-spawn id,x,z  --delete-spawn id
+       --add-path spawnId,wait,loop(0|1),x,z,x,z...  --undo  --redo  --validate  --save  --expect-save-fail
+```
+
+A failed edit or save exits 1. `--headless` runs the edits (and `--bake`, waiting for it) without a window.
+`--frames` runs show the window without taking focus; `KAST_WINDOW_POS` / `--window-pos` place it. `--bake` holds the
+frame count until `kast_mapbake` ends and logs how many frames were drawn meanwhile. `--log-fps` logs the frame rate
+once a second; `--sculpt-loop` raises and lowers a brush circling the map every frame (the sculpting benchmark: a
+Release build with `--no-vsync` on an 8 x 8 map draws about 300 fps on an RTX 4070 Ti SUPER, rebuilding only the
+touched tiles' meshes). `--no-recycle` deletes files for good (the tests use it).
+
 ## Coordinates and scenes
 
 - Right-handed, **Y up**, 1 unit = 1 meter. Cameras and directional lights look down their local **-Z**.
@@ -2019,6 +2075,11 @@ Windows.
 | `assets_create_menu_screenshot` | `--assets-menu / --focus-panel Assets`, writing `assets_create_menu.png` (Create: Lua System, State Machine, GUI). |
 | `starter_mmo_load`, `starter_mmo_copy`, `starter_mmo_copy_ca`, `starter_mmo_login_screenshot`, `starter_mmo_build`, `starter_mmo_player` | [`samples/starter-mmo`](samples/starter-mmo/README.md) (`cmake/starter_mmo_tests.cmake`): `--project samples/starter-mmo` with no warning or error (`FORBID_OUTPUT`); a copy with the test CA as its CA file plays the login GUI (`starter_mmo_login.png`), builds `Starter MMO.exe`, and the player logs `Online Services enabled: auth http://localhost:3100, CA file 'certs/world_dev_ca.pem'`. |
 | `starter_mmo_live_setup`, `starter_mmo_live_chars`, `starter_mmo_live_world`, `starter_mmo_live_cavern`, `starter_mmo_live_camera`, `starter_mmo_live_camera_zoom`, `starter_mmo_live_camera_orbit`, `starter_mmo_live_secrets`, `starter_mmo_live_teardown` | The sample against the compose stack, with a test account from `KAST_ONLINE_EMAIL` / `KAST_ONLINE_PASSWORD` in the environment only: the setup restarts the stack with the sample's override, checks the world server loaded it, adds `Starter Realm` and registers + verifies the account through Mailpit if needed; the stages play copies of the sample with `--online-login-env` and a test-only driver pressing the sample's buttons by their events (character list; the Meadow with the Guard, an idle `kast_bot`, the HUD and a chat line; both portals into the Cavern with the Bat; the player camera standing behind, zoomed out with `--sim-mouse` wheel notches and orbited with a `--sim-mouse` left drag), each a screenshot in `build/<preset>/starter_mmo/`; no password or JWT in any file or kept log; the teardown recreates the world with the default mounts (and stops the stack if the setup started it). Skipped without docker, a running engine or the two variables. |
+| `zone_builder_self_check` | `kast_zone_builder_self_check` (`tests/zone_builder_self_check.cpp`, no window, on copies in the temp folder): `meadow`, `cavern` and `hills` load and save unchanged with no write, and a forced rewrite reads back the same JSON and heights (`.r16` byte-identical; `hills`' `.png` replaced by an equal `.r16`); a new map saved, reloaded and streamed by `TerrainStreamer` (4 tiles); ground ray picking; Raise / Lower / Flatten heights within one quantization step, clamping to the height range, a stroke on a four-tile corner keeping every shared edge equal; height range changes keeping world heights within a step and counting clipped samples; PNG16 export/import exact, 8-bit, wrong-size and non-PNG imports refused unchanged; rect and polygon areas with parent and portal through `parse_areas` and `area_at`, kept `y` / `music` / `flags` / unknown keys, renames and deletes fixing children; spawns and paths across tile borders (moved, shared, renamed paths); saves blocked with mtimes unchanged (duplicate map id, portal to an unknown map, equal-priority overlap, duplicate spawn id, spawn off the map); tile rects, add (taking neighbour edges) and remove (its files listed and deleted on save, a removed-and-re-added tile's stale file too); undo/redo of every edit type to byte-identical files; the process runner (output, exit code, quoting) and `kast_mapbake` on a new map if built. |
+| `zone_builder_roundtrip_meadow`, `_cavern`, `_hills` | `cmake/zone_builder_test.cmake` on a copy: open, save, screenshot; every file of the map byte-identical. |
+| `zone_builder_new_map`, `zone_builder_sculpt`, `zone_builder_objects`, `zone_builder_tiles` | A new 2 x 2 map made from the command line (plain; sculpted across a tile corner, flattened, a PNG exported and imported, height range changed; with areas, a portal, spawns, a path and a spawn moved across a border; with a tile removed and one added), saved with a screenshot: it reopens and validates, `kast_mapbake` (if built) lints and bakes it, removed files are gone, and for `objects` `kast_world` (if built) logs it in `maps loaded`. |
+| `zone_builder_blocked_overlap`, `_portal`, `_spawn_id`, `_spawn_off_map`, `_map_id` | An invalid edit on a copy of `meadow`: the save is refused, the Problems panel shows the `kast_map` error (screenshot) and every file is byte-identical, none added. |
+| `zone_builder_bake`, `zone_builder_no_focus` | Bake Navmesh from the window on a copy of `meadow`: navtiles written, frames drawn while `kast_mapbake` ran (skipped if it is not built). `kast_focus_probe` on a `--frames 120` run. |
 | `editor_no_focus`, `launcher_no_focus`, `player_no_focus`, `editor_audio_play_no_focus` | `kast_focus_probe` runs `kast_editor --frames 120`, `kast_editor --launcher --frames 120` the built `switch` game with `--frames 120` and the editor playing `audio.scene` with the Mixer open, sampling the foreground window until exit: fails if it ever belongs to the Kast process, if no window was shown, or on a nonzero exit. A `--frames` run shows its window without activating it and logs init failures instead of showing a message box. |
 
 The screenshot tests each open a real window for ~2 seconds, in a fresh working directory (`<png>.run/`) so they
@@ -2053,6 +2114,11 @@ engine/   log (stdout + in-memory lines), app (SDL3 window, bgfx init, main loop
           scene_gui (a scene's UIDocuments in Play: load, stack, show/hide, hot reload, kast.gui access),
           gui_access (what kast.gui may do to the GUIs), shaders/
 player/   main.cpp (kast_player: the built game client)
+tools/    zone-builder/ (kast_zone_builder, README "Zone Builder"): zone_doc (map JSON + heights, undo snapshots),
+          zone_io (project maps, load, validate, save, npc names), terrain_edit (picking, brushes, height range, PNG16,
+          tiles), zone_edit (areas, spawns, paths), process_runner (kast_mapbake in the background), zone_view
+          (Renderer + PostProcess into the backbuffer, camera, overlays), zone_panels + zone_objects (ImGui panels and
+          3D tools), main.cpp (CLI)
 editor/   main.cpp (CLI, dock layout, menus, console), document (scene, Play mode, file actions, dialogs, modals, title),
           camera (editor camera), viewport (Scene panel: render, camera input, picking, gizmo),
           game_view (Game panel: render from the active camera, game GUIs over it in Play),
@@ -2060,14 +2126,15 @@ editor/   main.cpp (CLI, dock layout, menus, console), document (scene, Play mod
           gui_builder (GUI Hierarchy, GUI Inspector, GUI Style, GUI Preview),
           panels (Hierarchy, Inspector incl. AudioSource Preview, Systems, Components, Assets, Lighting, Mixer, Network), build (Build: game.pak, exe, DLLs, last folder),
           imgui_bgfx (ImGui renderer for bgfx), shaders/
-tests/    self_check.cpp, net_self_check.cpp, net_test_util (loopback servers, test certificates),
+tests/    self_check.cpp, zone_builder_self_check.cpp, net_self_check.cpp, net_test_util (loopback servers, test certificates),
           net_test_server.cpp (kast_net_test_server) + net_test_server_data/ (its key), focus_probe.cpp, scenes/ (a project: project.kast, basic.scene, lua.scene + scripts/, no_camera.scene,
           malformed.scene, v1.scene, v3.scene), project/ (scene-switch and Lua components project: project.kast,
           scene_a.scene, scene_b.scene, health.scene, ui.scene + ui/main_menu.rml/.rcss, scripts/,
           components/health.lua, audio.scene + sounds/ (tone.wav, wave-demo.wav, mp3-demo.mp3) +
           scripts/audio_sfx.lua, net_a.scene, net_b.scene + scripts/net_a.lua, net_b.lua + certs/net_test_ca.pem)
 cmake/    smoke_test.cmake, roundtrip_test.cmake, load_fails_test.cmake, differs_test.cmake, build_test.cmake,
-          player_test.cmake, starter_mmo_*.cmake / .ps1 / .lua (the samples/starter-mmo tests)
+          player_test.cmake, starter_mmo_*.cmake / .ps1 / .lua (the samples/starter-mmo tests),
+          zone_builder_tests.cmake + zone_builder_test.cmake (the zone builder's)
 samples/  starter-mmo/ (an online game project that is also the world server's Lua and maps: its README)
 ```
 

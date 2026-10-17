@@ -1,0 +1,117 @@
+# Zone builder end-to-end runs on a copy of a project's maps (the source project is never written).
+# Usage: cmake -DEXE=<kast_zone_builder> -DPROJECT=<dir> -DOUT_DIR=<dir> -DNAME=<test> -DMODE=<mode> [-DMAP=<folder>]
+#              [-DMAPBAKE=<kast_mapbake>] [-DWORLD=<kast_world>] [-DARGS=<|-separated extra edits>] -P zone_builder_test.cmake
+# MODE roundtrip: open MAP, save with no edits, take a screenshot; every file of the map must be byte-identical.
+# MODE blocked:   open MAP, run ARGS (edits that make it invalid), save: it must refuse, and every file stays
+#                 byte-identical with none added.
+# MODE new_map:   create MAP (2x2 tiles), save, screenshot; it must reopen and validate, and kast_mapbake (if given and
+#                 built) must lint and bake it.
+# MODE edit:      create MAP (2x2 tiles), run ARGS, save, screenshot; then as new_map. EXPECT_FILES: map-relative files
+#                 that must exist afterwards. With WORLD (if built), the world server must load every map of the copy,
+#                 MAP among them ("maps loaded"; it then stops at the missing database). ARGS2: a second run on the saved
+#                 MAP with these edits, then save (before the checks); EXPECT_GONE: map-relative files it must delete.
+# MODE bake:      open MAP and Bake Navmesh in the window (MAPBAKE); it must exit 0, write .server/nav/*.navtile and
+#                 have drawn frames while kast_mapbake ran.
+string(REPLACE "|" ";" ARGS "${ARGS}") # | in the test command: no ; escaping through add_test
+string(REPLACE "|" ";" EXPECT_FILES "${EXPECT_FILES}")
+string(REPLACE "|" ";" ARGS2 "${ARGS2}")
+string(REPLACE "|" ";" EXPECT_GONE "${EXPECT_GONE}")
+set(copy "${OUT_DIR}/${NAME}")
+set(shot "${OUT_DIR}/${NAME}.png")
+file(REMOVE_RECURSE "${copy}")
+file(REMOVE "${shot}")
+file(COPY "${PROJECT}/maps" DESTINATION "${copy}")
+if(EXISTS "${PROJECT}/materials")
+  file(COPY "${PROJECT}/materials" DESTINATION "${copy}")
+endif()
+
+function(run)
+  execute_process(COMMAND "${EXE}" --project "${copy}" --no-recycle ${ARGN} RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE out)
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "kast_zone_builder ${ARGN} exited with ${result}:\n${out}")
+  endif()
+  set(out "${out}" PARENT_SCOPE)
+endfunction()
+
+if(MODE STREQUAL "roundtrip" OR MODE STREQUAL "blocked")
+  if(MODE STREQUAL "blocked")
+    run(--map "${MAP}" ${ARGS} --expect-save-fail --frames 20 --screenshot "${shot}")
+  else()
+    run(--map "${MAP}" ${ARGS} --save --frames 20 --screenshot "${shot}")
+  endif()
+  file(GLOB_RECURSE files RELATIVE "${PROJECT}/maps/${MAP}" "${PROJECT}/maps/${MAP}/*")
+  file(GLOB_RECURSE after RELATIVE "${copy}/maps/${MAP}" "${copy}/maps/${MAP}/*")
+  if(NOT files STREQUAL after)
+    message(FATAL_ERROR "maps/${MAP} files changed: ${files} -> ${after}")
+  endif()
+  foreach(f ${files})
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E compare_files "${PROJECT}/maps/${MAP}/${f}" "${copy}/maps/${MAP}/${f}"
+                    RESULT_VARIABLE differ)
+    if(NOT differ EQUAL 0)
+      message(FATAL_ERROR "maps/${MAP}/${f} changed after a save with no edits")
+    endif()
+  endforeach()
+  message(STATUS "OK: maps/${MAP}: ${files} unchanged")
+elseif(MODE STREQUAL "new_map" OR MODE STREQUAL "edit")
+  run(--new-map "${MAP},2,2" ${ARGS} --save --frames 20 --screenshot "${shot}")
+  if(ARGS2)
+    run(--map "${MAP}" ${ARGS2} --save --frames 20 --screenshot "${shot}")
+  endif()
+  run(--map "${MAP}" --validate --headless)
+  foreach(f ${EXPECT_GONE})
+    if(EXISTS "${copy}/maps/${MAP}/${f}")
+      message(FATAL_ERROR "maps/${MAP}/${f} should have been deleted")
+    endif()
+  endforeach()
+  foreach(f map.json ${EXPECT_FILES})
+    if(NOT EXISTS "${copy}/maps/${MAP}/${f}")
+      message(FATAL_ERROR "maps/${MAP}/${f} was not written")
+    endif()
+  endforeach()
+  if(MAPBAKE AND EXISTS "${MAPBAKE}")
+    execute_process(COMMAND "${MAPBAKE}" "${copy}/maps/${MAP}" RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE out)
+    if(NOT result EQUAL 0)
+      message(FATAL_ERROR "kast_mapbake maps/${MAP} exited with ${result}:\n${out}")
+    endif()
+    message(STATUS "kast_mapbake: ${out}")
+  else()
+    message(STATUS "kast_mapbake not built (${MAPBAKE}): lint skipped")
+  endif()
+  if(WORLD AND EXISTS "${WORLD}")
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E env "MAP_ROOT=${copy}/maps" START_MAP=10 AUTH_JWKS_URL=http://127.0.0.1:9/jwks
+                            DB_HOST=127.0.0.1 DB_PORT=9 DB_USER=x DB_PASSWORD=x DB_NAME=x REALM_ID=1 DB_CONNECT_TIMEOUT_SECONDS=1
+                            "LUA_ROOT=${copy}/no_lua" "${WORLD}"
+                    OUTPUT_VARIABLE out ERROR_VARIABLE out TIMEOUT 60)
+    string(REGEX MATCH "[^
+]*maps loaded[^
+]*" loadedLine "${out}")
+    if(NOT loadedLine MATCHES "\"name\":\"${MAP}\"")
+      message(FATAL_ERROR "kast_world did not load maps/${MAP}:
+${out}")
+    endif()
+    message(STATUS "kast_world: ${loadedLine}")
+  else()
+    message(STATUS "kast_world not built (${WORLD}): server load skipped")
+  endif()
+elseif(MODE STREQUAL "bake")
+  if(NOT MAPBAKE OR NOT EXISTS "${MAPBAKE}")
+    message(STATUS "kast_mapbake not built (${MAPBAKE}): skipped")
+    return()
+  endif()
+  run(--map "${MAP}" --mapbake "${MAPBAKE}" --bake --panel Bake --frames 20 --screenshot "${shot}")
+  file(GLOB navtiles "${copy}/maps/${MAP}/.server/nav/*.navtile")
+  if(NOT navtiles)
+    message(FATAL_ERROR "no navtiles written:\n${out}")
+  endif()
+  string(REGEX MATCH "([0-9]+) frames drawn while kast_mapbake ran" drawn "${out}")
+  if(NOT drawn OR CMAKE_MATCH_1 LESS 2)
+    message(FATAL_ERROR "the UI did not keep drawing while kast_mapbake ran:\n${out}")
+  endif()
+  message(STATUS "${drawn}; ${navtiles}")
+else()
+  message(FATAL_ERROR "unknown MODE ${MODE}")
+endif()
+if(NOT EXISTS "${shot}")
+  message(FATAL_ERROR "no screenshot ${shot}")
+endif()
+message(STATUS "OK: ${NAME}")

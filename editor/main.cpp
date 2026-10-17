@@ -62,37 +62,6 @@ constexpr const char* kUsage =
     "[--open-external path] [--drop-model path] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--no-vsync] [--no-audio-device] [--crash abort|assert] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
-// --log-fps: once a second, the frame rate (vsync caps it at the display's refresh rate) and what a frame costs below
-// that cap: the editor's CPU time per frame (update, UI and submitting draws) and bgfx's last GPU frame time.
-class FpsLog {
-public:
-    void endFrame(uint64_t frameStart)
-    {
-        const uint64_t now = SDL_GetPerformanceCounter();
-        const auto frequency = static_cast<double>(SDL_GetPerformanceFrequency());
-        cpuSeconds_ += static_cast<double>(now - frameStart) / frequency;
-        ++frames_;
-        if (windowStart_ == 0)
-            windowStart_ = now;
-        const double elapsed = static_cast<double>(now - windowStart_) / frequency;
-        if (elapsed < 1.0)
-            return;
-        const bgfx::Stats* stats = bgfx::getStats();
-        const double gpuMs = 1000.0 * static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) /
-                             static_cast<double>(stats->gpuTimerFreq);
-        kast::log::info(std::format("FPS {:.1f}, CPU {:.2f} ms/frame, GPU {:.2f} ms/frame, {} draw calls", frames_ / elapsed,
-                                    1000.0 * cpuSeconds_ / frames_, gpuMs, stats->numDraw));
-        windowStart_ = now;
-        frames_ = 0;
-        cpuSeconds_ = 0.0;
-    }
-
-private:
-    uint64_t windowStart_ = 0;
-    int frames_ = 0;
-    double cpuSeconds_ = 0.0;
-};
-
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel, for screenshots of mouse-driven games.
 struct SimMouse {
     int frame = 0;  // the press (at the Game image's center) and the wheel go out on this frame

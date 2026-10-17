@@ -144,6 +144,30 @@ target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 imgui::imgui imguizmo::imguizmo pugixml::pugixml shell32) # shell32: Recycle Bin
 add_dependencies(kast_editor kast_player) # Build copies kast_player.exe from next to kast_editor.exe
 
+# --- zone builder: standalone zone map editor (tools/zone-builder, README "Zone Builder") ---
+# The document, file and terrain logic, without a window, shared with its self-check. editor/assets.cpp: Recycle Bin.
+add_library(kast_zone_core STATIC
+  tools/zone-builder/zone_doc.cpp tools/zone-builder/zone_io.cpp tools/zone-builder/terrain_edit.cpp
+  tools/zone-builder/zone_edit.cpp tools/zone-builder/process_runner.cpp
+  editor/assets.cpp editor/build.cpp editor/editor_settings.cpp)
+target_include_directories(kast_zone_core PUBLIC tools/zone-builder editor)
+target_compile_options(kast_zone_core PRIVATE ${KAST_COMPILE_OPTIONS})
+target_link_libraries(kast_zone_core PUBLIC kast_engine kast_map SDL3::SDL3 shell32)
+# Bake Navmesh's default kast_mapbake: services/world/build of this source tree, if it is still there at run time.
+target_compile_definitions(kast_zone_core PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_executable(kast_zone_builder
+  tools/zone-builder/main.cpp tools/zone-builder/zone_view.cpp tools/zone-builder/zone_panels.cpp
+  tools/zone-builder/zone_objects.cpp
+  editor/camera.cpp editor/imgui_bgfx.cpp editor/ui_common.cpp "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
+target_include_directories(kast_zone_builder PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
+target_compile_options(kast_zone_builder PRIVATE ${KAST_COMPILE_OPTIONS})
+target_link_libraries(kast_zone_builder PRIVATE kast_zone_core imgui::imgui)
+add_executable(kast_zone_builder_self_check tests/zone_builder_self_check.cpp "${KAST_MANIFEST}")
+target_compile_definitions(kast_zone_builder_self_check PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(kast_zone_builder_self_check PRIVATE ${KAST_COMPILE_OPTIONS})
+target_link_libraries(kast_zone_builder_self_check PRIVATE kast_zone_core)
+target_include_directories(kast_zone_builder_self_check SYSTEM PRIVATE "${Stb_INCLUDE_DIR}") # stb_image_write: 8-bit PNGs to reject
+
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
 add_executable(kast_self_check tests/self_check.cpp tests/net_self_check.cpp tests/net_test_util.cpp editor/document.cpp editor/build.cpp editor/camera.cpp
@@ -172,6 +196,7 @@ enable_testing()
 set(KAST_TEST_SCENES "${CMAKE_CURRENT_SOURCE_DIR}/tests/scenes")
 set(KAST_TEST_PROJECT "${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
 add_test(NAME engine_self_check COMMAND kast_self_check)
+add_test(NAME zone_builder_self_check COMMAND kast_zone_builder_self_check)
 # kast.auth against the real auth service in the services/world compose stack (cd services/world && docker compose
 # up -d --build); skipped, not failed, when it isn't running.
 add_test(NAME auth_live COMMAND kast_self_check --live-auth http://localhost:3100 http://localhost:8026)
@@ -1539,6 +1564,8 @@ add_test(NAME editor_audio_play_no_focus
   WORKING_DIRECTORY "${KAST_NO_FOCUS_DIR}")
 set_tests_properties(editor_no_focus launcher_no_focus editor_audio_play_no_focus PROPERTIES TIMEOUT 120 RESOURCE_LOCK no_focus_dir)
 set_tests_properties(player_no_focus PROPERTIES FIXTURES_REQUIRED game_switch_built TIMEOUT 90)
+
+include(cmake/zone_builder_tests.cmake)
 
 # samples/starter-mmo: the editor + services sample project.
 include(cmake/starter_mmo_tests.cmake)

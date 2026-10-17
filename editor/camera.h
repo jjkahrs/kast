@@ -15,6 +15,8 @@ struct EditorCamera {
     float yaw = 0.0f;
     float pitch = -20.0f;
     float distance = 10.0f;
+    float nearPlane = kNear; // the zone builder widens both for 2 km maps
+    float farPlane = kFar;
 
     bx::Vec3 forward() const;
     bx::Vec3 right() const;

@@ -278,3 +278,24 @@ void FrameLimit::onScreenshotSaved(bool saved)
     saved_ = saved;
     kast::requestQuit();
 }
+
+void FpsLog::endFrame(uint64_t frameStart)
+{
+    const uint64_t now = SDL_GetPerformanceCounter();
+    const auto frequency = static_cast<double>(SDL_GetPerformanceFrequency());
+    cpuSeconds_ += static_cast<double>(now - frameStart) / frequency;
+    ++frames_;
+    if (windowStart_ == 0)
+        windowStart_ = now;
+    const double elapsed = static_cast<double>(now - windowStart_) / frequency;
+    if (elapsed < 1.0)
+        return;
+    const bgfx::Stats* stats = bgfx::getStats();
+    const double gpuMs = 1000.0 * static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) /
+                         static_cast<double>(stats->gpuTimerFreq);
+    kast::log::info(std::format("FPS {:.1f}, CPU {:.2f} ms/frame, GPU {:.2f} ms/frame, {} draw calls", frames_ / elapsed,
+                                1000.0 * cpuSeconds_ / frames_, gpuMs, stats->numDraw));
+    windowStart_ = now;
+    frames_ = 0;
+    cpuSeconds_ = 0.0;
+}
