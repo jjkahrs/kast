@@ -6,6 +6,7 @@
 
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/Elements/ElementFormControl.h>
 #include <RmlUi/Core/Factory.h>
 
 #include <algorithm>
@@ -38,7 +39,35 @@ std::vector<std::filesystem::path> documentFiles(const std::filesystem::path& rm
     return files;
 }
 
+// Typed into: a <textarea>, or an <input> of a text type (text is the default).
+bool isTextField(const Rml::Element& element)
+{
+    if (element.GetTagName() == "textarea")
+        return true;
+    if (element.GetTagName() != "input")
+        return false;
+    const Rml::String type = element.GetAttribute<Rml::String>("type", "text");
+    return type == "text" || type == "password";
+}
+
 } // namespace
+
+std::string guiTextRml(std::string_view text)
+{
+    std::string out;
+    out.reserve(text.size());
+    for (const char c : text) {
+        switch (c) {
+        case '&': out += "&amp;"; break;
+        case '<': out += "&lt;"; break;
+        case '>': out += "&gt;"; break;
+        case '"': out += "&quot;"; break;
+        case '\n': out += "<br/>"; break;
+        default: out += c; break;
+        }
+    }
+    return out;
+}
 
 void SceneGui::sync(const Scene& scene, const std::filesystem::path& projectRoot, EventBus& bus)
 {
@@ -116,6 +145,66 @@ bool SceneGui::click(const std::string& id)
     return false;
 }
 
+std::optional<std::string> SceneGui::value(const std::string& id)
+{
+    for (auto it = entries_.rbegin(); it != entries_.rend(); ++it)
+        if (it->document)
+            if (auto* control = dynamic_cast<Rml::ElementFormControl*>(it->document->GetElementById(id)))
+                return control->GetValue();
+    return std::nullopt;
+}
+
+void SceneGui::setText(const std::string& id, std::string_view text)
+{
+    Written& written = written_[id];
+    written.text = std::string(text);
+    for (Entry& entry : entries_)
+        if (entry.document)
+            apply(*entry.document, id, {.text = written.text});
+}
+
+void SceneGui::setVisible(const std::string& id, bool visible)
+{
+    written_[id].visible = visible;
+    for (Entry& entry : entries_)
+        if (entry.document)
+            apply(*entry.document, id, {.visible = visible});
+}
+
+std::optional<std::string> SceneGui::focusedField()
+{
+    Rml::Context* context = gui::ready() ? context_.context() : nullptr;
+    Rml::Element* focus = context ? context->GetFocusElement() : nullptr;
+    if (!focus || !isTextField(*focus))
+        return std::nullopt;
+    return focus->GetId();
+}
+
+void SceneGui::reset()
+{
+    clear();
+    written_.clear();
+}
+
+void SceneGui::apply(Rml::ElementDocument& document, const std::string& id, const Written& written)
+{
+    Rml::Element* element = document.GetElementById(id);
+    if (!element)
+        return;
+    if (written.text) {
+        if (auto* control = dynamic_cast<Rml::ElementFormControl*>(element))
+            control->SetValue(*written.text);
+        else
+            element->SetInnerRML(guiTextRml(*written.text));
+    }
+    if (written.visible) {
+        if (*written.visible)
+            element->RemoveProperty("display"); // back to the style sheet's
+        else
+            element->SetProperty("display", "none");
+    }
+}
+
 void SceneGui::load(Entry& entry, EventBus& bus)
 {
     entry.document = nullptr;
@@ -148,6 +237,8 @@ void SceneGui::load(Entry& entry, EventBus& bus)
     }
     entry.listener = std::make_unique<ButtonClickListener>(bus, entry.path);
     document->AddEventListener(Rml::EventId::Click, entry.listener.get());
+    for (const auto& [id, written] : written_) // what Lua wrote before this document loaded
+        apply(*document, id, written);
     if (entry.visible)
         document->Show();
     entry.document = document;

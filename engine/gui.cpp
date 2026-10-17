@@ -135,6 +135,16 @@ uint64_t problemCount() { return g_globals ? g_globals->system.problems : 0; }
 
 GuiRenderer* renderer() { return g_globals ? &g_globals->renderer : nullptr; }
 
+void syncTextInput(SDL_Window* window, bool want)
+{
+    if (!window || want == SDL_TextInputActive(window))
+        return;
+    if (want)
+        SDL_StartTextInput(window);
+    else
+        SDL_StopTextInput(window);
+}
+
 } // namespace kast::gui
 
 namespace kast {

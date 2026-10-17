@@ -1,0 +1,20 @@
+# Runs the services/world compose stack with this sample's server content instead of services/world/lua and
+# tests/project/maps. Use it as a second -f file, from services/world (relative paths resolve from there):
+#
+#   docker compose -f docker-compose.yml -f ../../samples/starter-mmo/docker-compose.override.yml up -d --build
+#
+# The world server's LUA_ROOT is this whole folder: it reads components/ (shared with the client), fsms/, npcs/ and
+# systems/ and ignores the rest. MAP_ROOT is maps/. Back to the default content:
+#
+#   docker compose up -d --force-recreate world
+services:
+  world:
+    environment:
+      START_MAP: "10" # maps/meadow
+      GAME_STATE_MACHINES: "" # fsms/session.lua is the client's game machine, not the server's
+    volumes:
+      - ../../samples/starter-mmo:/app/lua:ro
+      - ../../samples/starter-mmo/maps:/app/maps:ro
+  bot:
+    volumes:
+      - ../../samples/starter-mmo/maps:/app/maps:ro

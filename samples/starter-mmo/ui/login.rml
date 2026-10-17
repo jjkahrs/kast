@@ -1,0 +1,20 @@
+<rml>
+    <head>
+        <title>Login</title>
+        <link type="text/rcss" href="starter.rcss"/>
+    </head>
+    <body>
+        <div id="screen" class="screen">
+            <div id="login_card" class="card">
+                <p id="title" class="header">Starter MMO</p>
+                <p class="label">Email</p>
+                <input type="text" id="email"/>
+                <p class="label">Password</p>
+                <input type="password" id="password"/>
+                <button id="login_button" data-event="login.submit">Log in</button>
+                <button id="register_button" class="secondary" data-event="login.register">Create an account</button>
+                <p id="login_status" class="status"></p>
+            </div>
+        </div>
+    </body>
+</rml>

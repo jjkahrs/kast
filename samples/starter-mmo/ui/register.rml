@@ -1,0 +1,25 @@
+<rml>
+    <head>
+        <title>Register</title>
+        <link type="text/rcss" href="starter.rcss"/>
+    </head>
+    <body>
+        <div id="screen" class="screen">
+            <div id="register_card" class="card">
+                <p id="title" class="header">Create an account</p>
+                <p class="label">1. Email</p>
+                <input type="text" id="email"/>
+                <p class="label">Password (at least 8 characters)</p>
+                <input type="password" id="password"/>
+                <button id="register_button" data-event="register.submit">Register</button>
+                <p class="label">2. Verification token</p>
+                <p class="hint">Open Mailpit at http://localhost:8026, open the Kast email and paste its token here.</p>
+                <input type="text" id="token"/>
+                <button id="verify_button" data-event="register.verify">Verify email</button>
+                <button id="resend_button" class="secondary" data-event="register.resend">Resend the email</button>
+                <button id="back_button" class="secondary" data-event="register.back">Back to login</button>
+                <p id="register_status" class="status"></p>
+            </div>
+        </div>
+    </body>
+</rml>

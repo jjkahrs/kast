@@ -1,0 +1,2 @@
+# The world dev stack's self-signed CA, copied out of its container by setup_realm.cmake (README). Not committed.
+*.pem

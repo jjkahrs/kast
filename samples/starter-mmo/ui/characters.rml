@@ -1,0 +1,19 @@
+<rml>
+    <head>
+        <title>Characters</title>
+        <link type="text/rcss" href="starter.rcss"/>
+    </head>
+    <body>
+        <div id="characters_card" class="card">
+            <p id="title" class="header">Characters</p>
+            <button id="char_1" data-event="characters.pick"></button>
+            <button id="char_2" data-event="characters.pick"></button>
+            <button id="char_3" data-event="characters.pick"></button>
+            <button id="char_4" data-event="characters.pick"></button>
+            <p class="label">New character name (3-16 letters)</p>
+            <input type="text" id="char_name"/>
+            <button id="create_button" class="secondary" data-event="characters.create">Create character</button>
+            <p id="characters_status" class="status"></p>
+        </div>
+    </body>
+</rml>

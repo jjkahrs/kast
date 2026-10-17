@@ -1,0 +1,6 @@
+{
+  "version": 2,
+  "spawns": [
+    {"id": "bat_1", "npc": "Bat", "pos": [128, 0, 120], "heading": 3.1416, "respawnSec": 30}
+  ]
+}

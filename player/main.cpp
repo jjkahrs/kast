@@ -183,6 +183,7 @@ int main(int argc, char** argv)
         renderer.init();
         post.init();
         kast::gui::init();
+        lua.setGui(&gui); // kast.gui.*
         if (options->gpuStats)
             bgfx::setDebug(BGFX_DEBUG_PROFILER);
         if (kast::activeCamera(scene) == entt::null)
@@ -202,6 +203,7 @@ int main(int argc, char** argv)
         if (kast::tickPlay(scene, lua, static_cast<float>(ticks - lastTicks) * 1e-9f))
             gui.clear(); // kast.loadScene: the new scene's GUIs load below
         gui.sync(scene, project.root, lua.bus());
+        kast::gui::syncTextInput(window, gui.focusedField().has_value());
         lastTicks = ticks;
         input.endFrame();
 

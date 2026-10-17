@@ -636,6 +636,8 @@ int main(int argc, char** argv)
             doc.lua.world().setAddressOverride(wanted); // kept by every Play start
     };
     applyWorldOverride();
+    GameViewport game(kGameView, kGameGuiView);
+    doc.lua.setGui(&game.gui()); // kast.gui.* in Play, from the first (--play) start on
     bool playAfterLogin = false; // --play waiting for --online-login-env's answer
     if (options->onlineLoginEnv) {
         online.poll(doc.project ? &*doc.project : nullptr, false);
@@ -664,7 +666,6 @@ int main(int argc, char** argv)
     if (options->newStateMachinePrompt)
         panels.openNewStateMachine(*options->newStateMachinePrompt);
     SceneViewport viewport(kSceneView);
-    GameViewport game(kGameView, kGameGuiView);
     GuiBuilder guiBuilder(kGuiPreviewView);
     UiScale uiScale(options->uiScale);
     FrameLimit frames(options->frames, options->screenshot);
@@ -684,7 +685,9 @@ int main(int argc, char** argv)
                             std::filesystem::path(reinterpret_cast<const char8_t*>(options->openExternal.c_str())));
 
     kast::AppHooks hooks;
+    SDL_Window* mainWindow = nullptr;
     hooks.init = [&](SDL_Window* window) {
+        mainWindow = window;
         ImGui::CreateContext();
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
         applyTheme();
@@ -736,6 +739,8 @@ int main(int argc, char** argv)
             startPlay(doc);
         }
         updatePlay(doc, ImGui::GetIO().DeltaTime);
+        if (game.hasInput(doc)) // otherwise ImGui's backend turns text input on and off for its own fields
+            kast::gui::syncTextInput(mainWindow, game.gui().focusedField().has_value());
         componentPollSeconds += ImGui::GetIO().DeltaTime;
         if (componentPollSeconds >= kComponentPollSeconds) { // Lua component hot reload (does nothing during Play)
             componentPollSeconds = 0.0f;

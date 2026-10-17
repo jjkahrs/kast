@@ -3,6 +3,7 @@
 #include "audio.h"
 #include "auth_client.h"
 #include "event_bus.h"
+#include "gui_access.h"
 #include "input.h"
 #include "network.h"
 #include "physics.h"
@@ -100,6 +101,10 @@ public:
     TerrainStreamer& terrain() { return terrain_; }
     StateMachines& fsm() { return fsm_; }
     const StateMachines& fsm() const { return fsm_; }
+    // The scene's game GUIs for kast.gui.* (the editor's Game view, kast_player's window; must outlive the session),
+    // reset() before each scene's systems start. Null (the default) leaves kast.gui nil. Takes effect at the next
+    // start or scene switch.
+    void setGui(GuiAccess* gui) { gui_ = gui; }
 
 private:
     struct State;
@@ -115,6 +120,7 @@ private:
     AuthClient auth_{network_};
     WorldClient world_{network_, auth_};
     Replication replication_; // subscribes on bus_, sends through world_
+    GuiAccess* gui_ = nullptr;
     std::unique_ptr<State> state_;
     StateMachines fsm_{bus_}; // declared after state_, so its Lua callbacks are released while the Lua state lives
 };

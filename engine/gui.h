@@ -6,6 +6,7 @@
 #include <string>
 
 union SDL_Event;
+struct SDL_Window;
 
 namespace Rml {
 class Context;
@@ -23,6 +24,9 @@ void shutdown();
 bool ready();
 // Warnings and errors RmlUi has logged since init: a load or parse went wrong if it grew meanwhile.
 uint64_t problemCount();
+// SDL sends typed text (SDL_EVENT_TEXT_INPUT, what RmlUi text fields insert) only while text input is on: turns it on
+// for window while want (a text field has focus, SceneGui::focusedField), off otherwise.
+void syncTextInput(SDL_Window* window, bool want);
 
 } // namespace kast::gui
 

@@ -2,11 +2,14 @@
 
 #include "event_bus.h"
 #include "gui.h"
+#include "gui_access.h"
 #include "gui_events.h"
 #include "scene.h"
 
 #include <filesystem>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -20,10 +23,13 @@ class ElementDocument;
 // naming the file and that document shows nothing; Play goes on.
 namespace kast {
 
-class SceneGui {
+// text as RML: &, <, > and " escaped, "\n" as <br/> (GuiAccess::setText on an element that isn't a text field).
+std::string guiTextRml(std::string_view text);
+
+class SceneGui final : public GuiAccess {
 public:
     explicit SceneGui(std::string contextName) : context_(std::move(contextName)) {}
-    ~SceneGui() { clear(); }
+    ~SceneGui() override { clear(); }
 
     // Loads, unloads, shows and hides documents so they match scene's UIDocuments (paths relative to projectRoot;
     // empty = no project). Button clicks publish on bus (gui_events.h), which must outlive the loaded documents.
@@ -36,7 +42,19 @@ public:
     bool click(const std::string& id);
     GuiContext& context() { return context_; }
 
+    // kast.gui.* (gui_access.h).
+    std::optional<std::string> value(const std::string& id) override;
+    void setText(const std::string& id, std::string_view text) override;
+    void setVisible(const std::string& id, bool visible) override;
+    std::optional<std::string> focusedField() override;
+    void reset() override;
+
 private:
+    struct Written { // kast.gui writes to one id, applied again to documents that load later
+        std::optional<std::string> text;
+        std::optional<bool> visible;
+    };
+
     struct Entry {
         entt::entity entity = entt::null;
         EntityId id = 0;
@@ -50,8 +68,10 @@ private:
     void load(Entry& entry, EventBus& bus);
     void unload(Entry& entry);
     void restack();
+    void apply(Rml::ElementDocument& document, const std::string& id, const Written& written);
 
     GuiContext context_;
+    std::map<std::string, Written> written_;
     std::filesystem::path root_;
     EventBus* bus_ = nullptr;
     std::vector<Entry> entries_; // by id

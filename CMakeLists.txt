@@ -1540,6 +1540,9 @@ add_test(NAME editor_audio_play_no_focus
 set_tests_properties(editor_no_focus launcher_no_focus editor_audio_play_no_focus PROPERTIES TIMEOUT 120 RESOURCE_LOCK no_focus_dir)
 set_tests_properties(player_no_focus PROPERTIES FIXTURES_REQUIRED game_switch_built TIMEOUT 90)
 
+# samples/starter-mmo: the editor + services sample project.
+include(cmake/starter_mmo_tests.cmake)
+
 # Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.
 get_property(kast_tests DIRECTORY PROPERTY TESTS)
 set_property(TEST ${kast_tests} APPEND PROPERTY ENVIRONMENT KAST_NO_CRASH_DIALOGS=1)

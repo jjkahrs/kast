@@ -1,0 +1,87 @@
+{
+  "version": 4,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            2,
+            6
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Camera": {
+          "verticalFovDegrees": 60,
+          "nearPlane": 0.1,
+          "farPlane": 500
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Login Screen",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UIDocument": {
+          "path": "ui/login.rml",
+          "visible": true
+        }
+      }
+    }
+  ],
+  "systems": [
+    "scripts/login.lua"
+  ],
+  "lighting": {
+    "ambientColor": [
+      0.7,
+      0.75,
+      1
+    ],
+    "ambientIntensity": 0.3
+  },
+  "editor": {
+    "camera": {
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "yaw": 20,
+      "pitch": -25,
+      "distance": 25
+    }
+  }
+}

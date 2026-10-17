@@ -63,8 +63,10 @@ void EventBus::drain()
     std::erase_if(subscribers_, [](const Subscriber& s) { return !s.active; });
 }
 
-void EventBus::deliver(Event& event)
+void EventBus::deliver(Event& queued)
 {
+    // queued lives in the dispatcher's vector: a subscriber's publish can grow it and move queued away mid-loop.
+    const Event event = std::move(queued);
     history_.push_back({frame_, event.name, event.payload.dump(), event.publisher});
     if (history_.size() > kHistorySize)
         history_.pop_front();

@@ -1,0 +1,14 @@
+<rml>
+    <head>
+        <title>HUD</title>
+        <link type="text/rcss" href="starter.rcss"/>
+    </head>
+    <body>
+        <div id="hud">
+            <p id="hud_name">-</p>
+            <p id="hud_health" class="stat">Health -</p>
+            <p id="hud_gold" class="stat">Gold -</p>
+            <p id="hud_map" class="stat">Map -</p>
+        </div>
+    </body>
+</rml>

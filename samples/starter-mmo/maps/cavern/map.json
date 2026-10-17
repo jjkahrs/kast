@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": 11,
+  "name": "Cavern",
+  "tiles": [[0, 0, 0, 0]],
+  "heightRange": [0, 30],
+  "spawn": {"pos": [128, 0, 128], "heading": 0},
+  "material": "materials/cavern_rock.mat",
+  "nav": {"maxSlopeDeg": 45}
+}

@@ -90,9 +90,9 @@ struct PendingScene {
 struct LuaSystems::State {
     State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, std::string scenePath, const Input* input,
           EventBus& bus, StateMachines& fsm, Physics& physics, Audio& audio, Network& network, AuthClient& auth,
-          WorldClient& world)
+          WorldClient& world, GuiAccess* gui)
         : scene(scene), projectRoot(projectRoot), scenePath(std::move(scenePath)), input(input), bus(bus), fsm(fsm),
-          physics(physics), audio(audio), network(network), auth(auth), world(world)
+          physics(physics), audio(audio), network(network), auth(auth), world(world), gui(gui)
     {
     }
 
@@ -107,6 +107,7 @@ struct LuaSystems::State {
     Network& network;
     AuthClient& auth;
     WorldClient& world;
+    GuiAccess* gui; // null: no game GUIs here, kast.gui is nil
     std::unordered_map<entt::entity, AudioHandle> sources; // the last voice each AudioSource started (kast.audio.stopSource)
     MaterialLibrary materials; // shared .mat files, for kast.get/setMaterialProperty
     std::optional<PendingScene> pending; // last kast.loadScene call wins
@@ -120,6 +121,7 @@ struct LuaSystems::State {
     sol::table netApi;     // kast.net.*
     sol::table authApi;    // kast.auth.*, only while Online Services are enabled
     sol::table worldApi;   // kast.world.*, likewise
+    sol::table guiApi;     // kast.gui.*, only with a GuiAccess
     DefinitionFiles fsmFiles; // state machine definition files at the last load, for hot reload
     std::string callbackPath; // the definition file whose enter/exit is running (log prefixes, event publisher)
     std::vector<System> systems;
@@ -155,6 +157,7 @@ struct LuaSystems::State {
     void bindNetApi();
     void bindAuthApi();
     void bindWorldApi();
+    void bindGuiApi();
     // Starts entity's AudioSource. Throws std::invalid_argument (see Audio::play).
     AudioHandle playSource(entt::entity entity);
     void playOnStart(); // every AudioSource with playOnStart; a bad clip logs an error and plays nothing
@@ -322,6 +325,8 @@ sol::environment LuaSystems::State::environment()
         kast["auth"] = readOnly(authApi);
     if (world.enabled())
         kast["world"] = readOnly(worldApi);
+    if (gui)
+        kast["gui"] = readOnly(guiApi);
     env["kast"] = readOnly(kast);
     return env;
 }
@@ -728,6 +733,7 @@ void LuaSystems::State::bindApi()
     bindNetApi();
     bindAuthApi();
     bindWorldApi();
+    bindGuiApi();
 }
 
 // kast.fsm.*: thin wrappers over StateMachines, whose std::invalid_argument (a bad target) becomes a Lua error at the
@@ -1094,6 +1100,34 @@ void LuaSystems::State::bindAuthApi()
     });
 }
 
+// kast.gui.*: the scene's game GUIs through GuiAccess (README "Game GUI"). Values and texts are never logged: a text
+// field may hold a password.
+void LuaSystems::State::bindGuiApi()
+{
+    const auto text = [](lua_State* L, const char* function, const char* what, const sol::object& value) {
+        if (value.get_type() != sol::type::string)
+            raise(L, std::format("kast.gui.{}: {} must be a string, got {}", function, what, toString(L, value)));
+        return value.as<std::string>();
+    };
+    guiApi = lua.create_table();
+    guiApi.set_function("value", [=, this](sol::this_state L, const sol::object& id) -> sol::object {
+        const std::optional<std::string> value = gui->value(text(L, "value", "id", id));
+        return value ? sol::make_object(lua, *value) : sol::object(sol::lua_nil);
+    });
+    guiApi.set_function("setText", [=, this](sol::this_state L, const sol::object& id, const sol::object& value) {
+        gui->setText(text(L, "setText", "id", id), text(L, "setText", "text", value));
+    });
+    guiApi.set_function("setVisible", [=, this](sol::this_state L, const sol::object& id, const sol::object& visible) {
+        if (visible.get_type() != sol::type::boolean)
+            raise(L, std::format("kast.gui.setVisible: visible must be a boolean, got {}", toString(L, visible)));
+        gui->setVisible(text(L, "setVisible", "id", id), visible.as<bool>());
+    });
+    guiApi.set_function("focusedField", [this]() -> sol::object {
+        const std::optional<std::string> id = gui->focusedField();
+        return id ? sol::make_object(lua, *id) : sol::object(sol::lua_nil);
+    });
+}
+
 // kast.world.*: thin wrappers over WorldClient; a bad argument or a call in the wrong state raises at the calling line,
 // everything the server or network decides is a world.* event.
 void LuaSystems::State::bindWorldApi()
@@ -1383,8 +1417,10 @@ void LuaSystems::launch(Scene& scene, const std::optional<std::filesystem::path>
     models().setRoot(projectRoot.value_or(std::filesystem::path())); // kast.*Animation* load models before any render
     replication_.start(scene, bus_, world_); // takes the template out before physics and scripts see it
     physics_.start(scene, bus_); // before the inits, which may query it
+    if (gui_)
+        gui_->reset(); // the old scene's documents and writes; the inits' writes apply as the new documents load
     state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_, physics_, audio_, network_, auth_,
-                                     world_);
+                                     world_, gui_);
     state_->playOnStart(); // before the inits, which may stop them
     state_->init(scene.systems);
 }

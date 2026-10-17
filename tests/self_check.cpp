@@ -35,6 +35,7 @@
 #include <project.h>
 #include <renderer.h>
 #include <scene.h>
+#include <scene_gui.h>
 #include <scene_io.h>
 #include <shadow.h>
 #include <state_machines.h>
@@ -988,6 +989,111 @@ end })");
           "kast.log/warn/error prefix the file");
     lua.stop();
     check(!lua.running() && lua.status().empty(), "stop ends the session");
+}
+
+// Stands in for SceneGui (which needs RmlUi and bgfx): records what kast.gui.* asks for.
+class FakeGui final : public kast::GuiAccess {
+public:
+    std::optional<std::string> value(const std::string& id) override
+    {
+        const auto it = values.find(id);
+        return it == values.end() ? std::nullopt : std::optional(it->second);
+    }
+    void setText(const std::string& id, std::string_view text) override
+    {
+        texts[id] = std::string(text);
+        history.push_back(std::format("text {}={}", id, text));
+    }
+    void setVisible(const std::string& id, bool visible) override
+    {
+        visible_[id] = visible;
+        history.push_back(std::format("visible {}={}", id, visible));
+    }
+    std::optional<std::string> focusedField() override { return focused; }
+    void reset() override
+    {
+        ++resets;
+        texts.clear();
+        visible_.clear();
+    }
+
+    std::map<std::string, std::string> values;
+    std::map<std::string, std::string> texts;
+    std::map<std::string, bool> visible_;
+    std::vector<std::string> history; // every write, kept across reset()
+    std::optional<std::string> focused;
+    int resets = 0;
+};
+
+void checkLuaGui()
+{
+    check(kast::guiTextRml("a < b & \"c\" > d\nnext") == "a &lt; b &amp; &quot;c&quot; &gt; d<br/>next",
+          "guiTextRml escapes &, <, >, \" and turns \\n into <br/>");
+
+    const std::filesystem::path dir = luaTestDir();
+    writeFile(dir / "nogui.lua", R"(return { init = function() assert(kast.gui == nil, "kast.gui without a GUI") end,
+    update = function() end })");
+    {
+        kast::Scene scene;
+        scene.systems = {"nogui.lua"};
+        kast::LuaSystems lua;
+        lua.start(scene, dir, "", nullptr);
+        lua.tick(0.1f);
+        checkOk(lua, 0, "kast.gui is nil when no GUI is attached");
+        lua.stop();
+    }
+
+    writeFile(dir / "gui.lua", R"(local function fails(part, fn)
+    local ok, err = pcall(fn)
+    assert(not ok, "expected an error mentioning " .. part)
+    assert(string.find(err, part, 1, true), "error '" .. tostring(err) .. "' does not mention " .. part)
+    assert(string.find(err, "gui.lua:%d+:"), "error '" .. tostring(err) .. "' has no file:line")
+end
+return {
+    init = function()
+        kast.gui.setText("status", "written in init") -- before any document loads: kept by the GUI
+    end,
+    update = function()
+        assert(kast.gui.value("email") == "me@example.com", "value of a text field")
+        local secret = kast.gui.value("password")
+        assert(secret == "gui-check-secret", "value of a password field")
+        assert(kast.gui.value("nothing") == nil, "value of a missing field is nil")
+        kast.gui.setText("password", "")
+        kast.gui.setText("log", "a\nb")
+        kast.gui.setVisible("realm_2", false)
+        assert(kast.gui.focusedField() == "chat_input", "focusedField")
+        fails("kast.gui.value: id must be a string, got 1", function() kast.gui.value(1) end)
+        fails("kast.gui.setText: text must be a string, got nil", function() kast.gui.setText("x") end)
+        fails("kast.gui.setVisible: visible must be a boolean, got 1", function() kast.gui.setVisible("x", 1) end)
+        fails("kast is read-only", function() kast.gui.value = nil end)
+        kast.loadScene("next.scene")
+    end,
+})");
+    writeFile(dir / "next.lua", R"(return { init = function() kast.gui.setVisible("hud", true) end,
+    update = function() assert(kast.gui.focusedField() == nil, "no focused field") end })");
+    writeFile(dir / "next.scene", R"({"version": 4, "entities": [], "systems": ["next.lua"]})");
+
+    kast::Scene scene;
+    scene.systems = {"gui.lua"};
+    FakeGui gui;
+    gui.values = {{"email", "me@example.com"}, {"password", "gui-check-secret"}};
+    gui.focused = "chat_input";
+    kast::LuaSystems lua;
+    lua.setGui(&gui);
+    lua.start(scene, dir, "", nullptr);
+    check(gui.resets == 1 && gui.texts["status"] == "written in init", "reset before the inits, which may write");
+    lua.tick(0.1f);
+    checkOk(lua, 0, "kast.gui.* asserts in Lua pass");
+    check(gui.history == std::vector<std::string>{"text status=written in init", "text password=", "text log=a\nb",
+                                                  "visible realm_2=false", "visible hud=true"},
+          "setText / setVisible reach the GUI with their arguments, in call order");
+    check(gui.resets == 2 && gui.texts.empty() && gui.visible_ == std::map<std::string, bool>{{"hud", true}},
+          "a kast.loadScene switch resets the GUI before the new scene's inits");
+    gui.focused.reset();
+    lua.tick(0.1f);
+    checkOk(lua, 0, "focusedField is nil without a focused text field");
+    check(!logged("gui-check-secret"), "no text field value is logged");
+    lua.stop();
 }
 
 void checkLuaSandbox()
@@ -2757,6 +2863,24 @@ void checkEventBus()
     actor.unsubscribe();
     added.clear();
     bus.drain(); // the last "again"
+
+    // A subscriber publishing mid-delivery grows the queue the event being delivered sits in: the subscribers after it
+    // must still get that event (Replication publishes world.entitySpawned from world.spawn, Lua listens after it).
+    {
+        kast::EventBus grow;
+        std::vector<std::string> got;
+        kast::EventBus::Subscription publisher = grow.subscribe("spawn", [&](const nlohmann::json&) {
+            for (int i = 0; i < 100; ++i)
+                grow.publish("spawned", i);
+        });
+        kast::EventBus::Subscription after =
+            grow.subscribe("spawn", [&](const nlohmann::json& payload) { got.push_back(payload.get<std::string>()); });
+        grow.publish("spawn", "Guard");
+        grow.publish("spawn", "Bat");
+        grow.drain();
+        check(got == std::vector<std::string>{"Guard", "Bat"},
+              "bus: a later subscriber still gets the event after an earlier one published mid-delivery");
+    }
     seen.clear();
 
     bool after = false;
@@ -7361,6 +7485,7 @@ int main(int argc, char** argv)
     checkSystemsFormat();
     checkLuaPlayMode();
     checkLuaApi();
+    checkLuaGui();
     checkLuaSandbox();
     checkLuaStringMetatable();
     checkLuaDepthCap();

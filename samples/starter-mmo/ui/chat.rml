@@ -1,0 +1,15 @@
+<rml>
+    <head>
+        <title>Chat</title>
+        <link type="text/rcss" href="starter.rcss"/>
+    </head>
+    <body>
+        <div id="chat">
+            <p id="chat_log"></p>
+            <div id="chat_row">
+                <input type="text" id="chat_input" maxlength="200"/>
+                <button id="chat_send" data-event="chat.send">Send</button>
+            </div>
+        </div>
+    </body>
+</rml>

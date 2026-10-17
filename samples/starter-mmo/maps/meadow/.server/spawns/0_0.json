@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "paths": {
+    "spawn_patrol": {"loop": true, "wait": 2,
+                     "points": [[134, 0, 122], [134, 0, 112], [124, 0, 112], [124, 0, 122]]}
+  },
+  "spawns": [
+    {"id": "guard_1", "npc": "Guard", "pos": [134, 0, 122], "heading": 0, "respawnSec": 5, "path": "spawn_patrol"}
+  ]
+}

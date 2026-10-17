@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "areas": [
+    {"id": "meadow", "name": "Meadow", "priority": 0, "rect": [0, 0, 256, 256]},
+    {"id": "cavern_gate", "name": "Cavern Gate", "parent": "meadow", "priority": 10, "rect": [150, 124, 156, 132],
+     "portal": {"map": 11, "pos": [128, 0, 128], "heading": 0}}
+  ]
+}

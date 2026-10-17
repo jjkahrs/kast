@@ -4,13 +4,15 @@
 # Usage: cmake -DEDITOR=<exe> -DSCREENSHOT=<png> [-DEXTRA_ARGS="<editor flags>"]
 #              [-DNEW_PROJECT_NAME=<name> -DNEW_PROJECT_DIR=<dir>] [-DMUST_NOT_EXIST=<path>] [-DMUST_EXIST=<path>]
 #              [-DPROJECTS_FROM=<json>] [-DLIST_MUST_CONTAIN=<text>] [-DFOCUS_PANEL=<window>]
-#              [-DEXPECT_OUTPUT=<regex> [-DEXPECT_COUNT=<n>]] [-DFRAMES=<n>] [-DWRAPPER=<exe;args>]
-#              [-DSETTINGS_FROM=<json>] [-DSETTINGS_MUST_NOT_CONTAIN=<text;...>] -P smoke_test.cmake
+#              [-DEXPECT_OUTPUT=<regex> [-DEXPECT_COUNT=<n>]] [-DFORBID_OUTPUT=<regex>] [-DFRAMES=<n>]
+#              [-DWRAPPER=<exe;args>] [-DSETTINGS_FROM=<json>] [-DSETTINGS_MUST_NOT_CONTAIN=<text;...>]
+#              [-DOUTPUT_FILE=<log>] -P smoke_test.cmake
 # NEW_PROJECT_* pass --new-project as separate arguments, so the name may contain spaces; FOCUS_PANEL passes
 # --focus-panel the same way (e.g. "State Machines"). MUST_NOT_EXIST fails the test if that path exists after the run
 # (e.g. a folder the New Project modal must not have created); MUST_EXIST if it doesn't. PROJECTS_FROM is copied to
 # the list before the run; LIST_MUST_CONTAIN is looked for in it after. EXPECT_OUTPUT must match the editor's log
-# (exactly EXPECT_COUNT times if given; for that count the log's ";" read as ","). FRAMES is how many frames run
+# (exactly EXPECT_COUNT times if given; for that count the log's ";" read as ","); FORBID_OUTPUT must not match it;
+# OUTPUT_FILE gets a copy of it (e.g. for a later secrets check). FRAMES is how many frames run
 # before the screenshot (default 120). WRAPPER (a list) runs the editor through another program, e.g.
 # kast_net_test_server <args> -- (its servers are up while the editor runs).
 # The editor settings are <work dir>/editor_settings.json (--settings-file), never the user's: SETTINGS_FROM is copied
@@ -39,6 +41,12 @@ execute_process(COMMAND ${WRAPPER} "${EDITOR}" --frames ${FRAMES} --screenshot "
                         ${EXTRA_ARGS}
                 WORKING_DIRECTORY "${work_dir}" RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output)
 message("${output}")
+if(DEFINED OUTPUT_FILE)
+  file(WRITE "${OUTPUT_FILE}" "${output}")
+endif()
+if(DEFINED FORBID_OUTPUT AND output MATCHES "${FORBID_OUTPUT}")
+  message(FATAL_ERROR "Output matches the forbidden '${FORBID_OUTPUT}': '${CMAKE_MATCH_0}'")
+endif()
 if(NOT result EQUAL 0)
   message(FATAL_ERROR "kast_editor exited with ${result}")
 endif()

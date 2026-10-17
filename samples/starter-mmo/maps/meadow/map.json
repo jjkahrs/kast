@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": 10,
+  "name": "Meadow",
+  "tiles": [[0, 0, 0, 0]],
+  "heightRange": [0, 12],
+  "spawn": {"pos": [128, 0, 128], "heading": 0},
+  "material": "materials/meadow_grass.mat",
+  "nav": {"maxSlopeDeg": 45}
+}
