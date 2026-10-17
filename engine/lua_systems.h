@@ -47,7 +47,7 @@ public:
     // null (no keys down, no mouse motion). auth: the project's Online Services auth endpoint (authConfig in auth_client.h);
     // nullopt leaves kast.auth and kast.world nil. The session starts logged out.
     void start(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, const std::string& scenePath,
-               const Input* input, std::vector<std::string> gameMachines = {},
+               Input* input, std::vector<std::string> gameMachines = {},
                std::optional<AuthConfig> auth = std::nullopt);
     // Publishes the network results received since the last tick, reloads scripts and state machine definitions whose
     // file changed, enters the machines of entities that gained StateMachine, then calls each enabled system's
@@ -109,7 +109,7 @@ public:
 private:
     struct State;
     void launch(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, const std::string& scenePath,
-                const Input* input);
+                Input* input);
     void endSession(); // shutdowns, then the Lua state goes; the state machines keep their game states
 
     EventBus bus_; // declared before state_: the systems' subscriptions unsubscribe from it when state_ goes

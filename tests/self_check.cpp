@@ -578,6 +578,47 @@ void checkInput()
     input.keysDown[SDL_SCANCODE_A] = true;
     input.clear();
     check(!input.keysDown[SDL_SCANCODE_A], "clear releases every key");
+
+    event = {};
+    event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+    event.button.button = SDL_BUTTON_RIGHT;
+    input.onEvent(event);
+    check(input.buttonsDown[2] && !input.buttonsDown[0], "right button down recorded");
+    event.button.button = 42; // not a button kast::Input tracks
+    input.onEvent(event);
+    event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+    event.button.button = SDL_BUTTON_RIGHT;
+    input.onEvent(event);
+    check(!input.buttonsDown[2], "right button up recorded");
+    event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+    event.button.button = SDL_BUTTON_LEFT;
+    input.onEvent(event);
+    check(input.buttonsDown[0], "left button down recorded");
+
+    event = {};
+    event.type = SDL_EVENT_MOUSE_WHEEL;
+    event.wheel.y = 1.0f;
+    input.onEvent(event);
+    input.onEvent(event);
+    event.wheel.y = 0.5f;
+    event.wheel.direction = SDL_MOUSEWHEEL_FLIPPED; // natural scrolling: SDL reports it reversed
+    input.onEvent(event);
+    check(input.wheelDelta == 1.5f, "wheel delta accumulates within a frame, flipped wheels reversed");
+    input.endFrame();
+    check(input.wheelDelta == 0.0f && input.buttonsDown[0], "endFrame clears the wheel, keeps held buttons");
+
+    input.keysDown[SDL_SCANCODE_W] = true;
+    input.cursorLocked = true;
+    input.wheelDelta = 2.0f;
+    event = {};
+    event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+    input.onEvent(event);
+    check(!input.buttonsDown[0] && !input.keysDown[SDL_SCANCODE_W] && !input.cursorLocked && input.wheelDelta == 0.0f,
+          "window focus loss releases keys and buttons, unlocks the cursor and clears the wheel");
+    input.buttonsDown[1] = true;
+    input.cursorLocked = true;
+    input.clear();
+    check(!input.buttonsDown[1] && !input.cursorLocked, "clear releases buttons and unlocks the cursor");
 }
 
 void checkRotatorSystem()
@@ -928,12 +969,19 @@ return { update = function(dt)
     fails('"intensity" must be >= 0', function() kast.set(cam, "PointLight", {intensity = -1, range = 7}) end)
     fails('"color" channels must be between 0 and 1', function() kast.set(cam, "PointLight", {color = {x = 1.5, y = 0, z = 0}}) end)
     fails('unknown key name "NotAKey"', function() kast.input.keyDown("NotAKey") end)
+    fails('kast.input.mouseDown: unknown button thumb (left, middle, right, x1 or x2)', function() kast.input.mouseDown("thumb") end)
+    fails("kast.input.mouseDown: unknown button 1", function() kast.input.mouseDown(1) end)
+    fails("kast.input.setCursorLocked: expected a boolean, got nil", function() kast.input.setCursorLocked() end)
     fails("kast is read-only", function() kast.get = nil end)
     fails("kast is read-only", function() kast.input.keyDown = nil end)
 
     assert(kast.input.keyDown("W") and not kast.input.keyDown("S"), "keyDown by SDL name")
     local dx, dy = kast.input.mouseDelta()
     assert(dx == 3 and dy == -2, "mouseDelta")
+    assert(kast.input.mouseDown("right") and not kast.input.mouseDown("left") and not kast.input.mouseDown("x2"),
+           "mouseDown by name")
+    assert(kast.input.wheelDelta() == -2, "wheelDelta")
+    kast.input.setCursorLocked(true)
 
     local parent = kast.create("Parent")
     local child = kast.create("Child", parent)
@@ -969,11 +1017,14 @@ end })");
     input.keysDown[SDL_SCANCODE_W] = true;
     input.mouseDeltaX = 3.0f;
     input.mouseDeltaY = -2.0f;
+    input.buttonsDown[2] = true;
+    input.wheelDelta = -2.0f;
 
     kast::LuaSystems lua;
     lua.start(scene, dir, "", &input);
     lua.tick(0.1f);
     checkOk(lua, 0, "kast.* API asserts in Lua pass");
+    check(input.cursorLocked, "kast.input.setCursorLocked asks the host for the lock");
     check(near(registry.get<kast::Transform>(cube).position, {2, 3, 4}) &&
               near(registry.get<kast::Transform>(cube).scale, {1, 1, 1}),
           "set wrote Transform; rejected sets left it unchanged");
@@ -1012,6 +1063,7 @@ public:
         history.push_back(std::format("visible {}={}", id, visible));
     }
     std::optional<std::string> focusedField() override { return focused; }
+    bool mouseOver() override { return hovered; }
     void reset() override
     {
         ++resets;
@@ -1024,6 +1076,7 @@ public:
     std::map<std::string, bool> visible_;
     std::vector<std::string> history; // every write, kept across reset()
     std::optional<std::string> focused;
+    bool hovered = false;
     int resets = 0;
 };
 
@@ -1064,6 +1117,7 @@ return {
         kast.gui.setText("log", "a\nb")
         kast.gui.setVisible("realm_2", false)
         assert(kast.gui.focusedField() == "chat_input", "focusedField")
+        assert(kast.gui.mouseOver() == true, "mouseOver")
         fails("kast.gui.value: id must be a string, got 1", function() kast.gui.value(1) end)
         fails("kast.gui.setText: text must be a string, got nil", function() kast.gui.setText("x") end)
         fails("kast.gui.setVisible: visible must be a boolean, got 1", function() kast.gui.setVisible("x", 1) end)
@@ -1072,7 +1126,10 @@ return {
     end,
 })");
     writeFile(dir / "next.lua", R"(return { init = function() kast.gui.setVisible("hud", true) end,
-    update = function() assert(kast.gui.focusedField() == nil, "no focused field") end })");
+    update = function()
+        assert(kast.gui.focusedField() == nil, "no focused field")
+        assert(kast.gui.mouseOver() == false, "not mouseOver")
+    end })");
     writeFile(dir / "next.scene", R"({"version": 4, "entities": [], "systems": ["next.lua"]})");
 
     kast::Scene scene;
@@ -1080,9 +1137,13 @@ return {
     FakeGui gui;
     gui.values = {{"email", "me@example.com"}, {"password", "gui-check-secret"}};
     gui.focused = "chat_input";
+    gui.hovered = true;
+    kast::Input input;
+    input.buttonsDown[0] = true; // held into the switch
+    input.cursorLocked = true;
     kast::LuaSystems lua;
     lua.setGui(&gui);
-    lua.start(scene, dir, "", nullptr);
+    lua.start(scene, dir, "", &input);
     check(gui.resets == 1 && gui.texts["status"] == "written in init", "reset before the inits, which may write");
     lua.tick(0.1f);
     checkOk(lua, 0, "kast.gui.* asserts in Lua pass");
@@ -1091,7 +1152,9 @@ return {
           "setText / setVisible reach the GUI with their arguments, in call order");
     check(gui.resets == 2 && gui.texts.empty() && gui.visible_ == std::map<std::string, bool>{{"hud", true}},
           "a kast.loadScene switch resets the GUI before the new scene's inits");
+    check(!input.buttonsDown[0] && !input.cursorLocked, "a kast.loadScene switch releases buttons and the cursor lock");
     gui.focused.reset();
+    gui.hovered = false;
     lua.tick(0.1f);
     checkOk(lua, 0, "focusedField is nil without a focused text field");
     check(!logged("gui-check-secret"), "no text field value is logged");
@@ -1115,6 +1178,8 @@ return {
         assert(kast.input.keyDown("W") == false, "no input: keys are up")
         local dx, dy = kast.input.mouseDelta()
         assert(dx == 0 and dy == 0, "no input: no mouse motion")
+        assert(kast.input.mouseDown("left") == false and kast.input.wheelDelta() == 0, "no input: no buttons, no wheel")
+        kast.input.setCursorLocked(true) -- no input: nothing to lock
     end,
 })");
     writeFile(dir / "two.lua", R"(

@@ -31,6 +31,8 @@ public:
     // An SDL event for the game GUIs (call only while hasInput).
     void onEvent(const SDL_Event& event);
     kast::SceneGui& gui() { return gui_; } // Play-mode GUIs: hot reload, --gui-click
+    // Window position of the drawn image's center (--sim-mouse presses there).
+    ImVec2 imageCenter() const { return {imageMin_.x + imageSize_.x * 0.5f, imageMin_.y + imageSize_.y * 0.5f}; }
 
 private:
     void syncGui(Document& doc);
@@ -43,6 +45,7 @@ private:
     kast::SceneGui gui_{"game"};
     uint32_t guiGeneration_ = 0; // the Document::playGeneration gui_ was loaded for
     ImVec2 imageMin_{0.0f, 0.0f}; // screen position of the drawn image, for GUI mouse positions
+    ImVec2 imageSize_{0.0f, 0.0f};
     float pixelScale_ = 1.0f;
     bool focused_ = false;
 };

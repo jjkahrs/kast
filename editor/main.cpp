@@ -58,7 +58,7 @@ constexpr const char* kUsage =
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
     "[--focus-panel Window] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
-    "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--settings-file settings.json] [--open-preferences] "
+    "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--sim-mouse frame,none|left|right,dx,dy,wheel] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--no-vsync] [--no-audio-device] [--crash abort|assert] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
@@ -91,6 +91,15 @@ private:
     uint64_t windowStart_ = 0;
     int frames_ = 0;
     double cpuSeconds_ = 0.0;
+};
+
+// --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel, for screenshots of mouse-driven games.
+struct SimMouse {
+    int frame = 0;  // the press (at the Game image's center) and the wheel go out on this frame
+    int button = 0; // SDL_BUTTON_LEFT / SDL_BUTTON_RIGHT, 0 = none
+    float dx = 0.0f; // moved the frame after the press; released the frame after that
+    float dy = 0.0f;
+    float wheel = 0.0f; // notches, + = away from the user
 };
 
 struct Options {
@@ -126,6 +135,7 @@ struct Options {
     std::optional<GuiKind> guiAdd; // then add this element as the GUI Hierarchy's + buttons do
     bool guiSave = false;          // then save the GUI as its Save button does
     std::string guiClick;           // with --play: click the game GUI element with this id (frame kAddComponentPopupFrame)
+    std::optional<SimMouse> simMouse; // with --play: push these SDL mouse events (the cursor lock isn't applied)
     std::string projectsFile;       // the recent-projects list; empty = the one in %APPDATA%
     std::string settingsFile;       // the editor settings (editor_settings.h); empty = the one in %APPDATA%
     bool openPreferences = false;   // open the File > Preferences modal for screenshots
@@ -152,6 +162,65 @@ bool parsePositive(std::string_view text, T& out)
     const char* end = text.data() + text.size();
     auto [ptr, ec] = std::from_chars(text.data(), end, out);
     return ec == std::errc{} && ptr == end && out > 0;
+}
+
+// --sim-mouse's events for this frame, handled from the next one: the cursor moves to the Game image's center and
+// presses (and turns the wheel), then moves by dx, dy, then releases.
+void pushSimMouse(const SimMouse& sim, int frame, ImVec2 center, SDL_WindowID window)
+{
+    const auto push = [&](SDL_EventType type, float xrel = 0.0f, float yrel = 0.0f) {
+        SDL_Event event{};
+        event.type = type;
+        if (type == SDL_EVENT_MOUSE_MOTION) {
+            event.motion = {.type = type, .windowID = window, .x = center.x, .y = center.y, .xrel = xrel, .yrel = yrel};
+        } else if (type == SDL_EVENT_MOUSE_WHEEL) {
+            event.wheel = {.type = type, .windowID = window, .y = sim.wheel, .direction = SDL_MOUSEWHEEL_NORMAL,
+                           .mouse_x = center.x, .mouse_y = center.y};
+        } else {
+            event.button = {.type = type, .windowID = window, .button = static_cast<Uint8>(sim.button),
+                            .down = type == SDL_EVENT_MOUSE_BUTTON_DOWN, .clicks = 1, .x = center.x, .y = center.y};
+        }
+        SDL_PushEvent(&event);
+    };
+    if (frame == sim.frame) {
+        push(SDL_EVENT_MOUSE_MOTION);
+        if (sim.button)
+            push(SDL_EVENT_MOUSE_BUTTON_DOWN);
+        if (sim.wheel != 0.0f)
+            push(SDL_EVENT_MOUSE_WHEEL);
+    } else if (sim.button && frame == sim.frame + 1) {
+        push(SDL_EVENT_MOUSE_MOTION, sim.dx, sim.dy);
+    } else if (sim.button && frame == sim.frame + 2) {
+        push(SDL_EVENT_MOUSE_BUTTON_UP);
+    }
+}
+
+// "frame,none|left|right,dx,dy,wheel" with a positive frame; logs why not.
+bool parseSimMouse(std::string_view text, std::optional<SimMouse>& out)
+{
+    std::vector<std::string_view> parts;
+    for (size_t start = 0;;) {
+        const size_t at = text.find(',', start);
+        parts.push_back(text.substr(start, at - start));
+        if (at == std::string_view::npos)
+            break;
+        start = at + 1;
+    }
+    const auto number = [](std::string_view part, float& value) {
+        auto [ptr, ec] = std::from_chars(part.data(), part.data() + part.size(), value);
+        return ec == std::errc{} && ptr == part.data() + part.size();
+    };
+    SimMouse sim;
+    const bool ok = parts.size() == 5 && parsePositive(parts[0], sim.frame) &&
+                    (parts[1] == "none" || parts[1] == "left" || parts[1] == "right") && number(parts[2], sim.dx) &&
+                    number(parts[3], sim.dy) && number(parts[4], sim.wheel);
+    if (!ok) {
+        kast::log::error(std::format("Invalid --sim-mouse '{}', expected frame,none|left|right,dx,dy,wheel", text));
+        return false;
+    }
+    sim.button = parts[1] == "left" ? SDL_BUTTON_LEFT : parts[1] == "right" ? SDL_BUTTON_RIGHT : 0;
+    out = sim;
+    return true;
 }
 
 // "<A><separator><B>" with positive A and B; logs why not.
@@ -240,6 +309,9 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.guiSelect = argv[++i];
         } else if (arg == "--gui-click" && hasValue) {
             options.guiClick = argv[++i];
+        } else if (arg == "--sim-mouse" && hasValue) {
+            if (!parseSimMouse(argv[++i], options.simMouse))
+                return std::nullopt;
         } else if (arg == "--gui-add" && hasValue && parseGuiKind(argv[i + 1], options.guiAdd)) {
             ++i;
         } else if (arg == "--gui-save") {
@@ -368,6 +440,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     if (!options.guiClick.empty() && !options.play) {
         kast::log::error("--gui-click requires --play");
+        return std::nullopt;
+    }
+    if (options.simMouse && !options.play) {
+        kast::log::error("--sim-mouse requires --play");
         return std::nullopt;
     }
     if (!options.openExternal.empty() && options.project.empty()) {
@@ -727,6 +803,7 @@ int main(int argc, char** argv)
         }
     };
     FpsLog fpsLog;
+    kast::CursorLock cursorLock;
     hooks.frame = [&] {
         const uint64_t frameStart = SDL_GetPerformanceCounter();
         ImGui_ImplSDL3_NewFrame();
@@ -840,6 +917,10 @@ int main(int argc, char** argv)
             doc.input.endFrame();
         else
             doc.input.clear();
+        if (!options->simMouse) // ponytail: a scripted drag never grabs the real mouse
+            cursorLock.sync(mainWindow, doc.input.cursorLocked);
+        if (options->simMouse)
+            pushSimMouse(*options->simMouse, frames.frame(), game.imageCenter(), SDL_GetWindowID(mainWindow));
 
         ImGui::Render();
         bgfx::touch(kImGuiView);

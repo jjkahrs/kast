@@ -78,7 +78,9 @@ running it twice adds nothing.
 
 - **Realm**: pick `Starter Realm`.
 - **Characters**: create one (3-16 letters), then click it.
-- **World**: WASD walks. The HUD (top left) shows Health and Gold as the server replicates them: Health drains while you
+- **World**: World of Warcraft-style controls. W runs forward, S backpedals, A/D turn, Space jumps. Hold the left
+  mouse button and drag to look around the character; hold the right button to turn the camera and the character (A/D
+  then strafe). The wheel zooms. A press on the chat box or HUD doesn't move the camera. The HUD (top left) shows Health and Gold as the server replicates them: Health drains while you
   walk and regenerates while you stand. Type in the chat box and press **Send**; everyone nearby sees it. The Guard
   patrols a 10 m square just ahead of the spawn.
 - **Portal**: the orange arch about 25 m east of the spawn is the `cavern_gate` portal: walk into it and the server
@@ -133,12 +135,14 @@ of the client project.
   ```
 
   `starter_mmo_live_setup` restarts the stack with the override, runs `setup_realm.cmake` and registers + verifies the
-  account through Mailpit if needed. Three stages then play copies of the sample with a test-only driver
+  account through Mailpit if needed. The stages then play copies of the sample with a test-only driver
   (`cmake/starter_mmo_test_driver.lua`, never part of the sample) that presses the sample's own buttons by publishing
   their events:
   - `starter_mmo_live_chars`: the character list.
   - `starter_mmo_live_world`: the Meadow with the Guard, an idle `kast_bot`, the HUD and a chat line.
   - `starter_mmo_live_cavern`: both portals, ending in the Cavern with the Bat.
+  - `starter_mmo_live_camera`, `_camera_zoom`, `_camera_orbit`: `scripts/player.lua`'s camera behind the character,
+    zoomed out and orbited by a left drag (the editor's `--sim-mouse`).
 
   Screenshots land in `build/debug/starter_mmo/`. `starter_mmo_live_secrets` checks that no file or log holds the
   password or a token. `starter_mmo_live_teardown` restores the default world mounts, so `world_live`,

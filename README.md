@@ -119,6 +119,7 @@ build\release\kast_editor.exe
 | `--settings-file <file.json>` | Use this per-user editor settings file instead of `%APPDATA%/Kast/Editor/editor_settings.json` (tests use a fresh one per run). |
 | `--online-login-env` | The Online panel's test login at startup, from the environment variables `KAST_ONLINE_EMAIL` and `KAST_ONLINE_PASSWORD` (never a password on the command line, where logs would show it); with `--play`, Play starts once the login has answered. See [Editor tooling](#editor-tooling). |
 | `--online-compose up\|down\|ps` | Press the Online panel's **Start**, **Stop** or **Status** at startup (e.g. with `--log-fps` to watch the frame rate while the stack starts). |
+| `--sim-mouse <frame,button,dx,dy,wheel>` | With `--play`: on frame `frame`, move the mouse to the center of the Game panel's image, press `button` (`left`, `right` or `none`) and turn the wheel by `wheel` notches; the next frame move it by `dx, dy` pixels, the frame after release. Synthetic SDL events, so `kast.input` and the game GUIs get them as from a real mouse while the Game panel is focused. `kast.input.setCursorLocked` is not applied to the window in such a run, so the real cursor is never grabbed. Example: `--sim-mouse 600,left,240,-40,0`. |
 | `--gui-click <id>` | With `--play`: click the game GUI element with this `id` (topmost visible document holding one) after 10 frames, as the mouse does; logs an error if there is none. |
 
 Without `--project`, `--scene`, `--save-scene` or `--build`, `kast_editor` runs the Project Manager instead of the
@@ -160,9 +161,12 @@ warning but still runs. Layouts saved before the Game panel existed get it docke
 
 While the Game panel is focused and playing, editor shortcuts (W/E/R, X, F, Delete, Ctrl+D, Hierarchy keys) don't
 apply, since they need their own panel focused; Ctrl+P still stops Play. Keyboard and mouse input then goes to
-`Document::input` (`kast::Input` in `engine/input.h`: scancodes held down, mouse delta this frame) for game
-systems to read; Lua systems read it through `kast.input`. It is cleared whenever the Game panel loses focus or Play stops. The
-cursor stays normal (no capture).
+`Document::input` (`kast::Input` in `engine/input.h`: scancodes and mouse buttons held down, mouse delta and wheel
+notches this frame) for game systems to read; Lua systems read it through `kast.input`. It is cleared (keys and buttons
+released, cursor unlocked) whenever the Game panel or the editor window loses focus, Play stops or `kast.loadScene`
+switches scenes; `kast_player.exe` clears it the same way on window focus loss and scene switches. The cursor stays
+normal unless a system locks it with `kast.input.setCursorLocked(true)` (`kast::CursorLock`: SDL relative mouse mode,
+the cursor hidden; on unlock it reappears where the lock began).
 
 **Systems panel** (below Hierarchy): the scene's Lua systems in run order. **Add Script...** picks an existing `.lua`
 file inside the active project (a file outside it is rejected with an error), **New from Template** writes
@@ -741,7 +745,10 @@ a wrong argument type raises a Lua error at the calling line.
 | `kast.destroy(id)` | — | Destroys the entity and its children immediately. |
 | `kast.log(msg)`, `kast.warn(msg)`, `kast.error(msg)` | — | To the Console, prefixed with the system's path: `[info] scripts/spin.lua: msg`. |
 | `kast.input.keyDown(name)` | boolean | SDL scancode names (`SDL_GetScancodeFromName`): `"W"`, `"Space"`, `"Left Shift"`, `"Up"`... An unknown name raises. |
-| `kast.input.mouseDelta()` | `dx, dy` | Pixels moved this frame. |
+| `kast.input.mouseDelta()` | `dx, dy` | Pixels moved this frame (also while the cursor is locked). |
+| `kast.input.mouseDown(button)` | boolean | `"left"`, `"middle"`, `"right"`, `"x1"` or `"x2"` held down. Any other value raises. |
+| `kast.input.wheelDelta()` | number | Wheel notches this frame; + = away from the user (up), whatever the OS scroll direction. |
+| `kast.input.setCursorLocked(locked)` | — | `true` hides the cursor and locks it in the window (relative mode; `mouseDelta` keeps reporting motion); `false` shows it where the lock began. Released automatically when the game loses input (see the Game panel above). A non-boolean raises. |
 | `kast.loadScene(path)` | — | Switches the running scene. `path` is project-relative. Checked **at call time**, reading the file from disk (unsaved editor edits are not seen): no active project, a path outside the project, a missing file or a scene that fails to load (including an old version) raises at the calling line, and nothing is queued. On success the switch is applied at the **end of the frame**, after every system's `update`; the last call in a frame wins. Applying it calls the old scene's enabled systems' `shutdown`, discards the Lua state, replaces the scene, and starts a new session for the new scene's own `systems` (each `init` runs). Nothing persists across the switch. Calls from a `shutdown` are ignored; a call from an `init` is applied at the end of the next ticked frame. |
 | `kast.publish(name [, payload])`, `kast.subscribe(name, fn)`, `kast.unsubscribe(handle)` | —, handle, — | Events between systems and C++: see [Events](#events). |
 | `kast.currentScene()` | string or `nil` | The running scene's project-relative path (`"levels/b.scene"`), or `nil` with no active project or for an Untitled scene. |
@@ -1827,6 +1834,7 @@ loaded documents by `id`, topmost document first (`engine/gui_access.h`).
 | `kast.gui.setText(id, text)` | — | A text field's value; any other element's content as plain text (escaped, `"\n"` is a line break). |
 | `kast.gui.setVisible(id, visible)` | — | `false` hides the element (`display: none`), `true` gives it back its style sheet's `display`. |
 | `kast.gui.focusedField()` | string or `nil` | The id of the text field (`<input type="text">`, `"password"`, `<textarea>`) with keyboard focus, e.g. to ignore movement keys while the player types. |
+| `kast.gui.mouseOver()` | boolean | The mouse is over a GUI element (RmlUi's hover element is something other than a document's own `<body>`, so a full-screen body doesn't count). Checked when a button goes down, it tells a press on the chat box from a press on the world. |
 
 Writes are kept and applied again to every document that loads later, so a system's `init` (which runs before the
 scene's documents load) and hot reloads see them; they are forgotten when the scene switches (`kast.loadScene`) and at
@@ -2010,7 +2018,7 @@ Windows.
 | `assets_create_gui_screenshot`, `assets_create_gui_written` | `--assets-create gui:ui --focus-panel Assets` on `new_gui_project` (made by `new_gui_project_clean` / `_copy`): `ui/new_gui.rcss` exists, `ui/new_gui.rml` links `new_gui.rcss`, and the shot shows its rename. |
 | `assets_create_menu_screenshot` | `--assets-menu / --focus-panel Assets`, writing `assets_create_menu.png` (Create: Lua System, State Machine, GUI). |
 | `starter_mmo_load`, `starter_mmo_copy`, `starter_mmo_copy_ca`, `starter_mmo_login_screenshot`, `starter_mmo_build`, `starter_mmo_player` | [`samples/starter-mmo`](samples/starter-mmo/README.md) (`cmake/starter_mmo_tests.cmake`): `--project samples/starter-mmo` with no warning or error (`FORBID_OUTPUT`); a copy with the test CA as its CA file plays the login GUI (`starter_mmo_login.png`), builds `Starter MMO.exe`, and the player logs `Online Services enabled: auth http://localhost:3100, CA file 'certs/world_dev_ca.pem'`. |
-| `starter_mmo_live_setup`, `starter_mmo_live_chars`, `starter_mmo_live_world`, `starter_mmo_live_cavern`, `starter_mmo_live_secrets`, `starter_mmo_live_teardown` | The sample against the compose stack, with a test account from `KAST_ONLINE_EMAIL` / `KAST_ONLINE_PASSWORD` in the environment only: the setup restarts the stack with the sample's override, checks the world server loaded it, adds `Starter Realm` and registers + verifies the account through Mailpit if needed; the stages play copies of the sample with `--online-login-env` and a test-only driver pressing the sample's buttons by their events (character list; the Meadow with the Guard, an idle `kast_bot`, the HUD and a chat line; both portals into the Cavern with the Bat), each a screenshot in `build/<preset>/starter_mmo/`; no password or JWT in any file or kept log; the teardown recreates the world with the default mounts (and stops the stack if the setup started it). Skipped without docker, a running engine or the two variables. |
+| `starter_mmo_live_setup`, `starter_mmo_live_chars`, `starter_mmo_live_world`, `starter_mmo_live_cavern`, `starter_mmo_live_camera`, `starter_mmo_live_camera_zoom`, `starter_mmo_live_camera_orbit`, `starter_mmo_live_secrets`, `starter_mmo_live_teardown` | The sample against the compose stack, with a test account from `KAST_ONLINE_EMAIL` / `KAST_ONLINE_PASSWORD` in the environment only: the setup restarts the stack with the sample's override, checks the world server loaded it, adds `Starter Realm` and registers + verifies the account through Mailpit if needed; the stages play copies of the sample with `--online-login-env` and a test-only driver pressing the sample's buttons by their events (character list; the Meadow with the Guard, an idle `kast_bot`, the HUD and a chat line; both portals into the Cavern with the Bat; the player camera standing behind, zoomed out with `--sim-mouse` wheel notches and orbited with a `--sim-mouse` left drag), each a screenshot in `build/<preset>/starter_mmo/`; no password or JWT in any file or kept log; the teardown recreates the world with the default mounts (and stops the stack if the setup started it). Skipped without docker, a running engine or the two variables. |
 | `editor_no_focus`, `launcher_no_focus`, `player_no_focus`, `editor_audio_play_no_focus` | `kast_focus_probe` runs `kast_editor --frames 120`, `kast_editor --launcher --frames 120` the built `switch` game with `--frames 120` and the editor playing `audio.scene` with the Mixer open, sampling the foreground window until exit: fails if it ever belongs to the Kast process, if no window was shown, or on a nonzero exit. A `--frames` run shows its window without activating it and logs init failures instead of showing a message box. |
 
 The screenshot tests each open a real window for ~2 seconds, in a fresh working directory (`<png>.run/`) so they

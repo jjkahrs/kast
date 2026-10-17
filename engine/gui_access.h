@@ -20,6 +20,9 @@ public:
     virtual void setVisible(const std::string& id, bool visible) = 0;
     // The id of the text field that has keyboard focus; nullopt if none does.
     virtual std::optional<std::string> focusedField() = 0;
+    // True while the mouse is over an element of a visible document other than the document itself (a full-screen
+    // <body> doesn't count), e.g. so a press on the chat box doesn't also turn the camera.
+    virtual bool mouseOver() = 0;
     // A new scene's systems are about to start: forget the kept writes and unload the documents.
     virtual void reset() = 0;
 };

@@ -4,9 +4,10 @@
 -- fields with kast.gui.setText, so the sample's own handlers do the work, then logs what arrives for the test to check.
 -- Stages: "chars" stops at the character list; "world" enters as CHARACTER, steps beside the idle bot at the spawn and
 -- chats; "cavern" enters as CHARACTER and walks through the portals until it has crossed both ways and is in the Cavern.
+-- "camera" enters as CHARACTER and stands still, for screenshots of scripts/player.lua's camera (with --sim-mouse).
 local STAGE, CHARACTER = "@STAGE@", "@CHARACTER@"
 local REALM = "Starter Realm"
-local SPEED = 5 -- m/s, like scripts/player.lua
+local SPEED = 5 -- m/s, under the world server's 10 m/s limit
 local MEADOW, CAVERN = 10, 11
 local GATES = {[MEADOW] = {x = 153, z = 128}, [CAVERN] = {x = 103, z = 128}} -- inside each map's portal area
 

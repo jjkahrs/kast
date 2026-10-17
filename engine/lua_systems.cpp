@@ -88,7 +88,7 @@ struct PendingScene {
 };
 
 struct LuaSystems::State {
-    State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, std::string scenePath, const Input* input,
+    State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, std::string scenePath, Input* input,
           EventBus& bus, StateMachines& fsm, Physics& physics, Audio& audio, Network& network, AuthClient& auth,
           WorldClient& world, GuiAccess* gui)
         : scene(scene), projectRoot(projectRoot), scenePath(std::move(scenePath)), input(input), bus(bus), fsm(fsm),
@@ -99,7 +99,7 @@ struct LuaSystems::State {
     Scene& scene;
     std::optional<std::filesystem::path> projectRoot;
     std::string scenePath; // project-relative, empty if unsaved or no project
-    const Input* input;
+    Input* input;
     EventBus& bus;
     StateMachines& fsm;
     Physics& physics;
@@ -727,6 +727,23 @@ void LuaSystems::State::bindApi()
     inputApi.set_function("mouseDelta", [this] {
         return input ? std::make_tuple(input->mouseDeltaX, input->mouseDeltaY) : std::make_tuple(0.0f, 0.0f);
     });
+    inputApi.set_function("mouseDown", [this](sol::this_state L, const sol::object& name) {
+        static constexpr std::array<std::string_view, Input::kButtonCount> names{"left", "middle", "right", "x1", "x2"};
+        const auto found = name.get_type() == sol::type::string
+                               ? std::ranges::find(names, name.as<std::string_view>())
+                               : names.end();
+        if (found == names.end())
+            raise(L, std::format("kast.input.mouseDown: unknown button {} (left, middle, right, x1 or x2)",
+                                 toString(L, name)));
+        return input && input->buttonsDown[static_cast<size_t>(found - names.begin())];
+    });
+    inputApi.set_function("wheelDelta", [this] { return input ? input->wheelDelta : 0.0f; });
+    inputApi.set_function("setCursorLocked", [this](sol::this_state L, const sol::object& locked) {
+        if (locked.get_type() != sol::type::boolean)
+            raise(L, std::format("kast.input.setCursorLocked: expected a boolean, got {}", toString(L, locked)));
+        if (input)
+            input->cursorLocked = locked.as<bool>();
+    });
     bindFsmApi();
     bindPhysicsApi();
     bindAudioApi();
@@ -1126,6 +1143,7 @@ void LuaSystems::State::bindGuiApi()
         const std::optional<std::string> id = gui->focusedField();
         return id ? sol::make_object(lua, *id) : sol::object(sol::lua_nil);
     });
+    guiApi.set_function("mouseOver", [this] { return gui->mouseOver(); });
 }
 
 // kast.world.*: thin wrappers over WorldClient; a bad argument or a call in the wrong state raises at the calling line,
@@ -1394,7 +1412,7 @@ LuaSystems::LuaSystems() = default;
 LuaSystems::~LuaSystems() = default;
 
 void LuaSystems::start(Scene& scene, const std::optional<std::filesystem::path>& projectRoot,
-                       const std::string& scenePath, const Input* input, std::vector<std::string> gameMachines,
+                       const std::string& scenePath, Input* input, std::vector<std::string> gameMachines,
                        std::optional<AuthConfig> auth)
 {
     fsm_.reset(std::move(gameMachines)); // its Lua callbacks go before the Lua state
@@ -1410,7 +1428,7 @@ void LuaSystems::start(Scene& scene, const std::optional<std::filesystem::path>&
 }
 
 void LuaSystems::launch(Scene& scene, const std::optional<std::filesystem::path>& projectRoot,
-                        const std::string& scenePath, const Input* input)
+                        const std::string& scenePath, Input* input)
 {
     fsm_.detach(); // drops callbacks into the old Lua state
     state_.reset(); // the old Lua state goes before the new one is built
@@ -1449,7 +1467,9 @@ bool LuaSystems::tick(float dt)
     PendingScene next = std::move(*state_->pending);
     Scene& scene = state_->scene;
     const std::optional<std::filesystem::path> projectRoot = state_->projectRoot;
-    const Input* input = state_->input;
+    Input* input = state_->input;
+    if (input)
+        input->clear(); // held buttons and the cursor lock belong to the old scene
     endSession(); // old systems' shutdowns see the old scene; the Lua state and queued events are discarded
     scene = std::move(next.scene);
     log::info(std::format("Switched to scene '{}'", next.path));

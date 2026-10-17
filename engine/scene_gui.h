@@ -47,6 +47,7 @@ public:
     void setText(const std::string& id, std::string_view text) override;
     void setVisible(const std::string& id, bool visible) override;
     std::optional<std::string> focusedField() override;
+    bool mouseOver() override;
     void reset() override;
 
 private:

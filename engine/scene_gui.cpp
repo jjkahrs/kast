@@ -180,6 +180,13 @@ std::optional<std::string> SceneGui::focusedField()
     return focus->GetId();
 }
 
+bool SceneGui::mouseOver()
+{
+    Rml::Context* context = gui::ready() ? context_.context() : nullptr;
+    Rml::Element* hover = context ? context->GetHoverElement() : nullptr;
+    return hover && hover != context->GetRootElement() && hover != hover->GetOwnerDocument();
+}
+
 void SceneGui::reset()
 {
     clear();

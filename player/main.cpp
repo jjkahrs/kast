@@ -163,7 +163,8 @@ int main(int argc, char** argv)
     if (options->noAudioDevice)
         kast::Audio::setDefaultOutput(kast::Audio::Output::Null);
     kast::LuaSystems lua;
-    kast::Input input;
+    kast::Input input; // window focus loss clears it (Input::onEvent)
+    kast::CursorLock cursorLock;
     kast::Renderer renderer;
     kast::PostProcess post(kGameView);
     double gpuMs = 0.0; // --gpu-stats: summed after the warmup
@@ -204,6 +205,7 @@ int main(int argc, char** argv)
             gui.clear(); // kast.loadScene: the new scene's GUIs load below
         gui.sync(scene, project.root, lua.bus());
         kast::gui::syncTextInput(window, gui.focusedField().has_value());
+        cursorLock.sync(window, input.cursorLocked);
         lastTicks = ticks;
         input.endFrame();
 

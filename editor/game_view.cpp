@@ -49,6 +49,7 @@ void GameViewport::draw(Document& doc)
                 gui_.context().render(guiView_, target_.frameBuffer());
             }
             imageMin_ = ImGui::GetCursorScreenPos();
+            imageSize_ = size;
             ImGui::Image(static_cast<ImTextureID>(target_.texture().idx), size);
         }
         if (camera == entt::null) {

@@ -6,7 +6,9 @@
 # at the Meadow spawn and stops it afterwards. Every EXPECT_ALL regex must match the editor's log, which is kept in
 # STATE/<STAGE>.log; an [error] line fails. Prints "SKIP: ..." when the setup didn't finish (no docker or credentials).
 # Usage: cmake -DEDITOR=<exe> -DWORLD_DIR=<dir> -DSAMPLE=<dir> -DSTATE=<dir> -DSTAGE=<name> -DCHARACTER=<name>
-#              -DSCREENSHOT=<png> -DFRAMES=<n> -DEXPECT_ALL=<regex;...> [-DBOT=ON] -P starter_mmo_live_play.cmake
+#              -DSCREENSHOT=<png> -DFRAMES=<n> -DEXPECT_ALL=<regex;...> [-DBOT=ON] [-DEDITOR_ARGS=<flags>]
+#              -P starter_mmo_live_play.cmake
+# EDITOR_ARGS go to the editor too (e.g. --sim-mouse for the camera stages).
 if(NOT EXISTS "${STATE}/ready")
   message("SKIP: starter_mmo_live_setup did not get the stack ready (see its output)")
   return()
@@ -50,7 +52,7 @@ endif()
 
 set(log "${STATE}/${STAGE}.log")
 execute_process(COMMAND "${CMAKE_COMMAND}" "-DEDITOR=${EDITOR}" "-DSCREENSHOT=${SCREENSHOT}" "-DFRAMES=${FRAMES}"
-                        "-DEXTRA_ARGS=--project ${project} --online-login-env --play --no-audio-device --size 1600x1000"
+                        "-DEXTRA_ARGS=--project ${project} --online-login-env --play --no-audio-device --size 1600x1000 ${EDITOR_ARGS}"
                         "-DOUTPUT_FILE=${log}" "-DFORBID_OUTPUT=\\[error\\]"
                         -P "${CMAKE_CURRENT_LIST_DIR}/smoke_test.cmake"
                 RESULT_VARIABLE result)
