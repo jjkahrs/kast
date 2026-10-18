@@ -40,7 +40,7 @@ struct Ctx {
         auto c = co_await login(token(tag), tag);
         if (!c) co_return nullptr;
         std::string err;
-        const bool in = co_await enter_world(*c, random_name(), ok, err);
+        const bool in = co_await enter_world(*c, random_name(), ok, err, o.charOptions);
         check.expect(in, tag + " entered world" + (in ? "" : " (" + err + ")"));
         co_return in ? c : nullptr;
     }
@@ -135,6 +135,18 @@ asio::awaitable<void> characters(Ctx& x) {
                        std::string("invalid name \"") + bad + "\" -> name_invalid");
     x.check.expect(co_await request<proto::CharDeleted>(*c, proto::CharDelete{victim}) == Code::not_found,
                    "deleting an already deleted character -> not_found");
+    x.check.expect(list && std::ranges::all_of(list->chars, [](const proto::CharInfo& ch) { return ch.options.empty(); }),
+                   "characters created without options list none");
+    // Creation options: the C++ limits first, then the server Lua (the default lua/ has no validateCharacter, so any
+    // option is refused).
+    proto::CharOptions nine;
+    for (char k = 'a'; k <= 'i'; ++k) nine[std::string(1, k)] = "x";
+    for (const auto& [bad, what] : {std::pair{proto::CharOptions{{"class", "mage"}}, "an option without a Lua hook"},
+                                    std::pair{proto::CharOptions{{"Class", "mage"}}, "an upper-case key"},
+                                    std::pair{proto::CharOptions{{"class", std::string(33, 'x')}}, "a 33-char value"},
+                                    std::pair{nine, "9 options"}})
+        x.check.expect(co_await request<proto::CharCreated>(*c, proto::CharCreate{random_name(), bad}) == Code::options_invalid,
+                       std::string(what) + " -> options_invalid");
 
     // another account can't take the name either (realm-wide uniqueness)
     auto other = co_await x.login(x.token("s2b"), "s2b");
@@ -1178,8 +1190,8 @@ std::optional<StarterTerrain> starter_terrain(Ctx& x) {
     return t;
 }
 
-// The Cavern's Bat: refused from 8 m away; 2.5 m away one hit (10) kills it: combat.attack, combat.hit and
-// combat.death. It stays as the bot's corpse (Corpse {owner}, no Despawn) until the bot takes its loot
+// The Cavern's Bat, for a Warrior (--char-option class=warrior): Strike refused from 8 m away; 2.5 m away one Strike
+// (12) kills it: combat.power, combat.hit and combat.death. It stays as the bot's corpse (Corpse {owner}, no Despawn) until the bot takes its loot
 // (systems/inventory.lua: loot.open, loot.take_all, loot.closed); then it despawns and is back 30 s later (respawnSec 30)
 // as a new entity at its spawn point.
 asio::awaitable<void> combat_bat(Ctx& x) {
@@ -1198,7 +1210,7 @@ asio::awaitable<void> combat_bat(Ctx& x) {
     x.check.expect(bat && bat->templateName == "Bat", "the Bat is in view");
     if (!bat) co_return;
     const auto attack = [&](uint32_t target) {
-        a->send(proto::ClientEvent{"combat.attack", nlohmann::json{{"target", target}}.dump()});
+        a->send(proto::ClientEvent{"combat.power", nlohmann::json{{"power", "strike"}, {"target", target}}.dump()});
     };
     attack(bat->entityId); // from the Cavern's spawn point (128, 128): 8 m
     auto msgs = co_await drain(*a, Millis(800));
@@ -1212,10 +1224,10 @@ asio::awaitable<void> combat_bat(Ctx& x) {
     msgs = co_await drain(*a, Millis(1000));
     const auto hits = named(msgs, "combat.hit");
     const auto deaths = named(msgs, "combat.death");
-    x.check.expect(named(msgs, "combat.attack").size() == 1 && hits.size() == 1 && hits[0].value("damage", 0) == 10 &&
+    x.check.expect(named(msgs, "combat.power").size() == 1 && hits.size() == 1 && hits[0].value("damage", 0) == 12 &&
                        hits[0].value("target", 0u) == bat->entityId && hits[0].value("attacker", 0u) == ok.entityId &&
-                       hits[0].value("targetName", "") == "Bat",
-                   "2.5 m away at " + fmt(byBat) + ": combat.attack + combat.hit {damage 10, attacker, target, names}");
+                       hits[0].value("targetName", "") == "Bat" && hits[0].value("power", "") == "Strike",
+                   "2.5 m away at " + fmt(byBat) + ": combat.power + combat.hit {damage 12, attacker, target, names, power}");
     x.check.expect(deaths.size() == 1 && deaths[0].value("entity", 0u) == bat->entityId && deaths[0].value("name", "") == "Bat",
                    "the Bat at 0 Health: combat.death");
     const auto despawned = [&](const std::vector<proto::Message>& m) {
@@ -1243,9 +1255,9 @@ asio::awaitable<void> combat_bat(Ctx& x) {
     a->close();
 }
 
-// The Meadow's Guard (50 Health, patrolling 124..134 x 112..122): no target / a player as target refused; next to it a
-// hit, then a second within the 1.5 s cooldown refused (no damage); after the cooldown a hit again; it hits back
-// (5 Health); out of range (ran 10 m off) refused. Its Health replicates 50 -> 40 -> 30.
+// The Meadow's Guard (50 Health, patrolling 124..134 x 112..122), for a Warrior's Strike: no target / a player as target
+// refused; next to it a hit, then a second within the 1.5 s cooldown refused (no damage); after the cooldown a hit
+// again; it hits back (5 Health); out of range (ran 10 m off) refused. Its Health replicates 50 -> 38 -> 26.
 asio::awaitable<void> combat_rules(Ctx& x) {
     const auto t = starter_terrain(x);
     if (!t) co_return;
@@ -1257,7 +1269,7 @@ asio::awaitable<void> combat_rules(Ctx& x) {
     x.check.expect(guard.has_value(), "the Guard is in view");
     if (!guard) co_return;
     const auto attack = [&](const nlohmann::json& target) {
-        a->send(proto::ClientEvent{"combat.attack", nlohmann::json{{"target", target}}.dump()});
+        a->send(proto::ClientEvent{"combat.power", nlohmann::json{{"power", "strike"}, {"target", target}}.dump()});
     };
     attack(ok.entityId); // itself: a player
     attack("guard");
@@ -1299,7 +1311,7 @@ asio::awaitable<void> combat_rules(Ctx& x) {
     for (const auto& u : only<proto::ComponentUpdate>(msgs))
         if (u.entityId == guard->entityId && u.name == "Health") guardHealth.push_back(nlohmann::json::parse(u.json).value("current", -1.0));
     x.check.expect(mine == 1 && theirs >= 1, "after the cooldown a hit again; the Guard hits back for 5");
-    x.check.expect(!guardHealth.empty() && guardHealth.back() == 30, "the Guard's Health replicates down to 30");
+    x.check.expect(!guardHealth.empty() && guardHealth.back() == 26, "the Guard's Health replicates down to 26");
 
     me = co_await walk(*a, me, 0, -10, 9.0f, ground); // runs off faster than it chases (5 m/s)
     attack(guard->entityId);

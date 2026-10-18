@@ -67,7 +67,7 @@ entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint 
 
     const auto e = reg_.create();
     reg_.emplace<SessionLink>(e, sessionId);
-    reg_.emplace<CharacterRef>(e, row.id, row.name);
+    reg_.emplace<CharacterRef>(e, row.id, row.name, row.options);
     reg_.emplace<Transform>(e, pos, heading);
     reg_.emplace<MapRef>(e, map);
     reg_.emplace<MoveState>(e, MoveBudget{0, now});

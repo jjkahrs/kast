@@ -46,7 +46,7 @@ struct System {
     std::string path; // "systems/regen.lua"
     std::filesystem::path file;
     sol::environment env;
-    sol::protected_function update, shutdown, onEnter, onLeave;
+    sol::protected_function update, shutdown, onEnter, onLeave, validateCharacter;
     std::vector<EventBus::Subscription> subscriptions; // kast.subscribe; cleared when the system is disabled
     bool ok = false;
     std::string error;
@@ -87,6 +87,7 @@ struct Runtime::Impl {
     ItemDefs items;                        // items/, loaded before the NPCs (loot tables name them)
     NpcDefs npcDefs;                       // npcs/, loaded after the machines (StateMachine data names one)
     System* current = nullptr;
+    bool returnedTrue = false; // the last call()'s first result was true
     std::string callbackPath; // the definition file whose enter/exit is running, if no system is
 
     Impl(entt::registry& r, Defs d, NpcHooks n) : reg(r), defs(with_state_machine(std::move(d))), npcs(std::move(n)) {
@@ -102,11 +103,13 @@ struct Runtime::Impl {
     template <class... Args>
     std::string call(System& system, const sol::protected_function& fn, std::string_view what, Args&&... args) {
         current = &system;
+        returnedTrue = false;
         std::string error;
         try {
             const ScriptBudget budget(lua.lua_state());
             sol::protected_function_result result = fn(std::forward<Args>(args)...);
             if (!result.valid()) error = result.get<sol::error>().what();
+            else returnedTrue = result.return_count() > 0 && result.get_type(0) == sol::type::boolean && result.get<bool>(0);
         } catch (const std::exception& e) { // sol2 conversions; nothing may escape to the tick
             error = std::format("{}: {}: {}", system.path, what, e.what());
         }
@@ -151,7 +154,8 @@ struct Runtime::Impl {
         system.update = update;
         for (auto [name, slot] : {std::pair{"init", static_cast<sol::protected_function*>(nullptr)},
                                   std::pair{"shutdown", &system.shutdown}, std::pair{"onEnter", &system.onEnter},
-                                  std::pair{"onLeave", &system.onLeave}}) {
+                                  std::pair{"onLeave", &system.onLeave},
+                                  std::pair{"validateCharacter", &system.validateCharacter}}) {
             sol::object fn = table[name];
             if (fn.get_type() == sol::type::lua_nil) continue;
             if (fn.get_type() != sol::type::function) return std::format("{}: \"{}\" must be a function", system.path, name);
@@ -648,6 +652,9 @@ struct Runtime::Impl {
                 const auto& ch = reg.get<world::CharacterRef>(e);
                 table["charId"] = static_cast<double>(ch.charId);
                 table["name"] = ch.name;
+                sol::table options = lua.create_table();
+                for (const auto& [key, value] : ch.options) options[key] = value;
+                table["options"] = options;
             } else if (t.builtin == Builtin::npc) {
                 const auto& npc = reg.get<world::Npc>(e);
                 table["name"] = npc.name;
@@ -793,6 +800,24 @@ void Runtime::enter(entt::entity e) {
 
 void Runtime::leave(entt::entity e) {
     for (System& s : impl_->systems) impl_->run(s, s.onLeave, "onLeave", wire(e));
+}
+
+bool Runtime::validate_character(const std::string& name, const proto::CharOptions& options) {
+    bool hooked = false;
+    for (System& s : impl_->systems) {
+        if (!s.ok || !s.validateCharacter.valid()) continue;
+        hooked = true;
+        sol::table table = impl_->lua.create_table();
+        for (const auto& [key, value] : options) table[key] = value;
+        std::string error = impl_->call(s, s.validateCharacter, "validateCharacter", name, table);
+        if (!error.empty()) {
+            impl_->disable(s, std::move(error));
+            log::error("Lua system disabled", {{"system", s.path}, {"callback", "validateCharacter"}, {"error", s.error}});
+            return false;
+        }
+        if (!impl_->returnedTrue) return false;
+    }
+    return hooked || options.empty();
 }
 
 void Runtime::shutdown() {

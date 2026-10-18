@@ -22,6 +22,12 @@
 -- "bag_drag_mouse" (Meadow) sets the same known bag and logs DRAG: --sim-mouse drags slot 1 onto slot 3 for real.
 -- "bag_keys" (Meadow) logs KEYS: --sim-key presses B (the bag opens), the driver then focuses the chat field
 -- (kast.gui.focus) and --sim-key presses B again: it types "b" there and the bag stays open.
+-- Classes and powers (scripts/characters.lua, scripts/powers.lua, the server's systems/classes.lua and combat.lua): a
+-- new character gets STAGE_CLASS's class (default warrior) by the class button's event before Create. "class_pick"
+-- presses Create with no class (nothing may be sent), then picks Mage, for the screenshot. The class stages run
+-- CLASS_STEPS: walk to a spot near the Meadow's Guard (or in front of / behind the Cavern's Bat), Tab, and press power
+-- keys by the action bar's event ("combat.power" {id = "power_<key>"}), shooting at the step marked shot. "legacy"
+-- stands still and logs its Class (cmake/starter_mmo_live_legacy.cmake strips the class first).
 -- "SHOT" log lines are for --screenshot-on-log: the moment a stage's screenshot should show.
 local STAGE, CHARACTER = "@STAGE@", "@CHARACTER@"
 local REALM = "Starter Realm"
@@ -29,7 +35,46 @@ local SPEED = 5 -- m/s, under the world server's 10 m/s limit
 local MEADOW, CAVERN = 10, 11
 local GATES = {[MEADOW] = {x = 153, z = 128}, [CAVERN] = {x = 103, z = 128}} -- inside each map's portal area
 local FIGHT_MAP = {combat_target = CAVERN, combat = CAVERN, combat_guard = MEADOW, death = MEADOW, revive = MEADOW,
-                   loot_window = CAVERN, loot_rejects = CAVERN, loot = CAVERN, bag_full = CAVERN}
+                   loot_window = CAVERN, loot_rejects = CAVERN, loot = CAVERN, bag_full = CAVERN,
+                   warrior = MEADOW, mage = MEADOW, mage_bolt = MEADOW, priest = MEADOW, rogue = MEADOW,
+                   rogue_backstab = CAVERN}
+local STAGE_CLASS = {mage = "mage", mage_bolt = "mage", priest = "priest", rogue = "rogue", rogue_backstab = "rogue",
+                     legacy = "mage"}
+local CLASS = STAGE_CLASS[STAGE] or "warrior"
+-- Each step waits `after` seconds, walks to its spot (go m south of the Guard, or "front" / "behind" the Bat), waits for
+-- its condition (bat: a living Bat; near: the Guard within that many m; log: a combat log line), then does the rest.
+local CLASS_STEPS = {
+    warrior = {
+        {go = 8}, {tab = true}, {press = 1},                          -- * Out of range
+        {go = 2.2, press = 3}, {after = 0.3, press = 1},              -- Shield Wall, then the GCD refuses Strike
+        {after = 1.0, go = 2.2, press = 1}, {after = 0.3, press = 1}, -- Strike 12, then its own cooldown refuses it
+        {after = 1.0, go = 2.2, press = 2},                           -- Heroic Slam 25
+        {log = "Guard hits you for 2", shot = "shield wall"},
+    },
+    mage = {
+        {go = 15}, {tab = true}, {press = 1},                         -- Firebolt 14: the Guard comes running
+        {after = 1.1, press = 3},                                     -- Arcane Blast 30
+        {after = 1.1, near = 7, press = 2},                           -- Frost Nova roots it
+        {log = "You cast Frost Nova: Guard rooted", shot = "frost nova"},
+    },
+    mage_bolt = {{go = 15}, {tab = true}, {press = 1}, {log = "You cast Firebolt on Guard for 14", shot = "firebolt"}},
+    priest = {
+        {go = 10}, {tab = true}, {press = 3},                         -- Power Shield
+        {after = 1.1, press = 1},                                     -- Smite 10: the Guard comes and hits the shield
+        {log = "Power Shield absorbs 5", press = 2},                  -- Heal
+        {after = 0.3, shot = "power shield"},
+    },
+    rogue = {
+        {seed = 3}, {go = 2.2}, {tab = true}, {press = 3},            -- Evasion
+        {after = 1.1, go = 2.2, press = 1},                           -- Sinister Strike 11
+        {log = "You dodge Guard's attack", shot = "evasion"},
+    },
+    rogue_backstab = {
+        {bat = true}, {go = "front"}, {tab = true}, {after = 0.5, press = 2}, -- * Not behind target
+        {go = "behind"}, {after = 0.5, press = 2},                    -- Backstab 30: the Bat dies
+        {log = "Bat dies", shot = "backstab"},
+    },
+}
 local BAT_SPOT = {x = 128, z = 122.5} -- 2.5 m north of the Bat (128, 120): in reach, the Bat between camera and player
 local GUARD_REACH = 2.6 -- m: close enough to hit (the server allows 3)
 local ATTACKS_ON_GUARD = 3
@@ -71,8 +116,13 @@ local gold, goldBefore
 local step, waitUntil = 0, 0
 local toggles = 0         -- bag.visibility events
 local retargetAt = 0      -- combat: when to press Tab again if nothing got selected
+local stepIndex, stepAt = 1, 0 -- class stages: the CLASS_STEPS step and when it began
+local logged = {}         -- combat log lines seen (class stages wait for some)
+local charReplies = 0     -- world.charCreated / charError answers (class_pick)
 
 local function log(format, ...) kast.log("test driver: " .. string.format(format, ...)) end
+
+local function attack() kast.publish("combat.power", {id = "power_1"}) end -- as a click on the action bar's first button
 
 local function shoot(why)
     if shot then return end
@@ -164,7 +214,7 @@ local function lootStage()
             phase = "corpse"
         elseif elapsed >= nextAttack then
             nextAttack = elapsed + ATTACK_EVERY
-            kast.publish("combat.attack_target")
+            attack()
         end
     elseif phase == "corpse" then
         if corpses[batId] ~= me then return end
@@ -256,7 +306,7 @@ local function fight()
             kast.publish("combat.target_next")
         elseif elapsed >= nextAttack and engaged then
             nextAttack = elapsed + ATTACK_EVERY
-            kast.publish("combat.attack_target")
+            attack()
         end
         return
     end
@@ -271,9 +321,59 @@ local function fight()
         else
             engaged = true
             nextAttack = elapsed + ATTACK_EVERY
-            kast.publish("combat.attack_target")
+            attack()
         end
     end
+end
+
+-- Yaw of a clone's Transform rotation (a yaw quaternion; 0 faces +z).
+local function heading(entity)
+    local q = kast.get(entity, "Transform").rotation
+    return 2 * math.atan2(q.y, q.w)
+end
+
+-- Where a class step stands: go m south of the Guard, or 2.5 m in front of / behind the Bat.
+local function spot(go)
+    if type(go) == "number" then
+        if not guard then return nil end
+        local g = kast.get(guard, "Transform").position
+        return {x = g.x, z = g.z - go}
+    end
+    if not bat then return nil end
+    local b, h = kast.get(bat, "Transform").position, heading(bat)
+    local k = go == "front" and 2.5 or -2.5
+    return {x = b.x + math.sin(h) * k, z = b.z + math.cos(h) * k}
+end
+
+local function guardWithin(d)
+    if not guard then return false end
+    local g, p = kast.get(guard, "Transform").position, kast.get(player, "Transform").position
+    return math.sqrt((g.x - p.x) ^ 2 + (g.z - p.z) ^ 2) <= d
+end
+
+-- The class stages: one CLASS_STEPS step at a time (see the header).
+local function classStage()
+    local s = CLASS_STEPS[STAGE][stepIndex]
+    if not s or elapsed - stepAt < (s.after or 0) then return end
+    if s.go then
+        local where = spot(s.go)
+        if not where then return end
+        local p = kast.get(player, "Transform").position
+        if math.sqrt((where.x - p.x) ^ 2 + (where.z - p.z) ^ 2) > 0.5 then
+            target = where
+            return
+        end
+        target = nil
+    end
+    if (s.bat and not batAlive()) or (s.near and not guardWithin(s.near)) or (s.log and not logged[s.log]) then return end
+    if s.seed then kast.world.send("test.seed", {seed = s.seed}) end
+    if s.tab then kast.publish("combat.target_next") end
+    if s.press then
+        log("press %d", s.press)
+        kast.publish("combat.power", {id = "power_" .. s.press})
+    end
+    if s.shot then shoot(s.shot) end
+    stepIndex, stepAt = stepIndex + 1, elapsed
 end
 
 local function walk(dt)
@@ -304,8 +404,19 @@ return {
         end)
         kast.subscribe("world.charList", function(e)
             local names = {}
-            for _, character in ipairs(e.characters) do names[#names + 1] = character.name end
+            for _, character in ipairs(e.characters) do
+                names[#names + 1] = string.format("%s (%s)", character.name, character.options.class or "no class")
+            end
             log("characters: %s", table.concat(names, ", "))
+            if STAGE == "class_pick" then
+                if phase == "arrive" then -- Create with no class picked: nothing may go out
+                    phase, waitUntil = "unpicked", elapsed + 2
+                    kast.gui.setText("char_name", CHARACTER)
+                    kast.publish("characters.create")
+                    log("pressed Create with no class")
+                end
+                return
+            end
             for i, character in ipairs(e.characters) do
                 if character.name == CHARACTER then
                     if STAGE ~= "chars" then
@@ -315,11 +426,25 @@ return {
                     return
                 end
             end
-            log("creating %s", CHARACTER)
+            log("creating %s as %s", CHARACTER, CLASS)
             kast.gui.setText("char_name", CHARACTER)
+            kast.publish("characters.class", {id = "class_" .. CLASS})
             kast.publish("characters.create")
         end)
-        kast.subscribe("world.charError", function(e) log("%s failed: %s", e.request, e.code) end)
+        kast.subscribe("world.charError", function(e)
+            charReplies = charReplies + 1
+            log("%s failed: %s", e.request, e.code)
+        end)
+        kast.subscribe("world.charCreated", function(e)
+            charReplies = charReplies + 1
+            log("created %s (%s)", e.character.name, tostring(e.character.options.class))
+        end)
+        kast.subscribe("server.class.powers", function(e)
+            local names = {}
+            for _, p in ipairs(e.powers) do names[#names + 1] = p.key .. " " .. p.name end
+            log("powers of %s: %s", e.class, table.concat(names, ", "))
+            if STAGE == "legacy" then shoot("legacy") end
+        end)
         kast.subscribe("world.entered", function(e)
             map, me = e.map, e.entityId
             if FIGHT_MAP[STAGE] then faceNorth() end
@@ -392,6 +517,7 @@ return {
         end)
         kast.subscribe("target.cleared", function() log("target cleared, %d marker(s)", markers()) end)
         kast.subscribe("chat.local", function(e)
+            logged[e.text] = true
             log("combat log: %s", e.text)
             if STAGE == "combat" and e.text == "Bat dies" then shoot("bat dead") end
             if STAGE == "death" and e.text == "You die" then shoot("dead") end
@@ -405,6 +531,7 @@ return {
         kast.subscribe("world.chat", function(e) log("chat %s: %s", e.from, e.text) end)
         kast.subscribe("world.component", function(e)
             if e.name == "Health" then log("Health %d / %d on %d", e.data.current, e.data.max, e.entityId) end
+            if e.name == "Class" then log("Class %s on %d", e.data.id, e.entityId) end
             if e.name == "Wallet" then
                 log("Wallet %d gold on %d", e.data.gold, e.entityId)
                 if e.entityId == me then
@@ -424,6 +551,17 @@ return {
         end)
     end,
     update = function(dt)
+        if STAGE == "class_pick" then
+            elapsed = elapsed + dt
+            if phase == "unpicked" and elapsed >= waitUntil then
+                log("replies to Create with no class: %d", charReplies)
+                phase = "picked"
+                kast.publish("characters.class", {id = "class_mage"})
+                log("picked mage")
+                shoot("class picked")
+            end
+            return
+        end
         if not player or not map then return end
         elapsed = elapsed + dt
         if STAGE == "world" and not chatted and elapsed > 1 then
@@ -459,11 +597,13 @@ return {
                 target = GATES[map]
             elseif LOOT_STAGES[STAGE] then
                 lootStage()
+            elseif CLASS_STEPS[STAGE] then
+                classStage()
             else
                 fight()
                 if STAGE == "combat_guard" and engaged and hits < ATTACKS_ON_GUARD and elapsed >= nextAttack then
                     nextAttack = elapsed + ATTACK_EVERY
-                    kast.publish("combat.attack_target")
+                    attack()
                 end
             end
         end

@@ -1273,9 +1273,9 @@ void checkWorldClient()
     {
         const std::vector<proto::Message> seen = fakeWorld.seen();
         check(seen.size() >= 2 && std::get_if<proto::Hello>(&seen[0]) &&
-                  std::get_if<proto::Hello>(&seen[0])->protocolVersion == 3 && std::get_if<proto::Auth>(&seen[1]) &&
-                  std::get_if<proto::Auth>(&seen[1])->accessToken == fake.accessToken(),
-              "world: the handshake sends Hello{2} then Auth{the session's access token}");
+                  std::get_if<proto::Hello>(&seen[0])->protocolVersion == proto::kProtocolVersion &&
+                  std::get_if<proto::Auth>(&seen[1]) && std::get_if<proto::Auth>(&seen[1])->accessToken == fake.accessToken(),
+              "world: the handshake sends Hello{kProtocolVersion} then Auth{the session's access token}");
     }
     check(throwsLogic([&] { w.connect(3); }, "connect: needs state 'disconnected', the connection is 'lobby'") &&
               throwsLogic([&] { w.say("x"); }, "say: needs state 'inWorld'"),
@@ -1291,8 +1291,9 @@ void checkWorldClient()
           "world.charError {request, code}; the connection stays");
     w.createCharacter("Hero");
     const Json* hero = r.next("world.charCreated");
-    check(hero && hero->at("character") == Json{{"id", 100}, {"name", "Hero"}, {"position", pos(100, 0, 100)}},
-          "world.charCreated {character = {id, name, position}}");
+    check(hero && hero->at("character") ==
+                      Json{{"id", 100}, {"name", "Hero"}, {"position", pos(100, 0, 100)}, {"options", Json::object()}},
+          "world.charCreated {character = {id, name, position, options = {}}}");
     w.createCharacter("Split");
     const Json* split = r.next("world.charCreated");
     check(split && split->at("character").value("id", 0) == 101, "world: a frame split across reads is reassembled");
@@ -1307,6 +1308,14 @@ void checkWorldClient()
     const Json* one = r.next("world.charList");
     check(one && one->at("characters").size() == 1 && one->at("characters")[0].value("name", "") == "Hero",
           "world.charList lists the characters");
+    w.createCharacter("Mage", {{"class", "mage"}, {"hair", "red"}});
+    const Json* mage = r.next("world.charCreated");
+    check(mage && mage->at("character").at("options") == Json{{"class", "mage"}, {"hair", "red"}},
+          "world: createCharacter options travel in CharCreate and come back in world.charCreated");
+    w.listCharacters();
+    const Json* two = r.next("world.charList");
+    check(two && two->at("characters").size() == 2 && two->at("characters")[1].at("options") == Json{{"class", "mage"}, {"hair", "red"}},
+          "world.charList entries carry options");
 
     w.enterWorld(100);
     const Json* entered = r.next("world.entered");
@@ -1446,15 +1455,18 @@ return {{
         fails("kast.world.connect: realmId must be a whole number >= 0, got x", kast.world.connect, "x")
         fails("kast.world.connect: realmId must be a whole number >= 0, got 1.5", kast.world.connect, 1.5)
         fails("kast.world.createCharacter: name must be a string, got nil", kast.world.createCharacter)
+        fails("kast.world.createCharacter: options must be a table, got 5", kast.world.createCharacter, "Hero", 5)
+        fails("kast.world.createCharacter: options must map strings to strings, got class = 1",
+              kast.world.createCharacter, "Hero", {{class = 1}})
         fails("kast.world.say: needs state 'inWorld', the connection is 'disconnected'", kast.world.say, "hi")
         fails("kast.world.listCharacters: needs state 'lobby'", kast.world.listCharacters)
         kast.subscribe("world.disconnected", function(e) kast.log("lua world disconnected " .. e.code) end)
         kast.subscribe("world.connected", function(e)
             kast.log(string.format("lua world connected %d %s %s", e.accountId, e.role, kast.world.state()))
-            kast.world.createCharacter("Hero")
+            kast.world.createCharacter("Hero", {{class = "mage"}})
         end)
         kast.subscribe("world.charCreated", function(e)
-            kast.log("lua world created " .. e.character.name .. " " .. e.character.id)
+            kast.log("lua world created " .. e.character.name .. " " .. e.character.id .. " " .. e.character.options.class)
             kast.world.enterWorld(e.character.id)
         end)
         kast.subscribe("world.entered", function(e)
@@ -1504,7 +1516,7 @@ return {{
         doc.lua.bus().subscribe("net.message", [&](const nlohmann::json&) { ++netMessages; });
     check(playUntil(doc, "lua world disconnected not_logged_in"), "kast.world.connect before login -> not_logged_in");
     check(playUntil(doc, "lua world connected 42 player lobby"), "kast.world.connect -> world.connected, state lobby");
-    check(playUntil(doc, "lua world created Hero 100"), "kast.world.createCharacter -> world.charCreated");
+    check(playUntil(doc, "lua world created Hero 100 mage"), "kast.world.createCharacter(name, options) -> world.charCreated with options");
     check(playUntil(doc, "lua world entered 1 at 100,0,100"), "kast.world.enterWorld -> world.entered");
     check(playUntil(doc, "lua world chat from Hero"), "kast.world.say -> world.chat (after a scene switch)");
     check(playUntil(doc, "lua server event quest 7 steps 2"), "kast.subscribe(\"server.<name>\") gets the ServerEvent payload");

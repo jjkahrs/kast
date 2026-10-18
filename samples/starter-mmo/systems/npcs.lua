@@ -5,7 +5,8 @@
 -- path's wait seconds, then walks to the next point: back to the first after the last (loop), or back along the path
 -- (loop = false). A respawned NPC is a new entity and starts over at the first point. While it is in "combat" or
 -- "returning" (systems/combat.lua moves it then) it is left alone; back on "walking" it heads for the point it was
--- walking to.
+-- walking to. Rooted ("npc.rooted" {npc, seconds} from systems/combat.lua's Frost Nova), it stands where it is, its
+-- walk or wait paused, until the root ends.
 -- On a map with a navmesh (docs/services/world/maps.html#navmesh) it walks kast.map.path's corners from where it is to the next point, so it
 -- goes around cliffs; without one (or no path), straight there. The server keeps it on the ground.
 --
@@ -14,7 +15,9 @@
 -- often (every other tick, say) and let clients interpolate.
 local SPEED = 3 -- m/s, a walk
 
+local now = 0
 local patrols = {} -- entity -> {target = point index, step = +1 or -1, waited = seconds, route = corners, leg = index}
+local rootedUntil = {} -- entity -> time it may move again
 
 -- The point after target, and the direction to go on in.
 local function advance(spawn, p)
@@ -69,7 +72,15 @@ local function walk(e, spawn, p, dt)
 end
 
 return {
+    init = function()
+        kast.subscribe("npc.rooted", function(e) rootedUntil[e.npc] = now + e.seconds end)
+    end,
+
     update = function(dt)
+        now = now + dt
+        for e, at in pairs(rootedUntil) do
+            if at <= now then rootedUntil[e] = nil end
+        end
         local live = {}
         for e in kast.query("Spawn") do
             local spawn = kast.get(e, "Spawn")
@@ -77,7 +88,7 @@ return {
                 local p = patrols[e]
                 if not p then p = {target = 1, step = 1, waited = 0} end
                 live[e] = p
-                walk(e, spawn, p, dt)
+                if not rootedUntil[e] then walk(e, spawn, p, dt) end
             end
         end
         patrols = live -- drops the NPCs that are gone

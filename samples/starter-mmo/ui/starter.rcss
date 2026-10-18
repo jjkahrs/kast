@@ -10,7 +10,7 @@ body {
     pointer-events: none; /* the world scene stacks full-screen documents: only their panels take the mouse */
 }
 
-.screen, .card, .window, #hud, #target_frame, #chat {
+.screen, .card, .window, #hud, #target_frame, #chat, #action_bar {
     pointer-events: auto;
 }
 
@@ -91,6 +91,24 @@ button.secondary:hover {
     background-color: #818181;
 }
 
+/* Characters screen (scripts/characters.lua): the class toggles; the picked one in the highlight colour. */
+button.class_button {
+    display: inline-block;
+    width: 92px;
+    margin: 6px 2px 0 2px;
+    background-color: #454545;
+    color: #f0f0f0;
+}
+
+button.class_button:hover {
+    background-color: #818181;
+}
+
+button.class_button.selected {
+    background-color: #ffcc00;
+    color: #000000;
+}
+
 .status {
     margin-top: 14px;
     min-height: 20px;
@@ -108,18 +126,23 @@ button.secondary:hover {
     position: absolute;
     left: 12px;
     top: 12px;
-    width: 180px;
+    width: 230px;
     font-size: 15px;
     background-color: #313131dd;
     border-radius: 6px;
 }
 
-#hud_name {
+#hud_header {
     padding: 6px 12px;
     background-color: #ffaa00;
     border-radius: 6px 6px 0 0;
     color: #000000;
     font-size: 18px;
+}
+
+#hud_class {
+    margin-left: 8px;
+    font-size: 15px;
 }
 
 #hud .stat {
@@ -152,6 +175,39 @@ button.secondary:hover {
 
 #target_health {
     padding: 3px 12px 6px 12px;
+}
+
+/* The class's powers (scripts/powers.lua): bottom centre; a button greys while it cools down. */
+#action_bar {
+    position: absolute;
+    left: 50%;
+    bottom: 12px;
+    width: 432px;
+    margin-left: -216px;
+    padding: 4px;
+    background-color: #313131dd;
+    border-radius: 6px;
+}
+
+button.power {
+    display: inline-block;
+    width: 136px;
+    margin: 0 2px;
+    padding: 10px 0;
+    font-size: 15px;
+}
+
+button.power.cooling {
+    background-color: #454545;
+    color: #a0a0a0;
+}
+
+/* Narrow views (the editor's Game view): centred, the bar would cover the chat box; start it right of the chat. */
+@media (max-width: 1100px) {
+    #action_bar {
+        left: 384px;
+        margin-left: 0;
+    }
 }
 
 #chat {

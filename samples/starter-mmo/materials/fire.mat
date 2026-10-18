@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "baseColor": [1, 0.35, 0.05, 1],
+  "baseColorTexture": "",
+  "metallic": 0,
+  "roughness": 0.6,
+  "metallicRoughnessTexture": "",
+  "emissive": [1, 0.3, 0],
+  "alphaMode": "opaque",
+  "alphaCutoff": 0.5
+}

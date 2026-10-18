@@ -73,6 +73,7 @@ void checkCodecRoundTrip() {
     roundtrip(Pong{42}, "Pong");
     roundtrip(CharListReq{}, "CharListReq");
     roundtrip(CharCreate{"Aragorn"}, "CharCreate");
+    roundtrip(CharCreate{"Gandalf", {{"class", "mage"}, {"hair", "grey beard"}}}, "CharCreate with options");
     roundtrip(CharDelete{1234567890123ull}, "CharDelete");
     roundtrip(EnterWorld{99}, "EnterWorld");
     roundtrip(Move{{1.5f, -2.25f, 1000.f}, 3.14f, 123456}, "Move");
@@ -82,6 +83,8 @@ void checkCodecRoundTrip() {
     roundtrip(CharList{{{1, "Alice", {1, 2, 3}}, {2, "Bob", {4, 5, 6}}}}, "CharList");
     roundtrip(CharList{}, "CharList empty");
     roundtrip(CharCreated{{5, "Carol", {7, 8, 9}}}, "CharCreated");
+    roundtrip(CharCreated{{6, "Dora", {1, 2, 3}, {{"class", "rogue"}}}}, "CharCreated with options");
+    roundtrip(CharList{{{1, "Alice", {1, 2, 3}, {{"class", "priest"}}}, {2, "Bob", {4, 5, 6}}}}, "CharList with options");
     roundtrip(CharDeleted{5}, "CharDeleted");
     roundtrip(EnterWorldOk{11, 2, {1, 0, 1}, 1.f}, "EnterWorldOk");
     roundtrip(MapChange{65535, {-3, 4, 5000}, 2.5f}, "MapChange");
@@ -97,7 +100,30 @@ void checkCodecRoundTrip() {
     const auto f = encode(Message{Hello{0x0102}});
     check(f == std::vector<uint8_t>{2, 0, 1, 0, 0x02, 0x01}, "Hello bytes little-endian");
 
-    check(kProtocolVersion == 3, "protocol version 3");
+    check(kProtocolVersion == 4, "protocol version 4");
+    // v4 CharCreate: str name, u8 count, count x (str key, str value), keys in order; a key twice is malformed
+    const auto cc = encode(Message{CharCreate{"Al", {{"b", "2"}, {"a", "1"}}}});
+    check(cc == std::vector<uint8_t>{17, 0, 0x11, 0, 2, 0, 'A', 'l', 2, 1, 0, 'a', 1, 0, '1', 1, 0, 'b', 1, 0, '2'},
+          "CharCreate options bytes");
+    const std::vector<uint8_t> dupe{2, 0, 'A', 'l', 2, 1, 0, 'a', 1, 0, '1', 1, 0, 'a', 1, 0, '2'};
+    Message dupeOut;
+    check(decode_payload(Opcode::CharCreate, dupe, dupeOut) == DecodeStatus::malformed, "CharCreate with a key twice is malformed");
+    const std::vector<uint8_t> shortOpts{2, 0, 'A', 'l', 1, 1, 0, 'a'};
+    check(decode_payload(Opcode::CharCreate, shortOpts, dupeOut) == DecodeStatus::malformed, "CharCreate with a cut option is malformed");
+    // C++ limits on options (valid_char_options): <= 8 entries, keys 1-16 of [a-z_], values <= 32 printable ASCII
+    check(valid_char_options({}) && valid_char_options({{"class", "warrior"}}) &&
+              valid_char_options({{"a_b", std::string(32, '~')}, {std::string(16, 'z'), ""}}),
+          "options: empty, plain, and at the limits are valid");
+    CharOptions nine;
+    for (char k = 'a'; k <= 'i'; ++k) nine[std::string(1, k)] = "x";
+    check(!valid_char_options(nine), "options: 9 entries refused");
+    check(!valid_char_options({{"", "x"}}) && !valid_char_options({{std::string(17, 'a'), "x"}}) &&
+              !valid_char_options({{"Class", "x"}}) && !valid_char_options({{"class1", "x"}}) &&
+              !valid_char_options({{"a.b", "x"}}),
+          "options: empty, long, upper-case, digit and dot keys refused");
+    check(!valid_char_options({{"a", std::string(33, 'x')}}) && !valid_char_options({{"a", "tab\t"}}) &&
+              !valid_char_options({{"a", "\xC3\xA9"}}),
+          "options: long, control and non-ASCII values refused");
     // v3 EnterWorldOk: u32 entityId, u16 map, vec3 pos, f32 heading; MapChange: u16 map, vec3 pos, f32 heading
     const auto ewo = encode(Message{EnterWorldOk{1, 0x0201, {0, 0, 0}, 0}});
     check(ewo.size() == 4 + 4 + 2 + 12 + 4 && ewo[8] == 0x01 && ewo[9] == 0x02, "EnterWorldOk map follows entityId");

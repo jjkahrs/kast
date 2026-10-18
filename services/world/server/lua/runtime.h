@@ -1,5 +1,6 @@
 // Server Lua systems: LUA_ROOT/systems/*.lua, run in alphabetical filename order on the tick thread, one Lua state,
-// each file in its own sandboxed environment. A file returns { init?, update(dt), shutdown?, onEnter?(e), onLeave?(e) }
+// each file in its own sandboxed environment. A file returns { init?, update(dt), shutdown?, onEnter?(e), onLeave?(e),
+// validateCharacter?(name, options) }
 // and reaches the world only through kast.* over the registry, the event bus and the state machines (docs/services/world/lua.html).
 // sol2 stays inside runtime.cpp: World holds a Runtime without seeing Lua types.
 #pragma once
@@ -80,6 +81,10 @@ public:
     void update(float dt);
     void enter(entt::entity e); // onEnter: after the character spawned and its persisted components were restored
     void leave(entt::entity e); // onLeave: before it is saved and despawned
+    // Whether a character may be created with these (C++-checked) options: every system with a validateCharacter must
+    // return true for (name, {key = value, ...}). No system has one: only empty options pass. An error rejects, and
+    // disables that system like any callback's.
+    bool validate_character(const std::string& name, const proto::CharOptions& options);
     void shutdown(); // also drops the events still queued on the bus
     std::vector<SystemStatus> status() const;
     // The NPC definition named name (loaded by load), or nullptr.

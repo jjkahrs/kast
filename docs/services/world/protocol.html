@@ -12,7 +12,7 @@
 <nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html" class="active">Protocol</a></li></ul></nav>
 <main>
 <h1 id="kast-world-protocol">Kast World Protocol</h1>
-<p><strong>Protocol version: 3</strong> (<code>kProtocolVersion</code> in <code>protocol/messages.h</code>, sent in <code>Hello</code>). A client on any other version gets <code>protocol_mismatch</code>.</p>
+<p><strong>Protocol version: 4</strong> (<code>kProtocolVersion</code> in <code>protocol/messages.h</code>, sent in <code>Hello</code>). A client on any other version gets <code>protocol_mismatch</code>.</p>
 <table>
 <thead>
 <tr>
@@ -21,6 +21,10 @@
 </tr>
 </thead>
 <tbody>
+<tr>
+<td>4</td>
+<td>Character creation options: <code>CharCreate</code> and <code>CharInfo</code> gain an <code>options</code> map; new code <code>options_invalid</code> (25). See <a href="#characters">Characters</a></td>
+</tr>
 <tr>
 <td>3</td>
 <td>Maps: <code>EnterWorldOk</code> gains <code>u16 map</code> after <code>entityId</code>; new <code>MapChange</code> (<code>0x0128</code>). See <a href="#maps">Maps</a></td>
@@ -169,7 +173,7 @@
 <td><code>0x0011</code></td>
 <td>CharCreate</td>
 <td>C</td>
-<td><code>str name</code></td>
+<td><code>str name, options</code></td>
 </tr>
 <tr>
 <td><code>0x0012</code></td>
@@ -299,11 +303,13 @@
 </tr>
 </tbody>
 </table>
-<p><strong>CharInfo:</strong> <code>u64 id, str name, vec3 pos</code>.</p>
+<p><strong>CharInfo:</strong> <code>u64 id, str name, vec3 pos, options</code> (the options the character was created with).</p>
+<p><strong>options:</strong> <code>u8 count</code>, then <code>count</code> × (<code>str key, str value</code>), keys in ascending byte order. A key twice is <code>malformed</code>.</p>
 <p>Any other opcode, including a server-to-client opcode sent by a client, gets <code>Disconnect{unknown_opcode}</code> or <code>Disconnect{unexpected_message}</code>.</p>
 <h3 id="characters">Characters</h3>
 <ul>
 <li><strong>Name rules:</strong> <code>CharCreate</code> names are 3–16 ASCII letters (<code>name_invalid</code> otherwise).</li>
+<li><strong>Creation options:</strong> string pairs the game defines (a class, a look); the protocol and the engine only carry them. The server takes at most 8, each key 1–16 characters of <code>[a-z_]</code> and each value at most 32 printable ASCII characters (<code>0x20</code>–<code>0x7E</code>); anything else is <code>options_invalid</code>, before any Lua runs. Then the server Lua's <code>validateCharacter</code> decides (<a href="lua.html#character-creation">Lua: character creation</a>); without one, only empty options pass. Accepted options are saved with the character (column <code>options</code>, migration 004) and come back in every <code>CharInfo</code>.</li>
 <li><strong>Uniqueness:</strong> names are unique per realm, case-insensitively (<code>name_taken</code>). A deleted character's name stays reserved.</li>
 <li><strong>Character limit:</strong> at most <code>MAX_CHARS_PER_ACCOUNT</code> (default 10) live characters per account per realm (<code>char_limit</code>).</li>
 <li><strong>Spawn point:</strong> new characters start on map <code>START_MAP</code> (default 1) at its <code>map.json</code> spawn.</li>
@@ -361,7 +367,7 @@
 <a href="../../engine/online-services.html">Online services</a>). It is client-to-server only and the reverse of
 <a href="#server-events">Server events</a>.</p>
 <ul>
-<li><strong><code>name</code>:</strong> 1–32 characters of <code>a-z</code>, <code>0-9</code>, <code>.</code> and <code>_</code> (<code>kClientEventNameMax</code>, <code>proto::valid_client_event_name</code>), e.g. <code>combat.attack</code>.</li>
+<li><strong><code>name</code>:</strong> 1–32 characters of <code>a-z</code>, <code>0-9</code>, <code>.</code> and <code>_</code> (<code>kClientEventNameMax</code>, <code>proto::valid_client_event_name</code>), e.g. <code>combat.power</code>.</li>
 <li><strong><code>json</code>:</strong> the payload as JSON, at most 1024 bytes (<code>kClientEventJsonMax</code>). It must parse to an object.</li>
 <li><strong>Validation:</strong> the server re-checks everything. A bad name, more than 1 KB, text that isn't JSON or JSON that isn't an
   object gets <code>Disconnect{malformed}</code>, like any other malformed frame.</li>
@@ -559,6 +565,12 @@ that sends one gets <code>Disconnect{unexpected_message}</code>.</p>
 <td><code>already_in_world</code></td>
 <td>E</td>
 <td>Character request sent while in the world</td>
+</tr>
+<tr>
+<td>25</td>
+<td><code>options_invalid</code></td>
+<td>E</td>
+<td><code>CharCreate</code> options over the limits, or refused by the server's Lua</td>
 </tr>
 </tbody>
 </table>

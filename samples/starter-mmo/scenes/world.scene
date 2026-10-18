@@ -1003,6 +1003,7 @@
     "scripts/chat.lua",
     "scripts/player.lua",
     "scripts/combat.lua",
+    "scripts/powers.lua",
     "scripts/world_flow.lua",
     "scripts/bag.lua",
     "scripts/loot.lua"

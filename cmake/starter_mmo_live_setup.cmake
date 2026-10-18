@@ -27,7 +27,8 @@ if(NOT running MATCHES "world")
 endif()
 file(WRITE "${STATE}/override" "")
 # The world server's Lua: a copy of the sample's server folders plus the test-only starter_mmo_test_server.lua (test.seed,
-# test.bag), mounted over the sample's own by a third compose file, so the sample itself never holds test code.
+# test.bag), mounted over the sample's own by a third compose file, so the sample itself never holds test code. The
+# same file lets the test account hold 20 characters (every stage has its own; the default is 10).
 set(server_lua "${STATE}/server_lua")
 foreach(dir components fsms items npcs systems)
   file(COPY "${SAMPLE}/${dir}" DESTINATION "${server_lua}")
@@ -36,6 +37,8 @@ file(COPY_FILE "${CMAKE_CURRENT_LIST_DIR}/starter_mmo_test_server.lua" "${server
 # Long volume syntax: a Windows path's drive colon would split the short "src:dst:ro" form.
 file(WRITE "${STATE}/test.override.yml" "services:
   world:
+    environment:
+      MAX_CHARS_PER_ACCOUNT: \"20\"
     volumes:
       - type: bind
         source: \"${server_lua}\"

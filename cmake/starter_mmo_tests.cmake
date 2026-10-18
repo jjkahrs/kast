@@ -55,7 +55,7 @@ set(live_shots)
 # name | stage | character | frames | bot | expected log lines (regexes, "&" separated) | extra editor flags
 foreach(stage
     "starter_mmo_live_chars|chars|Starter|420|OFF|picking realm Starter Realm&test driver: characters: .*Starter|"
-    "starter_mmo_live_world|world|Starter|900|ON|test driver: entered map 10&spawn npc Guard template 'Guard'&spawn player [^ ]+ template ''&test driver: Health [0-9]+ / 100 on&test driver: Wallet [0-9]+ gold&test driver: chat Starter[a-j]+: hello from the starter sample|"
+    "starter_mmo_live_world|world|Starter|900|ON|test driver: entered map 10&spawn npc Guard template 'Guard'&spawn player [^ ]+ template ''&test driver: Health [0-9]+ / 140 on&test driver: Wallet [0-9]+ gold&test driver: chat Starter[a-j]+: hello from the starter sample|"
     "starter_mmo_live_cavern|cavern|Explorer|1800|OFF|test driver: entered map 1[01]&crossed to map 10&crossed to map 11&spawn npc Bat template 'Bat'&world: map changed to 11|"
     # scripts/player.lua's camera: behind the character at 10 m, zoomed all the way out, orbited by a left drag
     "starter_mmo_live_camera|camera|Starter|900|OFF|test driver: entered map 10|"
@@ -65,12 +65,12 @@ foreach(stage
     # "SHOT" line (--screenshot-on-log); FRAMES is only the upper bound. A left click (no drag) selects the Bat:
     "starter_mmo_live_combat_target|combat_target|Fighter|6000|OFF|test driver: target selected Bat .[0-9]+., 1 marker|--sim-mouse 2400,left,0,0,0 --screenshot-on-log 30,SHOT"
     # Tab, Escape, Tab, then 1 until the Bat dies; it stays as Fighter's corpse:
-    "starter_mmo_live_combat|combat|Fighter|6000|OFF|test driver: target selected Bat&test driver: target cleared, 0 marker&test driver: combat log: You hit Bat for 10&test driver: combat log: Bat dies&test driver: corpse [0-9]+ owner [0-9]+|--screenshot-on-log 45,SHOT"
-    # Mid-fight with the Guard: three hits, and it hits back:
-    "starter_mmo_live_combat_guard|combat_guard|Fighter|6000|OFF|test driver: target selected Guard&test driver: combat log: You hit Guard for 10&test driver: Health 20 / 50 on&test driver: combat log: Guard hits you for 5|--screenshot-on-log 45,SHOT"
-    # The Guard kills a character that hit it once (100 Health, 5 every 2 s): dead, then revived at the spawn:
-    "starter_mmo_live_death|death|Fallen|12000|OFF|test driver: combat log: Guard hits you for 5&test driver: combat log: You die&test driver: Health 0 / 100 on|--screenshot-on-log 45,SHOT"
-    "starter_mmo_live_revive|revive|Fallen|12000|OFF|test driver: combat log: You die&test driver: combat log: You revive&test driver: Health 100 / 100 on&world: map changed to 10 at 128.0, 128.0|--screenshot-on-log 60,SHOT"
+    "starter_mmo_live_combat|combat|Fighter|6000|OFF|test driver: target selected Bat&test driver: target cleared, 0 marker&test driver: combat log: You cast Strike on Bat for 12&test driver: combat log: Bat dies&test driver: corpse [0-9]+ owner [0-9]+|--screenshot-on-log 45,SHOT"
+    # Mid-fight with the Guard: three Strikes, and it hits back:
+    "starter_mmo_live_combat_guard|combat_guard|Fighter|6000|OFF|test driver: target selected Guard&test driver: combat log: You cast Strike on Guard for 12&test driver: Health 14 / 50 on&test driver: combat log: Guard hits you for 5|--screenshot-on-log 45,SHOT"
+    # The Guard kills a Warrior that hit it once (140 Health, 5 every 2 s): dead, then revived at the spawn:
+    "starter_mmo_live_death|death|Fallen|12000|OFF|test driver: combat log: Guard hits you for 5&test driver: combat log: You die&test driver: Health 0 / 140 on|--screenshot-on-log 45,SHOT"
+    "starter_mmo_live_revive|revive|Fallen|12000|OFF|test driver: combat log: You die&test driver: combat log: You revive&test driver: Health 140 / 140 on&world: map changed to 10 at 128.0, 128.0|--screenshot-on-log 60,SHOT"
     # Loot (scripts/loot.lua, systems/inventory.lua; the test-only server system seeds the roll: 1 gold, Bat Wing, Linen
     # Cloth). Each waits for a living Bat (up to 90 s after an earlier stage's kill). A real right click (--sim-mouse
     # on the driver's CLICK line) on Looter's corpse opens the loot window:
@@ -94,7 +94,24 @@ foreach(stage
     # A real mouse drag (--sim-mouse from slot 1, 254 / 103 px from the Game view's centre, 116 px right onto slot 3):
     "starter_mmo_live_bag_drag_mouse|bag_drag_mouse|Sorter|6000|OFF|test driver: bag 2=linen_cloth:3 3=bat_wing:5 4=bat_wing:18 5=worn_shortsword:1 7=minor_healing_potion:4&test driver: camera turned by the drag: false|--sim-mouse 20,left,116,0,0,254,103 --sim-on-log DRAG --screenshot-on-log 30,SHOT"
     # Real keys (--sim-key): B opens the bag; with the chat field focused B types "b" and the bag stays open:
-    "starter_mmo_live_bag_keys|bag_keys|Sorter|6000|OFF|test driver: bag open: true&test driver: chat focused: true, focusedField chat_input&test driver: after B, chat, B: 1 bag toggle.s., chat field 'b'|--sim-key 30,B --sim-key 150,B --sim-on-log KEYS --screenshot-on-log 30,SHOT")
+    "starter_mmo_live_bag_keys|bag_keys|Sorter|6000|OFF|test driver: bag open: true&test driver: chat focused: true, focusedField chat_input&test driver: after B, chat, B: 1 bag toggle.s., chat field 'b'|--sim-key 30,B --sim-key 150,B --sim-on-log KEYS --screenshot-on-log 30,SHOT"
+    # Classes and powers (scripts/characters.lua, scripts/powers.lua; the server's systems/classes.lua and combat.lua).
+    # Create with no class sends nothing; then Mage picked (highlighted, its description):
+    "starter_mmo_live_class_pick|class_pick|Picker|3000|OFF|test driver: pressed Create with no class&test driver: replies to Create with no class: 0&test driver: picked mage|--screenshot-on-log 20,SHOT"
+    # One character per class against the Meadow's Guard, keys pressed by the action bar's event. Warrior: out of range,
+    # the GCD and Strike's cooldown refused; Shield Wall halves the Guard's hits:
+    "starter_mmo_live_class_warrior|warrior|Warrior|9000|OFF|test driver: Class warrior on&test driver: Health [0-9]+ / 140 on&test driver: powers of warrior: 1 Strike, 2 Heroic Slam, 3 Shield Wall&test driver: combat log: [*] Out of range&test driver: combat log: You cast Shield Wall&test driver: combat log: [*] Not ready yet .global cooldown.&test driver: combat log: You cast Strike on Guard for 12&test driver: combat log: [*] Not ready yet[^ ]&test driver: combat log: You cast Heroic Slam on Guard for 25&test driver: combat log: Guard hits you for 2|--screenshot-on-log 20,SHOT"
+    # Mage: a Firebolt in flight; then Firebolt, Arcane Blast and Frost Nova rooting the Guard as it comes:
+    "starter_mmo_live_class_mage_bolt|mage_bolt|Mage|9000|OFF|test driver: Class mage on&test driver: Health [0-9]+ / 80 on&test driver: powers of mage: 1 Firebolt, 2 Frost Nova, 3 Arcane Blast&test driver: combat log: You cast Firebolt on Guard for 14|--screenshot-on-log 5,SHOT"
+    "starter_mmo_live_class_mage|mage|Mage|9000|OFF|test driver: combat log: You cast Firebolt on Guard for 14&test driver: combat log: You cast Arcane Blast on Guard for 30&test driver: combat log: You cast Frost Nova: Guard rooted|--screenshot-on-log 8,SHOT"
+    # Priest: Power Shield soaks the Guard's hits; Smite; Heal:
+    "starter_mmo_live_class_priest|priest|Priest|9000|OFF|test driver: Class priest on&test driver: Health [0-9]+ / 90 on&test driver: powers of priest: 1 Smite, 2 Heal, 3 Power Shield&test driver: combat log: You cast Power Shield&test driver: combat log: You cast Smite on Guard for 10&test driver: combat log: Power Shield absorbs 5&test driver: combat log: You cast Heal for [0-9]+|--screenshot-on-log 20,SHOT"
+    # Rogue: Evasion dodges the Guard (test.seed makes the rolls known); Sinister Strike; then Backstab on the Cavern's
+    # Bat, refused in front of it, deadly behind it:
+    "starter_mmo_live_class_rogue|rogue|Rogue|9000|OFF|test driver: Class rogue on&test driver: Health [0-9]+ / 110 on&test driver: powers of rogue: 1 Sinister Strike, 2 Backstab, 3 Evasion&test driver: combat log: You cast Evasion&test driver: combat log: You cast Sinister Strike on Guard for 11&test driver: combat log: You dodge Guard's attack|--screenshot-on-log 20,SHOT"
+    "starter_mmo_live_class_backstab|rogue_backstab|Rogue|15000|OFF|test driver: combat log: [*] Not behind target&test driver: combat log: You cast Backstab on Bat for 30&test driver: combat log: Bat dies|--screenshot-on-log 20,SHOT"
+    # The character list with classes:
+    "starter_mmo_live_class_list|chars|Starter|420|OFF|test driver: characters: .*Warrior[a-j]+ .warrior.&test driver: characters: .*Mage[a-j]+ .mage.&test driver: characters: .*Priest[a-j]+ .priest.&test driver: characters: .*Rogue[a-j]+ .rogue.|")
   string(REPLACE "|" ";" stage "${stage}")
   list(GET stage 0 name)
   list(GET stage 1 stage_name)
@@ -113,13 +130,24 @@ foreach(stage
   set_tests_properties(${name} PROPERTIES FIXTURES_REQUIRED starter_mmo_live DEPENDS starter_mmo_live_setup
                        SKIP_REGULAR_EXPRESSION "SKIP: " TIMEOUT 300)
 endforeach()
-# The loot and bag stages run in this order (each loot stage may wait for the Bat an earlier one killed).
+# A character from before classes enters as a Warrior and is saved as one (MySQL edited between two plays):
+add_test(NAME starter_mmo_live_legacy
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" ${live_args} -DCHARACTER=Veteran
+          "-DSCREENSHOT=${KAST_STARTER_OUT}/starter_mmo_live_legacy.png" -DFRAMES=3000
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_live_legacy.cmake")
+list(APPEND live_shots "${KAST_STARTER_OUT}/starter_mmo_live_legacy.png")
+set_tests_properties(starter_mmo_live_legacy PROPERTIES FIXTURES_REQUIRED starter_mmo_live SKIP_REGULAR_EXPRESSION "SKIP: ")
+# The loot, bag and class stages run in this order (each loot stage, and the Backstab one, may wait for the Bat an
+# earlier one killed).
 set(inventory_stages starter_mmo_live_loot_window starter_mmo_live_loot_rejects starter_mmo_live_loot
     starter_mmo_live_bag_persist starter_mmo_live_bag_full starter_mmo_live_bag_move starter_mmo_live_bag_swap
     starter_mmo_live_bag_merge starter_mmo_live_bag_split starter_mmo_live_bag_destroy_confirm starter_mmo_live_bag_destroy
     starter_mmo_live_bag_drag_mouse starter_mmo_live_bag_keys)
+set(class_stages starter_mmo_live_class_pick starter_mmo_live_class_warrior starter_mmo_live_class_mage_bolt
+    starter_mmo_live_class_mage starter_mmo_live_class_priest starter_mmo_live_class_rogue starter_mmo_live_class_backstab
+    starter_mmo_live_class_list starter_mmo_live_legacy)
 set(previous starter_mmo_live_revive)
-foreach(name IN LISTS inventory_stages)
+foreach(name IN LISTS inventory_stages class_stages)
   set_tests_properties(${name} PROPERTIES DEPENDS "starter_mmo_live_setup;${previous}" TIMEOUT 420)
   set(previous ${name})
 endforeach()
@@ -128,11 +156,11 @@ add_test(NAME starter_mmo_live_secrets
   COMMAND "${CMAKE_COMMAND}" "-DSAMPLE=${KAST_STARTER}" "-DSTATE=${KAST_STARTER_STATE}" "-DSHOTS=${live_shots}"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_live_secrets.cmake")
 set_tests_properties(starter_mmo_live_secrets PROPERTIES FIXTURES_REQUIRED starter_mmo_live
-                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_world;starter_mmo_live_cavern;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_death;starter_mmo_live_revive;${inventory_stages}"
+                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_world;starter_mmo_live_cavern;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_death;starter_mmo_live_revive;${inventory_stages};${class_stages}"
                      SKIP_REGULAR_EXPRESSION "SKIP: ")
 set_tests_properties(starter_mmo_live_setup starter_mmo_live_teardown starter_mmo_live_chars starter_mmo_live_world
                      starter_mmo_live_cavern starter_mmo_live_camera starter_mmo_live_camera_zoom
                      starter_mmo_live_camera_orbit starter_mmo_live_combat_target starter_mmo_live_combat
                      starter_mmo_live_combat_guard starter_mmo_live_death starter_mmo_live_revive starter_mmo_live_secrets
-                     ${inventory_stages} PROPERTIES RUN_SERIAL TRUE)
+                     ${inventory_stages} ${class_stages} PROPERTIES RUN_SERIAL TRUE)
 set_tests_properties(starter_mmo_live_setup PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP: ")

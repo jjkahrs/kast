@@ -4,10 +4,11 @@ A small but complete Kast online game, made to read and copy. You open it in the
 
 1. register and verify an account through the in-game GUI;
 2. log in and pick a realm;
-3. create or pick a character;
+3. create a character as a Warrior, Mage, Priest or Rogue, or pick one;
 4. walk the Meadow with other players and a patrolling Guard, chat, and watch the server's Health and Gold in the HUD;
 5. take the portal into the Cavern, where a Bat waits, and walk back;
-6. target and fight the Bat and the Guard (tab-target melee, decided by the server), die and revive;
+6. target and fight the Bat and the Guard with your class's three powers (keys 1-3 or the action bar, decided by the
+   server), die and revive;
 7. loot what they drop into a World of Warcraft-style 16-slot bag, and sort it by drag and drop.
 
 The same folder is the game project (client) **and** the world server's Lua and maps: client and server share
@@ -19,15 +20,15 @@ The same folder is the game project (client) **and** the world server's Lua and 
 |---|---|---|
 | `project.kast` | client | `Starter MMO`, starts at `scenes/login.scene`, Online Services on (`http://localhost:3100`, CA `certs/world_dev_ca.pem`), game state machine `session` |
 | `scenes/` | client | `login`, `register`, `realms` (one screen each) and `world` (character select, then the game) |
-| `scripts/` | client | one Lua system per screen or concern; they talk through the event bus. `combat.lua`: targeting, the target marker, attack requests (`kast.world.send`), the combat log, tipped corpses and right clicks on them; `loot.lua`: the loot window and the sparkle over your corpses; `bag.lua`: the bag window, its drags and tooltips |
+| `scripts/` | client | one Lua system per screen or concern; they talk through the event bus. `characters.lua`: the character list and creation with a class; `combat.lua`: targeting, the target marker, the combat log, tipped corpses and right clicks on them; `powers.lua`: the action bar, keys 1-3, power requests (`kast.world.send`) and their effects; `loot.lua`: the loot window and the sparkle over your corpses; `bag.lua`: the bag window, its drags and tooltips |
 | `ui/` | client | RmlUi documents, one per screen, sharing `starter.rcss` (the Kast editor palette) |
-| `components/` | **both** | `Health` (replicated to everyone in view), `Wallet` (owner only), `Inventory` (the bag, owner only, saved), `Corpse` (who may loot a dead NPC, everyone in view), `MapProps` (client-side tag) |
+| `components/` | **both** | `Health` (replicated to everyone in view), `Wallet` (owner only), `Class` (warrior, mage, priest or rogue; owner only, saved), `Inventory` (the bag, owner only, saved), `Corpse` (who may loot a dead NPC, everyone in view), `MapProps` (client-side tag) |
 | `items/` | **both** | one item per file (`id`, `name`, `icon`, `quality`, `maxStack`, `sellPrice`, `description`): Bat Wing, Linen Cloth, Minor Healing Potion, Worn Shortsword; `kast.items` on both sides |
 | `fsms/` | both | `patrol` (the Guard's machine, server: walking, waiting, combat, returning), `creature` (the Bat's machine, server: idle, combat, returning), `session` (why the client is on the login screen) |
 | `npcs/` | server | the `Guard` and `Bat` NPC definitions; their `template` names the client entity they are shown as, `loot` what they drop |
-| `systems/` | server | `combat.lua` (melee, NPCs fighting back, tagging, death and revive), `inventory.lua` (bag requests, loot rolls, corpses), `regen.lua` (Health regen out of combat, 1 gold per login), `events.lua` (welcome / arrival messages), `npcs.lua` (patrols) |
+| `systems/` | server | `classes.lua` (which classes a new character may have, `Class` and max Health on entering), `combat.lua` (the powers of each class, NPCs fighting back, roots, buffs, tagging, death and revive), `inventory.lua` (bag requests, loot rolls, corpses), `regen.lua` (Health regen out of combat, 1 gold per login), `events.lua` (welcome / arrival messages), `npcs.lua` (patrols) |
 | `maps/meadow`, `maps/cavern` | both | map 10 and map 11: one 256 m tile each, heightmap, `areas.json` with a portal each way; `.server/spawns/` (server only) places the Guard and the Bat |
-| `materials/`, `models/`, `textures/` | client | primitives' materials, the animated character (`female-128-anim.glb`, from `tests/project/models`), item icons (`textures/icons/`, 64x64 placeholders) |
+| `materials/`, `models/`, `textures/` | client | primitives' materials (the power effects: `fire`, `arcane`, `holy`, `frost`, `steel`, `shadow`), the animated character (`female-128-anim.glb`, from `tests/project/models`), item icons (`textures/icons/`, 64x64 placeholders) |
 | `docker-compose.override.yml` | dev | runs the `services/world` stack with this folder's Lua and maps |
 | `setup_realm.cmake` | dev | copies the stack's dev CA into `certs/` and adds the realm `Starter Realm` |
 
@@ -86,25 +87,49 @@ running it twice adds nothing.
 ### 5. Play
 
 - **Realm**: pick `Starter Realm`.
-- **Characters**: create one (3-16 letters), then click it.
+- **Characters**: pick a class (the button turns `#ffcc00` and a line describes it), type a name (3-16 letters),
+  **Create character**, then click it: `Play <Name> (<Class>)`. Create without a class only says `Pick a class first.`;
+  the class can't be changed later. A character made before classes existed plays as a Warrior.
 - **World**: World of Warcraft-style controls. W runs forward, S backpedals, A/D turn, Space jumps. Hold the left
   mouse button and drag to look around the character; hold the right button to turn the camera and the character (A/D
-  then strafe). The wheel zooms. A press on the chat box or HUD doesn't move the camera. The HUD (top left) shows Health and Gold as the server replicates them. Type in the chat box and press **Send**; everyone nearby sees it. The Guard
+  then strafe). The wheel zooms. A press on the chat box or HUD doesn't move the camera. The HUD (top left) shows your
+  name and class, Health and Gold as the server replicates them. Type in the chat box and press **Send**; everyone nearby sees it. The Guard
   patrols a 10 m square just ahead of the spawn.
 - **Combat** (tab-target): **Tab** cycles the NPCs in view, nearest first, within 40 m; a **left click** (without
   dragging) on an NPC selects it; **Esc** clears the target. The target gets a gold disc under it and a frame at the top
-  centre with its name and Health. **1** attacks it. Keys typed into the chat box do nothing.
-  - Take the portal (below) to the Cavern: the Bat stands 8 m ahead. Target it and press 1: `* Out of range` in the
-    chat box. Walk up to it (within 3 m) and press 1 again: `You hit Bat for 10`, `Bat dies`. Its corpse tips over and
-    stays until it is looted empty or for 60 s; the Bat comes back at its spot 30 s after the corpse goes.
-  - The Guard fights back: hit it (10 damage, one hit every 1.5 s) and it chases you at 5 m/s and hits you for 5 every
-    2 s. Run more than 30 m from its spawn point and it gives up, walks home, heals to full and patrols again.
+  centre with its name and Health. Keys typed into the chat box do nothing.
+- **Classes and powers**: each class has three powers on keys **1**, **2** and **3**, also shown on the action bar at
+  the bottom (in a narrow window, right of the chat box); clicking a button is the same as its key. All are instant,
+  with cooldowns only (no mana, rage or energy). A power used starts its own cooldown and a 1 s global cooldown on all
+  three: the buttons grey out and count down the seconds. Damage powers need a living NPC target in range (melee 3 m,
+  ranged 25 m); heals and buffs are on yourself.
+
+  | Class | Health | 1 | 2 | 3 |
+  |---|---|---|---|---|
+  | Warrior | 140 | Strike: melee, 12 (1.5 s) | Heroic Slam: melee, 25 (8 s) | Shield Wall: NPC damage halved for 6 s (30 s) |
+  | Mage | 80 | Firebolt: ranged, 14 (2 s) | Frost Nova: NPCs within 8 m can't move for 4 s, no damage (20 s) | Arcane Blast: ranged, 30 (10 s) |
+  | Priest | 90 | Smite: ranged, 10 (1.5 s) | Heal: +40 Health, up to your max (10 s) | Power Shield: absorbs the next 30 NPC damage, gone after 10 s (25 s) |
+  | Rogue | 110 | Sinister Strike: melee, 11 (1.2 s) | Backstab: melee, 30, only from behind the target (8 s) | Evasion: 50% chance to dodge NPC hits for 8 s (30 s) |
+
+  Ranged powers send a small glowing ball from you to the target; Frost Nova flashes a frost ring, Heal a glow, and
+  Shield Wall, Power Shield and Evasion keep a see-through sphere around you while they last. Everyone nearby sees them.
+  A rooted NPC still hits you if you are within its reach. Reviving restores your class's full Health.
+  - Take the portal (below) to the Cavern: the Bat stands 8 m ahead. Target it and press 1 as a Warrior: `* Out of
+    range` in the chat box. Walk up to it (within 3 m) and press 1 again: `You cast Strike on Bat for 12`, `Bat dies`.
+    Its corpse tips over and stays until it is looted empty or for 60 s; the Bat comes back at its spot 30 s after the
+    corpse goes. A Mage can do the same from 20 m with Firebolt; a Rogue's Backstab from in front of the Bat says
+    `* Not behind target`.
+  - The Guard fights back: hit it and it chases you at 5 m/s and hits you for 5 every 2 s (`Guard hits you for 5`; 2
+    under Shield Wall; `Power Shield absorbs 5`; `You dodge Guard's attack`). Run more than 30 m from its spawn point and
+    it gives up, walks home, heals to full and patrols again.
   - Health regenerates (2 a second) only after 5 s without dealing or taking a hit. At 0 Health you die: you can't move
-    or attack and NPCs leave you; 5 s later you revive at the map's spawn point with full Health. A character that logs
-    out dead dies again on login and revives the same way.
-  - Every attack is a request (`kast.world.send("combat.attack", {target = id})`); the server's `systems/combat.lua`
-    checks range, cooldown and that both sides are alive, and decides the damage. The combat log in the chat box shows
-    what it sends back.
+    or use powers and NPCs leave you; 5 s later you revive at the map's spawn point with full Health. A character that
+    logs out dead dies again on login and revives the same way.
+  - Every power is a request (`kast.world.send("combat.power", {power = "firebolt", target = id})`); the server's
+    `systems/combat.lua` checks your class, the cooldowns, the target, range and that both sides are alive, and decides
+    what happens. The combat log in the chat box shows what it sends back; a refusal is a `* ...` line (`* Not ready
+    yet`, `* Not ready yet (global cooldown)`, `* Out of range`, `* Invalid target`, `* Your target is dead`, `* Not
+    behind target`, `* You are dead`).
 - **Loot**: an NPC drops loot once, when it dies, for the player who hit it first (its tagger). Bat: Bat Wing 80%,
   Linen Cloth 40%, 1-3 gold. Guard: Linen Cloth 60% (1-2), Minor Healing Potion 25%, Worn Shortsword 10%, 5-15 gold.
   - Only the tagger sees a gold sparkle bobbing over the corpse; anyone else gets `* You can't loot that`.
@@ -130,10 +155,11 @@ running it twice adds nothing.
   west of the Cavern's arrival point takes you back.
 - Losing the world connection or the auth session returns you to the login screen with the reason.
 
-To see another player, run a second client (a built game, below), or a bot from `services/world`:
+To see another player, run a second client (a built game, below), or a bot from `services/world` (`--char-option`
+gives its character a class; without one this sample refuses to create it):
 
 ```sh
-docker compose -f docker-compose.yml -f ../../samples/starter-mmo/docker-compose.override.yml run --rm bot --mode load --count 1 --behaviour idle --duration 120
+docker compose -f docker-compose.yml -f ../../samples/starter-mmo/docker-compose.override.yml run --rm bot --mode load --count 1 --behaviour idle --duration 120 --char-option class=warrior
 ```
 
 ### 6. Build and run the player
@@ -152,9 +178,18 @@ of the client project.
   once and the field is cleared.
 - **Character select lives in the world scene**, so `world.entered` places the scene's own `NetworkLocalPlayer`. It
   hides its document and shows the HUD and chat ones.
-- **Shared components**: the server's `systems/regen.lua` writes `Health` and `Wallet`; replication applies each
+- **Shared components**: the server's `systems/classes.lua` and `regen.lua` write `Class`, `Health` and `Wallet`;
+  replication applies each
   `world.component` to the local player, and `scripts/hud.lua` shows the values. Both sides load the same
   `components/*.lua`, so the fields always match.
+- **Classes**: the engine's `kast.world.createCharacter(name, options)` carries a table of strings it knows nothing
+  about; this sample sends `{class = "mage"}`. The world server checks its size, then asks the server Lua's
+  `validateCharacter` (here `systems/classes.lua`: exactly `class`, one of four; anything else is `options_invalid`),
+  saves it with the character and returns it in the character list (`options`). On entering, `classes.lua` reads
+  `kast.get(e, "Character").options.class` into the saved `Class` component, and `combat.lua` sends the owner its
+  powers (`class.powers`), which `scripts/powers.lua` puts on the action bar. The powers are defined once, in
+  `systems/combat.lua`: client scripts can't load server files (no `require` in the sandbox), so the client learns
+  names, keys and cooldowns from that event instead.
 - **NPCs**: the server's spawn files place `npc` definitions whose `template` (`Guard`, `Bat`) names an entity under
   the world scene's `NPC Templates`. The client clones that entity for each NPC in view.
 - **Items and loot**: both sides load `items/` (`kast.items`). The server rolls `kast.npcDef(name).loot` on `npc.died`
@@ -192,10 +227,10 @@ of the client project.
   - `starter_mmo_live_camera`, `_camera_zoom`, `_camera_orbit`: `scripts/player.lua`'s camera behind the character,
     zoomed out and orbited by a left drag (the editor's `--sim-mouse`).
   - `starter_mmo_live_combat_target`: a left click selects the Bat (target frame and marker).
-  - `starter_mmo_live_combat`: Tab, Esc, Tab, then 1 until the Bat dies and despawns.
-  - `starter_mmo_live_combat_guard`: three hits on the Guard, which hits back.
-  - `starter_mmo_live_death`, `starter_mmo_live_revive`: the Guard kills the character `Fallen`; dead, then revived at
-    the spawn point with full Health.
+  - `starter_mmo_live_combat`: Tab, Esc, Tab, then Strike (the action bar's first button) until the Bat dies.
+  - `starter_mmo_live_combat_guard`: three Strikes on the Guard, which hits back.
+  - `starter_mmo_live_death`, `starter_mmo_live_revive`: the Guard kills the Warrior `Fallen`; dead, then revived at
+    the spawn point with full Health (140).
   - Loot and bag stages use a test-only server system, `cmake/starter_mmo_test_server.lua`, which the live setup adds
     to a copy of this folder's server Lua (a third compose file in `build/debug/starter_mmo/live/`): `test.seed` makes
     the Bat's roll known (1 gold, Bat Wing, Linen Cloth) and `test.bag` sets a bag.
@@ -211,9 +246,24 @@ of the client project.
   - `starter_mmo_live_bag_drag_mouse`: a real mouse drag (`--sim-mouse` from slot 1 to slot 3) moves the stack.
   - `starter_mmo_live_bag_keys`: real key presses (`--sim-key`): B opens the bag; with the chat field focused, B types
     "b" and the bag stays open.
+  - `starter_mmo_live_class_pick`: Create with no class sends nothing; Mage picked, highlighted, its description.
+  - `starter_mmo_live_class_warrior`: a new Warrior against the Guard: `* Out of range`, Shield Wall, Strike refused by
+    the global cooldown, Strike 12, Strike refused by its cooldown, Heroic Slam 25, the Guard's hits halved to 2; the
+    screenshot shows the shield and the greyed buttons.
+  - `starter_mmo_live_class_mage_bolt`, `_class_mage`: a Firebolt in flight; Firebolt 14, Arcane Blast 30 and Frost
+    Nova rooting the oncoming Guard.
+  - `starter_mmo_live_class_priest`: Power Shield absorbing the Guard's hits, Smite 10, Heal.
+  - `starter_mmo_live_class_rogue`, `_class_backstab`: Evasion dodging the Guard (seeded), Sinister Strike 11; Backstab
+    refused in front of the Cavern's Bat, 30 from behind it.
+  - `starter_mmo_live_class_list`: the character list with each character's class.
+  - `starter_mmo_live_legacy` (`cmake/starter_mmo_live_legacy.cmake`): `Veteran` is stripped of its class in MySQL (as if
+    made before classes), enters as a Warrior with 140 max Health, and MySQL then holds its saved Warrior `Class`.
+  The test-time compose file also lets the test account hold 20 characters, since each stage has its own.
 
   The engine's drag and drop itself is checked by `ctest -R ui_drag` (a real `--sim-mouse` drag, with and without
-  Shift, in `tests/project/ui_drag.scene`); the server's bag and loot rules by `world_self_check` (`starter-mmo loot`).
+  Shift, in `tests/project/ui_drag.scene`); the server's bag and loot rules by `world_self_check` (`starter-mmo loot`), and every class and power rule (damage,
+  ranges, cooldowns, the global cooldown, roots, shields, dodges, Backstab, refusals) by its `starter-mmo classes`
+  checks.
 
   The combat stages take their screenshot a moment after the driver logs its shot line (the editor's
   `--screenshot-on-log`).

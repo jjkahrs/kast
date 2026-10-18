@@ -39,9 +39,22 @@ sol::table makeWorldApi(sol::state& lua, WorldClient& world)
     });
     worldApi.set_function("disconnect", [&world]() { world.disconnect(); });
     worldApi.set_function("listCharacters", [=, &world](sol::this_state L) { guarded(L, [&] { world.listCharacters(); }); });
-    worldApi.set_function("createCharacter", [=, &world](sol::this_state L, const sol::object& name) {
+    // kast.world.createCharacter(name, options?): options is a table of string -> string (nil: none).
+    worldApi.set_function("createCharacter", [=, &world](sol::this_state L, const sol::object& name,
+                                                         const sol::object& options) {
         const std::string n = text(L, "createCharacter", "name", name);
-        guarded(L, [&] { world.createCharacter(n); });
+        std::map<std::string, std::string> o;
+        if (options.get_type() != sol::type::lua_nil) {
+            if (options.get_type() != sol::type::table)
+                raise(L, std::format("kast.world.createCharacter: options must be a table, got {}", toString(L, options)));
+            for (const auto& [key, value] : options.as<sol::table>()) {
+                if (key.get_type() != sol::type::string || value.get_type() != sol::type::string)
+                    raise(L, std::format("kast.world.createCharacter: options must map strings to strings, got {} = {}",
+                                         toString(L, key), toString(L, value)));
+                o[key.as<std::string>()] = value.as<std::string>();
+            }
+        }
+        guarded(L, [&] { world.createCharacter(n, o); });
     });
     worldApi.set_function("deleteCharacter", [=, &world](sol::this_state L, const sol::object& charId) {
         const uint64_t c = id(L, "deleteCharacter", "charId", charId);

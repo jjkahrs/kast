@@ -208,9 +208,9 @@ number &gt;= 0, got x</code>). Everything the server or the network decides arri
 <td><code>world.charList</code></td>
 </tr>
 <tr>
-<td><code>createCharacter(name)</code></td>
+<td><code>createCharacter(name, options?)</code></td>
 <td><code>lobby</code></td>
-<td><code>CharCreate</code> (3–16 ASCII letters, unique per realm)</td>
+<td><code>CharCreate</code> (3–16 ASCII letters, unique per realm). <code>options</code>: a table of string → string, the game's creation choices (for example <code>{class = "mage"}</code>); nil or absent sends none. The engine only carries it: the world server checks its size and characters, then its Lua decides (<a href="../services/world/lua.html#character-creation">character creation</a>). A non-table, or a non-string key or value, raises an error.</td>
 <td><code>world.charCreated</code> or <code>world.charError</code></td>
 </tr>
 <tr>
@@ -265,8 +265,8 @@ number &gt;= 0, got x</code>). Everything the server or the network decides arri
 </li>
 <li>The server re-checks the name, size and JSON (a bad one is disconnected as <code>malformed</code>) and passes 10 per second per character to
   its Lua; the rest are dropped silently (<a href="../services/world/protocol.html#client-events">protocol</a>).</li>
-<li>Example, from the starter-mmo sample: <code>kast.world.send("combat.attack", {target = npcId})</code>; the server answers with
-  <code>server.combat.hit</code> or <code>server.combat.rejected</code> <code>{reason}</code>.</li>
+<li>Example, from the starter-mmo sample: <code>kast.world.send("combat.power", {power = "firebolt", target = npcId})</code>; the server
+  answers with <code>server.combat.power</code> and <code>server.combat.hit</code>, or <code>server.combat.rejected</code> <code>{reason}</code>.</li>
 </ul>
 <p><strong>Events</strong> (on the session's <a href="events.html#events">event bus</a>, publisher <code>kast.world</code>). Positions are <code>{x, y, z}</code> tables (x/z the
 ground plane, y up); <code>heading</code> is a number:</p>
@@ -286,12 +286,12 @@ ground plane, y up); <code>heading</code> is a number:</p>
 </tr>
 <tr>
 <td><code>world.charList</code></td>
-<td><code>{characters = {{id, name, position}, ...}}</code></td>
+<td><code>{characters = {{id, name, position, options}, ...}}</code>; <code>options</code> is the table the character was created with (<code>{}</code> for none)</td>
 <td><code>CharList</code></td>
 </tr>
 <tr>
 <td><code>world.charCreated</code></td>
-<td><code>{character = {id, name, position}}</code></td>
+<td><code>{character = {id, name, position, options}}</code></td>
 <td><code>CharCreated</code></td>
 </tr>
 <tr>
@@ -301,7 +301,7 @@ ground plane, y up); <code>heading</code> is a number:</p>
 </tr>
 <tr>
 <td><code>world.charError</code></td>
-<td><code>{request, code}</code>: <code>request</code> is the failed request's opcode name (<code>CharListReq</code>, <code>CharCreate</code>, <code>CharDelete</code>, <code>EnterWorld</code>); <code>code</code> is <code>name_taken</code>, <code>name_invalid</code>, <code>char_limit</code>, <code>not_found</code>, <code>already_in_world</code>, <code>rate_limited</code> or <code>service_unavailable</code>. The connection stays.</td>
+<td><code>{request, code}</code>: <code>request</code> is the failed request's opcode name (<code>CharListReq</code>, <code>CharCreate</code>, <code>CharDelete</code>, <code>EnterWorld</code>); <code>code</code> is <code>name_taken</code>, <code>name_invalid</code>, <code>options_invalid</code> (creation options refused), <code>char_limit</code>, <code>not_found</code>, <code>already_in_world</code>, <code>rate_limited</code> or <code>service_unavailable</code>. The connection stays.</td>
 <td><code>CharError</code></td>
 </tr>
 <tr>

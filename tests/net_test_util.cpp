@@ -359,7 +359,7 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
             } else if (name == "Unknown") {
                 raw(0x7777, {});
             } else {
-                chars.push_back({nextId++, name, spawn});
+                chars.push_back({nextId++, name, spawn, create->options});
                 queue(proto::CharCreated{chars.back()});
                 if (name == "Split") {
                     asio::write(socket, asio::buffer(out.data(), 3));

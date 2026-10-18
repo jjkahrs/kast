@@ -26,7 +26,7 @@
   cooldown, the Guard hitting back for 5 every 2 s and returning home healed, the Bat killed, its corpse staying 60 s
   and the Bat respawning 30 s after it went, a
   character killed (its move corrected, its attack refused, no regeneration) and revived at the map spawn with full
-  <code>Health</code>, walking not draining <code>Health</code>, the 30 m leash, and regeneration starting only 5 s after combat.</li>
+  <code>Health</code> (a Warrior's 140: these characters have no class), walking not draining <code>Health</code>, the 30 m leash, and regeneration starting only 5 s after combat.</li>
 <li><strong>Starter-mmo loot</strong> (<code>checkStarterMmoLoot</code>, with <code>KAST_STARTER_MMO_TEST_LUA</code> pointing at
   <code>cmake/starter_mmo_test_server.lua</code>): a copy of the sample's server Lua plus that test-only system (seeded rolls,
   set bags) drives <code>systems/inventory.lua</code>: an empty 16-slot bag for a new character and a saved one cleaned on login;
@@ -35,6 +35,17 @@
   Wing, Linen Cloth), gold to the Wallet, a full bag leaving the loot in the corpse (<code>full</code>), stacking onto existing
   stacks, the emptied corpse closing and going, and the bag saved with the character. <code>checkItemsAndLoot</code>: every
   item and loot table definition error, duplicate ids, <code>kast.items</code> and <code>kast.npcDef</code>.</li>
+<li><strong>Character creation</strong> (<code>self_check.cpp</code> + <code>checkCharacterCreation</code> in <code>lua_checks.cpp</code>): the
+  <code>CharCreate</code> / <code>CharInfo</code> options round trip and byte layout, a key twice or a cut option is malformed, the C++ limits
+  (8 entries, keys of 1–16 <code>[a-z_]</code>, values of up to 32 printable ASCII); without a <code>validateCharacter</code> only empty options
+  pass; with hooks every one must return <code>true</code>, an error refuses and disables its system; <code>kast.get(e, "Character").options</code>.</li>
+<li><strong>Starter-mmo classes</strong> (<code>checkStarterMmoClasses</code>, a copy of the sample's server Lua with the test-only system):
+  the sample's hook (exactly <code>class</code>, one of four); <code>Class</code> from the creation options, owner-only, a classless character
+  becoming a saved Warrior; max <code>Health</code> 140 / 80 / 90 / 110; <code>class.powers</code> to the owner; every rejection (wrong class,
+  unknown, malformed, target, range, GCD, cooldown, not behind, dead) changing nothing; each power's damage and range; Frost Nova
+  rooting within 8 m (a chasing NPC stays put 4 s but still hits in reach, a patrol stops); Heal capped at max; Power Shield
+  absorbing exactly 30 then breaking, or fading after 10 s; Shield Wall's halved hits for 6 s; Evasion dodging about half of
+  20 seeded hits and none after; a Mage's Firebolt tagging the Bat; revive at the class's max <code>Health</code>.</li>
 <li><strong>Maps</strong> (in <code>lua_checks.cpp</code>): tile math at the edges, every manifest and <code>Maps::load</code> error, bounds <code>Correction</code>,
   per-map AOI, <code>World::transfer</code> message order, map save/load fallbacks, and <code>kast.transfer</code> / <code>Transform.map</code>.</li>
 <li><strong>Areas</strong> (in <code>lua_checks.cpp</code>): rect, concave polygon, <code>y</code> range, priority and parent flag inheritance; every
@@ -93,15 +104,16 @@
   through again. The script then checks the world's log for <code>"client events dropped"</code> with <code>count</code> 20.</li>
 <li><strong><code>tests/integration.sh --starter-mmo</code></strong> runs only scenarios 23 and 24, against the stack started with
   the sample's override (<code>docker compose -f docker-compose.yml -f ../../samples/starter-mmo/docker-compose.override.yml up -d --build</code>),
-  using <code>samples/starter-mmo/systems/combat.lua</code>:<ul>
+  using <code>samples/starter-mmo/systems/combat.lua</code>; its bots are Warriors (<code>--char-option class=warrior</code>) and attack
+  with Strike (<code>combat.power</code> <code>{power = "strike"}</code>, 12 damage):<ul>
 <li>Scenario 23 (<code>combat-bat</code>): a bot walks through the Cavern Gate; an attack on the Bat from 8 m gets
-  <code>combat.rejected</code> <code>{reason = range}</code>; from 2.5 m one hit (10) gives <code>combat.attack</code>, <code>combat.hit</code> and
+  <code>combat.rejected</code> <code>{reason = range}</code>; from 2.5 m one hit (12) gives <code>combat.power</code>, <code>combat.hit</code> and
   <code>combat.death</code>; it stays as the bot's corpse (<code>Corpse {owner}</code>, no <code>Despawn</code>); <code>loot.open</code> gives
   <code>loot.contents</code> with 1–3 gold, <code>loot.take_all</code> empties it (<code>loot.closed</code>, <code>Despawn</code>); a new Bat spawns at its
   spawn point 29–32 s after that.</li>
 <li>Scenario 24 (<code>combat-rules</code>): a player, a string and an unknown id as targets get <code>{reason = target}</code>; next to
   the Guard two attacks at once give one hit and <code>{reason = cooldown}</code>; after the cooldown a hit again, the Guard hits
-  back for 5 and its <code>Health</code> replicates down to 30; 10 m off an attack gets <code>{reason = range}</code>.</li>
+  back for 5 and its <code>Health</code> replicates down to 26; 10 m off an attack gets <code>{reason = range}</code>.</li>
 </ul>
 </li>
 <li>Logs go to <code>build/integration-&lt;run&gt;/</code>.</li>

@@ -15,6 +15,7 @@ Kast is a game engine focused on making it easy to build MMORPGs.
 * FSM / Event Bus: own small code on EnTT (entt::dispatcher covers event bus)
 
 # Process
+* Create a branch to do work in
 * Test all changes and prove they work and fufill the stated goals and acceptance criteria
 * Take before and after screenshots to confirm that changes were made and done correctly
 
@@ -24,7 +25,8 @@ Kast is a game engine focused on making it easy to build MMORPGs.
 
 # General Rules
 * Do not read any files in ./ignore
-* Never commit or push anything to git
+* Never push anything to git
+* Never merge a branch unless explicitly told to by me
 * Tests that open windows should not do it on the main monitor.
 
 # Project Organization

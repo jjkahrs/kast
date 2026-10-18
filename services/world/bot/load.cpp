@@ -63,7 +63,7 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
     }
 
     proto::EnterWorldOk ok;
-    if (!co_await enter_world(*c, random_name(), ok, err)) {
+    if (!co_await enter_world(*c, random_name(), ok, err, o.charOptions)) {
         st.error("enter: " + err);
         c->close();
         co_return;

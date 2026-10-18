@@ -5,10 +5,16 @@
     </head>
     <body>
         <div id="hud">
-            <p id="hud_name">-</p>
+            <p id="hud_header"><span id="hud_name">-</span><span id="hud_class"></span></p>
             <p id="hud_health" class="stat">Health -</p>
             <p id="hud_gold" class="stat">Gold -</p>
             <p id="hud_map" class="stat">Map -</p>
+        </div>
+        <!-- scripts/powers.lua: the class's three powers (server "class.powers"); a click = its key. -->
+        <div id="action_bar">
+            <button id="power_1" class="power" data-event="combat.power"></button>
+            <button id="power_2" class="power" data-event="combat.power"></button>
+            <button id="power_3" class="power" data-event="combat.power"></button>
         </div>
         <div id="target_frame">
             <p id="target_name">-</p>

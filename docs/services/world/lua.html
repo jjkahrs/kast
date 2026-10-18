@@ -135,6 +135,7 @@ gives both the same names, stack sizes and qualities. NPC <a href="npcs.html#npc
     shutdown = function() end,     -- graceful shutdown, before the final saves
     onEnter = function(e) end,     -- a character spawned; its persisted components are already restored (never an NPC)
     onLeave = function(e) end,     -- a character is leaving; changes made here are saved (never an NPC)
+    validateCharacter = function(name, options) return true end, -- may this character be created? (see below)
 }
 </code></pre>
 <ul>
@@ -258,7 +259,7 @@ gives both the same names, stack sizes and qualities. NPC <a href="npcs.html#npc
 <tbody>
 <tr>
 <td><code>Character</code></td>
-<td><code>charId</code>, <code>name</code> (players only)</td>
+<td><code>charId</code>, <code>name</code>, <code>options</code> (the <a href="#character-creation">creation options</a>, <code>{key = value, ...}</code>, empty for none; players only)</td>
 </tr>
 <tr>
 <td><code>Npc</code></td>
@@ -278,6 +279,37 @@ gives both the same names, stack sizes and qualities. NPC <a href="npcs.html#npc
 </tr>
 </tbody>
 </table>
+<h2 id="character-creation">Character creation</h2>
+<p>A client may create a character with options, string pairs the game defines (<code>kast.world.createCharacter(name, {class = "mage"})</code>).
+The engine and the protocol only carry them. The server checks, in this order:</p>
+<ol>
+<li><strong>C++ limits:</strong> at most 8 options, keys of 1–16 characters of <code>[a-z_]</code>, values of at most 32 printable ASCII characters. Anything else is <code>CharError{options_invalid}</code>, and no Lua runs.</li>
+<li><strong>The Lua hook:</strong> every enabled system that returns a <code>validateCharacter</code> function is called with the name and a fresh table of the options. Each must return exactly <code>true</code>; anything else (<code>false</code>, <code>nil</code>, any other value) refuses the character with <code>options_invalid</code>. An error refuses it too, and disables that system like an error in any callback.</li>
+<li><strong>No hook:</strong> when no system defines <code>validateCharacter</code> (the default <code>services/world/lua</code>), empty options create the character as before and any option is refused with <code>options_invalid</code>.</li>
+</ol>
+<p>Then the usual rules (name taken, character limit) apply. Accepted options are saved with the character (the <code>options</code> column,
+migration <code>004_character_options.sql</code>) and return in every character list. In the world, <code>kast.get(e, "Character").options</code>
+holds them, typically read in <code>onEnter</code> to set up a component. A character created before migration 004 has empty options.</p>
+<pre><code class="language-lua">-- samples/starter-mmo/systems/classes.lua (shortened)
+local CLASSES = {warrior = {maxHealth = 140}, mage = {maxHealth = 80}, priest = {maxHealth = 90}, rogue = {maxHealth = 110}}
+return {
+    validateCharacter = function(name, options)
+        for key in pairs(options) do
+            if key ~= "class" then return false end
+        end
+        return CLASSES[options.class] ~= nil
+    end,
+    onEnter = function(e)
+        if not kast.has(e, "Class") then -- a persisted component: set once, from the creation options
+            local wanted = kast.get(e, "Character").options.class
+            kast.add(e, "Class")
+            kast.set(e, "Class", {id = CLASSES[wanted] and wanted or "warrior"})
+        end
+    end,
+    update = function(dt) end,
+}
+</code></pre>
+<p>The hook runs on the server's game thread while the request is answered, so keep it to checks on its arguments.</p>
 <h2 id="tick-order">Tick order</h2>
 <p>Each tick runs, in this order:</p>
 <ol>
@@ -324,7 +356,7 @@ An NPC that Lua creates, or moves into or out of a player's view, gets its <code
 <p>A client sends an event to the server's Lua with the engine's <code>kast.world.send(name, data)</code>
 (<a href="../../engine/online-services.html">Engine, Online Services</a>; wire format in <a href="protocol.html#client-events">protocol</a>).
 Systems receive it on the bus as <code>client.&lt;name&gt;</code>:</p>
-<pre><code class="language-lua">kast.subscribe(&quot;client.combat.attack&quot;, function(e)
+<pre><code class="language-lua">kast.subscribe(&quot;client.combat.power&quot;, function(e)
     -- e.entity: the sender's character entity id; e.data: the client's JSON object as a table
     local target = e.data.target
     if type(target) ~= &quot;number&quot; or not kast.has(target, &quot;Npc&quot;) then return end

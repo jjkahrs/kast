@@ -19,6 +19,7 @@
 #include <codec.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <format>
@@ -250,8 +251,8 @@ struct TestWorld {
         : maps(std::move(m)), world(rules, maps, [this](uint32_t sid, const proto::Message& m) { sent.bySession[sid].push_back(m); },
                 [this](const db::CharSave& s) { sent.saves.push_back(s); }, std::move(defs)) {}
     entt::entity spawn(uint32_t sid, uint64_t charId, const std::string& name, float x, float z,
-                       const std::string& components = "", uint16_t map = 1) {
-        db::CharRow row{charId, 1, name, map, {x, 0, z}, 0.5f, components};
+                       const std::string& components = "", uint16_t map = 1, proto::CharOptions options = {}) {
+        db::CharRow row{charId, 1, name, map, {x, 0, z}, 0.5f, components, std::move(options)};
         return world.spawn(sid, row, T0);
     }
     Json value(entt::entity e, const std::string& name) {
@@ -404,6 +405,58 @@ return {
     w.world.despawn(b);
     check(w.sent.saves.size() == 1 && Json::parse(*w.sent.saves[0].components)["Health"]["current"] == 43.0,
           "shutdown: onLeave (42), then shutdown (+1), then the final save; onLeave not run twice");
+}
+
+// Character creation options: validateCharacter(name, options) in any system decides; without one only empty options
+// pass. Every hook must return true; an error rejects and disables its system. kast.get(e, "Character").options.
+void checkCharacterCreation() {
+    {
+        LuaRoot r;
+        r.write("systems/plain.lua", "return { update = function() end }");
+        TestWorld w({});
+        check(w.world.load_scripts(r.root).empty(), "creation: plain system loads");
+        check(w.world.validate_character("Ann", {}) && !w.world.validate_character("Ann", {{"class", "mage"}}),
+              "creation: no hook -> empty options pass, any option is refused");
+    }
+    LuaRoot r;
+    r.write("components/report.lua", kReport);
+    r.write("systems/a_class.lua", R"(return {
+    update = function() end,
+    validateCharacter = function(name, options) return options.class == "mage" and name ~= "Bad" end,
+    onEnter = function(e)
+        local o = kast.get(e, "Character").options
+        kast.add(e, "Report")
+        kast.set(e, "Report", {lines = {tostring(o.class), tostring(o.hair)}})
+    end,
+})");
+    r.write("systems/b_hair.lua", R"(return {
+    update = function() end,
+    validateCharacter = function(name, options)
+        if options.hair == "boom" then error("bad hair") end
+        if options.hair == "yes" then return "yes" end
+        return options.hair ~= "green"
+    end,
+})");
+    TestWorld w(r.defs().defs);
+    check(w.world.load_scripts(r.root).empty(), "creation: hook systems load");
+    check(w.world.validate_character("Ann", {{"class", "mage"}}) && w.world.validate_character("Ann", {{"class", "mage"}, {"hair", "red"}}),
+          "creation: accepted when every hook returns true");
+    check(!w.world.validate_character("Ann", {}) && !w.world.validate_character("Ann", {{"class", "rogue"}}) &&
+              !w.world.validate_character("Bad", {{"class", "mage"}}),
+          "creation: the first hook refuses a missing class, another class and the name Bad");
+    check(!w.world.validate_character("Ann", {{"class", "mage"}, {"hair", "green"}}) &&
+              !w.world.validate_character("Ann", {{"class", "mage"}, {"hair", "yes"}}),
+          "creation: the second hook refuses too (false, and a non-boolean)");
+    const auto a = w.spawn(1, 41, "Ann", 1000, 1000, "", 1, {{"class", "mage"}, {"hair", "red"}});
+    const auto b = w.spawn(2, 42, "Old", 1010, 1000);
+    check(w.value(a, "Report")["lines"] == Json::parse(R"(["mage", "red"])") &&
+              w.value(b, "Report")["lines"] == Json::parse(R"(["nil", "nil"])"),
+          "creation: kast.get(e, \"Character\").options as created; none for an old character");
+    check(!w.world.validate_character("Ann", {{"class", "mage"}, {"hair", "boom"}}), "creation: an error in a hook refuses");
+    const auto status = w.world.script_status();
+    check(status.size() == 2 && status[0].ok && !status[1].ok && contains(status[1].error, "systems/b_hair.lua:4: bad hair"),
+          "creation: the failing hook's system is disabled: " + status[1].error);
+    check(w.world.validate_character("Ann", {{"class", "mage"}, {"hair", "green"}}), "creation: a disabled system's hook no longer runs");
 }
 
 void checkErrorsDisableOneSystem() {
@@ -2226,9 +2279,10 @@ end })");
 }
 
 #ifdef KAST_STARTER_MMO
-// The starter-mmo sample's combat (samples/starter-mmo/systems/combat.lua, regen.lua, npcs.lua, fsms/), on its own
-// maps: refused attacks, a hit and its cooldown, the NPC fighting back and returning home healed, an NPC killed and
-// respawned, a character killed (no moves, no attacks) and revived at the map spawn, regeneration only out of combat.
+// The starter-mmo sample's combat (samples/starter-mmo/systems/combat.lua, classes.lua, regen.lua, npcs.lua, fsms/), on
+// its own maps, with characters from before classes (Warriors: Strike, 12 damage, 140 Health): refused attacks, a hit
+// and its cooldown, the NPC fighting back and returning home healed, an NPC killed and respawned, a character killed
+// (no moves, no attacks) and revived at the map spawn with its class's Health, regeneration only out of combat.
 void checkStarterMmoCombat() {
     LogCapture capture;
     const fs::path root = KAST_STARTER_MMO;
@@ -2256,7 +2310,7 @@ void checkStarterMmoCombat() {
     };
     const auto health = [&](entt::entity e) { return w.value(e, "Health")["current"].get<double>(); };
     const auto attack = [&](entt::entity from, const nlohmann::json& target) {
-        w.world.push_client_event(from, "combat.attack", nlohmann::json{{"target", target}});
+        w.world.push_client_event(from, "combat.power", nlohmann::json{{"power", "strike"}, {"target", target}});
     };
     const auto events = [&](uint32_t sid, const std::string& name) {
         std::vector<Json> out;
@@ -2295,9 +2349,12 @@ void checkStarterMmoCombat() {
     w.world.tick(t += std::chrono::milliseconds(50));
     const double bobAfterHit = health(bob);
     const auto hits = events(1, "combat.hit");
-    check(hits.size() == 1 && hits[0]["attacker"] == wire(bob) && hits[0]["target"] == wire(bat) && hits[0]["damage"] == 10 &&
-              hits[0]["attackerName"] == "Bob" && hits[0]["targetName"] == "Bat" && events(2, "combat.attack").size() == 1,
-          "starter-mmo: combat.attack and combat.hit {attacker, target, damage, names} to everyone in view");
+    const auto used = events(2, "combat.power");
+    check(hits.size() == 1 && hits[0]["attacker"] == wire(bob) && hits[0]["target"] == wire(bat) && hits[0]["damage"] == 12 &&
+              hits[0]["attackerName"] == "Bob" && hits[0]["targetName"] == "Bat" && hits[0]["power"] == "Strike" &&
+              used.size() == 1 && used[0]["caster"] == wire(bob) && used[0]["power"] == "strike" && used[0]["effect"] == "melee" &&
+              used[0]["target"] == wire(bat),
+          "starter-mmo: combat.power and combat.hit {attacker, target, damage, names, power} to everyone in view");
     check(events(1, "combat.death").size() == 1 && events(2, "combat.death")[0]["name"] == "Bat" && health(bat) == 0,
           "starter-mmo: the Bat at 0 Health dies (combat.death)");
     const TimePoint killed = t;
@@ -2337,18 +2394,18 @@ void checkStarterMmoCombat() {
     w.world.tick(t += std::chrono::milliseconds(50));
     attack(carol, wire(guard));
     w.world.tick(t += std::chrono::milliseconds(50));
-    check(health(guard) == 40 && rejected(3) == std::vector<std::string>{"cooldown"} && state(guard) == "combat",
-          "starter-mmo: 10 damage, a second hit within 1.5 s refused, the Guard in combat: " + Json(rejected(3)).dump());
+    check(health(guard) == 38 && rejected(3) == std::vector<std::string>{"cooldown"} && state(guard) == "combat",
+          "starter-mmo: 12 damage, a second hit within 1.5 s refused, the Guard in combat: " + Json(rejected(3)).dump());
     run(1.5);
     attack(carol, wire(guard));
     run(0.1);
-    check(health(guard) == 30, "starter-mmo: hit again after the cooldown");
+    check(health(guard) == 26, "starter-mmo: hit again after the cooldown");
     // The Guard hits back for 5 every 2 s: at once, then 2 s and 4 s later.
     run(2.6);
     std::vector<double> guardHits;
     for (const auto& h : events(3, "combat.hit"))
         if (h["attacker"] == wire(guard)) guardHits.push_back(h["damage"]);
-    check(guardHits == std::vector<double>{5, 5, 5} && health(carol) == 85,
+    check(guardHits == std::vector<double>{5, 5, 5} && health(carol) == 125,
           "starter-mmo: the Guard hits back 5 every 2 s: " + Json(guardHits).dump() + " Carol " + std::to_string(health(carol)));
     // Carol leaves: the Guard returns to its spawn, heals to full and patrols again.
     w.world.despawn(carol);
@@ -2359,7 +2416,7 @@ void checkStarterMmoCombat() {
           "starter-mmo: back home the Guard is healed and patrols again (" + state(guard) + ")");
 
     // Dave, 3 Health, hits the Guard: it kills him. Dead: moves refused, attacks refused; revived 5 s later at the
-    // map's spawn point with full Health.
+    // map's spawn point with his class's full Health (a Warrior's 140).
     const proto::Vec3 g = reg.get<world::Transform>(guard).pos;
     const auto dave = w.spawn(4, 504, "Dave", g.x + 1.5f, g.z, R"({"Health":{"current":3,"max":100}})", 10);
     w.world.tick(t += std::chrono::milliseconds(50));
@@ -2381,9 +2438,9 @@ void checkStarterMmoCombat() {
     check(health(dave) == 0, "starter-mmo: no regeneration while dead");
     run(3);
     const proto::Vec3 dp = reg.get<world::Transform>(dave).pos;
-    check(health(dave) == 100 && std::hypot(dp.x - 128, dp.z - 128) < 0.01f && events(4, "combat.revive").size() == 1 &&
+    check(health(dave) == 140 && std::hypot(dp.x - 128, dp.z - 128) < 0.01f && events(4, "combat.revive").size() == 1 &&
               !w.sent.of<proto::MapChange>(4).empty(),
-          "starter-mmo: revived 5 s later at the map spawn (128, 128) with full Health");
+          "starter-mmo: revived 5 s later at the map spawn (128, 128) with a Warrior's full 140 Health");
     w.world.push_move(dave, proto::Move{{dp.x + 0.5f, *w.maps.ground(10, dp.x + 0.5f, dp.z), dp.z}, 0, 0});
     run(0.5);
     check(reg.get<world::Transform>(dave).pos.x == dp.x + 0.5f, "starter-mmo: moves accepted again after the revive");
@@ -2415,7 +2472,7 @@ void checkStarterMmoCombat() {
         attack(dave, wire(guard));
         w.world.tick(t += std::chrono::milliseconds(50));
     }
-    check(state(guard) == "combat" && health(guard) == 40, "starter-mmo: leash: the Guard fights Dave (" + state(guard) + ", " +
+    check(state(guard) == "combat" && health(guard) == 38, "starter-mmo: leash: the Guard fights Dave (" + state(guard) + ", " +
                                                                std::to_string(health(guard)) + ", " + Json(rejected(4)).dump() + ")");
     const proto::Vec3 d0 = reg.get<world::Transform>(dave).pos;
     float farthest = 0;
@@ -2548,7 +2605,7 @@ void checkStarterMmoLoot() {
     // Ann kills the Bat (seed 1: 1 gold, a Bat Wing, Linen Cloth): only she may loot it, from within 5 m.
     send(ann, "test.seed", {{"seed", 1}});
     const auto b = bat();
-    send(ann, "combat.attack", {{"target", wire(b)}});
+    send(ann, "combat.power", {{"power", "strike"}, {"target", wire(b)}});
     run(0.1);
     check(w.value(b, "Corpse")["owner"] == wire(ann), "starter-mmo loot: the tagger owns the corpse");
     send(ben, "loot.open", {{"target", wire(b)}});
@@ -2609,6 +2666,360 @@ void checkStarterMmoLoot() {
             saved = saved || (contains(*save.components, "\"Inventory\"") && contains(*save.components, "linen_cloth"));
     check(saved, "starter-mmo loot: the bag is saved with the character");
     for (const auto& st : w.world.script_status()) check(st.ok, "starter-mmo loot: system still enabled " + st.path + " " + st.error);
+}
+
+// The starter-mmo sample's classes and powers (samples/starter-mmo/systems/classes.lua, combat.lua, npcs.lua,
+// components/class.lua), in a copy of its server Lua with the test-only system (test.seed makes Evasion's rolls
+// known). Dummies are NPCs with 1000 Health made here; with the "Guard" definition and a creature machine they fight
+// back like the Guard (5 every 2 s).
+void checkStarterMmoClasses() {
+    LogCapture capture;
+    const fs::path sample = KAST_STARTER_MMO;
+    LuaRoot r;
+    for (const char* dir : {"components", "fsms", "items", "npcs", "systems"})
+        fs::copy(sample / dir, r.root / dir, fs::copy_options::recursive);
+    fs::copy_file(KAST_STARTER_MMO_TEST_LUA, r.root / "systems" / "zz_test.lua");
+    const auto defs = lua::load_component_defs(r.root, world::kReservedComponentNames);
+    std::vector<std::string> mapErrors;
+    world::WorldRules rules;
+    rules.startMap = 10;
+    TestWorld w(defs.defs, rules, world::Maps::load(sample / "maps", mapErrors));
+    const auto errors = w.world.load_scripts(r.root);
+    check(defs.errors.empty() && errors.empty(), "starter-mmo classes: loads " + (errors.empty() ? std::string() : errors[0]));
+    if (!errors.empty()) return;
+    auto& reg = w.world.registry();
+    TimePoint t = T0;
+    w.world.tick(t);
+    const auto tick = [&] { w.world.tick(t += std::chrono::milliseconds(50)); };
+    const auto run = [&](double seconds) {
+        for (int i = 0; i < std::max(1, static_cast<int>(std::lround(seconds * 20))); ++i) tick();
+    };
+    const auto use = [&](entt::entity from, const Json& data) {
+        w.world.push_client_event(from, "combat.power", nlohmann::json::parse(data.dump()));
+        tick();
+    };
+    const auto power = [&](entt::entity from, const std::string& id, entt::entity target = entt::null) {
+        Json data{{"power", id}};
+        if (target != entt::null) data["target"] = wire(target);
+        use(from, data);
+    };
+    const auto health = [&](entt::entity e) { return w.value(e, "Health")["current"].get<double>(); };
+    const auto maxHealth = [&](entt::entity e) { return w.value(e, "Health")["max"].get<double>(); };
+    const auto events = [&](uint32_t sid, const std::string& name) {
+        std::vector<Json> out;
+        for (const auto& e : w.sent.of<proto::ServerEvent>(sid))
+            if (e.name == name) out.push_back(Json::parse(e.json));
+        return out;
+    };
+    const auto rejected = [&](uint32_t sid) {
+        std::vector<std::string> out;
+        for (const auto& e : events(sid, "combat.rejected")) out.push_back(e["reason"]);
+        return out;
+    };
+    // Damage of the hits on target seen by session sid, in order (attacker: only its hits).
+    const auto hitsOn = [&](uint32_t sid, entt::entity target, entt::entity attacker = entt::null) {
+        std::vector<double> out;
+        for (const auto& h : events(sid, "combat.hit"))
+            if (h["target"] == wire(target) && (attacker == entt::null || h["attacker"] == wire(attacker)))
+                out.push_back(h["damage"]);
+        return out;
+    };
+    const auto dummy = [&](float x, float z, float heading = 0, bool fights = false) {
+        Json components{{"Health", {{"current", 1000}, {"max", 1000}, {"regen", true}}}};
+        if (fights) components["StateMachine"] = {{"machine", "creature"}, {"initialState", ""}};
+        return w.world.create_npc("Dummy", "Dummy", 10, proto::Vec3{x, 0, z}, heading, fights ? "Guard" : "",
+                                  lua::Json::parse(components.dump()));
+    };
+    const auto pos = [&](entt::entity e) { return reg.get<world::Transform>(e).pos; };
+    const auto as = [](const char* c) { return proto::CharOptions{{"class", c}}; };
+    using Reasons = std::vector<std::string>;
+    using Hits = std::vector<double>;
+
+    // The creation hook: exactly one option, class, one of the four.
+    check(w.world.validate_character("Ann", as("warrior")) && w.world.validate_character("Ann", as("mage")) &&
+              w.world.validate_character("Ann", as("priest")) && w.world.validate_character("Ann", as("rogue")),
+          "starter-mmo classes: each of the four classes is accepted");
+    check(!w.world.validate_character("Ann", {}) && !w.world.validate_character("Ann", as("paladin")) &&
+              !w.world.validate_character("Ann", as("Mage")) &&
+              !w.world.validate_character("Ann", {{"class", "mage"}, {"hair", "red"}}),
+          "starter-mmo classes: no class, an unknown class and an extra option are refused");
+
+    // Entering: Class from the creation options, Health from the class; one from before classes becomes a Warrior.
+    const auto war = w.spawn(1, 701, "War", 60, 60, "", 10, as("warrior"));
+    const auto mag = w.spawn(2, 702, "Mag", 60, 80, "", 10, as("mage"));
+    const auto pri = w.spawn(3, 703, "Pri", 60, 100, R"({"Health":{"current":70,"max":90}})", 10, as("priest"));
+    const auto rog = w.spawn(4, 704, "Rog", 60, 120, "", 10, as("rogue"));
+    const auto old = w.spawn(5, 705, "Old", 60, 140, R"({"Health":{"current":100,"max":100}})", 10);
+    run(0.1);
+    const auto classOf = [&](entt::entity e) { return w.value(e, "Class")["id"].get<std::string>(); };
+    check(classOf(war) == "warrior" && classOf(mag) == "mage" && classOf(pri) == "priest" && classOf(rog) == "rogue" &&
+              classOf(old) == "warrior",
+          "starter-mmo classes: Class from the creation options; none -> warrior");
+    check(health(war) == 140 && maxHealth(war) == 140 && health(mag) == 80 && maxHealth(mag) == 80 && health(pri) == 70 &&
+              maxHealth(pri) == 90 && health(rog) == 110 && maxHealth(rog) == 110 && health(old) == 100 && maxHealth(old) == 140,
+          "starter-mmo classes: max Health 140 / 80 / 90 / 110; new characters full, saved Health kept");
+    const auto bar = events(2, "class.powers");
+    check(bar.size() == 1 && bar[0]["class"] == "mage" && bar[0]["gcd"] == 1 && bar[0]["powers"].size() == 3 &&
+              bar[0]["powers"][0]["id"] == "firebolt" && bar[0]["powers"][0]["key"] == 1 && bar[0]["powers"][0]["cooldown"] == 2 &&
+              bar[0]["powers"][1]["id"] == "frost_nova" && bar[0]["powers"][1]["name"] == "Frost Nova" &&
+              bar[0]["powers"][2]["id"] == "arcane_blast" && bar[0]["powers"][2]["effect"] == "bolt",
+          "starter-mmo classes: the owner gets class.powers (its 3 powers, keys 1-3, cooldowns, the 1 s GCD): " +
+              (bar.empty() ? std::string() : bar[0].dump()));
+    const std::array owners{war, mag, pri, rog, old};
+    bool ownerOnly = true;
+    for (uint32_t sid = 1; sid <= 5; ++sid)
+        for (const auto& u : w.sent.of<proto::ComponentUpdate>(sid))
+            if (u.name == "Class" && u.entityId != wire(owners[sid - 1])) ownerOnly = false;
+    check(ownerOnly, "starter-mmo classes: Class is replicated to its owner only");
+    w.world.despawn(old);
+    const std::string saved = w.sent.saves.empty() || !w.sent.saves.back().components ? "{}" : *w.sent.saves.back().components;
+    check(Json::parse(saved).value("Class", Json::object()).value("id", "") == "warrior",
+          "starter-mmo classes: the Warrior a character from before classes became is saved: " + saved);
+    const auto relogged = w.spawn(5, 705, "Old", 60, 140, saved, 10);
+    run(0.1);
+    check(classOf(relogged) == "warrior" && maxHealth(relogged) == 140, "starter-mmo classes: ... and kept after a relog");
+
+    // Malformed and refused requests change nothing (the first valid power afterwards still works).
+    const auto d1 = dummy(60, 62.5f);
+    const auto tooFar = dummy(60, 63.5f); // 3.5 m
+    run(0.1);
+    w.sent.clear();
+    power(war, "firebolt", d1);
+    power(war, "fireball", d1);
+    use(war, Json{{"power", 5}});
+    w.world.push_client_event(war, "combat.power", nlohmann::json::object());
+    tick();
+    power(war, "strike");
+    use(war, Json{{"power", "strike"}, {"target", "x"}});
+    power(war, "strike", pri);
+    power(war, "strike", tooFar);
+    check(rejected(1) == Reasons{"wrong_class", "unknown_power", "unknown_power", "unknown_power", "target", "target", "target", "range"} &&
+              health(d1) == 1000 && health(tooFar) == 1000 && events(1, "combat.power").empty(),
+          "starter-mmo classes: wrong class, unknown, malformed, no / bad / player target, out of range refused, nothing used: " +
+              Json(rejected(1)).dump());
+    run(1.1); // under the 10 client events a second limit
+
+    // Warrior: Strike 12 and Heroic Slam 25 in melee; the 1 s global cooldown, then each power's own.
+    w.sent.clear();
+    power(war, "strike", d1);       // t 0
+    power(war, "heroic_slam", d1);  // within the GCD
+    run(1.0);
+    power(war, "strike", d1);       // after the GCD, within Strike's 1.5 s
+    power(war, "heroic_slam", d1);
+    run(1.5);
+    power(war, "strike", d1);
+    check(hitsOn(1, d1) == Hits{12, 25, 12} && rejected(1) == Reasons{"gcd", "cooldown"},
+          "starter-mmo classes: Strike 12, Heroic Slam 25, GCD and cooldown refused: " + Json(hitsOn(1, d1)).dump() + " " +
+              Json(rejected(1)).dump());
+
+    // Mage: Firebolt 14 and Arcane Blast 30 at 20 m, Firebolt refused at 26 m; Frost Nova roots NPCs within 8 m.
+    const auto d3 = dummy(80, 80), d4 = dummy(86, 80), inNova = dummy(67.5f, 80), outOfNova = dummy(68.5f, 80);
+    run(0.1);
+    w.sent.clear();
+    power(mag, "firebolt", d3);
+    run(1.05);
+    power(mag, "arcane_blast", d3);
+    run(1.05);
+    power(mag, "firebolt", d4);
+    const auto bolts = events(2, "combat.power");
+    check(hitsOn(2, d3, mag) == Hits{14, 30} && rejected(2) == Reasons{"range"} && bolts.size() == 2 &&
+              bolts[0]["effect"] == "bolt" && bolts[0]["target"] == wire(d3) && health(d4) == 1000,
+          "starter-mmo classes: Firebolt 14, Arcane Blast 30 at 20 m; 26 m out of range: " + Json(rejected(2)).dump());
+    size_t seenByOthers = 0;
+    for (const auto& e : events(1, "combat.power")) seenByOthers += e["caster"] == wire(mag) && e["effect"] == "bolt" ? 1 : 0;
+    check(seenByOthers == 2, "starter-mmo classes: another player in view gets the caster's combat.power (to draw its effect)");
+    run(1.05);
+    w.sent.clear();
+    power(mag, "frost_nova");
+    const auto nova = events(2, "combat.power");
+    check(nova.size() == 1 && nova[0]["effect"] == "nova" && nova[0]["rooted"] == Json::array({wire(inNova)}) &&
+              health(inNova) == 1000 && health(outOfNova) == 1000,
+          "starter-mmo classes: Frost Nova roots the NPC at 7.5 m, not the one at 8.5 m, no damage: " +
+              (nova.empty() ? std::string() : nova[0].dump()));
+
+    // A rooted NPC that fights: it can't chase for 4 s, then does; one in reach still hits.
+    const auto mag2 = w.spawn(6, 706, "Magtwo", 160, 60, "", 10, as("mage"));
+    const auto chaser = dummy(160, 66, 0, true); // 6 m away
+    const auto biter = dummy(162, 60, 0, true);  // 2 m away
+    run(0.1);
+    w.sent.clear();
+    power(mag2, "firebolt", biter);
+    run(1.05);
+    power(mag2, "frost_nova");
+    const proto::Vec3 rootedAt = pos(chaser);
+    w.sent.clear();
+    run(1.05);
+    power(mag2, "arcane_blast", chaser); // it would chase now
+    run(1.5);
+    check(pos(chaser) == rootedAt && w.world.fsm().state(lua::EntityId{wire(chaser)}) == "combat",
+          "starter-mmo classes: the rooted NPC is in combat but stays put");
+    check(!hitsOn(6, mag2, biter).empty(), "starter-mmo classes: a rooted NPC in reach still hits");
+    run(2.5); // the root (4 s from the nova) is over
+    check(std::hypot(pos(chaser).x - rootedAt.x, pos(chaser).z - rootedAt.z) > 1,
+          "starter-mmo classes: after 4 s the NPC chases again");
+
+    // The Meadow's patrolling Guard, rooted by a Frost Nova next to it, stops walking for 4 s.
+    entt::entity guard = entt::null;
+    for (auto [e, npcRef] : reg.view<world::Npc>().each())
+        if (npcRef.name == "Guard") guard = e;
+    const proto::Vec3 gp = pos(guard);
+    const auto mag4 = w.spawn(22, 722, "Magfour", gp.x + 2, gp.z, "", 10, as("mage"));
+    run(0.1);
+    power(mag4, "frost_nova");
+    tick(); // npcs.lua hears "npc.rooted" after this tick's walk
+    const proto::Vec3 patrolAt = pos(guard);
+    run(3.7);
+    const proto::Vec3 stillAt = pos(guard);
+    run(3);
+    const std::string patrolState = w.world.fsm().state(lua::EntityId{wire(guard)});
+    check(patrolState != "combat" && stillAt == patrolAt && (pos(guard).x != patrolAt.x || pos(guard).z != patrolAt.z),
+          std::format("starter-mmo classes: a rooted patrol stands for 4 s, then walks on ({}; {},{} -> {},{} -> {},{})",
+                      patrolState, patrolAt.x, patrolAt.z, stillAt.x, stillAt.z, pos(guard).x, pos(guard).z));
+    w.world.despawn(mag4);
+
+    // Priest: Smite 10 at 20 m (which holds off regeneration); Heal +40, capped at max, then its 10 s cooldown; Power
+    // Shield expires after 10 s.
+    const auto d7 = dummy(80, 100);
+    const auto low = w.spawn(23, 723, "Prilow", 100, 110, R"({"Health":{"current":30,"max":90}})", 10, as("priest"));
+    const auto high = w.spawn(24, 724, "Prihigh", 100, 100, R"({"Health":{"current":70,"max":90}})", 10, as("priest"));
+    run(0.1);
+    w.sent.clear();
+    power(pri, "smite", d7);
+    power(low, "smite", d7);
+    power(high, "smite", d7);
+    run(1.05);
+    const double lowBefore = health(low), highBefore = health(high);
+    power(low, "heal");
+    power(high, "heal");
+    double highAmount = -1;
+    for (const auto& e : events(24, "combat.power"))
+        if (e["caster"] == wire(high) && e["effect"] == "heal") highAmount = e["amount"];
+    check(hitsOn(3, d7) == Hits{10, 10, 10} && health(low) == lowBefore + 40 && health(high) == 90 &&
+              highAmount == 90 - highBefore && highAmount < 40,
+          std::format("starter-mmo classes: Smite 10; Heal +40 ({} -> {}), capped at max ({} -> 90)", lowBefore, health(low),
+                      highBefore));
+    run(1.05);
+    power(low, "heal");
+    check(rejected(23) == Reasons{"cooldown"}, "starter-mmo classes: Heal's 10 s cooldown");
+    run(1.05);
+    w.sent.clear();
+    power(pri, "power_shield");
+    run(9.8);
+    check(events(3, "combat.fade").empty(), "starter-mmo classes: Power Shield holds for 10 s");
+    run(0.3);
+    const auto faded = events(3, "combat.fade");
+    check(faded.size() == 1 && faded[0]["power"] == "power_shield" && faded[0]["name"] == "Power Shield",
+          "starter-mmo classes: ... then fades (combat.fade)");
+
+    // Power Shield under two fighting dummies: it soaks exactly 30, breaks, and later hits land in full.
+    const auto pri2 = w.spawn(7, 707, "Pritwo", 160, 160, "", 10, as("priest"));
+    const auto ga = dummy(162, 160, 0, true), gb = dummy(158, 160, 0, true);
+    run(0.1);
+    w.sent.clear();
+    power(pri2, "power_shield");
+    run(1.05);
+    power(pri2, "smite", ga);
+    run(1.55);
+    power(pri2, "smite", gb);
+    run(7);
+    double absorbed = 0;
+    size_t brokeAt = 0, n = 0;
+    bool fullAfter = true;
+    for (const auto& h : events(7, "combat.hit")) {
+        if (h["target"] != wire(pri2)) continue;
+        ++n;
+        if (h.contains("absorbed")) {
+            absorbed += h["absorbed"].get<double>();
+            if (h["absorbedBy"] != "Power Shield") fullAfter = false;
+            if (absorbed >= 30 && !brokeAt) brokeAt = n;
+        } else if (!brokeAt || h["damage"] != 5) {
+            fullAfter = false;
+        }
+    }
+    check(absorbed == 30 && brokeAt == 6 && n > 6 && fullAfter && events(7, "combat.fade").size() == 1 &&
+              health(pri2) == 90 - 5.0 * static_cast<double>(n - 6),
+          "starter-mmo classes: Power Shield absorbs 30 (6 hits of 5), breaks, then hits land: absorbed " +
+              std::to_string(absorbed) + " in " + std::to_string(brokeAt) + " of " + std::to_string(n) + " hits");
+
+    // Warrior: Shield Wall halves NPC damage (5 -> 2, rounded down) for 6 s.
+    const auto war2 = w.spawn(8, 708, "Wartwo", 200, 60, "", 10, as("warrior"));
+    const auto gw = dummy(202, 60, 0, true);
+    run(0.1);
+    w.sent.clear();
+    power(war2, "shield_wall");
+    run(1.05);
+    power(war2, "strike", gw); // it hits back at once, then every 2 s
+    run(4.5);
+    const Hits walled = hitsOn(8, war2, gw);
+    run(4);
+    const Hits all = hitsOn(8, war2, gw);
+    check(walled == Hits{2, 2, 2} && all.size() > walled.size() && all.back() == 5 && events(8, "combat.fade").size() == 1,
+          "starter-mmo classes: Shield Wall: 2 per hit for 6 s, then 5: " + Json(all).dump());
+
+    // Rogue: Sinister Strike 11; Backstab 30 only from behind (the dummies face +z: z below one is behind it).
+    const auto front = dummy(60, 118), back = dummy(60, 122); // Rog stands at (60, 120)
+    run(0.1);
+    w.sent.clear();
+    power(rog, "backstab", front);
+    power(rog, "backstab", back);
+    run(1.05);
+    power(rog, "sinister_strike", front);
+    check(hitsOn(4, back) == Hits{30} && hitsOn(4, front) == Hits{11} && rejected(4) == Reasons{"not_behind"},
+          "starter-mmo classes: Backstab 30 from behind, refused in front; Sinister Strike 11: " + Json(rejected(4)).dump());
+
+    // Evasion: five rogues, each with a fighting dummy; about half of the hits within its 8 s miss (seeded), none after.
+    w.world.push_client_event(rog, "test.seed", nlohmann::json{{"seed", 7}});
+    run(0.1);
+    std::vector<entt::entity> rogues, biters;
+    for (int i = 0; i < 5; ++i) {
+        const float x = 100 + 10.0f * static_cast<float>(i);
+        rogues.push_back(w.spawn(10 + i, 710 + i, std::string("Rogue") + static_cast<char>('a' + i), x, 200, "", 10, as("rogue")));
+        biters.push_back(dummy(x, 202, 0, true));
+    }
+    run(0.1);
+    w.sent.clear();
+    for (auto e : rogues) power(e, "evasion");
+    run(1.0);
+    for (int i = 0; i < 5; ++i) power(rogues[i], "sinister_strike", biters[i]);
+    run(6.4); // the Evasions end 8 s after they were cast
+    size_t dodged = 0, landed = 0;
+    for (uint32_t i = 0; i < 5; ++i) {
+        for (const auto& d : events(10 + i, "combat.dodge")) dodged += d["target"] == wire(rogues[i]) ? 1 : 0;
+        landed += hitsOn(10 + i, rogues[i], biters[i]).size();
+    }
+    check(dodged + landed >= 15 && dodged >= 5 && landed >= 5,
+          "starter-mmo classes: Evasion dodges about half the hits: " + std::to_string(dodged) + " dodged, " +
+              std::to_string(landed) + " landed");
+    run(1);
+    w.sent.clear();
+    run(6);
+    size_t later = 0;
+    for (uint32_t i = 0; i < 5; ++i) later += events(10 + i, "combat.dodge").size();
+    check(later == 0 && !hitsOn(10, rogues[0], biters[0]).empty(), "starter-mmo classes: no dodges once Evasion fades");
+
+    // Tagging and loot with any class's power: a Mage's Firebolt kills the Cavern's Bat; its corpse is the Mage's.
+    const auto mag3 = w.spawn(20, 720, "Magthree", 128, 140, "", 11, as("mage")); // 20 m from the Bat
+    run(0.1);
+    entt::entity bat = entt::null;
+    for (auto [e, npcRef] : reg.view<world::Npc>().each())
+        if (npcRef.name == "Bat") bat = e;
+    power(mag3, "firebolt", bat);
+    run(0.1);
+    check(bat != entt::null && health(bat) == 0 && w.value(bat, "Corpse").value("owner", 0u) == wire(mag3),
+          "starter-mmo classes: a Mage's Firebolt kills the Bat, tagged: the corpse is the Mage's");
+
+    // Dead: no powers.
+    const auto frail = w.spawn(21, 721, "Frail", 240, 60, R"({"Health":{"current":4,"max":80}})", 10, as("mage"));
+    const auto killer = dummy(242, 60, 0, true);
+    run(0.1);
+    power(frail, "firebolt", killer);
+    run(0.2);
+    w.sent.clear();
+    power(frail, "frost_nova");
+    check(health(frail) == 0 && rejected(21) == Reasons{"dead"}, "starter-mmo classes: a dead caster is refused");
+    run(5.1);
+    check(health(frail) == 80, "starter-mmo classes: revived with the class's 80 Health");
+    for (const auto& st : w.world.script_status()) check(st.ok, "starter-mmo classes: system still enabled " + st.path + " " + st.error);
 }
 #endif
 
@@ -3792,6 +4203,7 @@ int lua_checks(int& checks) {
     checkSandbox();
     checkKastApi();
     checkHooks();
+    checkCharacterCreation();
     checkErrorsDisableOneSystem();
     checkStartupErrors();
     checkPersistence();
@@ -3825,6 +4237,7 @@ int lua_checks(int& checks) {
 #endif
 #ifdef KAST_STARTER_MMO_TEST_LUA
     checkStarterMmoLoot();
+    checkStarterMmoClasses();
 #endif
     checkNpcDefinitionErrors();
     checkItemsAndLoot();

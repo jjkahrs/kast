@@ -10,6 +10,14 @@
             <button id="char_2" data-event="characters.pick"></button>
             <button id="char_3" data-event="characters.pick"></button>
             <button id="char_4" data-event="characters.pick"></button>
+            <p class="label">Class</p>
+            <div id="class_row">
+                <button id="class_warrior" class="class_button" data-event="characters.class">Warrior</button>
+                <button id="class_mage" class="class_button" data-event="characters.class">Mage</button>
+                <button id="class_priest" class="class_button" data-event="characters.class">Priest</button>
+                <button id="class_rogue" class="class_button" data-event="characters.class">Rogue</button>
+            </div>
+            <p id="class_description" class="hint">Pick a class for your new character.</p>
             <p class="label">New character name (3-16 letters)</p>
             <input type="text" id="char_name"/>
             <button id="create_button" class="secondary" data-event="characters.create">Create character</button>

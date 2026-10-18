@@ -13,16 +13,7 @@ if(NOT EXISTS "${STATE}/ready")
   message("SKIP: starter_mmo_live_setup did not get the stack ready (see its output)")
   return()
 endif()
-# Character names are unique per realm: CHARACTER plus 6 letters from the account's email hash, so each account
-# reuses its own characters.
-string(MD5 hash "$ENV{KAST_ONLINE_EMAIL}")
-string(SUBSTRING "${hash}" 0 6 hash)
-foreach(pair 0a 1b 2c 3d 4e 5f 6g 7h 8i 9j)
-  string(SUBSTRING "${pair}" 0 1 digit)
-  string(SUBSTRING "${pair}" 1 1 letter)
-  string(REPLACE "${digit}" "${letter}" hash "${hash}")
-endforeach()
-set(CHARACTER "${CHARACTER}${hash}")
+include("${CMAKE_CURRENT_LIST_DIR}/starter_mmo_character.cmake") # CHARACTER + the account's 6 letters
 set(project "${STATE}/${STAGE}_project")
 file(REMOVE_RECURSE "${project}")
 file(COPY "${SAMPLE}/" DESTINATION "${project}")
@@ -43,6 +34,7 @@ set(bot "")
 if(BOT)
   string(RANDOM LENGTH 6 ALPHABET abcdefghijklmnopqrstuvwxyz run_id)
   execute_process(COMMAND docker compose ${override} run -d --rm --no-deps bot --mode load --count 1 --behaviour idle
+                          --char-option class=warrior
                           --duration 120 --run-id "starter${run_id}"
                   WORKING_DIRECTORY "${WORLD_DIR}" RESULT_VARIABLE result OUTPUT_VARIABLE bot
                   OUTPUT_STRIP_TRAILING_WHITESPACE)

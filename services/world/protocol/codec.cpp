@@ -80,6 +80,7 @@ const char* code_name(Code c) {
     case Code::char_limit: return "char_limit";
     case Code::not_found: return "not_found";
     case Code::already_in_world: return "already_in_world";
+    case Code::options_invalid: return "options_invalid";
     }
     return "unknown";
 }

@@ -21,6 +21,7 @@ struct SessionLink {
 struct CharacterRef {
     uint64_t charId = 0;
     std::string name;
+    proto::CharOptions options = {}; // as created (CharCreate)
 };
 
 struct Transform {

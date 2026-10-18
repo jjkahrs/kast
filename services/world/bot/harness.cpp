@@ -43,13 +43,14 @@ asio::awaitable<std::shared_ptr<WorldClient>> connect_and_login(const Options& o
     co_return c;
 }
 
-asio::awaitable<bool> enter_world(WorldClient& c, const std::string& name, proto::EnterWorldOk& out, std::string& error) {
+asio::awaitable<bool> enter_world(WorldClient& c, const std::string& name, proto::EnterWorldOk& out, std::string& error,
+                                  const proto::CharOptions& options) {
     c.send(proto::CharListReq{});
     auto list = co_await c.wait_for<proto::CharList>(Millis(10000));
     if (!list) { error = "no CharList"; co_return false; }
     uint64_t charId = 0;
     if (list->chars.empty()) {
-        c.send(proto::CharCreate{name});
+        c.send(proto::CharCreate{name, options});
         auto created = co_await c.wait_for<proto::CharCreated>(Millis(10000));
         if (!created) { error = "CharCreate failed"; co_return false; }
         charId = created->character.id;

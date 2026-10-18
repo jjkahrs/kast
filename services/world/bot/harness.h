@@ -27,6 +27,7 @@ struct Options {
     std::string authKeyFile;      // auth's private key (test only): mints an expired token for scenario 8
     std::string expectPos;        // "x,y,z" for restart-verify
     std::string mapRoot;          // the server's maps/ folder (terrain scenario: ground heights)
+    proto::CharOptions charOptions; // --char-option key=value: CharCreate options (a game's class, ...)
     std::map<std::string, std::string> extra;
 };
 
@@ -37,8 +38,9 @@ asio::ssl::context make_client_tls(const Options& o);
 // Connect + TLS + Hello + Auth. nullptr on failure (error says why).
 asio::awaitable<std::shared_ptr<WorldClient>> connect_and_login(const Options& o, asio::ssl::context& tls,
                                                                 const std::string& token, std::string& error);
-// Lists characters, creates `name` if there are none, enters the first one.
-asio::awaitable<bool> enter_world(WorldClient& c, const std::string& name, proto::EnterWorldOk& out, std::string& error);
+// Lists characters, creates `name` (with options) if there are none, enters the first one.
+asio::awaitable<bool> enter_world(WorldClient& c, const std::string& name, proto::EnterWorldOk& out, std::string& error,
+                                  const proto::CharOptions& options = {});
 
 // Walks in a straight line at `speed` m/s, one Move every 100 ms, at from.y or groundY(x, z) if given. Returns the
 // final position.

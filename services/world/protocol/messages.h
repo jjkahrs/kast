@@ -3,6 +3,7 @@
 #include "wire.h"
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -10,7 +11,7 @@
 
 namespace kast::proto {
 
-constexpr uint16_t kProtocolVersion = 3;
+constexpr uint16_t kProtocolVersion = 4;
 constexpr size_t kHeaderSize = 4; // u16 payload length + u16 opcode
 constexpr size_t kMaxPayloadBytes = 0xFFFF; // the u16 length field's limit
 
@@ -66,6 +67,7 @@ enum class Code : uint16_t {
     char_limit = 22,
     not_found = 23,
     already_in_world = 24,
+    options_invalid = 25,
 };
 
 const char* code_name(Code c);
@@ -119,11 +121,49 @@ struct CharListReq {
     bool operator==(const CharListReq&) const = default;
 };
 
+// Character creation options: string pairs the game defines (a class, a look, ...); the protocol and the engine only
+// carry them. u8 count, then count x (str key, str value); a key twice is malformed. The server takes at most
+// kCharOptionsMax entries, keys of 1-kCharOptionKeyMax chars of [a-z_], values of up to kCharOptionValueMax printable
+// ASCII chars (valid_char_options), and its Lua decides the rest (docs/services/world/lua.html#character-creation).
+using CharOptions = std::map<std::string, std::string>;
+constexpr size_t kCharOptionsMax = 8;
+constexpr size_t kCharOptionKeyMax = 16;
+constexpr size_t kCharOptionValueMax = 32;
+inline void write(Writer& w, const CharOptions& o) {
+    size_t n = 0;
+    w.u8(static_cast<uint8_t>(o.size() > 255 ? 255 : o.size()));
+    for (const auto& [key, value] : o) {
+        if (n++ == 255) break;
+        w.str(key);
+        w.str(value);
+    }
+}
+inline void read(Reader& r, CharOptions& o) {
+    o.clear();
+    for (uint8_t n = r.u8(); n > 0 && r.ok(); --n) {
+        std::string key = r.str();
+        if (!o.emplace(std::move(key), r.str()).second) r.fail();
+    }
+}
+
+inline bool valid_char_options(const CharOptions& o) {
+    if (o.size() > kCharOptionsMax) return false;
+    for (const auto& [key, value] : o) {
+        if (key.empty() || key.size() > kCharOptionKeyMax || value.size() > kCharOptionValueMax) return false;
+        for (char ch : key)
+            if (!((ch >= 'a' && ch <= 'z') || ch == '_')) return false;
+        for (char ch : value)
+            if (ch < 0x20 || ch > 0x7E) return false;
+    }
+    return true;
+}
+
 struct CharCreate {
     static constexpr Opcode op = Opcode::CharCreate;
     std::string name;
-    void write(Writer& w) const { w.str(name); }
-    void read(Reader& r) { name = r.str(); }
+    CharOptions options = {};
+    void write(Writer& w) const { w.str(name); proto::write(w, options); }
+    void read(Reader& r) { name = r.str(); proto::read(r, options); }
     bool operator==(const CharCreate&) const = default;
 };
 
@@ -208,10 +248,11 @@ struct CharInfo {
     uint64_t id = 0;
     std::string name;
     Vec3 pos;
+    CharOptions options = {}; // as created
     bool operator==(const CharInfo&) const = default;
 };
-inline void write(Writer& w, const CharInfo& c) { w.u64(c.id); w.str(c.name); write(w, c.pos); }
-inline void read(Reader& r, CharInfo& c) { c.id = r.u64(); c.name = r.str(); read(r, c.pos); }
+inline void write(Writer& w, const CharInfo& c) { w.u64(c.id); w.str(c.name); write(w, c.pos); write(w, c.options); }
+inline void read(Reader& r, CharInfo& c) { c.id = r.u64(); c.name = r.str(); read(r, c.pos); read(r, c.options); }
 
 struct CharList {
     static constexpr Opcode op = Opcode::CharList;

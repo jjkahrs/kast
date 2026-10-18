@@ -185,11 +185,14 @@ void GameServer::handle_lobby(Client& c, proto::Message&& m) {
                 if (!cl) return;
                 if (!rows) return char_error(*cl, proto::Opcode::CharListReq, proto::Code::service_unavailable);
                 proto::CharList list;
-                for (const auto& r : *rows) list.chars.push_back({r.id, r.name, r.pos});
+                for (const auto& r : *rows) list.chars.push_back({r.id, r.name, r.pos, r.options});
                 cl->session->send(list);
             });
     } else if (auto* create = std::get_if<proto::CharCreate>(&m)) {
         if (!valid_character_name(create->name)) return char_error(c, op, proto::Code::name_invalid);
+        // C++ limits first: the Lua hook only ever sees small, plain options.
+        if (!proto::valid_char_options(create->options) || !world_.validate_character(create->name, create->options))
+            return char_error(c, op, proto::Code::options_invalid);
         c.requestInFlight = true;
         const auto& start = maps_.info(cfg_.startMap);
         const uint16_t map = start.id;
@@ -197,15 +200,15 @@ void GameServer::handle_lobby(Client& c, proto::Message&& m) {
         const float heading = start.spawnHeading;
         const uint32_t maxChars = cfg_.maxCharsPerAccount;
         db_.query<db::CreateResult>(
-            [acc, name = create->name, map, spawn, heading, maxChars](db::CharRepo& repo) {
-                return repo.create(acc, name, map, spawn, heading, maxChars);
+            [acc, name = create->name, options = create->options, map, spawn, heading, maxChars](db::CharRepo& repo) {
+                return repo.create(acc, name, options, map, spawn, heading, maxChars);
             },
             [this, reply](std::optional<db::CreateResult> res) {
                 Client* cl = reply();
                 if (!cl) return;
                 if (!res) return char_error(*cl, proto::Opcode::CharCreate, proto::Code::service_unavailable);
                 if (res->code != proto::Code::ok) return char_error(*cl, proto::Opcode::CharCreate, res->code);
-                cl->session->send(proto::CharCreated{{res->row.id, res->row.name, res->row.pos}});
+                cl->session->send(proto::CharCreated{{res->row.id, res->row.name, res->row.pos, res->row.options}});
                 log::info("character created", {{"account", cl->accountId}, {"char", res->row.id}});
             });
     } else if (auto* del = std::get_if<proto::CharDelete>(&m)) {

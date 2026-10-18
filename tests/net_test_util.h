@@ -147,7 +147,7 @@ Server::Body serveFakeAuth(FakeAuth& fake);
 // Each connection has its own characters. CharListReq -> CharList. CharCreate: "Taken" -> CharError{name_taken};
 // "Kick<n>" -> Disconnect{code n} and close; "Garbage" -> a malformed Spawn frame; "Unknown" -> opcode 0x7777;
 // "Split" -> CharCreated written in two parts 50 ms apart; anything else -> CharCreated{id from 100, name,
-// (100, 0, 100)}. CharDelete / EnterWorld of an unknown id -> CharError{not_found}. EnterWorld -> EnterWorldOk{1,
+// (100, 0, 100), the options sent}. CharDelete / EnterWorld of an unknown id -> CharError{not_found}. EnterWorld -> EnterWorldOk{1,
 // (100, 0, 100), 0.5}, Spawn{2, "Other", (101, 0, 100), 0}, EntityMove{2, (102, 0, 100), 1}, Correction{(100, 0, 100)}
 // in one write. Move more than 20 m (x/z) from the last accepted position (at first the spawn) -> Correction{that
 // position}, else it is accepted silently. Say -> ChatMsg{the character's name, text}, then Despawn{2} if text is "bye", or

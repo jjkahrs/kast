@@ -52,6 +52,10 @@ public:
     // client events they queued. Undelivered bus events are dropped.
     void shutdown_scripts();
     std::vector<lua::SystemStatus> script_status() const { return lua_.status(); }
+    // The Lua systems' validateCharacter verdict on C++-checked options (lua::Runtime::validate_character).
+    bool validate_character(const std::string& name, const proto::CharOptions& options) {
+        return lua_.validate_character(name, options);
+    }
     EventBus& bus() { return lua_.bus(); } // the Lua systems' event bus, for server C++
     lua::StateMachines& fsm() { return lua_.fsm(); } // the game and character state machines, for server C++
 

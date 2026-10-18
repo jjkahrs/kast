@@ -4,9 +4,9 @@
 -- forward swings the camera back behind. The cursor hides while dragging and comes back where the drag began.
 -- A press that starts on the GUI (chat box, HUD) turns nothing, and keys typed into a GUI text field don't move.
 -- Replication sends the moves to the server.
--- Combat (systems/combat.lua on the server): the character plays ATTACK_CLIP when the server confirms its attack and
--- HIT_CLIP when it is hit, while standing still; dead, it plays DEATH_CLIP and does not move or jump (the server refuses
--- its moves anyway) until it revives. The camera still works.
+-- Combat (systems/combat.lua on the server): the character plays ATTACK_CLIP when the server confirms one of its
+-- powers and HIT_CLIP when it is hit, while standing still; dead, it plays DEATH_CLIP and does not move or jump (the
+-- server refuses its moves anyway) until it revives. The camera still works.
 local RUN_SPEED = 7 -- m/s, forward and strafing (the world server allows 10)
 local BACK_SPEED = 4.5 -- m/s, backpedalling
 local TURN_RATE = math.rad(180) -- per second, A/D without the right button
@@ -123,7 +123,7 @@ return {
         kast.subscribe("world.entered", function(e)
             snapBehind, me, dead, action = true, e.entityId, false, nil
         end)
-        kast.subscribe("server.combat.attack", function(e) if e.attacker == me then action = ATTACK_CLIP end end)
+        kast.subscribe("server.combat.power", function(e) if e.caster == me then action = ATTACK_CLIP end end)
         kast.subscribe("server.combat.hit", function(e)
             if e.target == me and action ~= ATTACK_CLIP then action = HIT_CLIP end
         end)

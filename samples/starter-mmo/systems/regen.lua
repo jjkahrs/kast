@@ -1,7 +1,7 @@
--- Server system: every character gets Health and a Wallet (components/, shared with the client's HUD). Health
--- regenerates toward max once the character has neither dealt nor taken a hit for OUT_OF_COMBAT seconds
--- ("combat.engaged" from systems/combat.lua), and never while it is dead (0 Health). Each login pays one gold, so a
--- relog shows the Wallet persisted.
+-- Server system: every character gets a Wallet (components/, shared with the client's HUD; Health comes from
+-- systems/classes.lua). Health regenerates toward max once the character has neither dealt nor taken a hit for
+-- OUT_OF_COMBAT seconds ("combat.engaged" from systems/combat.lua), and never while it is dead (0 Health). Each login
+-- pays one gold, so a relog shows the Wallet persisted.
 --
 -- Bandwidth: every change of a replicated component is sent in full to the owner and everyone in view
 -- (docs/services/world/protocol.html#lua-components). So this runs once a second per character, each on its own phase (no burst tick), and keeps
@@ -20,7 +20,6 @@ return {
     end,
 
     onEnter = function(e)
-        if not kast.has(e, "Health") then kast.add(e, "Health") end
         if not kast.has(e, "Wallet") then kast.add(e, "Wallet") end
         kast.set(e, "Wallet", {gold = kast.get(e, "Wallet").gold + 1})
         state[e] = {wait = (e % 20) / 20 * PERIOD, calm = OUT_OF_COMBAT} -- spread over the ticks of a period

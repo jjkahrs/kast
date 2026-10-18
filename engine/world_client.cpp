@@ -21,7 +21,10 @@ constexpr size_t kMaxPayload = 0xFFFF;
 
 Json position(const proto::Vec3& v) { return {{"x", v.x}, {"y", v.y}, {"z", v.z}}; }
 
-Json character(const proto::CharInfo& c) { return {{"id", c.id}, {"name", c.name}, {"position", position(c.pos)}}; }
+Json character(const proto::CharInfo& c)
+{
+    return {{"id", c.id}, {"name", c.name}, {"position", position(c.pos)}, {"options", c.options}};
+}
 
 const char* roleName(proto::Role role)
 {
@@ -174,10 +177,10 @@ void WorldClient::listCharacters()
     send(proto::CharListReq{});
 }
 
-void WorldClient::createCharacter(const std::string& name)
+void WorldClient::createCharacter(const std::string& name, const std::map<std::string, std::string>& options)
 {
     require(WorldState::Lobby, "createCharacter");
-    send(proto::CharCreate{name});
+    send(proto::CharCreate{name, options});
 }
 
 void WorldClient::deleteCharacter(uint64_t charId)

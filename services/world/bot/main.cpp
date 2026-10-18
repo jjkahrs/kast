@@ -30,10 +30,11 @@ void usage() {
         "  --map-root DIR        terrain/navmesh scenarios: the server's maps/ folder (ground heights)\n"
         "  --expect-components G,H  components-verify scenario: Wallet gold and Health current before the restart\n"
         "  --tag T               shutdown/restart-verify scenarios: account tag\n"
+        "  --char-option K=V     options for the characters it creates (repeatable), e.g. class=warrior\n"
         "scenarios: auth characters ownership aoi chat speedhack malformed handshake duplicate persist\n"
         "           shutdown restart-verify dbdown components components-verify events fsm npcs\n"
         "           portal respawn terrain navmesh client-events client-event-rate\n"
-        "           combat-bat combat-rules (these two need the starter-mmo override)\n");
+        "           combat-bat combat-rules (these two need the starter-mmo override and --char-option class=warrior)\n");
 }
 
 } // namespace
@@ -69,6 +70,15 @@ int main(int argc, char** argv) {
         else if (a == "--tag") o.extra["tag"] = val();
         else if (a == "--expect-components") o.extra["expect-components"] = val();
         else if (a == "--zone") o.extra["zone"] = val();
+        else if (a == "--char-option") {
+            const std::string kv = val();
+            const size_t eq = kv.find('=');
+            if (eq == std::string::npos) {
+                std::fprintf(stderr, "--char-option wants KEY=VALUE, got %s\n", kv.c_str());
+                return 2;
+            }
+            o.charOptions[kv.substr(0, eq)] = kv.substr(eq + 1);
+        }
         else {
             std::fprintf(stderr, "unknown option %s\n", a.c_str());
             usage();

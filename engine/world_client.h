@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <utility>
@@ -50,7 +51,8 @@ public:
     void connect(uint64_t realmId); // no session -> world.disconnected not_logged_in, no network use
     void disconnect();              // world.disconnected client_disconnect, unless already disconnected
     void listCharacters();
-    void createCharacter(const std::string& name);
+    // options: the game's creation choices (a class, ...), checked by the server; the engine only carries them.
+    void createCharacter(const std::string& name, const std::map<std::string, std::string>& options = {});
     void deleteCharacter(uint64_t charId);
     void enterWorld(uint64_t charId);
     void say(const std::string& text);

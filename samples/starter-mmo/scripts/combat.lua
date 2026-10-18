@@ -1,5 +1,5 @@
--- Tab-target combat, client side. The server (systems/combat.lua) decides every hit; this only picks a target, asks
--- for attacks and shows what the server sends back.
+-- Tab-target combat, client side. The server (systems/combat.lua) decides every hit; this only picks a target and shows
+-- what the server sends back (scripts/powers.lua asks for the powers).
 -- Targeting: Tab cycles the NPCs in view, nearest first, within TAB_RANGE; a left click (press and release without
 -- dragging, not on the GUI) on an NPC selects it (kast.input.mouseRay against each NPC's PICK sphere, unless the
 -- terrain is closer); Escape clears. The target clears when its NPC despawns or dies (or the map changes). A gold disc
@@ -7,14 +7,14 @@
 -- HUD's target frame (scripts/hud.lua).
 -- Dead NPCs (replicated Health 0) are corpses: never targeted, tipped onto their side. A right click (press and release
 -- without dragging, not on the GUI) on a corpse publishes "loot.clicked" {entityId} for scripts/loot.lua.
--- 1 asks the server to attack the target: kast.world.send("combat.attack", {target = <entity id>}). Keys typed into a
--- GUI text field do nothing, as in scripts/player.lua, and neither do they while the local player is dead. The keys'
--- actions are also bus events, "combat.target_next", "combat.target_clear" and "combat.attack_target", for buttons
--- (and tests) to publish.
--- The server's combat.* events become combat log lines in the chat box ("chat.local", scripts/chat.lua), and other
--- players' clones play the attack, hit and death clips (the local player's are scripts/player.lua's).
+-- Keys typed into a GUI text field do nothing, as in scripts/player.lua, and neither do they while the local player is
+-- dead. The keys' actions are also bus events, "combat.target_next" and "combat.target_clear", for buttons (and tests)
+-- to publish.
+-- The server's combat.* events become combat log lines in the chat box ("chat.local", scripts/chat.lua): hits (with
+-- the power's name, and what a shield absorbed), dodges, deaths, revives and refusals ("* ..."); other players' clones
+-- play the attack (on any power they use), hit and death clips (the local player's are scripts/player.lua's).
 --
--- Bandwidth: one ClientEvent per key press (the server takes 10 a second at most); everything else is local.
+-- Bandwidth: none; everything here is local.
 local TAB_RANGE = 40 -- m
 local CLICK_SLOP = 4 -- pixels of mouse travel a click may have; more is a camera drag
 local PICK = {Guard = {y = 1.1, radius = 1.2}, Bat = {y = 2.25, radius = 1.0}} -- by template: sphere over the feet
@@ -25,13 +25,17 @@ local ATTACK_CLIP, HIT_CLIP, DEATH_CLIP, IDLE_CLIP = "Punch_Jab", "Hit_Chest", "
 local REJECTED = {
     range = "Out of range",
     cooldown = "Not ready yet",
+    gcd = "Not ready yet (global cooldown)",
     target = "Invalid target",
     target_dead = "Your target is dead",
+    not_behind = "Not behind target",
+    unknown_power = "Unknown power",
+    wrong_class = "Your class can't use that",
     dead = "You are dead",
 }
 
 local me                -- the local player's server entity id
-local dead = false      -- the local player is dead: no attacks
+local dead = false      -- the local player is dead: no targeting keys
 local player            -- the local player's scene entity
 local npcIds = {}       -- server ids of the NPCs in view (world.spawn kind "npc") -> template
 local clones = {}       -- server id -> {entity = clone, name =, template = (NPCs)}
@@ -162,10 +166,6 @@ local function watchClick(inWorld, button)
     end
 end
 
-local function attack()
-    if target and not dead then kast.world.send("combat.attack", {target = target}) end
-end
-
 local function playOnce(id, clip)
     local c = clones[id]
     if not c or c.template or id == me then return end -- NPCs are not animated; the local player is player.lua's
@@ -202,18 +202,29 @@ return {
         kast.subscribe("world.mapChanged", forgetAll)
         kast.subscribe("combat.target_next", function() if not dead and player then tabTarget() end end)
         kast.subscribe("combat.target_clear", clearTarget)
-        kast.subscribe("combat.attack_target", attack)
         kast.subscribe("world.disconnected", forgetAll)
 
-        kast.subscribe("server.combat.attack", function(e) playOnce(e.attacker, ATTACK_CLIP) end)
+        kast.subscribe("server.combat.power", function(e) playOnce(e.caster, ATTACK_CLIP) end)
         kast.subscribe("server.combat.hit", function(e)
             playOnce(e.target, HIT_CLIP)
-            if e.attacker == me then
-                log(string.format("You hit %s for %d", e.targetName, e.damage))
+            if e.power then -- a player's power
+                if e.attacker == me then
+                    log(string.format("You cast %s on %s for %d", e.power, e.targetName, e.damage))
+                else
+                    log(string.format("%s casts %s on %s for %d", e.attackerName, e.power, e.targetName, e.damage))
+                end
             elseif e.target == me then
                 log(string.format("%s hits you for %d", e.attackerName, e.damage))
             else
                 log(string.format("%s hits %s for %d", e.attackerName, e.targetName, e.damage))
+            end
+            if e.absorbed and e.absorbed > 0 then log(string.format("%s absorbs %d", e.absorbedBy, e.absorbed)) end
+        end)
+        kast.subscribe("server.combat.dodge", function(e)
+            if e.target == me then
+                log(string.format("You dodge %s's attack", e.attackerName))
+            else
+                log(string.format("%s dodges %s's attack", e.targetName, e.attackerName))
             end
         end)
         kast.subscribe("server.combat.death", function(e)
@@ -236,7 +247,6 @@ return {
         local function key(name) return keys and kast.input.keyDown(name) end
         if pressed("Tab", key("Tab")) then tabTarget() end
         if pressed("Escape", key("Escape")) then clearTarget() end
-        if pressed("1", key("1")) then attack() end
         local left = watchClick(inWorld, "left")
         if left then
             local id = pick(left.origin, left.dir, false)
