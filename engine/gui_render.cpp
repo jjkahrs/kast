@@ -1,7 +1,10 @@
 #include "gui_render.h"
 
 #include "fs_gui.bin.h"
+#include "files.h"
+#include "gui.h"
 #include "log.h"
+#include "renderer.h"
 #include "vs_gui.bin.h"
 
 #include <RmlUi/Core/Vertex.h>
@@ -9,6 +12,7 @@
 #include <bx/math.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <format>
 
 namespace kast {
@@ -117,11 +121,24 @@ void GuiRenderer::ReleaseGeometry(Rml::CompiledGeometryHandle handle)
     delete geometry;
 }
 
-Rml::TextureHandle GuiRenderer::LoadTexture(Rml::Vector2i&, const Rml::String& source)
+Rml::TextureHandle GuiRenderer::LoadTexture(Rml::Vector2i& dimensions, const Rml::String& source)
 {
-    // ponytail: no image loading; <img> and image decorators are out of scope. Decode with bimg here when needed.
-    log::warn(std::format("GUI images are not supported yet: '{}'", source));
-    return 0;
+    // <img src> and decorator: image(...) paths, resolved by RmlUi against the document; read from disk or the pak.
+    std::string bytes;
+    if (!readFile(gui::fromRmlPath(source), bytes))
+        return 0; // RmlUi logs "Could not load texture"
+    std::optional<MipImage> image = decodeImage(bytes, false);
+    if (!image) {
+        log::warn(std::format("GUI image '{}' is not a PNG or JPG it can decode", source));
+        return 0;
+    }
+    std::vector<uint8_t>& rgba = image->rgba;
+    rgba.resize(size_t(image->width) * image->height * 4); // the first level; the GUI draws at 1:1
+    for (size_t i = 0; i < rgba.size(); i += 4) // RmlUi blends premultiplied alpha
+        for (size_t c = 0; c < 3; ++c)
+            rgba[i + c] = static_cast<uint8_t>((rgba[i + c] * rgba[i + 3] + 127) / 255);
+    dimensions = {image->width, image->height};
+    return GenerateTexture({rgba.data(), rgba.size()}, dimensions);
 }
 
 Rml::TextureHandle GuiRenderer::GenerateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i dimensions)

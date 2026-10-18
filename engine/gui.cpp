@@ -55,7 +55,14 @@ public:
         SDL_free(clip);
     }
 
+    // A path relative to no document (RmlUi's drag clone) is taken relative to the dragged element's document.
+    void JoinPath(Rml::String& translated, const Rml::String& document, const Rml::String& path) override
+    {
+        Rml::SystemInterface::JoinPath(translated, document.empty() ? dragDocument : document, path);
+    }
+
     uint64_t problems = 0;
+    Rml::String dragDocument;
 };
 
 // Whole files through kast::readFile, so documents and sheets come from the pak in kast_player.
@@ -64,7 +71,7 @@ public:
     Rml::FileHandle Open(const Rml::String& path) override
     {
         auto file = std::make_unique<File>();
-        if (!readFile(std::filesystem::path(reinterpret_cast<const char8_t*>(path.c_str())), file->data))
+        if (!readFile(gui::fromRmlPath(path), file->data))
             return 0;
         return reinterpret_cast<Rml::FileHandle>(file.release());
     }
@@ -143,6 +150,29 @@ bool ready() { return g_globals != nullptr; }
 uint64_t problemCount() { return g_globals ? g_globals->system.problems : 0; }
 
 GuiRenderer* renderer() { return g_globals ? &g_globals->renderer : nullptr; }
+
+void setDragDocument(std::string sourceUrl)
+{
+    if (g_globals)
+        g_globals->system.dragDocument = std::move(sourceUrl);
+}
+
+std::string toRmlPath(const std::filesystem::path& file)
+{
+    const std::u8string text = file.generic_u8string();
+    std::string out(text.begin(), text.end());
+    if (out.size() > 1 && out[1] == ':')
+        out[1] = '|';
+    return out;
+}
+
+std::filesystem::path fromRmlPath(std::string_view path)
+{
+    std::string out(path);
+    if (out.size() > 1 && out[1] == '|')
+        out[1] = ':';
+    return std::filesystem::path(reinterpret_cast<const char8_t*>(out.c_str()));
+}
 
 void syncTextInput(SDL_Window* window, bool want)
 {

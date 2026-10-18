@@ -1,0 +1,19 @@
+<rml>
+    <head>
+        <title>Loot</title>
+        <link type="text/rcss" href="starter.rcss"/>
+    </head>
+    <body>
+        <!-- scripts/loot.lua: what the right-clicked corpse holds (the server's loot.contents). A click on an entry
+             takes it (loot.take_gold / loot.take_entry), Take All takes everything; Esc or walking away closes. -->
+        <div id="loot" class="window">
+            <p id="loot_title" class="window_title">Loot</p>
+            <button id="loot_gold" class="loot_entry" data-event="loot.take_gold"><div class="icon coin"></div><p id="loot_gold_name" class="loot_name">-</p></button>
+            <button id="loot_entry_1" class="loot_entry" data-event="loot.take_entry"><div id="loot_entry_1_icon" class="icon"></div><p id="loot_entry_1_name" class="loot_name">-</p></button>
+            <button id="loot_entry_2" class="loot_entry" data-event="loot.take_entry"><div id="loot_entry_2_icon" class="icon"></div><p id="loot_entry_2_name" class="loot_name">-</p></button>
+            <button id="loot_entry_3" class="loot_entry" data-event="loot.take_entry"><div id="loot_entry_3_icon" class="icon"></div><p id="loot_entry_3_name" class="loot_name">-</p></button>
+            <button id="loot_entry_4" class="loot_entry" data-event="loot.take_entry"><div id="loot_entry_4_icon" class="icon"></div><p id="loot_entry_4_name" class="loot_name">-</p></button>
+            <button id="loot_take_all" data-event="loot.take_all">Take All</button>
+        </div>
+    </body>
+</rml>

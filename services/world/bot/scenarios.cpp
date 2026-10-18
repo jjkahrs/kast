@@ -1179,7 +1179,9 @@ std::optional<StarterTerrain> starter_terrain(Ctx& x) {
 }
 
 // The Cavern's Bat: refused from 8 m away; 2.5 m away one hit (10) kills it: combat.attack, combat.hit and
-// combat.death, then its Despawn; it is back 30 s later (respawnSec 30) as a new entity at its spawn point.
+// combat.death. It stays as the bot's corpse (Corpse {owner}, no Despawn) until the bot takes its loot
+// (systems/inventory.lua: loot.open, loot.take_all, loot.closed); then it despawns and is back 30 s later (respawnSec 30)
+// as a new entity at its spawn point.
 asio::awaitable<void> combat_bat(Ctx& x) {
     const auto t = starter_terrain(x);
     if (!t) co_return;
@@ -1207,7 +1209,6 @@ asio::awaitable<void> combat_bat(Ctx& x) {
                                            [&](float px, float pz) { return t->ground(11, px, pz); });
     co_await drain(*a, Millis(300));
     attack(bat->entityId);
-    const auto killed = std::chrono::steady_clock::now(); // it dies this tick, and is destroyed the next
     msgs = co_await drain(*a, Millis(1000));
     const auto hits = named(msgs, "combat.hit");
     const auto deaths = named(msgs, "combat.death");
@@ -1217,13 +1218,27 @@ asio::awaitable<void> combat_bat(Ctx& x) {
                    "2.5 m away at " + fmt(byBat) + ": combat.attack + combat.hit {damage 10, attacker, target, names}");
     x.check.expect(deaths.size() == 1 && deaths[0].value("entity", 0u) == bat->entityId && deaths[0].value("name", "") == "Bat",
                    "the Bat at 0 Health: combat.death");
-    bool gone = false;
-    for (const auto& d : only<proto::Despawn>(msgs)) gone |= d.entityId == bat->entityId;
-    x.check.expect(gone, "the dead Bat despawns");
+    const auto despawned = [&](const std::vector<proto::Message>& m) {
+        bool gone = false;
+        for (const auto& d : only<proto::Despawn>(m)) gone |= d.entityId == bat->entityId;
+        return gone;
+    };
+    const auto corpse = updates_for(msgs, bat->entityId, "Corpse");
+    x.check.expect(!despawned(msgs) && corpse.size() == 1 && data_of(corpse[0]).value("owner", 0u) == ok.entityId,
+                   "the dead Bat stays as the bot's corpse (Corpse {owner})");
+    a->send(proto::ClientEvent{"loot.open", nlohmann::json{{"target", bat->entityId}}.dump()});
+    msgs = co_await drain(*a, Millis(800));
+    const auto contents = named(msgs, "loot.contents");
+    x.check.expect(contents.size() == 1 && contents[0].value("gold", 0) >= 1 && contents[0].value("gold", 0) <= 3,
+                   "loot.open: loot.contents with 1-3 gold");
+    a->send(proto::ClientEvent{"loot.take_all", nlohmann::json{{"target", bat->entityId}}.dump()});
+    msgs = co_await drain(*a, Millis(800));
+    const auto killed = std::chrono::steady_clock::now(); // the emptied corpse went: the respawn timer starts
+    x.check.expect(named(msgs, "loot.closed").size() == 1 && despawned(msgs), "loot.take_all empties the corpse: loot.closed, Despawn");
     const auto again = co_await wait_npc(*a, "Bat", Millis(40000));
     const double after = std::chrono::duration<double>(std::chrono::steady_clock::now() - killed).count();
     x.check.expect(again && again->entityId != bat->entityId, "the Bat respawns as a new entity");
-    x.check.expect(after >= 29.9 && after <= 31.5, "respawnSec (30 s) later: " + std::to_string(after) + " s");
+    x.check.expect(after >= 29 && after <= 31.5, "respawnSec (30 s) after the corpse went: " + std::to_string(after) + " s");
     if (again) x.check.expect(std::hypot(again->pos.x - 128, again->pos.z - 120) < 0.5f, "at its spawn point: " + fmt(again->pos));
     a->close();
 }

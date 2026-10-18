@@ -235,6 +235,36 @@ void check_plain_data(const sol::table& table, const std::string& what) {
     }
 }
 
+std::vector<std::filesystem::path> definition_files(const std::filesystem::path& root, const char* dir) {
+    std::vector<std::filesystem::path> files;
+    std::error_code ec;
+    const std::filesystem::path folder = root / dir;
+    if (std::filesystem::is_directory(folder, ec))
+        for (auto it = std::filesystem::recursive_directory_iterator(folder, ec);
+             !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+            if (it->is_regular_file(ec) && it->path().extension() == ".lua") files.push_back(it->path());
+    std::ranges::sort(files);
+    return files;
+}
+
+sol::table run_definition_file(sol::state& lua, const std::filesystem::path& file, const std::string& path,
+                               const std::string& shape) {
+    std::string error;
+    sol::protected_function body = load_sandboxed(lua, file, "@" + path, sandbox_environment(lua), error);
+    if (!body.valid())
+        throw InvalidDefinition(error.starts_with("cannot open") ? std::format("{}: {}", path, error) : error);
+    sol::protected_function_result result = [&] {
+        const ScriptBudget budget(lua.lua_state());
+        return body();
+    }();
+    if (!result.valid()) throw InvalidDefinition(result.get<sol::error>().what()); // "path:line: message"
+    if (result.return_count() != 1 || result.get_type() != sol::type::table)
+        throw InvalidDefinition(std::format("{}: must return exactly one table {}", path, shape));
+    const sol::table table = result;
+    check_plain_data(table, path + ": ");
+    return table;
+}
+
 std::vector<sol::object> sequence(const sol::object& value, const std::string& what) {
     if (value.get_type() != sol::type::table) throw InvalidDefinition(std::format("{} must be a list {{...}}", what));
     const sol::table table = value.as<sol::table>();

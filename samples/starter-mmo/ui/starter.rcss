@@ -7,6 +7,11 @@ body {
     font-family: Roboto;
     font-size: 18px;
     color: #f0f0f0;
+    pointer-events: none; /* the world scene stacks full-screen documents: only their panels take the mouse */
+}
+
+.screen, .card, .window, #hud, #target_frame, #chat {
+    pointer-events: auto;
 }
 
 div, p {
@@ -181,4 +186,149 @@ button.secondary:hover {
     width: 64px;
     margin: 0 0 0 6px;
     padding: 5px 0;
+}
+
+/* Bag and loot windows (ui/bag.rml, ui/loot.rml; scripts/bag.lua, scripts/loot.lua). Item quality colours are WoW's:
+   poor #9d9d9d, common #ffffff, uncommon #1eff00, for slot borders (.slot.q_*) and names (.q_*). */
+.window {
+    position: absolute;
+    padding: 0 8px 8px 8px;
+    font-size: 14px;
+    background-color: #313131ee;
+    border-radius: 6px;
+}
+
+.window_title {
+    margin: 0 -8px 8px -8px;
+    padding: 5px 10px;
+    background-color: #ffaa00;
+    border-radius: 6px 6px 0 0;
+    color: #000000;
+    font-size: 16px;
+}
+
+#bag {
+    right: 12px;
+    bottom: 12px;
+    width: 232px;
+}
+
+#bag_grid {
+    width: 232px;
+}
+
+.slot {
+    display: inline-block;
+    position: relative;
+    width: 50px;
+    height: 50px;
+    margin: 2px;
+    background-color: #000000;
+    border: 2px #454545;
+    border-radius: 4px;
+    drag: clone;
+}
+
+.slot.empty {
+    drag: none;
+}
+
+.slot:hover {
+    background-color: #454545;
+}
+
+.slot.q_poor { border-color: #9d9d9d; }
+.slot.q_common { border-color: #ffffff; }
+.slot.q_uncommon { border-color: #1eff00; }
+
+.icon {
+    display: inline-block;
+    width: 46px;
+    height: 46px;
+}
+
+.count {
+    position: absolute;
+    right: 3px;
+    bottom: 1px;
+    font-size: 14px;
+    color: #ffffff;
+    font-effect: outline(1px #000000);
+}
+
+#bag_tooltip {
+    position: absolute;
+    right: 256px;
+    bottom: 12px;
+    width: 220px;
+    padding: 6px 10px;
+    font-size: 14px;
+    background-color: #000000ee;
+    border: 1px #818181;
+    border-radius: 4px;
+}
+
+#tooltip_name {
+    font-size: 16px;
+}
+
+.tooltip_line {
+    margin-top: 2px;
+}
+
+#tooltip_description {
+    color: #ffcc00;
+}
+
+.q_poor { color: #9d9d9d; }
+.q_common { color: #ffffff; }
+.q_uncommon { color: #1eff00; }
+
+#destroy_dialog {
+    left: 50%;
+    top: 35%;
+    width: 280px;
+    margin-left: -140px;
+}
+
+#destroy_text {
+    margin: 4px 0 6px 0;
+}
+
+#loot {
+    left: 12px;
+    top: 190px;
+    width: 230px;
+}
+
+button.loot_entry {
+    display: block;
+    height: 46px;
+    margin-top: 4px;
+    padding: 0;
+    background-color: #000000;
+    color: #f0f0f0;
+    text-align: left;
+    border-radius: 4px;
+}
+
+button.loot_entry:hover {
+    background-color: #454545;
+}
+
+.loot_entry .icon {
+    width: 42px;
+    height: 42px;
+    margin: 2px;
+}
+
+.loot_name {
+    display: inline-block;
+    width: 170px;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+
+.icon.coin {
+    decorator: image(../textures/icons/coin.png);
 }

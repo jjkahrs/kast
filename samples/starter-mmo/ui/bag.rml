@@ -1,0 +1,44 @@
+<rml>
+    <head>
+        <title>Bag</title>
+        <link type="text/rcss" href="starter.rcss"/>
+    </head>
+    <body>
+        <!-- scripts/bag.lua: B opens and closes the bag; slots show the server's Inventory (icon, quality border,
+             stack count) and drag (data-drag="bag.slot"): onto a slot = move / swap / merge, Shift = split, outside
+             the bag = destroy after the confirmation below. Hovering a slot shows its tooltip. -->
+        <div id="bag" class="window">
+            <p class="window_title">Bag</p>
+            <div id="bag_grid">
+                <div id="slot_1" class="slot empty" data-drag="bag.slot"><div id="slot_1_icon" class="icon"></div><p id="slot_1_count" class="count"></p></div>
+                <div id="slot_2" class="slot empty" data-drag="bag.slot"><div id="slot_2_icon" class="icon"></div><p id="slot_2_count" class="count"></p></div>
+                <div id="slot_3" class="slot empty" data-drag="bag.slot"><div id="slot_3_icon" class="icon"></div><p id="slot_3_count" class="count"></p></div>
+                <div id="slot_4" class="slot empty" data-drag="bag.slot"><div id="slot_4_icon" class="icon"></div><p id="slot_4_count" class="count"></p></div>
+                <div id="slot_5" class="slot empty" data-drag="bag.slot"><div id="slot_5_icon" class="icon"></div><p id="slot_5_count" class="count"></p></div>
+                <div id="slot_6" class="slot empty" data-drag="bag.slot"><div id="slot_6_icon" class="icon"></div><p id="slot_6_count" class="count"></p></div>
+                <div id="slot_7" class="slot empty" data-drag="bag.slot"><div id="slot_7_icon" class="icon"></div><p id="slot_7_count" class="count"></p></div>
+                <div id="slot_8" class="slot empty" data-drag="bag.slot"><div id="slot_8_icon" class="icon"></div><p id="slot_8_count" class="count"></p></div>
+                <div id="slot_9" class="slot empty" data-drag="bag.slot"><div id="slot_9_icon" class="icon"></div><p id="slot_9_count" class="count"></p></div>
+                <div id="slot_10" class="slot empty" data-drag="bag.slot"><div id="slot_10_icon" class="icon"></div><p id="slot_10_count" class="count"></p></div>
+                <div id="slot_11" class="slot empty" data-drag="bag.slot"><div id="slot_11_icon" class="icon"></div><p id="slot_11_count" class="count"></p></div>
+                <div id="slot_12" class="slot empty" data-drag="bag.slot"><div id="slot_12_icon" class="icon"></div><p id="slot_12_count" class="count"></p></div>
+                <div id="slot_13" class="slot empty" data-drag="bag.slot"><div id="slot_13_icon" class="icon"></div><p id="slot_13_count" class="count"></p></div>
+                <div id="slot_14" class="slot empty" data-drag="bag.slot"><div id="slot_14_icon" class="icon"></div><p id="slot_14_count" class="count"></p></div>
+                <div id="slot_15" class="slot empty" data-drag="bag.slot"><div id="slot_15_icon" class="icon"></div><p id="slot_15_count" class="count"></p></div>
+                <div id="slot_16" class="slot empty" data-drag="bag.slot"><div id="slot_16_icon" class="icon"></div><p id="slot_16_count" class="count"></p></div>
+            </div>
+        </div>
+        <div id="bag_tooltip">
+            <p id="tooltip_name">-</p>
+            <p id="tooltip_count" class="tooltip_line"></p>
+            <p id="tooltip_description" class="tooltip_line"></p>
+            <p id="tooltip_price" class="tooltip_line"></p>
+        </div>
+        <div id="destroy_dialog" class="window">
+            <p class="window_title">Destroy item</p>
+            <p id="destroy_text">-</p>
+            <button id="destroy_confirm" data-event="bag.destroy_confirm">Destroy</button>
+            <button id="destroy_cancel" class="secondary" data-event="bag.destroy_cancel">Cancel</button>
+        </div>
+    </body>
+</rml>

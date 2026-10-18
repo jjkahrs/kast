@@ -8,4 +8,12 @@ return {
         Health = { current = 10, max = 10, regen = false },
         StateMachine = { machine = "creature" },
     },
+    -- Rolled once when it dies, for the player who hit it first (systems/inventory.lua); ids are items/ files.
+    loot = {
+        gold = { min = 1, max = 3 },
+        items = {
+            { item = "bat_wing",    chance = 0.8, min = 1, max = 1 },
+            { item = "linen_cloth", chance = 0.4, min = 1, max = 1 },
+        },
+    },
 }

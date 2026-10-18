@@ -92,6 +92,11 @@ a wrong argument type raises a Lua error at the calling line.</p>
 <td>—</td>
 <td>Destroys the entity and its children immediately.</td>
 </tr>
+<tr id="items">
+<td><code>kast.items</code></td>
+<td>table</td>
+<td>The project's item definitions (<code>items/**/*.lua</code>, one item per file) by id: <code>{[id] = {id, name, icon, quality, maxStack, sellPrice, description}}</code>, read-only all the way down. Loaded when Play starts, with the World Server's rules and messages (<a href="../services/world/lua.html#items">World Server, Items</a>), so a folder shared with the server gives both the same items. A rejected file is a Console error, <code>Item rejected: items/x.lua: ...</code>, and is left out.</td>
+</tr>
 <tr>
 <td><code>kast.log(msg)</code>, <code>kast.warn(msg)</code>, <code>kast.error(msg)</code></td>
 <td>—</td>

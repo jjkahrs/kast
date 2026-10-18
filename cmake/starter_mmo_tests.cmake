@@ -64,13 +64,37 @@ foreach(stage
     # Combat (scripts/combat.lua, the server's systems/combat.lua). The screenshot is taken a moment after the driver's
     # "SHOT" line (--screenshot-on-log); FRAMES is only the upper bound. A left click (no drag) selects the Bat:
     "starter_mmo_live_combat_target|combat_target|Fighter|6000|OFF|test driver: target selected Bat .[0-9]+., 1 marker|--sim-mouse 2400,left,0,0,0 --screenshot-on-log 30,SHOT"
-    # Tab, Escape, Tab, then 1 until the Bat dies; it despawns:
-    "starter_mmo_live_combat|combat|Fighter|6000|OFF|test driver: target selected Bat&test driver: target cleared, 0 marker&test driver: combat log: You hit Bat for 10&test driver: combat log: Bat dies&test driver: despawn [0-9]+|--screenshot-on-log 45,SHOT"
+    # Tab, Escape, Tab, then 1 until the Bat dies; it stays as Fighter's corpse:
+    "starter_mmo_live_combat|combat|Fighter|6000|OFF|test driver: target selected Bat&test driver: target cleared, 0 marker&test driver: combat log: You hit Bat for 10&test driver: combat log: Bat dies&test driver: corpse [0-9]+ owner [0-9]+|--screenshot-on-log 45,SHOT"
     # Mid-fight with the Guard: three hits, and it hits back:
     "starter_mmo_live_combat_guard|combat_guard|Fighter|6000|OFF|test driver: target selected Guard&test driver: combat log: You hit Guard for 10&test driver: Health 20 / 50 on&test driver: combat log: Guard hits you for 5|--screenshot-on-log 45,SHOT"
     # The Guard kills a character that hit it once (100 Health, 5 every 2 s): dead, then revived at the spawn:
     "starter_mmo_live_death|death|Fallen|12000|OFF|test driver: combat log: Guard hits you for 5&test driver: combat log: You die&test driver: Health 0 / 100 on|--screenshot-on-log 45,SHOT"
-    "starter_mmo_live_revive|revive|Fallen|12000|OFF|test driver: combat log: You die&test driver: combat log: You revive&test driver: Health 100 / 100 on&world: map changed to 10 at 128.0, 128.0|--screenshot-on-log 60,SHOT")
+    "starter_mmo_live_revive|revive|Fallen|12000|OFF|test driver: combat log: You die&test driver: combat log: You revive&test driver: Health 100 / 100 on&world: map changed to 10 at 128.0, 128.0|--screenshot-on-log 60,SHOT"
+    # Loot (scripts/loot.lua, systems/inventory.lua; the test-only server system seeds the roll: 1 gold, Bat Wing, Linen
+    # Cloth). Each waits for a living Bat (up to 90 s after an earlier stage's kill). A real right click (--sim-mouse
+    # on the driver's CLICK line) on Looter's corpse opens the loot window:
+    "starter_mmo_live_loot_window|loot_window|Looter|15000|OFF|test driver: corpse [0-9]+ owner [0-9]+ .me., 1 sparkle&test driver: loot window: 1 gold, bat_wing x1, linen_cloth x1|--sim-mouse 30,right,0,0,0 --sim-on-log CLICK --screenshot-on-log 30,SHOT"
+    # Rival: Looter's corpse has no sparkle and refuses Rival; bad slots are refused; Rival's own corpse refuses it from
+    # 8.5 m, then Rival takes it all from 2.5 m:
+    "starter_mmo_live_loot_rejects|loot_rejects|Rival|15000|OFF|test driver: foreign corpse [0-9]+ .owner [0-9]+., 0 sparkle&test driver: combat log: [*] You can't loot that&test driver: rejected not_owner&test driver: rejected slot&test driver: corpse [0-9]+ owner [0-9]+ .me., 1 sparkle&test driver: combat log: [*] Too far away&test driver: rejected range&test driver: loot closed|--screenshot-on-log 30,SHOT"
+    # Take All: gold to the Wallet, the items into the empty bag, the corpse goes; the bag open:
+    "starter_mmo_live_loot|loot|Looter|15000|OFF|test driver: loot window: 1 gold, bat_wing x1, linen_cloth x1&test driver: gold [+]1&test driver: loot closed&test driver: bag 1=bat_wing:1 2=linen_cloth:1|--screenshot-on-log 30,SHOT"
+    # Relog: the bag is as loot left it; hovering slot 1 shows its tooltip:
+    "starter_mmo_live_bag_persist|bag_persist|Looter|6000|OFF|test driver: bag after relog: 1=bat_wing:1 2=linen_cloth:1|--sim-mouse 20,none,255,104,0 --sim-on-log HOVER --screenshot-on-log 30,SHOT"
+    # A full bag (16 x 20 Linen Cloth): the gold is taken, the items stay in the corpse, "Inventory is full":
+    "starter_mmo_live_bag_full|bag_full|Packer|15000|OFF|test driver: loot window: 1 gold, bat_wing x1, linen_cloth x1&test driver: rejected full&test driver: combat log: [*] Inventory is full&test driver: loot window: 0 gold, bat_wing x1, linen_cloth x1|--screenshot-on-log 30,SHOT"
+    # The bag's drags (bag.slot.drop, as RmlUi publishes it), each stage one step further from the same known bag:
+    "starter_mmo_live_bag_move|bag_move|Sorter|6000|OFF|test driver: bag 2=linen_cloth:3 3=bat_wing:5 4=bat_wing:18 5=worn_shortsword:1 7=minor_healing_potion:4|--screenshot-on-log 30,SHOT"
+    "starter_mmo_live_bag_swap|bag_swap|Sorter|6000|OFF|test driver: bag 2=bat_wing:5 3=linen_cloth:3 4=bat_wing:18|--screenshot-on-log 30,SHOT"
+    "starter_mmo_live_bag_merge|bag_merge|Sorter|6000|OFF|test driver: bag 2=bat_wing:3 3=linen_cloth:3 4=bat_wing:20|--screenshot-on-log 30,SHOT"
+    "starter_mmo_live_bag_split|bag_split|Sorter|6000|OFF|test driver: bag 2=bat_wing:3 3=linen_cloth:2 4=bat_wing:20 5=worn_shortsword:1 6=linen_cloth:1 7=minor_healing_potion:4|--screenshot-on-log 30,SHOT"
+    "starter_mmo_live_bag_destroy_confirm|bag_destroy_confirm|Sorter|6000|OFF|test driver: drop slot_6 -> nowhere|--screenshot-on-log 30,SHOT"
+    "starter_mmo_live_bag_destroy|bag_destroy|Sorter|6000|OFF|test driver: bag 2=bat_wing:3 3=linen_cloth:2 4=bat_wing:20 5=worn_shortsword:1 7=minor_healing_potion:4|--screenshot-on-log 30,SHOT"
+    # A real mouse drag (--sim-mouse from slot 1, 254 / 103 px from the Game view's centre, 116 px right onto slot 3):
+    "starter_mmo_live_bag_drag_mouse|bag_drag_mouse|Sorter|6000|OFF|test driver: bag 2=linen_cloth:3 3=bat_wing:5 4=bat_wing:18 5=worn_shortsword:1 7=minor_healing_potion:4&test driver: camera turned by the drag: false|--sim-mouse 20,left,116,0,0,254,103 --sim-on-log DRAG --screenshot-on-log 30,SHOT"
+    # Real keys (--sim-key): B opens the bag; with the chat field focused B types "b" and the bag stays open:
+    "starter_mmo_live_bag_keys|bag_keys|Sorter|6000|OFF|test driver: bag open: true&test driver: chat focused: true, focusedField chat_input&test driver: after B, chat, B: 1 bag toggle.s., chat field 'b'|--sim-key 30,B --sim-key 150,B --sim-on-log KEYS --screenshot-on-log 30,SHOT")
   string(REPLACE "|" ";" stage "${stage}")
   list(GET stage 0 name)
   list(GET stage 1 stage_name)
@@ -89,16 +113,26 @@ foreach(stage
   set_tests_properties(${name} PROPERTIES FIXTURES_REQUIRED starter_mmo_live DEPENDS starter_mmo_live_setup
                        SKIP_REGULAR_EXPRESSION "SKIP: " TIMEOUT 300)
 endforeach()
+# The loot and bag stages run in this order (each loot stage may wait for the Bat an earlier one killed).
+set(inventory_stages starter_mmo_live_loot_window starter_mmo_live_loot_rejects starter_mmo_live_loot
+    starter_mmo_live_bag_persist starter_mmo_live_bag_full starter_mmo_live_bag_move starter_mmo_live_bag_swap
+    starter_mmo_live_bag_merge starter_mmo_live_bag_split starter_mmo_live_bag_destroy_confirm starter_mmo_live_bag_destroy
+    starter_mmo_live_bag_drag_mouse starter_mmo_live_bag_keys)
+set(previous starter_mmo_live_revive)
+foreach(name IN LISTS inventory_stages)
+  set_tests_properties(${name} PROPERTIES DEPENDS "starter_mmo_live_setup;${previous}" TIMEOUT 420)
+  set(previous ${name})
+endforeach()
 string(REPLACE ";" "$<SEMICOLON>" live_shots "${live_shots}")
 add_test(NAME starter_mmo_live_secrets
   COMMAND "${CMAKE_COMMAND}" "-DSAMPLE=${KAST_STARTER}" "-DSTATE=${KAST_STARTER_STATE}" "-DSHOTS=${live_shots}"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_live_secrets.cmake")
 set_tests_properties(starter_mmo_live_secrets PROPERTIES FIXTURES_REQUIRED starter_mmo_live
-                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_world;starter_mmo_live_cavern;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_death;starter_mmo_live_revive"
+                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_world;starter_mmo_live_cavern;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_death;starter_mmo_live_revive;${inventory_stages}"
                      SKIP_REGULAR_EXPRESSION "SKIP: ")
 set_tests_properties(starter_mmo_live_setup starter_mmo_live_teardown starter_mmo_live_chars starter_mmo_live_world
                      starter_mmo_live_cavern starter_mmo_live_camera starter_mmo_live_camera_zoom
                      starter_mmo_live_camera_orbit starter_mmo_live_combat_target starter_mmo_live_combat
                      starter_mmo_live_combat_guard starter_mmo_live_death starter_mmo_live_revive starter_mmo_live_secrets
-                     PROPERTIES RUN_SERIAL TRUE)
+                     ${inventory_stages} PROPERTIES RUN_SERIAL TRUE)
 set_tests_properties(starter_mmo_live_setup PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP: ")

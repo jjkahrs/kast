@@ -12,6 +12,7 @@ using Invalid = InvalidDefinition;
 
 constexpr size_t kMaxNameBytes = 255; // name and template, as kast.create allows
 constexpr const char* kReadOnly[] = {"Character", "Npc", "Spawn", "Transform"};
+constexpr int64_t kMaxLootCount = 1000000; // gold or items one loot entry may drop
 
 std::string text(const sol::table& table, const char* key, const std::string& what) {
     const sol::object value = table[key];
@@ -21,29 +22,68 @@ std::string text(const sol::table& table, const char* key, const std::string& wh
     return value.as<std::string>();
 }
 
-NpcDef parse_definition(sol::state& lua, const std::filesystem::path& file, const std::string& path, const Defs& defs,
-                        const MachineExists& machine, std::string& declared) {
+// An integer in [lo, hi] at json[key] of a loot part; what names that part.
+int64_t loot_count(const Json& json, const char* key, int64_t lo, int64_t hi, const std::string& what) {
+    if (!json.contains(key) || !json[key].is_number_integer() || json[key].get<int64_t>() < lo || json[key].get<int64_t>() > hi)
+        throw Invalid(std::format("{}\"{}\" must be an integer in [{}, {}]", what, key, lo, hi));
+    return json[key].get<int64_t>();
+}
+
+void loot_keys(const Json& json, std::initializer_list<const char*> allowed, const std::string& what) {
+    if (!json.is_object()) throw Invalid(what + "must be a table");
+    for (const auto& [key, value] : json.items())
+        if (std::ranges::none_of(allowed, [&](const char* a) { return key == a; }))
+            throw Invalid(std::format("{}unknown key {}", what, key));
+}
+
+// loot = {gold = {min =, max =}, items = {{item =, chance =, min =, max =}, ...}}, both parts optional: null if nil.
+Json parse_loot(const sol::object& value, const ItemDefs& items, const std::string& prefix) {
+    if (value.get_type() == sol::type::lua_nil) return nullptr;
+    nlohmann::json plain;
     std::string error;
-    sol::protected_function body = load_sandboxed(lua, file, "@" + path, sandbox_environment(lua), error);
-    if (!body.valid()) throw Invalid(error.starts_with("cannot open") ? std::format("{}: {}", path, error) : error);
-    sol::protected_function_result result = [&] {
-        const ScriptBudget budget(lua.lua_state());
-        return body();
-    }();
-    if (!result.valid()) throw Invalid(result.get<sol::error>().what()); // "path:line: message"
-    if (result.return_count() != 1 || result.get_type() != sol::type::table)
-        throw Invalid(std::format("{}: must return exactly one table {{name = ..., template = ..., components = {{...}}}}", path));
-    const sol::table table = result;
+    if (!lua_to_json(value, plain, error)) throw Invalid(prefix + "\"loot\": " + error);
+    const Json loot = plain;
+    const std::string what = prefix + "\"loot\": ";
+    loot_keys(loot, {"gold", "items"}, what);
+    if (loot.contains("gold")) {
+        const std::string at = what + "\"gold\": ";
+        loot_keys(loot["gold"], {"min", "max"}, at);
+        const int64_t min = loot_count(loot["gold"], "min", 0, kMaxLootCount, at);
+        loot_count(loot["gold"], "max", min, kMaxLootCount, at);
+    }
+    if (loot.contains("items")) {
+        if (!loot["items"].is_array()) throw Invalid(what + "\"items\" must be a sequence {{item = ..., chance = ..., min = ..., max = ...}, ...}");
+        for (size_t i = 0; i < loot["items"].size(); ++i) {
+            const Json& entry = loot["items"][i];
+            const std::string at = std::format("{}\"items\"[{}]: ", what, i + 1);
+            loot_keys(entry, {"item", "chance", "min", "max"}, at);
+            if (!entry.contains("item") || !entry["item"].is_string() || !items.contains(entry["item"].get<std::string>()))
+                throw Invalid(at + "\"item\" must name an item definition in " + std::string(kItemsDir) + "/");
+            if (!entry.contains("chance") || !entry["chance"].is_number() || entry["chance"].get<double>() <= 0 ||
+                entry["chance"].get<double>() > 1)
+                throw Invalid(at + "\"chance\" must be a number in (0, 1]");
+            const int64_t min = loot_count(entry, "min", 1, kMaxLootCount, at);
+            loot_count(entry, "max", min, kMaxLootCount, at);
+        }
+    }
+    return loot;
+}
+
+NpcDef parse_definition(sol::state& lua, const std::filesystem::path& file, const std::string& path, const Defs& defs,
+                        const MachineExists& machine, const ItemDefs& items, std::string& declared) {
+    const sol::table table =
+        run_definition_file(lua, file, path, "{name = ..., template = ..., components = {...}, loot = {...}}");
     const std::string prefix = path + ": ";
-    check_plain_data(table, prefix);
+    std::string error;
     NpcDef def;
     def.name = text(table, "name", prefix);
     declared = def.name;
-    check_keys(table, {"name", "template", "components"}, prefix);
+    check_keys(table, {"name", "template", "components", "loot"}, prefix);
     def.templateName = text(table, "template", prefix);
     std::optional<Json> components = merge_components(table["components"], Json::object(), defs, machine, error);
     if (!components) throw Invalid(prefix + error);
     def.components = std::move(*components);
+    def.loot = parse_loot(table["loot"], items, prefix);
     return def;
 }
 
@@ -95,15 +135,9 @@ std::optional<Json> merge_components(const sol::object& components, Json base, c
 }
 
 NpcDefsResult load_npc_defs(sol::state& lua, const std::filesystem::path& root, const Defs& defs,
-                            const MachineExists& machine) {
-    std::vector<std::filesystem::path> files;
+                            const MachineExists& machine, const ItemDefs& items) {
+    const std::vector<std::filesystem::path> files = definition_files(root, kNpcsDir);
     std::error_code ec;
-    const std::filesystem::path dir = root / kNpcsDir;
-    if (std::filesystem::is_directory(dir, ec))
-        for (auto it = std::filesystem::recursive_directory_iterator(dir, ec);
-             !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
-            if (it->is_regular_file(ec) && it->path().extension() == ".lua") files.push_back(it->path());
-    std::ranges::sort(files);
 
     struct Parsed {
         std::string path, name, error; // name: as declared, even if the file was rejected later
@@ -114,7 +148,7 @@ NpcDefsResult load_npc_defs(sol::state& lua, const std::filesystem::path& root, 
         Parsed p;
         p.path = std::filesystem::relative(file, root, ec).generic_string();
         try {
-            p.def = parse_definition(lua, file, p.path, defs, machine, p.name);
+            p.def = parse_definition(lua, file, p.path, defs, machine, items, p.name);
         } catch (const Invalid& e) {
             p.error = e.what();
         } catch (const std::exception& e) { // sol2 conversions

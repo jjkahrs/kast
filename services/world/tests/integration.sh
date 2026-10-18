@@ -100,7 +100,7 @@ summary() {
 # (docker compose -f docker-compose.yml -f ../../samples/starter-mmo/docker-compose.override.yml up -d --build).
 if [ "${1:-}" = "--starter-mmo" ]; then
     bot() { docker compose -f docker-compose.yml -f ../../samples/starter-mmo/docker-compose.override.yml run --rm -T bot --run-id "$RUN" "$@"; }
-    scenario "23 starter-mmo: Bat refused at 8 m, killed in one hit 2.5 m away, despawned, back 30 s later" --scenario combat-bat
+    scenario "23 starter-mmo: Bat refused at 8 m, killed in one hit 2.5 m away, its corpse looted, back 30 s later" --scenario combat-bat
     scenario "24 starter-mmo: Guard: bad targets refused, cooldown, hits back, out of range refused" --scenario combat-rules
     summary
 fi

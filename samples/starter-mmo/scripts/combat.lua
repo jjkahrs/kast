@@ -5,6 +5,8 @@
 -- terrain is closer); Escape clears. The target clears when its NPC despawns or dies (or the map changes). A gold disc
 -- (MARKER_*) under the target shows it. "target.selected" {entityId, name, health} / "target.cleared" go on the bus for the
 -- HUD's target frame (scripts/hud.lua).
+-- Dead NPCs (replicated Health 0) are corpses: never targeted, tipped onto their side. A right click (press and release
+-- without dragging, not on the GUI) on a corpse publishes "loot.clicked" {entityId} for scripts/loot.lua.
 -- 1 asks the server to attack the target: kast.world.send("combat.attack", {target = <entity id>}). Keys typed into a
 -- GUI text field do nothing, as in scripts/player.lua, and neither do they while the local player is dead. The keys'
 -- actions are also bus events, "combat.target_next", "combat.target_clear" and "combat.attack_target", for buttons
@@ -35,7 +37,7 @@ local npcIds = {}       -- server ids of the NPCs in view (world.spawn kind "npc
 local clones = {}       -- server id -> {entity = clone, name =, template = (NPCs)}
 local target, marker    -- the target's server id, the marker entity under its clone
 local held = {}         -- key or button name -> down last frame
-local click             -- the left press being watched: {origin, dir, travel}
+local clicks = {}       -- button -> the press being watched: {origin, dir, travel}
 local oneShots = {}     -- remote player clone -> true while an attack or hit clip plays
 
 local function log(text) kast.publish("chat.local", {text = text}) end
@@ -70,6 +72,19 @@ end
 
 local function position(entity) return kast.get(entity, "Transform").position end
 
+local function isDead(c)
+    return kast.has(c.entity, "Health") and kast.get(c.entity, "Health").current <= 0
+end
+
+-- Lays a corpse's clone on its side: its heading turn, then a quarter roll about its own forward axis.
+local function tip(c, dead)
+    if c.tipped or not (dead or isDead(c)) then return end
+    c.tipped = true
+    local q = kast.get(c.entity, "Transform").rotation -- a yaw: {0, sin(h/2), 0, cos(h/2)}
+    local r = math.sqrt(0.5)
+    kast.set(c.entity, "Transform", {rotation = {x = q.y * r, y = q.y * r, z = q.w * r, w = q.w * r}})
+end
+
 local function distance(a, b)
     return math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2 + (a.z - b.z) ^ 2)
 end
@@ -78,7 +93,7 @@ end
 local function nearbyNpcs()
     local list, from = {}, position(player)
     for id, c in pairs(clones) do
-        if c.template then
+        if c.template and not isDead(c) then
             local d = distance(position(c.entity), from)
             if d <= TAB_RANGE then list[#list + 1] = {id = id, d = d} end
         end
@@ -108,13 +123,17 @@ local function raySphere(origin, dir, center, radius)
     return t >= 0 and t or nil
 end
 
-local function pick(origin, dir)
+-- The NPC (corpses: dead ones only, else living ones) the ray hits first, unless the terrain is closer.
+local function pick(origin, dir, corpses)
     local best, bestT
     for id, c in pairs(clones) do
-        if c.template then
+        if c.template and isDead(c) == corpses then
             local p = position(c.entity)
             local shape = PICK[c.template] or PICK_DEFAULT
-            local t = raySphere(origin, dir, {x = p.x, y = p.y + shape.y, z = p.z}, shape.radius)
+            local center = {x = p.x, y = p.y + shape.y, z = p.z}
+            local radius = shape.radius
+            if corpses then center, radius = {x = p.x, y = p.y + 0.5, z = p.z}, shape.y + shape.radius end -- lying down
+            local t = raySphere(origin, dir, center, radius)
             if t and (not bestT or t < bestT) then best, bestT = id, t end
         end
     end
@@ -123,25 +142,23 @@ local function pick(origin, dir)
     return best
 end
 
--- A left press that ends without dragging and did not start on the GUI is a click; the ray is taken at the press,
--- before scripts/player.lua locks the cursor for a possible drag.
-local function watchClick(inWorld)
-    local down = kast.input.mouseDown("left")
-    if pressed("mouse", down) then
-        click = nil
+-- A press of button that ends without dragging and did not start on the GUI is a click; the ray is taken at the press,
+-- before scripts/player.lua locks the cursor for a possible drag. Returns the click's ray on its release frame.
+local function watchClick(inWorld, button)
+    local down = kast.input.mouseDown(button)
+    local click = clicks[button]
+    if pressed(button, down) then
+        clicks[button] = nil
         if inWorld and not (kast.gui and kast.gui.mouseOver()) then
             local origin, dir = kast.input.mouseRay()
-            if origin then click = {origin = origin, dir = dir, travel = 0} end
+            if origin then clicks[button] = {origin = origin, dir = dir, travel = 0} end
         end
     elseif down and click then
         local dx, dy = kast.input.mouseDelta()
         click.travel = click.travel + math.abs(dx) + math.abs(dy)
     elseif not down and click then
-        if click.travel <= CLICK_SLOP then
-            local id = pick(click.origin, click.dir)
-            if id then selectTarget(id) end
-        end
-        click = nil
+        clicks[button] = nil
+        if click.travel <= CLICK_SLOP then return click end
     end
 end
 
@@ -175,6 +192,11 @@ return {
         end)
         kast.subscribe("world.entitySpawned", function(e)
             clones[e.entityId] = {entity = e.entity, name = e.name, template = npcIds[e.entityId]}
+            if npcIds[e.entityId] then tip(clones[e.entityId]) end -- a corpse coming into view
+        end)
+        kast.subscribe("world.component", function(e)
+            local c = clones[e.entityId]
+            if c and c.template and e.name == "Health" then tip(c, e.data.current <= 0) end
         end)
         kast.subscribe("world.despawn", function(e) forget(e.entityId) end)
         kast.subscribe("world.mapChanged", forgetAll)
@@ -215,7 +237,16 @@ return {
         if pressed("Tab", key("Tab")) then tabTarget() end
         if pressed("Escape", key("Escape")) then clearTarget() end
         if pressed("1", key("1")) then attack() end
-        watchClick(inWorld)
+        local left = watchClick(inWorld, "left")
+        if left then
+            local id = pick(left.origin, left.dir, false)
+            if id then selectTarget(id) end
+        end
+        local right = watchClick(inWorld, "right")
+        if right then
+            local id = pick(right.origin, right.dir, true)
+            if id then kast.publish("loot.clicked", {entityId = id}) end
+        end
         for entity in pairs(oneShots) do -- an attack or hit clip ended: back to standing
             local ok, state = pcall(kast.getAnimationState, entity)
             if not ok then

@@ -2288,7 +2288,8 @@ void checkStarterMmoCombat() {
     check(health(bat) == 10 && rejected(1) == std::vector<std::string>{"range", "target", "target", "target"},
           "starter-mmo: out of range / a player / unknown / not a number refused: " + Json(rejected(1)).dump());
 
-    // Bob 2 m from the Bat: one hit kills it; both see the hit and the death; it is gone the next tick, back 30 s on.
+    // Bob 2 m from the Bat: one hit kills it; both see the hit and the death; its corpse stays 60 s (Bob never loots
+    // it), then goes, and the Bat is back respawnSec (30 s) after that.
     w.sent.clear();
     attack(bob, wire(bat));
     w.world.tick(t += std::chrono::milliseconds(50));
@@ -2299,19 +2300,33 @@ void checkStarterMmoCombat() {
           "starter-mmo: combat.attack and combat.hit {attacker, target, damage, names} to everyone in view");
     check(events(1, "combat.death").size() == 1 && events(2, "combat.death")[0]["name"] == "Bat" && health(bat) == 0,
           "starter-mmo: the Bat at 0 Health dies (combat.death)");
-    w.world.tick(t += std::chrono::milliseconds(50));
-    check(npc("Bat") == entt::null && !w.sent.of<proto::Despawn>(1).empty(), "starter-mmo: the dead Bat is destroyed");
     const TimePoint killed = t;
+    w.world.tick(t += std::chrono::milliseconds(50));
+    check(npc("Bat") == bat && state(bat) == "dead" && w.value(bat, "Corpse")["owner"] == wire(bob) &&
+              w.sent.of<proto::Despawn>(1).empty(),
+          "starter-mmo: the dead Bat stays as a corpse (dead, Corpse owner Bob)");
+    attack(bob, wire(bat));
+    run(0.1);
+    check(rejected(2) == std::vector<std::string>{"target_dead"}, "starter-mmo: a corpse can't be attacked " + Json(rejected(2)).dump());
     run(4);
     check(health(bob) == bobAfterHit, "starter-mmo: no regeneration within 5 s of a hit");
     run(2);
     check(health(bob) > bobAfterHit, "starter-mmo: regeneration once 5 s out of combat");
-    run(23.5);
-    check(npc("Bat") == entt::null, "starter-mmo: not back before respawnSec (30 s)");
+    check(reg.get<world::Transform>(bat).pos == reg.get<world::Transform>(bat).pos && state(bat) == "dead",
+          "starter-mmo: the corpse stays dead");
+    run(53.5);
+    check(npc("Bat") == bat, "starter-mmo: the corpse is still there before 60 s");
     run(1);
+    check(npc("Bat") == entt::null && !w.sent.of<proto::Despawn>(1).empty() && events(2, "loot.closed").size() == 1,
+          "starter-mmo: the unlooted corpse goes after 60 s (loot.closed to its owner)");
+    const TimePoint gone = t;
+    run(29);
+    check(npc("Bat") == entt::null, "starter-mmo: not back before respawnSec (30 s) after the corpse went");
+    run(1.5);
     const auto bat2 = npc("Bat");
-    check(bat2 != entt::null && bat2 != bat && health(bat2) == 10 && t - killed >= std::chrono::seconds(30),
-          "starter-mmo: the Bat respawns 30 s later with full Health");
+    check(bat2 != entt::null && bat2 != bat && health(bat2) == 10 && t - gone >= std::chrono::seconds(30) &&
+              t - killed >= std::chrono::seconds(90),
+          "starter-mmo: the Bat respawns 30 s after its corpse went, with full Health");
 
     // Carol 1.2 m from the Guard: a hit, a second within the cooldown refused, a third after it.
     const proto::Vec3 g0 = reg.get<world::Transform>(guard).pos; // somewhere on its patrol by now
@@ -2393,13 +2408,15 @@ void checkStarterMmoCombat() {
             w.world.tick(t += std::chrono::milliseconds(50));
         }
     };
-    const proto::Vec3 g1 = reg.get<world::Transform>(guard).pos;
-    walkTo(dave, g1.x + 2.0f, g1.z, 8);
-    const proto::Vec3 g2 = reg.get<world::Transform>(guard).pos;
-    walkTo(dave, g2.x + 1.5f, g2.z, 8); // it walked on meanwhile
-    attack(dave, wire(guard));
-    w.world.tick(t += std::chrono::milliseconds(50));
-    check(state(guard) == "combat" && health(guard) == 40, "starter-mmo: leash: the Guard fights Dave");
+    w.sent.clear();
+    for (int tries = 0; tries < 10 && state(guard) != "combat"; ++tries) { // it walks on meanwhile: catch up
+        const proto::Vec3 gp = reg.get<world::Transform>(guard).pos;
+        walkTo(dave, gp.x + 1.5f, gp.z, 8);
+        attack(dave, wire(guard));
+        w.world.tick(t += std::chrono::milliseconds(50));
+    }
+    check(state(guard) == "combat" && health(guard) == 40, "starter-mmo: leash: the Guard fights Dave (" + state(guard) + ", " +
+                                                               std::to_string(health(guard)) + ", " + Json(rejected(4)).dump() + ")");
     const proto::Vec3 d0 = reg.get<world::Transform>(dave).pos;
     float farthest = 0;
     bool returned = false;
@@ -2415,6 +2432,183 @@ void checkStarterMmoCombat() {
     check(health(guard) == 50 && (state(guard) == "walking" || state(guard) == "waiting"),
           "starter-mmo: leash: home, healed, patrolling (" + state(guard) + ")");
     for (const auto& st : w.world.script_status()) check(st.ok, "starter-mmo: system still enabled " + st.path + " " + st.error);
+}
+#endif
+
+#ifdef KAST_STARTER_MMO_TEST_LUA
+// The starter-mmo sample's bag and loot (samples/starter-mmo/systems/inventory.lua, components/inventory.lua,
+// corpse.lua, items/, npcs/ loot), in a copy of its server Lua with the test-only cmake/starter_mmo_test_server.lua
+// (test.seed, test.bag). Seed 1 makes the Bat drop 1 gold, a Bat Wing and Linen Cloth.
+void checkStarterMmoLoot() {
+    LogCapture capture;
+    const fs::path sample = KAST_STARTER_MMO;
+    LuaRoot r;
+    for (const char* dir : {"components", "fsms", "items", "npcs", "systems"})
+        fs::copy(sample / dir, r.root / dir, fs::copy_options::recursive);
+    fs::copy_file(KAST_STARTER_MMO_TEST_LUA, r.root / "systems" / "zz_test.lua");
+    const auto defs = lua::load_component_defs(r.root, world::kReservedComponentNames);
+    std::vector<std::string> mapErrors;
+    world::WorldRules rules;
+    rules.startMap = 10;
+    TestWorld w(defs.defs, rules, world::Maps::load(sample / "maps", mapErrors));
+    const auto errors = w.world.load_scripts(r.root);
+    check(defs.errors.empty() && errors.empty(), "starter-mmo loot: loads " + (errors.empty() ? std::string() : errors[0]));
+    if (!errors.empty()) return;
+    auto& reg = w.world.registry();
+    TimePoint t = T0;
+    w.world.tick(t);
+    const auto run = [&](double seconds) {
+        for (int i = 0; i < std::max(1, static_cast<int>(std::lround(seconds * 20))); ++i)
+            w.world.tick(t += std::chrono::milliseconds(50));
+    };
+    const auto bat = [&] {
+        for (auto [e, n] : reg.view<world::Npc>().each())
+            if (n.name == "Bat") return e;
+        return entt::entity{entt::null};
+    };
+    const auto send = [&](entt::entity from, const std::string& name, const Json& data) {
+        w.world.push_client_event(from, name, nlohmann::json::parse(data.dump()));
+        run(0.11); // under the 10 client events a second limit
+    };
+    const auto events = [&](uint32_t sid, const std::string& name) {
+        std::vector<Json> out;
+        for (const auto& e : w.sent.of<proto::ServerEvent>(sid))
+            if (e.name == name) out.push_back(Json::parse(e.json));
+        return out;
+    };
+    const auto rejected = [&](uint32_t sid) {
+        std::vector<std::string> out;
+        for (const auto& e : events(sid, "inventory.rejected")) out.push_back(e["reason"]);
+        w.sent.clear();
+        return out;
+    };
+    const auto bag = [&](entt::entity e) { // "item:count" per non-empty slot, by slot
+        const Json v = w.value(e, "Inventory");
+        std::vector<std::string> out;
+        for (size_t i = 0; i < 16; ++i)
+            out.push_back(v["items"][i].get<std::string>().empty() ? "" : v["items"][i].get<std::string>() + ":" +
+                                                                                  std::to_string(v["counts"][i].get<int>()));
+        while (!out.empty() && out.back().empty()) out.pop_back();
+        return out;
+    };
+    using Bag = std::vector<std::string>;
+    const auto setBag = [&](entt::entity e, const Bag& slots) {
+        Json items = Json::array(), counts = Json::array();
+        for (const std::string& s : slots) {
+            const size_t colon = s.find(':');
+            items.push_back(s.empty() ? "" : s.substr(0, colon));
+            counts.push_back(s.empty() ? 0 : std::stoi(s.substr(colon + 1)));
+        }
+        send(e, "test.bag", Json{{"items", items}, {"counts", counts}});
+    };
+    const auto gold = [&](entt::entity e) { return w.value(e, "Wallet")["gold"].get<int>(); };
+    const auto alive = [&](entt::entity e) { return reg.valid(e) && reg.all_of<world::Npc>(e); };
+
+    // Every character gets an empty 16-slot bag; a saved bag with an unknown item and a bad count is cleaned on login.
+    const auto ann = w.spawn(1, 601, "Ann", 128, 122, "", 11); // 2 m north of the Bat
+    const auto ben = w.spawn(2, 602, "Ben", 128, 117, R"({"Inventory":{"items":["gone","linen_cloth"],"counts":[3,99]}})", 11);
+    run(0.1);
+    check(w.value(ann, "Inventory")["items"].size() == 16 && bag(ann).empty(), "starter-mmo loot: a new character has an empty 16-slot bag");
+    check(bag(ben) == Bag{"", "linen_cloth:20"}, "starter-mmo loot: a saved bag drops unknown items and caps counts: " + Json(bag(ben)).dump());
+
+    // Bag requests.
+    setBag(ann, {"bat_wing:5", "linen_cloth:3", "", "bat_wing:18", "worn_shortsword:1"});
+    send(ann, "inventory.move", {{"from", 1}, {"to", 3}, {"item", "bat_wing"}});
+    check(bag(ann) == Bag{"", "linen_cloth:3", "bat_wing:5", "bat_wing:18", "worn_shortsword:1"}, "starter-mmo loot: move to an empty slot");
+    send(ann, "inventory.move", {{"from", 2}, {"to", 3}, {"item", "linen_cloth"}});
+    check(bag(ann) == Bag{"", "bat_wing:5", "linen_cloth:3", "bat_wing:18", "worn_shortsword:1"}, "starter-mmo loot: swap two items");
+    send(ann, "inventory.move", {{"from", 2}, {"to", 4}, {"item", "bat_wing"}});
+    check(bag(ann) == Bag{"", "bat_wing:3", "linen_cloth:3", "bat_wing:20", "worn_shortsword:1"},
+          "starter-mmo loot: merge up to maxStack (20), the rest stays: " + Json(bag(ann)).dump());
+    send(ann, "inventory.move", {{"from", 3}, {"to", 6}, {"item", "linen_cloth"}, {"split", true}});
+    check(bag(ann) == Bag{"", "bat_wing:3", "linen_cloth:2", "bat_wing:20", "worn_shortsword:1", "linen_cloth:1"},
+          "starter-mmo loot: split moves floor(n/2) to an empty slot");
+    send(ann, "inventory.destroy", {{"slot", 6}, {"item", "linen_cloth"}});
+    check(bag(ann) == Bag{"", "bat_wing:3", "linen_cloth:2", "bat_wing:20", "worn_shortsword:1"}, "starter-mmo loot: destroy");
+    rejected(1);
+    const Bag before = bag(ann);
+    for (const Json& bad : {Json{{"from", 0}, {"to", 2}, {"item", "x"}}, Json{{"from", 2}, {"to", 17}, {"item", "bat_wing"}},
+                            Json{{"from", 2}, {"to", 2}, {"item", "bat_wing"}}, Json{{"from", 1.5}, {"to", 2}, {"item", "bat_wing"}},
+                            Json{{"from", "2"}, {"to", 3}}, Json{{"from", 1}, {"to", 2}, {"item", ""}},
+                            Json{{"from", 2}, {"to", 3}, {"item", "linen_cloth"}},
+                            Json{{"from", 5}, {"to", 7}, {"item", "worn_shortsword"}, {"split", true}},
+                            Json{{"from", 2}, {"to", 3}, {"item", "bat_wing"}, {"split", true}},
+                            Json{{"from", 2}, {"to", 4}, {"item", "bat_wing"}}, Json("nope")})
+        send(ann, "inventory.move", bad);
+    send(ann, "inventory.destroy", {{"slot", 1}, {"item", ""}});
+    send(ann, "inventory.destroy", {{"slot", 2}, {"item", "linen_cloth"}});
+    send(ann, "inventory.destroy", {{"slot", 99}});
+    const auto reasons = rejected(1);
+    check(bag(ann) == before &&
+              reasons == std::vector<std::string>{"slot", "slot", "slot", "slot", "slot", "empty", "item", "split",
+                                                      "split", "stack_full", "slot", "empty", "item", "slot"},
+          "starter-mmo loot: malformed and illegal bag requests change nothing, each rejected with its reason: " +
+              Json(reasons).dump() + " " + Json(bag(ann)).dump());
+
+    // Ann kills the Bat (seed 1: 1 gold, a Bat Wing, Linen Cloth): only she may loot it, from within 5 m.
+    send(ann, "test.seed", {{"seed", 1}});
+    const auto b = bat();
+    send(ann, "combat.attack", {{"target", wire(b)}});
+    run(0.1);
+    check(w.value(b, "Corpse")["owner"] == wire(ann), "starter-mmo loot: the tagger owns the corpse");
+    send(ben, "loot.open", {{"target", wire(b)}});
+    send(ben, "loot.take_all", {{"target", wire(b)}});
+    check(rejected(2) == std::vector<std::string>{"not_owner", "not_owner"} && events(2, "loot.contents").empty(),
+          "starter-mmo loot: another player can't open or take the loot");
+    const proto::Vec3 annAt = reg.get<world::Transform>(ann).pos;
+    const auto moveTo = [&](entt::entity e, float x, float z) {
+        for (int i = 0; i < 400; ++i) {
+            const proto::Vec3 p = reg.get<world::Transform>(e).pos;
+            const float dx = x - p.x, dz = z - p.z, d = std::hypot(dx, dz);
+            if (d < 0.01f) return;
+            const float k = std::min(1.0f, 0.4f / d), nx = p.x + dx * k, nz = p.z + dz * k;
+            w.world.push_move(e, proto::Move{{nx, *w.maps.ground(11, nx, nz), nz}, 0, 0});
+            w.world.tick(t += std::chrono::milliseconds(50));
+        }
+    };
+    moveTo(ann, annAt.x, annAt.z + 6); // 8 m from the corpse
+    send(ann, "loot.open", {{"target", wire(b)}});
+    send(ann, "loot.open", {{"target", 424242}});
+    send(ann, "loot.open", {{"target", "x"}});
+    check(rejected(1) == std::vector<std::string>{"range", "no_loot", "no_loot"}, "starter-mmo loot: out of range / no corpse refused");
+    moveTo(ann, annAt.x, annAt.z);
+    send(ann, "loot.open", {{"target", wire(b)}});
+    const auto opened = events(1, "loot.contents");
+    check(opened.size() == 1 && opened[0]["gold"] == 1 &&
+              nlohmann::json(opened[0]["items"]) == nlohmann::json::parse(R"([{"item":"bat_wing","count":1},{"item":"linen_cloth","count":1}])"),
+          "starter-mmo loot: seed 1 rolls 1 gold, a Bat Wing and Linen Cloth: " + (opened.empty() ? "-" : opened[0].dump()));
+    send(ann, "loot.take", {{"target", wire(b)}, {"index", 3}});
+    send(ann, "loot.take", {{"target", wire(b)}, {"index", "x"}});
+    check(rejected(1) == std::vector<std::string>{"index", "index"}, "starter-mmo loot: a bad index is refused");
+    const int goldBefore = gold(ann);
+    send(ann, "loot.take", {{"target", wire(b)}, {"index", "gold"}});
+    check(gold(ann) == goldBefore + 1 && events(1, "loot.contents").back()["gold"] == 0, "starter-mmo loot: gold to the Wallet");
+    send(ann, "loot.take", {{"target", wire(b)}, {"index", "gold"}});
+    check(rejected(1) == std::vector<std::string>{"index"}, "starter-mmo loot: no gold left to take");
+
+    // A full bag: the Bat Wing merges onto the 3 Bat Wings, the Linen Cloth merges onto the 2; then with no room left
+    // the cloth stays in the corpse and Ann hears "full".
+    setBag(ann, {"bat_wing:3", "linen_cloth:20", "linen_cloth:20", "linen_cloth:20", "linen_cloth:20", "linen_cloth:20",
+                 "linen_cloth:20", "linen_cloth:20", "linen_cloth:20", "linen_cloth:20", "linen_cloth:20", "linen_cloth:20",
+                 "linen_cloth:20", "linen_cloth:20", "linen_cloth:20", "linen_cloth:20"});
+    send(ann, "loot.take_all", {{"target", wire(b)}});
+    check(bag(ann)[0] == "bat_wing:4" && rejected(1) == std::vector<std::string>{"full"} && alive(b),
+          "starter-mmo loot: the wing merges into its stack; the cloth doesn't fit: full, it stays");
+    setBag(ann, {"bat_wing:4", "linen_cloth:19"});
+    send(ann, "loot.take", {{"target", wire(b)}, {"index", 1}});
+    check(bag(ann) == Bag{"bat_wing:4", "linen_cloth:20"} && events(1, "loot.closed").size() == 1,
+          "starter-mmo loot: the last item merges onto a stack; the emptied corpse closes");
+    run(0.1);
+    check(!alive(b), "starter-mmo loot: the emptied corpse is gone");
+
+    // The bag is saved with the character.
+    w.world.despawn(ann);
+    bool saved = false;
+    for (const auto& save : w.sent.saves)
+        if (save.charId == 601 && save.components)
+            saved = saved || (contains(*save.components, "\"Inventory\"") && contains(*save.components, "linen_cloth"));
+    check(saved, "starter-mmo loot: the bag is saved with the character");
+    for (const auto& st : w.world.script_status()) check(st.ok, "starter-mmo loot: system still enabled " + st.path + " " + st.error);
 }
 #endif
 
@@ -3279,7 +3473,7 @@ void checkNpcDefinitionErrors() {
              {"return {name = 'A', template = ''}", tpl},
              {"return {name = 'A', template = '" + longName + "'}", tpl},
              {"return {name = 'A', template = 'T', extra = 1}", "npcs/a.lua: unknown key extra"},
-             {"return 5", "npcs/a.lua: must return exactly one table {name = ..., template = ..., components = {...}}"},
+             {"return 5", "npcs/a.lua: must return exactly one table {name = ..., template = ..., components = {...}, loot = {...}}"},
              {with("5"), "npcs/a.lua: \"components\" must be a table {Type = {field = value, ...}, ...}, got 5"},
              {with("{'x'}"), "npcs/a.lua: \"components\": component names must be strings, got 1"},
              {with("{Nope = {}}"), "npcs/a.lua: unknown component \"Nope\""},
@@ -3318,6 +3512,101 @@ void checkNpcDefinitionErrors() {
     check(npc_errors({{"npcs/readme.txt", "not lua"}}).empty(), "npc definitions: an npcs/ folder without .lua files is fine");
     check(npc_errors({{"npcs/sandbox.lua", "return {name = io and 'X' or 'S', template = os and 'X' or 'T'}"}}).empty(),
           "npc definitions: run sandboxed (no io, os)");
+}
+
+// --- Item definitions and NPC loot tables (docs/services/world/lua.html#items) ---
+
+constexpr const char* kWing = "return {id = 'wing', name = 'Wing', icon = 'icons/wing.png', quality = 'poor', maxStack = 20, "
+                              "sellPrice = 1, description = 'Leathery.'}";
+
+void checkItemsAndLoot() {
+    LogCapture capture;
+    const char* parts[] = {"id = 'a'", "name = 'A'", "icon = 'i.png'", "quality = 'common'", "maxStack = 5", "sellPrice = 0",
+                           "description = ''"};
+    const auto item = [&](const std::string& drop, const std::string& extra) { // every field but drop, then extra
+        std::string out;
+        for (const std::string part : parts)
+            if (!part.starts_with(drop + " ")) out += (out.empty() ? "" : ", ") + part;
+        return "return {" + out + extra + "}";
+    };
+    for (const auto& [body, want] : std::vector<std::pair<std::string, std::string>>{
+             {"return 5", "items/a.lua: must return exactly one table {id = ..., name = ..., icon = ..., quality = ..., maxStack = ..., sellPrice = ..., description = ...}"},
+             {item("", ", extra = 1"), "items/a.lua: unknown key extra"},
+             {item("id", ""), "items/a.lua: \"id\" must be a non-empty string of at most 64 bytes"},
+             {item("id", ", id = 'Bad Id'"), "items/a.lua: \"id\" may only hold a-z, 0-9 and _"},
+             {item("name", ""), "items/a.lua: \"name\" must be a non-empty string of at most 255 bytes"},
+             {item("icon", ""), "items/a.lua: \"icon\" must be a non-empty string of at most 255 bytes"},
+             {item("description", ""), "items/a.lua: \"description\" must be a string of at most 1024 bytes"},
+             {item("quality", ", quality = 'shiny'"), "items/a.lua: \"quality\" must be one of \"poor\", \"common\", \"uncommon\", \"rare\", \"epic\""},
+             {item("maxStack", ", maxStack = 0"), "items/a.lua: \"maxStack\" must be an integer in [1, 1000]"},
+             {item("maxStack", ", maxStack = 1.5"), "items/a.lua: \"maxStack\" must be an integer in [1, 1000]"},
+             {item("sellPrice", ", sellPrice = -1"), "items/a.lua: \"sellPrice\" must be an integer in [0, 1000000000]"},
+         }) {
+        LuaRoot r;
+        r.write("items/a.lua", body);
+        TestWorld w({});
+        const auto errors = w.world.load_scripts(r.root);
+        const std::string got = errors.size() == 1 ? errors[0] : "<" + joined(errors) + ">";
+        check(got == want, "item definition rejected: want [" + want + "] got [" + got + "]");
+    }
+    {
+        LuaRoot r;
+        r.write("items/w1.lua", kWing).write("items/sub/w2.lua", kWing);
+        TestWorld w({});
+        const auto errors = w.world.load_scripts(r.root);
+        check(errors == std::vector<std::string>{"items/sub/w2.lua: id \"wing\" is also declared in items/w1.lua",
+                                                 "items/w1.lua: id \"wing\" is also declared in items/sub/w2.lua"},
+              "item definitions: a duplicate id rejects both files " + joined(errors));
+    }
+
+    const auto loot = [](const std::string& l) { return "return {name = 'A', template = 'T', loot = " + l + "}"; };
+    for (const auto& [body, want] : std::vector<std::pair<std::string, std::string>>{
+             {loot("5"), "npcs/a.lua: \"loot\": must be a table"},
+             {loot("{coins = 1}"), "npcs/a.lua: \"loot\": unknown key coins"},
+             {loot("{gold = {min = 3, max = 1}}"), "npcs/a.lua: \"loot\": \"gold\": \"max\" must be an integer in [3, 1000000]"},
+             {loot("{gold = {min = -1, max = 1}}"), "npcs/a.lua: \"loot\": \"gold\": \"min\" must be an integer in [0, 1000000]"},
+             {loot("{items = 5}"), "npcs/a.lua: \"loot\": \"items\" must be a sequence {{item = ..., chance = ..., min = ..., max = ...}, ...}"},
+             {loot("{items = {{item = 'nope', chance = 1, min = 1, max = 1}}}"), "npcs/a.lua: \"loot\": \"items\"[1]: \"item\" must name an item definition in items/"},
+             {loot("{items = {{item = 'wing', chance = 0, min = 1, max = 1}}}"), "npcs/a.lua: \"loot\": \"items\"[1]: \"chance\" must be a number in (0, 1]"},
+             {loot("{items = {{item = 'wing', chance = 1.5, min = 1, max = 1}}}"), "npcs/a.lua: \"loot\": \"items\"[1]: \"chance\" must be a number in (0, 1]"},
+             {loot("{items = {{item = 'wing', chance = 1, min = 0, max = 1}}}"), "npcs/a.lua: \"loot\": \"items\"[1]: \"min\" must be an integer in [1, 1000000]"},
+             {loot("{items = {{item = 'wing', chance = 1, min = 2, max = 1}}}"), "npcs/a.lua: \"loot\": \"items\"[1]: \"max\" must be an integer in [2, 1000000]"},
+             {loot("{items = {{item = 'wing', chance = 1, min = 1, max = 1, x = 1}}}"), "npcs/a.lua: \"loot\": \"items\"[1]: unknown key x"},
+         }) {
+        const auto errors = npc_errors({{"items/wing.lua", kWing}, {"npcs/a.lua", body}});
+        const std::string got = errors.size() == 1 ? errors[0] : "<" + joined(errors) + ">";
+        check(got == want, "npc loot rejected: want [" + want + "] got [" + got + "]");
+    }
+
+    // kast.items and kast.npcDef from a system; both read-only or fresh copies.
+    LuaRoot r;
+    r.write("items/wing.lua", kWing);
+    r.write("npcs/bat.lua", "return {name = 'Bat', template = 'BatT', loot = {gold = {min = 1, max = 3}, "
+                            "items = {{item = 'wing', chance = 0.8, min = 1, max = 2}}}}");
+    r.write("npcs/ghost.lua", "return {name = 'Ghost', template = 'G'}");
+    r.write("systems/items.lua", std::string(kLuaExpect) + R"lua(
+return { init = function()
+    local w = kast.items.wing
+    expect(w.id == "wing" and w.name == "Wing" and w.icon == "icons/wing.png" and w.quality == "poor" and w.maxStack == 20 and
+           w.sellPrice == 1 and w.description == "Leathery.", "kast.items: every field")
+    expect(kast.items.nope == nil, "kast.items: unknown id is nil")
+    raises("kast is read-only", function() kast.items.wing.maxStack = 99 end)
+    raises("kast is read-only", function() kast.items.x = {} end)
+    local bat = kast.npcDef("Bat")
+    expect(bat.name == "Bat" and bat.template == "BatT" and bat.loot.gold.min == 1 and bat.loot.gold.max == 3, "kast.npcDef: name, template, gold")
+    local e = bat.loot.items[1]
+    expect(e.item == "wing" and e.chance == 0.8 and e.min == 1 and e.max == 2, "kast.npcDef: loot items")
+    bat.loot.gold.min = 50
+    expect(kast.npcDef("Bat").loot.gold.min == 1, "kast.npcDef returns a fresh copy")
+    expect(kast.npcDef("Ghost").loot == nil and kast.npcDef("Nope") == nil, "no loot / no definition: nil")
+    raises("kast.npcDef: name must be a string, got 5", function() kast.npcDef(5) end)
+    kast.log("items lua done")
+end, update = function() end }
+)lua");
+    TestWorld w({});
+    const auto errors = w.world.load_scripts(r.root);
+    check(errors.empty(), "items lua: loads " + joined(errors));
+    check_lua_expectations("items lua", "items lua done");
 }
 
 constexpr const char* kNpcDefs[][2] = {
@@ -3534,7 +3823,11 @@ int lua_checks(int& checks) {
 #ifdef KAST_STARTER_MMO
     checkStarterMmoCombat();
 #endif
+#ifdef KAST_STARTER_MMO_TEST_LUA
+    checkStarterMmoLoot();
+#endif
     checkNpcDefinitionErrors();
+    checkItemsAndLoot();
     checkNpcCreateFromDefinitions();
     checkNpcSpawnDefinitions();
     checkTileMath();

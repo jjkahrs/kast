@@ -937,6 +937,64 @@
           "visible": false
         }
       }
+    },
+    {
+      "id": 33,
+      "name": "Bag",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UIDocument": {
+          "path": "ui/bag.rml",
+          "visible": false
+        }
+      }
+    },
+    {
+      "id": 34,
+      "name": "Loot",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UIDocument": {
+          "path": "ui/loot.rml",
+          "visible": false
+        }
+      }
     }
   ],
   "systems": [
@@ -945,7 +1003,9 @@
     "scripts/chat.lua",
     "scripts/player.lua",
     "scripts/combat.lua",
-    "scripts/world_flow.lua"
+    "scripts/world_flow.lua",
+    "scripts/bag.lua",
+    "scripts/loot.lua"
   ],
   "lighting": {
     "ambientColor": [

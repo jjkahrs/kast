@@ -63,16 +63,25 @@ NPC of that type starts with. Spawn files (<code>npc</code>) and <code>kast.crea
         Health = { current = 50, max = 50 },   -- partial: unlisted fields take their defaults; {} is all defaults
         StateMachine = { machine = &quot;patrol&quot; }, -- enters &quot;patrol&quot;'s initial state when the NPC is created
     },
+    loot = {                 -- optional: what a system may roll when it dies (see below)
+        gold = { min = 5, max = 15 },
+        items = { { item = &quot;linen_cloth&quot;, chance = 0.6, min = 1, max = 2 } },
+    },
 }
 </code></pre>
 <ul>
-<li><strong>Keys:</strong> <code>name</code> (unique across <code>npcs/</code>) and <code>template</code> are required, non-empty strings of at most 255 bytes. Any
-  other key is an error.</li>
+<li><strong>Keys:</strong> <code>name</code> (unique across <code>npcs/</code>) and <code>template</code> are required, non-empty strings of at most 255 bytes;
+  <code>components</code> and <code>loot</code> are optional. Any other key is an error.</li>
+<li id="npc-loot"><strong>Loot:</strong> <code>gold = {min, max}</code> (integers, <code>0 &lt;= min &lt;= max &lt;= 1000000</code>) and <code>items</code>, a sequence of
+  <code>{item, chance, min, max}</code>: <code>item</code> an <a href="lua.html#items">item definition</a>'s <code>id</code>, <code>chance</code> in <code>(0, 1]</code>,
+  <code>1 &lt;= min &lt;= max &lt;= 1000000</code>. Both parts are optional; other keys are errors. The server only checks and keeps it:
+  systems read it with <code>kast.npcDef(name).loot</code> and decide when and how to roll it (the starter-mmo sample rolls it once
+  at death, <code>math.random</code>, for the player who hit the NPC first).</li>
 <li><strong>Components:</strong> any <a href="lua.html#component-definitions">Lua component</a>, and the writable built-in <code>StateMachine</code>, whose <code>machine</code>
   must name a valid <a href="state-machines.html#state-machines">state machine</a>. The read-only built-ins (<code>Npc</code>, <code>Transform</code>, <code>Spawn</code>,
   <code>Character</code>) and unknown names are errors. Field values are checked like <code>kast.set</code> (unknown field, wrong type,
   min/max, enum values, array elements).</li>
-<li><strong>Loading:</strong> once at startup, after <code>fsms/</code> and before the systems' <code>init</code>, in the definition sandbox. Every invalid
+<li><strong>Loading:</strong> once at startup, after <code>fsms/</code> and <code>items/</code> and before the systems' <code>init</code>, in the definition sandbox. Every invalid
   file is one <code>Lua error</code> starting with its path (<code>npcs/guard.lua: "Health": unknown field "hp"</code>) and refuses the
   start. Two files with the same <code>name</code> are both rejected, each error naming the other file. A missing or empty <code>npcs/</code>
   is fine.</li>

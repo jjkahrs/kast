@@ -107,7 +107,7 @@ add_library(kast_engine STATIC
   engine/app.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
   engine/systems.cpp engine/renderer.cpp engine/shadow.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
-  engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
+  engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
   engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/world_client.cpp engine/replication.cpp engine/terrain.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
@@ -1450,6 +1450,25 @@ add_test(NAME ui_click_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_click.png"
           "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui.scene --play --gui-click start_button --focus-panel Events"
           "-DEXPECT_OUTPUT=Menu start clicked: start_button in ui/main_menu.rml"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# kast.gui drag and drop (ui_drag.scene, scripts/ui_drag.lua): a scripted left drag from the Game view's centre takes
+# the box onto the panel right of it (test.box.start, then test.box.drop naming the target, which lights up through
+# kast.gui.setAttribute); a drag down onto empty <body> drops on no target; one with Shift held says so. The box is
+# hovered before the drag. Its decorator image and the panel's <img> (PNGs) load without a warning.
+add_test(NAME ui_drag_drop
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_drag_drop.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui_drag.scene --play --sim-mouse 60,left,260,0,0" -DFRAMES=120
+          "-DEXPECT_OUTPUT=Hovered: source.*Drag start: source in ui/drag.rml.*Drag drop: source onto 'target' in 'ui/drag.rml' shift=false"
+          "-DFORBID_OUTPUT=\\[warn\\] RmlUi|GUI image|Could not load" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME ui_drag_nowhere
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_drag_nowhere.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui_drag.scene --play --sim-mouse 60,left,0,200,0" -DFRAMES=120
+          "-DEXPECT_OUTPUT=Drag start: source in ui/drag.rml.*Drag drop: source onto '' in '' shift=false"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME ui_drag_shift
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_drag_shift.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui_drag.scene --play --sim-mouse 60,left+shift,260,0,0" -DFRAMES=120
+          "-DEXPECT_OUTPUT=Drag drop: source onto 'target' in 'ui/drag.rml' shift=true"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 # The built game (game_projects/ui, startScene ui.scene, see KAST_GAMES) loads the GUI from game.pak; a click there
 # reaches Lua too.

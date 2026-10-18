@@ -191,8 +191,16 @@
 <td>Press the Online panel's <strong>Start</strong>, <strong>Stop</strong> or <strong>Status</strong> at startup (e.g. with <code>--log-fps</code> to watch the frame rate while the stack starts).</td>
 </tr>
 <tr>
-<td><code>--sim-mouse &lt;frame,button,dx,dy,wheel&gt;</code></td>
-<td>With <code>--play</code>: on frame <code>frame</code>, move the mouse to the center of the Game panel's image, press <code>button</code> (<code>left</code>, <code>right</code> or <code>none</code>) and turn the wheel by <code>wheel</code> notches; the next frame move it by <code>dx, dy</code> pixels, the frame after release. Synthetic SDL events, so <code>kast.input</code> and the game GUIs get them as from a real mouse while the Game panel is focused. <code>kast.input.setCursorLocked</code> is not applied to the window in such a run, so the real cursor is never grabbed. Example: <code>--sim-mouse 600,left,240,-40,0</code>.</td>
+<td><code>--sim-mouse &lt;frame,button,dx,dy,wheel[,sx,sy]&gt;</code></td>
+<td>With <code>--play</code>: on frame <code>frame</code>, move the mouse to the center of the Game panel's image (or <code>sx, sy</code> pixels from it), press <code>button</code> (<code>left</code>, <code>right</code> or <code>none</code>) and turn the wheel by <code>wheel</code> notches; the next frame move it by <code>dx, dy</code> pixels (with <code>none</code>: a hover there, held until the run ends), the frame after release it there (a game GUI sees a drag and drop). <code>left+shift</code> / <code>right+shift</code> also hold Shift from the press until after the release. Synthetic SDL events, so <code>kast.input</code> and the game GUIs get them as from a real mouse while the Game panel is focused. <code>kast.input.setCursorLocked</code> is not applied to the window in such a run, so the real cursor is never grabbed. Example: <code>--sim-mouse 600,left,240,-40,0</code>.</td>
+</tr>
+<tr>
+<td><code>--sim-key &lt;frame,key&gt;</code></td>
+<td>With <code>--play</code>, repeatable: on frame <code>frame</code> press <code>key</code> (an SDL key name: <code>B</code>, <code>Escape</code>, <code>Tab</code>) on the Game panel, with the character it types (a letter or digit, lower case) for a focused game GUI text field, and release it two frames later. Synthetic SDL events, like <code>--sim-mouse</code>. Example: <code>--sim-key 600,B</code>.</td>
+</tr>
+<tr>
+<td><code>--sim-on-log &lt;text&gt;</code></td>
+<td>With <code>--sim-mouse</code> or <code>--sim-key</code>: their frames count from the first log line containing <code>text</code> instead of from the start, for input that must wait for something in the game (a corpse to right-click). Example: <code>--sim-mouse 30,right,0,0,0 --sim-on-log CLICK</code>.</td>
 </tr>
 <tr>
 <td><code>--screenshot-on-log &lt;frames,text&gt;</code></td>

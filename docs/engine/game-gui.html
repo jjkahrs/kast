@@ -38,7 +38,9 @@ normalizes whitespace and indentation.</p>
 <p><strong>Style sheets</strong> are RCSS (CSS2-like; see the RmlUi docs). RmlUi has no built-in styles: elements are inline until a
 rule says otherwise, so sheets start with <code>div, p { display: block; }</code>. The only font is the bundled Roboto
 (<code>font-family: Roboto;</code>, set on <code>body</code>); text without a <code>font-family</code> doesn't show (RmlUi warns). Images
-(<code>&lt;img&gt;</code>, image decorators) are not supported yet: they log a warning and draw nothing.</p>
+(<code>&lt;img src&gt;</code>, <code>decorator: image(...)</code>) are PNG or JPG files, paths relative to the document (or style sheet),
+read from disk or the built game's pak and drawn 1:1; a missing file is RmlUi's <code>Could not load texture</code> warning.
+A dragged element's clone (outside any document) finds them relative to the dragged element's document.</p>
 <p><strong>UIDocument</strong> (built-in component, <em>UI Document</em> in the Inspector): <code>path</code> (project-relative <code>.rml</code>; the Inspector
 offers a combo of the project's <code>.rml</code> files, an unknown path shows as <code>(missing) &lt;path&gt;</code> and is kept) and <code>visible</code>
 (default true). Saved with the scene like any component. In Play (and in the built game), every <code>UIDocument</code> in the
@@ -55,6 +57,34 @@ UIDocument's <code>path</code>). No or empty <code>data-event</code>: nothing is
     kast.log(&quot;Menu start clicked: &quot; .. event.id .. &quot; in &quot; .. event.document)
 end)
 </code></pre>
+<p id="drag-and-drop"><strong>Drag and drop</strong>: an element is draggable when its style sheet gives it RmlUi's <code>drag</code>
+property (<code>drag: clone</code> draws a copy under the cursor while the original stays put; <code>drag-drop</code> and <code>drag</code>
+work too). Give it (or an ancestor) <code>data-drag="name"</code> and the drag publishes on the event bus, publisher <code>UI</code>:</p>
+<ul>
+<li><code>name.start</code> once the mouse has moved with the button down on it;</li>
+<li><code>name.drop</code> when the button is released, wherever that is.</li>
+</ul>
+<p>Both carry <code>{"id", "document", "target", "targetDocument", "shift", "ctrl", "alt"}</code>: <code>id</code> is the dragged element's id (or its
+nearest ancestor's with one), <code>document</code> its <code>.rml</code>. On a drop, <code>target</code> is the id of the element under the cursor (or its
+nearest ancestor with one) and <code>targetDocument</code> that element's <code>.rml</code>; both are <code>""</code> when released over no element or
+over a document's own <code>&lt;body&gt;</code> (the world). <code>shift</code>, <code>ctrl</code> and <code>alt</code> are the modifier keys held at that
+moment. The engine moves nothing: Lua decides what a drop means.</p>
+<pre><code class="language-css">.slot { drag: clone; }
+</code></pre>
+<pre><code class="language-html">&lt;div id=&quot;slot_3&quot; class=&quot;slot&quot; data-drag=&quot;bag.slot&quot;&gt;&lt;div id=&quot;icon_3&quot; class=&quot;icon&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+</code></pre>
+<pre><code class="language-lua">kast.subscribe(&quot;bag.slot.drop&quot;, function(e)
+    if e.target == &quot;&quot; then askToDestroy(e.id)                 -- dropped on the world
+    elseif e.targetDocument == e.document then move(e.id, e.target, e.shift) end
+end)
+</code></pre>
+<p><strong>Stacked documents</strong>: a document's <code>&lt;body&gt;</code> is usually full-screen, and RmlUi gives the mouse to the topmost
+element under it, so a later document's empty body hides the panels of the ones below from clicks, drags and hover. Give
+<code>body</code> <code>pointer-events: none</code> and the panels <code>pointer-events: auto</code> (it is inherited); the starter-mmo sample's
+<code>starter.rcss</code> does.</p>
+<p>A press that starts a drag is a press on the GUI, so <code>kast.gui.mouseOver()</code> was true when it went down. The editor's
+<code>--sim-mouse frame,left[+shift],dx,dy,0</code> performs one drag for tests (<code>ctest -R ui_drag</code>,
+<code>tests/project/ui_drag.scene</code>).</p>
 <p><strong><code>kast.gui</code></strong> (Lua, in Play and the built game; nil where no game GUI runs): reads and writes elements of the scene's
 loaded documents by <code>id</code>, topmost document first (<code>engine/gui_access.h</code>).</p>
 <table>
@@ -82,6 +112,17 @@ loaded documents by <code>id</code>, topmost document first (<code>engine/gui_ac
 <td><code>false</code> hides the element (<code>display: none</code>), <code>true</code> gives it back its style sheet's <code>display</code>.</td>
 </tr>
 <tr>
+<td><code>kast.gui.setAttribute(id, name, value)</code></td>
+<td>—</td>
+<td>Sets an attribute (all strings): an <code>&lt;img&gt;</code>'s <code>src</code> (relative to the document, like in the <code>.rml</code>), the
+<code>class</code> list (<code>"slot uncommon"</code>) for styling, a <code>style</code> such as <code>decorator: image(../icons/wing.png)</code>, ...</td>
+</tr>
+<tr>
+<td><code>kast.gui.focus(id)</code></td>
+<td>boolean</td>
+<td>Gives the element keyboard focus, as a click would (a text field: typed text goes there, e.g. Enter to chat). <code>false</code> if no visible document has that id. Not kept.</td>
+</tr>
+<tr>
 <td><code>kast.gui.focusedField()</code></td>
 <td>string or <code>nil</code></td>
 <td>The id of the text field (<code>&lt;input type="text"&gt;</code>, <code>"password"</code>, <code>&lt;textarea&gt;</code>) with keyboard focus, e.g. to ignore movement keys while the player types.</td>
@@ -91,9 +132,14 @@ loaded documents by <code>id</code>, topmost document first (<code>engine/gui_ac
 <td>boolean</td>
 <td>The mouse is over a GUI element (RmlUi's hover element is something other than a document's own <code>&lt;body&gt;</code>, so a full-screen body doesn't count). Checked when a button goes down, it tells a press on the chat box from a press on the world.</td>
 </tr>
+<tr>
+<td><code>kast.gui.hovered()</code></td>
+<td>string or <code>nil</code></td>
+<td>The id of the element under the mouse, or of its nearest ancestor with one (an icon inside a slot reports the slot); <code>nil</code> over no element or only a <code>&lt;body&gt;</code>. Poll it each update for tooltips.</td>
+</tr>
 </tbody>
 </table>
-<p>Writes are kept and applied again to every document that loads later, so a system's <code>init</code> (which runs before the
+<p>Writes (<code>setText</code>, <code>setVisible</code>, <code>setAttribute</code>) are kept and applied again to every document that loads later, so a system's <code>init</code> (which runs before the
 scene's documents load) and hot reloads see them; they are forgotten when the scene switches (<code>kast.loadScene</code>) and at
 each Play start. A write to an id no document has does nothing. Arguments that aren't strings (or, for
 <code>setVisible</code>, a boolean) raise at the calling line. Values and texts are never logged: a field may hold a password,

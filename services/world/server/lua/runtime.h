@@ -42,6 +42,7 @@ struct ClientEvent {
 struct NpcDef {
     std::string name, templateName;
     Json components = Json::object(); // {"<Type>": canonical value, ...}: the listed fields over the defaults
+    Json loot; // null, or {"gold": {"min", "max"}?, "items": [{"item", "chance", "min", "max"}, ...]?} (checked)
 };
 using NpcDefs = std::map<std::string, NpcDef, std::less<>>; // by name
 
@@ -69,10 +70,11 @@ public:
     Runtime(const Runtime&) = delete;
     Runtime& operator=(const Runtime&) = delete;
 
-    // Loads the state machine definitions under root/fsms/, then the NPC definitions under root/npcs/, then every
+    // Loads the state machine definitions under root/fsms/, the item definitions under root/items/ (kast.items), then
+    // the NPC definitions under root/npcs/ (whose loot names items), then every
     // system under root/systems/ and runs each init, then the game machines (gameMachines, by name) enter their initial
     // state. Returns every error (a rejected definition, a listed machine without one, a bad system); non-empty means
-    // the server must not start. A missing folder is no machines / NPC definitions / systems.
+    // the server must not start. A missing folder is no machines / items / NPC definitions / systems.
     std::vector<std::string> load(const std::filesystem::path& root, std::vector<std::string> gameMachines = {});
     // A runtime error in any of these disables only that system (logged with path:line) until restart.
     void update(float dt);

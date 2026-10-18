@@ -96,6 +96,7 @@ void check_round_trip(const fs::path& project, const std::string& name, const st
     for (const auto& entry : fs::directory_iterator(dir / "heights")) heightBytes[entry.path().filename().string()] = bytes(entry.path());
 
     doc->saved = {}; // everything differs from "disk": every file is rewritten
+    if (doc->state.manifest.contains("material")) doc->saved.manifest = Json{{"material", doc->state.manifest["material"]}}; // still owns its generated terrain files
     CHECK(save_map(p, *doc, false).empty());
     CHECK(json_file(dir / "map.json") == manifest);
     if (!areas.is_null()) CHECK(json_file(dir / "areas.json") == areas);

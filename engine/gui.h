@@ -3,7 +3,9 @@
 #include <bgfx/bgfx.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
+#include <string_view>
 
 union SDL_Event;
 struct SDL_Window;
@@ -27,6 +29,13 @@ uint64_t problemCount();
 // SDL sends typed text (SDL_EVENT_TEXT_INPUT, what RmlUi text fields insert) only while text input is on: turns it on
 // for window while want (a text field has focus, SceneGui::focusedField), off otherwise.
 void syncTextInput(SDL_Window* window, bool want);
+// A file as RmlUi should see it: UTF-8, '/', and a drive's "C:" as "C|" (RmlUi's own convention: its URLs would read
+// "C:" as a scheme and lose the folder an <img src> is relative to). fromRmlPath undoes it for opening the file.
+std::string toRmlPath(const std::filesystem::path& file);
+std::filesystem::path fromRmlPath(std::string_view path);
+// While an element is dragged: its document's source URL, so the drag clone RmlUi builds outside any document still
+// finds the images its paths name relative to that document. Empty when no drag runs (gui_events.h sets it).
+void setDragDocument(std::string sourceUrl);
 
 } // namespace kast::gui
 

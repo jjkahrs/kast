@@ -4,7 +4,7 @@
 # starter_mmo_test_driver.lua (TEST ONLY, configured with STAGE and CHARACTER), which drives the sample's own screens
 # by publishing the events their buttons publish. BOT=ON first starts an idle kast_bot (compose service "bot") standing
 # at the Meadow spawn and stops it afterwards. Every EXPECT_ALL regex must match the editor's log, which is kept in
-# STATE/<STAGE>.log; an [error] line fails. Prints "SKIP: ..." when the setup didn't finish (no docker or credentials).
+# STATE/<STAGE>.log; an [error] line, an RmlUi warning or a GUI image warning fails. Prints "SKIP: ..." when the setup didn't finish (no docker or credentials).
 # Usage: cmake -DEDITOR=<exe> -DWORLD_DIR=<dir> -DSAMPLE=<dir> -DSTATE=<dir> -DSTAGE=<name> -DCHARACTER=<name>
 #              -DSCREENSHOT=<png> -DFRAMES=<n> -DEXPECT_ALL=<regex;...> [-DBOT=ON] [-DEDITOR_ARGS=<flags>]
 #              -P starter_mmo_live_play.cmake
@@ -36,11 +36,13 @@ foreach(scene_script "realms|realms" "world|world_flow")
   file(WRITE "${project}/scenes/${scene}.scene" "${text}")
 endforeach()
 
-set(override -f docker-compose.yml -f "${SAMPLE}/docker-compose.override.yml")
+# The same compose files as the setup, and --no-deps: a "run" with other files would recreate the world server
+# without the test-only Lua.
+set(override -f docker-compose.yml -f "${SAMPLE}/docker-compose.override.yml" -f "${STATE}/test.override.yml")
 set(bot "")
 if(BOT)
   string(RANDOM LENGTH 6 ALPHABET abcdefghijklmnopqrstuvwxyz run_id)
-  execute_process(COMMAND docker compose ${override} run -d --rm bot --mode load --count 1 --behaviour idle
+  execute_process(COMMAND docker compose ${override} run -d --rm --no-deps bot --mode load --count 1 --behaviour idle
                           --duration 120 --run-id "starter${run_id}"
                   WORKING_DIRECTORY "${WORLD_DIR}" RESULT_VARIABLE result OUTPUT_VARIABLE bot
                   OUTPUT_STRIP_TRAILING_WHITESPACE)
@@ -53,7 +55,7 @@ endif()
 set(log "${STATE}/${STAGE}.log")
 execute_process(COMMAND "${CMAKE_COMMAND}" "-DEDITOR=${EDITOR}" "-DSCREENSHOT=${SCREENSHOT}" "-DFRAMES=${FRAMES}"
                         "-DEXTRA_ARGS=--project ${project} --online-login-env --play --no-audio-device --size 1600x1000 ${EDITOR_ARGS}"
-                        "-DOUTPUT_FILE=${log}" "-DFORBID_OUTPUT=\\[error\\]"
+                        "-DOUTPUT_FILE=${log}" "-DFORBID_OUTPUT=\\[error\\]|\\[warn\\] RmlUi|GUI image"
                         -P "${CMAKE_CURRENT_LIST_DIR}/smoke_test.cmake"
                 RESULT_VARIABLE result)
 if(bot)

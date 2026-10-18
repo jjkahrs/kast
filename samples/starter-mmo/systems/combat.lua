@@ -7,8 +7,10 @@
 -- (kast.map.path, or straight on a map without a navmesh) and hits it for its NPC_ATTACKS damage every interval while
 -- within ATTACK_RANGE. It gives up ("returning") once it is LEASH_RANGE from its spawn point or its target is dead,
 -- gone or on another map; back at its spawn point it heals to full and goes back to patrolling (Guard) or standing
--- (Bat). At 0 Health an NPC dies: it is destroyed on the next tick (after its death went out) and its spawn file brings
--- it back respawnSec later.
+-- (Bat). The first player to hit an NPC tags it (WoW classic): tagged[npc], forgotten when it gets home healed. At 0
+-- Health an NPC dies: its machine goes "dead" (a corpse: no walking, no fighting, refused as a target) and "npc.died"
+-- {npc, tagger} goes on the server bus; systems/inventory.lua rolls its loot and removes the corpse later, and its spawn
+-- file brings it back respawnSec after that.
 --
 -- A character at 0 Health is dead for REVIVE_SECONDS: it cannot move (kast.setMovable) or attack, and NPCs drop it.
 -- Then it revives at its map's spawn point (kast.map.spawn) with full Health. One that logged out dead dies again on
@@ -18,7 +20,7 @@
 -- holds off regeneration after it).
 --
 -- Bandwidth: events only when something happens, sent with kast.sendNearby through the player involved (an NPC that
--- dies is gone before the tick's events go out): "combat.attack" {attacker, target, attackerName, targetName} and
+-- dies is still there as a corpse): "combat.attack" {attacker, target, attackerName, targetName} and
 -- "combat.hit" (the same plus damage) per hit, "combat.death" {entity, name}, "combat.revive" {entity, name}. Health
 -- is replicated on its own, once per hit. A chasing or returning NPC costs one EntityMove a tick to each viewer, like a
 -- patrolling one.
@@ -39,7 +41,7 @@ local now = 0           -- seconds since start, summed from dt
 local readyAt = {}      -- player -> time its next attack is allowed
 local deadUntil = {}    -- player -> time it revives
 local fights = {}       -- npc -> {target = player, swingAt = time, home = {x, y, z}, route = corners, leg, repathAt}
-local dying = {}        -- npcs at 0 Health, destroyed on the next tick
+local tagged = {}       -- npc -> the player who hit it first
 
 local function exists(e, component)
     local ok, has = pcall(kast.has, e, component) -- raises for ids that are not in the world
@@ -56,7 +58,7 @@ local function flatDistance(a, b)
 end
 
 local function alive(e)
-    return deadUntil[e] == nil and not dying[e] and kast.get(e, "Health").current > 0
+    return deadUntil[e] == nil and kast.get(e, "Health").current > 0
 end
 
 local function engaged(a, b)
@@ -95,9 +97,11 @@ local function hit(attacker, target, damage, player)
     if exists(target, "Character") then
         killPlayer(target)
     else
-        dying[target] = true
         fights[target] = nil
+        if exists(target, "StateMachine") then kast.fsm.change(target, "dead") end
         kast.sendNearby(player, "combat.death", {entity = target, name = name(target)})
+        kast.publish("npc.died", {npc = target, tagger = tagged[target]})
+        tagged[target] = nil
     end
 end
 
@@ -134,8 +138,9 @@ local function onAttack(event)
         return reject(attacker, "range")
     end
     readyAt[attacker] = now + ATTACK_COOLDOWN
+    tagged[target] = tagged[target] or attacker
     hit(attacker, target, ATTACK_DAMAGE, attacker)
-    if not dying[target] and exists(target, "StateMachine") then startFight(target, attacker) end
+    if alive(target) and exists(target, "StateMachine") then startFight(target, attacker) end
 end
 
 -- Moves npc toward goal at CHASE_SPEED along fight.route (planned again when stale); true once within reach.
@@ -195,7 +200,7 @@ local function goHome(npc, f, dt)
     local health = kast.get(npc, "Health")
     kast.set(npc, "Health", {current = health.max})
     if exists(npc, "Spawn") then kast.set(npc, "Transform", {heading = kast.get(npc, "Spawn").heading}) end
-    fights[npc] = nil
+    fights[npc], tagged[npc] = nil, nil
     kast.fsm.change(npc, RESUME_STATE[kast.get(npc, "StateMachine").machine] or "idle")
 end
 
@@ -214,10 +219,9 @@ return {
 
     update = function(dt)
         now = now + dt
-        for npc in pairs(dying) do
-            if exists(npc, "Npc") then kast.destroy(npc) end
+        for npc in pairs(tagged) do
+            if not exists(npc, "Npc") then tagged[npc] = nil end
         end
-        dying = {}
         for player, at in pairs(deadUntil) do
             if now >= at and exists(player, "Character") then revive(player) end
         end

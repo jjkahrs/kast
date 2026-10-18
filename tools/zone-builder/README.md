@@ -22,6 +22,9 @@ build\debug\kast_zone_builder.exe
 build\debug\kast_zone_builder.exe --project samples\starter-mmo --map meadow
 ```
 
+Or use `tools\zone-builder\run.bat [debug|release] [flags...]` (default debug) from any directory; it runs from
+the repo root, so relative paths like `samples\starter-mmo` still resolve.
+
 File > Open Project... (or `--project <dir>`) lists the project's `maps/*/map.json`; click one to open it. The
 **Bake** panel runs `kast_mapbake` (see [services/world/tools/mapbake](../../services/world/tools/mapbake/README.md)).
 

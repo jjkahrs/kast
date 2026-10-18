@@ -3,6 +3,7 @@
 #include "animation.h"
 #include "components.h"
 #include "log.h"
+#include "lua_items.h"
 #include "lua_sandbox.h"
 #include "lua_state_machines.h"
 #include "lua_world_api.h"
@@ -136,6 +137,9 @@ struct LuaSystems::State {
     bool call(System& system, const sol::protected_function& fn, std::string_view what, Args&&... args);
     void disable(System& system, const std::string& message);
     sol::table readOnly(const sol::table& source);
+    void loadItems();
+    sol::table itemTable();
+    std::map<std::string, nlohmann::json> items; // kast.items, from <project>/items/
     sol::environment environment();
 
     // kast.* bindings
@@ -162,8 +166,10 @@ void LuaSystems::State::init(const std::vector<std::string>& paths)
     bindApi();
     indexIds();
     fsm.attach(scene, [this](EntityId id) { return find(id); });
-    if (projectRoot)
+    if (projectRoot) {
         loadMachines(false);
+        loadItems();
+    }
     for (const std::string& path : paths)
         systems.push_back({.path = path});
     for (System& system : systems) {
@@ -302,6 +308,24 @@ sol::table LuaSystems::State::readOnly(const sol::table& source)
     return proxy;
 }
 
+// kast.items (lua_items.h): rejected files are logged; the valid ones are what Lua sees.
+void LuaSystems::State::loadItems()
+{
+    ItemDefinitions defs = loadItemDefinitions(lua, *projectRoot);
+    for (const std::string& error : defs.errors)
+        log::error(std::format("Item rejected: {}", error));
+    items = std::move(defs.items);
+}
+
+// {[id] = {id =, name =, ...}}: read-only all the way down, a fresh copy per environment.
+sol::table LuaSystems::State::itemTable()
+{
+    sol::table table = lua.create_table();
+    for (const auto& [id, item] : items)
+        table[id] = readOnly(jsonToLua(lua, item).as<sol::table>());
+    return readOnly(table);
+}
+
 sol::environment LuaSystems::State::environment()
 {
     sol::environment env = sandboxEnvironment(lua);
@@ -314,6 +338,7 @@ sol::environment LuaSystems::State::environment()
     kast["physics"] = readOnly(physicsApi);
     kast["audio"] = readOnly(audioApi);
     kast["net"] = readOnly(netApi);
+    kast["items"] = itemTable();
     if (auth.enabled())
         kast["auth"] = readOnly(authApi);
     if (world.enabled())
@@ -855,10 +880,14 @@ void LuaSystems::State::bindPhysicsApi()
         return table;
     };
     const auto idOf = [this](entt::entity e) { return scene.registry().get<PersistentId>(e).value; };
-    const auto idList = [this, idOf](const std::vector<entt::entity>& entities) {
+    // An entity destroyed this frame keeps its body until the next physics step (e.g. a terrain tile of the map just
+    // left): queries leave it out.
+    const auto gone = [this](entt::entity e) { return !scene.registry().valid(e) || !scene.registry().all_of<PersistentId>(e); };
+    const auto idList = [this, idOf, gone](const std::vector<entt::entity>& entities) {
         sol::table table = lua.create_table();
-        for (size_t i = 0; i < entities.size(); ++i)
-            table[i + 1] = idOf(entities[i]);
+        for (const entt::entity e : entities)
+            if (!gone(e))
+                table[table.size() + 1] = idOf(e);
         return table;
     };
     // Runs body; a Physics std::invalid_argument raises at the calling line.
@@ -871,7 +900,7 @@ void LuaSystems::State::bindPhysicsApi()
     };
 
     physicsApi = lua.create_table();
-    physicsApi.set_function("raycast", [this, vec3, number, toLua, idOf, guarded](
+    physicsApi.set_function("raycast", [this, vec3, number, toLua, idOf, gone, guarded](
                                            sol::this_state L, const sol::object& origin, const sol::object& direction,
                                            const sol::object& maxDistance) -> sol::object {
         const std::string fn = "kast.physics.raycast";
@@ -879,7 +908,7 @@ void LuaSystems::State::bindPhysicsApi()
         const bx::Vec3 dir = vec3(L, fn, "direction", direction);
         const float distance = number(L, fn, "maxDistance", maxDistance);
         const auto hit = guarded(L, fn, [&] { return physics.raycast(from, dir, distance); });
-        if (!hit)
+        if (!hit || gone(hit->entity))
             return sol::lua_nil;
         sol::table table = lua.create_table();
         table["entity"] = idOf(hit->entity);
@@ -939,11 +968,11 @@ void LuaSystems::State::bindPhysicsApi()
         const entt::entity e = entity(L, id);
         return guarded(L, "kast.physics.isGrounded", [&] { return physics.isGrounded(e); });
     });
-    physicsApi.set_function("getGround", [this, toLua, idOf, guarded](sol::this_state L,
+    physicsApi.set_function("getGround", [this, toLua, idOf, gone, guarded](sol::this_state L,
                                                                       const sol::object& id) -> sol::object {
         const entt::entity e = entity(L, id);
         const auto ground = guarded(L, "kast.physics.getGround", [&] { return physics.ground(e); });
-        if (!ground)
+        if (!ground || gone(ground->entity))
             return sol::lua_nil;
         sol::table table = lua.create_table();
         table["entity"] = idOf(ground->entity);
@@ -1151,11 +1180,23 @@ void LuaSystems::State::bindGuiApi()
             raise(L, std::format("kast.gui.setVisible: visible must be a boolean, got {}", toString(L, visible)));
         gui->setVisible(text(L, "setVisible", "id", id), visible.as<bool>());
     });
+    guiApi.set_function("setAttribute", [=, this](sol::this_state L, const sol::object& id, const sol::object& name,
+                                                  const sol::object& value) {
+        gui->setAttribute(text(L, "setAttribute", "id", id), text(L, "setAttribute", "name", name),
+                          text(L, "setAttribute", "value", value));
+    });
+    guiApi.set_function("focus", [=, this](sol::this_state L, const sol::object& id) {
+        return gui->focus(text(L, "focus", "id", id));
+    });
     guiApi.set_function("focusedField", [this]() -> sol::object {
         const std::optional<std::string> id = gui->focusedField();
         return id ? sol::make_object(lua, *id) : sol::object(sol::lua_nil);
     });
     guiApi.set_function("mouseOver", [this] { return gui->mouseOver(); });
+    guiApi.set_function("hovered", [this]() -> sol::object {
+        const std::optional<std::string> id = gui->hovered();
+        return id ? sol::make_object(lua, *id) : sol::object(sol::lua_nil);
+    });
 }
 
 // kast.world.*: see lua_world_api.h.

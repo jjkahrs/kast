@@ -6,7 +6,8 @@
 
 #include <optional>
 
-// RmlUi render interface on bgfx: geometry as static vertex/index buffers, textures RmlUi generates (font glyphs),
+// RmlUi render interface on bgfx: geometry as static vertex/index buffers, textures RmlUi generates (font glyphs) and
+// PNG/JPG images it loads (<img src>, decorator: image(...)),
 // scissoring and CSS transforms. Premultiplied alpha blending, drawn in submit order (sequential view).
 namespace kast {
 

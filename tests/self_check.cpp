@@ -1074,8 +1074,18 @@ public:
         visible_[id] = visible;
         history.push_back(std::format("visible {}={}", id, visible));
     }
+    void setAttribute(const std::string& id, const std::string& name, std::string_view value) override
+    {
+        history.push_back(std::format("attribute {}.{}={}", id, name, value));
+    }
+    bool focus(const std::string& id) override
+    {
+        history.push_back("focus " + id);
+        return id == "chat_input";
+    }
     std::optional<std::string> focusedField() override { return focused; }
-    bool mouseOver() override { return hovered; }
+    bool mouseOver() override { return over; }
+    std::optional<std::string> hovered() override { return hoveredId; }
     void reset() override
     {
         ++resets;
@@ -1088,9 +1098,38 @@ public:
     std::map<std::string, bool> visible_;
     std::vector<std::string> history; // every write, kept across reset()
     std::optional<std::string> focused;
-    bool hovered = false;
+    bool over = false;
+    std::optional<std::string> hoveredId;
     int resets = 0;
 };
+
+// kast.items from <project>/items/ (lua_items.h): every field, read-only; a rejected file is logged and left out.
+void checkLuaItems()
+{
+    const std::filesystem::path dir = luaTestDir();
+    std::filesystem::create_directories(dir / "items" / "sub");
+    writeFile(dir / "items" / "wing.lua", "return {id = 'wing', name = 'Wing', icon = 'icons/wing.png', quality = 'poor', "
+                                          "maxStack = 20, sellPrice = 1, description = 'Leathery.'}");
+    writeFile(dir / "items" / "sub" / "bad.lua", "return {id = 'bad', name = 'Bad', icon = 'b.png', quality = 'shiny', "
+                                                 "maxStack = 1, sellPrice = 0, description = ''}");
+    writeFile(dir / "items.lua", R"(return { init = function()
+    local w = kast.items.wing
+    assert(w.id == "wing" and w.name == "Wing" and w.icon == "icons/wing.png" and w.quality == "poor" and
+           w.maxStack == 20 and w.sellPrice == 1 and w.description == "Leathery.", "kast.items: every field")
+    assert(kast.items.bad == nil, "a rejected item is left out")
+    assert(not pcall(function() kast.items.wing.maxStack = 5 end), "an item is read-only")
+    assert(not pcall(function() kast.items.x = {} end), "kast.items is read-only")
+end, update = function() end })");
+    kast::Scene scene;
+    scene.systems = {"items.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr);
+    lua.tick(0.1f);
+    checkOk(lua, 0, "kast.items asserts in Lua pass");
+    check(logged("Item rejected: items/sub/bad.lua: \"quality\" must be one of \"poor\", \"common\", \"uncommon\", \"rare\", \"epic\""),
+          "a rejected item file is logged with its path and reason");
+    lua.stop();
+}
 
 void checkLuaGui()
 {
@@ -1130,7 +1169,11 @@ return {
         kast.gui.setVisible("realm_2", false)
         assert(kast.gui.focusedField() == "chat_input", "focusedField")
         assert(kast.gui.mouseOver() == true, "mouseOver")
+        assert(kast.gui.hovered() == "slot_3", "hovered")
+        kast.gui.setAttribute("icon_3", "src", "../textures/icons/wing.png")
+        assert(kast.gui.focus("chat_input") == true and kast.gui.focus("nope") == false, "focus")
         fails("kast.gui.value: id must be a string, got 1", function() kast.gui.value(1) end)
+        fails("kast.gui.setAttribute: value must be a string, got nil", function() kast.gui.setAttribute("x", "class") end)
         fails("kast.gui.setText: text must be a string, got nil", function() kast.gui.setText("x") end)
         fails("kast.gui.setVisible: visible must be a boolean, got 1", function() kast.gui.setVisible("x", 1) end)
         fails("kast is read-only", function() kast.gui.value = nil end)
@@ -1141,6 +1184,7 @@ return {
     update = function()
         assert(kast.gui.focusedField() == nil, "no focused field")
         assert(kast.gui.mouseOver() == false, "not mouseOver")
+        assert(kast.gui.hovered() == nil, "nothing hovered")
     end })");
     writeFile(dir / "next.scene", R"({"version": 4, "entities": [], "systems": ["next.lua"]})");
 
@@ -1149,7 +1193,8 @@ return {
     FakeGui gui;
     gui.values = {{"email", "me@example.com"}, {"password", "gui-check-secret"}};
     gui.focused = "chat_input";
-    gui.hovered = true;
+    gui.over = true;
+    gui.hoveredId = "slot_3";
     kast::Input input;
     input.buttonsDown[0] = true; // held into the switch
     input.cursorLocked = true;
@@ -1160,13 +1205,16 @@ return {
     lua.tick(0.1f);
     checkOk(lua, 0, "kast.gui.* asserts in Lua pass");
     check(gui.history == std::vector<std::string>{"text status=written in init", "text password=", "text log=a\nb",
-                                                  "visible realm_2=false", "visible hud=true"},
-          "setText / setVisible reach the GUI with their arguments, in call order");
+                                                  "visible realm_2=false", "attribute icon_3.src=../textures/icons/wing.png",
+                                                  "focus chat_input", "focus nope",
+                                                  "visible hud=true"},
+          "setText / setVisible / setAttribute reach the GUI with their arguments, in call order");
     check(gui.resets == 2 && gui.texts.empty() && gui.visible_ == std::map<std::string, bool>{{"hud", true}},
           "a kast.loadScene switch resets the GUI before the new scene's inits");
     check(!input.buttonsDown[0] && !input.cursorLocked, "a kast.loadScene switch releases buttons and the cursor lock");
     gui.focused.reset();
-    gui.hovered = false;
+    gui.over = false;
+    gui.hoveredId.reset();
     lua.tick(0.1f);
     checkOk(lua, 0, "focusedField is nil without a focused text field");
     check(!logged("gui-check-secret"), "no text field value is logged");
@@ -2825,7 +2873,7 @@ void checkBuildSettings()
                                        "physics.scene",
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "scene_a.scene", "scene_b.scene",
-                                       "shadows.scene", "terrain.scene", "ui.scene"},
+                                       "shadows.scene", "terrain.scene", "ui.scene", "ui_drag.scene"},
           "tests/project lists its scenes, sorted");
 
     const std::filesystem::path root = looseTestDir("kast_build_settings_check") / "game";
@@ -2844,7 +2892,7 @@ void checkBuildSettings()
                                                           "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "scene_a.scene", "scene_b.scene",
-                                                          "shadows.scene", "terrain.scene", "ui.scene"},
+                                                          "shadows.scene", "terrain.scene", "ui.scene", "ui_drag.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
     Document doc;
@@ -6473,6 +6521,9 @@ return {{
         elseif frame == 5 then
             assert(kast.physics.raycast({{x = -20, y = 10, z = 0}}, {{0, -1, 0}}, 100).entity == FLOOR, "kast.remove Collider")
             kast.destroy(CRATE)
+            -- Until the next step its body is still in the physics world: queries leave the gone entity out.
+            assert(kast.physics.raycast({{0, 10, 0}}, {{0, -1, 0}}, 100) == nil, "a destroyed entity's body is no hit")
+            assert(#kast.physics.overlapSphere({{x = 0, y = 0.5, z = 0}}, 0.2) == 0, "nor an overlap")
         elseif frame == 6 then
             local hit = kast.physics.raycast({{0, 10, 0}}, {{0, -1, 0}}, 100)
             assert(hit.entity == FLOOR, "kast.destroy removes the body")
@@ -7644,6 +7695,7 @@ int main(int argc, char** argv)
     checkLuaPlayMode();
     checkLuaApi();
     checkLuaGui();
+    checkLuaItems();
     checkLuaSandbox();
     checkLuaStringMetatable();
     checkLuaDepthCap();

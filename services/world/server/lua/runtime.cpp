@@ -84,6 +84,7 @@ struct Runtime::Impl {
     StateMachines fsm{bus, reg};           // after lua: its definitions hold Lua callbacks
     std::vector<System> systems;           // after bus: their subscriptions unsubscribe from it
     std::vector<ClientEvent> clientEvents; // kast.sendTo/sendNearby/broadcast since the last take
+    ItemDefs items;                        // items/, loaded before the NPCs (loot tables name them)
     NpcDefs npcDefs;                       // npcs/, loaded after the machines (StateMachine data names one)
     System* current = nullptr;
     std::string callbackPath; // the definition file whose enter/exit is running, if no system is
@@ -184,6 +185,7 @@ struct Runtime::Impl {
         for (const auto& [key, value] : api) kast[key] = value;
         kast["fsm"] = read_only(fsmApi);
         kast["map"] = read_only(mapApi);
+        kast["items"] = item_table();
         env["kast"] = read_only(kast);
         return env;
     }
@@ -202,8 +204,21 @@ struct Runtime::Impl {
 
     bool machine_exists(const std::string& name) const { return fsm.definition(name) != nullptr; }
 
+    // kast.items: {[id] = {id =, name =, ...}}, read-only all the way down, a fresh copy per environment.
+    sol::table item_table() {
+        sol::table table = lua.create_table();
+        for (const auto& [id, item] : items) table[id] = read_only(json_to_lua(lua, nlohmann::json(item)).as<sol::table>());
+        return read_only(table);
+    }
+
+    std::vector<std::string> load_items(const std::filesystem::path& root) {
+        ItemDefsResult loaded = load_item_defs(lua, root);
+        items = std::move(loaded.defs);
+        return std::move(loaded.errors);
+    }
+
     std::vector<std::string> load_npcs(const std::filesystem::path& root) {
-        NpcDefsResult loaded = load_npc_defs(lua, root, defs, [this](const std::string& n) { return machine_exists(n); });
+        NpcDefsResult loaded = load_npc_defs(lua, root, defs, [this](const std::string& n) { return machine_exists(n); }, items);
         npcDefs = std::move(loaded.defs);
         return std::move(loaded.errors);
     }
@@ -586,6 +601,18 @@ struct Runtime::Impl {
             else reg.emplace_or_replace<world::MoveLock>(e);
         });
         // Players leave only by logging out: destroy takes NPCs.
+        // kast.npcDef(name): {name =, template =, loot = <table or nil>} of an npcs/ definition (a fresh copy), nil if none.
+        api.set_function("npcDef", [this](sol::this_state L, const sol::object& name) -> sol::object {
+            if (name.get_type() != sol::type::string)
+                raise(L, std::format("kast.npcDef: name must be a string, got {}", to_string(L, name)));
+            const auto it = npcDefs.find(name.as<std::string>());
+            if (it == npcDefs.end()) return sol::lua_nil;
+            sol::table def = lua.create_table();
+            def["name"] = it->second.name;
+            def["template"] = it->second.templateName;
+            if (!it->second.loot.is_null()) def["loot"] = json_to_lua(lua, nlohmann::json(it->second.loot));
+            return def;
+        });
         api.set_function("destroy", [this](sol::this_state L, const sol::object& id) {
             const entt::entity e = entity(L, id, "kast.destroy");
             if (!reg.all_of<world::Npc>(e))
@@ -733,6 +760,7 @@ Runtime::~Runtime() = default;
 std::vector<std::string> Runtime::load(const std::filesystem::path& root, std::vector<std::string> gameMachines) {
     // Definitions first: an init may already use kast.fsm.
     std::vector<std::string> errors = impl_->load_machines(root, std::move(gameMachines));
+    for (std::string& e : impl_->load_items(root)) errors.push_back(std::move(e)); // before the NPCs: loot names items
     for (std::string& e : impl_->load_npcs(root)) errors.push_back(std::move(e)); // before init: it may kast.create one
     std::vector<std::filesystem::path> files;
     std::error_code ec;

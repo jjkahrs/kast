@@ -16,12 +16,6 @@
 namespace kast {
 namespace {
 
-std::string utf8Path(const std::filesystem::path& path)
-{
-    const std::u8string text = path.generic_u8string();
-    return {text.begin(), text.end()};
-}
-
 std::filesystem::file_time_type modified(const std::filesystem::path& file)
 {
     std::error_code ec;
@@ -171,6 +165,23 @@ void SceneGui::setVisible(const std::string& id, bool visible)
             apply(*entry.document, id, {.visible = visible});
 }
 
+void SceneGui::setAttribute(const std::string& id, const std::string& name, std::string_view value)
+{
+    written_[id].attributes[name] = std::string(value);
+    for (Entry& entry : entries_)
+        if (entry.document)
+            apply(*entry.document, id, {.attributes = {{name, std::string(value)}}});
+}
+
+bool SceneGui::focus(const std::string& id)
+{
+    for (auto it = entries_.rbegin(); it != entries_.rend(); ++it)
+        if (it->document && it->visible)
+            if (Rml::Element* element = it->document->GetElementById(id))
+                return element->Focus();
+    return false;
+}
+
 std::optional<std::string> SceneGui::focusedField()
 {
     Rml::Context* context = gui::ready() ? context_.context() : nullptr;
@@ -185,6 +196,13 @@ bool SceneGui::mouseOver()
     Rml::Context* context = gui::ready() ? context_.context() : nullptr;
     Rml::Element* hover = context ? context->GetHoverElement() : nullptr;
     return hover && hover != context->GetRootElement() && hover != hover->GetOwnerDocument();
+}
+
+std::optional<std::string> SceneGui::hovered()
+{
+    Rml::Context* context = gui::ready() ? context_.context() : nullptr;
+    const std::string id = guiElementId(context ? context->GetHoverElement() : nullptr);
+    return id.empty() ? std::nullopt : std::optional(id);
 }
 
 void SceneGui::reset()
@@ -204,6 +222,8 @@ void SceneGui::apply(Rml::ElementDocument& document, const std::string& id, cons
         else
             element->SetInnerRML(guiTextRml(*written.text));
     }
+    for (const auto& [name, value] : written.attributes)
+        element->SetAttribute(name, value);
     if (written.visible) {
         if (*written.visible)
             element->RemoveProperty("display"); // back to the style sheet's
@@ -235,7 +255,7 @@ void SceneGui::load(Entry& entry, EventBus& bus)
         return;
     }
     const uint64_t problems = gui::problemCount();
-    Rml::ElementDocument* document = context->LoadDocument(utf8Path(*file));
+    Rml::ElementDocument* document = context->LoadDocument(gui::toRmlPath(*file));
     if (!document || gui::problemCount() != problems) {
         log::error(std::format("UI document '{}' (or its style sheet) has errors, see above: not shown", entry.path));
         if (document)
@@ -244,6 +264,9 @@ void SceneGui::load(Entry& entry, EventBus& bus)
     }
     entry.listener = std::make_unique<ButtonClickListener>(bus, entry.path);
     document->AddEventListener(Rml::EventId::Click, entry.listener.get());
+    entry.dragListener = std::make_unique<DragListener>(bus, entry.path, [this](const Rml::Element& d) { return documentPath(d); });
+    document->AddEventListener(Rml::EventId::Dragstart, entry.dragListener.get());
+    document->AddEventListener(Rml::EventId::Dragend, entry.dragListener.get());
     for (const auto& [id, written] : written_) // what Lua wrote before this document loaded
         apply(*document, id, written);
     if (entry.visible)
@@ -255,10 +278,13 @@ void SceneGui::unload(Entry& entry)
 {
     if (entry.document && gui::ready()) {
         entry.document->RemoveEventListener(Rml::EventId::Click, entry.listener.get());
+        entry.document->RemoveEventListener(Rml::EventId::Dragstart, entry.dragListener.get());
+        entry.document->RemoveEventListener(Rml::EventId::Dragend, entry.dragListener.get());
         entry.document->Close();
     }
     entry.document = nullptr;
     entry.listener.reset();
+    entry.dragListener.reset();
 }
 
 void SceneGui::restack()
@@ -266,6 +292,14 @@ void SceneGui::restack()
     for (Entry& entry : entries_) // later ids on top
         if (entry.document)
             entry.document->PullToFront();
+}
+
+std::string SceneGui::documentPath(const Rml::Element& document) const
+{
+    for (const Entry& entry : entries_)
+        if (entry.document == &document)
+            return entry.path;
+    return "";
 }
 
 } // namespace kast

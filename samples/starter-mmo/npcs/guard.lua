@@ -8,4 +8,13 @@ return {
         Health = { current = 50, max = 50 },
         StateMachine = { machine = "patrol" },
     },
+    -- Rolled once when it dies, for the player who hit it first (systems/inventory.lua); ids are items/ files.
+    loot = {
+        gold = { min = 5, max = 15 },
+        items = {
+            { item = "linen_cloth",          chance = 0.6,  min = 1, max = 2 },
+            { item = "minor_healing_potion", chance = 0.25, min = 1, max = 1 },
+            { item = "worn_shortsword",      chance = 0.1,  min = 1, max = 1 },
+        },
+    },
 }

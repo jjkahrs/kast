@@ -34,6 +34,10 @@ server replicates to the matching component on the local player and on remote cl
 <td>State machine definitions, scanned recursively, one machine per file</td>
 </tr>
 <tr>
+<td><code>LUA_ROOT/items/**/*.lua</code></td>
+<td><a href="#items">Item definitions</a>, scanned recursively, one item per file; the engine reads the same files (<code>kast.items</code>)</td>
+</tr>
+<tr>
 <td><code>LUA_ROOT/npcs/**/*.lua</code></td>
 <td>NPC definitions, scanned recursively, one NPC type per file; server only (the engine never reads <code>npcs/</code>)</td>
 </tr>
@@ -46,7 +50,7 @@ server replicates to the matching component on the local player and on remote cl
 <ul>
 <li><strong><code>LUA_ROOT</code>:</strong> defaults to <code>/app/lua</code>. The image ships the sample from <code>services/world/lua/</code> there, and compose bind-mounts <code>./lua</code> over it.</li>
 <li><strong>Loading:</strong> files are loaded once at startup; there is no hot reload. After an edit, restart the server (<code>docker compose restart world</code>).</li>
-<li><strong>Errors refuse the start:</strong> an invalid component, state machine or NPC definition, an invalid system file, a <code>GAME_STATE_MACHINES</code> name with no valid definition, a spawn whose <code>npc</code> has no definition, or an error in a system's <code>init</code> stops the start. The server logs every error, not just the first, one <code>Lua error</code> line each. Each starts with the file path (and <code>path:line</code> for Lua errors); a <code>startup failed: Lua</code> line and exit status 1 follow.</li>
+<li><strong>Errors refuse the start:</strong> an invalid component, state machine, item or NPC definition, an invalid system file, a <code>GAME_STATE_MACHINES</code> name with no valid definition, a spawn whose <code>npc</code> has no definition, or an error in a system's <code>init</code> stops the start. The server logs every error, not just the first, one <code>Lua error</code> line each. Each starts with the file path (and <code>path:line</code> for Lua errors); a <code>startup failed: Lua</code> line and exit status 1 follow.</li>
 <li><strong>No Lua is fine:</strong> a missing or empty <code>LUA_ROOT</code> means no custom components, state machines, NPC definitions or systems, with an info log. Spawn files then refuse the start: their <code>npc</code> names no definition.</li>
 </ul>
 <p><strong>Sharing with a game project:</strong> point the bind mount (or <code>LUA_ROOT</code>, when running on the host) at a folder whose <code>components/</code> and <code>fsms/</code> are the game project's. For example, change the volume to <code>- ../../my-game:/app/lua:ro</code>, which holds <code>components/</code>, <code>fsms/</code>, and the <code>npcs/</code> and <code>systems/</code> folders the client never reads. Client and server then read the same definition files.</p>
@@ -99,6 +103,30 @@ return {
 <li><strong>Reserved names:</strong> a definition may not be named <code>Character</code>, <code>Npc</code>, <code>Transform</code> or <code>StateMachine</code> (the built-ins), or after any server C++ component (<code>Viewers</code>, <code>SessionLink</code>, <code>CharacterRef</code>, <code>MoveState</code>, <code>PendingMoves</code>, <code>PendingSay</code>, <code>ChatLimit</code>, <code>PendingClientEvents</code>, <code>ClientEventLimit</code>, <code>MoveLock</code>, <code>AoiCell</code>, <code>Visible</code>, <code>Moved</code>, <code>Dirty</code>, <code>SaveTimer</code>, <code>ReplicatedState</code>, <code>ScriptsLeft</code>, <code>PreservedComponents</code>, <code>ComponentData</code>, <code>StateMachineRuntime</code>).</li>
 <li><strong>Duplicates:</strong> two files declaring the same name are both rejected, each error naming the other file, whatever the scan order.</li>
 </ul>
+<h2 id="items">Items</h2>
+<p>An item type is data: one file per item under <code>LUA_ROOT/items/</code> (scanned recursively). The engine loads the game project's
+<code>items/</code> with the same rules (<a href="../../engine/lua-systems.html#items">Engine, kast.items</a>), so a folder shared by client and server
+gives both the same names, stack sizes and qualities. NPC <a href="npcs.html#npc-loot">loot tables</a> name items by <code>id</code>.</p>
+<pre><code class="language-lua">return {
+    id = &quot;bat_wing&quot;,                          -- unique across items/; a-z, 0-9 and _, at most 64 bytes
+    name = &quot;Bat Wing&quot;,                        -- shown to players; at most 255 bytes
+    icon = &quot;textures/icons/bat_wing.png&quot;,     -- project-relative image for clients; the server never opens it
+    quality = &quot;poor&quot;,                         -- poor, common, uncommon, rare or epic
+    maxStack = 20,                            -- 1..1000
+    sellPrice = 1,                            -- integer, 0..1000000000
+    description = &quot;A leathery wing.&quot;,         -- may be empty; at most 1024 bytes
+}
+</code></pre>
+<ul>
+<li><strong>Keys:</strong> exactly these seven, all required; any other key is an error.</li>
+<li><strong>Loading:</strong> once at startup, after <code>fsms/</code> and before <code>npcs/</code>, in the definition sandbox. Every invalid file is one
+  <code>Lua error</code> starting with its path (<code>items/bat_wing.lua: "maxStack" must be an integer in [1, 1000]</code>) and refuses the
+  start. Two files with the same <code>id</code> are both rejected, each error naming the other file. A missing or empty <code>items/</code>
+  is fine.</li>
+<li><strong>In systems:</strong> <code>kast.items</code> is <code>{[id] = {id =, name =, icon =, quality =, maxStack =, sellPrice =, description =}}</code>,
+  read-only all the way down (writing raises <code>kast is read-only</code>). What an item <em>does</em> is up to the systems; the
+  starter-mmo sample's <code>systems/inventory.lua</code> keeps a bag of them.</li>
+</ul>
 <h2 id="systems">Systems</h2>
 <p>A system file returns a table; only <code>update</code> is required:</p>
 <pre><code class="language-lua">return {
@@ -127,6 +155,14 @@ return {
 <tr>
 <td><code>kast.query(names...)</code></td>
 <td>Iterator over entity ids with every listed component, in ascending id order. Captured when called: entities gone later in the loop are skipped</td>
+</tr>
+<tr>
+<td><code>kast.items</code></td>
+<td>The <a href="#items">item definitions</a> by id, read-only</td>
+</tr>
+<tr>
+<td><code>kast.npcDef(name)</code></td>
+<td>A fresh copy of the <a href="npcs.html#npc-definitions">NPC definition</a> <code>name</code>: <code>{name, template, loot}</code> (<code>loot</code> nil without one); nil for an unknown name. A non-string name raises</td>
 </tr>
 <tr>
 <td><code>kast.get(e, name)</code></td>

@@ -1,0 +1,12 @@
+<rml>
+    <head>
+        <title>Drag</title>
+        <link type="text/rcss" href="drag.rcss"/>
+    </head>
+    <body>
+        <!-- kast.gui drag and drop (ctest ui_drag_*): the gold box in the centre drags (drag: clone) and publishes
+             test.box.start / test.box.drop; the wide panel right of it is a drop target. The box shows a PNG as a decorator and an <img> (both also on its drag clone), the panel one as an <img>. -->
+        <div id="source" class="box" data-drag="test.box"><img id="source_icon" src="../textures/checker.png"/><div class="label">drag me</div></div>
+        <div id="target" class="target"><p>drop here</p><img id="target_icon" src="../textures/checker.png"/></div>
+    </body>
+</rml>

@@ -19,7 +19,8 @@ class ElementDocument;
 }
 
 // A scene's game GUIs in Play mode (editor Game view and kast_player): one RmlUi document per UIDocument component,
-// stacked in entity creation order (PersistentId), shown while visible. A missing or broken .rml/.rcss logs an error
+// stacked in entity creation order (PersistentId), shown while visible. Clicks and drags publish on the bus
+// (gui_events.h). A missing or broken .rml/.rcss logs an error
 // naming the file and that document shows nothing; Play goes on.
 namespace kast {
 
@@ -46,14 +47,18 @@ public:
     std::optional<std::string> value(const std::string& id) override;
     void setText(const std::string& id, std::string_view text) override;
     void setVisible(const std::string& id, bool visible) override;
+    void setAttribute(const std::string& id, const std::string& name, std::string_view value) override;
+    bool focus(const std::string& id) override;
     std::optional<std::string> focusedField() override;
     bool mouseOver() override;
+    std::optional<std::string> hovered() override;
     void reset() override;
 
 private:
     struct Written { // kast.gui writes to one id, applied again to documents that load later
         std::optional<std::string> text;
         std::optional<bool> visible;
+        std::map<std::string, std::string> attributes;
     };
 
     struct Entry {
@@ -63,12 +68,14 @@ private:
         bool visible = true;
         Rml::ElementDocument* document = nullptr; // null if it failed to load
         std::unique_ptr<ButtonClickListener> listener;
+        std::unique_ptr<DragListener> dragListener;
         std::vector<std::pair<std::filesystem::path, std::filesystem::file_time_type>> files; // .rml, linked .rcss
     };
 
     void load(Entry& entry, EventBus& bus);
     void unload(Entry& entry);
     void restack();
+    std::string documentPath(const Rml::Element& document) const;
     void apply(Rml::ElementDocument& document, const std::string& id, const Written& written);
 
     GuiContext context_;

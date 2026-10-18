@@ -47,6 +47,12 @@ struct InvalidDefinition : std::runtime_error {
 void check_keys(const sol::table& table, std::initializer_list<const char*> allowed, const std::string& what);
 // No reachable table has a metatable, so reading the definition runs no Lua code.
 void check_plain_data(const sol::table& table, const std::string& what);
+// Every .lua file under root/dir (recursively; none if the folder is missing), sorted.
+std::vector<std::filesystem::path> definition_files(const std::filesystem::path& root, const char* dir);
+// Runs a definition file (path: root-relative, for messages) in a fresh sandboxed environment; it must return exactly one
+// plain-data table, else throws with "<path>: must return exactly one table <shape>".
+sol::table run_definition_file(sol::state& lua, const std::filesystem::path& file, const std::string& path,
+                               const std::string& shape);
 // value is a sequence {v1, v2, ...}; returns its items.
 std::vector<sol::object> sequence(const sol::object& value, const std::string& what);
 

@@ -7,7 +7,8 @@ A small but complete Kast online game, made to read and copy. You open it in the
 3. create or pick a character;
 4. walk the Meadow with other players and a patrolling Guard, chat, and watch the server's Health and Gold in the HUD;
 5. take the portal into the Cavern, where a Bat waits, and walk back;
-6. target and fight the Bat and the Guard (tab-target melee, decided by the server), die and revive.
+6. target and fight the Bat and the Guard (tab-target melee, decided by the server), die and revive;
+7. loot what they drop into a World of Warcraft-style 16-slot bag, and sort it by drag and drop.
 
 The same folder is the game project (client) **and** the world server's Lua and maps: client and server share
 `components/`.
@@ -18,14 +19,15 @@ The same folder is the game project (client) **and** the world server's Lua and 
 |---|---|---|
 | `project.kast` | client | `Starter MMO`, starts at `scenes/login.scene`, Online Services on (`http://localhost:3100`, CA `certs/world_dev_ca.pem`), game state machine `session` |
 | `scenes/` | client | `login`, `register`, `realms` (one screen each) and `world` (character select, then the game) |
-| `scripts/` | client | one Lua system per screen or concern; they talk through the event bus. `combat.lua`: targeting, the target marker, attack requests (`kast.world.send`) and the combat log |
+| `scripts/` | client | one Lua system per screen or concern; they talk through the event bus. `combat.lua`: targeting, the target marker, attack requests (`kast.world.send`), the combat log, tipped corpses and right clicks on them; `loot.lua`: the loot window and the sparkle over your corpses; `bag.lua`: the bag window, its drags and tooltips |
 | `ui/` | client | RmlUi documents, one per screen, sharing `starter.rcss` (the Kast editor palette) |
-| `components/` | **both** | `Health` (replicated to everyone in view), `Wallet` (owner only), `MapProps` (client-side tag) |
+| `components/` | **both** | `Health` (replicated to everyone in view), `Wallet` (owner only), `Inventory` (the bag, owner only, saved), `Corpse` (who may loot a dead NPC, everyone in view), `MapProps` (client-side tag) |
+| `items/` | **both** | one item per file (`id`, `name`, `icon`, `quality`, `maxStack`, `sellPrice`, `description`): Bat Wing, Linen Cloth, Minor Healing Potion, Worn Shortsword; `kast.items` on both sides |
 | `fsms/` | both | `patrol` (the Guard's machine, server: walking, waiting, combat, returning), `creature` (the Bat's machine, server: idle, combat, returning), `session` (why the client is on the login screen) |
-| `npcs/` | server | the `Guard` and `Bat` NPC definitions; their `template` names the client entity they are shown as |
-| `systems/` | server | `combat.lua` (melee, NPCs fighting back, death and revive), `regen.lua` (Health regen out of combat, 1 gold per login), `events.lua` (welcome / arrival messages), `npcs.lua` (patrols) |
+| `npcs/` | server | the `Guard` and `Bat` NPC definitions; their `template` names the client entity they are shown as, `loot` what they drop |
+| `systems/` | server | `combat.lua` (melee, NPCs fighting back, tagging, death and revive), `inventory.lua` (bag requests, loot rolls, corpses), `regen.lua` (Health regen out of combat, 1 gold per login), `events.lua` (welcome / arrival messages), `npcs.lua` (patrols) |
 | `maps/meadow`, `maps/cavern` | both | map 10 and map 11: one 256 m tile each, heightmap, `areas.json` with a portal each way; `.server/spawns/` (server only) places the Guard and the Bat |
-| `materials/`, `models/`, `textures/` | client | primitives' materials, the animated character (`female-128-anim.glb`, from `tests/project/models`) |
+| `materials/`, `models/`, `textures/` | client | primitives' materials, the animated character (`female-128-anim.glb`, from `tests/project/models`), item icons (`textures/icons/`, 64x64 placeholders) |
 | `docker-compose.override.yml` | dev | runs the `services/world` stack with this folder's Lua and maps |
 | `setup_realm.cmake` | dev | copies the stack's dev CA into `certs/` and adds the realm `Starter Realm` |
 
@@ -47,11 +49,14 @@ docker compose -f docker-compose.yml -f ../../samples/starter-mmo/docker-compose
 docker compose logs world    # "maps loaded" with Meadow (10) and Cavern (11), "Lua loaded", no "Lua error"
 ```
 
+`--build` matters after a World Server update (this sample needs one that loads `items/` and NPC `loot`): an older image
+refuses the sample's NPC definitions and the `world` container never gets healthy.
+
 The override mounts this folder as the world server's `LUA_ROOT` and `maps/` as its `MAP_ROOT`, starts new characters
 on map 10 and runs no server game state machine. `services/world/docker-compose.yml` itself is unchanged. To go back
 to the default content (`services/world/lua`, `tests/project/maps`): `docker compose up -d --force-recreate world`.
 
-After editing anything under `components/`, `fsms/`, `npcs/`, `systems/` or `maps/`, restart the world server with the
+After editing anything under `components/`, `fsms/`, `items/`, `npcs/`, `systems/` or `maps/`, restart the world server with the
 same two `-f` files (`... up -d --force-recreate world`). A broken file refuses the start; `docker compose logs world`
 says which.
 
@@ -90,8 +95,8 @@ running it twice adds nothing.
   dragging) on an NPC selects it; **Esc** clears the target. The target gets a gold disc under it and a frame at the top
   centre with its name and Health. **1** attacks it. Keys typed into the chat box do nothing.
   - Take the portal (below) to the Cavern: the Bat stands 8 m ahead. Target it and press 1: `* Out of range` in the
-    chat box. Walk up to it (within 3 m) and press 1 again: `You hit Bat for 10`, `Bat dies`. It despawns and comes
-    back at its spot 30 s later.
+    chat box. Walk up to it (within 3 m) and press 1 again: `You hit Bat for 10`, `Bat dies`. Its corpse tips over and
+    stays until it is looted empty or for 60 s; the Bat comes back at its spot 30 s after the corpse goes.
   - The Guard fights back: hit it (10 damage, one hit every 1.5 s) and it chases you at 5 m/s and hits you for 5 every
     2 s. Run more than 30 m from its spawn point and it gives up, walks home, heals to full and patrols again.
   - Health regenerates (2 a second) only after 5 s without dealing or taking a hit. At 0 Health you die: you can't move
@@ -100,6 +105,26 @@ running it twice adds nothing.
   - Every attack is a request (`kast.world.send("combat.attack", {target = id})`); the server's `systems/combat.lua`
     checks range, cooldown and that both sides are alive, and decides the damage. The combat log in the chat box shows
     what it sends back.
+- **Loot**: an NPC drops loot once, when it dies, for the player who hit it first (its tagger). Bat: Bat Wing 80%,
+  Linen Cloth 40%, 1-3 gold. Guard: Linen Cloth 60% (1-2), Minor Healing Potion 25%, Worn Shortsword 10%, 5-15 gold.
+  - Only the tagger sees a gold sparkle bobbing over the corpse; anyone else gets `* You can't loot that`.
+  - **Right click** the corpse (press and release without dragging) within 5 m: the loot window opens with its gold and
+    items (icon, name in quality colour, count). Click an entry to take it, or **Take All**. Further away:
+    `* Too far away`. Gold goes to the HUD's Gold; items into the bag, onto stacks of the same item first.
+  - With no room, the item stays in the corpse and the chat box says `* Inventory is full`.
+  - The window closes when the corpse is empty (it then despawns), when it despawns after 60 s, when you walk more
+    than 5 m away, or on **Esc**.
+- **Bag**: **B** opens and closes it (typed into the chat box, B is just a "b"). 16 slots in a 4x4 grid: icon, border
+  in the item's quality colour (grey poor, white common, green uncommon), count when over 1. Hover a slot for its
+  tooltip: name, stack, description, sell price (no vendors yet). Drag a stack (the camera stays put):
+  - onto an empty slot: moves it; with **Shift** held: moves half of it (a split);
+  - onto a different item: swaps them; onto the same item: merges up to its stack size (20 Bat Wings, 5 potions, 1
+    sword), the rest stays;
+  - outside the bag (the world, another window): `Destroy <item>?` with **Destroy** / **Cancel**.
+
+  The bag is saved with the character. Every change is a request (`kast.world.send("inventory.move", ...)`) that the
+  server's `systems/inventory.lua` checks (slots, the item it expects, stack sizes, loot owner, range, alive); a refused
+  one says why in the chat box and changes nothing.
 - **Portal**: the orange arch about 25 m east of the spawn is the `cavern_gate` portal: walk into it and the server
   moves you to the Cavern (`world.mapChanged`); the terrain and props switch and the Bat is in front of you. The arch
   west of the Cavern's arrival point takes you back.
@@ -132,6 +157,12 @@ of the client project.
   `components/*.lua`, so the fields always match.
 - **NPCs**: the server's spawn files place `npc` definitions whose `template` (`Guard`, `Bat`) names an entity under
   the world scene's `NPC Templates`. The client clones that entity for each NPC in view.
+- **Items and loot**: both sides load `items/` (`kast.items`). The server rolls `kast.npcDef(name).loot` on `npc.died`
+  (published by `systems/combat.lua`) and keeps the contents to itself: clients only see `Corpse {owner}`, and the owner
+  asks for the contents (`loot.open`). The bag is two parallel arrays (`items`, `counts`) because component fields
+  can't hold tables.
+- **Drag and drop** is the engine's: a slot has RCSS `drag: clone` and `data-drag="bag.slot"`, so RmlUi drags publish
+  `bag.slot.start` / `bag.slot.drop` with the target slot and Shift ([Game GUI](../../docs/engine/game-gui.html#drag-and-drop)).
 - **Maps**: the client's `Terrain` follows the server's map, and `scripts/world_flow.lua` shows the props tagged with
   that map's `MapProps`.
 - **Why back at login**: `world_flow.lua` records the reason in the `session` game state machine, which survives
@@ -165,6 +196,24 @@ of the client project.
   - `starter_mmo_live_combat_guard`: three hits on the Guard, which hits back.
   - `starter_mmo_live_death`, `starter_mmo_live_revive`: the Guard kills the character `Fallen`; dead, then revived at
     the spawn point with full Health.
+  - Loot and bag stages use a test-only server system, `cmake/starter_mmo_test_server.lua`, which the live setup adds
+    to a copy of this folder's server Lua (a third compose file in `build/debug/starter_mmo/live/`): `test.seed` makes
+    the Bat's roll known (1 gold, Bat Wing, Linen Cloth) and `test.bag` sets a bag.
+  - `starter_mmo_live_loot_window`: a real right click (`--sim-mouse` with `--sim-on-log`) on `Looter`'s Bat
+    corpse, one sparkle, the loot window.
+  - `starter_mmo_live_loot_rejects`: `Rival` sees that corpse without a sparkle and is refused (`not_owner`); bad slots
+    are refused; its own corpse is refused from 8.5 m (`range`), then taken from 2.5 m.
+  - `starter_mmo_live_loot`: Take All: `gold +1`, Bat Wing and Linen Cloth in the bag, the corpse gone, the bag open.
+  - `starter_mmo_live_bag_persist`: `Looter` again: the same bag after the relog, slot 1's tooltip.
+  - `starter_mmo_live_bag_full`: a bag of 16 full stacks: the gold is taken, the items stay, `* Inventory is full`.
+  - `starter_mmo_live_bag_move`, `_swap`, `_merge`, `_split`, `_destroy_confirm`, `_destroy`: `Sorter`'s drags, one
+    step further each, replayed as the bag's `bag.slot.drop` events.
+  - `starter_mmo_live_bag_drag_mouse`: a real mouse drag (`--sim-mouse` from slot 1 to slot 3) moves the stack.
+  - `starter_mmo_live_bag_keys`: real key presses (`--sim-key`): B opens the bag; with the chat field focused, B types
+    "b" and the bag stays open.
+
+  The engine's drag and drop itself is checked by `ctest -R ui_drag` (a real `--sim-mouse` drag, with and without
+  Shift, in `tests/project/ui_drag.scene`); the server's bag and loot rules by `world_self_check` (`starter-mmo loot`).
 
   The combat stages take their screenshot a moment after the driver logs its shot line (the editor's
   `--screenshot-on-log`).
