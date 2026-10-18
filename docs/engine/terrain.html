@@ -13,7 +13,7 @@
 <main>
 <h1 id="terrain">Terrain</h1>
 <p>Heightmap ground for <a href="../services/world/index.html">maps</a> (<code>engine/terrain.h</code>, <code>services/world/map/heights.h</code>), streamed
-in Play (editor and <code>kast_player</code>; not in edit mode).</p>
+in Play (editor and <code>kast_player</code>; not in edit mode), with the map's <a href="#objects">zone objects</a>.</p>
 <p><strong>Heightmaps</strong>: a map folder <code>maps/&lt;folder&gt;/</code> holds <code>map.json</code> (its <code>heightRange</code> <code>[min, max]</code>, <code>material</code>, <code>terrainUv</code> and
 <code>nav.maxSlopeDeg</code> are used here) and one file per tile, <code>heights/&lt;tx&gt;_&lt;tz&gt;.r16</code> (exactly 257 x 257 little-endian
 uint16, 132098 bytes) or <code>.png</code> (257 x 257 16-bit grayscale). A tile is 256 m with a sample every 1 m, row-major with
@@ -49,10 +49,51 @@ Builder</a> can color a map by height. It keeps the gradient in <code>map.json</
 <code>textures/&lt;folder&gt;_terrain.png</code> (1 px per metre of the bounding box, at most 4096 px on a side, row 0 at min z) with
 <code>materials/&lt;folder&gt;_terrain.mat</code>, and the map uses that material with <code>"terrainUv": "map"</code>. The engine and the
 world server ignore <code>terrainColors</code>; the texture is an ordinary material texture.</p>
+<h2 id="objects">Zone objects</h2>
+<p>A map's tiles can hold placed objects: <code>maps/&lt;folder&gt;/objects/&lt;tx&gt;_&lt;tz&gt;.json</code> (the format, shared with the world
+server and the tools: <a href="../services/world/maps.html#objects">World Server, Maps, Objects</a>; authored in the
+<a href="../../tools/zone-builder/docs/index.html#objects">Zone Builder</a>). Like the ground they exist in Play only.</p>
+<ul>
+<li><strong>Streaming</strong>: a tile's objects file is read with its heights, on the frame the tile appears, and each object becomes
+  a child of the <code>TerrainTile</code> entity, so they all go when the tile streams out. An object is an entity named
+  <code>&lt;type&gt; &lt;prefab name&gt;</code> at its <code>pos</code> and <code>yaw</code> (radians about +y, 0 faces +z), holding an instance of its prefab,
+  scaled by its <code>scale</code> (the prefab root's own offset is scaled with it). Plain entities, one prefab instance each: no
+  instancing. Each prefab loads once per Play session. Every mesh of every object is a draw call: a Release build keeps
+  60 fps with a thousand of them in view, a Debug build pays about 0.1 ms each, so keep scattered prefabs to one or two
+  meshes (the Meadow's grass is a single tuft).</li>
+<li><strong>Types</strong>: a <code>visual</code> (grass, flowers) has no physics: characters and raycasts pass through it (keep colliders out
+  of visual prefabs). An <code>obstacle</code> or <code>interactable</code> also gets a static <code>Collider</code> on the object entity from the file's
+  <code>shape</code>, not from the mesh: a box (<code>halfExtents</code>, turned by yaw) or an upright cylinder (<code>ColliderShape::Cylinder</code>,
+  <code>radius</code> and <code>height</code>), standing on <code>pos</code> and not scaled. A <code>CharacterController</code> walking into one stops at its
+  side, as the server's navmesh stops the player there.</li>
+<li><strong>Bad entries</strong>: an entry that fails to parse (<code>Terrain: maps/meadow/objects/0_0.json: objects[3]: "scale" must be a
+  number &gt; 0; that object is skipped</code>) or whose prefab doesn't load (logged once per prefab and Play session, with the
+  file: <code>Terrain: ...: prefab "prefabs/rock.prefab": ...; its objects are skipped</code>) is skipped; the tile's other objects
+  load. A file that isn't JSON loads none.</li>
+<li><strong>Lua</strong>: the engine binds no keys; the game decides how a player activates an object:<ul>
+<li><code>kast.nearestInteractable(position, maxDistance)</code>: the interactable of the streamed tiles nearest to <code>position</code>
+  (<code>{x =, y =, z =}</code>; y is ignored), by the horizontal distance to its shape's edge (0 inside it, as the server measures
+  its range), if one is within <code>maxDistance</code> m: <code>{id =, name =, pos = {x, y, z}, distance =}</code> (<code>name</code> is the file's,
+  <code>""</code> if none), else <code>nil</code>. A bad argument raises.</li>
+<li><code>kast.interact(id)</code>: sends <code>Interact{id}</code> (<a href="../services/world/protocol.html#interact">protocol</a>) and returns <code>true</code>
+  while Online Services are in the world, else <code>false</code> (offline Play, the lobby). An id that isn't a whole number from 1
+  to 4294967295 raises. The server checks the map and the range and answers nothing itself; its Lua answers with a
+  <code>server.&lt;name&gt;</code> event if the game wants feedback.</li>
+</ul>
+</li>
+</ul>
+<pre><code class="language-lua">-- samples/starter-mmo/scripts/shrines.lua (abridged): E uses the nearest interactable within 3 m.
+local near = kast.nearestInteractable(kast.get(player, "Transform").position, 3)
+if near and pressedE then kast.interact(near.id) end
+kast.subscribe("server.shrine.blessing", function(e) kast.publish("chat.local", {text = "* " .. e.text}) end)
+</code></pre>
 <p><strong>Sample</strong>: <code>tests/project/maps/hills</code> (map 3, 2 x 2 tiles of PNG16 hills, <code>materials/terrain_grass.mat</code>) and
 <code>tests/project/terrain.scene</code> (a <code>Terrain</code> on map 3, a <code>CharacterController</code> dropped above the hills). The <code>start</code>
 map's <code>hills_gate</code> area ([1060, 1020]-[1070, 1030]) is a portal to it. <code>scripts/terrain_map_switch.lua</code> switches a
-<code>Terrain</code> from its map to map 3 offline, as <code>world.mapChanged</code> does online.</p>
+<code>Terrain</code> from its map to map 3 offline, as <code>world.mapChanged</code> does online. The hills' zone object fixtures (a visual,
+two obstacle crates and the interactable Test Shrine) are played by <code>tests/project/zone_objects.scene</code>
+(<code>scripts/zone_objects.lua</code>: one character walks into the obstacle crate and stops, one through the visual crate). The
+<code>samples/starter-mmo</code> Meadow has grass, flowers, rocks, trees and a shrine on E.</p>
 </main>
 </div>
 </body>

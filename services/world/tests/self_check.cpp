@@ -100,7 +100,7 @@ void checkCodecRoundTrip() {
     const auto f = encode(Message{Hello{0x0102}});
     check(f == std::vector<uint8_t>{2, 0, 1, 0, 0x02, 0x01}, "Hello bytes little-endian");
 
-    check(kProtocolVersion == 4, "protocol version 4");
+    check(kProtocolVersion == 5, "protocol version 5");
     // v4 CharCreate: str name, u8 count, count x (str key, str value), keys in order; a key twice is malformed
     const auto cc = encode(Message{CharCreate{"Al", {{"b", "2"}, {"a", "1"}}}});
     check(cc == std::vector<uint8_t>{17, 0, 0x11, 0, 2, 0, 'A', 'l', 2, 1, 0, 'a', 1, 0, '1', 1, 0, 'b', 1, 0, '2'},
@@ -135,6 +135,10 @@ void checkCodecRoundTrip() {
     const auto ce = encode(Message{ClientEvent{"a.b", "{}"}});
     check(ce == std::vector<uint8_t>{9, 0, 0x22, 0, 3, 0, 'a', '.', 'b', 2, 0, '{', '}'}, "ClientEvent bytes");
     check(std::string(opcode_name(Opcode::ClientEvent)) == "ClientEvent", "ClientEvent name");
+    // v5 Interact: opcode 0x0023, u32 objectId
+    roundtrip(Interact{0xFFFFFFFFu}, "Interact");
+    check(encode(Message{Interact{0x01020304}}) == std::vector<uint8_t>{4, 0, 0x23, 0, 4, 3, 2, 1}, "Interact bytes");
+    check(std::string(opcode_name(Opcode::Interact)) == "Interact", "Interact name");
     // v2 Spawn: u32 id, str name, vec3, f32 heading, u8 kind, str template
     const auto npc = encode(Message{Spawn{1, "G", {0, 0, 0}, 0, SpawnKind::npc, "T"}});
     check(npc.size() == 4 + 4 + 3 + 12 + 4 + 1 + 3 && npc[4 + 4 + 3 + 16] == 1 && npc.back() == 'T',

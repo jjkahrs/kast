@@ -96,14 +96,46 @@ void ZoneView::syncPreview(const ZoneDoc& doc) {
     renderer_.setPreview(material, terrain_material(texture), texture, std::move(image));
 }
 
+// ponytail: a changed tile rebuilds all its objects (a drag or a scatter dab: every frame); per-object diffs if dense
+// tiles make editing hitch.
+void ZoneView::syncObjects(const ZoneDoc& doc, const std::filesystem::path& projectRoot) {
+    if (projectRoot != prefabs_.projectRoot) { // another project: its prefabs
+        prefabs_ = {projectRoot, {}};
+        for (auto& [key, tile] : objects_) tile.built = nullptr;
+    }
+    for (auto it = objects_.begin(); it != objects_.end();) {
+        const auto file = doc.state.objects.find(it->first);
+        if (file != doc.state.objects.end() && file->second == it->second.built) {
+            ++it;
+            continue;
+        }
+        for (const entt::entity e : it->second.entities) scene_.destroy(e);
+        it = objects_.erase(it);
+    }
+    for (const auto& [key, json] : doc.state.objects) {
+        if (objects_.contains(key)) continue;
+        ObjectTile& tile = objects_[key];
+        tile.built = json;
+        std::string error;
+        for (const km::ZoneObject& object : km::parse_objects(nlohmann::json(json), key).objects) // validate() reports errors
+            if (const entt::entity e = kast::spawnZoneObject(scene_, entt::null, {0.0f, 0.0f, 0.0f}, object, prefabs_, error);
+                e != entt::null)
+                tile.entities.push_back(e);
+    }
+}
+
 void ZoneView::render(const ZoneDoc* doc, const std::filesystem::path& projectRoot, uint16_t width, uint16_t height) {
     if (width == 0 || height == 0) return;
     if (doc) {
         sync(*doc);
         syncPreview(*doc);
+        syncObjects(*doc, projectRoot);
     } else if (!tiles_.empty()) {
         for (auto& [key, tile] : tiles_) scene_.registry().destroy(tile.entity);
         tiles_.clear();
+        for (auto& [key, tile] : objects_)
+            for (const entt::entity e : tile.entities) scene_.destroy(e);
+        objects_.clear();
         manifest_ = nullptr;
     }
     width_ = width;

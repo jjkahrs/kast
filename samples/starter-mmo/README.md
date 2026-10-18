@@ -20,15 +20,15 @@ The same folder is the game project (client) **and** the world server's Lua and 
 |---|---|---|
 | `project.kast` | client | `Starter MMO`, starts at `scenes/login.scene`, Online Services on (`http://localhost:3100`, CA `certs/world_dev_ca.pem`), game state machine `session` |
 | `scenes/` | client | `login`, `register`, `realms` (one screen each) and `world` (character select, then the game) |
-| `scripts/` | client | one Lua system per screen or concern; they talk through the event bus. `characters.lua`: the character list and creation with a class; `combat.lua`: targeting, the target marker, the combat log, tipped corpses and right clicks on them; `powers.lua`: the action bar, keys 1-3, power requests (`kast.world.send`) and their effects; `loot.lua`: the loot window and the sparkle over your corpses; `bag.lua`: the bag window, its drags and tooltips |
+| `scripts/` | client | one Lua system per screen or concern; they talk through the event bus. `characters.lua`: the character list and creation with a class; `combat.lua`: targeting, the target marker, the combat log, tipped corpses and right clicks on them; `powers.lua`: the action bar, keys 1-3, power requests (`kast.world.send`) and their effects; `loot.lua`: the loot window and the sparkle over your corpses; `bag.lua`: the bag window, its drags and tooltips; `shrines.lua`: E uses the nearest interactable (the Meadow Shrine); `player.lua`: movement, stopped by the zone obstacles |
 | `ui/` | client | RmlUi documents, one per screen, sharing `starter.rcss` (the Kast editor palette) |
 | `components/` | **both** | `Health` (replicated to everyone in view), `Wallet` (owner only), `Class` (warrior, mage, priest or rogue; owner only, saved), `Inventory` (the bag, owner only, saved), `Corpse` (who may loot a dead NPC, everyone in view), `MapProps` (client-side tag) |
 | `items/` | **both** | one item per file (`id`, `name`, `icon`, `quality`, `maxStack`, `sellPrice`, `description`): Bat Wing, Linen Cloth, Minor Healing Potion, Worn Shortsword; `kast.items` on both sides |
 | `fsms/` | both | `patrol` (the Guard's machine, server: walking, waiting, combat, returning), `creature` (the Bat's machine, server: idle, combat, returning), `session` (why the client is on the login screen) |
 | `npcs/` | server | the `Guard` and `Bat` NPC definitions; their `template` names the client entity they are shown as, `loot` what they drop |
-| `systems/` | server | `classes.lua` (which classes a new character may have, `Class` and max Health on entering), `combat.lua` (the powers of each class, NPCs fighting back, roots, buffs, tagging, death and revive), `inventory.lua` (bag requests, loot rolls, corpses), `regen.lua` (Health regen out of combat, 1 gold per login), `events.lua` (welcome / arrival messages), `npcs.lua` (patrols) |
-| `maps/meadow`, `maps/cavern` | both | map 10 and map 11: one 256 m tile each, heightmap, `areas.json` with a portal each way; `.server/spawns/` (server only) places the Guard and the Bat |
-| `materials/`, `models/`, `textures/` | client | primitives' materials (the power effects: `fire`, `arcane`, `holy`, `frost`, `steel`, `shadow`), the animated character (`female-128-anim.glb`, from `tests/project/models`), item icons (`textures/icons/`, 64x64 placeholders) |
+| `systems/` | server | `classes.lua` (which classes a new character may have, `Class` and max Health on entering), `combat.lua` (the powers of each class, NPCs fighting back, roots, buffs, tagging, death and revive), `inventory.lua` (bag requests, loot rolls, corpses), `regen.lua` (Health regen out of combat, 1 gold per login), `events.lua` (welcome / arrival messages), `npcs.lua` (patrols), `shrines.lua` (the Meadow Shrine: Health back to full and a blessing in the chat box) |
+| `maps/meadow`, `maps/cavern` | both | map 10 and map 11: one 256 m tile each, heightmap, `areas.json` with a portal each way; `.server/spawns/` (server only) places the Guard and the Bat. The Meadow also has zone objects (`objects/0_0.json`: grass and flowers, rocks, trees and the Meadow Shrine; `.server/interactables/0_0.json`, server only: the shrine's event) and its baked navtile (`.server/nav/`, the rocks, trees and shrine cut out) |
+| `prefabs/`, `materials/`, `models/`, `textures/` | client | the zone objects' prefabs, built from primitives (`grass`, `flower`, `rock`, `tree`, `shrine`); primitives' materials (the power effects: `fire`, `arcane`, `holy`, `frost`, `steel`, `shadow`), the animated character (`female-128-anim.glb`, from `tests/project/models`), item icons (`textures/icons/`, 64x64 placeholders) |
 | `docker-compose.override.yml` | dev | runs the `services/world` stack with this folder's Lua and maps |
 | `setup_realm.cmake` | dev | copies the stack's dev CA into `certs/` and adds the realm `Starter Realm` |
 
@@ -153,6 +153,15 @@ running it twice adds nothing.
 - **Portal**: the orange arch about 25 m east of the spawn is the `cavern_gate` portal: walk into it and the server
   moves you to the Cavern (`world.mapChanged`); the terrain and props switch and the Bat is in front of you. The arch
   west of the Cavern's arrival point takes you back.
+- **Meadow objects** (zone objects, [Engine, Terrain](../../docs/engine/terrain.html#objects)): grass and flowers you
+  walk through; rocks, trees and the Meadow Shrine (north-west of the spawn) that stop you, and you slide along them.
+  The world server knows only their shapes, cut out of the Meadow's navmesh, so it would correct a move into one too.
+  Walk within 3 m of the shrine: the chat box says `[E] Use the Meadow Shrine`. Press **E**: `scripts/shrines.lua`
+  calls `kast.interact`, the server checks you are on the Meadow and in range, and `systems/shrines.lua` (subscribed to
+  the shrine's `shrine.activated` event) restores your Health and answers `* The shrine hums softly. You feel
+  refreshed.` Elsewhere, E says `There is nothing here to use.` Edit them with the
+  [Zone Builder](../../tools/zone-builder/docs/index.html#objects) (`--project samples/starter-mmo --map meadow`),
+  then re-bake (its **Bake** panel) and restart the world server.
 - Losing the world connection or the auth session returns you to the login screen with the reason.
 
 To see another player, run a second client (a built game, below), or a bot from `services/world` (`--char-option`
@@ -226,6 +235,10 @@ of the client project.
   - `starter_mmo_live_cavern`: both portals, ending in the Cavern with the Bat.
   - `starter_mmo_live_camera`, `_camera_zoom`, `_camera_orbit`: `scripts/player.lua`'s camera behind the character,
     zoomed out and orbited by a left drag (the editor's `--sim-mouse`).
+  - `starter_mmo_live_rock`: real W presses (`--sim-key`) walk the character into a Meadow rock; it stops 1.65 m from
+    the rock's centre (its 1.2 m radius and the character's 0.45 m), or up to a frame's step short of that.
+  - `starter_mmo_live_shrine`: at the Meadow Shrine, `[E] Use the Meadow Shrine`, a real E press, and the server's
+    blessing in the chat box.
   - `starter_mmo_live_combat_target`: a left click selects the Bat (target frame and marker).
   - `starter_mmo_live_combat`: Tab, Esc, Tab, then Strike (the action bar's first button) until the Bat dies.
   - `starter_mmo_live_combat_guard`: three Strikes on the Guard, which hits back.

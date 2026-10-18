@@ -26,12 +26,20 @@ docker compose run --rm -T --entrypoint ./kast_mapbake bot /app/maps/hills --out
 <li><strong>Input:</strong> each tile's ground triangles (<code>map::for_each_triangle</code>, the triangles the client renders and Jolt
   collides with) plus a border from its neighbours on the map, so paths cross tile edges. A tile without heights is
   flat.</li>
+<li><strong>Zone objects:</strong> every obstacle and interactable in <code>objects/&lt;tx&gt;_&lt;tz&gt;.json</code> (the tile's and its neighbours',
+  for the border) is cut out of the walkable area by its <code>shape</code>: a box's footprint turned by its yaw
+  (<code>rcMarkConvexPolyArea</code>) or a cylinder (<code>rcMarkCylinderArea</code>), the whole column under it. The cut happens before the
+  <code>agentRadius</code> erosion, so agents keep that clearance round every object. Visuals are ignored
+  (<a href="../../../../../docs/services/world/maps.html#objects">World Server, Maps, Objects</a>). Re-bake after moving a blocking
+  object.</li>
 <li><strong>Params:</strong> the manifest's <code>nav</code> (defaults <code>agentRadius</code> 0.4, <code>agentHeight</code> 1.8, <code>maxClimb</code> 0.5, <code>maxSlopeDeg</code> 45,
   <code>cellSize</code> 0.5; cell height is <code>cellSize / 2</code>). <code>maxSlopeDeg</code> is also the client's character max slope on terrain,
   so the bake and Jolt agree on what is walkable. <code>cellSize</code> must divide 256, and <code>tan(maxSlopeDeg) * cellSize</code>
   should not exceed <code>maxClimb</code>, or walkable slopes come apart.</li>
-<li><strong>Lint first:</strong> height seams (a tile's edge samples must equal its neighbour's) and every spawn file
-  (<code>map::parse_spawns</code>, tile on the map, ids unique). Any error is printed (<code>seam 0_0 | 1_0: 257 samples differ,
+<li><strong>Lint first:</strong> height seams (a tile's edge samples must equal its neighbour's), every spawn file
+  (<code>map::parse_spawns</code>, tile on the map, ids unique), every objects file (<code>map::parse_objects</code>: a bad file, an unknown
+  <code>type</code>, a blocking object without a <code>shape</code> or any other bad entry, tile on the map, interactable ids unique) and every
+  <code>.server/interactables</code> file (<code>map::parse_interactables</code>, as the server loads them). Any error is printed (<code>seam 0_0 | 1_0: 257 samples differ,
   worst 1.53 m at z 0</code>) and the tool exits 1 having written nothing. Usage errors exit 2.</li>
 <li><strong>Cost:</strong> with <code>cellSize</code> 0.5, about 1 s and 30-45 KB per hills tile (40-90 polygons).</li>
 </ul>

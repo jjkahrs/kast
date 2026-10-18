@@ -1,6 +1,6 @@
 // The zone builder's 3D view: the open map's tiles drawn by kast::Renderer (with the map's material, as in game) and
 // kast::PostProcess straight into the backbuffer behind the ImGui windows, the orbit camera, ground picking and the
-// overlays (ImGui lines projected from the ground).
+// overlays (ImGui lines projected from the ground). Zone objects show as their prefabs.
 #pragma once
 #include "terrain_edit.h"
 #include "zone_doc.h"
@@ -55,6 +55,9 @@ private:
     // When the map uses its generated terrain material: re-bakes its texture into the renderer's preview after the
     // heights or the manifest change (not mid-stroke), so the view shows it before it is saved.
     void syncPreview(const ZoneDoc& doc);
+    // Mirrors each tile's objects file as entities (kast::spawnZoneObject: the prefab, and the blocking shapes'
+    // Colliders, unused here); a tile's are rebuilt only when its file's JSON changes.
+    void syncObjects(const ZoneDoc& doc, const std::filesystem::path& projectRoot);
 
     struct Tile {
         entt::entity entity = entt::null;
@@ -69,6 +72,12 @@ private:
     Json manifest_; // what tiles_ were built from
     std::shared_ptr<const kast::map::MapInfo> info_;
     TileMap<Tile> tiles_;
+    struct ObjectTile {
+        std::vector<entt::entity> entities;
+        Json built; // the objects file they were made from
+    };
+    TileMap<ObjectTile> objects_;
+    kast::PrefabCache prefabs_; // for the open project
     Json previewManifest_;           // what the preview was baked from
     TileMap<HeightsPtr> previewHeights_;
     float viewProj_[16] = {};

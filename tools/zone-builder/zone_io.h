@@ -30,7 +30,8 @@ Project scan_project(const std::filesystem::path& root);
 uint16_t next_map_id(const Project& project);
 
 // Reads maps/<folder>: map.json, areas.json, every declared tile's heights (.r16 first, as the loaders) and every
-// .server/spawns/<tx>_<tz>.json. nullopt with err set if a file is unreadable or the manifest is invalid.
+// .server/spawns/, objects/ and .server/interactables/ <tx>_<tz>.json. nullopt with err set if a file is unreadable or
+// the manifest is invalid.
 std::optional<ZoneDoc> load_map(const Project& project, const std::string& folder, std::string& err);
 
 // A new map in memory (nothing on disk until saved): tiles [0, 0, width - 1, depth - 1], flat, spawn in the middle
@@ -41,7 +42,8 @@ std::optional<ZoneDoc> new_map(const Project& project, const std::string& folder
 // Every problem that would stop the world server loading this map; empty if none.
 std::vector<ZoneError> validate(const Project& project, const ZoneDoc& doc);
 
-// The files of tile t on disk (heights, spawn file, navtile), project-relative: what removing it deletes on save.
+// The files of tile t on disk (heights, spawn, objects and interactables files, navtile), project-relative: what
+// removing it deletes on save.
 std::vector<std::string> tile_files(const Project& project, const std::string& folder, TileKey t);
 
 // Files of tiles the saved manifest has and the current one does not: heights, spawn and navtile files that save
@@ -49,7 +51,7 @@ std::vector<std::string> tile_files(const Project& project, const std::string& f
 std::vector<std::string> removed_tile_files(const Project& project, const ZoneDoc& doc);
 
 // Validates, then writes what changed since the last save (heights as .r16; an edited tile's old .png is deleted) and
-// deletes removed_tile_files. Any validation error: writes nothing and returns them. recycle: deleted files go to the
+// deletes removed_tile_files and the spawn, objects and interactables files of tiles that no longer have one. Any validation error: writes nothing and returns them. recycle: deleted files go to the
 // Recycle Bin (tests delete for good, to keep the bin clean). Rescans project on success.
 std::vector<ZoneError> save_map(Project& project, ZoneDoc& doc, bool recycle = true);
 

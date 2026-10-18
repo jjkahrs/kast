@@ -1,0 +1,49 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Shrine",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Base",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 0.2, 0], "rotation": [0, 0, 0, 1], "scale": [2.4, 0.4, 2.4]},
+        "MeshRenderer": {"primitive": "cube", "material": "materials/stone.mat", "castShadows": true, "receiveShadows": true}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Pillar",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 1.2, 0], "rotation": [0, 0, 0, 1], "scale": [0.7, 1.6, 0.7]},
+        "MeshRenderer": {"primitive": "cube", "material": "materials/stone.mat", "castShadows": true, "receiveShadows": true}
+      }
+    },
+    {
+      "id": 4,
+      "name": "Orb",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 2.35, 0], "rotation": [0, 0, 0, 1], "scale": [0.7, 0.7, 0.7]},
+        "MeshRenderer": {"primitive": "sphere", "material": "materials/holy.mat", "castShadows": false, "receiveShadows": true}
+      }
+    },
+    {
+      "id": 5,
+      "name": "Glow",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 2.4, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "PointLight": {"color": [1.0, 0.85, 0.5], "intensity": 2.0, "range": 8.0}
+      }
+    }
+  ]
+}

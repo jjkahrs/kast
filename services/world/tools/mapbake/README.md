@@ -1,6 +1,7 @@
 # Kast Map Bake
 
-`kast_mapbake` lints a zone map folder (height seams, spawn files) and bakes one Recast navtile per declared tile into
+`kast_mapbake` lints a zone map folder (height seams, spawn, object and interactable files) and bakes one Recast
+navtile per declared tile, with its obstacles and interactables cut out, into
 `<mapDir>/.server/nav/` for the world server's navmesh. Exit 0: all baked; 1: lint or bake errors (nothing written);
 2: usage.
 

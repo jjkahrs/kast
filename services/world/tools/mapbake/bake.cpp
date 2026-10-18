@@ -59,7 +59,7 @@ Geometry gather(const map::MapInfo& info, const map::TileHeights& heights, map::
 } // namespace
 
 std::optional<TileBake> bake_tile(const map::MapInfo& info, const map::TileHeights& heights, map::TileKey tile,
-                                  std::string& err) {
+                                  std::string& err, const std::vector<map::ZoneObject>& objects) {
     const map::NavParams nav = info.nav.value_or(map::NavParams{});
     rcConfig cfg{};
     cfg.cs = nav.cellSize;
@@ -118,6 +118,24 @@ std::optional<TileBake> bake_tile(const map::MapInfo& info, const map::TileHeigh
     if (!chf || !rcBuildCompactHeightfield(&ctx, cfg.walkableHeight, cfg.walkableClimb, *solid, *chf))
         return fail("compact heightfield");
     solid.reset();
+    // Before erosion, so the agent radius is kept clear around each object as round a cliff.
+    // ponytail: the whole column under the footprint (bmin..bmax y); the shape's own y range if maps get bridges or caves.
+    for (const map::ZoneObject& o : objects) {
+        if (!o.shape) continue; // a visual
+        if (o.shape->kind == map::Shape::Kind::Cylinder) {
+            const float base[3] = {o.pos[0], cfg.bmin[1], o.pos[2]};
+            rcMarkCylinderArea(&ctx, base, o.shape->radius, cfg.bmax[1] - cfg.bmin[1], RC_NULL_AREA, *chf);
+            continue;
+        }
+        float verts[12];
+        int n = 0;
+        for (const auto& [x, z] : map::footprint(*o.shape, o.pos, o.yaw)) {
+            verts[n++] = x;
+            verts[n++] = 0;
+            verts[n++] = z;
+        }
+        rcMarkConvexPolyArea(&ctx, verts, 4, cfg.bmin[1], cfg.bmax[1], RC_NULL_AREA, *chf);
+    }
     if (!rcErodeWalkableArea(&ctx, cfg.walkableRadius, *chf)) return fail("erode");
     if (!rcBuildDistanceField(&ctx, *chf)) return fail("distance field");
     if (!rcBuildRegions(&ctx, *chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea)) return fail("regions");

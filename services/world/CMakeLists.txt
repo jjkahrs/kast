@@ -37,7 +37,7 @@ target_include_directories(kast_protocol PUBLIC protocol)
 target_compile_options(kast_protocol PRIVATE ${WORLD_COMPILE_OPTIONS})
 
 # --- map: map.json manifests, tile math and heightmaps; std + nlohmann_json + stb only, no file IO, shared with the engine ---
-add_library(kast_map STATIC map/map.cpp map/heights.cpp)
+add_library(kast_map STATIC map/map.cpp map/heights.cpp map/objects.cpp)
 target_include_directories(kast_map PUBLIC map)
 target_include_directories(kast_map SYSTEM PRIVATE "${Stb_INCLUDE_DIR}")
 target_compile_options(kast_map PRIVATE ${WORLD_COMPILE_OPTIONS})

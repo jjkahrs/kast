@@ -164,12 +164,12 @@ struct UIDocument {
     bool visible = true;
 };
 
-enum class ColliderShape { Box, Sphere, Capsule };
+enum class ColliderShape { Box, Sphere, Capsule, Cylinder };
 
 // A physics shape (see physics.h). Without a Rigidbody the entity is a static body. size: box full extents; radius:
-// sphere / capsule; height: capsule total height including both hemispheres (>= 2 * radius), along local Y. center:
-// local offset. World scale applies: box per axis, sphere / capsule by the largest axis. isTrigger: reports
-// triggerEnter / triggerExit and blocks nothing.
+// sphere / capsule / cylinder; height: capsule total height including both hemispheres (>= 2 * radius), or cylinder
+// height (any), along local Y. center: local offset. World scale applies: box per axis, the others by the largest axis.
+// isTrigger: reports triggerEnter / triggerExit and blocks nothing.
 struct Collider {
     ColliderShape shape = ColliderShape::Box;
     bx::Vec3 size{1.0f, 1.0f, 1.0f}; // > 0

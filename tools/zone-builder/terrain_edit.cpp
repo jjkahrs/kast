@@ -389,6 +389,8 @@ bool remove_tile(const km::MapInfo& info, ZoneState& state, TileKey t) {
     state.manifest["tiles"] = tile_rects(tiles);
     state.heights.erase(t);
     state.spawns.erase(t);
+    state.objects.erase(t);
+    state.interactables.erase(t);
     return true;
 }
 

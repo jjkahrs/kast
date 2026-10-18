@@ -1,0 +1,1742 @@
+{
+  "version": 1,
+  "objects": [
+    {
+      "type": "interactable",
+      "prefab": "prefabs/shrine.prefab",
+      "pos": [
+        118.0,
+        6.4263678,
+        140.0
+      ],
+      "yaw": 0.4,
+      "scale": 1.0,
+      "shape": {
+        "box": {
+          "halfExtents": [
+            1.2,
+            1.25,
+            1.2
+          ]
+        }
+      },
+      "id": 1,
+      "name": "Meadow Shrine"
+    },
+    {
+      "type": "obstacle",
+      "prefab": "prefabs/rock.prefab",
+      "pos": [
+        141.0,
+        4.7436028,
+        108.0
+      ],
+      "yaw": 0.3,
+      "scale": 1.0,
+      "shape": {
+        "cylinder": {
+          "radius": 1.2,
+          "height": 1.4
+        }
+      }
+    },
+    {
+      "type": "obstacle",
+      "prefab": "prefabs/rock.prefab",
+      "pos": [
+        108.0,
+        5.3615932,
+        118.0
+      ],
+      "yaw": 1.2,
+      "scale": 1.2,
+      "shape": {
+        "cylinder": {
+          "radius": 1.4,
+          "height": 1.6
+        }
+      }
+    },
+    {
+      "type": "obstacle",
+      "prefab": "prefabs/rock.prefab",
+      "pos": [
+        146.0,
+        5.884733,
+        142.0
+      ],
+      "yaw": 2.1,
+      "scale": 0.9,
+      "shape": {
+        "cylinder": {
+          "radius": 1.1,
+          "height": 1.3
+        }
+      }
+    },
+    {
+      "type": "obstacle",
+      "prefab": "prefabs/rock.prefab",
+      "pos": [
+        100.0,
+        5.82211,
+        140.0
+      ],
+      "yaw": 0.8,
+      "scale": 1.0,
+      "shape": {
+        "cylinder": {
+          "radius": 1.2,
+          "height": 1.4
+        }
+      }
+    },
+    {
+      "type": "obstacle",
+      "prefab": "prefabs/tree.prefab",
+      "pos": [
+        95.0,
+        4.66688,
+        100.0
+      ],
+      "yaw": 0.0,
+      "scale": 1.0,
+      "shape": {
+        "cylinder": {
+          "radius": 0.5,
+          "height": 6.0
+        }
+      }
+    },
+    {
+      "type": "obstacle",
+      "prefab": "prefabs/tree.prefab",
+      "pos": [
+        160.0,
+        4.8585944,
+        100.0
+      ],
+      "yaw": 1.0,
+      "scale": 1.1,
+      "shape": {
+        "cylinder": {
+          "radius": 0.55,
+          "height": 6.5
+        }
+      }
+    },
+    {
+      "type": "obstacle",
+      "prefab": "prefabs/tree.prefab",
+      "pos": [
+        105.0,
+        8.194644,
+        162.0
+      ],
+      "yaw": 2.0,
+      "scale": 0.9,
+      "shape": {
+        "cylinder": {
+          "radius": 0.45,
+          "height": 5.5
+        }
+      }
+    },
+    {
+      "type": "obstacle",
+      "prefab": "prefabs/tree.prefab",
+      "pos": [
+        166.0,
+        7.3818264,
+        156.0
+      ],
+      "yaw": 3.0,
+      "scale": 1.0,
+      "shape": {
+        "cylinder": {
+          "radius": 0.5,
+          "height": 6.0
+        }
+      }
+    },
+    {
+      "type": "obstacle",
+      "prefab": "prefabs/tree.prefab",
+      "pos": [
+        82.0,
+        6.0368967,
+        128.0
+      ],
+      "yaw": 4.0,
+      "scale": 1.2,
+      "shape": {
+        "cylinder": {
+          "radius": 0.6,
+          "height": 7.0
+        }
+      }
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        157.22469,
+        5.9424443,
+        139.62582
+      ],
+      "yaw": 2.3101385,
+      "scale": 0.8562163
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        153.88315,
+        8.033669,
+        161.83582
+      ],
+      "yaw": 3.4002023,
+      "scale": 1.0649798
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        122.836296,
+        3.5934536,
+        87.59908
+      ],
+      "yaw": 2.83253,
+      "scale": 1.0763845
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        112.886116,
+        5.7821665,
+        124.00172
+      ],
+      "yaw": 4.904431,
+      "scale": 0.8560575
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        109.526344,
+        7.732447,
+        154.293
+      ],
+      "yaw": 1.6851865,
+      "scale": 1.1451722
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        113.11351,
+        5.367167,
+        114.402275
+      ],
+      "yaw": 5.232677,
+      "scale": 0.8848703
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        161.04132,
+        4.9207497,
+        98.93189
+      ],
+      "yaw": 4.4317994,
+      "scale": 1.1040642
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        114.179,
+        4.4623356,
+        97.701065
+      ],
+      "yaw": 2.3216069,
+      "scale": 1.2319753
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        155.0887,
+        5.1820345,
+        115.33273
+      ],
+      "yaw": 0.07942808,
+      "scale": 0.9429791
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        95.33307,
+        5.5843244,
+        131.1159
+      ],
+      "yaw": 2.6962698,
+      "scale": 1.3268125
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        113.86145,
+        5.468096,
+        120.25601
+      ],
+      "yaw": 0.30345407,
+      "scale": 1.2827935
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        127.38279,
+        3.71708,
+        89.07442
+      ],
+      "yaw": 2.4724517,
+      "scale": 0.8382098
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        86.66943,
+        5.7398143,
+        126.449196
+      ],
+      "yaw": 4.778945,
+      "scale": 1.1585674
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        133.57025,
+        10.546073,
+        167.39554
+      ],
+      "yaw": 4.6945543,
+      "scale": 0.80281144
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        124.8418,
+        6.7310996,
+        142.16762
+      ],
+      "yaw": 3.8443692,
+      "scale": 1.264646
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        91.76212,
+        5.377187,
+        111.41419
+      ],
+      "yaw": 0.87472034,
+      "scale": 1.1765156
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        136.85062,
+        4.6552873,
+        111.03749
+      ],
+      "yaw": 3.934308,
+      "scale": 1.0920072
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        138.7398,
+        4.6036596,
+        104.157265
+      ],
+      "yaw": 3.22421,
+      "scale": 1.2914627
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        88.32199,
+        5.2472925,
+        135.20932
+      ],
+      "yaw": 3.9310117,
+      "scale": 1.0466847
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        129.83241,
+        3.7445743,
+        91.67453
+      ],
+      "yaw": 3.3618774,
+      "scale": 0.9749158
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        119.32892,
+        3.600155,
+        90.49066
+      ],
+      "yaw": 4.3649716,
+      "scale": 1.3098872
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        132.84348,
+        3.7593012,
+        90.30469
+      ],
+      "yaw": 1.1298791,
+      "scale": 1.1787901
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        94.33383,
+        5.5986853,
+        119.90107
+      ],
+      "yaw": 3.0144491,
+      "scale": 1.1286482
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        123.88898,
+        3.8295238,
+        95.13688
+      ],
+      "yaw": 3.619995,
+      "scale": 1.4546323
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        148.9095,
+        5.677574,
+        131.56146
+      ],
+      "yaw": 0.04777137,
+      "scale": 1.105857
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        139.62564,
+        6.4145126,
+        139.3665
+      ],
+      "yaw": 5.1171393,
+      "scale": 1.2484875
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        97.03514,
+        5.8266187,
+        125.27389
+      ],
+      "yaw": 4.0529356,
+      "scale": 1.279907
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        142.39229,
+        5.3454785,
+        125.406334
+      ],
+      "yaw": 2.6852176,
+      "scale": 1.0651674
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        152.73895,
+        7.2482786,
+        154.31717
+      ],
+      "yaw": 0.03487447,
+      "scale": 1.0231215
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        145.23169,
+        4.7945952,
+        107.91058
+      ],
+      "yaw": 1.481839,
+      "scale": 0.89879197
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        113.83468,
+        5.2416725,
+        109.09265
+      ],
+      "yaw": 4.757854,
+      "scale": 1.0697091
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        103.69109,
+        7.383242,
+        155.66847
+      ],
+      "yaw": 1.082282,
+      "scale": 1.3661454
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        110.38075,
+        5.364404,
+        117.60371
+      ],
+      "yaw": 1.2700796,
+      "scale": 0.8358131
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        125.03107,
+        5.264618,
+        126.76537
+      ],
+      "yaw": 1.0469872,
+      "scale": 1.2075634
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        153.9192,
+        5.8232093,
+        141.61554
+      ],
+      "yaw": 4.8070865,
+      "scale": 0.8884369
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        131.62486,
+        5.7705264,
+        130.7289
+      ],
+      "yaw": 0.9096188,
+      "scale": 1.4018993
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        113.587975,
+        4.4816113,
+        98.067444
+      ],
+      "yaw": 0.5793946,
+      "scale": 1.296238
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        129.09465,
+        3.7313414,
+        91.59308
+      ],
+      "yaw": 0.47320238,
+      "scale": 0.94252825
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        156.01103,
+        7.5162168,
+        158.31003
+      ],
+      "yaw": 0.95288485,
+      "scale": 1.1018413
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        94.63501,
+        5.065691,
+        105.648506
+      ],
+      "yaw": 1.5980844,
+      "scale": 1.1180358
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        163.30914,
+        5.6885514,
+        122.15738
+      ],
+      "yaw": 5.5757613,
+      "scale": 0.88326526
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        124.81997,
+        3.8660429,
+        95.88697
+      ],
+      "yaw": 5.91971,
+      "scale": 1.1871018
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        146.35983,
+        5.0195575,
+        114.957275
+      ],
+      "yaw": 1.121992,
+      "scale": 1.120204
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        124.05107,
+        8.088502,
+        149.82083
+      ],
+      "yaw": 2.8752542,
+      "scale": 1.2200983
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        103.617935,
+        4.077611,
+        97.353935
+      ],
+      "yaw": 5.2165775,
+      "scale": 1.2263834
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        108.051094,
+        3.7341578,
+        89.254456
+      ],
+      "yaw": 2.460735,
+      "scale": 0.9537217
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        90.516205,
+        5.5490203,
+        129.85883
+      ],
+      "yaw": 1.3130127,
+      "scale": 1.2289495
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        116.607994,
+        5.3361883,
+        120.19672
+      ],
+      "yaw": 1.2757863,
+      "scale": 1.2748291
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        90.559166,
+        5.2310553,
+        136.08784
+      ],
+      "yaw": 4.6461134,
+      "scale": 1.0728998
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        136.03583,
+        5.259685,
+        123.86995
+      ],
+      "yaw": 0.25948694,
+      "scale": 0.9556416
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        117.50014,
+        6.4618673,
+        140.63708
+      ],
+      "yaw": 3.927909,
+      "scale": 1.4070349
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        152.82898,
+        5.725358,
+        125.393394
+      ],
+      "yaw": 5.505003,
+      "scale": 1.1861025
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        93.218895,
+        5.459274,
+        113.68645
+      ],
+      "yaw": 5.887052,
+      "scale": 0.9167037
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        147.50697,
+        5.5048857,
+        128.29826
+      ],
+      "yaw": 0.65902716,
+      "scale": 1.4132836
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        163.21371,
+        5.905818,
+        142.65254
+      ],
+      "yaw": 0.45199105,
+      "scale": 1.3774822
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        158.75696,
+        5.3572187,
+        110.04463
+      ],
+      "yaw": 4.506145,
+      "scale": 1.0987488
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        139.69164,
+        5.431758,
+        129.50092
+      ],
+      "yaw": 1.1468039,
+      "scale": 1.273077
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        127.14191,
+        6.955556,
+        142.9099
+      ],
+      "yaw": 4.0576973,
+      "scale": 0.8942316
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        147.26437,
+        5.7663336,
+        141.92964
+      ],
+      "yaw": 4.298998,
+      "scale": 1.4922618
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        131.93173,
+        4.4593196,
+        108.2182
+      ],
+      "yaw": 2.328775,
+      "scale": 1.3411976
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        115.58345,
+        5.6121426,
+        124.3285
+      ],
+      "yaw": 2.5804362,
+      "scale": 1.2511992
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        120.01632,
+        5.046691,
+        118.813614
+      ],
+      "yaw": 2.2606616,
+      "scale": 1.2146935
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        106.77233,
+        5.3140187,
+        115.673645
+      ],
+      "yaw": 5.7772336,
+      "scale": 0.9720447
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        111.4042,
+        3.9476922,
+        91.12829
+      ],
+      "yaw": 2.16001,
+      "scale": 1.1741662
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        144.08429,
+        4.8106036,
+        108.80048
+      ],
+      "yaw": 0.5000186,
+      "scale": 1.4809853
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        148.51324,
+        7.210713,
+        153.2311
+      ],
+      "yaw": 5.8410215,
+      "scale": 1.2041483
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        146.06686,
+        6.1500616,
+        144.48282
+      ],
+      "yaw": 0.103292786,
+      "scale": 1.2560352
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        168.77295,
+        5.707134,
+        124.83437
+      ],
+      "yaw": 4.717918,
+      "scale": 1.0618435
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        90.972,
+        6.0176253,
+        144.83727
+      ],
+      "yaw": 4.8051386,
+      "scale": 1.46705
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        98.832634,
+        5.273145,
+        110.369354
+      ],
+      "yaw": 4.7598524,
+      "scale": 1.0524309
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        104.93042,
+        8.064833,
+        160.98419
+      ],
+      "yaw": 4.0519934,
+      "scale": 1.2827455
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        122.80317,
+        7.237962,
+        146.04216
+      ],
+      "yaw": 4.78496,
+      "scale": 1.3279071
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        139.80827,
+        7.9054213,
+        149.4511
+      ],
+      "yaw": 2.725825,
+      "scale": 1.4532175
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        113.77448,
+        9.917809,
+        168.86617
+      ],
+      "yaw": 0.3694216,
+      "scale": 1.228951
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        138.0685,
+        9.482645,
+        158.52208
+      ],
+      "yaw": 0.95637304,
+      "scale": 0.994314
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        152.50687,
+        5.946811,
+        130.09918
+      ],
+      "yaw": 2.1132848,
+      "scale": 1.2728491
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        132.54143,
+        4.2339144,
+        98.57752
+      ],
+      "yaw": 2.855383,
+      "scale": 1.3640504
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        130.6141,
+        4.900365,
+        123.17766
+      ],
+      "yaw": 5.6945014,
+      "scale": 1.258238
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        134.98201,
+        3.8200428,
+        87.35111
+      ],
+      "yaw": 5.021361,
+      "scale": 1.0158222
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        164.37256,
+        5.7272134,
+        128.11327
+      ],
+      "yaw": 0.08931581,
+      "scale": 1.0629412
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        104.387985,
+        6.7048354,
+        146.8004
+      ],
+      "yaw": 0.57903284,
+      "scale": 0.9487285
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        129.96295,
+        10.804512,
+        172.56903
+      ],
+      "yaw": 0.7339087,
+      "scale": 1.3021257
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        139.11655,
+        9.728421,
+        164.01648
+      ],
+      "yaw": 3.0582163,
+      "scale": 1.3606184
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        107.465904,
+        4.567477,
+        104.45671
+      ],
+      "yaw": 3.5616195,
+      "scale": 0.95387715
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        131.66539,
+        4.429293,
+        102.73985
+      ],
+      "yaw": 4.8177404,
+      "scale": 1.1384848
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        162.02351,
+        5.8938494,
+        128.85017
+      ],
+      "yaw": 2.7306633,
+      "scale": 1.3881687
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        123.469734,
+        4.3427267,
+        102.04018
+      ],
+      "yaw": 2.3706164,
+      "scale": 0.8319104
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        137.72408,
+        7.1475086,
+        142.80807
+      ],
+      "yaw": 2.5407073,
+      "scale": 0.92326474
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        159.16031,
+        5.4389887,
+        112.621475
+      ],
+      "yaw": 5.29191,
+      "scale": 0.9317771
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        118.82249,
+        4.3181357,
+        98.23628
+      ],
+      "yaw": 6.1105576,
+      "scale": 1.323834
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        101.84812,
+        5.831415,
+        122.93995
+      ],
+      "yaw": 1.3087909,
+      "scale": 0.99002236
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        170.82124,
+        5.8339357,
+        128.11626
+      ],
+      "yaw": 2.2800655,
+      "scale": 1.2987502
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        119.54322,
+        6.487423,
+        140.64987
+      ],
+      "yaw": 5.6725607,
+      "scale": 0.82188976
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        108.24237,
+        8.214394,
+        159.16621
+      ],
+      "yaw": 3.9557467,
+      "scale": 0.99402404
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        149.91562,
+        4.931284,
+        110.61429
+      ],
+      "yaw": 3.091566,
+      "scale": 1.384733
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        121.69589,
+        4.884425,
+        117.517815
+      ],
+      "yaw": 3.4966116,
+      "scale": 1.1105032
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        150.06519,
+        5.373796,
+        122.67684
+      ],
+      "yaw": 3.77076,
+      "scale": 0.9318905
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        112.608475,
+        8.542529,
+        158.38399
+      ],
+      "yaw": 1.5285445,
+      "scale": 0.9258087
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        171.10349,
+        5.7453923,
+        136.5577
+      ],
+      "yaw": 5.5719795,
+      "scale": 1.0230248
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        128.15552,
+        3.8887427,
+        95.826324
+      ],
+      "yaw": 0.64697474,
+      "scale": 0.8506722
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        138.15045,
+        5.744367,
+        132.77225
+      ],
+      "yaw": 0.11355128,
+      "scale": 0.85908026
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        107.996506,
+        4.083622,
+        94.178825
+      ],
+      "yaw": 6.2135344,
+      "scale": 1.0817933
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        100.651764,
+        5.744014,
+        122.14297
+      ],
+      "yaw": 4.2670655,
+      "scale": 0.8725322
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        129.3121,
+        4.42813,
+        109.2184
+      ],
+      "yaw": 1.7949344,
+      "scale": 0.94954175
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        86.674736,
+        5.404563,
+        116.53289
+      ],
+      "yaw": 5.716743,
+      "scale": 1.2544622
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        168.13348,
+        5.636526,
+        138.27979
+      ],
+      "yaw": 0.43275,
+      "scale": 1.449296
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        127.50255,
+        6.9650674,
+        142.72427
+      ],
+      "yaw": 0.03387491,
+      "scale": 1.0325477
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/grass.prefab",
+      "pos": [
+        122.33294,
+        10.057902,
+        164.80946
+      ],
+      "yaw": 4.0107975,
+      "scale": 0.80812335
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        133.38664,
+        8.31525,
+        148.30672
+      ],
+      "yaw": 6.2480617,
+      "scale": 1.0810249
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        119.41743,
+        3.8268979,
+        93.45363
+      ],
+      "yaw": 2.376792,
+      "scale": 1.2992433
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        139.8399,
+        3.9627056,
+        93.00725
+      ],
+      "yaw": 3.49412,
+      "scale": 0.8637482
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        111.706406,
+        6.155518,
+        128.86528
+      ],
+      "yaw": 5.96594,
+      "scale": 1.2901161
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        116.77875,
+        8.970834,
+        159.21193
+      ],
+      "yaw": 2.329466,
+      "scale": 1.0442667
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        90.133484,
+        5.2301536,
+        135.84644
+      ],
+      "yaw": 6.010013,
+      "scale": 1.0169168
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        130.72176,
+        3.9748728,
+        95.81847
+      ],
+      "yaw": 0.3417755,
+      "scale": 0.952784
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        106.42824,
+        6.3636556,
+        142.33017
+      ],
+      "yaw": 4.694358,
+      "scale": 1.0847852
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        135.47076,
+        7.948392,
+        146.52307
+      ],
+      "yaw": 5.721889,
+      "scale": 0.9174056
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        142.28299,
+        7.7515616,
+        151.16827
+      ],
+      "yaw": 2.3859525,
+      "scale": 0.8092991
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        135.95491,
+        9.875501,
+        159.43188
+      ],
+      "yaw": 6.1828537,
+      "scale": 1.1440499
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        143.23201,
+        7.0444136,
+        147.70578
+      ],
+      "yaw": 0.23263966,
+      "scale": 0.9910195
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        94.0095,
+        5.5195713,
+        116.42139
+      ],
+      "yaw": 6.0768633,
+      "scale": 0.84438556
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        118.60931,
+        5.168408,
+        117.30679
+      ],
+      "yaw": 4.9123974,
+      "scale": 1.141489
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        125.796646,
+        6.6800394,
+        140.99846
+      ],
+      "yaw": 0.5936989,
+      "scale": 0.81597465
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        101.96233,
+        4.1951623,
+        100.36337
+      ],
+      "yaw": 4.2343597,
+      "scale": 1.0009298
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        143.66473,
+        4.3229213,
+        99.96882
+      ],
+      "yaw": 4.125635,
+      "scale": 1.2551366
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        126.0125,
+        3.9765785,
+        97.66499
+      ],
+      "yaw": 1.2002935,
+      "scale": 1.2043226
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        109.03404,
+        6.162677,
+        126.379715
+      ],
+      "yaw": 3.401007,
+      "scale": 1.1971478
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        125.26496,
+        3.9658535,
+        97.413574
+      ],
+      "yaw": 1.6116086,
+      "scale": 1.0567081
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        150.66833,
+        7.8761706,
+        159.55
+      ],
+      "yaw": 0.7645059,
+      "scale": 0.9945921
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        151.12662,
+        5.0447946,
+        116.26354
+      ],
+      "yaw": 0.7869037,
+      "scale": 0.81355345
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        119.637566,
+        5.072038,
+        110.78441
+      ],
+      "yaw": 1.2027031,
+      "scale": 1.1065156
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        119.3815,
+        4.627937,
+        102.548164
+      ],
+      "yaw": 1.607394,
+      "scale": 0.89832467
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        91.69736,
+        5.3808956,
+        111.66037
+      ],
+      "yaw": 5.364165,
+      "scale": 0.96733636
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        124.28498,
+        7.2593155,
+        145.91595
+      ],
+      "yaw": 3.0983896,
+      "scale": 1.0915557
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        161.54523,
+        5.955037,
+        142.51308
+      ],
+      "yaw": 3.0857623,
+      "scale": 0.96252626
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        102.415695,
+        5.6264725,
+        121.02878
+      ],
+      "yaw": 3.20284,
+      "scale": 0.92678845
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        94.99872,
+        5.33785,
+        135.83652
+      ],
+      "yaw": 5.6956825,
+      "scale": 1.0902402
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        126.281685,
+        4.541584,
+        109.7891
+      ],
+      "yaw": 5.918439,
+      "scale": 1.1112258
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        97.73357,
+        5.6993613,
+        131.9918
+      ],
+      "yaw": 1.7417375,
+      "scale": 1.1338748
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        119.64447,
+        7.7009215,
+        148.62299
+      ],
+      "yaw": 0.79375905,
+      "scale": 0.8486335
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        139.57407,
+        4.992904,
+        114.77369
+      ],
+      "yaw": 4.317479,
+      "scale": 1.0798532
+    },
+    {
+      "type": "visual",
+      "prefab": "prefabs/flower.prefab",
+      "pos": [
+        98.598206,
+        6.5743527,
+        149.36815
+      ],
+      "yaw": 4.9005647,
+      "scale": 1.111184
+    }
+  ]
+}

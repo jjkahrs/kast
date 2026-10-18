@@ -1,0 +1,31 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Flower",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Stem",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 0.2, 0], "rotation": [0, 0, 0, 1], "scale": [0.04, 0.4, 0.04]},
+        "MeshRenderer": {"primitive": "cube", "material": "materials/grass_blade.mat", "castShadows": false, "receiveShadows": true}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Bloom",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 0.42, 0], "rotation": [0, 0, 0, 1], "scale": [0.16, 0.12, 0.16]},
+        "MeshRenderer": {"primitive": "sphere", "material": "materials/flower.mat", "castShadows": false, "receiveShadows": true}
+      }
+    }
+  ]
+}

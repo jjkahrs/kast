@@ -2875,7 +2875,7 @@ void checkBuildSettings()
                                        "physics.scene",
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                       "shadows.scene", "terrain.scene", "ui.scene", "ui_drag.scene"},
+                                       "shadows.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
 
     const std::filesystem::path root = looseTestDir("kast_build_settings_check") / "game";
@@ -2894,7 +2894,7 @@ void checkBuildSettings()
                                                           "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                                          "shadows.scene", "terrain.scene", "ui.scene", "ui_drag.scene"},
+                                                          "shadows.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
     Document doc;
@@ -6833,6 +6833,125 @@ void checkTerrainPlay()
     check(doc.scene.registry().view<kast::TerrainTile>().empty(), "terrain Play: Stop leaves no tiles in the scene");
 }
 
+// Zone objects (docs/engine/terrain.html#objects) on the hills' fixtures (maps/hills/objects): each streams in with its
+// tile as the tile's child, an object entity at its pos and yaw holding the prefab instance (scaled), and for an obstacle
+// or interactable a static Collider from its shape standing on pos; Jolt collides with the shape. nearestInteractable
+// measures to the shape's edge. A bad entry and a missing prefab are logged with the file and skipped, the rest kept.
+void checkZoneObjects()
+{
+    kast::TerrainStreamer streamer;
+    streamer.start(std::filesystem::path(KAST_TEST_PROJECT_DIR));
+    kast::Scene scene;
+    const entt::entity terrain = scene.create("Terrain");
+    scene.registry().emplace<kast::Terrain>(terrain, 3, 1);
+    kast::EventBus bus;
+    streamer.update(scene, bus); // centre: the origin, tile 0_0; radius 1 takes all 4
+    std::map<std::string, entt::entity> objects;
+    for (auto [tileEntity, tile] : scene.registry().view<kast::TerrainTile>().each())
+        for (const entt::entity child : scene.children(tileEntity))
+            objects[std::format("{}_{} {}", tile.tx, tile.tz, scene.registry().get<kast::Name>(child).value)] = child;
+    check(objects.size() == 4 && objects.contains("0_0 visual Crate") && objects.contains("1_0 obstacle Crate") &&
+              objects.contains("0_1 interactable Crate") && objects.contains("0_1 obstacle Crate"),
+          "zone objects: hills' 4 fixtures are their tiles' children");
+    if (objects.size() != 4)
+        return;
+    const auto& reg = scene.registry();
+    const entt::entity visual = objects["0_0 visual Crate"], wall = objects["1_0 obstacle Crate"];
+    const entt::entity shrine = objects["0_1 interactable Crate"];
+    const auto worldPos = [&](entt::entity e) {
+        float m[16];
+        scene.worldMatrix(e, m);
+        return bx::Vec3{m[12], m[13], m[14]};
+    };
+    check(!reg.all_of<kast::Collider>(visual) && scene.children(visual).size() == 1 &&
+              near(reg.get<kast::Transform>(scene.children(visual)[0]).scale, {0.4f, 0.4f, 0.4f}, 1e-5f) &&
+              near(worldPos(visual).x, 248.0f) && near(worldPos(visual).z, 244.0f),
+          "zone objects: a visual has no Collider, its prefab instance is scaled 0.4, at its map position");
+    const kast::Collider* box = reg.try_get<kast::Collider>(wall);
+    check(box && box->shape == kast::ColliderShape::Box && near(box->size, {2.0f, 2.0f, 2.0f}, 1e-5f) &&
+              near(box->center, {0.0f, 1.0f, 0.0f}, 1e-5f) && !reg.all_of<kast::Rigidbody>(wall) &&
+              near(worldPos(wall).x, 266.0f) && near(reg.get<kast::Transform>(wall).position.x, 10.0f),
+          "zone objects: an obstacle's box shape is a static Collider standing on its pos (local to tile 1_0)");
+    const kast::Collider* post = reg.try_get<kast::Collider>(shrine);
+    check(post && post->shape == kast::ColliderShape::Cylinder && near(post->radius, 0.6f) && near(post->height, 1.0f) &&
+              near(post->center, {0.0f, 0.5f, 0.0f}, 1e-5f),
+          "zone objects: an interactable's cylinder shape is a Collider too");
+
+    kast::Physics physics;
+    physics.start(scene, bus);
+    stepPhysics(physics, 1);
+    const float base = worldPos(shrine).y;
+    const auto hit = physics.raycast({250.0f, base + 20.0f, 266.0f}, {0.0f, -1.0f, 0.0f}, 40.0f);
+    check(hit && hit->entity == shrine && near(hit->point.y, base + 1.0f, 0.02f),
+          "zone objects: Jolt hits the cylinder's top, 1 m above its pos (the shape, not the 1 m crate mesh)");
+    const auto through = physics.raycast({248.0f, worldPos(visual).y + 20.0f, 244.0f}, {0.0f, -1.0f, 0.0f}, 40.0f);
+    check(through && reg.all_of<kast::TerrainTile>(through->entity), "zone objects: a raycast passes through the visual");
+
+    const auto nearest = kast::nearestInteractable(scene, 250.0f, 268.5f, 3.0f);
+    check(nearest && nearest->object->id == 1 && nearest->object->name == "Test Shrine" && near(nearest->distance, 1.9f, 1e-3f),
+          "zone objects: nearestInteractable finds Test Shrine 1.9 m from its edge");
+    check(!kast::nearestInteractable(scene, 250.0f, 280.0f, 3.0f), "zone objects: none beyond maxDistance");
+
+    scene.registry().get<kast::Terrain>(terrain).radius = 0; // the centre tile 0_0 only: 0_1 and 1_0 stream out
+    streamer.update(scene, bus);
+    check(!scene.valid(wall) && !scene.valid(shrine) && scene.valid(visual) && !kast::nearestInteractable(scene, 250.0f, 268.5f, 3.0f),
+          "zone objects: they go with their tile");
+
+    // A copy of the hills with a bad entry and a missing prefab (twice): logged, skipped, the rest kept.
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "kast_zone_objects_check";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root / "maps");
+    std::filesystem::copy(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "maps" / "hills", root / "maps" / "hills",
+                          std::filesystem::copy_options::recursive);
+    std::filesystem::copy(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "prefabs", root / "prefabs");
+    writeFile(root / "maps" / "hills" / "objects" / "0_0.json", R"({"version": 1, "objects": [
+        {"type": "visual", "prefab": "prefabs/Crate.prefab", "pos": [10, 0, 10]},
+        {"type": "tree", "prefab": "prefabs/Crate.prefab", "pos": [20, 0, 20]},
+        {"type": "visual", "prefab": "prefabs/NopeZoneObject.prefab", "pos": [30, 0, 30]},
+        {"type": "visual", "prefab": "prefabs/NopeZoneObject.prefab", "pos": [40, 0, 40]},
+        {"type": "obstacle", "prefab": "prefabs/Crate.prefab", "pos": [50, 0, 50], "shape": {"cylinder": {"radius": 1, "height": 1}}}]})");
+    kast::TerrainStreamer broken;
+    broken.start(root);
+    kast::Scene brokenScene;
+    brokenScene.registry().emplace<kast::Terrain>(brokenScene.create("Terrain"), 3, 0);
+    broken.update(brokenScene, bus);
+    const entt::entity tile = brokenScene.registry().view<kast::TerrainTile>().front();
+    const auto file = (root / "maps" / "hills" / "objects" / "0_0.json").string();
+    const auto count = std::ranges::count_if(kast::log::lines(), [](const std::string& l) { return contains(l, "NopeZoneObject.prefab"); });
+    check(brokenScene.children(tile).size() == 2 &&
+              logged(std::format("Terrain: {}: objects[1]: \"type\" must be \"visual\", \"obstacle\" or \"interactable\"; "
+                                 "that object is skipped", file)) &&
+              logged(std::format("Terrain: {}: prefab \"prefabs/NopeZoneObject.prefab\":", file)) && count == 1,
+          std::format("zone objects: a bad entry and a missing prefab (logged once) are skipped, the other 2 kept ({})",
+                      brokenScene.children(tile).size()).c_str());
+    std::filesystem::remove_all(root);
+}
+
+// tests/project/zone_objects.scene in editor Play (scripts/zone_objects.lua): the Hero walking +x stops at the
+// obstacle crate's side (x 265 - its 0.4 m radius); the Walker walks through the visual crate; the Lua API answers.
+void checkZoneObjectsPlay()
+{
+    Document doc;
+    std::string error;
+    const std::filesystem::path root = KAST_TEST_PROJECT_DIR;
+    check(openProject(doc, root / kast::kProjectFileName, error) && openFile(doc, (root / "zone_objects.scene").string(), error),
+          ("zone objects Play: opens zone_objects.scene: " + error).c_str());
+    startPlay(doc);
+    for (int i = 0; i < 330; ++i)
+        updatePlay(doc, 1.0f / 60.0f);
+    const entt::entity hero = named(doc.scene, "Hero"), walker = named(doc.scene, "Walker");
+    const float heroX = hero != entt::null ? doc.scene.registry().get<kast::Transform>(hero).position.x : 0.0f;
+    const float walkerX = walker != entt::null ? doc.scene.registry().get<kast::Transform>(walker).position.x : 0.0f;
+    check(heroX > 263.5f && heroX < 264.7f,
+          std::format("zone objects Play: the Hero is stopped by the obstacle crate (x {:.2f}, its side at 264.6)", heroX).c_str());
+    check(walkerX > 249.5f, std::format("zone objects Play: the Walker walked through the visual crate at 248 (x {:.2f})", walkerX).c_str());
+    check(logged("zone objects: nearest 1 Test Shrine 1.90 m at 250, 266") && logged("none within 3 m of (250, 280): true") &&
+              logged("zone objects: interact offline false") &&
+              logged("interact(0) false") && logged("kast.interact: id must be a whole number from 1 to 4294967295, got 0"),
+          "zone objects Play: kast.nearestInteractable and kast.interact from Lua");
+    stopPlay(doc);
+}
+
 void checkColliderWireframe()
 {
     kast::Scene scene;
@@ -6856,6 +6975,19 @@ void checkColliderWireframe()
     // yawed: (0.5, 0.5, 1) around world (1, 2, 2).
     check(lines.size() == 12 && near(b.min, {0.5f, 1.5f, 1.0f}, 1e-4f) && near(b.max, {1.5f, 2.5f, 3.0f}, 1e-4f),
           "physics: the box collider wireframe has the world position, rotation, scale and center offset");
+    kast::Collider cylinder;
+    cylinder.shape = kast::ColliderShape::Cylinder;
+    cylinder.radius = 0.5f;
+    cylinder.height = 0.4f; // shorter than its diameter: fine for a cylinder
+    scene.registry().replace<kast::Collider>(e, cylinder); // max scale 2: radius 1, height 0.8
+    const kast::Aabb cyl = bounds(kast::colliderWireframe(scene, e));
+    const auto validate = kast::componentInfo(kast::findComponentType("Collider")).validate;
+    kast::Collider capsule = cylinder;
+    capsule.shape = kast::ColliderShape::Capsule;
+    check(near(cyl.min, {0.0f, 1.6f, 2.0f}, 1e-3f) && near(cyl.max, {2.0f, 2.4f, 4.0f}, 1e-3f) && validate &&
+              !validate(entt::meta_any(cylinder)) && validate(entt::meta_any(capsule)),
+          "physics: a cylinder collider's wireframe is its two circles round the center; height < 2 * radius is valid for it "
+          "(not for a capsule)");
     scene.registry().remove<kast::Collider>(e);
     check(kast::colliderWireframe(scene, e).empty(), "physics: no collider, no wireframe");
     scene.registry().emplace<kast::CharacterController>(e);
@@ -8361,6 +8493,8 @@ int main(int argc, char** argv)
     checkTerrainPhysics();
     checkTerrainStreaming();
     checkTerrainPlay();
+    checkZoneObjects();
+    checkZoneObjectsPlay();
     checkColliderWireframe();
     checkAudioDecode();
     checkAudioMix();

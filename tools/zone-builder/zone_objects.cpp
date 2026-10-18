@@ -1,5 +1,6 @@
-// The Areas and Spawns panels and their tools in the 3D view (Panels, see zone_panels.h): drawing rect and polygon
-// areas, placing spawns, adding path points, dragging area vertices, spawns and path points, and their overlays.
+// The Areas, Spawns and Objects panels and their tools in the 3D view (Panels, see zone_panels.h): drawing rect and
+// polygon areas, placing spawns, adding path points, placing zone objects and scattering visuals, dragging area
+// vertices, spawns, path points and objects, and their overlays (zone objects' shapes as ground outlines).
 #include "zone_panels.h"
 
 #include <scene_io.h> // jsonNumber
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <format>
 
 namespace zone {
@@ -25,6 +27,12 @@ constexpr ImU32 kPortalColor = IM_COL32(110, 200, 255, 230);
 constexpr ImU32 kSpawnMarker = IM_COL32(255, 110, 70, 255);
 constexpr ImU32 kPathColor = IM_COL32(120, 255, 140, 220);
 constexpr ImU32 kDraftColor = IM_COL32(255, 255, 255, 230);
+constexpr ImU32 kVisualColor = IM_COL32(120, 220, 90, 200);
+constexpr ImU32 kObstacleColor = IM_COL32(255, 153, 0, 230); // the palette's darken
+constexpr ImU32 kInteractableColor = IM_COL32(110, 200, 255, 240);
+constexpr ImU32 kScatterColor = IM_COL32(255, 204, 0, 255);
+constexpr ImU32 kEraseColor = IM_COL32(255, 80, 60, 255);
+constexpr ImVec4 kErrorText{1.0f, 0.45f, 0.35f, 1.0f};
 constexpr float kHandlePx = 10.0f; // grab distance of a handle, in window points
 constexpr float kHeadingLength = 8.0f; // metres
 
@@ -72,6 +80,37 @@ std::string lower(std::string s) {
 void undoScope(ZoneDoc& doc) {
     if (ImGui::IsItemActivated()) doc.begin();
     if (ImGui::IsItemDeactivated()) doc.commit();
+}
+
+// An object's shape as the parser reads it, for the overlay; nullopt for none (or a bad one: validate() reports it).
+std::optional<km::Shape> shape_of(const Json& object) {
+    const Json& s = object.value("shape", Json());
+    km::Shape shape;
+    if (s.contains("box") && s["box"].is_object()) {
+        const Vec3 h = vec3(s["box"].value("halfExtents", Json()));
+        shape.halfExtents = {h[0], h[1], h[2]};
+    } else if (s.contains("cylinder") && s["cylinder"].is_object()) {
+        shape.kind = km::Shape::Kind::Cylinder;
+        shape.radius = number(s["cylinder"], "radius", 0);
+        shape.height = number(s["cylinder"], "height", 0);
+    } else {
+        return std::nullopt;
+    }
+    return shape;
+}
+
+std::string stem(const std::string& prefab) { return std::filesystem::path(prefab).stem().string(); }
+
+ImU32 type_color(km::ObjectType type) {
+    return type == km::ObjectType::Visual ? kVisualColor : type == km::ObjectType::Obstacle ? kObstacleColor : kInteractableColor;
+}
+
+constexpr const char* kTypeNames[] = {"Visual", "Obstacle", "Interactable"}; // in km::ObjectType order
+
+bool id_used(const ZoneState& state, uint32_t id, ObjectRef except) {
+    for (const ObjectRef& ref : all_objects(state))
+        if (!(ref == except) && object_json(state, ref).value("id", Json()) == id) return true;
+    return false;
 }
 
 } // namespace
@@ -139,6 +178,13 @@ void Panels::updateObjects(Session& session, bool click) {
     case Tool::SetSpawn:
         if (click && hover_) doc.edit([&](ZoneState& s) { s.manifest["spawn"]["pos"] = vec3_json(*hover_); });
         break;
+    case Tool::PlaceObject:
+        if (click && hover_ && !placePrefab_.empty())
+            doc.edit([&](ZoneState& s) { object_ = add_object(s, placeType_, placePrefab_, *hover_, 0, 1); });
+        break;
+    case Tool::Scatter:
+        updateScatter(session, click);
+        break;
     case Tool::PathPoints:
         if (const auto ref = find_spawn(doc.state, spawn_); ref && click && hover_)
             doc.edit([&](ZoneState& s) { add_path_point(s, *ref, *hover_); });
@@ -171,9 +217,23 @@ void Panels::updateObjects(Session& session, bool click) {
                     drag_ = {Drag::Kind::Spawn, 0};
                 }
             }
+            // Then zone objects: the marker nearest the mouse.
+            float nearest = kHandlePx * kHandlePx;
+            if (drag_.kind == Drag::Kind::None)
+                for (const ObjectRef& r : all_objects(doc.state)) {
+                    const Vec3 p = vec3(object_json(doc.state, r).value("pos", Json()));
+                    const auto sp = screen(doc, p[0], p[2]);
+                    if (!sp) continue;
+                    const float d = (sp->x - io.MousePos.x) * (sp->x - io.MousePos.x) + (sp->y - io.MousePos.y) * (sp->y - io.MousePos.y);
+                    if (d > nearest) continue;
+                    nearest = d;
+                    object_ = r;
+                    drag_ = {Drag::Kind::Object, 0};
+                }
             if (drag_.kind != Drag::Kind::None) {
                 doc.begin(); // the whole drag is one undo step
             } else if (hover_) {
+                object_.reset();
                 // The highest-priority area under the click, as the server picks.
                 area_.reset();
                 int best = 0;
@@ -200,6 +260,9 @@ void Panels::updateObjects(Session& session, bool click) {
                 break;
             case Drag::Kind::PathPoint:
                 if (Json* route = now ? spawn_path(doc.state, *now) : nullptr) (*route)["points"][drag_.index] = vec3_json(*hover_);
+                break;
+            case Drag::Kind::Object:
+                if (object_) object_ = move_object(doc.state, *object_, *hover_);
                 break;
             case Drag::Kind::None: break;
             }
@@ -234,6 +297,27 @@ void Panels::drawObjectOverlays(const Session& session) const {
                 for (const Point& p : points)
                     if (const auto s = screen(doc, p[0], p[1]))
                         draw->AddRectFilled({s->x - 4, s->y - 4}, {s->x + 4, s->y + 4}, kAreaSelected);
+        }
+    }
+    for (const ObjectRef& ref : all_objects(doc.state)) {
+        const Json& o = object_json(doc.state, ref);
+        const km::ObjectType type = object_type(o);
+        const Vec3 p = vec3(o.value("pos", Json()));
+        const bool selected = object_ == ref;
+        const ImU32 color = selected ? kAreaSelected : type_color(type);
+        if (const auto shape = type == km::ObjectType::Visual ? std::nullopt : shape_of(o)) {
+            const auto outline = km::footprint(*shape, p, number(o, "yaw", 0));
+            for (size_t k = 0; k < outline.size(); ++k)
+                view_.drawGroundLine(doc, outline[k], outline[(k + 1) % outline.size()], color, selected ? 3.0f : 1.5f);
+        }
+        const auto at = screen(doc, p[0], p[2]);
+        if (!at) continue;
+        draw->AddCircleFilled(*at, selected ? 6.0f : type == km::ObjectType::Visual ? 2.5f : 4.0f, color);
+        if (type == km::ObjectType::Interactable) {
+            const std::string label = std::format("#{} {}", o.value("id", 0u), o.value("name", stem(str(o, "prefab"))));
+            draw->AddText({at->x + 8, at->y - 8}, color, label.c_str());
+        } else if (selected) {
+            draw->AddText({at->x + 8, at->y - 8}, color, stem(str(o, "prefab")).c_str());
         }
     }
     for (const auto& [tile, file] : doc.state.spawns) {
@@ -464,6 +548,214 @@ void Panels::drawSpawns(Session& session) {
         }
     }
     ImGui::End();
+}
+
+void Panels::updateScatter(Session& session, bool click) {
+    ZoneDoc& doc = *session.doc;
+    if (hover_) view_.drawGroundCircle(doc, (*hover_)[0], (*hover_)[2], scatter_.radius, scatterErase_ ? kEraseColor : kScatterColor);
+    if (click && hover_ && (scatterErase_ || !scatter_.prefabs.empty())) {
+        doc.begin(); // the whole stroke is one undo step
+        stroking_ = true;
+        lastDab_.reset();
+    }
+    if (stroking_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        doc.commit();
+        stroking_ = false;
+    }
+    if (!stroking_ || !hover_) return;
+    const Point at{(*hover_)[0], (*hover_)[2]};
+    if (lastDab_ && std::hypot(at[0] - (*lastDab_)[0], at[1] - (*lastDab_)[1]) < scatter_.radius) return;
+    lastDab_ = at;
+    std::string err;
+    const auto info = doc.info(err);
+    if (!info) return;
+    if (scatterErase_) erase_visuals(doc.state, at[0], at[1], scatter_.radius);
+    else scatter(*info, doc.state, scatter_, scatterRng_, at[0], at[1]);
+}
+
+void Panels::drawScatter(Session& session) {
+    ImGui::SeparatorText("Scatter brush (visuals)");
+    ImGui::Checkbox("Erase visuals", &scatterErase_);
+    ImGui::TextDisabled(scatterErase_ ? "Drag on the terrain to remove visuals in the circle. Esc: stop"
+                                      : "Drag on the terrain: a dab every radius moved, one undo step per stroke. Esc: stop");
+    ImGui::SliderFloat("Radius (m)", &scatter_.radius, 0.5f, 64.0f, "%.1f");
+    if (!scatterErase_) {
+        ImGui::SliderInt("Per dab", &scatter_.count, 1, 100);
+        ImGui::Checkbox("Random yaw", &scatter_.randomYaw);
+        ImGui::DragFloatRange2("Scale", &scatter_.scaleMin, &scatter_.scaleMax, 0.01f, 0.05f, 10.0f, "min %.2f", "max %.2f");
+        if (ImGui::InputInt("Seed", &scatterSeed_)) scatterRng_ = ScatterRng(uint32_t(scatterSeed_));
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Restart")) scatterRng_ = ScatterRng(uint32_t(scatterSeed_)); // replay from the seed
+        ImGui::TextUnformatted("Prefabs (one picked at random per object):");
+        if (ImGui::BeginChild("##scatterPrefabs", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 5), ImGuiChildFlags_Borders)) {
+            for (const std::string& prefab : session.prefabs) {
+                const auto it = std::find(scatter_.prefabs.begin(), scatter_.prefabs.end(), prefab);
+                bool on = it != scatter_.prefabs.end();
+                if (ImGui::Checkbox(prefab.c_str(), &on)) {
+                    if (on) scatter_.prefabs.push_back(prefab);
+                    else scatter_.prefabs.erase(it);
+                }
+            }
+        }
+        ImGui::EndChild();
+        if (scatter_.prefabs.empty()) ImGui::TextColored(kErrorText, "Tick at least one prefab");
+    }
+}
+
+void Panels::drawZoneObjects(Session& session) {
+    if (ImGui::Begin("Objects") && session.doc) {
+        ZoneDoc& doc = *session.doc;
+        toolButton("Place Object", Tool::PlaceObject);
+        toolButton("Scatter", Tool::Scatter);
+        ImGui::NewLine();
+        if (tool_ == Tool::PlaceObject) ImGui::TextDisabled("Click the terrain to place one. Esc: stop");
+        if (tool_ == Tool::None) ImGui::TextDisabled("Click an object's marker to select it; drag it to move it");
+        if (placePrefab_.empty() && !session.prefabs.empty()) placePrefab_ = session.prefabs.front();
+        if (ImGui::BeginCombo("Prefab", placePrefab_.empty() ? "(no .prefab in the project)" : placePrefab_.c_str())) {
+            for (const std::string& prefab : session.prefabs)
+                if (ImGui::Selectable(prefab.c_str(), prefab == placePrefab_)) placePrefab_ = prefab;
+            ImGui::EndCombo();
+        }
+        int type = int(placeType_);
+        if (ImGui::Combo("Type", &type, kTypeNames, IM_ARRAYSIZE(kTypeNames))) placeType_ = km::ObjectType(type);
+        if (tool_ == Tool::Scatter) drawScatter(session);
+
+        const std::vector<ObjectRef> refs = all_objects(doc.state);
+        if (object_ && std::find(refs.begin(), refs.end(), *object_) == refs.end()) object_.reset(); // undone or deleted
+        ImGui::Text("%zu object(s)", refs.size());
+        if (ImGui::BeginChild("##objectList", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 6), ImGuiChildFlags_Borders)) {
+            ImGuiListClipper clipper; // scattered tiles hold thousands
+            clipper.Begin(int(refs.size()));
+            while (clipper.Step())
+                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+                    const Json& o = object_json(doc.state, refs[i]);
+                    const std::string id = o.contains("id") ? std::format(" #{}", o.value("id", 0u)) : "";
+                    const std::string label = std::format("{} {}{}  (tile {})##{}_{}", str(o, "type"), stem(str(o, "prefab")), id,
+                                                          tile_name(refs[i].tile), tile_name(refs[i].tile), refs[i].index);
+                    if (ImGui::Selectable(label.c_str(), object_ == refs[i])) object_ = refs[i];
+                }
+        }
+        ImGui::EndChild();
+        if (object_) drawObjectFields(session);
+    }
+    ImGui::End();
+}
+
+void Panels::drawObjectFields(Session& session) {
+    ZoneDoc& doc = *session.doc;
+    std::string err;
+    const auto info = doc.info(err);
+    if (!info) return;
+    const ObjectRef ref = *object_;
+    ImGui::SeparatorText("Selected object");
+    int t = int(object_type(object_json(doc.state, ref)));
+    if (ImGui::Combo("Object type", &t, kTypeNames, IM_ARRAYSIZE(kTypeNames)))
+        doc.edit([&](ZoneState& s) { set_object_type(s, ref, km::ObjectType(t)); });
+    const km::ObjectType type = object_type(object_json(doc.state, ref)); // after a change of it
+    const std::string prefab = str(object_json(doc.state, ref), "prefab");
+    if (ImGui::BeginCombo("Object prefab", prefab.c_str())) {
+        for (const std::string& p : session.prefabs)
+            if (ImGui::Selectable(p.c_str(), p == prefab)) doc.edit([&](ZoneState& s) { object_json(s, ref)["prefab"] = p; });
+        ImGui::EndCombo();
+    }
+    const auto changed = [&] { // after a field edit: the server entry follows
+        if (type == km::ObjectType::Interactable) sync_interactable(doc.state, *object_);
+    };
+    const Vec3 pos = vec3(object_json(doc.state, ref).value("pos", Json()));
+    float xz[2] = {pos[0], pos[2]};
+    if (ImGui::InputFloat2("Position x, z", xz, "%.2f")) {
+        const float y = ground_y(*info, doc.state, xz[0], xz[1]).value_or(pos[1]);
+        object_ = move_object(doc.state, ref, {xz[0], y, xz[1]});
+    }
+    undoScope(doc);
+    const ObjectRef now = *object_; // the move may have changed its file
+    Json& o = object_json(doc.state, now);
+    ImGui::Text("Tile %s, y %.2f (on the ground)", tile_name(now.tile).c_str(), vec3(o.value("pos", Json()))[1]);
+    float yaw = number(o, "yaw", 0) * 180.0f / bx::kPi;
+    if (ImGui::SliderFloat("Yaw", &yaw, -180.0f, 180.0f, "%.0f deg")) {
+        object_json(doc.state, now)["yaw"] = kast::jsonNumber(yaw * bx::kPi / 180.0f);
+        changed();
+    }
+    undoScope(doc);
+    float scale = number(object_json(doc.state, now), "scale", 1);
+    if (ImGui::InputFloat("Scale", &scale, 0.1f, 0.5f, "%.2f")) object_json(doc.state, now)["scale"] = kast::jsonNumber(std::max(0.01f, scale));
+    undoScope(doc);
+
+    if (type != km::ObjectType::Visual) {
+        const auto shape = shape_of(object_json(doc.state, now));
+        int kind = shape && shape->kind == km::Shape::Kind::Cylinder ? 1 : 0;
+        const char* kinds[] = {"Box", "Cylinder"};
+        if (ImGui::Combo("Shape", &kind, kinds, 2))
+            doc.edit([&](ZoneState& s) {
+                object_json(s, now)["shape"] = kind == 0 ? default_shape() : Json{{"cylinder", {{"radius", 0.5}, {"height", 1}}}};
+                if (type == km::ObjectType::Interactable) sync_interactable(s, now);
+            });
+        if (shape && shape->kind == km::Shape::Kind::Box) {
+            float h[3] = {shape->halfExtents[0], shape->halfExtents[1], shape->halfExtents[2]};
+            if (ImGui::InputFloat3("Half extents", h, "%.2f")) {
+                object_json(doc.state, now)["shape"]["box"]["halfExtents"] =
+                    vec3_json({std::max(0.01f, h[0]), std::max(0.01f, h[1]), std::max(0.01f, h[2])});
+                changed();
+            }
+            undoScope(doc);
+        } else if (shape) {
+            float rh[2] = {shape->radius, shape->height};
+            if (ImGui::InputFloat2("Radius, height", rh, "%.2f")) {
+                Json& c = object_json(doc.state, now)["shape"]["cylinder"];
+                c["radius"] = kast::jsonNumber(std::max(0.01f, rh[0]));
+                c["height"] = kast::jsonNumber(std::max(0.01f, rh[1]));
+                changed();
+            }
+            undoScope(doc);
+        }
+    }
+
+    if (type == km::ObjectType::Interactable) {
+        ImGui::SeparatorText("Interactable");
+        const uint32_t id = object_json(doc.state, now).value("id", 0u);
+        int typed = int(id);
+        if (ImGui::InputInt("Id", &typed) && typed >= 1 && !id_used(doc.state, uint32_t(typed), now))
+            set_interactable_id(doc.state, now, uint32_t(typed));
+        undoScope(doc);
+        std::string name = str(object_json(doc.state, now), "name");
+        if (ImGui::InputText("Name", &name)) {
+            if (name.empty()) object_json(doc.state, now).erase("name");
+            else object_json(doc.state, now)["name"] = name;
+            changed();
+        }
+        undoScope(doc);
+        const uint32_t current = object_json(doc.state, now).value("id", 0u);
+        if (!interactable_json(doc.state, now.tile, current)) sync_interactable(doc.state, now); // a hand-edited file
+        ImGui::TextDisabled("Server only (.server/interactables/%s.json):", tile_name(now.tile).c_str());
+        float range = number(*interactable_json(doc.state, now.tile, current), "range", 3);
+        if (ImGui::InputFloat("Range (m)", &range, 0.5f, 1.0f, "%.1f"))
+            (*interactable_json(doc.state, now.tile, current))["range"] = kast::jsonNumber(std::max(0.1f, range));
+        undoScope(doc);
+        std::string event = str(*interactable_json(doc.state, now.tile, current), "event");
+        if (ImGui::InputText("Event", &event)) (*interactable_json(doc.state, now.tile, current))["event"] = event;
+        undoScope(doc);
+        if (event.empty()) ImGui::TextColored(kErrorText, "The event name must not be empty");
+        if (dataFor_ != current) { // another selection: show its data
+            dataFor_ = current;
+            const Json& data = interactable_json(doc.state, now.tile, current)->value("data", Json());
+            dataText_ = data.is_null() ? "" : data.dump(2);
+            dataError_.clear();
+        }
+        if (ImGui::InputTextMultiline("Data (JSON object)", &dataText_, ImVec2(0, ImGui::GetTextLineHeight() * 5))) {
+            const Json parsed = Json::parse(dataText_, nullptr, false);
+            Json& entry = *interactable_json(doc.state, now.tile, current);
+            dataError_.clear();
+            if (dataText_.find_first_not_of(" \t\r\n") == std::string::npos) entry.erase("data");
+            else if (parsed.is_object()) entry["data"] = parsed;
+            else dataError_ = parsed.is_discarded() ? "not valid JSON (the last valid data is kept)" : "must be a JSON object";
+        }
+        undoScope(doc);
+        if (!dataError_.empty()) ImGui::TextColored(kErrorText, "Data: %s", dataError_.c_str());
+    }
+    if (ImGui::Button("Delete object")) {
+        doc.edit([&](ZoneState& s) { delete_object(s, now); });
+        object_.reset();
+    }
 }
 
 } // namespace zone

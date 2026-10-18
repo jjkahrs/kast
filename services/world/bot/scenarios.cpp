@@ -367,6 +367,7 @@ asio::awaitable<void> handshake_rejects(Ctx& x) {
         co_await rejected_login(x, "expired token", expired, proto::kProtocolVersion, Code::token_expired);
     co_await rejected_login(x, "wrong protocol version", good, 999, Code::protocol_mismatch);
     co_await rejected_login(x, "protocol version 1", good, 1, Code::protocol_mismatch);
+    co_await rejected_login(x, "protocol version 4 (before Interact)", good, 4, Code::protocol_mismatch);
 
     {
         auto c = std::make_shared<WorldClient>(co_await asio::this_coro::executor, x.tls);
@@ -1086,6 +1087,62 @@ std::vector<int> echoes(const std::vector<proto::Message>& msgs, uint32_t entity
     return out;
 }
 
+// --- 25: zone objects on the sample "hills" map (docs/services/world/maps.html#objects) ---
+// The fixtures (maps/hills/objects, .server/interactables): interactable 1 "Test Shrine" (a 0.6 m cylinder at
+// (250, 266), range 3, event "test.shrine" {msg = "hello"}) and an obstacle crate (a 2 m box at (266, 248)). The test
+// hook answers "test.shrine" with a ServerEvent carrying what it got. Interact on another map, out of range or with an
+// unknown id gets nothing; in range, one answer; walking into the crate, a Correction at its side (the navmesh cut).
+asio::awaitable<void> objects(Ctx& x) {
+    std::string err;
+    const auto hills = load_terrain(std::filesystem::path(x.o.mapRoot) / "hills", err);
+    x.check.expect(hills.has_value(), "maps/hills loaded from --map-root '" + x.o.mapRoot + "' " + err);
+    if (!hills) co_return;
+    const auto groundY = [&](float px, float pz) { return hills->ground(px, pz); };
+    const auto answers = [](const std::vector<proto::Message>& msgs) {
+        std::vector<nlohmann::json> out;
+        for (const auto& e : only<proto::ServerEvent>(msgs))
+            if (e.name == "test.shrine") out.push_back(nlohmann::json::parse(e.json, nullptr, false));
+        return out;
+    };
+
+    proto::EnterWorldOk ea;
+    auto a = co_await x.enter("s25", ea);
+    if (!a) co_return;
+    co_await drain(*a, Millis(300));
+    a->send(proto::Interact{1}); // map 1 has no interactable 1
+    x.check.expect(answers(co_await drain(*a, Millis(1000))).empty(), "Interact{1} on map 1 (it is map 3's): no event");
+
+    co_await walk(*a, ea.pos, 1065 - ea.pos.x, 1025 - ea.pos.z);
+    const auto mc = only<proto::MapChange>(co_await drain(*a, Millis(1000)));
+    x.check.expect(!mc.empty() && mc[0].map == 3, "A: MapChange{3}");
+    if (mc.empty()) co_return;
+    const float away = std::hypot(mc[0].pos.x - 250, mc[0].pos.z - 266) - 0.6f;
+    a->send(proto::Interact{1});
+    a->send(proto::Interact{999});
+    x.check.expect(answers(co_await drain(*a, Millis(1000))).empty(),
+                   "Interact{1} " + std::to_string(int(away)) + " m from the shrine's edge (range 3) and Interact{999}: no event");
+
+    const proto::Vec3 atShrine = co_await walk(*a, mc[0].pos, 250 - mc[0].pos.x, 263.5f - mc[0].pos.z, 6.0f, groundY);
+    a->send(proto::Interact{1});
+    const auto msgs = co_await drain(*a, Millis(1500));
+    const auto got = answers(msgs);
+    x.check.expect(only<proto::Correction>(msgs).empty(), "walked to " + fmt(atShrine) + ", 1.9 m from the shrine's edge: no Correction");
+    x.check.expect(got.size() == 1 && got[0].value("object", 0) == 1 && got[0].value("map", 0) == 3 &&
+                       got[0].value("msg", "") == "hello" && got[0].value("entity", 0u) == ea.entityId,
+                   "Interact{1} in range: test.shrine {entity, map 3, object 1, data.msg hello} reached Lua (" +
+                       (got.empty() ? std::string("no answer") : got[0].dump()) + ")");
+
+    const proto::Vec3 beside = co_await walk(*a, atShrine, 261 - atShrine.x, 248 - atShrine.z, 6.0f, groundY);
+    auto toCrate = co_await drain(*a, Millis(500));
+    x.check.expect(only<proto::Correction>(toCrate).empty(), "walking to " + fmt(beside) + " beside the crate: no Correction");
+    co_await walk(*a, beside, 5, 0, 4.0f, groundY); // through the crate's x 265..267
+    const auto corr = only<proto::Correction>(co_await drain(*a, Millis(1000)));
+    x.check.expect(!corr.empty() && corr.back().pos.x < 265,
+                   "walking into the obstacle crate -> Correction outside it" +
+                       (corr.empty() ? std::string(" (none)") : " (got " + fmt(corr.back().pos) + ")"));
+    a->close();
+}
+
 proto::ClientEvent echo(int n) { return {"test.echo", nlohmann::json{{"n", n}}.dump()}; }
 
 // A ClientEvent reaches the server's Lua as "client.test.echo" {entity = sender, data}: the hook's reply carries both.
@@ -1339,7 +1396,7 @@ int run_scenario(const Options& o) {
         {"events", events},             {"fsm", fsm},                 {"npcs", npcs},
         {"portal", portal},             {"respawn", respawn},         {"terrain", terrain},
         {"navmesh", navmesh},           {"client-events", client_events}, {"client-event-rate", client_event_rate},
-        {"combat-bat", combat_bat},     {"combat-rules", combat_rules},
+        {"combat-bat", combat_bat},     {"combat-rules", combat_rules}, {"objects", objects},
     };
     auto it = all.find(o.scenario);
     if (it == all.end()) {

@@ -214,6 +214,12 @@ void WorldClient::sendEvent(const std::string& name, const nlohmann::json& data)
     send(proto::ClientEvent{name, std::move(json)});
 }
 
+void WorldClient::interact(uint32_t objectId)
+{
+    require(WorldState::InWorld, "interact");
+    send(proto::Interact{objectId});
+}
+
 void WorldClient::move(float x, float y, float z, float heading)
 {
     require(WorldState::InWorld, "move");

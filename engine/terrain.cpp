@@ -2,6 +2,9 @@
 
 #include "files.h"
 #include "log.h"
+#include "prefab.h"
+#include "replication.h" // yawRotation
+#include "scene_io.h"   // loadPrefab
 
 #include <algorithm>
 #include <cmath>
@@ -45,9 +48,82 @@ std::vector<map::TileKey> tiles_around(const map::MapInfo& info, std::array<floa
     return tiles;
 }
 
+std::shared_ptr<const PrefabAsset> PrefabCache::get(const std::string& path, std::string& error, bool* fresh)
+{
+    auto [it, added] = loaded.try_emplace(path);
+    if (fresh)
+        *fresh = added;
+    if (added && !loadPrefab(projectRoot, path, it->second.first, it->second.second))
+        it->second.first.reset();
+    error = it->second.second;
+    return it->second.first;
+}
+
+entt::entity spawnZoneObject(Scene& scene, entt::entity parent, const bx::Vec3& origin, const map::ZoneObject& object,
+                             PrefabCache& prefabs, std::string& error)
+{
+    const std::shared_ptr<const PrefabAsset> prefab = prefabs.get(object.prefab, error);
+    if (!prefab) {
+        error = std::format("prefab \"{}\": {}", object.prefab, error);
+        return entt::null;
+    }
+    const entt::entity entity = scene.create(std::format("{} {}", map::object_type_name(object.type),
+                                                         std::filesystem::path(object.prefab).stem().string()),
+                                             parent);
+    if (entity == entt::null) {
+        error = "the hierarchy is too deep";
+        return entt::null;
+    }
+    entt::registry& registry = scene.registry();
+    Transform& transform = registry.get<Transform>(entity);
+    transform.position = bx::sub(bx::Vec3{object.pos[0], object.pos[1], object.pos[2]}, origin);
+    transform.rotation = yawRotation(object.yaw);
+    if (object.shape) {
+        Collider collider; // static: no Rigidbody
+        const map::Shape& s = *object.shape;
+        if (s.kind == map::Shape::Kind::Box) {
+            collider.size = {2 * s.halfExtents[0], 2 * s.halfExtents[1], 2 * s.halfExtents[2]};
+            collider.center = {0.0f, s.halfExtents[1], 0.0f};
+        } else {
+            collider.shape = ColliderShape::Cylinder;
+            collider.radius = s.radius;
+            collider.height = s.height;
+            collider.center = {0.0f, s.height * 0.5f, 0.0f};
+        }
+        registry.emplace<Collider>(entity, collider);
+    }
+    const entt::entity instance = instantiatePrefab(scene, prefab, entity, error);
+    if (instance == entt::null) {
+        scene.destroy(entity);
+        return entt::null;
+    }
+    Transform& t = registry.get<Transform>(instance); // the prefab root's own offset, scaled with it
+    t.position = bx::mul(t.position, object.scale);
+    t.scale = bx::mul(t.scale, object.scale);
+    return entity;
+}
+
+std::optional<NearbyInteractable> nearestInteractable(const Scene& scene, float x, float z, float maxDistance)
+{
+    std::optional<NearbyInteractable> best;
+    for (auto [entity, tile] : scene.registry().view<TerrainTile>().each()) {
+        if (!tile.data)
+            continue;
+        for (const map::ZoneObject& o : tile.data->objects) {
+            if (o.type != map::ObjectType::Interactable)
+                continue;
+            const float d = map::footprint_distance(*o.shape, o.pos, o.yaw, x, z);
+            if (d <= maxDistance && (!best || d < best->distance))
+                best = NearbyInteractable{&o, d};
+        }
+    }
+    return best;
+}
+
 void TerrainStreamer::start(const std::optional<std::filesystem::path>& projectRoot)
 {
     maps_.clear();
+    prefabs_ = {projectRoot.value_or(std::filesystem::path()), {}};
     areaMap_ = 0;
     area_ = -1;
     warnedMap_ = -1;
@@ -105,13 +181,45 @@ std::shared_ptr<const TerrainTileData> TerrainStreamer::load(const LoadedMap& ma
         std::string err;
         if (std::optional<map::Heights> heights = map::decode_heights(bytes, ext, err)) {
             data->heights = std::move(*heights);
-            return data;
+            break;
         }
         log::error(std::format("Terrain: {}: {}; the tile is flat", file.string(), err));
         break;
     }
-    data->heights = map::flat_heights(); // no heights file: flat at heightMin
+    if (data->heights.empty())
+        data->heights = map::flat_heights(); // no heights file: flat at heightMin
+
+    const std::filesystem::path objects = map.folder / "objects" / (stem + ".json");
+    bool exists = false;
+    if (const std::optional<Json> json = readJson(objects, exists)) {
+        map::ParsedObjects parsed = map::parse_objects(*json, tile);
+        for (const std::string& err : parsed.errors)
+            log::error(std::format("Terrain: {}: {}; that object is skipped", objects.string(), err));
+        data->objects = std::move(parsed.objects);
+    } else if (exists) {
+        log::error(std::format("Terrain: {}: not valid JSON; the tile has no objects", objects.string()));
+    }
     return data;
+}
+
+// ponytail: one entity tree per object, created on the main thread with the tile; GPU instancing and a worker load if
+// dense tiles hitch.
+void TerrainStreamer::spawnObjects(Scene& scene, entt::entity tile, const LoadedMap& map, const TerrainTileData& data)
+{
+    const bx::Vec3 origin{float(data.tile.x) * map::kTileSize, 0.0f, float(data.tile.z) * map::kTileSize};
+    const std::filesystem::path file = map.folder / "objects" / std::format("{}_{}.json", data.tile.x, data.tile.z);
+    for (const map::ZoneObject& object : data.objects) {
+        std::string error;
+        bool fresh = false;
+        if (prefabs_.get(object.prefab, error, &fresh) == nullptr) {
+            if (fresh) // once per prefab and session, not once per blade of grass
+                log::error(std::format("Terrain: {}: prefab \"{}\": {}; its objects are skipped", file.string(),
+                                       object.prefab, error));
+            continue;
+        }
+        if (spawnZoneObject(scene, tile, origin, object, prefabs_, error) == entt::null)
+            log::error(std::format("Terrain: {}: {}; that object is skipped", file.string(), error));
+    }
 }
 
 void TerrainStreamer::update(Scene& scene, EventBus& bus)
@@ -157,7 +265,9 @@ void TerrainStreamer::update(Scene& scene, EventBus& bus)
         if (entity == entt::null)
             continue;
         registry.get<Transform>(entity).position = {float(key.x) * map::kTileSize, 0.0f, float(key.z) * map::kTileSize};
-        registry.emplace<TerrainTile>(entity, terrain->map, key.x, key.z, load(loaded->second, key));
+        const std::shared_ptr<const TerrainTileData> data = load(loaded->second, key);
+        registry.emplace<TerrainTile>(entity, terrain->map, key.x, key.z, data);
+        spawnObjects(scene, entity, loaded->second, *data);
     }
 
     if (loaded == maps_.end())

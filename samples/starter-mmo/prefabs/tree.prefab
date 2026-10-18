@@ -1,0 +1,31 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Tree",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Trunk",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 1.5, 0], "rotation": [0, 0, 0, 1], "scale": [0.5, 3, 0.5]},
+        "MeshRenderer": {"primitive": "cube", "material": "materials/bark.mat", "castShadows": true, "receiveShadows": true}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Canopy",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 4, 0], "rotation": [0, 0, 0, 1], "scale": [3.2, 3.2, 3.2]},
+        "MeshRenderer": {"primitive": "sphere", "material": "materials/leaves.mat", "castShadows": true, "receiveShadows": true}
+      }
+    }
+  ]
+}

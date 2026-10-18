@@ -45,9 +45,20 @@ add_test(NAME zone_builder_objects
           "-DARGS=--material|materials/meadow_grass.mat|--sculpt|250,250,80,6|--add-area|town,1,20,20,200,200|--add-polygon|ruins,2,300,300,420,300,360,420|--area-parent|ruins,town|--area-portal|ruins,10,128,0,128,0|--add-spawn|guard_a,Guard,100,100,0,30|--add-path|guard_a,2,1,100,100,160,100,160,160|--add-spawn|bat_a,Bat,200,300,1.5,-1|--move-spawn|guard_a,300,120"
           "-DEXPECT_FILES=areas.json|.server/spawns/1_0.json|.server/spawns/0_1.json"
           -P "${zone_test}")
-# Invalid edits block the save: nothing written (meadow: area cavern_gate p10 at [150,124,156,132], spawn guard_1).
+# Zone objects: one of each type (a cylinder rock, a box shrine with its server fields), two scatter strokes (the second
+# undone), a visual erased and the rock moved across a tile border: saved, linted and baked by kast_mapbake (the
+# obstacles cut out), and loaded by the world server (the interactable).
+add_test(NAME zone_builder_zone_objects
+  COMMAND "${CMAKE_COMMAND}" -DEXE=$<TARGET_FILE:kast_zone_builder> "-DPROJECT=${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo"
+          "-DOUT_DIR=${KAST_ZONE_OUT}" -DNAME=zone_objects -DMODE=edit -DMAP=grove "-DMAPBAKE=${KAST_MAPBAKE}" "-DWORLD=${KAST_WORLD_EXE}"
+          "-DARGS=--add-object|visual,prefabs/grass.prefab,50,50|--add-object|obstacle,prefabs/rock.prefab,100,100,0.5,1,cylinder,2,2|--add-object|interactable,prefabs/shrine.prefab,300,80,0,1,box,1,1,1|--set-interactable|1,4,grove.altar,Altar,{\"gold\": 3}|--scatter|200,200,20,30,5,0.8,1.2,prefabs/grass.prefab+prefabs/flower.prefab|--scatter|220,200,20,30,6,0.8,1.2,prefabs/grass.prefab|--undo|--erase-visuals|50,50,1|--move-object|0,0,0,400,100"
+          "-DEXPECT_FILES=objects/0_0.json|objects/1_0.json|.server/interactables/1_0.json"
+          -P "${zone_test}")
+# Invalid edits block the save: nothing written (meadow: area cavern_gate p10 at [150,124,156,132], spawn guard_1,
+# the Meadow Shrine: interactable 1).
 foreach(case "overlap|--add-area|dup,10,140,120,160,140" "portal|--area-portal|cavern_gate,999,128,0,128,0"
-             "spawn_id|--add-spawn|guard_1,Bat,100,100" "spawn_off_map|--add-spawn|far,Bat,300,100" "map_id|--map-id|11")
+             "spawn_id|--add-spawn|guard_1,Bat,100,100" "spawn_off_map|--add-spawn|far,Bat,300,100" "map_id|--map-id|11"
+             "interactable_event|--set-interactable|1,3,")
   string(FIND "${case}" "|" bar)
   string(SUBSTRING "${case}" 0 ${bar} name)
   math(EXPR bar "${bar} + 1")

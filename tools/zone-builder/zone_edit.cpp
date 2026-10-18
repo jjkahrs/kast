@@ -1,8 +1,13 @@
 #include "zone_edit.h"
 
+#include "terrain_edit.h" // ground_y
+
 #include <scene_io.h> // jsonNumber
 
 #include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <numbers>
 #include <utility>
 
 namespace zone {
@@ -222,6 +227,211 @@ void add_path_point(ZoneState& state, SpawnRef ref, const Vec3& point) {
     const Json& pos = s.value("pos", Json::array({0, 0, 0}));
     const Vec3 start{as_float(pos[0]), as_float(pos[1]), as_float(pos[2])};
     add_path(state, ref, s.value("id", std::string("spawn")) + "_path", {start, point}, 0, true);
+}
+
+namespace {
+
+namespace km = kast::map;
+
+Json& objects_list(ZoneState& state, TileKey tile) {
+    Json& file = state.objects[tile];
+    if (!file.is_object()) file = {{"version", 1}, {"objects", Json::array()}};
+    if (!file.contains("objects") || !file["objects"].is_array()) file["objects"] = Json::array();
+    return file["objects"];
+}
+
+Json& interactables_list(ZoneState& state, TileKey tile) {
+    Json& file = state.interactables[tile];
+    if (!file.is_object()) file = {{"version", 1}, {"interactables", Json::array()}};
+    if (!file.contains("interactables") || !file["interactables"].is_array()) file["interactables"] = Json::array();
+    return file["interactables"];
+}
+
+// Drops tile's files whose lists are empty (save then deletes them).
+void prune(ZoneState& state, TileKey tile) {
+    if (const auto it = state.objects.find(tile); it != state.objects.end() && it->second.value("objects", Json::array()).empty())
+        state.objects.erase(it);
+    if (const auto it = state.interactables.find(tile);
+        it != state.interactables.end() && it->second.value("interactables", Json::array()).empty())
+        state.interactables.erase(it);
+}
+
+uint32_t id_of(const Json& j) { return j.value("id", Json()).is_number_unsigned() ? j["id"].get<uint32_t>() : 0; }
+
+// Removes interactable id's server entry from tile's file; returns it (null if none).
+Json take_interactable(ZoneState& state, TileKey tile, uint32_t id) {
+    const auto it = state.interactables.find(tile);
+    if (it == state.interactables.end()) return Json();
+    Json& list = it->second["interactables"];
+    for (size_t i = 0; i < list.size(); ++i)
+        if (id_of(list[i]) == id) {
+            Json entry = std::move(list[i]);
+            list.erase(i);
+            return entry;
+        }
+    return Json();
+}
+
+} // namespace
+
+std::vector<ObjectRef> all_objects(const ZoneState& state) {
+    std::vector<ObjectRef> refs;
+    for (const auto& [tile, file] : state.objects) {
+        const Json& list = file.value("objects", Json::array());
+        for (size_t i = 0; i < list.size(); ++i) refs.push_back({tile, i});
+    }
+    return refs;
+}
+
+const Json& object_json(const ZoneState& state, ObjectRef ref) { return state.objects.at(ref.tile)["objects"][ref.index]; }
+Json& object_json(ZoneState& state, ObjectRef ref) { return state.objects.at(ref.tile)["objects"][ref.index]; }
+
+km::ObjectType object_type(const Json& object) {
+    const Json& type = object.value("type", Json());
+    return type == "obstacle" ? km::ObjectType::Obstacle : type == "interactable" ? km::ObjectType::Interactable : km::ObjectType::Visual;
+}
+
+uint32_t next_interactable_id(const ZoneState& state) {
+    uint32_t top = 0;
+    for (const auto& [tile, file] : state.objects)
+        for (const Json& o : file.value("objects", Json::array())) top = std::max(top, id_of(o));
+    for (const auto& [tile, file] : state.interactables)
+        for (const Json& e : file.value("interactables", Json::array())) top = std::max(top, id_of(e));
+    return top + 1;
+}
+
+Json* interactable_json(ZoneState& state, TileKey tile, uint32_t id) {
+    return const_cast<Json*>(interactable_json(std::as_const(state), tile, id));
+}
+
+const Json* interactable_json(const ZoneState& state, TileKey tile, uint32_t id) {
+    const auto it = state.interactables.find(tile);
+    if (it == state.interactables.end() || !it->second.contains("interactables")) return nullptr;
+    for (const Json& e : it->second["interactables"])
+        if (id_of(e) == id) return &e;
+    return nullptr;
+}
+
+Json default_shape() { return {{"box", {{"halfExtents", Json::array({0.5, 0.5, 0.5})}}}}; }
+
+ObjectRef add_object(ZoneState& state, km::ObjectType type, const std::string& prefab, const Vec3& pos, float yaw, float scale) {
+    const TileKey tile = km::tile_of(pos[0], pos[2]);
+    Json& list = objects_list(state, tile);
+    list.push_back({{"type", "visual"}, {"prefab", prefab}, {"pos", vec3_json(pos)}, {"yaw", num(yaw)}, {"scale", num(scale)}});
+    const ObjectRef ref{tile, list.size() - 1};
+    set_object_type(state, ref, type);
+    return ref;
+}
+
+ObjectRef move_object(ZoneState& state, ObjectRef ref, const Vec3& pos) {
+    const TileKey tile = km::tile_of(pos[0], pos[2]);
+    if (tile == ref.tile) {
+        object_json(state, ref)["pos"] = vec3_json(pos);
+        if (object_type(object_json(state, ref)) == km::ObjectType::Interactable) sync_interactable(state, ref);
+        return ref;
+    }
+    Json object = std::move(object_json(state, ref));
+    state.objects.at(ref.tile)["objects"].erase(ref.index);
+    object["pos"] = vec3_json(pos);
+    const bool interactable = object_type(object) == km::ObjectType::Interactable;
+    Json entry = interactable ? take_interactable(state, ref.tile, id_of(object)) : Json();
+    prune(state, ref.tile);
+    Json& list = objects_list(state, tile);
+    list.push_back(std::move(object));
+    const ObjectRef moved{tile, list.size() - 1};
+    if (interactable) {
+        if (!entry.is_null()) interactables_list(state, tile).push_back(std::move(entry));
+        sync_interactable(state, moved);
+    }
+    return moved;
+}
+
+void delete_object(ZoneState& state, ObjectRef ref) {
+    const Json object = object_json(state, ref);
+    state.objects.at(ref.tile)["objects"].erase(ref.index);
+    if (object_type(object) == km::ObjectType::Interactable) take_interactable(state, ref.tile, id_of(object));
+    prune(state, ref.tile);
+}
+
+void set_object_type(ZoneState& state, ObjectRef ref, km::ObjectType type) {
+    Json& o = object_json(state, ref);
+    const km::ObjectType was = object_type(o);
+    o["type"] = km::object_type_name(type);
+    if (type != km::ObjectType::Visual && !o.contains("shape")) o["shape"] = default_shape();
+    if (was == km::ObjectType::Interactable && type != km::ObjectType::Interactable) {
+        take_interactable(state, ref.tile, id_of(o));
+        o.erase("id");
+        o.erase("name");
+        prune(state, ref.tile);
+    } else if (type == km::ObjectType::Interactable && was != km::ObjectType::Interactable) {
+        o["id"] = next_interactable_id(state);
+        sync_interactable(state, ref);
+    }
+}
+
+void sync_interactable(ZoneState& state, ObjectRef ref) {
+    const Json& o = object_json(state, ref);
+    const uint32_t id = id_of(o);
+    Json* entry = interactable_json(state, ref.tile, id);
+    if (!entry) {
+        const std::string stem = std::filesystem::path(o.value("prefab", std::string("object"))).stem().string();
+        Json& list = interactables_list(state, ref.tile);
+        list.push_back({{"id", id}, {"range", 3}, {"event", stem + ".activated"}});
+        entry = &list.back();
+    }
+    for (const char* key : {"pos", "yaw", "shape", "name"}) {
+        if (o.contains(key)) (*entry)[key] = o[key];
+        else entry->erase(key);
+    }
+}
+
+void set_interactable_id(ZoneState& state, ObjectRef ref, uint32_t id) {
+    Json& o = object_json(state, ref);
+    if (Json* entry = interactable_json(state, ref.tile, id_of(o))) (*entry)["id"] = id;
+    o["id"] = id;
+    sync_interactable(state, ref);
+}
+
+float ScatterRng::next() {
+    state_ ^= state_ << 13;
+    state_ ^= state_ >> 17;
+    state_ ^= state_ << 5;
+    return float(state_ >> 8) * (1.0f / 16777216.0f);
+}
+
+size_t scatter(const km::MapInfo& info, ZoneState& state, const Scatter& brush, ScatterRng& rng, float x, float z) {
+    if (brush.prefabs.empty()) return 0;
+    size_t placed = 0;
+    for (int i = 0; i < brush.count; ++i) {
+        // Every draw happens whether or not the point lands, so a dab's sequence never depends on the map.
+        const float r = brush.radius * std::sqrt(rng.next()), a = 2 * std::numbers::pi_v<float> * rng.next();
+        const std::string& prefab = brush.prefabs[std::min(size_t(rng.next() * float(brush.prefabs.size())), brush.prefabs.size() - 1)];
+        const float turn = rng.next();
+        const float yaw = brush.randomYaw ? 2 * std::numbers::pi_v<float> * turn : 0.0f;
+        const float scale = brush.scaleMin + (brush.scaleMax - brush.scaleMin) * rng.next();
+        const float px = x + r * std::cos(a), pz = z + r * std::sin(a);
+        const std::optional<float> y = ground_y(info, state, px, pz);
+        if (!y) continue;
+        add_object(state, km::ObjectType::Visual, prefab, {px, *y, pz}, yaw, std::max(scale, 0.01f));
+        ++placed;
+    }
+    return placed;
+}
+
+size_t erase_visuals(ZoneState& state, float x, float z, float radius) {
+    size_t erased = 0;
+    for (auto it = state.objects.begin(); it != state.objects.end();) {
+        Json& list = it->second["objects"];
+        for (size_t i = list.size(); i-- > 0;) {
+            const Json& pos = list[i].value("pos", Json());
+            if (object_type(list[i]) != km::ObjectType::Visual || !pos.is_array() || pos.size() != 3) continue;
+            if (std::hypot(as_float(pos[0]) - x, as_float(pos[2]) - z) > radius) continue;
+            list.erase(i);
+            ++erased;
+        }
+        it = list.empty() ? state.objects.erase(it) : std::next(it);
+    }
+    return erased;
 }
 
 } // namespace zone

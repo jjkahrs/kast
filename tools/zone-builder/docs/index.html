@@ -22,8 +22,9 @@ Map...</strong> asks for a folder (letters, digits, <code>_</code>, <code>-</cod
 by 1-8 tiles; nothing is written until you save. The title shows <code>*</code> while there are unsaved edits.</p>
 <p><strong>3D view</strong> (behind the panels): the map's tiles with its material, lit like the game. Right drag (or Alt + left drag)
 orbits, middle drag pans, the wheel zooms, <strong>F</strong> frames the map. Overlays: tile borders, the player spawn (with its
-heading), areas (portals in blue, the selected one with corner handles), spawns (with heading), patrol paths, the
-brush ring. They are drawn over the terrain, not hidden by hills.</p>
+heading), areas (portals in blue, the selected one with corner handles), spawns (with heading), patrol paths, zone
+objects (a dot each; obstacles' and interactables' shapes outlined on the ground), the brush ring. They are drawn over
+the terrain, not hidden by hills. Zone objects also show as their prefabs, as in game.</p>
 <table>
 <thead>
 <tr>
@@ -36,7 +37,7 @@ brush ring. They are drawn over the terrain, not hidden by hills.</p>
 <tr>
 <td><strong>Map</strong></td>
 <td>id, name, material (a project <code>.mat</code>), player spawn (x, z on the ground, heading; <strong>Place on terrain</strong> then click), own <code>nav</code> settings, and the <strong>tile grid</strong>: click a free cell to add a tile (its edges take its neighbours' heights, so no seam), a tile to remove it (a dialog lists the files that go and the spawns lost)</td>
-<td><code>map.json</code>; on save, a removed tile's <code>heights/</code>, <code>.server/spawns/</code> and <code>.server/nav/</code> files are deleted (to the Recycle Bin)</td>
+<td><code>map.json</code>; on save, a removed tile's <code>heights/</code>, <code>.server/spawns/</code>, <code>objects/</code>, <code>.server/interactables/</code> and <code>.server/nav/</code> files are deleted (to the Recycle Bin)</td>
 </tr>
 <tr>
 <td><strong>Terrain</strong></td>
@@ -54,6 +55,11 @@ brush ring. They are drawn over the terrain, not hidden by hills.</p>
 <td><code>.server/spawns/&lt;tx&gt;_&lt;tz&gt;.json</code> of the tile each spawn stands in: moving one across a tile border moves it to that file with its path (copied if other spawns still use it, renamed if the name is taken)</td>
 </tr>
 <tr>
+<td><strong>Objects</strong></td>
+<td><strong>Place Object</strong> (pick a prefab and a type, click the terrain), <strong>Scatter</strong> (a brush of visuals), select by clicking an object's marker, drag to move; type, prefab, position, yaw, scale, shape, and an interactable's id, name, range, event and data: see <a href="#objects">Objects</a></td>
+<td><code>objects/&lt;tx&gt;_&lt;tz&gt;.json</code> and <code>.server/interactables/&lt;tx&gt;_&lt;tz&gt;.json</code> of the tile each object stands in; a tile left with none loses its files</td>
+</tr>
+<tr>
 <td><strong>Bake</strong></td>
 <td><strong>Bake Navmesh</strong>: runs <code>kast_mapbake &lt;mapDir&gt;</code> on the saved, valid map in the background, its output and exit code below. The exe path is a setting (<code>%APPDATA%/Kast/ZoneBuilder/zone_builder.json</code>, <code>"mapbake"</code>); empty means <code>services/world/build/{release,debug}/kast_mapbake.exe</code> of this source tree, then next to <code>kast_zone_builder.exe</code></td>
 <td><code>.server/nav/*.navtile</code> (by <code>kast_mapbake</code>)</td>
@@ -65,6 +71,39 @@ brush ring. They are drawn over the terrain, not hidden by hills.</p>
 </tr>
 </tbody>
 </table>
+<h2 id="objects">Objects</h2>
+<p>Zone objects are prefabs placed on the map's tiles (formats: <a href="../../../docs/services/world/maps.html#objects">World
+Server, Maps, Objects</a>; in game: <a href="../../../docs/engine/terrain.html#objects">Engine, Terrain</a>). The project's
+<code>.prefab</code> files are listed in the <strong>Objects</strong> panel.</p>
+<ul>
+<li><strong>Types:</strong> <strong>Visual</strong> (grass, flowers: client only, blocks nothing), <strong>Obstacle</strong> (rocks, walls, trees: blocks
+  players and NPCs; the server knows only its shape) and <strong>Interactable</strong> (blocks like an obstacle, and a player can
+  activate it; the server publishes its event).</li>
+<li><strong>Place Object:</strong> pick the prefab and the type, then click the terrain: the object stands on the ground there (y
+  snapped), yaw 0, scale 1. A new obstacle or interactable gets a 1 m box shape; a new interactable gets the next free
+  id on the map and a server entry (range 3, event <code>&lt;prefab name&gt;.activated</code>).</li>
+<li><strong>Select and move:</strong> with no tool, click an object's dot to select it (or pick it in the list) and drag to move it on
+  the ground. Moving one into another tile moves it to that tile's file, an interactable's server entry with it.</li>
+<li><strong>Fields:</strong> type (an interactable turned obstacle loses its id and server entry; a visual keeps an old shape unused),
+  prefab, position (x, z; y follows the ground), yaw (degrees here, radians in the file), scale (the prefab only), shape
+  (<strong>Box</strong> half extents, turned by yaw, or <strong>Cylinder</strong> radius and height, in metres, standing on the object). An
+  interactable also has its <strong>id</strong> (unique on the map: a used one is not taken), <strong>name</strong>, and the server-only
+  <strong>range</strong>, <strong>event</strong> and <strong>data</strong> (a JSON object, checked as you type: text that isn't one shows the problem and keeps the
+  last valid data; empty removes it). The server entry's <code>pos</code>, <code>yaw</code>, <code>shape</code> and <code>name</code> always follow the object.</li>
+<li><strong>Overlays:</strong> a dot per object (green visuals, orange obstacles, blue interactables with <code>#id name</code>, the selection in
+  yellow) and each shape's outline on the ground (16 points for a cylinder). The 3D view draws each object's prefab, scaled
+  and turned; a tile's objects are rebuilt when its file changes.</li>
+<li><strong>Scatter</strong> (visuals only): tick prefabs (one is picked at random per object), set the radius, how many per dab, random yaw
+  or not, the scale range and the <strong>seed</strong>. Drag on the terrain: a dab on mouse down and another each time the brush has moved
+  its radius, each placing that many visuals at random points of the circle, on the ground (points off the map are
+  skipped). The whole stroke is one undo step. <strong>Erase visuals</strong> turns the brush into an eraser that removes every
+  visual inside the circle (obstacles and interactables stay). The random numbers come from the seed (xorshift32, the
+  same on every machine): changing the seed or pressing <strong>Restart</strong> starts its sequence again, so the same seed and strokes
+  give the same objects.</li>
+<li><strong>Save</strong> writes each changed tile's <code>objects/</code> and <code>.server/interactables/</code> file and deletes a tile's files once it has
+  none. Unknown keys in the files are kept. Re-bake the navmesh (<strong>Bake</strong>) after placing, moving or removing an
+  obstacle or interactable.</li>
+</ul>
 <h2 id="generated-terrain">Generated terrain</h2>
 <p><strong>Generate</strong> (Terrain panel) replaces the heights of every declared tile with fBm Perlin noise: <strong>Seed</strong> (or
 <strong>Randomize</strong>), <strong>Scale</strong> (metres per noise feature, default 256), <strong>Octaves</strong> (5), <strong>Persistence</strong>
@@ -107,7 +146,9 @@ on that file. Picking another material in the Map panel keeps it; the generated 
 <p><strong>Save</strong> (Ctrl+S, File &gt; Save) first checks the map as the world server would load it: <code>kast_map</code>'s <code>parse_manifest</code>,
 <code>parse_areas</code> and <code>parse_spawns</code> for every tile's file, spawn ids unique on the map, spawn files on declared tiles, the
 map id unused by the project's other maps, portals to an existing map, onto its tiles and not into a portal there,
-valid <code>terrainColors</code>, and no foreign file at the generated terrain texture or material path.
+valid <code>terrainColors</code>, no foreign file at the generated terrain texture or material path, every objects file
+(<code>parse_objects</code>: any bad entry) and interactables file (<code>parse_interactables</code>) on a declared tile, interactable ids unique on
+the map, and each interactable object with a server entry of the same id in its tile's file (and each entry with an object).
 Any problem: nothing is written, and <strong>Problems</strong> lists them all (file and message, as the server reports them). Only
 files that changed are written; a map opened and saved unchanged keeps every byte. <strong>Undo</strong> / <strong>Redo</strong> (Ctrl+Z /
 Ctrl+Y, Edit menu) cover every edit; a brush stroke or a drag is one step.</p>
@@ -123,12 +164,19 @@ edits: --new-map folder[,W,H[,id]]  --map-id N  --material path  --set-spawn x,z
        --area-portal id,map,x,y,z,heading  --move-area-vertex id,i,x,z  --delete-area id
        --add-spawn id,npc,x,z[,heading[,respawnSec]]  --move-spawn id,x,z  --delete-spawn id
        --add-path spawnId,wait,loop(0|1),x,z,x,z...
+       --add-object type,prefab,x,z[,yaw[,scale[,box,hx,hy,hz | cylinder,r,h]]]
+       --set-interactable id,range,event[,name[,data JSON object]]  --move-object tx,tz,i,x,z  --delete-object tx,tz,i
+       --scatter x,z,radius,count,seed,scaleMin,scaleMax,prefab[+prefab...]  --erase-visuals x,z,radius
        --generate-heights seed[,scale,octaves,persistence,lacunarity]  --terrain-colors pct,r,g,b,pct,r,g,b...
        --create-terrain-material  --undo  --redo  --validate  --save  --expect-save-fail
 </code></pre>
 <p><code>--terrain-colors</code> takes 4 numbers per stop (at least 2 stops): the position in % of the height range, then red,
 green and blue 0..1, e.g. <code>--terrain-colors 0,0,0,1,100,1,0,0</code> for blue at the bottom and red at the top.
-<code>--generate-heights 7</code> uses the default scale, octaves, persistence and lacunarity.</p>
+<code>--generate-heights 7</code> uses the default scale, octaves, persistence and lacunarity.
+Objects are addressed by tile and index in its objects file (<code>--move-object 0,0,2,300,40</code>), interactables by id. <code>--scatter</code> is
+one stroke of one dab with a fresh seed (random yaw); <code>--set-interactable</code>'s data is the rest of the value, commas and all
+(<code>--set-interactable 1,3,shrine.activated,Meadow Shrine,{"message":"Hi"}</code>). <code>--select object:tx,tz,i</code> selects an object for a
+screenshot.</p>
 <p>A failed edit or save exits 1. <code>--headless</code> runs the edits (and <code>--bake</code>, waiting for it) without a window.
 <code>--frames</code> runs show the window without taking focus; <code>KAST_WINDOW_POS</code> / <code>--window-pos</code> place it. <code>--bake</code> holds the
 frame count until <code>kast_mapbake</code> ends and logs how many frames were drawn meanwhile. <code>--log-fps</code> logs the frame rate

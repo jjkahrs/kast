@@ -7,6 +7,7 @@
 #include <app.h>
 #include <files.h>
 #include <log.h>
+#include <prefab.h> // kPrefabExtension
 
 #include <SDL3/SDL.h>
 #include <bx/math.h>
@@ -15,6 +16,7 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <charconv>
 #include <format>
 #include <mutex>
 #include <random>
@@ -74,11 +76,12 @@ bool Session::openProject(const fs::path& root) {
 
 void Session::scanMaterials() {
     materials.clear();
-    for (const fs::path& file : kast::listFiles(project->root))
-        if (file.extension() == ".mat") {
-            const std::u8string rel = file.lexically_relative(project->root).generic_u8string();
-            materials.emplace_back(rel.begin(), rel.end());
-        }
+    prefabs.clear();
+    for (const fs::path& file : kast::listFiles(project->root)) {
+        const std::u8string rel = file.lexically_relative(project->root).generic_u8string();
+        if (file.extension() == ".mat") materials.emplace_back(rel.begin(), rel.end());
+        if (file.extension() == kast::kPrefabExtension) prefabs.emplace_back(rel.begin(), rel.end());
+    }
 }
 
 bool Session::openMap(const std::string& folder) {
@@ -313,6 +316,18 @@ void Panels::select(const Session& session, const std::string& id) {
     if (!session.doc) return;
     if (const auto area = find_area(session.doc->state, id)) area_ = area;
     if (find_spawn(session.doc->state, id)) spawn_ = id;
+    if (!id.starts_with("object:")) return;
+    int v[3] = {};
+    const char* p = id.data() + 7;
+    const char* end = id.data() + id.size();
+    for (int i = 0; i < 3; ++i) {
+        const auto [next, ec] = std::from_chars(p, end, v[i]);
+        if (ec != std::errc() || (i < 2 && (next == end || *next != ','))) return;
+        p = next + 1;
+    }
+    const ObjectRef ref{{v[0], v[1]}, size_t(std::max(v[2], 0))};
+    const auto refs = all_objects(session.doc->state);
+    if (std::find(refs.begin(), refs.end(), ref) != refs.end()) object_ = ref;
 }
 
 void Panels::draw(Session& session, SDL_Window* window) {
@@ -327,6 +342,7 @@ void Panels::draw(Session& session, SDL_Window* window) {
     drawTerrain(session, window);
     drawAreas(session);
     drawSpawns(session);
+    drawZoneObjects(session);
     drawBake(session);
     session.pollBake();
     drawHeightRangePrompt(session);
@@ -816,8 +832,10 @@ void Panels::updateTool(Session& session) {
     if (click && hover_) tile_ = kast::map::tile_of((*hover_)[0], (*hover_)[2]);
 
     if (tool_ != Tool::Raise && tool_ != Tool::Lower && tool_ != Tool::Flatten) {
-        if (stroking_) doc.commit();
-        stroking_ = false;
+        if (stroking_ && tool_ != Tool::Scatter) { // a sculpt stroke cut short by a tool change (Scatter strokes its own)
+            doc.commit();
+            stroking_ = false;
+        }
         updateObjects(session, click);
         return;
     }

@@ -4,11 +4,13 @@
 
 #include <assets.h> // recycleAsset
 #include <files.h>
+#include <objects.h>
 
 #include <algorithm>
 #include <cstring>
 #include <regex>
 #include <set>
+#include <tuple>
 
 namespace zone {
 namespace {
@@ -142,6 +144,15 @@ std::optional<ZoneDoc> load_map(const Project& project, const std::string& folde
         if (!spawns) return fail(".server/spawns/" + name, err);
         doc.state.spawns[*tile] = std::move(*spawns);
     }
+    for (const auto& [sub, files] : {std::pair{"objects", &doc.state.objects}, {".server/interactables", &doc.state.interactables}})
+        for (const auto& entry : fs::directory_iterator(dir / sub, ec)) {
+            const std::string name = entry.path().filename().string();
+            const auto tile = spawn_file_tile(name);
+            if (!tile) continue; // as spawn files
+            auto json = read_json(entry.path(), exists, err);
+            if (!json) return fail(std::string(sub) + "/" + name, err);
+            (*files)[*tile] = std::move(*json);
+        }
 
     bool ok = true;
     for_each_tile(*info, [&](TileKey t) {
@@ -251,6 +262,53 @@ std::vector<ZoneError> validate(const Project& project, const ZoneDoc& doc) {
         for (const km::Spawn& s : *spawns)
             if (!ids.insert(s.id).second) errors.push_back({file, "spawn \"" + s.id + "\": duplicate id on this map"});
     }
+
+    // Objects as kast_mapbake lints them, the server's interactables as the server loads them, and the two in step: each
+    // interactable object has a server entry of the same id in the same tile's file, and each entry an object.
+    std::set<uint32_t> objectIds, serverIds;
+    TileMap<std::set<uint32_t>> objectsByTile, serverByTile;
+    for (const auto& [tile, json] : doc.state.objects) {
+        const std::string file = where(doc.folder, "objects/" + tile_name(tile) + ".json");
+        if (!info->has_tile(tile)) {
+            errors.push_back({file, "tile is not on the map"});
+            continue;
+        }
+        const km::ParsedObjects parsed = km::parse_objects(nlohmann::json(json), tile);
+        for (const std::string& e : parsed.errors) errors.push_back({file, e});
+        for (const km::ZoneObject& o : parsed.objects) {
+            if (o.type != km::ObjectType::Interactable) continue;
+            if (!objectIds.insert(o.id).second)
+                errors.push_back({file, "interactable " + std::to_string(o.id) + ": duplicate id on this map"});
+            objectsByTile[tile].insert(o.id);
+        }
+    }
+    for (const auto& [tile, json] : doc.state.interactables) {
+        const std::string file = where(doc.folder, ".server/interactables/" + tile_name(tile) + ".json");
+        if (!info->has_tile(tile)) {
+            errors.push_back({file, "tile is not on the map"});
+            continue;
+        }
+        const auto list = km::parse_interactables(nlohmann::json(json), tile, err);
+        if (!list) {
+            errors.push_back({file, err});
+            continue;
+        }
+        for (const km::Interactable& it : *list) {
+            if (!serverIds.insert(it.id).second)
+                errors.push_back({file, "interactable " + std::to_string(it.id) + ": duplicate id on this map"});
+            serverByTile[tile].insert(it.id);
+        }
+    }
+    for (const auto& [tile, tileIds] : objectsByTile)
+        for (const uint32_t id : tileIds)
+            if (!serverByTile[tile].contains(id))
+                errors.push_back({where(doc.folder, "objects/" + tile_name(tile) + ".json"),
+                                  "interactable " + std::to_string(id) + " has no entry in .server/interactables/" + tile_name(tile) + ".json"});
+    for (const auto& [tile, tileIds] : serverByTile)
+        for (const uint32_t id : tileIds)
+            if (!objectsByTile[tile].contains(id))
+                errors.push_back({where(doc.folder, ".server/interactables/" + tile_name(tile) + ".json"),
+                                  "interactable " + std::to_string(id) + " has no object in objects/" + tile_name(tile) + ".json"});
     return errors;
 }
 
@@ -258,7 +316,8 @@ std::vector<std::string> tile_files(const Project& project, const std::string& f
     const std::string name = tile_name(t);
     std::vector<std::string> files;
     for (const std::string file : {"heights/" + name + ".r16", "heights/" + name + ".png", ".server/spawns/" + name + ".json",
-                                   ".server/nav/" + name + ".navtile"})
+                                   ".server/nav/" + name + ".navtile", "objects/" + name + ".json",
+                                   ".server/interactables/" + name + ".json"})
         if (fs::exists(project.root / "maps" / u8path(folder) / u8path(file))) files.push_back(where(folder, file));
     return files;
 }
@@ -291,6 +350,10 @@ std::vector<ZoneError> save_map(Project& project, ZoneDoc& doc, bool recycle) {
             for (const char* ext : {".r16", ".png"}) drop(where(doc.folder, "heights/" + tile_name(tile) + ext));
     for (const auto& [tile, json] : doc.saved.spawns)
         if (!doc.state.spawns.contains(tile)) drop(where(doc.folder, ".server/spawns/" + tile_name(tile) + ".json"));
+    for (const auto& [tile, json] : doc.saved.objects)
+        if (!doc.state.objects.contains(tile)) drop(where(doc.folder, "objects/" + tile_name(tile) + ".json"));
+    for (const auto& [tile, json] : doc.saved.interactables)
+        if (!doc.state.interactables.contains(tile)) drop(where(doc.folder, ".server/interactables/" + tile_name(tile) + ".json"));
     const fs::path dir = project.root / "maps" / u8path(doc.folder);
     const auto write = [&](const std::string& file, std::string_view bytes) {
         const fs::path path = dir / u8path(file);
@@ -332,6 +395,12 @@ std::vector<ZoneError> save_map(Project& project, ZoneDoc& doc, bool recycle) {
         const auto old = doc.saved.spawns.find(tile);
         if (old == doc.saved.spawns.end() || old->second != json) write(".server/spawns/" + tile_name(tile) + ".json", dump(json));
     }
+    for (const auto& [sub, files, saved] : {std::tuple{"objects/", &doc.state.objects, &doc.saved.objects},
+                                            {".server/interactables/", &doc.state.interactables, &doc.saved.interactables}})
+        for (const auto& [tile, json] : *files) {
+            const auto old = saved->find(tile);
+            if (old == saved->end() || old->second != json) write(sub + tile_name(tile) + ".json", dump(json));
+        }
     for (const auto& [tile, heights] : doc.state.heights) {
         const auto old = doc.saved.heights.find(tile);
         if (old != doc.saved.heights.end() && old->second == heights) continue;

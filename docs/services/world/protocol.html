@@ -12,7 +12,7 @@
 <nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html" class="active">Protocol</a></li></ul></nav>
 <main>
 <h1 id="kast-world-protocol">Kast World Protocol</h1>
-<p><strong>Protocol version: 4</strong> (<code>kProtocolVersion</code> in <code>protocol/messages.h</code>, sent in <code>Hello</code>). A client on any other version gets <code>protocol_mismatch</code>.</p>
+<p><strong>Protocol version: 5</strong> (<code>kProtocolVersion</code> in <code>protocol/messages.h</code>, sent in <code>Hello</code>). A client on any other version gets <code>protocol_mismatch</code>.</p>
 <table>
 <thead>
 <tr>
@@ -21,6 +21,10 @@
 </tr>
 </thead>
 <tbody>
+<tr>
+<td>5</td>
+<td>Zone objects: new <code>Interact</code> (<code>0x0023</code>). See <a href="#interact">Interact</a></td>
+</tr>
 <tr>
 <td>4</td>
 <td>Character creation options: <code>CharCreate</code> and <code>CharInfo</code> gain an <code>options</code> map; new code <code>options_invalid</code> (25). See <a href="#characters">Characters</a></td>
@@ -206,6 +210,12 @@
 <td><code>str name, str json</code> (a named event for the server's Lua systems, see <a href="#client-events">Client events</a>)</td>
 </tr>
 <tr>
+<td><code>0x0023</code></td>
+<td>Interact</td>
+<td>C</td>
+<td><code>u32 objectId</code> (activates an interactable zone object, see <a href="#interact">Interact</a>)</td>
+</tr>
+<tr>
 <td><code>0x0102</code></td>
 <td>AuthOk</td>
 <td>S</td>
@@ -381,6 +391,22 @@
   arrival order. The bus drain right after that tick's Lua update delivers it (<a href="lua.html#client-events">Lua, Client events</a>).</li>
 <li><strong>Trust:</strong> <code>data</code> comes from the client. Handlers must check every field (<a href="security.html#client-events">Security, Client events</a>).</li>
 </ul>
+<h3 id="interact">Interact</h3>
+<p>A client activates an interactable zone object (a shrine, a lever) with <code>Interact{u32 objectId}</code>: the object's <code>id</code> from
+the map's <code>objects/&lt;tx&gt;_&lt;tz&gt;.json</code> (the engine's <code>kast.interact(id)</code>, <a href="../../engine/terrain.html#objects">Engine, Terrain</a>).
+Client-to-server only.</p>
+<ul>
+<li><strong>Check:</strong> on the next tick, the id must be an interactable of the player's current map (its
+  <code>.server/interactables</code> entry, <a href="maps.html#objects">Maps, Objects</a>) and the player within its <code>range</code> of the shape's
+  edge, measured on the ground plane.</li>
+<li><strong>Accepted:</strong> the object's <code>event</code> is published on the server bus as <code>{entity, map, object, data}</code>
+  (<a href="events.html#interactables">Events, Interactables</a>).</li>
+<li><strong>Rejected</strong> (unknown id, another map's object, out of range): dropped silently, logged at debug level as
+  <code>interact rejected</code>. There is no reply message; the game's Lua answers an accepted one if it wants to (with
+  <a href="#server-events">Server events</a>).</li>
+<li><strong>Phase and limits:</strong> only accepted in the world (in the lobby it is ignored, like a stale <code>Move</code>), and counted by the
+  connection's <a href="#abuse-limits">message rate</a>.</li>
+</ul>
 <h3 id="lua-components">Lua components</h3>
 <p>Game-defined Lua components (<a href="lua.html">Lua components and systems</a>) reach clients as these two messages. They are
 server-authoritative: there is no client-to-server component message, and a client that sends one gets
@@ -456,7 +482,7 @@ that sends one gets <code>Disconnect{unexpected_message}</code>.</p>
 <td>1</td>
 <td><code>protocol_mismatch</code></td>
 <td>D</td>
-<td><code>Hello.protocolVersion</code> is not 2</td>
+<td><code>Hello.protocolVersion</code> is not 5</td>
 </tr>
 <tr>
 <td>2</td>

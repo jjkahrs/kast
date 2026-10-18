@@ -41,6 +41,30 @@ the three send functions put anything on the network.</p>
 </ul>
 </li>
 </ul>
+<h2 id="interactables">Interactables</h2>
+<p>An interactable zone object (<a href="maps.html#objects">Maps, Objects</a>) names the event its activation publishes. When a
+player's <code>Interact</code> (<a href="protocol.html#interact">protocol</a>) passes the server's checks (an interactable of the player's
+map, the player within its range), the server publishes that event on this bus, from C++, in the tick after the
+message arrived; the drain after that tick's Lua <code>update</code> delivers it:</p>
+<pre><code class="language-lua">-- maps/meadow/.server/interactables/0_0.json: {"id": 1, "event": "shrine.activated", "data": {"message": "..."}, ...}
+kast.subscribe("shrine.activated", function(e)
+    -- e.entity: the player's character; e.map: its map id; e.object: the interactable's id;
+    -- e.data: the entry's "data" object, or nil if it has none
+    kast.sendTo(e.entity, "shrine.blessing", {text = e.data and e.data.message or "The shrine hums."})
+end)
+</code></pre>
+<ul>
+<li><strong>One event per object,</strong> named in its file, so a game can give each shrine, lever or chest its own subscriber, or
+  share one name and tell them apart by <code>e.object</code>.</li>
+<li><strong>Trust:</strong> everything in the payload comes from the server: the map files and the player's checked position. The
+  client only chose the id.</li>
+<li><strong>State is the game's:</strong> the server keeps none (no cooldowns, no enabled flag, no "opened" door). A subscriber that
+  wants a cooldown keeps it in Lua; nothing is replicated unless the subscriber sends it.</li>
+<li><strong>Rejections</strong> publish nothing and send nothing; they are logged at debug level (<code>interact rejected</code>).</li>
+<li><strong>Samples:</strong> <code>samples/starter-mmo/systems/shrines.lua</code> (the Meadow Shrine restores Health and answers
+  <code>shrine.blessing</code>) and <code>services/world/lua/systems/test_hooks.lua</code> (the hills' Test Shrine answers <code>test.shrine</code>, for
+  integration scenario 25).</li>
+</ul>
 <p><strong>Client events cost bandwidth.</strong> Each send is one message per recipient, and nothing rate-limits them: only the
 existing 1 MiB per-session send-buffer cap stops a flood, by disconnecting the client. <code>broadcast</code> reaches every
 player, so one call per player costs N² messages in a zone of N. <code>sendNearby</code> in a crowd costs about the same. Send on

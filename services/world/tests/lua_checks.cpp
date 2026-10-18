@@ -1910,12 +1910,17 @@ void checkNpcSample() {
     // The Sentry (maps/hills/.server/spawns/0_1.json) patrols (150, 331) <-> (215, 331), through the mesa
     // (x 170..200, z 316..346) as the crow flies: on the hills' navmesh it walks round it, on the ground.
     float sentryEnd = 1e9f, sentryOffGround = 0, sentryInWall = 0;
+    // And the crate fixture across that line at (160, 331) (maps/hills/objects/0_1.json, a 3 m box): round it too.
+    map::Shape crate;
+    crate.halfExtents = {1.5f, 1.5f, 1.5f};
+    float sentryNearCrate = 1e9f;
     for (int i = 1; i <= 800; ++i) {
         w.world.tick(T0 + std::chrono::milliseconds(50 * i));
         const proto::Vec3 s = reg.get<world::Transform>(sentry).pos;
         sentryEnd = std::min(sentryEnd, std::hypot(s.x - 215, s.z - 331));
         sentryOffGround = std::max(sentryOffGround, std::fabs(s.y - *w.maps.ground(3, s.x, s.z)));
         sentryInWall = std::max(sentryInWall, std::min({s.x - 170, 200 - s.x, s.z - 316, 346 - s.z}));
+        sentryNearCrate = std::min(sentryNearCrate, map::footprint_distance(crate, {160, 0, 331}, 0, s.x, s.z));
         const proto::Vec3 p = reg.get<world::Transform>(g).pos;
         farthest = std::max(farthest, std::hypot(p.x - 1024, p.z - 1024));
         maxStep = std::max(maxStep, std::hypot(p.x - last.x, p.z - last.z));
@@ -1933,6 +1938,8 @@ void checkNpcSample() {
     check(sentryEnd < 1 && sentryInWall < 0.5f && sentryOffGround < 0.01f,
           std::format("the Sentry reaches (215, 331) round the mesa ({:.2f} m off; at most {:.2f} m into its 3 m wall's "
                       "foot), on the ground ({:.3f} m off)", sentryEnd, sentryInWall, sentryOffGround));
+    check(sentryNearCrate > 0.2f, std::format("the Sentry walks round the obstacle crate at (160, 331) (closest {:.2f} m to its edge)",
+                                              sentryNearCrate));
     const auto spawns = w.sent.of<proto::Spawn>(1);
     check(std::ranges::any_of(spawns, [](const proto::Spawn& s) { return s.kind == proto::SpawnKind::npc && s.templateName == "Guard"; }),
           "the player at the spawn point gets the Guard's Spawn");
@@ -4192,8 +4199,345 @@ void checkGroundSample() {
     check(!maps.nav().on_mesh(3, at(185, 317.5f), 6) && maps.nav().on_mesh(3, at(185, 331), 6) &&
               maps.nav().path(3, at(185, 310), at(185, 331)).empty(),
           "hills: on_mesh false on the mesa's 81 degree wall; its top is walkable but no path leads up");
+    // Its zone object fixtures (maps/hills/objects, .server/interactables): the obstacles are cut out of the baked
+    // navtiles, the visual is not, and the server knows the interactable.
+    check(!maps.nav().on_mesh(3, at(266, 248), 6) && !maps.nav().on_mesh(3, at(160, 331), 6) &&
+              maps.nav().on_mesh(3, at(262, 248), 6),
+          "hills: the obstacle crates (266, 248) and (160, 331) are off the navmesh, 3 m beside them on");
+    check(maps.nav().on_mesh(3, at(248, 244), 6), "hills: the visual crate (248, 244) stays walkable");
+    const map::Interactable* shrine = maps.interactable(3, 1);
+    check(shrine && shrine->event == "test.shrine" && shrine->data["msg"] == "hello" && shrine->name == "Test Shrine" &&
+              !maps.interactable(1, 1),
+          "hills: interactable 1 (test.shrine, data {msg = hello}) is on map 3 only");
 }
 #endif
+
+#ifdef KAST_STARTER_MMO
+// starter-mmo's Meadow Shrine (maps/meadow objects + .server/interactables, systems/shrines.lua): activated in range it
+// restores the player's Health and sends "shrine.blessing" with the shrine's data.message; out of range, nothing.
+void checkStarterMmoShrine() {
+    LogCapture capture;
+    const fs::path root = KAST_STARTER_MMO;
+    const auto defs = lua::load_component_defs(root, world::kReservedComponentNames);
+    std::vector<std::string> mapErrors;
+    auto maps = world::Maps::load(root / "maps", mapErrors);
+    check(mapErrors.empty(), "starter-mmo shrine: maps load " + joined(mapErrors));
+    const map::Interactable* shrine = maps.interactable(10, 1);
+    check(shrine && shrine->event == "shrine.activated" && shrine->name == "Meadow Shrine",
+          "starter-mmo shrine: the meadow's interactable 1 is the Meadow Shrine");
+    if (!shrine) return;
+    world::WorldRules rules;
+    rules.startMap = 10;
+    TestWorld w(defs.defs, rules, std::move(maps));
+    const auto errors = w.world.load_scripts(root);
+    check(errors.empty(), "starter-mmo shrine: systems load " + joined(errors));
+    if (!errors.empty()) return;
+    const auto pilgrim = w.spawn(1, 51, "Pilgrim", shrine->pos[0], shrine->pos[2] - 3, "", 10);
+    const auto faraway = w.spawn(2, 52, "Faraway", shrine->pos[0] + 20, shrine->pos[2], "", 10);
+    check(map::footprint_distance(shrine->shape, shrine->pos, shrine->yaw, shrine->pos[0], shrine->pos[2] - 3) < shrine->range,
+          "starter-mmo shrine: the Pilgrim stands within range of its edge");
+    TimePoint t = T0;
+    w.world.tick(t);
+    w.world.tick(t += std::chrono::milliseconds(50));
+    for (auto e : {pilgrim, faraway}) lua::pool(w.world.registry(), "Health").get(e).value["current"] = 5;
+    w.sent.clear();
+    w.world.push_interact(pilgrim, 1);
+    w.world.push_interact(faraway, 1);
+    for (int i = 0; i < 3; ++i) w.world.tick(t += std::chrono::milliseconds(50));
+    const auto blessings = [&](uint32_t sid) {
+        std::vector<std::string> out;
+        for (const auto& e : w.sent.of<proto::ServerEvent>(sid))
+            if (e.name == "shrine.blessing") out.push_back(Json::parse(e.json).value("text", ""));
+        return out;
+    };
+    const Json h = w.value(pilgrim, "Health");
+    check(blessings(1) == std::vector<std::string>{"The shrine hums softly. You feel refreshed."} && h["current"] == h["max"],
+          "starter-mmo shrine: in range, Health back to max and the blessing sent: " + h.dump());
+    check(blessings(2).empty() && w.value(faraway, "Health")["current"] == 5, "starter-mmo shrine: 20 m away, nothing");
+    check(!said("FAIL") && log_index("\"level\":\"error\"") == SIZE_MAX, "starter-mmo shrine: no Lua errors");
+}
+#endif
+
+// --- zone objects (docs/services/world/maps.html#objects) ---
+
+constexpr const char* kVisualEntry = R"({"type":"visual","prefab":"prefabs/grass.prefab","pos":[10,0,10]})";
+
+// objects/<tx>_<tz>.json: every field, then each problem as one "objects[i]: ..." error that skips only its entry.
+void checkObjectParsing() {
+    const auto parse = [](const std::string& text) { return map::parse_objects(nlohmann::json::parse(text), {0, 0}); };
+    const auto good = parse(R"({"version":1,"objects":[
+        {"type":"visual","prefab":"prefabs/grass.prefab","pos":[10,1,10],"yaw":1.5,"scale":0.5,"seed":3},
+        {"type":"obstacle","prefab":"prefabs/rock.prefab","pos":[20,2,20],"shape":{"cylinder":{"radius":2,"height":3}}},
+        {"type":"interactable","prefab":"prefabs/shrine.prefab","pos":[30,0,30],"id":7,"name":"Shrine",
+         "shape":{"box":{"halfExtents":[1,2,1.5]}}}]})");
+    check(good.errors.empty() && good.objects.size() == 3, "objects: a valid file parses: " + joined(good.errors));
+    if (good.objects.size() == 3) {
+        const auto& [v, o, i] = std::tie(good.objects[0], good.objects[1], good.objects[2]);
+        check(v.type == map::ObjectType::Visual && v.prefab == "prefabs/grass.prefab" && v.pos == std::array<float, 3>{10, 1, 10} &&
+                  v.yaw == 1.5f && v.scale == 0.5f && !v.shape,
+              "objects: a visual's fields (unknown keys ignored, no shape)");
+        check(o.type == map::ObjectType::Obstacle && o.scale == 1 && o.yaw == 0 && o.shape &&
+                  o.shape->kind == map::Shape::Kind::Cylinder && o.shape->radius == 2 && o.shape->height == 3,
+              "objects: an obstacle's cylinder, scale 1 and yaw 0 by default");
+        check(i.type == map::ObjectType::Interactable && i.id == 7 && i.name == "Shrine" && i.shape &&
+                  i.shape->kind == map::Shape::Kind::Box && i.shape->halfExtents == std::array<float, 3>{1, 2, 1.5f},
+              "objects: an interactable's id, name and box");
+    }
+    const std::vector<std::pair<std::string, std::string>> bad = {
+        {"5", "objects[1]: must be an object"},
+        {R"({"type":"tree","prefab":"a.prefab","pos":[1,0,1]})", "objects[1]: \"type\" must be \"visual\", \"obstacle\" or \"interactable\""},
+        {R"({"type":"visual","pos":[1,0,1]})", "objects[1]: \"prefab\" must be a project-relative .prefab path"},
+        {R"({"type":"visual","prefab":"models/rock.glb","pos":[1,0,1]})", "objects[1]: \"prefab\" must be a project-relative .prefab path"},
+        {R"({"type":"visual","prefab":"a.prefab"})", "objects[1]: \"pos\" must be [x, y, z]"},
+        {R"({"type":"visual","prefab":"a.prefab","pos":[300,0,1]})", "objects[1]: \"pos\" is outside tile 0_0"},
+        {R"({"type":"visual","prefab":"a.prefab","pos":[1,0,1],"yaw":"north"})", "objects[1]: \"yaw\" must be a number (radians)"},
+        {R"({"type":"visual","prefab":"a.prefab","pos":[1,0,1],"scale":0})", "objects[1]: \"scale\" must be a number > 0"},
+        {R"({"type":"obstacle","prefab":"a.prefab","pos":[1,0,1]})", "objects[1]: a blocking object needs \"shape\""},
+        {R"({"type":"obstacle","prefab":"a.prefab","pos":[1,0,1],"shape":{"sphere":{"radius":1}}})",
+         "objects[1]: \"shape\" must be {\"box\": {\"halfExtents\": [x, y, z]}} or {\"cylinder\": {\"radius\": r, \"height\": h}}"},
+        {R"({"type":"obstacle","prefab":"a.prefab","pos":[1,0,1],"shape":{"box":{"halfExtents":[1,-1,1]}}})",
+         "objects[1]: \"shape.box.halfExtents\" must be [x, y, z], each > 0"},
+        {R"({"type":"obstacle","prefab":"a.prefab","pos":[1,0,1],"shape":{"cylinder":{"radius":1}}})",
+         "objects[1]: \"shape.cylinder\" must be {\"radius\": r, \"height\": h}, each > 0"},
+        {R"({"type":"interactable","prefab":"a.prefab","pos":[1,0,1],"shape":{"cylinder":{"radius":1,"height":1}}})",
+         "objects[1]: \"id\" must be an integer in [1, 4294967295]"},
+        {R"({"type":"interactable","prefab":"a.prefab","pos":[1,0,1],"id":0,"shape":{"cylinder":{"radius":1,"height":1}}})",
+         "objects[1]: \"id\" must be an integer in [1, 4294967295]"},
+    };
+    for (const auto& [entry, want] : bad) {
+        const auto got = parse(std::string(R"({"version":1,"objects":[)") + kVisualEntry + "," + entry + "]}");
+        check(got.errors == std::vector<std::string>{want} && got.objects.size() == 1,
+              "objects: bad entry skipped, the rest kept: want [" + want + "] got [" + joined(got.errors) + "]");
+    }
+    const std::string shrine = R"({"type":"interactable","prefab":"a.prefab","pos":[1,0,1],"id":4,"shape":{"cylinder":{"radius":1,"height":1}}})";
+    const auto dup = parse(R"({"version":1,"objects":[)" + shrine + "," + shrine + "]}");
+    check(dup.errors == std::vector<std::string>{"objects[1]: duplicate id 4"} && dup.objects.size() == 1,
+          "objects: a repeated id is an error, the first kept: " + joined(dup.errors));
+    for (const auto& [text, want] : std::vector<std::pair<std::string, std::string>>{
+             {"[]", "must be a JSON object"}, {R"({"version":2,"objects":[]})", "\"version\" must be 1"},
+             {R"({"version":1})", "\"objects\" must be a list"}}) {
+        const auto got = parse(text);
+        check(got.errors == std::vector<std::string>{want} && got.objects.empty(), "objects: file error " + want + ": " + joined(got.errors));
+    }
+
+    // .server/interactables/<tx>_<tz>.json: fail fast, like spawn files.
+    const auto inter = [](const std::string& entries, std::string& err) {
+        return map::parse_interactables(nlohmann::json::parse(R"({"version":1,"interactables":[)" + entries + "]}"), {0, 0}, err);
+    };
+    std::string err;
+    const auto list = inter(R"({"id":7,"pos":[30,0,30],"yaw":0.5,"shape":{"box":{"halfExtents":[1,2,1]}},"range":4,
+        "event":"shrine.activated","data":{"msg":"hi","n":[1,2]},"name":"Shrine","note":"kept"},
+        {"id":8,"pos":[40,0,40],"shape":{"cylinder":{"radius":2,"height":1}},"event":"well.used"})", err);
+    check(list && list->size() == 2, "interactables: a valid file parses " + err);
+    if (list && list->size() == 2) {
+        const auto& a = (*list)[0];
+        check(a.id == 7 && a.yaw == 0.5f && a.range == 4 && a.event == "shrine.activated" && a.data["msg"] == "hi" &&
+                  a.name == "Shrine" && a.shape.kind == map::Shape::Kind::Box,
+              "interactables: every field");
+        check((*list)[1].range == 3 && (*list)[1].data.is_null() && (*list)[1].name.empty(),
+              "interactables: range 3 by default, no data, no name");
+    }
+    const std::string ok = R"("pos":[1,0,1],"shape":{"cylinder":{"radius":1,"height":1}},"event":"e")";
+    std::string deep = "1";
+    for (int i = 0; i < 32; ++i) deep = "{\"a\":" + deep + "}";
+    for (const auto& [entries, want] : std::vector<std::pair<std::string, std::string>>{
+             {"7", "interactables[0]: must be an object"},
+             {R"({"pos":[1,0,1]})", "interactables[0]: \"id\" must be an integer in [1, 4294967295]"},
+             {R"({"id":5,)" + ok + R"(},{"id":5,)" + ok + "}", "interactable 5: duplicate id"},
+             {R"({"id":5,"pos":[1,0,999],"shape":{"cylinder":{"radius":1,"height":1}},"event":"e"})", "interactable 5: \"pos\" is outside tile 0_0"},
+             {R"({"id":5,"pos":[1,0,1],"event":"e"})",
+              "interactable 5: \"shape\" must be {\"box\": {\"halfExtents\": [x, y, z]}} or {\"cylinder\": {\"radius\": r, \"height\": h}}"},
+             {R"({"id":5,"range":0,)" + ok + "}", "interactable 5: \"range\" must be a number > 0 (metres)"},
+             {R"({"id":5,"pos":[1,0,1],"shape":{"cylinder":{"radius":1,"height":1}},"event":""})",
+              "interactable 5: \"event\" must be a non-empty string of at most 255 bytes"},
+             {R"({"id":5,"data":[1],)" + ok + "}", "interactable 5: \"data\" must be an object"},
+             {R"({"id":5,"data":)" + deep + "," + ok + "}", "interactable 5: \"data\" is nested more than 31 deep"},
+             {R"({"id":5,"name":3,)" + ok + "}", "interactable 5: \"name\" must be a string"}}) {
+        err.clear();
+        check(!inter(entries, err) && err == want, "interactables: want [" + want + "] got [" + err + "]");
+    }
+
+    // Footprints and the horizontal distance to their edge.
+    map::Shape wall;
+    wall.halfExtents = {2, 1, 1};
+    map::Shape post;
+    post.kind = map::Shape::Kind::Cylinder;
+    post.radius = 2;
+    const std::array<float, 3> o{0, 5, 0};
+    const auto close_to = [](float a, float b) { return std::fabs(a - b) < 1e-4f; };
+    check(close_to(map::footprint_distance(wall, o, 0, 3, 0), 1) && close_to(map::footprint_distance(wall, o, 0, 0, 3), 2) &&
+              map::footprint_distance(wall, o, 0, 1.9f, 0.9f) == 0 && close_to(map::footprint_distance(wall, o, 0, 5, 5), 5),
+          "footprint_distance: to a box's edge, 0 inside, to its corner");
+    const float quarter = std::numbers::pi_v<float> / 2;
+    check(close_to(map::footprint_distance(wall, o, quarter, 0, 3), 1) && close_to(map::footprint_distance(wall, o, quarter, 3, 0), 2),
+          "footprint_distance: a box turned by yaw (its long side now along z)");
+    check(close_to(map::footprint_distance(post, o, 0, 5, 0), 3) && map::footprint_distance(post, o, 0, 1, 1) == 0,
+          "footprint_distance: to a cylinder's edge, 0 inside");
+    const auto corners = map::footprint(wall, o, quarter);
+    check(corners.size() == 4 && close_to(std::fabs(corners[0][1]), 2) && close_to(std::fabs(corners[0][0]), 1) &&
+              map::footprint(post, o, 0).size() == 16,
+          "footprint: a box's 4 corners turned by yaw, a cylinder's 16 points");
+}
+
+constexpr const char* kObjectsManifest = R"({"version":1,"id":1,"tiles":[[0,0,1,0]],"spawn":{"pos":[10,0,10]}})";
+constexpr const char* kShrineFile = R"({"version":1,"interactables":[
+    {"id":7,"pos":[100,0,100],"shape":{"box":{"halfExtents":[1,1,1]}},"event":"shrine.activated","data":{"msg":"hi"}}]})";
+
+// Maps::load: interactables files of owned tiles, every problem refusing the start with the file.
+void checkInteractableLoading() {
+    const auto errors = [](const std::vector<std::pair<std::string, std::string>>& files) {
+        LuaRoot r;
+        r.write("m/map.json", kObjectsManifest);
+        for (const auto& [path, body] : files) r.write("m/.server/interactables/" + path, body);
+        std::vector<std::string> errs;
+        world::Maps::load(r.root, errs);
+        return joined(errs);
+    };
+    LuaRoot r;
+    r.write("m/map.json", kObjectsManifest).write("m/.server/interactables/0_0.json", kShrineFile);
+    std::vector<std::string> errs;
+    const auto maps = world::Maps::load(r.root, errs);
+    const auto* shrine = maps.interactable(1, 7);
+    check(errs.empty() && shrine && shrine->event == "shrine.activated" && !maps.interactable(1, 8) && !maps.interactable(2, 7),
+          "interactables load by map and id " + joined(errs));
+    const std::string well = R"({"version":1,"interactables":[{"id":7,"pos":[300,0,10],"shape":{"cylinder":{"radius":1,"height":1}},"event":"w"}]})";
+    check(errors({{"0_0.json", kShrineFile}, {"1_0.json", well}}) ==
+              "maps/m/.server/interactables/1_0.json: interactable 7: duplicate id on this map",
+          "interactables: an id used twice on a map is refused: " + errors({{"0_0.json", kShrineFile}, {"1_0.json", well}}));
+    check(errors({{"shrine.json", kShrineFile}}) == "maps/m/.server/interactables/shrine.json: file name must be <tx>_<tz>.json",
+          "interactables: a bad file name is refused");
+    check(errors({{"5_5.json", kShrineFile}}) == "maps/m/.server/interactables/5_5.json: tile is not on the map",
+          "interactables: a file for a tile not on the map is refused");
+    check(errors({{"0_0.json", "{nope"}}) == "maps/m/.server/interactables/0_0.json: not valid JSON", "interactables: bad JSON refused");
+    check(errors({{"1_0.json", kShrineFile}}) == "maps/m/.server/interactables/1_0.json: interactable 7: \"pos\" is outside tile 1_0",
+          "interactables: a parse error is refused with the file: " + errors({{"1_0.json", kShrineFile}}));
+}
+
+// Interact: in range on the player's map publishes the object's event {entity, map, object, data}; unknown id, another
+// map's object and out of range publish nothing and log at debug.
+void checkInteract() {
+    LogCapture capture;
+    log::set_level(log::Level::debug);
+    LuaRoot r;
+    r.write("components/report.lua", kReport);
+    r.write("systems/shrine.lua", R"(
+local got = {}
+return {
+    init = function()
+        kast.subscribe("shrine.activated", function(e)
+            got[#got + 1] = string.format("%d %d %d %s", e.entity, e.map, e.object, e.data and e.data.msg or "nil")
+        end)
+        kast.subscribe("well.used", function(e)
+            got[#got + 1] = string.format("%d %d %d %s", e.entity, e.map, e.object, tostring(e.data))
+        end)
+    end,
+    onEnter = function(e) kast.add(e, "Report") end,
+    update = function(dt) for e in kast.query("Report") do kast.set(e, "Report", {lines = got}) end end,
+})");
+    world::Maps maps = test_maps();
+    map::Interactable shrine;
+    shrine.id = 7;
+    shrine.pos = {100, 0, 100};
+    shrine.shape.halfExtents = {1, 1, 1};
+    shrine.event = "shrine.activated";
+    shrine.data = {{"msg", "hi"}};
+    maps.add_interactable(1, shrine);
+    map::Interactable well = shrine;
+    well.id = 8;
+    well.pos = {200, 0, 100};
+    well.shape.kind = map::Shape::Kind::Cylinder;
+    well.shape.radius = 2;
+    well.range = 1;
+    well.event = "well.used";
+    well.data = nullptr;
+    maps.add_interactable(1, well);
+    map::Interactable cave = shrine;
+    cave.id = 9;
+    maps.add_interactable(2, cave);
+    TestWorld w(r.defs().defs, {}, std::move(maps));
+    check(w.world.load_scripts(r.root).empty(), "interact: system loads");
+    const auto alice = w.spawn(1, 41, "Alice", 103.9f, 100);  // 2.9 m from the shrine's edge: in range 3
+    const auto bob = w.spawn(2, 42, "Bob", 104.1f, 100);      // 3.1 m: out of range (and far from the well)
+    w.world.tick(T0);
+    w.world.push_interact(alice, 7);
+    w.world.push_interact(alice, 9);    // map 2's
+    w.world.push_interact(alice, 1234); // nobody's
+    w.world.push_interact(bob, 7);
+    w.world.push_interact(bob, 8);      // 94 m from the well
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    w.world.tick(T0 + std::chrono::milliseconds(100));
+    const Json lines = w.value(bob, "Report").value("lines", Json::array());
+    check(lines == Json::array({std::to_string(wire(alice)) + " 1 7 hi"}),
+          "interact: only Alice's in-range activation publishes {entity, map, object, data}: " + lines.dump());
+    check(said_at("interact rejected").size() == 4 && logged("\"reason\":\"not on this map\"") && logged("\"object\":1234") &&
+              logged("\"reason\":\"out of range\""),
+          "interact: the 4 rejections are logged at debug");
+    // The well (no data): data nil in Lua.
+    const auto carol = w.spawn(3, 43, "Carol", 202.5f, 100);
+    w.world.tick(T0 + std::chrono::milliseconds(150));
+    w.world.push_interact(carol, 8);
+    w.world.tick(T0 + std::chrono::milliseconds(200));
+    w.world.tick(T0 + std::chrono::milliseconds(250));
+    const Json more = w.value(carol, "Report").value("lines", Json::array());
+    check(more.size() == 2 && more[1] == std::to_string(wire(carol)) + " 1 8 nil", "interact: no data -> e.data nil: " + more.dump());
+    log::set_level(log::Level::info);
+    for (const auto& s : w.world.script_status()) check(s.ok, "interact: system still enabled " + s.error);
+}
+
+// The bake cuts obstacles and interactables (box and cylinder, a neighbour tile's too) out of the navmesh, with
+// agentRadius clearance; visuals stay walkable. Then a move into one is off_mesh, and paths go round.
+void checkObstacleNavmesh() {
+    std::string err;
+    const auto info = map::parse_manifest(nlohmann::json::parse(
+        R"({"version":1,"id":1,"tiles":[[0,0,1,0]],"heightRange":[0,10],"spawn":{"pos":[10,0,10]}})"), err);
+    const auto objects = map::parse_objects(nlohmann::json::parse(R"({"version":1,"objects":[
+        {"type":"obstacle","prefab":"w.prefab","pos":[128,0,128],"shape":{"box":{"halfExtents":[2,2,40]}}},
+        {"type":"interactable","prefab":"s.prefab","pos":[60,0,60],"id":1,"shape":{"cylinder":{"radius":3,"height":2}}},
+        {"type":"visual","prefab":"g.prefab","pos":[200,0,200]},
+        {"type":"obstacle","prefab":"r.prefab","pos":[254,0,60],"yaw":0.785,"shape":{"box":{"halfExtents":[4,1,4]}}}]})"), {0, 0});
+    check(objects.errors.empty() && objects.objects.size() == 4, "obstacle bake: fixture objects parse " + joined(objects.errors));
+    const map::TileHeights flat;
+    LuaRoot r;
+    r.write("m/map.json", R"({"version":1,"id":1,"tiles":[[0,0,1,0]],"heightRange":[0,10],"spawn":{"pos":[10,0,10]}})");
+    int plainPolys = 0;
+    for (int tx : {0, 1}) {
+        const auto plain = mapbake::bake_tile(*info, flat, {tx, 0}, err);
+        // Tile 1_0 gets tile 0_0's objects too: the rock at x 254 reaches over the seam (the mapbake CLI passes neighbours').
+        const auto baked = mapbake::bake_tile(*info, flat, {tx, 0}, err, objects.objects);
+        check(plain && baked && baked->polys > plain->polys, std::format("obstacle bake: tile {}_0 has more polys with its "
+              "obstacles cut out ({} against {}) {}", tx, baked ? baked->polys : 0, plain ? plain->polys : 0, err));
+        if (tx == 0 && plain) plainPolys = plain->polys;
+        if (baked) r.write(std::format("m/.server/nav/{}_0.navtile", tx), baked->navtile);
+    }
+    std::vector<std::string> errors;
+    world::Maps maps = world::Maps::load(r.root, errors);
+    check(errors.empty() && plainPolys > 0, "obstacle bake: navtiles load " + joined(errors));
+    const auto on = [&](float x, float z) { return maps.nav().on_mesh(1, {x, 0, z}, 6); };
+    check(!on(128, 128) && !on(129.5f, 160) && on(133, 128), "obstacle bake: the wall's box is off the mesh, 3 m beside it on");
+    check(!on(60, 60) && !on(62, 60) && on(66, 60), "obstacle bake: the interactable's cylinder is off the mesh, beyond it on");
+    check(on(200, 200) && on(100, 30), "obstacle bake: a visual and open ground stay walkable");
+    check(!on(254, 60) && !on(257, 60) && on(266, 60), "obstacle bake: a turned box over the tile seam is cut from both tiles");
+    const auto path = maps.nav().path(1, {100, 0, 128}, {156, 0, 128});
+    bool around = false, through = false;
+    for (const auto& p : path) {
+        around |= std::fabs(p.z - 128) > 40;
+        through |= std::fabs(p.x - 128) < 2 && std::fabs(p.z - 128) < 40;
+    }
+    check(path.size() > 2 && around && !through, std::format("obstacle bake: the path goes round the wall ({} points)", path.size()));
+
+    const auto corrections = [&](proto::Vec3 from, proto::Vec3 to) {
+        std::vector<std::string> errs;
+        TestWorld w({}, {}, world::Maps::load(r.root, errs));
+        const auto e = w.world.spawn(1, {1, 1, "Walker", 1, from, 0, ""}, T0);
+        w.world.tick(T0);
+        w.sent.clear();
+        w.world.push_move(e, {to, 0, 0});
+        w.world.tick(T0 + std::chrono::seconds(1));
+        return w.sent.of<proto::Correction>(1).size();
+    };
+    check(corrections({120, 0, 128}, {127, 0, 128}) == 1, "move into the wall: off_mesh -> Correction");
+    check(corrections({120, 0, 100}, {124, 0, 100}) == 0, "move beside the wall: accepted");
+}
 
 int lua_checks(int& checks) {
     checkCodec();
@@ -4234,6 +4578,7 @@ int lua_checks(int& checks) {
     checkMovableAndMapSpawn();
 #ifdef KAST_STARTER_MMO
     checkStarterMmoCombat();
+    checkStarterMmoShrine();
 #endif
 #ifdef KAST_STARTER_MMO_TEST_LUA
     checkStarterMmoLoot();
@@ -4252,6 +4597,10 @@ int lua_checks(int& checks) {
     checkAreaLoading();
     checkGround();
     checkNavmesh();
+    checkObjectParsing();
+    checkInteractableLoading();
+    checkInteract();
+    checkObstacleNavmesh();
 #ifdef KAST_SAMPLE_MAPS
     checkGroundSample();
     checkNpcSample();

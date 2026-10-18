@@ -91,6 +91,8 @@ public:
     void push_say(entt::entity e, std::string text);
     // A ClientEvent GameServer already checked (valid name, JSON object within kClientEventJsonMax).
     void push_client_event(entt::entity e, std::string name, nlohmann::json data);
+    // An Interact; checked by interact_system on the next tick.
+    void push_interact(entt::entity e, uint32_t objectId);
 
     void tick(TimePoint now);
     size_t population() const { return population_; }

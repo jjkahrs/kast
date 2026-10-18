@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "objects": [
+    {
+      "type": "interactable",
+      "prefab": "prefabs/Crate.prefab",
+      "pos": [
+        250.0,
+        28.476997,
+        266.0
+      ],
+      "yaw": 0.0,
+      "scale": 1.0,
+      "shape": {
+        "cylinder": {
+          "radius": 0.6,
+          "height": 1.0
+        }
+      },
+      "id": 1,
+      "name": "Test Shrine"
+    },
+    {
+      "type": "obstacle",
+      "prefab": "prefabs/Crate.prefab",
+      "pos": [
+        160.0,
+        3.0957506,
+        331.0
+      ],
+      "yaw": 0.0,
+      "scale": 3.0,
+      "shape": {
+        "box": {
+          "halfExtents": [
+            1.5,
+            1.5,
+            1.5
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -36,6 +36,7 @@
 namespace {
 
 namespace fs = std::filesystem;
+using zone::Json;
 using zone::Session;
 
 constexpr bgfx::ViewId kSceneViews = 1; // shadow maps, scene, post (ZoneView)
@@ -51,6 +52,9 @@ constexpr const char* kUsage =
     "--area-portal id,map,x,y,z,heading --move-area-vertex id,i,x,z --delete-area id "
     "--add-spawn id,npc,x,z[,heading[,respawnSec]] --move-spawn id,x,z --delete-spawn id "
     "--add-path spawnId,wait,loop,x,z,x,z... --add-tile tx,tz --remove-tile tx,tz --set-spawn x,z[,heading] "
+    "--add-object type,prefab,x,z[,yaw[,scale[,box,hx,hy,hz|cylinder,r,h]]] --set-interactable id,range,event[,name[,data]] "
+    "--move-object tx,tz,i,x,z --delete-object tx,tz,i --scatter x,z,radius,count,seed,scaleMin,scaleMax,prefab[+prefab] "
+    "--erase-visuals x,z,radius "
     "--generate-heights seed[,scale,octaves,persistence,lacunarity] --terrain-colors pct,r,g,b,pct,r,g,b... "
     "--create-terrain-material --save --validate --expect-save-fail --undo --redo";
 // Flags that are edits taking a value, run in command-line order.
@@ -60,7 +64,8 @@ constexpr std::string_view kValueOps[] = {"--map", "--new-map", "--falloff", "--
                                           "--add-area", "--add-polygon", "--area-parent", "--area-portal",
                                           "--move-area-vertex", "--delete-area", "--add-spawn", "--move-spawn",
                                           "--delete-spawn", "--add-path", "--map-id", "--add-tile",
-                                          "--remove-tile", "--set-spawn"};
+                                          "--remove-tile", "--set-spawn", "--add-object", "--set-interactable",
+                                          "--move-object", "--delete-object", "--scatter", "--erase-visuals"};
 constexpr float kLoopRadius = 24.0f; // --sculpt-loop's brush
 
 // One command-line edit: the flag and its value (empty for flags without one).
@@ -268,6 +273,100 @@ std::optional<bool> objectEdit(Session& session, const Op& op) {
         });
         return true;
     }
+    // Zone objects: addressed by tile and index in its objects file ("tx,tz,i"), interactables by id.
+    const auto objectAt = [&](size_t from) -> std::optional<zone::ObjectRef> {
+        int tx = 0, tz = 0, index = 0;
+        if (parts.size() < from + 3 || !parseInt(parts[from], tx) || !parseInt(parts[from + 1], tz) || !parseInt(parts[from + 2], index))
+            return std::nullopt;
+        const zone::ObjectRef ref{{tx, tz}, size_t(index)};
+        const auto refs = zone::all_objects(doc.state);
+        return std::find(refs.begin(), refs.end(), ref) != refs.end() ? std::optional(ref) : std::nullopt;
+    };
+    if (op.flag == "--add-object") {
+        const std::string form = "type,prefab,x,z[,yaw[,scale[,box,hx,hy,hz | cylinder,r,h]]]";
+        const std::vector<std::string> types = {"visual", "obstacle", "interactable"};
+        const auto type = parts.empty() ? types.end() : std::find(types.begin(), types.end(), parts[0]);
+        const size_t shapeAt = std::min<size_t>(parts.size(), 6);
+        std::vector<float> v;
+        for (size_t i = 2; i < shapeAt; ++i)
+            if (!parseFloat(parts[i], v.emplace_back())) return bad(form.c_str());
+        const auto shape = parts.size() > 6 ? floats(7) : std::optional<std::vector<float>>(std::vector<float>{});
+        const bool box = parts.size() > 6 && parts[6] == "box" && shape && shape->size() == 3;
+        const bool cylinder = parts.size() > 6 && parts[6] == "cylinder" && shape && shape->size() == 2;
+        if (type == types.end() || parts.size() < 4 || v.size() < 2 || (parts.size() > 6 && !box && !cylinder)) return bad(form.c_str());
+        doc.edit([&](zone::ZoneState& s) {
+            const zone::ObjectRef ref = zone::add_object(s, kast::map::ObjectType(type - types.begin()), parts[1],
+                                                         ground(v[0], v[1]), v.size() > 2 ? v[2] : 0.0f, v.size() > 3 ? v[3] : 1.0f);
+            Json& o = zone::object_json(s, ref);
+            if (box) o["shape"] = {{"box", {{"halfExtents", zone::vec3_json({(*shape)[0], (*shape)[1], (*shape)[2]})}}}};
+            if (cylinder) o["shape"] = {{"cylinder", {{"radius", kast::jsonNumber((*shape)[0])}, {"height", kast::jsonNumber((*shape)[1])}}}};
+            if (o.value("type", "") == "interactable") zone::sync_interactable(s, ref);
+        });
+        return true;
+    }
+    if (op.flag == "--set-interactable") { // id,range,event[,name[,data]]: data is the rest, commas and all
+        int id = 0;
+        float range = 0;
+        std::optional<zone::ObjectRef> ref;
+        for (const zone::ObjectRef& r : zone::all_objects(doc.state))
+            if (parts.size() >= 3 && parseInt(parts[0], id) && zone::object_json(doc.state, r).value("id", Json()) == id) ref = r;
+        Json data;
+        if (parts.size() > 4) {
+            const size_t at = parts[0].size() + parts[1].size() + parts[2].size() + parts[3].size() + 4;
+            data = Json::parse(op.value.substr(at), nullptr, false);
+        }
+        if (!ref || !parseFloat(parts[1], range) || (parts.size() > 4 && !data.is_object()))
+            return bad("id,range,event[,name[,data JSON object]] (an existing interactable)");
+        doc.edit([&](zone::ZoneState& s) {
+            if (parts.size() > 3 && !parts[3].empty()) zone::object_json(s, *ref)["name"] = parts[3];
+            zone::sync_interactable(s, *ref);
+            Json& entry = *zone::interactable_json(s, ref->tile, uint32_t(id));
+            entry["range"] = kast::jsonNumber(range);
+            entry["event"] = parts[2];
+            if (data.is_object()) entry["data"] = data;
+        });
+        return true;
+    }
+    if (op.flag == "--move-object") {
+        const auto ref = objectAt(0);
+        const auto v = ref && parts.size() == 5 ? floats(3) : std::nullopt;
+        if (!v) return bad("tx,tz,index,x,z (an existing object)");
+        doc.edit([&](zone::ZoneState& s) { zone::move_object(s, *ref, ground((*v)[0], (*v)[1])); });
+        return true;
+    }
+    if (op.flag == "--delete-object") {
+        const auto ref = objectAt(0);
+        if (!ref || parts.size() != 3) return bad("tx,tz,index (an existing object)");
+        doc.edit([&](zone::ZoneState& s) { zone::delete_object(s, *ref); });
+        return true;
+    }
+    if (op.flag == "--scatter") { // one stroke of one dab, as the Scatter tool's
+        zone::Scatter brush;
+        int count = 0, seed = 0;
+        std::vector<float> f; // x, z, radius, scaleMin, scaleMax
+        for (const size_t i : {0, 1, 2, 5, 6})
+            if (i < parts.size() && !parseFloat(parts[i], f.emplace_back())) f.pop_back();
+        if (parts.size() != 8 || f.size() != 5 || !parseInt(parts[3], count) || !parseInt(parts[4], seed) || count < 1 || !info)
+            return bad("x,z,radius,count,seed,scaleMin,scaleMax,prefab[+prefab...]");
+        brush.radius = f[2];
+        brush.count = count;
+        brush.scaleMin = f[3];
+        brush.scaleMax = f[4];
+        brush.prefabs = split(parts[7], '+');
+        zone::ScatterRng rng{uint32_t(seed)};
+        size_t placed = 0;
+        doc.edit([&](zone::ZoneState& s) { placed = zone::scatter(*info, s, brush, rng, f[0], f[1]); });
+        session.print(std::format("--scatter: {} visual(s) placed", placed));
+        return true;
+    }
+    if (op.flag == "--erase-visuals") {
+        const auto v = parts.size() == 3 ? floats(0) : std::nullopt;
+        if (!v) return bad("x,z,radius");
+        size_t erased = 0;
+        doc.edit([&](zone::ZoneState& s) { erased = zone::erase_visuals(s, (*v)[0], (*v)[1], (*v)[2]); });
+        session.print(std::format("--erase-visuals: {} visual(s) removed", erased));
+        return true;
+    }
     if (op.flag == "--move-spawn") {
         const auto v = parts.size() == 3 ? floats(1) : std::nullopt;
         if (!v || !spawn(parts[0])) return bad("id,x,z (an existing spawn)");
@@ -472,6 +571,7 @@ void buildDefaultLayout(ImGuiID dockspace) {
     ImGui::DockBuilderDockWindow("Terrain", leftBottom);
     ImGui::DockBuilderDockWindow("Areas", leftBottom);
     ImGui::DockBuilderDockWindow("Spawns", leftBottom);
+    ImGui::DockBuilderDockWindow("Objects", leftBottom);
     ImGui::DockBuilderDockWindow("###Problems", bottom);
     ImGui::DockBuilderDockWindow("Log", bottom);
     ImGui::DockBuilderDockWindow("Bake", bottom);

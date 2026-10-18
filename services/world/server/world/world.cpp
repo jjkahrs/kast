@@ -76,6 +76,7 @@ entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint 
     reg_.emplace<ChatLimit>(e, WindowLimiter(rules_.chatRateCount, rules_.chatRateWindow));
     reg_.emplace<PendingClientEvents>(e);
     reg_.emplace<ClientEventLimit>(e, WindowLimiter(rules_.clientEventRateCount, rules_.clientEventRateWindow));
+    reg_.emplace<PendingInteracts>(e);
     const CellKey cell = grid_.cell_of(map, pos.x, pos.z);
     reg_.emplace<AoiCell>(e, cell);
     reg_.emplace<Visible>(e);
@@ -216,6 +217,10 @@ void World::push_client_event(entt::entity e, std::string name, nlohmann::json d
     if (reg_.valid(e)) reg_.get<PendingClientEvents>(e).events.push_back({std::move(name), std::move(data)});
 }
 
+void World::push_interact(entt::entity e, uint32_t objectId) {
+    if (reg_.valid(e)) reg_.get<PendingInteracts>(e).objectIds.push_back(objectId);
+}
+
 // area runs right after movement: a player who walked into a portal is transferred before aoi, so this tick's view
 // diff already sends the Spawns on the new map (MapChange and the old Despawns went out in transfer).
 // The spawner runs right before Lua, so a system's update already sees (and can move) the NPCs due this tick; like the
@@ -233,6 +238,7 @@ void World::tick(TimePoint now) {
     aoi_system(reg_, grid_, send_);
     chat_system(reg_, rules_.chat, send_, now);
     client_event_in_system(reg_, lua_.bus(), now); // delivered by the drain after this tick's Lua update
+    interact_system(reg_, maps_, lua_.bus());      // likewise
     spawner_system(reg_, spawner_, rules_.maxNpcs, now, [this](const SpawnRecord& r) {
         const auto& s = *r.spawn;
         const lua::NpcDef* def = lua_.npc(s.npc); // load_scripts refused the start without one

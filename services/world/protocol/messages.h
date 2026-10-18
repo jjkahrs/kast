@@ -11,7 +11,7 @@
 
 namespace kast::proto {
 
-constexpr uint16_t kProtocolVersion = 4;
+constexpr uint16_t kProtocolVersion = 5;
 constexpr size_t kHeaderSize = 4; // u16 payload length + u16 opcode
 constexpr size_t kMaxPayloadBytes = 0xFFFF; // the u16 length field's limit
 
@@ -27,6 +27,7 @@ enum class Opcode : uint16_t {
     Move = 0x0020,         // C
     Say = 0x0021,          // C
     ClientEvent = 0x0022,  // C
+    Interact = 0x0023,     // C
     AuthOk = 0x0102,       // S
     Disconnect = 0x0103,   // S
     CharList = 0x0110,     // S
@@ -212,6 +213,16 @@ struct ClientEvent {
     void write(Writer& w) const { w.str(name); w.str(json); }
     void read(Reader& r) { name = r.str(); json = r.str(); }
     bool operator==(const ClientEvent&) const = default;
+};
+
+// Activates a zone object (docs/services/world/protocol.html#interact): the id of an interactable in the map's
+// objects files. The server checks the map and the range and replies nothing; its Lua answers if it wants to.
+struct Interact {
+    static constexpr Opcode op = Opcode::Interact;
+    uint32_t objectId = 0;
+    void write(Writer& w) const { w.u32(objectId); }
+    void read(Reader& r) { objectId = r.u32(); }
+    bool operator==(const Interact&) const = default;
 };
 
 // 1-32 chars of [a-z0-9._].
@@ -410,7 +421,7 @@ struct MapChange {
     bool operator==(const MapChange&) const = default;
 };
 
-using Message = std::variant<Hello, Auth, Ping, Pong, CharListReq, CharCreate, CharDelete, EnterWorld, Move, Say, ClientEvent,
+using Message = std::variant<Hello, Auth, Ping, Pong, CharListReq, CharCreate, CharDelete, EnterWorld, Move, Say, ClientEvent, Interact,
                              AuthOk, Disconnect, CharList, CharCreated, CharDeleted, EnterWorldOk, CharError, Spawn,
                              Despawn, EntityMove, Correction, ChatMsg, ComponentUpdate,
                              ComponentRemove, ServerEvent, MapChange>;

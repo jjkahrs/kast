@@ -28,6 +28,10 @@
 -- CLASS_STEPS: walk to a spot near the Meadow's Guard (or in front of / behind the Cavern's Bat), Tab, and press power
 -- keys by the action bar's event ("combat.power" {id = "power_<key>"}), shooting at the step marked shot. "legacy"
 -- stands still and logs its Class (cmake/starter_mmo_live_legacy.cmake strips the class first).
+-- Zone objects (maps/meadow/objects, scripts/player.lua, scripts/shrines.lua): "rock" walks to ROCK_SPOT, faces north
+-- and logs KEYS: --sim-key presses W over and over, scripts/player.lua walks the character north into the rock, which
+-- stops it; then the driver logs where it stopped. "shrine" walks to SHRINE_SPOT, faces the Meadow Shrine and logs
+-- PRESS: --sim-key presses E, scripts/shrines.lua activates it and the server's answer shows in the chat box.
 -- "SHOT" log lines are for --screenshot-on-log: the moment a stage's screenshot should show.
 local STAGE, CHARACTER = "@STAGE@", "@CHARACTER@"
 local REALM = "Starter Realm"
@@ -75,6 +79,8 @@ local CLASS_STEPS = {
         {log = "Bat dies", shot = "backstab"},
     },
 }
+local ROCK_SPOT = {x = 141, z = 103} -- 5 m south of the rock at (141, 108), a 1.2 m cylinder
+local SHRINE_SPOT = {x = 118, z = 136.5} -- 2 m from the Meadow Shrine's edge (118, 140): within its range 3
 local BAT_SPOT = {x = 128, z = 122.5} -- 2.5 m north of the Bat (128, 120): in reach, the Bat between camera and player
 local GUARD_REACH = 2.6 -- m: close enough to hit (the server allows 3)
 local ATTACKS_ON_GUARD = 3
@@ -292,6 +298,23 @@ local function bagStage()
             return shoot(STAGE)
         end
         phase = "step"
+    end
+end
+
+-- The zone object stages: see the header.
+local function zoneStage()
+    local spot = STAGE == "rock" and ROCK_SPOT or SHRINE_SPOT
+    if phase == "arrive" then
+        target = not at(spot) and spot or nil
+        if target then return end
+        faceNorth()
+        phase, waitUntil = "keys", elapsed + 5
+        log(STAGE == "rock" and "KEYS" or "PRESS")
+    elseif phase == "keys" and elapsed >= waitUntil then
+        phase = "done"
+        local p = kast.get(player, "Transform").position
+        log("stopped at %.2f, %.2f", p.x, p.z)
+        if STAGE == "rock" then shoot("at the rock") end
     end
 end
 
@@ -522,6 +545,7 @@ return {
             if STAGE == "combat" and e.text == "Bat dies" then shoot("bat dead") end
             if STAGE == "death" and e.text == "You die" then shoot("dead") end
             if STAGE == "revive" and e.text == "You revive" then shoot("revived") end
+            if STAGE == "shrine" and e.text:find("The shrine hums", 1, true) then shoot("blessing") end
         end)
         kast.subscribe("server.combat.hit", function(e)
             if e.attacker ~= me or STAGE ~= "combat_guard" then return end
@@ -574,6 +598,7 @@ return {
             target = not done and GATES[map] or nil
         end
         if BAG_STAGE[STAGE] or STAGE == "bag_drag_mouse" then bagStage() end
+        if STAGE == "rock" or STAGE == "shrine" then zoneStage() end
         if STAGE == "bag_keys" and elapsed > 2 and phase == "arrive" then
             phase, waitUntil = "keys", elapsed + 6
             log("KEYS")

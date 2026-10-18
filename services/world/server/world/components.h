@@ -71,6 +71,11 @@ struct ClientEventLimit {
     uint64_t dropped = 0; // over the limit since login (logged on despawn)
 };
 
+// Interact object ids this tick (interact_system checks and publishes them).
+struct PendingInteracts {
+    std::vector<uint32_t> objectIds;
+};
+
 struct MoveLock {}; // tag: kast.setMovable(e, false); every Move is refused with a Correction
 
 struct AoiCell {
@@ -122,7 +127,7 @@ struct Viewers {
 // and every C++ component here, in lua/components.h and in lua/state_machines.h.
 inline constexpr const char* kReservedComponentNames[] = {
     "Character",    "Transform",       "StateMachine", "Npc",                 "SessionLink",   "CharacterRef",
-    "MoveState",    "PendingMoves",    "PendingSay",   "ChatLimit",           "PendingClientEvents", "ClientEventLimit", "MoveLock",           "AoiCell",       "Visible",
+    "MoveState",    "PendingMoves",    "PendingSay",   "ChatLimit",           "PendingClientEvents", "ClientEventLimit", "PendingInteracts", "MoveLock",           "AoiCell",       "Visible",
     "Viewers",      "Moved",           "Dirty",        "SaveTimer",           "ReplicatedState", "ScriptsLeft",
     "PreservedComponents", "ComponentData", "StateMachineRuntime", "MapRef",
     "AreaRef",      "Spawn",           "SpawnRef"};

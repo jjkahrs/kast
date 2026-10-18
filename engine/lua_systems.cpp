@@ -613,6 +613,35 @@ void LuaSystems::State::bindApi()
         return sol::make_object(lua, registry.get<PersistentId>(e).value);
     });
 
+    // Zone objects (docs/engine/terrain.html#objects): the game binds the keys. kast.nearestInteractable(position,
+    // maxDistance) -> {id, name, pos = {x, y, z}, distance} of the streamed interactable nearest by the horizontal
+    // distance to its shape's edge, or nil. kast.interact(id) sends Interact while in the world (true), else false;
+    // the server's Lua answers, if it does, with an event.
+    api.set_function("nearestInteractable", [this](sol::this_state L, const sol::object& position,
+                                                   const sol::object& maxDistance) -> sol::object {
+        const sol::table t = position.get_type() == sol::type::table ? position.as<sol::table>() : sol::table();
+        const sol::object x = t.valid() ? t["x"] : sol::object(), z = t.valid() ? t["z"] : sol::object();
+        if (x.get_type() != sol::type::number || z.get_type() != sol::type::number)
+            raise(L, std::format("kast.nearestInteractable: position must be {{x =, y =, z =}}, got {}", toString(L, position)));
+        if (maxDistance.get_type() != sol::type::number || !(maxDistance.as<double>() >= 0))
+            raise(L, std::format("kast.nearestInteractable: maxDistance must be a number >= 0, got {}", toString(L, maxDistance)));
+        const auto found = nearestInteractable(scene, x.as<float>(), z.as<float>(), maxDistance.as<float>());
+        if (!found)
+            return sol::make_object(lua, sol::lua_nil);
+        const map::ZoneObject& o = *found->object;
+        return sol::make_object(lua, lua.create_table_with("id", o.id, "name", o.name, "distance", found->distance, "pos",
+                                                           lua.create_table_with("x", o.pos[0], "y", o.pos[1], "z", o.pos[2])));
+    });
+    api.set_function("interact", [this](sol::this_state L, const sol::object& id) {
+        const double n = id.get_type() == sol::type::number ? id.as<double>() : 0.0;
+        if (!(n >= 1 && n <= 4294967295.0 && n == std::floor(n)))
+            raise(L, std::format("kast.interact: id must be a whole number from 1 to 4294967295, got {}", toString(L, id)));
+        if (!world.enabled() || world.state() != WorldState::InWorld)
+            return false;
+        world.interact(static_cast<uint32_t>(n));
+        return true;
+    });
+
     // Per-entity material properties (Unity's renderer.material): the first set copies the entity's MeshRenderer
     // material into a MaterialInstance only it renders with; reads come from the instance, else the shared .mat.
     // Fields and checks as in .mat files; colors as {r, g, b[, a]} or {x =, y =, z =[, w =]}.

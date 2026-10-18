@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "interactables": [
+    {
+      "id": 1,
+      "range": 3.0,
+      "event": "shrine.activated",
+      "pos": [
+        118.0,
+        6.4263678,
+        140.0
+      ],
+      "yaw": 0.4,
+      "shape": {
+        "box": {
+          "halfExtents": [
+            1.2,
+            1.25,
+            1.2
+          ]
+        }
+      },
+      "name": "Meadow Shrine",
+      "data": {
+        "message": "The shrine hums softly. You feel refreshed."
+      }
+    }
+  ]
+}

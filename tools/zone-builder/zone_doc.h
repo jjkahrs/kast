@@ -35,6 +35,8 @@ struct ZoneState {
     Json manifest;               // map.json
     Json areas;                  // areas.json; null: no file
     TileMap<Json> spawns;        // .server/spawns/<tx>_<tz>.json
+    TileMap<Json> objects;       // objects/<tx>_<tz>.json; a tile without objects has no entry (and no file)
+    TileMap<Json> interactables; // .server/interactables/<tx>_<tz>.json, kept in step with objects (zone_edit.h)
     TileMap<HeightsPtr> heights; // tiles with a heights file or edits; absent: flat at heightMin
 };
 

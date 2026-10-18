@@ -39,7 +39,7 @@ std::optional<std::string> portal_error(const Maps& maps, const map::Area& area)
     return std::nullopt;
 }
 
-// "<tx>_<tz>.json" -> the tile; nullopt for any other name.
+// "<tx>_<tz>.json" -> the tile; nullopt for any other name (spawn and interactables files).
 std::optional<map::TileKey> spawn_file_tile(const std::string& name) {
     static const std::regex re(R"((-?\d{1,9})_(-?\d{1,9})\.json)");
     std::smatch m;
@@ -117,6 +117,40 @@ void Maps::load_spawns(uint16_t id, const std::filesystem::path& folder, std::ve
     if (ec) errors.push_back("maps/" + folder.filename().string() + "/.server/spawns: " + ec.message());
 }
 
+void Maps::load_interactables(uint16_t id, const std::filesystem::path& folder, std::vector<std::string>& errors) {
+    const std::filesystem::path dir = folder / ".server" / "interactables";
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec)) return; // none
+    std::vector<std::filesystem::path> files;
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) files.push_back(entry.path());
+    std::sort(files.begin(), files.end()); // stable error order
+    const map::MapInfo& info = maps_.at(id);
+    for (const auto& file : files) {
+        const std::string where = "maps/" + folder.filename().string() + "/.server/interactables/" + file.filename().string();
+        const auto tile = spawn_file_tile(file.filename().string());
+        if (!tile) { errors.push_back(where + ": file name must be <tx>_<tz>.json"); continue; }
+        if (!info.has_tile(*tile)) { errors.push_back(where + ": tile is not on the map"); continue; }
+        if (!owns(id, *tile)) continue; // another process runs it
+        std::string err;
+        const auto json = read_json(file, err);
+        auto list = json ? map::parse_interactables(*json, *tile, err) : std::nullopt;
+        if (!list) { errors.push_back(where + ": " + err); continue; }
+        for (auto& it : *list) {
+            if (interactable(id, it.id))
+                errors.push_back(where + ": interactable " + std::to_string(it.id) + ": duplicate id on this map");
+            else add_interactable(id, std::move(it));
+        }
+    }
+    if (ec) errors.push_back("maps/" + folder.filename().string() + "/.server/interactables: " + ec.message());
+}
+
+const map::Interactable* Maps::interactable(uint16_t map, uint32_t id) const {
+    const auto m = interactables_.find(map);
+    if (m == interactables_.end()) return nullptr;
+    const auto it = m->second.find(id);
+    return it == m->second.end() ? nullptr : &it->second;
+}
+
 Maps Maps::load(const std::filesystem::path& root, std::vector<std::string>& errors) {
     Maps maps;
     std::error_code ec;
@@ -152,6 +186,7 @@ Maps Maps::load(const std::filesystem::path& root, std::vector<std::string>& err
         maps.load_spawns(id, folder, errors);
         maps.load_heights(id, folder, errors);
         maps.load_nav(id, folder, errors);
+        maps.load_interactables(id, folder, errors);
     }
     // Portals once every map is in (a bad one is reported; its map stays loaded, but any error stops the server).
     for (const auto& [id, info] : maps.maps_)

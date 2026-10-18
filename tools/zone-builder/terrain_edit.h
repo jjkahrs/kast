@@ -118,7 +118,8 @@ Json tile_rects(const TileSet& tiles);
 // Declares tile t (false if it already is). Its heights start flat at heightMin, then take the shared edges of the
 // declared neighbours, so no seam appears.
 bool add_tile(const kast::map::MapInfo& info, ZoneState& state, TileKey t);
-// Undeclares tile t (false if it is not declared, or is the last one) and drops its heights and spawn file.
+// Undeclares tile t (false if it is not declared, or is the last one) and drops its heights, spawn, objects and
+// interactables files.
 bool remove_tile(const kast::map::MapInfo& info, ZoneState& state, TileKey t);
 
 } // namespace zone

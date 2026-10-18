@@ -1,7 +1,9 @@
-// Area, spawn and patrol path edits on a ZoneState's JSON, in place: keys the tool does not edit (an area's y, music,
-// flags, anything unknown) stay as they were. Pure, no window; validation is zone_io's validate().
+// Area, spawn, patrol path and zone object edits on a ZoneState's JSON, in place: keys the tool does not edit (an area's
+// y, music, flags, anything unknown) stay as they were. Pure, no window; validation is zone_io's validate().
 #pragma once
 #include "zone_doc.h"
+
+#include <objects.h>
 
 #include <array>
 #include <optional>
@@ -69,6 +71,70 @@ void delete_path(ZoneState& state, TileKey tile, const std::string& name);
 Json* spawn_path(ZoneState& state, SpawnRef ref);
 // Appends a point to the spawn's route, creating "<id>_path" from the spawn's position if it has none.
 void add_path_point(ZoneState& state, SpawnRef ref, const Vec3& point);
+
+// --- zone objects (objects/<tx>_<tz>.json "objects"; an interactable's server side in .server/interactables/) ---
+// A tile whose list becomes empty loses its entry, so save deletes its file.
+
+struct ObjectRef {
+    TileKey tile;
+    size_t index; // into that file's "objects"
+    bool operator==(const ObjectRef&) const = default;
+};
+
+// Every object of the map, file by file.
+std::vector<ObjectRef> all_objects(const ZoneState& state);
+const Json& object_json(const ZoneState& state, ObjectRef ref);
+Json& object_json(ZoneState& state, ObjectRef ref);
+kast::map::ObjectType object_type(const Json& object); // visual for anything unknown
+// One above the highest interactable id the map uses (objects or server entries); 1 if none.
+uint32_t next_interactable_id(const ZoneState& state);
+// The server entry with this id in tile's interactables file, or null.
+Json* interactable_json(ZoneState& state, TileKey tile, uint32_t id);
+const Json* interactable_json(const ZoneState& state, TileKey tile, uint32_t id);
+// A new blocking object's shape: a 1 m box standing on its pos.
+Json default_shape();
+// Appends an object to the file of the tile pos is in: {"type", "prefab", "pos", "yaw", "scale"}, plus default_shape()
+// for a blocking type and, for an interactable, the next id and its server entry (sync_interactable).
+ObjectRef add_object(ZoneState& state, kast::map::ObjectType type, const std::string& prefab, const Vec3& pos, float yaw,
+                     float scale);
+// Moves an object; into another tile it moves to that tile's file, an interactable's server entry with it.
+ObjectRef move_object(ZoneState& state, ObjectRef ref, const Vec3& pos);
+// Removes an object, and an interactable's server entry.
+void delete_object(ZoneState& state, ObjectRef ref);
+// A blocking type gets default_shape() if it has none; an interactable gets an id and its server entry; one that stops
+// being interactable loses both (its shape stays). Visuals keep a shape they had (unused, as the parsers ignore it).
+void set_object_type(ZoneState& state, ObjectRef ref, kast::map::ObjectType type);
+// Copies an interactable's id, pos, yaw, shape and name into its server entry, creating it with "range": 3 and
+// "event": "<prefab file name>.activated" if missing. The server-only keys (range, event, data, unknown ones) stay.
+void sync_interactable(ZoneState& state, ObjectRef ref);
+// Renumbers an interactable, its server entry with it.
+void set_interactable_id(ZoneState& state, ObjectRef ref, uint32_t id);
+
+// --- scatter brush (visuals only) ---
+
+struct Scatter {
+    std::vector<std::string> prefabs; // one picked at random per object
+    float radius = 8;
+    int count = 10; // objects per dab
+    float scaleMin = 0.8f, scaleMax = 1.2f;
+    bool randomYaw = true;
+};
+
+// xorshift32: the same numbers from a seed on every compiler (std:: distributions are implementation-defined).
+class ScatterRng {
+public:
+    explicit ScatterRng(uint32_t seed) : state_(seed ? seed : 0x9E3779B9u) {}
+    float next(); // [0, 1)
+
+private:
+    uint32_t state_;
+};
+
+// One dab: brush.count visuals at random points of the circle at (x, z), on the ground (points off the declared tiles
+// are skipped), with a random prefab, yaw (or 0) and scale. Returns how many were placed.
+size_t scatter(const kast::map::MapInfo& info, ZoneState& state, const Scatter& brush, ScatterRng& rng, float x, float z);
+// Removes every visual within radius of (x, z) on the ground plane. Returns how many.
+size_t erase_visuals(ZoneState& state, float x, float z, float radius);
 
 // [x, y, z] / [x, z] as the files write them (shortest float text).
 Json vec3_json(const Vec3& v);

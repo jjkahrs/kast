@@ -3,7 +3,8 @@
 namespace zone {
 
 bool same(const ZoneState& a, const ZoneState& b) {
-    return a.manifest == b.manifest && a.areas == b.areas && a.spawns == b.spawns && a.heights == b.heights;
+    return a.manifest == b.manifest && a.areas == b.areas && a.spawns == b.spawns && a.objects == b.objects &&
+           a.interactables == b.interactables && a.heights == b.heights;
 }
 
 std::string tile_name(TileKey t) { return std::to_string(t.x) + "_" + std::to_string(t.z); }

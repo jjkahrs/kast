@@ -29,6 +29,11 @@
 <li><strong>Off the navmesh is corrected at once:</strong> a player cannot fall off a cliff face. A grace period (or an allowance
   while falling) if drops are wanted.</li>
 <li><strong>Navmesh cell height:</strong> fixed at <code>cellSize / 2</code>; a manifest field if maps need finer vertical steps.</li>
+<li><strong>Zone objects block by navmesh only:</strong> the server has no shape collision; an obstacle's whole column under its
+  footprint is cut from the bake, whatever its height. Bridges, overhangs or objects that stop blocking (doors) need the
+  shapes' own y range in the bake and dynamic obstacles (Detour tile cache).</li>
+<li><strong>No interactable state:</strong> the server keeps no cooldown, enabled flag or per-object state, and sends nothing for a
+  rejected <code>Interact</code>; the game's Lua does both if it needs them.</li>
 <li><strong>32-bit poly refs:</strong> about 4096 polygons per tile at 1024 tiles a map; <code>DT_POLYREF64</code> past that.</li>
 <li><strong>One process owns every tile:</strong> <code>Maps::owns</code> is always true for a loaded tile. Several processes need a refused
   transfer to save and send <code>Redirect{host, port, ticket}</code> to the owner.</li>

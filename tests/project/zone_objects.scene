@@ -1,0 +1,74 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Sun",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [256, 60, 256], "rotation": [-0.115425, 0.799192, 0.16269, 0.567011], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.95, 0.9], "intensity": 1 }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Terrain",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "Terrain": { "map": 3, "radius": 1 }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Hero",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [260, 40, 248], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "CharacterController": { "radius": 0.4, "height": 1.8, "maxSlopeDegrees": 45, "stepHeight": 0.3 }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Hero Body",
+      "parent": 3,
+      "components": {
+        "Transform": { "position": [0, 0.9, 0], "rotation": [0, 0, 0, 1], "scale": [0.8, 1.8, 0.8] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/red_plastic_r05.mat" }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Walker",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [242, 40, 244], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "CharacterController": { "radius": 0.4, "height": 1.8, "maxSlopeDegrees": 45, "stepHeight": 0.3 }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Walker Body",
+      "parent": 5,
+      "components": {
+        "Transform": { "position": [0, 0.9, 0], "rotation": [0, 0, 0, 1], "scale": [0.8, 1.8, 0.8] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/gold_r05.mat" }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [255, 32, 230], "rotation": [0, 0.9848, 0.1736, 0], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    }
+  ],
+  "systems": ["scripts/zone_objects.lua"],
+  "lighting": { "ambientColor": [0.6, 0.7, 1], "ambientIntensity": 0.25 },
+  "physics": { "gravity": [0, -9.81, 0] },
+  "editor": {
+    "camera": { "pivot": [256, 22, 248], "yaw": 0, "pitch": -25, "distance": 30 }
+  }
+}

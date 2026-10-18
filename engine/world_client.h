@@ -60,6 +60,8 @@ public:
     // [a-z0-9._]) and the encoded size (<= 1 KB) first, then the state (InWorld); each throws std::logic_error.
     // data must be a JSON object.
     void sendEvent(const std::string& name, const nlohmann::json& data);
+    // Interact{objectId}: activates a zone object (an interactable's id). The server answers only through its Lua.
+    void interact(uint32_t objectId);
     // Move{position, heading (radians, atan2(dx, dz)), clientTimeMs}. Rejected moves come back as world.correction.
     void move(float x, float y, float z, float heading);
 

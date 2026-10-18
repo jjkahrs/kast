@@ -4,6 +4,7 @@
 #pragma once
 #include <heights.h>
 #include <map.h>
+#include <objects.h>
 
 #include <optional>
 #include <string>
@@ -17,10 +18,11 @@ struct TileBake {
 };
 
 // Bakes tile `tile` of the map: its ground triangles plus a border of its neighbours' (tiles on the map only; a tile
-// with no entry in `heights` is flat), so paths cross tile edges. Params: info.nav, or NavParams' defaults if the
-// manifest has none. nullopt with err set if Recast or Detour fail.
+// with no entry in `heights` is flat), so paths cross tile edges. The footprint of every obstacle and interactable in
+// `objects` (the tile's and its neighbours'; visuals are skipped) is cut out, with agentRadius clearance around it.
+// Params: info.nav, or NavParams' defaults if the manifest has none. nullopt with err set if Recast or Detour fail.
 std::optional<TileBake> bake_tile(const map::MapInfo& info, const map::TileHeights& heights, map::TileKey tile,
-                                  std::string& err);
+                                  std::string& err, const std::vector<map::ZoneObject>& objects = {});
 
 // Every declared tile's edge against its +x and +z neighbour's (the shared samples must be equal): one line per
 // mismatching edge ("seam 0_0 | 1_0: 12 samples differ, worst 3.20 m at z 40").

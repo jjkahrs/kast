@@ -75,6 +75,18 @@
   Recast's ledge filter's ~27) and off it on the mesa wall, and the Sentry walking round the mesa on the ground.
   <code>mapbake_cli</code> runs the tool: a torn seam and a spawn outside its tile exit 1 with nothing baked, and (in the repo)
   hills' stored navtiles equal a fresh bake.</li>
+<li><strong>Zone objects</strong> (<code>lua_checks.cpp</code> + <code>self_check.cpp</code> + ctest <code>mapbake_cli</code>): <code>parse_objects</code> on every field and
+  each kind of bad entry (skipped, the rest kept), a repeated id and bad files; <code>parse_interactables</code> on every field, its
+  defaults and each error, data more than 31 deep included; <code>footprint_distance</code> and <code>footprint</code> for boxes (turned by
+  yaw) and cylinders. <code>Maps::load</code>: interactables by map and id, and each refusal (an id twice on a map, a bad file name,
+  a tile not on the map, bad JSON, a bad entry). <code>Interact</code>: in range on the player's map publishes the event with
+  <code>{entity, map, object, data}</code> (data nil when absent); another map's id, an unknown id and out of range publish nothing
+  and log <code>interact rejected</code> at debug. An in-memory bake with a box wall, a cylinder interactable, a visual and a turned
+  box over the tile seam: the blocking ones off the mesh (both tiles for the seam one), the visual walkable, a path round
+  the wall, a move into it corrected. With the sample maps: the hills' obstacle crates off the mesh and its visual crate
+  on it, the Test Shrine loaded, the Sentry walking round the crate on its route; starter-mmo's Meadow Shrine restoring
+  Health and sending its blessing in range, nothing 20 m away. The codec round-trips <code>Interact</code> (version 5).
+  <code>mapbake_cli</code>: an objects file with an unknown type and a blocking object without a shape exits 1 with both errors.</li>
 <li><strong>Integration</strong> (<code>tests/integration.sh</code>): drives <code>kast_bot</code> scenarios against the compose stack. Scenario 10a
   (<code>persist</code>) also checks that a new character enters map 1 and keeps its map across a relog.<ul>
 <li>The bots register, verify through Mailpit and log in with real auth tokens.</li>
@@ -102,6 +114,10 @@
   capitals, a 33-character name, a payload over 1 KB, a JSON array and text that isn't JSON each get <code>Disconnect{malformed}</code>.</li>
 <li>Scenario 22 (<code>client-event-rate</code>): 30 events at once give only the first 10 echoes, and a second later events get
   through again. The script then checks the world's log for <code>"client events dropped"</code> with <code>count</code> 20.</li>
+<li>Scenario 25 (<code>objects</code>) uses the hills' zone object fixtures and the sample <code>systems/test_hooks.lua</code>, which answers
+  <code>test.shrine</code> with a <code>ServerEvent</code> carrying the payload. <code>Interact{1}</code> on map 1, at the hills' portal arrival (11 m from
+  the shrine's edge) and <code>Interact{999}</code> get nothing; walked to 1.9 m from it, <code>Interact{1}</code> gets the answer with
+  <code>{entity, map 3, object 1, msg hello}</code>; walking into the obstacle crate gets a <code>Correction</code> outside it.</li>
 <li><strong><code>tests/integration.sh --starter-mmo</code></strong> runs only scenarios 23 and 24, against the stack started with
   the sample's override (<code>docker compose -f docker-compose.yml -f ../../samples/starter-mmo/docker-compose.override.yml up -d --build</code>),
   using <code>samples/starter-mmo/systems/combat.lua</code>; its bots are Warriors (<code>--char-option class=warrior</code>) and attack

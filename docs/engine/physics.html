@@ -27,7 +27,7 @@ both run it.</p>
 <tbody>
 <tr>
 <td><code>Collider</code></td>
-<td><code>shape</code> <code>box</code> / <code>sphere</code> / <code>capsule</code> [box]; <code>size</code> box full extents [1, 1, 1] (&gt; 0); <code>radius</code> sphere / capsule [0.5] (&gt; 0); <code>height</code> capsule <strong>total</strong> height along local Y, both hemispheres included [2] (&gt;= 2 * radius); <code>center</code> local offset [0, 0, 0]; <code>isTrigger</code> [false]; <code>friction</code> [0.5] (&gt;= 0); <code>restitution</code> [0] (0..1)</td>
+<td><code>shape</code> <code>box</code> / <code>sphere</code> / <code>capsule</code> / <code>cylinder</code> [box]; <code>size</code> box full extents [1, 1, 1] (&gt; 0); <code>radius</code> sphere / capsule / cylinder [0.5] (&gt; 0); <code>height</code> capsule <strong>total</strong> height along local Y, both hemispheres included [2] (&gt;= 2 * radius), or an upright cylinder's height (any &gt; 0, flat or tall); <code>center</code> local offset [0, 0, 0]; <code>isTrigger</code> [false]; <code>friction</code> [0.5] (&gt;= 0); <code>restitution</code> [0] (0..1)</td>
 </tr>
 <tr>
 <td><code>Rigidbody</code></td>
@@ -43,8 +43,8 @@ both run it.</p>
 <li>A <code>Collider</code> without a <code>Rigidbody</code> is a static body. A <code>Rigidbody</code> without a <code>Collider</code> is ignored, with one warning
   naming the entity. <code>CharacterController</code> plus <code>Collider</code> or <code>Rigidbody</code> is an error: logged once naming the entity,
   shown in red in the Inspector, and the entity gets no physics.</li>
-<li>Bodies use the entity's <strong>world</strong> transform at any hierarchy depth. World scale applies: a box per axis, a sphere or
-  capsule by the largest axis; <code>center</code> is scaled too. After each step dynamic and kinematic bodies and characters
+<li>Bodies use the entity's <strong>world</strong> transform at any hierarchy depth. World scale applies: a box per axis, a sphere,
+  capsule or cylinder by the largest axis; <code>center</code> is scaled too. After each step dynamic and kinematic bodies and characters
   write their pose back into the entity's local <code>Transform</code> (relative to its parent; scale untouched).</li>
 <li><strong>Kinematic</strong> bodies follow their <code>Transform</code> (moved over one step, so they push dynamic bodies) and move by a
   velocity set with <code>kast.physics.setVelocity</code>.</li>
@@ -156,7 +156,7 @@ down steps, and falls with the scene gravity (characters are Y-up: only gravity'
 sets walk and vertical speed together (a jump). It also has an inner body, so bodies, queries and triggers see it.</p>
 <p><strong>Editor</strong>: the selected entity's collider (or character capsule) draws as a green wireframe in the Scene view, as
 physics builds it (world position, rotation, scale, center).</p>
-<p><strong>Limits</strong>: box, sphere and capsule colliders only (no mesh or convex hull), one collider per entity, no joints, no
+<p><strong>Limits</strong>: box, sphere, capsule and cylinder colliders only (no mesh or convex hull), one collider per entity, no joints, no
 collision layers (everything collides with everything), no stay events, no interpolation, client-side only (not
 networked). Resting bodies sink up to 2 cm into each other (Jolt's penetration slop). Capacity: 65536 bodies.</p>
 <p>C++: <code>kast::Physics</code> (from <code>LuaSystems::physics()</code>) has the same queries and controls (<code>std::invalid_argument</code> for the

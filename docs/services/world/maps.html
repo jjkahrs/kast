@@ -19,6 +19,8 @@ joined only by transfers. Players and NPCs on different maps never see each othe
 &lt;MAP_ROOT&gt;/&lt;folder&gt;/heights/&lt;tx&gt;_&lt;tz&gt;.r16|.png   optional: tile heightmaps (docs/engine/terrain.html; see Ground)
 &lt;MAP_ROOT&gt;/&lt;folder&gt;/.server/spawns/&lt;tx&gt;_&lt;tz&gt;.json   optional, server only: the NPCs a tile places (see NPC spawns)
 &lt;MAP_ROOT&gt;/&lt;folder&gt;/.server/nav/&lt;tx&gt;_&lt;tz&gt;.navtile   optional, server only: the tile's baked navmesh (see Navmesh)
+&lt;MAP_ROOT&gt;/&lt;folder&gt;/objects/&lt;tx&gt;_&lt;tz&gt;.json   optional, client and kast_mapbake: the tile's zone objects (see Objects)
+&lt;MAP_ROOT&gt;/&lt;folder&gt;/.server/interactables/&lt;tx&gt;_&lt;tz&gt;.json   optional, server only: its interactables (see Objects)
 </code></pre>
 <pre><code class="language-json">{ &quot;version&quot;: 1, &quot;id&quot;: 1, &quot;name&quot;: &quot;Eastlands&quot;,
   &quot;tiles&quot;: [[0, 0, 7, 7]],
@@ -39,8 +41,8 @@ joined only by transfers. Players and NPCs on different maps never see each othe
   <code>material</code>, <code>terrainUv</code> and <code>nav.maxSlopeDeg</code> (<a href="../../engine/terrain.html">Engine, Terrain</a>); the server uses <code>heightRange</code> and the heightmaps for the <a href="#ground">ground</a>. <code>map/heights.h</code> (heightmap decoding and the shared
   ground triangles) is part of <code>kast_map</code>, so the server build needs vcpkg's <code>stb</code>.</li>
 <li><strong>Startup:</strong> every map is loaded and logged (<code>maps loaded</code>). Any bad manifest (with the file and the problem, such as
-  <code>maps/cave/map.json: tiles[0]: x0 &lt;= x1 and z0 &lt;= z1 required</code>), a duplicate id, no maps, a missing <code>START_MAP</code>, or a
-  spawn y outside <code>MIN_Y</code>/<code>MAX_Y</code> refuses the start.</li>
+  <code>maps/cave/map.json: tiles[0]: x0 &lt;= x1 and z0 &lt;= z1 required</code>), a duplicate id, no maps, a missing <code>START_MAP</code>, a
+  spawn y outside <code>MIN_Y</code>/<code>MAX_Y</code>, or a bad <a href="#objects">interactables</a> file refuses the start.</li>
 <li><strong>Bounds:</strong> a move onto a tile the map does not declare is rejected with <code>Correction</code>.</li>
 <li><strong>Characters:</strong> <code>characters.map_id</code> (<code>migrations/003_character_map.sql</code>) is saved with the position. On enter, a map
   that is no longer loaded, or a position no longer on its map, puts the character at <code>START_MAP</code>'s spawn (logged).
@@ -74,6 +76,67 @@ joined only by transfers. Players and NPCs on different maps never see each othe
   (the heights changed since) enters on it.</li>
 <li><strong>Lua:</strong> <code>kast.map.ground(map, x, z)</code> is the height there, or <code>nil</code> off the map.</li>
 </ul>
+<h2 id="objects">Objects</h2>
+<p>Zone objects are what a map places on its tiles besides the ground: grass and flowers, rocks and trees, a shrine a
+player can use. The zone builder authors them (<a href="../../../tools/zone-builder/docs/index.html#objects">Zone Builder, Objects</a>);
+<code>map/objects.h</code> (part of <code>kast_map</code>) parses both files for the game client, the server, <code>kast_mapbake</code> and the zone builder.</p>
+<table>
+<tr><th>Type</th><th>Client</th><th>Server</th></tr>
+<tr><td><code>visual</code></td><td>the prefab, no collision</td><td>nothing: never in a server file</td></tr>
+<tr><td><code>obstacle</code></td><td>the prefab and a static Jolt body from <code>shape</code></td><td>its shape is cut out of the navmesh</td></tr>
+<tr><td><code>interactable</code></td><td>as an obstacle, plus <code>kast.interact(id)</code></td><td>as an obstacle, plus its <code>.server/interactables</code> entry: an <code>Interact</code> in range publishes its event</td></tr>
+</table>
+<p><code>objects/&lt;tx&gt;_&lt;tz&gt;.json</code> (shipped with the game) lists every object of the tile; an object belongs to the tile its
+<code>pos</code> is in:</p>
+<pre><code class="language-json">{ &quot;version&quot;: 1, &quot;objects&quot;: [
+  {&quot;type&quot;: &quot;visual&quot;, &quot;prefab&quot;: &quot;prefabs/grass.prefab&quot;, &quot;pos&quot;: [120.5, 5.2, 131.0], &quot;yaw&quot;: 2.4, &quot;scale&quot;: 0.9},
+  {&quot;type&quot;: &quot;obstacle&quot;, &quot;prefab&quot;: &quot;prefabs/rock.prefab&quot;, &quot;pos&quot;: [141, 6.1, 108], &quot;yaw&quot;: 0.3,
+   &quot;shape&quot;: {&quot;cylinder&quot;: {&quot;radius&quot;: 1.2, &quot;height&quot;: 1.4}}},
+  {&quot;type&quot;: &quot;interactable&quot;, &quot;prefab&quot;: &quot;prefabs/shrine.prefab&quot;, &quot;pos&quot;: [118, 6.4, 140], &quot;yaw&quot;: 0.4, &quot;id&quot;: 1,
+   &quot;name&quot;: &quot;Meadow Shrine&quot;, &quot;shape&quot;: {&quot;box&quot;: {&quot;halfExtents&quot;: [1.2, 1.25, 1.2]}}} ] }
+</code></pre>
+<ul>
+<li><strong>Every object:</strong> <code>type</code>, <code>prefab</code> (a project-relative <code>.prefab</code>), <code>pos</code> [x, y, z] on the tile; optional <code>yaw</code>
+  (radians about +y, like <code>heading</code>: 0 faces +z, default 0) and <code>scale</code> (uniform, &gt; 0, default 1; it scales the prefab
+  only).</li>
+<li><strong>Shapes</strong> (obstacles and interactables must have one; a visual's is not read): <code>{"box": {"halfExtents": [x, y, z]}}</code>,
+  turned by <code>yaw</code>, or an upright <code>{"cylinder": {"radius": r, "height": h}}</code>, every number &gt; 0, in metres. A shape stands on
+  <code>pos</code> (its base at <code>pos.y</code>) and is not scaled with the prefab, so the collision and the navmesh cut are exactly what the file
+  says, whatever the prefab looks like.</li>
+<li><strong>Interactables</strong> also carry <code>id</code> (1-4294967295, unique on the map): what the client sends in <code>Interact</code>. <code>name</code> is
+  optional, for the game's prompts (<code>kast.nearestInteractable</code>).</li>
+<li><code>.server/interactables/&lt;tx&gt;_&lt;tz&gt;.json</code> (server only, never packaged: the build skips dot-folders) has one entry per
+  interactable of the tile, with what only the server needs:</li>
+</ul>
+<pre><code class="language-json">{ &quot;version&quot;: 1, &quot;interactables&quot;: [
+  {&quot;id&quot;: 1, &quot;pos&quot;: [118, 6.4, 140], &quot;yaw&quot;: 0.4, &quot;shape&quot;: {&quot;box&quot;: {&quot;halfExtents&quot;: [1.2, 1.25, 1.2]}},
+   &quot;range&quot;: 3, &quot;event&quot;: &quot;shrine.activated&quot;, &quot;name&quot;: &quot;Meadow Shrine&quot;,
+   &quot;data&quot;: {&quot;message&quot;: &quot;The shrine hums softly. You feel refreshed.&quot;}} ] }
+</code></pre>
+<ul>
+<li><code>id</code>, <code>pos</code> (on the tile), <code>shape</code> and <code>event</code> (a non-empty event name, at most 255 bytes) are required; <code>yaw</code>,
+  <code>range</code> (metres, &gt; 0, default 3), <code>data</code> (a JSON object, at most 31 deep so the event payload stays within the bus's 32) and
+  <code>name</code> are optional. The zone builder writes <code>pos</code>, <code>yaw</code>, <code>shape</code> and <code>name</code> from the object and keeps the rest.</li>
+<li><strong>Range</strong> is the horizontal distance from the player's position to the shape's edge (0 inside it):
+  <code>map::footprint_distance</code>, the same on the client's <code>kast.nearestInteractable</code>.</li>
+<li><strong>Unknown keys</strong> are ignored in both files, so tools may keep their own.</li>
+<li><strong>Startup:</strong> the server loads the interactables files of its owned tiles (<code>Maps::owns</code>). A bad file name, a file for a
+  tile not on the map, bad JSON, a bad entry, an id used twice on the map or bad <code>data</code> refuses the start with the file and
+  the problem (<code>maps/hills/.server/interactables/0_1.json: interactable 1: "range" must be a number &gt; 0 (metres)</code>).</li>
+<li><strong>Interact:</strong> a player's <code>Interact{objectId}</code> (<a href="protocol.html#interact">protocol</a>) is checked on the next tick: the
+  id must be an interactable of the player's current map, and the player within its <code>range</code>. Then its <code>event</code> is published
+  on the server bus as <code>{entity, map, object, data}</code> (<code>data</code> absent if the file has none; <a href="events.html#interactables">Events</a>).
+  An unknown id, another map's object or a player out of range publishes nothing and logs <code>interact rejected</code> at
+  debug level (<code>reason</code> <code>not on this map</code> or <code>out of range</code>). There is no reply message: the game's Lua answers if it
+  wants to. <code>Interact</code> counts toward the session's message rate limit like every message.</li>
+<li><strong>Blocking</strong> is the navmesh only: the server has no physics, so obstacles stop players and NPCs through the
+  <a href="#navmesh">Navmesh</a> cut (a move into one is <code>off_mesh</code>), and NPC paths go round them. The check's 0.5 m tolerance
+  (made for the <code>agentRadius</code> shrink at cliffs) applies here too, so a player may graze up to about half a metre into
+  a footprint's rim without a <code>Correction</code>; anything deeper is corrected (a 1.2 m rock in the Meadow accepts its
+  player down to about 1 m from its centre). Clients block at the shape itself. Visuals never reach the server.</li>
+<li><strong>Bad client entries:</strong> the game client logs each bad entry or missing prefab with the file and skips it, keeping the
+  rest (<a href="../../engine/terrain.html#objects">Engine, Terrain</a>). <code>kast_mapbake</code> refuses any bad entry.</li>
+</ul>
 <h2 id="navmesh">Navmesh</h2>
 <p>The ground says how high a player is, not whether they could have walked there. A map can carry a baked navmesh
 (Recast/Detour) of where its agents can walk; the server checks player moves against it and NPCs path on it.</p>
@@ -81,6 +144,12 @@ joined only by transfers. Players and NPCs on different maps never see each othe
 <li>
 <p><strong>Baking:</strong> <code>kast_mapbake</code> lints a map and bakes its navtiles: see the <a href="../../../services/world/tools/mapbake/docs/index.html">Map Bake docs</a>.</p>
 </li>
+<li><strong>Obstacles:</strong> the bake reads <code>objects/</code> and cuts every obstacle's and interactable's shape out of the walkable
+  area (Recast area marking: <code>rcMarkConvexPolyArea</code> for a box's turned footprint, <code>rcMarkCylinderArea</code> for a cylinder),
+  before the <code>agentRadius</code> erosion, so the mesh keeps that clearance round each one as it does round a cliff. A tile's
+  bake includes its neighbours' objects that reach over its border. The whole column under a footprint is cut, whatever
+  the shape's height. Visuals are ignored. A player can then not stand inside one (<code>off_mesh</code>, <code>Correction</code>), and
+  <code>kast.map.path</code> goes round them. After adding, moving or removing a blocking object, re-bake.</li>
 <li>
 <p><strong>Navtile format:</strong> a 12-byte little-endian header, <code>{'KNAV', u32 version (1), u32 Detour DT_NAVMESH_VERSION (7)}</code>,
   then the Detour tile from <code>dtCreateNavMeshData</code> for tile (tx, tz) (<code>map/navtile.h</code>).</p>
@@ -102,11 +171,14 @@ joined only by transfers. Players and NPCs on different maps never see each othe
   round the mesa its route crosses.</li>
 <li><strong>Limits:</strong> Detour's poly refs are 32-bit here: tile bits + polygon bits &lt;= 22, so a map of 1024 tiles allows 4096
   polygons per tile (more tiles, fewer polygons). A navtile over the limit refuses the start; <code>DT_POLYREF64</code> (Detour
-  rebuilt) lifts it. No dynamic obstacles, off-mesh links (jumps, ladders) or static props in the bake, and the client
-  does no pathing.</li>
+  rebuilt) lifts it. No dynamic obstacles (an object that stops blocking, such as an opened door) or off-mesh links
+  (jumps, ladders) in the bake, and the client does no pathing.</li>
 <li><strong>Sample:</strong> <code>tests/project/maps/hills</code> has a mesa (x 170-200, z 316-346, 25 m flat top, 81 degree walls) and the
-  Sentry (<code>.server/spawns/0_1.json</code>) patrolling from (150, 331) to (215, 331), straight through it. Its baked navtiles
-  are in <code>.server/nav/</code>; ctest <code>mapbake_cli</code> fails if they no longer match a fresh bake.</li>
+  Sentry (<code>.server/spawns/0_1.json</code>) patrolling from (150, 331) to (215, 331), straight through it and through a 3 m obstacle
+  crate at (160, 331) (<code>objects/0_1.json</code>). Its other fixtures: a visual crate at (248, 244), an obstacle crate at (266, 248)
+  and interactable 1 "Test Shrine" at (250, 266) (event <code>test.shrine</code>). Its baked navtiles are in <code>.server/nav/</code>; ctest
+  <code>mapbake_cli</code> fails if they no longer match a fresh bake. <code>samples/starter-mmo/maps/meadow</code> has grass, flowers, rocks,
+  trees and the Meadow Shrine, and its navtile.</li>
 </ul>
 </main>
 </div>

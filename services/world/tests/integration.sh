@@ -212,4 +212,7 @@ if ! docker logs --since "$since" "$WORLD" 2>&1 | grep '"client events dropped"'
     echo "==> FAIL $name (dropped count not logged)"
 fi
 
+# 25: zone objects on the sample hills (docs/services/world/maps.html#objects) with the sample lua/systems/test_hooks.lua
+scenario "25 zone objects: Interact on another map / out of range / unknown id -> nothing, in range -> test.shrine event; into the obstacle crate -> Correction" --scenario objects
+
 summary

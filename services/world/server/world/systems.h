@@ -65,6 +65,10 @@ void chat_system(entt::registry& reg, const ChatRules& rules, const Send& send, 
 // Publishes each character's ClientEvents (kast.world.send) on the Lua bus as "client.<name>" {entity, data}, in
 // arrival order; past the character's ClientEventLimit they are dropped and counted.
 void client_event_in_system(entt::registry& reg, EventBus& bus, TimePoint now);
+// Each player's Interacts (docs/services/world/events.html#interactables): one on the player's map (Maps::interactable)
+// with the player within its range of the shape's edge (map::footprint_distance, horizontal) publishes the object's
+// event {entity, map, object, data (absent if the file has none)}. Anything else is dropped with a debug log.
+void interact_system(entt::registry& reg, const Maps& maps, EventBus& bus);
 // Sends replicated Lua components (docs/services/world/lua.html): what changed since the last send to the
 // owner (owner, aoi) and observers (aoi), and every aoi component of an entity to a viewer it came into view of.
 void component_replication_system(entt::registry& reg, const lua::Defs& defs, const Send& send);

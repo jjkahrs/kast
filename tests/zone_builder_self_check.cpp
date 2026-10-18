@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <thread>
 
@@ -102,9 +103,13 @@ void check_round_trip(const fs::path& project, const std::string& name, const st
     if (!areas.is_null()) CHECK(json_file(dir / "areas.json") == areas);
     for (const auto& [tile, json] : doc->state.spawns)
         CHECK(json_file(dir / ".server" / "spawns" / (tile_name(tile) + ".json")) == json);
+    for (const auto& [tile, json] : doc->state.objects) CHECK(json_file(dir / "objects" / (tile_name(tile) + ".json")) == json);
+    for (const auto& [tile, json] : doc->state.interactables)
+        CHECK(json_file(dir / ".server" / "interactables" / (tile_name(tile) + ".json")) == json);
     auto again = load_map(p, folder, err);
     CHECK(again && again->state.manifest == doc->state.manifest && again->state.areas == doc->state.areas &&
-          again->state.spawns == doc->state.spawns);
+          again->state.spawns == doc->state.spawns && again->state.objects == doc->state.objects &&
+          again->state.interactables == doc->state.interactables);
     for (const auto& [file, data] : heightBytes) {
         const fs::path r16 = dir / "heights" / (fs::path(file).stem().string() + ".r16");
         if (file.ends_with(".r16")) CHECK(bytes(r16) == data);
@@ -542,6 +547,142 @@ void check_spawns() {
     CHECK(!spawn_json(doc.state, *find_spawn(doc.state, "s1")).contains("path") && validate(p, doc).empty());
 }
 
+// Zone objects: every type placed, edited, moved across a tile border and deleted, each interactable's server entry in
+// step; unknown keys survive a save and load; validate() blocks a save on a bad shape, a missing server entry or a
+// duplicate id; an emptied tile's files are deleted.
+void check_objects() {
+    const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "objects");
+    Project p = scan_project(root);
+    ZoneDoc doc = flat_map(p);
+    using km::ObjectType;
+    ObjectRef rock, shrine;
+    doc.edit([&](ZoneState& s) {
+        add_object(s, ObjectType::Visual, "prefabs/grass.prefab", {10, 0, 10}, 0.5f, 0.8f);
+        rock = add_object(s, ObjectType::Obstacle, "prefabs/rock.prefab", {20, 0, 20}, 0, 1);
+        shrine = add_object(s, ObjectType::Interactable, "prefabs/shrine.prefab", {30, 0, 30}, 1, 1);
+    });
+    CHECK(all_objects(doc.state).size() == 3 && doc.state.objects.size() == 1);
+    CHECK(object_json(doc.state, rock)["shape"] == default_shape() && !object_json(doc.state, rock).contains("id"));
+    const Json* entry = interactable_json(doc.state, {0, 0}, 1);
+    CHECK(object_json(doc.state, shrine)["id"] == 1 && entry && (*entry)["event"] == "shrine.activated" && (*entry)["range"] == 3 &&
+          (*entry)["pos"] == object_json(doc.state, shrine)["pos"] && (*entry)["shape"] == default_shape());
+    CHECK(next_interactable_id(doc.state) == 2 && validate(p, doc).empty());
+    const auto parsed = km::parse_objects(nlohmann::json(doc.state.objects.at({0, 0})), {0, 0});
+    CHECK(parsed.errors.empty() && parsed.objects.size() == 3);
+
+    // Server-only fields and unknown keys stay through edits, a move across the border and a save + load.
+    doc.edit([&](ZoneState& s) {
+        Json& e = *interactable_json(s, {0, 0}, 1);
+        e["event"] = "altar.used";
+        e["data"] = {{"gold", 5}};
+        e["note"] = "kept";
+        object_json(s, shrine)["name"] = "Altar";
+        object_json(s, shrine)["tint"] = "blue";
+        sync_interactable(s, shrine);
+        shrine = move_object(s, shrine, {300, 0, 40});
+    });
+    CHECK(shrine.tile == (TileKey{1, 0}) && !interactable_json(doc.state, {0, 0}, 1) && !doc.state.interactables.contains({0, 0}));
+    entry = interactable_json(doc.state, {1, 0}, 1);
+    CHECK(entry && (*entry)["event"] == "altar.used" && (*entry)["data"]["gold"] == 5 && (*entry)["note"] == "kept" &&
+          (*entry)["name"] == "Altar" && (*entry)["pos"] == vec3_json({300, 0, 40}));
+    CHECK(object_json(doc.state, shrine)["tint"] == "blue" && validate(p, doc).empty());
+    print_errors(save_map(p, doc, false));
+    const fs::path dir = root / "maps" / "sculpt";
+    CHECK(fs::exists(dir / "objects" / "0_0.json") && fs::exists(dir / "objects" / "1_0.json") &&
+          fs::exists(dir / ".server" / "interactables" / "1_0.json") && !fs::exists(dir / ".server" / "interactables" / "0_0.json"));
+    std::string err;
+    auto again = load_map(p, "sculpt", err);
+    CHECK(again && again->state.objects == doc.state.objects && again->state.interactables == doc.state.interactables);
+
+    // Type changes: an obstacle made interactable gets id 2 and a server entry; back to obstacle loses both.
+    doc.edit([&](ZoneState& s) { set_object_type(s, rock, ObjectType::Interactable); });
+    CHECK(object_json(doc.state, rock)["id"] == 2 && interactable_json(doc.state, {0, 0}, 2));
+    doc.edit([&](ZoneState& s) { set_interactable_id(s, rock, 7); });
+    CHECK(object_json(doc.state, rock)["id"] == 7 && interactable_json(doc.state, {0, 0}, 7) && !interactable_json(doc.state, {0, 0}, 2));
+    doc.edit([&](ZoneState& s) { set_object_type(s, rock, ObjectType::Obstacle); });
+    CHECK(!object_json(doc.state, rock).contains("id") && !doc.state.interactables.contains({0, 0}) &&
+          object_json(doc.state, rock).contains("shape"));
+
+    // Blocked saves, nothing written.
+    const auto before = mtimes(root / "maps");
+    doc.edit([&](ZoneState& s) { object_json(s, rock)["shape"] = {{"cylinder", {{"radius", -1}, {"height", 1}}}}; });
+    CHECK(has_error(save_map(p, doc, false), "maps/sculpt/objects/0_0.json", "objects[1]: \"shape.cylinder\" must be"));
+    doc.undo();
+    doc.edit([&](ZoneState& s) { s.interactables.erase({1, 0}); });
+    CHECK(has_error(save_map(p, doc, false), "maps/sculpt/objects/1_0.json", "interactable 1 has no entry in .server/interactables/1_0.json"));
+    doc.undo();
+    doc.edit([&](ZoneState& s) {
+        const ObjectRef twin = add_object(s, ObjectType::Interactable, "prefabs/shrine.prefab", {280, 0, 60}, 0, 1);
+        set_interactable_id(s, twin, 1);
+    });
+    CHECK(has_error(save_map(p, doc, false), "maps/sculpt/objects/1_0.json", "duplicate id"));
+    CHECK(mtimes(root / "maps") == before);
+    doc.undo();
+
+    // Deleting the last object of a tile deletes its files on save.
+    doc.edit([&](ZoneState& s) { delete_object(s, shrine); });
+    CHECK(!doc.state.objects.contains({1, 0}) && !doc.state.interactables.contains({1, 0}));
+    print_errors(save_map(p, doc, false));
+    CHECK(!fs::exists(dir / "objects" / "1_0.json") && !fs::exists(dir / ".server" / "interactables" / "1_0.json") &&
+          fs::exists(dir / "objects" / "0_0.json"));
+}
+
+// The scatter brush: the same seed and dabs give the same objects, another seed others; only visuals, on the ground,
+// within the radius and the scale range; a stroke is one undo step; erase removes visuals only.
+void check_scatter() {
+    const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "scatter");
+    Project p = scan_project(root);
+    ZoneDoc doc = flat_map(p);
+    const km::MapInfo info = info_of(doc);
+    doc.edit([&](ZoneState& s) { apply_brush(info, s, 200, 200, Brush{.radius = 60}, 8); }); // a hill: y varies
+    Scatter brush;
+    brush.prefabs = {"prefabs/grass.prefab", "prefabs/flower.prefab"};
+    brush.radius = 10;
+    brush.count = 40;
+    brush.scaleMin = 0.5f;
+    brush.scaleMax = 1.5f;
+    const auto stroke = [&](uint32_t seed) {
+        ZoneState s = doc.state;
+        ScatterRng rng(seed);
+        for (const Point at : {Point{200, 200}, Point{215, 200}, Point{250, 210}}) scatter(info, s, brush, rng, at[0], at[1]);
+        return s;
+    };
+    const ZoneState a = stroke(7), b = stroke(7), c = stroke(8);
+    CHECK(a.objects == b.objects && !a.objects.empty() && a.objects != c.objects);
+    CHECK(all_objects(a).size() == 120); // every point lands on the 2 x 2 map
+    std::set<std::string> prefabs;
+    for (const ObjectRef& ref : all_objects(a)) {
+        const Json& o = object_json(a, ref);
+        const float x = o["pos"][0], y = o["pos"][1], z = o["pos"][2], scale = o["scale"];
+        prefabs.insert(o["prefab"]);
+        CHECK(object_type(o) == km::ObjectType::Visual && scale >= 0.5f && scale <= 1.5f);
+        CHECK(std::fabs(y - *ground_y(info, a, x, z)) < 1e-3f);
+        CHECK(std::hypot(x - 200, z - 200) <= 10.01f || std::hypot(x - 215, z - 200) <= 10.01f || std::hypot(x - 250, z - 210) <= 10.01f);
+    }
+    CHECK(prefabs.size() == 2);
+    // In the document: one undo step per stroke, as the tool does it (begin on mouse down, commit on mouse up).
+    doc.begin();
+    ScatterRng rng(7);
+    for (const Point at : {Point{200, 200}, Point{215, 200}, Point{250, 210}}) scatter(info, doc.state, brush, rng, at[0], at[1]);
+    doc.commit();
+    CHECK(doc.state.objects == a.objects);
+    doc.undo();
+    CHECK(doc.state.objects.empty());
+    doc.redo();
+    // Erase: visuals within 12 m of (200, 200) go, an obstacle there stays.
+    doc.edit([](ZoneState& s) { add_object(s, km::ObjectType::Obstacle, "prefabs/rock.prefab", {201, 0, 201}, 0, 1); });
+    const size_t total = all_objects(doc.state).size();
+    size_t erased = 0;
+    doc.edit([&](ZoneState& s) { erased = erase_visuals(s, 200, 200, 12); });
+    CHECK(erased > 0 && all_objects(doc.state).size() == total - erased);
+    for (const ObjectRef& ref : all_objects(doc.state)) {
+        const Json& o = object_json(doc.state, ref);
+        const float x = o["pos"][0], z = o["pos"][2];
+        CHECK(object_type(o) != km::ObjectType::Visual || std::hypot(x - 200, z - 200) > 12);
+    }
+    CHECK(validate(p, doc).empty());
+}
+
 void check_tiles() {
     // Rects: a full square stays one rect; an L becomes a run per shape change.
     CHECK(tile_rects({{0, 0}, {1, 0}, {0, 1}, {1, 1}}) == Json::parse("[[0, 0, 1, 1]]"));
@@ -860,6 +1001,8 @@ int main(int argc, char** argv) {
     check_png();
     check_areas();
     check_spawns();
+    check_objects();
+    check_scatter();
     check_undo_each();
     check_tiles();
     check_process_runner();

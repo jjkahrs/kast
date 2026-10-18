@@ -96,7 +96,7 @@ target_compile_options(kast_protocol PRIVATE ${KAST_COMPILE_OPTIONS})
 
 # --- map: the world server's map manifests, tile math and heightmaps (services/world/map), compiled from its sources
 # unchanged; std + nlohmann_json + stb only ---
-add_library(kast_map STATIC services/world/map/map.cpp services/world/map/heights.cpp)
+add_library(kast_map STATIC services/world/map/map.cpp services/world/map/heights.cpp services/world/map/objects.cpp)
 target_include_directories(kast_map PUBLIC services/world/map)
 target_include_directories(kast_map SYSTEM PRIVATE "${Stb_INCLUDE_DIR}")
 target_compile_options(kast_map PRIVATE ${KAST_COMPILE_OPTIONS})
@@ -629,6 +629,13 @@ set_tests_properties(terrain_switch_play_differs PROPERTIES
                      FIXTURES_REQUIRED "terrain_switch_before_play_shot;terrain_switch_after_play_shot")
 set_tests_properties(terrain_sun_cast_off_play_differs PROPERTIES
                      FIXTURES_REQUIRED "terrain_play_shot;terrain_sun_cast_off_play_shot")
+# Zone objects: tests/project/zone_objects.scene on the hills' fixtures (maps/hills/objects; docs/engine/terrain.html#objects).
+# In Play the Hero walks into the obstacle crate and stops at its side, the Walker through the visual crate.
+add_test(NAME zone_objects_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_objects_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/zone_objects.scene --play" -DFOCUS_PANEL=Game -DFRAMES=420
+          "-DEXPECT_OUTPUT=zone objects: hero x 26[34]\\.[0-9]+, walker x (249\\.[5-9]|25[0-9]\\.)"
+          "-DFORBID_OUTPUT=\\[error\\]|Lua error" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/terrain_roundtrip")
 add_test(NAME terrain_roundtrip
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_SHADOW_PROJECT}/terrain.scene"
@@ -1056,7 +1063,7 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "point_shadows|Point Shadows Test|point_shadows.scene|FALSE"
                "physics|Physics Test|physics.scene|FALSE"
                "terrain|Terrain Test|terrain.scene|FALSE" "terrain_off|Terrain Test|terrain_off.scene|FALSE"
-               "prefabs|Prefabs Test|prefabs.scene|FALSE")
+               "prefabs|Prefabs Test|prefabs.scene|FALSE" "zone_objects|Zone Objects Test|zone_objects.scene|FALSE")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
@@ -1098,6 +1105,15 @@ add_test(NAME player_prefabs_instantiate
           "-DEXPECT_OUTPUT=prefab_spawn: instantiated true.*prefab_spawn: missing gives nil"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
 set_tests_properties(player_prefabs_instantiate PROPERTIES FIXTURES_REQUIRED game_prefabs_built TIMEOUT 90)
+# The built zone objects game streams the hills' objects and their prefabs from game.pak in the player: the Hero stops
+# at the obstacle crate, the Walker walks through the visual one (as zone_objects_play_screenshot in the editor).
+add_test(NAME player_zone_objects_play
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/zone_objects" "-DEXE=Zone Objects Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/zone_objects_play.run" -DEXPECT=0 "-DEXTRA_ARGS=--frames 420"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_zone_objects_play.png"
+          "-DEXPECT_OUTPUT=zone objects: hero x 26[34]\\.[0-9]+, walker x (249\\.[5-9]|25[0-9]\\.).*nearest 1 Test Shrine"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_zone_objects_play PROPERTIES FIXTURES_REQUIRED game_zone_objects_built TIMEOUT 90)
 # The built physics game logs the same events from game.pak in the player.
 add_test(NAME player_physics_events
   COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/physics" "-DEXE=Physics Test.exe"

@@ -19,6 +19,7 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
@@ -166,6 +167,11 @@ JPH::Ref<JPH::Shape> colliderShape(const Collider& c, const bx::Vec3& worldScale
     case ColliderShape::Capsule:
         shape = capsule(c.radius * maxAxis(scale), c.height * maxAxis(scale));
         break;
+    case ColliderShape::Cylinder: {
+        const float radius = c.radius * maxAxis(scale), half = c.height * maxAxis(scale) * 0.5f;
+        shape = new JPH::CylinderShape(half, radius, std::min({JPH::cDefaultConvexRadius, half, radius}));
+        break;
+    }
     }
     const bx::Vec3 offset = bx::mul(c.center, worldScale);
     if (same(offset, {0.0f, 0.0f, 0.0f}))
@@ -980,6 +986,16 @@ std::vector<std::pair<bx::Vec3, bx::Vec3>> colliderWireframe(const Scene& scene,
         case ColliderShape::Capsule:
             capsuleLines(lines, center, collider->radius * s, collider->height * s);
             break;
+        case ColliderShape::Cylinder: {
+            const float r = collider->radius * s;
+            const bx::Vec3 up{0.0f, collider->height * s * 0.5f, 0.0f};
+            const bx::Vec3 top = bx::add(center, up), bottom = bx::sub(center, up);
+            arc(lines, top, kX, kZ, r, 0.0f, 2.0f * kPi);
+            arc(lines, bottom, kX, kZ, r, 0.0f, 2.0f * kPi);
+            for (const bx::Vec3& side : {kX, kZ, bx::neg(kX), bx::neg(kZ)})
+                lines.emplace_back(bx::add(top, bx::mul(side, r)), bx::add(bottom, bx::mul(side, r)));
+            break;
+        }
         }
     }
     float pose[16];

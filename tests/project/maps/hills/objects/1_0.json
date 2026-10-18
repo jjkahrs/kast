@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "objects": [
+    {
+      "type": "obstacle",
+      "prefab": "prefabs/Crate.prefab",
+      "pos": [
+        266.0,
+        27.998474,
+        248.0
+      ],
+      "yaw": 0.0,
+      "scale": 2.0,
+      "shape": {
+        "box": {
+          "halfExtents": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    }
+  ]
+}

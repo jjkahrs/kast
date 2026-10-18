@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "objects": [
+    {
+      "type": "visual",
+      "prefab": "prefabs/Crate.prefab",
+      "pos": [
+        248.0,
+        20.869461,
+        244.0
+      ],
+      "yaw": 0.5,
+      "scale": 0.4
+    }
+  ]
+}

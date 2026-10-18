@@ -3,6 +3,8 @@
 -- the camera around the character; right drag turns the camera and the character with it; the wheel zooms. Running
 -- forward swings the camera back behind. The cursor hides while dragging and comes back where the drag began.
 -- A press that starts on the GUI (chat box, HUD) turns nothing, and keys typed into a GUI text field don't move.
+-- Zone obstacles (the meadow's rocks, trees and shrine: static colliders, maps/meadow/objects) stop the character; it
+-- slides along them when it can. The world server cuts the same shapes from its navmesh.
 -- Replication sends the moves to the server.
 -- Combat (systems/combat.lua on the server): the character plays ATTACK_CLIP when the server confirms one of its
 -- powers and HIT_CLIP when it is hit, while standing still; dead, it plays DEATH_CLIP and does not move or jump (the
@@ -19,6 +21,7 @@ local MOUSE_SENSITIVITY = math.rad(0.25) -- per pixel dragged
 local FOLLOW_RATE = 4 -- 1/s: how fast the camera swings back behind while running forward
 local PIVOT_HEIGHT = 1.5 -- m above the feet: head and shoulders
 local CAMERA_CLEARANCE = 0.3 -- m kept above the terrain
+local BODY_RADIUS = 0.45 -- m: how close the character's middle gets to an obstacle
 local FADE = 0.2 -- s, animation crossfade
 local JUMP_ANIM_SPEED = 2.5 -- Jump_Start and Jump_Land are longer than a jump
 local ATTACK_CLIP, HIT_CLIP, DEATH_CLIP = "Punch_Jab", "Hit_Chest", "Death_A" -- no weapon model: a punch
@@ -36,6 +39,14 @@ local dead = false
 local function groundY(x, z, fallback)
     local hit = kast.physics.raycast({x = x, y = 200, z = z}, {x = 0, y = -1, z = 0}, 400)
     return hit and hit.point.y or fallback
+end
+
+-- Whether the character, standing at (x, feet, z), would touch an obstacle: terrain is the scene's only other collider.
+local function blocked(x, z, feet)
+    for _, e in ipairs(kast.physics.overlapSphere({x = x, y = feet + 1, z = z}, BODY_RADIUS)) do
+        if not kast.has(e, "TerrainTile") then return true end
+    end
+    return false
 end
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
@@ -177,6 +188,9 @@ return {
         if len > 0 then
             local speed = forward < 0 and BACK_SPEED or RUN_SPEED
             x, z = x + dx / len * speed * dt, z + dz / len * speed * dt
+            if blocked(x, z, p.y) then -- slide along the obstacle on one axis, else stop
+                if not blocked(x, p.z, p.y) then z = p.z elseif not blocked(p.x, z, p.y) then x = p.x else x, z = p.x, p.z end
+            end
         end
         local ground = groundY(x, z, p.y)
         local y, jumped, landed = ground, false, false

@@ -159,7 +159,8 @@ void GameServer::handle_lobby(Client& c, proto::Message&& m) {
     const bool charRequest = op == proto::Opcode::CharListReq || op == proto::Opcode::CharCreate ||
                              op == proto::Opcode::CharDelete || op == proto::Opcode::EnterWorld;
     if (!charRequest) {
-        if (op == proto::Opcode::Move || op == proto::Opcode::Say || op == proto::Opcode::ClientEvent)
+        if (op == proto::Opcode::Move || op == proto::Opcode::Say || op == proto::Opcode::ClientEvent ||
+            op == proto::Opcode::Interact)
             return; // stale in-world traffic; harmless
         c.session->disconnect(proto::Code::unexpected_message);
         return;
@@ -245,6 +246,7 @@ void GameServer::handle_lobby(Client& c, proto::Message&& m) {
 void GameServer::handle_world(Client& c, proto::Message&& m) {
     if (auto* mv = std::get_if<proto::Move>(&m)) { world_.push_move(c.entity, *mv); return; }
     if (auto* say = std::get_if<proto::Say>(&m)) { world_.push_say(c.entity, std::move(say->text)); return; }
+    if (auto* in = std::get_if<proto::Interact>(&m)) { world_.push_interact(c.entity, in->objectId); return; }
     if (auto* ev = std::get_if<proto::ClientEvent>(&m)) {
         auto data = client_event_data(*ev);
         if (!data) {

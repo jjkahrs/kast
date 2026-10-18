@@ -165,6 +165,24 @@ void client_event_in_system(entt::registry& reg, EventBus& bus, TimePoint now) {
     }
 }
 
+void interact_system(entt::registry& reg, const Maps& maps, EventBus& bus) {
+    for (auto [e, pending, ch, tf, mr] : reg.view<PendingInteracts, CharacterRef, Transform, MapRef>().each()) {
+        for (const uint32_t id : pending.objectIds) {
+            const map::Interactable* it = maps.interactable(mr.map, id);
+            const float distance = it ? map::footprint_distance(it->shape, it->pos, it->yaw, tf.pos.x, tf.pos.z) : 0;
+            if (!it || distance > it->range) {
+                log::debug("interact rejected", {{"char", ch.charId}, {"map", mr.map}, {"object", id},
+                                                 {"reason", it ? "out of range" : "not on this map"}});
+                continue;
+            }
+            nlohmann::json payload{{"entity", wire_id(e)}, {"map", mr.map}, {"object", id}};
+            if (!it->data.is_null()) payload["data"] = it->data;
+            bus.publish(it->event, std::move(payload));
+        }
+        pending.objectIds.clear();
+    }
+}
+
 // Runs after the Lua systems, so a change made this tick is sent this tick. Spawn always goes first: aoi_system sent
 // it earlier in the tick, and a viewer that just got it receives the full set instead of this tick's changes.
 // ponytail: diffs each replicated component's full JSON every tick; dirty flags from kast.set if entity counts grow.

@@ -14,6 +14,8 @@ endfunction()
 
 expect_lint_error(bad_seam "seam 0_0 \\| 1_0: 257 samples differ, worst 1\\.53 m")
 expect_lint_error(bad_spawn "spawn \"stray\": \"pos\" is outside tile 0_0")
+# An unknown type and a blocking object without a shape: both reported, nothing baked.
+expect_lint_error(bad_objects "objects\\[1\\]: \"type\" must be \"visual\", \"obstacle\" or \"interactable\".*objects\\[2\\]: a blocking object needs \"shape\"")
 
 if(HILLS)
   execute_process(COMMAND "${BAKE}" "${HILLS}" --out "${OUT}/hills" RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out)

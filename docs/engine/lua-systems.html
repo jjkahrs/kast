@@ -103,6 +103,19 @@ a wrong argument type raises a Lua error at the calling line.</p>
   functions. Each prefab file is read once per Play session. Works in editor Play and in built players
   (<code>.prefab</code> files ship in <code>game.pak</code>).</td>
 </tr>
+<tr id="nearest-interactable">
+<td><code>kast.nearestInteractable(position, maxDistance)</code></td>
+<td>table or nil</td>
+<td>The interactable <a href="terrain.html#objects">zone object</a> of the streamed terrain tiles nearest to <code>position</code>
+  (<code>{x =, y =, z =}</code>), by the horizontal distance to its shape's edge, if within <code>maxDistance</code> m:
+  <code>{id =, name =, pos = {x, y, z}, distance =}</code>.</td>
+</tr>
+<tr id="interact">
+<td><code>kast.interact(id)</code></td>
+<td>boolean</td>
+<td>Activates interactable <code>id</code> (1 to 4294967295): sends <code>Interact</code> to the world server and returns <code>true</code> while in the
+  world, else <code>false</code>. The server's Lua answers if it wants to (<a href="terrain.html#objects">Terrain, Zone objects</a>).</td>
+</tr>
 <tr id="items">
 <td><code>kast.items</code></td>
 <td>table</td>

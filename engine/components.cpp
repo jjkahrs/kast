@@ -86,7 +86,7 @@ const char* validateCollider(const entt::meta_any& component)
         return "\"size\" must be > 0 on every axis";
     if (!(c.radius > 0.0f && c.height > 0.0f))
         return "\"radius\" and \"height\" must be > 0";
-    if (!(c.height >= 2.0f * c.radius))
+    if (c.shape != ColliderShape::Cylinder && !(c.height >= 2.0f * c.radius))
         return "\"height\" must be >= 2 * \"radius\" (it includes both hemispheres)";
     if (!(c.friction >= 0.0f))
         return "\"friction\" must be >= 0";
@@ -220,7 +220,8 @@ void registerBuiltins()
         .type("ColliderShape")
         .data<ColliderShape::Box>("box").custom<FieldInfo>("Box")
         .data<ColliderShape::Sphere>("sphere").custom<FieldInfo>("Sphere")
-        .data<ColliderShape::Capsule>("capsule").custom<FieldInfo>("Capsule");
+        .data<ColliderShape::Capsule>("capsule").custom<FieldInfo>("Capsule")
+        .data<ColliderShape::Cylinder>("cylinder").custom<FieldInfo>("Cylinder");
     registerComponent<Collider>("Collider", {"Collider", true, validateCollider})
         .data<&Collider::shape>("shape").custom<FieldInfo>("Shape")
         .data<&Collider::size>("size").custom<FieldInfo>("Size")

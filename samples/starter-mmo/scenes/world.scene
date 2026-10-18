@@ -1006,7 +1006,8 @@
     "scripts/powers.lua",
     "scripts/world_flow.lua",
     "scripts/bag.lua",
-    "scripts/loot.lua"
+    "scripts/loot.lua",
+    "scripts/shrines.lua"
   ],
   "lighting": {
     "ambientColor": [
