@@ -1,0 +1,97 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Tower",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            3.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Base",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            0.25,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.5,
+            0.5,
+            1.5
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/bricks.mat",
+          "castShadows": true,
+          "receiveShadows": true
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Crate",
+      "parent": 1,
+      "prefab": "prefabs/Crate.prefab",
+      "instance": [
+        {
+          "source": 1,
+          "id": 3,
+          "components": {
+            "Transform": {
+              "position": [
+                0.0,
+                1.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        {
+          "source": 2,
+          "id": 4
+        }
+      ]
+    }
+  ]
+}

@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html" class="active">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li></ul></nav>
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html" class="active">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li></ul></nav>
 <main>
 <h1 id="run">Run</h1>
 <pre><code class="language-bat">build\release\kast_editor.exe
@@ -161,6 +161,61 @@
 <tr>
 <td><code>--drop-model &lt;path&gt;</code></td>
 <td>Add this project model file (project-relative) as dropping it from the Assets panel on the Scene view does: an entity at the origin named after the file, with a <code>ModelRenderer</code> and, if the model has clips, an <code>Animator</code> (selected).</td>
+</tr>
+<tr>
+<td colspan="2"><strong>Prefab steps</strong> (<a href="prefabs.html#prefabs">Prefabs</a>): run at startup in command-line order, after <code>--select</code> and before <code>--save-scene</code>, so they work headless with <code>--save-scene</code> and before a window's first frame. A step that fails logs why and exits with 1. IDs are <code>PersistentId</code>s; paths are project-relative.</td>
+</tr>
+<tr>
+<td><code>--create-prefab &lt;folder&gt;|/</code></td>
+<td>Hierarchy &gt; <strong>Create Prefab</strong> on the <code>--select</code> entity: writes <code>&lt;folder&gt;/&lt;name&gt;.prefab</code> (<code>/</code> = the project root) and makes the entity an instance of it.</td>
+</tr>
+<tr>
+<td><code>--drop-prefab &lt;path&gt;[,&lt;parentId&gt;]</code></td>
+<td>Drop the prefab on the Hierarchy: a new instance at the root, or as the last child of <code>parentId</code> (selected).</td>
+</tr>
+<tr>
+<td><code>--drop-prefab-view &lt;path&gt;,&lt;u&gt;,&lt;v&gt;</code></td>
+<td>Drop the prefab on the Scene view at (<code>u</code>, <code>v</code>), 0–1 from its top-left: a root instance where that ray of the scene's editor camera (a 16:9 view) first hits a mesh, else crosses y = 0, else 10 m along it (selected).</td>
+</tr>
+<tr>
+<td><code>--set-field &lt;ID&gt;,&lt;Component&gt;.&lt;field&gt;,&lt;json&gt;</code></td>
+<td>Set one field as an Inspector edit does, e.g. <code>5,PointLight.range,4</code> (an override on an instance entity); <code>&lt;ID&gt;,Name,"text"</code> renames.</td>
+</tr>
+<tr>
+<td><code>--prefab-revert &lt;spec&gt;</code></td>
+<td>Inspector <strong>Revert</strong>. <code>spec</code> is <code>ID</code> (Revert All, on an instance root), <code>ID:Component</code>, <code>ID:Component.field</code>, <code>ID:Name</code> or <code>ID:#local</code> (a deleted child by its prefab-local id, on the root).</td>
+</tr>
+<tr>
+<td><code>--prefab-apply &lt;spec&gt;[@&lt;hop&gt;]</code></td>
+<td>Inspector <strong>Apply</strong>, the same specs (<code>ID</code> = Apply All). <code>@hop</code> picks the nesting level written: 0 (default) the outermost prefab, 1 the one nested in it, ...</td>
+</tr>
+<tr>
+<td><code>--prefab-unpack &lt;ID&gt;</code></td>
+<td>Inspector <strong>Unpack</strong> on an instance root.</td>
+</tr>
+<tr>
+<td><code>--edit-prefab &lt;path&gt;</code></td>
+<td>Open the prefab in prefab edit mode, as double-clicking it in Assets does; later steps act on the prefab.</td>
+</tr>
+<tr>
+<td><code>--prefab-save</code></td>
+<td>In prefab edit mode: Save (Ctrl+S), writing the <code>.prefab</code>.</td>
+</tr>
+<tr>
+<td><code>--prefab-back</code></td>
+<td>In prefab edit mode: <strong>Back</strong> to the scene without a prompt (unsaved prefab changes are discarded), refreshing its instances.</td>
+</tr>
+<tr>
+<td><code>--assets-delete &lt;path&gt;</code></td>
+<td>Open the Assets <strong>Delete Asset</strong> confirmation for this entry after 12 frames, for screenshots (for a prefab it lists the scenes and prefabs using it).</td>
+</tr>
+<tr>
+<td><code>--prefab-back-prompt</code></td>
+<td>In prefab edit mode (<code>--edit-prefab</code>): press the Hierarchy's <strong>Back</strong> after 12 frames, so unsaved prefab changes (e.g. from <code>--set-field</code>) show the Save / Don't Save / Cancel prompt, for screenshots.</td>
+</tr>
+<tr>
+<td><code>--inspector-apply-menu &lt;Component&gt;.&lt;field&gt;</code></td>
+<td>Open the <code>--select</code> entity's override context menu of that field (or <code>Component</code>, its header) after 12 frames, with the Apply submenu open when the entity is nested, for screenshots. The field must be overridden.</td>
 </tr>
 <tr>
 <td><code>--no-vsync</code></td>

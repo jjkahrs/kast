@@ -55,7 +55,53 @@ kast::Aabb worldBounds(const kast::Scene& scene, entt::entity entity)
     return box;
 }
 
+// fn(entity, distance along ray) for each mesh or model the ray hits (distance >= 0 on a hit, else negative).
+template <typename Fn>
+void forEachMeshHit(const kast::Scene& scene, const kast::Ray& ray, Fn&& fn)
+{
+    for (entt::entity entity : scene.registry().view<kast::Transform>()) {
+        const std::optional<kast::Aabb> bounds = localBounds(scene, entity);
+        if (!bounds)
+            continue;
+        // Test in the mesh's local space: exact for rotated/scaled boxes. The direction is left unnormalized
+        // so the hit parameter is the same distance along the world ray.
+        float world[16], inverse[16];
+        scene.worldMatrix(entity, world);
+        bx::mtxInverse(inverse, world);
+        const kast::Ray local{bx::mul(ray.origin, inverse), kast::transformDir(ray.direction, inverse)};
+        fn(entity, kast::intersect(local, *bounds));
+    }
+}
+
+constexpr float kDropDistance = 10.0f; // a prefab dropped where the cursor ray hits nothing: this far along it
+
 } // namespace
+
+kast::Ray editorCameraRay(const Document& doc, float u, float v, float aspect, bool homogeneousDepth)
+{
+    float view[16], proj[16], viewProj[16];
+    doc.camera.viewMatrix(view);
+    doc.camera.projMatrix(proj, aspect);
+    bx::mtxMul(viewProj, view, proj);
+    return kast::screenRay(viewProj, u, v, 1.0f, 1.0f, homogeneousDepth);
+}
+
+entt::entity dropPrefabOnView(Document& doc, const std::string& path, const kast::Ray& ray, std::string& error)
+{
+    float nearest = std::numeric_limits<float>::max();
+    forEachMeshHit(doc.scene, ray, [&](entt::entity, float distance) {
+        if (distance >= 0.0f)
+            nearest = std::min(nearest, distance);
+    });
+    if (nearest == std::numeric_limits<float>::max())
+        nearest = ray.direction.y != 0.0f ? -ray.origin.y / ray.direction.y : -1.0f; // the y = 0 plane, if ahead
+    if (nearest < 0.0f)
+        nearest = kDropDistance;
+    const entt::entity entity = dropPrefab(doc, path, entt::null, error);
+    if (entity != entt::null)
+        doc.scene.registry().get<kast::Transform>(entity).position = bx::mad(ray.direction, nearest, ray.origin);
+    return entity;
+}
 
 bool beginViewportPanel(const char* name, Document& doc, PanelFocus panel)
 {
@@ -147,6 +193,13 @@ void SceneViewport::draw(Document& doc)
             ImGui::Image(static_cast<ImTextureID>(target_.texture().idx), size);
             if (std::string model; acceptModelDrop(model)) // from the Assets panel: a new entity at the origin
                 createModelEntity(doc, model, entt::null);
+            if (std::string prefab; acceptPrefabDrop(prefab)) { // where the cursor points
+                const ImVec2 mouse = ImGui::GetIO().MousePos;
+                const kast::Ray ray = editorCameraRay(doc, (mouse.x - origin.x) / size.x, (mouse.y - origin.y) / size.y,
+                                                      size.x / size.y, bgfx::getCaps()->homogeneousDepth);
+                if (std::string error; dropPrefabOnView(doc, prefab, ray, error) == entt::null)
+                    kast::log::error(std::format("Cannot add an instance of '{}': {}", prefab, error));
+            }
             const bool hovered = ImGui::IsItemHovered();
             if (doc.play != PlayState::Stopped) {
                 ImGui::GetWindowDrawList()->AddRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), kPlayTint,
@@ -198,8 +251,9 @@ void SceneViewport::drawToolbar(Document& doc)
         return pressed;
     };
     const bool stopped = doc.play == PlayState::Stopped;
-    if (playButton("Play (Ctrl+P)", doc.play == PlayState::Playing, doc.play != PlayState::Playing))
+    if (playButton("Play (Ctrl+P)", doc.play == PlayState::Playing, doc.play != PlayState::Playing && !doc.prefabEdit))
         startPlay(doc);
+    disabledTooltip(doc.prefabEdit ? "Play is disabled while a prefab is open: go Back to the scene first" : nullptr);
     if (playButton("Pause", doc.play == PlayState::Paused, !stopped))
         togglePause(doc);
     if (playButton("Stop", false, !stopped))
@@ -316,18 +370,7 @@ void SceneViewport::pick(Document& doc, const float* viewProj, float x, float y,
             nearest = entity;
         }
     };
-    for (entt::entity entity : doc.scene.registry().view<kast::Transform>()) {
-        const std::optional<kast::Aabb> bounds = localBounds(doc.scene, entity);
-        if (!bounds)
-            continue;
-        // Test in the mesh's local space: exact for rotated/scaled boxes. The direction is left unnormalized
-        // so the hit parameter is the same distance along the world ray.
-        float world[16], inverse[16];
-        doc.scene.worldMatrix(entity, world);
-        bx::mtxInverse(inverse, world);
-        const kast::Ray local{bx::mul(ray.origin, inverse), kast::transformDir(ray.direction, inverse)};
-        consider(entity, kast::intersect(local, *bounds));
-    }
+    forEachMeshHit(doc.scene, ray, consider);
     for (entt::entity entity : doc.scene.registry().view<kast::Camera>()) {
         float world[16];
         doc.scene.worldMatrix(entity, world);

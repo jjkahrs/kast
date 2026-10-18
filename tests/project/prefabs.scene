@@ -1,0 +1,345 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            3.0,
+            8.0
+          ],
+          "rotation": [
+            -0.17364818,
+            0.0,
+            0.0,
+            0.9848077
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Camera": {
+          "verticalFovDegrees": 60.0,
+          "nearPlane": 0.1,
+          "farPlane": 500.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Sun",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            5.0,
+            0.0
+          ],
+          "rotation": [
+            -0.42261827,
+            0.0,
+            0.0,
+            0.9063078
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "DirectionalLight": {
+          "color": [
+            1.0,
+            0.96,
+            0.9
+          ],
+          "intensity": 1.0,
+          "castShadows": true,
+          "bias": 0.05,
+          "normalBias": 1.5,
+          "maxDistance": 100.0,
+          "cascadeCount": 4
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            10.0,
+            1.0,
+            10.0
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "plane",
+          "material": "",
+          "castShadows": true,
+          "receiveShadows": true
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Crate",
+      "parent": null,
+      "prefab": "prefabs/Crate.prefab",
+      "instance": [
+        {
+          "source": 1,
+          "id": 4,
+          "components": {
+            "Transform": {
+              "position": [
+                -3.0,
+                0.5,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        {
+          "source": 2,
+          "id": 5
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Tower",
+      "parent": null,
+      "prefab": "prefabs/Tower.prefab",
+      "instance": [
+        {
+          "source": 1,
+          "id": 6,
+          "components": {
+            "Transform": {
+              "position": [
+                3.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        {
+          "source": 2,
+          "id": 7
+        },
+        {
+          "source": 3,
+          "id": 8
+        },
+        {
+          "source": 4,
+          "id": 9
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "name": "Crate",
+      "parent": null,
+      "prefab": "prefabs/Crate.prefab",
+      "instance": [
+        {
+          "source": 1,
+          "id": 10,
+          "components": {
+            "Transform": {
+              "position": [
+                0.0,
+                0.5,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "MeshRenderer": {
+              "material": "materials/gold_r05.mat"
+            }
+          }
+        },
+        {
+          "source": 2,
+          "id": 11,
+          "components": {
+            "PointLight": {
+              "color": [
+                0.2,
+                0.6,
+                1.0
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "name": "Statue",
+      "parent": null,
+      "prefab": "prefabs/missing.prefab",
+      "instance": [
+        {
+          "source": 1,
+          "id": 12,
+          "components": {
+            "Transform": {
+              "position": [
+                0,
+                0,
+                -3
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            }
+          }
+        },
+        {
+          "source": 2,
+          "id": 13,
+          "components": {
+            "MeshRenderer": {
+              "material": "materials/gold_r09.mat"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "systems": [
+    "scripts/prefab_spawn.lua"
+  ],
+  "lighting": {
+    "ambientColor": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "ambientIntensity": 0.2
+  },
+  "postProcessing": {
+    "tonemapping": {
+      "enabled": false,
+      "exposure": 0.0,
+      "operator": "None"
+    },
+    "bloom": {
+      "enabled": false,
+      "threshold": 1.0,
+      "intensity": 0.5,
+      "radius": 0.5
+    },
+    "colorGrading": {
+      "enabled": false,
+      "contrast": 1.0,
+      "saturation": 1.0,
+      "colorFilter": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "temperature": 0.0
+    },
+    "vignette": {
+      "enabled": false,
+      "intensity": 0.3,
+      "smoothness": 0.5
+    },
+    "fxaa": {
+      "enabled": false
+    },
+    "fog": {
+      "enabled": false,
+      "color": [
+        0.5,
+        0.6,
+        0.7
+      ],
+      "density": 0.05,
+      "start": 0.0
+    }
+  },
+  "physics": {
+    "gravity": [
+      0.0,
+      -9.81,
+      0.0
+    ]
+  },
+  "editor": {
+    "camera": {
+      "pivot": [
+        0.0,
+        0.75,
+        0.0
+      ],
+      "yaw": 20.0,
+      "pitch": -25.0,
+      "distance": 12.0
+    }
+  }
+}

@@ -38,6 +38,13 @@ private:
 // while doc.focusRequest names it, and clears the request once the panel shows focused. Returns whether it's visible.
 bool beginViewportPanel(const char* name, Document& doc, PanelFocus panel);
 
+// Drops the prefab (project-relative) on the Scene view along ray (world space): a new root instance where the ray first
+// hits a mesh or model, else where it crosses y = 0, else 10 m along it; selected (dropPrefab). Edit mode only, so there
+// is no streamed terrain to hit.
+entt::entity dropPrefabOnView(Document& doc, const std::string& path, const kast::Ray& ray, std::string& error);
+// The ray through (u, v) (0..1 from the top-left) of an aspect-wide Scene view of doc.camera.
+kast::Ray editorCameraRay(const Document& doc, float u, float v, float aspect, bool homogeneousDepth);
+
 // The Scene panel: renders the document through kast::Renderer and kast::PostProcess (the toolbar's "Post" toggles
 // the effects) into an offscreen target, editor overlays over that, and handles the editor camera, click selection,
 // transform gizmo and viewport shortcuts. Input is only taken while the panel is hovered (or a drag that started

@@ -5,6 +5,7 @@
 #include <app.h>
 #include <log.h>
 #include <model.h>
+#include <prefab.h>
 
 #include <imgui_internal.h> // ImGuiWindow::WorkRect, to inset cards from the window's sides; ImRect
 
@@ -13,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <format>
 #include <vector>
 
@@ -87,10 +89,13 @@ void disabledTooltip(const char* reason)
         ImGui::SetTooltip("%s", reason);
 }
 
-bool acceptModelDrop(std::string& path)
+namespace {
+
+// The last item as a drop target for an Assets file whose path passes accept.
+bool acceptAssetPayload(std::string& path, bool (*accept)(const char* file))
 {
     const ImGuiPayload* dragged = ImGui::GetDragDropPayload();
-    if (!dragged || !dragged->IsDataType(kAssetPayload) || !kast::isModelFile(static_cast<const char*>(dragged->Data)) ||
+    if (!dragged || !dragged->IsDataType(kAssetPayload) || !accept(static_cast<const char*>(dragged->Data)) ||
         !ImGui::BeginDragDropTarget())
         return false;
     const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kAssetPayload);
@@ -98,6 +103,20 @@ bool acceptModelDrop(std::string& path)
         path = static_cast<const char*>(payload->Data);
     ImGui::EndDragDropTarget();
     return payload != nullptr;
+}
+
+} // namespace
+
+bool acceptModelDrop(std::string& path)
+{
+    return acceptAssetPayload(path, [](const char* file) { return kast::isModelFile(file); });
+}
+
+bool acceptPrefabDrop(std::string& path)
+{
+    return acceptAssetPayload(path, [](const char* file) {
+        return std::filesystem::path(file).extension() == kast::kPrefabExtension;
+    });
 }
 
 void beginCard()

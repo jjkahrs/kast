@@ -8,6 +8,7 @@
 #include <lua_components.h>
 #include <material.h>
 #include <physics.h>
+#include <prefab.h>
 #include <scene_io.h>
 #include <state_machines.h>
 
@@ -17,6 +18,7 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cfloat>
 #include <climits>
@@ -32,9 +34,36 @@ namespace {
 using Json = nlohmann::ordered_json;
 
 constexpr const char* kEntityPayload = "KAST_ENTITY";
+constexpr ImU32 kOverrideColor = IM_COL32(0xff, 0xcc, 0x00, 0xff); // the palette's highlight: overridden prefab values
 constexpr SDL_DialogFileFilter kLuaFilter{"Lua script (*.lua)", "lua"};
 
 bool sameBits(const bx::Quaternion& a, const bx::Quaternion& b) { return std::memcmp(&a, &b, sizeof(a)) == 0; }
+
+// A small cube (top face and two sides) at x in a row from y, height tall: marks prefab instance roots in the Hierarchy.
+// Accent colored, black on a selected (accent-filled) row.
+void drawPrefabIcon(float x, float y, float height, bool selected)
+{
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float s = ImGui::GetFontSize() * 0.6f; // icon height
+    const float top = y + (height - s) * 0.5f;
+    const ImU32 color = selected ? IM_COL32_BLACK : ImGui::GetColorU32(ImGuiCol_Button);
+    const float w = s * 0.5f, q = s * 0.25f;
+    const ImVec2 up{x + w, top}, left{x, top + q}, right{x + s, top + q}, mid{x + w, top + 2.0f * q};
+    const ImVec2 bottomLeft{x, top + s - q}, bottomRight{x + s, top + s - q}, bottom{x + w, top + s};
+    draw->AddQuadFilled(up, right, mid, left, color);
+    const float line = bx::max(1.0f, s * 0.1f);
+    draw->AddPolyline(std::array{left, bottomLeft, bottom, bottomRight, right}.data(), 5, color, ImDrawFlags_None, line);
+    draw->AddLine(mid, bottom, color, line);
+}
+
+// The #ffcc00 bar at the Inspector's left edge beside an overridden prefab value, from y top to bottom (screen).
+void markOverride(float top, float bottom)
+{
+    const float x = ImGui::GetWindowPos().x + 1.0f;
+    ImGui::GetWindowDrawList()->PushClipRectFullScreen();
+    ImGui::GetWindowDrawList()->AddRectFilled({x, top}, {x + 4.0f, bottom}, kOverrideColor);
+    ImGui::GetWindowDrawList()->PopClipRect();
+}
 
 bool acceptEntityDrop(entt::entity& dropped)
 {
@@ -60,10 +89,17 @@ void Panels::forgetStaleScene(const Document& doc)
     ImGui::ClearActiveID(); // an active InputText (Inspector Name) would write its old-scene text into the new scene
 }
 
-void Panels::drawHierarchy(Document& doc)
+void Panels::drawHierarchy(Document& doc, FileActions& files)
 {
     forgetStaleScene(doc);
     if (ImGui::Begin("Hierarchy")) {
+        if (doc.prefabEdit) { // prefab edit mode: where we are, and the way back
+            if (ImGui::SmallButton("Back"))
+                files.backFromPrefab();
+            ImGui::SameLine();
+            ImGui::TextColored(ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), "%s", breadcrumb(doc).c_str());
+            ImGui::Separator();
+        }
         for (entt::entity root : doc.scene.children(entt::null))
             drawNode(doc, root);
 
@@ -78,6 +114,8 @@ void Panels::drawHierarchy(Document& doc)
             edit_ = {Edit::Op::Reparent, dropped, entt::null};
         if (std::string model; acceptModelDrop(model))
             edit_ = {Edit::Op::CreateModel, entt::null, entt::null, ObjectKind::Model, model};
+        if (std::string prefab; acceptPrefabDrop(prefab))
+            edit_ = {Edit::Op::DropPrefab, entt::null, entt::null, ObjectKind::Empty, prefab};
         if (ImGui::BeginPopupContextItem("##rootMenu")) {
             drawCreateItems(entt::null);
             ImGui::EndPopup();
@@ -116,7 +154,19 @@ void Panels::drawNode(Document& doc, entt::entity entity)
 
     ImGui::PushID(static_cast<int>(entt::to_integral(entity)));
     const bool renaming = renaming_ == entity;
+    const bool missing = kast::isMissingPrefab(doc.scene, entity);
+    if (missing)
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
     const bool open = ImGui::TreeNodeEx("##node", flags, "%s", renaming ? "" : name.c_str());
+    if (missing) {
+        ImGui::PopStyleColor();
+        ImGui::SetItemTooltip("Missing prefab '%s': kept as a placeholder",
+                              registry.get<kast::PrefabInstance>(entity).path.c_str());
+    }
+    if (!renaming && registry.all_of<kast::PrefabInstance>(entity) && !missing)
+        drawPrefabIcon(ImGui::GetItemRectMin().x + ImGui::GetTreeNodeToLabelSpacing() +
+                           ImGui::CalcTextSize(name.c_str()).x + ImGui::GetStyle().ItemSpacing.x,
+                       ImGui::GetItemRectMin().y, ImGui::GetItemRectSize().y, doc.selected == entity);
 
     if ((ImGui::IsItemClicked(ImGuiMouseButton_Left) || ImGui::IsItemClicked(ImGuiMouseButton_Right)) &&
         !ImGui::IsItemToggledOpen())
@@ -130,6 +180,8 @@ void Panels::drawNode(Document& doc, entt::entity entity)
         edit_ = {Edit::Op::Reparent, dropped, entity};
     if (std::string model; acceptModelDrop(model)) // a child of this entity
         edit_ = {Edit::Op::CreateModel, entt::null, entity, ObjectKind::Model, model};
+    if (std::string prefab; acceptPrefabDrop(prefab)) // an instance as a child of this entity
+        edit_ = {Edit::Op::DropPrefab, entt::null, entity, ObjectKind::Empty, prefab};
     if (ImGui::BeginPopupContextItem("##nodeMenu")) {
         drawCreateItems(entity);
         ImGui::Separator();
@@ -140,6 +192,15 @@ void Panels::drawNode(Document& doc, entt::entity entity)
         }
         if (ImGui::MenuItem("Duplicate", "Ctrl+D"))
             edit_ = {Edit::Op::Duplicate, entity};
+        const char* prefabBlocker = prefabEditBlocker(doc) ? prefabEditBlocker(doc)
+                                    : registry.all_of<kast::PrefabLink>(entity)
+                                        ? "Already part of a prefab instance: unpack it first"
+                                    : doc.prefabEdit && doc.scene.parent(entity) == entt::null
+                                        ? "The open prefab's root can't itself become a prefab instance"
+                                        : nullptr;
+        if (ImGui::MenuItem("Create Prefab", nullptr, false, !prefabBlocker))
+            edit_ = {Edit::Op::CreatePrefab, entity};
+        disabledTooltip(prefabBlocker);
         if (ImGui::MenuItem("Delete", "Del"))
             edit_ = {Edit::Op::Delete, entity};
         ImGui::EndPopup();
@@ -191,6 +252,20 @@ void Panels::applyEdit(Document& doc)
     case Edit::Op::CreateModel:
         createModelEntity(doc, edit.path, edit.parent);
         break;
+    case Edit::Op::CreatePrefab: {
+        std::string path, error;
+        if (createPrefabFrom(doc, edit.target, assetFolder(), path, error)) {
+            refreshAssets(doc);
+            selectAsset(path);
+        } else {
+            assetsFailed(std::format("Cannot create a prefab: {}", error));
+        }
+        break;
+    }
+    case Edit::Op::DropPrefab:
+        if (std::string error; dropPrefab(doc, edit.path, edit.parent, error) == entt::null)
+            assetsFailed(std::format("Cannot add an instance of '{}': {}", edit.path, error));
+        break;
     case Edit::Op::Delete:
         doc.selected = edit.target;
         deleteSelected(doc);
@@ -202,7 +277,9 @@ void Panels::applyEdit(Document& doc)
     case Edit::Op::Reparent:
         if (!scene.valid(edit.target) || scene.parent(edit.target) == edit.parent)
             break;
-        if (scene.reparent(edit.target, edit.parent))
+        if (const char* blocker = kast::reparentBlocker(scene, edit.target))
+            kast::log::warn(std::format("Cannot move '{}': {}", scene.registry().get<kast::Name>(edit.target).value, blocker));
+        else if (scene.reparent(edit.target, edit.parent))
             markDirty(doc);
         else
             kast::log::warn(std::format("Cannot parent '{}' under its own descendant",
@@ -363,6 +440,14 @@ void Panels::drawInspector(Document& doc)
             const entt::entity entity = doc.selected;
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.65f); // leave room for the labels
             bool changed = ImGui::InputText("Name", &registry.get<kast::Name>(entity).value);
+            const bool linked = registry.all_of<kast::PrefabLink>(entity);
+            const Json overrides = linked ? kast::prefabOverrides(doc.scene, entity) : Json();
+            const auto overridden = [&](const char* kind, const std::string& key) {
+                return overrides.is_object() && overrides.contains(kind) && overrides[kind].contains(key);
+            };
+            drawOverrideMenu(doc, entity, "Name", "", overrides.is_object() && overrides.contains("name"));
+            if (linked || kast::isMissingPrefab(doc.scene, entity))
+                drawPrefabCard(doc, entity, overrides);
 
             const std::vector<kast::ComponentType> types = kast::allComponentTypes();
             kast::ComponentType removed;
@@ -372,7 +457,12 @@ void Panels::drawInspector(Document& doc)
                 ImGui::PushID(type.name()); // field labels repeat across components
                 bool keep = true;           // the header's x button (removable types only) clears it
                 beginCard();
-                if (cardHeader(type.displayName(), type.removable() ? &keep : nullptr, ImGuiTreeNodeFlags_DefaultOpen)) {
+                const bool added = overridden("added", type.name());
+                const Json* changedFields = overridden("components", type.name()) ? &overrides["components"][type.name()] : nullptr;
+                const bool expanded = cardHeader(type.displayName(), type.removable() ? &keep : nullptr,
+                                                 ImGuiTreeNodeFlags_DefaultOpen);
+                drawOverrideMenu(doc, entity, type.name(), "", added || changedFields);
+                if (expanded) {
                     const char* conflict = type.meta() && type.meta() == entt::resolve<kast::CharacterController>()
                                                ? kast::physicsConflict(registry, entity)
                                                : nullptr;
@@ -411,7 +501,12 @@ void Panels::drawInspector(Document& doc)
                             return drawField(entity, type, field, value);
                         };
                         for (const kast::FieldDesc& field : type.fields()) {
-                            if (!drawOne(field, json[field.name]))
+                            ImGui::PushID(field.name.c_str()); // each field's override menu
+                            const bool edited = drawOne(field, json[field.name]);
+                            drawOverrideMenu(doc, entity, type.name(), field.name,
+                                             !added && changedFields && changedFields->contains(field.name));
+                            ImGui::PopID();
+                            if (!edited)
                                 continue;
                             // Rejected edits (e.g. Camera ranges) are not applied: the last valid value stays, so
                             // the scene stays loadable.
@@ -496,6 +591,139 @@ void Panels::drawInspector(Document& doc)
     }
     drawNewComponentModal(doc); // outside the selection branch, so --new-component-prompt shows it without one
     ImGui::End();
+    if (const std::optional<PrefabOp> op = std::exchange(prefabOp_, std::nullopt)) {
+        if (std::string error; !runPrefabOp(doc, *op, error))
+            assetsFailed(std::format("Prefab: {}", error));
+    }
+}
+
+void Panels::drawOverrideMenu(Document& doc, entt::entity entity, const std::string& component, const std::string& field,
+                              bool overridden)
+{
+    if (!overridden)
+        return;
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    markOverride(min.y, max.y);
+
+    const std::string key = field.empty() ? component : component + '.' + field;
+    const bool requested = applyMenuRequest_ == key && entity == doc.selected; // --inspector-apply-menu
+    if (requested) {
+        applyMenuRequest_.clear();
+        ImGui::OpenPopup("##override");
+        ImGui::SetNextWindowPos({min.x, max.y});
+    }
+    if (!ImGui::BeginPopupContextItem("##override"))
+        return;
+    using Kind = PrefabOp::Kind;
+    const bool whole = field.empty() && component != "Name";
+    const kast::EntityId id = doc.scene.registry().get<kast::PersistentId>(entity).value;
+    const char* blocker = prefabEditBlocker(doc);
+    if (ImGui::MenuItem(whole ? "Revert Component" : "Revert", nullptr, false, !blocker))
+        prefabOp_ = PrefabOp{whole ? Kind::RevertComponent : Kind::RevertField, id, component, field};
+    const std::vector<std::string> chain = kast::prefabChain(doc.scene, entity);
+    const auto applyTo = [&](size_t hop) {
+        prefabOp_ = PrefabOp{whole ? Kind::ApplyComponent : Kind::ApplyField, id, component, field, hop};
+    };
+    if (chain.size() == 1) {
+        if (ImGui::MenuItem(std::format("Apply to {}", utf8(fromUtf8(chain[0]).filename())).c_str(), nullptr, false, !blocker))
+            applyTo(0);
+    } else {
+        if (requested)
+            ImGui::OpenPopup("Apply"); // BeginMenu's popup id
+        if (ImGui::BeginMenu("Apply", !blocker)) {
+            for (size_t hop = 0; hop < chain.size(); ++hop) // outermost first: the default
+                if (ImGui::MenuItem(std::format("Apply to {}{}", utf8(fromUtf8(chain[hop]).filename()),
+                                                hop == 0 ? " (outermost)" : "")
+                                        .c_str()))
+                    applyTo(hop);
+            ImGui::EndMenu();
+        }
+    }
+    disabledTooltip(blocker);
+    ImGui::EndPopup();
+}
+
+void Panels::drawPrefabCard(Document& doc, entt::entity entity, const Json& overrides)
+{
+    using Kind = PrefabOp::Kind;
+    entt::registry& registry = doc.scene.registry();
+    const kast::EntityId id = registry.get<kast::PersistentId>(entity).value;
+    const char* blocker = prefabEditBlocker(doc);
+    ImGui::PushID("prefab");
+    beginCard();
+    if (kast::isMissingPrefab(doc.scene, entity) && !registry.all_of<kast::PrefabLink>(entity)) {
+        ImGui::TextColored(kErrorColor, "Missing prefab: %s", registry.get<kast::PrefabInstance>(entity).path.c_str());
+        ImGui::TextWrapped("It didn't load (see the Console). This placeholder keeps the reference and every override, "
+                           "and saves them unchanged.");
+        endCard();
+        ImGui::PopID();
+        return;
+    }
+    const std::vector<std::string> chain = kast::prefabChain(doc.scene, entity);
+    const entt::entity root = kast::prefabRoot(doc.scene, entity);
+    ImGui::TextUnformatted("Prefab");
+    ImGui::SameLine();
+    ImGui::TextColored(ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), "%s", chain.empty() ? "?" : chain[0].c_str());
+    for (size_t i = 1; i < chain.size(); ++i)
+        ImGui::TextDisabled("  nested: %s", chain[i].c_str());
+    ImGui::BeginDisabled(blocker != nullptr);
+    if (root != entity) {
+        ImGui::TextDisabled("Part of '%s'", doc.scene.valid(root) ? registry.get<kast::Name>(root).value.c_str() : "?");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Select Root"))
+            doc.selected = root;
+    } else {
+        if (ImGui::Button("Revert All"))
+            prefabOp_ = PrefabOp{Kind::RevertAll, id};
+        ImGui::SameLine();
+        if (ImGui::Button("Apply All"))
+            prefabOp_ = PrefabOp{Kind::ApplyAll, id};
+        ImGui::SetItemTooltip("Write every override, added and deleted child into %s", chain[0].c_str());
+        ImGui::SameLine();
+        if (ImGui::Button("Unpack"))
+            prefabOp_ = PrefabOp{Kind::Unpack, id};
+        ImGui::SetItemTooltip("Break the link: plain entities with their current values (nested instances stay linked)");
+    }
+    // Structural overrides: listed, since there is nothing else to show them on.
+    if (overrides.is_object() && overrides.contains("removed")) {
+        for (const Json& removed : overrides["removed"]) {
+            const std::string name = removed.get<std::string>();
+            ImGui::PushID(name.c_str());
+            markOverride(ImGui::GetCursorScreenPos().y, ImGui::GetCursorScreenPos().y + ImGui::GetFrameHeight());
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Removed component: %s", name.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Revert"))
+                prefabOp_ = PrefabOp{Kind::RevertComponent, id, name};
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Apply"))
+                prefabOp_ = PrefabOp{Kind::ApplyComponent, id, name};
+            ImGui::PopID();
+        }
+    }
+    if (root == entity) {
+        for (const kast::PrefabAsset::Entity* deleted : kast::deletedPrefabChildren(doc.scene, entity)) {
+            ImGui::PushID(static_cast<int>(deleted->id));
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Deleted child: %s", deleted->name.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Revert"))
+                prefabOp_ = PrefabOp{Kind::RevertDeleted, id, "", "", 0, deleted->id};
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Apply"))
+                prefabOp_ = PrefabOp{Kind::ApplyDeleted, id, "", "", 0, deleted->id};
+            ImGui::PopID();
+        }
+        for (entt::entity child : kast::addedPrefabChildren(doc.scene, entity)) {
+            ImGui::Text("Added child: %s", registry.get<kast::Name>(child).value.c_str());
+            ImGui::SetItemTooltip("Only in this scene; Apply All adds it to the prefab, Revert All removes it");
+        }
+    }
+    ImGui::EndDisabled();
+    disabledTooltip(blocker);
+    endCard();
+    ImGui::PopID();
 }
 
 void Panels::openNewComponent(std::string name)
@@ -1554,6 +1782,8 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, Exte
                 assetSelected_.clear();
             if (std::string dropped; acceptAssetDrop(dropped))
                 assetEdit_ = {AssetEdit::Op::Move, dropped, ""};
+            if (entt::entity dropped = entt::null; acceptEntityDrop(dropped)) // a new prefab of it, at the root
+                assetEdit_ = {AssetEdit::Op::NewPrefab, "", "", dropped};
             if (assetMenuRequest_ == "")
                 openRequestedAssetMenu("##rootMenu");
             if (ImGui::BeginPopupContextItem("##rootMenu")) {
@@ -1580,6 +1810,14 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, Exte
                 if (target) {
                     ImGui::Text("Delete '%s'%s?", target->name.c_str(), target->folder ? " and all its contents" : "");
                     ImGui::TextUnformatted("It will be moved to the Recycle Bin.");
+                    if (!assetDeleteUsers_.empty()) {
+                        ImGui::Spacing();
+                        ImGui::TextColored(kErrorColor, "Used as a prefab by %zu file%s; their instances will load as "
+                                                        "missing-prefab placeholders:",
+                                           assetDeleteUsers_.size(), assetDeleteUsers_.size() == 1 ? "" : "s");
+                        for (const std::string& user : assetDeleteUsers_)
+                            ImGui::BulletText("%s", user.c_str());
+                    }
                 } else {
                     ImGui::TextUnformatted("It no longer exists.");
                 }
@@ -1644,6 +1882,9 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
     if (!entry.folder && isTextAsset(entry.name) && !hasExtension(entry.name, ".rml") && ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) // .rml: the GUI Builder above; its menu opens it here
         editor.open(assetsRoot_ / fromUtf8(entry.path));
+    if (!entry.folder && !blocker && hasExtension(entry.name, kast::kPrefabExtension) && ImGui::IsItemHovered() &&
+        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        files.openPrefab(entry.path); // prefab edit mode
     if (!entry.folder && !blocker && hasExtension(entry.name, ".scene") && ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
         std::string error;
@@ -1659,6 +1900,8 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
     }
     if (std::string dropped; entry.folder && acceptAssetDrop(dropped))
         assetEdit_ = {AssetEdit::Op::Move, dropped, entry.path};
+    if (entt::entity dropped = entt::null; entry.folder && acceptEntityDrop(dropped)) // a new prefab of it, here
+        assetEdit_ = {AssetEdit::Op::NewPrefab, entry.path, "", dropped};
     if (assetMenuRequest_ == entry.path)
         openRequestedAssetMenu("##assetMenu");
     if (ImGui::BeginPopupContextItem("##assetMenu")) {
@@ -1770,7 +2013,15 @@ void Panels::requestAssetDelete(const Document& doc, const std::string& path)
         return;
     }
     assetDeletePath_ = path;
+    assetDeleteUsers_ = prefabUsers(assetsRoot_, path);
+    std::erase(assetDeleteUsers_, path); // a prefab nesting itself is no other file's loss
     assetDeleteRequested_ = true;
+}
+
+std::string Panels::assetFolder() const
+{
+    const AssetEntry* selected = findAsset(assets_, assetSelected_);
+    return !selected ? "" : selected->folder ? selected->path : parentAsset(selected->path);
 }
 
 void Panels::assetsFailed(std::string error)
@@ -1862,10 +2113,22 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui)
         }
         break;
     }
+    case AssetEdit::Op::NewPrefab: {
+        std::string path;
+        if (createPrefabFrom(doc, edit.entity, edit.path, path, error)) {
+            assetExpand_ = edit.path;
+            refreshAssets(doc);
+            selectAsset(path);
+            return;
+        }
+        break;
+    }
     case AssetEdit::Op::Delete:
         error = deleteBlocker(source, openScenePath(doc)); // the scene may have changed since the prompt opened
-        if (error.empty() && recycleAsset(source, error))
+        if (error.empty() && recycleAsset(source, error)) {
             kast::log::info(std::format("Moved '{}' to the Recycle Bin", edit.path));
+            refreshPrefabs(doc); // instances of a deleted prefab become placeholders
+        }
         break;
     case AssetEdit::Op::Rename:
         dest = source.parent_path() / fromUtf8(edit.target);
@@ -1902,9 +2165,12 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui)
             gui.remap(source, dest);
             if (scenePath)
                 doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
-            remapScenePaths(doc, edit.path, selected); // systems, MeshRenderer materials, models and overrides
+            remapScenePaths(doc, edit.path, selected); // systems, MeshRenderer materials, models, overrides, prefabs
             for (const std::string& file : remapMaterialTextures(root, edit.path, selected))
                 kast::log::info(std::format("Updated texture paths in '{}'", file));
+            for (const std::string& file : remapPrefabReferences(root, edit.path, selected))
+                kast::log::info(std::format("Updated prefab references in '{}'", file));
+            refreshPrefabs(doc); // instances reload from the moved files
             if (std::vector<std::string> path = {inspectedMaterial_}; remapProjectPaths(path, edit.path, selected))
                 inspectedMaterial_ = path[0];
             if (newFsm) {

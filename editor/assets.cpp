@@ -4,6 +4,7 @@
 
 #include <files.h>
 #include <log.h>
+#include <prefab.h>
 #include <project.h>
 
 #define NOMINMAX
@@ -13,6 +14,7 @@
 
 #include <algorithm>
 #include <format>
+#include <string_view>
 #include <system_error>
 
 namespace {
@@ -293,4 +295,78 @@ bool recycleAsset(const fs::path& target, std::string& error)
                                       std::system_category().message(result), result)
                         : std::format("Deleting '{}' was cancelled", utf8(target.filename()));
     return false;
+}
+
+std::string uniquePrefabName(const fs::path& dir, const std::string& entityName)
+{
+    std::string stem = entityName;
+    for (char& c : stem)
+        if (static_cast<unsigned char>(c) < 0x20 || std::string_view(R"(<>:"/\|?*)").find(c) != std::string_view::npos)
+            c = '_';
+    while (!stem.empty() && (stem.back() == ' ' || stem.back() == '.'))
+        stem.pop_back();
+    if (stem.empty() || !assetNameError(stem + kast::kPrefabExtension).empty())
+        stem = "Prefab";
+    std::string name = stem + kast::kPrefabExtension;
+    for (int n = 2; assetNameTaken(dir, fromUtf8(name)); ++n)
+        name = std::format("{}_{}{}", stem, n, kast::kPrefabExtension);
+    return name;
+}
+
+namespace {
+
+// Each .scene / .prefab under root with its JSON; files that don't parse are skipped.
+template <typename Fn>
+void forEachSceneFile(const fs::path& root, Fn&& fn)
+{
+    for (const fs::path& file : kast::listFiles(root)) {
+        if (file.extension() != ".scene" && file.extension() != kast::kPrefabExtension)
+            continue;
+        std::string text;
+        if (!kast::readFile(file, text))
+            continue;
+        nlohmann::ordered_json json = nlohmann::ordered_json::parse(text, nullptr, false);
+        if (json.is_object() && json.contains("entities") && json["entities"].is_array())
+            fn(file, json);
+    }
+}
+
+} // namespace
+
+std::vector<std::string> prefabUsers(const fs::path& root, const std::string& target)
+{
+    std::vector<std::string> users;
+    forEachSceneFile(root, [&](const fs::path& file, const nlohmann::ordered_json& json) {
+        for (const auto& entity : json["entities"])
+            if (entity.is_object() && entity.contains("prefab") && entity["prefab"].is_string() &&
+                isSameOrInside(fromUtf8(entity["prefab"].get<std::string>()), fromUtf8(target))) {
+                users.push_back(kast::toProjectPath(root, file).value_or(utf8(file)));
+                return;
+            }
+    });
+    return users;
+}
+
+std::vector<std::string> remapPrefabReferences(const fs::path& root, const std::string& from, const std::string& to)
+{
+    std::vector<std::string> changed;
+    forEachSceneFile(root, [&](const fs::path& file, nlohmann::ordered_json& json) {
+        bool any = false;
+        for (auto& entity : json["entities"]) {
+            if (!entity.is_object() || !entity.contains("prefab") || !entity["prefab"].is_string())
+                continue;
+            std::vector<std::string> path = {entity["prefab"].get<std::string>()};
+            if (remapProjectPaths(path, from, to)) {
+                entity["prefab"] = path[0];
+                any = true;
+            }
+        }
+        if (!any)
+            return;
+        if (kast::writeFileAtomic(file, json.dump(2) + '\n')) // the scene / prefab writers' own format
+            changed.push_back(kast::toProjectPath(root, file).value_or(utf8(file)));
+        else
+            kast::log::error(std::format("Cannot update the prefab references in '{}'", utf8(file)));
+    });
+    return changed;
 }

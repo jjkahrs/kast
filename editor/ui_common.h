@@ -33,6 +33,8 @@ constexpr const char* kAssetPayload = "KAST_ASSET"; // drag and drop from the As
 // The last item as a drop target for a model file (.glb/.gltf/.fbx/.obj) dragged from the Assets panel: true and its
 // path once dropped. Other assets are not accepted.
 bool acceptModelDrop(std::string& path);
+// The same for a .prefab.
+bool acceptPrefabDrop(std::string& path);
 
 // A card: a rounded, tinted, bordered panel behind everything drawn between beginCard and endCard, spanning the window's
 // width, with a gap below it. Cards do not nest. Its edges line up with collapsing headers, which cardHeader draws with

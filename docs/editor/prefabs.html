@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prefabs - Kast Editor</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html" class="active">Prefabs</a></li></ul></nav>
+<main>
+<h1 id="prefabs">Prefabs</h1>
+<p>A prefab is a reusable entity subtree saved as a <code>.prefab</code> file in the project. Instances of it in scenes stay
+<strong>linked</strong>: when the prefab changes, every instance follows, except for what the instance changed itself (its
+<strong>overrides</strong>). Prefabs need a project, and none of the actions below run during Play. The file format is in
+<a href="../engine/coordinates-and-scenes.html#prefabs">Coordinates and scenes</a>.</p>
+
+<h2 id="create">Creating a prefab</h2>
+<ul>
+<li>Drag an entity from the Hierarchy onto the Assets panel's background (the project root) or onto a folder:
+  <code>&lt;entity name&gt;.prefab</code> is written there (<code>Orc_2.prefab</code>, ... if the name is taken).</li>
+<li>Or right-click it in the Hierarchy &gt; <strong>Create Prefab</strong>: the same, in the Assets panel's current folder (the selected
+  folder, else the selected file's folder, else the root).</li>
+<li>The entity becomes an instance of the new prefab. Its subtree may hold other prefab instances: they are nested in the
+  new prefab and stay linked. An entity that is already part of an instance can't become a new prefab (unpack it first),
+  nor can a subtree holding a missing-prefab placeholder.</li>
+</ul>
+
+<h2 id="instantiate">Placing instances</h2>
+<ul>
+<li>Drag a <code>.prefab</code> from Assets onto the Hierarchy: on its empty space it becomes a root, on an entity a child of it.</li>
+<li>Drag it onto the Scene view: a root instance where the cursor ray first hits a mesh or model, else where the ray
+  crosses the y = 0 plane, else 10 m in front of the camera.</li>
+<li>The new instance is selected; it starts at the prefab root's transform (the Scene view drop moves it).</li>
+<li>From Lua: <a href="../engine/lua-systems.html#instantiate"><code>kast.instantiate(path, parent?, position?)</code></a>, in editor Play and in built games.</li>
+</ul>
+<p>In the Hierarchy an instance root has a small cube icon after its name. Ctrl+D duplicates an instance as another
+linked instance; a duplicated prefab child becomes an added child. Prefab children can't be dragged to another parent:
+unpack the instance first.</p>
+
+<h2 id="overrides">Overrides</h2>
+<p>Overrides are per field: change a field of an instance entity (in the Inspector, the gizmo, ...) and only that field
+stops following the prefab. The instance root's name and Transform always belong to the instance. Structural changes
+are overrides too: adding or removing a component, adding a child entity (it is saved in the scene, not the prefab) and
+deleting a prefab child. Everything is worked out by comparing the entities with the prefab, so a field changed back to
+the prefab's value is no longer an override.</p>
+<p>The Inspector, on any entity of an instance:</p>
+<ul>
+<li>A <strong>Prefab</strong> card at the top names the prefab (and the prefabs nested inside it that this entity belongs to). On a
+  prefab child, <strong>Select Root</strong> selects the instance root.</li>
+<li>Overridden fields, the headers of components with overridden fields, added components and an overridden name are
+  marked with a <code>#ffcc00</code> bar at the Inspector's left edge.</li>
+<li>Removed components are listed on the card (<strong>Removed component: X</strong>); on the instance root also its deleted
+  children (<strong>Deleted child: X</strong>) and added children.</li>
+</ul>
+
+<h2 id="revert-apply">Revert, Apply and Unpack</h2>
+<ul>
+<li>Right-click a marked field, component header or the Name: <strong>Revert</strong> (back to the prefab's value; for a component
+  header the whole component, removing an added one) or <strong>Apply to X.prefab</strong> (write this value into the prefab).
+  Removed components and deleted children have their own Revert / Apply buttons on the card.</li>
+<li>On the instance root: <strong>Revert All</strong> drops every override (fields, components, added children; deleted children
+  come back); <strong>Apply All</strong> writes the whole instance into the prefab: overrides, added children (they become prefab
+  children), deleted children (removed from the prefab). The root's own name and transform are never applied.</li>
+<li><strong>Unpack</strong> breaks the link: the instance becomes plain entities with their current values. Prefab instances
+  nested inside stay linked (with what the outer prefab changed on them as their own overrides).</li>
+<li>Apply writes the <code>.prefab</code> file immediately and refreshes every instance in the open scene. Other scenes pick the
+  change up when they load.</li>
+</ul>
+
+<h2 id="nesting">Nesting</h2>
+<p>A prefab may contain instances of other prefabs, e.g. <code>Tower.prefab</code> holding a <code>Crate.prefab</code>. Changing
+<code>Crate.prefab</code> reaches the crate inside every Tower instance (under whatever Tower overrides on it). For an entity that
+belongs to several prefabs the Apply item is a submenu, outermost first: <strong>Apply to Tower.prefab (outermost)</strong> keeps
+the change as Tower's override of the crate; <strong>Apply to Crate.prefab</strong> writes it into the crate prefab itself (and clears
+the matching override in Tower). A prefab can never contain itself, directly or through nesting: creating, applying,
+saving or dropping something that would, is refused with an error saying which instance holds which prefab.</p>
+
+<h2 id="edit-mode">Prefab edit mode</h2>
+<ul>
+<li>Double-click a <code>.prefab</code> in Assets. The Hierarchy, Inspector and Scene view then show only the prefab, under the
+  breadcrumb <code>&lt;scene name&gt; &gt; Crate.prefab</code> at the top of the Hierarchy, with a <strong>Back</strong> button. The window title
+  shows the prefab.</li>
+<li>Edit it like a scene. Play is disabled. File &gt; Save (Ctrl+S) writes the <code>.prefab</code> (Save As saves to the same file).</li>
+<li><strong>Back</strong>, opening another prefab, or opening / creating a scene, building or quitting with unsaved prefab changes
+  asks Save / Don't Save / Cancel. The scene comes back as you left it (unsaved changes included), with every instance
+  of the edited prefab, and of prefabs nesting it, refreshed and their overrides kept.</li>
+</ul>
+
+<h2 id="assets">Renaming, moving and deleting prefabs</h2>
+<ul>
+<li>Renaming or moving a <code>.prefab</code> (or a folder holding prefabs) in Assets updates the references in the open scene
+  and in every <code>.scene</code> and <code>.prefab</code> file of the project on disk.</li>
+<li>Deleting a prefab that scenes or prefabs use lists those files in the <strong>Delete Asset</strong> confirmation first. If you
+  delete it anyway, its instances load as missing-prefab placeholders.</li>
+</ul>
+
+<h2 id="missing">Missing prefabs</h2>
+<p>A scene (or prefab) whose instance names a prefab that doesn't load (deleted, moved outside the editor, broken JSON, a
+cycle) still loads. The instance becomes a placeholder entity named after the prefab file, drawn red in the Hierarchy
+(its tooltip and the Inspector card name the path), and the Console has a warning naming the entity and the path.
+Saving keeps the reference and all its overrides unchanged, so once the prefab is back the instance is too.</p>
+
+<h2 id="testing">Testing hooks</h2>
+<p>Every action above can run headless from the <a href="command-line.html">command line</a> (<code>--create-prefab</code>,
+<code>--drop-prefab</code>, <code>--drop-prefab-view</code>, <code>--set-field</code>, <code>--prefab-revert</code>, <code>--prefab-apply</code>,
+<code>--prefab-unpack</code>, <code>--edit-prefab</code>, <code>--prefab-save</code>, <code>--prefab-back</code>), followed by <code>--save-scene</code>; the
+<code>prefab_*</code> tests in ctest use them on <code>tests/project/prefabs.scene</code>.</p>
+</main>
+</div>
+</body>
+</html>

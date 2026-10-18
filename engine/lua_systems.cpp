@@ -23,6 +23,7 @@
 #include <cmath>
 #include <format>
 #include <functional>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
@@ -120,6 +121,7 @@ struct LuaSystems::State {
     std::string callbackPath; // the definition file whose enter/exit is running (log prefixes, event publisher)
     std::vector<System> systems;
     std::unordered_map<EntityId, entt::entity> ids; // ponytail: rebuilt every tick, O(entities); index in Scene if big
+    std::map<std::string, std::shared_ptr<const PrefabAsset>> prefabs; // kast.instantiate's, loaded once per session
     System* current = nullptr; // whose code is running: log prefixes, event publisher and subscription owner
 
     void init(const std::vector<std::string>& paths);
@@ -565,6 +567,51 @@ void LuaSystems::State::bindApi()
         return id;
     });
     api.set_function("destroy", [this](sol::this_state L, const sol::object& id) { scene.destroy(entity(L, id)); });
+    // Failures a game can recover from (bad path, missing or broken file) return nil and log why; bad argument types
+    // raise like the other functions.
+    api.set_function("instantiate", [this, &registry](sol::this_state L, const sol::object& path, const sol::object& parent,
+                                                      const sol::object& position) -> sol::object {
+        const auto fail = [&](const std::string& why) {
+            log::warn(std::format("{}: kast.instantiate: {}", who(), why));
+            return sol::make_object(lua, sol::lua_nil);
+        };
+        if (path.get_type() != sol::type::string)
+            raise(L, std::format("kast.instantiate: path must be a string, got {}", toString(L, path)));
+        const bool root = parent.get_type() == sol::type::lua_nil || parent.get_type() == sol::type::none;
+        const entt::entity parentEntity = root ? entt::null : entity(L, parent);
+        std::optional<bx::Vec3> at;
+        if (position.get_type() == sol::type::table) {
+            const sol::table t = position.as<sol::table>();
+            const sol::object x = t["x"], y = t["y"], z = t["z"];
+            if (x.get_type() != sol::type::number || y.get_type() != sol::type::number || z.get_type() != sol::type::number)
+                raise(L, "kast.instantiate: position must be {x =, y =, z =}");
+            at = bx::Vec3{x.as<float>(), y.as<float>(), z.as<float>()};
+        } else if (position.get_type() != sol::type::lua_nil && position.get_type() != sol::type::none) {
+            raise(L, std::format("kast.instantiate: position must be {{x =, y =, z =}}, got {}", toString(L, position)));
+        }
+        const std::string file = path.as<std::string>();
+        if (!projectRoot)
+            return fail("no project is active");
+        std::shared_ptr<const PrefabAsset>& asset = prefabs[file];
+        std::string error;
+        if (!asset && !loadPrefab(*projectRoot, file, asset, error)) {
+            prefabs.erase(file);
+            return fail(error);
+        }
+        const entt::entity e = instantiatePrefab(scene, asset, parentEntity, error);
+        if (e == entt::null)
+            return fail(error);
+        if (at)
+            registry.get<Transform>(e).position = *at;
+        auto index = [&](auto& self, entt::entity created) -> void { // usable by id right away, as kast.create's
+            ids[registry.get<PersistentId>(created).value] = created;
+            for (entt::entity child : scene.children(created))
+                self(self, child);
+        };
+        index(index, e);
+        fsm.syncAll(); // StateMachines in the prefab enter their initial states
+        return sol::make_object(lua, registry.get<PersistentId>(e).value);
+    });
 
     // Per-entity material properties (Unity's renderer.material): the first set copies the entity's MeshRenderer
     // material into a MaterialInstance only it renders with; reads come from the instance, else the shared .mat.
@@ -690,7 +737,7 @@ void LuaSystems::State::bindApi()
         if (!file)
             raise(L, std::format("kast.loadScene: {}", error));
         Scene loaded;
-        if (!loadScene(file->string(), loaded, error))
+        if (!loadScene(file->string(), loaded, error, nullptr, *projectRoot))
             raise(L, std::format("kast.loadScene: {}", error));
         pending = PendingScene{toProjectPath(*projectRoot, *file).value_or(path), std::move(loaded)};
     });

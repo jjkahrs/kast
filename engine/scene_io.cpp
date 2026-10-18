@@ -3,14 +3,17 @@
 #include "components.h"
 #include "files.h"
 #include "log.h"
+#include "project.h"
 
 #include <algorithm>
 #include <cfloat>
 #include <charconv>
 #include <cmath>
 #include <format>
+#include <functional>
 #include <map>
 #include <optional>
+#include <set>
 #include <stdexcept>
 
 namespace kast {
@@ -44,6 +47,9 @@ struct Record {
     std::vector<entt::meta_any> components; // registration order
     std::vector<std::pair<std::string, Json>> luaComponents; // canonical, after the drift rules
     std::map<std::string, Json> preserved;                   // unknown types, verbatim
+    std::vector<PrefabHop> hops;             // part of a prefab instance (PrefabLink)
+    std::optional<PrefabInstance> instance;  // an instance root or placeholder
+    EntityId placeholderParent = 0;          // PlaceholderChild
 };
 
 Record parseEntity(const Json& json, SceneLoadReport& report)
@@ -297,7 +303,8 @@ Json postProcessingToJson(const ScenePostProcessing& post)
                      {"start", jsonNumber(f.start)}}}};
 }
 
-void build(const std::vector<Record>& records, Scene& scene)
+// Roots go under attach (entt::null: scene roots).
+void build(const std::vector<Record>& records, Scene& scene, entt::entity attach = entt::null)
 {
     std::map<EntityId, size_t> byId;
     std::map<std::optional<EntityId>, std::vector<size_t>> childrenOf; // file order; nullopt = roots
@@ -323,17 +330,508 @@ void build(const std::vector<Record>& records, Scene& scene)
                 scene.registry().storage<LuaComponentData>(luaStorageId(name)).emplace(entity, LuaComponentData{value});
             if (!record.preserved.empty())
                 scene.registry().emplace<PreservedComponents>(entity, record.preserved);
+            if (!record.hops.empty())
+                scene.registry().emplace<PrefabLink>(entity, record.hops);
+            if (record.instance)
+                scene.registry().emplace<PrefabInstance>(entity, *record.instance);
+            if (record.placeholderParent)
+                scene.registry().emplace<PlaceholderChild>(entity, record.placeholderParent);
             ++created;
             self(self, record.id, entity);
         }
     };
-    place(place, std::nullopt, entt::null);
+    place(place, std::nullopt, attach);
     // Every entity whose parent chain ends at a root was placed; the rest are in a parent cycle.
     if (created != records.size())
         throw Invalid("entity parent references form a cycle");
 }
 
+// Prefabs loaded while one scene or prefab loads: each file once, and the chain being loaded to refuse cycles.
+struct LoadContext {
+    std::filesystem::path root; // empty: no project, no prefab loads
+    std::vector<std::string> loading; // outermost first
+    std::map<std::string, std::shared_ptr<const PrefabAsset>> loaded;
+    std::map<std::string, std::string> failed; // why
+};
+
+void parseScene(const Json& json, Scene& out, LoadContext& context, SceneLoadReport& report, bool prefab);
+
+std::shared_ptr<const PrefabAsset> snapshot(const Scene& scene, const std::string& path)
+{
+    auto asset = std::make_shared<PrefabAsset>();
+    asset->path = path;
+    const entt::registry& registry = scene.registry();
+    scene.forEachDepthFirst([&](entt::entity e) {
+        PrefabAsset::Entity entity;
+        entity.id = registry.get<PersistentId>(e).value;
+        const entt::entity parent = scene.parent(e);
+        entity.parent = parent == entt::null ? 0 : registry.get<PersistentId>(parent).value;
+        entity.name = registry.get<Name>(e).value;
+        entity.components = entityComponentsToJson(registry, e);
+        if (const auto* link = registry.try_get<PrefabLink>(e))
+            entity.hops = link->hops;
+        if (const auto* instance = registry.try_get<PrefabInstance>(e)) {
+            if (instance->asset)
+                asset->nested[entity.id] = instance->asset;
+            else
+                entity.missingPrefab = instance->path;
+        }
+        asset->entities.push_back(std::move(entity));
+    });
+    return asset;
+}
+
+// Reads and parses a prefab file (the chain in context.loading already holds path).
+void readPrefab(LoadContext& context, const std::string& path, Scene& out, SceneLoadReport& report)
+{
+    if (context.root.empty())
+        throw Invalid("no project is open");
+    std::string reason;
+    const std::optional<std::filesystem::path> file = resolveProjectPath(context.root, path, reason);
+    if (!file)
+        throw Invalid(reason);
+    std::string text;
+    if (!readFile(*file, text))
+        throw Invalid("cannot open the file");
+    parseScene(Json::parse(text), out, context, report, true);
+}
+
+// The prefab at path, loaded once per context; null + why if it doesn't load. A nested prefab's warnings are added
+// to report, prefixed with its path.
+std::shared_ptr<const PrefabAsset> resolvePrefab(LoadContext& context, const std::string& path, std::string& why,
+                                                 SceneLoadReport& outer)
+{
+    if (const auto it = context.loaded.find(path); it != context.loaded.end())
+        return it->second;
+    if (const auto it = context.failed.find(path); it != context.failed.end()) {
+        why = it->second;
+        return nullptr;
+    }
+    if (std::ranges::find(context.loading, path) != context.loading.end()) {
+        why = "it would contain itself:";
+        for (const std::string& link : context.loading)
+            why += std::format(" '{}' >", link);
+        why += std::format(" '{}'", path);
+        return nullptr; // not cached: it depends on the chain
+    }
+    SceneLoadReport report;
+    Scene scene;
+    context.loading.push_back(path);
+    try {
+        readPrefab(context, path, scene, report);
+    } catch (const Json::exception& e) {
+        why = e.what();
+    } catch (const Invalid& e) {
+        why = e.what();
+    }
+    context.loading.pop_back();
+    if (!why.empty()) {
+        context.failed[path] = why;
+        return nullptr;
+    }
+    for (const std::string& warning : report.warnings)
+        outer.warnings.push_back(std::format("prefab '{}': {}", path, warning));
+    std::shared_ptr<const PrefabAsset> asset = snapshot(scene, path);
+    context.loaded[path] = asset;
+    return asset;
+}
+
+// A built-in component's overridden value is still valid (fields check each other, e.g. Collider height >= 2 * radius,
+// so a prefab change can invalidate an override that was fine). If not, a warning: the prefab's value is used, so a
+// prefab edit never stops scenes from loading. Lua components get the drift rules later instead.
+bool keepsValid(const std::string& type, const Json& value, const std::string& label, SceneLoadReport& report)
+{
+    const entt::meta_type meta = findComponentType(type);
+    std::string error;
+    if (!meta || componentFromJson(meta, value, error))
+        return true;
+    report.warnings.push_back(std::format("{}: override of \"{}\" dropped ({}); the prefab's value is used", label,
+                                          type, error));
+    return false;
+}
+
+// An instance entry's overrides applied to the prefab entity's name and components.
+void applyEntry(const Json& entry, std::string& name, Json& components, const std::string& label, SceneLoadReport& report)
+{
+    if (entry.contains("name")) {
+        if (!entry["name"].is_string())
+            throw Invalid("instance: \"name\" must be a string");
+        name = entry["name"].get<std::string>();
+    }
+    if (entry.contains("removed")) {
+        if (!entry["removed"].is_array())
+            throw Invalid("instance: \"removed\" must be an array of component names");
+        for (const Json& removed : entry["removed"]) {
+            if (!removed.is_string())
+                throw Invalid("instance: \"removed\" must be an array of component names");
+            components.erase(removed.get<std::string>());
+        }
+    }
+    if (entry.contains("components")) {
+        if (!entry["components"].is_object())
+            throw Invalid("instance: \"components\" must be an object");
+        for (const auto& [key, fields] : entry["components"].items()) {
+            if (!fields.is_object())
+                throw Invalid(std::format("instance: \"components\": \"{}\" must be an object of fields", key));
+            if (!components.contains(key) || !components[key].is_object()) {
+                report.warnings.push_back(std::format("{}: override of \"{}\", which its prefab no longer has, ignored",
+                                                      label, key));
+                continue;
+            }
+            Json merged = components[key];
+            for (const auto& [fieldName, value] : fields.items())
+                merged[fieldName] = value;
+            if (keepsValid(key, merged, label, report))
+                components[key] = std::move(merged);
+        }
+    }
+    if (entry.contains("added")) {
+        if (!entry["added"].is_object())
+            throw Invalid("instance: \"added\" must be an object");
+        for (const auto& [key, value] : entry["added"].items())
+            if (keepsValid(key, value, label, report))
+                components[key] = value;
+    }
+}
+
+// Records for an instance of asset with root id rootId: the prefab's entities with entries' overrides (by source; the
+// root's entry is rootEntry) and ids (else fresh ones). entries null: a new instance, no overrides.
+void expandAsset(const std::shared_ptr<const PrefabAsset>& asset, EntityId rootId, const Json& parent,
+                 const std::string& rootName, const std::map<EntityId, const Json*>& entries, const Json* rootEntry,
+                 const std::function<EntityId()>& fresh, std::vector<Record>& records, SceneLoadReport& report)
+{
+    std::map<EntityId, EntityId> sceneIds; // prefab-local -> scene
+    std::set<EntityId> skipped;            // deleted, with their subtrees
+    for (const PrefabAsset::Entity& base : asset->entities) {
+        const bool root = &base == &asset->entities.front();
+        const Json* entry = root ? rootEntry : nullptr;
+        if (const auto it = entries.find(base.id); !root && it != entries.end() && it->second != rootEntry)
+            entry = it->second;
+        if (!root && (skipped.contains(base.parent) || (entry && entry->contains("deleted")))) {
+            skipped.insert(base.id);
+            continue;
+        }
+        const EntityId id = root ? rootId : entry ? (*entry)["id"].get<EntityId>() : fresh();
+        sceneIds[base.id] = id;
+        std::string name = root ? rootName : base.name;
+        Json components = base.components;
+        if (entry)
+            applyEntry(*entry, name, components, std::format("Entity '{}' (id {})", name, id), report);
+        Record record = parseEntity(Json{{"id", id}, {"name", name},
+                                         {"parent", root ? parent : Json(sceneIds.at(base.parent))},
+                                         {"components", std::move(components)}},
+                                    report);
+        record.hops.push_back({rootId, base.id});
+        for (const PrefabHop& hop : base.hops)
+            record.hops.push_back({sceneIds.at(hop.root), hop.local});
+        if (root)
+            record.instance = PrefabInstance{asset->path, asset, nullptr};
+        else if (const auto nested = asset->nested.find(base.id); nested != asset->nested.end())
+            record.instance = PrefabInstance{nested->second->path, nested->second, nullptr};
+        else if (!base.missingPrefab.empty())
+            record.instance = PrefabInstance{base.missingPrefab, nullptr, nullptr};
+        records.push_back(std::move(record));
+    }
+}
+
+// An instance record ("prefab" + "instance" entries): its entities' records, or a placeholder whose entry ids become
+// aliases of it (children saved under them load under the placeholder).
+void parseInstance(const Json& json, LoadContext& context, const std::function<EntityId()>& fresh,
+                   std::vector<Record>& records, std::map<EntityId, EntityId>& aliases, SceneLoadReport& report)
+{
+    const EntityId id = entityId(field(json, "id"), "id");
+    const Json& name = field(json, "name");
+    if (!name.is_string())
+        throw Invalid("\"name\" must be a string");
+    const Json& parent = field(json, "parent");
+    if (!parent.is_null())
+        entityId(parent, "parent");
+    const Json& prefab = field(json, "prefab");
+    if (!prefab.is_string() || prefab.get<std::string>().empty())
+        throw Invalid("\"prefab\" must be a non-empty string");
+    const std::string path = prefab.get<std::string>();
+    const Json& entries = field(json, "instance");
+    if (!entries.is_array())
+        throw Invalid("\"instance\" must be an array");
+
+    std::map<EntityId, const Json*> bySource;
+    const Json* rootEntry = nullptr; // the one with the record's id
+    for (const Json& entry : entries) {
+        if (!entry.is_object())
+            throw Invalid("\"instance\" entries must be objects");
+        const bool deleted = entry.contains("deleted");
+        if (deleted && entry["deleted"] != true)
+            throw Invalid("instance: \"deleted\" must be true");
+        const bool isRoot = !deleted && entityId(field(entry, "id"), "id") == id;
+        if (isRoot)
+            rootEntry = &entry;
+        if (!isRoot || entry.contains("source")) {
+            const EntityId source = entityId(field(entry, "source"), "source");
+            if (!bySource.emplace(source, &entry).second)
+                throw Invalid(std::format("instance: two entries for source {}", source));
+        }
+    }
+
+    const std::string label = std::format("Entity '{}' (id {})", name.get<std::string>(), id);
+    std::string why;
+    if (const std::shared_ptr<const PrefabAsset> asset = resolvePrefab(context, path, why, report)) {
+        expandAsset(asset, id, parent, name.get<std::string>(), bySource, rootEntry, fresh, records, report);
+        return;
+    }
+    report.warnings.push_back(std::format("{}: prefab '{}' did not load ({}); kept as a placeholder", label, path, why));
+    Json transform = componentToJson(entt::meta_any(Transform{}));
+    if (rootEntry && rootEntry->contains("components") && (*rootEntry)["components"].contains("Transform"))
+        transform = (*rootEntry)["components"]["Transform"];
+    Record record = parseEntity(Json{{"id", id}, {"name", std::filesystem::path(path).stem().string()},
+                                     {"parent", parent}, {"components", {{"Transform", transform}}}},
+                                report);
+    record.instance = PrefabInstance{path, nullptr, json};
+    for (const Json& entry : entries)
+        if (entry.contains("id") && entry["id"].get<EntityId>() != id)
+            aliases[entry["id"].get<EntityId>()] = id;
+    records.push_back(std::move(record));
+}
+
+// Throws Invalid / Json::exception. prefab: exactly one root, which is not an instance; no scene-level blocks needed.
+void parseScene(const Json& json, Scene& out, LoadContext& context, SceneLoadReport& report, bool prefab)
+{
+    const Json& version = field(json, "version");
+    if (!version.is_number_integer() || version.get<int>() != kSceneFileVersion)
+        throw Invalid(std::format("unsupported \"version\" {} (expected {}; older files are not migrated)", version.dump(),
+                                  kSceneFileVersion));
+
+    const Json& entities = field(json, "entities");
+    if (!entities.is_array())
+        throw Invalid("\"entities\" must be an array");
+    // Entities new in a prefab since an instance was saved get ids past every id the file names.
+    EntityId maxId = 0;
+    const auto see = [&](const Json& object) {
+        if (object.is_object() && object.contains("id") && object["id"].is_number_unsigned())
+            maxId = std::max(maxId, object["id"].get<EntityId>());
+    };
+    for (const Json& entity : entities) {
+        see(entity);
+        if (entity.is_object() && entity.contains("instance") && entity["instance"].is_array())
+            for (const Json& entry : entity["instance"])
+                see(entry);
+    }
+    EntityId next = maxId + 1;
+    const std::function<EntityId()> fresh = [&] { return next++; };
+
+    std::vector<Record> records;
+    std::map<EntityId, EntityId> aliases; // a placeholder's unloaded entity ids -> the placeholder
+    for (size_t i = 0; i < entities.size(); ++i) {
+        try {
+            if (entities[i].is_object() && entities[i].contains("prefab"))
+                parseInstance(entities[i], context, fresh, records, aliases, report);
+            else
+                records.push_back(parseEntity(entities[i], report));
+        } catch (const Invalid& e) {
+            throw Invalid(std::format("entities[{}]: {}", i, e.what()));
+        }
+    }
+    for (Record& record : records) {
+        if (const auto alias = record.parent ? aliases.find(*record.parent) : aliases.end(); alias != aliases.end()) {
+            record.placeholderParent = *record.parent;
+            record.parent = alias->second;
+        }
+    }
+
+    Scene scene;
+    build(records, scene);
+    scene.reserveId(std::max(maxId, next - 1));
+    if (prefab) {
+        if (scene.children(entt::null).size() != 1)
+            throw Invalid("a prefab must have exactly one root entity");
+        if (scene.registry().all_of<PrefabInstance>(scene.children(entt::null).front()))
+            throw Invalid("the root of a prefab can't itself be a prefab instance");
+    }
+    if (json.contains("editor")) {
+        if (!json["editor"].is_object())
+            throw Invalid("\"editor\" must be an object");
+        scene.editorData = json["editor"];
+    }
+    if (json.contains("lighting"))
+        scene.lighting = parseLighting(json["lighting"]);
+    if (json.contains("postProcessing"))
+        scene.postProcessing = parsePostProcessing(json["postProcessing"]);
+    if (json.contains("physics"))
+        scene.physics = parsePhysics(json["physics"]);
+    if (json.contains("systems")) {
+        const Json& systems = json["systems"];
+        if (!systems.is_array())
+            throw Invalid("\"systems\" must be an array");
+        for (size_t i = 0; i < systems.size(); ++i) {
+            if (!systems[i].is_string() || systems[i].get<std::string>().empty())
+                throw Invalid(std::format("systems[{}]: must be a non-empty string", i));
+            scene.systems.push_back(systems[i].get<std::string>());
+        }
+    }
+    out = std::move(scene);
+}
+
+EntityId idOf(const Scene& scene, entt::entity entity) { return scene.registry().get<PersistentId>(entity).value; }
+
+Json parentJson(const Scene& scene, entt::entity entity)
+{
+    const entt::entity parent = scene.parent(entity);
+    if (parent == entt::null)
+        return nullptr;
+    const auto* child = scene.registry().try_get<PlaceholderChild>(entity);
+    return child && isMissingPrefab(scene, parent) ? child->parent : idOf(scene, parent);
+}
+
+Json instanceToJson(const Scene& scene, entt::entity root, const PrefabInstance& instance)
+{
+    const entt::registry& registry = scene.registry();
+    const EntityId rootId = idOf(scene, root);
+    std::map<EntityId, entt::entity> linked; // prefab-local -> entity
+    auto collect = [&](auto& self, entt::entity entity) -> void {
+        if (const auto* link = registry.try_get<PrefabLink>(entity); link && link->hops.front().root == rootId)
+            linked[link->hops.front().local] = entity;
+        for (entt::entity child : scene.children(entity))
+            self(self, child);
+    };
+    collect(collect, root);
+
+    Json entries = Json::array();
+    std::set<EntityId> absent;
+    for (const PrefabAsset::Entity& base : instance.asset->entities) {
+        if (absent.contains(base.parent)) {
+            absent.insert(base.id);
+            continue;
+        }
+        const auto it = linked.find(base.id);
+        if (it == linked.end()) {
+            absent.insert(base.id);
+            entries.push_back({{"source", base.id}, {"deleted", true}});
+            continue;
+        }
+        Json entry = {{"source", base.id}, {"id", idOf(scene, it->second)}};
+        const Json overrides = diffPrefabEntity(registry.get<Name>(it->second).value,
+                                                entityComponentsToJson(registry, it->second), base, it->second == root);
+        for (const auto& [key, value] : overrides.items())
+            entry[key] = value;
+        entries.push_back(std::move(entry));
+    }
+    return {{"id", rootId}, {"name", registry.get<Name>(root).value}, {"parent", parentJson(scene, root)},
+            {"prefab", instance.path}, {"instance", std::move(entries)}};
+}
+
+Json entitiesToJson(const Scene& scene)
+{
+    const entt::registry& registry = scene.registry();
+    Json entities = Json::array();
+    scene.forEachDepthFirst([&](entt::entity entity) {
+        const EntityId id = idOf(scene, entity);
+        const auto* link = registry.try_get<PrefabLink>(entity);
+        if (link && link->hops.front().root != id)
+            return; // in its instance root's record
+        if (const auto* instance = registry.try_get<PrefabInstance>(entity)) {
+            if (instance->asset) {
+                entities.push_back(instanceToJson(scene, entity, *instance));
+                return;
+            }
+            Json json = instance->placeholder;
+            if (!json.is_object()) // a nested placeholder that an Unpack made top-level: only its root's state is known
+                json = {{"id", id}, {"name", registry.get<Name>(entity).value}, {"parent", nullptr},
+                        {"prefab", instance->path},
+                        {"instance", Json::array({{{"id", id},
+                                                   {"components", {{"Transform", componentToJson(
+                                                                        registry, entity, ComponentType(entt::resolve<Transform>()))}}}}})}};
+            json["id"] = id;
+            json["parent"] = parentJson(scene, entity);
+            entities.push_back(std::move(json));
+            return;
+        }
+        Json json;
+        json["id"] = id;
+        json["name"] = registry.get<Name>(entity).value;
+        json["parent"] = parentJson(scene, entity);
+        json["components"] = entityComponentsToJson(registry, entity);
+        entities.push_back(std::move(json));
+    });
+    return entities;
+}
+
 } // namespace
+
+Json entityComponentsToJson(const entt::registry& registry, entt::entity entity)
+{
+    Json components = Json::object();
+    for (const ComponentType& type : allComponentTypes())
+        if (hasComponent(registry, entity, type))
+            components[type.name()] = componentToJson(registry, entity, type);
+    if (const auto* preserved = registry.try_get<PreservedComponents>(entity))
+        for (const auto& [name, value] : preserved->byName)
+            components[name] = value;
+    return components;
+}
+
+Json diffPrefabEntity(const std::string& name, const Json& components, const PrefabAsset::Entity& base, bool root)
+{
+    Json out = Json::object();
+    if (!root && name != base.name)
+        out["name"] = name;
+    Json changed = Json::object();
+    Json added = Json::object();
+    Json removed = Json::array();
+    for (const auto& [key, baseValue] : base.components.items()) {
+        if (!components.contains(key)) {
+            removed.push_back(key);
+            continue;
+        }
+        const Json& value = components[key];
+        if (root && key == entt::resolve<Transform>().name()) {
+            changed[key] = value; // the instance's own
+        } else if (value.is_object() && baseValue.is_object()) {
+            Json fields = Json::object();
+            for (const auto& [field, fieldValue] : value.items())
+                if (!baseValue.contains(field) || baseValue[field] != fieldValue)
+                    fields[field] = fieldValue;
+            if (!fields.empty())
+                changed[key] = std::move(fields);
+        } else if (value != baseValue) {
+            added[key] = value;
+        }
+    }
+    for (const auto& [key, value] : components.items())
+        if (!base.components.contains(key))
+            added[key] = value;
+    if (!changed.empty())
+        out["components"] = std::move(changed);
+    if (!added.empty())
+        out["added"] = std::move(added);
+    if (!removed.empty())
+        out["removed"] = std::move(removed);
+    return out;
+}
+
+entt::entity instantiatePrefab(Scene& scene, const std::shared_ptr<const PrefabAsset>& asset, entt::entity parent,
+                               std::string& error)
+{
+    // Checked first: build would stop at the limit with part of the instance created.
+    std::map<EntityId, int> depth; // in the prefab, root = 1
+    int height = 0;
+    for (const PrefabAsset::Entity& entity : asset->entities)
+        height = std::max(height, depth[entity.id] = entity.parent ? depth[entity.parent] + 1 : 1);
+    if (parent != entt::null && scene.depth(parent) + height > kMaxHierarchyDepth) {
+        error = std::format("the instance would be deeper than {} levels (the hierarchy limit)", kMaxHierarchyDepth);
+        return entt::null;
+    }
+    try {
+        std::vector<Record> records;
+        SceneLoadReport report;
+        const EntityId id = scene.newId();
+        expandAsset(asset, id, nullptr, asset->entities.front().name, {}, nullptr, [&] { return scene.newId(); },
+                    records, report);
+        build(records, scene, parent);
+        return scene.children(parent).back();
+    } catch (const Invalid& e) {
+        error = e.what();
+    }
+    return entt::null;
+}
 
 double jsonNumber(float value)
 {
@@ -344,51 +842,13 @@ double jsonNumber(float value)
     return result;
 }
 
-bool sceneFromJson(const Json& json, Scene& out, std::string& error, SceneLoadReport* report)
+bool sceneFromJson(const Json& json, Scene& out, std::string& error, SceneLoadReport* report,
+                   const std::filesystem::path& projectRoot)
 {
     SceneLoadReport local;
+    LoadContext context{projectRoot};
     try {
-        const Json& version = field(json, "version");
-        if (!version.is_number_integer() || version.get<int>() != kSceneFileVersion)
-            throw Invalid(std::format("unsupported \"version\" {} (expected {}; older scenes are not migrated)",
-                                      version.dump(), kSceneFileVersion));
-
-        const Json& entities = field(json, "entities");
-        if (!entities.is_array())
-            throw Invalid("\"entities\" must be an array");
-        std::vector<Record> records;
-        for (size_t i = 0; i < entities.size(); ++i) {
-            try {
-                records.push_back(parseEntity(entities[i], local));
-            } catch (const Invalid& e) {
-                throw Invalid(std::format("entities[{}]: {}", i, e.what()));
-            }
-        }
-
-        Scene scene;
-        build(records, scene);
-        if (json.contains("editor")) {
-            if (!json["editor"].is_object())
-                throw Invalid("\"editor\" must be an object");
-            scene.editorData = json["editor"];
-        }
-        if (json.contains("lighting"))
-            scene.lighting = parseLighting(json["lighting"]);
-        if (json.contains("postProcessing"))
-            scene.postProcessing = parsePostProcessing(json["postProcessing"]);
-        if (json.contains("physics"))
-            scene.physics = parsePhysics(json["physics"]);
-        if (json.contains("systems")) {
-            const Json& systems = json["systems"];
-            if (!systems.is_array())
-                throw Invalid("\"systems\" must be an array");
-            for (size_t i = 0; i < systems.size(); ++i) {
-                if (!systems[i].is_string() || systems[i].get<std::string>().empty())
-                    throw Invalid(std::format("systems[{}]: must be a non-empty string", i));
-                scene.systems.push_back(systems[i].get<std::string>());
-            }
-        }
-        out = std::move(scene);
+        parseScene(json, out, context, local, false);
         if (report)
             *report = std::move(local);
         return true;
@@ -400,7 +860,8 @@ bool sceneFromJson(const Json& json, Scene& out, std::string& error, SceneLoadRe
     return false;
 }
 
-bool loadScene(const std::string& path, Scene& out, std::string& error, SceneLoadReport* report)
+bool loadScene(const std::string& path, Scene& out, std::string& error, SceneLoadReport* report,
+               const std::filesystem::path& projectRoot)
 {
     std::string text;
     if (!readFile(path, text)) {
@@ -410,7 +871,7 @@ bool loadScene(const std::string& path, Scene& out, std::string& error, SceneLoa
     std::string reason;
     try {
         SceneLoadReport local;
-        if (sceneFromJson(Json::parse(text), out, reason, &local)) {
+        if (sceneFromJson(Json::parse(text), out, reason, &local, projectRoot)) {
             for (const std::string& warning : local.warnings)
                 log::warn(std::format("Scene '{}': {}", path, warning));
             if (report)
@@ -424,30 +885,52 @@ bool loadScene(const std::string& path, Scene& out, std::string& error, SceneLoa
     return false;
 }
 
+bool loadPrefab(const std::filesystem::path& projectRoot, const std::string& path, std::shared_ptr<const PrefabAsset>& out,
+                std::string& error, SceneLoadReport* report)
+{
+    LoadContext context{projectRoot};
+    SceneLoadReport local;
+    std::string why;
+    std::shared_ptr<const PrefabAsset> asset = resolvePrefab(context, path, why, local);
+    if (!asset) {
+        error = std::format("Invalid prefab '{}': {}", path, why);
+        return false;
+    }
+    for (const std::string& warning : local.warnings)
+        log::warn(warning);
+    out = std::move(asset);
+    if (report)
+        *report = std::move(local);
+    return true;
+}
+
+bool loadPrefabScene(const std::filesystem::path& projectRoot, const std::string& path, Scene& out, std::string& error,
+                     SceneLoadReport* report)
+{
+    LoadContext context{projectRoot, {path}}; // an instance of itself inside is a cycle
+    SceneLoadReport local;
+    std::string reason;
+    try {
+        readPrefab(context, path, out, local);
+        for (const std::string& warning : local.warnings)
+            log::warn(std::format("Prefab '{}': {}", path, warning));
+        if (report)
+            *report = std::move(local);
+        return true;
+    } catch (const Json::exception& e) {
+        reason = e.what();
+    } catch (const Invalid& e) {
+        reason = e.what();
+    }
+    error = std::format("Invalid prefab '{}': {}", path, reason);
+    return false;
+}
+
 Json sceneToJson(const Scene& scene)
 {
-    const entt::registry& registry = scene.registry();
-    const std::vector<ComponentType> types = allComponentTypes();
-    Json entities = Json::array();
-    scene.forEachDepthFirst([&](entt::entity entity) {
-        const entt::entity parent = scene.parent(entity);
-        Json json;
-        json["id"] = registry.get<PersistentId>(entity).value;
-        json["name"] = registry.get<Name>(entity).value;
-        json["parent"] = parent == entt::null ? Json(nullptr) : Json(registry.get<PersistentId>(parent).value);
-        Json& components = json["components"] = Json::object();
-        for (const ComponentType& type : types)
-            if (hasComponent(registry, entity, type))
-                components[type.name()] = componentToJson(registry, entity, type);
-        if (const auto* preserved = registry.try_get<PreservedComponents>(entity))
-            for (const auto& [name, value] : preserved->byName)
-                components[name] = value;
-        entities.push_back(std::move(json));
-    });
-
     Json root;
     root["version"] = kSceneFileVersion;
-    root["entities"] = std::move(entities);
+    root["entities"] = entitiesToJson(scene);
     root["systems"] = scene.systems;
     const SceneLighting& lighting = scene.lighting;
     root["lighting"] = {{"ambientColor", Json::array({jsonNumber(lighting.ambientColor.x), jsonNumber(lighting.ambientColor.y),
@@ -460,10 +943,39 @@ Json sceneToJson(const Scene& scene)
     return root;
 }
 
+Json prefabToJson(const Scene& scene) { return {{"version", kSceneFileVersion}, {"entities", entitiesToJson(scene)}}; }
+
 bool saveScene(const Scene& scene, const std::string& path, std::string& error)
 {
     if (!writeFileAtomic(path, sceneToJson(scene).dump(2) + '\n')) {
         error = std::format("Cannot write scene '{}'", path);
+        return false;
+    }
+    return true;
+}
+
+bool savePrefab(const Scene& scene, const std::filesystem::path& projectRoot, const std::string& path, std::string& error)
+{
+    const std::vector<entt::entity>& roots = scene.children(entt::null);
+    if (roots.size() != 1) {
+        error = std::format("Cannot save prefab '{}': it must have exactly one root entity (it has {})", path, roots.size());
+        return false;
+    }
+    if (scene.registry().all_of<PrefabInstance>(roots.front())) {
+        error = std::format("Cannot save prefab '{}': its root can't itself be a prefab instance", path);
+        return false;
+    }
+    if (std::string cycle = prefabCycleError(scene, path); !cycle.empty()) {
+        error = std::format("Cannot save prefab '{}': {}", path, cycle);
+        return false;
+    }
+    std::string reason;
+    const std::optional<std::filesystem::path> file = resolveProjectPath(projectRoot, path, reason);
+    std::error_code ec;
+    if (file)
+        std::filesystem::create_directories(file->parent_path(), ec); // a failed write below says so
+    if (!file || !writeFileAtomic(*file, prefabToJson(scene).dump(2) + '\n')) {
+        error = std::format("Cannot write prefab '{}'{}", path, file ? "" : ": " + reason);
         return false;
     }
     return true;

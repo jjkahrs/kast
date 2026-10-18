@@ -1,0 +1,72 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Crate",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            0.5,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/checker.mat",
+          "castShadows": true,
+          "receiveShadows": true
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Lamp",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.6,
+            0.2
+          ],
+          "intensity": 2.0,
+          "range": 3.0,
+          "castShadows": false,
+          "bias": 0.05
+        }
+      }
+    }
+  ]
+}

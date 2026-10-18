@@ -44,6 +44,18 @@ struct Document {
 
     PanelFocus focusRequest = PanelFocus::None; // set by Play/Stop, cleared by the panel that takes focus
 
+    // Prefab edit mode: scene, path, dirty and selection are the open .prefab's (path: its file; saving writes the
+    // prefab), and the scene being edited waits here. No Play while it is set.
+    struct PrefabEdit {
+        kast::Scene scene;
+        EditorCamera camera;
+        std::string path;
+        bool dirty = false;
+        kast::EntityId selected = 0;
+        std::string prefab; // the open prefab, project-relative
+    };
+    std::optional<PrefabEdit> prefabEdit;
+
     // Called by startPlay once the Lua session has started (its inits ran) and by stopPlay before it stops: main's
     // hand-off of the Online panel's login to kast.auth. Unset: nothing.
     std::function<void(kast::LuaSystems&)> onPlayStarted, onPlayStopping;
@@ -158,7 +170,42 @@ entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent);
 // dirty. What dropping a model from the Assets panel on the viewport or the Hierarchy does.
 entt::entity createModelEntity(Document& doc, const std::string& path, entt::entity parent);
 void deleteSelected(Document& doc);
-void duplicateSelected(Document& doc);
+void duplicateSelected(Document& doc); // instances inside the copy stay linked (kast::duplicateLinked)
+
+// Prefabs (docs/editor/prefabs.html). Paths are project-relative; each needs a project and Play stopped (false +
+// error otherwise, the document unchanged).
+// Why prefabs can't be changed now (no project, or Play not stopped); null if they can.
+const char* prefabEditBlocker(const Document& doc);
+// Writes entity's subtree as <folder>/<entity name>.prefab (uniquePrefabName; folder "" = the project root), makes
+// entity an instance of it and selects it. path is the prefab written.
+bool createPrefabFrom(Document& doc, entt::entity entity, const std::string& folder, std::string& path, std::string& error);
+// A new instance of the prefab under parent (entt::null = root), selected. Refused if it would contain the prefab open
+// in prefab edit mode.
+entt::entity dropPrefab(Document& doc, const std::string& path, entt::entity parent, std::string& error);
+// Reloads doc.scene (and the scene waiting behind prefab edit mode) so every instance shows its prefab file as it is
+// now, keeping overrides and the selection (by id). Logs failures.
+void refreshPrefabs(Document& doc);
+// Enters prefab edit mode on path (or switches to it while already editing one): doc.scene becomes the prefab. Unsaved
+// changes of a prefab already open are discarded (FileActions prompts first).
+bool openPrefab(Document& doc, const std::string& path, std::string& error);
+// Leaves prefab edit mode, discarding unsaved prefab changes: the waiting scene comes back with its instances
+// refreshed. No-op outside edit mode.
+void closePrefab(Document& doc);
+// An Inspector prefab action (and the --prefab-* flags): on entity (by id); component "Name" means the entity name.
+struct PrefabOp {
+    enum class Kind { RevertField, RevertComponent, RevertDeleted, RevertAll, ApplyField, ApplyComponent, ApplyDeleted,
+                      ApplyAll, Unpack } kind = Kind::RevertAll;
+    kast::EntityId entity = 0; // the instance root for *Deleted, *All and Unpack
+    std::string component;
+    std::string field;
+    size_t hop = 0;          // Apply*: the nesting level written (0 = outermost)
+    kast::EntityId local = 0; // *Deleted: the deleted child's prefab-local id
+};
+// Runs op (prefabEditBlocker applies); Apply writes the .prefab files and every instance refreshes. Marks the document
+// dirty when it changed. False + error if it couldn't run.
+bool runPrefabOp(Document& doc, const PrefabOp& op, std::string& error);
+// "<scene name> > <prefab file name>" in prefab edit mode, else displayName.
+std::string breadcrumb(const Document& doc);
 
 // Default scene: angled light, ground plane, cube resting on it, a Main Camera and an editor camera framing them.
 // Clears path and dirty; keeps the active project.
@@ -195,6 +242,11 @@ public:
     void open();
     // Opens path (no dialog), after the unsaved-changes prompt if the document is dirty. Failures show the Error modal.
     void openScene(std::string path);
+    // Prefab edit mode: opens path (project-relative) / goes back to the scene, after the unsaved-changes prompt if
+    // the open prefab is dirty. Opening a scene, New, Build or Quit while a prefab is open leave edit mode first (and
+    // then prompt for the scene).
+    void openPrefab(std::string path);
+    void backFromPrefab();
     void save();
     void saveAs();
     void exit();
@@ -225,7 +277,7 @@ public:
     bool onQuitRequested();
 
 private:
-    enum class Pending { None, New, Open, OpenPath, Quit, Build, BuildAndRun };
+    enum class Pending { None, New, Open, OpenPath, Quit, Build, BuildAndRun, OpenPrefab, Back };
     enum class DialogKind { Open, SaveAs, BuildFolder, CaFile };
 
     // Runs action now, or after the unsaved-changes modal if the document is dirty.
@@ -250,6 +302,7 @@ private:
     Pending pending_ = Pending::None;   // action waiting on the unsaved-changes modal
     Pending afterSave_ = Pending::None; // action to run once a Save As dialog saves successfully
     std::string openPath_; // the scene Pending::OpenPath opens
+    std::string openPrefab_; // the prefab Pending::OpenPrefab opens
     bool confirmRequested_ = false;
     bool quitConfirmed_ = false;
     std::string error_;

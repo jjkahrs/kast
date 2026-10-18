@@ -1813,6 +1813,50 @@ void checkReplicationOffline()
 // NPC spawns (world.spawn kind "npc"): clones of their own template, a child of NetworkReplication.npcTemplates, which
 // leaves the scene at start with every template under it; an empty or missing template falls back to the template
 // entity with one warning per name. Players are unchanged.
+
+// A template entity that is a prefab instance clones like any other: its components and subtree, with no prefab link.
+void checkReplicationPrefabTemplate()
+{
+    const std::filesystem::path dir = netProject("replication_prefab");
+    kast::Scene prefab;
+    const entt::entity root = prefab.create("Template");
+    prefab.registry().get<kast::Transform>(root).scale = {2, 2, 2};
+    const entt::entity body = prefab.create("Body", root);
+    prefab.registry().emplace<kast::MeshRenderer>(body, kast::MeshRenderer{.primitive = kast::Primitive::Sphere});
+    std::string error;
+    check(kast::savePrefab(prefab, dir, "prefabs/template.prefab", error), "replication prefab: write the template prefab");
+    std::shared_ptr<const kast::PrefabAsset> asset;
+    kast::Scene scene;
+    check(kast::loadPrefab(dir, "prefabs/template.prefab", asset, error), "replication prefab: load it");
+    const entt::entity instance = kast::instantiatePrefab(scene, asset, entt::null, error);
+    scene.registry().get<kast::Transform>(instance).position = {5, 0, 5}; // an instance override
+    const entt::entity m = scene.create("Manager");
+    scene.registry().emplace<kast::NetworkReplication>(m, kast::NetworkReplication{"Template", 100.0f});
+    scene.registry().emplace<kast::NetworkLocalPlayer>(scene.create("Player"));
+    check(kast::saveScene(scene, (dir / "r.scene").string(), error), "replication prefab: save the scene");
+    kast::Scene s;
+    check(kast::loadScene((dir / "r.scene").string(), s, error, nullptr, dir) && named(s, "Template") != entt::null &&
+              kast::isPrefabRoot(s, named(s, "Template")),
+          "replication prefab: the template loads as an instance");
+
+    Network net;
+    kast::AuthClient auth{net};
+    kast::WorldClient world{net, auth};
+    world.reset(kast::AuthConfig{"http://127.0.0.1:1", ""});
+    kast::EventBus bus;
+    kast::Replication r;
+    r.start(s, bus, world);
+    bus.publish("world.spawn", {{"entityId", 2}, {"name", "Other"}, {"position", at(10, 0, 10)}, {"heading", 0}});
+    bus.drain();
+    const entt::entity clone = r.clone(2);
+    const auto& kids = s.valid(clone) ? s.children(clone) : std::vector<entt::entity>{};
+    check(named(s, "Template") == entt::null && s.valid(clone) && kids.size() == 1 &&
+              s.registry().all_of<kast::MeshRenderer>(kids[0]) &&
+              approx(s.registry().get<kast::Transform>(clone).scale, {2, 2, 2}) &&
+              !s.registry().any_of<kast::PrefabLink, kast::PrefabInstance>(clone),
+          "replication prefab: the clone copies the instance's subtree and components, unlinked");
+    r.stop();
+}
 void checkReplicationNpcs()
 {
     const auto build = [](kast::Scene& s) {
@@ -2972,6 +3016,7 @@ int netSelfCheck()
     checkWorldLuaApi();
     checkWorldSendOffline();
     checkReplicationOffline();
+    checkReplicationPrefabTemplate();
     checkReplicationNpcs();
     checkReplicationComponents();
     checkReplicationFakeServer();

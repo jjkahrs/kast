@@ -69,3 +69,15 @@ bool moveAsset(const std::filesystem::path& source, const std::filesystem::path&
 // Sends target to the Recycle Bin, without a prompt unless Windows can't recycle it (it then asks before deleting it
 // for good). False + error if that fails or is cancelled.
 bool recycleAsset(const std::filesystem::path& target, std::string& error);
+
+// Prefabs (see prefab.h).
+// "<name>.prefab", else "<name>_2.prefab", ...: the first not taken in dir (ignoring case). name is an entity name with
+// characters a file name can't hold replaced by '_' ("Prefab" if nothing usable is left).
+std::string uniquePrefabName(const std::filesystem::path& dir, const std::string& entityName);
+// The .scene and .prefab files under root (project-relative, sorted) with an instance of a prefab at target or inside
+// it (target: project-relative, a .prefab or a folder).
+std::vector<std::string> prefabUsers(const std::filesystem::path& root, const std::string& target);
+// Rewrites the prefab references in every .scene and .prefab under root that point at from or inside it (as
+// remapProjectPaths). Returns the files changed (project-relative); a file that can't be written is logged.
+std::vector<std::string> remapPrefabReferences(const std::filesystem::path& root, const std::string& from,
+                                               const std::string& to);

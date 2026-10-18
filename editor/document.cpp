@@ -9,6 +9,7 @@
 #include <lua_components.h>
 #include <scene_io.h>
 #include <play.h>
+#include <prefab.h>
 #include <state_machines.h>
 
 #include <SDL3/SDL.h>
@@ -191,7 +192,7 @@ void duplicateSelected(Document& doc)
 {
     if (!doc.scene.valid(doc.selected))
         return;
-    doc.selected = doc.scene.duplicate(doc.selected);
+    doc.selected = kast::duplicateLinked(doc.scene, doc.selected);
     markDirty(doc);
 }
 
@@ -212,6 +213,10 @@ bool selectById(Document& doc, kast::EntityId id)
 
 void startPlay(Document& doc)
 {
+    if (doc.prefabEdit) {
+        kast::log::warn("Play is disabled while a prefab is open: go Back to the scene first");
+        return;
+    }
     if (doc.play == PlayState::Stopped) {
         doc.playSnapshot = kast::sceneToJson(doc.scene);
         doc.playSnapshotDirty = doc.dirty;
@@ -258,7 +263,7 @@ void stopPlay(Document& doc)
                                         ? doc.scene.registry().get<kast::PersistentId>(doc.selected).value
                                         : 0;
     std::string error;
-    if (!kast::sceneFromJson(doc.playSnapshot, doc.scene, error))
+    if (!kast::sceneFromJson(doc.playSnapshot, doc.scene, error, nullptr, rootOf(doc.project).value_or(std::filesystem::path())))
         kast::log::error(std::format("Cannot restore the scene from before Play: {}", error)); // keeps the play-mode scene
     doc.play = PlayState::Stopped;
     doc.playSnapshot = nullptr;
@@ -347,6 +352,215 @@ void remapScenePaths(Document& doc, const std::string& from, const std::string& 
         if (moved || overrides)
             markDirty(doc);
     }
+    // Instances (also in the scene waiting behind prefab edit mode, which is dirtied with it); refreshPrefabs then
+    // reloads them from the moved files.
+    const auto remapInstances = [&](kast::Scene& scene) {
+        bool changed = false;
+        for (auto [entity, instance] : scene.registry().view<kast::PrefabInstance>().each()) {
+            std::vector<std::string> path = {instance.path};
+            if (remapProjectPaths(path, from, to)) {
+                instance.path = path[0];
+                if (instance.placeholder.is_object())
+                    instance.placeholder["prefab"] = path[0];
+                changed = true;
+            }
+        }
+        return changed;
+    };
+    if (remapInstances(doc.scene))
+        markDirty(doc);
+    if (doc.prefabEdit) {
+        if (remapInstances(doc.prefabEdit->scene))
+            doc.prefabEdit->dirty = true;
+        std::vector<std::string> paths = {doc.prefabEdit->prefab};
+        if (remapProjectPaths(paths, from, to))
+            doc.prefabEdit->prefab = paths[0];
+        if (std::optional<std::string> scene = doc.project ? kast::toProjectPath(doc.project->root, doc.prefabEdit->path)
+                                                           : std::nullopt;
+            scene && remapProjectPaths(paths = {*scene}, from, to))
+            doc.prefabEdit->path = (doc.project->root / fromUtf8(paths[0])).string();
+    }
+}
+
+const char* prefabEditBlocker(const Document& doc)
+{
+    return !doc.project                      ? "Open a project to use prefabs"
+           : doc.play != PlayState::Stopped ? "Stop Play mode to change prefabs"
+                                            : nullptr;
+}
+
+bool createPrefabFrom(Document& doc, entt::entity entity, const std::string& folder, std::string& path, std::string& error)
+{
+    if (const char* blocker = prefabEditBlocker(doc)) {
+        error = blocker;
+        return false;
+    }
+    if (!doc.scene.valid(entity)) {
+        error = "Select an entity to make a prefab of";
+        return false;
+    }
+    if (doc.prefabEdit && doc.scene.parent(entity) == entt::null) {
+        error = "The open prefab's root can't itself become a prefab instance";
+        return false;
+    }
+    const std::filesystem::path dir = folder.empty() ? doc.project->root : doc.project->root / fromUtf8(folder);
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const std::string name = uniquePrefabName(dir, doc.scene.registry().get<kast::Name>(entity).value);
+    path = folder.empty() ? name : folder + '/' + name;
+    if (!kast::createPrefab(doc.scene, entity, path, doc.project->root, error))
+        return false;
+    doc.selected = entity;
+    markDirty(doc);
+    return true;
+}
+
+entt::entity dropPrefab(Document& doc, const std::string& path, entt::entity parent, std::string& error)
+{
+    if (const char* blocker = prefabEditBlocker(doc)) {
+        error = blocker;
+        return entt::null;
+    }
+    std::shared_ptr<const kast::PrefabAsset> asset;
+    if (!kast::loadPrefab(doc.project->root, path, asset, error))
+        return entt::null;
+    if (doc.prefabEdit && asset->contains(doc.prefabEdit->prefab)) {
+        error = std::format("'{}' {} '{}', the prefab being edited: a prefab can't contain itself", path,
+                            path == doc.prefabEdit->prefab ? "is" : "contains", doc.prefabEdit->prefab);
+        return entt::null;
+    }
+    const entt::entity entity = kast::instantiatePrefab(doc.scene, asset, parent, error);
+    if (entity == entt::null)
+        return entity;
+    doc.selected = entity;
+    markDirty(doc);
+    kast::log::info(std::format("Added an instance of '{}'", path));
+    return entity;
+}
+
+void refreshPrefabs(Document& doc)
+{
+    if (!doc.project)
+        return;
+    const kast::EntityId selected = doc.scene.valid(doc.selected) ? doc.scene.registry().get<kast::PersistentId>(doc.selected).value : 0;
+    std::string error;
+    if (!kast::reloadPrefabs(doc.scene, doc.project->root, error))
+        kast::log::error(std::format("Cannot refresh the prefab instances: {}", error));
+    if (doc.prefabEdit && !kast::reloadPrefabs(doc.prefabEdit->scene, doc.project->root, error))
+        kast::log::error(std::format("Cannot refresh the prefab instances of the waiting scene: {}", error));
+    selectById(doc, selected);
+    ++doc.sceneGeneration;
+}
+
+bool openPrefab(Document& doc, const std::string& path, std::string& error)
+{
+    if (const char* blocker = prefabEditBlocker(doc)) {
+        error = blocker;
+        return false;
+    }
+    kast::Scene prefab;
+    const std::optional<std::filesystem::path> file = kast::resolveProjectPath(doc.project->root, path, error);
+    if (!file || !kast::loadPrefabScene(doc.project->root, path, prefab, error))
+        return false;
+    if (!doc.prefabEdit) {
+        const kast::EntityId selected =
+            doc.scene.valid(doc.selected) ? doc.scene.registry().get<kast::PersistentId>(doc.selected).value : 0;
+        doc.prefabEdit = Document::PrefabEdit{std::move(doc.scene), doc.camera, doc.path, doc.dirty, selected, path};
+    }
+    doc.prefabEdit->prefab = path;
+    doc.scene = std::move(prefab);
+    doc.path = file->string();
+    doc.dirty = false;
+    doc.selected = entt::null;
+    doc.camera = EditorCamera{.pivot = {0.0f, 0.5f, 0.0f}, .yaw = 30.0f, .pitch = -25.0f, .distance = 7.0f};
+    ++doc.sceneGeneration;
+    kast::log::info(std::format("Editing prefab '{}'", path));
+    return true;
+}
+
+void closePrefab(Document& doc)
+{
+    if (!doc.prefabEdit)
+        return;
+    Document::PrefabEdit waiting = std::move(*doc.prefabEdit);
+    doc.prefabEdit.reset();
+    doc.scene = std::move(waiting.scene);
+    doc.camera = waiting.camera;
+    doc.path = waiting.path;
+    doc.dirty = waiting.dirty;
+    selectById(doc, waiting.selected);
+    refreshPrefabs(doc); // bumps sceneGeneration
+    kast::log::info(std::format("Back to scene '{}' from prefab '{}'", displayName(doc), waiting.prefab));
+}
+
+bool runPrefabOp(Document& doc, const PrefabOp& op, std::string& error)
+{
+    if (const char* blocker = prefabEditBlocker(doc)) {
+        error = blocker;
+        return false;
+    }
+    const entt::entity entity = kast::findById(doc.scene, op.entity);
+    if (entity == entt::null || !doc.scene.registry().all_of<kast::PrefabLink>(entity)) {
+        error = std::format("no prefab instance entity with id {}", op.entity);
+        return false;
+    }
+    using Kind = PrefabOp::Kind;
+    const bool root = kast::isPrefabRoot(doc.scene, entity);
+    if (!root && (op.kind == Kind::RevertDeleted || op.kind == Kind::RevertAll || op.kind == Kind::ApplyDeleted ||
+                  op.kind == Kind::ApplyAll || op.kind == Kind::Unpack)) {
+        error = std::format("entity {} is not a prefab instance root", op.entity);
+        return false;
+    }
+    const std::filesystem::path& projectRoot = doc.project->root;
+    bool ok = true;
+    switch (op.kind) {
+    case Kind::RevertField:
+        ok = kast::revertPrefabField(doc.scene, entity, op.component, op.field);
+        break;
+    case Kind::RevertComponent:
+        ok = kast::revertPrefabComponent(doc.scene, entity, op.component);
+        break;
+    case Kind::RevertDeleted:
+        ok = kast::revertDeletedChild(doc.scene, entity, op.local, projectRoot, error);
+        break;
+    case Kind::RevertAll:
+        ok = kast::revertAllOverrides(doc.scene, entity, projectRoot, error);
+        break;
+    case Kind::ApplyField:
+    case Kind::ApplyComponent:
+        ok = kast::applyPrefabOverride(doc.scene, entity, op.component, op.kind == Kind::ApplyField ? op.field : "",
+                                       op.hop, projectRoot, error);
+        break;
+    case Kind::ApplyDeleted:
+        ok = kast::applyDeletedChild(doc.scene, entity, op.local, projectRoot, error);
+        break;
+    case Kind::ApplyAll:
+        ok = kast::applyAllOverrides(doc.scene, entity, projectRoot, error);
+        break;
+    case Kind::Unpack:
+        kast::unpackPrefab(doc.scene, entity);
+        kast::log::info(std::format("Unpacked '{}'", doc.scene.registry().get<kast::Name>(entity).value));
+        break;
+    }
+    if (!ok) {
+        if (error.empty())
+            error = "nothing to revert";
+        return false;
+    }
+    markDirty(doc);
+    if (op.kind >= Kind::RevertDeleted && op.kind != Kind::Unpack) // the scene was reloaded; prefab files may have changed
+        refreshPrefabs(doc);
+    selectById(doc, op.entity);
+    return true;
+}
+
+std::string breadcrumb(const Document& doc)
+{
+    if (!doc.prefabEdit)
+        return displayName(doc);
+    const std::string scene =
+        doc.prefabEdit->path.empty() ? "Untitled" : std::filesystem::path(doc.prefabEdit->path).stem().string();
+    return std::format("{} > {}", scene, utf8(fromUtf8(doc.prefabEdit->prefab).filename()));
 }
 
 bool newSystemFromTemplate(Document& doc, std::string& error)
@@ -371,6 +585,7 @@ bool newSystemFromTemplate(Document& doc, std::string& error)
 void resetToDefault(Document& doc)
 {
     doc.scene = kast::Scene{};
+    doc.prefabEdit.reset();
     entt::registry& registry = doc.scene.registry();
 
     const entt::entity light = createObject(doc, ObjectKind::DirectionalLight, entt::null);
@@ -403,7 +618,7 @@ bool openFile(Document& doc, const std::string& path, std::string& error)
     kast::activateComponentDefinitions(rootOf(project), nullptr);
     kast::Scene scene;
     kast::SceneLoadReport report;
-    if (!kast::loadScene(path, scene, error, &report)) {
+    if (!kast::loadScene(path, scene, error, &report, rootOf(project).value_or(std::filesystem::path()))) {
         if (kast::activateComponentDefinitions(rootOf(doc.project), &doc.scene)) // back to the kept scene's project
             markDirty(doc);
         return false;
@@ -417,6 +632,7 @@ bool openFile(Document& doc, const std::string& path, std::string& error)
     doc.project = std::move(project);
     doc.selected = entt::null;
     doc.dirty = report.migrated; // Lua component data fixed by the drift rules
+    doc.prefabEdit.reset();
     ++doc.sceneGeneration;
     kast::log::info(std::format("Opened scene '{}'", path));
     return true;
@@ -424,6 +640,18 @@ bool openFile(Document& doc, const std::string& path, std::string& error)
 
 bool saveFile(Document& doc, const std::string& path, std::string& error)
 {
+    if (doc.prefabEdit) { // the open prefab, as a prefab: the project and the waiting scene stay
+        const std::optional<std::string> prefab = kast::toProjectPath(doc.project->root, path);
+        if (!prefab) {
+            error = std::format("Cannot save prefab '{}': it is outside the project", path);
+            return false;
+        }
+        if (!kast::savePrefab(doc.scene, doc.project->root, *prefab, error))
+            return false;
+        doc.dirty = false;
+        kast::log::info(std::format("Saved prefab '{}'", *prefab));
+        return true;
+    }
     if (!writeScene(doc, path, error))
         return false;
     std::optional<kast::Project> project = projectOf(path);
@@ -866,6 +1094,8 @@ bool createProject(std::string_view name, const std::string& dir, std::filesyste
 
 std::string displayName(const Document& doc)
 {
+    if (doc.prefabEdit)
+        return utf8(fromUtf8(doc.prefabEdit->prefab).filename());
     return doc.path.empty() ? "Untitled" : std::filesystem::path(doc.path).stem().string();
 }
 
@@ -888,7 +1118,24 @@ void FileActions::openScene(std::string path)
     openPath_ = std::move(path);
     request(Pending::OpenPath);
 }
-void FileActions::saveAs() { showSaveDialog(Pending::None); }
+void FileActions::saveAs()
+{
+    if (doc_.prefabEdit)
+        save(); // a prefab keeps its file
+    else
+        showSaveDialog(Pending::None);
+}
+void FileActions::openPrefab(std::string path)
+{
+    if (dialogOpen_)
+        return;
+    openPrefab_ = std::move(path);
+    if (doc_.prefabEdit)
+        request(Pending::OpenPrefab); // the open prefab's unsaved changes
+    else
+        perform(Pending::OpenPrefab); // the scene waits, unsaved changes and all
+}
+void FileActions::backFromPrefab() { request(Pending::Back); }
 void FileActions::exit() { kast::requestQuit(); } // same path as the window X, so onQuitRequested runs
 void FileActions::build() { request(Pending::Build); }
 void FileActions::buildAndRun() { request(Pending::BuildAndRun); }
@@ -904,6 +1151,8 @@ void FileActions::save()
 bool FileActions::onQuitRequested()
 {
     stopPlay(doc_); // restore the edit-mode scene first, so unsaved-changes checks see it
+    if (!quitConfirmed_ && doc_.prefabEdit && !doc_.dirty)
+        closePrefab(doc_); // the waiting scene's unsaved changes still prompt
     if (quitConfirmed_ || (!doc_.dirty && !dialogOpen_))
         return true;
     request(Pending::Quit);
@@ -924,6 +1173,13 @@ void FileActions::request(Pending action)
 
 void FileActions::perform(Pending action)
 {
+    if (doc_.prefabEdit && action != Pending::None && action != Pending::OpenPrefab && action != Pending::Back) {
+        closePrefab(doc_); // its changes were saved or discarded by now
+        if (doc_.dirty) {
+            request(action); // now the scene's
+            return;
+        }
+    }
     switch (action) {
     case Pending::New:
         resetToDefault(doc_);
@@ -956,6 +1212,16 @@ void FileActions::perform(Pending action)
             buildTo(*folder, true);
         else
             browseBuildFolder(true);
+        break;
+    case Pending::OpenPrefab:
+        if (std::string error; !::openPrefab(doc_, openPrefab_, error)) {
+            error_ = error;
+            kast::log::error(error_);
+            errorRequested_ = true;
+        }
+        break;
+    case Pending::Back:
+        closePrefab(doc_);
         break;
     case Pending::None: break;
     }

@@ -92,6 +92,17 @@ a wrong argument type raises a Lua error at the calling line.</p>
 <td>—</td>
 <td>Destroys the entity and its children immediately.</td>
 </tr>
+<tr id="instantiate">
+<td><code>kast.instantiate(path [, parentId [, position]])</code></td>
+<td>id or nil</td>
+<td>A new linked instance of the <a href="../editor/prefabs.html#prefabs">prefab</a> <code>path</code> (project-relative <code>.prefab</code>), at the root or
+  as the last child of <code>parentId</code>, with every entity of the prefab (nested prefabs included) usable by id right away.
+  <code>position</code> (<code>{x =, y =, z =}</code>) sets the root's local position; without it the root keeps the prefab root's
+  transform. Returns the root's id. A path that doesn't resolve inside the project, a missing file or one that doesn't
+  parse returns <code>nil</code> and logs a warning saying why; a bad <code>parentId</code> or <code>position</code> type raises like the other
+  functions. Each prefab file is read once per Play session. Works in editor Play and in built players
+  (<code>.prefab</code> files ship in <code>game.pak</code>).</td>
+</tr>
 <tr id="items">
 <td><code>kast.items</code></td>
 <td>table</td>

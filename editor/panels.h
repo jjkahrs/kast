@@ -12,6 +12,7 @@
 
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -47,7 +48,16 @@ public:
     // Selects the Assets entry at path (project-relative), as a click does: a .mat also shows in the Inspector until an
     // entity is selected. Opens the entry's folder.
     void selectAsset(const std::string& path);
-    void drawHierarchy(Document& doc);
+    // Opens the Assets "Delete Asset" confirmation for path (project-relative), as Delete does.
+    void openAssetDelete(const Document& doc, const std::string& path) { requestAssetDelete(doc, path); }
+    // Opens the selected entity's Inspector context menu of field ("Component.field") with its Apply submenu, for
+    // screenshots.
+    void openApplyMenu(std::string field) { applyMenuRequest_ = std::move(field); }
+    // The Assets folder new prefabs go to (Hierarchy > Create Prefab): the selected folder, else the selected file's
+    // folder; "" = the project root.
+    std::string assetFolder() const;
+    // files: the prefab edit mode breadcrumb's Back.
+    void drawHierarchy(Document& doc, FileActions& files);
     void drawInspector(Document& doc);
     void drawSystems(Document& doc);
     void drawComponents(Document& doc);
@@ -74,24 +84,32 @@ public:
 private:
     // Tree edits are deferred to the end of drawHierarchy so the child lists are not changed mid-iteration.
     struct Edit {
-        enum class Op { None, Create, CreateModel, Delete, Duplicate, Reparent } op = Op::None;
+        enum class Op { None, Create, CreateModel, CreatePrefab, DropPrefab, Delete, Duplicate, Reparent } op = Op::None;
         entt::entity target = entt::null;
         entt::entity parent = entt::null;
         ObjectKind kind = ObjectKind::Empty;
-        std::string path; // CreateModel: the dropped model file
+        std::string path; // CreateModel, DropPrefab: the dropped file
     };
 
     // Assets panel file operations, deferred like Edit and applied at the end of drawAssets. Paths are
     // project-relative; "" is the project root.
     struct AssetEdit {
-        enum class Op { None, NewFolder, NewSystem, NewStateMachine, NewGui, NewMaterial, Rename, Move, Delete } op = Op::None;
+        enum class Op { None, NewFolder, NewSystem, NewStateMachine, NewGui, NewMaterial, NewPrefab, Rename, Move, Delete } op = Op::None;
         std::string path;   // the entry acted on (NewFolder and New*: the folder to create in)
         std::string target; // Rename: the new name; Move: the destination folder
+        entt::entity entity = entt::null; // NewPrefab: the entity dropped from the Hierarchy
     };
 
     // After doc.scene was replaced: drops the Hierarchy rename and the active ImGui item (an edit in progress).
     void forgetStaleScene(const Document& doc);
     void drawNode(Document& doc, entt::entity entity);
+    // The Inspector's prefab card (link, Revert All / Apply All / Unpack, removed components, deleted and added
+    // children) for an instance entity or a missing-prefab placeholder.
+    void drawPrefabCard(Document& doc, entt::entity entity, const nlohmann::ordered_json& overrides);
+    // After the last Inspector item (a field, a component header or the Name): marks it overridden and gives it a
+    // Revert / Apply context menu. field empty: the whole component.
+    void drawOverrideMenu(Document& doc, entt::entity entity, const std::string& component, const std::string& field,
+                          bool overridden);
     void drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ExternalEditor& editor,
                        const AssetEntry& entry, const char* blocker);
     void drawAssetItems(const Document& doc, ExternalEditor& editor, const AssetEntry& entry, const char* blocker);
@@ -136,6 +154,8 @@ private:
                    nlohmann::ordered_json& value);
 
     Edit edit_;
+    std::optional<PrefabOp> prefabOp_; // an Inspector prefab action, run at the end of drawInspector
+    std::string applyMenuRequest_;     // openApplyMenu
     entt::entity renaming_ = entt::null;
     bool focusRename_ = false;
     std::string renameBuffer_;
@@ -178,6 +198,7 @@ private:
     bool assetScrollTo_ = false; // selectAsset: scroll the selected entry into view when next drawn
     AssetEdit assetEdit_;
     std::string assetDeletePath_; // waiting on the delete confirmation
+    std::vector<std::string> assetDeleteUsers_; // the scenes and prefabs with instances of prefabs it would delete
     bool assetDeleteRequested_ = false;
     std::string assetsError_;
     bool assetsErrorRequested_ = false;

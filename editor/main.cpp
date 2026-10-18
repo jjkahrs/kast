@@ -14,9 +14,11 @@
 
 #include <app.h>
 #include <audio.h>
+#include <components.h>
 #include <crash_dialogs.h>
 #include <gui.h>
 #include <log.h>
+#include <prefab.h>
 #include <world_client.h>
 
 #include <SDL3/SDL.h>
@@ -59,7 +61,9 @@ constexpr const char* kUsage =
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
     "[--focus-panel Window] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy]] [--sim-key frame,key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
-    "[--open-external path] [--drop-model path] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--no-vsync] [--no-audio-device] [--crash abort|assert] | "
+    "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
+    "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
+    "[--prefab-save] [--prefab-back] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--no-vsync] [--no-audio-device] [--crash abort|assert] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel, for screenshots of mouse-driven games.
@@ -126,6 +130,13 @@ struct Options {
     bool launcher = false;          // run the Project Manager (the default anyway when nothing asks for the editor)
     std::string launcherOpen;       // open this project as the Project Manager would, without a window, and exit
     std::string dropModel;          // add this project model file as dropping it from the Assets panel does
+    // Prefab steps (--create-prefab, --drop-prefab, --drop-prefab-view, --set-field, --prefab-revert, --prefab-apply,
+    // --prefab-unpack, --edit-prefab, --prefab-save, --prefab-back): flag and value, run in command-line order at startup
+    // (after --select, before --save-scene).
+    std::vector<std::pair<std::string, std::string>> prefabSteps;
+    std::string assetsDelete;       // open the Assets Delete Asset confirmation for this entry
+    std::string inspectorApplyMenu; // open the --select entity's Inspector override menu of "Component.field" (+ Apply)
+    bool prefabBackPrompt = false;  // press the prefab edit mode Back button (its unsaved-changes prompt) for screenshots
     std::string worldAddress;       // host:port replacing every realm's world address in Play (kast.world), editor only
     bool onlineLoginEnv = false;    // Online panel test login from KAST_ONLINE_EMAIL / KAST_ONLINE_PASSWORD (--play waits for it)
     std::optional<OnlineModel::Compose> onlineCompose; // press the Online panel's Start, Stop or Status at startup
@@ -382,6 +393,18 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.openExternal = argv[++i];
         } else if (arg == "--drop-model" && hasValue) {
             options.dropModel = argv[++i];
+        } else if ((arg == "--create-prefab" || arg == "--drop-prefab" || arg == "--drop-prefab-view" || arg == "--set-field" ||
+                    arg == "--prefab-revert" || arg == "--prefab-apply" || arg == "--prefab-unpack" || arg == "--edit-prefab") &&
+                   hasValue) {
+            options.prefabSteps.emplace_back(arg, argv[++i]);
+        } else if (arg == "--prefab-save" || arg == "--prefab-back") {
+            options.prefabSteps.emplace_back(arg, "");
+        } else if (arg == "--assets-delete" && hasValue) {
+            options.assetsDelete = argv[++i];
+        } else if (arg == "--inspector-apply-menu" && hasValue) {
+            options.inspectorApplyMenu = argv[++i];
+        } else if (arg == "--prefab-back-prompt") {
+            options.prefabBackPrompt = true;
         } else if (arg == "--log-fps") {
             options.logFps = true;
         } else if (arg == "--no-vsync") {
@@ -463,6 +486,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
                              options.guiAdd || options.guiSave || !options.guiClick.empty() || options.openPreferences ||
                              !options.openExternal.empty() || !options.dropModel.empty() || options.logFps ||
+                             !options.prefabSteps.empty() || !options.assetsDelete.empty() || !options.inspectorApplyMenu.empty() ||
+                             options.prefabBackPrompt ||
                              options.noVsync || !options.worldAddress.empty() || options.onlineLoginEnv ||
                              options.onlineCompose;
     if (!options.editor() && editorFlags) {
@@ -470,7 +495,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, "
                          "--assets-menu, "
                          "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
-                         "--gui-click, --open-preferences, --open-external, --world-address, --online-login-env and --online-compose require "
+                         "--gui-click, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
+                         "steps, --assets-delete and --inspector-apply-menu require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
     }
@@ -661,6 +687,138 @@ void drawGuiBuilder(GuiBuilder& builder)
     builder.drawModals();
 }
 
+// "ID[:Component[.field] | :#local][@hop]" (--prefab-revert / --prefab-apply): whole-instance, deleted-child, component
+// or field op; component "Name" is the entity name. nullopt if it doesn't parse.
+std::optional<PrefabOp> parsePrefabOp(std::string_view spec, bool apply)
+{
+    using Kind = PrefabOp::Kind;
+    PrefabOp op;
+    if (const size_t at = spec.rfind('@'); at != std::string_view::npos) {
+        int hop = 0;
+        const std::string_view text = spec.substr(at + 1);
+        const auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), hop);
+        if (ec != std::errc{} || ptr != text.data() + text.size() || hop < 0)
+            return std::nullopt;
+        op.hop = static_cast<size_t>(hop);
+        spec = spec.substr(0, at);
+    }
+    const size_t colon = spec.find(':');
+    if (!parsePositive(spec.substr(0, colon), op.entity))
+        return std::nullopt;
+    const std::string_view target = colon == std::string_view::npos ? "" : spec.substr(colon + 1);
+    if (target.empty()) {
+        op.kind = apply ? Kind::ApplyAll : Kind::RevertAll;
+    } else if (target.front() == '#') {
+        if (!parsePositive(target.substr(1), op.local))
+            return std::nullopt;
+        op.kind = apply ? Kind::ApplyDeleted : Kind::RevertDeleted;
+    } else if (const size_t dot = target.find('.'); dot != std::string_view::npos || target == "Name") {
+        op.kind = apply ? Kind::ApplyField : Kind::RevertField;
+        op.component = std::string(target.substr(0, dot));
+        op.field = dot == std::string_view::npos ? "" : std::string(target.substr(dot + 1));
+    } else {
+        op.kind = apply ? Kind::ApplyComponent : Kind::RevertComponent;
+        op.component = std::string(target);
+    }
+    return op;
+}
+
+// One --create-prefab ... --prefab-back step, as the Hierarchy, Scene view, Inspector and Assets panel would do it.
+// False (logged) if it fails.
+bool runPrefabStep(Document& doc, const std::string& flag, const std::string& value)
+{
+    std::string error;
+    const auto lastNumber = [](const std::string& text, std::string& head, float& number) {
+        const size_t comma = text.rfind(',');
+        if (comma == std::string::npos)
+            return false;
+        const char* begin = text.data() + comma + 1;
+        const auto [ptr, ec] = std::from_chars(begin, text.data() + text.size(), number);
+        head = text.substr(0, comma);
+        return ec == std::errc{} && ptr == text.data() + text.size();
+    };
+    bool ok = false;
+    if (flag == "--create-prefab") {
+        std::string path;
+        ok = createPrefabFrom(doc, doc.selected, value == "/" ? "" : value, path, error);
+    } else if (flag == "--drop-prefab") {
+        std::string path = value;
+        entt::entity parent = entt::null;
+        if (const size_t comma = value.rfind(','); comma != std::string::npos) {
+            kast::EntityId id = 0;
+            if (!parsePositive(std::string_view(value).substr(comma + 1), id) ||
+                (parent = kast::findById(doc.scene, id)) == entt::null) {
+                kast::log::error(std::format("--drop-prefab {}: no parent entity with that id", value));
+                return false;
+            }
+            path = value.substr(0, comma);
+        }
+        ok = dropPrefab(doc, path, parent, error) != entt::null;
+    } else if (flag == "--drop-prefab-view") {
+        std::string rest, path;
+        float u = 0.0f, v = 0.0f;
+        if (!lastNumber(value, rest, v) || !lastNumber(rest, path, u)) {
+            kast::log::error(std::format("Invalid --drop-prefab-view '{}', expected path,u,v", value));
+            return false;
+        }
+        // Headless: a 16:9 Scene view of the editor camera, D3D depth (what the editor renders with).
+        ok = dropPrefabOnView(doc, path, editorCameraRay(doc, u, v, 16.0f / 9.0f, false), error) != entt::null;
+    } else if (flag == "--set-field") {
+        const size_t first = value.find(','), second = first == std::string::npos ? first : value.find(',', first + 1);
+        kast::EntityId id = 0;
+        const std::string target = second == std::string::npos ? "" : value.substr(first + 1, second - first - 1);
+        const size_t dot = target.find('.');
+        const entt::entity entity = second != std::string::npos && parsePositive(std::string_view(value).substr(0, first), id)
+                                        ? kast::findById(doc.scene, id)
+                                        : entt::null;
+        nlohmann::ordered_json json = second == std::string::npos ? nlohmann::ordered_json()
+                                                                  : nlohmann::ordered_json::parse(value.substr(second + 1), nullptr, false);
+        if (entity == entt::null || json.is_discarded() || (dot == std::string::npos && target != "Name")) {
+            kast::log::error(std::format("Invalid --set-field '{}', expected ID,Component.field,json (or ID,Name,\"text\")", value));
+            return false;
+        }
+        entt::registry& registry = doc.scene.registry();
+        if (target == "Name") {
+            ok = json.is_string();
+            if (ok)
+                registry.get<kast::Name>(entity).value = json.get<std::string>();
+            else
+                error = "the name must be a JSON string";
+        } else if (const kast::ComponentType type = kast::findAnyComponentType(target.substr(0, dot));
+                   type && kast::hasComponent(registry, entity, type)) {
+            nlohmann::ordered_json component = kast::componentToJson(registry, entity, type);
+            component[target.substr(dot + 1)] = json;
+            ok = kast::setComponentJson(registry, entity, type, component, error);
+        } else {
+            error = std::format("entity {} has no \"{}\"", id, target.substr(0, dot));
+        }
+        if (ok)
+            markDirty(doc);
+    } else if (flag == "--prefab-revert" || flag == "--prefab-apply") {
+        const std::optional<PrefabOp> op = parsePrefabOp(value, flag == "--prefab-apply");
+        if (!op) {
+            kast::log::error(std::format("Invalid {} '{}', expected ID[:Component[.field] | :#local][@hop]", flag, value));
+            return false;
+        }
+        ok = runPrefabOp(doc, *op, error);
+    } else if (flag == "--prefab-unpack") {
+        PrefabOp op{PrefabOp::Kind::Unpack};
+        ok = parsePositive(value, op.entity) && runPrefabOp(doc, op, error);
+    } else if (flag == "--edit-prefab") {
+        ok = openPrefab(doc, value, error);
+    } else if (flag == "--prefab-save") {
+        error = "no prefab is open (--edit-prefab)";
+        ok = doc.prefabEdit && saveFile(doc, doc.path, error);
+    } else if (flag == "--prefab-back") {
+        error = "no prefab is open (--edit-prefab)";
+        ok = doc.prefabEdit.has_value();
+        closePrefab(doc);
+    }
+    if (!ok)
+        kast::log::error(std::format("{} {}: {}", flag, value, error));
+    return ok;
+}
+
 void drawConsole()
 {
     if (ImGui::Begin("Console")) {
@@ -721,6 +879,13 @@ int main(int argc, char** argv)
             return 1;
         }
     }
+    if (options->select != 0 && !selectById(doc, options->select)) {
+        kast::log::error(std::format("--select {}: no entity with that id", options->select));
+        return 1;
+    }
+    for (const auto& [flag, value] : options->prefabSteps)
+        if (!runPrefabStep(doc, flag, value))
+            return 1;
     if (!options->saveScene.empty()) {
         std::string error;
         if (!saveFile(doc, options->saveScene, error)) {
@@ -737,10 +902,6 @@ int main(int argc, char** argv)
             buildGame(*doc.project, options->build, std::filesystem::path(reinterpret_cast<const char8_t*>(base)), exe, error))
             return 0;
         kast::log::error(base ? error : std::format("Cannot find the editor's folder: {}", SDL_GetError()));
-        return 1;
-    }
-    if (options->select != 0 && !selectById(doc, options->select)) {
-        kast::log::error(std::format("--select {}: no entity with that id", options->select));
         return 1;
     }
     if (!options->newComponent.empty()) { // before --play, which blocks it
@@ -928,11 +1089,17 @@ int main(int argc, char** argv)
             kast::log::error(std::format("--gui-click {}: no such element in a visible game GUI", options->guiClick));
         if (options->assetsMenu && frames.frame() == kAddComponentPopupFrame + 2) // after --focus-panel, which closes popups
             panels.openAssetMenu(*options->assetsMenu);
+        if (!options->assetsDelete.empty() && frames.frame() == kAddComponentPopupFrame + 2)
+            panels.openAssetDelete(doc, options->assetsDelete);
+        if (!options->inspectorApplyMenu.empty() && frames.frame() == kAddComponentPopupFrame + 2)
+            panels.openApplyMenu(options->inspectorApplyMenu);
+        if (options->prefabBackPrompt && frames.frame() == kAddComponentPopupFrame + 2)
+            files.backFromPrefab();
         if (options->assetsCreate && frames.frame() == kAddComponentPopupFrame)
             panels.requestAssetCreate(options->assetsCreate->first, options->assetsCreate->second);
         if (!options->assetsSelect.empty() && frames.frame() == kAddComponentPopupFrame)
             panels.selectAsset(options->assetsSelect);
-        panels.drawHierarchy(doc);
+        panels.drawHierarchy(doc, files);
         // Before the views render: Inspector edits (a material saved to disk) show in this frame's Scene and Game.
         panels.drawInspector(doc);
         viewport.draw(doc); // submitted before Game so Scene is the front tab on first run

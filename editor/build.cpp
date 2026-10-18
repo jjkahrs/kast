@@ -112,7 +112,7 @@ bool sceneLoads(const std::filesystem::path& root, const std::string& scene, std
         return false;
     }
     kast::Scene loaded;
-    return kast::loadScene(file->string(), loaded, error);
+    return kast::loadScene(file->string(), loaded, error, nullptr, root);
 }
 
 } // namespace

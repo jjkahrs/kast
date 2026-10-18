@@ -6,6 +6,7 @@
 #include <entt/entity/registry.hpp>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -272,6 +273,9 @@ public:
     entt::entity create(const std::string& name, entt::entity parent = entt::null);
     // Same, with an explicit id (used by loading). The caller guarantees the id is unique and nonzero.
     entt::entity createWithId(EntityId id, const std::string& name, entt::entity parent = entt::null);
+    // A fresh id for createWithId (never handed out again), and keeping ids up to id from create / newId (loading).
+    EntityId newId() { return nextId_++; }
+    void reserveId(EntityId id) { nextId_ = std::max(nextId_, id + 1); }
 
     bool valid(entt::entity entity) const { return entity != entt::null && registry_.valid(entity); }
 

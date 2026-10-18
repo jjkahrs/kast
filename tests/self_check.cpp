@@ -33,6 +33,7 @@
 #include <audio.h>
 #include <pak.h>
 #include <post_process.h>
+#include <prefab.h>
 #include <project.h>
 #include <renderer.h>
 #include <scene.h>
@@ -428,10 +429,10 @@ void checkLoadValidation()
     const auto entity = [&](int id, const char* parent, const std::string& more = "") {
         return std::format(R"({{"id": {}, "parent": {}, "name": "E", "components": {{{}{}}}}})", id, parent, transform, more);
     };
-    const auto file = [](const std::string& entities) { return R"({"version": 4, "entities": [)" + entities + "]}"; };
+    const auto file = [](const std::string& entities) { return R"({"version": 5, "entities": [)" + entities + "]}"; };
     const std::tuple<const char*, std::string, const char*> bad[] = {
         // what, file contents, text the error must mention
-        {"invalid JSON", "{ \"version\": 4, ", ""},
+        {"invalid JSON", "{ \"version\": 5, ", ""},
         {"wrong version", R"({"version": 99, "entities": []})", "version"},
         {"version 1 rejected",
          R"({"version": 1, "entities": [{"id": 1, "parent": null, "name": "E", "position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]}]})",
@@ -465,19 +466,19 @@ void checkLoadValidation()
          file(entity(1, "null", R"(, "PointLight": {"color": [1,1,1], "intensity": -0.5, "range": 5})")), "intensity"},
         {"point light color > 1", file(entity(1, "null", R"(, "PointLight": {"color": [1,1.5,1], "intensity": 1, "range": 5})")),
          "color"},
-        {"lighting not an object", R"({"version": 4, "entities": [], "lighting": 3})", "lighting"},
+        {"lighting not an object", R"({"version": 5, "entities": [], "lighting": 3})", "lighting"},
         {"lighting color out of range",
-         R"({"version": 4, "entities": [], "lighting": {"ambientColor": [1,-0.1,1], "ambientIntensity": 0.2}})", "ambientColor"},
-        {"lighting color wrong size", R"({"version": 4, "entities": [], "lighting": {"ambientColor": [1,1], "ambientIntensity": 0.2}})",
+         R"({"version": 5, "entities": [], "lighting": {"ambientColor": [1,-0.1,1], "ambientIntensity": 0.2}})", "ambientColor"},
+        {"lighting color wrong size", R"({"version": 5, "entities": [], "lighting": {"ambientColor": [1,1], "ambientIntensity": 0.2}})",
          "ambientColor"},
         {"lighting negative intensity",
-         R"({"version": 4, "entities": [], "lighting": {"ambientColor": [1,1,1], "ambientIntensity": -1}})", "ambientIntensity"},
+         R"({"version": 5, "entities": [], "lighting": {"ambientColor": [1,1,1], "ambientIntensity": -1}})", "ambientIntensity"},
         {"lighting mistyped intensity",
-         R"({"version": 4, "entities": [], "lighting": {"ambientColor": [1,1,1], "ambientIntensity": "dim"}})", "ambientIntensity"},
-        {"lighting missing intensity", R"({"version": 4, "entities": [], "lighting": {"ambientColor": [1,1,1]}})",
+         R"({"version": 5, "entities": [], "lighting": {"ambientColor": [1,1,1], "ambientIntensity": "dim"}})", "ambientIntensity"},
+        {"lighting missing intensity", R"({"version": 5, "entities": [], "lighting": {"ambientColor": [1,1,1]}})",
          "ambientIntensity"},
         {"lighting unknown field",
-         R"({"version": 4, "entities": [], "lighting": {"ambientColor": [1,1,1], "ambientIntensity": 1, "fog": 1}})", "fog"},
+         R"({"version": 5, "entities": [], "lighting": {"ambientColor": [1,1,1], "ambientIntensity": 1, "fog": 1}})", "fog"},
         {"dangling parent", file(entity(1, "7")), "parent"},
         {"cycle", file(entity(1, "2") + ", " + entity(2, "1")), "cycle"},
         {"self parent", file(entity(1, "1")), "cycle"},
@@ -821,26 +822,27 @@ void checkSystemsFormat()
         std::ifstream in(path, std::ios::binary);
         return std::string(std::istreambuf_iterator<char>(in), {});
     };
-    check(read(first) == read(second) && contains(read(first), "\"version\": 4") && contains(read(first), "\"systems\""),
-          "version 4 systems round trip is byte-identical");
+    check(read(first) == read(second) && contains(read(first), "\"version\": 5") && contains(read(first), "\"systems\""),
+          "version 5 systems round trip is byte-identical");
 
     const std::string entity =
         R"({"id": 1, "parent": null, "name": "E", "components": {"Transform": {"position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]}}})";
     const auto file = [&](int version, const std::string& systems) {
         return std::format(R"({{"version": {}, "entities": [{}]{}}})", version, entity, systems);
     };
-    writeFile(dir / "nosystems.scene", file(4, ""));
+    writeFile(dir / "nosystems.scene", file(5, ""));
     loaded.systems = {"stale.lua"};
     check(kast::loadScene((dir / "nosystems.scene").string(), loaded, error) && loaded.systems.empty(),
-          "a version 4 file without \"systems\" loads with none");
+          "a version 5 file without \"systems\" loads with none");
     const std::tuple<const char*, std::string, const char*> bad[] = {
-        {"systems not an array", file(4, R"(, "systems": "a.lua")"), "\"systems\" must be an array"},
-        {"systems entry not a string", file(4, R"(, "systems": ["a.lua", 7])"), "systems[1]: must be a non-empty string"},
-        {"systems entry empty", file(4, R"(, "systems": [""])"), "systems[0]: must be a non-empty string"},
+        {"systems not an array", file(5, R"(, "systems": "a.lua")"), "\"systems\" must be an array"},
+        {"systems entry not a string", file(5, R"(, "systems": ["a.lua", 7])"), "systems[1]: must be a non-empty string"},
+        {"systems entry empty", file(5, R"(, "systems": [""])"), "systems[0]: must be a non-empty string"},
         {"version 1 rejected", file(1, ""), "unsupported \"version\" 1"},
         {"version 2 rejected", file(2, ""), "unsupported \"version\" 2"},
         {"version 3 rejected", file(3, R"(, "systems": [])"), "unsupported \"version\" 3"},
-        {"version 5 rejected", file(5, ""), "unsupported \"version\" 5"},
+        {"version 4 rejected", file(4, ""), "unsupported \"version\" 4"},
+        {"version 6 rejected", file(6, ""), "unsupported \"version\" 6"},
     };
     for (const auto& [what, text, mention] : bad) {
         writeFile(dir / "bad.scene", text);
@@ -1186,7 +1188,7 @@ return {
         assert(kast.gui.mouseOver() == false, "not mouseOver")
         assert(kast.gui.hovered() == nil, "nothing hovered")
     end })");
-    writeFile(dir / "next.scene", R"({"version": 4, "entities": [], "systems": ["next.lua"]})");
+    writeFile(dir / "next.scene", R"({"version": 5, "entities": [], "systems": ["next.lua"]})");
 
     kast::Scene scene;
     scene.systems = {"gui.lua"};
@@ -2332,7 +2334,7 @@ end })");
     kast::activateComponentDefinitions(std::nullopt, nullptr);
 }
 
-constexpr const char* kSceneHead = R"({"version": 4, "entities": [{"id": 1, "parent": null, "name": "Drifty", "components": {)"
+constexpr const char* kSceneHead = R"({"version": 5, "entities": [{"id": 1, "parent": null, "name": "Drifty", "components": {)"
                                    R"("Transform": {"position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]})";
 
 void checkLuaComponentDrift()
@@ -2872,7 +2874,7 @@ void checkBuildSettings()
                                        "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene",
                                        "physics.scene",
                                        "point_lights.scene",
-                                       "point_shadows.scene", "post_processing.scene", "scene_a.scene", "scene_b.scene",
+                                       "point_shadows.scene", "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
                                        "shadows.scene", "terrain.scene", "ui.scene", "ui_drag.scene"},
           "tests/project lists its scenes, sorted");
 
@@ -2891,7 +2893,7 @@ void checkBuildSettings()
                                                           "models_material.scene", "models_missing.scene", "net_a.scene",
                                                           "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
-                                                          "post_processing.scene", "scene_a.scene", "scene_b.scene",
+                                                          "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
                                                           "shadows.scene", "terrain.scene", "ui.scene", "ui_drag.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
@@ -4943,7 +4945,7 @@ void checkShadows()
     check(oldSunValue && oldSunValue->intensity == 2.0f && oldSunValue->castShadows && oldSunValue->cascadeCount == 4 &&
               oldSunValue->maxDistance == 100.0f,
           "DirectionalLight without shadow fields loads with the defaults");
-    const char* oldScene = R"({"version": 4, "entities": [
+    const char* oldScene = R"({"version": 5, "entities": [
         {"id": 1, "name": "Box", "parent": null, "components": {
             "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
             "MeshRenderer": {"primitive": "cube", "material": ""},
@@ -5037,7 +5039,7 @@ void checkPostProcessing()
     post.fxaa.enabled = true;
     post.fog = {true, {0.3f, 0.4f, 0.5f}, 0.08f, 3.0f};
     const nlohmann::ordered_json json = kast::sceneToJson(scene);
-    check(json["version"] == 4 && json.contains("postProcessing"), "saved with postProcessing, still version 4");
+    check(json["version"] == kast::kSceneFileVersion && json.contains("postProcessing"), "saved with postProcessing, current version");
     kast::Scene loaded;
     std::string error;
     check(kast::sceneFromJson(json, loaded, error), "post scene loads");
@@ -5303,7 +5305,7 @@ void checkMaterialScenes()
     kast::Scene loaded;
     std::string error;
     kast::SceneLoadReport report;
-    const auto json = nlohmann::ordered_json::parse(R"({"version": 4, "entities": [{"id": 1, "name": "Old", "parent": null,
+    const auto json = nlohmann::ordered_json::parse(R"({"version": 5, "entities": [{"id": 1, "name": "Old", "parent": null,
         "components": {"Transform": {"position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]},
                        "MeshRenderer": {"primitive": "sphere", "color": [0.3, 0.45, 0.85]}}}]})");
     check(kast::sceneFromJson(json, loaded, error, &report), "a scene with MeshRenderer \"color\" still loads");
@@ -7653,6 +7655,594 @@ void checkWindowPos()
     check(rejected, "window pos: anything but two integers is rejected");
 }
 
+
+// --- Prefabs (engine/prefab.h): files, instances, overrides, revert / apply / unpack, nesting, placeholders ---
+
+entt::entity childNamed(const kast::Scene& scene, entt::entity parent, const std::string& name)
+{
+    for (entt::entity child : scene.children(parent))
+        if (scene.registry().get<kast::Name>(child).value == name)
+            return child;
+    return entt::null;
+}
+
+// Saves scene, loads it back from the file (prefabs from dir) and returns whether that worked.
+bool reloadScene(kast::Scene& scene, const std::filesystem::path& dir, const char* name = "prefab.scene")
+{
+    std::string error;
+    const std::string file = (dir / name).string();
+    kast::Scene loaded;
+    if (!kast::saveScene(scene, file, error) || !kast::loadScene(file, loaded, error, nullptr, dir)) {
+        kast::log::error(std::format("reloadScene: {}", error));
+        return false;
+    }
+    scene = std::move(loaded);
+    return true;
+}
+
+// Loads a prefab file as a scene, runs edit on it and saves it back (an edit made in prefab edit mode).
+template <typename Fn>
+bool editPrefab(const std::filesystem::path& dir, const std::string& path, Fn&& edit)
+{
+    kast::Scene prefab;
+    std::string error;
+    if (!kast::loadPrefabScene(dir, path, prefab, error))
+        return kast::log::error(error), false;
+    edit(prefab);
+    if (!kast::savePrefab(prefab, dir, path, error))
+        return kast::log::error(error), false;
+    return true;
+}
+
+nlohmann::ordered_json readJson(const std::filesystem::path& file) { return nlohmann::ordered_json::parse(readText(file)); }
+
+// "Orc" (MeshRenderer) with children Club (Collider, Rotator), Hat and Cape, made into prefabs/orc.prefab.
+entt::entity makeOrc(kast::Scene& scene, const std::filesystem::path& dir)
+{
+    entt::registry& registry = scene.registry();
+    const entt::entity orc = scene.create("Orc");
+    registry.get<kast::Transform>(orc).position = {1, 0, 0};
+    registry.emplace<kast::MeshRenderer>(orc);
+    const entt::entity club = scene.create("Club", orc);
+    registry.emplace<kast::Collider>(club).radius = 0.5f;
+    registry.emplace<kast::Rotator>(club);
+    scene.create("Hat", orc);
+    scene.create("Cape", orc);
+    std::string error;
+    check(kast::createPrefab(scene, orc, "prefabs/orc.prefab", dir, error), "prefab: create orc.prefab");
+    if (!error.empty())
+        kast::log::error(error);
+    return orc;
+}
+
+void checkPrefabFiles()
+{
+    const std::filesystem::path dir = projectTestDir("kast_prefab_files", "Prefabs");
+    kast::Scene scene;
+    const entt::entity orc = makeOrc(scene, dir);
+    entt::registry& registry = scene.registry();
+    check(std::filesystem::exists(dir / "prefabs/orc.prefab") && kast::isPrefabRoot(scene, orc) &&
+              registry.all_of<kast::PrefabLink>(childNamed(scene, orc, "Club")) &&
+              kast::prefabOverrides(scene, orc) == nlohmann::ordered_json::object() &&
+              kast::prefabOverrides(scene, childNamed(scene, orc, "Club")) == nlohmann::ordered_json::object(),
+          "prefab: Create Prefab writes the file and the source becomes a linked instance with no overrides");
+    const nlohmann::ordered_json file = readJson(dir / "prefabs/orc.prefab");
+    check(file["version"] == kast::kSceneFileVersion && file.size() == 2 && file["entities"].size() == 4 &&
+              file["entities"][0]["name"] == "Orc" && file["entities"][0]["parent"].is_null() &&
+              file["entities"][1]["parent"] == file["entities"][0]["id"],
+          "prefab: the file holds version and the subtree's entities, root first");
+
+    // Round trip: load -> save -> save is byte-identical, for the prefab and for a scene holding instances.
+    kast::Scene prefab;
+    std::string error;
+    check(kast::loadPrefabScene(dir, "prefabs/orc.prefab", prefab, error) &&
+              kast::savePrefab(prefab, dir, "prefabs/orc_copy.prefab", error) &&
+              readText(dir / "prefabs/orc_copy.prefab") == readText(dir / "prefabs/orc.prefab"),
+          "prefab: a prefab file round trip is byte-identical");
+    check(reloadScene(scene, dir, "a.scene") && reloadScene(scene, dir, "b.scene") &&
+              readText(dir / "a.scene") == readText(dir / "b.scene") && kast::isPrefabRoot(scene, named(scene, "Orc")),
+          "prefab: a scene with an instance round trips byte-identically and stays linked");
+
+    // Bad prefab files.
+    writeFile(dir / "prefabs/two_roots.prefab", R"({"version": 5, "entities": [
+        {"id": 1, "name": "A", "parent": null, "components": {"Transform": {"position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]}}},
+        {"id": 2, "name": "B", "parent": null, "components": {"Transform": {"position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]}}}]})");
+    writeFile(dir / "prefabs/v4.prefab", R"({"version": 4, "entities": []})");
+    std::shared_ptr<const kast::PrefabAsset> asset;
+    check(!kast::loadPrefab(dir, "prefabs/two_roots.prefab", asset, error) && contains(error, "exactly one root"),
+          "prefab: a prefab with two roots is refused");
+    check(!kast::loadPrefab(dir, "prefabs/v4.prefab", asset, error) && contains(error, "unsupported \"version\" 4"),
+          "prefab: a version 4 prefab is refused");
+    check(!kast::loadPrefab(dir, "prefabs/none.prefab", asset, error) && contains(error, "cannot open"),
+          "prefab: a missing prefab file fails with why");
+    kast::Scene twoRoots;
+    twoRoots.create("A");
+    twoRoots.create("B");
+    check(!kast::savePrefab(twoRoots, dir, "prefabs/x.prefab", error) && contains(error, "exactly one root"),
+          "prefab: saving two roots as a prefab is refused");
+
+    // v4 scenes no longer load.
+    writeFile(dir / "old.scene", R"({"version": 4, "entities": []})");
+    kast::Scene old;
+    check(!kast::loadScene((dir / "old.scene").string(), old, error) && contains(error, "unsupported \"version\" 4"),
+          "scene v4 is rejected with a clear error");
+}
+
+void checkPrefabOverrides()
+{
+    const std::filesystem::path dir = projectTestDir("kast_prefab_overrides", "Prefabs");
+    kast::Scene scene;
+    makeOrc(scene, dir);
+    std::shared_ptr<const kast::PrefabAsset> asset;
+    std::string error;
+    check(kast::loadPrefab(dir, "prefabs/orc.prefab", asset, error), "prefab: load orc.prefab");
+
+    // Instantiate: a second linked instance with fresh ids, at the prefab root's transform.
+    const entt::entity second = kast::instantiatePrefab(scene, asset, entt::null, error);
+    entt::registry& registry = scene.registry();
+    check(kast::isPrefabRoot(scene, second) && scene.children(second).size() == 3 &&
+              idOf(scene, second) != idOf(scene, named(scene, "Orc")) &&
+              registry.get<kast::Transform>(second).position.x == 1.0f,
+          "prefab: instantiate makes a linked copy with its own ids at the prefab root's transform");
+    kast::Scene deep;
+    entt::entity bottom = entt::null;
+    for (int i = 0; i < kast::kMaxHierarchyDepth - 1; ++i)
+        bottom = deep.create("Level", bottom);
+    check(kast::instantiatePrefab(deep, asset, bottom, error) == entt::null && contains(error, "deeper than"),
+          "prefab: an instance past kMaxHierarchyDepth is refused whole");
+
+    // Overrides on the second instance: a field, an added and a removed component, an added and a deleted child,
+    // a renamed child and the root's own transform.
+    registry.get<kast::Name>(second).value = "Boss";
+    registry.get<kast::Transform>(second).position = {7, 0, 7};
+    const entt::entity club = childNamed(scene, second, "Club");
+    registry.get<kast::Collider>(club).radius = 0.9f;
+    registry.remove<kast::Rotator>(club);
+    registry.emplace<kast::Rotator>(childNamed(scene, second, "Hat"));
+    registry.get<kast::Name>(childNamed(scene, second, "Hat")).value = "Helmet";
+    scene.destroy(childNamed(scene, second, "Cape"));
+    scene.create("Extra", second);
+    using Json = nlohmann::ordered_json;
+    check(kast::prefabOverrides(scene, club) ==
+              Json{{"components", {{"Collider", {{"radius", 0.9}}}}}, {"removed", Json::array({"Rotator"})}} &&
+              kast::prefabOverrides(scene, second) == Json::object(),
+          "prefab: overrides are the changed fields and removed components; the root's name and transform are its own");
+    check(kast::deletedPrefabChildren(scene, second).size() == 1 &&
+              kast::deletedPrefabChildren(scene, second)[0]->name == "Cape" &&
+              kast::addedPrefabChildren(scene, second).size() == 1,
+          "prefab: the deleted and the added child are listed");
+
+    // Saved and reloaded, then the prefab changes: overrides stay, the rest follows.
+    check(reloadScene(scene, dir), "prefab: save and reload the overrides");
+    check(editPrefab(dir, "prefabs/orc.prefab", [](kast::Scene& prefab) {
+        const entt::entity root = prefab.children(entt::null).front();
+        kast::Collider& collider = prefab.registry().get<kast::Collider>(childNamed(prefab, root, "Club"));
+        collider.radius = 0.75f;
+        collider.friction = 0.9f;
+        prefab.registry().emplace<kast::PointLight>(childNamed(prefab, root, "Hat"));
+        prefab.create("Boots", root);
+    }), "prefab: change orc.prefab");
+    check(reloadScene(scene, dir), "prefab: reload after the prefab changed");
+    const entt::entity boss = named(scene, "Boss");
+    const entt::entity orc = named(scene, "Orc");
+    const entt::entity bossClub = childNamed(scene, boss, "Club");
+    const entt::entity helmet = childNamed(scene, boss, "Helmet");
+    check(registry.valid(boss) && scene.registry().get<kast::Transform>(boss).position.x == 7.0f &&
+              scene.registry().get<kast::Collider>(bossClub).radius == 0.9f &&
+              scene.registry().get<kast::Collider>(bossClub).friction == 0.9f &&
+              !scene.registry().all_of<kast::Rotator>(bossClub) && scene.registry().all_of<kast::Rotator>(helmet) &&
+              scene.registry().all_of<kast::PointLight>(helmet) && childNamed(scene, boss, "Cape") == entt::null &&
+              childNamed(scene, boss, "Extra") != entt::null && childNamed(scene, boss, "Boots") != entt::null,
+          "prefab: field, component and child overrides survive a prefab change; everything else follows it");
+    check(scene.registry().get<kast::Collider>(childNamed(scene, orc, "Club")).radius == 0.75f &&
+              childNamed(scene, orc, "Cape") != entt::null && childNamed(scene, orc, "Boots") != entt::null,
+          "prefab: an instance without overrides follows the prefab completely");
+    check(reloadScene(scene, dir, "c.scene") && reloadScene(scene, dir, "d.scene") &&
+              readText(dir / "c.scene") == readText(dir / "d.scene"),
+          "prefab: overrides round trip byte-identically");
+
+    // Revert, in memory: field, component (removed and added), deleted child, then everything.
+    kast::Scene& s = scene;
+    entt::entity root = named(s, "Boss");
+    check(kast::revertPrefabField(s, childNamed(s, root, "Club"), "Collider", "radius") &&
+              s.registry().get<kast::Collider>(childNamed(s, root, "Club")).radius == 0.75f &&
+              !kast::revertPrefabField(s, childNamed(s, root, "Club"), "Collider", "radius"),
+          "prefab: Revert field restores the prefab value (and then has nothing left to revert)");
+    check(kast::revertPrefabComponent(s, childNamed(s, root, "Club"), "Rotator") &&
+              s.registry().all_of<kast::Rotator>(childNamed(s, root, "Club")) &&
+              kast::revertPrefabComponent(s, childNamed(s, root, "Helmet"), "Rotator") &&
+              !s.registry().all_of<kast::Rotator>(childNamed(s, root, "Helmet")),
+          "prefab: Revert component brings a removed component back and takes an added one away");
+    const kast::EntityId capeLocal = kast::deletedPrefabChildren(s, root)[0]->id;
+    check(kast::revertDeletedChild(s, root, capeLocal, dir, error) &&
+              childNamed(s, named(s, "Boss"), "Cape") != entt::null,
+          "prefab: Revert brings a deleted child back");
+    root = named(s, "Boss");
+    check(kast::revertAllOverrides(s, root, dir, error), "prefab: Revert All runs");
+    root = named(s, "Boss");
+    check(s.valid(root) && s.registry().get<kast::Transform>(root).position.x == 7.0f &&
+              childNamed(s, root, "Extra") == entt::null && childNamed(s, root, "Hat") != entt::null &&
+              kast::prefabOverrides(s, childNamed(s, root, "Hat")) == Json::object() &&
+              kast::addedPrefabChildren(s, root).empty() && kast::deletedPrefabChildren(s, root).empty(),
+          "prefab: Revert All drops every override and added child but keeps the root's name and transform");
+
+    // Apply: a field, a component, a deleted child, then everything; the prefab file changes and the overrides go.
+    registry.get<kast::Collider>(childNamed(s, root, "Club")).radius = 0.6f;
+    check(kast::applyPrefabOverride(s, childNamed(s, root, "Club"), "Collider", "radius", 0, dir, error) &&
+              readJson(dir / "prefabs/orc.prefab")["entities"][1]["components"]["Collider"]["radius"] == 0.6 &&
+              kast::prefabOverrides(s, childNamed(s, named(s, "Boss"), "Club")) == Json::object() &&
+              s.registry().get<kast::Collider>(childNamed(s, named(s, "Orc"), "Club")).radius == 0.6f,
+          "prefab: Apply field writes the prefab and every linked instance follows");
+    root = named(s, "Boss");
+    s.registry().emplace<kast::Camera>(childNamed(s, root, "Hat"));
+    check(kast::applyPrefabOverride(s, childNamed(s, root, "Hat"), "Camera", "", 0, dir, error) &&
+              s.registry().all_of<kast::Camera>(childNamed(s, named(s, "Orc"), "Hat")),
+          "prefab: Apply component adds it to the prefab");
+    root = named(s, "Boss");
+    s.registry().remove<kast::Camera>(childNamed(s, root, "Hat"));
+    check(kast::applyPrefabOverride(s, childNamed(s, root, "Hat"), "Camera", "", 0, dir, error) &&
+              !s.registry().all_of<kast::Camera>(childNamed(s, named(s, "Orc"), "Hat")),
+          "prefab: Apply of a removed component removes it from the prefab");
+    root = named(s, "Boss");
+    s.destroy(childNamed(s, root, "Boots"));
+    const kast::EntityId bootsLocal = kast::deletedPrefabChildren(s, root)[0]->id;
+    check(kast::applyDeletedChild(s, root, bootsLocal, dir, error) &&
+              childNamed(s, named(s, "Orc"), "Boots") == entt::null &&
+              kast::deletedPrefabChildren(s, named(s, "Boss")).empty(),
+          "prefab: Apply of a deleted child removes it from the prefab");
+    root = named(s, "Boss");
+    s.create("Shield", root);
+    s.destroy(childNamed(s, root, "Cape"));
+    s.registry().get<kast::Name>(childNamed(s, root, "Hat")).value = "Crown";
+    check(kast::applyAllOverrides(s, named(s, "Boss"), dir, error), "prefab: Apply All runs");
+    const entt::entity plain = named(s, "Orc");
+    root = named(s, "Boss");
+    check(childNamed(s, plain, "Shield") != entt::null && childNamed(s, plain, "Cape") == entt::null &&
+              childNamed(s, plain, "Crown") != entt::null &&
+              s.registry().get<kast::Transform>(plain).position.x == 1.0f &&
+              kast::addedPrefabChildren(s, root).empty() && kast::deletedPrefabChildren(s, root).empty() &&
+              kast::prefabOverrides(s, childNamed(s, root, "Shield")) == Json::object() &&
+              readJson(dir / "prefabs/orc.prefab")["entities"][0]["name"] == "Orc",
+          "prefab: Apply All writes added and deleted children and overrides, not the root's own name and transform");
+    if (!error.empty())
+        kast::log::error(error);
+
+    // Unpack and Duplicate.
+    const entt::entity copy = kast::duplicateLinked(s, named(s, "Boss"));
+    check(kast::isPrefabRoot(s, copy) && kast::prefabBase(s, childNamed(s, copy, "Club")) != nullptr &&
+              idOf(s, copy) != idOf(s, named(s, "Boss")),
+          "prefab: Duplicate of an instance is another linked instance");
+    const entt::entity duplicatedChild = kast::duplicateLinked(s, childNamed(s, copy, "Club"));
+    check(!s.registry().all_of<kast::PrefabLink>(duplicatedChild) && kast::addedPrefabChildren(s, copy).size() == 1,
+          "prefab: Duplicate of a prefab child is an added child");
+    check(kast::reparentBlocker(s, childNamed(s, copy, "Club")) != nullptr && kast::reparentBlocker(s, copy) == nullptr,
+          "prefab: prefab children can't be reparented; the instance root can");
+    kast::unpackPrefab(s, copy);
+    check(!s.registry().any_of<kast::PrefabLink, kast::PrefabInstance>(copy) &&
+              !s.registry().all_of<kast::PrefabLink>(childNamed(s, copy, "Club")) &&
+              s.registry().get<kast::Collider>(childNamed(s, copy, "Club")).radius == 0.6f,
+          "prefab: Unpack leaves plain entities with their current values");
+    check(reloadScene(s, dir, "e.scene") && reloadScene(s, dir, "f.scene") &&
+              readText(dir / "e.scene") == readText(dir / "f.scene"),
+          "prefab: the scene round trips byte-identically after the edits");
+}
+
+void checkPrefabNesting()
+{
+    const std::filesystem::path dir = projectTestDir("kast_prefab_nesting", "Prefabs");
+    std::string error;
+    // gem.prefab (a PointLight), then chest.prefab holding an instance of it.
+    kast::Scene scene;
+    const entt::entity gem = scene.create("Gem");
+    scene.registry().emplace<kast::PointLight>(gem);
+    check(kast::createPrefab(scene, gem, "prefabs/gem.prefab", dir, error), "prefab nesting: create gem.prefab");
+    const entt::entity chest = scene.create("Chest");
+    scene.registry().emplace<kast::MeshRenderer>(chest);
+    scene.reparent(gem, chest);
+    check(kast::createPrefab(scene, chest, "prefabs/chest.prefab", dir, error), "prefab nesting: create chest.prefab");
+    const nlohmann::ordered_json file = readJson(dir / "prefabs/chest.prefab");
+    check(file["entities"].size() == 2 && file["entities"][1]["prefab"] == "prefabs/gem.prefab",
+          "prefab nesting: the outer prefab stores the inner one as an instance");
+    check(reloadScene(scene, dir), "prefab nesting: reload");
+    const entt::entity inner = childNamed(scene, named(scene, "Chest"), "Gem");
+    check(kast::prefabChain(scene, inner) == std::vector<std::string>{"prefabs/chest.prefab", "prefabs/gem.prefab"} &&
+              kast::prefabRoot(scene, inner) == named(scene, "Chest") &&
+              scene.registry().all_of<kast::PrefabInstance>(inner),
+          "prefab nesting: an inner entity belongs to both prefabs, outermost first");
+
+    // Apply to the inner prefab: gem.prefab changes, chest.prefab keeps no override for it.
+    scene.registry().get<kast::PointLight>(inner).range = 4.0f;
+    check(kast::applyPrefabOverride(scene, inner, "PointLight", "range", 1, dir, error), "prefab nesting: Apply to inner");
+    check(readJson(dir / "prefabs/gem.prefab")["entities"][0]["components"]["PointLight"]["range"] == 4.0 &&
+              !contains(readText(dir / "prefabs/chest.prefab"), "\"range\""),
+          "prefab nesting: Apply to Inner.prefab writes it and clears the outer override");
+    // Apply to the outer prefab: chest.prefab gets the override, gem.prefab is unchanged.
+    scene.registry().get<kast::PointLight>(childNamed(scene, named(scene, "Chest"), "Gem")).intensity = 3.0f;
+    check(kast::applyPrefabOverride(scene, childNamed(scene, named(scene, "Chest"), "Gem"), "PointLight", "intensity", 0,
+                                    dir, error) &&
+              readJson(dir / "prefabs/gem.prefab")["entities"][0]["components"]["PointLight"]["intensity"] == 1.0 &&
+              contains(readText(dir / "prefabs/chest.prefab"), "\"intensity\": 3.0"),
+          "prefab nesting: Apply to Outer.prefab keeps the change as the outer prefab's override");
+
+    // An inner prefab change reaches instances of the outer one.
+    check(editPrefab(dir, "prefabs/gem.prefab", [](kast::Scene& prefab) {
+        prefab.registry().get<kast::PointLight>(prefab.children(entt::null).front()).color = {1, 0, 0};
+    }), "prefab nesting: change gem.prefab");
+    kast::Scene other;
+    std::shared_ptr<const kast::PrefabAsset> chestAsset;
+    check(kast::loadPrefab(dir, "prefabs/chest.prefab", chestAsset, error), "prefab nesting: load chest.prefab");
+    const entt::entity placed = kast::instantiatePrefab(other, chestAsset, entt::null, error);
+    const kast::PointLight& light = other.registry().get<kast::PointLight>(other.children(placed).front());
+    check(light.color.y == 0.0f && light.intensity == 3.0f && light.range == 4.0f,
+          "prefab nesting: the inner prefab's change shows through the outer prefab, under its override");
+
+    // Unpacking the outer instance keeps the inner one linked, with the outer override as its own.
+    check(reloadScene(scene, dir), "prefab nesting: reload before unpack");
+    kast::unpackPrefab(scene, named(scene, "Chest"));
+    const entt::entity loose = childNamed(scene, named(scene, "Chest"), "Gem");
+    check(!scene.registry().all_of<kast::PrefabInstance>(named(scene, "Chest")) && kast::isPrefabRoot(scene, loose) &&
+              kast::prefabOverrides(scene, loose) == nlohmann::ordered_json{{"components", {{"PointLight", {{"intensity", 3.0}}}}}} &&
+              scene.registry().get<kast::PointLight>(loose).intensity == 3.0f,
+          "prefab nesting: Unpack leaves nested instances linked");
+    check(reloadScene(scene, dir) && scene.registry().get<kast::PointLight>(childNamed(scene, named(scene, "Chest"), "Gem"))
+                                             .intensity == 3.0f,
+          "prefab nesting: the unpacked scene saves the inner instance with its override");
+
+    // Cycles: saving gem.prefab with a chest inside, or making a prefab that holds an instance of its own path.
+    kast::Scene gemScene;
+    check(kast::loadPrefabScene(dir, "prefabs/gem.prefab", gemScene, error), "prefab nesting: open gem.prefab");
+    kast::instantiatePrefab(gemScene, chestAsset, gemScene.children(entt::null).front(), error);
+    check(!kast::savePrefab(gemScene, dir, "prefabs/gem.prefab", error) && contains(error, "can't contain itself"),
+          "prefab nesting: a prefab that would contain itself through nesting is refused with an error");
+    // Hand-made cycle a -> b -> a: loading stops at the repeat with a placeholder and a warning.
+    writeFile(dir / "prefabs/a.prefab", R"({"version": 5, "entities": [
+        {"id": 1, "name": "A", "parent": null, "components": {"Transform": {"position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]}}},
+        {"id": 2, "name": "B", "parent": 1, "prefab": "prefabs/b.prefab", "instance": []}]})");
+    writeFile(dir / "prefabs/b.prefab", R"({"version": 5, "entities": [
+        {"id": 1, "name": "B", "parent": null, "components": {"Transform": {"position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]}}},
+        {"id": 2, "name": "A", "parent": 1, "prefab": "prefabs/a.prefab", "instance": []}]})");
+    std::shared_ptr<const kast::PrefabAsset> cyclic;
+    kast::SceneLoadReport report;
+    check(kast::loadPrefab(dir, "prefabs/a.prefab", cyclic, error, &report) && report.warnings.size() == 1 &&
+              contains(report.warnings[0], "would contain itself") && cyclic->entities.size() == 3 &&
+              cyclic->entities[2].missingPrefab == "prefabs/a.prefab",
+          "prefab nesting: a cycle in the files loads with the repeat as a placeholder and a warning");
+}
+
+void checkMissingPrefabs()
+{
+    const std::filesystem::path dir = projectTestDir("kast_prefab_missing", "Prefabs");
+    writeFile(dir / "prefabs/broken.prefab", "{ not json");
+    const std::string record = R"({
+      "id": 5,
+      "name": "Ghost",
+      "parent": null,
+      "prefab": "prefabs/gone.prefab",
+      "instance": [
+        {
+          "source": 1,
+          "id": 5,
+          "components": {
+            "Transform": {
+              "position": [
+                2.0,
+                0.0,
+                3.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        {
+          "source": 2,
+          "id": 6,
+          "components": {
+            "Collider": {
+              "radius": 0.85
+            }
+          }
+        },
+        {
+          "source": 3,
+          "deleted": true
+        }
+      ]
+    })";
+    writeFile(dir / "missing.scene", std::format(R"({{"version": 5, "entities": [{}, {}, {}]}})", record,
+        R"({"id": 7, "name": "Under Child", "parent": 6, "components": {"Transform": {"position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]}}})",
+        R"({"id": 8, "name": "Broken", "parent": null, "prefab": "prefabs/broken.prefab", "instance": []})"));
+    kast::Scene scene;
+    kast::SceneLoadReport report;
+    std::string error;
+    check(kast::loadScene((dir / "missing.scene").string(), scene, error, &report, dir), "prefab missing: the scene loads");
+    const entt::entity ghost = named(scene, "gone");
+    check(kast::isMissingPrefab(scene, ghost) && kast::isMissingPrefab(scene, named(scene, "broken")) &&
+              scene.registry().get<kast::Transform>(ghost).position.z == 3.0f &&
+              scene.parent(named(scene, "Under Child")) == ghost,
+          "prefab missing: placeholders named after the prefab, at their saved position, keeping children");
+    check(report.warnings.size() == 2 && contains(report.warnings[0], "Entity 'Ghost' (id 5)") &&
+              contains(report.warnings[0], "prefabs/gone.prefab") && contains(report.warnings[1], "prefabs/broken.prefab"),
+          "prefab missing: a warning per placeholder names the entity and the path");
+    check(kast::saveScene(scene, (dir / "out.scene").string(), error), "prefab missing: save");
+    const nlohmann::ordered_json saved = readJson(dir / "out.scene");
+    check(saved["entities"][0] == nlohmann::ordered_json::parse(record) && saved["entities"][1]["parent"] == 6,
+          "prefab missing: saving keeps the reference, the overrides and the child's parent unchanged");
+    kast::Scene again;
+    check(kast::loadScene((dir / "out.scene").string(), again, error, nullptr, dir) &&
+              kast::saveScene(again, (dir / "out2.scene").string(), error) &&
+              readText(dir / "out.scene") == readText(dir / "out2.scene"),
+          "prefab missing: placeholders round trip byte-identically");
+    // Once the prefab exists, the instance comes back with its overrides.
+    kast::Scene source;
+    const entt::entity root = source.create("Gone");
+    source.registry().emplace<kast::Collider>(source.create("Inner", root));
+    source.create("Deleted", root);
+    check(kast::savePrefab(source, dir, "prefabs/gone.prefab", error), "prefab missing: write the prefab");
+    kast::Scene found;
+    check(kast::loadScene((dir / "out.scene").string(), found, error, nullptr, dir) &&
+              kast::isPrefabRoot(found, named(found, "Ghost")) &&
+              found.registry().get<kast::Collider>(named(found, "Inner")).radius == 0.85f &&
+              named(found, "Deleted") == entt::null && found.parent(named(found, "Under Child")) == named(found, "Inner"),
+          "prefab missing: when the prefab is back the instance loads with every override");
+}
+
+void checkPrefabRemap()
+{
+    const std::filesystem::path dir = projectTestDir("kast_prefab_remap", "Prefabs");
+    kast::Scene scene;
+    makeOrc(scene, dir);
+    std::string error;
+    std::filesystem::create_directories(dir / "scenes");
+    check(kast::saveScene(scene, (dir / "scenes/one.scene").string(), error) &&
+              kast::saveScene(scene, (dir / "two.scene").string(), error),
+          "prefab remap: write two scenes using orc.prefab");
+    // A prefab nesting orc.prefab.
+    kast::Scene holder;
+    const entt::entity pack = holder.create("Pack");
+    std::shared_ptr<const kast::PrefabAsset> orc;
+    check(kast::loadPrefab(dir, "prefabs/orc.prefab", orc, error), "prefab remap: load orc.prefab");
+    kast::instantiatePrefab(holder, orc, pack, error);
+    check(kast::createPrefab(holder, pack, "pack.prefab", dir, error), "prefab remap: pack.prefab nests orc.prefab");
+    check((prefabUsers(dir, "prefabs/orc.prefab") == std::vector<std::string>{"pack.prefab", "scenes/one.scene", "two.scene"}) &&
+              (prefabUsers(dir, "prefabs") == prefabUsers(dir, "prefabs/orc.prefab")) && prefabUsers(dir, "pack.prefab").empty(),
+          "prefab remap: the users of a prefab (or a folder of them) are listed");
+
+    // Move the folder, as the Assets panel does: the files on disk and the open scene follow.
+    Document doc;
+    check(openFile(doc, (dir / "two.scene").string(), error), "prefab remap: open two.scene");
+    std::filesystem::create_directories(dir / "assets");
+    std::filesystem::rename(dir / "prefabs", dir / "assets/prefabs");
+    const std::vector<std::string> changed = remapPrefabReferences(dir, "prefabs", "assets/prefabs");
+    remapScenePaths(doc, "prefabs", "assets/prefabs");
+    refreshPrefabs(doc);
+    check((changed == std::vector<std::string>{"pack.prefab", "scenes/one.scene", "two.scene"}) && doc.dirty &&
+              kast::isPrefabRoot(doc.scene, named(doc.scene, "Orc")) &&
+              doc.scene.registry().get<kast::PrefabInstance>(named(doc.scene, "Orc")).path == "assets/prefabs/orc.prefab",
+          "prefab remap: a move rewrites every scene and prefab on disk and the open scene");
+    kast::Scene moved;
+    check(kast::loadScene((dir / "scenes/one.scene").string(), moved, error, nullptr, dir) &&
+              kast::isPrefabRoot(moved, named(moved, "Orc")) && contains(readText(dir / "pack.prefab"), "assets/prefabs/orc.prefab"),
+          "prefab remap: the moved references load");
+    // Rename the prefab itself.
+    std::filesystem::rename(dir / "assets/prefabs/orc.prefab", dir / "assets/prefabs/brute.prefab");
+    remapPrefabReferences(dir, "assets/prefabs/orc.prefab", "assets/prefabs/brute.prefab");
+    remapScenePaths(doc, "assets/prefabs/orc.prefab", "assets/prefabs/brute.prefab");
+    refreshPrefabs(doc);
+    check(kast::isPrefabRoot(doc.scene, named(doc.scene, "Orc")) && contains(readText(dir / "two.scene"), "brute.prefab") &&
+              (prefabUsers(dir, "assets/prefabs/brute.prefab").size() == 3),
+          "prefab remap: a rename rewrites the references too");
+    check(uniquePrefabName(dir / "assets/prefabs", "brute") == "brute_2.prefab" &&
+              uniquePrefabName(dir, "Big: Orc?") == "Big_ Orc_.prefab" && uniquePrefabName(dir, "...") == "Prefab.prefab",
+          "prefab remap: new prefab names are unique and file-safe");
+}
+
+void checkPrefabEditMode()
+{
+    const std::filesystem::path dir = projectTestDir("kast_prefab_edit", "Prefabs");
+    {
+        kast::Scene scene;
+        const entt::entity orc = makeOrc(scene, dir);
+        scene.registry().get<kast::Collider>(childNamed(scene, orc, "Club")).radius = 0.95f; // an override
+        std::string error;
+        check(kast::saveScene(scene, (dir / "main.scene").string(), error), "prefab edit: write main.scene");
+    }
+    Document doc;
+    std::string error;
+    check(openFile(doc, (dir / "main.scene").string(), error), "prefab edit: open main.scene");
+    doc.scene.registry().get<kast::Name>(named(doc.scene, "Orc")).value = "Grunt"; // unsaved scene change
+    markDirty(doc);
+    check(openPrefab(doc, "prefabs/orc.prefab", error) && doc.prefabEdit && !doc.dirty &&
+              doc.scene.children(entt::null).size() == 1 && breadcrumb(doc) == "main > orc.prefab" &&
+              windowTitle(doc) == "Kast Editor - Prefabs - orc.prefab",
+          "prefab edit: the prefab replaces the scene, under a breadcrumb");
+    startPlay(doc);
+    check(doc.play == PlayState::Stopped, "prefab edit: Play is disabled");
+    const entt::entity root = doc.scene.children(entt::null).front();
+    doc.scene.registry().get<kast::Collider>(childNamed(doc.scene, root, "Club")).friction = 0.25f;
+    doc.scene.create("Horn", root);
+    markDirty(doc);
+    check(saveFile(doc, doc.path, error) && !doc.dirty && contains(readText(dir / "prefabs/orc.prefab"), "Horn"),
+          "prefab edit: Save writes the .prefab");
+    closePrefab(doc);
+    const entt::entity grunt = named(doc.scene, "Grunt");
+    check(!doc.prefabEdit && doc.dirty && grunt != entt::null && childNamed(doc.scene, grunt, "Horn") != entt::null &&
+              doc.scene.registry().get<kast::Collider>(childNamed(doc.scene, grunt, "Club")).friction == 0.25f &&
+              doc.scene.registry().get<kast::Collider>(childNamed(doc.scene, grunt, "Club")).radius == 0.95f,
+          "prefab edit: Back restores the scene (unsaved changes kept) with instances refreshed, overrides kept");
+    // A drop that would put the edited prefab inside itself is refused.
+    check(openPrefab(doc, "prefabs/orc.prefab", error), "prefab edit: open again");
+    check(dropPrefab(doc, "prefabs/orc.prefab", entt::null, error) == entt::null && contains(error, "can't contain itself"),
+          "prefab edit: dropping a prefab into its own edit mode is refused");
+    doc.scene.create("Unsaved", doc.scene.children(entt::null).front());
+    closePrefab(doc); // discards
+    check(!contains(readText(dir / "prefabs/orc.prefab"), "Unsaved") &&
+              childNamed(doc.scene, named(doc.scene, "Grunt"), "Unsaved") == entt::null,
+          "prefab edit: leaving without saving discards the prefab changes");
+    // Create Prefab and the editor-side ops by id.
+    std::string path;
+    const entt::entity lone = doc.scene.create("Lone Wolf");
+    check(createPrefabFrom(doc, lone, "", path, error) && path == "Lone Wolf.prefab" && kast::isPrefabRoot(doc.scene, lone),
+          "prefab edit: Create Prefab saves <name>.prefab in the folder");
+    check(!createPrefabFrom(doc, childNamed(doc.scene, named(doc.scene, "Grunt"), "Club"), "", path, error) &&
+              contains(error, "already part of a prefab instance"),
+          "prefab edit: Create Prefab on a prefab child is refused");
+    PrefabOp op{PrefabOp::Kind::RevertField, idOf(doc.scene, childNamed(doc.scene, named(doc.scene, "Grunt"), "Club")),
+                "Collider", "radius"};
+    check(runPrefabOp(doc, op, error) &&
+              doc.scene.registry().get<kast::Collider>(childNamed(doc.scene, named(doc.scene, "Grunt"), "Club")).radius == 0.5f,
+          "prefab edit: runPrefabOp reverts by id");
+}
+
+void checkLuaInstantiate()
+{
+    const std::filesystem::path dir = projectTestDir("kast_prefab_lua", "Prefabs");
+    {
+        kast::Scene source;
+        makeOrc(source, dir);
+    }
+    writeFile(dir / "scripts/spawn.lua", R"(return { init = function()
+    local id = kast.instantiate("prefabs/orc.prefab", nil, {x = 1, y = 2, z = 3})
+    assert(id ~= nil, "instantiate returns the root id")
+    local t = kast.get(id, "Transform")
+    assert(t.position.x == 1 and t.position.y == 2 and t.position.z == 3, "at position")
+    local count = function() local n = 0; for e in kast.query() do n = n + 1 end; return n end
+    local before = count()
+    local child = kast.instantiate("prefabs/orc.prefab", id)
+    assert(child ~= nil and child ~= id and count() == before + 4, "a second one, with its 3 children")
+    assert(kast.instantiate("prefabs/nope.prefab") == nil, "a missing file returns nil")
+    assert(kast.instantiate("../outside.prefab") == nil, "a path outside the project returns nil")
+    kast.log("instantiate ok")
+end, update = function() end })");
+    writeFile(dir / "prefabs/broken.prefab", "{ nope");
+    writeFile(dir / "scripts/broken.lua", R"(return { init = function()
+    assert(kast.instantiate("prefabs/broken.prefab") == nil, "a broken file returns nil")
+end, update = function() end })");
+    kast::Scene scene;
+    scene.systems = {"scripts/spawn.lua", "scripts/broken.lua"};
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "", nullptr);
+    lua.tick(0.1f);
+    checkOk(lua, 0, "kast.instantiate: success cases in Lua pass");
+    checkOk(lua, 1, "kast.instantiate: a broken file returns nil");
+    const entt::entity first = named(scene, "Orc");
+    check(scene.valid(first) && kast::isPrefabRoot(scene, first) && childNamed(scene, first, "Orc") != entt::null &&
+              kast::isPrefabRoot(scene, childNamed(scene, first, "Orc")),
+          "kast.instantiate: linked instances, the second under the first");
+    check(logged("instantiate ok") && logged("kast.instantiate: Invalid prefab 'prefabs/nope.prefab'") &&
+              logged("kast.instantiate: Invalid prefab 'prefabs/broken.prefab'"),
+          "kast.instantiate: failures are logged with why");
+    lua.stop();
+}
 int main(int argc, char** argv)
 {
     kast::disableCrashDialogsIfRequested();
@@ -7694,6 +8284,13 @@ int main(int argc, char** argv)
     checkSystemsFormat();
     checkLuaPlayMode();
     checkLuaApi();
+    checkPrefabFiles();
+    checkPrefabOverrides();
+    checkPrefabNesting();
+    checkMissingPrefabs();
+    checkPrefabRemap();
+    checkPrefabEditMode();
+    checkLuaInstantiate();
     checkLuaGui();
     checkLuaItems();
     checkLuaSandbox();

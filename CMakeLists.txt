@@ -104,7 +104,7 @@ target_link_libraries(kast_map PUBLIC nlohmann_json::nlohmann_json)
 
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
-  engine/app.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
+  engine/app.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/prefab.cpp engine/components.cpp
   engine/systems.cpp engine/renderer.cpp engine/shadow.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
@@ -119,6 +119,7 @@ target_compile_definitions(kast_engine PRIVATE SOL_LUAJIT=1 SOL_ALL_SAFETIES_ON=
 target_compile_options(kast_engine PRIVATE ${KAST_COMPILE_OPTIONS})
 # Asio targets Windows 10 (and its templates need /bigobj); crypt32 reads the ROOT certificate store.
 set_source_files_properties(engine/network.cpp PROPERTIES COMPILE_DEFINITIONS "_WIN32_WINNT=0x0A00" COMPILE_OPTIONS /bigobj)
+set_source_files_properties(engine/lua_systems.cpp PROPERTIES COMPILE_OPTIONS /bigobj) # sol2 templates
 target_link_libraries(kast_engine
   PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json RmlUi::RmlUi kast_map
   PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 assimp::assimp Jolt::Jolt "${LUAJIT_LIBRARY}" kast_protocol
@@ -288,6 +289,80 @@ add_test(NAME scene_v1_rejected
 add_test(NAME scene_v3_rejected
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_SCENES}/v3.scene"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
+add_test(NAME scene_v4_rejected
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_SCENES}/v4.scene"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
+# Prefabs: tests/project/prefabs.scene (Crate instances, one with overrides; Tower, which nests a Crate; Statue, a
+# missing-prefab placeholder; scripts/prefab_spawn.lua calls kast.instantiate; the built game "prefabs" in KAST_GAMES
+# runs it in the player). Each prefab_* test runs the headless prefab steps on a fresh copy of the project
+# (cmake/prefab_test.cmake) and checks the saved scene and .prefab files.
+set(KAST_PREFABS "${KAST_TEST_PROJECT}/prefabs.scene")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/prefabs_roundtrip")
+add_test(NAME prefabs_roundtrip
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_PREFABS}"
+          "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/prefabs_roundtrip" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
+# kast_prefab_test(<name> <args> <prefab_test.cmake -D...>...): prefab_<name> in its own copy of the test project.
+function(kast_prefab_test name args)
+  add_test(NAME prefab_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${KAST_TEST_PROJECT}"
+            "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/prefab_tests/${name}" -DSCENE=prefabs.scene "-DARGS=${args}" ${ARGN}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/prefab_test.cmake")
+endfunction()
+kast_prefab_test(create "--select 3 --create-prefab prefabs"
+  "-DEXPECT=out.scene|\"id\":3,\"name\":\"Ground\",\"parent\":null,\"prefab\":\"prefabs/Ground.prefab\"\;prefabs/Ground.prefab|\"name\":\"Ground\",\"parent\":null,\"components\"")
+kast_prefab_test(create_root "--select 3 --create-prefab /" "-DEXPECT=out.scene|\"prefab\":\"Ground.prefab\"\;Ground.prefab|\"Ground\"")
+kast_prefab_test(drop_hierarchy "--drop-prefab prefabs/Crate.prefab --drop-prefab prefabs/Crate.prefab,3"
+  "-DEXPECT=out.scene|\"id\":14,\"name\":\"Crate\",\"parent\":null,\"prefab\":\"prefabs/Crate.prefab\"\;out.scene|\"id\":16,\"name\":\"Crate\",\"parent\":3,\"prefab\":\"prefabs/Crate.prefab\"")
+# Scene view drops along the editor camera's center ray: onto the Crate at (-3, 0.5, 0); far off the Ground onto the
+# y = 0 plane; at the sky, 10 m ahead.
+kast_prefab_test(drop_view_mesh "--drop-prefab-view prefabs/Crate.prefab,0.5,0.5"
+  "-DCAMERA={\"pivot\": [-3, 0.5, 0], \"yaw\": 0, \"pitch\": -20, \"distance\": 6}" -DLAST_Y=above:0.05)
+kast_prefab_test(drop_view_plane "--drop-prefab-view prefabs/Crate.prefab,0.5,0.5"
+  "-DCAMERA={\"pivot\": [0, 0, -40], \"yaw\": 0, \"pitch\": -30, \"distance\": 10}" -DLAST_Y=zero -DLAST_FAR=5)
+kast_prefab_test(drop_view_sky "--drop-prefab-view prefabs/Crate.prefab,0.5,0.5"
+  "-DCAMERA={\"pivot\": [0, 5, 0], \"yaw\": 0, \"pitch\": 20, \"distance\": 5}" -DLAST_Y=above:5)
+kast_prefab_test(override "--set-field 5,PointLight.range,4"
+  "-DEXPECT=out.scene|{\"source\":2,\"id\":5,\"components\":{\"PointLight\":{\"range\":4.0}}}")
+kast_prefab_test(apply_field "--set-field 5,PointLight.range,4 --prefab-apply 5:PointLight.range"
+  "-DEXPECT=prefabs/Crate.prefab|\"range\":4.0\;out.scene|{\"source\":2,\"id\":5}" "-DFORBID=out.scene|\"range\":4.0")
+kast_prefab_test(apply_inner "--set-field 9,PointLight.range,6 --prefab-apply 9:PointLight.range@1"
+  "-DEXPECT=prefabs/Crate.prefab|\"range\":6.0" "-DFORBID=prefabs/Tower.prefab|\"range\"")
+kast_prefab_test(apply_outer "--set-field 9,PointLight.range,6 --prefab-apply 9:PointLight.range@0"
+  "-DEXPECT=prefabs/Tower.prefab|\"PointLight\":{\"range\":6.0}" "-DFORBID=prefabs/Crate.prefab|\"range\":6.0")
+kast_prefab_test(apply_all "--prefab-apply 10"
+  "-DEXPECT=prefabs/Crate.prefab|gold_r05.mat\;out.scene|{\"source\":2,\"id\":11}\;out.scene|\"id\":4,\"name\":\"Crate\"" "-DFORBID=out.scene|gold_r05")
+kast_prefab_test(revert_field "--prefab-revert 11:PointLight.color"
+  "-DEXPECT=out.scene|{\"source\":2,\"id\":11}\;out.scene|gold_r05.mat")
+kast_prefab_test(revert_all "--prefab-revert 10" "-DFORBID=out.scene|gold_r05\;prefabs/Crate.prefab|gold_r05")
+kast_prefab_test(unpack "--prefab-unpack 6"
+  "-DEXPECT=out.scene|\"id\":6,\"name\":\"Tower\",\"parent\":null,\"components\"\;out.scene|\"id\":8,\"name\":\"Crate\",\"parent\":6,\"prefab\":\"prefabs/Crate.prefab\"")
+kast_prefab_test(edit_mode "--edit-prefab prefabs/Crate.prefab --set-field 2,PointLight.intensity,5 --prefab-save --prefab-back"
+  "-DEXPECT=prefabs/Crate.prefab|\"intensity\":5.0\;out.scene|\"color\"\;out.scene|missing.prefab")
+kast_prefab_test(cycle_refused "--edit-prefab prefabs/Crate.prefab --drop-prefab prefabs/Tower.prefab" -DEXPECT_FAIL=1)
+# Windows (on the screen KAST_WINDOW_POS names): an instance's override marks with the Apply menu, the inner/outer
+# Apply submenu, prefab edit mode, its unsaved-changes prompt on Back, and the Delete Asset confirmation listing the
+# prefab's users.
+add_test(NAME prefab_inspector_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/prefab_inspector.png"
+          "-DEXTRA_ARGS=--scene ${KAST_PREFABS} --select 10 --inspector-apply-menu MeshRenderer.material"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME prefab_apply_submenu_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/prefab_apply_submenu.png"
+          "-DEXTRA_ARGS=--scene ${KAST_PREFABS} --select 9 --set-field 9,PointLight.range,5 --inspector-apply-menu PointLight.range"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME prefab_edit_mode_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/prefab_edit_mode.png"
+          "-DEXTRA_ARGS=--scene ${KAST_PREFABS} --edit-prefab prefabs/Tower.prefab --play"
+          "-DEXPECT_OUTPUT=Editing prefab 'prefabs/Tower.prefab'.*Play is disabled while a prefab is open"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME prefab_back_prompt_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/prefab_back_prompt.png"
+          "-DEXTRA_ARGS=--scene ${KAST_PREFABS} --edit-prefab prefabs/Crate.prefab --set-field 2,PointLight.range,7 --prefab-back-prompt"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME prefab_delete_dialog_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/prefab_delete_dialog.png"
+          "-DEXTRA_ARGS=--scene ${KAST_PREFABS} --assets-delete prefabs/Crate.prefab" -DFOCUS_PANEL=Assets
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 # Point lights: tests/project/point_lights.scene (dim sun, red / green / blue point lights, bluish ambient; the built
 # game "lights" in KAST_GAMES runs it in the player). Editor with Blue Light selected (range sphere), the Lighting panel,
 # Play, and Play of a configure-time copy with every PointLight intensity 0, so only point light shading can differ.
@@ -980,7 +1055,8 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "shadows_off|Shadows Test|shadows_sun_off.scene|FALSE"
                "point_shadows|Point Shadows Test|point_shadows.scene|FALSE"
                "physics|Physics Test|physics.scene|FALSE"
-               "terrain|Terrain Test|terrain.scene|FALSE" "terrain_off|Terrain Test|terrain_off.scene|FALSE")
+               "terrain|Terrain Test|terrain.scene|FALSE" "terrain_off|Terrain Test|terrain_off.scene|FALSE"
+               "prefabs|Prefabs Test|prefabs.scene|FALSE")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
@@ -1015,6 +1091,13 @@ add_test(NAME player_terrain_differs
   COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_terrain_off.png"
           "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_terrain.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
 set_tests_properties(player_terrain_differs PROPERTIES FIXTURES_REQUIRED "player_terrain_shot;player_terrain_off_shot")
+# The built prefabs game loads its instances and nested prefabs from game.pak, and kast.instantiate works in the player.
+add_test(NAME player_prefabs_instantiate
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/prefabs" "-DEXE=Prefabs Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/prefabs_instantiate.run" -DEXPECT=0
+          "-DEXPECT_OUTPUT=prefab_spawn: instantiated true.*prefab_spawn: missing gives nil"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_prefabs_instantiate PROPERTIES FIXTURES_REQUIRED game_prefabs_built TIMEOUT 90)
 # The built physics game logs the same events from game.pak in the player.
 add_test(NAME player_physics_events
   COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/physics" "-DEXE=Physics Test.exe"

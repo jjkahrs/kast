@@ -138,7 +138,7 @@ bool loadGame(kast::Project& project, std::optional<kast::AuthConfig>& auth, kas
         return false;
     }
     kast::activateComponentDefinitions(project.root, nullptr); // before the scene loads, so its Lua components resolve
-    return kast::loadScene(file->string(), scene, error);
+    return kast::loadScene(file->string(), scene, error, nullptr, project.root);
 }
 
 } // namespace
