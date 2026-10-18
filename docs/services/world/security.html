@@ -56,8 +56,17 @@
 <li><strong>Messages:</strong> the per-connection message rate, with disconnect on sustained excess, and one character request in flight at a time.</li>
 <li><strong>Movement:</strong> bounds, speed and the ground (no flying), with <code>Correction</code>. Rejected moves are never replicated.</li>
 <li><strong>Chat:</strong> size limit, UTF-8 validation, control-character stripping and the 5 per 10 s rate limit.</li>
+<li><strong>Client events:</strong> name, size and JSON-object checks, and 10 per second per character (not configurable; see <a href="#client-events">Client events</a>).</li>
 <li><strong>Connections:</strong> a connection limit and a send-buffer cap for clients that stop reading.</li>
 <li><strong>Malformed input:</strong> an unknown opcode, a bad length or a decode failure disconnects the client with a reason code.</li>
+</ul>
+<h2 id="client-events">Client events</h2>
+<p><code>ClientEvent</code> (<code>kast.world.send</code> on the client) is the only way a client talks to the server's Lua systems. The rules are in the <a href="protocol.html#client-events">protocol</a>.</p>
+<ul>
+<li><strong>Validation:</strong> the server re-checks every event: a name of 1–32 characters of <code>a-z0-9._</code>, at most 1 KB of JSON, and JSON that parses to an object. Anything else is a malformed frame: <code>Disconnect{malformed}</code>, logged as <code>client event rejected</code> with the session and byte count.</li>
+<li><strong>Rate limit:</strong> 10 per second per character. Excess events are dropped silently and counted; the count is logged as <code>client events dropped</code> <code>{char, count}</code> when the character leaves. The per-connection message rate applies too.</li>
+<li><strong>Handlers must validate <code>data</code>:</strong> only <code>entity</code> (the sender) is set by the server; <code>data</code> is whatever the client sent. The client asks, the server decides. The starter-mmo sample's <code>systems/combat.lua</code> checks, on the server, that <code>target</code> is a number naming an NPC with <code>Health</code>, that the target and the attacker are alive, that the cooldown has passed and that the target is on the attacker's map within range. The damage is the server's own constant: the client never decides it. A refused attack only sends the attacker <code>combat.rejected</code> <code>{reason}</code>.</li>
+<li><strong>Locked movement:</strong> <code>kast.setMovable(e, false)</code> (a <code>MoveLock</code> on the character) makes the movement step refuse every <code>Move</code> from that player with a <code>Correction</code> back to where it stands. The sample uses it for dead players, so a modified client can't walk while dead. It is not saved: the sample's <code>combat.lua</code> kills a character that logged out dead again on login.</li>
 </ul>
 <h2 id="trust_proxy-test-only">TRUST_PROXY (test only)</h2>
 <ul>

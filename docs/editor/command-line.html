@@ -195,6 +195,10 @@
 <td>With <code>--play</code>: on frame <code>frame</code>, move the mouse to the center of the Game panel's image, press <code>button</code> (<code>left</code>, <code>right</code> or <code>none</code>) and turn the wheel by <code>wheel</code> notches; the next frame move it by <code>dx, dy</code> pixels, the frame after release. Synthetic SDL events, so <code>kast.input</code> and the game GUIs get them as from a real mouse while the Game panel is focused. <code>kast.input.setCursorLocked</code> is not applied to the window in such a run, so the real cursor is never grabbed. Example: <code>--sim-mouse 600,left,240,-40,0</code>.</td>
 </tr>
 <tr>
+<td><code>--screenshot-on-log &lt;frames,text&gt;</code></td>
+<td>With <code>--frames N</code> (and usually <code>--screenshot</code>): end the run, taking the screenshot, <code>frames</code> frames after the first log line containing <code>text</code> (everything after the first comma); <code>N</code> stays the upper bound if it never appears. For waits that depend on the network or a server, e.g. <code>--screenshot-on-log 30,Bat dies</code>. Requires <code>--frames</code>.</td>
+</tr>
+<tr>
 <td><code>--gui-click &lt;id&gt;</code></td>
 <td>With <code>--play</code>: click the game GUI element with this <code>id</code> (topmost visible document holding one) after 10 frames, as the mouse does; logs an error if there is none.</td>
 </tr>

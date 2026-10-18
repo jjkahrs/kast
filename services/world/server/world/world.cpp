@@ -74,6 +74,8 @@ entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint 
     reg_.emplace<PendingMoves>(e);
     reg_.emplace<PendingSay>(e);
     reg_.emplace<ChatLimit>(e, WindowLimiter(rules_.chatRateCount, rules_.chatRateWindow));
+    reg_.emplace<PendingClientEvents>(e);
+    reg_.emplace<ClientEventLimit>(e, WindowLimiter(rules_.clientEventRateCount, rules_.clientEventRateWindow));
     const CellKey cell = grid_.cell_of(map, pos.x, pos.z);
     reg_.emplace<AoiCell>(e, cell);
     reg_.emplace<Visible>(e);
@@ -98,6 +100,8 @@ void World::despawn(entt::entity e) {
     }
     const auto& ch = reg_.get<CharacterRef>(e);
     const auto& tf = reg_.get<Transform>(e);
+    if (const uint64_t dropped = reg_.get<ClientEventLimit>(e).dropped)
+        log::info("client events dropped", {{"char", ch.charId}, {"count", dropped}});
     save_({ch.charId, reg_.get<MapRef>(e).map, tf.pos, tf.heading, lua::components_column(reg_, e, defs_)});
     leave_views(e);
     grid_.remove(wire_id(e), reg_.get<AoiCell>(e).cell);
@@ -208,6 +212,10 @@ void World::push_say(entt::entity e, std::string text) {
     if (reg_.valid(e)) reg_.get<PendingSay>(e).texts.push_back(std::move(text));
 }
 
+void World::push_client_event(entt::entity e, std::string name, nlohmann::json data) {
+    if (reg_.valid(e)) reg_.get<PendingClientEvents>(e).events.push_back({std::move(name), std::move(data)});
+}
+
 // area runs right after movement: a player who walked into a portal is transferred before aoi, so this tick's view
 // diff already sends the Spawns on the new map (MapChange and the old Despawns went out in transfer).
 // The spawner runs right before Lua, so a system's update already sees (and can move) the NPCs due this tick; like the
@@ -224,6 +232,7 @@ void World::tick(TimePoint now) {
         transfer(e, {portal.map, {portal.pos[0], portal.pos[1], portal.pos[2]}, portal.heading});
     aoi_system(reg_, grid_, send_);
     chat_system(reg_, rules_.chat, send_, now);
+    client_event_in_system(reg_, lua_.bus(), now); // delivered by the drain after this tick's Lua update
     spawner_system(reg_, spawner_, rules_.maxNpcs, now, [this](const SpawnRecord& r) {
         const auto& s = *r.spawn;
         const lua::NpcDef* def = lua_.npc(s.npc); // load_scripts refused the start without one

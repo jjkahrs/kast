@@ -52,6 +52,8 @@ struct MipImage {
 };
 // Decodes PNG or JPG bytes and builds the mips (filtered in linear space if srgb). nullopt if it can't be decoded.
 std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb);
+// Appends the mips below level 0 (image.rgba holds just width x height RGBA8) and sets levels.
+void buildMips(MipImage& image, bool srgb);
 
 // Draws a Scene's MeshRenderers and ModelRenderers (posed by their AnimatorState, else in bind pose; skinned on the GPU)
 // with their materials (PBR metallic-roughness, see fs_mesh.sc) lit by its ambient, its
@@ -77,6 +79,11 @@ public:
     // editor's selection.
     void renderOverlays(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx,
                         entt::entity selected);
+    // Until replaced (empty materialPath: none), terrain whose map material is materialPath draws with material, and
+    // the sRGB texture texturePath is image instead of either file: the zone builder's preview of a material it has
+    // not saved yet.
+    void setPreview(const std::string& materialPath, const Material& material, const std::string& texturePath,
+                    MipImage image);
 
 private:
     struct Mesh {
@@ -196,6 +203,9 @@ private:
     MaterialLibrary materials_;
     std::map<std::pair<std::string, bool>, Texture> textures_; // by (path, srgb)
     std::map<std::string, GpuModel> models_;                   // by project-relative path
+    std::string previewMaterialPath_, previewTexturePath_;      // setPreview
+    Material previewMaterial_;
+    bgfx::TextureHandle previewTexture_ = BGFX_INVALID_HANDLE;
 };
 
 } // namespace kast

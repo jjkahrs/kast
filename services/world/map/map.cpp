@@ -295,6 +295,11 @@ std::optional<MapInfo> parse_manifest(const Json& j, std::string& err) {
         if (!j["material"].is_string()) return fail("\"material\" must be a string");
         m.material = j["material"].get<std::string>();
     }
+    if (j.contains("terrainUv")) {
+        const Json& uv = j["terrainUv"];
+        if (uv == "map") m.terrainUv = TerrainUv::Map;
+        else if (uv != "tiled") return fail("\"terrainUv\" must be \"tiled\" or \"map\"");
+    }
     if (j.contains("nav")) {
         const Json& nav = j["nav"];
         if (!nav.is_object()) return fail("\"nav\" must be an object");

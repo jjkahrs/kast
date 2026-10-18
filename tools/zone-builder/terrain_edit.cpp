@@ -2,10 +2,18 @@
 
 #include <scene_io.h> // jsonNumber
 
+#define STB_PERLIN_IMPLEMENTATION
+#include <stb_perlin.h>
+#define STB_IMAGE_WRITE_STATIC
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
+
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <map>
+#include <random>
 #include <vector>
 
 namespace zone {
@@ -382,6 +390,129 @@ bool remove_tile(const km::MapInfo& info, ZoneState& state, TileKey t) {
     state.heights.erase(t);
     state.spawns.erase(t);
     return true;
+}
+
+void generate_heights(const km::MapInfo& info, ZoneState& state, const NoiseParams& p) {
+    // The seed picks where in the noise the map sits (stb_perlin repeats every 256 units on each axis; y off the
+    // integer lattice, where Perlin noise is 0). mt19937's raw output is the same on every platform.
+    std::mt19937 rng(p.seed);
+    const auto offset = [&] { return float(rng() % 65536u) / 256.0f + 0.5f / 256.0f; };
+    const float ox = offset(), oy = offset(), oz = offset();
+    constexpr int n = km::kTileSamples;
+    TileMap<std::vector<float>> noise;
+    float lo = kInf, hi = -kInf;
+    for_each_declared(info, [&](TileKey t) {
+        std::vector<float>& out = noise[t];
+        out.resize(size_t(n) * n);
+        for (int v = 0; v < n; ++v)
+            for (int u = 0; u < n; ++u) {
+                // Integer map samples, so a shared edge sample is the same input in both tiles.
+                const int gx = t.x * int(km::kTileSize) + u, gz = t.z * int(km::kTileSize) + v;
+                const float y = stb_perlin_fbm_noise3(float(gx) / p.scale + ox, oy, float(gz) / p.scale + oz,
+                                                      p.lacunarity, p.persistence, p.octaves);
+                out[size_t(v) * n + size_t(u)] = y;
+                lo = std::min(lo, y);
+                hi = std::max(hi, y);
+            }
+    });
+    for (auto& [t, values] : noise) {
+        auto fresh = std::make_shared<km::Heights>(values.size());
+        for (size_t i = 0; i < values.size(); ++i) (*fresh)[i] = quantize(values[i], lo, hi - lo);
+        state.heights[t] = std::move(fresh);
+    }
+}
+
+Gradient default_gradient() {
+    return {{0.0f, {0.76f, 0.70f, 0.50f}},
+            {0.30f, {0.33f, 0.52f, 0.21f}},
+            {0.70f, {0.45f, 0.42f, 0.38f}},
+            {1.0f, {0.95f, 0.95f, 0.97f}}};
+}
+
+std::optional<Gradient> parse_gradient(const Json& manifest, std::string& err) {
+    const auto unit = [](const Json& j) { return j.is_number() && j.get<double>() >= 0 && j.get<double>() <= 1; };
+    const auto it = manifest.find("terrainColors");
+    if (it == manifest.end()) return err = "no \"terrainColors\"", std::nullopt;
+    if (!it->is_array() || it->size() < 2) return err = "\"terrainColors\" must be an array of at least 2 stops", std::nullopt;
+    Gradient gradient;
+    for (size_t i = 0; i < it->size(); ++i) {
+        const Json& stop = (*it)[i];
+        if (!stop.is_array() || stop.size() != 2 || !unit(stop[0]) || !stop[1].is_array() || stop[1].size() != 3 ||
+            !std::all_of(stop[1].begin(), stop[1].end(), unit))
+            return err = "\"terrainColors\"[" + std::to_string(i) + "] must be [pos, [r, g, b]], each 0..1", std::nullopt;
+        gradient.push_back({stop[0].get<float>(), {stop[1][0].get<float>(), stop[1][1].get<float>(), stop[1][2].get<float>()}});
+    }
+    return gradient;
+}
+
+Json gradient_json(const Gradient& gradient) {
+    Json out = Json::array();
+    for (const ColorStop& s : gradient)
+        out.push_back({kast::jsonNumber(s.pos),
+                       {kast::jsonNumber(s.rgb[0]), kast::jsonNumber(s.rgb[1]), kast::jsonNumber(s.rgb[2])}});
+    return out;
+}
+
+std::array<float, 3> gradient_color(const Gradient& gradient, float t) {
+    if (gradient.empty()) return {0.5f, 0.5f, 0.5f};
+    Gradient sorted = gradient; // the UI keeps the user's order while a stop is dragged past another
+    std::stable_sort(sorted.begin(), sorted.end(), [](const ColorStop& a, const ColorStop& b) { return a.pos < b.pos; });
+    if (t <= sorted.front().pos) return sorted.front().rgb;
+    for (size_t i = 1; i < sorted.size(); ++i) {
+        const ColorStop &a = sorted[i - 1], &b = sorted[i];
+        if (t > b.pos) continue;
+        const float f = b.pos > a.pos ? (t - a.pos) / (b.pos - a.pos) : 1.0f;
+        return {a.rgb[0] + (b.rgb[0] - a.rgb[0]) * f, a.rgb[1] + (b.rgb[1] - a.rgb[1]) * f, a.rgb[2] + (b.rgb[2] - a.rgb[2]) * f};
+    }
+    return sorted.back().rgb;
+}
+
+std::string terrain_material_path(const std::string& folder) { return "materials/" + folder + "_terrain.mat"; }
+std::string terrain_texture_path(const std::string& folder) { return "textures/" + folder + "_terrain.png"; }
+
+// ponytail: ground_y per pixel (a rect scan each); ~16 M lookups at the 4096 cap take seconds, fine for a save.
+TerrainImage bake_terrain(const km::MapInfo& info, const ZoneState& state, const Gradient& gradient) {
+    TerrainImage image;
+    if (info.tiles.empty()) return image;
+    int x0 = INT32_MAX, z0 = INT32_MAX, x1 = INT32_MIN, z1 = INT32_MIN;
+    for (const km::TileRect& r : info.tiles)
+        x0 = std::min(x0, r.x0), z0 = std::min(z0, r.z0), x1 = std::max(x1, r.x1), z1 = std::max(z1, r.z1);
+    const int metresX = (x1 - x0 + 1) * int(km::kTileSize), metresZ = (z1 - z0 + 1) * int(km::kTileSize);
+    const int longest = std::max(metresX, metresZ);
+    image.width = longest > kMaxTerrainImage ? std::max(1, int(int64_t(metresX) * kMaxTerrainImage / longest)) : metresX;
+    image.height = longest > kMaxTerrainImage ? std::max(1, int(int64_t(metresZ) * kMaxTerrainImage / longest)) : metresZ;
+    image.rgb.resize(size_t(image.width) * image.height * 3);
+    const auto [hmin, hmax] = km::height_range(info);
+    const float px = float(metresX) / float(image.width), pz = float(metresZ) / float(image.height);
+    for (int j = 0; j < image.height; ++j)
+        for (int i = 0; i < image.width; ++i) {
+            const float x = float(x0) * km::kTileSize + (float(i) + 0.5f) * px;
+            const float z = float(z0) * km::kTileSize + (float(j) + 0.5f) * pz;
+            const std::optional<float> y = ground_y(info, state, x, z);
+            std::array<float, 3> c{0.5f, 0.5f, 0.5f};
+            if (y) c = gradient_color(gradient, hmax > hmin ? (*y - hmin) / (hmax - hmin) : 0.0f);
+            uint8_t* out = &image.rgb[(size_t(j) * image.width + size_t(i)) * 3];
+            for (int k = 0; k < 3; ++k) out[k] = uint8_t(std::lround(std::clamp(c[k], 0.0f, 1.0f) * 255.0f));
+        }
+    return image;
+}
+
+std::string encode_png_rgb(const TerrainImage& image) {
+    int len = 0;
+    unsigned char* data = stbi_write_png_to_mem(image.rgb.data(), image.width * 3, image.width, image.height, 3, &len);
+    if (!data) return {};
+    std::string png(reinterpret_cast<const char*>(data), size_t(len));
+    STBIW_FREE(data);
+    return png;
+}
+
+kast::Material terrain_material(const std::string& texturePath) {
+    kast::Material m;
+    m.baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
+    m.baseColorTexture = texturePath;
+    m.metallic = 0.0f;
+    m.roughness = 0.9f;
+    return m;
 }
 
 } // namespace zone

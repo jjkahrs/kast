@@ -10,5 +10,9 @@
             <p id="hud_gold" class="stat">Gold -</p>
             <p id="hud_map" class="stat">Map -</p>
         </div>
+        <div id="target_frame">
+            <p id="target_name">-</p>
+            <p id="target_health" class="stat">Health -</p>
+        </div>
     </body>
 </rml>

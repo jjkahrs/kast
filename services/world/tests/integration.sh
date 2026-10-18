@@ -2,6 +2,7 @@
 # Runs every integration scenario against the compose stack (docker compose up -d --build first).
 # Prints PASS/FAIL per scenario and exits non-zero if any failed.
 # Scenarios 10-13 stop/restart containers, so run this against a test stack only.
+# --starter-mmo runs only scenarios 23-24 (samples/starter-mmo combat), against the stack with the sample's override.
 set -u
 cd "$(dirname "$0")/.."
 export MSYS_NO_PATHCONV=1 # Git Bash on Windows: keep container paths as written
@@ -87,6 +88,22 @@ graceful() {
 
 echo "run id: $RUN   logs: $LOGDIR"
 wait_healthy world || { echo "world is not healthy; run docker compose up -d --build"; exit 1; }
+
+summary() {
+    echo
+    echo "================ integration summary ($RUN) ================"
+    printf '%s\n' "${RESULTS[@]}"
+    exit $FAILED
+}
+
+# --starter-mmo: only the samples/starter-mmo combat scenarios, against the stack started with the sample's override
+# (docker compose -f docker-compose.yml -f ../../samples/starter-mmo/docker-compose.override.yml up -d --build).
+if [ "${1:-}" = "--starter-mmo" ]; then
+    bot() { docker compose -f docker-compose.yml -f ../../samples/starter-mmo/docker-compose.override.yml run --rm -T bot --run-id "$RUN" "$@"; }
+    scenario "23 starter-mmo: Bat refused at 8 m, killed in one hit 2.5 m away, despawned, back 30 s later" --scenario combat-bat
+    scenario "24 starter-mmo: Guard: bad targets refused, cooldown, hits back, out of range refused" --scenario combat-rules
+    summary
+fi
 
 # 0: kast_mapbake in the image (docs/services/world/maps.html#navmesh) bakes every tile of the mounted (read-only) hills into a temp dir;
 # the server keeps the navtiles stored in the repo. Checksums are logged to compare with a Windows bake.
@@ -183,7 +200,16 @@ scenario "19 terrain: hills_gate lands on the ground, slope walk accepted, fly h
 # 20: navmesh on the sample hills map (docs/services/world/maps.html#navmesh): walking into the mesa's wall is corrected; the Sentry walks around it
 scenario "20 navmesh: mesa wall -> Correction, Sentry patrols around it on the ground" --scenario navmesh
 
-echo
-echo "================ integration summary ($RUN) ================"
-printf '%s\n' "${RESULTS[@]}"
-exit $FAILED
+# 21-22: client events (docs/services/world/protocol.html#client-events) with the sample lua/systems/test_hooks.lua
+scenario "21 client events: client.<name> reaches Lua with the sender; bad name / > 1 KB / non-object -> malformed" --scenario client-events
+name="22 client events: 10 a second per session, the rest dropped and counted"
+since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+scenario "$name" --scenario client-event-rate
+sleep 1 # the logout's despawn logs the count
+if ! docker logs --since "$since" "$WORLD" 2>&1 | grep '"client events dropped"' | grep -q '"count":20'; then
+    RESULTS[${#RESULTS[@]}-1]="FAIL  $name  no 'client events dropped' log with count 20"
+    FAILED=1
+    echo "==> FAIL $name (dropped count not logged)"
+fi
+
+summary

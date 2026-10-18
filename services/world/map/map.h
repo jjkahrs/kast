@@ -79,6 +79,10 @@ struct Spawn {
     std::string file;               // "maps/<folder>/.server/spawns/<tx>_<tz>.json"; empty from parse_spawns
 };
 
+// How terrain UVs run: Tiled = world xz / 8 (a texture repeating every 8 m); Map = one texture over the bounding box of
+// the declared tiles (map.json "terrainUv": "tiled" | "map").
+enum class TerrainUv { Tiled, Map };
+
 struct MapInfo {
     uint16_t id = 0;
     std::string name;
@@ -87,6 +91,7 @@ struct MapInfo {
     float spawnHeading = 0;
     std::optional<std::array<float, 2>> heightRange; // phases 4-6
     std::string material;                            // phases 4-6
+    TerrainUv terrainUv = TerrainUv::Tiled;
     std::optional<NavParams> nav;                    // phase 6
     Areas areas;                                     // areas.json, loaded separately (parse_areas); empty if none
     std::vector<Spawn> spawns;                       // every owned tile's spawn file (parse_spawns); empty if none

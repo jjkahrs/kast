@@ -258,6 +258,16 @@ float UiScale::displayScale() const
 void FrameLimit::endFrame()
 {
     ++frame_;
+    if (!logText_.empty()) {
+        const std::vector<std::string>& lines = kast::log::lines();
+        for (; logSeen_ < lines.size(); ++logSeen_) {
+            if (lines[logSeen_].find(logText_) != std::string::npos) {
+                frames_ = std::min(frames_, frame_ + logDelay_);
+                logText_.clear();
+                break;
+            }
+        }
+    }
     if (frames_ == 0 || frame_ < frames_)
         return;
     if (screenshot_.empty()) {

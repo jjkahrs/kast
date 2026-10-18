@@ -5,8 +5,10 @@
 #include "log.h"
 #include "lua_sandbox.h"
 #include "lua_state_machines.h"
+#include "lua_world_api.h"
 #include "files.h"
 #include "material.h"
+#include "math3d.h"
 #include "network.h"
 #include "project.h"
 #include "scene_io.h"
@@ -30,15 +32,6 @@ namespace {
 using Json = nlohmann::ordered_json;
 
 constexpr double kMaxExactInteger = 9007199254740992.0; // 2^53: Lua numbers are doubles
-
-// Raises a Lua error at the calling script's file:line. sol2 turns the exception into lua_error.
-[[noreturn]] void raise(lua_State* L, const std::string& message)
-{
-    luaL_where(L, 1);
-    std::string where = lua_tostring(L, -1);
-    lua_pop(L, 1);
-    throw std::runtime_error(where + message);
-}
 
 struct System {
     std::string path; // as listed in the scene
@@ -737,6 +730,25 @@ void LuaSystems::State::bindApi()
                                  toString(L, name)));
         return input && input->buttonsDown[static_cast<size_t>(found - names.begin())];
     });
+    // kast.input.mouseRay(): origin, direction ({x, y, z} each, direction normalized) of the ray from the active
+    // Camera through the cursor, for kast.physics.raycast; nil before the cursor's position is known or with no Camera.
+    inputApi.set_function("mouseRay", [this](sol::this_state L) -> std::tuple<sol::object, sol::object> {
+        const entt::entity camera = activeCamera(scene);
+        if (!input || input->mouseX < 0.0f || input->view.height <= 0.0f || camera == entt::null)
+            return {sol::lua_nil, sol::lua_nil};
+        float world[16];
+        scene.worldMatrix(camera, world);
+        const float tanHalf = std::tan(bx::toRad(scene.registry().get<Camera>(camera).verticalFovDegrees) * 0.5f);
+        const float aspect = input->view.width / input->view.height;
+        const float ndcX = input->mouseX * 2.0f - 1.0f;
+        const float ndcY = 1.0f - input->mouseY * 2.0f;
+        const bx::Vec3 local = {ndcX * tanHalf * aspect, ndcY * tanHalf, -1.0f}; // the camera looks down -z
+        const bx::Vec3 dir = bx::normalize(transformDir(local, world));
+        const auto table = [&](const bx::Vec3& v) {
+            return sol::make_object(L, lua.create_table_with("x", v.x, "y", v.y, "z", v.z));
+        };
+        return {table({world[12], world[13], world[14]}), table(dir)};
+    });
     inputApi.set_function("wheelDelta", [this] { return input ? input->wheelDelta : 0.0f; });
     inputApi.set_function("setCursorLocked", [this](sol::this_state L, const sol::object& locked) {
         if (locked.get_type() != sol::type::boolean)
@@ -1146,54 +1158,10 @@ void LuaSystems::State::bindGuiApi()
     guiApi.set_function("mouseOver", [this] { return gui->mouseOver(); });
 }
 
-// kast.world.*: thin wrappers over WorldClient; a bad argument or a call in the wrong state raises at the calling line,
-// everything the server or network decides is a world.* event.
+// kast.world.*: see lua_world_api.h.
 void LuaSystems::State::bindWorldApi()
 {
-    const auto guarded = [](lua_State* L, auto&& body) {
-        try {
-            return body();
-        } catch (const std::logic_error& e) { // WorldClient's messages start with the function's name
-            raise(L, std::format("kast.world.{}", e.what()));
-        }
-    };
-    // ids are numbers in Lua (accountId, charId): whole, 0 .. 2^53
-    const auto id = [](lua_State* L, const char* function, const char* what, const sol::object& value) {
-        const double n = value.get_type() == sol::type::number ? value.as<double>() : -1.0;
-        if (n < 0 || n > 9007199254740992.0 || n != std::floor(n))
-            raise(L, std::format("kast.world.{}: {} must be a whole number >= 0, got {}", function, what,
-                                 toString(L, value)));
-        return static_cast<uint64_t>(n);
-    };
-    const auto text = [](lua_State* L, const char* function, const char* what, const sol::object& value) {
-        if (value.get_type() != sol::type::string)
-            raise(L, std::format("kast.world.{}: {} must be a string, got {}", function, what, toString(L, value)));
-        return value.as<std::string>();
-    };
-    worldApi = lua.create_table();
-    worldApi.set_function("connect", [=, this](sol::this_state L, const sol::object& realmId) {
-        const uint64_t realm = id(L, "connect", "realmId", realmId);
-        guarded(L, [&] { world.connect(realm); });
-    });
-    worldApi.set_function("disconnect", [this]() { world.disconnect(); });
-    worldApi.set_function("listCharacters", [=, this](sol::this_state L) { guarded(L, [&] { world.listCharacters(); }); });
-    worldApi.set_function("createCharacter", [=, this](sol::this_state L, const sol::object& name) {
-        const std::string n = text(L, "createCharacter", "name", name);
-        guarded(L, [&] { world.createCharacter(n); });
-    });
-    worldApi.set_function("deleteCharacter", [=, this](sol::this_state L, const sol::object& charId) {
-        const uint64_t c = id(L, "deleteCharacter", "charId", charId);
-        guarded(L, [&] { world.deleteCharacter(c); });
-    });
-    worldApi.set_function("enterWorld", [=, this](sol::this_state L, const sol::object& charId) {
-        const uint64_t c = id(L, "enterWorld", "charId", charId);
-        guarded(L, [&] { world.enterWorld(c); });
-    });
-    worldApi.set_function("say", [=, this](sol::this_state L, const sol::object& message) {
-        const std::string t = text(L, "say", "text", message);
-        guarded(L, [&] { world.say(t); });
-    });
-    worldApi.set_function("state", [this]() { return std::string(worldStateName(world.state())); });
+    worldApi = makeWorldApi(lua, world);
 }
 
 void LuaSystems::State::bindNetApi()

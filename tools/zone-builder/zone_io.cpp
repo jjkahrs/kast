@@ -1,5 +1,7 @@
 #include "zone_io.h"
 
+#include "terrain_edit.h"
+
 #include <assets.h> // recycleAsset
 #include <files.h>
 
@@ -198,6 +200,15 @@ std::vector<ZoneError> validate(const Project& project, const ZoneDoc& doc) {
     for (const ProjectMap& m : project.maps)
         if (m.folder != doc.folder && m.info.id == info->id)
             errors.push_back({where(doc.folder, "map.json"), "id " + std::to_string(info->id) + " already used by maps/" + m.folder});
+    if (doc.state.manifest.contains("terrainColors") && !parse_gradient(doc.state.manifest, err))
+        errors.push_back({where(doc.folder, "map.json"), err});
+    // Save overwrites the generated terrain files; until the map has been saved pointing at them, a file already there
+    // is someone else's.
+    const std::string generated = terrain_material_path(doc.folder);
+    if (info->material == generated && !(doc.saved.manifest.is_object() && doc.saved.manifest.value("material", "") == generated))
+        for (const std::string& file : {generated, terrain_texture_path(doc.folder)})
+            if (fs::exists(project.root / u8path(file)))
+                errors.push_back({file, "already exists and was not generated for this map; rename or delete it"});
 
     if (!doc.state.areas.is_null()) {
         if (const auto areas = km::parse_areas(nlohmann::json(doc.state.areas), err)) {
@@ -294,6 +305,27 @@ std::vector<ZoneError> save_map(Project& project, ZoneDoc& doc, bool recycle) {
         if (recycle ? !recycleAsset(path, err) : !fs::remove(path, ec)) errors.push_back({file, recycle ? err : ec.message()});
     };
 
+    // The generated terrain texture and material follow the heights and colors on every save, once Create assigned
+    // them; baked before anything is written.
+    std::string terrainPng, terrainMat;
+    std::string err;
+    if (const auto info = doc.info(err); info && info->material == terrain_material_path(doc.folder))
+        if (const auto gradient = parse_gradient(doc.state.manifest, err)) {
+            terrainPng = encode_png_rgb(bake_terrain(*info, doc.state, *gradient));
+            terrainMat = kast::materialToJson(terrain_material(terrain_texture_path(doc.folder))).dump(2) + "\n";
+            if (terrainPng.empty()) return {{terrain_texture_path(doc.folder), "cannot encode the PNG"}};
+        }
+    const auto writeProject = [&](const std::string& file, std::string_view bytes) { // project-relative
+        const fs::path path = project.root / u8path(file);
+        std::error_code ec;
+        fs::create_directories(path.parent_path(), ec);
+        if (!kast::writeFileAtomic(path, bytes)) errors.push_back({file, "cannot write"});
+    };
+
+    if (!terrainPng.empty()) {
+        writeProject(terrain_texture_path(doc.folder), terrainPng);
+        writeProject(terrain_material_path(doc.folder), terrainMat);
+    }
     if (doc.state.manifest != doc.saved.manifest) write("map.json", dump(doc.state.manifest));
     if (!doc.state.areas.is_null() && doc.state.areas != doc.saved.areas) write("areas.json", dump(doc.state.areas));
     for (const auto& [tile, json] : doc.state.spawns) {

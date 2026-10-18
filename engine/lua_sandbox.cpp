@@ -229,6 +229,14 @@ sol::protected_function loadSandboxed(sol::state& lua, const std::filesystem::pa
     return body;
 }
 
+void raise(lua_State* L, const std::string& message)
+{
+    luaL_where(L, 1);
+    std::string where = lua_tostring(L, -1);
+    lua_pop(L, 1);
+    throw std::runtime_error(where + message);
+}
+
 std::string toString(lua_State* L, const sol::object& value)
 {
     sol::protected_function tostring = sol::state_view(L)["tostring"];

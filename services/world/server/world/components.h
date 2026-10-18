@@ -56,6 +56,22 @@ struct ChatLimit {
     WindowLimiter limiter;
 };
 
+// ClientEvents this tick, already checked by GameServer (name, size, JSON object); client_event_in_system rate limits
+// them and publishes them to the Lua bus.
+struct PendingClientEvent {
+    std::string name;
+    nlohmann::json data;
+};
+struct PendingClientEvents {
+    std::vector<PendingClientEvent> events;
+};
+struct ClientEventLimit {
+    WindowLimiter limiter;
+    uint64_t dropped = 0; // over the limit since login (logged on despawn)
+};
+
+struct MoveLock {}; // tag: kast.setMovable(e, false); every Move is refused with a Correction
+
 struct AoiCell {
     CellKey cell;
 };
@@ -105,7 +121,7 @@ struct Viewers {
 // and every C++ component here, in lua/components.h and in lua/state_machines.h.
 inline constexpr const char* kReservedComponentNames[] = {
     "Character",    "Transform",       "StateMachine", "Npc",                 "SessionLink",   "CharacterRef",
-    "MoveState",    "PendingMoves",    "PendingSay",   "ChatLimit",           "AoiCell",       "Visible",
+    "MoveState",    "PendingMoves",    "PendingSay",   "ChatLimit",           "PendingClientEvents", "ClientEventLimit", "MoveLock",           "AoiCell",       "Visible",
     "Viewers",      "Moved",           "Dirty",        "SaveTimer",           "ReplicatedState", "ScriptsLeft",
     "PreservedComponents", "ComponentData", "StateMachineRuntime", "MapRef",
     "AreaRef",      "Spawn",           "SpawnRef"};

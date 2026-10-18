@@ -198,6 +198,19 @@ void WorldClient::say(const std::string& text)
     send(proto::Say{text});
 }
 
+void WorldClient::sendEvent(const std::string& name, const nlohmann::json& data)
+{
+    if (!proto::valid_client_event_name(name))
+        throw std::logic_error(std::format("send: name must be 1-{} characters of a-z, 0-9, '.' and '_', got '{}'",
+                                           proto::kClientEventNameMax, name));
+    std::string json = data.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    if (json.size() > proto::kClientEventJsonMax)
+        throw std::logic_error(std::format("send: data is {} bytes encoded, the limit is {}", json.size(),
+                                           proto::kClientEventJsonMax));
+    require(WorldState::InWorld, "send");
+    send(proto::ClientEvent{name, std::move(json)});
+}
+
 void WorldClient::move(float x, float y, float z, float heading)
 {
     require(WorldState::InWorld, "move");

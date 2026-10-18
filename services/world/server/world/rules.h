@@ -3,6 +3,7 @@
 #include "../core/clock.h"
 
 #include <messages.h>
+#include <nlohmann/json.hpp>
 
 #include <optional>
 #include <string>
@@ -15,6 +16,9 @@ bool valid_character_name(std::string_view name);
 
 // Valid UTF-8, control characters stripped, 1..maxBytes bytes after stripping. nullopt = reject.
 std::optional<std::string> sanitize_chat(std::string_view text, size_t maxBytes);
+// A ClientEvent's payload as a JSON object, or nullopt if the event is invalid: name not 1-32 chars of [a-z0-9._],
+// JSON over kClientEventJsonMax bytes, not JSON, or not an object.
+std::optional<nlohmann::json> client_event_data(const proto::ClientEvent& ev);
 
 struct MoveRules {
     float maxSpeed = 10;       // m/s

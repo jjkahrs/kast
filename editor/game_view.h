@@ -31,6 +31,8 @@ public:
     // An SDL event for the game GUIs (call only while hasInput).
     void onEvent(const SDL_Event& event);
     kast::SceneGui& gui() { return gui_; } // Play-mode GUIs: hot reload, --gui-click
+    // Where the image is drawn, for Input's cursor position (kast.input.mouseRay).
+    kast::Input::View inputView() const { return {imageMin_.x, imageMin_.y, imageSize_.x, imageSize_.y}; }
     // Window position of the drawn image's center (--sim-mouse presses there).
     ImVec2 imageCenter() const { return {imageMin_.x + imageSize_.x * 0.5f, imageMin_.y + imageSize_.y * 0.5f}; }
 

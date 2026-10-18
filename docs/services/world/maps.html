@@ -34,8 +34,9 @@ joined only by transfers. Players and NPCs on different maps never see each othe
 <li><strong>Identity:</strong> <code>id</code> (0-65535) is what the database, the wire and Lua use. It must be unique across maps; the folder
   name only locates the files. <code>version</code> must be 1.</li>
 <li><strong>Required:</strong> <code>version</code>, <code>id</code>, <code>tiles</code> and <code>spawn.pos</code> (on a declared tile). <code>name</code>, <code>spawn.heading</code>, <code>heightRange</code>,
-  <code>material</code> and <code>nav</code> are optional. The game client's terrain uses <code>heightRange</code>, <code>material</code> and <code>nav.maxSlopeDeg</code>
-  (<a href="../../engine/terrain.html">Engine, Terrain</a>); the server uses <code>heightRange</code> and the heightmaps for the <a href="#ground">ground</a>. <code>map/heights.h</code> (heightmap decoding and the shared
+  <code>material</code>, <code>terrainUv</code> (<code>"tiled"</code> or <code>"map"</code>; anything else fails the map) and <code>nav</code> are optional, and unknown keys
+  (such as the zone builder's <code>terrainColors</code>) are ignored. The game client's terrain uses <code>heightRange</code>,
+  <code>material</code>, <code>terrainUv</code> and <code>nav.maxSlopeDeg</code> (<a href="../../engine/terrain.html">Engine, Terrain</a>); the server uses <code>heightRange</code> and the heightmaps for the <a href="#ground">ground</a>. <code>map/heights.h</code> (heightmap decoding and the shared
   ground triangles) is part of <code>kast_map</code>, so the server build needs vcpkg's <code>stb</code>.</li>
 <li><strong>Startup:</strong> every map is loaded and logged (<code>maps loaded</code>). Any bad manifest (with the file and the problem, such as
   <code>maps/cave/map.json: tiles[0]: x0 &lt;= x1 and z0 &lt;= z1 required</code>), a duplicate id, no maps, a missing <code>START_MAP</code>, or a

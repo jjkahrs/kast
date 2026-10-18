@@ -62,6 +62,9 @@ void aoi_rebucket(entt::registry& reg, AoiGrid& grid);
 void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send);
 void replication_system(entt::registry& reg, const Send& send);
 void chat_system(entt::registry& reg, const ChatRules& rules, const Send& send, TimePoint now);
+// Publishes each character's ClientEvents (kast.world.send) on the Lua bus as "client.<name>" {entity, data}, in
+// arrival order; past the character's ClientEventLimit they are dropped and counted.
+void client_event_in_system(entt::registry& reg, EventBus& bus, TimePoint now);
 // Sends replicated Lua components (docs/services/world/lua.html): what changed since the last send to the
 // owner (owner, aoi) and observers (aoi), and every aoi component of an entity to a viewer it came into view of.
 void component_replication_system(entt::registry& reg, const lua::Defs& defs, const Send& send);

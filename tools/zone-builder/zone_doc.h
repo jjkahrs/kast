@@ -70,6 +70,8 @@ public:
         fn(state);
         commit();
     }
+    // Between begin() and commit(): mid-stroke.
+    bool editing() const { return pending_.has_value(); }
     bool canUndo() const { return !undo_.empty(); }
     bool canRedo() const { return !redo_.empty(); }
     void undo();

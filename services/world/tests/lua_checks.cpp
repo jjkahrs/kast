@@ -2111,6 +2111,8 @@ return { update = function()
     expect(a and b, "query Spawn finds both spawns")
     expect(#a.path == 1 and a.path[1].x == 1030 and a.path[1].y == 0 and a.path[1].z == 1024, "path points as {x, y, z}")
     expect(a.wait == 1 and a.loop == false, "wait and loop")
+    expect(a.pos.x == 1024 and a.pos.y == 0 and a.pos.z == 1024 and a.heading == 0.5, "pos and heading as in the file")
+    expect(b.pos.y == 5000 and b.heading == 0, "pos is the file's, not clamped onto the ground")
     expect(b.path == nil and b.wait == nil and b.loop == nil, "no path: no path, wait or loop")
     local plain = kast.create("Plain", {template = "T"})
     expect(not kast.has(plain, "Spawn"), "kast.create NPCs have no Spawn")
@@ -2138,6 +2140,283 @@ void checkSpawnLua() {
     check_lua_expectations("spawn lua", "spawn lua done");
     for (const auto& s : w.world.script_status()) check(s.ok, "spawn lua: system still enabled " + s.error);
 }
+
+// ClientEvent in (kast.world.send): "client.<name>" {entity, data} on the bus after this tick's update, in arrival
+// order; past 10 a second per character the rest are dropped and counted (ClientEventLimit).
+void checkClientEventsIn() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("components/report.lua", kReport);
+    r.write("systems/inbox.lua", R"(
+local got = {}
+return {
+    init = function()
+        kast.subscribe("client.combat.attack", function(e)
+            got[#got + 1] = string.format("%d %s %s", e.entity, tostring(e.data.target), kast.get(e.entity, "Character").name)
+        end)
+    end,
+    onEnter = function(e) kast.add(e, "Report") end,
+    update = function(dt) for e in kast.query("Report") do kast.set(e, "Report", {lines = got}) end end,
+})");
+    TestWorld w(r.defs().defs);
+    check(w.world.load_scripts(r.root).empty(), "client events: system loads");
+    const auto alice = w.spawn(1, 31, "Alice", 1000, 1000);
+    for (int i = 0; i < 15; ++i) w.world.push_client_event(alice, "combat.attack", Json{{"target", i}});
+    w.world.tick(T0);
+    w.world.tick(T0 + std::chrono::milliseconds(50)); // the report is written in the update after the drain
+    Json lines = w.value(alice, "Report").value("lines", Json::array());
+    const std::string id = std::to_string(wire(alice));
+    check(lines.size() == 10 && lines[0] == id + " 0 Alice" && lines[9] == id + " 9 Alice",
+          "client.<name> {entity = sender, data}, the first 10 a second, in order: " + lines.dump());
+    auto& limit = w.world.registry().get<world::ClientEventLimit>(alice);
+    check(limit.dropped == 5, "client events: the 5 over the limit are counted");
+    for (int i = 20; i < 23; ++i) w.world.push_client_event(alice, "combat.attack", Json{{"target", i}});
+    w.world.tick(T0 + std::chrono::seconds(1));
+    w.world.tick(T0 + std::chrono::milliseconds(1050));
+    lines = w.value(alice, "Report").value("lines", Json::array());
+    check(lines.size() == 13 && lines[12] == id + " 22 Alice" && limit.dropped == 5,
+          "client events: allowed again a second later: " + lines.dump());
+    w.world.push_client_event(alice, "unheard", Json::object()); // nobody subscribed: dropped by the bus, no error
+    w.world.tick(T0 + std::chrono::milliseconds(1100));
+    w.world.despawn(alice);
+    check(said_at("client events dropped").size() == 1, "client events: the dropped count is logged on despawn");
+    for (const auto& s : w.world.script_status()) check(s.ok, "client events: system still enabled " + s.error);
+}
+
+// kast.setMovable: a locked character's moves are all refused with one Correction a tick; unlocked, they work again.
+// kast.map.spawn(map): the map's spawn point.
+void checkMovableAndMapSpawn() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("systems/lock.lua", std::string(kLuaExpect) + R"(
+local ticks = 0
+return { update = function()
+    ticks = ticks + 1
+    local e
+    for c in kast.query("Character") do e = c end
+    if ticks == 1 then
+        kast.setMovable(e, false)
+        local npc = kast.create("Statue", {template = "T"})
+        raises("kast.setMovable: entity " .. npc .. " is an NPC; only players send moves", function() kast.setMovable(npc, false) end)
+        raises("kast.setMovable: movable must be a boolean, got nil", function() kast.setMovable(e) end)
+        raises("invalid entity id 999999", function() kast.setMovable(999999, true) end)
+        local s = kast.map.spawn(2)
+        expect(s.position.x == 256 and s.position.y == 0 and s.position.z == 256 and s.heading == 1, "kast.map.spawn")
+        raises("kast.map.spawn: ", function() kast.map.spawn(99) end)
+    elseif ticks == 2 then
+        kast.setMovable(e, true)
+        kast.log("lock lua done")
+    end
+end })");
+    TestWorld w({});
+    check(w.world.load_scripts(r.root).empty(), "movable: loads");
+    const auto alice = w.spawn(1, 41, "Alice", 1000, 1000);
+    w.world.tick(T0); // locks
+    w.sent.clear();
+    w.world.push_move(alice, proto::Move{{1001, 0, 1000}, 0, 0});
+    w.world.push_move(alice, proto::Move{{1002, 0, 1000}, 0, 0});
+    w.world.tick(T0 + std::chrono::milliseconds(500)); // refused, then unlocks
+    const auto& tf = w.world.registry().get<world::Transform>(alice);
+    check(tf.pos.x == 1000 && w.sent.of<proto::Correction>(1).size() == 1, "movable: locked moves -> one Correction, no move");
+    w.world.push_move(alice, proto::Move{{1001, 0, 1000}, 0, 0});
+    w.world.tick(T0 + std::chrono::milliseconds(1000));
+    check(tf.pos.x == 1001, "movable: unlocked moves are accepted again");
+    check_lua_expectations("movable", "lock lua done");
+    for (const auto& s : w.world.script_status()) check(s.ok, "movable: system still enabled " + s.error);
+}
+
+#ifdef KAST_STARTER_MMO
+// The starter-mmo sample's combat (samples/starter-mmo/systems/combat.lua, regen.lua, npcs.lua, fsms/), on its own
+// maps: refused attacks, a hit and its cooldown, the NPC fighting back and returning home healed, an NPC killed and
+// respawned, a character killed (no moves, no attacks) and revived at the map spawn, regeneration only out of combat.
+void checkStarterMmoCombat() {
+    LogCapture capture;
+    const fs::path root = KAST_STARTER_MMO;
+    const auto defs = lua::load_component_defs(root, world::kReservedComponentNames);
+    check(defs.errors.empty(), "starter-mmo: definitions load");
+    std::vector<std::string> mapErrors;
+    auto maps = world::Maps::load(root / "maps", mapErrors);
+    check(mapErrors.empty(), "starter-mmo: maps load " + (mapErrors.empty() ? "" : mapErrors[0]));
+    world::WorldRules rules;
+    rules.startMap = 10;
+    TestWorld w(defs.defs, rules, std::move(maps));
+    const auto errors = w.world.load_scripts(root);
+    check(errors.empty(), "starter-mmo: systems load " + (errors.empty() ? "" : errors[0]));
+    if (!errors.empty()) return;
+    auto& reg = w.world.registry();
+    TimePoint t = T0;
+    w.world.tick(t);
+    const auto npc = [&](const std::string& name) {
+        for (auto [e, n] : reg.view<world::Npc>().each())
+            if (n.name == name) return e;
+        return entt::entity{entt::null};
+    };
+    const auto run = [&](double seconds) {
+        for (int i = 0; i < static_cast<int>(std::lround(seconds * 20)); ++i) w.world.tick(t += std::chrono::milliseconds(50));
+    };
+    const auto health = [&](entt::entity e) { return w.value(e, "Health")["current"].get<double>(); };
+    const auto attack = [&](entt::entity from, const nlohmann::json& target) {
+        w.world.push_client_event(from, "combat.attack", nlohmann::json{{"target", target}});
+    };
+    const auto events = [&](uint32_t sid, const std::string& name) {
+        std::vector<Json> out;
+        for (const auto& e : w.sent.of<proto::ServerEvent>(sid))
+            if (e.name == name) out.push_back(Json::parse(e.json));
+        return out;
+    };
+    const auto rejected = [&](uint32_t sid) {
+        std::vector<std::string> out;
+        for (const auto& e : events(sid, "combat.rejected")) out.push_back(e["reason"]);
+        return out;
+    };
+    const auto state = [&](entt::entity e) { return w.world.fsm().state(lua::EntityId{wire(e)}); };
+    const auto bat = npc("Bat"), guard = npc("Guard");
+    check(bat != entt::null && guard != entt::null, "starter-mmo: the Bat and the Guard spawn");
+    if (bat == entt::null || guard == entt::null) return;
+    check(w.value(bat, "StateMachine")["machine"] == "creature" && state(bat) == "idle",
+          "starter-mmo: the Bat stands idle (creature machine)");
+
+    // Refused: out of range (8 m), not an NPC, no such entity, not a number.
+    const auto alice = w.spawn(1, 501, "Alice", 128, 128, "", 11);
+    const auto bob = w.spawn(2, 502, "Bob", 128, 122, R"({"Health":{"current":50,"max":100}})", 11);
+    run(0.1);
+    attack(alice, wire(bat));
+    attack(alice, wire(bob));
+    attack(alice, 999999);
+    attack(alice, "x");
+    run(0.1);
+    check(health(bat) == 10 && rejected(1) == std::vector<std::string>{"range", "target", "target", "target"},
+          "starter-mmo: out of range / a player / unknown / not a number refused: " + Json(rejected(1)).dump());
+
+    // Bob 2 m from the Bat: one hit kills it; both see the hit and the death; it is gone the next tick, back 30 s on.
+    w.sent.clear();
+    attack(bob, wire(bat));
+    w.world.tick(t += std::chrono::milliseconds(50));
+    const double bobAfterHit = health(bob);
+    const auto hits = events(1, "combat.hit");
+    check(hits.size() == 1 && hits[0]["attacker"] == wire(bob) && hits[0]["target"] == wire(bat) && hits[0]["damage"] == 10 &&
+              hits[0]["attackerName"] == "Bob" && hits[0]["targetName"] == "Bat" && events(2, "combat.attack").size() == 1,
+          "starter-mmo: combat.attack and combat.hit {attacker, target, damage, names} to everyone in view");
+    check(events(1, "combat.death").size() == 1 && events(2, "combat.death")[0]["name"] == "Bat" && health(bat) == 0,
+          "starter-mmo: the Bat at 0 Health dies (combat.death)");
+    w.world.tick(t += std::chrono::milliseconds(50));
+    check(npc("Bat") == entt::null && !w.sent.of<proto::Despawn>(1).empty(), "starter-mmo: the dead Bat is destroyed");
+    const TimePoint killed = t;
+    run(4);
+    check(health(bob) == bobAfterHit, "starter-mmo: no regeneration within 5 s of a hit");
+    run(2);
+    check(health(bob) > bobAfterHit, "starter-mmo: regeneration once 5 s out of combat");
+    run(23.5);
+    check(npc("Bat") == entt::null, "starter-mmo: not back before respawnSec (30 s)");
+    run(1);
+    const auto bat2 = npc("Bat");
+    check(bat2 != entt::null && bat2 != bat && health(bat2) == 10 && t - killed >= std::chrono::seconds(30),
+          "starter-mmo: the Bat respawns 30 s later with full Health");
+
+    // Carol 1.2 m from the Guard: a hit, a second within the cooldown refused, a third after it.
+    const proto::Vec3 g0 = reg.get<world::Transform>(guard).pos; // somewhere on its patrol by now
+    const auto carol = w.spawn(3, 503, "Carol", g0.x + 1.2f, g0.z, "", 10);
+    w.world.tick(t += std::chrono::milliseconds(50));
+    w.sent.clear();
+    attack(carol, wire(guard));
+    w.world.tick(t += std::chrono::milliseconds(50));
+    attack(carol, wire(guard));
+    w.world.tick(t += std::chrono::milliseconds(50));
+    check(health(guard) == 40 && rejected(3) == std::vector<std::string>{"cooldown"} && state(guard) == "combat",
+          "starter-mmo: 10 damage, a second hit within 1.5 s refused, the Guard in combat: " + Json(rejected(3)).dump());
+    run(1.5);
+    attack(carol, wire(guard));
+    run(0.1);
+    check(health(guard) == 30, "starter-mmo: hit again after the cooldown");
+    // The Guard hits back for 5 every 2 s: at once, then 2 s and 4 s later.
+    run(2.6);
+    std::vector<double> guardHits;
+    for (const auto& h : events(3, "combat.hit"))
+        if (h["attacker"] == wire(guard)) guardHits.push_back(h["damage"]);
+    check(guardHits == std::vector<double>{5, 5, 5} && health(carol) == 85,
+          "starter-mmo: the Guard hits back 5 every 2 s: " + Json(guardHits).dump() + " Carol " + std::to_string(health(carol)));
+    // Carol leaves: the Guard returns to its spawn, heals to full and patrols again.
+    w.world.despawn(carol);
+    run(0.1);
+    check(state(guard) == "returning", "starter-mmo: attacker gone -> the Guard is returning, not " + state(guard));
+    run(5);
+    check(health(guard) == 50 && (state(guard) == "walking" || state(guard) == "waiting"),
+          "starter-mmo: back home the Guard is healed and patrols again (" + state(guard) + ")");
+
+    // Dave, 3 Health, hits the Guard: it kills him. Dead: moves refused, attacks refused; revived 5 s later at the
+    // map's spawn point with full Health.
+    const proto::Vec3 g = reg.get<world::Transform>(guard).pos;
+    const auto dave = w.spawn(4, 504, "Dave", g.x + 1.5f, g.z, R"({"Health":{"current":3,"max":100}})", 10);
+    w.world.tick(t += std::chrono::milliseconds(50));
+    w.sent.clear();
+    attack(dave, wire(guard));
+    run(0.2);
+    const auto deaths = events(4, "combat.death");
+    check(health(dave) == 0 && deaths.size() == 1 && deaths[0]["entity"] == wire(dave) && deaths[0]["name"] == "Dave",
+          "starter-mmo: Dave at 0 Health dies (combat.death)");
+    const proto::Vec3 deadAt = reg.get<world::Transform>(dave).pos;
+    w.world.push_move(dave, proto::Move{{deadAt.x + 1, deadAt.y, deadAt.z}, 0, 0});
+    attack(dave, wire(guard));
+    run(0.1);
+    check(reg.get<world::Transform>(dave).pos == deadAt && !w.sent.of<proto::Correction>(4).empty() &&
+              rejected(4) == std::vector<std::string>{"dead"},
+          "starter-mmo: dead -> move corrected, attack refused");
+    run(2);
+    check(state(guard) != "combat", "starter-mmo: the Guard drops a dead target");
+    check(health(dave) == 0, "starter-mmo: no regeneration while dead");
+    run(3);
+    const proto::Vec3 dp = reg.get<world::Transform>(dave).pos;
+    check(health(dave) == 100 && std::hypot(dp.x - 128, dp.z - 128) < 0.01f && events(4, "combat.revive").size() == 1 &&
+              !w.sent.of<proto::MapChange>(4).empty(),
+          "starter-mmo: revived 5 s later at the map spawn (128, 128) with full Health");
+    w.world.push_move(dave, proto::Move{{dp.x + 0.5f, *w.maps.ground(10, dp.x + 0.5f, dp.z), dp.z}, 0, 0});
+    run(0.5);
+    check(reg.get<world::Transform>(dave).pos.x == dp.x + 0.5f, "starter-mmo: moves accepted again after the revive");
+    // Walking does not drain Health any more.
+    const double walked = health(dave);
+    for (int i = 1; i <= 20; ++i) {
+        const float x = dp.x + 0.5f + 0.2f * static_cast<float>(i);
+        w.world.push_move(dave, proto::Move{{x, *w.maps.ground(10, x, dp.z), dp.z}, 0, 0});
+        w.world.tick(t += std::chrono::milliseconds(50));
+    }
+    check(health(dave) == walked, "starter-mmo: walking does not drain Health");
+
+    // Leash: Dave hits the Guard and runs off at 8 m/s; chasing at 5 m/s it gives up 30 m from its spawn point and
+    // goes home healed.
+    const auto walkTo = [&](entt::entity e, float x, float z, float speed) {
+        for (int i = 0; i < 2000; ++i) {
+            const proto::Vec3 p = reg.get<world::Transform>(e).pos;
+            const float dx = x - p.x, dz = z - p.z, d = std::hypot(dx, dz), step = speed * 0.05f;
+            if (d < 0.01f) return;
+            const float k = std::min(1.0f, step / d), nx = p.x + dx * k, nz = p.z + dz * k;
+            w.world.push_move(e, proto::Move{{nx, *w.maps.ground(10, nx, nz), nz}, std::atan2(dx, dz), 0});
+            w.world.tick(t += std::chrono::milliseconds(50));
+        }
+    };
+    const proto::Vec3 g1 = reg.get<world::Transform>(guard).pos;
+    walkTo(dave, g1.x + 2.0f, g1.z, 8);
+    const proto::Vec3 g2 = reg.get<world::Transform>(guard).pos;
+    walkTo(dave, g2.x + 1.5f, g2.z, 8); // it walked on meanwhile
+    attack(dave, wire(guard));
+    w.world.tick(t += std::chrono::milliseconds(50));
+    check(state(guard) == "combat" && health(guard) == 40, "starter-mmo: leash: the Guard fights Dave");
+    const proto::Vec3 d0 = reg.get<world::Transform>(dave).pos;
+    float farthest = 0;
+    bool returned = false;
+    for (int leg = 0; leg < 2 && !returned; ++leg) { // 50 m south, then on if needed
+        walkTo(dave, d0.x, d0.z - 50.0f * static_cast<float>(leg + 1), 8);
+        const proto::Vec3 gp = reg.get<world::Transform>(guard).pos;
+        farthest = std::max(farthest, std::hypot(gp.x - 134, gp.z - 122));
+        returned = state(guard) == "returning";
+    }
+    check(returned && farthest <= 31.0f, "starter-mmo: leash: returning once 30 m from its spawn (" +
+                                             std::to_string(farthest) + " m), not " + state(guard));
+    run(8);
+    check(health(guard) == 50 && (state(guard) == "walking" || state(guard) == "waiting"),
+          "starter-mmo: leash: home, healed, patrolling (" + state(guard) + ")");
+    for (const auto& st : w.world.script_status()) check(st.ok, "starter-mmo: system still enabled " + st.path + " " + st.error);
+}
+#endif
 
 // --- maps (docs/services/world/maps.html) ---
 
@@ -3250,6 +3529,11 @@ int lua_checks(int& checks) {
     checkSpawnLoading();
     checkRespawn();
     checkSpawnLua();
+    checkClientEventsIn();
+    checkMovableAndMapSpawn();
+#ifdef KAST_STARTER_MMO
+    checkStarterMmoCombat();
+#endif
     checkNpcDefinitionErrors();
     checkNpcCreateFromDefinitions();
     checkNpcSpawnDefinitions();

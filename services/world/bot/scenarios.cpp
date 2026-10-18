@@ -1062,6 +1062,240 @@ asio::awaitable<void> navmesh(Ctx& x) {
     a->close();
 }
 
+// --- 21, 22: client events (kast.world.send's ClientEvent), with the sample lua/systems/test_hooks.lua ---
+
+// The "test.echo" replies' n, in arrival order.
+std::vector<int> echoes(const std::vector<proto::Message>& msgs, uint32_t entity) {
+    std::vector<int> out;
+    for (const auto& e : only<proto::ServerEvent>(msgs)) {
+        auto data = nlohmann::json::parse(e.json, nullptr, false);
+        if (e.name == "test.echo" && data.is_object() && data.value("entity", 0u) == entity) out.push_back(data.value("n", -2));
+    }
+    return out;
+}
+
+proto::ClientEvent echo(int n) { return {"test.echo", nlohmann::json{{"n", n}}.dump()}; }
+
+// A ClientEvent reaches the server's Lua as "client.test.echo" {entity = sender, data}: the hook's reply carries both.
+// Then each kind of invalid ClientEvent closes its connection with Disconnect{malformed}: a bad name, a payload over
+// 1 KB, JSON that is not an object.
+asio::awaitable<void> client_events(Ctx& x) {
+    proto::EnterWorldOk ok;
+    auto a = co_await x.enter("s21a", ok);
+    if (!a) co_return;
+    co_await drain(*a, Millis(300));
+    a->send(echo(7));
+    const auto got = echoes(co_await drain(*a, Millis(1000)), ok.entityId);
+    x.check.expect(got == std::vector<int>{7}, "client.test.echo {entity = sender, data = {n = 7}} -> test.echo n 7 (" +
+                                                   std::to_string(got.size()) + " replies)");
+    a->close();
+
+    const std::string over = nlohmann::json{{"s", std::string(proto::kClientEventJsonMax, 'a')}}.dump();
+    const std::vector<std::pair<std::string, proto::ClientEvent>> bad = {
+        {"name with capitals", {"Test.Echo", "{}"}},
+        {"33-char name", {std::string(33, 'a'), "{}"}},
+        {"payload over 1 KB", {"test.echo", over}},
+        {"JSON array", {"test.echo", "[1]"}},
+        {"not JSON", {"test.echo", "{nope"}},
+    };
+    int i = 0;
+    for (const auto& [what, event] : bad) {
+        proto::EnterWorldOk eb;
+        auto b = co_await x.enter("s21b" + std::to_string(i++), eb);
+        if (!b) co_return;
+        b->send(event);
+        const bool closed = co_await b->wait_closed(Millis(3000));
+        x.check.expect(closed && b->disconnectReason == Code::malformed, what + " -> Disconnect{malformed}");
+    }
+}
+
+// 30 ClientEvents at once: the first 10 reach Lua (10 a second per session), the other 20 are dropped (the server logs
+// the count when the character leaves; tests/integration.sh checks it). A second later events get through again.
+asio::awaitable<void> client_event_rate(Ctx& x) {
+    proto::EnterWorldOk ok;
+    auto a = co_await x.enter("s22", ok);
+    if (!a) co_return;
+    co_await drain(*a, Millis(300));
+    for (int n = 1; n <= 30; ++n) a->send(echo(n));
+    const auto got = echoes(co_await drain(*a, Millis(800)), ok.entityId);
+    std::vector<int> first10(10);
+    for (int n = 1; n <= 10; ++n) first10[n - 1] = n;
+    x.check.expect(got == first10, "30 at once: only the first 10 reach Lua (" + std::to_string(got.size()) + " replies)");
+    co_await drain(*a, Millis(400)); // past the 1 s window
+    a->send(echo(99));
+    const auto later = echoes(co_await drain(*a, Millis(1000)), ok.entityId);
+    x.check.expect(later == std::vector<int>{99}, "a second later events reach Lua again");
+    a->close();
+}
+
+// --- 23, 24: starter-mmo combat (samples/starter-mmo/systems/combat.lua; the stack runs the sample's override) ---
+
+struct StarterTerrain {
+    std::optional<Terrain> meadow, cavern;
+    float ground(uint16_t map, float px, float pz) const {
+        const auto& t = map == 11 ? cavern : meadow;
+        return t ? t->ground(px, pz) : 0.0f;
+    }
+};
+
+// The ServerEvents named name, as JSON.
+std::vector<nlohmann::json> named(const std::vector<proto::Message>& msgs, const std::string& name) {
+    std::vector<nlohmann::json> out;
+    for (const auto& e : only<proto::ServerEvent>(msgs))
+        if (e.name == name) out.push_back(nlohmann::json::parse(e.json, nullptr, false));
+    return out;
+}
+
+// A fresh character walks from the Meadow's spawn point through its Cavern Gate (153, 128) to the Cavern; returns its
+// position there, or nullopt (checked). seen: the messages that came with the MapChange (the Cavern's Spawns).
+asio::awaitable<std::optional<proto::Vec3>> to_cavern(Ctx& x, WorldClient& c, const proto::EnterWorldOk& ok,
+                                                      const StarterTerrain& t, std::vector<proto::Message>& seen) {
+    x.check.expect(ok.map == 10, "a new character starts in the Meadow (map 10), got " + std::to_string(ok.map));
+    co_await walk(c, ok.pos, 153 - ok.pos.x, 128 - ok.pos.z, 9.0f, [&](float px, float pz) { return t.ground(10, px, pz); });
+    seen = co_await drain(c, Millis(1000));
+    const auto mc = only<proto::MapChange>(seen);
+    x.check.expect(!mc.empty() && mc[0].map == 11, "through the Cavern Gate: MapChange{11}");
+    if (mc.empty() || mc[0].map != 11) co_return std::nullopt;
+    co_return mc[0].pos;
+}
+
+// Waits up to timeout for the Spawn of the NPC named name.
+asio::awaitable<std::optional<proto::Spawn>> wait_npc(WorldClient& c, const std::string& name, Millis timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    for (;;) {
+        const auto left = std::chrono::duration_cast<Millis>(deadline - std::chrono::steady_clock::now());
+        auto s = co_await c.wait_for<proto::Spawn>(std::max(left, Millis(0)));
+        if (!s || (s->kind == proto::SpawnKind::npc && s->name == name)) co_return s;
+    }
+}
+
+std::optional<StarterTerrain> starter_terrain(Ctx& x) {
+    std::string err;
+    StarterTerrain t{load_terrain(std::filesystem::path(x.o.mapRoot) / "meadow", err), std::nullopt};
+    t.cavern = load_terrain(std::filesystem::path(x.o.mapRoot) / "cavern", err);
+    x.check.expect(t.meadow && t.cavern, "starter-mmo maps from --map-root '" + x.o.mapRoot + "' " + err);
+    if (!t.meadow || !t.cavern) return std::nullopt;
+    return t;
+}
+
+// The Cavern's Bat: refused from 8 m away; 2.5 m away one hit (10) kills it: combat.attack, combat.hit and
+// combat.death, then its Despawn; it is back 30 s later (respawnSec 30) as a new entity at its spawn point.
+asio::awaitable<void> combat_bat(Ctx& x) {
+    const auto t = starter_terrain(x);
+    if (!t) co_return;
+    proto::EnterWorldOk ok;
+    auto a = co_await x.enter("s23", ok);
+    if (!a) co_return;
+    std::vector<proto::Message> arrived;
+    const auto at = co_await to_cavern(x, *a, ok, *t, arrived);
+    if (!at) co_return;
+    std::optional<proto::Spawn> bat;
+    for (const auto& sp : only<proto::Spawn>(arrived))
+        if (sp.kind == proto::SpawnKind::npc && sp.name == "Bat") bat = sp;
+    if (!bat) bat = co_await wait_npc(*a, "Bat", Millis(35000)); // it may still be respawning from a last run
+    x.check.expect(bat && bat->templateName == "Bat", "the Bat is in view");
+    if (!bat) co_return;
+    const auto attack = [&](uint32_t target) {
+        a->send(proto::ClientEvent{"combat.attack", nlohmann::json{{"target", target}}.dump()});
+    };
+    attack(bat->entityId); // from the Cavern's spawn point (128, 128): 8 m
+    auto msgs = co_await drain(*a, Millis(800));
+    const auto refused = named(msgs, "combat.rejected");
+    x.check.expect(refused.size() == 1 && refused[0].value("reason", "") == "range" && named(msgs, "combat.hit").empty(),
+                   "8 m away: combat.rejected {reason = range}, no hit");
+    const proto::Vec3 byBat = co_await walk(*a, *at, 128 - at->x, 122.5f - at->z, 9.0f,
+                                           [&](float px, float pz) { return t->ground(11, px, pz); });
+    co_await drain(*a, Millis(300));
+    attack(bat->entityId);
+    const auto killed = std::chrono::steady_clock::now(); // it dies this tick, and is destroyed the next
+    msgs = co_await drain(*a, Millis(1000));
+    const auto hits = named(msgs, "combat.hit");
+    const auto deaths = named(msgs, "combat.death");
+    x.check.expect(named(msgs, "combat.attack").size() == 1 && hits.size() == 1 && hits[0].value("damage", 0) == 10 &&
+                       hits[0].value("target", 0u) == bat->entityId && hits[0].value("attacker", 0u) == ok.entityId &&
+                       hits[0].value("targetName", "") == "Bat",
+                   "2.5 m away at " + fmt(byBat) + ": combat.attack + combat.hit {damage 10, attacker, target, names}");
+    x.check.expect(deaths.size() == 1 && deaths[0].value("entity", 0u) == bat->entityId && deaths[0].value("name", "") == "Bat",
+                   "the Bat at 0 Health: combat.death");
+    bool gone = false;
+    for (const auto& d : only<proto::Despawn>(msgs)) gone |= d.entityId == bat->entityId;
+    x.check.expect(gone, "the dead Bat despawns");
+    const auto again = co_await wait_npc(*a, "Bat", Millis(40000));
+    const double after = std::chrono::duration<double>(std::chrono::steady_clock::now() - killed).count();
+    x.check.expect(again && again->entityId != bat->entityId, "the Bat respawns as a new entity");
+    x.check.expect(after >= 29.9 && after <= 31.5, "respawnSec (30 s) later: " + std::to_string(after) + " s");
+    if (again) x.check.expect(std::hypot(again->pos.x - 128, again->pos.z - 120) < 0.5f, "at its spawn point: " + fmt(again->pos));
+    a->close();
+}
+
+// The Meadow's Guard (50 Health, patrolling 124..134 x 112..122): no target / a player as target refused; next to it a
+// hit, then a second within the 1.5 s cooldown refused (no damage); after the cooldown a hit again; it hits back
+// (5 Health); out of range (ran 10 m off) refused. Its Health replicates 50 -> 40 -> 30.
+asio::awaitable<void> combat_rules(Ctx& x) {
+    const auto t = starter_terrain(x);
+    if (!t) co_return;
+    proto::EnterWorldOk ok;
+    auto a = co_await x.enter("s24", ok);
+    if (!a) co_return;
+    const auto ground = [&](float px, float pz) { return t->ground(10, px, pz); };
+    const auto guard = co_await wait_npc(*a, "Guard", Millis(10000));
+    x.check.expect(guard.has_value(), "the Guard is in view");
+    if (!guard) co_return;
+    const auto attack = [&](const nlohmann::json& target) {
+        a->send(proto::ClientEvent{"combat.attack", nlohmann::json{{"target", target}}.dump()});
+    };
+    attack(ok.entityId); // itself: a player
+    attack("guard");
+    attack(4000000000u);
+    auto msgs = co_await drain(*a, Millis(800));
+    auto refused = named(msgs, "combat.rejected");
+    x.check.expect(refused.size() == 3 && refused[0].value("reason", "") == "target" && refused[2].value("reason", "") == "target",
+                   "a player, a string, an unknown id: combat.rejected {reason = target} x3");
+
+    // Stand on the patrol's south side (129, 112) and wait for the Guard to come within 2.5 m.
+    proto::Vec3 me = co_await walk(*a, ok.pos, 129 - ok.pos.x, 110 - ok.pos.z, 9.0f, ground);
+    proto::Vec3 g = guard->pos;
+    bool close = false;
+    for (int i = 0; i < 300 && !close; ++i) { // up to 30 s: one patrol round is about 21 s
+        for (const auto& m : only<proto::EntityMove>(co_await drain(*a, Millis(100))))
+            if (m.entityId == guard->entityId) g = m.pos;
+        close = std::hypot(g.x - me.x, g.z - me.z) <= 2.5f;
+    }
+    x.check.expect(close, "the Guard passes within 2.5 m: " + fmt(g));
+    if (!close) co_return;
+    attack(guard->entityId);
+    attack(guard->entityId);
+    msgs = co_await drain(*a, Millis(600));
+    int mine = 0;
+    for (const auto& h : named(msgs, "combat.hit")) mine += h.value("attacker", 0u) == ok.entityId;
+    refused = named(msgs, "combat.rejected");
+    x.check.expect(mine == 1 && refused.size() == 1 && refused[0].value("reason", "") == "cooldown",
+                   "two attacks at once: one hit, the second refused {reason = cooldown}");
+    co_await drain(*a, Millis(1100)); // past the cooldown; the Guard is in combat beside us now
+    attack(guard->entityId);
+    msgs = co_await drain(*a, Millis(2500));
+    mine = 0;
+    int theirs = 0;
+    for (const auto& h : named(msgs, "combat.hit")) {
+        mine += h.value("attacker", 0u) == ok.entityId;
+        theirs += h.value("attacker", 0u) == guard->entityId && h.value("target", 0u) == ok.entityId && h.value("damage", 0) == 5;
+    }
+    std::vector<double> guardHealth;
+    for (const auto& u : only<proto::ComponentUpdate>(msgs))
+        if (u.entityId == guard->entityId && u.name == "Health") guardHealth.push_back(nlohmann::json::parse(u.json).value("current", -1.0));
+    x.check.expect(mine == 1 && theirs >= 1, "after the cooldown a hit again; the Guard hits back for 5");
+    x.check.expect(!guardHealth.empty() && guardHealth.back() == 30, "the Guard's Health replicates down to 30");
+
+    me = co_await walk(*a, me, 0, -10, 9.0f, ground); // runs off faster than it chases (5 m/s)
+    attack(guard->entityId);
+    msgs = co_await drain(*a, Millis(600));
+    refused = named(msgs, "combat.rejected");
+    bool ranged = false;
+    for (const auto& r : refused) ranged |= r.value("reason", "") == "range";
+    x.check.expect(ranged, "10 m off: combat.rejected {reason = range}");
+    a->close();
+}
+
 } // namespace
 
 int run_scenario(const Options& o) {
@@ -1077,7 +1311,8 @@ int run_scenario(const Options& o) {
         {"dbdown", db_down},            {"components", components},   {"components-verify", components_verify},
         {"events", events},             {"fsm", fsm},                 {"npcs", npcs},
         {"portal", portal},             {"respawn", respawn},         {"terrain", terrain},
-        {"navmesh", navmesh},
+        {"navmesh", navmesh},           {"client-events", client_events}, {"client-event-rate", client_event_rate},
+        {"combat-bat", combat_bat},     {"combat-rules", combat_rules},
     };
     auto it = all.find(o.scenario);
     if (it == all.end()) {

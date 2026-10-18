@@ -40,8 +40,8 @@ brush ring. They are drawn over the terrain, not hidden by hills.</p>
 </tr>
 <tr>
 <td><strong>Terrain</strong></td>
-<td><strong>Raise</strong>, <strong>Lower</strong>, <strong>Flatten</strong> brushes (left drag; radius, strength, falloff; Shift+click picks Flatten's height), the <strong>height range</strong> (Apply re-quantizes every tile so world heights stay put; a confirm shows how many samples clip), <strong>Import PNG...</strong> / <strong>Export PNG...</strong> of the last clicked tile (257 x 257 16-bit grayscale; anything else is refused with the reason; an import's edges are copied onto its neighbours)</td>
-<td><code>heights/&lt;tx&gt;_&lt;tz&gt;.r16</code> for each edited tile only; an edited tile's old <code>.png</code> is deleted (the loaders read <code>.r16</code> first)</td>
+<td><strong>Raise</strong>, <strong>Lower</strong>, <strong>Flatten</strong> brushes (left drag; radius, strength, falloff; Shift+click picks Flatten's height), the <strong>height range</strong> (Apply re-quantizes every tile so world heights stay put; a confirm shows how many samples clip), <strong>Import PNG...</strong> / <strong>Export PNG...</strong> of the last clicked tile (257 x 257 16-bit grayscale; anything else is refused with the reason; an import's edges are copied onto its neighbours); <strong>Generate</strong>, <strong>Height colors</strong> and <strong>Terrain texture</strong>, below</td>
+<td><code>heights/&lt;tx&gt;_&lt;tz&gt;.r16</code> for each edited tile only; an edited tile's old <code>.png</code> is deleted (the loaders read <code>.r16</code> first); the generated terrain texture and material, below</td>
 </tr>
 <tr>
 <td><strong>Areas</strong></td>
@@ -65,9 +65,49 @@ brush ring. They are drawn over the terrain, not hidden by hills.</p>
 </tr>
 </tbody>
 </table>
+<h2 id="generated-terrain">Generated terrain</h2>
+<p><strong>Generate</strong> (Terrain panel) replaces the heights of every declared tile with fBm Perlin noise: <strong>Seed</strong> (or
+<strong>Randomize</strong>), <strong>Scale</strong> (metres per noise feature, default 256), <strong>Octaves</strong> (5), <strong>Persistence</strong>
+(the amplitude ratio between octaves, 0.5) and <strong>Lacunarity</strong> (the frequency ratio, 2). The noise is sampled at each
+sample's map position, so tiles sharing an edge get the same samples (no seams, whatever the tile layout), and it is
+stretched over the whole height range: the lowest sample is the range's min, the highest its max. The same seed and
+settings on the same tiles give the same heights. The player spawn moves up or down onto the new ground. One
+<strong>Generate heights</strong> is one undo step.</p>
+<p><strong>Height colors</strong> is a gradient over the height range: stops at a position (0 % = the range's min, 100 % = its
+max) with a color. Between two stops the color blends linearly; below the lowest and above the highest it is that
+stop's. Add stop, Remove (at least 2 stay), drag a position or pick a color; each change is one undo step. The default
+is sand, grass, rock, snow. It is kept in <code>map.json</code> as <code>"terrainColors"</code> (see
+<a href="../../../docs/engine/terrain.html#generated-texture">Terrain</a>).</p>
+<p><strong>Create texture &amp; material</strong> (Terrain panel) sets the map's material to <code>materials/&lt;folder&gt;_terrain.mat</code>,
+<code>"terrainUv": "map"</code> (one texture over the whole map) and the default colors if the map has none, as one undo step.
+The 3D view shows the result straight away; nothing is written until you save. Then every save writes:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>textures/&lt;folder&gt;_terrain.png</code></td>
+<td>8-bit RGB, the color of the ground at each pixel: 1 px per metre over the bounding box of the declared tiles (256 px
+per tile), shrunk to fit 4096 px on the longest side; grey where no tile is. Row 0 is the box's min z</td>
+</tr>
+<tr>
+<td><code>materials/&lt;folder&gt;_terrain.mat</code></td>
+<td>white base color times that texture, metallic 0, roughness 0.9</td>
+</tr>
+</tbody>
+</table>
+<p>Both are re-baked on every save of the map, so the texture follows sculpting and color edits. These two paths are the
+only files the zone builder writes outside <code>maps/</code>: other materials and textures are never touched, and if one of
+them already exists before the map has been saved using it (someone else's file), the save is blocked with a problem
+on that file. Picking another material in the Map panel keeps it; the generated files are then no longer written.</p>
 <p><strong>Save</strong> (Ctrl+S, File &gt; Save) first checks the map as the world server would load it: <code>kast_map</code>'s <code>parse_manifest</code>,
 <code>parse_areas</code> and <code>parse_spawns</code> for every tile's file, spawn ids unique on the map, spawn files on declared tiles, the
-map id unused by the project's other maps, and portals to an existing map, onto its tiles and not into a portal there.
+map id unused by the project's other maps, portals to an existing map, onto its tiles and not into a portal there,
+valid <code>terrainColors</code>, and no foreign file at the generated terrain texture or material path.
 Any problem: nothing is written, and <strong>Problems</strong> lists them all (file and message, as the server reports them). Only
 files that changed are written; a map opened and saved unchanged keeps every byte. <strong>Undo</strong> / <strong>Redo</strong> (Ctrl+Z /
 Ctrl+Y, Edit menu) cover every edit; a brush stroke or a drag is one step.</p>
@@ -82,8 +122,13 @@ edits: --new-map folder[,W,H[,id]]  --map-id N  --material path  --set-spawn x,z
        --add-area id,priority,x0,z0,x1,z1  --add-polygon id,priority,x,z,x,z,x,z...  --area-parent id,parent
        --area-portal id,map,x,y,z,heading  --move-area-vertex id,i,x,z  --delete-area id
        --add-spawn id,npc,x,z[,heading[,respawnSec]]  --move-spawn id,x,z  --delete-spawn id
-       --add-path spawnId,wait,loop(0|1),x,z,x,z...  --undo  --redo  --validate  --save  --expect-save-fail
+       --add-path spawnId,wait,loop(0|1),x,z,x,z...
+       --generate-heights seed[,scale,octaves,persistence,lacunarity]  --terrain-colors pct,r,g,b,pct,r,g,b...
+       --create-terrain-material  --undo  --redo  --validate  --save  --expect-save-fail
 </code></pre>
+<p><code>--terrain-colors</code> takes 4 numbers per stop (at least 2 stops): the position in % of the height range, then red,
+green and blue 0..1, e.g. <code>--terrain-colors 0,0,0,1,100,1,0,0</code> for blue at the bottom and red at the top.
+<code>--generate-heights 7</code> uses the default scale, octaves, persistence and lacunarity.</p>
 <p>A failed edit or save exits 1. <code>--headless</code> runs the edits (and <code>--bake</code>, waiting for it) without a window.
 <code>--frames</code> runs show the window without taking focus; <code>KAST_WINDOW_POS</code> / <code>--window-pos</code> place it. <code>--bake</code> holds the
 frame count until <code>kast_mapbake</code> ends and logs how many frames were drawn meanwhile. <code>--log-fps</code> logs the frame rate

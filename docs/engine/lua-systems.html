@@ -118,6 +118,11 @@ a wrong argument type raises a Lua error at the calling line.</p>
 <td>Wheel notches this frame; + = away from the user (up), whatever the OS scroll direction.</td>
 </tr>
 <tr>
+<td><code>kast.input.mouseRay()</code></td>
+<td><code>origin, direction</code></td>
+<td>The ray from the scene's active <code>Camera</code> through the cursor, as <code>{x, y, z}</code> tables (<code>direction</code> normalized), e.g. for <code>kast.physics.raycast</code> to pick what was clicked. <code>nil, nil</code> before the cursor position is known or without a <code>Camera</code>. The cursor is tracked within the game view: the whole window in the player, the Game panel's image in the editor.</td>
+</tr>
+<tr>
 <td><code>kast.input.setCursorLocked(locked)</code></td>
 <td>—</td>
 <td><code>true</code> hides the cursor and locks it in the window (relative mode; <code>mouseDelta</code> keeps reporting motion); <code>false</code> shows it where the lock began. Released automatically when the game loses input (see the Game panel above). A non-boolean raises.</td>

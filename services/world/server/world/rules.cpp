@@ -10,6 +10,13 @@ bool valid_character_name(std::string_view name) {
     return std::all_of(name.begin(), name.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); });
 }
 
+std::optional<nlohmann::json> client_event_data(const proto::ClientEvent& ev) {
+    if (!proto::valid_client_event_name(ev.name) || ev.json.size() > proto::kClientEventJsonMax) return std::nullopt;
+    auto data = nlohmann::json::parse(ev.json, nullptr, false);
+    if (!data.is_object()) return std::nullopt; // a parse error is "discarded", not an object
+    return data;
+}
+
 std::optional<std::string> sanitize_chat(std::string_view text, size_t maxBytes) {
     if (text.size() > maxBytes) return std::nullopt;
     std::string out;

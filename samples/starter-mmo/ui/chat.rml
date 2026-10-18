@@ -7,7 +7,9 @@
         <div id="chat">
             <p id="chat_log"></p>
             <div id="chat_row">
-                <input type="text" id="chat_input" maxlength="200"/>
+                <!-- tab-index inline: Tab is the target key (scripts/combat.lua); RmlUi's own inline tab-index on inputs
+                     beats a style sheet's -->
+                <input type="text" id="chat_input" maxlength="200" style="tab-index: none"/>
                 <button id="chat_send" data-event="chat.send">Send</button>
             </div>
         </div>

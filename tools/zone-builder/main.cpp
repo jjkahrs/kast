@@ -51,10 +51,12 @@ constexpr const char* kUsage =
     "--area-portal id,map,x,y,z,heading --move-area-vertex id,i,x,z --delete-area id "
     "--add-spawn id,npc,x,z[,heading[,respawnSec]] --move-spawn id,x,z --delete-spawn id "
     "--add-path spawnId,wait,loop,x,z,x,z... --add-tile tx,tz --remove-tile tx,tz --set-spawn x,z[,heading] "
-    "--save --validate --expect-save-fail --undo --redo";
+    "--generate-heights seed[,scale,octaves,persistence,lacunarity] --terrain-colors pct,r,g,b,pct,r,g,b... "
+    "--create-terrain-material --save --validate --expect-save-fail --undo --redo";
 // Flags that are edits taking a value, run in command-line order.
 constexpr std::string_view kValueOps[] = {"--map", "--new-map", "--falloff", "--sculpt", "--flatten", "--height-range",
                                           "--import-png", "--export-png", "--material",
+                                          "--generate-heights", "--terrain-colors",
                                           "--add-area", "--add-polygon", "--area-parent", "--area-portal",
                                           "--move-area-vertex", "--delete-area", "--add-spawn", "--move-spawn",
                                           "--delete-spawn", "--add-path", "--map-id", "--add-tile",
@@ -133,7 +135,8 @@ std::optional<Options> parseOptions(int argc, char** argv) {
             options.project = fs::path(std::u8string(v.begin(), v.end()));
         } else if (std::find(std::begin(kValueOps), std::end(kValueOps), arg) != std::end(kValueOps) && hasValue) {
             options.ops.push_back({std::string(arg), argv[++i]});
-        } else if (arg == "--save" || arg == "--expect-save-fail" || arg == "--undo" || arg == "--redo" || arg == "--validate") {
+        } else if (arg == "--save" || arg == "--expect-save-fail" || arg == "--undo" || arg == "--redo" || arg == "--validate" ||
+                   arg == "--create-terrain-material") {
             options.ops.push_back({std::string(arg), {}});
         } else if (arg == "--frames" && hasValue && parseInt(argv[i + 1], options.frames) && options.frames > 0) {
             ++i;
@@ -386,6 +389,28 @@ bool runOp(Session& session, const Op& op, zone::Brush& brush) {
         if (!v) return bad("tx,tz,file");
         return op.flag == "--import-png" ? session.importPng(v->first, v->second) : session.exportPng(v->first, v->second);
     }
+    if (op.flag == "--generate-heights") {
+        const auto parts = split(op.value, ',');
+        zone::NoiseParams p;
+        const auto [end, ec] = std::from_chars(parts[0].data(), parts[0].data() + parts[0].size(), p.seed);
+        const auto v = parts.size() > 1 ? parseFloats(op.value.substr(parts[0].size() + 1), 1, 4) : std::vector<float>();
+        if (ec != std::errc() || end != parts[0].data() + parts[0].size() || !v) return bad("seed[,scale,octaves,persistence,lacunarity]");
+        if (v->size() > 0) p.scale = (*v)[0];
+        if (v->size() > 1) p.octaves = int((*v)[1]);
+        if (v->size() > 2) p.persistence = (*v)[2];
+        if (v->size() > 3) p.lacunarity = (*v)[3];
+        if (!(p.scale > 0) || p.octaves < 1 || p.octaves > 16 || !(p.persistence > 0 && p.persistence <= 1) || !(p.lacunarity >= 1))
+            return bad("scale > 0, octaves 1..16, persistence 0..1, lacunarity >= 1");
+        return session.generateHeights(p);
+    }
+    if (op.flag == "--terrain-colors") { // pct 0..100 of the height range, rgb 0..1, per stop
+        const auto v = parseFloats(op.value, 8, 4 * 64);
+        if (!v || v->size() % 4) return bad("pct,r,g,b,pct,r,g,b... (at least 2 stops)");
+        zone::Gradient g;
+        for (size_t i = 0; i < v->size(); i += 4) g.push_back({(*v)[i] / 100.0f, {(*v)[i + 1], (*v)[i + 2], (*v)[i + 3]}});
+        return session.setTerrainColors(g);
+    }
+    if (op.flag == "--create-terrain-material") return session.createTerrainMaterial();
     if (op.flag == "--validate") { // fails the run on any problem, writes nothing
         session.problems = zone::validate(*session.project, *session.doc);
         for (const zone::ZoneError& e : session.problems) kast::log::error(e.file + ": " + e.message);

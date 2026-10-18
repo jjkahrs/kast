@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -24,6 +25,7 @@ enum class Opcode : uint16_t {
     EnterWorld = 0x0013,   // C
     Move = 0x0020,         // C
     Say = 0x0021,          // C
+    ClientEvent = 0x0022,  // C
     AuthOk = 0x0102,       // S
     Disconnect = 0x0103,   // S
     CharList = 0x0110,     // S
@@ -158,6 +160,27 @@ struct Say {
     void read(Reader& r) { text = r.str(); }
     bool operator==(const Say&) const = default;
 };
+
+// A named event for the server's Lua (kast.world.send; docs/services/world/protocol.html#client-events). Never S->C.
+// The server re-checks both limits: the name is untrusted, the JSON is parsed and must be an object.
+constexpr size_t kClientEventNameMax = 32;
+constexpr size_t kClientEventJsonMax = 1024;
+struct ClientEvent {
+    static constexpr Opcode op = Opcode::ClientEvent;
+    std::string name;
+    std::string json;
+    void write(Writer& w) const { w.str(name); w.str(json); }
+    void read(Reader& r) { name = r.str(); json = r.str(); }
+    bool operator==(const ClientEvent&) const = default;
+};
+
+// 1-32 chars of [a-z0-9._].
+inline bool valid_client_event_name(std::string_view name) {
+    if (name.empty() || name.size() > kClientEventNameMax) return false;
+    for (char ch : name)
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '.' || ch == '_')) return false;
+    return true;
+}
 
 struct AuthOk {
     static constexpr Opcode op = Opcode::AuthOk;
@@ -346,7 +369,7 @@ struct MapChange {
     bool operator==(const MapChange&) const = default;
 };
 
-using Message = std::variant<Hello, Auth, Ping, Pong, CharListReq, CharCreate, CharDelete, EnterWorld, Move, Say,
+using Message = std::variant<Hello, Auth, Ping, Pong, CharListReq, CharCreate, CharDelete, EnterWorld, Move, Say, ClientEvent,
                              AuthOk, Disconnect, CharList, CharCreated, CharDeleted, EnterWorldOk, CharError, Spawn,
                              Despawn, EntityMove, Correction, ChatMsg, ComponentUpdate,
                              ComponentRemove, ServerEvent, MapChange>;

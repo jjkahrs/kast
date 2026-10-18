@@ -9,6 +9,7 @@
 #include <event_bus.h>
 #include <files.h>
 #include <scene.h>
+#include <renderer.h> // decodeImage
 #include <terrain.h>
 
 #include <chrono>
@@ -668,6 +669,178 @@ void check_undo_each() {
 
 } // namespace
 
+// Same heights: the same tiles with equal samples.
+bool same_heights(const ZoneState& a, const ZoneState& b) {
+    if (a.heights.size() != b.heights.size()) return false;
+    for (const auto& [t, h] : a.heights) {
+        const auto it = b.heights.find(t);
+        if (it == b.heights.end() || *it->second != *h) return false;
+    }
+    return true;
+}
+
+// A raise dab at map (x, z) as one undo step; true if it changed a tile.
+bool sculpt_at(ZoneDoc& doc, float x, float z) {
+    std::string err;
+    const auto info = doc.info(err);
+    TileSet touched;
+    doc.edit([&](ZoneState& s) { touched = apply_brush(*info, s, x, z, Brush{}, 10.0f); });
+    return !touched.empty();
+}
+
+// Every declared pair of neighbours has equal samples on its shared edge.
+bool seamless(const km::MapInfo& info, const ZoneState& state) {
+    constexpr int n = km::kTileSamples;
+    for (TileKey t : declared_tiles(info)) {
+        const km::Heights& a = tile_heights(state, t);
+        if (info.has_tile({t.x + 1, t.z})) {
+            const km::Heights& b = tile_heights(state, {t.x + 1, t.z});
+            for (int v = 0; v < n; ++v)
+                if (a[size_t(v) * n + n - 1] != b[size_t(v) * n]) return false;
+        }
+        if (info.has_tile({t.x, t.z + 1})) {
+            const km::Heights& b = tile_heights(state, {t.x, t.z + 1});
+            for (int u = 0; u < n; ++u)
+                if (a[size_t(n - 1) * n + u] != b[size_t(u)]) return false;
+        }
+    }
+    return true;
+}
+
+// Random heights, height colors, the baked texture and the generated material.
+void check_terrain_gen() {
+    // Gradient: interpolation, clamping, unsorted stops, the JSON round trip and invalid stops.
+    const Gradient g = {{1.0f, {1, 0, 0}}, {0.0f, {0, 0, 1}}, {0.5f, {0, 1, 0}}};
+    CHECK((gradient_color(g, 0.0f) == std::array<float, 3>{0, 0, 1}));
+    CHECK((gradient_color(g, -1.0f) == std::array<float, 3>{0, 0, 1}));
+    CHECK((gradient_color(g, 2.0f) == std::array<float, 3>{1, 0, 0}));
+    const auto quarter = gradient_color(g, 0.25f);
+    CHECK(std::fabs(quarter[1] - 0.5f) < 1e-6f && std::fabs(quarter[2] - 0.5f) < 1e-6f && quarter[0] == 0);
+    std::string err;
+    Json manifest = {{"terrainColors", gradient_json(g)}};
+    const auto parsed = parse_gradient(manifest, err);
+    CHECK(parsed && parsed->size() == 3 && (*parsed)[2].pos == 0.5f && (*parsed)[0].rgb[0] == 1);
+    manifest["terrainColors"] = Json::parse("[[0, [1, 1, 1]]]");
+    CHECK(!parse_gradient(manifest, err));
+    manifest["terrainColors"] = Json::parse("[[0, [1, 1, 1]], [1, [2, 0, 0]]]");
+    CHECK(!parse_gradient(manifest, err));
+    CHECK(default_gradient().size() == 4 && parse_gradient(Json{{"terrainColors", gradient_json(default_gradient())}}, err));
+
+    // terrainUv: tiled by default, "map", anything else an error.
+    nlohmann::json m = nlohmann::json::parse(R"({"version": 1, "id": 1, "name": "x", "tiles": [[0, 0, 0, 0]], "spawn": {"pos": [1, 0, 1]}})");
+    CHECK(km::parse_manifest(m, err) && km::parse_manifest(m, err)->terrainUv == km::TerrainUv::Tiled);
+    m["terrainUv"] = "map";
+    CHECK(km::parse_manifest(m, err) && km::parse_manifest(m, err)->terrainUv == km::TerrainUv::Map);
+    m["terrainUv"] = "tiled";
+    CHECK(km::parse_manifest(m, err) && km::parse_manifest(m, err)->terrainUv == km::TerrainUv::Tiled);
+    m["terrainUv"] = "bogus";
+    CHECK(!km::parse_manifest(m, err) && err.find("terrainUv") != std::string::npos);
+
+    // Generate on a non-rectangular map (2x2 plus 2_0): the full range, no seams, deterministic, one undo step.
+    const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "terrain_gen");
+    Project p = scan_project(root);
+    auto doc = new_map(p, "gen", "Gen", next_map_id(p), 2, 2, err);
+    CHECK(doc.has_value());
+    if (!doc) return;
+    doc->edit([&](ZoneState& s) { add_tile(*doc->info(err), s, {2, 0}); });
+    const auto info = doc->info(err);
+    CHECK(info && info->has_tile({2, 0}) && !info->has_tile({2, 1}));
+    if (!info) return;
+    const ZoneState before = doc->state;
+    NoiseParams params;
+    params.seed = 7;
+    doc->edit([&](ZoneState& s) { generate_heights(*info, s, params); });
+    CHECK(doc->state.heights.size() == 5);
+    uint16_t lo = 65535, hi = 0;
+    for (const auto& [t, h] : doc->state.heights)
+        for (uint16_t s : *h) lo = std::min(lo, s), hi = std::max(hi, s);
+    CHECK(lo == 0 && hi == 65535);
+    CHECK(seamless(*info, doc->state));
+    ZoneState again = before, other = before;
+    generate_heights(*info, again, params);
+    params.seed = 8;
+    generate_heights(*info, other, params);
+    bool same = true, differ = false;
+    for (const auto& [t, h] : doc->state.heights) {
+        same = same && *again.heights[t] == *h;
+        differ = differ || *other.heights[t] != *h;
+    }
+    CHECK(same && differ);
+    doc->undo();
+    CHECK(same_heights(doc->state, before) && doc->state.manifest == before.manifest);
+    doc->redo();
+
+    // Bake: 256 px per tile over the bounding box (3x2 tiles), grey off the map (2_1), the end colors at the lowest
+    // and highest ground.
+    const Gradient bw = {{0.0f, {0, 0, 1}}, {1.0f, {1, 0, 0}}};
+    ZoneState plateau = before;
+    auto h = std::make_shared<km::Heights>(km::flat_heights());
+    for (int v = 10; v <= 30; ++v)
+        for (int u = 10; u <= 30; ++u) (*h)[size_t(v) * km::kTileSamples + size_t(u)] = 65535;
+    plateau.heights[{0, 0}] = h;
+    const TerrainImage img = bake_terrain(*info, plateau, bw);
+    CHECK(img.width == 768 && img.height == 512 && img.rgb.size() == size_t(768 * 512 * 3));
+    const auto px = [&](int i, int j) {
+        const uint8_t* c = &img.rgb[(size_t(j) * img.width + size_t(i)) * 3];
+        return std::array<int, 3>{c[0], c[1], c[2]};
+    };
+    CHECK((px(20, 20) == std::array<int, 3>{255, 0, 0}));
+    CHECK((px(200, 200) == std::array<int, 3>{0, 0, 255}));
+    CHECK((px(600, 400) == std::array<int, 3>{128, 128, 128})); // tile 2_1: not on the map
+    // The 4096 cap: 20 x 1 tiles (5120 m) shrink to 4096 x 204.
+    Json wide = doc->state.manifest;
+    wide["tiles"] = Json::parse("[[0, 0, 19, 0]]");
+    const auto wideInfo = km::parse_manifest(nlohmann::json(wide), err);
+    CHECK(wideInfo.has_value());
+    if (wideInfo) {
+        const TerrainImage capped = bake_terrain(*wideInfo, ZoneState{}, bw);
+        CHECK(capped.width == kMaxTerrainImage && capped.height == 204);
+    }
+
+    // Create + save: the texture and material written, other materials untouched; a sculpt re-bakes on save.
+    std::map<fs::path, std::string> others;
+    for (const fs::path& f : {root / "materials", root / "textures"})
+        if (fs::exists(f))
+            for (const auto& e : fs::recursive_directory_iterator(f))
+                if (e.is_regular_file()) others[e.path()] = bytes(e.path());
+    CHECK(!others.empty());
+    doc->edit([&](ZoneState& s) {
+        s.manifest["terrainColors"] = gradient_json(bw);
+        s.manifest["terrainUv"] = "map";
+        s.manifest["material"] = terrain_material_path("gen");
+    });
+    auto errors = save_map(p, *doc, false);
+    print_errors(errors);
+    CHECK(errors.empty());
+    const fs::path png = root / "textures" / "gen_terrain.png", mat = root / "materials" / "gen_terrain.mat";
+    const auto image = kast::decodeImage(bytes(png), false);
+    CHECK(image && image->width == 768 && image->height == 512);
+    kast::Material loaded;
+    CHECK(kast::loadMaterial(mat, loaded, err) && loaded.baseColorTexture == "textures/gen_terrain.png" &&
+          loaded.metallic == 0 && loaded.roughness == 0.9f && loaded.baseColor[0] == 1);
+    for (const auto& [f, data] : others) CHECK(bytes(f) == data);
+    const auto reloaded = load_map(p, "gen", err);
+    CHECK(reloaded && reloaded->info(err)->terrainUv == km::TerrainUv::Map && parse_gradient(reloaded->state.manifest, err));
+    const std::string firstPng = bytes(png);
+    CHECK(sculpt_at(*doc, 300, 200));
+    CHECK(save_map(p, *doc, false).empty() && bytes(png) != firstPng);
+
+    // A file already at the generated path that this map did not write: the save is blocked and writes nothing.
+    auto other2 = new_map(p, "gen2", "Gen2", next_map_id(p), 1, 1, err);
+    CHECK(other2.has_value());
+    if (!other2) return;
+    kast::writeFileAtomic(root / "materials" / "gen2_terrain.mat", "hand made");
+    other2->edit([&](ZoneState& s) {
+        s.manifest["terrainColors"] = gradient_json(bw);
+        s.manifest["terrainUv"] = "map";
+        s.manifest["material"] = terrain_material_path("gen2");
+    });
+    errors = save_map(p, *other2, false);
+    CHECK(errors.size() == 1 && errors[0].file == "materials/gen2_terrain.mat");
+    CHECK(bytes(root / "materials" / "gen2_terrain.mat") == "hand made" && !fs::exists(root / "textures" / "gen2_terrain.png") &&
+          !fs::exists(root / "maps" / "gen2"));
+}
+
 int main(int argc, char** argv) {
     if (argc == 3 && std::string(argv[1]) == "--child") { // check_process_runner's child: stdout, stderr, exit code
         std::printf("child: %s\n", argv[2]);
@@ -689,6 +862,7 @@ int main(int argc, char** argv) {
     check_undo_each();
     check_tiles();
     check_process_runner();
+    check_terrain_gen();
     if (failures) std::fprintf(stderr, "%d check(s) failed\n", failures);
     else std::printf("zone builder self-check: all passed\n");
     return failures ? 1 : 0;

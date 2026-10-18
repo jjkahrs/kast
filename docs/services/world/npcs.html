@@ -103,7 +103,9 @@ server only (the editor's Build leaves dot-folders out of <code>game.pak</code>)
   <code>wait</code> (seconds, default 0) the pause at each point, and <code>loop</code> (default <code>true</code>) goes from the last point back to the
   first; <code>false</code> walks back along the route. The server does not move NPCs: a Lua system reads the path from the
   read-only <code>Spawn</code> component (<code>kast.query("Spawn")</code>, <code>kast.get(e, "Spawn")</code>). The sample <code>systems/npcs.lua</code> walks
-  every NPC that has one, along <code>kast.map.path</code> between its points on a map with a <a href="maps.html#navmesh">navmesh</a>.</li>
+  every NPC that has one, along <code>kast.map.path</code> between its points on a map with a <a href="maps.html#navmesh">navmesh</a>. <code>Spawn</code> also holds the file's <code>pos</code> (<code>{x, y, z}</code>, y as written, not clamped to the ground) and
+  <code>heading</code>, so a system can send an NPC home (the starter-mmo sample's <code>systems/combat.lua</code> walks a leashed NPC back to
+  it and heals it there).</li>
 <li><strong>Loading:</strong> at startup, the spawn files of every tile this process owns (every tile, for now). A file name that is
   not <code>&lt;tx&gt;_&lt;tz&gt;.json</code>, a tile not on the map, an invalid file (each problem named, such as
   <code>maps/start/.server/spawns/4_4.json: spawn "guard_1": "pos" is outside tile 4_4</code>), an unknown <code>path</code> or an <code>id</code> used

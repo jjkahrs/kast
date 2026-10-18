@@ -4,6 +4,9 @@
 -- forward swings the camera back behind. The cursor hides while dragging and comes back where the drag began.
 -- A press that starts on the GUI (chat box, HUD) turns nothing, and keys typed into a GUI text field don't move.
 -- Replication sends the moves to the server.
+-- Combat (systems/combat.lua on the server): the character plays ATTACK_CLIP when the server confirms its attack and
+-- HIT_CLIP when it is hit, while standing still; dead, it plays DEATH_CLIP and does not move or jump (the server refuses
+-- its moves anyway) until it revives. The camera still works.
 local RUN_SPEED = 7 -- m/s, forward and strafing (the world server allows 10)
 local BACK_SPEED = 4.5 -- m/s, backpedalling
 local TURN_RATE = math.rad(180) -- per second, A/D without the right button
@@ -18,6 +21,7 @@ local PIVOT_HEIGHT = 1.5 -- m above the feet: head and shoulders
 local CAMERA_CLEARANCE = 0.3 -- m kept above the terrain
 local FADE = 0.2 -- s, animation crossfade
 local JUMP_ANIM_SPEED = 2.5 -- Jump_Start and Jump_Land are longer than a jump
+local ATTACK_CLIP, HIT_CLIP, DEATH_CLIP = "Punch_Jab", "Hit_Chest", "Death_A" -- no weapon model: a punch
 
 local player, camera
 local yaw, pitch, distance = 0, PITCH_START, ZOOM_START -- camera; yaw 0 looks along -z
@@ -25,6 +29,9 @@ local snapBehind = true -- put the camera behind the character on the next updat
 local press -- nil, "camera" or "gui": what the held mouse buttons started on
 local vy, airborne = 0, false
 local clip, jumpPhase -- the playing clip; nil, "start", "air" or "land"
+local me -- the character's server entity id
+local action -- ATTACK_CLIP or HIT_CLIP waiting to play or playing, until it ends or the character moves
+local dead = false
 
 local function groundY(x, z, fallback)
     local hit = kast.physics.raycast({x = x, y = 200, z = z}, {x = 0, y = -1, z = 0}, 400)
@@ -62,6 +69,7 @@ local function mouseButtons(inWorld)
 end
 
 local function animate(forward, strafe, jumped, landed)
+    if dead then return play(DEATH_CLIP, false) end
     if jumped then
         jumpPhase = "start"
         return play("Jump_Start", false, JUMP_ANIM_SPEED)
@@ -79,6 +87,14 @@ local function animate(forward, strafe, jumped, landed)
         return play("Jump_Land", false, JUMP_ANIM_SPEED)
     end
     jumpPhase = nil
+    if action and not moving then
+        if clip ~= action then
+            clip = nil -- the same clip again restarts it
+            return play(action, false)
+        end
+        if not clipDone() then return end
+    end
+    action = nil
     if forward > 0 then play("Run_Female", true)
     elseif forward < 0 then play("Walk_Backwards", true)
     elseif strafe > 0 then play("Strafe_right", true)
@@ -104,7 +120,15 @@ return {
     init = function()
         for e in kast.query("NetworkLocalPlayer") do player = e end
         for e in kast.query("Camera") do camera = e end
-        kast.subscribe("world.entered", function() snapBehind = true end)
+        kast.subscribe("world.entered", function(e)
+            snapBehind, me, dead, action = true, e.entityId, false, nil
+        end)
+        kast.subscribe("server.combat.attack", function(e) if e.attacker == me then action = ATTACK_CLIP end end)
+        kast.subscribe("server.combat.hit", function(e)
+            if e.target == me and action ~= ATTACK_CLIP then action = HIT_CLIP end
+        end)
+        kast.subscribe("server.combat.death", function(e) if e.entity == me then dead = true end end)
+        kast.subscribe("server.combat.revive", function(e) if e.entity == me then dead, action = false, nil end end)
         kast.subscribe("world.mapChanged", function() snapBehind = true end)
     end,
     update = function(dt)
@@ -129,7 +153,7 @@ return {
             distance = clamp(distance * ZOOM_STEP ^ -wheel, ZOOM_MIN, ZOOM_MAX)
         end
 
-        local keys = inWorld and not (kast.gui and kast.gui.focusedField())
+        local keys = inWorld and not dead and not (kast.gui and kast.gui.focusedField())
         local function key(name) return keys and kast.input.keyDown(name) end
         local forward = (key("W") and 1 or 0) - (key("S") and 1 or 0)
         local side = (key("D") and 1 or 0) - (key("A") and 1 or 0)

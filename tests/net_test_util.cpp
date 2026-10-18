@@ -412,6 +412,8 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
                 queue(proto::MapChange{2, valid, 1.5f});
                 queue(proto::Despawn{3});
             }
+        } else if (const auto* event = std::get_if<proto::ClientEvent>(&message)) {
+            queue(proto::ServerEvent{"echo." + event->name, event->json}); // kast.world.send's frame, back as an event
         } else {
             queue(proto::Disconnect{proto::Code::unexpected_message});
             return flush();

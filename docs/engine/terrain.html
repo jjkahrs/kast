@@ -14,7 +14,7 @@
 <h1 id="terrain">Terrain</h1>
 <p>Heightmap ground for <a href="../services/world/index.html">maps</a> (<code>engine/terrain.h</code>, <code>services/world/map/heights.h</code>), streamed
 in Play (editor and <code>kast_player</code>; not in edit mode).</p>
-<p><strong>Heightmaps</strong>: a map folder <code>maps/&lt;folder&gt;/</code> holds <code>map.json</code> (its <code>heightRange</code> <code>[min, max]</code>, <code>material</code> and
+<p><strong>Heightmaps</strong>: a map folder <code>maps/&lt;folder&gt;/</code> holds <code>map.json</code> (its <code>heightRange</code> <code>[min, max]</code>, <code>material</code>, <code>terrainUv</code> and
 <code>nav.maxSlopeDeg</code> are used here) and one file per tile, <code>heights/&lt;tx&gt;_&lt;tz&gt;.r16</code> (exactly 257 x 257 little-endian
 uint16, 132098 bytes) or <code>.png</code> (257 x 257 16-bit grayscale). A tile is 256 m with a sample every 1 m, row-major with
 rows along +z; column 256 of tile <code>tx</code> is column 0 of tile <code>tx+1</code> (and likewise for rows), so neighbours share their
@@ -29,8 +29,12 @@ of the entity, clipped to the tiles <code>map.json</code> declares; tiles that l
 map, so a portal swaps every tile for the new map's. <code>TerrainTile</code> (<code>map</code>, <code>tx</code>, <code>tz</code>) is runtime only: it is not in
 Add Component, and its Transform is ignored (tiles sit at their map position).</p>
 <ul>
-<li><strong>Rendering</strong>: each tile is one 257 x 257 vertex mesh (UV = world x/z / 8) drawn with the map's <code>material</code> (empty:
-  the default material), lit, casting and receiving shadows like any mesh. No LOD.</li>
+<li><strong>Rendering</strong>: each tile is one 257 x 257 vertex mesh drawn with the map's <code>material</code> (empty: the default
+  material), lit, casting and receiving shadows like any mesh. No LOD. Its UVs follow <code>map.json</code>
+  <code>"terrainUv"</code>: <code>"tiled"</code> (the default) is world x/z / 8, a texture repeating every 8 m; <code>"map"</code> stretches one
+  texture over the bounding box of the declared tiles (UV 0, 0 at its min x, min z corner, 1, 1 at its max), the same on
+  both sides of a tile edge. Any other value fails the manifest (the editor, player, zone builder and world server
+  refuse the map).</li>
 <li><strong>Physics</strong>: each tile is a static Jolt height field (under 2 cm from the rendered ground), so characters and
   bodies collide with it and raycasts hit it (the hit entity is the <code>TerrainTile</code>). While tiles exist, characters
   use the map's <code>nav.maxSlopeDeg</code> instead of their own <code>maxSlopeDegrees</code>.</li>
@@ -38,6 +42,13 @@ Add Component, and its Transform is ignored (tiles sit at their map position).</
   <code>area.left</code> then <code>area.entered</code>, each <code>{map, id, name}</code> (publisher <code>kast.terrain</code>).</li>
 <li>Loading is synchronous, on the frame a tile appears: crossing into a new tile can hitch.</li>
 </ul>
+<p id="generated-texture"><strong>Generated texture</strong>: the <a href="../../tools/zone-builder/docs/index.html#generated-terrain">Zone
+Builder</a> can color a map by height. It keeps the gradient in <code>map.json</code> as <code>"terrainColors"</code>: stops
+<code>[pos, [r, g, b]]</code>, <code>pos</code> 0..1 of the height range (0 = min, 1 = max), colors 0..1, at least 2, e.g.
+<code>[[0, [0.76, 0.7, 0.5]], [0.3, [0.33, 0.52, 0.21]], [1, [0.95, 0.95, 0.97]]]</code>. On save it bakes them into
+<code>textures/&lt;folder&gt;_terrain.png</code> (1 px per metre of the bounding box, at most 4096 px on a side, row 0 at min z) with
+<code>materials/&lt;folder&gt;_terrain.mat</code>, and the map uses that material with <code>"terrainUv": "map"</code>. The engine and the
+world server ignore <code>terrainColors</code>; the texture is an ordinary material texture.</p>
 <p><strong>Sample</strong>: <code>tests/project/maps/hills</code> (map 3, 2 x 2 tiles of PNG16 hills, <code>materials/terrain_grass.mat</code>) and
 <code>tests/project/terrain.scene</code> (a <code>Terrain</code> on map 3, a <code>CharacterController</code> dropped above the hills). The <code>start</code>
 map's <code>hills_gate</code> area ([1060, 1020]-[1070, 1030]) is a portal to it. <code>scripts/terrain_map_switch.lua</code> switches a

@@ -1439,7 +1439,7 @@ end
 return {{
     init = function()
         for _, name in ipairs({{"connect", "disconnect", "listCharacters", "createCharacter", "deleteCharacter",
-                               "enterWorld", "say", "state"}}) do
+                               "enterWorld", "say", "send", "state"}}) do
             assert(type(kast.world[name]) == "function", name .. " missing")
         end
         assert(kast.world.state() == "disconnected")
@@ -1478,6 +1478,9 @@ return {{
         kast.subscribe("server.quest.update", function(e)
             kast.log(string.format("lua server event quest %d steps %d", e.quest, #e.steps))
         end)
+        kast.subscribe("server.echo.quest.accept", function(e)
+            kast.log(string.format("lua client event echoed quest %d", e.quest))
+        end)
         kast.subscribe("world.despawn", function(e)
             kast.log("lua world despawn " .. e.entityId)
             kast.world.disconnect()
@@ -1486,6 +1489,7 @@ return {{
             kast.log("lua world b disconnected " .. e.code .. " " .. kast.world.state())
         end)
         kast.world.say("events")
+        kast.world.send("quest.accept", {quest = 7})
         kast.world.say("bye")
     end,
     update = function(dt) end,
@@ -1504,6 +1508,7 @@ return {{
     check(playUntil(doc, "lua world entered 1 at 100,0,100"), "kast.world.enterWorld -> world.entered");
     check(playUntil(doc, "lua world chat from Hero"), "kast.world.say -> world.chat (after a scene switch)");
     check(playUntil(doc, "lua server event quest 7 steps 2"), "kast.subscribe(\"server.<name>\") gets the ServerEvent payload");
+    check(playUntil(doc, "lua client event echoed quest 7"), "kast.world.send -> ClientEvent{name, JSON object}");
     check(playUntil(doc, "lua world despawn 2"), "world.despawn");
     check(playUntil(doc, "lua world b disconnected client_disconnect disconnected"),
           "kast.world.disconnect -> world.disconnected client_disconnect");
@@ -1524,6 +1529,49 @@ return {{
     stopPlay(doc);
     check(!doc.lua.world().enabled() && doc.lua.world().state() == kast::WorldState::Disconnected,
           "Stop drops the world connection");
+}
+
+// kast.world.send's checks, all before any connection (no network): name and size are checked before the state.
+void checkWorldSendOffline()
+{
+    const std::filesystem::path dir = netProject("kast_world_send_check");
+    writeFile(dir / kast::kProjectFileName, R"({"version": 1, "name": "Send", "startScene": null,
+"online": {"enabled": true, "authUrl": "http://127.0.0.1:9"}})");
+    saveScene(dir / "a.scene", {"scripts/a.lua"});
+    writeFile(dir / "scripts/a.lua", R"(local function fails(part, fn, ...)
+    local ok, err = pcall(fn, ...)
+    assert(not ok and string.find(err, part, 1, true), "expected '" .. part .. "', got " .. tostring(err))
+end
+return {
+    init = function()
+        local badName = "kast.world.send: name must be 1-32 characters of a-z, 0-9, '.' and '_', got '"
+        fails("kast.world.send: name must be a string, got nil", kast.world.send)
+        fails(badName .. "'", kast.world.send, "")
+        fails(badName .. "Combat.attack'", kast.world.send, "Combat.attack")
+        fails(badName .. "a b'", kast.world.send, "a b")
+        fails(badName .. string.rep("a", 33) .. "'", kast.world.send, string.rep("a", 33))
+        fails("kast.world.send: data must be a table, got 5", kast.world.send, "x", 5)
+        fails("kast.world.send: data must be a table with string keys, not a list", kast.world.send, "x", {1, 2})
+        fails("kast.world.send: data is 1032 bytes encoded, the limit is 1024", kast.world.send, "x",
+              {s = string.rep("a", 1024)})
+        fails("kast.world.send: needs state 'inWorld', the connection is 'disconnected'", kast.world.send,
+              string.rep("a", 32), {s = string.rep("a", 1016)}) -- 32 chars and exactly 1024 bytes pass the checks
+        fails("kast.world.send: needs state 'inWorld'", kast.world.send, "combat.attack_2", {})
+        fails("kast.world.send: needs state 'inWorld'", kast.world.send, "combat.attack")
+        kast.log("lua world send checks done")
+    end,
+    update = function(dt) end,
+}
+)");
+    Document doc;
+    std::string error;
+    check(openFile(doc, (dir / "a.scene").string(), error) && doc.project, "open the kast.world.send scene");
+    startPlay(doc);
+    check(playUntil(doc, "lua world send checks done"),
+          "kast.world.send raises for a bad name, non-table data, a list, > 1 KB encoded, and outside inWorld");
+    for (const kast::LuaSystemStatus& s : doc.lua.status())
+        check(s.ok, "kast.world.send checks: " + s.path + " " + s.error);
+    stopPlay(doc);
 }
 
 // --- Replication (engine/replication.h) ---
@@ -2910,6 +2958,7 @@ int netSelfCheck()
     checkAuthLuaApi();
     checkWorldClient();
     checkWorldLuaApi();
+    checkWorldSendOffline();
     checkReplicationOffline();
     checkReplicationNpcs();
     checkReplicationComponents();

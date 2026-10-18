@@ -14,6 +14,18 @@
 <h1 id="tests">Tests</h1>
 <ul>
 <li><strong>Self-check</strong> (<code>tests/self_check.cpp</code> + <code>tests/lua_checks.cpp</code>, ctest <code>world_self_check</code>): assert-style checks of the pure logic with an injected clock, so nothing sleeps. The Lua checks write their scripts to a temp folder and drive a <code>World</code> with captured sends, saves and log lines. They cover the event bus (the engine's cases), <code>kast.publish/subscribe/unsubscribe</code> and the client sends: audiences, order, rejections and timing. They also cover state machines, from definitions to C++ / Lua parity.</li>
+<li><strong>Client events</strong> (<code>self_check.cpp</code> + <code>lua_checks.cpp</code>): the <code>ClientEvent</code> codec round trip, its exact
+  bytes and opcode name; <code>client_event_data</code> refusing a bad name, more than 1 KB, text that isn't JSON and JSON that isn't
+  an object. With a <code>World</code> (<code>checkClientEventsIn</code>): <code>client.&lt;name&gt;</code> delivered to a subscriber with the sender's
+  <code>entity</code> and <code>data</code>, the 10 a second limit, the dropped count and its log line at the despawn.
+  <code>checkMovableAndMapSpawn</code>: <code>kast.setMovable</code> refusing moves with <code>Correction</code> and its errors, and
+  <code>kast.map.spawn</code>; the <code>Spawn</code> built-in's <code>pos</code> / <code>heading</code> in the spawn checks.</li>
+<li><strong>Starter-mmo combat</strong> (<code>checkStarterMmoCombat</code> in <code>lua_checks.cpp</code>, compiled only when built in the repo, with
+  <code>KAST_STARTER_MMO</code> pointing at <code>samples/starter-mmo</code>): loads the sample's Lua and maps and drives its
+  <code>systems/combat.lua</code>, <code>regen.lua</code>, <code>npcs.lua</code> and <code>fsms/</code> on the injected clock: refused attacks, a hit and the
+  cooldown, the Guard hitting back for 5 every 2 s and returning home healed, the Bat killed and respawned after 30 s, a
+  character killed (its move corrected, its attack refused, no regeneration) and revived at the map spawn with full
+  <code>Health</code>, walking not draining <code>Health</code>, the 30 m leash, and regeneration starting only 5 s after combat.</li>
 <li><strong>Maps</strong> (in <code>lua_checks.cpp</code>): tile math at the edges, every manifest and <code>Maps::load</code> error, bounds <code>Correction</code>,
   per-map AOI, <code>World::transfer</code> message order, map save/load fallbacks, and <code>kast.transfer</code> / <code>Transform.map</code>.</li>
 <li><strong>Areas</strong> (in <code>lua_checks.cpp</code>): rect, concave polygon, <code>y</code> range, priority and parent flag inheritance; every
@@ -65,6 +77,22 @@
 <li>Scenario 20 (<code>navmesh</code>) takes bot A to the hills: walking at ground height to the mesa's south foot gets no
   <code>Correction</code>; walking on up its wall does. Over 30 s, the Sentry's <code>EntityMove</code>s pass the mesa's x range, all on
   the ground and at most 0.5 m into its walls' foot (a navmesh corner may graze it).</li>
+<li>Scenario 21 (<code>client-events</code>) uses the sample <code>systems/test_hooks.lua</code>, which answers every <code>client.test.echo</code>
+  with <code>test.echo</code> <code>{n, entity}</code>: a <code>ClientEvent</code> comes back with the sender's entity and its <code>n</code>. A name with
+  capitals, a 33-character name, a payload over 1 KB, a JSON array and text that isn't JSON each get <code>Disconnect{malformed}</code>.</li>
+<li>Scenario 22 (<code>client-event-rate</code>): 30 events at once give only the first 10 echoes, and a second later events get
+  through again. The script then checks the world's log for <code>"client events dropped"</code> with <code>count</code> 20.</li>
+<li><strong><code>tests/integration.sh --starter-mmo</code></strong> runs only scenarios 23 and 24, against the stack started with
+  the sample's override (<code>docker compose -f docker-compose.yml -f ../../samples/starter-mmo/docker-compose.override.yml up -d --build</code>),
+  using <code>samples/starter-mmo/systems/combat.lua</code>:<ul>
+<li>Scenario 23 (<code>combat-bat</code>): a bot walks through the Cavern Gate; an attack on the Bat from 8 m gets
+  <code>combat.rejected</code> <code>{reason = range}</code>; from 2.5 m one hit (10) gives <code>combat.attack</code>, <code>combat.hit</code> and
+  <code>combat.death</code>, then its <code>Despawn</code>; a new Bat spawns at its spawn point 29–32 s later.</li>
+<li>Scenario 24 (<code>combat-rules</code>): a player, a string and an unknown id as targets get <code>{reason = target}</code>; next to
+  the Guard two attacks at once give one hit and <code>{reason = cooldown}</code>; after the cooldown a hit again, the Guard hits
+  back for 5 and its <code>Health</code> replicates down to 30; 10 m off an attack gets <code>{reason = range}</code>.</li>
+</ul>
+</li>
 <li>Logs go to <code>build/integration-&lt;run&gt;/</code>.</li>
 </ul>
 </li>

@@ -32,7 +32,8 @@ void usage() {
         "  --tag T               shutdown/restart-verify scenarios: account tag\n"
         "scenarios: auth characters ownership aoi chat speedhack malformed handshake duplicate persist\n"
         "           shutdown restart-verify dbdown components components-verify events fsm npcs\n"
-        "           portal respawn\n");
+        "           portal respawn terrain navmesh client-events client-event-rate\n"
+        "           combat-bat combat-rules (these two need the starter-mmo override)\n");
 }
 
 } // namespace

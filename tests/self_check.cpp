@@ -981,6 +981,12 @@ return { update = function(dt)
     assert(kast.input.mouseDown("right") and not kast.input.mouseDown("left") and not kast.input.mouseDown("x2"),
            "mouseDown by name")
     assert(kast.input.wheelDelta() == -2, "wheelDelta")
+    local origin, dir = kast.input.mouseRay() -- cursor at the top right of a 2:1 view, camera at 0 looking down -z
+    assert(origin.x == 0 and origin.y == 0 and origin.z == 0, "mouseRay starts at the camera")
+    assert(dir.x > 0 and dir.y > 0 and dir.z < 0 and math.abs(dir.x / dir.y - 2) < 1e-4 and
+           math.abs(dir.y / -dir.z - math.tan(math.rad(30))) < 1e-4 and
+           math.abs(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z - 1) < 1e-4,
+           "mouseRay through the cursor, normalized")
     kast.input.setCursorLocked(true)
 
     local parent = kast.create("Parent")
@@ -1019,6 +1025,12 @@ end })");
     input.mouseDeltaY = -2.0f;
     input.buttonsDown[2] = true;
     input.wheelDelta = -2.0f;
+    input.view = {10.0f, 20.0f, 200.0f, 100.0f};
+    SDL_Event motion{};
+    motion.type = SDL_EVENT_MOUSE_MOTION;
+    motion.motion.x = 210.0f; // the view's top right corner, in window coordinates
+    motion.motion.y = 20.0f;
+    input.onEvent(motion); // xrel/yrel 0: the deltas above stay
 
     kast::LuaSystems lua;
     lua.start(scene, dir, "", &input);
@@ -4581,7 +4593,8 @@ void checkGuiStylesheetBounds()
     check(linkedStylesheet(loose / "a.rml").empty(), "a GUI in no project links only sheets in its own folder");
 }
 
-// Ctrl+V / Ctrl+C in an RmlUi text field use the OS clipboard (SDL's), through GuiContext::onEvent like the game.
+// Ctrl+V / Ctrl+C in an RmlUi text field use the OS clipboard (SDL's), through GuiContext::onEvent like the game;
+// Tab focuses the field unless it is styled tab-index: none.
 // Headless: bgfx's Noop renderer, no window. Saves and restores the clipboard's text.
 void checkGuiClipboard()
 {
@@ -4622,6 +4635,34 @@ void checkGuiClipboard()
             char* copied = SDL_GetClipboardText();
             check(std::string_view(copied) == "pasted-token_123", "Ctrl+A, Ctrl+C copies the field to the OS clipboard");
             SDL_free(copied);
+            // Tab with nothing focused moves focus into a text field (RmlUi's default), unless the field has
+            // "tab-index: none": samples/starter-mmo's chat input does, so its Tab (the target key) stays the game's.
+            const auto tabFocuses = [&](Rml::ElementDocument& document) {
+                if (Rml::Element* focus = rml->GetFocusElement())
+                    focus->Blur();
+                document.Show();
+                rml->Update();
+                SDL_Event tab{};
+                tab.type = SDL_EVENT_KEY_DOWN;
+                tab.key.key = SDLK_TAB;
+                gui.onEvent(tab);
+                rml->Update();
+                Rml::Element* focus = rml->GetFocusElement();
+                return focus && dynamic_cast<Rml::ElementFormControl*>(focus);
+            };
+            check(tabFocuses(*doc), "Tab focuses an unstyled text field");
+            doc->Hide();
+            // The sample's own chat box, its style sheet inlined (the link needs a project to resolve).
+            const std::filesystem::path ui = std::filesystem::path(KAST_SOURCE_DIR) / "samples/starter-mmo/ui";
+            std::string sheet, chatRml;
+            check(kast::readFile(ui / "starter.rcss", sheet) && kast::readFile(ui / "chat.rml", chatRml),
+                  "the starter-mmo chat box and style sheet read");
+            const std::string link = R"(<link type="text/rcss" href="starter.rcss"/>)";
+            if (const size_t at = chatRml.find(link); at != std::string::npos)
+                chatRml.replace(at, link.size(), "<style>" + sheet + "</style>");
+            Rml::ElementDocument* chat = rml->LoadDocumentFromMemory(chatRml);
+            check(chat && chat->GetElementById("chat_input") && !tabFocuses(*chat),
+                  "Tab does not focus the starter-mmo chat input (inline tab-index: none)");
         }
     }
     kast::gui::shutdown();

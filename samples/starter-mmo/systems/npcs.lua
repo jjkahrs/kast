@@ -3,7 +3,9 @@
 -- (npcs/guard.lua) gives it the "patrol" machine (fsms/patrol.lua), which starts in "walking". While "walking", update
 -- moves it at SPEED m/s toward its next path point, facing where it goes; on arrival it switches to "waiting" for the
 -- path's wait seconds, then walks to the next point: back to the first after the last (loop), or back along the path
--- (loop = false). A respawned NPC is a new entity and starts over at the first point.
+-- (loop = false). A respawned NPC is a new entity and starts over at the first point. While it is in "combat" or
+-- "returning" (systems/combat.lua moves it then) it is left alone; back on "walking" it heads for the point it was
+-- walking to.
 -- On a map with a navmesh (docs/services/world/maps.html#navmesh) it walks kast.map.path's corners from where it is to the next point, so it
 -- goes around cliffs; without one (or no path), straight there. The server keeps it on the ground.
 --
@@ -24,7 +26,12 @@ local function advance(spawn, p)
 end
 
 local function walk(e, spawn, p, dt)
-    if kast.fsm.state(e) == "waiting" then
+    local state = kast.fsm.state(e)
+    if state ~= "walking" and state ~= "waiting" then
+        p.route = nil -- planned from where it was before the fight
+        return
+    end
+    if state == "waiting" then
         p.waited = p.waited + dt
         if p.waited >= spawn.wait then
             p.waited = 0

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -167,6 +168,13 @@ bgfx::ProgramHandle makeProgram(const uint8_t* vs, uint32_t vsSize, const uint8_
                                true);
 }
 
+bgfx::TextureHandle createTexture(const MipImage& image, bool srgb)
+{
+    return bgfx::createTexture2D(image.width, image.height, image.levels > 1, 1, bgfx::TextureFormat::RGBA8,
+                                 srgb ? BGFX_TEXTURE_SRGB : BGFX_TEXTURE_NONE,
+                                 bgfx::copy(image.rgba.data(), static_cast<uint32_t>(image.rgba.size())));
+}
+
 // Draws lines (vertex pairs) with this frame's transient buffer; skipped if it has no room left.
 void submitLines(const std::vector<LineVertex>& lines, const bgfx::VertexLayout& layout, bgfx::ProgramHandle program,
                  bgfx::ViewId view)
@@ -219,9 +227,16 @@ std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb)
     MipImage image{static_cast<uint16_t>(width), static_cast<uint16_t>(height), 1, {}};
     image.rgba.assign(pixels, pixels + static_cast<size_t>(width) * height * 4);
     stbi_image_free(pixels);
+    buildMips(image, srgb);
+    return image;
+}
+
+void buildMips(MipImage& image, bool srgb)
+{
+    image.levels = 1;
     // Each level is filtered from the one before; sRGB images are filtered in linear space so the mips don't darken.
     size_t level = 0; // byte offset of the last level
-    for (int w = width, h = height; w > 1 || h > 1; ++image.levels) {
+    for (int w = image.width, h = image.height; w > 1 || h > 1; ++image.levels) {
         const int nw = bx::max(w / 2, 1), nh = bx::max(h / 2, 1);
         const size_t next = image.rgba.size();
         image.rgba.resize(next + static_cast<size_t>(nw) * nh * 4); // may move the data: take pointers after
@@ -233,7 +248,6 @@ std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb)
         w = nw;
         h = nh;
     }
-    return image;
 }
 
 float pointLightFalloff(float distance, float range)
@@ -382,6 +396,9 @@ void Renderer::shutdown()
     }
     clearTextures();
     clearModels();
+    if (bgfx::isValid(previewTexture_))
+        bgfx::destroy(previewTexture_);
+    previewTexture_ = BGFX_INVALID_HANDLE;
     bgfx::destroy(white_);
 }
 
@@ -407,6 +424,21 @@ void Renderer::addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws)
         TerrainMesh& mesh = it->second;
         if (added) {
             constexpr int n = map::kTileSamples;
+            // UV per tile sample: tiled = local / 8 (world xz / 8; tile-local gives the same wrap, 256 / 8 being whole,
+            // without float drift far out); map = 0..1 over the declared tiles' bounding box.
+            // ponytail: the sampler repeats, so map mode's outer pixel blends with the opposite edge; clamp if it shows.
+            int uvOrigin[2] = {0, 0}; // in samples, so shared edges get bit-equal UVs
+            float uvScale[2] = {1.0f / 8.0f, 1.0f / 8.0f};
+            if (info.terrainUv == map::TerrainUv::Map) {
+                int x0 = INT_MAX, z0 = INT_MAX, x1 = INT_MIN, z1 = INT_MIN;
+                for (const map::TileRect& r : info.tiles) {
+                    x0 = std::min(x0, r.x0), z0 = std::min(z0, r.z0), x1 = std::max(x1, r.x1), z1 = std::max(z1, r.z1);
+                }
+                uvScale[0] = 1.0f / (float(x1 - x0 + 1) * map::kTileSize);
+                uvScale[1] = 1.0f / (float(z1 - z0 + 1) * map::kTileSize);
+                uvOrigin[0] = (data.tile.x - x0) * int(map::kTileSize);
+                uvOrigin[1] = (data.tile.z - z0) * int(map::kTileSize);
+            }
             std::vector<MeshVertex> vertices;
             vertices.reserve(size_t(n) * n);
             float lo = FLT_MAX, hi = -FLT_MAX;
@@ -414,9 +446,8 @@ void Renderer::addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws)
                 for (int u = 0; u < n; ++u) {
                     const float y = map::sample_height(data.heights[size_t(v) * n + size_t(u)], info);
                     const auto normal = map::normal_at(data.heights, info, u, v);
-                    // UV = world xz / 8; tile-local gives the same wrap (256 / 8 is whole) without float drift far out.
-                    vertices.push_back({float(u), y, float(v), normal[0], normal[1], normal[2], float(u) / 8.0f,
-                                        float(v) / 8.0f});
+                    vertices.push_back({float(u), y, float(v), normal[0], normal[1], normal[2],
+                                        float(uvOrigin[0] + u) * uvScale[0], float(uvOrigin[1] + v) * uvScale[1]});
                     lo = std::min(lo, y);
                     hi = std::max(hi, y);
                 }
@@ -428,7 +459,8 @@ void Renderer::addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws)
         DrawItem item;
         bx::mtxTranslate(item.world.data(), mesh.bounds.min.x, 0.0f, mesh.bounds.min.z);
         item.bounds = mesh.bounds;
-        item.material = &materials_.get(info.material);
+        item.material = !info.material.empty() && info.material == previewMaterialPath_ ? &previewMaterial_
+                                                                                      : &materials_.get(info.material);
         item.vertices = mesh.vertices;
         item.indices = terrainIndices_;
         draws.push_back(item);
@@ -463,6 +495,8 @@ bgfx::TextureHandle Renderer::texture(const std::string& path, bool srgb)
 {
     if (path.empty())
         return white_;
+    if (srgb && path == previewTexturePath_ && bgfx::isValid(previewTexture_))
+        return previewTexture_;
     auto [it, added] = textures_.try_emplace({path, srgb});
     if (added)
         loadTexture(path, srgb, it->second);
@@ -497,9 +531,20 @@ void Renderer::loadTexture(const std::string& path, bool srgb, Texture& texture)
         warnOnce(std::format("Texture '{}': {}; using white", path, error));
         return;
     }
-    texture.handle = bgfx::createTexture2D(image->width, image->height, image->levels > 1, 1, bgfx::TextureFormat::RGBA8,
-                                           srgb ? BGFX_TEXTURE_SRGB : BGFX_TEXTURE_NONE,
-                                           bgfx::copy(image->rgba.data(), static_cast<uint32_t>(image->rgba.size())));
+    texture.handle = createTexture(*image, srgb);
+}
+
+void Renderer::setPreview(const std::string& materialPath, const Material& material, const std::string& texturePath,
+                          MipImage image)
+{
+    previewMaterialPath_ = materialPath;
+    previewMaterial_ = material;
+    previewTexturePath_ = texturePath;
+    if (bgfx::isValid(previewTexture_))
+        bgfx::destroy(previewTexture_);
+    previewTexture_ = BGFX_INVALID_HANDLE;
+    if (!materialPath.empty() && !image.rgba.empty())
+        previewTexture_ = createTexture(image, true);
 }
 
 void Renderer::clearTextures()

@@ -46,6 +46,8 @@ private:
 };
 
 std::string toString(lua_State* L, const sol::object& value); // Lua tostring
+// Raises a Lua error at the calling script's file:line. sol2 turns the exception into lua_error.
+[[noreturn]] void raise(lua_State* L, const std::string& message);
 
 // Definition-file checks shared by Lua components and state machines. Each throws InvalidDefinition, its message
 // starting with what (e.g. "components/health.lua: ").

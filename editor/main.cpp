@@ -53,7 +53,7 @@ constexpr uint32_t kBackbufferClearColor = 0x202020ff;
 constexpr int kAddComponentPopupFrame = 10;
 constexpr float kComponentPollSeconds = 0.5f; // Lua definition files and the Assets tree are checked this often
 constexpr const char* kUsage =
-    "Usage: kast_editor [--frames N] [--screenshot out.png] [--size WxH] [--window-pos X,Y] [--ui-scale F] [--projects-file list.json] "
+    "Usage: kast_editor [--frames N] [--screenshot out.png] [--screenshot-on-log frames,text] [--size WxH] [--window-pos X,Y] [--ui-scale F] [--projects-file list.json] "
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
@@ -74,6 +74,7 @@ struct SimMouse {
 struct Options {
     int frames = 0;         // 0 = run until quit
     std::string screenshot; // captured after the last frame
+    std::optional<std::pair<int, std::string>> screenshotOnLog; // --screenshot-on-log: delay frames, log text
     std::optional<std::pair<int, int>> size; // window size; default 1280x720 (editor), 1024x600 (Project Manager)
     std::optional<std::pair<int, int>> windowPos; // window top-left (editor and Project Manager)
     std::optional<float> uiScale; // overrides the monitor's display scale
@@ -244,6 +245,15 @@ std::optional<Options> parseArgs(int argc, char** argv)
             ++i;
         } else if (arg == "--screenshot" && hasValue) {
             options.screenshot = argv[++i];
+        } else if (arg == "--screenshot-on-log" && hasValue) {
+            const std::string_view text = argv[++i];
+            const size_t comma = text.find(',');
+            int delay = 0;
+            if (comma == std::string_view::npos || comma + 1 == text.size() || !parsePositive(text.substr(0, comma), delay)) {
+                kast::log::error(std::format("Invalid --screenshot-on-log '{}', expected frames,text", text));
+                return std::nullopt;
+            }
+            options.screenshotOnLog = {{delay, std::string(text.substr(comma + 1))}};
         } else if (arg == "--scene" && hasValue) {
             options.scene = argv[++i];
         } else if (arg == "--project" && hasValue) {
@@ -427,8 +437,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
         kast::log::error("--open-online-settings requires --project <dir>");
         return std::nullopt;
     }
-    if (!options.screenshot.empty() && options.frames == 0) {
-        kast::log::error("--screenshot requires --frames N");
+    if ((!options.screenshot.empty() || options.screenshotOnLog) && options.frames == 0) {
+        kast::log::error("--screenshot and --screenshot-on-log require --frames N");
         return std::nullopt;
     }
     return options;
@@ -714,6 +724,8 @@ int main(int argc, char** argv)
     GuiBuilder guiBuilder(kGuiPreviewView);
     UiScale uiScale(options->uiScale);
     FrameLimit frames(options->frames, options->screenshot);
+    if (options->screenshotOnLog)
+        frames.endOnLog(options->screenshotOnLog->first, options->screenshotOnLog->second);
     float componentPollSeconds = 0.0f;
     ExternalEditor externalEditor(settingsFile);
     std::string preferencesDraft; // the Preferences modal's edit of the command
@@ -767,6 +779,7 @@ int main(int argc, char** argv)
         uiScale.onEvent(event);
         ImGui_ImplSDL3_ProcessEvent(&event); // ImGui keeps getting input while the game has it, for Ctrl+P
         if (game.hasInput(doc)) {
+            doc.input.view = game.inputView();
             doc.input.onEvent(event);
             game.onEvent(event);
         }

@@ -52,6 +52,9 @@ private:
     // Mirrors the doc's declared tiles as TerrainTile entities; a tile's data changes (and the renderer rebuilds only
     // that tile's mesh) only when its heights or the manifest do.
     void sync(const ZoneDoc& doc);
+    // When the map uses its generated terrain material: re-bakes its texture into the renderer's preview after the
+    // heights or the manifest change (not mid-stroke), so the view shows it before it is saved.
+    void syncPreview(const ZoneDoc& doc);
 
     struct Tile {
         entt::entity entity = entt::null;
@@ -66,6 +69,8 @@ private:
     Json manifest_; // what tiles_ were built from
     std::shared_ptr<const kast::map::MapInfo> info_;
     TileMap<Tile> tiles_;
+    Json previewManifest_;           // what the preview was baked from
+    TileMap<HeightsPtr> previewHeights_;
     float viewProj_[16] = {};
     float width_ = 1, height_ = 1;
     enum class Drag { None, Orbit, Pan } drag_ = Drag::None;

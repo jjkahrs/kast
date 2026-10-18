@@ -60,7 +60,17 @@ foreach(stage
     # scripts/player.lua's camera: behind the character at 10 m, zoomed all the way out, orbited by a left drag
     "starter_mmo_live_camera|camera|Starter|900|OFF|test driver: entered map 10|"
     "starter_mmo_live_camera_zoom|camera|Starter|900|OFF|test driver: entered map 10|--sim-mouse 800,none,0,0,-10"
-    "starter_mmo_live_camera_orbit|camera|Starter|900|OFF|test driver: entered map 10|--sim-mouse 800,left,480,-60,0")
+    "starter_mmo_live_camera_orbit|camera|Starter|900|OFF|test driver: entered map 10|--sim-mouse 800,left,480,-60,0"
+    # Combat (scripts/combat.lua, the server's systems/combat.lua). The screenshot is taken a moment after the driver's
+    # "SHOT" line (--screenshot-on-log); FRAMES is only the upper bound. A left click (no drag) selects the Bat:
+    "starter_mmo_live_combat_target|combat_target|Fighter|6000|OFF|test driver: target selected Bat .[0-9]+., 1 marker|--sim-mouse 2400,left,0,0,0 --screenshot-on-log 30,SHOT"
+    # Tab, Escape, Tab, then 1 until the Bat dies; it despawns:
+    "starter_mmo_live_combat|combat|Fighter|6000|OFF|test driver: target selected Bat&test driver: target cleared, 0 marker&test driver: combat log: You hit Bat for 10&test driver: combat log: Bat dies&test driver: despawn [0-9]+|--screenshot-on-log 45,SHOT"
+    # Mid-fight with the Guard: three hits, and it hits back:
+    "starter_mmo_live_combat_guard|combat_guard|Fighter|6000|OFF|test driver: target selected Guard&test driver: combat log: You hit Guard for 10&test driver: Health 20 / 50 on&test driver: combat log: Guard hits you for 5|--screenshot-on-log 45,SHOT"
+    # The Guard kills a character that hit it once (100 Health, 5 every 2 s): dead, then revived at the spawn:
+    "starter_mmo_live_death|death|Fallen|12000|OFF|test driver: combat log: Guard hits you for 5&test driver: combat log: You die&test driver: Health 0 / 100 on|--screenshot-on-log 45,SHOT"
+    "starter_mmo_live_revive|revive|Fallen|12000|OFF|test driver: combat log: You die&test driver: combat log: You revive&test driver: Health 100 / 100 on&world: map changed to 10 at 128.0, 128.0|--screenshot-on-log 60,SHOT")
   string(REPLACE "|" ";" stage "${stage}")
   list(GET stage 0 name)
   list(GET stage 1 stage_name)
@@ -84,9 +94,11 @@ add_test(NAME starter_mmo_live_secrets
   COMMAND "${CMAKE_COMMAND}" "-DSAMPLE=${KAST_STARTER}" "-DSTATE=${KAST_STARTER_STATE}" "-DSHOTS=${live_shots}"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_live_secrets.cmake")
 set_tests_properties(starter_mmo_live_secrets PROPERTIES FIXTURES_REQUIRED starter_mmo_live
-                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_world;starter_mmo_live_cavern;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit"
+                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_world;starter_mmo_live_cavern;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_death;starter_mmo_live_revive"
                      SKIP_REGULAR_EXPRESSION "SKIP: ")
 set_tests_properties(starter_mmo_live_setup starter_mmo_live_teardown starter_mmo_live_chars starter_mmo_live_world
                      starter_mmo_live_cavern starter_mmo_live_camera starter_mmo_live_camera_zoom
-                     starter_mmo_live_camera_orbit starter_mmo_live_secrets PROPERTIES RUN_SERIAL TRUE)
+                     starter_mmo_live_camera_orbit starter_mmo_live_combat_target starter_mmo_live_combat
+                     starter_mmo_live_combat_guard starter_mmo_live_death starter_mmo_live_revive starter_mmo_live_secrets
+                     PROPERTIES RUN_SERIAL TRUE)
 set_tests_properties(starter_mmo_live_setup PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP: ")

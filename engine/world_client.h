@@ -45,7 +45,7 @@ public:
     void setAddressOverride(std::optional<std::string> hostPort);
     const std::optional<std::string>& addressOverride() const { return override_; }
 
-    // Requires enabled(). connect needs state Disconnected; the character calls Lobby; say InWorld. Otherwise they throw
+    // Requires enabled(). connect needs state Disconnected; the character calls Lobby; say and sendEvent InWorld. Otherwise they throw
     // std::logic_error (a script bug). Everything the server or network decides comes back as events.
     void connect(uint64_t realmId); // no session -> world.disconnected not_logged_in, no network use
     void disconnect();              // world.disconnected client_disconnect, unless already disconnected
@@ -54,6 +54,10 @@ public:
     void deleteCharacter(uint64_t charId);
     void enterWorld(uint64_t charId);
     void say(const std::string& text);
+    // ClientEvent{name, data as JSON} for the server's Lua ("client.<name>"). Checks the name (1-32 chars of
+    // [a-z0-9._]) and the encoded size (<= 1 KB) first, then the state (InWorld); each throws std::logic_error.
+    // data must be a JSON object.
+    void sendEvent(const std::string& name, const nlohmann::json& data);
     // Move{position, heading (radians, atan2(dx, dz)), clientTimeMs}. Rejected moves come back as world.correction.
     void move(float x, float y, float z, float heading);
 

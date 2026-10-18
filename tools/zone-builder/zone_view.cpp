@@ -76,10 +76,32 @@ void ZoneView::sync(const ZoneDoc& doc) {
             }
 }
 
+void ZoneView::syncPreview(const ZoneDoc& doc) {
+    if (doc.editing() || (doc.state.manifest == previewManifest_ && doc.state.heights == previewHeights_)) return;
+    previewManifest_ = doc.state.manifest;
+    previewHeights_ = doc.state.heights;
+    std::string err;
+    const std::string material = terrain_material_path(doc.folder), texture = terrain_texture_path(doc.folder);
+    const auto gradient = parse_gradient(doc.state.manifest, err);
+    if (!info_ || info_->material != material || !gradient) {
+        renderer_.setPreview({}, {}, {}, {});
+        return;
+    }
+    const TerrainImage baked = bake_terrain(*info_, doc.state, *gradient);
+    kast::MipImage image{uint16_t(baked.width), uint16_t(baked.height), 1, {}};
+    image.rgba.reserve(baked.rgb.size() / 3 * 4);
+    for (size_t i = 0; i < baked.rgb.size(); i += 3)
+        image.rgba.insert(image.rgba.end(), {baked.rgb[i], baked.rgb[i + 1], baked.rgb[i + 2], 255});
+    kast::buildMips(image, true);
+    renderer_.setPreview(material, terrain_material(texture), texture, std::move(image));
+}
+
 void ZoneView::render(const ZoneDoc* doc, const std::filesystem::path& projectRoot, uint16_t width, uint16_t height) {
     if (width == 0 || height == 0) return;
-    if (doc) sync(*doc);
-    else if (!tiles_.empty()) {
+    if (doc) {
+        sync(*doc);
+        syncPreview(*doc);
+    } else if (!tiles_.empty()) {
         for (auto& [key, tile] : tiles_) scene_.registry().destroy(tile.entity);
         tiles_.clear();
         manifest_ = nullptr;

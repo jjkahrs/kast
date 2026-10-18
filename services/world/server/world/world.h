@@ -24,6 +24,8 @@ struct WorldRules {
     uint16_t startMap = 1; // START_MAP: new characters, NPCs without a map, and the fallback for a bad saved map
     size_t chatRateCount = 5;
     Millis chatRateWindow{10000};
+    size_t clientEventRateCount = 10; // kast.world.send events per character per window; the rest are dropped
+    Millis clientEventRateWindow{1000};
     Millis saveInterval{60000};
     float tickSeconds = 0.05f; // dt passed to Lua update
     size_t maxNpcs = 10000;    // kast.create raises past this
@@ -83,6 +85,8 @@ public:
 
     void push_move(entt::entity e, const proto::Move& m);
     void push_say(entt::entity e, std::string text);
+    // A ClientEvent GameServer already checked (valid name, JSON object within kClientEventJsonMax).
+    void push_client_event(entt::entity e, std::string name, nlohmann::json data);
 
     void tick(TimePoint now);
     size_t population() const { return population_; }

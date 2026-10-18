@@ -61,9 +61,16 @@ private:
 };
 
 // --frames N [--screenshot out.png]: quits after N frames, or captures a screenshot then and quits once it is saved.
+// --screenshot-on-log D,TEXT moves that last frame up to D frames after the first log line containing TEXT (tests
+// that wait for something in the game, such as a death).
 class FrameLimit {
 public:
     FrameLimit(int frames, std::string screenshot) : frames_(frames), screenshot_(std::move(screenshot)) {}
+    void endOnLog(int delayFrames, std::string text)
+    {
+        logDelay_ = delayFrames;
+        logText_ = std::move(text);
+    }
 
     // Call at the end of every frame, after ImGui::Render.
     void endFrame();
@@ -76,6 +83,9 @@ public:
 private:
     int frames_ = 0; // 0 = run until quit
     std::string screenshot_;
+    std::string logText_; // empty: no --screenshot-on-log
+    int logDelay_ = 0;
+    size_t logSeen_ = 0; // log lines already searched
     int frame_ = 0;
     bool requested_ = false;
     bool saved_ = false;

@@ -35,13 +35,15 @@ proto::Spawn spawn_message(const entt::registry& reg, entt::entity e) {
 }
 
 // Validates each queued Move against map bounds, the navmesh (if the map has one and rules.navCheck), speed and the
-// ground; a rejected move snaps the client back with Correction.
+// ground; a rejected move snaps the client back with Correction. A MoveLock'd character (kast.setMovable) has every
+// move rejected.
 // ponytail: off_mesh corrects at once, so a player cannot drop off a cliff face; a grace period if falls are wanted.
 void movement_system(entt::registry& reg, const MoveRules& rules, const Maps& maps, const Send& send, TimePoint now) {
     for (auto [e, pending, tf, mr, ms, link] : reg.view<PendingMoves, Transform, MapRef, MoveState, SessionLink>().each()) {
         if (pending.moves.empty()) continue;
         bool corrected = false;
         for (const auto& m : pending.moves) {
+            if (reg.all_of<MoveLock>(e)) { corrected = true; break; }
             proto::Vec3 to = m.pos;
             const auto ground = maps.ground(mr.map, to.x, to.z); // nullopt: off the map
             const bool onMesh = !rules.navCheck || !maps.nav().has(mr.map) || maps.nav().on_mesh(mr.map, to, rules.maxAir);
@@ -146,6 +148,20 @@ void chat_system(entt::registry& reg, const ChatRules& rules, const Send& send, 
             for (uint32_t sid : audience(reg, e)) send(sid, msg);
         }
         pending.texts.clear();
+    }
+}
+
+void client_event_in_system(entt::registry& reg, EventBus& bus, TimePoint now) {
+    for (auto [e, pending, limit, ch] : reg.view<PendingClientEvents, ClientEventLimit, CharacterRef>().each()) {
+        for (auto& event : pending.events) {
+            if (!limit.limiter.allow(now)) {
+                ++limit.dropped;
+                log::debug("client event rate limited", {{"char", ch.charId}, {"event", event.name}});
+                continue;
+            }
+            bus.publish("client." + event.name, {{"entity", wire_id(e)}, {"data", std::move(event.data)}});
+        }
+        pending.events.clear();
     }
 }
 

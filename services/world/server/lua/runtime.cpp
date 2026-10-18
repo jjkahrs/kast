@@ -514,6 +514,13 @@ struct Runtime::Impl {
             return area_table(id, finite(L, "kast.map.areaAt: ", "x", x), finite(L, "kast.map.areaAt: ", "y", y),
                               finite(L, "kast.map.areaAt: ", "z", z));
         });
+        // kast.map.spawn(map): {position = {x, y, z}, heading} of the map's spawn point (map.json "spawn").
+        mapApi.set_function("spawn", [this](sol::this_state L, const sol::object& map) {
+            const map::MapInfo* info = npcs.map(map_id(L, "kast.map.spawn: ", map));
+            return lua.create_table_with(
+                "position", lua.create_table_with("x", info->spawn[0], "y", info->spawn[1], "z", info->spawn[2]),
+                "heading", info->spawnHeading);
+        });
         // kast.map.ground(map, x, z): the ground's height there, or nil off the map's tiles.
         mapApi.set_function("ground", [this](sol::this_state L, const sol::object& map, const sol::object& x,
                                              const sol::object& z) {
@@ -567,6 +574,17 @@ struct Runtime::Impl {
                                             const sol::object& pos, const sol::object& heading) {
             return transfer(L, id, map, pos, heading);
         });
+        // kast.setMovable(e, movable): false refuses every Move of the player (Correction back to where it stands)
+        // until set true again. Not saved: a character logs in movable.
+        api.set_function("setMovable", [this](sol::this_state L, const sol::object& id, const sol::object& movable) {
+            const entt::entity e = entity(L, id, "kast.setMovable");
+            if (!reg.all_of<world::CharacterRef>(e))
+                raise(L, std::format("kast.setMovable: entity {} is an NPC; only players send moves", to_string(L, id)));
+            if (movable.get_type() != sol::type::boolean)
+                raise(L, std::format("kast.setMovable: movable must be a boolean, got {}", to_string(L, movable)));
+            if (movable.as<bool>()) reg.remove<world::MoveLock>(e);
+            else reg.emplace_or_replace<world::MoveLock>(e);
+        });
         // Players leave only by logging out: destroy takes NPCs.
         api.set_function("destroy", [this](sol::this_state L, const sol::object& id) {
             const entt::entity e = entity(L, id, "kast.destroy");
@@ -611,6 +629,8 @@ struct Runtime::Impl {
             } else if (t.builtin == Builtin::spawn) {
                 const map::Spawn& s = *npcs.spawn(reg.get<world::SpawnRef>(e).record);
                 table["id"] = s.id;
+                table["pos"] = lua.create_table_with("x", s.pos[0], "y", s.pos[1], "z", s.pos[2]);
+                table["heading"] = s.heading;
                 if (s.path) {
                     sol::table points = lua.create_table();
                     for (const auto& p : s.path->points) points.add(lua.create_table_with("x", p[0], "y", p[1], "z", p[2]));

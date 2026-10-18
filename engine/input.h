@@ -18,6 +18,13 @@ struct Input {
     float mouseDeltaY = 0.0f;
     float wheelDelta = 0.0f;   // wheel notches since endFrame(), + = away from the user
     bool cursorLocked = false; // asked for by the game; the host applies it with CursorLock
+    // Where the game is drawn, in SDL window coordinates (the whole window in the player, the Game image in the
+    // editor); the host sets it every frame. Empty: the cursor position is unknown.
+    struct View {
+        float x = 0.0f, y = 0.0f, width = 0.0f, height = 0.0f;
+    } view;
+    float mouseX = -1.0f; // the cursor in view, 0..1 left to right / top to bottom, from the last motion or press
+    float mouseY = -1.0f; // (outside 0..1 when it is off the view); -1 before any
 
     void onEvent(const SDL_Event& event); // window focus loss clears everything
     void endFrame() { mouseDeltaX = mouseDeltaY = wheelDelta = 0.0f; } // after the frame's systems ran

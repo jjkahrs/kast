@@ -66,6 +66,15 @@ add_test(NAME zone_builder_tiles
           "-DEXPECT_FILES=heights/1_0.r16|heights/2_0.r16"
           "-DEXPECT_GONE=heights/1_1.r16|.server/spawns/1_1.json"
           -P "${zone_test}")
+# Generate heights (seed 7), blue-to-red height colors and Create texture & material, saved: the texture and material
+# written, seamless and deterministic heights, undo, re-bake after a sculpt; linted by kast_mapbake and loaded by the
+# world server.
+add_test(NAME zone_builder_terrain_gen
+  COMMAND "${CMAKE_COMMAND}" -DEXE=$<TARGET_FILE:kast_zone_builder> "-DPROJECT=${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo"
+          "-DOUT_DIR=${KAST_ZONE_OUT}" -DNAME=terrain_gen -DMODE=edit -DMAP=terra "-DMAPBAKE=${KAST_MAPBAKE}" "-DWORLD=${KAST_WORLD_EXE}"
+          "-DARGS=--generate-heights|7,256,5,0.5,2|--terrain-colors|0,0,0,1,100,1,0,0|--create-terrain-material"
+          "-DEXPECT_FILES=heights/0_0.r16|heights/1_0.r16|heights/0_1.r16|heights/1_1.r16|../../textures/terra_terrain.png|../../materials/terra_terrain.mat"
+          -DTERRAIN_GEN=1 -P "${zone_test}")
 # Bake Navmesh from the window on a copy of meadow: kast_mapbake's navtiles written, the UI drawing meanwhile.
 add_test(NAME zone_builder_bake
   COMMAND "${CMAKE_COMMAND}" -DEXE=$<TARGET_FILE:kast_zone_builder> "-DPROJECT=${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo"

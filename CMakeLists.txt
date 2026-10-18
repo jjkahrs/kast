@@ -105,7 +105,7 @@ target_link_libraries(kast_map PUBLIC nlohmann_json::nlohmann_json)
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/components.cpp
-  engine/systems.cpp engine/renderer.cpp engine/shadow.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/project.cpp
+  engine/systems.cpp engine/renderer.cpp engine/shadow.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
@@ -152,6 +152,7 @@ add_library(kast_zone_core STATIC
   editor/assets.cpp editor/build.cpp editor/editor_settings.cpp)
 target_include_directories(kast_zone_core PUBLIC tools/zone-builder editor)
 target_compile_options(kast_zone_core PRIVATE ${KAST_COMPILE_OPTIONS})
+target_include_directories(kast_zone_core SYSTEM PRIVATE "${Stb_INCLUDE_DIR}") # stb_perlin, stb_image_write
 target_link_libraries(kast_zone_core PUBLIC kast_engine kast_map SDL3::SDL3 shell32)
 # Bake Navmesh's default kast_mapbake: services/world/build of this source tree, if it is still there at run time.
 target_compile_definitions(kast_zone_core PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

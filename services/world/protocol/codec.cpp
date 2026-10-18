@@ -37,6 +37,7 @@ const char* opcode_name(Opcode op) {
     case Opcode::EnterWorld: return "EnterWorld";
     case Opcode::Move: return "Move";
     case Opcode::Say: return "Say";
+    case Opcode::ClientEvent: return "ClientEvent";
     case Opcode::AuthOk: return "AuthOk";
     case Opcode::Disconnect: return "Disconnect";
     case Opcode::CharList: return "CharList";

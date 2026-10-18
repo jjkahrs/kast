@@ -3,7 +3,10 @@
 #pragma once
 #include "zone_doc.h"
 
+#include <material.h>
+
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <set>
 #include <string>
@@ -53,6 +56,58 @@ std::string encode_png16(const kast::map::Heights& heights);
 // Replaces tile's heights with a 257 x 257 16-bit grayscale PNG's samples, then copies its edges onto the declared
 // neighbours' shared edges so the map has no seams. false with err set ("png: 8-bit ...") if the PNG is not one.
 bool import_png16(const kast::map::MapInfo& info, ZoneState& state, TileKey tile, std::string_view png, std::string& err);
+
+// --- random heights ---
+
+struct NoiseParams {
+    uint32_t seed = 1;
+    float scale = 256;       // metres per noise feature (the first octave's wavelength)
+    int octaves = 5;         // 1..16
+    float persistence = 0.5f; // amplitude ratio between octaves, (0, 1]
+    float lacunarity = 2.0f;  // frequency ratio between octaves, >= 1
+};
+
+// Replaces the heights of every declared tile with fBm Perlin noise sampled at each sample's map position (shared
+// edges are the same position, so no seams), stretched over the whole heightRange. Same params and tiles: the same
+// heights.
+void generate_heights(const kast::map::MapInfo& info, ZoneState& state, const NoiseParams& params);
+
+// --- height colors (map.json "terrainColors": [[pos, [r, g, b]], ...]; pos 0..1 of the heightRange, rgb 0..1) ---
+
+struct ColorStop {
+    float pos = 0;
+    std::array<float, 3> rgb{};
+};
+using Gradient = std::vector<ColorStop>;
+
+// Sand, grass, rock, snow.
+Gradient default_gradient();
+// The manifest's terrainColors; nullopt with err set if it has none or they are invalid (fewer than 2 stops, pos or a
+// channel outside 0..1).
+std::optional<Gradient> parse_gradient(const Json& manifest, std::string& err);
+Json gradient_json(const Gradient& gradient);
+// The color at t (0..1 of the heightRange): linear between the stops around it (in pos order), the end stops' beyond.
+std::array<float, 3> gradient_color(const Gradient& gradient, float t);
+
+// "materials/<folder>_terrain.mat", "textures/<folder>_terrain.png": the files Create texture & material assigns and
+// save writes, project-relative.
+std::string terrain_material_path(const std::string& folder);
+std::string terrain_texture_path(const std::string& folder);
+
+// RGB8, row 0 at the bounding box's min z.
+struct TerrainImage {
+    int width = 0, height = 0;
+    std::vector<uint8_t> rgb;
+};
+
+// The gradient over the declared tiles' bounding box, 1 px per metre, shrunk to fit kMaxTerrainImage on the longest
+// side; each pixel the color of the ground at its centre, grey off the map.
+constexpr int kMaxTerrainImage = 4096;
+TerrainImage bake_terrain(const kast::map::MapInfo& info, const ZoneState& state, const Gradient& gradient);
+// An 8-bit RGB PNG (deflated).
+std::string encode_png_rgb(const TerrainImage& image);
+// The generated .mat: white base color times texturePath, metallic 0, roughness 0.9.
+kast::Material terrain_material(const std::string& texturePath);
 
 // --- tiles (map.json "tiles") ---
 

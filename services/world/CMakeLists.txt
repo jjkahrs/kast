@@ -121,6 +121,11 @@ set(KAST_SAMPLE_MAPS "${CMAKE_CURRENT_SOURCE_DIR}/../../tests/project/maps")
 if(EXISTS "${KAST_SAMPLE_MAPS}")
   target_compile_definitions(world_self_check PRIVATE KAST_SAMPLE_MAPS="${KAST_SAMPLE_MAPS}")
 endif()
+# The starter-mmo sample's Lua and maps (its combat check), likewise only inside the repo.
+set(KAST_STARTER_MMO "${CMAKE_CURRENT_SOURCE_DIR}/../../samples/starter-mmo")
+if(EXISTS "${KAST_STARTER_MMO}")
+  target_compile_definitions(world_self_check PRIVATE KAST_STARTER_MMO="${KAST_STARTER_MMO}")
+endif()
 add_test(NAME world_self_check COMMAND world_self_check)
 # kast_mapbake's lint exits (tests/mapbake fixtures); in the repo also that the sample hills' stored navtiles are current.
 set(MAPBAKE_HILLS "")

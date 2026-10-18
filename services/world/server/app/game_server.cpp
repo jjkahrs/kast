@@ -159,7 +159,8 @@ void GameServer::handle_lobby(Client& c, proto::Message&& m) {
     const bool charRequest = op == proto::Opcode::CharListReq || op == proto::Opcode::CharCreate ||
                              op == proto::Opcode::CharDelete || op == proto::Opcode::EnterWorld;
     if (!charRequest) {
-        if (op == proto::Opcode::Move || op == proto::Opcode::Say) return; // stale in-world traffic; harmless
+        if (op == proto::Opcode::Move || op == proto::Opcode::Say || op == proto::Opcode::ClientEvent)
+            return; // stale in-world traffic; harmless
         c.session->disconnect(proto::Code::unexpected_message);
         return;
     }
@@ -241,6 +242,16 @@ void GameServer::handle_lobby(Client& c, proto::Message&& m) {
 void GameServer::handle_world(Client& c, proto::Message&& m) {
     if (auto* mv = std::get_if<proto::Move>(&m)) { world_.push_move(c.entity, *mv); return; }
     if (auto* say = std::get_if<proto::Say>(&m)) { world_.push_say(c.entity, std::move(say->text)); return; }
+    if (auto* ev = std::get_if<proto::ClientEvent>(&m)) {
+        auto data = client_event_data(*ev);
+        if (!data) {
+            log::info("client event rejected", {{"session", c.session->id()}, {"bytes", ev->json.size()}});
+            c.session->disconnect(proto::Code::malformed);
+            return;
+        }
+        world_.push_client_event(c.entity, std::move(ev->name), std::move(*data));
+        return;
+    }
     const proto::Opcode op = proto::opcode_of(m);
     if (op == proto::Opcode::CharListReq || op == proto::Opcode::CharCreate || op == proto::Opcode::CharDelete ||
         op == proto::Opcode::EnterWorld) {

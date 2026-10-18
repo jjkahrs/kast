@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "baseColor": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "baseColorTexture": "textures/meadow_terrain.png",
+  "metallic": 0.0,
+  "roughness": 0.9,
+  "metallicRoughnessTexture": "",
+  "emissiveEnabled": false,
+  "emissive": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "emissiveIntensity": 1.0,
+  "alphaMode": "opaque",
+  "alphaCutoff": 0.5
+}

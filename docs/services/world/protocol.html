@@ -92,14 +92,14 @@
   |&lt;--- CharList / CharCreated / CharError -|
   |---- EnterWorld{charId} ----------------&gt;|
   |&lt;--- EnterWorldOk{entityId, map, ...} ---|   in world
-  |---- Move / Say ------------------------&gt;|
+  |---- Move / Say / ClientEvent ----------&gt;|
   |&lt;--- Spawn / Despawn / EntityMove / ... -|
 </code></pre>
 <ul>
 <li><strong>Deadline:</strong> the whole handshake must finish within the deadline: TLS, <code>Hello</code> and <code>Auth</code>. Otherwise the server sends <code>Disconnect{handshake_timeout}</code>. A client that never starts TLS is simply closed, because there is no secure channel to send a reason on.</li>
 <li><strong>Message order:</strong><ul>
 <li>Before <code>AuthOk</code>, only <code>Hello</code> and then <code>Auth</code> are accepted. Any other message gets <code>Disconnect{unexpected_message}</code>, and so does any message sent while the token is being verified.</li>
-<li>In the lobby, <code>Move</code> and <code>Say</code> are ignored.</li>
+<li>In the lobby, <code>Move</code>, <code>Say</code> and <code>ClientEvent</code> are ignored.</li>
 <li>In the world, a character request is answered with <code>CharError{already_in_world}</code>.</li>
 </ul>
 </li>
@@ -194,6 +194,12 @@
 <td>Say</td>
 <td>C</td>
 <td><code>str text</code> (UTF-8)</td>
+</tr>
+<tr>
+<td><code>0x0022</code></td>
+<td>ClientEvent</td>
+<td>C</td>
+<td><code>str name, str json</code> (a named event for the server's Lua systems, see <a href="#client-events">Client events</a>)</td>
 </tr>
 <tr>
 <td><code>0x0102</code></td>
@@ -349,6 +355,25 @@
 <li><strong>Control characters:</strong> C0, DEL and C1 are stripped.</li>
 <li><strong>Rate limit:</strong> <code>CHAT_RATE_COUNT</code> per <code>CHAT_RATE_WINDOW_MS</code> (default 5 per 10 s). Rejected messages count toward it.</li>
 <li><strong>Rejected messages</strong> (invalid, too long or over the rate) are dropped silently.</li>
+</ul>
+<h3 id="client-events">Client events</h3>
+<p>A client sends a named event to the server's Lua systems as <code>ClientEvent</code> (the engine's <code>kast.world.send(name, data)</code>,
+<a href="../../engine/online-services.html">Online services</a>). It is client-to-server only and the reverse of
+<a href="#server-events">Server events</a>.</p>
+<ul>
+<li><strong><code>name</code>:</strong> 1–32 characters of <code>a-z</code>, <code>0-9</code>, <code>.</code> and <code>_</code> (<code>kClientEventNameMax</code>, <code>proto::valid_client_event_name</code>), e.g. <code>combat.attack</code>.</li>
+<li><strong><code>json</code>:</strong> the payload as JSON, at most 1024 bytes (<code>kClientEventJsonMax</code>). It must parse to an object.</li>
+<li><strong>Validation:</strong> the server re-checks everything. A bad name, more than 1 KB, text that isn't JSON or JSON that isn't an
+  object gets <code>Disconnect{malformed}</code>, like any other malformed frame.</li>
+<li><strong>Phase:</strong> only accepted in the world. In the lobby it is ignored, like a stale <code>Move</code> or <code>Say</code>.</li>
+<li><strong>Rate limit:</strong> 10 per 1 s window per character (<code>WorldRules</code> <code>clientEventRateCount</code> /
+  <code>clientEventRateWindow</code>, not configurable). Events over the limit are dropped silently and counted; the count is logged as
+  <code>"client events dropped" {char, count}</code> when the character leaves. This is on top of the connection's
+  <a href="#abuse-limits">message rate</a>.</li>
+<li><strong>Delivery:</strong> on the next tick, after chat and before the spawner and the Lua update, each event is published on the Lua bus as
+  <code>client.&lt;name&gt;</code> with the payload <code>{entity = &lt;sender's character entity id&gt;, data = &lt;the object as a table&gt;}</code>, in
+  arrival order. The bus drain right after that tick's Lua update delivers it (<a href="lua.html#client-events">Lua, Client events</a>).</li>
+<li><strong>Trust:</strong> <code>data</code> comes from the client. Handlers must check every field (<a href="security.html#client-events">Security, Client events</a>).</li>
 </ul>
 <h3 id="lua-components">Lua components</h3>
 <p>Game-defined Lua components (<a href="lua.html">Lua components and systems</a>) reach clients as these two messages. They are

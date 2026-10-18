@@ -105,6 +105,10 @@ void checkCodecRoundTrip() {
     check(mc.size() == 4 + 2 + 12 + 4 && mc[2] == 0x28 && mc[3] == 0x01 && mc[4] == 0x01 && mc[5] == 0x02,
           "MapChange opcode 0x0128, map first");
     check(std::string(opcode_name(Opcode::MapChange)) == "MapChange", "MapChange name");
+    // ClientEvent: opcode 0x0022, str name, str json (ServerEvent's layout)
+    const auto ce = encode(Message{ClientEvent{"a.b", "{}"}});
+    check(ce == std::vector<uint8_t>{9, 0, 0x22, 0, 3, 0, 'a', '.', 'b', 2, 0, '{', '}'}, "ClientEvent bytes");
+    check(std::string(opcode_name(Opcode::ClientEvent)) == "ClientEvent", "ClientEvent name");
     // v2 Spawn: u32 id, str name, vec3, f32 heading, u8 kind, str template
     const auto npc = encode(Message{Spawn{1, "G", {0, 0, 0}, 0, SpawnKind::npc, "T"}});
     check(npc.size() == 4 + 4 + 3 + 12 + 4 + 1 + 3 && npc[4 + 4 + 3 + 16] == 1 && npc.back() == 'T',
@@ -296,6 +300,30 @@ void checkChat() {
     check(allowed == 5, "5 per 10 s");
     check(!chat.allow(T0 + 9s), "still limited at 9 s");
     check(chat.allow(T0 + 10s), "first slot frees at 10 s");
+}
+
+// ClientEvent (kast.world.send): the name and payload checks GameServer applies before World sees the event.
+void checkClientEvents() {
+    using proto::ClientEvent;
+    check(proto::valid_client_event_name("combat.attack_2"), "event name a-z 0-9 . _ ok");
+    check(proto::valid_client_event_name(std::string(32, 'a')), "32-char event name ok");
+    check(!proto::valid_client_event_name(std::string(33, 'a')), "33-char event name rejected");
+    check(!proto::valid_client_event_name(""), "empty event name rejected");
+    for (const char* bad : {"Combat", "a b", "a-b", "a/b", "\xC3\xA9", "a\n"})
+        check(!proto::valid_client_event_name(bad), "event name rejected");
+
+    const auto data = client_event_data(ClientEvent{"combat.attack", R"({"target":12})"});
+    check(data && (*data)["target"] == 12, "valid ClientEvent -> its JSON object");
+    check(client_event_data(ClientEvent{"x", "{}"}).has_value(), "empty object ok");
+    check(!client_event_data(ClientEvent{"Bad", "{}"}), "bad name rejected");
+    check(!client_event_data(ClientEvent{"x", "[1,2]"}), "array payload rejected");
+    check(!client_event_data(ClientEvent{"x", "5"}), "number payload rejected");
+    check(!client_event_data(ClientEvent{"x", "{not json"}), "invalid JSON rejected");
+    check(!client_event_data(ClientEvent{"x", ""}), "empty payload rejected");
+    const std::string atLimit = R"({"s":")" + std::string(proto::kClientEventJsonMax - 8, 'a') + R"("})";
+    check(atLimit.size() == 1024 && client_event_data(ClientEvent{"x", atLimit}).has_value(), "1024-byte payload ok");
+    const std::string over = R"({"s":")" + std::string(proto::kClientEventJsonMax - 7, 'a') + R"("})";
+    check(!client_event_data(ClientEvent{"x", over}), "1025-byte payload rejected");
 }
 
 void checkMessageRate() {
@@ -555,6 +583,7 @@ int main() {
     checkMovement();
     checkAoi();
     checkChat();
+    checkClientEvents();
     checkMessageRate();
     checkConfig();
     checkTickStats();

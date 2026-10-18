@@ -96,7 +96,7 @@ return {
 </code></pre>
 <ul>
 <li><strong>Invalid values:</strong> a bad <code>persist</code> or <code>replicate</code> is a definition error.</li>
-<li><strong>Reserved names:</strong> a definition may not be named <code>Character</code>, <code>Npc</code>, <code>Transform</code> or <code>StateMachine</code> (the built-ins), or after any server C++ component (<code>Viewers</code>, <code>SessionLink</code>, <code>CharacterRef</code>, <code>MoveState</code>, <code>PendingMoves</code>, <code>PendingSay</code>, <code>ChatLimit</code>, <code>AoiCell</code>, <code>Visible</code>, <code>Moved</code>, <code>Dirty</code>, <code>SaveTimer</code>, <code>ReplicatedState</code>, <code>ScriptsLeft</code>, <code>PreservedComponents</code>, <code>ComponentData</code>, <code>StateMachineRuntime</code>).</li>
+<li><strong>Reserved names:</strong> a definition may not be named <code>Character</code>, <code>Npc</code>, <code>Transform</code> or <code>StateMachine</code> (the built-ins), or after any server C++ component (<code>Viewers</code>, <code>SessionLink</code>, <code>CharacterRef</code>, <code>MoveState</code>, <code>PendingMoves</code>, <code>PendingSay</code>, <code>ChatLimit</code>, <code>PendingClientEvents</code>, <code>ClientEventLimit</code>, <code>MoveLock</code>, <code>AoiCell</code>, <code>Visible</code>, <code>Moved</code>, <code>Dirty</code>, <code>SaveTimer</code>, <code>ReplicatedState</code>, <code>ScriptsLeft</code>, <code>PreservedComponents</code>, <code>ComponentData</code>, <code>StateMachineRuntime</code>).</li>
 <li><strong>Duplicates:</strong> two files declaring the same name are both rejected, each error naming the other file, whatever the scan order.</li>
 </ul>
 <h2 id="systems">Systems</h2>
@@ -153,6 +153,10 @@ return {
 <td>Removes NPC <code>e</code>; the players who see it get <code>Despawn</code></td>
 </tr>
 <tr>
+<td><code>kast.setMovable(e, movable)</code></td>
+<td><code>false</code>: the server refuses every <code>Move</code> from player <code>e</code> (one <code>Correction</code> back to where it stands per tick) until set <code>true</code> again. Not saved: a character logs in movable. Raises for an NPC (<code>kast.setMovable: entity N is an NPC; only players send moves</code>) and for a non-boolean</td>
+</tr>
+<tr>
 <td><code>kast.log/warn/error(msg)</code></td>
 <td>A server log line <code>&lt;system path&gt;: &lt;msg&gt;</code> at that level</td>
 </tr>
@@ -189,6 +193,10 @@ return {
 <td>The area <code>e</code> or a point is in: <code>{id, name, flags, music}</code> or <code>nil</code> (see <a href="areas.html#areas">Areas</a>)</td>
 </tr>
 <tr>
+<td><code>kast.map.spawn(map)</code></td>
+<td>The map's spawn point (<code>map.json</code> <code>"spawn"</code>): <code>{position = {x, y, z}, heading}</code>. Raises on an unloaded map</td>
+</tr>
+<tr>
 <td><code>kast.map.ground(map, x, z)</code></td>
 <td>The ground's height at a point on loaded map <code>map</code>, or <code>nil</code> off its tiles (see <a href="maps.html#ground">Ground</a>). Raises on an unloaded map</td>
 </tr>
@@ -222,7 +230,7 @@ return {
 </tr>
 <tr>
 <td><code>Spawn</code></td>
-<td><code>id</code>, and with a path <code>path = {{x, y, z}, ...}</code>, <code>wait</code> (seconds), <code>loop</code> (NPCs from a spawn file only; see <a href="npcs.html#npc-spawns">NPC spawns</a>)</td>
+<td><code>id</code>, <code>pos = {x, y, z}</code>, <code>heading</code> (the spawn file's values; y is not clamped to the ground), and with a path <code>path = {{x, y, z}, ...}</code>, <code>wait</code> (seconds), <code>loop</code> (NPCs from a spawn file only; see <a href="npcs.html#npc-spawns">NPC spawns</a>)</td>
 </tr>
 <tr>
 <td><code>Transform</code></td>
@@ -241,12 +249,13 @@ return {
 <li><strong>areas:</strong> <code>area.leave</code> / <code>area.enter</code> for players that moved, and portal transfers (<a href="areas.html#areas">Areas</a>)</li>
 <li>AOI (<code>Spawn</code> / <code>Despawn</code>)</li>
 <li>chat</li>
+<li><strong>client events in:</strong> each character's <code>ClientEvent</code>s published on the bus as <code>client.&lt;name&gt;</code> (<a href="#client-events">Client events</a>)</li>
 <li><strong>spawner:</strong> the <a href="npcs.html#npc-spawns">NPC spawns</a> that are due</li>
 <li><strong>Lua <code>update</code></strong>, every system in filename order</li>
 <li><strong>event drain:</strong> the events queued since the last drain go to their subscribers</li>
 <li>replication (<code>EntityMove</code>)</li>
 <li>component replication</li>
-<li><strong>client events:</strong> <code>ServerEvent</code> for every <code>kast.sendTo</code> / <code>sendNearby</code> / <code>broadcast</code> since the last flush</li>
+<li><strong>events to clients:</strong> <code>ServerEvent</code> for every <code>kast.sendTo</code> / <code>sendNearby</code> / <code>broadcast</code> since the last flush</li>
 <li>save</li>
 <li>end of tick</li>
 </ol>
@@ -275,6 +284,23 @@ An NPC that Lua creates, or moves into or out of a player's view, gets its <code
 </tr>
 </tbody>
 </table>
+<h2 id="client-events">Client events</h2>
+<p>A client sends an event to the server's Lua with the engine's <code>kast.world.send(name, data)</code>
+(<a href="../../engine/online-services.html">Engine, Online Services</a>; wire format in <a href="protocol.html#client-events">protocol</a>).
+Systems receive it on the bus as <code>client.&lt;name&gt;</code>:</p>
+<pre><code class="language-lua">kast.subscribe(&quot;client.combat.attack&quot;, function(e)
+    -- e.entity: the sender's character entity id; e.data: the client's JSON object as a table
+    local target = e.data.target
+    if type(target) ~= &quot;number&quot; or not kast.has(target, &quot;Npc&quot;) then return end
+    -- ...
+end)
+</code></pre>
+<ul>
+<li><strong>Payload:</strong> <code>{entity = &lt;sender's character entity id&gt;, data = &lt;the JSON object as a table&gt;}</code>. <code>entity</code> is set by the server and always the sender.</li>
+<li><strong>Untrusted:</strong> <code>data</code> is whatever the client sent. Check every field's type and every claim (range, cooldown, ownership) before acting on it (<a href="security.html#client-events">Security, Client events</a>).</li>
+<li><strong>Timing:</strong> published after chat (tick order step 5) and delivered by the event drain right after that tick's Lua <code>update</code>, in arrival order.</li>
+<li><strong>Limits:</strong> name 1–32 characters of <code>a-z0-9._</code>, at most 1 KB of JSON, 10 per second per character; the rest are dropped (<a href="protocol.html#client-events">protocol</a>).</li>
+</ul>
 <h2 id="persistence-1">Persistence</h2>
 <ul>
 <li><strong>Storage:</strong> components with <code>persist = true</code> are stored in <code>characters.components</code>, a JSON column added by <code>migrations/002_character_components.sql</code>. It holds <code>{"&lt;Name&gt;": {...}, ...}</code> in the replication encoding.</li>
@@ -289,7 +315,7 @@ An NPC that Lua creates, or moves into or out of a player's view, gets its <code
 <li><strong>Full sets:</strong> the owner gets its full set on the first tick in the world. A viewer gets an entity's full <code>aoi</code> set when the entity comes into view, right after its <code>Spawn</code>.</li>
 <li><strong>NPCs:</strong> the same rules without an owner: <code>aoi</code> components go to the players who see the NPC, <code>owner</code> ones to nobody.</li>
 <li><strong>Ordering:</strong> data never precedes <code>Spawn</code> or follows <code>Despawn</code>.</li>
-<li><strong>Client writes:</strong> there are none. A client that sends a component message is disconnected with <code>unexpected_message</code>.</li>
+<li><strong>Client writes:</strong> there are none. A client that sends a component message is disconnected with <code>unexpected_message</code>. Clients ask for changes with <a href="#client-events">client events</a>, which a system checks and applies.</li>
 </ul>
 <h2 id="sample">Sample</h2>
 <p>The <code>lua/</code> folder holds the sample:</p>
@@ -343,7 +369,7 @@ An NPC that Lua creates, or moves into or out of a player's view, gets its <code
 </tr>
 <tr>
 <td><code>systems/test_hooks.lua</code></td>
-<td>Test only, for scenario 18: a character whose name starts with <code>Respawntest</code> destroys the Guard (spawn <code>guard_1</code>) when it enters. Remove it from a real game</td>
+<td>Test only. Scenario 18: a character whose name starts with <code>Respawntest</code> destroys the Guard (spawn <code>guard_1</code>) when it enters. Scenarios 21 and 22: every <code>client.test.echo</code> goes back to its sender as <code>test.echo</code> <code>{n, entity}</code>. Remove it from a real game</td>
 </tr>
 <tr>
 <td><code>systems/regen.lua</code></td>

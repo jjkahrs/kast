@@ -6,7 +6,8 @@ A small but complete Kast online game, made to read and copy. You open it in the
 2. log in and pick a realm;
 3. create or pick a character;
 4. walk the Meadow with other players and a patrolling Guard, chat, and watch the server's Health and Gold in the HUD;
-5. take the portal into the Cavern, where a Bat waits, and walk back.
+5. take the portal into the Cavern, where a Bat waits, and walk back;
+6. target and fight the Bat and the Guard (tab-target melee, decided by the server), die and revive.
 
 The same folder is the game project (client) **and** the world server's Lua and maps: client and server share
 `components/`.
@@ -17,12 +18,12 @@ The same folder is the game project (client) **and** the world server's Lua and 
 |---|---|---|
 | `project.kast` | client | `Starter MMO`, starts at `scenes/login.scene`, Online Services on (`http://localhost:3100`, CA `certs/world_dev_ca.pem`), game state machine `session` |
 | `scenes/` | client | `login`, `register`, `realms` (one screen each) and `world` (character select, then the game) |
-| `scripts/` | client | one Lua system per screen or concern; they talk through the event bus |
+| `scripts/` | client | one Lua system per screen or concern; they talk through the event bus. `combat.lua`: targeting, the target marker, attack requests (`kast.world.send`) and the combat log |
 | `ui/` | client | RmlUi documents, one per screen, sharing `starter.rcss` (the Kast editor palette) |
 | `components/` | **both** | `Health` (replicated to everyone in view), `Wallet` (owner only), `MapProps` (client-side tag) |
-| `fsms/` | both | `patrol` (the Guard's machine, server), `session` (why the client is on the login screen) |
+| `fsms/` | both | `patrol` (the Guard's machine, server: walking, waiting, combat, returning), `creature` (the Bat's machine, server: idle, combat, returning), `session` (why the client is on the login screen) |
 | `npcs/` | server | the `Guard` and `Bat` NPC definitions; their `template` names the client entity they are shown as |
-| `systems/` | server | `regen.lua` (Health regen and drain, 1 gold per login), `events.lua` (welcome / arrival messages), `npcs.lua` (patrols) |
+| `systems/` | server | `combat.lua` (melee, NPCs fighting back, death and revive), `regen.lua` (Health regen out of combat, 1 gold per login), `events.lua` (welcome / arrival messages), `npcs.lua` (patrols) |
 | `maps/meadow`, `maps/cavern` | both | map 10 and map 11: one 256 m tile each, heightmap, `areas.json` with a portal each way; `.server/spawns/` (server only) places the Guard and the Bat |
 | `materials/`, `models/`, `textures/` | client | primitives' materials, the animated character (`female-128-anim.glb`, from `tests/project/models`) |
 | `docker-compose.override.yml` | dev | runs the `services/world` stack with this folder's Lua and maps |
@@ -83,9 +84,22 @@ running it twice adds nothing.
 - **Characters**: create one (3-16 letters), then click it.
 - **World**: World of Warcraft-style controls. W runs forward, S backpedals, A/D turn, Space jumps. Hold the left
   mouse button and drag to look around the character; hold the right button to turn the camera and the character (A/D
-  then strafe). The wheel zooms. A press on the chat box or HUD doesn't move the camera. The HUD (top left) shows Health and Gold as the server replicates them: Health drains while you
-  walk and regenerates while you stand. Type in the chat box and press **Send**; everyone nearby sees it. The Guard
+  then strafe). The wheel zooms. A press on the chat box or HUD doesn't move the camera. The HUD (top left) shows Health and Gold as the server replicates them. Type in the chat box and press **Send**; everyone nearby sees it. The Guard
   patrols a 10 m square just ahead of the spawn.
+- **Combat** (tab-target): **Tab** cycles the NPCs in view, nearest first, within 40 m; a **left click** (without
+  dragging) on an NPC selects it; **Esc** clears the target. The target gets a gold disc under it and a frame at the top
+  centre with its name and Health. **1** attacks it. Keys typed into the chat box do nothing.
+  - Take the portal (below) to the Cavern: the Bat stands 8 m ahead. Target it and press 1: `* Out of range` in the
+    chat box. Walk up to it (within 3 m) and press 1 again: `You hit Bat for 10`, `Bat dies`. It despawns and comes
+    back at its spot 30 s later.
+  - The Guard fights back: hit it (10 damage, one hit every 1.5 s) and it chases you at 5 m/s and hits you for 5 every
+    2 s. Run more than 30 m from its spawn point and it gives up, walks home, heals to full and patrols again.
+  - Health regenerates (2 a second) only after 5 s without dealing or taking a hit. At 0 Health you die: you can't move
+    or attack and NPCs leave you; 5 s later you revive at the map's spawn point with full Health. A character that logs
+    out dead dies again on login and revives the same way.
+  - Every attack is a request (`kast.world.send("combat.attack", {target = id})`); the server's `systems/combat.lua`
+    checks range, cooldown and that both sides are alive, and decides the damage. The combat log in the chat box shows
+    what it sends back.
 - **Portal**: the orange arch about 25 m east of the spawn is the `cavern_gate` portal: walk into it and the server
   moves you to the Cavern (`world.mapChanged`); the terrain and props switch and the Bat is in front of you. The arch
   west of the Cavern's arrival point takes you back.
@@ -146,6 +160,14 @@ of the client project.
   - `starter_mmo_live_cavern`: both portals, ending in the Cavern with the Bat.
   - `starter_mmo_live_camera`, `_camera_zoom`, `_camera_orbit`: `scripts/player.lua`'s camera behind the character,
     zoomed out and orbited by a left drag (the editor's `--sim-mouse`).
+  - `starter_mmo_live_combat_target`: a left click selects the Bat (target frame and marker).
+  - `starter_mmo_live_combat`: Tab, Esc, Tab, then 1 until the Bat dies and despawns.
+  - `starter_mmo_live_combat_guard`: three hits on the Guard, which hits back.
+  - `starter_mmo_live_death`, `starter_mmo_live_revive`: the Guard kills the character `Fallen`; dead, then revived at
+    the spawn point with full Health.
+
+  The combat stages take their screenshot a moment after the driver logs its shot line (the editor's
+  `--screenshot-on-log`).
 
   Screenshots land in `build/debug/starter_mmo/`. `starter_mmo_live_secrets` checks that no file or log holds the
   password or a token. `starter_mmo_live_teardown` restores the default world mounts, so `world_live`,

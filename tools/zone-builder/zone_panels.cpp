@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <format>
 #include <mutex>
+#include <random>
 
 namespace zone {
 namespace {
@@ -65,15 +66,19 @@ bool Session::openProject(const fs::path& root) {
     project = scan_project(fs::absolute(root).lexically_normal());
     doc.reset();
     problems = project->errors;
+    scanMaterials();
+    npcs = npc_names(project->root);
+    print(std::format("Opened project {} ({} maps)", utf8(project->root), project->maps.size()));
+    return true;
+}
+
+void Session::scanMaterials() {
     materials.clear();
     for (const fs::path& file : kast::listFiles(project->root))
         if (file.extension() == ".mat") {
             const std::u8string rel = file.lexically_relative(project->root).generic_u8string();
             materials.emplace_back(rel.begin(), rel.end());
         }
-    npcs = npc_names(project->root);
-    print(std::format("Opened project {} ({} maps)", utf8(project->root), project->maps.size()));
-    return true;
 }
 
 bool Session::openMap(const std::string& folder) {
@@ -114,6 +119,40 @@ bool Session::save() {
         return false;
     }
     print("Saved maps/" + doc->folder);
+    scanMaterials(); // a generated terrain material may be new
+    return true;
+}
+
+bool Session::generateHeights(const NoiseParams& params) {
+    std::string err;
+    const auto info = doc ? doc->info(err) : std::nullopt;
+    if (!info) return false;
+    doc->edit([&](ZoneState& s) {
+        generate_heights(*info, s, params);
+        // The spawn stays on the ground (it is on the map: the manifest parsed).
+        s.manifest["spawn"]["pos"][1] = kast::jsonNumber(*ground_y(*info, s, info->spawn[0], info->spawn[2]));
+    });
+    print(std::format("Generated heights (seed {}, scale {} m, {} octaves)", params.seed, params.scale, params.octaves));
+    return true;
+}
+
+bool Session::setTerrainColors(const Gradient& gradient) {
+    if (!doc || gradient.size() < 2) return false;
+    doc->edit([&](ZoneState& s) { s.manifest["terrainColors"] = gradient_json(gradient); });
+    return true;
+}
+
+bool Session::createTerrainMaterial() {
+    if (!doc) return false;
+    std::string err;
+    const bool hasColors = parse_gradient(doc->state.manifest, err).has_value();
+    doc->edit([&](ZoneState& s) {
+        if (!hasColors) s.manifest["terrainColors"] = gradient_json(default_gradient());
+        s.manifest["terrainUv"] = "map";
+        s.manifest["material"] = terrain_material_path(doc->folder);
+    });
+    print("Terrain material " + terrain_material_path(doc->folder) + " and " + terrain_texture_path(doc->folder) +
+          " assigned; written on save");
     return true;
 }
 
@@ -668,9 +707,85 @@ void Panels::drawTerrain(Session& session, SDL_Window* window) {
             ImGui::SameLine();
             if (ImGui::Button("Export PNG..."))
                 SDL_ShowSaveFileDialog(onPicked, dialogData(int(Dialog::ExportPng)), window, &kPngFilter, 1, nullptr);
+
+            drawGenerate(session, range[1] > range[0]);
+            drawTerrainColors(session);
         }
     }
     ImGui::End();
+}
+
+void Panels::drawGenerate(Session& session, bool hasRange) {
+    ImGui::SeparatorText("Generate");
+    ImGui::InputScalar("Seed", ImGuiDataType_U32, &noise_.seed);
+    ImGui::SameLine();
+    if (ImGui::Button("Randomize")) noise_.seed = std::random_device{}();
+    ImGui::SliderFloat("Scale", &noise_.scale, 16.0f, 4096.0f, "%.0f m", ImGuiSliderFlags_Logarithmic);
+    ImGui::SliderInt("Octaves", &noise_.octaves, 1, 16);
+    ImGui::SliderFloat("Persistence", &noise_.persistence, 0.05f, 1.0f, "%.2f");
+    ImGui::SliderFloat("Lacunarity", &noise_.lacunarity, 1.0f, 4.0f, "%.2f");
+    ImGui::BeginDisabled(!hasRange);
+    if (ImGui::Button("Generate heights")) session.generateHeights(noise_);
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("Replaces every tile's heights, over the whole height range");
+}
+
+void Panels::drawTerrainColors(Session& session) {
+    ZoneDoc& doc = *session.doc;
+    ImGui::SeparatorText("Height colors");
+    std::string err;
+    // Edits go to the manifest as they happen and are one undo step from the first change until no widget is active
+    // (a drag, a color picker).
+    if (!colorsEditing_ && !ImGui::IsAnyItemActive()) gradient_ = parse_gradient(doc.state.manifest, err).value_or(default_gradient());
+    bool changed = false;
+    std::optional<size_t> remove;
+    for (size_t i = 0; i < gradient_.size(); ++i) {
+        ImGui::PushID(int(i));
+        float pct = gradient_[i].pos * 100.0f;
+        ImGui::SetNextItemWidth(80.0f);
+        if (ImGui::DragFloat("##pos", &pct, 0.25f, 0.0f, 100.0f, "%.1f %%", ImGuiSliderFlags_AlwaysClamp)) {
+            gradient_[i].pos = pct / 100.0f;
+            changed = true;
+        }
+        ImGui::SameLine();
+        changed |= ImGui::ColorEdit3("##color", gradient_[i].rgb.data(), ImGuiColorEditFlags_NoInputs);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(gradient_.size() <= 2);
+        if (ImGui::Button("Remove")) remove = i;
+        ImGui::EndDisabled();
+        ImGui::PopID();
+    }
+    if (changed) {
+        if (!colorsEditing_) doc.begin();
+        colorsEditing_ = true;
+        doc.state.manifest["terrainColors"] = gradient_json(gradient_);
+    }
+    if (colorsEditing_ && !ImGui::IsAnyItemActive()) {
+        doc.commit();
+        colorsEditing_ = false;
+    }
+    if (remove && !colorsEditing_) {
+        gradient_.erase(gradient_.begin() + std::ptrdiff_t(*remove));
+        session.setTerrainColors(gradient_);
+    }
+    if (ImGui::Button("Add stop") && !colorsEditing_) {
+        // Halfway between the two highest stops, in the color already there: the look does not change until edited.
+        std::vector<float> pos;
+        for (const ColorStop& c : gradient_) pos.push_back(c.pos);
+        std::sort(pos.begin(), pos.end());
+        const float at = (pos[pos.size() - 2] + pos.back()) / 2.0f;
+        gradient_.push_back({at, gradient_color(gradient_, at)});
+        session.setTerrainColors(gradient_);
+    }
+    ImGui::TextDisabled("Position: %% of the height range (0 = min, 100 = max)");
+
+    ImGui::SeparatorText("Terrain texture");
+    const std::string material = terrain_material_path(doc.folder);
+    if (ImGui::Button("Create texture & material")) session.createTerrainMaterial();
+    if (doc.state.manifest.value("material", std::string()) == material)
+        ImGui::TextWrapped("Uses %s and %s, written on every save", material.c_str(), terrain_texture_path(doc.folder).c_str());
+    else
+        ImGui::TextDisabled("Bakes these colors into a texture spanning the map");
 }
 
 void Panels::drawHeightRangePrompt(Session& session) {

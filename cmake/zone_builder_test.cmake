@@ -10,6 +10,7 @@
 #                 that must exist afterwards. With WORLD (if built), the world server must load every map of the copy,
 #                 MAP among them ("maps loaded"; it then stops at the missing database). ARGS2: a second run on the saved
 #                 MAP with these edits, then save (before the checks); EXPECT_GONE: map-relative files it must delete.
+#                 TERRAIN_GEN: also terrain_gen_checks (below).
 # MODE bake:      open MAP and Bake Navmesh in the window (MAPBAKE); it must exit 0, write .server/nav/*.navtile and
 #                 have drawn frames while kast_mapbake ran.
 string(REPLACE "|" ";" ARGS "${ARGS}") # | in the test command: no ; escaping through add_test
@@ -31,6 +32,74 @@ function(run)
     message(FATAL_ERROR "kast_zone_builder ${ARGN} exited with ${result}:\n${out}")
   endif()
   set(out "${out}" PARENT_SCOPE)
+endfunction()
+
+# TERRAIN_GEN (MODE edit, ARGS generating seed 7 + Create): the generated texture and material, the heights' seams,
+# determinism, undo, and the texture re-baked after a sculpt.
+function(terrain_gen_checks)
+  set(dir "${copy}/maps/${MAP}")
+  set(png "${copy}/textures/${MAP}_terrain.png")
+  file(READ "${png}" ihdr OFFSET 16 LIMIT 8 HEX)
+  if(NOT ihdr STREQUAL "0000020000000200")
+    message(FATAL_ERROR "${png}: expected 512 x 512, IHDR size ${ihdr}")
+  endif()
+  file(READ "${dir}/map.json" manifest)
+  string(JSON uv GET "${manifest}" terrainUv)
+  string(JSON material GET "${manifest}" material)
+  string(JSON stops LENGTH "${manifest}" terrainColors)
+  if(NOT uv STREQUAL "map" OR NOT material STREQUAL "materials/${MAP}_terrain.mat" OR stops LESS 2)
+    message(FATAL_ERROR "map.json: terrainUv ${uv}, material ${material}, ${stops} terrainColors")
+  endif()
+  file(READ "${copy}/materials/${MAP}_terrain.mat" mat)
+  string(JSON texture GET "${mat}" baseColorTexture)
+  if(NOT texture STREQUAL "textures/${MAP}_terrain.png")
+    message(FATAL_ERROR "${MAP}_terrain.mat: baseColorTexture ${texture}")
+  endif()
+  # Seams: 0_0's last row is 0_1's first; 0_0's last column is 1_0's first (spot-checked every 16 rows).
+  file(READ "${dir}/heights/0_0.r16" a OFFSET 131584 LIMIT 514 HEX) # row 256: 256 * 257 * 2
+  file(READ "${dir}/heights/0_1.r16" b OFFSET 0 LIMIT 514 HEX)
+  if(NOT a STREQUAL b)
+    message(FATAL_ERROR "seam between tiles 0_0 and 0_1")
+  endif()
+  foreach(v RANGE 0 256 16)
+    math(EXPR at "(${v} * 257 + 256) * 2")
+    math(EXPR bt "${v} * 257 * 2")
+    file(READ "${dir}/heights/0_0.r16" a OFFSET ${at} LIMIT 2 HEX)
+    file(READ "${dir}/heights/1_0.r16" b OFFSET ${bt} LIMIT 2 HEX)
+    if(NOT a STREQUAL b)
+      message(FATAL_ERROR "seam between tiles 0_0 and 1_0 at row ${v}: ${a} vs ${b}")
+    endif()
+  endforeach()
+  # The same seed on another map with the same tiles: the same bytes; another seed: different.
+  run(--new-map "${MAP}_same,2,2" --generate-heights 7 --save --headless)
+  run(--new-map "${MAP}_other,2,2" --generate-heights 8 --save --headless)
+  foreach(t 0_0 1_0 0_1 1_1)
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E compare_files "${dir}/heights/${t}.r16" "${copy}/maps/${MAP}_same/heights/${t}.r16"
+                    RESULT_VARIABLE differ)
+    if(NOT differ EQUAL 0)
+      message(FATAL_ERROR "seed 7 twice: heights/${t}.r16 differ")
+    endif()
+  endforeach()
+  execute_process(COMMAND "${CMAKE_COMMAND}" -E compare_files "${dir}/heights/0_0.r16" "${copy}/maps/${MAP}_other/heights/0_0.r16"
+                  RESULT_VARIABLE differ)
+  if(differ EQUAL 0)
+    message(FATAL_ERROR "seeds 7 and 8 gave the same heights")
+  endif()
+  # Generate then undo: nothing to save, the heights stay byte-identical.
+  file(SHA256 "${dir}/heights/0_0.r16" before)
+  file(SHA256 "${png}" pngBefore)
+  run(--map "${MAP}" --generate-heights 99 --undo --save --headless)
+  file(SHA256 "${dir}/heights/0_0.r16" after)
+  if(NOT before STREQUAL after)
+    message(FATAL_ERROR "--generate-heights then --undo changed heights/0_0.r16")
+  endif()
+  # A sculpt re-bakes the texture on save.
+  run(--map "${MAP}" --sculpt 300,200,40,20 --save --headless)
+  file(SHA256 "${png}" pngAfter)
+  if(pngBefore STREQUAL pngAfter)
+    message(FATAL_ERROR "sculpt + save did not re-bake ${png}")
+  endif()
+  message(STATUS "terrain gen: 512 x 512 texture, seams, determinism, undo and re-bake OK")
 endfunction()
 
 if(MODE STREQUAL "roundtrip" OR MODE STREQUAL "blocked")
@@ -92,6 +161,9 @@ ${out}")
     message(STATUS "kast_world: ${loadedLine}")
   else()
     message(STATUS "kast_world not built (${WORLD}): server load skipped")
+  endif()
+  if(TERRAIN_GEN)
+    terrain_gen_checks()
   endif()
 elseif(MODE STREQUAL "bake")
   if(NOT MAPBAKE OR NOT EXISTS "${MAPBAKE}")

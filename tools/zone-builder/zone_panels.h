@@ -40,12 +40,18 @@ struct Session {
     bool newMap(const std::string& folder, const std::string& name, uint16_t id, int width, int depth);
     bool save();
     void print(std::string line); // to the Log panel and kast::log
+    void scanMaterials(); // materials from the project's files
 
     // Terrain edits, one undo step each (an interactive stroke is one step too, see Panels).
     bool sculpt(const Brush& brush, float x, float z, float amount);
     bool setHeightRange(float min, float max);
     bool importPng(TileKey tile, const std::filesystem::path& file);
     bool exportPng(TileKey tile, const std::filesystem::path& file);
+    bool generateHeights(const NoiseParams& params);
+    bool setTerrainColors(const Gradient& gradient); // map.json "terrainColors"
+    // Assigns the generated terrain material (terrain_material_path) with "terrainUv": "map", adding the default
+    // terrainColors if there are none; save writes the texture and material.
+    bool createTerrainMaterial();
 
     // Starts kast_mapbake on the saved, valid open map (else prints why not). pollBake moves its output to bakeLog
     // and prints the exit code once it ends; call every frame.
@@ -94,6 +100,8 @@ private:
     void run(Session& session, const Pending& pending);
     void pollDialogs(Session& session);
     void drawTerrain(Session& session, SDL_Window* window);
+    void drawGenerate(Session& session, bool hasRange);
+    void drawTerrainColors(Session& session);
     void drawHeightRangePrompt(Session& session);
     void drawTileGrid(Session& session, const kast::map::MapInfo& info);
     void drawRemoveTilePrompt(Session& session);
@@ -132,6 +140,9 @@ private:
     size_t rangeClips_ = 0;
     bool askRange_ = false;
     bool rangeEdited_ = false; // Min/Max typed but not applied: keep them
+    NoiseParams noise_;
+    Gradient gradient_;          // the stops shown; the manifest's while no edit is in progress
+    bool colorsEditing_ = false; // a stop edit's undo step is open
 
     std::optional<size_t> area_;       // selected area (index into areas.json "areas")
     std::string spawn_;                // selected spawn id

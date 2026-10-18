@@ -483,7 +483,7 @@
         "Transform": {
           "position": [
             153,
-            2,
+            7.5,
             123.5
           ],
           "rotation": [
@@ -512,7 +512,7 @@
         "Transform": {
           "position": [
             153,
-            2,
+            7.5,
             132.5
           ],
           "rotation": [
@@ -541,7 +541,7 @@
         "Transform": {
           "position": [
             153,
-            4.3,
+            9.8,
             128
           ],
           "rotation": [
@@ -570,7 +570,7 @@
         "Transform": {
           "position": [
             112,
-            0.4,
+            6.6,
             140
           ],
           "rotation": [
@@ -599,7 +599,7 @@
         "Transform": {
           "position": [
             142,
-            0.3,
+            4.84,
             104
           ],
           "rotation": [
@@ -944,6 +944,7 @@
     "scripts/hud.lua",
     "scripts/chat.lua",
     "scripts/player.lua",
+    "scripts/combat.lua",
     "scripts/world_flow.lua"
   ],
   "lighting": {

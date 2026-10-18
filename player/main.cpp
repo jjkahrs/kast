@@ -196,6 +196,10 @@ int main(int argc, char** argv)
         return true;
     };
     hooks.event = [&](const SDL_Event& event) {
+        int windowWidth = 0;
+        int windowHeight = 0;
+        SDL_GetWindowSize(window, &windowWidth, &windowHeight); // event coordinates are window, not pixel, units
+        input.view = {0.0f, 0.0f, static_cast<float>(windowWidth), static_cast<float>(windowHeight)};
         input.onEvent(event);
         gui.context().onEvent(event);
     };
