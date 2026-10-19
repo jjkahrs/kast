@@ -16,8 +16,12 @@ constexpr float kMinUiScale = 0.75f;
 constexpr float kMaxUiScale = 3.0f;
 
 float clampUiScale(float scale);
-// The embedded Roboto font at the base size (ImGui default font if it fails to load).
+// The embedded Roboto font at the base size (ImGui default font if it fails to load), with the icons below merged in.
 void loadFont();
+// Material Symbols icons in the editor font (UTF-8).
+constexpr const char* kIconPlay = "\xee\x80\xb7";  // U+E037 play_arrow
+constexpr const char* kIconPause = "\xee\x80\xb4"; // U+E034 pause
+constexpr const char* kIconStop = "\xee\x81\x87";  // U+E047 stop
 // The editor palette (see CLAUDE.md) on top of ImGui's dark style. Call before UiScale::init.
 void applyTheme();
 // ImGui has one text color, and white text on the accent fills (buttons, tabs, headers, selection) is unreadable: turns
