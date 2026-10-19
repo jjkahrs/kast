@@ -131,7 +131,7 @@ set_source_files_properties(engine/lua_systems.cpp PROPERTIES COMPILE_OPTIONS /b
 target_link_libraries(kast_engine
   PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json RmlUi::RmlUi kast_map
   PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 assimp::assimp Jolt::Jolt "${LUAJIT_LIBRARY}" kast_protocol
-          Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto crypt32)
+          Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto crypt32 shell32) # shell32: recycleFile
 
 # --- player: the prebuilt game client the editor's Build menu copies; engine only, no ImGui ---
 # A Windows-subsystem app (no console window); SDL_main.h supplies WinMain.
@@ -153,30 +153,32 @@ target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 imgui::imgui imguizmo::imguizmo pugixml::pugixml shell32) # shell32: Recycle Bin
 add_dependencies(kast_editor kast_player) # Build copies kast_player.exe from next to kast_editor.exe
 
-# --- zone builder: standalone zone map editor (tools/zone-builder, tools/zone-builder/docs/index.html) ---
-# The document, file and terrain logic, without a window, shared with its self-check. editor/assets.cpp: Recycle Bin.
-add_library(kast_zone_core STATIC
-  tools/zone-builder/zone_doc.cpp tools/zone-builder/zone_io.cpp tools/zone-builder/terrain_edit.cpp
-  tools/zone-builder/zone_edit.cpp tools/zone-builder/process_runner.cpp
-  editor/assets.cpp editor/build.cpp editor/editor_settings.cpp)
-target_include_directories(kast_zone_core PUBLIC tools/zone-builder editor)
-target_compile_options(kast_zone_core PRIVATE ${KAST_COMPILE_OPTIONS})
-target_include_directories(kast_zone_core SYSTEM PRIVATE "${Stb_INCLUDE_DIR}") # stb_perlin, stb_image_write
-target_link_libraries(kast_zone_core PUBLIC kast_engine kast_map SDL3::SDL3 shell32)
+# --- zone: the zone (map) document, file and terrain editing logic (engine/zone), no window. Its own library, not
+# part of kast_engine: only editing tools link it, so the shipped kast_player stays free of it (and of KAST_SOURCE_DIR). ---
+add_library(kast_zone STATIC
+  engine/zone/zone_doc.cpp engine/zone/zone_io.cpp engine/zone/terrain_edit.cpp engine/zone/zone_edit.cpp
+  engine/zone/process_runner.cpp)
+target_compile_options(kast_zone PRIVATE ${KAST_COMPILE_OPTIONS})
+target_include_directories(kast_zone SYSTEM PRIVATE "${Stb_INCLUDE_DIR}") # stb_perlin, stb_image_write
+target_link_libraries(kast_zone PUBLIC kast_engine kast_map)
 # Bake Navmesh's default kast_mapbake: services/world/build of this source tree, if it is still there at run time.
-target_compile_definitions(kast_zone_core PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(kast_zone PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_executable(kast_zone_self_check tests/zone_self_check.cpp "${KAST_MANIFEST}")
+target_compile_definitions(kast_zone_self_check PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(kast_zone_self_check PRIVATE ${KAST_COMPILE_OPTIONS})
+target_link_libraries(kast_zone_self_check PRIVATE kast_zone)
+target_include_directories(kast_zone_self_check SYSTEM PRIVATE "${Stb_INCLUDE_DIR}") # stb_image_write: 8-bit PNGs to reject
+
+# --- zone builder: standalone zone map editor (tools/zone-builder, tools/zone-builder/docs/index.html) ---
+# editor/: camera, ImGui backend, dialogs and the per-user settings (Bake's kast_mapbake path).
 add_executable(kast_zone_builder
   tools/zone-builder/main.cpp tools/zone-builder/zone_view.cpp tools/zone-builder/zone_panels.cpp
   tools/zone-builder/zone_objects.cpp
-  editor/camera.cpp editor/imgui_bgfx.cpp editor/ui_common.cpp "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
-target_include_directories(kast_zone_builder PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
+  editor/camera.cpp editor/imgui_bgfx.cpp editor/ui_common.cpp editor/assets.cpp editor/build.cpp editor/editor_settings.cpp
+  "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
+target_include_directories(kast_zone_builder PRIVATE editor "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_compile_options(kast_zone_builder PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_zone_builder PRIVATE kast_zone_core imgui::imgui)
-add_executable(kast_zone_builder_self_check tests/zone_builder_self_check.cpp "${KAST_MANIFEST}")
-target_compile_definitions(kast_zone_builder_self_check PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-target_compile_options(kast_zone_builder_self_check PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_zone_builder_self_check PRIVATE kast_zone_core)
-target_include_directories(kast_zone_builder_self_check SYSTEM PRIVATE "${Stb_INCLUDE_DIR}") # stb_image_write: 8-bit PNGs to reject
+target_link_libraries(kast_zone_builder PRIVATE kast_zone imgui::imgui SDL3::SDL3 shell32)
 
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
@@ -206,7 +208,7 @@ enable_testing()
 set(KAST_TEST_SCENES "${CMAKE_CURRENT_SOURCE_DIR}/tests/scenes")
 set(KAST_TEST_PROJECT "${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
 add_test(NAME engine_self_check COMMAND kast_self_check)
-add_test(NAME zone_builder_self_check COMMAND kast_zone_builder_self_check)
+add_test(NAME zone_self_check COMMAND kast_zone_self_check)
 # kast.auth against the real auth service in the services/world compose stack (cd services/world && docker compose
 # up -d --build); skipped, not failed, when it isn't running.
 add_test(NAME auth_live COMMAND kast_self_check --live-auth http://localhost:3100 http://localhost:8026)

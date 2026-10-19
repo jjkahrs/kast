@@ -4,6 +4,7 @@
 
 #include <animation.h>
 #include <components.h>
+#include <files.h> // recycleFile
 #include <log.h>
 #include <lua_components.h>
 #include <material.h>
@@ -2159,7 +2160,7 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui)
     }
     case AssetEdit::Op::Delete:
         error = deleteBlocker(source, openScenePath(doc)); // the scene may have changed since the prompt opened
-        if (error.empty() && recycleAsset(source, error)) {
+        if (error.empty() && kast::recycleFile(source, error)) {
             kast::log::info(std::format("Moved '{}' to the Recycle Bin", edit.path));
             refreshPrefabs(doc); // instances of a deleted prefab become placeholders
         }

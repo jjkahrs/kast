@@ -2,8 +2,8 @@
 // kast::PostProcess straight into the backbuffer behind the ImGui windows, the orbit camera, ground picking and the
 // overlays (ImGui lines projected from the ground). Zone objects show as their prefabs.
 #pragma once
-#include "terrain_edit.h"
-#include "zone_doc.h"
+#include <zone/terrain_edit.h>
+#include <zone/zone_doc.h>
 
 #include <camera.h>
 #include <post_process.h>

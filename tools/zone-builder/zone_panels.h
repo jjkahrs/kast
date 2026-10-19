@@ -2,9 +2,9 @@
 // Map (manifest), Terrain, Areas, Spawns, Objects, Problems and Log, plus the dialogs; the 3D view's tools
 // (zone_objects.cpp: areas, spawns, paths and zone objects).
 #pragma once
-#include "zone_edit.h"
-#include "process_runner.h"
-#include "zone_io.h"
+#include <zone/zone_edit.h>
+#include <zone/process_runner.h>
+#include <zone/zone_io.h>
 #include "zone_view.h"
 
 #include <imgui.h>
