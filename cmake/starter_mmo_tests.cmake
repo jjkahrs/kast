@@ -49,7 +49,9 @@ add_test(NAME starter_mmo_live_setup
   COMMAND "${CMAKE_COMMAND}" ${live_args} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_live_setup.cmake")
 add_test(NAME starter_mmo_live_teardown
   COMMAND "${CMAKE_COMMAND}" ${live_args} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_live_teardown.cmake")
-set_tests_properties(starter_mmo_live_setup PROPERTIES FIXTURES_SETUP starter_mmo_live TIMEOUT 1200)
+# After world_live_teardown: it recreates the world server, which would undo this setup's override mid-run.
+set_tests_properties(starter_mmo_live_setup PROPERTIES FIXTURES_SETUP starter_mmo_live TIMEOUT 1200
+                     DEPENDS world_live_teardown)
 set_tests_properties(starter_mmo_live_teardown PROPERTIES FIXTURES_CLEANUP starter_mmo_live TIMEOUT 900)
 set(live_shots)
 # The equip_drag stage's mouse drag: from bag slot 1's centre to Main Hand's (ui/starter.rcss: #character, #equip_6).
