@@ -28,6 +28,8 @@ public:
             loaded_->map = map;
     }
 
+    // The map id the zone (or error()) is for; nullopt until update tries one, and after reload().
+    std::optional<int> loadedMap() const { return loaded_ ? std::optional(loaded_->map) : std::nullopt; }
     zone::ZoneDoc* zone() { return zone_ ? &*zone_ : nullptr; } // null: none loaded
     const zone::ZoneDoc* zone() const { return zone_ ? &*zone_ : nullptr; }
     bool dirty() const { return zone_ && zone_->dirty(); }

@@ -144,7 +144,8 @@ add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
   editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp editor/editor_settings.cpp
-  editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/kast_editor.rc
+  editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp
+  editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 # The Online panel's default compose folder: services/world of this source tree, if it is still there at run time.
@@ -706,6 +707,26 @@ add_test(NAME editor_zone_two_terrains
           "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/zone_two_terrains.scene" -DFOCUS_PANEL=Zone
           "-DEXPECT_OUTPUT=Zone: loaded maps/[a-z]+ \\(map [13]\\)" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# Zone tab tools in the Scene view (--zone-tool, --sim-mouse on the Scene view): zone_tools is terrain.scene with a Box
+# at the editor camera's pivot, so the scripted click lands on the Box over the terrain. With a tool the click is the
+# zone's (a stroke, the spawn moved; the Box is not selected); without one it selects the Box (no zone edit). In memory
+# only: nothing is saved.
+string(JSON zone_tools SET "${terrain_scene}" entities ${terrain_count}
+       [=[{"id": 91, "name": "Box", "parent": null, "components": {"Transform": {"position": [256, 26, 256], "rotation": [0, 0, 0, 1], "scale": [6, 6, 6]}, "MeshRenderer": {"primitive": "cube", "material": ""}}}]=])
+file(WRITE "${KAST_SHADOW_PROJECT}/zone_tools.scene" "${zone_tools}")
+function(kast_zone_tool_test name args)
+  add_test(NAME editor_zone_tool_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_tool_${name}.png"
+            "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/zone_tools.scene --zone-section Terrain ${args}" -DFOCUS_PANEL=Zone
+            ${ARGN} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endfunction()
+kast_zone_tool_test(raise "--zone-tool Raise --sim-mouse 40,left,40,0,0" "-DEXPECT_OUTPUT=Zone: Raise stroke"
+                    -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\\\[error\\\\]")
+kast_zone_tool_test(ring "--zone-tool Lower --sim-mouse 40,none,0,0,0" "-DFORBID_OUTPUT=stroke|\\\\[error\\\\]")
+kast_zone_tool_test(set_spawn "--zone-tool SetSpawn --sim-mouse 40,left,0,0,0"
+                    "-DEXPECT_OUTPUT=Zone: player spawn at 25[0-9][.][0-9], [0-9.]+, 25[0-9][.][0-9]" -DEXPECT_COUNT=1
+                    "-DFORBID_OUTPUT=\\\\[error\\\\]")
+kast_zone_tool_test(none "--sim-mouse 40,left,0,0,0" "-DFORBID_OUTPUT=Zone: (.* stroke|player spawn)|\\\\[error\\\\]")
 # Zone objects: tests/project/zone_objects.scene on the hills' fixtures (maps/hills/objects; docs/engine/terrain.html#objects).
 # In Play the Hero walks into the obstacle crate and stops at its side, the Walker through the visual crate.
 add_test(NAME zone_objects_play_screenshot

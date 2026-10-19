@@ -148,51 +148,66 @@ void ZoneRender::syncObjects(const zone::ZoneDoc& zone, const std::filesystem::p
     }
 }
 
+std::optional<ImVec2> GroundDraw::project(zone::Vec3 p) const
+{
+    float clip[4];
+    const float v[4] = {p[0], p[1], p[2], 1.0f};
+    bx::vec4MulMtx(clip, v, viewProj);
+    if (clip[3] <= 1e-4f) // behind the camera
+        return std::nullopt;
+    return ImVec2(x + (clip[0] / clip[3] * 0.5f + 0.5f) * width, y + (0.5f - clip[1] / clip[3] * 0.5f) * height);
+}
+
+zone::Vec3 GroundDraw::ground(float gx, float gz) const
+{
+    // A point on the map's far edge belongs to the tile beyond it: the nearest point on the map.
+    const auto c = info.clamp(gx, gz);
+    return zone::Vec3{gx, zone::ground_y(info, state, c[0], c[1]).value_or(0.0f) + kLift, gz};
+}
+
+void GroundDraw::line(std::array<float, 2> a, std::array<float, 2> b, ImU32 color, float thickness) const
+{
+    const int steps = std::max(1, int(std::hypot(b[0] - a[0], b[1] - a[1]) / kBorderStep));
+    std::optional<ImVec2> last;
+    for (int i = 0; i <= steps; ++i) {
+        const float t = float(i) / float(steps);
+        const auto p = project(ground(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t));
+        if (p && last)
+            draw->AddLine(*last, *p, color, thickness);
+        last = p;
+    }
+}
+
+void GroundDraw::circle(float cx, float cz, float radius, ImU32 color, float thickness) const
+{
+    constexpr int kSegments = 64;
+    for (int i = 0; i < kSegments; ++i) {
+        const float a0 = 2.0f * bx::kPi * float(i) / kSegments, a1 = 2.0f * bx::kPi * float(i + 1) / kSegments;
+        line({cx + radius * std::cos(a0), cz + radius * std::sin(a0)},
+             {cx + radius * std::cos(a1), cz + radius * std::sin(a1)}, color, thickness);
+    }
+}
+
 void ZoneRender::drawOverlays(ImDrawList* draw, const float* viewProj, float x, float y, float width, float height) const
 {
     if (!zone_ || !info_)
         return;
-    const zone::ZoneDoc& zone = *zone_;
-    const auto project = [&](zone::Vec3 p) -> std::optional<ImVec2> {
-        float clip[4];
-        const float v[4] = {p[0], p[1], p[2], 1.0f};
-        bx::vec4MulMtx(clip, v, viewProj);
-        if (clip[3] <= 1e-4f) // behind the camera
-            return std::nullopt;
-        return ImVec2(x + (clip[0] / clip[3] * 0.5f + 0.5f) * width, y + (0.5f - clip[1] / clip[3] * 0.5f) * height);
-    };
-    // The ground at map (x, z); a point on the map's far edge belongs to the tile beyond it: the nearest point on the map.
-    const auto ground = [&](float gx, float gz) {
-        const auto c = info_->clamp(gx, gz);
-        return zone::Vec3{gx, zone::ground_y(*info_, zone.state, c[0], c[1]).value_or(0.0f) + kLift, gz};
-    };
-    const auto groundLine = [&](std::array<float, 2> a, std::array<float, 2> b) {
-        const int steps = std::max(1, int(std::hypot(b[0] - a[0], b[1] - a[1]) / kBorderStep));
-        std::optional<ImVec2> last;
-        for (int i = 0; i <= steps; ++i) {
-            const float t = float(i) / float(steps);
-            const auto p = project(ground(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t));
-            if (p && last)
-                draw->AddLine(*last, *p, kTileLine, 1.5f);
-            last = p;
-        }
-    };
-
+    const GroundDraw g{draw, viewProj, x, y, width, height, *info_, zone_->state};
     draw->PushClipRect(ImVec2(x, y), ImVec2(x + width, y + height), true);
     for (const auto& [key, tile] : tiles_) {
         const float x0 = key.x * km::kTileSize, z0 = key.z * km::kTileSize, x1 = x0 + km::kTileSize, z1 = z0 + km::kTileSize;
-        groundLine({x0, z0}, {x1, z0});
-        groundLine({x0, z0}, {x0, z1});
+        g.line({x0, z0}, {x1, z0}, kTileLine, 1.5f);
+        g.line({x0, z0}, {x0, z1}, kTileLine, 1.5f);
         if (!info_->has_tile({key.x, key.z + 1}))
-            groundLine({x0, z1}, {x1, z1});
+            g.line({x0, z1}, {x1, z1}, kTileLine, 1.5f);
         if (!info_->has_tile({key.x + 1, key.z}))
-            groundLine({x1, z0}, {x1, z1});
+            g.line({x1, z0}, {x1, z1}, kTileLine, 1.5f);
     }
-    const zone::Vec3 spawn = ground(info_->spawn[0], info_->spawn[2]);
-    if (const auto p = project(spawn)) {
+    const zone::Vec3 spawn = g.ground(info_->spawn[0], info_->spawn[2]);
+    if (const auto p = g.project(spawn)) {
         draw->AddCircleFilled(*p, 6.0f, kSpawnColor);
         const float h = info_->spawnHeading;
-        if (const auto q = project(ground(spawn[0] + 6.0f * std::sin(h), spawn[2] + 6.0f * std::cos(h))))
+        if (const auto q = g.project(g.ground(spawn[0] + 6.0f * std::sin(h), spawn[2] + 6.0f * std::cos(h))))
             draw->AddLine(*p, *q, kSpawnColor, 3.0f);
         draw->AddText(ImVec2(p->x + 8.0f, p->y - 8.0f), kSpawnColor, "spawn");
     }

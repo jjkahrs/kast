@@ -229,8 +229,9 @@ std::string newProjectError(std::string_view name, const std::string& dir);
 // error if newProjectError fails or a write fails; a folder made by this call is removed.
 bool createProject(std::string_view name, const std::string& dir, std::filesystem::path& created, std::string& error);
 std::string displayName(const Document& doc);
-// "Kast Editor - [<project> - ]<scene>[*][ (Playing|Paused[: <switched scene>])]"
-std::string windowTitle(const Document& doc);
+// "Kast Editor - [<project> - ]<scene>[*][ (Playing|Paused[: <switched scene>])]"; "*" when the scene or (extraDirty,
+// FileActions::extra: the open zone) has unsaved changes.
+std::string windowTitle(const Document& doc, bool extraDirty = false);
 
 // File menu behavior: New/Open/Save/Save As with native dialogs, unsaved-changes and error modals, window title.
 class FileActions {

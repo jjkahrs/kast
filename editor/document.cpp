@@ -1099,14 +1099,15 @@ std::string displayName(const Document& doc)
     return doc.path.empty() ? "Untitled" : std::filesystem::path(doc.path).stem().string();
 }
 
-std::string windowTitle(const Document& doc)
+std::string windowTitle(const Document& doc, bool extraDirty)
 {
     std::string play;
     if (doc.play != PlayState::Stopped)
         play = std::format(" ({}{}{})", doc.play == PlayState::Playing ? "Playing" : "Paused",
                            doc.playSceneName.empty() ? "" : ": ", doc.playSceneName);
     const std::string project = doc.project ? doc.project->name + " - " : "";
-    return std::format("Kast Editor - {}{}{}{}", project, displayName(doc), doc.dirty ? "*" : "", play);
+    return std::format("Kast Editor - {}{}{}{}", project, displayName(doc), doc.dirty || extraDirty ? "*" : "",
+                       play);
 }
 
 void FileActions::newScene() { request(Pending::New); }
@@ -1537,7 +1538,7 @@ void FileActions::buildTo(const std::filesystem::path& folder, bool run)
 
 void FileActions::updateTitle()
 {
-    std::string title = windowTitle(doc_);
+    std::string title = windowTitle(doc_, !extraUnsaved().empty());
     if (title == title_ || !window_)
         return;
     title_ = std::move(title);

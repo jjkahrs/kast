@@ -124,7 +124,11 @@
 </tr>
 <tr>
 <td><code>--zone-section &lt;Name[,Name...]&gt;</code></td>
-<td>Expand these sections of the Zone tab (e.g. <code>Map,Problems</code>) after the first 10 frames, for screenshots; pair it with <code>--focus-panel Zone</code> to bring the tab to the front.</td>
+<td>Expand these sections of the Zone tab (e.g. <code>Map,Problems</code>) and collapse the others after the first 10 frames, for screenshots; pair it with <code>--focus-panel Zone</code> to bring the tab to the front.</td>
+</tr>
+<tr>
+<td><code>--zone-tool &lt;Tool&gt;</code></td>
+<td>Make that Zone tab tool active after the first 10 frames, as its button does: <code>Raise</code>, <code>Lower</code>, <code>Flatten</code>, <code>SetSpawn</code> (Place on terrain), <code>AreaRect</code>, <code>AreaPolygon</code>, <code>PlaceSpawn</code>, <code>PathPoints</code>, <code>PlaceObject</code> or <code>Scatter</code>. Pair it with <code>--sim-mouse</code> (without <code>--play</code> it acts on the Scene view) for tests and screenshots of the tools: a click or drag uses the tool, a hover shows the brush ring.</td>
 </tr>
 <tr>
 <td><code>--no-scene-post</code></td>
@@ -259,7 +263,7 @@
 </tr>
 <tr>
 <td><code>--sim-mouse &lt;frame,button,dx,dy,wheel[,sx,sy]&gt;</code></td>
-<td>With <code>--play</code>: on frame <code>frame</code>, move the mouse to the center of the Game panel's image (or <code>sx, sy</code> pixels from it), press <code>button</code> (<code>left</code>, <code>right</code> or <code>none</code>) and turn the wheel by <code>wheel</code> notches; the next frame move it by <code>dx, dy</code> pixels (with <code>none</code>: a hover there, held until the run ends), the frame after release it there (a game GUI sees a drag and drop). <code>left+shift</code> / <code>right+shift</code> also hold Shift from the press until after the release. Synthetic SDL events, so <code>kast.input</code> and the game GUIs get them as from a real mouse while the Game panel is focused. <code>kast.input.setCursorLocked</code> is not applied to the window in such a run, so the real cursor is never grabbed. Example: <code>--sim-mouse 600,left,240,-40,0</code>.</td>
+<td>With <code>--play</code> (without it: the Scene view's image instead, e.g. for <code>--zone-tool</code>): on frame <code>frame</code>, move the mouse to the center of the Game panel's image (or <code>sx, sy</code> pixels from it), press <code>button</code> (<code>left</code>, <code>right</code> or <code>none</code>) and turn the wheel by <code>wheel</code> notches; the next frame move it by <code>dx, dy</code> pixels (with <code>none</code>: a hover there, held until the run ends), the frame after release it there (a game GUI sees a drag and drop). <code>left+shift</code> / <code>right+shift</code> also hold Shift from the press until after the release. Synthetic SDL events, so <code>kast.input</code> and the game GUIs get them as from a real mouse while the Game panel is focused. <code>kast.input.setCursorLocked</code> is not applied to the window in such a run, so the real cursor is never grabbed. Example: <code>--sim-mouse 600,left,240,-40,0</code>.</td>
 </tr>
 <tr>
 <td><code>--sim-key &lt;frame,key&gt;</code></td>
@@ -281,7 +285,7 @@
 </table>
 <p>Without <code>--project</code>, <code>--scene</code>, <code>--save-scene</code> or <code>--build</code>, <code>kast_editor</code> runs the Project Manager instead of the
 editor. Editor-only flags (<code>--select</code>, <code>--play</code>, <code>--select-network-entity</code>, <code>--add-component-popup</code>, <code>--new-component[-prompt]</code>,
-<code>--new-state-machine-prompt</code>, <code>--open-menu</code>, <code>--open-build-settings</code>, <code>--open-online-settings</code>, <code>--focus-panel</code>, <code>--zone-section</code>, <code>--assets-*</code>, <code>--open-gui</code>,
+<code>--new-state-machine-prompt</code>, <code>--open-menu</code>, <code>--open-build-settings</code>, <code>--open-online-settings</code>, <code>--focus-panel</code>, <code>--zone-section</code>, <code>--zone-tool</code>, <code>--assets-*</code>, <code>--open-gui</code>,
 <code>--gui-*</code>) then are invalid arguments, as are Project Manager flags (<code>--launcher</code>, <code>--new-project</code>,
 <code>--launcher-open</code>, <code>--</code>) together with the editor's.</p>
 <p>Invalid arguments exit with code 2; init failures (SDL, window, bgfx) log the reason, show a message box, and exit 1.</p>

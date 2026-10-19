@@ -11,9 +11,28 @@
 
 #include <imgui.h>
 
+#include <array>
 #include <filesystem>
 #include <memory>
 #include <optional>
+
+// Draws on a zone's ground over the Scene view image at (x, y), width x height (ImGui points), seen through viewProj:
+// the zone overlays (ZoneRender) and the Zone tab's tool overlays (ZonePanel). Lines follow the ground (in-memory
+// heights) a little above it, so it does not hide them.
+struct GroundDraw {
+    ImDrawList* draw;
+    const float* viewProj;
+    float x, y, width, height;
+    const kast::map::MapInfo& info;
+    const zone::ZoneState& state;
+
+    // The image point of world point p; nullopt behind the camera.
+    std::optional<ImVec2> project(zone::Vec3 p) const;
+    // The ground at map (gx, gz), lifted; a point past the map's edge takes the nearest point on the map's height.
+    zone::Vec3 ground(float gx, float gz) const;
+    void line(std::array<float, 2> a, std::array<float, 2> b, ImU32 color, float thickness) const;
+    void circle(float cx, float cz, float radius, ImU32 color, float thickness = 2.0f) const;
+};
 
 class ZoneRender {
 public:

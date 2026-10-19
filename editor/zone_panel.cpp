@@ -1,12 +1,14 @@
 #include "zone_panel.h"
 
 #include "ui_common.h"
+#include "zone_render.h" // GroundDraw
 
 #include <zone/terrain_edit.h>
 #include <zone/zone_edit.h>
 
 #include <components.h>
 #include <log.h>
+#include <math3d.h>   // screenRay
 #include <scene_io.h> // jsonNumber
 
 #include <bx/math.h>
@@ -25,6 +27,14 @@ constexpr const char* kUnsavedPopup = "Unsaved zone changes";
 constexpr const char* kNewMapPopup = "New Map";
 constexpr const char* kRemoveTilePopup = "Remove tile?";
 constexpr ImVec4 kDirtyColor{1.0f, 0.8f, 0.0f, 1.0f}; // #ffcc00, the palette's highlight
+constexpr ImU32 kBrushColor = IM_COL32(255, 204, 0, 255); // the same highlight: the brush ring
+constexpr float kPickDistance = 10000.0f; // metres: past the far corner of any map in view
+constexpr std::pair<const char*, ZonePanel::Tool> kToolNames[] = {
+    {"Raise", ZonePanel::Tool::Raise},           {"Lower", ZonePanel::Tool::Lower},
+    {"Flatten", ZonePanel::Tool::Flatten},       {"AreaRect", ZonePanel::Tool::AreaRect},
+    {"AreaPolygon", ZonePanel::Tool::AreaPolygon}, {"PlaceSpawn", ZonePanel::Tool::PlaceSpawn},
+    {"PathPoints", ZonePanel::Tool::PathPoints}, {"SetSpawn", ZonePanel::Tool::SetSpawn},
+    {"PlaceObject", ZonePanel::Tool::PlaceObject}, {"Scatter", ZonePanel::Tool::Scatter}};
 
 // One undo step per edit of the last item: from its activation to its deactivation.
 void undoScope(zone::ZoneDoc& z)
@@ -45,8 +55,8 @@ entt::entity firstTerrain(const Document& doc)
 
 bool ZonePanel::header(const char* label, const char* section, bool defaultOpen)
 {
-    if (openSections_.erase(section))
-        ImGui::SetNextItemOpen(true);
+    if (showSections_ && sectionsShown_.insert(section).second)
+        ImGui::SetNextItemOpen(showSections_->contains(section));
     return ImGui::CollapsingHeader(label, defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0);
 }
 
@@ -65,6 +75,8 @@ void ZonePanel::draw(Document& doc, ZoneSession& zone)
         tool_ = Tool::None;
     if (tool_ != Tool::None && !ImGui::GetTopMostPopupModal() && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         tool_ = Tool::None;
+    endStroke(zone);
+    pollPngDialog(zone);
     // The open zone's Id field edited (or undone): the Terrain entity follows, so the scene keeps naming this map.
     if (zone::ZoneDoc* z = zone.zone(); z && !locked && zone.terrainEntity() != entt::null) {
         const int id = z->state.manifest.value("id", -1);
@@ -97,7 +109,8 @@ void ZonePanel::draw(Document& doc, ZoneSession& zone)
             drawTopBar(zone);
             drawTerrainEntity(doc, zone);
             drawMap(doc, zone);
-            // Phases 4-5: the Terrain, Areas, Spawns, Objects and Bake sections go here, each a header(...) block.
+            drawTerrain(zone);
+            // Phase 5: the Areas, Spawns, Objects and Bake sections go here, each a header(...) block.
             drawProblems(zone);
             ImGui::EndDisabled();
         }
@@ -106,6 +119,88 @@ void ZonePanel::draw(Document& doc, ZoneSession& zone)
     drawUnsavedPrompt(doc, zone);
     drawNewMapDialog(doc, zone);
     drawRemoveTilePrompt(zone);
+    drawHeightRangePrompt(zone);
+}
+
+std::optional<ZonePanel::Tool> ZonePanel::toolNamed(std::string_view name)
+{
+    for (const auto& [n, tool] : kToolNames)
+        if (name == n)
+            return tool;
+    return std::nullopt;
+}
+
+void ZonePanel::guardMapChange(Document& doc, const ZoneSession& zone)
+{
+    const std::optional<int> loaded = zone.loadedMap();
+    if (!loaded || !zone.dirty() || doc.play != PlayState::Stopped || doc.prefabEdit)
+        return;
+    const entt::entity terrain = firstTerrain(doc);
+    if (terrain == entt::null || terrain != zone.terrainEntity())
+        return;
+    int& map = doc.scene.registry().get<kast::Terrain>(terrain).map;
+    if (map == *loaded)
+        return;
+    pending_ = {Pending::Kind::PickMap, map}; // applied by the prompt's Save / Don't Save (run), dropped by Cancel
+    map = *loaded;
+    askUnsaved_ = true;
+}
+
+bool ZonePanel::sceneInput(ZoneSession& zone, const SceneViewport::Input& input)
+{
+    hover_.reset();
+    zone::ZoneDoc* z = zone.zone();
+    const ImGuiIO& io = ImGui::GetIO();
+    const bool click = input.hovered && !input.cameraDrag && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    if (!z || (tool_ == Tool::None && !click))
+        return false;
+    std::string err;
+    const auto info = z->info(err);
+    if (!info)
+        return tool_ != Tool::None;
+    if (input.hovered || stroking_) { // the ground under the mouse (in-memory heights)
+        const kast::Ray ray = kast::screenRay(input.viewProj, io.MousePos.x - input.x, io.MousePos.y - input.y,
+                                              input.width, input.height, bgfx::getCaps()->homogeneousDepth);
+        hover_ = zone::raycast(*info, z->state, {ray.origin.x, ray.origin.y, ray.origin.z},
+                               {ray.direction.x, ray.direction.y, ray.direction.z}, kPickDistance);
+    }
+    if (click && hover_) // whatever the tool: the Terrain section's heightmap tile
+        tile_ = km::tile_of((*hover_)[0], (*hover_)[2]);
+    switch (tool_) {
+    case Tool::None:
+        return false; // phase 5: a zone handle hit (Zone tab in front) claims the mouse here, and its drag after
+    case Tool::Raise:
+    case Tool::Lower:
+    case Tool::Flatten:
+        sculptInput(*z, *info, click);
+        break;
+    case Tool::SetSpawn:
+        if (click && hover_) {
+            z->edit([&](zone::ZoneState& s) { s.manifest["spawn"]["pos"] = zone::vec3_json(*hover_); });
+            kast::log::info(std::format("Zone: player spawn at {:.1f}, {:.1f}, {:.1f}", (*hover_)[0], (*hover_)[1],
+                                        (*hover_)[2]));
+        }
+        break;
+    default: // phase 5's tools
+        break;
+    }
+    return true;
+}
+
+void ZonePanel::drawSceneOverlay(const ZoneSession& zone, ImDrawList* draw, const float* viewProj, float x, float y,
+                                 float width, float height) const
+{
+    const zone::ZoneDoc* z = zone.zone();
+    if (!z || !hover_ || (tool_ != Tool::Raise && tool_ != Tool::Lower && tool_ != Tool::Flatten))
+        return;
+    std::string err;
+    const auto info = z->info(err);
+    if (!info)
+        return;
+    draw->PushClipRect(ImVec2(x, y), ImVec2(x + width, y + height), true);
+    GroundDraw{draw, viewProj, x, y, width, height, *info, z->state}.circle((*hover_)[0], (*hover_)[2], brush_.radius,
+                                                                            kBrushColor);
+    draw->PopClipRect();
 }
 
 void ZonePanel::drawTopBar(ZoneSession& zone)
@@ -133,8 +228,14 @@ void ZonePanel::drawTopBar(ZoneSession& zone)
     if (ImGui::Button("Redo"))
         z->redo();
     ImGui::EndDisabled();
+    // The Scene view tools (phase 5 adds the areas', spawns' and objects' to this row).
+    toolButton("Raise", Tool::Raise);
+    toolButton("Lower", Tool::Lower);
+    toolButton("Flatten", Tool::Flatten);
+    ImGui::NewLine();
     ImGui::EndDisabled();
-    // Phases 4-5: the Scene view tool buttons (toolButton) go on a row here.
+    if (tool_ != Tool::None)
+        ImGui::TextDisabled("Left mouse in the Scene view: the tool. Esc: no tool.");
     ImGui::Separator();
 }
 
@@ -321,7 +422,7 @@ void ZonePanel::toolButton(const char* label, Tool tool)
 {
     const bool active = tool_ == tool;
     if (active)
-        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered)); // the highlight
     if (ImGui::Button(label))
         tool_ = active ? Tool::None : tool;
     if (active)
