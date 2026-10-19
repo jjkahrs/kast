@@ -43,7 +43,7 @@ void ZoneRender::sync(const zone::ZoneDoc* zone, const std::filesystem::path& pr
     syncObjects(*zone, projectRoot);
 }
 
-// Adapted from the zone builder's view: a tile's data changes (and the renderer rebuilds only that tile's mesh) only
+// A tile's data changes (and the renderer rebuilds only that tile's mesh) only
 // when its heights or the manifest do.
 void ZoneRender::syncTiles(const zone::ZoneDoc& zone)
 {

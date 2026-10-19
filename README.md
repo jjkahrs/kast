@@ -11,8 +11,8 @@ the realm list) and the world server (`services/world`). `samples/starter-mmo` i
 Documentation is HTML under [`docs/`](docs/index.html): [Editor](docs/editor/index.html),
 [Engine](docs/engine/index.html), [Auth Server](docs/services/auth/index.html),
 [World Server](docs/services/world/index.html), [Development](docs/development/tests.html) (tests, source layout).
-Tools document themselves in their own folders: [Zone Builder](tools/zone-builder/README.md),
-[Map Bake](services/world/tools/mapbake/README.md).
+Zone maps are built in the editor's Zone tab ([Zone Builder](docs/editor/zone-builder.html)). Tools document
+themselves in their own folders: [Map Bake](services/world/tools/mapbake/README.md).
 
 ## Prerequisites (Windows)
 

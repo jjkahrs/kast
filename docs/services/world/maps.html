@@ -37,7 +37,7 @@ joined only by transfers. Players and NPCs on different maps never see each othe
   name only locates the files. <code>version</code> must be 1.</li>
 <li><strong>Required:</strong> <code>version</code>, <code>id</code>, <code>tiles</code> and <code>spawn.pos</code> (on a declared tile). <code>name</code>, <code>spawn.heading</code>, <code>heightRange</code>,
   <code>material</code>, <code>terrainUv</code> (<code>"tiled"</code> or <code>"map"</code>; anything else fails the map) and <code>nav</code> are optional, and unknown keys
-  (such as the zone builder's <code>terrainColors</code>) are ignored. The game client's terrain uses <code>heightRange</code>,
+  (such as the editor Zone Builder's <code>terrainColors</code>) are ignored. The game client's terrain uses <code>heightRange</code>,
   <code>material</code>, <code>terrainUv</code> and <code>nav.maxSlopeDeg</code> (<a href="../../engine/terrain.html">Engine, Terrain</a>); the server uses <code>heightRange</code> and the heightmaps for the <a href="#ground">ground</a>. <code>map/heights.h</code> (heightmap decoding and the shared
   ground triangles) is part of <code>kast_map</code>, so the server build needs vcpkg's <code>stb</code>.</li>
 <li><strong>Startup:</strong> every map is loaded and logged (<code>maps loaded</code>). Any bad manifest (with the file and the problem, such as
@@ -78,8 +78,8 @@ joined only by transfers. Players and NPCs on different maps never see each othe
 </ul>
 <h2 id="objects">Objects</h2>
 <p>Zone objects are what a map places on its tiles besides the ground: grass and flowers, rocks and trees, a shrine a
-player can use. The zone builder authors them (<a href="../../../tools/zone-builder/docs/index.html#objects">Zone Builder, Objects</a>);
-<code>map/objects.h</code> (part of <code>kast_map</code>) parses both files for the game client, the server, <code>kast_mapbake</code> and the zone builder.</p>
+player can use. The editor's Zone tab authors them (<a href="../../editor/zone-builder.html#objects">Zone Builder, Objects</a>);
+<code>map/objects.h</code> (part of <code>kast_map</code>) parses both files for the game client, the server, <code>kast_mapbake</code> and the editor's Zone Builder.</p>
 <table>
 <tr><th>Type</th><th>Client</th><th>Server</th></tr>
 <tr><td><code>visual</code></td><td>the prefab, no collision</td><td>nothing: never in a server file</td></tr>
@@ -116,7 +116,7 @@ player can use. The zone builder authors them (<a href="../../../tools/zone-buil
 <ul>
 <li><code>id</code>, <code>pos</code> (on the tile), <code>shape</code> and <code>event</code> (a non-empty event name, at most 255 bytes) are required; <code>yaw</code>,
   <code>range</code> (metres, &gt; 0, default 3), <code>data</code> (a JSON object, at most 31 deep so the event payload stays within the bus's 32) and
-  <code>name</code> are optional. The zone builder writes <code>pos</code>, <code>yaw</code>, <code>shape</code> and <code>name</code> from the object and keeps the rest.</li>
+  <code>name</code> are optional. The Zone Builder writes <code>pos</code>, <code>yaw</code>, <code>shape</code> and <code>name</code> from the object and keeps the rest.</li>
 <li><strong>Range</strong> is the horizontal distance from the player's position to the shape's edge (0 inside it):
   <code>map::footprint_distance</code>, the same on the client's <code>kast.nearestInteractable</code>.</li>
 <li><strong>Unknown keys</strong> are ignored in both files, so tools may keep their own.</li>

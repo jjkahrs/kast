@@ -529,24 +529,48 @@ every test runs with <code>KAST_WINDOW_POS=secondary</code>, which opens windows
 <td><code>kast_zone_self_check</code> (<code>tests/zone_self_check.cpp</code>, no window, on copies in the temp folder): <code>meadow</code>, <code>cavern</code> and <code>hills</code> load and save unchanged with no write, and a forced rewrite reads back the same JSON and heights (<code>.r16</code> byte-identical; <code>hills</code>' <code>.png</code> replaced by an equal <code>.r16</code>); a new map saved, reloaded and streamed by <code>TerrainStreamer</code> (4 tiles); ground ray picking; Raise / Lower / Flatten heights within one quantization step, clamping to the height range, a stroke on a four-tile corner keeping every shared edge equal; height range changes keeping world heights within a step and counting clipped samples; PNG16 export/import exact, 8-bit, wrong-size and non-PNG imports refused unchanged; rect and polygon areas with parent and portal through <code>parse_areas</code> and <code>area_at</code>, kept <code>y</code> / <code>music</code> / <code>flags</code> / unknown keys, renames and deletes fixing children; spawns and paths across tile borders (moved, shared, renamed paths); saves blocked with mtimes unchanged (duplicate map id, portal to an unknown map, equal-priority overlap, duplicate spawn id, spawn off the map); tile rects, add (taking neighbour edges) and remove (its files listed and deleted on save, a removed-and-re-added tile's stale file too); undo/redo of every edit type to byte-identical files; zone objects of every type placed, edited, moved across a border (an interactable's server entry with it), retyped and deleted (an emptied tile's files deleted on save), unknown keys and server-only fields kept through a save and load, and saves blocked by a bad shape, a missing server entry or a duplicate id; the scatter brush giving the same objects for the same seed and others for another, visuals only, on the ground, inside the circle and the scale range, one undo step per stroke, and erasing visuals only; the process runner (output, exit code, quoting) and <code>kast_mapbake</code> on a new map if built.</td>
 </tr>
 <tr>
-<td><code>zone_builder_roundtrip_meadow</code>, <code>_cavern</code>, <code>_hills</code></td>
-<td><code>cmake/zone_builder_test.cmake</code> on a copy: open, save, screenshot; every file of the map byte-identical.</td>
+<td><code>zone_cli_roundtrip_meadow</code>, <code>_cavern</code>, <code>_hills</code>, <code>_roundtrip_undo</code></td>
+<td><code>cmake/zone_test.cmake</code> drives <code>kast_editor</code>'s <a href="../editor/command-line.html#zone">zone edit flags</a> on a copy: open (<code>--map</code>), save (<code>--save-zone</code>), screenshot of the map as the scene's zone; every file of the map byte-identical (for <code>roundtrip_undo</code>, after a sculpt and a spawn undone, redone and undone again).</td>
 </tr>
 <tr>
-<td><code>zone_builder_new_map</code>, <code>zone_builder_sculpt</code>, <code>zone_builder_objects</code>, <code>zone_builder_tiles</code></td>
-<td>A new 2 x 2 map made from the command line (plain; sculpted across a tile corner, flattened, a PNG exported and imported, height range changed; with areas, a portal, spawns, a path and a spawn moved across a border; with a tile removed and one added), saved with a screenshot: it reopens and validates, <code>kast_mapbake</code> (if built) lints and bakes it, removed files are gone, and for <code>objects</code> <code>kast_world</code> (if built) logs it in <code>maps loaded</code>.</td>
+<td><code>zone_cli_new_map</code>, <code>zone_cli_sculpt</code>, <code>zone_cli_objects</code>, <code>zone_cli_tiles</code></td>
+<td>A new 2 x 2 map made from the command line (plain; sculpted across a tile corner, flattened, a PNG exported and imported, height range changed; with areas, a portal, spawns, a path and a spawn moved across a border; with a tile removed and one added), saved with a screenshot: it reopens and validates, <code>kast_mapbake</code> (if built) lints and bakes it, removed files are gone, and <code>kast_world</code> (if built) logs it in <code>maps loaded</code>.</td>
 </tr>
 <tr>
-<td><code>zone_builder_zone_objects</code></td>
+<td><code>zone_cli_zone_objects</code></td>
 <td>A new map with a visual, a cylinder obstacle and a box interactable (its range, event, name and data set), two scatter strokes (the second undone), a visual erased and the obstacle moved across a tile border: saved, it reopens and validates, <code>kast_mapbake</code> (if built) lints and bakes it and <code>kast_world</code> (if built) loads it.</td>
 </tr>
 <tr>
-<td><code>zone_builder_blocked_overlap</code>, <code>_portal</code>, <code>_spawn_id</code>, <code>_spawn_off_map</code>, <code>_map_id</code>, <code>_interactable_event</code></td>
-<td>An invalid edit on a copy of <code>meadow</code>: the save is refused, the Problems panel shows the <code>kast_map</code> error (screenshot) and every file is byte-identical, none added.</td>
+<td><code>zone_cli_terrain_gen</code></td>
+<td>Generated heights (seed 7), blue-to-red height colors and Create texture &amp; material on a new map, saved: the terrain texture and material written, heights seamless and deterministic, undo, the texture re-baked after a sculpt; linted by <code>kast_mapbake</code> and loaded by <code>kast_world</code> (if built).</td>
 </tr>
 <tr>
-<td><code>zone_builder_bake</code>, <code>zone_builder_no_focus</code></td>
-<td>Bake Navmesh from the window on a copy of <code>meadow</code>: navtiles written, frames drawn while <code>kast_mapbake</code> ran (skipped if it is not built). <code>kast_focus_probe</code> on a <code>--frames 120</code> run.</td>
+<td><code>zone_cli_blocked_overlap</code>, <code>_portal</code>, <code>_spawn_id</code>, <code>_spawn_off_map</code>, <code>_map_id</code>, <code>_interactable_event</code></td>
+<td>An invalid edit on a copy of <code>meadow</code>: the save is refused, the Zone tab's Problems section shows the <code>kast_map</code> error (screenshot) and every file is byte-identical, none added.</td>
+</tr>
+<tr>
+<td><code>zone_cli_file_save_blocked</code></td>
+<td>File &gt; Save (<code>--file-save</code>, as Ctrl+S) with an invalid zone and a dirty scene on a copy of <code>tests/project</code>: the zone writes nothing and its problems go to the Console; the scene still saves.</td>
+</tr>
+<tr>
+<td><code>zone_cli_bake</code>, <code>zone_cli_bake_headless</code>, <code>editor_zone_bake</code></td>
+<td>Bake Navmesh (<code>--bake</code>) on a copy of <code>meadow</code> (in the window, and with <code>--headless</code>) and of <code>tests/project</code>'s <code>hills</code> (<code>cmake/editor_zone_bake_test.cmake</code>): navtiles written, <code>kast_mapbake</code>'s output and exit code in the Console, frames drawn while it ran. Skipped (pass) if <code>kast_mapbake</code> is not built.</td>
+</tr>
+<tr>
+<td><code>editor_zone_scene</code>, <code>editor_zone_missing_map</code>, <code>editor_zone_no_project</code>, <code>editor_zone_no_terrain</code>, <code>editor_zone_two_terrains</code></td>
+<td>The Scene view in edit mode shows the zone of the scene's Terrain entity (<code>samples/starter-mmo</code> <code>world.scene</code>: <code>Zone: loaded maps/meadow (map 10)</code> once, every prefab loading); a Terrain map id with no map is reported once; and the Zone tab's messages with no project, no Terrain entity (<strong>Add Terrain entity</strong>) and two Terrain entities (screenshots).</td>
+</tr>
+<tr>
+<td><code>editor_zone_tab</code>, <code>editor_zone_tab_old_layout</code>, <code>editor_zone_tab_play</code>, <code>editor_zone_play_dirty</code>, <code>editor_zone_remove_tile_prompt</code></td>
+<td>The Zone tab docked with Hierarchy in the default layout and in a layout saved before it existed (<code>tests/layouts/pre_zone.ini</code>), with <code>--zone-section Map,Problems</code>; read-only during Play; Play with unsaved zone edits logs that Play uses the saved map files; the remove-tile confirmation (<code>--prompt-remove-tile</code>, <code>--focus</code>). Screenshots.</td>
+</tr>
+<tr>
+<td><code>editor_zone_tool_raise</code>, <code>_ring</code>, <code>_set_spawn</code>, <code>_none</code>, <code>_area_rect</code>, <code>_place_spawn</code>, <code>_path_points</code>, <code>_place_object</code>, <code>_scatter</code>, <code>editor_zone_handle_drag</code></td>
+<td>Zone tools in the Scene view (<code>--zone-tool</code> and <code>--sim-mouse</code> on the Scene view, over a Box entity on the terrain): with a tool the click or drag is one logged zone edit and the Box is not selected (a hover only draws the brush ring); with none it selects the Box and edits nothing; with no tool and the Zone tab in front a drag on a spawn moves it. Nothing is saved.</td>
+</tr>
+<tr>
+<td><code>editor_zone_no_focus</code></td>
+<td><code>kast_focus_probe</code> on <code>kast_editor --project samples/starter-mmo --map meadow --frames 120</code>.</td>
 </tr>
 <tr>
 <td><code>editor_no_focus</code>, <code>launcher_no_focus</code>, <code>player_no_focus</code>, <code>editor_audio_play_no_focus</code></td>

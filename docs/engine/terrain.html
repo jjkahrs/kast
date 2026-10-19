@@ -33,7 +33,7 @@ Add Component, and its Transform is ignored (tiles sit at their map position).</
   material), lit, casting and receiving shadows like any mesh. No LOD. Its UVs follow <code>map.json</code>
   <code>"terrainUv"</code>: <code>"tiled"</code> (the default) is world x/z / 8, a texture repeating every 8 m; <code>"map"</code> stretches one
   texture over the bounding box of the declared tiles (UV 0, 0 at its min x, min z corner, 1, 1 at its max), the same on
-  both sides of a tile edge. Any other value fails the manifest (the editor, player, zone builder and world server
+  both sides of a tile edge. Any other value fails the manifest (the editor, its Zone Builder, the player and the world server
   refuse the map).</li>
 <li><strong>Physics</strong>: each tile is a static Jolt height field (under 2 cm from the rendered ground), so characters and
   bodies collide with it and raycasts hit it (the hit entity is the <code>TerrainTile</code>). While tiles exist, characters
@@ -42,8 +42,8 @@ Add Component, and its Transform is ignored (tiles sit at their map position).</
   <code>area.left</code> then <code>area.entered</code>, each <code>{map, id, name}</code> (publisher <code>kast.terrain</code>).</li>
 <li>Loading is synchronous, on the frame a tile appears: crossing into a new tile can hitch.</li>
 </ul>
-<p id="generated-texture"><strong>Generated texture</strong>: the <a href="../../tools/zone-builder/docs/index.html#generated-terrain">Zone
-Builder</a> can color a map by height. It keeps the gradient in <code>map.json</code> as <code>"terrainColors"</code>: stops
+<p id="generated-texture"><strong>Generated texture</strong>: the <a href="../editor/zone-builder.html#generated-terrain">Zone
+Builder</a> (the editor's Zone tab) can color a map by height. It keeps the gradient in <code>map.json</code> as <code>"terrainColors"</code>: stops
 <code>[pos, [r, g, b]]</code>, <code>pos</code> 0..1 of the height range (0 = min, 1 = max), colors 0..1, at least 2, e.g.
 <code>[[0, [0.76, 0.7, 0.5]], [0.3, [0.33, 0.52, 0.21]], [1, [0.95, 0.95, 0.97]]]</code>. On save it bakes them into
 <code>textures/&lt;folder&gt;_terrain.png</code> (1 px per metre of the bounding box, at most 4096 px on a side, row 0 at min z) with
@@ -52,7 +52,7 @@ world server ignore <code>terrainColors</code>; the texture is an ordinary mater
 <h2 id="objects">Zone objects</h2>
 <p>A map's tiles can hold placed objects: <code>maps/&lt;folder&gt;/objects/&lt;tx&gt;_&lt;tz&gt;.json</code> (the format, shared with the world
 server and the tools: <a href="../services/world/maps.html#objects">World Server, Maps, Objects</a>; authored in the
-<a href="../../tools/zone-builder/docs/index.html#objects">Zone Builder</a>). Like the ground they exist in Play only.</p>
+<a href="../editor/zone-builder.html#objects">Zone Builder</a>). Like the ground they exist in Play only.</p>
 <ul>
 <li><strong>Streaming</strong>: a tile's objects file is read with its heights, on the frame the tile appears, and each object becomes
   a child of the <code>TerrainTile</code> entity, so they all go when the tile streams out. An object is an entity named

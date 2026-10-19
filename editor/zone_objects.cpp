@@ -1,5 +1,5 @@
-// The Zone tab's Areas, Spawns, Objects and Bake sections and their Scene view tools (ported from the zone builder's
-// panels): drawing rect and polygon areas, placing spawns, adding path points, placing zone objects and scattering
+// The Zone tab's Areas, Spawns, Objects and Bake sections and their Scene view tools:
+// drawing rect and polygon areas, placing spawns, adding path points, placing zone objects and scattering
 // visuals, dragging area vertices, spawns, path points and objects with no tool, their overlays (zone objects' shapes as
 // ground outlines), and Bake Navmesh (kast_mapbake). The edits are zone/zone_edit.h.
 #include "zone_panel.h"

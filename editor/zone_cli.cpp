@@ -1,4 +1,4 @@
-// The zone edit flags (zone_cli.h), moved from the standalone zone builder's main.cpp and Session.
+// The zone edit flags (zone_cli.h): parsing each one and running it on the ZoneSession.
 #include "zone_cli.h"
 
 #include "zone_panel.h"

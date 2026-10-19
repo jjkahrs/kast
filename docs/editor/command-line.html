@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html" class="active">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li></ul></nav>
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html" class="active">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
 <main>
 <h1 id="run">Run</h1>
 <pre><code class="language-bat">build\release\kast_editor.exe
@@ -129,6 +129,22 @@
 <tr>
 <td><code>--zone-tool &lt;Tool&gt;</code></td>
 <td>Make that Zone tab tool active after the first 10 frames, as its button does: <code>Raise</code>, <code>Lower</code>, <code>Flatten</code>, <code>SetSpawn</code> (Place on terrain), <code>AreaRect</code>, <code>AreaPolygon</code>, <code>PlaceSpawn</code>, <code>PathPoints</code>, <code>PlaceObject</code> or <code>Scatter</code>. Pair it with <code>--sim-mouse</code> (without <code>--play</code> it acts on the Scene view) for tests and screenshots of the tools: a click or drag uses the tool, a hover shows the brush ring.</td>
+</tr>
+<tr>
+<td><code>--zone-select &lt;id&gt;|object:tx,tz,i</code></td>
+<td>Select that zone area or spawn (by id), or the zone object at index <code>i</code> of tile <code>tx, tz</code>'s objects file, in the Zone tab after the first 10 frames, for screenshots.</td>
+</tr>
+<tr>
+<td><code>--bake</code></td>
+<td>Press the Zone tab's <strong>Bake Navmesh</strong> after the first 10 frames (see <a href="zone-builder.html#bake">Bake</a>). The <code>--frames</code> count holds until <code>kast_mapbake</code> ends, then <code>N frames drawn while kast_mapbake ran</code> is logged; exit 1 if the bake fails. With <code>--headless</code>: bake without a window, waiting for it.</td>
+</tr>
+<tr>
+<td><code>--mapbake &lt;exe&gt;</code></td>
+<td>The <code>kast_mapbake.exe</code> Bake Navmesh runs, for this run only (the Bake section's setting is not changed).</td>
+</tr>
+<tr>
+<td><code>--file-save</code></td>
+<td>File &gt; Save (as Ctrl+S: the scene, then a zone with unsaved edits) after the first 10 frames, for tests.</td>
 </tr>
 <tr>
 <td><code>--no-scene-post</code></td>
@@ -286,8 +302,177 @@
 <p>Without <code>--project</code>, <code>--scene</code>, <code>--save-scene</code> or <code>--build</code>, <code>kast_editor</code> runs the Project Manager instead of the
 editor. Editor-only flags (<code>--select</code>, <code>--play</code>, <code>--select-network-entity</code>, <code>--add-component-popup</code>, <code>--new-component[-prompt]</code>,
 <code>--new-state-machine-prompt</code>, <code>--open-menu</code>, <code>--open-build-settings</code>, <code>--open-online-settings</code>, <code>--focus-panel</code>, <code>--zone-section</code>, <code>--zone-tool</code>, <code>--assets-*</code>, <code>--open-gui</code>,
-<code>--gui-*</code>) then are invalid arguments, as are Project Manager flags (<code>--launcher</code>, <code>--new-project</code>,
+<code>--gui-*</code>, <code>--zone-select</code>, <code>--bake</code>, <code>--mapbake</code>, <code>--file-save</code>, the <a href="#zone">zone edits</a>) then are invalid arguments, as are Project Manager flags (<code>--launcher</code>, <code>--new-project</code>,
 <code>--launcher-open</code>, <code>--</code>) together with the editor's.</p>
+<h2 id="zone">Zone edits</h2>
+<p>The <a href="zone-builder.html#zone-builder">Zone Builder</a>'s edits, for tests and scripts. They need a project
+(<code>--project &lt;dir&gt;</code> with a <code>project.kast</code>, or a <code>--scene</code> inside one) and run in command-line order before
+the window opens, each one undo step. <code>--map</code> or <code>--new-map</code> comes first: it opens that map of the project as the
+zone. The window then shows it, the scene's first <code>Terrain</code> entity pointing at it (one is added if there is none) and
+the camera framing it. A failed edit or save logs why and exits 1. Positions are world metres on the ground (y follows
+the terrain), headings radians, tiles <code>tx,tz</code>. The full list is also in the editor's invalid-argument message.</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr><td colspan="2"><strong>Map</strong></td></tr>
+<tr>
+<td><code>--map &lt;folder&gt;</code></td>
+<td>Open <code>maps/&lt;folder&gt;</code> of the project.</td>
+</tr>
+<tr>
+<td><code>--new-map &lt;folder&gt;[,W,H[,id]]</code></td>
+<td>A new map (named after its folder) of W x H tiles (default 2 x 2, 1-8 each) with that id (default: the lowest unused). Nothing is written until <code>--save-zone</code>.</td>
+</tr>
+<tr>
+<td><code>--map-id N</code></td>
+<td>The map's id.</td>
+</tr>
+<tr>
+<td><code>--material &lt;path&gt;</code></td>
+<td>The map's material (a project-relative <code>.mat</code>; empty = the default material).</td>
+</tr>
+<tr>
+<td><code>--set-spawn x,z[,heading]</code></td>
+<td>The player spawn.</td>
+</tr>
+<tr>
+<td><code>--add-tile tx,tz</code>, <code>--remove-tile tx,tz</code></td>
+<td>Add a tile (its edges take its neighbours' heights); remove one (not the last; its files are deleted on save).</td>
+</tr>
+<tr><td colspan="2"><strong>Terrain</strong></td></tr>
+<tr>
+<td><code>--falloff F</code></td>
+<td>The brush falloff (0..1) for the following <code>--sculpt</code> / <code>--flatten</code>.</td>
+</tr>
+<tr>
+<td><code>--sculpt x,z,radius,metres</code></td>
+<td>A Raise stroke of that radius at (x, z); negative metres lower.</td>
+</tr>
+<tr>
+<td><code>--flatten x,z,radius,height[,fraction]</code></td>
+<td>A Flatten stroke toward <code>height</code>, <code>fraction</code> (default 1) of the way.</td>
+</tr>
+<tr>
+<td><code>--height-range min,max</code></td>
+<td>Apply a new height range (world heights kept, samples outside it clipped).</td>
+</tr>
+<tr>
+<td><code>--import-png tx,tz,file</code>, <code>--export-png tx,tz,file</code></td>
+<td>Import / export that tile's heights as a 257 x 257 16-bit grayscale PNG.</td>
+</tr>
+<tr>
+<td><code>--generate-heights seed[,scale,octaves,persistence,lacunarity]</code></td>
+<td><a href="zone-builder.html#generated-terrain">Generate heights</a>; <code>--generate-heights 7</code> uses the default scale, octaves, persistence and lacunarity.</td>
+</tr>
+<tr>
+<td><code>--terrain-colors pct,r,g,b,pct,r,g,b...</code></td>
+<td>The Height colors: 4 numbers per stop (at least 2 stops): the position in % of the height range, then red, green and blue 0..1, e.g. <code>0,0,0,1,100,1,0,0</code> for blue at the bottom and red at the top.</td>
+</tr>
+<tr>
+<td><code>--create-terrain-material</code></td>
+<td>Create texture &amp; material.</td>
+</tr>
+<tr><td colspan="2"><strong>Areas and spawns</strong></td></tr>
+<tr>
+<td><code>--add-area id,priority,x0,z0,x1,z1</code></td>
+<td>A rectangle area.</td>
+</tr>
+<tr>
+<td><code>--add-polygon id,priority,x,z,x,z,x,z...</code></td>
+<td>A polygon area (at least 3 points).</td>
+</tr>
+<tr>
+<td><code>--area-parent id,parent</code></td>
+<td>The area's parent area.</td>
+</tr>
+<tr>
+<td><code>--area-portal id,map,x,y,z,heading</code></td>
+<td>Make the area a portal to map id <code>map</code>, arriving at (x, y, z) facing <code>heading</code>.</td>
+</tr>
+<tr>
+<td><code>--move-area-vertex id,i,x,z</code>, <code>--delete-area id</code></td>
+<td>Move vertex <code>i</code> of the area; delete the area.</td>
+</tr>
+<tr>
+<td><code>--add-spawn id,npc,x,z[,heading[,respawnSec]]</code></td>
+<td>A spawn of NPC <code>npc</code> (respawn seconds, default 60; -1 = never).</td>
+</tr>
+<tr>
+<td><code>--move-spawn id,x,z</code>, <code>--delete-spawn id</code></td>
+<td>Move (across tiles too) or delete a spawn.</td>
+</tr>
+<tr>
+<td><code>--add-path spawnId,wait,loop,x,z,x,z...</code></td>
+<td>A patrol path <code>&lt;spawnId&gt;_path</code> for the spawn: <code>wait</code> seconds at each point, <code>loop</code> 1 (loop) or 0 (walk back).</td>
+</tr>
+<tr><td colspan="2"><strong>Objects</strong></td></tr>
+<tr>
+<td><code>--add-object type,prefab,x,z[,yaw[,scale[,box,hx,hy,hz|cylinder,r,h]]]</code></td>
+<td>A zone object: <code>visual</code>, <code>obstacle</code> or <code>interactable</code>, a project-relative prefab, a shape.</td>
+</tr>
+<tr>
+<td><code>--set-interactable id,range,event[,name[,data]]</code></td>
+<td>Interactable <code>id</code>'s fields; data is a JSON object, the rest of the value, commas and all (<code>--set-interactable 1,3,shrine.activated,Meadow Shrine,{"message":"Hi"}</code>).</td>
+</tr>
+<tr>
+<td><code>--move-object tx,tz,i,x,z</code>, <code>--delete-object tx,tz,i</code></td>
+<td>Move or delete the object at index <code>i</code> of tile <code>tx, tz</code>'s objects file (<code>--move-object 0,0,2,300,40</code>).</td>
+</tr>
+<tr>
+<td><code>--scatter x,z,radius,count,seed,scaleMin,scaleMax,prefab[+prefab...]</code></td>
+<td>One Scatter stroke of one dab, with a fresh seed (random yaw).</td>
+</tr>
+<tr>
+<td><code>--erase-visuals x,z,radius</code></td>
+<td>Remove every visual in the circle.</td>
+</tr>
+<tr><td colspan="2"><strong>Undo, checks and saving</strong></td></tr>
+<tr>
+<td><code>--undo</code>, <code>--redo</code></td>
+<td>Undo / redo one step (exit 1 if there is none).</td>
+</tr>
+<tr>
+<td><code>--validate</code></td>
+<td>Check the zone as a save does; any problem fails the run. Writes nothing.</td>
+</tr>
+<tr>
+<td><code>--save-zone</code></td>
+<td>Save the zone (any problem blocks it: nothing written, exit 1).</td>
+</tr>
+<tr>
+<td><code>--expect-save-fail</code></td>
+<td>Save the zone and fail the run if the save succeeds (tests of blocked saves).</td>
+</tr>
+<tr><td colspan="2"><strong>Run</strong></td></tr>
+<tr>
+<td><code>--headless</code></td>
+<td>Run the zone edits (and <code>--bake</code>, waiting for it) and exit without opening a window.</td>
+</tr>
+<tr>
+<td><code>--no-recycle</code></td>
+<td>Zone saves delete files for good instead of sending them to the Recycle Bin (the tests use it).</td>
+</tr>
+<tr>
+<td><code>--focus x,z,distance</code></td>
+<td>Point the Scene camera at (x, z) on the zone's ground from that distance.</td>
+</tr>
+<tr>
+<td><code>--prompt-remove-tile tx,tz</code></td>
+<td>Open the Zone tab's remove-tile confirmation for that tile after 12 frames, for screenshots. Removes nothing by itself.</td>
+</tr>
+<tr>
+<td><code>--sculpt-loop</code></td>
+<td>A brush circling the map's centre raises and lowers it every frame, outside undo (with <code>--log-fps</code> and <code>--no-vsync</code>: the sculpting benchmark).</td>
+</tr>
+</tbody>
+</table>
+<p>The Zone UI flags <code>--focus-panel Zone</code>, <code>--zone-section</code>, <code>--zone-tool</code>, <code>--zone-select</code>, <code>--bake</code>,
+<code>--mapbake</code> and <code>--file-save</code> are in the table above.</p>
 <p>Invalid arguments exit with code 2; init failures (SDL, window, bgfx) log the reason, show a message box, and exit 1.</p>
 </main>
 </div>

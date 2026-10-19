@@ -1,5 +1,5 @@
-// The Zone tab's Terrain section and the sculpt brushes' Scene view input (ported from the zone builder's Terrain
-// panel): Raise/Lower/Flatten settings, the height range (with the clip prompt), heightmap PNG import/export, Generate
+// The Zone tab's Terrain section and the sculpt brushes' Scene view input:
+// Raise/Lower/Flatten settings, the height range (with the clip prompt), heightmap PNG import/export, Generate
 // (fBm), Height colors and Create texture & material. The math is zone/terrain_edit.h.
 #include "zone_panel.h"
 

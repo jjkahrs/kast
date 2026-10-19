@@ -1,8 +1,8 @@
-// kast_editor's zone edit flags (the old standalone zone builder's command line), for tests and scripts: --map or
+// kast_editor's zone edit flags (the Zone Builder's command line), for tests and scripts: --map or
 // --new-map opens a map of the project into the ZoneSession, then edits run in command-line order (one undo step each)
 // and --save-zone writes it. They run before the editor window opens, which then shows that map as the scene's zone
 // (main.cpp points the Terrain entity at it), or with --headless instead of the window.
-// Syntax: docs/editor/command-line.html; the forms are in kUsage below.
+// Syntax: docs/editor/command-line.html#zone; the forms are in kUsage below.
 #pragma once
 
 #include "camera.h"

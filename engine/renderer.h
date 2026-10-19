@@ -87,8 +87,8 @@ public:
     void renderOverlays(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx,
                         entt::entity selected);
     // Until replaced (empty materialPath: none), terrain whose map material is materialPath draws with material, and
-    // the sRGB texture texturePath is image instead of either file: the zone builder's preview of a material it has
-    // not saved yet.
+    // the sRGB texture texturePath is image instead of either file: the editor's zone preview of a material not
+    // saved yet (Zone Builder, Create texture & material).
     void setPreview(const std::string& materialPath, const Material& material, const std::string& texturePath,
                     MipImage image);
     // Both on by default. Instancing off: every draw is its own submit. Culling off: every draw goes to every pass.

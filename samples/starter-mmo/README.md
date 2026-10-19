@@ -190,9 +190,9 @@ running it twice adds nothing.
   Walk within 3 m of the shrine: the chat box says `[E] Use the Meadow Shrine`. Press **E**: `scripts/shrines.lua`
   calls `kast.interact`, the server checks you are on the Meadow and in range, and `systems/shrines.lua` (subscribed to
   the shrine's `shrine.activated` event) restores your Health and answers `* The shrine hums softly. You feel
-  refreshed.` Elsewhere, E says `There is nothing here to use.` Edit them with the
-  [Zone Builder](../../tools/zone-builder/docs/index.html#objects) (`--project samples/starter-mmo --map meadow`),
-  then re-bake (its **Bake** panel) and restart the world server.
+  refreshed.` Elsewhere, E says `There is nothing here to use.` Edit them in the editor's
+  [Zone tab](../../docs/editor/zone-builder.html#objects) (open `scenes/world.scene`: its Terrain entity names the Meadow, map 10),
+  then re-bake (its **Bake** section) and restart the world server.
 - Losing the world connection or the auth session returns you to the login screen with the reason.
 
 To see another player, run a second client (a built game, below), or a bot from `services/world` (`--char-option`
