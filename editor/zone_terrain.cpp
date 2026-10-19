@@ -319,12 +319,27 @@ void ZonePanel::sculptInput(zone::ZoneDoc& z, const km::MapInfo& info, bool clic
 
 void ZonePanel::endStroke(ZoneSession& zone)
 {
-    const bool brush = tool_ == Tool::Raise || tool_ == Tool::Lower || tool_ == Tool::Flatten;
-    if (!stroking_ || (brush && zone.zone() && ImGui::IsMouseDown(ImGuiMouseButton_Left)))
+    const bool down = zone.zone() && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    zone::ZoneDoc* z = zone.zone();
+    if (drag_.kind != Drag::Kind::None && !(down && tool_ == Tool::None)) {
+        drag_ = {};
+        if (z && z->editing()) {
+            z->commit();
+            kast::log::info("Zone: moved " + dragLog_);
+        }
+    }
+    const bool brush = scattering_ ? tool_ == Tool::Scatter
+                                   : tool_ == Tool::Raise || tool_ == Tool::Lower || tool_ == Tool::Flatten;
+    if (!stroking_ || (brush && down))
         return;
     stroking_ = false;
-    if (zone::ZoneDoc* z = zone.zone(); z && z->editing()) {
+    if (z && z->editing()) {
         z->commit();
-        kast::log::info(std::format("Zone: {} stroke", brushName(brush_.mode)));
+        if (scattering_)
+            kast::log::info(std::format("Zone: {} stroke ({} visual(s))", scatterErase_ ? "Erase" : "Scatter",
+                                        strokeCount_));
+        else
+            kast::log::info(std::format("Zone: {} stroke", brushName(brush_.mode)));
     }
+    scattering_ = false;
 }

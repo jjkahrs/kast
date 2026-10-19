@@ -95,3 +95,10 @@ add_test(NAME zone_builder_no_focus
           --map meadow --frames 120
   WORKING_DIRECTORY "${KAST_ZONE_OUT}")
 set_tests_properties(zone_builder_no_focus PROPERTIES TIMEOUT 120 RESOURCE_LOCK no_focus_dir)
+
+# The editor's Bake Navmesh (Zone tab, kast_editor --bake) on a copy of tests/project: navtiles of maps/hills written,
+# kast_mapbake's output and exit code in the Console, the editor drawing meanwhile. Passes as skipped without kast_mapbake.
+add_test(NAME editor_zone_bake
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_SOURCE_DIR}/tests/project"
+          -DSCENE=terrain.scene -DMAP=hills "-DMAPBAKE=${KAST_MAPBAKE}" "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/editor_zone_bake.run"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/editor_zone_bake_test.cmake")

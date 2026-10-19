@@ -65,7 +65,7 @@ constexpr const char* kUsage =
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
-    "[--focus-panel Window] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
+    "[--focus-panel Window] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy]] [--sim-key frame,key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
@@ -121,6 +121,9 @@ struct Options {
     bool openOnlineSettings = false; // open the Online Services modal (needs --project) for screenshots
     std::vector<std::string> zoneSections; // --zone-section: expand these Zone tab sections, collapse the others (with --focus-panel Zone), for screenshots
     std::optional<ZonePanel::Tool> zoneTool; // --zone-tool: this Zone tab tool is active (tests, with --sim-mouse)
+    std::string zoneSelect; // --zone-select: select this zone area or spawn id, or "object:tx,tz,index"
+    bool bake = false;      // --bake: Bake Navmesh on the zone (--frames counts once it ends; exit 1 if it fails)
+    std::string mapbake;    // --mapbake: the kast_mapbake.exe for this run (not saved to the settings)
     std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting", "Post Processing", "Physics", "Mixer", "Network" and "Online" also open it) to the front, for screenshots
     std::string openGui;            // open this .rml in the GUI Builder (relative paths: to the project, else the cwd)
     std::string guiSelect;          // then select the element with this id in it
@@ -400,6 +403,12 @@ std::optional<Options> parseArgs(int argc, char** argv)
                 kast::log::error(std::format("Unknown --zone-tool '{}'", argv[i]));
                 return std::nullopt;
             }
+        } else if (arg == "--zone-select" && hasValue) {
+            options.zoneSelect = argv[++i];
+        } else if (arg == "--bake") {
+            options.bake = true;
+        } else if (arg == "--mapbake" && hasValue) {
+            options.mapbake = argv[++i];
         } else if (arg == "--projects-file" && hasValue) {
             options.projectsFile = argv[++i];
         } else if (arg == "--settings-file" && hasValue) {
@@ -503,7 +512,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     const bool editorFlags = options.select != 0 || options.play || options.selectNetworkEntity || options.addComponentPopup ||
                              options.newComponentPrompt || !options.newComponent.empty() || !options.openMenu.empty() ||
-                             options.openBuildSettings || options.openOnlineSettings || !options.focusPanel.empty() || !options.zoneSections.empty() || options.zoneTool || options.newStateMachinePrompt ||
+                             options.openBuildSettings || options.openOnlineSettings || !options.focusPanel.empty() || !options.zoneSections.empty() || options.zoneTool || !options.zoneSelect.empty() || options.bake || !options.mapbake.empty() || options.newStateMachinePrompt ||
                              options.assetsMenu || options.assetsCreate || !options.assetsSelect.empty() ||
                              !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
@@ -515,7 +524,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.onlineCompose;
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --select-network-entity, --add-component-popup, --new-component[-prompt], "
-                         "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, --zone-section, --zone-tool, "
+                         "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
                          "--assets-menu, "
                          "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
                          "--gui-click, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
@@ -983,7 +992,11 @@ int main(int argc, char** argv)
         panels.openNewStateMachine(*options->newStateMachinePrompt);
     SceneViewport viewport(kSceneView);
     ZoneRender zoneRender;
-    ZonePanel zonePanel;
+    ZonePanel zonePanel(settingsFile);
+    if (!options->mapbake.empty())
+        zonePanel.setMapbake(options->mapbake);
+    bool bakeStarted = false; // --bake: once (the frame count holds while it runs)
+    int bakeFrames = 0;       // --bake: frames drawn while kast_mapbake ran
     // A dirty zone is part of the unsaved-changes prompt, and File > Save / Ctrl+S writes it after the scene.
     files.extra = {.unsaved = [&] { return zone.dirty() ? "maps/" + zone.zone()->folder : std::string(); },
                    .save = [&] { return zonePanel.save(zone); },
@@ -993,7 +1006,8 @@ int main(int argc, char** argv)
     const auto showZone = [&] { return doc.play == PlayState::Stopped && !doc.prefabEdit; };
     viewport.overlay = [&](const float* viewProj, float x, float y, float width, float height) {
         zoneRender.drawOverlays(ImGui::GetWindowDrawList(), viewProj, x, y, width, height);
-        zonePanel.drawSceneOverlay(zone, ImGui::GetWindowDrawList(), viewProj, x, y, width, height);
+        if (showZone())
+            zonePanel.drawSceneOverlay(zone, ImGui::GetWindowDrawList(), viewProj, x, y, width, height);
     };
     // An active Zone tab tool gets the Scene view's left mouse instead of picking and the gizmo.
     viewport.input = [&](const SceneViewport::Input& input) { return showZone() && zonePanel.sceneInput(zone, input); };
@@ -1122,6 +1136,10 @@ int main(int argc, char** argv)
             zonePanel.showSections(options->zoneSections);
         if (options->zoneTool && frames.frame() == kAddComponentPopupFrame)
             zonePanel.setTool(*options->zoneTool);
+        if (!options->zoneSelect.empty() && frames.frame() == kAddComponentPopupFrame)
+            zonePanel.select(zone, options->zoneSelect);
+        if (options->bake && frames.frame() == kAddComponentPopupFrame && !std::exchange(bakeStarted, true))
+            zonePanel.startBake(zone);
         if (!options->openGui.empty() && frames.frame() == kAddComponentPopupFrame)
             guiBuilder.focusPanels(); // again: the first frames' docking undid the focus open() asked for
         if (options->guiPick && frames.frame() == kAddComponentPopupFrame + 6) { // the preview has been laid out
@@ -1227,7 +1245,14 @@ int main(int argc, char** argv)
         bgfx::touch(kImGuiView);
         darkenTextOnAccent(ImGui::GetDrawData());
         imgui_bgfx::render(ImGui::GetDrawData());
-        frames.endFrame();
+        // --bake: the frame count waits for kast_mapbake, so the screenshot shows its result (the UI keeps drawing).
+        if (options->bake && zonePanel.baking()) {
+            ++bakeFrames;
+        } else {
+            if (const int drawn = std::exchange(bakeFrames, 0); drawn > 0)
+                kast::log::info(std::format("{} frames drawn while kast_mapbake ran", drawn));
+            frames.endFrame();
+        }
         if (options->logFps)
             fpsLog.endFrame(frameStart);
     };
@@ -1256,5 +1281,7 @@ int main(int argc, char** argv)
                                hooks);
     if (code != 0)
         return code;
+    if (options->bake && zonePanel.bakeExit() != 0)
+        return 1;
     return frames.failed() ? 1 : 0;
 }

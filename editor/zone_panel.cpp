@@ -1,7 +1,7 @@
 #include "zone_panel.h"
 
+#include "editor_settings.h"
 #include "ui_common.h"
-#include "zone_render.h" // GroundDraw
 
 #include <zone/terrain_edit.h>
 #include <zone/zone_edit.h>
@@ -28,6 +28,8 @@ constexpr const char* kNewMapPopup = "New Map";
 constexpr const char* kRemoveTilePopup = "Remove tile?";
 constexpr ImVec4 kDirtyColor{1.0f, 0.8f, 0.0f, 1.0f}; // #ffcc00, the palette's highlight
 constexpr ImU32 kBrushColor = IM_COL32(255, 204, 0, 255); // the same highlight: the brush ring
+constexpr ImVec4 kToolIdle{0.27f, 0.27f, 0.27f, 1.0f}; // #454545, the palette's text field: an idle tool button
+constexpr ImVec4 kToolActive{1.0f, 0.8f, 0.0f, 1.0f}; // #ffcc00, the highlight: the active tool
 constexpr float kPickDistance = 10000.0f; // metres: past the far corner of any map in view
 constexpr std::pair<const char*, ZonePanel::Tool> kToolNames[] = {
     {"Raise", ZonePanel::Tool::Raise},           {"Lower", ZonePanel::Tool::Lower},
@@ -53,6 +55,11 @@ entt::entity firstTerrain(const Document& doc)
 
 } // namespace
 
+ZonePanel::ZonePanel(std::filesystem::path settingsFile)
+    : settingsFile_(std::move(settingsFile)), mapbake_(editorSetting(loadEditorSettings(settingsFile_), "mapbake"))
+{
+}
+
 bool ZonePanel::header(const char* label, const char* section, bool defaultOpen)
 {
     if (showSections_ && sectionsShown_.insert(section).second)
@@ -73,10 +80,24 @@ void ZonePanel::draw(Document& doc, ZoneSession& zone)
     const bool locked = doc.play != PlayState::Stopped || doc.prefabEdit.has_value();
     if (locked || !zone.zone())
         tool_ = Tool::None;
-    if (tool_ != Tool::None && !ImGui::GetTopMostPopupModal() && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
-        tool_ = Tool::None;
+    if (tool_ != Tool::None && !ImGui::GetTopMostPopupModal() && !ImGui::GetIO().WantTextInput &&
+        ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        if (!polygon_.empty() || rect_) { // the area being drawn first
+            polygon_.clear();
+            rect_.reset();
+        } else {
+            tool_ = Tool::None;
+        }
+    }
+    if (tool_ != Tool::AreaPolygon)
+        polygon_.clear();
+    if (tool_ != Tool::AreaRect)
+        rect_.reset();
     endStroke(zone);
+    checkSelection(zone.zone());
+    defaultPrefabs(zone);
     pollPngDialog(zone);
+    pollBake();
     // The open zone's Id field edited (or undone): the Terrain entity follows, so the scene keeps naming this map.
     if (zone::ZoneDoc* z = zone.zone(); z && !locked && zone.terrainEntity() != entt::null) {
         const int id = z->state.manifest.value("id", -1);
@@ -91,9 +112,11 @@ void ZonePanel::draw(Document& doc, ZoneSession& zone)
     // still being built at startup, so keep asking until it really shows.
     if (focusProblems_)
         ImGui::SetNextWindowFocus();
+    tabFront_ = false;
     if (ImGui::Begin(kWindow)) {
         const ImGuiWindow* window = ImGui::GetCurrentWindowRead();
-        if (focusProblems_ && ImGui::IsWindowFocused() && (!window->DockIsActive || window->DockTabIsVisible))
+        tabFront_ = !window->DockIsActive || window->DockTabIsVisible;
+        if (focusProblems_ && ImGui::IsWindowFocused() && tabFront_)
             focusProblems_ = false;
         if (!doc.project) {
             ImGui::TextWrapped("A project is required: a zone is a map in the project's maps/ folder. Open a scene that "
@@ -110,7 +133,10 @@ void ZonePanel::draw(Document& doc, ZoneSession& zone)
             drawTerrainEntity(doc, zone);
             drawMap(doc, zone);
             drawTerrain(zone);
-            // Phase 5: the Areas, Spawns, Objects and Bake sections go here, each a header(...) block.
+            drawAreas(zone);
+            drawSpawns(zone);
+            drawObjects(zone);
+            drawBake(zone);
             drawProblems(zone);
             ImGui::EndDisabled();
         }
@@ -152,13 +178,14 @@ bool ZonePanel::sceneInput(ZoneSession& zone, const SceneViewport::Input& input)
     zone::ZoneDoc* z = zone.zone();
     const ImGuiIO& io = ImGui::GetIO();
     const bool click = input.hovered && !input.cameraDrag && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-    if (!z || (tool_ == Tool::None && !click))
+    const bool dragging = drag_.kind != Drag::Kind::None;
+    if (!z || (tool_ == Tool::None && !click && !dragging))
         return false;
     std::string err;
     const auto info = z->info(err);
     if (!info)
         return tool_ != Tool::None;
-    if (input.hovered || stroking_) { // the ground under the mouse (in-memory heights)
+    if (input.hovered || stroking_ || dragging || rect_) { // the ground under the mouse (in-memory heights)
         const kast::Ray ray = kast::screenRay(input.viewProj, io.MousePos.x - input.x, io.MousePos.y - input.y,
                                               input.width, input.height, bgfx::getCaps()->homogeneousDepth);
         hover_ = zone::raycast(*info, z->state, {ray.origin.x, ray.origin.y, ray.origin.z},
@@ -167,8 +194,6 @@ bool ZonePanel::sceneInput(ZoneSession& zone, const SceneViewport::Input& input)
     if (click && hover_) // whatever the tool: the Terrain section's heightmap tile
         tile_ = km::tile_of((*hover_)[0], (*hover_)[2]);
     switch (tool_) {
-    case Tool::None:
-        return false; // phase 5: a zone handle hit (Zone tab in front) claims the mouse here, and its drag after
     case Tool::Raise:
     case Tool::Lower:
     case Tool::Flatten:
@@ -181,8 +206,10 @@ bool ZonePanel::sceneInput(ZoneSession& zone, const SceneViewport::Input& input)
                                         (*hover_)[2]));
         }
         break;
-    default: // phase 5's tools
-        break;
+    default: // areas, spawns, paths, objects, Scatter; handle drags with no tool
+        return objectsInput(zone, *z, *info, {nullptr, input.viewProj, input.x, input.y, input.width, input.height, *info,
+                                              z->state},
+                            click);
     }
     return true;
 }
@@ -191,15 +218,15 @@ void ZonePanel::drawSceneOverlay(const ZoneSession& zone, ImDrawList* draw, cons
                                  float width, float height) const
 {
     const zone::ZoneDoc* z = zone.zone();
-    if (!z || !hover_ || (tool_ != Tool::Raise && tool_ != Tool::Lower && tool_ != Tool::Flatten))
-        return;
     std::string err;
-    const auto info = z->info(err);
+    const auto info = z ? z->info(err) : std::nullopt;
     if (!info)
         return;
     draw->PushClipRect(ImVec2(x, y), ImVec2(x + width, y + height), true);
-    GroundDraw{draw, viewProj, x, y, width, height, *info, z->state}.circle((*hover_)[0], (*hover_)[2], brush_.radius,
-                                                                            kBrushColor);
+    const GroundDraw g{draw, viewProj, x, y, width, height, *info, z->state};
+    drawObjectOverlays(g);
+    if (hover_ && (tool_ == Tool::Raise || tool_ == Tool::Lower || tool_ == Tool::Flatten))
+        g.circle((*hover_)[0], (*hover_)[2], brush_.radius, kBrushColor);
     draw->PopClipRect();
 }
 
@@ -228,10 +255,16 @@ void ZonePanel::drawTopBar(ZoneSession& zone)
     if (ImGui::Button("Redo"))
         z->redo();
     ImGui::EndDisabled();
-    // The Scene view tools (phase 5 adds the areas', spawns' and objects' to this row).
+    // The Scene view tools, wrapped to the tab's width.
     toolButton("Raise", Tool::Raise);
     toolButton("Lower", Tool::Lower);
     toolButton("Flatten", Tool::Flatten);
+    toolButton("Area Rect", Tool::AreaRect);
+    toolButton("Area Polygon", Tool::AreaPolygon);
+    toolButton("Place Spawn", Tool::PlaceSpawn);
+    toolButton("Path Points", Tool::PathPoints);
+    toolButton("Place Object", Tool::PlaceObject);
+    toolButton("Scatter", Tool::Scatter);
     ImGui::NewLine();
     ImGui::EndDisabled();
     if (tool_ != Tool::None)
@@ -421,12 +454,17 @@ void ZonePanel::drawProblems(const ZoneSession& zone)
 void ZonePanel::toolButton(const char* label, Tool tool)
 {
     const bool active = tool_ == tool;
-    if (active)
-        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered)); // the highlight
+    const ImGuiStyle& style = ImGui::GetStyle();
+    if (ImGui::GetContentRegionAvail().x < ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f)
+        ImGui::NewLine();
+    // Idle tools grey, the active one in the highlight with a border: told apart at a glance.
+    ImGui::PushStyleColor(ImGuiCol_Button, active ? kToolActive : kToolIdle);
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.0f, 0.0f, 0.0f, 1.0f)); // #000000
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, active ? 2.0f : 0.0f);
     if (ImGui::Button(label))
         tool_ = active ? Tool::None : tool;
-    if (active)
-        ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(2);
     ImGui::SameLine();
 }
 

@@ -2,6 +2,7 @@
 
 #include <files.h>
 #include <log.h>
+#include <prefab.h> // kPrefabExtension
 
 #include <algorithm>
 #include <format>
@@ -10,13 +11,18 @@ void ZoneSession::scan(const std::filesystem::path& root)
 {
     project_ = root.empty() ? zone::Project{} : zone::scan_project(root);
     materials_.clear();
+    prefabs_.clear();
+    npcs_.clear();
     if (root.empty())
         return;
-    for (const std::filesystem::path& file : kast::listFiles(root))
-        if (file.extension() == ".mat") {
-            const std::u8string rel = file.lexically_relative(root).generic_u8string();
+    for (const std::filesystem::path& file : kast::listFiles(root)) {
+        const std::u8string rel = file.lexically_relative(root).generic_u8string();
+        if (file.extension() == ".mat")
             materials_.emplace_back(rel.begin(), rel.end());
-        }
+        if (file.extension() == kast::kPrefabExtension)
+            prefabs_.emplace_back(rel.begin(), rel.end());
+    }
+    npcs_ = zone::npc_names(root);
 }
 
 void ZoneSession::update(const Document& doc)
@@ -74,6 +80,16 @@ bool ZoneSession::save(bool recycle)
     kast::log::info("Zone: saved maps/" + zone_->folder);
     scan(project_.root); // a new map, or a generated terrain material, is on disk now
     return true;
+}
+
+bool ZoneSession::check()
+{
+    if (!zone_)
+        return false;
+    problems_ = zone::validate(project_, *zone_);
+    for (const zone::ZoneError& e : problems_)
+        kast::log::warn(std::format("Zone: {}: {}", e.file, e.message));
+    return problems_.empty();
 }
 
 bool ZoneSession::newMap(const std::string& folder, const std::string& name, uint16_t id, int width, int depth,

@@ -144,7 +144,7 @@ add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
   editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp editor/editor_settings.cpp
-  editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp
+  editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp
   editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
@@ -727,6 +727,32 @@ kast_zone_tool_test(set_spawn "--zone-tool SetSpawn --sim-mouse 40,left,0,0,0"
                     "-DEXPECT_OUTPUT=Zone: player spawn at 25[0-9][.][0-9], [0-9.]+, 25[0-9][.][0-9]" -DEXPECT_COUNT=1
                     "-DFORBID_OUTPUT=\\\\[error\\\\]")
 kast_zone_tool_test(none "--sim-mouse 40,left,0,0,0" "-DFORBID_OUTPUT=Zone: (.* stroke|player spawn)|\\\\[error\\\\]")
+# Areas, spawns, paths, objects (zone_objects.cpp): each tool's click or drag is one logged edit at the pivot.
+kast_zone_tool_test(area_rect "--zone-tool AreaRect --sim-mouse 40,left,80,-40,0"
+                    "-DEXPECT_OUTPUT=Zone: area area added [(][0-9]+ x [0-9]+ m[)]" -DEXPECT_COUNT=1
+                    "-DFORBID_OUTPUT=\\\\[error\\\\]")
+kast_zone_tool_test(place_spawn "--zone-tool PlaceSpawn --sim-mouse 40,left,0,0,0"
+                    "-DEXPECT_OUTPUT=Zone: spawn npc_1 [(]npc[)] placed at 25[0-9][.][0-9]" -DEXPECT_COUNT=1
+                    "-DFORBID_OUTPUT=\\\\[error\\\\]")
+kast_zone_tool_test(path_points "--zone-tool PathPoints --zone-select sentry_1 --sim-mouse 40,left,0,0,0"
+                    "-DEXPECT_OUTPUT=Zone: path point added to sentry_1 at 25[0-9][.][0-9]" -DEXPECT_COUNT=1
+                    "-DFORBID_OUTPUT=\\\\[error\\\\]")
+kast_zone_tool_test(place_object "--zone-tool PlaceObject --sim-mouse 40,left,0,0,0"
+                    "-DEXPECT_OUTPUT=Zone: Obstacle [A-Za-z]+ [(]tile 1_1, #[0-9]+[)] placed at 25[0-9]" -DEXPECT_COUNT=1
+                    "-DFORBID_OUTPUT=\\\\[error\\\\]")
+# A scatter drag (several dabs) is one stroke: one undo step, logged once.
+kast_zone_tool_test(scatter "--zone-tool Scatter --sim-mouse 40,left,200,0,0"
+                    "-DEXPECT_OUTPUT=Zone: Scatter stroke [(][1-9][0-9]* visual" -DEXPECT_COUNT=1
+                    "-DFORBID_OUTPUT=\\\\[error\\\\]")
+# No tool: a drag starting on a zone handle (the Zone tab in front) moves it, one undo step, instead of picking.
+# zone_handles is zone_tools with the editor camera's pivot on spawn sentry_1 (maps/hills, ground y ~7).
+string(JSON zone_handles SET "${zone_tools}" editor camera pivot [=[[150, 7, 331]]=])
+file(WRITE "${KAST_SHADOW_PROJECT}/zone_handles.scene" "${zone_handles}")
+add_test(NAME editor_zone_handle_drag
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_handle_drag.png"
+          "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/zone_handles.scene --zone-section Spawns --sim-mouse 40,left,60,0,0"
+          -DFOCUS_PANEL=Zone "-DEXPECT_OUTPUT=Zone: moved spawn sentry_1" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 # Zone objects: tests/project/zone_objects.scene on the hills' fixtures (maps/hills/objects; docs/engine/terrain.html#objects).
 # In Play the Hero walks into the obstacle crate and stops at its side, the Walker through the visual crate.
 add_test(NAME zone_objects_play_screenshot

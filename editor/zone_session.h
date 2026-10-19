@@ -33,9 +33,12 @@ public:
     zone::ZoneDoc* zone() { return zone_ ? &*zone_ : nullptr; } // null: none loaded
     const zone::ZoneDoc* zone() const { return zone_ ? &*zone_ : nullptr; }
     bool dirty() const { return zone_ && zone_->dirty(); }
-    // The project's maps (empty root: no project) and .mat files (project-relative), scanned with the project.
+    // The project's maps (empty root: no project), .mat and .prefab files (project-relative) and NPC definition names
+    // (zone::npc_names), scanned with the project.
     const zone::Project& project() const { return project_; }
     const std::vector<std::string>& materials() const { return materials_; }
+    const std::vector<std::string>& prefabs() const { return prefabs_; }
+    const std::vector<std::string>& npcs() const { return npcs_; }
     entt::entity terrainEntity() const { return terrain_; } // the first Terrain entity; null: none
     // Why the Terrain's map did not load (unknown id, unreadable or invalid files); empty when it loaded or there is
     // nothing to load.
@@ -46,6 +49,8 @@ public:
     // zone::save_map on the open zone (validation first: any problem writes nothing). Logs the result and each problem
     // to the Console. False with no zone or when blocked.
     bool save(bool recycle = true);
+    // zone::validate on the open zone into problems(), each logged to the Console. True when it passed.
+    bool check();
     // zone::new_map in memory (written by the first save), opened as the zone for map id: the caller points the Terrain
     // entity at id this frame. False + error (zone unchanged) if new_map refuses.
     bool newMap(const std::string& folder, const std::string& name, uint16_t id, int width, int depth, std::string& error);
@@ -61,7 +66,7 @@ private:
 
     std::optional<Key> loaded_; // what zone_ / error_ are for; nullopt: nothing tried yet
     zone::Project project_;
-    std::vector<std::string> materials_;
+    std::vector<std::string> materials_, prefabs_, npcs_;
     std::optional<zone::ZoneDoc> zone_;
     entt::entity terrain_ = entt::null;
     std::string error_;
