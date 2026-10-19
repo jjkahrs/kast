@@ -65,11 +65,11 @@ void ZoneSession::update(const Document& doc)
         kast::log::warn(std::format("Zone: {}: {}", e.file, e.message));
 }
 
-bool ZoneSession::save(bool recycle)
+bool ZoneSession::save()
 {
     if (!zone_)
         return false;
-    problems_ = zone::save_map(project_, *zone_, recycle);
+    problems_ = zone::save_map(project_, *zone_, recycle_);
     if (!problems_.empty()) {
         kast::log::error(std::format("Zone: save of maps/{} blocked: {} problem(s), nothing written (Zone tab > Problems)",
                                      zone_->folder, problems_.size()));
@@ -90,6 +90,25 @@ bool ZoneSession::check()
     for (const zone::ZoneError& e : problems_)
         kast::log::warn(std::format("Zone: {}: {}", e.file, e.message));
     return problems_.empty();
+}
+
+bool ZoneSession::open(const std::string& folder, std::string& error)
+{
+    const auto map = std::ranges::find_if(project_.maps, [&](const zone::ProjectMap& m) { return m.folder == folder; });
+    std::optional<zone::ZoneDoc> loaded;
+    if (map == project_.maps.end())
+        error = std::format("no map maps/{}", folder);
+    else
+        loaded = zone::load_map(project_, folder, error);
+    if (!loaded)
+        return false;
+    zone_ = std::move(loaded);
+    loaded_ = Key{project_.root, map->info.id};
+    error_.clear();
+    problems_ = zone::validate(project_, *zone_);
+    kast::log::info(std::format("Zone: opened maps/{} (map {}){}", folder, map->info.id,
+                                problems_.empty() ? "" : std::format(" with {} problem(s)", problems_.size())));
+    return true;
 }
 
 bool ZoneSession::newMap(const std::string& folder, const std::string& name, uint16_t id, int width, int depth,

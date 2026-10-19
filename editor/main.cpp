@@ -11,6 +11,7 @@
 #include "recent_projects.h"
 #include "ui_common.h"
 #include "viewport.h"
+#include "zone_cli.h"
 #include "zone_panel.h"
 #include "zone_render.h"
 #include "zone_session.h"
@@ -32,6 +33,7 @@
 #include <imgui_internal.h> // DockBuilder API
 #include <imgui_stdlib.h>
 
+#include <array>
 #include <cassert>
 #include <charconv>
 #include <cstdlib>
@@ -69,7 +71,7 @@ constexpr const char* kUsage =
     "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy]] [--sim-key frame,key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
-    "[--prefab-save] [--prefab-back] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] | "
+    "[--prefab-save] [--prefab-back] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [zone edits] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel (without --play: on the Scene view), for
@@ -124,6 +126,13 @@ struct Options {
     std::string zoneSelect; // --zone-select: select this zone area or spawn id, or "object:tx,tz,index"
     bool bake = false;      // --bake: Bake Navmesh on the zone (--frames counts once it ends; exit 1 if it fails)
     std::string mapbake;    // --mapbake: the kast_mapbake.exe for this run (not saved to the settings)
+    std::vector<zone_cli::Op> zoneOps; // --map, --new-map, --sculpt, ..., --save-zone (zone_cli.h), in order, before the window
+    bool headless = false;  // --headless: run the zone edits (and --bake) and exit without opening a window
+    bool noRecycle = false; // --no-recycle: zone saves delete files instead of sending them to the Recycle Bin
+    bool sculptLoop = false; // --sculpt-loop: a moving brush sculpts the zone every frame (the --log-fps benchmark)
+    std::optional<std::array<float, 3>> focus; // --focus x,z,distance: the Scene camera's pivot on the zone ground
+    std::optional<std::array<int, 2>> promptRemoveTile; // --prompt-remove-tile: open the Zone tab's remove-tile dialog
+    bool fileSave = false;  // --file-save: File > Save (as Ctrl+S) at frame kAddComponentPopupFrame, for tests
     std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting", "Post Processing", "Physics", "Mixer", "Network" and "Online" also open it) to the front, for screenshots
     std::string openGui;            // open this .rml in the GUI Builder (relative paths: to the project, else the cwd)
     std::string guiSelect;          // then select the element with this id in it
@@ -409,6 +418,26 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.bake = true;
         } else if (arg == "--mapbake" && hasValue) {
             options.mapbake = argv[++i];
+        } else if (const std::optional<bool> zoneValue = zone_cli::takesValue(arg); zoneValue && (!*zoneValue || hasValue)) {
+            options.zoneOps.push_back({std::string(arg), *zoneValue ? argv[++i] : ""});
+        } else if (arg == "--headless") {
+            options.headless = true;
+        } else if (arg == "--no-recycle") {
+            options.noRecycle = true;
+        } else if (arg == "--sculpt-loop") {
+            options.sculptLoop = true;
+        } else if (arg == "--file-save") {
+            options.fileSave = true;
+        } else if (arg == "--focus" && hasValue) {
+            if (!(options.focus = zone_cli::parseFocus(argv[++i]))) {
+                kast::log::error(std::format("Invalid --focus '{}', expected x,z,distance", argv[i]));
+                return std::nullopt;
+            }
+        } else if (arg == "--prompt-remove-tile" && hasValue) {
+            if (!(options.promptRemoveTile = zone_cli::parseTile(argv[++i]))) {
+                kast::log::error(std::format("Invalid --prompt-remove-tile '{}', expected tx,tz", argv[i]));
+                return std::nullopt;
+            }
         } else if (arg == "--projects-file" && hasValue) {
             options.projectsFile = argv[++i];
         } else if (arg == "--settings-file" && hasValue) {
@@ -499,7 +528,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
             if (*options.uiScale != scale)
                 kast::log::warn(std::format("--ui-scale {} clamped to {:.2f}", value, *options.uiScale));
         } else {
-            kast::log::error(std::format("Invalid argument '{}'. {}", arg, kUsage));
+            kast::log::error(std::format("Invalid argument '{}'. {} {}", arg, kUsage, zone_cli::kUsage));
             return std::nullopt;
         }
     }
@@ -521,14 +550,15 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.prefabSteps.empty() || !options.assetsDelete.empty() || !options.inspectorApplyMenu.empty() ||
                              options.prefabBackPrompt ||
                              options.noVsync || options.noInstancing || options.noCulling || !options.worldAddress.empty() || options.onlineLoginEnv ||
-                             options.onlineCompose;
+                             options.onlineCompose || !options.zoneOps.empty() || options.headless || options.noRecycle ||
+                             options.sculptLoop || options.focus || options.promptRemoveTile || options.fileSave;
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --select-network-entity, --add-component-popup, --new-component[-prompt], "
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
                          "--assets-menu, "
                          "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
                          "--gui-click, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
-                         "steps, --assets-delete and --inspector-apply-menu require "
+                         "steps, --assets-delete, --inspector-apply-menu, --file-save and the zone flags require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
     }
@@ -942,9 +972,28 @@ int main(int argc, char** argv)
     refreshStateMachines(doc); // the Inspector and State Machines panel list them from the first frame
     const std::filesystem::path settingsFile =
         options->settingsFile.empty() ? defaultEditorSettingsFile() : std::filesystem::absolute(options->settingsFile);
+    ZoneSession zone; // the scene's zone: the Scene view shows it, the Zone tab edits it
+    zone.setRecycle(!options->noRecycle);
+    if (!options->zoneOps.empty() || options->headless) { // the zone edit flags (zone_cli.h)
+        if (!doc.project) {
+            kast::log::error("The zone flags need a project: --project <dir> or a --scene inside one");
+            return 1;
+        }
+        zone.openProject(doc.project->root);
+        if (!zone_cli::run(zone, options->zoneOps))
+            return 1;
+        if (options->headless)
+            return options->bake ? zone_cli::bakeHeadless(zone, settingsFile, options->mapbake) : 0;
+        // The window shows the map they opened: the scene's Terrain entity points at it (added if there is none).
+        const auto terrains = doc.scene.registry().view<kast::Terrain>();
+        if (const std::optional<int> map = zone.loadedMap();
+            map && (terrains.empty() || doc.scene.registry().get<kast::Terrain>(terrains.front()).map != *map))
+            ZonePanel::setTerrainMap(doc, *map);
+        if (zone.zone())
+            zone_cli::frameZone(doc.camera, *zone.zone());
+    }
     // The Online panel's login goes to each Play session and comes back at Stop (refresh tokens rotate: one holder).
     OnlineModel online(settingsFile);
-    ZoneSession zone; // the scene's zone: the Scene view shows it, the Zone tab edits it
     doc.onPlayStarted = [&online, &zone](kast::LuaSystems& lua) {
         online.lendSession(lua.auth());
         if (zone.dirty())
@@ -976,6 +1025,12 @@ int main(int argc, char** argv)
         }
     }
     zone.update(doc); // before --play, which freezes it: the Zone tab shows the zone during that Play
+    if (options->focus) {
+        const auto [x, z, distance] = *options->focus;
+        doc.camera.pivot = {x, zone_cli::groundY(zone.zone(), x, z), z};
+        doc.camera.distance = distance;
+        doc.camera.pitch = -50.0f;
+    }
     if (options->play && !playAfterLogin)
         startPlay(doc);
     if (options->onlineCompose && !online.runCompose(*options->onlineCompose))
@@ -1140,6 +1195,10 @@ int main(int argc, char** argv)
             zonePanel.select(zone, options->zoneSelect);
         if (options->bake && frames.frame() == kAddComponentPopupFrame && !std::exchange(bakeStarted, true))
             zonePanel.startBake(zone);
+        if (options->promptRemoveTile && frames.frame() == kAddComponentPopupFrame + 2) // after --focus-panel
+            zonePanel.askRemoveTile({(*options->promptRemoveTile)[0], (*options->promptRemoveTile)[1]});
+        if (options->fileSave && frames.frame() == kAddComponentPopupFrame)
+            files.save();
         if (!options->openGui.empty() && frames.frame() == kAddComponentPopupFrame)
             guiBuilder.focusPanels(); // again: the first frames' docking undid the focus open() asked for
         if (options->guiPick && frames.frame() == kAddComponentPopupFrame + 6) { // the preview has been laid out
@@ -1176,6 +1235,8 @@ int main(int argc, char** argv)
         if (const ImGuiWindowSettings* hierarchy = ImGui::FindWindowSettingsByID(ImHashStr("Hierarchy"));
             hierarchy && !ImGui::FindWindowSettingsByID(ImHashStr(ZonePanel::kWindow)))
             ImGui::SetNextWindowDockID(hierarchy->DockId, ImGuiCond_FirstUseEver);
+        if (options->sculptLoop && showZone() && zone.zone())
+            zone_cli::sculptLoop(*zone.zone(), frames.frame());
         zonePanel.draw(doc, zone); // before the zone is synced: its edits show this frame
         zoneRender.sync(showZone() ? zone.zone() : nullptr, doc.project ? doc.project->root : std::filesystem::path(),
                         viewport.renderer());

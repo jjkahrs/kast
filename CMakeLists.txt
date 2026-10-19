@@ -144,7 +144,7 @@ add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
   editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp editor/editor_settings.cpp
-  editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp
+  editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp editor/zone_cli.cpp
   editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
@@ -169,17 +169,6 @@ target_compile_definitions(kast_zone_self_check PRIVATE KAST_SOURCE_DIR="${CMAKE
 target_compile_options(kast_zone_self_check PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_zone_self_check PRIVATE kast_zone)
 target_include_directories(kast_zone_self_check SYSTEM PRIVATE "${Stb_INCLUDE_DIR}") # stb_image_write: 8-bit PNGs to reject
-
-# --- zone builder: standalone zone map editor (tools/zone-builder, tools/zone-builder/docs/index.html) ---
-# editor/: camera, ImGui backend, dialogs and the per-user settings (Bake's kast_mapbake path).
-add_executable(kast_zone_builder
-  tools/zone-builder/main.cpp tools/zone-builder/zone_view.cpp tools/zone-builder/zone_panels.cpp
-  tools/zone-builder/zone_objects.cpp
-  editor/camera.cpp editor/imgui_bgfx.cpp editor/ui_common.cpp editor/assets.cpp editor/build.cpp editor/editor_settings.cpp
-  "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
-target_include_directories(kast_zone_builder PRIVATE editor "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
-target_compile_options(kast_zone_builder PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_zone_builder PRIVATE kast_zone imgui::imgui SDL3::SDL3 shell32)
 
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
@@ -1892,7 +1881,7 @@ add_test(NAME editor_audio_play_no_focus
 set_tests_properties(editor_no_focus launcher_no_focus editor_audio_play_no_focus PROPERTIES TIMEOUT 120 RESOURCE_LOCK no_focus_dir)
 set_tests_properties(player_no_focus PROPERTIES FIXTURES_REQUIRED game_switch_built TIMEOUT 90)
 
-include(cmake/zone_builder_tests.cmake)
+include(cmake/zone_tests.cmake)
 
 # samples/starter-mmo: the editor + services sample project.
 include(cmake/starter_mmo_tests.cmake)

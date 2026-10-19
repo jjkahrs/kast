@@ -59,6 +59,12 @@ public:
     std::optional<int> bakeExit() const { return bakeExit_; }
     // --mapbake: the kast_mapbake.exe for this run (not saved to the settings).
     void setMapbake(std::string exe) { mapbake_ = std::move(exe); }
+    // Moves kast_mapbake's output to the Console and logs its exit code once it ends; draw calls it every frame.
+    void pollBake();
+    // --prompt-remove-tile: opens the remove-tile confirm dialog for t, as clicking it in the tile grid does.
+    void askRemoveTile(kast::map::TileKey t) { removeTile_ = t; }
+    // Points the first Terrain entity (added if there is none) at map id; marks the scene dirty.
+    static void setTerrainMap(Document& doc, int id);
 
     // Before zone.update each frame: the first Terrain's map changed elsewhere (the Inspector) while the zone has
     // unsaved changes. Puts the old id back and asks first (the unsaved-zone prompt); the new id is applied after Save
@@ -114,7 +120,6 @@ private:
     void drawObjectFields(ZoneSession& zone);
     void drawScatter(const ZoneSession& zone);
     void drawBake(ZoneSession& zone);
-    void pollBake();
     // PlaceObject's prefab and the Scatter brush's first one, once the project has prefabs.
     void defaultPrefabs(const ZoneSession& zone);
     // Drops selections that no longer exist (an undo, another map).
@@ -134,8 +139,6 @@ private:
     // Runs pending now, or after the prompt if the zone has unsaved changes.
     void request(Document& doc, ZoneSession& zone, Pending pending);
     void run(Document& doc, ZoneSession& zone, const Pending& pending);
-    // Points the first Terrain entity (added if there is none) at map id; marks the scene dirty.
-    void setTerrainMap(Document& doc, int id);
 
     std::optional<std::set<std::string>> showSections_;
     std::set<std::string> sectionsShown_; // the sections showSections_ has been applied to

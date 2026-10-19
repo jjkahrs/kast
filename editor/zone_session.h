@@ -48,7 +48,19 @@ public:
 
     // zone::save_map on the open zone (validation first: any problem writes nothing). Logs the result and each problem
     // to the Console. False with no zone or when blocked.
-    bool save(bool recycle = true);
+    bool save();
+    // Whether save sends the files it deletes (a removed tile's) to the Recycle Bin (default) or deletes them (--no-recycle).
+    void setRecycle(bool recycle) { recycle_ = recycle; }
+    // Scans root's maps, materials, prefabs and NPCs now, as update does when the project changes (zone_cli, before the
+    // first update).
+    void openProject(const std::filesystem::path& root)
+    {
+        if (root != project_.root)
+            scan(root);
+    }
+    // zone::load_map of maps/<folder> as the zone, for that map's id: the caller points the Terrain entity at it before
+    // the next update. False + error (zone unchanged) if it does not load.
+    bool open(const std::string& folder, std::string& error);
     // zone::validate on the open zone into problems(), each logged to the Console. True when it passed.
     bool check();
     // zone::new_map in memory (written by the first save), opened as the zone for map id: the caller points the Terrain
@@ -71,4 +83,5 @@ private:
     entt::entity terrain_ = entt::null;
     std::string error_;
     std::vector<zone::ZoneError> problems_;
+    bool recycle_ = true;
 };
