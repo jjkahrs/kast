@@ -6,16 +6,57 @@
       "name": "Grass",
       "parent": null,
       "components": {
-        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
+        "Transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
       }
     },
     {
-      "id": 2,
-      "name": "Tuft",
+      "id": 3,
+      "name": "Grass Model",
       "parent": 1,
       "components": {
-        "Transform": {"position": [0, 0.15, 0], "rotation": [0, 0, 0, 1], "scale": [0.35, 0.45, 0.35]},
-        "MeshRenderer": {"primitive": "sphere", "material": "materials/grass_blade.mat", "castShadows": false, "receiveShadows": true}
+        "Transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "ModelRenderer": {
+          "model": "models/grass-mesh.obj",
+          "materials": [
+            "materials/grass_material.mat"
+          ],
+          "castShadows": true,
+          "receiveShadows": true
+        }
       }
     }
   ]

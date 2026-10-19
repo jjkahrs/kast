@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "baseColor": [
+    0.32570547,
+    0.64637685,
+    0.1911027,
+    1.0
+  ],
+  "baseColorTexture": "",
+  "metallic": 0.0,
+  "roughness": 0.5,
+  "metallicRoughnessTexture": "",
+  "emissiveEnabled": false,
+  "emissive": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "emissiveIntensity": 1.0,
+  "alphaMode": "opaque",
+  "alphaCutoff": 0.5
+}
