@@ -103,6 +103,73 @@ entt::entity dropPrefabOnView(Document& doc, const std::string& path, const kast
     return entity;
 }
 
+namespace {
+
+// Play / Pause / Stop at the right of the Scene panel's tab bar, whichever tab is shown, or of its title bar while it
+// floats undocked. Submitted to the window that owns the bar (a dock node's tabs belong to its host window), so they
+// hover and click like the tabs. Hidden where they would cover a tab or the title, and with no bar at all.
+void drawPlayControls(Document& doc, ImGuiWindow* scene)
+{
+    const ImGuiStyle& style = ImGui::GetStyle();
+    ImGuiWindow* owner = nullptr;
+    ImRect bar;
+    float used = 0.0f; // where the tabs or the title end
+    if (const ImGuiDockNode* node = scene->DockIsActive ? scene->DockNode : nullptr) {
+        if (!node->TabBar || node->IsHiddenTabBar() || node->IsNoTabBar())
+            return;
+        owner = node->HostWindow;
+        bar = node->TabBar->BarRect;
+        used = bar.Min.x + node->TabBar->WidthAllTabsIdeal;
+    } else {
+        if (scene->Collapsed || (scene->Flags & ImGuiWindowFlags_NoTitleBar))
+            return;
+        owner = scene;
+        bar = scene->TitleBarRect();
+        // The window menu button, then the title: ImGui's default left placements, which the editor keeps.
+        used = bar.Min.x + style.FramePadding.x + ImGui::GetFontSize() + style.ItemInnerSpacing.x +
+               ImGui::CalcTextSize(scene->Name, nullptr, true).x;
+    }
+    const char* icons[] = {kIconPlay, kIconPause, kIconStop};
+    float width = style.ItemSpacing.x * 2.0f;
+    for (const char* icon : icons)
+        width += ImGui::CalcTextSize(icon).x + style.FramePadding.x * 2.0f;
+    const float left = bar.Max.x - width;
+    if (left < used + style.ItemSpacing.x)
+        return;
+
+    ImGui::Begin(owner->Name); // appends to the window, already submitted this frame
+    ImGui::PushClipRect(bar.Min, bar.Max, false);
+    ImGui::SetCursorScreenPos(ImVec2(left, bar.Min.y));
+    ImGui::PushID("PlayControls");
+    const auto playButton = [](const char* icon, const char* tooltip, bool active, bool enabled) {
+        if (active)
+            ImGui::PushStyleColor(ImGuiCol_Button, kPlayTint);
+        ImGui::BeginDisabled(!enabled);
+        const bool pressed = ImGui::Button(icon);
+        ImGui::EndDisabled();
+        if (active)
+            ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", tooltip);
+        ImGui::SameLine();
+        return pressed;
+    };
+    const bool stopped = doc.play == PlayState::Stopped;
+    if (playButton(kIconPlay, "Play (Ctrl+P)", doc.play == PlayState::Playing,
+                   doc.play != PlayState::Playing && !doc.prefabEdit))
+        startPlay(doc);
+    disabledTooltip(doc.prefabEdit ? "Play is disabled while a prefab is open: go Back to the scene first" : nullptr);
+    if (playButton(kIconPause, "Pause", doc.play == PlayState::Paused, !stopped))
+        togglePause(doc);
+    if (playButton(kIconStop, "Stop", false, !stopped))
+        stopPlay(doc);
+    ImGui::PopID();
+    ImGui::PopClipRect();
+    ImGui::End();
+}
+
+} // namespace
+
 bool beginViewportPanel(const char* name, Document& doc, PanelFocus panel)
 {
     const bool requested = doc.focusRequest == panel;
@@ -180,8 +247,9 @@ void SceneViewport::draw(Document& doc)
     }
 
     const bool visible = beginViewportPanel("Scene", doc, PanelFocus::Scene);
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
     if (visible) {
-        drawToolbar(doc);
+        drawToolbar();
         const ImVec2 size = ImGui::GetContentRegionAvail();
         const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
         // A window too small for the panel leaves it no room (size < 0): 0, which nothing resizes to, not a wrapped
@@ -235,35 +303,15 @@ void SceneViewport::draw(Document& doc)
         }
     }
     ImGui::End();
+    drawPlayControls(doc, window);
 }
 
-void SceneViewport::drawToolbar(Document& doc)
+void SceneViewport::drawToolbar()
 {
     const ImGuiStyle& style = ImGui::GetStyle();
     const ImVec2 start = ImGui::GetCursorPos(); // below the tab bar
     ImGui::SetCursorPos(ImVec2(start.x + style.FramePadding.x * 2.0f, start.y + style.FramePadding.y));
 
-    // Play controls first so they stay visible when the panel is narrow.
-    const auto playButton = [](const char* label, bool active, bool enabled) {
-        if (active)
-            ImGui::PushStyleColor(ImGuiCol_Button, kPlayTint);
-        ImGui::BeginDisabled(!enabled);
-        const bool pressed = ImGui::SmallButton(label);
-        ImGui::EndDisabled();
-        if (active)
-            ImGui::PopStyleColor();
-        ImGui::SameLine();
-        return pressed;
-    };
-    const bool stopped = doc.play == PlayState::Stopped;
-    if (playButton("Play (Ctrl+P)", doc.play == PlayState::Playing, doc.play != PlayState::Playing && !doc.prefabEdit))
-        startPlay(doc);
-    disabledTooltip(doc.prefabEdit ? "Play is disabled while a prefab is open: go Back to the scene first" : nullptr);
-    if (playButton("Pause", doc.play == PlayState::Paused, !stopped))
-        togglePause(doc);
-    if (playButton("Stop", false, !stopped))
-        stopPlay(doc);
-    ImGui::SameLine(0.0f, style.ItemSpacing.x * 3.0f);
     if (ImGui::RadioButton("Move (W)", operation_ == ImGuizmo::TRANSLATE))
         operation_ = ImGuizmo::TRANSLATE;
     ImGui::SameLine();
