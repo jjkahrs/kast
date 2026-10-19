@@ -6,7 +6,7 @@
 #              [-DPROJECTS_FROM=<json>] [-DLIST_MUST_CONTAIN=<text>] [-DFOCUS_PANEL=<window>]
 #              [-DEXPECT_OUTPUT=<regex> [-DEXPECT_COUNT=<n>]] [-DFORBID_OUTPUT=<regex>] [-DFRAMES=<n>]
 #              [-DWRAPPER=<exe;args>] [-DSETTINGS_FROM=<json>] [-DSETTINGS_MUST_NOT_CONTAIN=<text;...>]
-#              [-DOUTPUT_FILE=<log>] [-DLAYOUT_FROM=<imgui.ini>] -P smoke_test.cmake
+#              [-DOUTPUT_FILE=<log>] [-DLAYOUT_FROM=<imgui.ini>] [-DLAYOUT_SAME_DOCK=<window;window...>] -P smoke_test.cmake
 # NEW_PROJECT_* pass --new-project as separate arguments, so the name may contain spaces; FOCUS_PANEL passes
 # --focus-panel the same way (e.g. "State Machines"). MUST_NOT_EXIST fails the test if that path exists after the run
 # (e.g. a folder the New Project modal must not have created); MUST_EXIST if it doesn't. PROJECTS_FROM is copied to
@@ -17,7 +17,8 @@
 # kast_net_test_server <args> -- (its servers are up while the editor runs).
 # The editor settings are <work dir>/editor_settings.json (--settings-file), never the user's: SETTINGS_FROM is copied
 # there before the run; SETTINGS_MUST_NOT_CONTAIN (a list) fails the test if the file holds any of those texts after.
-# LAYOUT_FROM is copied to <work dir>/imgui.ini, the editor's saved panel layout, before the run.
+# LAYOUT_FROM is copied to <work dir>/imgui.ini, the editor's saved panel layout, before the run. LAYOUT_SAME_DOCK (a
+# list of window titles) fails the test unless the imgui.ini saved at exit docks them all in one node (tabs together).
 if(NOT DEFINED FRAMES)
   set(FRAMES 120)
 endif()
@@ -84,6 +85,21 @@ if(DEFINED LIST_MUST_CONTAIN)
   if(found EQUAL -1)
     message(FATAL_ERROR "projects.json does not contain '${LIST_MUST_CONTAIN}':\n${list}")
   endif()
+endif()
+if(DEFINED LAYOUT_SAME_DOCK)
+  file(READ "${work_dir}/imgui.ini" ini)
+  set(docks "")
+  foreach(window IN LISTS LAYOUT_SAME_DOCK)
+    if(NOT ini MATCHES "\\[Window\\]\\[${window}\\][^[]*DockId=(0x[0-9A-Fa-f]+)")
+      message(FATAL_ERROR "imgui.ini: '${window}' is not docked:\n${ini}")
+    endif()
+    list(APPEND docks "${window} ${CMAKE_MATCH_1}")
+    if(NOT DEFINED dock)
+      set(dock "${CMAKE_MATCH_1}")
+    elseif(NOT dock STREQUAL CMAKE_MATCH_1)
+      message(FATAL_ERROR "imgui.ini: not docked together: ${docks}")
+    endif()
+  endforeach()
 endif()
 message(STATUS "OK: exit 0, ${SCREENSHOT} is ${size} bytes")
 if(DEFINED SETTINGS_MUST_NOT_CONTAIN AND EXISTS "${work_dir}/editor_settings.json")

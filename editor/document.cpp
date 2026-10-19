@@ -1153,17 +1153,22 @@ bool FileActions::onQuitRequested()
     stopPlay(doc_); // restore the edit-mode scene first, so unsaved-changes checks see it
     if (!quitConfirmed_ && doc_.prefabEdit && !doc_.dirty)
         closePrefab(doc_); // the waiting scene's unsaved changes still prompt
-    if (quitConfirmed_ || (!doc_.dirty && !dialogOpen_))
+    if (quitConfirmed_ || (!unsaved() && !dialogOpen_))
         return true;
     request(Pending::Quit);
     return false;
+}
+
+std::string FileActions::extraUnsaved() const
+{
+    return extra.unsaved && !doc_.prefabEdit ? extra.unsaved() : std::string();
 }
 
 void FileActions::request(Pending action)
 {
     if (dialogOpen_)
         return;
-    if (!doc_.dirty) {
+    if (!unsaved()) {
         perform(action);
         return;
     }
@@ -1175,7 +1180,7 @@ void FileActions::perform(Pending action)
 {
     if (doc_.prefabEdit && action != Pending::None && action != Pending::OpenPrefab && action != Pending::Back) {
         closePrefab(doc_); // its changes were saved or discarded by now
-        if (doc_.dirty) {
+        if (unsaved()) {
             request(action); // now the scene's
             return;
         }
@@ -1292,8 +1297,15 @@ void FileActions::saveTo(const std::string& path, Pending after)
 {
     std::string error;
     if (saveFile(doc_, path, error)) {
-        perform(after);
-        return;
+        // Then the extra (a dirty zone). Blocked (it logs why): the action waits, so its changes aren't lost.
+        if (const std::string what = extraUnsaved(); !what.empty() && extra.save && !extra.save()) {
+            if (after == Pending::None)
+                return;
+            error = std::format("{} was not saved (see the Console), so nothing else was done", what);
+        } else {
+            perform(after);
+            return;
+        }
     }
     error_ = error;
     kast::log::error(error_);
@@ -1322,7 +1334,9 @@ void FileActions::drawModals()
     if (std::exchange(confirmRequested_, false))
         ImGui::OpenPopup("Unsaved changes");
     if (ImGui::BeginPopupModal("Unsaved changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Save changes to %s before continuing?", displayName(doc_).c_str());
+        const std::string what = extraUnsaved();
+        ImGui::Text("Save changes to %s%s%s before continuing?", displayName(doc_).c_str(), what.empty() ? "" : " and ",
+                    what.c_str());
         ImGui::Spacing();
         if (ImGui::Button("Save")) {
             ImGui::CloseCurrentPopup();
@@ -1337,6 +1351,8 @@ void FileActions::drawModals()
         if (ImGui::Button("Don't Save")) {
             ImGui::CloseCurrentPopup();
             stopPlay(doc_);
+            if (extra.discard && !extraUnsaved().empty())
+                extra.discard();
             perform(std::exchange(pending_, Pending::None));
         }
         ImGui::SameLine();

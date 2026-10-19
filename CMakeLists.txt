@@ -144,7 +144,7 @@ add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
   editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp editor/editor_settings.cpp
-  editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/kast_editor.rc
+  editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 # The Online panel's default compose folder: services/world of this source tree, if it is still there at run time.
@@ -283,8 +283,27 @@ add_test(NAME editor_zone_scene
 add_test(NAME editor_zone_missing_map
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_missing_map.png"
           "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/missing_map.scene"
-          "-DEXPECT_OUTPUT=Zone: the Terrain map did not load: no map with id 999" -DEXPECT_COUNT=1
+          "-DEXPECT_OUTPUT=Zone: the Terrain map did not load: no map with id 999" -DEXPECT_COUNT=1 -DFOCUS_PANEL=Zone
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# The Zone tab (docs/editor/zone-builder.html) is a tab beside Hierarchy in the default layout and in a layout saved
+# before it existed (tests/layouts/pre_zone.ini); --zone-section expands its Map and Problems sections.
+add_test(NAME editor_zone_tab
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_tab.png"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo/scenes/world.scene --zone-section Map,Problems --size 1600x1000"
+          -DFOCUS_PANEL=Zone "-DLAYOUT_SAME_DOCK=Hierarchy;Zone" "-DEXPECT_OUTPUT=Zone: loaded maps/meadow \\(map 10\\)"
+          "-DFORBID_OUTPUT=\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME editor_zone_tab_old_layout
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_tab_old_layout.png"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo/scenes/world.scene --zone-section Map,Problems --size 1600x1000"
+          -DFOCUS_PANEL=Zone "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_zone.ini"
+          "-DLAYOUT_SAME_DOCK=Hierarchy;Zone;Systems" "-DFORBID_OUTPUT=\\[error\\]"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# No project: the tab says one is required (tests/scenes has a project.kast, so a copy of basic.scene outside it).
+file(COPY_FILE "${KAST_TEST_SCENES}/basic.scene" "${CMAKE_CURRENT_BINARY_DIR}/no_project_basic.scene")
+add_test(NAME editor_zone_no_project
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_no_project.png"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_BINARY_DIR}/no_project_basic.scene" -DFOCUS_PANEL=Zone
+          "-DFORBID_OUTPUT=Zone: |\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(scene_screenshot PROPERTIES FIXTURES_SETUP basic_shot)
 set_tests_properties(scene_play_screenshot PROPERTIES FIXTURES_SETUP play_shot)
 set_tests_properties(game_play_screenshot PROPERTIES FIXTURES_SETUP game_shot)
@@ -666,6 +685,27 @@ set_tests_properties(terrain_switch_play_differs PROPERTIES
                      FIXTURES_REQUIRED "terrain_switch_before_play_shot;terrain_switch_after_play_shot")
 set_tests_properties(terrain_sun_cast_off_play_differs PROPERTIES
                      FIXTURES_REQUIRED "terrain_play_shot;terrain_sun_cast_off_play_shot")
+# The Zone tab's Terrain entity cases: none (terrain_off: the tab offers Add Terrain entity and the map picker, nothing
+# loads) and two (a second Terrain on map 1 added after the first: the tab names the one whose map is the zone).
+string(JSON terrain_count LENGTH "${terrain_scene}" entities)
+string(JSON terrain_two SET "${terrain_scene}" entities ${terrain_count}
+       [=[{"id": 90, "name": "Second Terrain", "parent": null, "components": {"Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}, "Terrain": {"map": 1, "radius": 1}}}]=])
+file(WRITE "${KAST_SHADOW_PROJECT}/zone_two_terrains.scene" "${terrain_two}")
+add_test(NAME editor_zone_no_terrain
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_no_terrain.png"
+          "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/terrain_off.scene --zone-section Map,Problems" -DFOCUS_PANEL=Zone
+          "-DFORBID_OUTPUT=Zone: |\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# During Play the Zone tab is read-only (and the Scene view has no zone overlays).
+add_test(NAME editor_zone_tab_play
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_tab_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/terrain.scene --play" -DFOCUS_PANEL=Zone
+          "-DEXPECT_OUTPUT=Zone: loaded maps/hills \\(map 3\\)" "-DFORBID_OUTPUT=Play uses the saved|\\[error\\]"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME editor_zone_two_terrains
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_two_terrains.png"
+          "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/zone_two_terrains.scene" -DFOCUS_PANEL=Zone
+          "-DEXPECT_OUTPUT=Zone: loaded maps/[a-z]+ \\(map [13]\\)" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 # Zone objects: tests/project/zone_objects.scene on the hills' fixtures (maps/hills/objects; docs/engine/terrain.html#objects).
 # In Play the Hero walks into the obstacle crate and stops at its side, the Walker through the visual crate.
 add_test(NAME zone_objects_play_screenshot

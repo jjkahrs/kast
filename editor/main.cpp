@@ -11,6 +11,7 @@
 #include "recent_projects.h"
 #include "ui_common.h"
 #include "viewport.h"
+#include "zone_panel.h"
 #include "zone_render.h"
 #include "zone_session.h"
 
@@ -37,6 +38,7 @@
 #include <filesystem>
 #include <format>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -63,7 +65,7 @@ constexpr const char* kUsage =
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
-    "[--focus-panel Window] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
+    "[--focus-panel Window] [--zone-section Map[,Problems...]] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy]] [--sim-key frame,key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
@@ -116,6 +118,7 @@ struct Options {
     std::optional<std::pair<Panels::AssetCreate, std::string>> assetsCreate; // run Assets Create in that folder
     bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
     bool openOnlineSettings = false; // open the Online Services modal (needs --project) for screenshots
+    std::vector<std::string> zoneSections; // --zone-section: expand these Zone tab sections (with --focus-panel Zone), for screenshots
     std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting", "Post Processing", "Physics", "Mixer", "Network" and "Online" also open it) to the front, for screenshots
     std::string openGui;            // open this .rml in the GUI Builder (relative paths: to the project, else the cwd)
     std::string guiSelect;          // then select the element with this id in it
@@ -387,6 +390,9 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.openMenu = argv[++i];
         } else if (arg == "--focus-panel" && hasValue) {
             options.focusPanel = argv[++i];
+        } else if (arg == "--zone-section" && hasValue) {
+            for (const auto part : std::views::split(std::string_view(argv[++i]), ','))
+                options.zoneSections.emplace_back(std::string_view(part.begin(), part.end()));
         } else if (arg == "--projects-file" && hasValue) {
             options.projectsFile = argv[++i];
         } else if (arg == "--settings-file" && hasValue) {
@@ -490,7 +496,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     const bool editorFlags = options.select != 0 || options.play || options.selectNetworkEntity || options.addComponentPopup ||
                              options.newComponentPrompt || !options.newComponent.empty() || !options.openMenu.empty() ||
-                             options.openBuildSettings || options.openOnlineSettings || !options.focusPanel.empty() || options.newStateMachinePrompt ||
+                             options.openBuildSettings || options.openOnlineSettings || !options.focusPanel.empty() || !options.zoneSections.empty() || options.newStateMachinePrompt ||
                              options.assetsMenu || options.assetsCreate || !options.assetsSelect.empty() ||
                              !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
@@ -502,7 +508,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.onlineCompose;
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --select-network-entity, --add-component-popup, --new-component[-prompt], "
-                         "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, "
+                         "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, --zone-section, "
                          "--assets-menu, "
                          "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
                          "--gui-click, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
@@ -563,6 +569,7 @@ void buildDefaultLayout(ImGuiID dockspace)
     const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.3f, nullptr, &center);
     ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.35f, nullptr, &left);
     ImGui::DockBuilderDockWindow("Hierarchy", left);
+    ImGui::DockBuilderDockWindow(ZonePanel::kWindow, left);
     const ImGuiID leftLowest = ImGui::DockBuilderSplitNode(leftBottom, ImGuiDir_Down, 0.5f, nullptr, &leftBottom);
     ImGui::DockBuilderDockWindow("Systems", leftBottom);
     ImGui::DockBuilderDockWindow("Components", leftLowest);
@@ -925,7 +932,13 @@ int main(int argc, char** argv)
         options->settingsFile.empty() ? defaultEditorSettingsFile() : std::filesystem::absolute(options->settingsFile);
     // The Online panel's login goes to each Play session and comes back at Stop (refresh tokens rotate: one holder).
     OnlineModel online(settingsFile);
-    doc.onPlayStarted = [&online](kast::LuaSystems& lua) { online.lendSession(lua.auth()); };
+    ZoneSession zone; // the scene's zone: the Scene view shows it, the Zone tab edits it
+    doc.onPlayStarted = [&online, &zone](kast::LuaSystems& lua) {
+        online.lendSession(lua.auth());
+        if (zone.dirty())
+            kast::log::warn(std::format("Zone: maps/{} has unsaved changes; Play uses the saved map files",
+                                        zone.zone()->folder));
+    };
     doc.onPlayStopping = [&online](kast::LuaSystems& lua) { online.reclaimSession(lua.auth()); };
     // Editor Play's world address: --world-address, else the Online panel's override (applied every frame below).
     const auto applyWorldOverride = [&] {
@@ -950,6 +963,7 @@ int main(int argc, char** argv)
             playAfterLogin = options->play;
         }
     }
+    zone.update(doc); // before --play, which freezes it: the Zone tab shows the zone during that Play
     if (options->play && !playAfterLogin)
         startPlay(doc);
     if (options->onlineCompose && !online.runCompose(*options->onlineCompose))
@@ -965,8 +979,12 @@ int main(int argc, char** argv)
     if (options->newStateMachinePrompt)
         panels.openNewStateMachine(*options->newStateMachinePrompt);
     SceneViewport viewport(kSceneView);
-    ZoneSession zone;
     ZoneRender zoneRender;
+    ZonePanel zonePanel;
+    // A dirty zone is part of the unsaved-changes prompt, and File > Save / Ctrl+S writes it after the scene.
+    files.extra = {.unsaved = [&] { return zone.dirty() ? "maps/" + zone.zone()->folder : std::string(); },
+                   .save = [&] { return zonePanel.save(zone); },
+                   .discard = [&] { zone.reload(); }};
     viewport.overlay = [&](const float* viewProj, float x, float y, float width, float height) {
         zoneRender.drawOverlays(ImGui::GetWindowDrawList(), viewProj, x, y, width, height);
     };
@@ -1091,6 +1109,9 @@ int main(int argc, char** argv)
             const std::string id = "###" + options->focusPanel;
             ImGui::SetWindowFocus(ImGui::FindWindowByName(id.c_str()) ? id.c_str() : options->focusPanel.c_str());
         }
+        if (frames.frame() == kAddComponentPopupFrame)
+            for (const std::string& section : options->zoneSections)
+                zonePanel.openSection(section);
         if (!options->openGui.empty() && frames.frame() == kAddComponentPopupFrame)
             guiBuilder.focusPanels(); // again: the first frames' docking undid the focus open() asked for
         if (options->guiPick && frames.frame() == kAddComponentPopupFrame + 6) { // the preview has been laid out
@@ -1124,6 +1145,11 @@ int main(int argc, char** argv)
         // The open zone in the Scene view, edit mode only: Play streams the saved map from disk (TerrainStreamer), and a
         // prefab is edited on its own.
         zone.update(doc);
+        // Layouts saved before the Zone tab existed: dock it as a tab beside Hierarchy.
+        if (const ImGuiWindowSettings* hierarchy = ImGui::FindWindowSettingsByID(ImHashStr("Hierarchy"));
+            hierarchy && !ImGui::FindWindowSettingsByID(ImHashStr(ZonePanel::kWindow)))
+            ImGui::SetNextWindowDockID(hierarchy->DockId, ImGuiCond_FirstUseEver);
+        zonePanel.draw(doc, zone); // before the zone is synced: its edits show this frame
         const bool showZone = doc.play == PlayState::Stopped && !doc.prefabEdit;
         zoneRender.sync(showZone ? zone.zone() : nullptr, doc.project ? doc.project->root : std::filesystem::path(),
                         viewport.renderer());

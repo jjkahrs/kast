@@ -123,6 +123,10 @@
 <td>Bring that editor window (e.g. <code>Events</code>, <code>"State Machines"</code>, <code>"GUI Preview"</code>) to the front of its dock after the first 10 frames, for screenshots. <code>Lighting</code>, <code>"Post Processing"</code>, <code>Physics</code>, <code>Mixer</code>, <code>Network</code> and <code>Online</code> also open those hidden panels.</td>
 </tr>
 <tr>
+<td><code>--zone-section &lt;Name[,Name...]&gt;</code></td>
+<td>Expand these sections of the Zone tab (e.g. <code>Map,Problems</code>) after the first 10 frames, for screenshots; pair it with <code>--focus-panel Zone</code> to bring the tab to the front.</td>
+</tr>
+<tr>
 <td><code>--no-scene-post</code></td>
 <td>Start with the Scene toolbar's <strong>Post</strong> box off (scene without post effects).</td>
 </tr>
@@ -277,7 +281,7 @@
 </table>
 <p>Without <code>--project</code>, <code>--scene</code>, <code>--save-scene</code> or <code>--build</code>, <code>kast_editor</code> runs the Project Manager instead of the
 editor. Editor-only flags (<code>--select</code>, <code>--play</code>, <code>--select-network-entity</code>, <code>--add-component-popup</code>, <code>--new-component[-prompt]</code>,
-<code>--new-state-machine-prompt</code>, <code>--open-menu</code>, <code>--open-build-settings</code>, <code>--open-online-settings</code>, <code>--focus-panel</code>, <code>--assets-*</code>, <code>--open-gui</code>,
+<code>--new-state-machine-prompt</code>, <code>--open-menu</code>, <code>--open-build-settings</code>, <code>--open-online-settings</code>, <code>--focus-panel</code>, <code>--zone-section</code>, <code>--assets-*</code>, <code>--open-gui</code>,
 <code>--gui-*</code>) then are invalid arguments, as are Project Manager flags (<code>--launcher</code>, <code>--new-project</code>,
 <code>--launcher-open</code>, <code>--</code>) together with the editor's.</p>
 <p>Invalid arguments exit with code 2; init failures (SDL, window, bgfx) log the reason, show a message box, and exit 1.</p>
