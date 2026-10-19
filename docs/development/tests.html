@@ -12,10 +12,10 @@
 <nav class="side"><h2>Development</h2><ul><li><a href="tests.html" class="active">Tests</a></li><li><a href="layout.html">Source layout</a></li></ul></nav>
 <main>
 <h1 id="tests">Tests</h1>
-<p><code>ctest --preset debug</code> (or <code>release</code>) runs the tests below. Many open a window; to keep them off the main monitor,
-configure with <code>-DKAST_TEST_WINDOW_POS=X,Y</code> (e.g. <code>cmake --preset debug -DKAST_TEST_WINDOW_POS=-1900,40</code> for a monitor
-left of the main one): every test then runs with <code>KAST_WINDOW_POS</code> set to it. Empty (the default) leaves placement to
-Windows.</p>
+<p><code>ctest --preset debug</code> (or <code>release</code>) runs the tests below. Many open a window; they stay off the main monitor:
+every test runs with <code>KAST_WINDOW_POS=secondary</code>, which opens windows on the first display that isn't the primary one
+(with only one display they open on it, with a warning). Configure with <code>-DKAST_TEST_WINDOW_POS=X,Y</code> (e.g.
+<code>cmake --preset debug -DKAST_TEST_WINDOW_POS=-1900,40</code>) to pin them to a desktop position instead.</p>
 <table>
 <thead>
 <tr>

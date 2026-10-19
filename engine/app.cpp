@@ -17,14 +17,35 @@ namespace kast {
 namespace {
 
 
-// Creates the window at config.position, else at KAST_WINDOW_POS, else where the OS puts it.
+// Top-left (+40, +40) of the usable area of the first display that isn't the primary one; empty with one display.
+std::optional<std::pair<int, int>> secondaryDisplayPos()
+{
+    int count = 0;
+    SDL_DisplayID* displays = SDL_GetDisplays(&count);
+    std::optional<std::pair<int, int>> position;
+    for (int i = 0; i < count && !position; ++i) {
+        SDL_Rect bounds{};
+        if (displays[i] != SDL_GetPrimaryDisplay() && SDL_GetDisplayUsableBounds(displays[i], &bounds))
+            position = std::pair{bounds.x + 40, bounds.y + 40};
+    }
+    SDL_free(displays);
+    return position;
+}
+
+// Creates the window at config.position, else at KAST_WINDOW_POS ("X,Y" or "secondary"), else where the OS puts it.
 SDL_Window* createWindow(const AppConfig& config)
 {
     std::optional<std::pair<int, int>> position = config.position;
     if (const char* env = SDL_getenv("KAST_WINDOW_POS"); !position && env && *env) {
-        position = parseWindowPos(env);
-        if (!position)
-            log::warn(std::format("Ignored KAST_WINDOW_POS '{}': expected X,Y", env));
+        if (std::string_view(env) == "secondary") {
+            position = secondaryDisplayPos();
+            if (!position)
+                log::warn("KAST_WINDOW_POS=secondary: only one display, the window opens on the main monitor");
+        } else {
+            position = parseWindowPos(env);
+            if (!position)
+                log::warn(std::format("Ignored KAST_WINDOW_POS '{}': expected X,Y or secondary", env));
+        }
     }
     const SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, config.title);

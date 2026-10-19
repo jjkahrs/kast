@@ -17,7 +17,8 @@ struct AppConfig {
     bool vsync = true; // false: present as fast as possible (frame-rate measurements)
     bool activate = true; // false (--frames test runs): show without taking focus; init failures only log
     // Top-left corner of the window in desktop coordinates (--window-pos). Empty: the environment variable
-    // KAST_WINDOW_POS ("X,Y", how ctest keeps test windows off the main monitor), else where the OS puts it.
+    // KAST_WINDOW_POS ("X,Y" or "secondary" = the first non-primary display; how ctest keeps test windows off the
+    // main monitor), else where the OS puts it.
     std::optional<std::pair<int, int>> position;
 };
 

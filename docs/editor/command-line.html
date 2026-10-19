@@ -36,7 +36,7 @@
 </tr>
 <tr>
 <td><code>--window-pos X,Y</code></td>
-<td>Initial window position: the top-left corner in desktop coordinates (negative = a monitor left of or above the main one). Without it, the environment variable <code>KAST_WINDOW_POS</code> (same format; a bad value is a warning and ignored), else wherever Windows puts it. The editor, the Project Manager and the player log <code>Window at X, Y on display '&lt;name&gt;'</code> when either is set.</td>
+<td>Initial window position: the top-left corner in desktop coordinates (negative = a monitor left of or above the main one). Without it, the environment variable <code>KAST_WINDOW_POS</code> (same format, or <code>secondary</code> for the first display that isn't the primary one, as ctest sets it; a bad value is a warning and ignored), else wherever Windows puts it. The editor, the Project Manager and the player log <code>Window at X, Y on display '&lt;name&gt;'</code> when either is set.</td>
 </tr>
 <tr>
 <td><code>--ui-scale F</code></td>

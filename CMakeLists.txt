@@ -1692,9 +1692,11 @@ include(cmake/starter_mmo_tests.cmake)
 # Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.
 get_property(kast_tests DIRECTORY PROPERTY TESTS)
 set_property(TEST ${kast_tests} APPEND PROPERTY ENVIRONMENT KAST_NO_CRASH_DIALOGS=1)
-# Windowed tests open at this desktop position ("X,Y", e.g. -1900,40 for a monitor left of the main one), so they stay
-# off the main monitor. Empty: wherever the OS puts them.
-set(KAST_TEST_WINDOW_POS "" CACHE STRING "Top-left desktop position of test windows (X,Y); empty = OS default")
+# Windowed tests stay off the main monitor: at this desktop position ("X,Y", e.g. -1900,40), or, empty (the default),
+# on the first display that isn't the primary one (KAST_WINDOW_POS=secondary).
+set(KAST_TEST_WINDOW_POS "" CACHE STRING "Top-left desktop position of test windows (X,Y); empty = first non-primary display")
 if(KAST_TEST_WINDOW_POS)
   set_property(TEST ${kast_tests} APPEND PROPERTY ENVIRONMENT "KAST_WINDOW_POS=${KAST_TEST_WINDOW_POS}")
+else()
+  set_property(TEST ${kast_tests} APPEND PROPERTY ENVIRONMENT "KAST_WINDOW_POS=secondary")
 endif()

@@ -3,7 +3,7 @@
 
 Current Version: 0.1.0
 
-C++20 game engine for building MMORPGs. `engine/` is the reusable runtime (SDL3 window + bgfx Direct3D 11, EnTT
+Kast is a C++20 game engine for building MMORPGs. `engine/` is the reusable runtime (SDL3 window + bgfx Direct3D 11, EnTT
 scene, renderer, scene files); `editor/` is the Unity-style editor (`kast_editor`) built on it with Dear ImGui docking
 and ImGuizmo. `services/` holds the game services: the authentication server (`services/auth`, accounts, sessions and
 the realm list) and the world server (`services/world`). `samples/starter-mmo` is a complete online game project.
