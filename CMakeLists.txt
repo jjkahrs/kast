@@ -43,7 +43,7 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
              engine/shaders/vs_mesh engine/shaders/vs_mesh_skinned engine/shaders/fs_mesh engine/shaders/vs_line
              engine/shaders/vs_mesh_instanced engine/shaders/vs_shadow engine/shaders/vs_shadow_skinned
              engine/shaders/vs_shadow_instanced engine/shaders/fs_shadow
-             engine/shaders/fs_line
+             engine/shaders/fs_line engine/shaders/vs_sky engine/shaders/fs_sky
              engine/shaders/gui/vs_gui engine/shaders/gui/fs_gui
              engine/shaders/post/vs_post engine/shaders/post/fs_post_bright engine/shaders/post/fs_post_down
              engine/shaders/post/fs_post_up engine/shaders/post/fs_post_final engine/shaders/post/fs_post_fxaa)
@@ -110,7 +110,7 @@ add_library(kast_engine STATIC
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
-  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/world_client.cpp engine/replication.cpp engine/terrain.cpp ${KAST_ENGINE_SHADERS})
+  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/world_client.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
@@ -706,6 +706,52 @@ add_test(NAME post_processing_roundtrip
 add_test(NAME post_processing_bad_rejected
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_POST_PROJECT}/post_processing_bad.scene"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
+# Skies (docs/engine/skybox.html): tests/project/sky_procedural.scene (a red horizon between a blue top and a green bottom,
+# fog on, a fully fogged far cube), sky_cubemap.scene / sky_cubemap_back.scene (the tests/project/textures/sky_test
+# faces: a color each with a white top-left marker, seen from two corners), sky_missing_face.scene (nx missing: the
+# procedural sky instead) and sky_mismatched.scene (ny smaller than px). Scene view, Play, the Lighting panel, the
+# fallback warnings, a round trip and a copy with an unknown mode, which must fail to load. The built games "sky*" in
+# KAST_GAMES read the colors back from the player (player_sky_*_probe).
+set(KAST_SKY "${KAST_TEST_PROJECT}/sky_procedural.scene")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_SKY}")
+file(READ "${KAST_SKY}" sky_scene)
+string(JSON sky_off REMOVE "${sky_scene}" sky)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/sky_off.scene" "${sky_off}")
+string(REPLACE "\"position\": [0, 1.5, 0]" "\"position\": [500, 80, -900]" sky_moved "${sky_scene}") # the camera only
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/sky_moved.scene" "${sky_moved}")
+string(REPLACE "\"procedural\"" "\"sunset\"" sky_bad "${sky_scene}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/sky_bad.scene" "${sky_bad}")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sky_roundtrip")
+add_test(NAME sky_procedural_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/sky_procedural.png"
+          "-DEXTRA_ARGS=--scene ${KAST_SKY} --size 1600x900" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME sky_procedural_play_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/sky_procedural_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_SKY} --size 1600x900 --play" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME sky_cubemap_panel_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/sky_cubemap_panel.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/sky_cubemap.scene --size 1600x900" -DFOCUS_PANEL=Lighting
+          "-DFORBID_OUTPUT=Sky cubemap" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME sky_fallback_panel_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/sky_fallback_panel.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/sky_missing_face.scene --size 1600x900 --play" -DFOCUS_PANEL=Lighting
+          "-DEXPECT_OUTPUT=Sky cubemap: face nx 'textures/sky_test/missing.png': cannot read the file. using the procedural sky"
+          -DEXPECT_COUNT=1 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME sky_mismatched_falls_back
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/sky_mismatched.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/sky_mismatched.scene"
+          "-DEXPECT_OUTPUT=Sky cubemap: face ny is 8x8, but px is 16x16. using the procedural sky"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME sky_roundtrip
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_TEST_PROJECT}/sky_cubemap.scene"
+          "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/sky_roundtrip" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
+add_test(NAME sky_bad_rejected
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${CMAKE_CURRENT_BINARY_DIR}/sky_bad.scene"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
 # Projects: --project opens tests/project (its startScene, scene_a); a folder without project.kast must exit 1.
 # Materials: tests/project/materials.scene (gold / red plastic spheres at roughness 0.1, 0.5, 0.9, PNG and JPG textured
 # cubes, a metallic-roughness textured sphere, emissive, a mask cutout, two overlapping blended planes, a broken and a
@@ -1071,7 +1117,10 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "point_shadows|Point Shadows Test|point_shadows.scene|FALSE"
                "physics|Physics Test|physics.scene|FALSE"
                "terrain|Terrain Test|terrain.scene|FALSE" "terrain_off|Terrain Test|terrain_off.scene|FALSE"
-               "prefabs|Prefabs Test|prefabs.scene|FALSE" "zone_objects|Zone Objects Test|zone_objects.scene|FALSE")
+               "prefabs|Prefabs Test|prefabs.scene|FALSE" "zone_objects|Zone Objects Test|zone_objects.scene|FALSE"
+               "sky|Sky Test|sky_procedural.scene|FALSE" "sky_off|Sky Test|sky_off.scene|FALSE"
+               "sky_moved|Sky Test|sky_moved.scene|FALSE" "sky_cube|Sky Test|sky_cubemap.scene|FALSE"
+               "sky_cube_back|Sky Test|sky_cubemap_back.scene|FALSE" "sky_fallback|Sky Test|sky_missing_face.scene|FALSE")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
@@ -1097,6 +1146,41 @@ foreach(game ${KAST_GAMES})
   set_tests_properties(player_${name}_screenshot PROPERTIES FIXTURES_REQUIRED game_${name}_built
                        FIXTURES_SETUP player_${name}_shot TIMEOUT 90)
 endforeach()
+# Skies in the player (the scenes are under Skies above). Colors read back at known screen positions (1280x720, from the
+# cameras' orientations): the gradient (the same from a camera 1 km away: the sky ignores translation), the fogged far
+# cube at the fog color while the sky stays unfogged, sky off clearing to the fog color as before skies, every cube
+# face's color and marker corner from two corners of the cube, and a missing face's procedural fallback.
+file(COPY_FILE "${CMAKE_CURRENT_BINARY_DIR}/sky_off.scene" "${CMAKE_CURRENT_BINARY_DIR}/game_projects/sky_off/sky_off.scene")
+file(COPY_FILE "${CMAKE_CURRENT_BINARY_DIR}/sky_moved.scene" "${CMAKE_CURRENT_BINARY_DIR}/game_projects/sky_moved/sky_moved.scene")
+set(KAST_SKY_GRADIENT 0.5004,0.4201,204,0,169,6 0.5004,0.0299,115,0,235,6 0.5004,0.9701,115,235,0,6
+                      0.1004,0.2507,183,0,192,6 0.9004,0.7507,183,192,0,6 0.5004,0.3007,168,0,205,6 0.2004,0.6007,208,164,0,6)
+# kast_sky_probe(<game> <fx,fy,r,g,b,tolerance>...): player_<game>_probe reads player_<game>.png (kast_self_check --probe-png).
+function(kast_sky_probe name)
+  add_test(NAME player_${name}_probe
+    COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/player_${name}.png" ${ARGN})
+  set_tests_properties(player_${name}_probe PROPERTIES FIXTURES_REQUIRED player_${name}_shot)
+endfunction()
+kast_sky_probe(sky ${KAST_SKY_GRADIENT} 0.5750,0.5000,188,188,188,6)
+kast_sky_probe(sky_moved ${KAST_SKY_GRADIENT})
+kast_sky_probe(sky_off 0.5004,0.0299,188,188,188,6 0.5004,0.9701,188,188,188,6)
+kast_sky_probe(sky_fallback ${KAST_SKY_GRADIENT})
+kast_sky_probe(sky_cube 0.1520,0.2448,255,255,255,12 0.4801,0.5204,255,0,0,12 0.3011,0.7041,255,0,0,12
+               0.7983,0.0918,255,255,255,12 0.5000,0.4592,0,255,0,12 0.5000,0.0918,0,255,0,12
+               0.5199,0.5204,255,255,255,12 0.8480,0.2448,0,0,255,12 0.6989,0.7041,0,0,255,12)
+kast_sky_probe(sky_cube_back 0.4122,0.2669,255,255,255,12 0.6885,0.1982,0,255,255,12 0.4220,0.6595,0,255,255,12
+               0.5287,0.4747,0,255,255,12 0.3731,0.1025,255,255,255,12 0.7035,0.8928,255,255,255,12
+               0.3963,0.7789,255,0,255,12 0.3355,0.2171,0,0,255,12 0.8640,0.0378,255,255,255,12
+               0.7882,0.8207,255,255,0,12)
+add_test(NAME player_sky_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_sky_off.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_sky.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(player_sky_differs PROPERTIES FIXTURES_REQUIRED "player_sky_shot;player_sky_off_shot")
+add_test(NAME player_sky_fallback_warns
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/sky_fallback" "-DEXE=Sky Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/sky_fallback_warns.run" -DEXPECT=0
+          "-DEXPECT_OUTPUT=Sky cubemap: face nx 'textures/sky_test/missing.png': cannot read the file"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_sky_fallback_warns PROPERTIES FIXTURES_REQUIRED game_sky_fallback_built TIMEOUT 90)
 # The sun-shadow-off copy for the "shadows_off" game (configured above, under Shadows).
 file(COPY_FILE "${KAST_SHADOW_PROJECT}/shadows_sun_off.scene" "${CMAKE_CURRENT_BINARY_DIR}/game_projects/shadows_off/shadows_sun_off.scene")
 # The terrain-less copy for the "terrain_off" game (configured above, under Terrain): the built player streams the

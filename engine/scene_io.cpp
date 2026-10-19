@@ -255,6 +255,52 @@ ScenePostProcessing parsePostProcessing(const Json& json)
     return post;
 }
 
+// "sky": every field optional (missing = default), but present ones must be valid. Face paths are not checked here: a
+// face that doesn't load falls back to the procedural sky at render time.
+SceneSky parseSky(const Json& json)
+{
+    if (!json.is_object())
+        throw Invalid("\"sky\" must be an object");
+    SceneSky sky;
+    for (const auto& [key, value] : json.items()) {
+        if (key == "mode") {
+            if (value == "off")
+                sky.mode = SkyMode::Off;
+            else if (value == "procedural")
+                sky.mode = SkyMode::Procedural;
+            else if (value == "cubemap")
+                sky.mode = SkyMode::Cubemap;
+            else
+                throw Invalid("sky: \"mode\" must be \"off\", \"procedural\" or \"cubemap\"");
+        } else if (key == "top" || key == "horizon" || key == "bottom") {
+            const auto channel = [&](const Json& c) {
+                const double v = c.is_number() ? c.get<double>() : NAN;
+                if (!(v >= 0.0 && v <= 1.0))
+                    throw Invalid(std::format("sky: \"{}\" must be an array of 3 numbers between 0 and 1", key));
+                return static_cast<float>(v);
+            };
+            if (!value.is_array() || value.size() != 3)
+                throw Invalid(std::format("sky: \"{}\" must be an array of 3 numbers between 0 and 1", key));
+            (key == "top" ? sky.top : key == "horizon" ? sky.horizon : sky.bottom) =
+                bx::Vec3{channel(value[0]), channel(value[1]), channel(value[2])};
+        } else if (key == "faces") {
+            if (!value.is_object())
+                throw Invalid("sky: \"faces\" must be an object");
+            for (const auto& [face, path] : value.items()) {
+                const auto it = std::ranges::find(kSkyFaceNames, std::string_view(face));
+                if (it == std::end(kSkyFaceNames))
+                    throw Invalid(std::format("sky.faces: unknown face \"{}\" (px, nx, py, ny, pz or nz)", face));
+                if (!path.is_string())
+                    throw Invalid(std::format("sky.faces: \"{}\" must be a string", face));
+                sky.faces[it - std::begin(kSkyFaceNames)] = path.get<std::string>();
+            }
+        } else {
+            throw Invalid(std::format("sky: unknown field \"{}\"", key));
+        }
+    }
+    return sky;
+}
+
 constexpr double kMaxGravity = 1000.0; // m/s^2 per axis
 
 // "physics": every field optional (missing = default), but present ones must be valid.
@@ -655,6 +701,8 @@ void parseScene(const Json& json, Scene& out, LoadContext& context, SceneLoadRep
         scene.lighting = parseLighting(json["lighting"]);
     if (json.contains("postProcessing"))
         scene.postProcessing = parsePostProcessing(json["postProcessing"]);
+    if (json.contains("sky"))
+        scene.sky = parseSky(json["sky"]);
     if (json.contains("physics"))
         scene.physics = parsePhysics(json["physics"]);
     if (json.contains("systems")) {
@@ -926,6 +974,28 @@ bool loadPrefabScene(const std::filesystem::path& projectRoot, const std::string
     return false;
 }
 
+Json skyToJson(const SceneSky& sky)
+{
+    constexpr const char* kModes[] = {"off", "procedural", "cubemap"}; // SkyMode order
+    const auto color = [](const bx::Vec3& c) { return Json::array({jsonNumber(c.x), jsonNumber(c.y), jsonNumber(c.z)}); };
+    Json faces = Json::object();
+    for (size_t i = 0; i < sky.faces.size(); ++i)
+        faces[kSkyFaceNames[i]] = sky.faces[i];
+    return {{"mode", kModes[static_cast<int>(sky.mode)]}, {"top", color(sky.top)}, {"horizon", color(sky.horizon)},
+            {"bottom", color(sky.bottom)}, {"faces", std::move(faces)}};
+}
+
+bool skyFromJson(const Json& json, SceneSky& out, std::string& error)
+{
+    try {
+        out = parseSky(json);
+        return true;
+    } catch (const Invalid& e) {
+        error = e.what();
+    }
+    return false;
+}
+
 Json sceneToJson(const Scene& scene)
 {
     Json root;
@@ -937,6 +1007,7 @@ Json sceneToJson(const Scene& scene)
                                                       jsonNumber(lighting.ambientColor.z)})},
                         {"ambientIntensity", jsonNumber(lighting.ambientIntensity)}};
     root["postProcessing"] = postProcessingToJson(scene.postProcessing);
+    root["sky"] = skyToJson(scene.sky);
     const bx::Vec3& gravity = scene.physics.gravity;
     root["physics"] = {{"gravity", Json::array({jsonNumber(gravity.x), jsonNumber(gravity.y), jsonNumber(gravity.z)})}};
     root["editor"] = scene.editorData;

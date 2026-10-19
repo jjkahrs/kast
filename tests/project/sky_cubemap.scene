@@ -1,0 +1,34 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Directional Light",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 4, 0], "rotation": [-0.408218, -0.23457, -0.109382, 0.875426], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.95, 0.9], "intensity": 1.1 }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 1.5, 0], "rotation": [-0.115917, 0.880476, -0.279848, -0.364705], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 120, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    }
+  ],
+  "systems": [],
+  "sky": {
+    "mode": "cubemap",
+    "top": [0, 0, 1],
+    "horizon": [1, 0, 0],
+    "bottom": [0, 1, 0],
+    "faces": { "px": "textures/sky_test/px.png", "nx": "textures/sky_test/nx.png", "py": "textures/sky_test/py.png", "ny": "textures/sky_test/ny.png", "pz": "textures/sky_test/pz.png", "nz": "textures/sky_test/nz.png" }
+  },
+  "editor": {
+    "camera": { "pivot": [0, 1.5, 0], "yaw": 0, "pitch": 0, "distance": 0.01 }
+  }
+}

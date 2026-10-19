@@ -40,6 +40,7 @@
 #include <scene_gui.h>
 #include <scene_io.h>
 #include <shadow.h>
+#include <sky.h>
 #include <frustum.h>
 #include <state_machines.h>
 #include <systems.h>
@@ -52,6 +53,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <fcntl.h> // _O_RDONLY
 #include <filesystem>
@@ -480,6 +482,16 @@ void checkLoadValidation()
          "ambientIntensity"},
         {"lighting unknown field",
          R"({"version": 5, "entities": [], "lighting": {"ambientColor": [1,1,1], "ambientIntensity": 1, "fog": 1}})", "fog"},
+        {"sky not an object", R"({"version": 5, "entities": [], "sky": 3})", "\"sky\" must be an object"},
+        {"sky unknown mode", R"({"version": 5, "entities": [], "sky": {"mode": "night"}})", "\"mode\""},
+        {"sky unknown field", R"({"version": 5, "entities": [], "sky": {"mode": "off", "sun": true}})", "\"sun\""},
+        {"sky color mistyped", R"({"version": 5, "entities": [], "sky": {"top": "blue"}})", "\"top\""},
+        {"sky color channel mistyped", R"({"version": 5, "entities": [], "sky": {"horizon": [1, "1", 1]}})", "\"horizon\""},
+        {"sky color out of range", R"({"version": 5, "entities": [], "sky": {"bottom": [0, 1.5, 0]}})", "\"bottom\""},
+        {"sky color wrong size", R"({"version": 5, "entities": [], "sky": {"top": [0, 0]}})", "\"top\""},
+        {"sky faces not an object", R"({"version": 5, "entities": [], "sky": {"faces": ["a.png"]}})", "\"faces\""},
+        {"sky unknown face", R"({"version": 5, "entities": [], "sky": {"faces": {"up": "a.png"}}})", "\"up\""},
+        {"sky face not a string", R"({"version": 5, "entities": [], "sky": {"faces": {"px": 1}}})", "\"px\""},
         {"dangling parent", file(entity(1, "7")), "parent"},
         {"cycle", file(entity(1, "2") + ", " + entity(2, "1")), "cycle"},
         {"self parent", file(entity(1, "1")), "cycle"},
@@ -2876,7 +2888,9 @@ void checkBuildSettings()
                                        "physics.scene",
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                       "shadows.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "zone_objects.scene"},
+                                       "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
+                                       "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene",
+                                       "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
 
     const std::filesystem::path root = looseTestDir("kast_build_settings_check") / "game";
@@ -2895,7 +2909,9 @@ void checkBuildSettings()
                                                           "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                                          "shadows.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "zone_objects.scene"},
+                                                          "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
+                                                          "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene",
+                                                          "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
     Document doc;
@@ -5040,6 +5056,141 @@ void checkFrustumCulling()
     bx::mtxLookAt(face, {0, 0, 0}, {-1, 0, 0}, {0, 1, 0}, bx::Handedness::Left);
     bx::mtxMul(viewProj, face, proj);
     check(!kast::intersects(kast::frustumFromViewProj(viewProj, false), box({5, 1, 1}, 0.5f)), "-X face culls a box on +X");
+}
+
+// Skies: the "sky" block, the gradient and face checks behind the renderer, and kast.sky.
+void checkSky()
+{
+    kast::Scene scene;
+    scene.sky = {kast::SkyMode::Cubemap, {0.1f, 0.2f, 0.3f}, {0.4f, 0.5f, 0.6f}, {0.7f, 0.8f, 0.9f},
+                 {"s/px.png", "s/nx.png", "s/py.png", "s/ny.png", "s/pz.png", "s/nz.jpg"}};
+    nlohmann::ordered_json json = kast::sceneToJson(scene);
+    check(json["sky"]["mode"] == "cubemap" && json["sky"]["faces"]["nz"] == "s/nz.jpg" && json["sky"]["top"][2] == kast::jsonNumber(0.3f),
+          "sky saved as a \"sky\" block, faces by name");
+    kast::Scene loaded;
+    std::string error;
+    check(kast::sceneFromJson(json, loaded, error) && loaded.sky.mode == kast::SkyMode::Cubemap &&
+              near(loaded.sky.top, {0.1f, 0.2f, 0.3f}) && near(loaded.sky.horizon, {0.4f, 0.5f, 0.6f}) &&
+              near(loaded.sky.bottom, {0.7f, 0.8f, 0.9f}) && loaded.sky.faces == scene.sky.faces,
+          "sky round trip");
+    check(kast::sceneToJson(loaded) == json, "sky saves back identically");
+    json.erase("sky");
+    check(kast::sceneFromJson(json, loaded, error) && loaded.sky.mode == kast::SkyMode::Off &&
+              near(loaded.sky.top, kast::SceneSky{}.top) && loaded.sky.faces == kast::SceneSky{}.faces,
+          "missing sky: off, defaults");
+    json["sky"] = {{"mode", "procedural"}, {"faces", {{"py", "up.png"}}}};
+    check(kast::sceneFromJson(json, loaded, error) && loaded.sky.mode == kast::SkyMode::Procedural &&
+              near(loaded.sky.horizon, kast::SceneSky{}.horizon) && loaded.sky.faces[2] == "up.png" &&
+              loaded.sky.faces[0].empty(),
+          "sky fields are optional");
+
+    // fs_sky.sc's gradient.
+    kast::SceneSky sky;
+    sky.top = {0, 0, 1};
+    sky.horizon = {1, 0, 0};
+    sky.bottom = {0, 1, 0};
+    check(near(kast::proceduralSkyColor(sky, 0.0f), {1, 0, 0}) && near(kast::proceduralSkyColor(sky, 1.0f), {0, 0, 1}) &&
+              near(kast::proceduralSkyColor(sky, -1.0f), {0, 1, 0}),
+          "sky gradient: horizon at eye level, top straight up, bottom straight down");
+    check(near(kast::proceduralSkyColor(sky, 0.25f), {0.5f, 0, 0.5f}) &&
+              near(kast::proceduralSkyColor(sky, -0.25f), {0.5f, 0.5f, 0}),
+          "sky gradient: blended by sqrt(|y|)");
+    bool smooth = true; // no jumps, across the horizon or anywhere else
+    for (int i = -100; i < 100; ++i)
+        smooth = smooth && bx::length(bx::sub(kast::proceduralSkyColor(sky, i / 100.0f),
+                                              kast::proceduralSkyColor(sky, (i + 1) / 100.0f))) < 0.15f;
+    check(smooth, "sky gradient is continuous");
+
+    // Cube faces: square, all px's size.
+    std::array<kast::MipImage, 6> faces;
+    for (kast::MipImage& face : faces)
+        face.width = face.height = 16;
+    check(kast::skyFacesError(faces).empty(), "six 16x16 faces make a cube");
+    faces[3].height = 8;
+    check(kast::skyFacesError(faces) == "face ny is 16x8, not square", "a non-square face is named");
+    faces[3].width = 8;
+    check(kast::skyFacesError(faces) == "face ny is 8x8, but px is 16x16", "a face of another size is named");
+
+    // kast.sky: get, partial set, invalid sets raise and change nothing; Stop restores the scene's sky.
+    const std::filesystem::path dir = luaTestDir();
+    writeFile(dir / "scripts/sky.lua", R"(local function fails(part, fn)
+    local ok, err = pcall(fn)
+    assert(not ok, "expected an error mentioning " .. part)
+    assert(string.find(err, part, 1, true), "error '" .. tostring(err) .. "' does not mention " .. part)
+    assert(string.find(err, "sky.lua:%d+:"), "error '" .. tostring(err) .. "' has no file:line")
+end
+local done = false
+return { update = function(dt)
+    if done then return end
+    done = true
+    local s = kast.sky.get()
+    assert(s.mode == "procedural" and s.top.z == 1 and s.horizon.x == 1 and s.bottom.y == 1 and s.faces.px == "",
+           "get: mode name, colors as {x, y, z}, faces by name")
+    kast.sky.set({mode = "cubemap", faces = {nz = "sky/nz.png"}, top = {x = 0.5, y = 0.25, z = 0}})
+    s = kast.sky.get()
+    assert(s.mode == "cubemap" and s.faces.nz == "sky/nz.png" and s.faces.px == "" and s.top.x == 0.5 and
+           s.horizon.x == 1, "partial set keeps the other fields and faces")
+    fails('"mode" must be', function() kast.sky.set({top = {x = 0, y = 0, z = 0}, mode = "night"}) end)
+    fails('unknown field "sun"', function() kast.sky.set({sun = 1}) end)
+    fails('"horizon" must be an array of 3 numbers between 0 and 1',
+          function() kast.sky.set({horizon = {x = 2, y = 0, z = 0}}) end)
+    fails('"bottom" must be a table {x=, y=, z=}', function() kast.sky.set({bottom = {1, 0, 0}}) end)
+    fails('unknown face "up"', function() kast.sky.set({faces = {up = "x.png"}}) end)
+    fails('"px" must be a string', function() kast.sky.set({faces = {px = 3}}) end)
+    fails('"faces" must be an object', function() kast.sky.set({faces = "x.png"}) end)
+    fails("kast.sky.set: expected a table", function() kast.sky.set("procedural") end)
+    fails("kast is read-only", function() kast.sky.get = nil end)
+    s = kast.sky.get()
+    assert(s.mode == "cubemap" and s.top.x == 0.5 and s.top.y == 0.25 and s.horizon.x == 1 and s.faces.px == "",
+           "invalid sets leave the sky unchanged")
+    kast.log("sky checks done")
+end })");
+    Document doc;
+    doc.path = (dir / "sky.scene").string();
+    doc.project = kast::Project{.root = dir, .name = "Sky"};
+    doc.scene.sky = sky; // the gradient above
+    doc.scene.sky.mode = kast::SkyMode::Procedural;
+    doc.scene.systems = {"scripts/sky.lua"};
+    startPlay(doc);
+    updatePlay(doc, 0.1f);
+    checkOk(doc.lua, 0, "kast.sky asserts pass");
+    check(logged("sky checks done"), "kast.sky checks ran");
+    check(doc.scene.sky.mode == kast::SkyMode::Cubemap && doc.scene.sky.faces[5] == "sky/nz.png" &&
+              near(doc.scene.sky.top, {0.5f, 0.25f, 0.0f}),
+          "kast.sky.set changes the scene's sky");
+    stopPlay(doc);
+    check(doc.scene.sky.mode == kast::SkyMode::Procedural && doc.scene.sky.faces[5].empty() &&
+              near(doc.scene.sky.top, {0, 0, 1}),
+          "Stop restores the sky kast.sky.set changed");
+}
+
+// --probe-png <png> <fx,fy,r,g,b,tolerance>...: each pixel at (fx, fy) (0..1 across and down the image) is within
+// tolerance of r, g, b (0..255) per channel. Screenshot tests use it to read rendered colors.
+int probePng(int argc, char** argv)
+{
+    std::string bytes;
+    const std::optional<kast::MipImage> image = kast::readFile(argv[2], bytes) ? kast::decodeImage(bytes, false) : std::nullopt;
+    if (!image) {
+        std::printf("probe: cannot read '%s' as PNG\n", argv[2]);
+        return 1;
+    }
+    int failed = 0;
+    for (int i = 3; i < argc; ++i) {
+        float fx = 0, fy = 0;
+        int r = 0, g = 0, b = 0, tolerance = 0;
+        if (std::sscanf(argv[i], "%f,%f,%d,%d,%d,%d", &fx, &fy, &r, &g, &b, &tolerance) != 6) {
+            std::printf("probe: bad probe '%s' (expected fx,fy,r,g,b,tolerance)\n", argv[i]);
+            return 1;
+        }
+        const int x = std::clamp(static_cast<int>(fx * image->width), 0, image->width - 1);
+        const int y = std::clamp(static_cast<int>(fy * image->height), 0, image->height - 1);
+        const uint8_t* p = &image->rgba[(static_cast<size_t>(y) * image->width + x) * 4];
+        const bool ok = std::abs(p[0] - r) <= tolerance && std::abs(p[1] - g) <= tolerance && std::abs(p[2] - b) <= tolerance;
+        std::printf("probe %s (%d, %d): %d %d %d, expected %d %d %d +-%d\n", ok ? "ok  " : "FAIL", x, y, p[0], p[1], p[2], r, g,
+                    b, tolerance);
+        failed += ok ? 0 : 1;
+    }
+    return failed == 0 ? 0 : 1;
 }
 
 void checkPostProcessing()
@@ -8427,6 +8578,8 @@ int main(int argc, char** argv)
 {
     kast::disableCrashDialogsIfRequested();
     kast::Audio::setDefaultOutput(kast::Audio::Output::Offline); // no sound from the checks; render() pulls the mix
+    if (argc >= 3 && std::string_view(argv[1]) == "--probe-png")
+        return probePng(argc, argv);
     if (argc == 2 && std::string_view(argv[1]) == "--bench-physics")
         return benchPhysics();
     if (argc == 2 && std::string_view(argv[1]) == "--net") // only the networking checks
@@ -8452,6 +8605,7 @@ int main(int argc, char** argv)
     checkShadows();
     checkFrustumCulling();
     checkPostProcessing();
+    checkSky();
     checkMaterialFiles();
     checkMaterialLibrary();
     checkTextureDecode();

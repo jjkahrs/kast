@@ -114,6 +114,7 @@ struct LuaSystems::State {
     sol::table physicsApi; // kast.physics.*
     sol::table audioApi;   // kast.audio.*
     sol::table netApi;     // kast.net.*
+    sol::table skyApi;     // kast.sky.*
     sol::table authApi;    // kast.auth.*, only while Online Services are enabled
     sol::table worldApi;   // kast.world.*, likewise
     sol::table guiApi;     // kast.gui.*, only with a GuiAccess
@@ -155,6 +156,7 @@ struct LuaSystems::State {
     void bindPhysicsApi();
     void bindAudioApi();
     void bindNetApi();
+    void bindSkyApi();
     void bindAuthApi();
     void bindWorldApi();
     void bindGuiApi();
@@ -343,6 +345,7 @@ sol::environment LuaSystems::State::environment()
     kast["physics"] = readOnly(physicsApi);
     kast["audio"] = readOnly(audioApi);
     kast["net"] = readOnly(netApi);
+    kast["sky"] = readOnly(skyApi);
     kast["items"] = itemTable();
     if (auth.enabled())
         kast["auth"] = readOnly(authApi);
@@ -864,6 +867,7 @@ void LuaSystems::State::bindApi()
     bindPhysicsApi();
     bindAudioApi();
     bindNetApi();
+    bindSkyApi();
     bindAuthApi();
     bindWorldApi();
     bindGuiApi();
@@ -1275,6 +1279,50 @@ void LuaSystems::State::bindGuiApi()
     guiApi.set_function("hovered", [this]() -> sol::object {
         const std::optional<std::string> id = gui->hovered();
         return id ? sol::make_object(lua, *id) : sol::object(sol::lua_nil);
+    });
+}
+
+// kast.sky.*: the scene's sky as its "sky" block (scene_io.h), but colors as {x=, y=, z=} like kast.get's Vec3 fields.
+// Runtime only: never saved, and Stop restores the scene's own.
+void LuaSystems::State::bindSkyApi()
+{
+    const FieldDesc color{.name = "", .kind = FieldKind::Vec3};
+    skyApi = lua.create_table();
+    skyApi.set_function("get", [this, color] {
+        const nlohmann::ordered_json json = skyToJson(scene.sky);
+        sol::table table = jsonToLua(lua, json).as<sol::table>();
+        for (const char* key : {"top", "horizon", "bottom"})
+            table[key] = fieldJsonToLua(lua, color, json[key]);
+        return table;
+    });
+    // Partial tables: listed fields (and faces) change, the rest keep their values. All-or-nothing: anything the scene
+    // file would reject raises and leaves the sky unchanged.
+    skyApi.set_function("set", [this, color](sol::this_state L, const sol::object& fields) {
+        if (fields.get_type() != sol::type::table)
+            raise(L, std::format("kast.sky.set: expected a table, got {}", toString(L, fields)));
+        nlohmann::ordered_json json = skyToJson(scene.sky);
+        std::string error;
+        for (const auto& [key, value] : fields.as<sol::table>()) {
+            if (key.get_type() != sol::type::string)
+                raise(L, std::format("kast.sky.set: field names must be strings, got {}", toString(L, key)));
+            const std::string name = key.as<std::string>();
+            nlohmann::json plain;
+            if (name == "top" || name == "horizon" || name == "bottom") {
+                if (!luaToFieldJson({.name = name, .kind = color.kind}, value, json[name], error))
+                    raise(L, "kast.sky.set: " + error);
+            } else if (!luaToJson(value, plain, error)) {
+                raise(L, std::format("kast.sky.set: \"{}\": {}", name, error));
+            } else if (name == "faces" && plain.is_object()) {
+                for (const auto& [face, path] : plain.items())
+                    json["faces"][face] = path;
+            } else {
+                json[name] = plain; // an unknown field or a bad value: skyFromJson says which
+            }
+        }
+        SceneSky sky;
+        if (!skyFromJson(json, sky, error))
+            raise(L, "kast.sky.set: " + error);
+        scene.sky = sky;
     });
 }
 

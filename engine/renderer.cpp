@@ -425,6 +425,7 @@ void Renderer::init()
     const uint32_t white = 0xffffffff;
     white_ = bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
                                    bgfx::copy(&white, sizeof(white)));
+    sky_.init();
 }
 
 void Renderer::shutdown()
@@ -470,6 +471,7 @@ void Renderer::shutdown()
         bgfx::destroy(previewTexture_);
     previewTexture_ = BGFX_INVALID_HANDLE;
     bgfx::destroy(white_);
+    sky_.shutdown();
 }
 
 // ponytail: full-res tiles (66049 vertices, 131072 triangles each); LOD and skirts when the draw distance grows.
@@ -1063,6 +1065,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         for (size_t i : indices)
             submit(*opaque[i], opaqueLights[i]);
     }
+    sky_.draw(scene.sky, root_, view, viewMtx, projMtx); // behind the opaque meshes, under the blended ones
     for (size_t i : backToFront(centers, eye))
         submit(*blended[i], nearestPointLights(pointLights, blended[i]->bounds));
 }

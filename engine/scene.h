@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -98,6 +99,21 @@ struct PointLight {
 struct SceneLighting {
     bx::Vec3 ambientColor{1.0f, 1.0f, 1.0f}; // linear RGB 0..1
     float ambientIntensity = 0.2f;           // >= 0
+};
+
+enum class SkyMode { Off, Procedural, Cubemap };
+constexpr const char* kSkyFaceNames[6] = {"px", "nx", "py", "ny", "pz", "nz"}; // SceneSky::faces order
+
+// Per-scene background drawn behind all geometry (see sky.h). Off: the view clears to its background (or fog) color, as
+// before skies. Background only: no effect on lighting.
+struct SceneSky {
+    SkyMode mode = SkyMode::Off;
+    bx::Vec3 top{0.10f, 0.30f, 0.75f};     // linear RGB 0..1: looking straight up
+    bx::Vec3 horizon{0.55f, 0.70f, 0.85f}; // at eye level
+    bx::Vec3 bottom{0.20f, 0.20f, 0.22f};  // straight down
+    // Cubemap: project-relative PNG/JPG images, square and all the same size, looking along +X, -X, +Y, -Y, +Z, -Z
+    // (kSkyFaceNames). A face that fails to load shows the procedural sky instead.
+    std::array<std::string, 6> faces;
 };
 
 enum class Tonemap { None, Aces }; // None: clamp to 0..1 (the look before post-processing)
@@ -319,6 +335,8 @@ public:
 
     // Saved under "lighting" in the scene file.
     SceneLighting lighting;
+    // Saved under "sky" in the scene file.
+    SceneSky sky;
     // Saved under "postProcessing" in the scene file.
     ScenePostProcessing postProcessing;
     // Saved under "physics" in the scene file.
