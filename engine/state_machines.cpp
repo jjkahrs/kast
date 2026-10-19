@@ -152,10 +152,18 @@ void StateMachines::syncAll()
     const auto lost = registry.view<StateMachineRuntime>(entt::exclude<StateMachine>);
     registry.remove<StateMachineRuntime>(lost.begin(), lost.end());
     std::vector<entt::entity> entities; // collected first: enter callbacks may change the registry
-    scene_->forEachDepthFirst([&](entt::entity entity) {
-        if (registry.all_of<StateMachine>(entity))
+    for (auto [entity, machine] : registry.view<StateMachine>().each()) {
+        const auto* runtime = registry.try_get<StateMachineRuntime>(entity);
+        if (!runtime || runtime->machine != machine.machine)
             entities.push_back(entity);
-    });
+    }
+    if (entities.size() > 1) { // more than one to enter: in depth-first order
+        entities.clear();
+        scene_->forEachDepthFirst([&](entt::entity entity) {
+            if (registry.all_of<StateMachine>(entity))
+                entities.push_back(entity);
+        });
+    }
     for (entt::entity entity : entities)
         syncEntity(entity);
 }

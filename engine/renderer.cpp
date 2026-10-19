@@ -239,6 +239,37 @@ std::vector<std::vector<size_t>> batchDraws(size_t count, KeyOf keyOf)
     return batches;
 }
 
+// World matrices for one frame, each ancestor's computed once (Scene::worldMatrix walks the whole parent chain per
+// call). Same math as Scene::worldMatrix, so the same result.
+class WorldMatrices {
+public:
+    explicit WorldMatrices(const Scene& scene) : scene_(scene) {}
+
+    Mat4 operator()(entt::entity entity)
+    {
+        const size_t index = entt::to_entity(entity);
+        if (index < done_.size() && done_[index])
+            return cache_[index];
+        Mat4 world;
+        scene_.localMatrix(entity, world.data());
+        if (const entt::entity parent = scene_.parent(entity); parent != entt::null) {
+            const Mat4 local = world;
+            bx::mtxMul(world.data(), local.data(), (*this)(parent).data());
+        }
+        if (index >= done_.size()) {
+            done_.resize(index + 1, false);
+            cache_.resize(index + 1);
+        }
+        done_[index] = true;
+        return cache_[index] = world;
+    }
+
+private:
+    const Scene& scene_;
+    std::vector<Mat4> cache_; // by entity index
+    std::vector<bool> done_;
+};
+
 // The file a texture path reads: a model's embedded image "<model>#<i>" comes from the model file.
 std::string textureFile(const std::string& path)
 {
@@ -869,10 +900,8 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     float lightDir[4] = {0.0f, -1.0f, 0.0f, 0.0f};
     float lightColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     const DirectionalLight* sun = nullptr;
-    scene.forEachDepthFirst([&](entt::entity entity) {
-        const auto* light = registry.try_get<DirectionalLight>(entity);
-        if (sun || !light)
-            return;
+    if (const entt::entity entity = firstDepthFirst<DirectionalLight>(scene); entity != entt::null) {
+        const DirectionalLight* light = &registry.get<DirectionalLight>(entity);
         sun = light;
         float world[16];
         scene.worldMatrix(entity, world);
@@ -884,7 +913,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         lightColor[0] = light->color.x * light->intensity;
         lightColor[1] = light->color.y * light->intensity;
         lightColor[2] = light->color.z * light->intensity;
-    });
+    }
     const SceneLighting& lighting = scene.lighting;
     const float ambient[4] = {lighting.ambientColor.x * lighting.ambientIntensity,
                               lighting.ambientColor.y * lighting.ambientIntensity,
@@ -901,14 +930,14 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
                                light.castShadows, light.bias});
     }
 
-    // ponytail: world matrices are recomputed up the parent chain per entity; cache them when scenes get deep or large.
+    WorldMatrices worldOf(scene);
     std::vector<DrawItem> draws;
     std::vector<std::vector<Mat4>> boneSets;
     for (auto [entity, mesh] : registry.view<MeshRenderer>().each()) {
         const auto* instance = registry.try_get<MaterialInstance>(entity);
         const Mesh& gpu = meshes_[static_cast<size_t>(mesh.primitive)];
         DrawItem item;
-        scene.worldMatrix(entity, item.world.data());
+        item.world = worldOf(entity);
         item.bounds = transformBounds(primitiveBounds(mesh.primitive), item.world.data());
         item.material = instance ? &instance->material : &materials_.get(mesh.material);
         item.vertices = gpu.vertices;
@@ -917,11 +946,8 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         item.receiveShadows = mesh.receiveShadows;
         draws.push_back(item);
     }
-    for (auto [entity, model] : registry.view<ModelRenderer>().each()) {
-        float world[16];
-        scene.worldMatrix(entity, world);
-        addModelDraws(scene, entity, model, world, draws, boneSets);
-    }
+    for (auto [entity, model] : registry.view<ModelRenderer>().each())
+        addModelDraws(scene, entity, model, worldOf(entity).data(), draws, boneSets);
     addTerrainDraws(scene, draws);
 
     const ShadowFrame shadows = renderShadows(sun, {lightDir[0], lightDir[1], lightDir[2]}, draws, boneSets,

@@ -120,7 +120,8 @@ struct LuaSystems::State {
     DefinitionFiles fsmFiles; // state machine definition files at the last load, for hot reload
     std::string callbackPath; // the definition file whose enter/exit is running (log prefixes, event publisher)
     std::vector<System> systems;
-    std::unordered_map<EntityId, entt::entity> ids; // ponytail: rebuilt every tick, O(entities); index in Scene if big
+    std::unordered_map<EntityId, entt::entity> ids; // ponytail: rebuilt after any entity creation; index in Scene if big
+    uint64_t indexedAt = 0; // Scene::creations() when ids was built
     std::map<std::string, std::shared_ptr<const PrefabAsset>> prefabs; // kast.instantiate's, loaded once per session
     System* current = nullptr; // whose code is running: log prefixes, event publisher and subscription owner
 
@@ -193,7 +194,8 @@ void LuaSystems::State::init(const std::vector<std::string>& paths)
 
 void LuaSystems::State::tick(float dt)
 {
-    indexIds();
+    if (Scene::creations() != indexedAt)
+        indexIds();
     // ponytail: one stat per script per frame; poll on a timer if script counts grow large.
     for (System& system : systems) {
         if (system.file.empty()) // never resolved: no project or a path outside it
@@ -226,6 +228,7 @@ void LuaSystems::State::stop()
 void LuaSystems::State::indexIds()
 {
     ids.clear();
+    indexedAt = Scene::creations();
     for (auto [entity, id] : scene.registry().view<PersistentId>().each())
         ids.emplace(id.value, entity);
 }

@@ -29,6 +29,7 @@ entt::entity Scene::createWithId(EntityId id, const std::string& name, entt::ent
     registry_.emplace<Hierarchy>(entity, parent);
     siblings(parent).push_back(entity);
     nextId_ = std::max(nextId_, id + 1);
+    ++creations_;
     return entity;
 }
 
@@ -148,12 +149,7 @@ void Scene::localMatrix(entt::entity entity, float* out) const
 
 entt::entity activeCamera(const Scene& scene)
 {
-    entt::entity found = entt::null;
-    scene.forEachDepthFirst([&](entt::entity entity) {
-        if (found == entt::null && scene.registry().all_of<Camera>(entity))
-            found = entity;
-    });
-    return found;
+    return firstDepthFirst<Camera>(scene);
 }
 
 void cameraMatrices(const Scene& scene, entt::entity camera, float aspect, bool homogeneousDepth, float* view, float* proj)

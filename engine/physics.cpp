@@ -352,6 +352,7 @@ struct Physics::World {
 
     void step();
     void sync();
+    bool syncEntity(entt::entity entity, bool rebuild);
     void create(entt::entity entity, Body body);
     void destroy(entt::entity entity);
     void syncPose(Body& body, const bx::Vec3& position, const bx::Quaternion& rotation);
@@ -422,64 +423,86 @@ void Physics::World::sync()
     for (entt::entity entity : gone)
         destroy(entity);
 
-    // Depth-first, so bodies are created in a stable order (Jolt's results depend on it).
-    // ponytail: visits every entity each step; keep a physics entity list if scenes get huge.
-    scene.forEachDepthFirst([&](entt::entity entity) {
-        if (const auto* tile = registry.try_get<TerrainTile>(entity); tile && tile->data) {
-            const auto it = bodies.find(entity);
-            if (it != bodies.end() && it->second.terrain == tile->data)
-                return; // static at its map position: its Transform is ignored
-            if (it != bodies.end())
-                destroy(entity);
-            Body wanted;
-            wanted.terrain = tile->data;
-            wanted.position = {float(tile->data->tile.x) * map::kTileSize, 0.0f, float(tile->data->tile.z) * map::kTileSize};
-            create(entity, std::move(wanted));
-            return;
-        }
-        const auto* collider = registry.try_get<Collider>(entity);
-        const auto* rigidbody = registry.try_get<Rigidbody>(entity);
-        const auto* controller = registry.try_get<CharacterController>(entity);
-        if (!collider && !controller) {
-            if (rigidbody && reported.insert(entity).second)
-                log::warn(std::format("Physics: entity {} has a Rigidbody but no Collider; it is ignored",
-                                      describe(scene, entity)));
-            return;
-        }
-        if (const char* conflict = physicsConflict(registry, entity)) {
-            if (reported.insert(entity).second)
-                log::error(std::format("Physics: entity {}: {}", describe(scene, entity), conflict));
-            return;
-        }
-        Body wanted;
-        if (collider)
-            wanted.collider = *collider;
-        if (rigidbody)
-            wanted.rigidbody = *rigidbody;
-        if (controller)
-            wanted.controller = *controller;
-        bx::Vec3 position{bx::InitNone}, scale{bx::InitNone};
-        bx::Quaternion rotation{bx::InitNone};
-        worldPose(scene, entity, position, rotation, scale);
-        wanted.scale = scale;
+    // Poses from the physics components alone, without a tree walk. A body to create or rebuild sends the whole scene
+    // through a depth-first pass instead, so bodies are created in a stable order (Jolt's results depend on it).
+    bool settled = true;
+    const auto visit = [&](entt::entity entity) { settled = syncEntity(entity, false) && settled; };
+    for (entt::entity entity : registry.view<TerrainTile>())
+        visit(entity);
+    for (entt::entity entity : registry.view<Collider>(entt::exclude<TerrainTile>))
+        visit(entity);
+    for (entt::entity entity : registry.view<CharacterController>(entt::exclude<TerrainTile, Collider>))
+        visit(entity);
+    for (entt::entity entity : registry.view<Rigidbody>(entt::exclude<TerrainTile, Collider, CharacterController>))
+        visit(entity);
+    if (!settled)
+        scene.forEachDepthFirst([&](entt::entity entity) { syncEntity(entity, true); });
+}
 
+// One entity's body to match its components, its pose to match its Transform. Without rebuild, an entity whose body
+// must be created or rebuilt is left as it is and false returned.
+bool Physics::World::syncEntity(entt::entity entity, bool rebuild)
+{
+    const entt::registry& registry = scene.registry();
+    if (const auto* tile = registry.try_get<TerrainTile>(entity); tile && tile->data) {
         const auto it = bodies.find(entity);
-        if (it != bodies.end() && same(it->second.collider, wanted.collider) &&
-            same(it->second.rigidbody, wanted.rigidbody) && same(it->second.controller, wanted.controller) &&
-            sameScale(it->second.scale, wanted.scale)) {
-            syncPose(it->second, position, rotation);
-            return;
-        }
-        if (it != bodies.end()) {
-            // Rebuilt: keep moving as before.
-            wanted.walk = it->second.walk;
-            wanted.fall = it->second.fall;
+        if (it != bodies.end() && it->second.terrain == tile->data)
+            return true; // static at its map position: its Transform is ignored
+        if (!rebuild)
+            return false;
+        if (it != bodies.end())
             destroy(entity);
-        }
-        wanted.position = position;
-        wanted.rotation = rotation;
+        Body wanted;
+        wanted.terrain = tile->data;
+        wanted.position = {float(tile->data->tile.x) * map::kTileSize, 0.0f, float(tile->data->tile.z) * map::kTileSize};
         create(entity, std::move(wanted));
-    });
+        return true;
+    }
+    const auto* collider = registry.try_get<Collider>(entity);
+    const auto* rigidbody = registry.try_get<Rigidbody>(entity);
+    const auto* controller = registry.try_get<CharacterController>(entity);
+    if (!collider && !controller) {
+        if (rigidbody && reported.insert(entity).second)
+            log::warn(std::format("Physics: entity {} has a Rigidbody but no Collider; it is ignored",
+                                  describe(scene, entity)));
+        return true;
+    }
+    if (const char* conflict = physicsConflict(registry, entity)) {
+        if (reported.insert(entity).second)
+            log::error(std::format("Physics: entity {}: {}", describe(scene, entity), conflict));
+        return true;
+    }
+    Body wanted;
+    if (collider)
+        wanted.collider = *collider;
+    if (rigidbody)
+        wanted.rigidbody = *rigidbody;
+    if (controller)
+        wanted.controller = *controller;
+    bx::Vec3 position{bx::InitNone}, scale{bx::InitNone};
+    bx::Quaternion rotation{bx::InitNone};
+    worldPose(scene, entity, position, rotation, scale);
+    wanted.scale = scale;
+
+    const auto it = bodies.find(entity);
+    if (it != bodies.end() && same(it->second.collider, wanted.collider) &&
+        same(it->second.rigidbody, wanted.rigidbody) && same(it->second.controller, wanted.controller) &&
+        sameScale(it->second.scale, wanted.scale)) {
+        syncPose(it->second, position, rotation);
+        return true;
+    }
+    if (!rebuild)
+        return false;
+    if (it != bodies.end()) {
+        // Rebuilt: keep moving as before.
+        wanted.walk = it->second.walk;
+        wanted.fall = it->second.fall;
+        destroy(entity);
+    }
+    wanted.position = position;
+    wanted.rotation = rotation;
+    create(entity, std::move(wanted));
+    return true;
 }
 
 void Physics::World::create(entt::entity entity, Body body)

@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -279,6 +280,9 @@ public:
 
     bool valid(entt::entity entity) const { return entity != entt::null && registry_.valid(entity); }
 
+    // Entities created so far by every Scene: unchanged means no entity is new since, for caches keyed by entity.
+    static uint64_t creations() { return creations_; }
+
     // Destroys the entity and its whole subtree. No-op if entity isn't valid.
     void destroy(entt::entity entity);
 
@@ -339,7 +343,24 @@ private:
     entt::registry registry_;
     std::vector<entt::entity> roots_;
     EntityId nextId_ = 1;
+    inline static std::atomic<uint64_t> creations_ = 0;
 };
+
+// The first entity with a C in depth-first order, or entt::null if there is none. Walks the tree only when more than
+// one entity has a C.
+template <typename C>
+entt::entity firstDepthFirst(const Scene& scene)
+{
+    const auto view = scene.registry().view<const C>();
+    if (view.size() <= 1)
+        return view.empty() ? entt::null : view.front();
+    entt::entity found = entt::null;
+    scene.forEachDepthFirst([&](entt::entity entity) {
+        if (found == entt::null && view.contains(entity))
+            found = entity;
+    });
+    return found;
+}
 
 // The camera the game renders from: the first Camera entity in depth-first order, or entt::null if there is none.
 entt::entity activeCamera(const Scene& scene);
