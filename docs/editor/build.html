@@ -61,8 +61,9 @@ components from it, titles its window with the project name and plays <code>star
 systems, Lua systems, Lua components, <code>kast.loadScene</code>), rendering through the scene's Main Camera. It has no console
 window and doesn't hot reload. Its scene's <a href="../engine/game-gui.html#game-gui">game GUIs</a> show over the scene and take mouse and keyboard
 input. Flags (for tests): <code>--frames N</code> and <code>--screenshot out.png</code>, as in the editor, <code>--gui-click &lt;id&gt;</code> (click that
-GUI element on frame 10), <code>--size WxH</code> (window size, default 1280x720), <code>--window-pos X,Y</code> (window position, as in the editor; also <code>KAST_WINDOW_POS</code>), <code>--no-audio-device</code> (silent null audio backend) and <code>--gpu-stats</code> (log the average GPU time of
-the frame's views, after 10 warmup frames, on exit). A missing
+GUI element on frame 10), <code>--size WxH</code> (window size, default 1280x720), <code>--window-pos X,Y</code> (window position, as in the editor; also <code>KAST_WINDOW_POS</code>), <code>--no-audio-device</code> (silent null audio backend), <code>--gpu-stats</code> (log the average GPU time of
+the frame's views, after 10 warmup frames, on exit), and <code>--no-instancing</code> and <code>--no-culling</code> (turn off
+<a href="../engine/instancing-and-culling.html#instancing-and-culling">instancing and culling</a>, as in the editor). A missing
 or corrupt <code>game.pak</code>, an invalid <code>project.kast</code>, Online Services enabled with a CA file missing from <code>game.pak</code> or
 not a valid certificate, or a <code>startScene</code> that is missing or doesn't load shows an error
 message box and exits 1; with <code>--frames</code> the message is only logged (stdout), so tests never block.</p>

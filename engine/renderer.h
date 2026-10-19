@@ -1,5 +1,6 @@
 #pragma once
 
+#include "frustum.h"
 #include "material.h"
 #include "model.h"
 #include "scene.h"
@@ -63,6 +64,9 @@ void buildMips(MipImage& image, bool srgb);
 // eye, rendered in kShadowViews views before the scene's (see shadow.h). renderOverlays draws the
 // editor's: a ground grid, axis lines, a short frustum preview per Camera, the range of the selected PointLight and
 // the selected entity's collider.
+// Every pass culls its draws to its view frustum (main camera, each cascade, each cube face), and draws that share
+// buffers, material, shadow flags and (main pass) point lights, unskinned and not blended, are drawn as one GPU-instanced
+// submit (see docs/engine/instancing-and-culling.html).
 // The caller owns the views' framebuffers, rects and clears; these set the view transform and mode and submit.
 class Renderer {
 public:
@@ -84,6 +88,10 @@ public:
     // not saved yet.
     void setPreview(const std::string& materialPath, const Material& material, const std::string& texturePath,
                     MipImage image);
+    // Both on by default. Instancing off: every draw is its own submit. Culling off: every draw goes to every pass.
+    // Either way the output is the same, so off is a reference (--no-instancing, --no-culling).
+    void setInstancing(bool on) { instancing_ = on; }
+    void setCulling(bool on) { culling_ = on; }
 
 private:
     struct Mesh {
@@ -103,11 +111,12 @@ private:
     // One mesh to submit: the transform, buffers and material, plus its bone matrices when skinned.
     struct DrawItem {
         Mat4 world{};
-        Aabb bounds{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}}; // world space, for point lights and blend sorting
+        Aabb bounds{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}}; // world space, for culling, point lights and blend sorting
         const Material* material = nullptr;
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
         int bones = -1; // index into the frame's bone sets; -1 = not skinned
+        bool posed = false; // animated: bounds are the bind pose's, so the draw is never culled
         bool castShadows = true;
         bool receiveShadows = true;
     };
@@ -141,7 +150,16 @@ private:
     ShadowFrame renderShadows(const DirectionalLight* sun, const bx::Vec3& sunDir, const std::vector<DrawItem>& draws,
                               const std::vector<std::vector<Mat4>>& boneSets, const std::vector<PointLightSample>& pointLights,
                               const float* viewMtx, const float* projMtx, bgfx::ViewId shadowViews);
-    void submitShadowCaster(const DrawItem& item, const std::vector<std::vector<Mat4>>& boneSets, bgfx::ViewId view);
+    // Draws one batch (see batchDraws) into a shadow view: instanced if it can be, else one by one.
+    void submitShadowCasters(const std::vector<const DrawItem*>& batch, const std::vector<std::vector<Mat4>>& boneSets,
+                             bgfx::ViewId view);
+    // Culling is on and item is outside frustum (posed draws never are: their bounds are the bind pose's).
+    bool culled(const DrawItem& item, const Frustum& frustum) const
+    {
+        return culling_ && !item.posed && !intersects(frustum, item.bounds);
+    }
+    // True if batch can be one instanced submit, with its world matrices in instances (this frame's buffer).
+    bool instanced(const std::vector<const DrawItem*>& batch, bgfx::InstanceDataBuffer& instances) const;
     void drawGrid(bgfx::ViewId view);
     void drawCameraFrustums(const Scene& scene, bgfx::ViewId view);
     void drawPointLightRange(const Scene& scene, bgfx::ViewId view, entt::entity selected);
@@ -163,9 +181,11 @@ private:
     bgfx::VertexLayout modelLayout_; // ModelVertex
     bgfx::ProgramHandle meshProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle skinnedProgram_ = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle instancedProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle lineProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle shadowProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle shadowSkinnedProgram_ = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle shadowInstancedProgram_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle normalMatrix_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle bones_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle baseColor_ = BGFX_INVALID_HANDLE;
@@ -206,6 +226,8 @@ private:
     std::string previewMaterialPath_, previewTexturePath_;      // setPreview
     Material previewMaterial_;
     bgfx::TextureHandle previewTexture_ = BGFX_INVALID_HANDLE;
+    bool instancing_ = true;
+    bool culling_ = true;
 };
 
 } // namespace kast

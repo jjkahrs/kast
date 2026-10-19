@@ -63,7 +63,7 @@ constexpr const char* kUsage =
     "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy]] [--sim-key frame,key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
-    "[--prefab-save] [--prefab-back] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--no-vsync] [--no-audio-device] [--crash abort|assert] | "
+    "[--prefab-save] [--prefab-back] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel, for screenshots of mouse-driven games.
@@ -143,6 +143,8 @@ struct Options {
     bool logFps = false;            // log frames per second, editor CPU and GPU frame times once a second
     std::string crash;              // --crash abort|assert: fail on purpose, to test KAST_NO_CRASH_DIALOGS
     bool noVsync = false;           // present as fast as possible, to measure the frame rate past the display's
+    bool noInstancing = false;      // the Scene and Game views draw every mesh one by one (Renderer::setInstancing)
+    bool noCulling = false;         // the Scene and Game views draw every mesh in every pass (Renderer::setCulling)
     bool noAudioDevice = false;     // play sound on the null backend (silent), as if there were no output device
     std::vector<std::string> childArgs; // the flags after --, passed on to the editor the Project Manager starts
 
@@ -409,6 +411,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.logFps = true;
         } else if (arg == "--no-vsync") {
             options.noVsync = true;
+        } else if (arg == "--no-instancing") {
+            options.noInstancing = true;
+        } else if (arg == "--no-culling") {
+            options.noCulling = true;
         } else if (arg == "--no-audio-device") {
             options.noAudioDevice = true;
         } else if (arg == "--crash" && hasValue && (argv[i + 1] == std::string_view("abort") ||
@@ -488,7 +494,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.openExternal.empty() || !options.dropModel.empty() || options.logFps ||
                              !options.prefabSteps.empty() || !options.assetsDelete.empty() || !options.inspectorApplyMenu.empty() ||
                              options.prefabBackPrompt ||
-                             options.noVsync || !options.worldAddress.empty() || options.onlineLoginEnv ||
+                             options.noVsync || options.noInstancing || options.noCulling || !options.worldAddress.empty() || options.onlineLoginEnv ||
                              options.onlineCompose;
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --select-network-entity, --add-component-popup, --new-component[-prompt], "
@@ -997,6 +1003,10 @@ int main(int argc, char** argv)
         viewport.init();
         viewport.setPostEffects(!options->noScenePost);
         game.init();
+        for (kast::Renderer* renderer : {&viewport.renderer(), &game.renderer()}) {
+            renderer->setInstancing(!options->noInstancing);
+            renderer->setCulling(!options->noCulling);
+        }
         kast::gui::init();
         if (!options->openGui.empty()) {
             std::filesystem::path rml = std::filesystem::path(reinterpret_cast<const char8_t*>(options->openGui.c_str()));

@@ -202,8 +202,8 @@ std::shared_ptr<const TerrainTileData> TerrainStreamer::load(const LoadedMap& ma
     return data;
 }
 
-// ponytail: one entity tree per object, created on the main thread with the tile; GPU instancing and a worker load if
-// dense tiles hitch.
+// ponytail: one entity tree per object, created on the main thread with the tile (the Renderer instances repeated
+// meshes); a worker load if dense tiles hitch.
 void TerrainStreamer::spawnObjects(Scene& scene, entt::entity tile, const LoadedMap& map, const TerrainTileData& data)
 {
     const bx::Vec3 origin{float(data.tile.x) * map::kTileSize, 0.0f, float(data.tile.z) * map::kTileSize};

@@ -38,7 +38,7 @@ constexpr int kScreenshotTimeoutFrames = 30;
 constexpr const char* kPakFileName = "game.pak";
 constexpr int kGuiClickFrame = 10; // --gui-click: once the GUIs have loaded and laid out
 constexpr const char* kUsage =
-    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--size WxH] [--window-pos X,Y] [--gpu-stats] [--no-audio-device]";
+    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--size WxH] [--window-pos X,Y] [--gpu-stats] [--no-instancing] [--no-culling] [--no-audio-device]";
 constexpr int kGpuStatsWarmupFrames = 10; // --gpu-stats: skip startup frames (shader and target creation)
 
 struct Options {
@@ -48,6 +48,8 @@ struct Options {
     int width = kast::AppConfig{}.width, height = kast::AppConfig{}.height; // --size: window size
     std::optional<std::pair<int, int>> windowPos; // --window-pos: window top-left
     bool gpuStats = false;  // log the average GPU frame time on exit
+    bool noInstancing = false; // draw every mesh one by one (Renderer::setInstancing)
+    bool noCulling = false;    // draw every mesh in every pass (Renderer::setCulling)
     bool noAudioDevice = false; // tests: sound on the null backend (silent), as if there were no output device
 };
 
@@ -91,6 +93,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
             }
         } else if (arg == "--gpu-stats") {
             options.gpuStats = true;
+        } else if (arg == "--no-instancing") {
+            options.noInstancing = true;
+        } else if (arg == "--no-culling") {
+            options.noCulling = true;
         } else if (arg == "--no-audio-device") {
             options.noAudioDevice = true;
         } else {
@@ -182,6 +188,8 @@ int main(int argc, char** argv)
         window = created;
         kast::log::info(std::format("Window title: {}", SDL_GetWindowTitle(window)));
         renderer.init();
+        renderer.setInstancing(!options->noInstancing);
+        renderer.setCulling(!options->noCulling);
         post.init();
         kast::gui::init();
         lua.setGui(&gui); // kast.gui.*

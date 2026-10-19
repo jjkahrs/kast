@@ -222,6 +222,14 @@
 <td>Present frames as fast as possible instead of at the display's refresh rate (with <code>--log-fps</code>, to measure headroom).</td>
 </tr>
 <tr>
+<td><code>--no-instancing</code></td>
+<td>The Scene and Game views draw every mesh with its own draw call instead of batching same-mesh, same-material draws into GPU-instanced ones (see <a href="../engine/instancing-and-culling.html#instancing-and-culling">Instancing and culling</a>). For comparing output and performance.</td>
+</tr>
+<tr>
+<td><code>--no-culling</code></td>
+<td>The Scene and Game views draw every mesh in every pass (camera, shadow cascades, point light cube faces) instead of only those whose bounds are inside that pass's view (see <a href="../engine/instancing-and-culling.html#instancing-and-culling">Instancing and culling</a>). For comparing output and performance.</td>
+</tr>
+<tr>
 <td><code>--no-audio-device</code></td>
 <td>Play sound on miniaudio's null backend (silent), as if there were no output device: one warning, everything else behaves normally. Tests use it.</td>
 </tr>

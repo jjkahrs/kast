@@ -41,7 +41,8 @@ set(KAST_EDITOR_SHADERS)
 set(KAST_ENGINE_SHADERS)
 foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
              engine/shaders/vs_mesh engine/shaders/vs_mesh_skinned engine/shaders/fs_mesh engine/shaders/vs_line
-             engine/shaders/vs_shadow engine/shaders/vs_shadow_skinned engine/shaders/fs_shadow
+             engine/shaders/vs_mesh_instanced engine/shaders/vs_shadow engine/shaders/vs_shadow_skinned
+             engine/shaders/vs_shadow_instanced engine/shaders/fs_shadow
              engine/shaders/fs_line
              engine/shaders/gui/vs_gui engine/shaders/gui/fs_gui
              engine/shaders/post/vs_post engine/shaders/post/fs_post_bright engine/shaders/post/fs_post_down
@@ -105,7 +106,7 @@ target_link_libraries(kast_map PUBLIC nlohmann_json::nlohmann_json)
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/prefab.cpp engine/components.cpp
-  engine/systems.cpp engine/renderer.cpp engine/shadow.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_world_api.cpp engine/project.cpp
+  engine/systems.cpp engine/renderer.cpp engine/shadow.cpp engine/frustum.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp

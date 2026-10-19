@@ -40,6 +40,7 @@
 #include <scene_gui.h>
 #include <scene_io.h>
 #include <shadow.h>
+#include <frustum.h>
 #include <state_machines.h>
 #include <systems.h>
 #include <terrain.h>
@@ -4994,6 +4995,53 @@ void checkShadows()
 
 // --- Post-processing ---
 
+void checkFrustumCulling()
+{
+    const auto box = [](bx::Vec3 center, float half) {
+        return kast::Aabb{bx::sub(center, {half, half, half}), bx::add(center, {half, half, half})};
+    };
+    // A camera at the origin looking down -Z, 90 degree FOV, square, near 0.1, far 100: at depth d the view is d wide
+    // each side.
+    for (const bool homogeneousDepth : {false, true}) {
+        float view[16], proj[16], viewProj[16];
+        bx::mtxLookAt(view, {0, 0, 0}, {0, 0, -1}, {0, 1, 0}, bx::Handedness::Right);
+        bx::mtxProj(proj, 90.0f, 1.0f, 0.1f, 100.0f, homogeneousDepth, bx::Handedness::Right);
+        bx::mtxMul(viewProj, view, proj);
+        const kast::Frustum frustum = kast::frustumFromViewProj(viewProj, homogeneousDepth);
+        check(kast::intersects(frustum, box({0, 0, -10}, 1)), "box ahead is in the frustum");
+        check(kast::intersects(frustum, box({10.5f, 0, -10}, 1)), "box over the right edge is in the frustum");
+        check(!kast::intersects(frustum, box({13, 0, -10}, 1)), "box past the right edge is culled");
+        check(!kast::intersects(frustum, box({0, -13, -10}, 1)), "box below the view is culled");
+        check(!kast::intersects(frustum, box({0, 0, 10}, 1)), "box behind the eye is culled");
+        check(!kast::intersects(frustum, box({0, 0, -0.06f}, 0.02f)), "box before the near plane is culled");
+        check(kast::intersects(frustum, box({0, 0, -100}, 1)), "box across the far plane is in the frustum");
+        check(!kast::intersects(frustum, box({0, 0, -102}, 1)), "box past the far plane is culled");
+
+        // A cascade fitted to a slice keeps a caster between the light and the slice, culls one beyond it.
+        const auto corners = kast::frustumSliceCorners(view, proj, 2.0f, 10.0f);
+        const bx::Vec3 lightDir = bx::normalize(bx::Vec3{0.3f, -0.8f, -0.5f});
+        const bx::Vec3 caster = bx::add(bx::Vec3{0, 0, -6}, bx::mul(lightDir, -40.0f)); // up the light from the slice
+        const kast::Cascade cascade =
+            kast::fitCascade(corners, lightDir, bx::dot(caster, lightDir) - 1.0f, homogeneousDepth);
+        float cascadeViewProj[16];
+        bx::mtxMul(cascadeViewProj, cascade.view.data(), cascade.proj.data());
+        const kast::Frustum light = kast::frustumFromViewProj(cascadeViewProj, homogeneousDepth);
+        check(kast::intersects(light, box(caster, 1)), "caster toward the light is in the cascade");
+        check(!kast::intersects(light, box(bx::add(bx::Vec3{0, 0, -6}, bx::mul(lightDir, 40.0f)), 1)),
+              "box past the slice, away from the light, is culled from the cascade");
+        check(!kast::intersects(light, box({200, 0, -6}, 1)), "box beside the cascade is culled");
+    }
+    // A point light cube face (left-handed, 0..1 depth, as the Renderer's): +X sees a box on +X, -X doesn't.
+    float proj[16], face[16], viewProj[16];
+    bx::mtxProj(proj, 90.0f, 1.0f, kast::kPointShadowNear, 10.0f, false, bx::Handedness::Left);
+    bx::mtxLookAt(face, {0, 0, 0}, {1, 0, 0}, {0, 1, 0}, bx::Handedness::Left);
+    bx::mtxMul(viewProj, face, proj);
+    check(kast::intersects(kast::frustumFromViewProj(viewProj, false), box({5, 1, 1}, 0.5f)), "+X face sees a box on +X");
+    bx::mtxLookAt(face, {0, 0, 0}, {-1, 0, 0}, {0, 1, 0}, bx::Handedness::Left);
+    bx::mtxMul(viewProj, face, proj);
+    check(!kast::intersects(kast::frustumFromViewProj(viewProj, false), box({5, 1, 1}, 0.5f)), "-X face culls a box on +X");
+}
+
 void checkPostProcessing()
 {
     // Shader math mirrors.
@@ -8402,6 +8450,7 @@ int main(int argc, char** argv)
     checkLoadValidation();
     checkPointLights();
     checkShadows();
+    checkFrustumCulling();
     checkPostProcessing();
     checkMaterialFiles();
     checkMaterialLibrary();

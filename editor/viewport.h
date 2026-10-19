@@ -62,6 +62,7 @@ public:
     void shutdown();
     void draw(Document& doc);
     void setPostEffects(bool on) { postEffects_ = on; } // the toolbar's "Post" toggle
+    kast::Renderer& renderer() { return renderer_; }     // --no-instancing, --no-culling
 
 private:
     enum class Drag { None, Fly, Orbit, Pan };

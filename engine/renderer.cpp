@@ -5,8 +5,10 @@
 #include "fs_shadow.bin.h"
 #include "vs_line.bin.h"
 #include "vs_mesh.bin.h"
+#include "vs_mesh_instanced.bin.h"
 #include "vs_mesh_skinned.bin.h"
 #include "vs_shadow.bin.h"
+#include "vs_shadow_instanced.bin.h"
 #include "vs_shadow_skinned.bin.h"
 
 #include <algorithm>
@@ -20,6 +22,7 @@
 
 #include "animation.h"
 #include "files.h"
+#include "frustum.h"
 #include "log.h"
 #include "physics.h"
 #include "project.h"
@@ -204,6 +207,38 @@ Aabb transformBounds(const Aabb& local, const float* world)
     return result;
 }
 
+// What draws must share to be one instanced submit: buffers, material, shadow flags and, in the main pass, the point
+// lights that reach them (so each instance is lit as its own draw would be).
+struct BatchKey {
+    uint16_t vertices = 0, indices = 0;
+    const Material* material = nullptr;
+    bool skinned = false, castShadows = false, receiveShadows = false;
+    std::vector<size_t> pointLights;
+    auto operator<=>(const BatchKey&) const = default;
+};
+
+template <typename Item> // Renderer::DrawItem
+BatchKey batchKey(const Item& item, std::vector<size_t> pointLights)
+{
+    return {item.vertices.idx, item.indices.idx, item.material, item.bones >= 0, item.castShadows, item.receiveShadows,
+            std::move(pointLights)};
+}
+
+// Indices 0..count-1 grouped by keyOf(index): groups in order of first appearance, indices in order within each.
+template <typename KeyOf>
+std::vector<std::vector<size_t>> batchDraws(size_t count, KeyOf keyOf)
+{
+    std::map<BatchKey, size_t> group;
+    std::vector<std::vector<size_t>> batches;
+    for (size_t i = 0; i < count; ++i) {
+        const auto [it, added] = group.try_emplace(keyOf(i), batches.size());
+        if (added)
+            batches.emplace_back();
+        batches[it->second].push_back(i);
+    }
+    return batches;
+}
+
 // The file a texture path reads: a model's embedded image "<model>#<i>" comes from the model file.
 std::string textureFile(const std::string& path)
 {
@@ -323,9 +358,11 @@ void Renderer::init()
 
     meshProgram_ = makeProgram(vs_mesh, sizeof(vs_mesh), fs_mesh, sizeof(fs_mesh));
     skinnedProgram_ = makeProgram(vs_mesh_skinned, sizeof(vs_mesh_skinned), fs_mesh, sizeof(fs_mesh));
+    instancedProgram_ = makeProgram(vs_mesh_instanced, sizeof(vs_mesh_instanced), fs_mesh, sizeof(fs_mesh));
     lineProgram_ = makeProgram(vs_line, sizeof(vs_line), fs_line, sizeof(fs_line));
     shadowProgram_ = makeProgram(vs_shadow, sizeof(vs_shadow), fs_shadow, sizeof(fs_shadow));
     shadowSkinnedProgram_ = makeProgram(vs_shadow_skinned, sizeof(vs_shadow_skinned), fs_shadow, sizeof(fs_shadow));
+    shadowInstancedProgram_ = makeProgram(vs_shadow_instanced, sizeof(vs_shadow_instanced), fs_shadow, sizeof(fs_shadow));
     normalMatrix_ = bgfx::createUniform("u_normalMatrix", bgfx::UniformType::Mat4);
     bones_ = bgfx::createUniform("u_bones", bgfx::UniformType::Mat4, static_cast<uint16_t>(kMaxBones));
     baseColor_ = bgfx::createUniform("u_baseColor", bgfx::UniformType::Vec4);
@@ -370,9 +407,11 @@ void Renderer::shutdown()
     bgfx::destroy(grid_);
     bgfx::destroy(meshProgram_);
     bgfx::destroy(skinnedProgram_);
+    bgfx::destroy(instancedProgram_);
     bgfx::destroy(lineProgram_);
     bgfx::destroy(shadowProgram_);
     bgfx::destroy(shadowSkinnedProgram_);
+    bgfx::destroy(shadowInstancedProgram_);
     for (bgfx::UniformHandle uniform : {normalMatrix_, bones_, baseColor_, lightDir_, lightColor_, ambient_, pointPosRange_,
                                         pointColor_, emissive_, materialParams_, cameraPos_, fogColor_, fogParams_,
                                         baseColorSampler_, metallicRoughnessSampler_, csmMtx_, csmSplits_, csmBias_,
@@ -616,6 +655,7 @@ void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const Mode
     const std::vector<Mat4>& globals =
         state && state->model == &model && state->globals.size() == model.nodes.size() ? state->globals : gpu->bindGlobals;
     item.bounds = transformBounds(model.bounds, world); // ponytail: bind-pose bounds, also for posed models
+    item.posed = &globals != &gpu->bindGlobals;
     for (size_t i = 0; i < model.meshes.size(); ++i) {
         const ModelMesh& mesh = model.meshes[i];
         const std::string* slot = mesh.material < renderer.materials.size() ? &renderer.materials[mesh.material] : nullptr;
@@ -636,22 +676,51 @@ void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const Mode
     }
 }
 
-void Renderer::submitShadowCaster(const DrawItem& item, const std::vector<std::vector<Mat4>>& boneSets, bgfx::ViewId view)
+bool Renderer::instanced(const std::vector<const DrawItem*>& batch, bgfx::InstanceDataBuffer& instances) const
 {
-    const Material& material = *item.material;
+    constexpr uint16_t kStride = sizeof(Mat4); // i_data0..3 in vs_mesh_instanced.sc and vs_shadow_instanced.sc
+    const auto count = static_cast<uint32_t>(batch.size());
+    // ponytail: a batch this frame's transient buffer can't hold whole draws one by one; split it if that shows.
+    if (!instancing_ || count < 2 || batch.front()->bones >= 0 || !(bgfx::getCaps()->supported & BGFX_CAPS_INSTANCING) ||
+        bgfx::getAvailInstanceDataBuffer(count, kStride) < count)
+        return false;
+    bgfx::allocInstanceDataBuffer(&instances, count, kStride);
+    for (uint32_t i = 0; i < count; ++i)
+        std::memcpy(instances.data + i * kStride, batch[i]->world.data(), kStride);
+    return true;
+}
+
+void Renderer::submitShadowCasters(const std::vector<const DrawItem*>& batch, const std::vector<std::vector<Mat4>>& boneSets,
+                                   bgfx::ViewId view)
+{
+    // The batch shares its material, buffers and skinning (BatchKey).
+    const DrawItem& first = *batch.front();
+    const Material& material = *first.material;
     const float params[4] = {0.0f, 0.0f, material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f, 0.0f};
-    bgfx::setTransform(item.world.data());
-    if (item.bones >= 0) {
-        const std::vector<Mat4>& bones = boneSets[static_cast<size_t>(item.bones)];
-        bgfx::setUniform(bones_, bones.data(), static_cast<uint16_t>(bones.size()));
+    const auto setMaterial = [&] {
+        bgfx::setUniform(baseColor_, material.baseColor.data());
+        bgfx::setUniform(materialParams_, params);
+        bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
+        bgfx::setVertexBuffer(0, first.vertices);
+        bgfx::setIndexBuffer(first.indices);
+        bgfx::setState(kShadowState);
+    };
+    bgfx::InstanceDataBuffer instances;
+    if (instanced(batch, instances)) {
+        setMaterial();
+        bgfx::setInstanceDataBuffer(&instances);
+        bgfx::submit(view, shadowInstancedProgram_);
+        return;
     }
-    bgfx::setUniform(baseColor_, material.baseColor.data());
-    bgfx::setUniform(materialParams_, params);
-    bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
-    bgfx::setVertexBuffer(0, item.vertices);
-    bgfx::setIndexBuffer(item.indices);
-    bgfx::setState(kShadowState);
-    bgfx::submit(view, item.bones >= 0 ? shadowSkinnedProgram_ : shadowProgram_);
+    for (const DrawItem* item : batch) {
+        setMaterial();
+        bgfx::setTransform(item->world.data());
+        if (item->bones >= 0) {
+            const std::vector<Mat4>& bones = boneSets[static_cast<size_t>(item->bones)];
+            bgfx::setUniform(bones_, bones.data(), static_cast<uint16_t>(bones.size()));
+        }
+        bgfx::submit(view, item->bones >= 0 ? shadowSkinnedProgram_ : shadowProgram_);
+    }
 }
 
 Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const bx::Vec3& sunDir,
@@ -665,6 +734,25 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
     for (const DrawItem& item : draws)
         if (item.castShadows && item.material->alphaMode != AlphaMode::Blend)
             casters.push_back(&item);
+    // Batched once; each view then draws the casters of each batch inside its frustum (and that keep accepts).
+    std::vector<std::vector<const DrawItem*>> batches;
+    for (const std::vector<size_t>& indices :
+         batchDraws(casters.size(), [&](size_t i) { return batchKey(*casters[i], {}); })) {
+        batches.emplace_back();
+        for (size_t i : indices)
+            batches.back().push_back(casters[i]);
+    }
+    std::vector<const DrawItem*> inView;
+    const auto submitCasters = [&](const Frustum& frustum, const auto& keep, bgfx::ViewId view) {
+        for (const std::vector<const DrawItem*>& batch : batches) {
+            inView.clear();
+            for (const DrawItem* item : batch)
+                if (keep(*item) && !culled(*item, frustum))
+                    inView.push_back(item);
+            if (!inView.empty())
+                submitShadowCasters(inView, boneSets, view);
+        }
+    };
     const bool homogeneousDepth = bgfx::getCaps()->homogeneousDepth;
     float cameraWorld[16];
     bx::mtxInverse(cameraWorld, viewMtx);
@@ -707,8 +795,11 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
             bgfx::setViewClear(view, BGFX_CLEAR_DEPTH, 0, 1.0f, 0);
             bgfx::setViewTransform(view, cascade.view.data(), cascade.proj.data());
             bgfx::touch(view);
-            for (const DrawItem* item : casters)
-                submitShadowCaster(*item, boneSets, view);
+            float viewProj[16];
+            bx::mtxMul(viewProj, cascade.view.data(), cascade.proj.data());
+            // The ortho volume reaches back to the nearest caster (fitCascade), so casters between the light and the
+            // camera's slice stay in it.
+            submitCasters(frustumFromViewProj(viewProj, homogeneousDepth), [](const DrawItem&) { return true; }, view);
             // NDC to this cascade's quarter of the atlas (v down), depth unchanged.
             float tile[16];
             bx::mtxIdentity(tile);
@@ -720,8 +811,6 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
                 tile[10] = 0.5f;
                 tile[14] = 0.5f;
             }
-            float viewProj[16];
-            bx::mtxMul(viewProj, cascade.view.data(), cascade.proj.data());
             bx::mtxMul(frame.csmMtx[i], viewProj, tile);
             frame.csmBias[i][0] = sun->normalBias * cascade.texelSize;
             frame.csmBias[i][1] = sun->bias / cascade.depthRange;
@@ -739,13 +828,10 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
             }
         }
         const PointLightSample& light = pointLights[frame.pointLights[cube]];
-        // ponytail: casters are culled by the light's range only, not per face.
-        std::vector<const DrawItem*> inRange;
-        for (const DrawItem* item : casters) {
-            const bx::Vec3 closest = bx::clamp(light.position, item->bounds.min, item->bounds.max);
-            if (bx::length(bx::sub(light.position, closest)) < light.range)
-                inRange.push_back(item);
-        }
+        const auto inRange = [&](const DrawItem& item) {
+            const bx::Vec3 closest = bx::clamp(light.position, item.bounds.min, item.bounds.max);
+            return bx::length(bx::sub(light.position, closest)) < light.range;
+        };
         // ponytail: D3D 0..1 depth assumed (fs_mesh.sc pointShadow), as for the DX11-only shaders.
         float proj[16];
         bx::mtxProj(proj, 90.0f, 1.0f, kPointShadowNear, light.range, false, bx::Handedness::Left);
@@ -760,8 +846,9 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
             bgfx::setViewClear(view, BGFX_CLEAR_DEPTH, 0, 1.0f, 0);
             bgfx::setViewTransform(view, faceView, proj);
             bgfx::touch(view);
-            for (const DrawItem* item : inRange)
-                submitShadowCaster(*item, boneSets, view);
+            float viewProj[16];
+            bx::mtxMul(viewProj, faceView, proj);
+            submitCasters(frustumFromViewProj(viewProj, false), inRange, view);
         }
     }
     return frame;
@@ -843,12 +930,9 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     for (size_t cube = 0; cube < shadows.pointLights.size(); ++cube)
         cubeOf[shadows.pointLights[cube]] = static_cast<int>(cube);
 
-    const auto submit = [&](const DrawItem& item) {
+    // Everything a mesh draw sets but its transform: material, lights (nearest: nearestPointLights), shadows, buffers.
+    const auto setDrawState = [&](const DrawItem& item, const std::vector<size_t>& nearest) {
         const Material& material = *item.material;
-        float inverse[16];
-        float normalMatrix[16];
-        bx::mtxInverse(inverse, item.world.data());
-        bx::mtxTranspose(normalMatrix, inverse);
         // Unused slots: black, range 1, so they add nothing.
         float pointPosRange[kMaxPointLights][4] = {};
         float pointColor[kMaxPointLights][4] = {};
@@ -857,7 +941,6 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             slot[3] = 1.0f;
         for (auto& slot : pointShadow)
             slot[0] = -1.0f;
-        const std::vector<size_t> nearest = nearestPointLights(pointLights, item.bounds);
         for (size_t slot = 0; slot < nearest.size(); ++slot) {
             const PointLightSample& light = pointLights[nearest[slot]];
             std::memcpy(pointPosRange[slot], &light.position, sizeof(bx::Vec3));
@@ -875,12 +958,6 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         const float params[4] = {material.metallic, material.roughness,
                                  material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f, blend ? 1.0f : 0.0f};
 
-        bgfx::setTransform(item.world.data());
-        bgfx::setUniform(normalMatrix_, normalMatrix);
-        if (item.bones >= 0) {
-            const std::vector<Mat4>& bones = boneSets[static_cast<size_t>(item.bones)];
-            bgfx::setUniform(bones_, bones.data(), static_cast<uint16_t>(bones.size()));
-        }
         bgfx::setUniform(baseColor_, material.baseColor.data());
         bgfx::setUniform(emissive_, emissive);
         bgfx::setUniform(materialParams_, params);
@@ -908,22 +985,60 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         bgfx::setVertexBuffer(0, item.vertices);
         bgfx::setIndexBuffer(item.indices);
         bgfx::setState(blend ? kBlendState : kState);
+    };
+    const auto submit = [&](const DrawItem& item, const std::vector<size_t>& nearest) {
+        float inverse[16];
+        float normalMatrix[16];
+        bx::mtxInverse(inverse, item.world.data());
+        bx::mtxTranspose(normalMatrix, inverse);
+        setDrawState(item, nearest);
+        bgfx::setTransform(item.world.data());
+        bgfx::setUniform(normalMatrix_, normalMatrix);
+        if (item.bones >= 0) {
+            const std::vector<Mat4>& bones = boneSets[static_cast<size_t>(item.bones)];
+            bgfx::setUniform(bones_, bones.data(), static_cast<uint16_t>(bones.size()));
+        }
         bgfx::submit(view, item.bones >= 0 ? skinnedProgram_ : meshProgram_);
     };
 
-    // Opaque and mask meshes now; blended ones after, far to near by world-space bounds center.
-    std::vector<size_t> blended;
+    // Opaque and mask meshes in the view now, batched; blended ones after, one by one far to near by world-space
+    // bounds center.
+    float viewProj[16];
+    bx::mtxMul(viewProj, viewMtx, projMtx);
+    const Frustum frustum = frustumFromViewProj(viewProj, bgfx::getCaps()->homogeneousDepth);
+    std::vector<const DrawItem*> opaque;
+    std::vector<std::vector<size_t>> opaqueLights; // per opaque draw
+    std::vector<const DrawItem*> blended;
     std::vector<bx::Vec3> centers;
-    for (size_t i = 0; i < draws.size(); ++i) {
-        if (draws[i].material->alphaMode != AlphaMode::Blend) {
-            submit(draws[i]);
+    for (const DrawItem& item : draws) {
+        if (culled(item, frustum))
+            continue;
+        if (item.material->alphaMode != AlphaMode::Blend) {
+            opaque.push_back(&item);
+            opaqueLights.push_back(nearestPointLights(pointLights, item.bounds));
             continue;
         }
-        blended.push_back(i);
-        centers.push_back(bx::mul(bx::add(draws[i].bounds.min, draws[i].bounds.max), 0.5f));
+        blended.push_back(&item);
+        centers.push_back(bx::mul(bx::add(item.bounds.min, item.bounds.max), 0.5f));
+    }
+    std::vector<const DrawItem*> batch;
+    for (const std::vector<size_t>& indices :
+         batchDraws(opaque.size(), [&](size_t i) { return batchKey(*opaque[i], opaqueLights[i]); })) {
+        batch.clear();
+        for (size_t i : indices)
+            batch.push_back(opaque[i]);
+        bgfx::InstanceDataBuffer instances;
+        if (instanced(batch, instances)) {
+            setDrawState(*batch.front(), opaqueLights[indices.front()]);
+            bgfx::setInstanceDataBuffer(&instances);
+            bgfx::submit(view, instancedProgram_);
+            continue;
+        }
+        for (size_t i : indices)
+            submit(*opaque[i], opaqueLights[i]);
     }
     for (size_t i : backToFront(centers, eye))
-        submit(draws[blended[i]]);
+        submit(*blended[i], nearestPointLights(pointLights, blended[i]->bounds));
 }
 
 void Renderer::renderOverlays(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx,
