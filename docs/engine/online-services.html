@@ -414,7 +414,9 @@ against <code>kast_net_test_server</code>, whose fake auth lists Testgrove at it
 <p><strong>Against the real servers</strong>: start the stack (<code>cd services/world &amp;&amp; cp .env.example .env</code> once, then
 <code>docker compose up -d --build</code>; world on 7777, auth on 3100), then run <code>ctest -R world_live</code>. <code>world_live_setup</code> copies
 the world's dev certificate out of the container (<code>docker compose cp world:/app/certs/server.crt</code>) and adds a realm
-<code>Kast Live</code> (127.0.0.1:7777) to auth's database; <code>world_live</code> drives two accounts through it.</p>
+<code>Kast Live</code> (127.0.0.1:7777) to auth's database; <code>world_live</code> drives two accounts through it. A world server
+started with a sample's compose override is switched to the default one for the test and switched back afterwards
+(<code>world_live_teardown</code>).</p>
 <h2 id="replication">Replication</h2>
 <p>Networked players without sync code (<code>engine/replication.h</code>). Three built-in components, edited in the Inspector and
 saved in scenes like any other:</p>

@@ -209,8 +209,16 @@ set_tests_properties(auth_live PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
 # 90 s: it idles 85 s, past the server's 60 s idle timeout plus one 20 s heartbeat). Both skip when the stack isn't running.
 add_test(NAME world_live_setup
   COMMAND "${CMAKE_COMMAND}" "-DWORLD_DIR=${CMAKE_CURRENT_SOURCE_DIR}/services/world"
-          "-DCA_OUT=${CMAKE_CURRENT_BINARY_DIR}/world_live_ca.pem" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/world_live_setup.cmake")
-set_tests_properties(world_live_setup PROPERTIES FIXTURES_SETUP world_live_ready TIMEOUT 60)
+          "-DCA_OUT=${CMAKE_CURRENT_BINARY_DIR}/world_live_ca.pem"
+          "-DRESTORE_OUT=${CMAKE_CURRENT_BINARY_DIR}/world_live_restore.txt"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/world_live_setup.cmake")
+set_tests_properties(world_live_setup PROPERTIES FIXTURES_SETUP world_live_ready TIMEOUT 660)
+# Puts back the compose overrides the setup took off the world server (e.g. samples/starter-mmo's), if any.
+add_test(NAME world_live_teardown
+  COMMAND "${CMAKE_COMMAND}" "-DWORLD_DIR=${CMAKE_CURRENT_SOURCE_DIR}/services/world"
+          "-DRESTORE_OUT=${CMAKE_CURRENT_BINARY_DIR}/world_live_restore.txt"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/world_live_teardown.cmake")
+set_tests_properties(world_live_teardown PROPERTIES FIXTURES_CLEANUP world_live_ready TIMEOUT 600)
 add_test(NAME world_live COMMAND kast_self_check --live-world http://localhost:3100 http://localhost:8026
                                  "${CMAKE_CURRENT_BINARY_DIR}/world_live_ca.pem" "Kast Live")
 set_tests_properties(world_live PROPERTIES FIXTURES_REQUIRED world_live_ready SKIP_RETURN_CODE 77 TIMEOUT 240)

@@ -2570,14 +2570,24 @@ int liveReplicationCheck(const std::string& authUrl, const std::string& mailpitU
         return kSkipped;
     }
 
-    // Both enter the world.
+    // Both enter the world. Every later step needs both players in it: a failed step ends the check.
+    const auto reach = [&](Player& p, const char* event, const std::string& what) {
+        const bool ok = run([&] { return p.last(event) || p.last("world.charError"); }, 10s) && p.last(event);
+        check(ok, what);
+        if (const Json* error = p.last("world.charError"); !ok && error)
+            kast::log::error(std::format("{}: world.charError {}", what, error->dump()));
+        return ok;
+    };
     for (Player* p : {&a, &b}) {
         p->lua.world().connect(realm);
-        check(run([&] { return p->last("world.connected") != nullptr; }, 10s), "live replication: connected");
+        if (!reach(*p, "world.connected", "live replication: connected"))
+            return 1;
         p->lua.world().createCharacter(uniqueName(p == &a ? "Ra" : "Rb"));
-        check(run([&] { return p->last("world.charCreated") != nullptr; }, 10s), "live replication: character created");
+        if (!reach(*p, "world.charCreated", "live replication: character created"))
+            return 1;
         p->lua.world().enterWorld(p->last("world.charCreated")->at("character").value("id", uint64_t{0}));
-        check(run([&] { return p->last("world.entered") != nullptr; }, 10s), "live replication: entered the world");
+        if (!reach(*p, "world.entered", "live replication: entered the world"))
+            return 1;
     }
     const uint32_t idA = a.last("world.entered")->value("entityId", 0u);
     const uint32_t idB = b.last("world.entered")->value("entityId", 0u);
