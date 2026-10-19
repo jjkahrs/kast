@@ -249,6 +249,13 @@ add_test(NAME game_play_differs
 add_test(NAME game_no_camera
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/game_no_camera.png"
           "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/no_camera.scene --play" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# A saved layout whose Scene panel is shorter than its toolbar: no room for the image must not crash (it once made a
+# 65535-pixel-tall framebuffer) or trip ImGui's assert in debug builds.
+add_test(NAME scene_panel_no_room
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/scene_panel_no_room.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/basic.scene" -DFOCUS_PANEL=Scene
+          "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/short_scene_panel.ini"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(scene_screenshot PROPERTIES FIXTURES_SETUP basic_shot)
 set_tests_properties(scene_play_screenshot PROPERTIES FIXTURES_SETUP play_shot)
 set_tests_properties(game_play_screenshot PROPERTIES FIXTURES_SETUP game_shot)

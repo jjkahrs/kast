@@ -65,6 +65,10 @@ every test runs with <code>KAST_WINDOW_POS=secondary</code>, which opens windows
 <td><code>--scene tests/scenes/no_camera.scene --play</code>: exit 0 and a PNG (Game panel shows "No Camera in scene").</td>
 </tr>
 <tr>
+<td><code>scene_panel_no_room</code></td>
+<td><code>--scene tests/scenes/basic.scene --focus-panel Scene</code> with the saved layout <code>tests/layouts/short_scene_panel.ini</code> (a Scene panel shorter than its toolbar): exit 0 and a PNG, no crash and no ImGui assert in debug.</td>
+</tr>
+<tr>
 <td><code>lua_scene_screenshot</code></td>
 <td><code>--scene tests/scenes/lua.scene</code> (Systems panel lists its two scripts), writing <code>lua_scene.png</code>.</td>
 </tr>

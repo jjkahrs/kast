@@ -184,8 +184,11 @@ void SceneViewport::draw(Document& doc)
         drawToolbar(doc);
         const ImVec2 size = ImGui::GetContentRegionAvail();
         const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
-        const auto width = static_cast<uint16_t>(size.x * scale.x);
-        const auto height = static_cast<uint16_t>(size.y * scale.y);
+        // A window too small for the panel leaves it no room (size < 0): 0, which nothing resizes to, not a wrapped
+        // 65535-ish size.
+        const auto pixels = [](float v) { return static_cast<uint16_t>(std::clamp(v, 0.0f, 65535.0f)); };
+        const uint16_t width = pixels(size.x * scale.x);
+        const uint16_t height = pixels(size.y * scale.y);
         post_.begin(width, height, kast::sceneClearColor(doc.scene.postProcessing, kViewportClearColor));
         target_.resize(width, height, post_.depth());
         if (target_.valid() && size.x > 0.0f && size.y > 0.0f) {
@@ -227,6 +230,8 @@ void SceneViewport::draw(Document& doc)
             if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && !onGizmo)
                 pick(doc, viewProj, io.MousePos.x - origin.x, io.MousePos.y - origin.y, size.x, size.y);
             shortcuts(doc);
+        } else {
+            ImGui::Dummy(ImVec2(0.0f, 0.0f)); // no room for the image: an item still ends the toolbar's cursor move
         }
     }
     ImGui::End();
