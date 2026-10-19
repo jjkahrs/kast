@@ -1,0 +1,36 @@
+<rml>
+    <head>
+        <title>Character</title>
+        <link type="text/rcss" href="starter.rcss"/>
+    </head>
+    <body>
+        <!-- scripts/character.lua: C opens and closes the character window (a WoW-style paper doll). The 7 equipment
+             slots (components/equipment.lua's order) sit around a static silhouette and show the server's Equipment;
+             they drag (data-drag="equip.slot") onto a bag slot to unequip, and bag slots dropped on them equip.
+             Hovering one shows its tooltip. The stats are Max Health and the gear's Armor and Damage. -->
+        <div id="character" class="window">
+            <p class="window_title"><span id="character_name">-</span><span id="character_class"></span></p>
+            <div id="paperdoll">
+                <img id="silhouette" src="../textures/character_silhouette.png"/>
+                <div id="equip_1" class="slot equip empty" data-drag="equip.slot"><div id="equip_1_icon" class="icon"></div><p id="equip_1_label" class="equip_label">Head</p></div>
+                <div id="equip_2" class="slot equip empty" data-drag="equip.slot"><div id="equip_2_icon" class="icon"></div><p id="equip_2_label" class="equip_label">Chest</p></div>
+                <div id="equip_3" class="slot equip empty" data-drag="equip.slot"><div id="equip_3_icon" class="icon"></div><p id="equip_3_label" class="equip_label">Legs</p></div>
+                <div id="equip_4" class="slot equip empty" data-drag="equip.slot"><div id="equip_4_icon" class="icon"></div><p id="equip_4_label" class="equip_label">Feet</p></div>
+                <div id="equip_5" class="slot equip empty" data-drag="equip.slot"><div id="equip_5_icon" class="icon"></div><p id="equip_5_label" class="equip_label">Hands</p></div>
+                <div id="equip_6" class="slot equip empty" data-drag="equip.slot"><div id="equip_6_icon" class="icon"></div><p id="equip_6_label" class="equip_label">Main Hand</p></div>
+                <div id="equip_7" class="slot equip empty" data-drag="equip.slot"><div id="equip_7_icon" class="icon"></div><p id="equip_7_label" class="equip_label">Off Hand</p></div>
+            </div>
+            <div id="character_stats">
+                <p id="stat_health" class="stat_line">Max Health -</p>
+                <p id="stat_armor" class="stat_line">Armor 0</p>
+                <p id="stat_damage" class="stat_line">Damage +0</p>
+            </div>
+        </div>
+        <div id="gear_tooltip">
+            <p id="gear_tooltip_name">-</p>
+            <p id="gear_tooltip_slot" class="tooltip_line"></p>
+            <p id="gear_tooltip_stats" class="tooltip_line gear_stats"></p>
+            <p id="gear_tooltip_description" class="tooltip_line"></p>
+        </div>
+    </body>
+</rml>

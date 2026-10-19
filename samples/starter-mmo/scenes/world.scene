@@ -995,6 +995,35 @@
           "visible": false
         }
       }
+    },
+    {
+      "id": 35,
+      "name": "Character Window",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UIDocument": {
+          "path": "ui/character.rml",
+          "visible": false
+        }
+      }
     }
   ],
   "systems": [
@@ -1006,6 +1035,7 @@
     "scripts/powers.lua",
     "scripts/world_flow.lua",
     "scripts/bag.lua",
+    "scripts/character.lua",
     "scripts/loot.lua",
     "scripts/shrines.lua"
   ],

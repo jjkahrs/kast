@@ -8,6 +8,19 @@
 --                        stays in from; onto another item: swaps the two.
 --   "inventory.destroy" {slot, item}            destroys the stack.
 --
+-- Equipment (components/equipment.lua, slots 1..7 = EQUIP_SLOTS) lives here too, since equipping moves items between
+-- it and the bag in one step (and system files can't share readBag / writeBag). GEAR says which items/ ids are gear,
+-- their slot and their flat stats; the owner gets it on entering as "equipment.gear" {slots, names, gear}. Both
+-- requests are refused while dead ("dead") or within OUT_OF_COMBAT seconds of a hit ("combat", "combat.engaged" from
+-- systems/combat.lua, the same window systems/regen.lua uses):
+--   "equipment.equip"   {from, slot, item}  bag slot from -> equipment slot; the item's GEAR slot must be that slot
+--                        ("wrong_slot"). Whatever was equipped there goes into bag slot from (a swap).
+--   "equipment.unequip" {slot, to?, item}   equipment slot -> bag slot to: an empty slot takes it; gear for the same
+--                        equipment slot swaps with it; any other item refuses it ("occupied", or "full" when the bag
+--                        has no empty slot). No to: the first empty bag slot, or "full".
+-- After each change, and on entering, "equipment.stats" {entity, armor, damage, stamina} (the gear's totals) goes on the
+-- server bus: systems/combat.lua applies Armor and Damage, systems/classes.lua Stamina's max Health.
+--
 -- Loot: "npc.died" {npc, tagger} (systems/combat.lua) rolls the NPC definition's loot table (npcs/*.lua, kast.npcDef)
 -- once: gold between gold.min and gold.max, and each item with its chance, min..max of it. Loot belongs to the tagger
 -- alone. The corpse gets Corpse {owner = tagger} (replicated to everyone in view, so clients tip it over and the owner's
@@ -22,16 +35,29 @@
 -- the owner gets "loot.contents" again, or "loot.closed" {target} when the corpse is empty and goes (also when it
 -- times out).
 --
--- Bandwidth: one event per request back to the requester only, plus the Inventory / Wallet change (owner only) and the
--- Corpse component once per death (everyone in view). Nothing per tick.
+-- Bandwidth: one event per request back to the requester only, plus the Inventory / Wallet / Equipment change (owner
+-- only) and the Corpse component once per death (everyone in view). "equipment.gear" once per login. Nothing per tick.
 local SLOTS = 16
 local LOOT_RANGE = 5        -- metres, on x/z
 local CORPSE_SECONDS = 60   -- a corpse with loot left goes after this
+local OUT_OF_COMBAT = 5     -- seconds after a hit dealt or taken before gear may change (systems/regen.lua's too)
+local EQUIP_SLOTS = {"head", "chest", "legs", "feet", "hands", "main_hand", "off_hand"} -- components/equipment.lua
+local SLOT_NAMES = {"Head", "Chest", "Legs", "Feet", "Hands", "Main Hand", "Off Hand"}
+local GEAR = { -- items/ id -> its slot and stats (missing = 0); gear items have maxStack 1
+    leather_cap      = {slot = "head",      armor = 1, stamina = 1},
+    linen_tunic      = {slot = "chest",     armor = 2, stamina = 2},
+    patched_trousers = {slot = "legs",      armor = 1, stamina = 1},
+    worn_boots       = {slot = "feet",      armor = 1, stamina = 1},
+    cloth_gloves     = {slot = "hands",     armor = 1, stamina = 1},
+    worn_shortsword  = {slot = "main_hand", damage = 3},
+    wooden_shield    = {slot = "off_hand",  armor = 2, stamina = 1},
+}
 -- ponytail: math.random's sequence starts the same on every server start (the sandbox has no clock to seed it from);
 -- fine for a sample, seed it from a real source in a game where drops matter.
 
 local now = 0
 local corpses = {} -- npc -> {owner = player, gold = n, items = {{item =, count =}, ...}, despawnAt = time}
+local lastHit = {} -- player -> time of its last "combat.engaged"
 
 local function exists(e, component)
     local ok, has = pcall(kast.has, e, component) -- raises for ids that are not in the world
@@ -121,6 +147,90 @@ local function onDestroy(event)
     if data.item ~= items[slot] then return reject(e, "item") end
     items[slot], counts[slot] = "", 0
     writeBag(e, items, counts)
+end
+
+local function equipIndex(v)
+    return type(v) == "number" and v == math.floor(v) and v >= 1 and v <= #EQUIP_SLOTS and v or nil
+end
+
+local function fits(item, slot) return GEAR[item] ~= nil and GEAR[item].slot == EQUIP_SLOTS[slot] end
+
+-- The equipment as a plain array of #EQUIP_SLOTS ids: unknown items and items in the wrong slot dropped.
+local function readGear(e)
+    local saved = kast.get(e, "Equipment").items
+    local gear = {}
+    for i = 1, #EQUIP_SLOTS do
+        local id = saved[i] or ""
+        gear[i] = kast.items[id] and fits(id, i) and id or ""
+    end
+    return gear
+end
+
+local function publishStats(e, gear)
+    local total = {entity = e, armor = 0, damage = 0, stamina = 0}
+    for _, id in ipairs(gear) do
+        local def = GEAR[id]
+        if def then
+            total.armor = total.armor + (def.armor or 0)
+            total.damage = total.damage + (def.damage or 0)
+            total.stamina = total.stamina + (def.stamina or 0)
+        end
+    end
+    kast.publish("equipment.stats", total)
+end
+
+local function writeGear(e, gear)
+    kast.set(e, "Equipment", {items = gear})
+    publishStats(e, gear)
+end
+
+-- Why e may not change its gear now, or nil.
+local function gearProblem(e)
+    if kast.get(e, "Health").current <= 0 then return "dead" end
+    if lastHit[e] and now - lastHit[e] < OUT_OF_COMBAT then return "combat" end
+end
+
+local function onEquip(event)
+    local e, data = event.entity, event.data
+    local from = type(data) == "table" and slotIndex(data.from) or nil
+    local slot = from and equipIndex(data.slot) or nil
+    if not slot then return reject(e, "slot") end
+    local problem = gearProblem(e)
+    if problem then return reject(e, problem) end
+    local items, counts = readBag(e)
+    if items[from] == "" then return reject(e, "empty") end
+    if data.item ~= items[from] then return reject(e, "item") end
+    if not fits(items[from], slot) then return reject(e, "wrong_slot") end
+    local gear = readGear(e)
+    local old = gear[slot]
+    gear[slot] = items[from]
+    items[from], counts[from] = old, old == "" and 0 or 1
+    writeBag(e, items, counts)
+    writeGear(e, gear)
+end
+
+local function onUnequip(event)
+    local e, data = event.entity, event.data
+    local slot = type(data) == "table" and equipIndex(data.slot) or nil
+    local to = slot and slotIndex(data.to)
+    if not slot or (data.to ~= nil and not to) then return reject(e, "slot") end
+    local problem = gearProblem(e)
+    if problem then return reject(e, problem) end
+    local gear = readGear(e)
+    if gear[slot] == "" then return reject(e, "empty") end
+    if data.item ~= gear[slot] then return reject(e, "item") end
+    local items, counts = readBag(e)
+    local free
+    for i = 1, SLOTS do
+        if items[i] == "" then free = free or i end
+    end
+    to = to or free
+    if not to then return reject(e, "full") end
+    local swap = items[to]
+    if swap ~= "" and not fits(swap, slot) then return reject(e, free and "occupied" or "full") end
+    items[to], counts[to], gear[slot] = gear[slot], 1, swap
+    writeBag(e, items, counts)
+    writeGear(e, gear)
 end
 
 local function roll(npc)
@@ -226,6 +336,9 @@ return {
     init = function()
         kast.subscribe("client.inventory.move", onMove)
         kast.subscribe("client.inventory.destroy", onDestroy)
+        kast.subscribe("client.equipment.equip", onEquip)
+        kast.subscribe("client.equipment.unequip", onUnequip)
+        kast.subscribe("combat.engaged", function(e) lastHit[e.entity] = now end)
         kast.subscribe("npc.died", onDied)
         kast.subscribe("client.loot.open", onLootOpen)
         kast.subscribe("client.loot.take", onLootTake)
@@ -235,6 +348,13 @@ return {
     onEnter = function(e)
         if not kast.has(e, "Inventory") then kast.add(e, "Inventory") end
         writeBag(e, readBag(e)) -- a saved bag from an older items/ set: unknown items dropped, always SLOTS slots
+        if not kast.has(e, "Equipment") then kast.add(e, "Equipment") end
+        writeGear(e, readGear(e)) -- the same for saved gear, and items no longer in their slot
+        kast.sendTo(e, "equipment.gear", {slots = EQUIP_SLOTS, names = SLOT_NAMES, gear = GEAR})
+    end,
+
+    onLeave = function(e)
+        lastHit[e] = nil
     end,
 
     update = function(dt)

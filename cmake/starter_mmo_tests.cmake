@@ -52,6 +52,9 @@ add_test(NAME starter_mmo_live_teardown
 set_tests_properties(starter_mmo_live_setup PROPERTIES FIXTURES_SETUP starter_mmo_live TIMEOUT 1200)
 set_tests_properties(starter_mmo_live_teardown PROPERTIES FIXTURES_CLEANUP starter_mmo_live TIMEOUT 900)
 set(live_shots)
+# The equip_drag stage's mouse drag: from bag slot 1's centre to Main Hand's (ui/starter.rcss: #character, #equip_6).
+set(equip_drag_dx -212)
+set(equip_drag_dy -89)
 # The rock stage's W key, pressed every 3 frames for 2 (--sim-key holds a key 2 frames): 200 presses, metres more than
 # the 3.35 m to the rock at any frame rate.
 set(rock_keys "")
@@ -121,7 +124,19 @@ foreach(stage
     "starter_mmo_live_class_rogue|rogue|Rogue|9000|OFF|test driver: Class rogue on&test driver: Health [0-9]+ / 110 on&test driver: powers of rogue: 1 Sinister Strike, 2 Backstab, 3 Evasion&test driver: combat log: You cast Evasion&test driver: combat log: You cast Sinister Strike on Guard for 11&test driver: combat log: You dodge Guard's attack|--screenshot-on-log 20,SHOT"
     "starter_mmo_live_class_backstab|rogue_backstab|Rogue|15000|OFF|test driver: combat log: [*] Not behind target&test driver: combat log: You cast Backstab on Bat for 30&test driver: combat log: Bat dies|--screenshot-on-log 20,SHOT"
     # The character list with classes:
-    "starter_mmo_live_class_list|chars|Starter|420|OFF|test driver: characters: .*Warrior[a-j]+ .warrior.&test driver: characters: .*Mage[a-j]+ .mage.&test driver: characters: .*Priest[a-j]+ .priest.&test driver: characters: .*Rogue[a-j]+ .rogue.|")
+    "starter_mmo_live_class_list|chars|Starter|420|OFF|test driver: characters: .*Warrior[a-j]+ .warrior.&test driver: characters: .*Mage[a-j]+ .mage.&test driver: characters: .*Priest[a-j]+ .priest.&test driver: characters: .*Rogue[a-j]+ .rogue.|"
+    # Equipment (scripts/character.lua; the server's systems/inventory.lua, combat.lua, classes.lua). Real keys: C opens
+    # the character window; with the chat field focused C types "c" and the window stays open:
+    "starter_mmo_live_equip_open|equip_open|Outfitter|6000|OFF|test driver: character open: true&test driver: character document visible: true&test driver: chat focused: true, focusedField chat_input&test driver: after C, chat, C: 1 character toggle.s., chat field 'c'|--sim-key 30,C --sim-key 150,C --sim-on-log KEYS --screenshot-on-log 30,SHOT"
+    # A real mouse drag (--sim-mouse from bag slot 1, 254 / 103 px from the Game view's centre, onto Main Hand):
+    "starter_mmo_live_equip_drag|equip_drag|Outfitter|6000|OFF|test driver: equipment 6=worn_shortsword&test driver: bag 2=leather_cap:1&test driver: stats: max health 140, armor 0, damage [+]3&test driver: camera turned by the drag: false|--sim-mouse 20,left,${equip_drag_dx},${equip_drag_dy},0,254,103 --sim-on-log DRAG --screenshot-on-log 30,SHOT"
+    # Hovering the Leather Cap that stage left in bag slot 2 (--sim-mouse 58 px right of slot 1): slot and stats:
+    "starter_mmo_live_equip_tooltip|equip_tooltip|Outfitter|6000|OFF|test driver: bag 2=leather_cap:1&test driver: hovered slot_2|--sim-mouse 20,none,312,104,0 --sim-on-log HOVER --screenshot-on-log 30,SHOT"
+    # Refusals (drops replayed as RmlUi publishes them): the wrong slot (client and server), a full bag, in combat:
+    "starter_mmo_live_equip_rules|equip_rules|Ruler|9000|OFF|test driver: combat log: [*] Can't equip that there&test driver: rejected wrong_slot&test driver: equipment 6=worn_shortsword&test driver: rejected full&test driver: combat log: [*] Inventory is full&test driver: combat log: You cast Strike on Guard for 15&test driver: rejected combat&test driver: combat log: [*] Can't do that in combat|--screenshot-on-log 20,SHOT"
+    # Sword, tunic and shield: Strike 15, 155 max Health, the Guard's 5 down to 1 by 4 Armor; then the same after a relog:
+    "starter_mmo_live_equip_combat|equip_combat|Brawler|9000|OFF|test driver: equipment 2=linen_tunic 6=worn_shortsword 7=wooden_shield&test driver: Health [0-9]+ / 155 on&test driver: combat log: You cast Strike on Guard for 15&test driver: combat log: Guard hits you for 1|--screenshot-on-log 20,SHOT"
+    "starter_mmo_live_equip_persist|equip_persist|Brawler|6000|OFF|test driver: equipment after relog: 2=linen_tunic 6=worn_shortsword 7=wooden_shield&test driver: Health [0-9]+ / 155 on&test driver: stats: max health 155, armor 4, damage [+]3|--screenshot-on-log 30,SHOT")
   string(REPLACE "|" ";" stage "${stage}")
   list(GET stage 0 name)
   list(GET stage 1 stage_name)
@@ -147,7 +162,7 @@ add_test(NAME starter_mmo_live_legacy
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_live_legacy.cmake")
 list(APPEND live_shots "${KAST_STARTER_OUT}/starter_mmo_live_legacy.png")
 set_tests_properties(starter_mmo_live_legacy PROPERTIES FIXTURES_REQUIRED starter_mmo_live SKIP_REGULAR_EXPRESSION "SKIP: ")
-# The loot, bag and class stages run in this order (each loot stage, and the Backstab one, may wait for the Bat an
+# The loot, bag, class and equipment stages run in this order (each loot stage, and the Backstab one, may wait for the Bat an
 # earlier one killed).
 set(inventory_stages starter_mmo_live_loot_window starter_mmo_live_loot_rejects starter_mmo_live_loot
     starter_mmo_live_bag_persist starter_mmo_live_bag_full starter_mmo_live_bag_move starter_mmo_live_bag_swap
@@ -156,8 +171,10 @@ set(inventory_stages starter_mmo_live_loot_window starter_mmo_live_loot_rejects 
 set(class_stages starter_mmo_live_class_pick starter_mmo_live_class_warrior starter_mmo_live_class_mage_bolt
     starter_mmo_live_class_mage starter_mmo_live_class_priest starter_mmo_live_class_rogue starter_mmo_live_class_backstab
     starter_mmo_live_class_list starter_mmo_live_legacy)
+set(equip_stages starter_mmo_live_equip_open starter_mmo_live_equip_drag starter_mmo_live_equip_tooltip starter_mmo_live_equip_rules
+    starter_mmo_live_equip_combat starter_mmo_live_equip_persist)
 set(previous starter_mmo_live_revive)
-foreach(name IN LISTS inventory_stages class_stages)
+foreach(name IN LISTS inventory_stages class_stages equip_stages)
   set_tests_properties(${name} PROPERTIES DEPENDS "starter_mmo_live_setup;${previous}" TIMEOUT 420)
   set(previous ${name})
 endforeach()
@@ -166,11 +183,11 @@ add_test(NAME starter_mmo_live_secrets
   COMMAND "${CMAKE_COMMAND}" "-DSAMPLE=${KAST_STARTER}" "-DSTATE=${KAST_STARTER_STATE}" "-DSHOTS=${live_shots}"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_live_secrets.cmake")
 set_tests_properties(starter_mmo_live_secrets PROPERTIES FIXTURES_REQUIRED starter_mmo_live
-                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_world;starter_mmo_live_cavern;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_death;starter_mmo_live_revive;${inventory_stages};${class_stages}"
+                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_world;starter_mmo_live_cavern;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_death;starter_mmo_live_revive;${inventory_stages};${class_stages};${equip_stages}"
                      SKIP_REGULAR_EXPRESSION "SKIP: ")
 set_tests_properties(starter_mmo_live_setup starter_mmo_live_teardown starter_mmo_live_chars starter_mmo_live_world
                      starter_mmo_live_cavern starter_mmo_live_camera starter_mmo_live_camera_zoom
                      starter_mmo_live_camera_orbit starter_mmo_live_combat_target starter_mmo_live_combat
                      starter_mmo_live_combat_guard starter_mmo_live_death starter_mmo_live_revive starter_mmo_live_secrets
-                     ${inventory_stages} ${class_stages} PROPERTIES RUN_SERIAL TRUE)
+                     ${inventory_stages} ${class_stages} ${equip_stages} PROPERTIES RUN_SERIAL TRUE)
 set_tests_properties(starter_mmo_live_setup PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP: ")

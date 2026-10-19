@@ -32,6 +32,14 @@
 -- and logs KEYS: --sim-key presses W over and over, scripts/player.lua walks the character north into the rock, which
 -- stops it; then the driver logs where it stopped. "shrine" walks to SHRINE_SPOT, faces the Meadow Shrine and logs
 -- PRESS: --sim-key presses E, scripts/shrines.lua activates it and the server's answer shows in the chat box.
+-- Equipment (scripts/character.lua, the server's systems/inventory.lua, combat.lua, classes.lua; Meadow): each stage
+-- starts bare (the test server's "test.equipment") with a known bag. "equip_open" logs KEYS: --sim-key presses C (the
+-- character window opens), the driver focuses the chat field and C again types "c" there, the window stays open.
+-- "equip_drag" opens the bag and the character window and logs DRAG: --sim-mouse drags the Worn Shortsword from bag
+-- slot 1 onto Main Hand for real. "equip_rules" and "equip_combat" run CLASS_STEPS with act steps (a drop replayed as
+-- RmlUi publishes it, a raw request, a known bag): the refusals, then the Guard. "equip_persist" (equip_combat's
+-- character) logs its gear after the relog and opens both windows. "equip_tooltip" (equip_drag's character, the Leather
+-- Cap left in bag slot 2) opens the bag and logs HOVER: --sim-mouse hovers that slot for its tooltip.
 -- "SHOT" log lines are for --screenshot-on-log: the moment a stage's screenshot should show.
 local STAGE, CHARACTER = "@STAGE@", "@CHARACTER@"
 local REALM = "Starter Realm"
@@ -41,7 +49,7 @@ local GATES = {[MEADOW] = {x = 153, z = 128}, [CAVERN] = {x = 103, z = 128}} -- 
 local FIGHT_MAP = {combat_target = CAVERN, combat = CAVERN, combat_guard = MEADOW, death = MEADOW, revive = MEADOW,
                    loot_window = CAVERN, loot_rejects = CAVERN, loot = CAVERN, bag_full = CAVERN,
                    warrior = MEADOW, mage = MEADOW, mage_bolt = MEADOW, priest = MEADOW, rogue = MEADOW,
-                   rogue_backstab = CAVERN}
+                   rogue_backstab = CAVERN, equip_rules = MEADOW, equip_combat = MEADOW}
 local STAGE_CLASS = {mage = "mage", mage_bolt = "mage", priest = "priest", rogue = "rogue", rogue_backstab = "rogue",
                      legacy = "mage"}
 local CLASS = STAGE_CLASS[STAGE] or "warrior"
@@ -78,6 +86,26 @@ local CLASS_STEPS = {
         {go = "behind"}, {after = 0.5, press = 2},                    -- Backstab 30: the Bat dies
         {log = "Bat dies", shot = "backstab"},
     },
+    -- Equipment (act: see ACTS below): bare, a known bag, then drops replayed as RmlUi publishes them.
+    equip_rules = {
+        {act = "reset", bag = {"worn_shortsword:1", "linen_tunic:1"}},
+        {after = 1.5, act = "equip", from = 2, slot = 1},             -- the tunic on the head: refused by the client
+        {after = 0.5, act = "raw_equip", from = 2, slot = 1},         -- ... and by the server (wrong_slot)
+        {after = 0.5, act = "equip", from = 1, slot = 6},             -- the sword into Main Hand
+        {after = 1, act = "fill"},                                    -- 16 full stacks
+        {after = 1, act = "unequip", slot = 6},                       -- * Inventory is full
+        {log = "* Inventory is full", go = 2.2}, {tab = true}, {press = 1}, -- Strike: now in combat
+        {after = 0.5, act = "unequip", slot = 6},                     -- * Can't do that in combat
+        {log = "* Can't do that in combat", shot = "rules"},
+    },
+    equip_combat = {
+        {act = "reset", bag = {"worn_shortsword:1", "linen_tunic:1", "wooden_shield:1"}},
+        {after = 1.5, act = "equip", from = 1, slot = 6},             -- +3 Damage
+        {after = 0.5, act = "equip", from = 2, slot = 2},             -- 2 Armor, 2 Stamina
+        {after = 0.5, act = "equip", from = 3, slot = 7},             -- 2 Armor, 1 Stamina: 155 max Health
+        {after = 1, go = 2.2}, {tab = true}, {press = 1},             -- Strike 15
+        {log = "Guard hits you for 1", shot = "armored"},             -- 5 - 4 Armor
+    },
 }
 local ROCK_SPOT = {x = 141, z = 103} -- 5 m south of the rock at (141, 108), a 1.2 m cylinder
 local SHRINE_SPOT = {x = 118, z = 136.5} -- 2 m from the Meadow Shrine's edge (118, 140): within its range 3
@@ -102,6 +130,7 @@ local BAG_STEPS = { -- stage -> its drop; each bag stage replays every step up t
 }
 local BAG_STAGE = {}
 for i, step in ipairs(BAG_STEPS) do BAG_STAGE[step.stage] = i end
+local EQUIP_STAGES = {equip_open = true, equip_drag = true, equip_tooltip = true, equip_persist = true}
 
 local player
 local map
@@ -125,6 +154,9 @@ local retargetAt = 0      -- combat: when to press Tab again if nothing got sele
 local stepIndex, stepAt = 1, 0 -- class stages: the CLASS_STEPS step and when it began
 local logged = {}         -- combat log lines seen (class stages wait for some)
 local charReplies = 0     -- world.charCreated / charError answers (class_pick)
+local equipped = {}       -- the local Equipment, as replicated
+local stats               -- the last "character.stats"
+local windowToggles = 0   -- character.visibility events
 
 local function log(format, ...) kast.log("test driver: " .. string.format(format, ...)) end
 
@@ -175,6 +207,38 @@ local function setBag(slots) -- {"item:count" or "", ...}
     end
     kast.world.send("test.bag", {items = items, counts = counts})
 end
+
+local function gearText()
+    local parts = {}
+    for i = 1, 7 do
+        if (equipped[i] or "") ~= "" then parts[#parts + 1] = i .. "=" .. equipped[i] end
+    end
+    return table.concat(parts, " ")
+end
+
+local function resetGear(slots)
+    kast.world.send("test.equipment", {})
+    setBag(slots)
+end
+
+-- Drags as RmlUi publishes them: bag slot from onto equipment slot; equipment slot onto bag slot to (nil: the bag's
+-- frame).
+local function dropOnGear(from, slot)
+    kast.publish("bag.slot.drop", {id = "slot_" .. from, document = "ui/bag.rml", target = "equip_" .. slot,
+        targetDocument = "ui/character.rml", shift = false, ctrl = false, alt = false})
+end
+local function dropOnBag(slot, to)
+    kast.publish("equip.slot.drop", {id = "equip_" .. slot, document = "ui/character.rml",
+        target = to and ("slot_" .. to) or "bag", targetDocument = "ui/bag.rml", shift = false, ctrl = false, alt = false})
+end
+
+local ACTS = { -- CLASS_STEPS act steps
+    reset = function(s) resetGear(s.bag) end,
+    equip = function(s) dropOnGear(s.from, s.slot) end,
+    raw_equip = function(s) kast.world.send("equipment.equip", {from = s.from, slot = s.slot, item = bagItems[s.from]}) end,
+    unequip = function(s) dropOnBag(s.slot, s.to) end,
+    fill = function() setBag(FULL_BAG) end,
+}
 
 local function batAlive()
     local ok, health = pcall(kast.get, bat, "Health")
@@ -301,6 +365,54 @@ local function bagStage()
     end
 end
 
+-- The equipment stages without CLASS_STEPS: see the header.
+local function equipStage()
+    if phase == "arrive" and elapsed > 2 then
+        if STAGE == "equip_tooltip" then
+            kast.publish("bag.toggle")
+            phase, waitUntil = "shown", elapsed + 1.5
+            return log("HOVER")
+        end
+        if STAGE == "equip_persist" then
+            log("equipment after relog: %s", gearText())
+            kast.publish("bag.toggle")
+            kast.publish("character.toggle")
+            phase, waitUntil = "shown", elapsed + 1.5
+            return
+        end
+        resetGear(STAGE == "equip_drag" and {"worn_shortsword:1", "leather_cap:1"} or {})
+        phase = "setup_wait"
+    elseif phase == "setup_wait" and done >= 2 then
+        waitUntil, phase = elapsed + 1, "settle"
+    elseif phase == "settle" and elapsed >= waitUntil then
+        if STAGE == "equip_open" then
+            phase, waitUntil = "keys", elapsed + 6
+            return log("KEYS")
+        end
+        kast.publish("bag.toggle")
+        kast.publish("character.toggle")
+        phase, waitUntil = "opened", elapsed + 1
+    elseif phase == "opened" and elapsed >= waitUntil then
+        cameraBefore = cameraRotation()
+        phase = "mouse"
+        log("DRAG")
+    elseif phase == "mouse" and equipped[6] == "worn_shortsword" and stats and stats.damage == 3 then
+        phase = "done"
+        local now, was = cameraRotation(), cameraBefore
+        local turned = math.abs(now.x - was.x) + math.abs(now.y - was.y) + math.abs(now.z - was.z) + math.abs(now.w - was.w)
+        log("camera turned by the drag: %s", tostring(turned > 1e-4))
+        shoot("equipped with the mouse")
+    elseif phase == "keys" and elapsed >= waitUntil then
+        phase = "done"
+        log("after C, chat, C: %d character toggle(s), chat field '%s'", windowToggles, kast.gui.value("chat_input") or "?")
+        shoot("keys")
+    elseif phase == "shown" and elapsed >= waitUntil then
+        phase = "done"
+        log("hovered %s", tostring(kast.gui.hovered()))
+        shoot(STAGE)
+    end
+end
+
 -- The zone object stages: see the header.
 local function zoneStage()
     local spot = STAGE == "rock" and ROCK_SPOT or SHRINE_SPOT
@@ -390,6 +502,10 @@ local function classStage()
     end
     if (s.bat and not batAlive()) or (s.near and not guardWithin(s.near)) or (s.log and not logged[s.log]) then return end
     if s.seed then kast.world.send("test.seed", {seed = s.seed}) end
+    if s.act then
+        log("act %s", s.act)
+        ACTS[s.act](s)
+    end
     if s.tab then kast.publish("combat.target_next") end
     if s.press then
         log("press %d", s.press)
@@ -529,6 +645,23 @@ return {
                 shoot("rejects done")
             end
         end)
+        kast.subscribe("character.visibility", function(e)
+            windowToggles = windowToggles + 1
+            log("character open: %s", tostring(e.open))
+            if STAGE == "equip_open" and e.open then
+                local shown = false
+                for doc in kast.query("UIDocument") do
+                    local d = kast.get(doc, "UIDocument")
+                    shown = shown or (d.path == "ui/character.rml" and d.visible)
+                end
+                log("character document visible: %s", tostring(shown))
+                log("chat focused: %s, focusedField %s", tostring(kast.gui.focus("chat_input")), tostring(kast.gui.focusedField()))
+            end
+        end)
+        kast.subscribe("character.stats", function(e)
+            stats = e
+            log("stats: max health %d, armor %d, damage +%d", e.maxHealth, e.armor, e.damage)
+        end)
         kast.subscribe("target.selected", function(e)
             log("target selected %s (%d), %d marker(s)", e.name, e.entityId, markers())
             if STAGE == "combat_target" then shoot("target") end
@@ -567,6 +700,10 @@ return {
                 corpses[e.entityId] = e.data.owner
                 log("corpse %d owner %d", e.entityId, e.data.owner)
             end
+            if e.name == "Equipment" and e.entityId == me then
+                for i = 1, 7 do equipped[i] = e.data.items[i] or "" end
+                log("equipment %s", gearText())
+            end
             if e.name == "Inventory" and e.entityId == me then
                 for i = 1, 16 do bagItems[i], bagCounts[i] = e.data.items[i] or "", e.data.counts[i] or 0 end
                 bagChanged = true
@@ -599,6 +736,7 @@ return {
         end
         if BAG_STAGE[STAGE] or STAGE == "bag_drag_mouse" then bagStage() end
         if STAGE == "rock" or STAGE == "shrine" then zoneStage() end
+        if EQUIP_STAGES[STAGE] then equipStage() end
         if STAGE == "bag_keys" and elapsed > 2 and phase == "arrive" then
             phase, waitUntil = "keys", elapsed + 6
             log("KEYS")

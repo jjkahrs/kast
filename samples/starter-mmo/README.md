@@ -9,7 +9,9 @@ A small but complete Kast online game, made to read and copy. You open it in the
 5. take the portal into the Cavern, where a Bat waits, and walk back;
 6. target and fight the Bat and the Guard with your class's three powers (keys 1-3 or the action bar, decided by the
    server), die and revive;
-7. loot what they drop into a World of Warcraft-style 16-slot bag, and sort it by drag and drop.
+7. loot what they drop into a World of Warcraft-style 16-slot bag, and sort it by drag and drop;
+8. open the character window (C), a WoW-style paper doll, and equip gear from the bag that changes your Armor, Damage
+   and max Health on the server.
 
 The same folder is the game project (client) **and** the world server's Lua and maps: client and server share
 `components/`.
@@ -20,15 +22,15 @@ The same folder is the game project (client) **and** the world server's Lua and 
 |---|---|---|
 | `project.kast` | client | `Starter MMO`, starts at `scenes/login.scene`, Online Services on (`http://localhost:3100`, CA `certs/world_dev_ca.pem`), game state machine `session` |
 | `scenes/` | client | `login`, `register`, `realms` (one screen each) and `world` (character select, then the game) |
-| `scripts/` | client | one Lua system per screen or concern; they talk through the event bus. `characters.lua`: the character list and creation with a class; `combat.lua`: targeting, the target marker, the combat log, tipped corpses and right clicks on them; `powers.lua`: the action bar, keys 1-3, power requests (`kast.world.send`) and their effects; `loot.lua`: the loot window and the sparkle over your corpses; `bag.lua`: the bag window, its drags and tooltips; `shrines.lua`: E uses the nearest interactable (the Meadow Shrine); `player.lua`: movement, stopped by the zone obstacles |
+| `scripts/` | client | one Lua system per screen or concern; they talk through the event bus. `characters.lua`: the character list and creation with a class; `combat.lua`: targeting, the target marker, the combat log, tipped corpses and right clicks on them; `powers.lua`: the action bar, keys 1-3, power requests (`kast.world.send`) and their effects; `loot.lua`: the loot window and the sparkle over your corpses; `bag.lua`: the bag window, its drags and tooltips; `character.lua`: the character window (paper doll), its drags, stats and tooltips; `shrines.lua`: E uses the nearest interactable (the Meadow Shrine); `player.lua`: movement, stopped by the zone obstacles |
 | `ui/` | client | RmlUi documents, one per screen, sharing `starter.rcss` (the Kast editor palette) |
-| `components/` | **both** | `Health` (replicated to everyone in view), `Wallet` (owner only), `Class` (warrior, mage, priest or rogue; owner only, saved), `Inventory` (the bag, owner only, saved), `Corpse` (who may loot a dead NPC, everyone in view), `MapProps` (client-side tag) |
-| `items/` | **both** | one item per file (`id`, `name`, `icon`, `quality`, `maxStack`, `sellPrice`, `description`): Bat Wing, Linen Cloth, Minor Healing Potion, Worn Shortsword; `kast.items` on both sides |
+| `components/` | **both** | `Health` (replicated to everyone in view), `Wallet` (owner only), `Class` (warrior, mage, priest or rogue; owner only, saved), `Inventory` (the bag, owner only, saved), `Equipment` (7 gear slots, owner only, saved), `Corpse` (who may loot a dead NPC, everyone in view), `MapProps` (client-side tag) |
+| `items/` | **both** | one item per file (`id`, `name`, `icon`, `quality`, `maxStack`, `sellPrice`, `description`): Bat Wing, Linen Cloth, Minor Healing Potion, and the gear: Worn Shortsword, Leather Cap, Linen Tunic, Patched Trousers, Worn Boots, Cloth Gloves, Wooden Shield; `kast.items` on both sides. Which slot gear fits and its stats are `systems/inventory.lua`'s `GEAR` table (item files may hold only those seven keys) |
 | `fsms/` | both | `patrol` (the Guard's machine, server: walking, waiting, combat, returning), `creature` (the Bat's machine, server: idle, combat, returning), `session` (why the client is on the login screen) |
 | `npcs/` | server | the `Guard` and `Bat` NPC definitions; their `template` names the client entity they are shown as, `loot` what they drop |
-| `systems/` | server | `classes.lua` (which classes a new character may have, `Class` and max Health on entering), `combat.lua` (the powers of each class, NPCs fighting back, roots, buffs, tagging, death and revive), `inventory.lua` (bag requests, loot rolls, corpses), `regen.lua` (Health regen out of combat, 1 gold per login), `events.lua` (welcome / arrival messages), `npcs.lua` (patrols), `shrines.lua` (the Meadow Shrine: Health back to full and a blessing in the chat box) |
+| `systems/` | server | `classes.lua` (which classes a new character may have, `Class` and max Health on entering), `combat.lua` (the powers of each class, NPCs fighting back, roots, buffs, tagging, death and revive), `inventory.lua` (bag and equipment requests, the `GEAR` table, loot rolls, corpses), `regen.lua` (Health regen out of combat, 1 gold per login), `events.lua` (welcome / arrival messages), `npcs.lua` (patrols), `shrines.lua` (the Meadow Shrine: Health back to full and a blessing in the chat box) |
 | `maps/meadow`, `maps/cavern` | both | map 10 and map 11: one 256 m tile each, heightmap, `areas.json` with a portal each way; `.server/spawns/` (server only) places the Guard and the Bat. The Meadow also has zone objects (`objects/0_0.json`: grass and flowers, rocks, trees and the Meadow Shrine; `.server/interactables/0_0.json`, server only: the shrine's event) and its baked navtile (`.server/nav/`, the rocks, trees and shrine cut out) |
-| `prefabs/`, `materials/`, `models/`, `textures/` | client | the zone objects' prefabs, built from primitives (`grass`, `flower`, `rock`, `tree`, `shrine`); primitives' materials (the power effects: `fire`, `arcane`, `holy`, `frost`, `steel`, `shadow`), the animated character (`female-128-anim.glb`, from `tests/project/models`), item icons (`textures/icons/`, 64x64 placeholders) |
+| `prefabs/`, `materials/`, `models/`, `textures/` | client | the zone objects' prefabs, built from primitives (`grass`, `flower`, `rock`, `tree`, `shrine`); primitives' materials (the power effects: `fire`, `arcane`, `holy`, `frost`, `steel`, `shadow`), the animated character (`female-128-anim.glb`, from `tests/project/models`), item icons (`textures/icons/`, 64x64 placeholders), the character window's silhouette (`textures/character_silhouette.png`, a placeholder) |
 | `docker-compose.override.yml` | dev | runs the `services/world` stack with this folder's Lua and maps |
 | `setup_realm.cmake` | dev | copies the stack's dev CA into `certs/` and adds the realm `Starter Realm` |
 
@@ -113,7 +115,8 @@ running it twice adds nothing.
 
   Ranged powers send a small glowing ball from you to the target; Frost Nova flashes a frost ring, Heal a glow, and
   Shield Wall, Power Shield and Evasion keep a see-through sphere around you while they last. Everyone nearby sees them.
-  A rooted NPC still hits you if you are within its reach. Reviving restores your class's full Health.
+  A rooted NPC still hits you if you are within its reach. Reviving restores your full Health (your class's plus your
+  gear's Stamina). Gear adds to these numbers (below): the Worn Shortsword makes Strike 15.
   - Take the portal (below) to the Cavern: the Bat stands 8 m ahead. Target it and press 1 as a Warrior: `* Out of
     range` in the chat box. Walk up to it (within 3 m) and press 1 again: `You cast Strike on Bat for 12`, `Bat dies`.
     Its corpse tips over and stays until it is looted empty or for 60 s; the Bat comes back at its spot 30 s after the
@@ -131,7 +134,8 @@ running it twice adds nothing.
     yet`, `* Not ready yet (global cooldown)`, `* Out of range`, `* Invalid target`, `* Your target is dead`, `* Not
     behind target`, `* You are dead`).
 - **Loot**: an NPC drops loot once, when it dies, for the player who hit it first (its tagger). Bat: Bat Wing 80%,
-  Linen Cloth 40%, 1-3 gold. Guard: Linen Cloth 60% (1-2), Minor Healing Potion 25%, Worn Shortsword 10%, 5-15 gold.
+  Linen Cloth 40%, Worn Boots 10%, Cloth Gloves 10%, 1-3 gold. Guard: Linen Cloth 60% (1-2), Minor Healing Potion 25%,
+  Worn Shortsword 10%, Leather Cap 10%, Linen Tunic 10%, Patched Trousers 10%, Wooden Shield 5%, 5-15 gold.
   - Only the tagger sees a gold sparkle bobbing over the corpse; anyone else gets `* You can't loot that`.
   - **Right click** the corpse (press and release without dragging) within 5 m: the loot window opens with its gold and
     items (icon, name in quality colour, count). Click an entry to take it, or **Take All**. Further away:
@@ -149,7 +153,34 @@ running it twice adds nothing.
 
   The bag is saved with the character. Every change is a request (`kast.world.send("inventory.move", ...)`) that the
   server's `systems/inventory.lua` checks (slots, the item it expects, stack sizes, loot owner, range, alive); a refused
-  one says why in the chat box and changes nothing.
+  one says why in the chat box and changes nothing. Gear's tooltip also shows its slot and stats.
+- **Character window**: **C** opens and closes it (typed into the chat box, C is just a "c"). A World of Warcraft-style
+  paper doll: your name and class on top, a silhouette with seven slots around it (Head, Chest, Legs on the left,
+  Hands and Feet on the right, Main Hand and Off Hand below; an empty slot shows its name faintly, a filled one the
+  item's icon in its quality border), and your Max Health, Armor and Damage bonus under it. Hover a slot for its
+  tooltip: name, slot, stats, description. Drag (the camera stays put):
+  - a bag item onto its slot: equips it; onto an occupied slot: swaps, the old item goes where the new one was;
+  - an equipped item onto an empty bag slot: unequips it; onto gear for the same slot: swaps them; onto any other item:
+    `* That bag slot is taken`; onto the bag's frame: the first empty slot. No room: `* Inventory is full`;
+  - onto the wrong slot: `* Can't equip that there`. Dead: `* You are dead`. Within 5 s of dealing or taking a hit
+    (the same window Health regeneration waits for): `* Can't do that in combat`. A refusal changes nothing.
+
+  | Item | Slot | Stats | Quality |
+  |---|---|---|---|
+  | Leather Cap | Head | 1 Armor, 1 Stamina | common |
+  | Linen Tunic | Chest | 2 Armor, 2 Stamina | common |
+  | Patched Trousers | Legs | 1 Armor, 1 Stamina | common |
+  | Worn Boots | Feet | 1 Armor, 1 Stamina | common |
+  | Cloth Gloves | Hands | 1 Armor, 1 Stamina | common |
+  | Worn Shortsword | Main Hand | 3 Damage | uncommon |
+  | Wooden Shield | Off Hand | 2 Armor, 1 Stamina | uncommon |
+
+  Stats are flat and the server applies them: **Armor** takes 1 per point off every NPC hit, never below 1, before
+  Shield Wall halves it and Power Shield absorbs it (Evasion's dodges are unchanged); the full set's 8 Armor turns the
+  Guard's 5 into 1. **Damage** adds to every damage power, melee and ranged (Strike 12 -> 15, Firebolt 14 -> 17); heals
+  and buffs are unchanged. **Stamina** gives 5 max Health a point on top of the class's (a Warrior in the full set: 175).
+  Equipping raises the max but not your current Health; unequipping lowers the max and clamps your Health to it.
+  Gear is saved with the character. Any class can wear anything; Main Hand and Off Hand are independent.
 - **Portal**: the orange arch about 25 m east of the spawn is the `cavern_gate` portal: walk into it and the server
   moves you to the Cavern (`world.mapChanged`); the terrain and props switch and the Bat is in front of you. The arch
   west of the Cavern's arrival point takes you back.
@@ -205,8 +236,17 @@ of the client project.
   (published by `systems/combat.lua`) and keeps the contents to itself: clients only see `Corpse {owner}`, and the owner
   asks for the contents (`loot.open`). The bag is two parallel arrays (`items`, `counts`) because component fields
   can't hold tables.
+- **Equipment**: `Equipment` is one array of 7 item ids, in `components/equipment.lua`'s slot order. Item files may hold
+  only the engine's seven keys, so which slot an item fits and its stats are the server's `GEAR` table in
+  `systems/inventory.lua`, sent to the owner on entering (`equipment.gear`, like `class.powers`) for the window and the
+  tooltips. Equip and unequip live in `inventory.lua` because they move items between the bag and the equipment in one
+  step, and system files can't share `readBag` / `writeBag`. After every change (and on entering) it publishes
+  `equipment.stats {entity, armor, damage, stamina}` on the server bus: `combat.lua` keeps each player's Armor and
+  Damage from it, `classes.lua` sets `Health.max` (class base + 5 per Stamina). Neither reads the gear itself.
 - **Drag and drop** is the engine's: a slot has RCSS `drag: clone` and `data-drag="bag.slot"`, so RmlUi drags publish
   `bag.slot.start` / `bag.slot.drop` with the target slot and Shift ([Game GUI](../../docs/engine/game-gui.html#drag-and-drop)).
+  Drops carry the target's document, so a bag slot dropped on `ui/character.rml` is `scripts/character.lua`'s to equip
+  (the bag ignores it), and equipment slots (`data-drag="equip.slot"`) dropped on `ui/bag.rml` unequip.
 - **Maps**: the client's `Terrain` follows the server's map, and `scripts/world_flow.lua` shows the props tagged with
   that map's `MapProps`.
 - **Why back at login**: `world_flow.lua` records the reason in the `session` game state machine, which survives
@@ -271,12 +311,24 @@ of the client project.
   - `starter_mmo_live_class_list`: the character list with each character's class.
   - `starter_mmo_live_legacy` (`cmake/starter_mmo_live_legacy.cmake`): `Veteran` is stripped of its class in MySQL (as if
     made before classes), enters as a Warrior with 140 max Health, and MySQL then holds its saved Warrior `Class`.
+  - Equipment stages start bare (the test server's `test.equipment`) with a known bag (`test.bag`):
+    `starter_mmo_live_equip_open`: real C presses (`--sim-key`) open the character window; with the chat field focused C
+    types "c" and the window stays open. `starter_mmo_live_equip_drag`: a real mouse drag (`--sim-mouse`) of the Worn
+    Shortsword from bag slot 1 onto Main Hand; the stats show Damage +3 and the camera didn't turn.
+    `starter_mmo_live_equip_tooltip`: hovering the Leather Cap in the bag (slot and stats in its tooltip).
+    `starter_mmo_live_equip_rules`: the wrong slot (refused by the client, then by the server), a full bag and, after a
+    Strike on the Guard, in combat, each in the chat box. `starter_mmo_live_equip_combat`: `Brawler` in sword, tunic
+    and shield: 155 max Health, Strike 15, the Guard's hits down to 1. `starter_mmo_live_equip_persist`: `Brawler`
+    again after the relog: the same gear, 155 max Health, Armor 4, Damage +3, both windows open.
   The test-time compose file also lets the test account hold 20 characters, since each stage has its own.
 
   The engine's drag and drop itself is checked by `ctest -R ui_drag` (a real `--sim-mouse` drag, with and without
   Shift, in `tests/project/ui_drag.scene`); the server's bag and loot rules by `world_self_check` (`starter-mmo loot`), and every class and power rule (damage,
   ranges, cooldowns, the global cooldown, roots, shields, dodges, Backstab, refusals) by its `starter-mmo classes`
-  checks.
+  checks. Its `starter-mmo equipment` checks cover equip, unequip and both swaps, every refusal (wrong slot, occupied,
+  full, dead, in combat, bad indices, a mismatched item), saved gear cleanup, Armor (with its minimum and its order
+  before Shield Wall and Power Shield), Damage on melee and ranged powers, Stamina's max Health with clamping, revive
+  and login with gear, and the gear saved across a relog.
 
   The combat stages take their screenshot a moment after the driver logs its shot line (the editor's
   `--screenshot-on-log`).

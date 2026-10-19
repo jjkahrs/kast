@@ -3028,6 +3028,305 @@ void checkStarterMmoClasses() {
     check(health(frail) == 80, "starter-mmo classes: revived with the class's 80 Health");
     for (const auto& st : w.world.script_status()) check(st.ok, "starter-mmo classes: system still enabled " + st.path + " " + st.error);
 }
+
+// The starter-mmo sample's equipment (samples/starter-mmo/components/equipment.lua, systems/inventory.lua's equip
+// rules and GEAR, combat.lua's Armor and Damage, classes.lua's Stamina), in a copy of its server Lua with the test-only
+// system (test.bag). Gear: Leather Cap head 1 armor 1 stamina, Linen Tunic chest 2/2, Patched Trousers legs 1/1, Worn
+// Boots feet 1/1, Cloth Gloves hands 1/1, Worn Shortsword main hand 3 damage, Wooden Shield off hand 2/1.
+void checkStarterMmoEquipment() {
+    LogCapture capture;
+    const fs::path sample = KAST_STARTER_MMO;
+    LuaRoot r;
+    for (const char* dir : {"components", "fsms", "items", "npcs", "systems"})
+        fs::copy(sample / dir, r.root / dir, fs::copy_options::recursive);
+    fs::copy_file(KAST_STARTER_MMO_TEST_LUA, r.root / "systems" / "zz_test.lua");
+    const auto defs = lua::load_component_defs(r.root, world::kReservedComponentNames);
+    std::vector<std::string> mapErrors;
+    world::WorldRules rules;
+    rules.startMap = 10;
+    TestWorld w(defs.defs, rules, world::Maps::load(sample / "maps", mapErrors));
+    const auto errors = w.world.load_scripts(r.root);
+    check(defs.errors.empty() && errors.empty(), "starter-mmo equipment: loads " + (errors.empty() ? std::string() : errors[0]));
+    if (!errors.empty()) return;
+    TimePoint t = T0;
+    w.world.tick(t);
+    const auto tick = [&] { w.world.tick(t += std::chrono::milliseconds(50)); };
+    const auto run = [&](double seconds) {
+        for (int i = 0; i < std::max(1, static_cast<int>(std::lround(seconds * 20))); ++i) tick();
+    };
+    const auto send = [&](entt::entity from, const std::string& name, const Json& data) {
+        w.world.push_client_event(from, name, nlohmann::json::parse(data.dump()));
+        run(0.11); // under the 10 client events a second limit
+    };
+    const auto events = [&](uint32_t sid, const std::string& name) {
+        std::vector<Json> out;
+        for (const auto& e : w.sent.of<proto::ServerEvent>(sid))
+            if (e.name == name) out.push_back(Json::parse(e.json));
+        return out;
+    };
+    using Reasons = std::vector<std::string>;
+    const auto rejected = [&](uint32_t sid) {
+        Reasons out;
+        for (const auto& e : events(sid, "inventory.rejected")) out.push_back(e["reason"]);
+        w.sent.clear();
+        return out;
+    };
+    using Slots = std::vector<std::string>;
+    const auto bag = [&](entt::entity e) { // "item:count" per non-empty slot, by slot
+        const Json v = w.value(e, "Inventory");
+        Slots out;
+        for (size_t i = 0; i < 16; ++i)
+            out.push_back(v["items"][i].get<std::string>().empty() ? "" : v["items"][i].get<std::string>() + ":" +
+                                                                                  std::to_string(v["counts"][i].get<int>()));
+        while (!out.empty() && out.back().empty()) out.pop_back();
+        return out;
+    };
+    const auto gear = [&](entt::entity e) { // item id per slot, trailing empties dropped
+        Slots out = w.value(e, "Equipment")["items"].get<Slots>();
+        while (!out.empty() && out.back().empty()) out.pop_back();
+        return out;
+    };
+    const auto setBag = [&](entt::entity e, const Slots& slots) {
+        Json items = Json::array(), counts = Json::array();
+        for (const std::string& s : slots) {
+            const size_t colon = s.find(':');
+            items.push_back(s.empty() ? "" : s.substr(0, colon));
+            counts.push_back(s.empty() ? 0 : std::stoi(s.substr(colon + 1)));
+        }
+        send(e, "test.bag", Json{{"items", items}, {"counts", counts}});
+    };
+    const auto equip = [&](entt::entity e, int from, int slot, const std::string& item) {
+        send(e, "equipment.equip", {{"from", from}, {"slot", slot}, {"item", item}});
+    };
+    const auto unequip = [&](entt::entity e, int slot, int to, const std::string& item) { // to 0: none
+        Json data{{"slot", slot}, {"item", item}};
+        if (to) data["to"] = to;
+        send(e, "equipment.unequip", data);
+    };
+    const auto health = [&](entt::entity e) { return w.value(e, "Health")["current"].get<double>(); };
+    const auto maxHealth = [&](entt::entity e) { return w.value(e, "Health")["max"].get<double>(); };
+    const auto hitsOn = [&](uint32_t sid, entt::entity target) {
+        std::vector<double> out;
+        for (const auto& h : events(sid, "combat.hit"))
+            if (h["target"] == wire(target)) out.push_back(h["damage"]);
+        return out;
+    };
+    const auto dummy = [&](float x, float z, bool fights = false) {
+        Json components{{"Health", {{"current", 1000}, {"max", 1000}, {"regen", true}}}};
+        if (fights) components["StateMachine"] = {{"machine", "creature"}, {"initialState", ""}};
+        return w.world.create_npc("Dummy", "Dummy", 10, proto::Vec3{x, 0, z}, 0, fights ? "Guard" : "",
+                                  lua::Json::parse(components.dump()));
+    };
+    const auto as = [](const char* c) { return proto::CharOptions{{"class", c}}; };
+    using Hits = std::vector<double>;
+
+    // Items: the sword and six new gear items, one per other slot, all maxStack 1 with an icon; four in the Guard's
+    // loot, two in the Bat's.
+    const std::array<const char*, 7> gearIds{"leather_cap", "linen_tunic", "patched_trousers", "worn_boots",
+                                             "cloth_gloves", "worn_shortsword", "wooden_shield"};
+    const auto text = [](const fs::path& p) {
+        std::ifstream in(p, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), {});
+    };
+    const std::string loot = text(sample / "npcs" / "guard.lua") + text(sample / "npcs" / "bat.lua");
+    bool itemsOk = true;
+    for (const char* id : gearIds)
+        itemsOk = itemsOk && contains(text(sample / "items" / (std::string(id) + ".lua")), "maxStack = 1,") &&
+                  fs::exists(sample / "textures" / "icons" / (std::string(id) + ".png")) &&
+                  contains(loot, std::string("\"") + id + "\"");
+    check(itemsOk, "starter-mmo equipment: 7 gear items, maxStack 1, icons, all in NPC loot");
+
+    // Entering: an empty 7-slot Equipment, the gear table for the client; a saved one drops unknown and misplaced items.
+    const auto ann = w.spawn(1, 801, "Ann", 60, 60, "", 10, as("warrior"));
+    const auto ben = w.spawn(2, 802, "Ben", 60, 80,
+                             R"({"Equipment":{"items":["gone","worn_shortsword","linen_tunic","","","worn_shortsword",""]}})",
+                             10, as("warrior"));
+    run(0.1);
+    const auto table = events(1, "equipment.gear");
+    check(w.value(ann, "Equipment")["items"] == Json(Slots(7, "")) && table.size() == 1 &&
+              table[0]["slots"] == Json::parse(R"(["head","chest","legs","feet","hands","main_hand","off_hand"])") &&
+              table[0]["names"][5] == "Main Hand" && table[0]["gear"]["worn_shortsword"]["slot"] == "main_hand" &&
+              table[0]["gear"]["worn_shortsword"]["damage"] == 3 && table[0]["gear"]["linen_tunic"]["armor"] == 2,
+          "starter-mmo equipment: a new character has 7 empty slots and gets equipment.gear: " +
+              (table.empty() ? std::string("-") : table[0].dump()));
+    check(gear(ben) == Slots{"", "", "", "", "", "worn_shortsword"},
+          "starter-mmo equipment: a saved Equipment drops an unknown item and items in the wrong slot: " + Json(gear(ben)).dump());
+    bool ownerOnly = true;
+    for (uint32_t sid = 1; sid <= 2; ++sid)
+        for (const auto& u : w.sent.of<proto::ComponentUpdate>(sid))
+            if (u.name == "Equipment" && u.entityId != wire(sid == 1 ? ann : ben)) ownerOnly = false;
+    check(ownerOnly, "starter-mmo equipment: Equipment is replicated to its owner only");
+
+    // Equip and unequip, with both swaps.
+    setBag(ann, {"worn_shortsword:1", "linen_tunic:1", "worn_shortsword:1", "bat_wing:5"});
+    rejected(1);
+    equip(ann, 1, 6, "worn_shortsword");
+    check(gear(ann) == Slots{"", "", "", "", "", "worn_shortsword"} && bag(ann) == Slots{"", "linen_tunic:1", "worn_shortsword:1", "bat_wing:5"},
+          "starter-mmo equipment: equip from the bag into its slot");
+    equip(ann, 2, 2, "linen_tunic");
+    equip(ann, 3, 6, "worn_shortsword"); // onto the equipped sword: the old one goes to bag slot 3
+    check(gear(ann) == Slots{"", "linen_tunic", "", "", "", "worn_shortsword"} &&
+              bag(ann) == Slots{"", "", "worn_shortsword:1", "bat_wing:5"} && rejected(1).empty(),
+          "starter-mmo equipment: equip onto an occupied slot swaps the old item into the bag slot: " + Json(bag(ann)).dump());
+    unequip(ann, 2, 8, "linen_tunic");
+    check(gear(ann) == Slots{"", "", "", "", "", "worn_shortsword"} &&
+              bag(ann) == Slots{"", "", "worn_shortsword:1", "bat_wing:5", "", "", "", "linen_tunic:1"},
+          "starter-mmo equipment: unequip onto an empty bag slot");
+    unequip(ann, 6, 3, "worn_shortsword"); // onto the other sword: swapped
+    check(gear(ann) == Slots{"", "", "", "", "", "worn_shortsword"} &&
+              bag(ann) == Slots{"", "", "worn_shortsword:1", "bat_wing:5", "", "", "", "linen_tunic:1"} && rejected(1).empty(),
+          "starter-mmo equipment: unequip onto same-slot gear in the bag swaps them");
+    unequip(ann, 6, 0, "worn_shortsword");
+    check(gear(ann).empty() && bag(ann) == Slots{"worn_shortsword:1", "", "worn_shortsword:1", "bat_wing:5", "", "", "", "linen_tunic:1"},
+          "starter-mmo equipment: unequip without a bag slot goes to the first empty one: " + Json(bag(ann)).dump());
+
+    // Refusals change nothing.
+    equip(ann, 1, 6, "worn_shortsword");
+    rejected(1);
+    const Slots bagBefore = bag(ann), gearBefore = gear(ann);
+    equip(ann, 8, 1, "linen_tunic");      // a chest item onto the head
+    equip(ann, 4, 6, "bat_wing");         // not gear
+    unequip(ann, 6, 8, "worn_shortsword"); // onto the tunic: other gear
+    unequip(ann, 6, 4, "worn_shortsword"); // onto the Bat Wings
+    const Reasons placed = rejected(1);
+    check(placed == Reasons{"wrong_slot", "wrong_slot", "occupied", "occupied"} && bag(ann) == bagBefore && gear(ann) == gearBefore,
+          "starter-mmo equipment: wrong slot and an occupied bag slot refused: " + Json(placed).dump());
+    for (const Json& bad : {Json{{"from", 0}, {"slot", 1}, {"item", "x"}}, Json{{"from", 17}, {"slot", 1}, {"item", "x"}},
+                            Json{{"from", 8}, {"slot", 0}, {"item", "linen_tunic"}}, Json{{"from", 8}, {"slot", 8}, {"item", "linen_tunic"}},
+                            Json{{"from", 8}, {"slot", 1.5}, {"item", "linen_tunic"}}, Json{{"from", "8"}, {"slot", 2}},
+                            Json("nope"), Json{{"from", 2}, {"slot", 2}, {"item", ""}},
+                            Json{{"from", 8}, {"slot", 2}, {"item", "leather_cap"}}})
+        send(ann, "equipment.equip", bad);
+    for (const Json& bad : {Json{{"slot", 9}, {"item", "x"}}, Json{{"slot", 6}, {"to", 17}, {"item", "worn_shortsword"}},
+                            Json{{"slot", 6}, {"to", "x"}, {"item", "worn_shortsword"}}, Json(5),
+                            Json{{"slot", 1}, {"item", ""}}, Json{{"slot", 6}, {"item", "leather_cap"}}})
+        send(ann, "equipment.unequip", bad);
+    const Reasons bad = rejected(1);
+    check(bad == Reasons{"slot", "slot", "slot", "slot", "slot", "slot", "slot", "empty", "item", "slot", "slot", "slot", "slot",
+                         "empty", "item"} &&
+              bag(ann) == bagBefore && gear(ann) == gearBefore,
+          "starter-mmo equipment: bad indices, empty slots and a mismatched item refused: " + Json(bad).dump());
+    Slots full(16, "linen_cloth:20");
+    full[3] = "worn_shortsword:1";
+    full[7] = "linen_tunic:1";
+    setBag(ann, full);
+    rejected(1);
+    unequip(ann, 6, 0, "worn_shortsword");  // no empty slot
+    unequip(ann, 6, 1, "worn_shortsword");  // onto Linen Cloth in a full bag
+    unequip(ann, 6, 8, "worn_shortsword");  // onto the tunic in a full bag
+    unequip(ann, 6, 4, "worn_shortsword");  // the swap still works in a full bag
+    check(rejected(1) == Reasons{"full", "full", "full"} && gear(ann) == Slots{"", "", "", "", "", "worn_shortsword"} &&
+              bag(ann) == full,
+          "starter-mmo equipment: a full bag refuses an unequip (full), but a same-slot swap still works");
+
+    // Dead or within 5 s of a hit: refused; 5 s after the last hit: allowed.
+    setBag(ann, {"leather_cap:1"});
+    const auto d1 = dummy(60, 62.5f);
+    run(0.1);
+    send(ann, "combat.power", {{"power", "strike"}, {"target", wire(d1)}});
+    run(4.5);
+    equip(ann, 1, 1, "leather_cap");
+    unequip(ann, 6, 0, "worn_shortsword");
+    check(rejected(1) == Reasons{"combat", "combat"} && bag(ann) == Slots{"leather_cap:1"},
+          "starter-mmo equipment: refused within 5 s of a hit");
+    run(0.5);
+    equip(ann, 1, 1, "leather_cap");
+    check(gear(ann) == Slots{"leather_cap", "", "", "", "", "worn_shortsword"}, "starter-mmo equipment: allowed 5 s after the hit");
+    const auto dead = w.spawn(3, 803, "Dead", 60, 100, R"({"Health":{"current":0,"max":140},"Inventory":{"items":["leather_cap"],"counts":[1]}})",
+                              10, as("warrior"));
+    run(0.1);
+    equip(dead, 1, 1, "leather_cap");
+    check(rejected(3) == Reasons{"dead"} && gear(dead).empty(), "starter-mmo equipment: refused while dead");
+
+    // Damage: +3 on every damage power, melee and ranged; heals unchanged.
+    const auto d2 = dummy(80, 62.5f), d3 = dummy(100, 80);
+    const auto mag = w.spawn(4, 804, "Mag", 100, 60, R"({"Equipment":{"items":["","","","","","worn_shortsword",""]}})", 10, as("mage"));
+    const auto war = w.spawn(5, 805, "War", 80, 60, R"({"Equipment":{"items":["","","","","","worn_shortsword",""]}})", 10, as("warrior"));
+    const auto pri = w.spawn(6, 806, "Pri", 120, 60,
+                             R"({"Health":{"current":30,"max":90},"Equipment":{"items":["","","","","","worn_shortsword",""]}})", 10,
+                             as("priest"));
+    run(0.1);
+    w.sent.clear();
+    send(war, "combat.power", {{"power", "strike"}, {"target", wire(d2)}});
+    run(1.0);
+    send(war, "combat.power", {{"power", "heroic_slam"}, {"target", wire(d2)}});
+    send(mag, "combat.power", {{"power", "firebolt"}, {"target", wire(d3)}});
+    send(pri, "combat.power", {{"power", "heal"}});
+    double healed = -1;
+    for (const auto& e : events(6, "combat.power"))
+        if (e["effect"] == "heal") healed = e["amount"];
+    check(hitsOn(5, d2) == Hits{15, 28} && hitsOn(4, d3) == Hits{17} && healed == 40,
+          std::format("starter-mmo equipment: the sword's +3 Damage: Strike 15, Heroic Slam 28, Firebolt 17; Heal still 40 ({}): ",
+                      healed) + Json(hitsOn(5, d2)).dump() + Json(hitsOn(4, d3)).dump());
+
+    // Armor: each point takes 1 off an NPC's hit (the Guard's 5), never below 1, before Shield Wall and Power Shield.
+    const auto armored = [&](uint32_t sid, const char* name, float x, const char* cls, const char* items) {
+        return w.spawn(sid, 810 + sid, name, x, 160, std::string(R"({"Equipment":{"items":)") + items + "}}", 10, as(cls));
+    };
+    const auto a2 = armored(10, "Armtwo", 60, "warrior", R"(["","linen_tunic","","","","",""])");                // armor 2
+    const auto a8 = armored(11, "Armall", 80, "warrior", R"(["leather_cap","linen_tunic","patched_trousers","worn_boots","cloth_gloves","","wooden_shield"])");
+    const auto aw = armored(12, "Armwall", 100, "warrior", R"(["leather_cap","","","","","",""])");              // armor 1
+    const auto ap = armored(13, "Armpri", 120, "priest", R"(["","linen_tunic","","","","",""])");               // armor 2
+    std::array<entt::entity, 4> biters{};
+    for (int i = 0; i < 4; ++i) biters[i] = dummy(60 + 20.0f * static_cast<float>(i), 162, true);
+    run(0.1);
+    check(maxHealth(a8) == 140 + 5 * 7, "starter-mmo equipment: the full set's 7 Stamina: max Health 175");
+    w.sent.clear();
+    send(aw, "combat.power", {{"power", "shield_wall"}});
+    send(ap, "combat.power", {{"power", "power_shield"}});
+    run(1.0);
+    send(a2, "combat.power", {{"power", "strike"}, {"target", wire(biters[0])}});
+    send(a8, "combat.power", {{"power", "strike"}, {"target", wire(biters[1])}});
+    send(aw, "combat.power", {{"power", "strike"}, {"target", wire(biters[2])}});
+    send(ap, "combat.power", {{"power", "smite"}, {"target", wire(biters[3])}});
+    run(2.5);
+    double firstAbsorbed = -1;
+    for (const auto& h : events(13, "combat.hit"))
+        if (h["target"] == wire(ap) && firstAbsorbed < 0) firstAbsorbed = h.value("absorbed", -1.0);
+    check(hitsOn(10, a2).size() >= 2 && hitsOn(10, a2)[0] == 3 && hitsOn(11, a8)[0] == 1 && hitsOn(12, aw)[0] == 2 &&
+              firstAbsorbed == 3,
+          std::format("starter-mmo equipment: Armor 2: 3, Armor 8: 1 (min), Armor 1 then Shield Wall: 2, Armor 2 then Power "
+                      "Shield absorbs 3 ({}): ", firstAbsorbed) +
+              Json(hitsOn(10, a2)).dump() + Json(hitsOn(11, a8)).dump() + Json(hitsOn(12, aw)).dump());
+
+    // Stamina: +5 max Health a point. Equipping raises the max only; unequipping clamps the current Health; login and
+    // revive use the class's base plus the gear.
+    const auto sta = w.spawn(7, 807, "Sta", 160, 60,
+                             R"({"Health":{"current":155,"max":155},"Equipment":{"items":["leather_cap","linen_tunic","","","","",""]},)"
+                             R"("Inventory":{"items":["worn_boots"],"counts":[1]}})",
+                             10, as("warrior"));
+    run(0.1);
+    const bool login = health(sta) == 155 && maxHealth(sta) == 155;
+    equip(sta, 1, 4, "worn_boots");
+    const bool raised = health(sta) == 155 && maxHealth(sta) == 160;
+    unequip(sta, 2, 0, "linen_tunic");
+    check(login && raised && health(sta) == 150 && maxHealth(sta) == 150,
+          std::format("starter-mmo equipment: login keeps 155 / 155 ({}), boots raise only the max ({}), the tunic off clamps "
+                      "to 150 / 150 ({} / {})", login, raised, health(sta), maxHealth(sta)));
+    const auto fallen = w.spawn(8, 808, "Fallen", 180, 60,
+                                R"({"Health":{"current":0,"max":150},"Equipment":{"items":["","linen_tunic","","","","",""]}})", 10,
+                                as("warrior"));
+    run(0.1);
+    check(health(fallen) == 0 && maxHealth(fallen) == 150, "starter-mmo equipment: logged in dead, max Health with gear");
+    run(5.1);
+    check(health(fallen) == 150, "starter-mmo equipment: revived at the class's 140 + the tunic's 10");
+
+    // Saved with the character; a relog has the same gear, max Health and Damage.
+    w.world.despawn(war);
+    std::string saved = "{}";
+    for (const auto& s : w.sent.saves)
+        if (s.charId == 805 && s.components) saved = *s.components;
+    check(Json::parse(saved).value("Equipment", Json::object()).value("items", Json::array()) ==
+              Json::parse(R"(["","","","","","worn_shortsword",""])"),
+          "starter-mmo equipment: Equipment is saved with the character: " + saved);
+    const auto relogged = w.spawn(5, 805, "War", 80, 60, saved, 10, as("warrior"));
+    run(1.1);
+    w.sent.clear();
+    send(relogged, "combat.power", {{"power", "strike"}, {"target", wire(d2)}});
+    check(gear(relogged) == Slots{"", "", "", "", "", "worn_shortsword"} && hitsOn(5, d2) == Hits{15},
+          "starter-mmo equipment: after a relog the same gear, and Strike 15");
+    for (const auto& st : w.world.script_status()) check(st.ok, "starter-mmo equipment: system still enabled " + st.path + " " + st.error);
+}
 #endif
 
 // --- maps (docs/services/world/maps.html) ---
@@ -4583,6 +4882,7 @@ int lua_checks(int& checks) {
 #ifdef KAST_STARTER_MMO_TEST_LUA
     checkStarterMmoLoot();
     checkStarterMmoClasses();
+    checkStarterMmoEquipment();
 #endif
     checkNpcDefinitionErrors();
     checkItemsAndLoot();

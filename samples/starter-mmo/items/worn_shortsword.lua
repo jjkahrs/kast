@@ -1,4 +1,4 @@
--- See bat_wing.lua. Not equippable yet.
+-- See bat_wing.lua. Gear: its slot and stats are the server's GEAR table (systems/inventory.lua).
 return {
     id = "worn_shortsword",
     name = "Worn Shortsword",

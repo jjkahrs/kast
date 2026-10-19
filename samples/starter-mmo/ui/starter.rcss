@@ -388,3 +388,89 @@ button.loot_entry:hover {
 .icon.coin {
     decorator: image(../textures/icons/coin.png);
 }
+
+/* Character window (ui/character.rml, scripts/character.lua): a WoW-style paper doll left of the bag. The equipment
+   slots are .slot (the bag's look, drag and quality borders), placed around the silhouette: Head, Chest, Legs on the
+   left, Hands and Feet on the right, Main Hand and Off Hand below. An empty slot shows its faint name. */
+#character {
+    right: 256px;
+    top: 84px;
+    width: 284px;
+}
+
+#character_class {
+    margin-left: 8px;
+    font-size: 14px;
+}
+
+#paperdoll {
+    position: relative;
+    width: 284px;
+    height: 236px;
+}
+
+#silhouette {
+    position: absolute;
+    left: 98px;
+    top: 0;
+    width: 87px;
+    height: 174px;
+}
+
+.equip {
+    position: absolute;
+    margin: 0;
+}
+
+#equip_1 { left: 0; top: 0; }
+#equip_2 { left: 0; top: 60px; }
+#equip_3 { left: 0; top: 120px; }
+#equip_5 { left: 230px; top: 0; }
+#equip_4 { left: 230px; top: 60px; }
+#equip_6 { left: 84px; top: 182px; }
+#equip_7 { left: 146px; top: 182px; }
+
+.equip_label {
+    position: absolute;
+    left: 0;
+    top: 10px;
+    width: 50px;
+    font-size: 11px;
+    color: #818181;
+    text-align: center;
+}
+
+#character_stats {
+    margin-top: 4px;
+    padding: 4px 8px;
+    background-color: #000000;
+    border-radius: 4px;
+}
+
+.stat_line {
+    padding: 1px 0;
+}
+
+#gear_tooltip {
+    position: absolute;
+    right: 568px;
+    top: 84px;
+    width: 220px;
+    padding: 6px 10px;
+    font-size: 14px;
+    background-color: #000000ee;
+    border: 1px #818181;
+    border-radius: 4px;
+}
+
+#gear_tooltip_name {
+    font-size: 16px;
+}
+
+#gear_tooltip_description {
+    color: #ffcc00;
+}
+
+.gear_stats {
+    color: #1eff00;
+}

@@ -5,10 +5,13 @@
 --   empty slot, merges it into the same item (up to maxStack) or swaps it with another. With Shift onto an empty slot,
 --   split = true: half the stack moves. Dropped outside the bag (the world, another window): a confirmation dialog,
 --   then "inventory.destroy" {slot, item}. item is the id this client shows in that slot, so a stale view is refused.
---   Hovering a slot shows its tooltip: name in its quality colour, count, description, sell price.
+--   Dropped on the character window (ui/character.rml): scripts/character.lua equips it (or not); never destroyed.
+--   Hovering a slot shows its tooltip: name in its quality colour, count, slot and stats for gear (the server's
+--   "equipment.gear"), description, sell price.
 -- Slots show the item's icon (kast.items[id].icon), a quality-coloured border and the count when over 1.
 -- Opening or closing publishes "bag.visibility" {open}.
--- Every "inventory.rejected" {reason} the server sends (bag and loot requests) goes into the chat box ("chat.local").
+-- Every "inventory.rejected" {reason} the server sends (bag, loot and equipment requests) goes into the chat box
+-- ("chat.local").
 --
 -- Bandwidth: one ClientEvent per drop or confirmed destroy; the server answers with one Inventory update.
 local SLOTS = 16
@@ -24,6 +27,9 @@ local REJECTED = {
     range = "Too far away",
     index = "That is gone",
     dead = "You are dead",
+    wrong_slot = "Can't equip that there",
+    combat = "Can't do that in combat",
+    occupied = "That bag slot is taken",
 }
 
 local me                      -- the local player's server entity id
@@ -33,10 +39,27 @@ local open = false
 local held = false            -- B down last frame
 local hovered                 -- slot whose tooltip shows
 local doomed                  -- {slot, item} waiting for the destroy confirmation
+local gear = {gear = {}, names = {}, slots = {}} -- the server's "equipment.gear"
 
 local function log(text) kast.publish("chat.local", {text = text}) end
 
 local function slotOf(id) return tonumber(string.match(id or "", "^slot_(%d+)")) end -- also its icon / count
+
+-- Gear's slot name and stats line ("+1 Armor  +2 Stamina"), or "" for other items. scripts/character.lua has the same
+-- (client scripts can't share functions).
+local function gearLines(id)
+    local g = gear.gear[id]
+    if not g then return "", "" end
+    local slotName = ""
+    for i, slot in ipairs(gear.slots) do
+        if slot == g.slot then slotName = gear.names[i] end
+    end
+    local stats = {}
+    for _, stat in ipairs({{"armor", "Armor"}, {"damage", "Damage"}, {"stamina", "Stamina"}}) do
+        if (g[stat[1]] or 0) > 0 then stats[#stats + 1] = "+" .. g[stat[1]] .. " " .. stat[2] end
+    end
+    return slotName, table.concat(stats, "  ")
+end
 
 local function drawSlot(i)
     local item, count = items[i] or "", counts[i] or 0
@@ -46,7 +69,7 @@ local function drawSlot(i)
     local def = kast.items[item]
     local slot = "slot_" .. i
     kast.gui.setAttribute(slot, "class", def and ("slot q_" .. def.quality) or "slot empty")
-    kast.gui.setAttribute(slot .. "_icon", "style", def and ("decorator: image(../" .. def.icon .. ")") or "")
+    kast.gui.setAttribute(slot .. "_icon", "style", def and ("decorator: image(../" .. def.icon .. ")") or "decorator: none")
     kast.gui.setText(slot .. "_count", def and count > 1 and tostring(count) or "")
 end
 
@@ -58,6 +81,9 @@ local function showTooltip(slot)
     kast.gui.setText("tooltip_name", def.name)
     kast.gui.setAttribute("tooltip_name", "class", "q_" .. def.quality)
     kast.gui.setText("tooltip_count", counts[slot] > 1 and ("Stack of " .. counts[slot]) or "")
+    local slotName, stats = gearLines(items[slot])
+    kast.gui.setText("tooltip_slot", slotName)
+    kast.gui.setText("tooltip_stats", stats)
     kast.gui.setText("tooltip_description", def.description)
     kast.gui.setText("tooltip_price", string.format("Sell price: %d gold", def.sellPrice))
 end
@@ -80,6 +106,7 @@ end
 local function onDrop(e)
     local from = slotOf(e.id)
     if not from or (items[from] or "") == "" then return end
+    if e.targetDocument == "ui/character.rml" then return end -- scripts/character.lua's
     if e.target ~= "" and e.targetDocument == e.document then
         local to = slotOf(e.target)
         if not to or to == from then return end -- the bag's frame or title: nothing
@@ -109,6 +136,7 @@ return {
         end)
         kast.subscribe("bag.toggle", function() setOpen(not open) end)
         kast.subscribe("bag.slot.drop", onDrop)
+        kast.subscribe("server.equipment.gear", function(e) gear = e end)
         kast.subscribe("bag.destroy_confirm", function()
             if doomed then kast.world.send("inventory.destroy", doomed) end
             closeDialog()

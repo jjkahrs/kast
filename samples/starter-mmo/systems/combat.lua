@@ -12,14 +12,17 @@
 -- its range on x/z ("range"), and for Backstab the caster stands in the 180 degree arc behind the target's heading
 -- ("not_behind").
 -- What a power does, by the fields of its definition:
---   damage   takes that much Health off the target; the first player to hit an NPC tags it (WoW classic), and a hit NPC
---            fights back (below).
+--   damage   takes that much Health off the target, plus the caster's gear Damage; the first player to hit an NPC tags
+--            it (WoW classic), and a hit NPC fights back (below).
 --   root     every living NPC on the caster's map within radius m can't move for root seconds; it still hits a player
 --            in reach. "npc.rooted" {npc, seconds} goes on the server bus for systems/npcs.lua's patrols.
 --   heal     the caster gets that much Health, at most up to its max.
 --   duration a buff on the caster for that long: taken (NPC damage times this, rounded down), absorb (soaks up that
 --            much NPC damage, then breaks) or dodge (the chance an NPC hit misses; math.random, which a test seeds).
 --            Buffs end early on death and are not saved.
+-- Gear (systems/inventory.lua's "equipment.stats" {entity, armor, damage, stamina} on the server bus): Damage adds to
+-- every damage power; each point of Armor takes 1 off every NPC hit (never below 1), before Shield Wall and Power
+-- Shield. Stamina is systems/classes.lua's.
 --
 -- A hit NPC enters "combat" (fsms/patrol.lua for the Guard, fsms/creature.lua for the Bat), walks to its attacker
 -- (kast.map.path, or straight on a map without a navmesh) and hits it for its NPC_ATTACKS damage every interval while
@@ -30,7 +33,7 @@
 -- systems/inventory.lua rolls its loot and removes the corpse later, and its spawn file brings it back respawnSec after.
 --
 -- A character at 0 Health is dead for REVIVE_SECONDS: it cannot move (kast.setMovable) or use powers, and NPCs drop it.
--- Then it revives at its map's spawn point (kast.map.spawn) with Health.max (its class's). One that logged out dead
+-- Then it revives at its map's spawn point (kast.map.spawn) with Health.max (its class's plus its gear's Stamina). One that logged out dead
 -- dies again on login and revives the same way.
 --
 -- Each hit dealt or taken, and each dodge, publishes "combat.engaged" {entity} on the server bus for both sides
@@ -91,6 +94,7 @@ local rootedUntil = {}  -- npc -> time it may move again
 local deadUntil = {}    -- player -> time it revives
 local fights = {}       -- npc -> {target = player, swingAt = time, home = {x, y, z}, route = corners, leg, repathAt}
 local tagged = {}       -- npc -> the player who hit it first
+local gear = {}         -- player -> {armor =, damage =}, its gear's totals ("equipment.stats")
 
 local function exists(e, component)
     local ok, has = pcall(kast.has, e, component) -- raises for ids that are not in the world
@@ -177,7 +181,7 @@ local function hit(attacker, target, damage, player, extra)
     end
 end
 
--- An NPC's hit on a player, through the player's buffs: dodged, then reduced, then absorbed.
+-- An NPC's hit on a player, through the player's gear and buffs: dodged, then armor, then reduced, then absorbed.
 local function npcHit(npc, player, damage)
     local evasion = buffWith(player, "dodge")
     if evasion and math.random() < evasion.power.dodge then
@@ -185,6 +189,7 @@ local function npcHit(npc, player, damage)
         engaged(npc, player)
         return
     end
+    damage = math.max(1, damage - (gear[player] and gear[player].armor or 0))
     local wall = buffWith(player, "taken")
     if wall then damage = math.floor(damage * wall.power.taken) end
     local shield, absorbed = buffWith(player, "absorb"), nil
@@ -275,7 +280,7 @@ local function onPower(event)
         used.target, used.targetName = target, name(target)
         kast.sendNearby(caster, "combat.power", used)
         tagged[target] = tagged[target] or caster
-        hit(caster, target, power.damage, caster, {power = power.name})
+        hit(caster, target, power.damage + (gear[caster] and gear[caster].damage or 0), caster, {power = power.name})
         if alive(target) and exists(target, "StateMachine") then startFight(target, caster) end
     elseif power.root then
         used.rooted = rootAround(caster, power)
@@ -368,6 +373,9 @@ end
 return {
     init = function()
         kast.subscribe("client.combat.power", onPower)
+        kast.subscribe("equipment.stats", function(e)
+            if exists(e.entity, "Character") then gear[e.entity] = {armor = e.armor, damage = e.damage} end
+        end)
     end,
 
     onEnter = function(e)
@@ -376,7 +384,7 @@ return {
     end,
 
     onLeave = function(e)
-        readyAt[e], gcdUntil[e], buffs[e], deadUntil[e] = nil, nil, nil, nil
+        readyAt[e], gcdUntil[e], buffs[e], deadUntil[e], gear[e] = nil, nil, nil, nil, nil
     end,
 
     update = function(dt)

@@ -6,7 +6,8 @@
     <body>
         <!-- scripts/bag.lua: B opens and closes the bag; slots show the server's Inventory (icon, quality border,
              stack count) and drag (data-drag="bag.slot"): onto a slot = move / swap / merge, Shift = split, outside
-             the bag = destroy after the confirmation below. Hovering a slot shows its tooltip. -->
+             the bag = destroy after the confirmation below. Hovering a slot shows its tooltip (with slot and stats for gear). Dropped on the
+             character window (ui/character.rml): scripts/character.lua equips it, or nothing. -->
         <div id="bag" class="window">
             <p class="window_title">Bag</p>
             <div id="bag_grid">
@@ -31,6 +32,8 @@
         <div id="bag_tooltip">
             <p id="tooltip_name">-</p>
             <p id="tooltip_count" class="tooltip_line"></p>
+            <p id="tooltip_slot" class="tooltip_line"></p>
+            <p id="tooltip_stats" class="tooltip_line gear_stats"></p>
             <p id="tooltip_description" class="tooltip_line"></p>
             <p id="tooltip_price" class="tooltip_line"></p>
         </div>

@@ -15,6 +15,10 @@ return {
             { item = "linen_cloth",          chance = 0.6,  min = 1, max = 2 },
             { item = "minor_healing_potion", chance = 0.25, min = 1, max = 1 },
             { item = "worn_shortsword",      chance = 0.1,  min = 1, max = 1 },
+            { item = "leather_cap",          chance = 0.1,  min = 1, max = 1 },
+            { item = "linen_tunic",          chance = 0.1,  min = 1, max = 1 },
+            { item = "patched_trousers",     chance = 0.1,  min = 1, max = 1 },
+            { item = "wooden_shield",        chance = 0.05, min = 1, max = 1 },
         },
     },
 }

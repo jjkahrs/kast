@@ -12,8 +12,10 @@ return {
     loot = {
         gold = { min = 1, max = 3 },
         items = {
-            { item = "bat_wing",    chance = 0.8, min = 1, max = 1 },
-            { item = "linen_cloth", chance = 0.4, min = 1, max = 1 },
+            { item = "bat_wing",     chance = 0.8, min = 1, max = 1 },
+            { item = "linen_cloth",  chance = 0.4, min = 1, max = 1 },
+            { item = "worn_boots",   chance = 0.1, min = 1, max = 1 },
+            { item = "cloth_gloves", chance = 0.1, min = 1, max = 1 },
         },
     },
 }
