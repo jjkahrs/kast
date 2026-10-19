@@ -30,6 +30,7 @@ so vcpkg builds ports with VS 2022 even when newer Visual Studio versions are in
 
 ```bat
 build.bat              :: configure + build (debug). build.bat release for optimized
+build.bat relwithdebinfo          :: optimized with debug info: near-release speed, still debuggable
 run.bat                :: run build\debug\kast_editor.exe from the repo root
 run.bat release --size 1600x900   :: optional preset, then any editor flags
 run.bat debug --ui-scale 2.0      :: force UI scale (default: monitor's display scale)
@@ -74,7 +75,16 @@ ctest --preset debug
 cmake --preset release
 cmake --build --preset release
 ctest --preset release
+
+cmake --preset relwithdebinfo
+cmake --build --preset relwithdebinfo
+ctest --preset relwithdebinfo
 ```
+
+Which preset: `debug` has the debug CRT and STL checks (asserts, iterator checks) and is many times slower, which
+matters in large scenes such as the starter MMO's meadow. `relwithdebinfo` is optimized like `release` but keeps the
+PDBs, so a debugger still breaks, steps and shows call stacks (locals may be optimized away). Use it for playing and
+profiling; `release` for shipping.
 
 Output goes to `build/<preset>/`: `kast_editor.exe`, `kast_player.exe` (the game client Build copies) and
 `kast_self_check.exe`; runtime DLLs are copied next to them.

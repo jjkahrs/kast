@@ -1,9 +1,11 @@
 @echo off
-rem Runs the editor from the repo root. Usage: run.bat [debug|release] [editor flags...]   (default: debug)
+rem Runs the editor from the repo root. Usage: run.bat [debug|release|relwithdebinfo] [editor flags...]   (default: debug)
 setlocal
 cd /d "%~dp0" &rem before any shift: shift also moves %0
 set "PRESET=debug"
-if /i "%~1"=="release" (set "PRESET=release" & shift) else if /i "%~1"=="debug" shift
+if /i "%~1"=="release" (set "PRESET=release" & shift) else if /i "%~1"=="relwithdebinfo" (
+    set "PRESET=relwithdebinfo" & shift
+) else if /i "%~1"=="debug" shift
 
 set "ARGS="
 :collect
