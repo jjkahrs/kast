@@ -23,8 +23,8 @@
 // definitions: status, Global toggle, live game states, new from template) and Events (the Play session's recently
 // delivered events, with a name filter) and Assets (the project's files: browse, open scenes and GUIs, new folder,
 // new Lua system / state machine / GUI, rename, delete to the Recycle Bin, drag-drop move, open text files in an
-// external editor), Lighting (the scene's ambient light), Post Processing (the scene's post effects and fog) and Mixer
-// (the project's default bus levels, live voices during Play) panels.
+// external editor), Lighting (the scene's ambient light and sky), Post Processing (the scene's post effects and fog)
+// and Mixer (the project's default bus levels, live voices during Play) panels.
 class Panels {
 public:
     // Opens the Inspector's "New Lua Component" modal (Add Component > New Lua Component...) with name prefilled.
@@ -63,8 +63,9 @@ public:
     void drawComponents(Document& doc);
     void drawStateMachines(Document& doc);
     void drawEvents(Document& doc);
-    // The scene's ambient light (Window > Lighting); draws nothing while open is false.
-    void drawLighting(Document& doc, bool& open);
+    // The scene's ambient light and sky (Window > Lighting); draws nothing while open is false. skyError: why the
+    // Scene view's cubemap sky fell back to the procedural one (Renderer::skyError), shown under the faces.
+    void drawLighting(Document& doc, bool& open, const std::string& skyError);
     // The scene's post-processing and fog, a section per effect (Window > Post Processing); nothing while open is false.
     void drawPostProcessing(Document& doc, bool& open);
     // The scene's physics settings: gravity (Window > Physics); draws nothing while open is false.

@@ -1,0 +1,52 @@
+#pragma once
+
+#include "scene.h"
+
+#include <bgfx/bgfx.h>
+
+#include <array>
+#include <filesystem>
+#include <string>
+
+namespace kast {
+
+struct MipImage; // renderer.h
+
+// CPU mirror of fs_sky.sc's gradient, for self_check: horizon blended toward top (dirY > 0) or bottom (dirY < 0) by
+// sqrt(|dirY|), where dirY is the unit view direction's y (-1 straight down .. 1 straight up).
+bx::Vec3 proceduralSkyColor(const SceneSky& sky, float dirY);
+
+// Why six decoded faces (kSkyFaceNames order) can't make one cube: the first face that is not square or not the size
+// of px, named. Empty if they can.
+std::string skyFacesError(const std::array<MipImage, 6>& faces);
+
+// Draws a SceneSky behind everything else in a view (Renderer::render calls it between opaque and blended meshes):
+// a full-screen triangle at the far plane, depth-tested so it only fills pixels no mesh covered. Uses the camera's
+// rotation only. The cubemap's six faces load once per set of paths (sRGB, so the output is linear); a face that is
+// missing, unreadable, undecodable, not square or a different size warns once and the procedural sky draws instead.
+class SkyRenderer {
+public:
+    void init();
+    void shutdown();
+    // Faces load from projectRoot (empty: none, so a cubemap falls back).
+    void draw(const SceneSky& sky, const std::filesystem::path& projectRoot, bgfx::ViewId view, const float* viewMtx,
+              const float* projMtx);
+    // Why the last cubemap drawn fell back to the procedural sky ("" = it didn't, or no cubemap was drawn).
+    const std::string& error() const { return error_; }
+
+private:
+    void load(const std::array<std::string, 6>& faces, const std::filesystem::path& root);
+    void unload();
+
+    bgfx::VertexBufferHandle triangle_ = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle invViewProj_ = BGFX_INVALID_HANDLE, top_ = BGFX_INVALID_HANDLE, horizon_ = BGFX_INVALID_HANDLE,
+                        bottom_ = BGFX_INVALID_HANDLE, sampler_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle cube_ = BGFX_INVALID_HANDLE; // invalid: not loaded, or failed (error_)
+    bool loaded_ = false;                            // faces_ / root_ say what cube_ (or error_) is for
+    std::array<std::string, 6> faces_;
+    std::filesystem::path root_;
+    std::string error_;
+};
+
+} // namespace kast

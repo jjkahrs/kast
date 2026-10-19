@@ -13,6 +13,18 @@
 <main>
 <h1>Kast Editor</h1>
 <p><code>kast_editor</code> is the Unity-style editor built on the engine with Dear ImGui docking and ImGuizmo. Without <code>--project</code>, <code>--scene</code>, <code>--save-scene</code> or <code>--build</code> it opens the Project Manager. Build and start it as described in the repository <a href="../../README.md">README</a>.</p>
+<h2 id="scene-settings">Scene settings panels</h2>
+<p>Hidden until opened from the <strong>Window</strong> menu; edits show live in the Scene and Game views and mark the scene
+dirty (<code>*</code> in the title).</p>
+<ul>
+<li><strong>Lighting</strong>: <strong>Ambient</strong> color and intensity (<a href="../engine/coordinates-and-scenes.html">Coordinates and scenes</a>),
+  and <strong>Sky</strong>: a <strong>Mode</strong> combo (Off, Procedural, Cubemap), the <strong>Top</strong>, <strong>Horizon</strong> and
+  <strong>Bottom</strong> colors (shown for Procedural and Cubemap: they are the cubemap's fallback) and, for Cubemap, a
+  picker per face (<strong>+X (px)</strong> .. <strong>-Z (nz)</strong>) listing the project's PNG and JPG files. When a face
+  can't be used the panel says why in red and the views show the gradient (<a href="../engine/skybox.html">Skybox</a>).</li>
+<li><strong>Post Processing</strong>: the post effects and fog (<a href="../engine/post-processing.html">Post-processing and fog</a>).</li>
+<li><strong>Physics</strong>: gravity (<a href="../engine/physics.html">Physics</a>).</li>
+</ul>
 <h2 id="pages">Pages</h2>
 <ul class="pages"><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li></ul>
 </main>

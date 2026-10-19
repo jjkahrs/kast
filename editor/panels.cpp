@@ -1391,22 +1391,56 @@ void Panels::drawSystems(Document& doc)
     ImGui::End();
 }
 
-void Panels::drawLighting(Document& doc, bool& open)
+void Panels::drawLighting(Document& doc, bool& open, const std::string& skyError)
 {
     if (!open)
         return;
     const float em = ImGui::GetFontSize();
-    ImGui::SetNextWindowSize(ImVec2(em * 22, em * 7), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(em * 22, em * 24), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Lighting", &open)) {
+        bool changed = false;
+        const auto color = [&](const char* label, bx::Vec3& value) {
+            if (ImGui::ColorEdit3(label, &value.x)) {
+                value = bx::clamp(value, bx::Vec3(0.0f), bx::Vec3(1.0f)); // typed values
+                changed = true;
+            }
+        };
         kast::SceneLighting& lighting = doc.scene.lighting;
         ImGui::SeparatorText("Ambient");
-        bool changed = ImGui::ColorEdit3("Color", &lighting.ambientColor.x);
+        color("Color", lighting.ambientColor);
         changed |= ImGui::DragFloat("Intensity", &lighting.ambientIntensity, 0.01f, 0.0f, FLT_MAX, "%.3f",
                                     ImGuiSliderFlags_AlwaysClamp);
-        if (changed) {
-            lighting.ambientColor = bx::clamp(lighting.ambientColor, bx::Vec3(0.0f), bx::Vec3(1.0f)); // typed values
-            markDirty(doc);
+
+        kast::SceneSky& sky = doc.scene.sky;
+        ImGui::SeparatorText("Sky");
+        ImGui::PushID("sky");
+        int mode = static_cast<int>(sky.mode);
+        if (ImGui::Combo("Mode", &mode, "Off\0Procedural\0Cubemap\0")) {
+            sky.mode = static_cast<kast::SkyMode>(mode);
+            changed = true;
         }
+        if (sky.mode != kast::SkyMode::Off) { // the gradient is also the cubemap's fallback
+            color("Top", sky.top);
+            color("Horizon", sky.horizon);
+            color("Bottom", sky.bottom);
+        }
+        if (sky.mode == kast::SkyMode::Cubemap) {
+            if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
+                refreshAssets(doc);
+            std::vector<std::string> textures;
+            collectFiles(assets_, {".png", ".jpg", ".jpeg"}, textures);
+            if (!skyError.empty()) { // above the faces, so it shows without scrolling
+                ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+                ImGui::TextWrapped("Cubemap: %s. Showing the procedural sky.", skyError.c_str());
+                ImGui::PopStyleColor();
+            }
+            constexpr const char* kLabels[] = {"+X (px)", "-X (nx)", "+Y (py)", "-Y (ny)", "+Z (pz)", "-Z (nz)"};
+            for (size_t i = 0; i < sky.faces.size(); ++i)
+                changed = drawFilePicker(kLabels[i], textures, "None", sky.faces[i]) || changed;
+        }
+        ImGui::PopID();
+        if (changed)
+            markDirty(doc);
     }
     ImGui::End();
 }

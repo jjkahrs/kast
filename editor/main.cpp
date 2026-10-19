@@ -1138,7 +1138,7 @@ int main(int argc, char** argv)
             console && !ImGui::FindWindowSettingsByID(ImHashStr("State Machines")))
             ImGui::SetNextWindowDockID(console->DockId, ImGuiCond_FirstUseEver);
         panels.drawStateMachines(doc);
-        panels.drawLighting(doc, showLighting);
+        panels.drawLighting(doc, showLighting, viewport.renderer().skyError());
         panels.drawPostProcessing(doc, showPostProcessing);
         panels.drawPhysics(doc, showPhysics);
         panels.drawMixer(doc, showMixer);

@@ -35,6 +35,10 @@ nlohmann::ordered_json sceneToJson(const Scene& scene);
 bool sceneFromJson(const nlohmann::ordered_json& json, Scene& out, std::string& error, SceneLoadReport* report = nullptr,
                    const std::filesystem::path& projectRoot = {});
 
+// A scene's "sky" block (kast.sky uses these too). skyFromJson replaces out only on success; error says why not.
+nlohmann::ordered_json skyToJson(const SceneSky& sky);
+bool skyFromJson(const nlohmann::ordered_json& json, SceneSky& out, std::string& error);
+
 // .prefab files: {"version", "entities"} holding exactly one root entity, which isn't itself a prefab instance.
 // loadPrefab resolves nested instances (one that contains the prefab itself is a missing-prefab placeholder).
 bool loadPrefab(const std::filesystem::path& projectRoot, const std::string& path, std::shared_ptr<const PrefabAsset>& out,
