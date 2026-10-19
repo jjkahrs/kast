@@ -11,6 +11,8 @@
 #include "recent_projects.h"
 #include "ui_common.h"
 #include "viewport.h"
+#include "zone_render.h"
+#include "zone_session.h"
 
 #include <app.h>
 #include <audio.h>
@@ -42,6 +44,8 @@
 
 namespace {
 
+constexpr float kZoneNearPlane = 0.5f; // the editor camera's planes while the Scene view shows a zone
+constexpr float kZoneFarPlane = 6000.0f;
 // Each viewport's shadow maps, then its scene and post passes (see SceneViewport, GameViewport).
 constexpr bgfx::ViewId kViewportViews = kast::Renderer::kShadowViews + kast::PostProcess::kViews;
 constexpr bgfx::ViewId kSceneView = 1; // then its overlays
@@ -961,6 +965,11 @@ int main(int argc, char** argv)
     if (options->newStateMachinePrompt)
         panels.openNewStateMachine(*options->newStateMachinePrompt);
     SceneViewport viewport(kSceneView);
+    ZoneSession zone;
+    ZoneRender zoneRender;
+    viewport.overlay = [&](const float* viewProj, float x, float y, float width, float height) {
+        zoneRender.drawOverlays(ImGui::GetWindowDrawList(), viewProj, x, y, width, height);
+    };
     GuiBuilder guiBuilder(kGuiPreviewView);
     UiScale uiScale(options->uiScale);
     FrameLimit frames(options->frames, options->screenshot);
@@ -1112,6 +1121,16 @@ int main(int argc, char** argv)
         panels.drawHierarchy(doc, files);
         // Before the views render: Inspector edits (a material saved to disk) show in this frame's Scene and Game.
         panels.drawInspector(doc);
+        // The open zone in the Scene view, edit mode only: Play streams the saved map from disk (TerrainStreamer), and a
+        // prefab is edited on its own.
+        zone.update(doc);
+        const bool showZone = doc.play == PlayState::Stopped && !doc.prefabEdit;
+        zoneRender.sync(showZone ? zone.zone() : nullptr, doc.project ? doc.project->root : std::filesystem::path(),
+                        viewport.renderer());
+        viewport.setExtraScene(zoneRender.scene());
+        // A whole 2 km+ map in view: a farther far plane, and a farther near plane for depth precision.
+        doc.camera.nearPlane = zoneRender.scene() ? kZoneNearPlane : EditorCamera::kNear;
+        doc.camera.farPlane = zoneRender.scene() ? kZoneFarPlane : EditorCamera::kFar;
         viewport.draw(doc); // submitted before Game so Scene is the front tab on first run
         // Layouts saved before the Game panel existed: dock it as a tab beside Scene.
         if (const ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("Scene")))

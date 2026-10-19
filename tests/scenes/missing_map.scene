@@ -1,0 +1,249 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Directional Light",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            4,
+            0
+          ],
+          "rotation": [
+            -0.408218,
+            -0.23457,
+            -0.109382,
+            0.875426
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "DirectionalLight": {
+          "color": [
+            1,
+            0.95,
+            0.9
+          ],
+          "intensity": 1.1
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            12,
+            1,
+            12
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "plane",
+          "color": [
+            0.5,
+            0.55,
+            0.5
+          ]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Cube",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -1.5,
+            0.5,
+            0
+          ],
+          "rotation": [
+            0,
+            0.173648,
+            0,
+            0.984808
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "color": [
+            0.85,
+            0.3,
+            0.25
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Sphere",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            1.5,
+            0.75,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1.5,
+            1.5,
+            1.5
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "sphere",
+          "color": [
+            0.3,
+            0.45,
+            0.85
+          ]
+        },
+        "Rotator": {
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "degreesPerSecond": 45
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Satellite",
+      "parent": 4,
+      "components": {
+        "Transform": {
+          "position": [
+            0.9,
+            0.6,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0.258819,
+            0.965926
+          ],
+          "scale": [
+            0.3,
+            0.3,
+            0.3
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "color": [
+            0.95,
+            0.8,
+            0.2
+          ]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            2.5,
+            6
+          ],
+          "rotation": [
+            -0.173648,
+            0,
+            0,
+            0.984808
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Camera": {
+          "verticalFovDegrees": 60,
+          "nearPlane": 0.1,
+          "farPlane": 1000
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Terrain",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Terrain": {
+          "map": 999,
+          "radius": 1
+        }
+      }
+    }
+  ],
+  "editor": {
+    "camera": {
+      "pivot": [
+        0,
+        0.75,
+        0
+      ],
+      "yaw": 20,
+      "pitch": -20,
+      "distance": 8
+    }
+  }
+}

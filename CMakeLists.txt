@@ -144,13 +144,13 @@ add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
   editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp editor/editor_settings.cpp
-  editor/online.cpp editor/online_panel.cpp editor/kast_editor.rc
+  editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 # The Online panel's default compose folder: services/world of this source tree, if it is still there at run time.
 target_compile_definitions(kast_editor PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 imgui::imgui imguizmo::imguizmo pugixml::pugixml shell32) # shell32: Recycle Bin
+target_link_libraries(kast_editor PRIVATE kast_engine kast_zone SDL3::SDL3 imgui::imgui imguizmo::imguizmo pugixml::pugixml shell32) # shell32: Recycle Bin
 add_dependencies(kast_editor kast_player) # Build copies kast_player.exe from next to kast_editor.exe
 
 # --- zone: the zone (map) document, file and terrain editing logic (engine/zone), no window. Its own library, not
@@ -272,6 +272,18 @@ add_test(NAME scene_panel_no_room
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/scene_panel_no_room.png"
           "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/basic.scene" -DFOCUS_PANEL=Scene
           "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/short_scene_panel.ini"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# The Scene view shows the zone named by the scene's Terrain entity in edit mode: the map loads (once), every prefab of
+# its objects too. A Terrain map id the project has no map for is reported once, and the editor carries on.
+add_test(NAME editor_zone_scene
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_scene.png"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo/scenes/world.scene"
+          "-DEXPECT_OUTPUT=Zone: loaded maps/meadow \\(map 10\\)" -DEXPECT_COUNT=1
+          "-DFORBID_OUTPUT=did not load|\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME editor_zone_missing_map
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_missing_map.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/missing_map.scene"
+          "-DEXPECT_OUTPUT=Zone: the Terrain map did not load: no map with id 999" -DEXPECT_COUNT=1
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(scene_screenshot PROPERTIES FIXTURES_SETUP basic_shot)
 set_tests_properties(scene_play_screenshot PROPERTIES FIXTURES_SETUP play_shot)

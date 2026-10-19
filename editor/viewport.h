@@ -7,6 +7,8 @@
 
 #include <bgfx/bgfx.h>
 
+#include <functional>
+
 inline constexpr uint32_t kViewportClearColor = 0x2b3440ff; // Scene and Game panel background (sRGB)
 
 // Offscreen color + depth target bound to one bgfx view, recreated when the panel size changes.
@@ -63,6 +65,11 @@ public:
     void draw(Document& doc);
     void setPostEffects(bool on) { postEffects_ = on; } // the toolbar's "Post" toggle
     kast::Renderer& renderer() { return renderer_; }     // --no-instancing, --no-culling
+    // Drawn with the document's scene, lit by it (Renderer::render's extra): the open zone in edit mode. Null: none.
+    void setExtraScene(const kast::Scene* scene) { extraScene_ = scene; }
+    // Called each frame the scene image shows, before the gizmo, with the view-projection and the image's rect (ImGui
+    // points), to draw over it with the window's draw list: the zone overlays.
+    std::function<void(const float* viewProj, float x, float y, float width, float height)> overlay;
 
 private:
     enum class Drag { None, Fly, Orbit, Pan };
@@ -81,4 +88,5 @@ private:
     Drag drag_ = Drag::None;
     int operation_ = 0; // ImGuizmo::OPERATION; int so this header stays ImGuizmo-free
     bool local_ = true;
+    const kast::Scene* extraScene_ = nullptr;
 };

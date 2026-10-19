@@ -283,10 +283,12 @@ void SceneViewport::draw(Document& doc)
             doc.camera.projMatrix(proj, size.x / size.y);
             bx::mtxMul(viewProj, view, proj);
             renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), post_.sceneView(), view,
-                             proj, shadowViews_);
+                             proj, shadowViews_, extraScene_);
             post_.apply(doc.scene.postProcessing, postEffects_, target_.frameBuffer());
             renderer_.renderOverlays(doc.scene, target_.view(), view, proj, doc.selected);
 
+            if (overlay)
+                overlay(viewProj, origin.x, origin.y, size.x, size.y);
             ImGuizmo::SetDrawlist();
             ImGuizmo::SetRect(origin.x, origin.y, size.x, size.y);
             const bool gizmoShown = doc.scene.valid(doc.selected);
