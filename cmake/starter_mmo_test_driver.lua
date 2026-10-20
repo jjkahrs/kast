@@ -163,6 +163,16 @@ local stats               -- the last "character.stats"
 local windowToggles = 0   -- character.visibility events
 
 local function log(format, ...) kast.log("test driver: " .. string.format(format, ...)) end
+-- Predicted powers (scripts/powers.lua): frames counted from the step's key press to the attack clip and the cooldown.
+local frame, pressFrame, clipSeen, rolledBackAt = 0, 0, true, nil
+-- The keys stages: --sim-key's second press comes on frame 150 after KEYS (cmake/starter_mmo_tests.cmake); their check
+-- waits 6 s and past that frame, so a slow (Debug) frame rate cannot check before the press.
+local KEYS_DONE_FRAMES, keysFrame = 160, 0
+local function keysDone() return elapsed >= waitUntil and frame >= keysFrame + KEYS_DONE_FRAMES end
+local function clipNow()
+    local ok, state = pcall(kast.getAnimationState, player)
+    return ok and state.clip or "?"
+end
 
 local function crossings() return tonumber(kast.fsm.state("test_route"):sub(2)) end -- portals taken since Play
 local clones = {} -- this scene's clones: name -> true
@@ -394,7 +404,7 @@ local function equipStage()
         waitUntil, phase = elapsed + 1, "settle"
     elseif phase == "settle" and elapsed >= waitUntil then
         if STAGE == "equip_open" then
-            phase, waitUntil = "keys", elapsed + 6
+            phase, waitUntil, keysFrame = "keys", elapsed + 6, frame
             return log("KEYS")
         end
         kast.publish("bag.toggle")
@@ -410,7 +420,7 @@ local function equipStage()
         local turned = math.abs(now.x - was.x) + math.abs(now.y - was.y) + math.abs(now.z - was.z) + math.abs(now.w - was.w)
         log("camera turned by the drag: %s", tostring(turned > 1e-4))
         shoot("equipped with the mouse")
-    elseif phase == "keys" and elapsed >= waitUntil then
+    elseif phase == "keys" and keysDone() then
         phase = "done"
         log("after C, chat, C: %d character toggle(s), chat field '%s'", windowToggles, kast.gui.value("chat_input") or "?")
         shoot("keys")
@@ -517,6 +527,7 @@ local function classStage()
     if s.tab then kast.publish("combat.target_next") end
     if s.press then
         log("press %d", s.press)
+        pressFrame, clipSeen = frame, false
         kast.publish("combat.power", {id = "power_" .. s.press})
     end
     if s.shot then shoot(s.shot) end
@@ -707,6 +718,13 @@ return {
             end
         end)
         kast.subscribe("target.cleared", function() log("target cleared, %d marker(s)", markers()) end)
+        kast.subscribe("power.predicted", function(e)
+            log("predicted %s %d frame(s) after the press: cooldown %.1f s", e.power, frame - pressFrame, e.cooldown)
+        end)
+        kast.subscribe("power.rejected", function(e)
+            log("rejected %s (%s, predicted %s): cooldown %.1f s left", e.power, e.reason, tostring(e.predicted), e.cooldown)
+            if e.predicted then rolledBackAt = frame end
+        end)
         kast.subscribe("chat.local", function(e)
             logged[e.text] = true
             log("combat log: %s", e.text)
@@ -747,6 +765,15 @@ return {
         end)
     end,
     update = function(dt)
+        frame = frame + 1
+        if not clipSeen and player and clipNow() == "Punch_Jab" then
+            clipSeen = true
+            log("attack clip %d frame(s) after the press", frame - pressFrame)
+        end
+        if rolledBackAt and frame == rolledBackAt + 2 then
+            rolledBackAt = nil
+            log("clip after the rollback: %s", clipNow())
+        end
         if STAGE == "class_pick" then
             elapsed = elapsed + dt
             if phase == "unpicked" and elapsed >= waitUntil then
@@ -774,9 +801,9 @@ return {
         if STAGE == "rock" or STAGE == "shrine" then zoneStage() end
         if EQUIP_STAGES[STAGE] then equipStage() end
         if STAGE == "bag_keys" and elapsed > 2 and phase == "arrive" then
-            phase, waitUntil = "keys", elapsed + 6
+            phase, waitUntil, keysFrame = "keys", elapsed + 6, frame
             log("KEYS")
-        elseif STAGE == "bag_keys" and phase == "keys" and elapsed >= waitUntil then
+        elseif STAGE == "bag_keys" and phase == "keys" and keysDone() then
             phase = "done"
             log("after B, chat, B: %d bag toggle(s), chat field '%s'", toggles, kast.gui.value("chat_input") or "?")
             shoot("keys")

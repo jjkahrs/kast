@@ -11,7 +11,7 @@
 
 namespace kast::proto {
 
-constexpr uint16_t kProtocolVersion = 5;
+constexpr uint16_t kProtocolVersion = 7;
 constexpr size_t kHeaderSize = 4; // u16 payload length + u16 opcode
 constexpr size_t kMaxPayloadBytes = 0xFFFF; // the u16 length field's limit
 
@@ -44,6 +44,7 @@ enum class Opcode : uint16_t {
     ComponentRemove = 0x0126, // S
     ServerEvent = 0x0127,     // S
     MapChange = 0x0128,       // S
+    Reply = 0x0129,           // S
 };
 
 // Reason codes carried by Disconnect and CharError.
@@ -184,13 +185,17 @@ struct EnterWorld {
     bool operator==(const EnterWorld&) const = default;
 };
 
+// v6: seq counts the client's Moves (from 1); epoch is the one of the last Correction it got (0 before any). The
+// server drops a Move of an older epoch without a word: it was sent before the client heard of the Correction.
 struct Move {
     static constexpr Opcode op = Opcode::Move;
     Vec3 pos;
     float heading = 0;
     uint32_t clientTimeMs = 0;
-    void write(Writer& w) const { proto::write(w, pos); w.f32(heading); w.u32(clientTimeMs); }
-    void read(Reader& r) { proto::read(r, pos); heading = r.f32(); clientTimeMs = r.u32(); }
+    uint32_t seq = 0;
+    uint32_t epoch = 0;
+    void write(Writer& w) const { proto::write(w, pos); w.f32(heading); w.u32(clientTimeMs); w.u32(seq); w.u32(epoch); }
+    void read(Reader& r) { proto::read(r, pos); heading = r.f32(); clientTimeMs = r.u32(); seq = r.u32(); epoch = r.u32(); }
     bool operator==(const Move&) const = default;
 };
 
@@ -204,14 +209,16 @@ struct Say {
 
 // A named event for the server's Lua (kast.world.send; docs/services/world/protocol.html#client-events). Never S->C.
 // The server re-checks both limits: the name is untrusted, the JSON is parsed and must be an object.
+// requestId: 0 for kast.world.send; otherwise kast.world.request's, which the server's Lua answers with one Reply.
 constexpr size_t kClientEventNameMax = 32;
 constexpr size_t kClientEventJsonMax = 1024;
 struct ClientEvent {
     static constexpr Opcode op = Opcode::ClientEvent;
     std::string name;
     std::string json;
-    void write(Writer& w) const { w.str(name); w.str(json); }
-    void read(Reader& r) { name = r.str(); json = r.str(); }
+    uint32_t requestId = 0;
+    void write(Writer& w) const { w.str(name); w.str(json); w.u32(requestId); }
+    void read(Reader& r) { name = r.str(); json = r.str(); requestId = r.u32(); }
     bool operator==(const ClientEvent&) const = default;
 };
 
@@ -358,11 +365,15 @@ struct EntityMove {
     bool operator==(const EntityMove&) const = default;
 };
 
+// v6: pos is where the server has the player after the Move ackSeq, the last one it processed (the rejected one);
+// epoch is the new epoch, for the client's later Moves (docs/services/world/protocol.html#movement).
 struct Correction {
     static constexpr Opcode op = Opcode::Correction;
     Vec3 pos;
-    void write(Writer& w) const { proto::write(w, pos); }
-    void read(Reader& r) { proto::read(r, pos); }
+    uint32_t ackSeq = 0;
+    uint32_t epoch = 0;
+    void write(Writer& w) const { proto::write(w, pos); w.u32(ackSeq); w.u32(epoch); }
+    void read(Reader& r) { proto::read(r, pos); ackSeq = r.u32(); epoch = r.u32(); }
     bool operator==(const Correction&) const = default;
 };
 
@@ -410,20 +421,40 @@ struct ServerEvent {
 };
 
 // The player was moved to another map (or another place on its own): drop every remote entity, place yourself here.
-// Comes before the Despawns and Spawns of the move (docs/services/world/protocol.html#maps).
+// Comes before the Despawns and Spawns of the move (docs/services/world/protocol.html#maps). epoch: the Moves' epoch
+// from now on, as after a Correction (Moves sent before this arrived are from the old place: dropped, not corrected).
 struct MapChange {
     static constexpr Opcode op = Opcode::MapChange;
     uint16_t map = 0;
     Vec3 pos;
     float heading = 0;
-    void write(Writer& w) const { w.u16(map); proto::write(w, pos); w.f32(heading); }
-    void read(Reader& r) { map = r.u16(); proto::read(r, pos); heading = r.f32(); }
+    uint32_t epoch = 0;
+    void write(Writer& w) const { w.u16(map); proto::write(w, pos); w.f32(heading); w.u32(epoch); }
+    void read(Reader& r) { map = r.u16(); proto::read(r, pos); heading = r.f32(); epoch = r.u32(); }
     bool operator==(const MapChange&) const = default;
+};
+
+// The answer to a ClientEvent's requestId (kast.reply), to its sender only. json: the reply's data when ok, else the
+// reason as a JSON string.
+struct Reply {
+    static constexpr Opcode op = Opcode::Reply;
+    uint32_t requestId = 0;
+    bool ok = false;
+    std::string json;
+    void write(Writer& w) const { w.u32(requestId); w.u8(ok ? 1 : 0); w.str(json); }
+    void read(Reader& r) {
+        requestId = r.u32();
+        const uint8_t v = r.u8();
+        if (v > 1) r.fail();
+        ok = v == 1;
+        json = r.str();
+    }
+    bool operator==(const Reply&) const = default;
 };
 
 using Message = std::variant<Hello, Auth, Ping, Pong, CharListReq, CharCreate, CharDelete, EnterWorld, Move, Say, ClientEvent, Interact,
                              AuthOk, Disconnect, CharList, CharCreated, CharDeleted, EnterWorldOk, CharError, Spawn,
                              Despawn, EntityMove, Correction, ChatMsg, ComponentUpdate,
-                             ComponentRemove, ServerEvent, MapChange>;
+                             ComponentRemove, ServerEvent, MapChange, Reply>;
 
 } // namespace kast::proto

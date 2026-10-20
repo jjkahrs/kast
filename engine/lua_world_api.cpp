@@ -10,6 +10,22 @@
 
 namespace kast {
 
+nlohmann::json worldEventData(lua_State* L, const char* function, const sol::object& data)
+{
+    nlohmann::json json = nlohmann::json::object();
+    if (data.get_type() == sol::type::lua_nil || data.get_type() == sol::type::none)
+        return json;
+    if (data.get_type() != sol::type::table)
+        raise(L, std::format("{}: data must be a table, got {}", function, toString(L, data)));
+    if (std::string error; !luaToJson(data, json, error))
+        raise(L, std::format("{}: {}", function, error));
+    if (json.is_array() && json.empty()) // {} reads as an empty list
+        json = nlohmann::json::object();
+    if (!json.is_object())
+        raise(L, std::format("{}: data must be a table with string keys, not a list", function));
+    return json;
+}
+
 sol::table makeWorldApi(sol::state& lua, WorldClient& world)
 {
     const auto guarded = [](lua_State* L, auto&& body) {
@@ -71,17 +87,7 @@ sol::table makeWorldApi(sol::state& lua, WorldClient& world)
     // kast.world.send(name, data?): data is a table with string keys (nil: {}); "client.<name>" on the server's bus.
     worldApi.set_function("send", [=, &world](sol::this_state L, const sol::object& name, const sol::object& data) {
         const std::string n = text(L, "send", "name", name);
-        nlohmann::json json = nlohmann::json::object();
-        if (data.get_type() != sol::type::lua_nil) {
-            if (data.get_type() != sol::type::table)
-                raise(L, std::format("kast.world.send: data must be a table, got {}", toString(L, data)));
-            if (std::string error; !luaToJson(data, json, error))
-                raise(L, std::format("kast.world.send: {}", error));
-            if (json.is_array() && json.empty()) // {} reads as an empty list
-                json = nlohmann::json::object();
-            if (!json.is_object())
-                raise(L, "kast.world.send: data must be a table with string keys, not a list");
-        }
+        const nlohmann::json json = worldEventData(L, "kast.world.send", data);
         guarded(L, [&] { world.sendEvent(n, json); });
     });
     worldApi.set_function("state", [&world]() { return std::string(worldStateName(world.state())); });

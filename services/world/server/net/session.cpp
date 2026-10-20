@@ -7,7 +7,8 @@ Session::Session(uint32_t id, asio::ip::tcp::socket socket, asio::ssl::context& 
                  OnMessage onMessage, OnClosed onClosed)
     : id_(id), stream_(std::move(socket), tls), limits_(limits), onMessage_(std::move(onMessage)),
       onClosed_(std::move(onClosed)), handshakeTimer_(stream_.get_executor()), heartbeatTimer_(stream_.get_executor()),
-      closeTimer_(stream_.get_executor()), lastReceive_(SteadyClock::now()),
+      closeTimer_(stream_.get_executor()), lagInTimer_(stream_.get_executor()), lagOutTimer_(stream_.get_executor()),
+      lagRng_(id), lastReceive_(SteadyClock::now()),
       rate_(limits.msgRate, limits.msgBurst, limits.msgRateGrace) {
     asio::error_code ec;
     const auto ep = stream_.lowest_layer().remote_endpoint(ec);
@@ -71,14 +72,49 @@ void Session::handle_frame(proto::Opcode op) {
         case proto::DecodeStatus::unknown_opcode: disconnect(proto::Code::unknown_opcode); return;
         default: disconnect(proto::Code::malformed); return;
         }
-        if (auto* ping = std::get_if<proto::Ping>(&msg)) send(proto::Pong{ping->nonce});
-        else if (!std::holds_alternative<proto::Pong>(msg)) onMessage_(*this, std::move(msg));
+        if (lagged()) delay(lagIn_, lagInTimer_, std::move(msg));
+        else deliver(std::move(msg));
     }
     if (!closing_) read_header();
 }
 
+void Session::deliver(proto::Message&& m) {
+    if (auto* ping = std::get_if<proto::Ping>(&m)) send(proto::Pong{ping->nonce});
+    else if (!std::holds_alternative<proto::Pong>(m)) onMessage_(*this, std::move(m));
+}
+
 void Session::send(const proto::Message& m) {
     if (closing_) return;
+    if (lagged()) delay(lagOut_, lagOutTimer_, m);
+    else write(m);
+}
+
+// The lag simulator: messages wait in queue until due (lag_due), then go on (received ones to deliver, sent ones to
+// write) in order. A Disconnect is not delayed; whatever is still queued when the session closes is dropped.
+void Session::delay(DelayQueue& queue, asio::steady_timer& timer, proto::Message m) {
+    const TimePoint now = SteadyClock::now();
+    queue.push_back({lag_due(now, queue.empty() ? now : queue.back().due, limits_.simLatency, limits_.simJitter, lagRng_),
+                     std::move(m)});
+    if (queue.size() == 1) arm_delay(queue, timer);
+}
+
+void Session::arm_delay(DelayQueue& queue, asio::steady_timer& timer) {
+    timer.expires_at(queue.front().due);
+    timer.async_wait([self = shared_from_this(), &queue, &timer](asio::error_code ec) {
+        if (ec || self->closing_) return;
+        const bool inbound = &queue == &self->lagIn_;
+        while (!queue.empty() && queue.front().due <= SteadyClock::now()) {
+            proto::Message m = std::move(queue.front().msg);
+            queue.pop_front();
+            if (inbound) self->deliver(std::move(m));
+            else self->write(m);
+            if (self->closing_) return;
+        }
+        if (!queue.empty()) self->arm_delay(queue, timer);
+    });
+}
+
+void Session::write(const proto::Message& m) {
     proto::encode(pending_, m);
     if (pending_.size() > limits_.maxSendBuffer) {
         log::warn("send buffer full, dropping slow client", {{"session", id_}, {"bytes", pending_.size()}});
@@ -150,6 +186,8 @@ void Session::close() {
     handshakeTimer_.cancel();
     heartbeatTimer_.cancel();
     closeTimer_.cancel();
+    lagInTimer_.cancel();
+    lagOutTimer_.cancel();
     // ponytail: no TLS close_notify; peers see EOF. Add async_shutdown with a timeout if clients ever need it.
     asio::error_code ec;
     stream_.lowest_layer().shutdown(asio::ip::tcp::socket::shutdown_both, ec);

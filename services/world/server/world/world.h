@@ -90,7 +90,7 @@ public:
     void push_move(entt::entity e, const proto::Move& m);
     void push_say(entt::entity e, std::string text);
     // A ClientEvent GameServer already checked (valid name, JSON object within kClientEventJsonMax).
-    void push_client_event(entt::entity e, std::string name, nlohmann::json data);
+    void push_client_event(entt::entity e, std::string name, nlohmann::json data, uint32_t requestId = 0);
     // An Interact; checked by interact_system on the next tick.
     void push_interact(entt::entity e, uint32_t objectId);
 

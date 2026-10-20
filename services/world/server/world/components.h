@@ -43,6 +43,7 @@ struct AreaRef {
 
 struct MoveState {
     MoveBudget budget;
+    uint32_t epoch = 0; // bumped by each Correction; Moves of an older one are dropped (movement_system)
 };
 
 // Inbound this tick, filled from the network before systems run.
@@ -62,6 +63,7 @@ struct ChatLimit {
 struct PendingClientEvent {
     std::string name;
     nlohmann::json data;
+    uint32_t requestId = 0; // kast.world.request's, 0 for kast.world.send
 };
 struct PendingClientEvents {
     std::vector<PendingClientEvent> events;

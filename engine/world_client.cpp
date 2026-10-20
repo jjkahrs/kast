@@ -89,6 +89,7 @@ void WorldClient::reset(std::optional<AuthConfig> config)
     realmsRequest_ = 0;
     events_.clear();
     latest_.clear();
+    requests_.clear(); // no events: the Lua state that asked is gone
 }
 
 void WorldClient::setAddressOverride(std::optional<std::string> hostPort)
@@ -202,17 +203,45 @@ void WorldClient::say(const std::string& text)
     send(proto::Say{text});
 }
 
-void WorldClient::sendEvent(const std::string& name, const nlohmann::json& data)
+std::string WorldClient::eventJson(const std::string& name, const nlohmann::json& data, const char* function) const
 {
     if (!proto::valid_client_event_name(name))
-        throw std::logic_error(std::format("send: name must be 1-{} characters of a-z, 0-9, '.' and '_', got '{}'",
-                                           proto::kClientEventNameMax, name));
+        throw std::logic_error(std::format("{}: name must be 1-{} characters of a-z, 0-9, '.' and '_', got '{}'",
+                                           function, proto::kClientEventNameMax, name));
     std::string json = data.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     if (json.size() > proto::kClientEventJsonMax)
-        throw std::logic_error(std::format("send: data is {} bytes encoded, the limit is {}", json.size(),
+        throw std::logic_error(std::format("{}: data is {} bytes encoded, the limit is {}", function, json.size(),
                                            proto::kClientEventJsonMax));
-    require(WorldState::InWorld, "send");
-    send(proto::ClientEvent{name, std::move(json)});
+    require(WorldState::InWorld, function);
+    return json;
+}
+
+void WorldClient::sendEvent(const std::string& name, const nlohmann::json& data)
+{
+    send(proto::ClientEvent{name, eventJson(name, data, "send")});
+}
+
+uint32_t WorldClient::request(const std::string& name, const nlohmann::json& data, std::chrono::milliseconds timeout)
+{
+    std::string json = eventJson(name, data, "request");
+    if (++requestSerial_ == 0) // wrapped: 0 means "not a request"
+        ++requestSerial_;
+    requests_[requestSerial_] = std::chrono::steady_clock::now() + timeout;
+    send(proto::ClientEvent{name, std::move(json), requestSerial_});
+    return requestSerial_;
+}
+
+void WorldClient::expireRequests()
+{
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = requests_.begin(); it != requests_.end();) {
+        if (it->second > now) {
+            ++it;
+            continue;
+        }
+        emit("world.reply", {{"requestId", it->first}, {"ok", false}, {"reason", "timeout"}});
+        it = requests_.erase(it);
+    }
 }
 
 void WorldClient::interact(uint32_t objectId)
@@ -221,13 +250,14 @@ void WorldClient::interact(uint32_t objectId)
     send(proto::Interact{objectId});
 }
 
-void WorldClient::move(float x, float y, float z, float heading)
+void WorldClient::move(float x, float y, float z, float heading, uint32_t seq, uint32_t epoch)
 {
     require(WorldState::InWorld, "move");
     // clientTimeMs is informational (the server trusts its own clock): wraps after 49 days, which is fine.
     const auto now = std::chrono::steady_clock::now().time_since_epoch();
     send(proto::Move{{x, y, z}, heading,
-                     static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now).count())});
+                     static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now).count()), seq,
+                     epoch});
 }
 
 void WorldClient::send(const auto& message)
@@ -314,7 +344,8 @@ void WorldClient::dispatch(const auto& m)
         emit("world.entered",
              {{"entityId", m.entityId}, {"map", m.map}, {"position", position(m.pos)}, {"heading", m.heading}});
     } else if constexpr (std::is_same_v<T, proto::MapChange>) {
-        emit("world.mapChanged", {{"map", m.map}, {"position", position(m.pos)}, {"heading", m.heading}});
+        emit("world.mapChanged",
+             {{"map", m.map}, {"position", position(m.pos)}, {"heading", m.heading}, {"epoch", m.epoch}});
     } else if constexpr (std::is_same_v<T, proto::Spawn>) {
         emit("world.spawn", {{"entityId", m.entityId},
                              {"name", m.name},
@@ -327,7 +358,7 @@ void WorldClient::dispatch(const auto& m)
     } else if constexpr (std::is_same_v<T, proto::EntityMove>) {
         emit("world.entityMove", {{"entityId", m.entityId}, {"position", position(m.pos)}, {"heading", m.heading}});
     } else if constexpr (std::is_same_v<T, proto::Correction>) {
-        emit("world.correction", {{"position", position(m.pos)}});
+        emit("world.correction", {{"position", position(m.pos)}, {"ackSeq", m.ackSeq}, {"epoch", m.epoch}});
     } else if constexpr (std::is_same_v<T, proto::ChatMsg>) {
         emit("world.chat", {{"from", m.fromName}, {"text", m.text}}); // never logged (world server rule)
     } else if constexpr (std::is_same_v<T, proto::ComponentUpdate>) {
@@ -337,6 +368,16 @@ void WorldClient::dispatch(const auto& m)
         emit("world.component", {{"entityId", m.entityId}, {"name", m.name}, {"data", std::move(data)}});
     } else if constexpr (std::is_same_v<T, proto::ComponentRemove>) {
         emit("world.componentRemoved", {{"entityId", m.entityId}, {"name", m.name}});
+    } else if constexpr (std::is_same_v<T, proto::Reply>) {
+        if (!requests_.erase(m.requestId)) // timed out already (or never asked): its world.reply went out
+            return;
+        Json value = Json::parse(m.json, nullptr, false);
+        if (m.ok)
+            emit("world.reply", {{"requestId", m.requestId}, {"ok", true},
+                                 {"data", value.is_discarded() ? Json::object() : std::move(value)}});
+        else
+            emit("world.reply", {{"requestId", m.requestId}, {"ok", false},
+                                 {"reason", value.is_string() ? value.get<std::string>() : std::string("invalid")}});
     } else if constexpr (std::is_same_v<T, proto::ServerEvent>) {
         Json payload = Json::parse(m.json, nullptr, false);
         if (payload.is_discarded())
@@ -357,6 +398,9 @@ void WorldClient::drop(const std::string& code, const std::string& reason)
     realmsRequest_ = 0;
     state_ = WorldState::Disconnected;
     log::info(std::format("World: disconnected ({}): {}", code, reason));
+    for (const auto& [id, deadline] : requests_) // never answered now
+        emit("world.reply", {{"requestId", id}, {"ok", false}, {"reason", "disconnected"}});
+    requests_.clear();
     emit("world.disconnected", {{"code", code}, {"reason", reason}});
 }
 
@@ -364,7 +408,7 @@ void WorldClient::emit(std::string name, Json payload)
 {
     if (name == "world.connected" || name == "world.disconnected")
         latest_.clear(); // a new connection, or none: nothing of the old one is replayed
-    if (name != "world.disconnected")
+    if (name != "world.disconnected" && name != "world.reply") // a reply is its request's alone
         latest_[name] = payload;
     events_.push_back({std::move(name), std::move(payload)});
 }
@@ -377,6 +421,7 @@ const Json* WorldClient::latest(const std::string& name) const
 
 std::vector<NetEvent> WorldClient::poll()
 {
+    expireRequests();
     std::vector<NetEvent> out;
     out.swap(events_);
     return out;

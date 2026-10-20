@@ -1245,7 +1245,7 @@ void checkWorldClient()
     WorldRun r(std::format("http://127.0.0.1:{}", authServer.port()), cert.certPem);
     auto& w = r.world;
     check(w.enabled() && kast::worldStateName(w.state()) == std::string("disconnected"), "world: starts disconnected");
-    check(throwsLogic([&] { w.move(1, 2, 3, 0); }, "move: needs state 'inWorld'"), "world: move outside the world throws");
+    check(throwsLogic([&] { w.move(1, 2, 3, 0, 1, 0); }, "move: needs state 'inWorld'"), "world: move outside the world throws");
 
     w.connect(3);
     const Json* noSession = r.next("world.disconnected");
@@ -1331,7 +1331,8 @@ void checkWorldClient()
     check(moved && *moved == Json{{"entityId", 2}, {"position", pos(102, 0, 100)}, {"heading", 1.0}},
           "world.entityMove {entityId, position, heading}");
     const Json* correction = r.next("world.correction");
-    check(correction && *correction == Json{{"position", pos(100, 0, 100)}}, "world.correction {position}");
+    check(correction && *correction == Json{{"position", pos(100, 0, 100)}, {"ackSeq", 0}, {"epoch", 0}},
+          "world.correction {position, ackSeq, epoch}");
     check(throwsLogic([&] { w.listCharacters(); }, "listCharacters: needs state 'lobby'"),
           "world: character calls in the world throw");
     w.say("secret-chat-text-1");
@@ -1351,8 +1352,9 @@ void checkWorldClient()
           "world.spawn of a v2 NPC Spawn: kind npc, its template");
     w.say("mapchange");
     const Json* mapChanged = r.next("world.mapChanged");
-    check(mapChanged && *mapChanged == Json{{"map", 2}, {"position", pos(300, 0, 310)}, {"heading", 1.5}},
-          "MapChange -> world.mapChanged {map, position, heading}");
+    check(mapChanged && mapChanged->value("map", 0) == 2 && mapChanged->value("position", Json()) == pos(300, 0, 310) &&
+              mapChanged->value("heading", 0.0) == 1.5 && mapChanged->value("epoch", 0u) >= 1 && mapChanged->size() == 4,
+          "MapChange -> world.mapChanged {map, position, heading, epoch}");
     const Json* gone = r.next("world.despawn");
     check(gone && gone->value("entityId", 0) == 3 && w.state() == kast::WorldState::InWorld,
           "after world.mapChanged: the old neighbour's world.despawn; still inWorld");
@@ -1516,7 +1518,30 @@ return {{
         end)
         kast.world.say("events")
         kast.world.send("quest.accept", {quest = 7})
-        kast.world.say("bye")
+        local predicted, confirmed = false, 0
+        kast.world.request("test.ok", {n = 5}, {
+            predict = function() predicted = true end,
+            confirmed = function(data)
+                confirmed = confirmed + 1
+                kast.log(string.format("lua request confirmed %d x%d", data.n, confirmed))
+            end,
+            rejected = function(reason) kast.log("lua request wrongly rejected " .. reason) end,
+        })
+        kast.log("lua request predicted at once " .. tostring(predicted))
+        kast.world.request("test.no", {}, {rejected = function(reason) kast.log("lua request rejected " .. reason) end})
+        kast.world.request("test.pending", nil, {
+            rejected = function(reason) kast.log("lua request pending rejected " .. reason) end,
+        })
+        kast.world.request("test.silent", {}, {timeout = 0.2, rejected = function(reason)
+            kast.log("lua request silent rejected " .. reason)
+            kast.world.say("bye")
+        end})
+        local ok, err = pcall(kast.world.request, "x", {}, {predict = 5})
+        assert(not ok and string.find(err, "kast.world.request: handlers.predict must be a function, got 5", 1, true), err)
+        ok, err = pcall(kast.world.request, "x", {}, {timeout = 0})
+        assert(not ok and string.find(err, "handlers.timeout must be seconds in (0, 3600], got 0", 1, true), err)
+        ok, err = pcall(kast.world.request, "A", {})
+        assert(not ok and string.find(err, "kast.world.request: name must be 1-32 characters", 1, true), err)
     end,
     update = function(dt) end,
 }
@@ -1537,6 +1562,13 @@ return {{
     check(playUntil(doc, "lua world chat from Hero"), "kast.world.say -> world.chat (after a scene switch)");
     check(playUntil(doc, "lua server event quest 7 steps 2"), "kast.subscribe(\"server.<name>\") gets the ServerEvent payload");
     check(playUntil(doc, "lua client event echoed quest 7"), "kast.world.send -> ClientEvent{name, JSON object}");
+    check(logged("lua request predicted at once true"), "kast.world.request: predict runs before it returns");
+    check(playUntil(doc, "lua request confirmed 5 x1"), "kast.world.request: Reply ok -> confirmed(data)");
+    check(playUntil(doc, "lua request rejected no_way"), "kast.world.request: Reply rejected -> rejected(reason)");
+    check(playUntil(doc, "lua request silent rejected timeout"), "kast.world.request: no Reply in time -> rejected(\"timeout\")");
+    check(playUntil(doc, "lua request pending rejected disconnected") && !logged("lua request confirmed 5 x2") &&
+              !logged("lua request wrongly rejected"),
+          "kast.world.request: one answer each (a second Reply is ignored); unanswered at disconnect -> \"disconnected\"");
     check(playUntil(doc, "lua world despawn 2"), "world.despawn");
     check(playUntil(doc, "lua world b disconnected client_disconnect disconnected"),
           "kast.world.disconnect -> world.disconnected client_disconnect");
@@ -1660,6 +1692,193 @@ void checkReplicationOffline()
               approx(kast::headingOf(bx::Quaternion{bx::InitIdentity}), 0.0f),
           "replication: heading <-> yaw round trip, heading pi/2 faces +X (atan2(dx, dz))");
 
+    // MoveHistory: seq from 1, the epoch of the last Correction; rebase = server position + the deltas after ackSeq
+    // + the unsent one.
+    {
+        kast::MoveHistory h;
+        h.placed({0, 0, 0});
+        const auto s1 = h.sent({1, 0, 0});
+        const auto s2 = h.sent({2, 0, 0});
+        const auto s3 = h.sent({12, 0, 0}); // a jump the server rejects
+        h.sent({13, 0, 1});
+        const auto s5 = h.sent({14, 0, 2});
+        check(s1.seq == 1 && s2.seq == 2 && s5.seq == 5 && s1.epoch == 0 && s5.epoch == 0 && h.size() == 5,
+              "replication: MoveHistory stamps seq 1, 2, ... and epoch 0 before any Correction");
+        // The server took 1 and 2, rejected 3 (ackSeq 3, epoch 1); 4 and 5 were in flight; the player is at 14.5 now.
+        const bx::Vec3 rebased = h.rebase({2, 0, 0}, s3.seq, 1, {14.5f, 0, 2.5f});
+        check(approx(rebased, {4.5f, 0, 2.5f}) && h.epoch() == 1 && h.size() == 2,
+              std::format("replication: rebase = server pos + unacked deltas + the unsent one (want 4.5, 0, 2.5; got {}, "
+                          "{}, {}), epoch adopted, acked deltas dropped",
+                          rebased.x, rebased.y, rebased.z));
+        const auto s6 = h.sent({5.5f, 0, 2.5f});
+        check(s6.seq == 6 && s6.epoch == 1, "replication: the next Move has seq 6 and the new epoch");
+        // Rejected again at 6: the server is where it was (it dropped 4 and 5); 6's delta goes, the unsent one stays.
+        check(approx(h.rebase({2, 0, 0}, 6, 2, {6, 0, 2.5f}), {2.5f, 0, 0}) && h.epoch() == 2 && h.size() == 0,
+              "replication: a second rejection acks past the stale moves: server pos + the unsent delta only");
+        check(approx(h.rebase({7, 0, 7}, 6, 2, {2.5f, 0, 0}), {7, 0, 7}), "replication: nothing in flight: the server's position");
+        h.sent({8, 0, 7});
+        h.placed({100, 0, 100}); // a map change; a Correction for a Move from the old map acks a seq before every delta
+        h.sent({101, 0, 100});
+        check(approx(h.rebase({100, 0, 100}, 7, 3, {102, 0, 100}), {102, 0, 100}) && h.epoch() == 3,
+              "replication: after a placement every delta since it replays on a Correction for an older Move");
+        h.placed({200, 0, 200}, 5u); // world.mapChanged: the server's new epoch
+        const auto afterMapChange = h.sent({201, 0, 200});
+        check(afterMapChange.epoch == 5 && h.epoch() == 5 && h.size() == 1,
+              "replication: a placement with an epoch (world.mapChanged) adopts it for the next Moves");
+        for (int i = 0; i < 1000; ++i)
+            h.sent({static_cast<float>(i), 0, 0});
+        check(h.size() == kast::MoveHistory::kCapacity, "replication: MoveHistory keeps at most kCapacity deltas");
+        h.reset();
+        check(h.sent({0, 0, 0}).seq == 1 && h.epoch() == 0, "replication: reset starts seq and epoch over");
+    }
+
+    // CorrectionBlend: under the threshold the error blends out linearly over the duration; at or over it, snaps.
+    {
+        kast::CorrectionBlend blend;
+        check(!blend.correct({11, 0, 0}, {10, 0, 0}, 2.0f, 0.1f) && approx(blend.offset(), {1, 0, 0}),
+              "replication: a 1 m error under a 2 m threshold blends (the shown position stays)");
+        const bx::Vec3 first = blend.step(0.05f);
+        check(approx(first, {-0.5f, 0, 0}) && approx(blend.offset(), {0.5f, 0, 0}),
+              "replication: half the duration blends out half the error");
+        const bx::Vec3 rest = blend.step(0.06f);
+        check(approx(rest, {-0.5f, 0, 0}) && approx(blend.offset(), {0, 0, 0}) && approx(blend.step(0.1f), {0, 0, 0}),
+              "replication: the blend ends on the rebased position within the duration, then adds nothing");
+        blend.correct({11, 0, 0}, {10, 0, 0}, 2.0f, 0.1f);
+        blend.step(0.05f);
+        check(!blend.correct({10.5f, 0, 0}, {9.5f, 0, 0}, 2.0f, 0.1f) && approx(blend.offset(), {1, 0, 0}),
+              "replication: a Correction mid-blend restarts it from the shown position");
+        check(blend.correct({12, 0, 0}, {10, 0, 0}, 2.0f, 0.1f) && approx(blend.offset(), {0, 0, 0}) &&
+                  blend.correct({10, 0, 2.5f}, {10, 0, 0}, 2.0f, 0.1f) && approx(blend.step(0.05f), {0, 0, 0}),
+              "replication: an error of 2 m or more snaps (no offset left)");
+        check(blend.correct({10.1f, 0, 0}, {10, 0, 0}, 2.0f, 0.0f) && blend.correct({10.1f, 0, 0}, {10, 0, 0}, 0.0f, 0.1f),
+              "replication: smoothing 0 ms or threshold 0 always snaps");
+        blend.correct({11, 0, 0}, {10, 0, 0}, 2.0f, 0.1f);
+        blend.reset();
+        check(approx(blend.offset(), {0, 0, 0}), "replication: reset drops a blend in progress");
+    }
+
+    // RemoteMotion: dead reckoning from each EntityMove along the observed velocity up to the cap, hold, settle.
+    {
+        constexpr float d = 0.1f, cap = 0.25f;
+        kast::RemoteMotion motion;
+        motion.place({0, 0, 0}, 0.0f);
+        motion.moved({0.7f, 0, 0}, 0.0f, d, cap);
+        motion.step(0.1f);
+        const bx::Vec3 arrived = motion.position(d, cap);
+        motion.step(0.2f);
+        check(approx(arrived, {0.7f, 0, 0}) && approx(motion.position(d, cap), {0.7f, 0, 0}),
+              "replication: the first EntityMove after a spawn has no velocity (interpolates, then stays)");
+        motion.place({0, 0, 0}, 0.0f);
+        for (int k = 1; k <= 80; ++k) { // 7 m/s at 10 Hz for 8 s: the velocity is known
+            motion.moved({0.7f * static_cast<float>(k), 0, 0}, 0.0f, d, cap);
+            motion.step(k < 80 ? 0.1f : 0.0f);
+        }
+        std::vector<float> xs;
+        for (float dt : {0.0f, 0.1f, 0.15f, 0.1f, 0.1f, 0.1f, 0.05f}) {
+            motion.step(dt);
+            xs.push_back(motion.position(d, cap).x);
+        }
+        const std::vector<float> want{56.0f, 56.7f, 57.75f, 57.75f, 57.75f, 56.875f, 56.0f};
+        bool along = true;
+        std::string wanted, got;
+        for (size_t i = 0; i < want.size(); ++i) {
+            along &= approx(xs[i], want[i]);
+            wanted += std::format(" {}", want[i]);
+            got += std::format(" {}", xs[i]);
+        }
+        check(along, std::format("replication: from an EntityMove a clone goes on at the observed velocity for 250 ms, "
+                                 "holds 250 ms, then settles back (at 0, 100, 250, 350, 450, 550, 600 ms want{}; got{})",
+                                 wanted, got));
+        motion.place({0, 0, 0}, 0.0f);
+        motion.moved({0.7f, 0, 0}, 0.0f, d, cap);
+        motion.step(0.1f);
+        motion.moved({1.4f, 0, 0}, 0.0f, d, cap);
+        const float ramp = motion.position(d, cap).x;
+        motion.step(0.1f);
+        const float rampOn = motion.position(d, cap).x;
+        check(approx(ramp, 0.7f) && rampOn > 0.7f && rampOn < 1.4f + 0.7f,
+              std::format("replication: the first steps after a spawn ramp the velocity up rather than trust one "
+                          "(got {} m 100 ms on, want between 0.7 and 2.1)", rampOn));
+        kast::RemoteMotion none;
+        none.place({0, 0, 0}, 0.0f);
+        none.moved({0.7f, 0, 0}, 0.0f, d, 0.0f);
+        none.step(0.1f);
+        none.moved({1.4f, 0, 0}, 0.0f, d, 0.0f);
+        none.step(0.6f);
+        check(approx(none.position(d, 0.0f), {1.4f, 0, 0}), "replication: maxExtrapolation 0 holds at the server position");
+
+        // The lag simulator at SIM_LATENCY_MS 150, SIM_JITTER_MS 50 (both ways, order kept): a mover at 4 m/s sends a
+        // Move every 100 ms, the server applies those that came by each 50 ms tick and sends one EntityMove of the last
+        // (bunched ones skip a position), which reaches the clone 100..200 ms later; frames of 31 / 16 ms like the live
+        // test's. Over many such runs the clone never jumps on an EntityMove, never goes backward, moves on every frame
+        // once it has a velocity (no stepping, no hold in a gap) and never goes over twice the mover's speed.
+        std::minstd_rand rng(7);
+        const auto lag = [&] { return 0.15 + std::uniform_real_distribution<double>(-0.05, 0.05)(rng); };
+        bool smooth = true;
+        float backward = 0.0f, fastest = 0.0f;
+        int frames = 0, stalled = 0;
+        for (int run = 0; run < 100; ++run) {
+            std::map<int, float> ticks; // server tick -> the last position applied by it
+            double due = 0.0;
+            for (int k = 1; k <= 30; ++k) { // from the first change (no Move for standing at the spawn)
+                due = std::max(due, k * 0.1 + lag());
+                ticks[static_cast<int>(std::ceil(due / 0.05))] = 0.4f * static_cast<float>(k);
+            }
+            std::vector<std::pair<double, float>> updates; // arrival, position
+            due = 0.0;
+            for (const auto& [tick, x] : ticks) {
+                due = std::max(due, tick * 0.05 + lag());
+                updates.emplace_back(due, x);
+            }
+            kast::RemoteMotion j;
+            j.place({0, 0, 0}, 0.0f);
+            size_t next = 0;
+            float last = 0.0f;
+            double now = 0.0;
+            for (int frame = 0; now < updates.back().first; ++frame) {
+                const float dt = frame % 3 == 2 ? 1.0f / 64.0f : 1.0f / 32.0f;
+                now += dt;
+                while (next < updates.size() && updates[next].first <= now) { // the engine's order: events, then
+                    const float before = j.position(d, cap).x;                // the replication update
+                    j.moved({updates[next++].second, 0, 0}, 0.0f, d, cap);
+                    smooth &= approx(j.position(d, cap).x, before); // an update never moves the shown position
+                }
+                j.step(dt);
+                const float x = j.position(d, cap).x;
+                if (next > 2) { // a velocity known
+                    ++frames;
+                    backward = std::min(backward, x - last);
+                    fastest = std::max(fastest, (x - last) / dt);
+                    stalled += x - last <= 1e-5f;
+                }
+                last = x;
+            }
+        }
+        kast::log::info(std::format("replication: lagged 4 m/s mover over 100 runs: {} frames, {} still, worst backward "
+                                    "{} m, fastest {:.2f} m/s", frames, stalled, backward, fastest));
+        check(smooth && backward >= 0.0f && stalled == 0 && fastest < 8.0f,
+              std::format("replication: a 4 m/s mover's lagged, jittered EntityMoves: no pop on an update ({}), never "
+                          "backward (worst {} m), {} of {} frames standing still (want 0), fastest {} m/s (want < 8)",
+                          smooth, backward, stalled, frames, fastest));
+
+        kast::RemoteMotion h;
+        h.place({0, 0, 0}, 0.0f);
+        h.moved({0, 0, 0}, 1.0f, d, cap);
+        h.step(0.05f);
+        const float halfTurn = h.heading(d);
+        h.step(0.05f);
+        const float turned = h.heading(d);
+        h.place({0, 0, 0}, 3.0f);
+        h.moved({0, 0, 0}, -3.0f, d, cap); // across +-pi: the short way (0.28 rad), not back round through 0
+        h.step(0.05f);
+        const float acrossPi = std::abs(std::remainder(h.heading(d) - 3.14159265f, 2.0f * 3.14159265f));
+        h.step(0.05f);
+        check(approx(halfTurn, 0.5f) && approx(turned, 1.0f) && acrossPi < 1e-3f && approx(h.heading(d), -3.0f) &&
+                  approx(h.heading(0.0f), -3.0f),
+              std::format("replication: heading turns over the interpolation, the short way round (got {}, {}, {} "
+                          "off pi)", halfTurn, turned, acrossPi));
+    }
+
     kast::MoveThrottle throttle;
     check(throttle.shouldSend({1, 0, 1}, 0, 0.0, 10) && !throttle.shouldSend({1, 0, 1}, 0, 1.0, 10),
           "replication: the first position is sent, an unchanged one never");
@@ -1694,13 +1913,29 @@ void checkReplicationOffline()
     check(kast::setComponentJson(scene.registry(), probe, local, {{"sendRateHz", 20}}, error) &&
               !kast::setComponentJson(scene.registry(), probe, local, {{"sendRateHz", 31}}, error) &&
               !kast::setComponentJson(scene.registry(), probe, local, {{"sendRateHz", 0.5}}, error) &&
-              kast::componentToJson(scene.registry(), probe, local) == nlohmann::ordered_json{{"sendRateHz", 20}},
-          "replication: sendRateHz 1..30, out of range rejected and the value kept");
+              kast::componentToJson(scene.registry(), probe, local) ==
+                  nlohmann::ordered_json{{"sendRateHz", 20}, {"smoothingThreshold", 2}, {"smoothingMs", 100}},
+          "replication: sendRateHz 1..30, out of range rejected and the value kept; smoothing optional, 2 m / 100 ms");
+    check(kast::setComponentJson(scene.registry(), probe, local,
+                                 {{"sendRateHz", 10}, {"smoothingThreshold", 0.5}, {"smoothingMs", 0}}, error) &&
+              !kast::setComponentJson(scene.registry(), probe, local, {{"sendRateHz", 10}, {"smoothingThreshold", -1}}, error) &&
+              !kast::setComponentJson(scene.registry(), probe, local, {{"sendRateHz", 10}, {"smoothingMs", 1001}}, error) &&
+              kast::componentToJson(scene.registry(), probe, local) ==
+                  nlohmann::ordered_json{{"sendRateHz", 10}, {"smoothingThreshold", 0.5}, {"smoothingMs", 0}},
+          "replication: smoothingThreshold >= 0 and smoothingMs 0..1000 round trip, out of range rejected");
     check(kast::setComponentJson(scene.registry(), probe, manager, {{"templateEntity", "T"}, {"interpolationMs", 50}}, error) &&
               !kast::setComponentJson(scene.registry(), probe, manager, {{"templateEntity", "T"}, {"interpolationMs", -1}}, error) &&
               kast::componentToJson(scene.registry(), probe, manager) ==
-                  nlohmann::ordered_json{{"templateEntity", "T"}, {"interpolationMs", 50}, {"npcTemplates", ""}},
-          "replication: NetworkReplication round trip (npcTemplates optional), negative interpolation rejected");
+                  nlohmann::ordered_json{{"templateEntity", "T"}, {"interpolationMs", 50}, {"npcTemplates", ""},
+                                         {"maxExtrapolationMs", 250}},
+          "replication: NetworkReplication round trip (npcTemplates, maxExtrapolationMs optional: 250 ms), negative "
+          "interpolation rejected");
+    check(kast::setComponentJson(scene.registry(), probe, manager,
+                                 {{"templateEntity", "T"}, {"interpolationMs", 50}, {"maxExtrapolationMs", 0}}, error) &&
+              !kast::setComponentJson(scene.registry(), probe, manager, {{"templateEntity", "T"}, {"interpolationMs", 50}, {"maxExtrapolationMs", -1}}, error) &&
+              !kast::setComponentJson(scene.registry(), probe, manager, {{"templateEntity", "T"}, {"interpolationMs", 50}, {"maxExtrapolationMs", 1001}}, error) &&
+              kast::componentToJson(scene.registry(), probe, manager).value("maxExtrapolationMs", -1.0f) == 0.0f,
+          "replication: maxExtrapolationMs 0..1000 round trip, out of range rejected");
     check(kast::setComponentJson(scene.registry(), probe, manager,
                                  {{"templateEntity", "T"}, {"interpolationMs", 50}, {"npcTemplates", "NPCs"}}, error) &&
               kast::componentToJson(scene.registry(), probe, manager).value("npcTemplates", "") == "NPCs",
@@ -1764,8 +1999,12 @@ void checkReplicationOffline()
         mbus.publish("world.spawn", {{"entityId", 7}, {"name", "Old"}, {"position", at(10, 0, 10)}, {"heading", 0}});
         mbus.drain();
         const entt::entity old = mr.clone(7);
+        mbus.publish("world.correction", {{"position", at(49, 1, 60)}, {"ackSeq", 0}, {"epoch", 1}}); // blends...
+        mbus.drain();
+        mr.update(0.025f);
         mbus.publish("world.mapChanged", {{"map", 2}, {"position", at(300, 0, 310)}, {"heading", 1.5}});
         mbus.drain();
+        mr.update(0.05f); // ...but the map change snaps: nothing of that blend is left
         const kast::Transform& lt = ms.registry().get<kast::Transform>(localPlayer);
         check(ms.valid(old) == false && mr.clone(7) == entt::null && approx(lt.position, {300, 0, 310}) &&
                   approx(kast::headingOf(lt.rotation), 1.5f),
@@ -1800,10 +2039,28 @@ void checkReplicationOffline()
     check(approx(quarter, 12.5f) && approx(half, 15.0f) && approx(done, 20.0f),
           std::format("replication: world.entityMove interpolates over 100 ms (want 12.5, 15, 20; got {}, {}, {})",
                       quarter, half, done));
-    bus.publish("world.correction", {{"position", at(49, 1, 60)}});
+    bus.publish("world.entityMove", {{"entityId", 2}, {"position", at(20, 0, 10)}, {"heading", 2.0}});
     bus.drain();
-    check(approx(pt.position, {49, 1, 60}) && approx(kast::headingOf(pt.rotation), 0.5f),
-          "replication: world.correction snaps the local player's position, heading kept");
+    r.update(0.05f);
+    check(approx(kast::headingOf(reg.get<kast::Transform>(other).rotation), 1.5f) &&
+              approx(reg.get<kast::Transform>(other).position, {20, 0, 10}),
+          "replication: a clone's heading turns toward world.entityMove's over the interpolation (no snap)");
+    bus.publish("world.correction", {{"position", at(49, 1, 60)}, {"ackSeq", 0}, {"epoch", 1}});
+    bus.drain();
+    const float blendStart = pt.position.x;
+    r.update(0.05f);
+    const float blendHalf = pt.position.x;
+    r.update(0.05f);
+    check(approx(blendStart, 50) && approx(blendHalf, 49.5f) && approx(pt.position, {49, 1, 60}) &&
+              approx(kast::headingOf(pt.rotation), 0.5f),
+          std::format("replication: world.correction 1 m off (nothing in flight) blends to its position over 100 ms "
+                      "(want 50, 49.5, 49; got {}, {}, {}), heading kept",
+                      blendStart, blendHalf, pt.position.x));
+    s.registry().get<kast::Transform>(player).position.x += 2; // walked 2 m, not sent yet
+    bus.publish("world.correction", {{"position", at(40, 1, 60)}, {"ackSeq", 0}, {"epoch", 2}});
+    bus.drain();
+    check(approx(pt.position, {42, 1, 60}),
+          "replication: world.correction 9 m off snaps, keeping the unsent walk on top of its position");
     bus.publish("world.despawn", {{"entityId", 2}});
     bus.drain();
     check(r.clone(2) == entt::null && !s.valid(other) && named(s, "Other") == entt::null && countNamed(s, "Body") == 1,
@@ -2208,7 +2465,7 @@ void checkReplicationFakeServer()
     }
     for (int frame = 0; frame < 20; ++frame) // standing: one more Move with the final position, then nothing
         updatePlay(doc, 0.016f);
-    const bx::Vec3 walked = reg.get<kast::Transform>(player).position;
+    bx::Vec3 walked = reg.get<kast::Transform>(player).position;
     const auto end = std::chrono::steady_clock::now() + 3s;
     while (std::chrono::steady_clock::now() < end &&
            (moves(fakeWorld).empty() || !approx(moves(fakeWorld).back().pos.x, walked.x)))
@@ -2238,6 +2495,109 @@ void checkReplicationFakeServer()
     check(approx(reg.get<kast::Transform>(player).position, walked, 1e-3f),
           std::format("replication: the player is snapped back to x {} (now {})", walked.x,
                       reg.get<kast::Transform>(player).position.x));
+
+    // Moves in flight behind a Correction (the fake holds it back until 3 more Moves have come): no cascade. The
+    // player jumps 50 m and keeps walking; the Moves after the jump are of the old epoch, dropped without a word, and
+    // the Correction puts the player at the server's position + everything it walked since the jump.
+    const auto correctedLines = [] {
+        return std::ranges::count_if(kast::log::lines(), [](const std::string& line) {
+            return contains(line, "replication: corrected to");
+        });
+    };
+    const auto correctedBefore = correctedLines();
+    const size_t sentBeforeJump = moves(fakeWorld).size();
+    doc.lua.world().say("hold");
+    scene.registry().get<kast::Transform>(player).position.x += 50;
+    float walkedAfterJump = 0;
+    const auto walkFrame = [&] {
+        scene.registry().get<kast::Transform>(player).position.x += 0.048f; // 3 m/s
+        walkedAfterJump += 0.048f;
+        updatePlay(doc, 0.016f);
+        std::this_thread::sleep_for(1ms);
+    };
+    const auto jumpDeadline = std::chrono::steady_clock::now() + 5s;
+    while (std::chrono::steady_clock::now() < jumpDeadline && correctedLines() == correctedBefore)
+        walkFrame();
+    const size_t sentByCorrection = moves(fakeWorld).size();
+    for (int frame = 0; frame < 30; ++frame) // on after the rebase: the server takes these
+        walkFrame();
+    for (int frame = 0; frame < 20; ++frame) { // standing: the last Move goes, then no more Corrections
+        updatePlay(doc, 0.016f);
+        std::this_thread::sleep_for(5ms);
+    }
+    std::this_thread::sleep_for(100ms);
+    for (int frame = 0; frame < 5; ++frame)
+        updatePlay(doc, 0.016f);
+    const std::vector<proto::Move> afterJump = moves(fakeWorld);
+    // The rejected Move's whole delta goes, with the walk since the Move before it (the server never took that part).
+    const float lostWithJump = afterJump.at(sentBeforeJump).pos.x - walked.x - 50;
+    const float serverX = walked.x;
+    walked = {serverX + walkedAfterJump - lostWithJump, walked.y, walked.z};
+    check(correctedLines() == correctedBefore + 1,
+          std::format("replication: one Correction for the jump, none for the {} Moves in flight behind it (got {})",
+                      sentByCorrection - sentBeforeJump - 1, correctedLines() - correctedBefore));
+    check(sentByCorrection - sentBeforeJump >= 4 && approx(reg.get<kast::Transform>(player).position, walked, 1e-3f),
+          std::format("replication: rebased to the server's x {} + the {} m walked since the jump's Move (now {}, want {})",
+                      serverX, walkedAfterJump - lostWithJump, reg.get<kast::Transform>(player).position.x, walked.x));
+    check(afterJump.size() > sentByCorrection && afterJump.back().epoch == afterJump[sentBeforeJump].epoch + 1 &&
+              approx(afterJump.back().pos.x, walked.x, 1e-3f) && afterJump.back().seq == afterJump.size(),
+          "replication: later Moves carry the Correction's epoch and the rebased position; seq counts every Move");
+
+    // A small rejection (the fake rejects the next Move whatever its distance): the error, that Move's delta, blends out
+    // of the shown position over 100 ms while the player walks on; the Moves carry the true position, so the blend
+    // never reaches the server as speed and no other Correction follows.
+    {
+        for (int frame = 0; frame < 10; ++frame) // walking: the rejected Move is a whole 100 ms (0.3 m) on
+            walkFrame();
+        const auto correctedBeforeReject = correctedLines();
+        const size_t sentBefore = moves(fakeWorld).size();
+        doc.lua.world().say("reject");
+        std::vector<float> shown{reg.get<kast::Transform>(player).position.x};
+        size_t correctedAt = 0; // index in shown of the frame the Correction came in
+        const auto rejectDeadline = std::chrono::steady_clock::now() + 5s;
+        while (std::chrono::steady_clock::now() < rejectDeadline && (correctedAt == 0 || shown.size() < correctedAt + 30)) {
+            walkFrame();
+            shown.push_back(reg.get<kast::Transform>(player).position.x);
+            if (correctedAt == 0 && correctedLines() > correctedBeforeReject)
+                correctedAt = shown.size() - 1;
+        }
+        for (int frame = 0; frame < 20; ++frame) { // standing: the last Move goes
+            updatePlay(doc, 0.016f);
+            std::this_thread::sleep_for(5ms);
+        }
+        std::this_thread::sleep_for(100ms);
+        for (int frame = 0; frame < 5; ++frame)
+            updatePlay(doc, 0.016f);
+        const std::vector<proto::Move> sentNow = moves(fakeWorld);
+        // Each frame walks 0.048 m; while blending, the shown position also takes 0.048 m a frame back (0.3 m error
+        // over 6.25 frames): it stands, never pops back, and walks again once the 100 ms are up.
+        int blendFrames = 0;
+        float minStep = 1.0f;
+        for (size_t i = correctedAt; correctedAt > 0 && i < shown.size(); ++i) {
+            const float step = shown[i] - shown[i - 1];
+            minStep = std::min(minStep, step);
+            if (std::abs(step - 0.048f) > 1e-3f)
+                blendFrames = static_cast<int>(i - correctedAt + 1);
+        }
+        const float blended = correctedAt > 0 ? 0.048f * 7 - (shown[correctedAt + 6] - shown[correctedAt - 1]) : 0.0f;
+        check(correctedAt > 0 && correctedLines() == correctedBeforeReject + 1,
+              std::format("replication: one Correction for the rejected Move, none while blending (got {})",
+                          correctedLines() - correctedBeforeReject));
+        check(blended > 0.1f && blended < 2.0f && minStep > -1e-3f && blendFrames >= 6 && blendFrames <= 7,
+              std::format("replication: a {} m error blends over {} frames of 16 ms (want 6-7: <= 100 ms), the shown "
+                          "position never stepping back (smallest step {})",
+                          blended, blendFrames, minStep));
+        bool walkOnly = true; // every Move of the new epoch is a whole number of 0.048 m frames on from the one before
+        for (size_t i = sentBefore + 1; i < sentNow.size(); ++i) {
+            if (sentNow[i].epoch != sentNow[i - 1].epoch)
+                continue;
+            const float frames = (sentNow[i].pos.x - sentNow[i - 1].pos.x) / 0.048f;
+            walkOnly = walkOnly && frames >= 0.0f && std::abs(frames - std::round(frames)) < 0.05f;
+        }
+        check(walkOnly && !sentNow.empty() && approx(sentNow.back().pos.x, reg.get<kast::Transform>(player).position.x, 1e-3f),
+              "replication: Moves carry the walk only, not the blend, and the last one the shown (blended) position");
+        walked = reg.get<kast::Transform>(player).position;
+    }
 
     // A scene switch: the new scene's player stands where the old one walked to, and the remote player is there.
     const size_t movesBefore = moves(fakeWorld).size();
@@ -2709,19 +3069,22 @@ int liveReplicationCheck(const std::string& authUrl, const std::string& mailpitU
     check(spawnedB(), "live replication: world.entitySpawned on A names B's server id");
 
     // B walks +x at 4 m/s for 2 s; A's clone of B is sampled every frame.
-    std::vector<float> trail;
+    std::vector<float> trail, frameDt;
     float walked = 0;
     const entt::entity cloneB = a.lua.replication().clone(idB);
     run([&] { return walked >= 2.0f; }, 5s, [&](float dt) {
         b.position().x += 4.0f * dt;
         walked += dt;
         trail.push_back(a.scene.registry().get<kast::Transform>(cloneB).position.x);
+        frameDt.push_back(dt);
     });
-    run([] { return false; }, 600ms); // settle: the last Move, then 100 ms of interpolation
+    // settle: the last Move (up to ~550 ms with the lag simulator on), then the clone's extrapolation past the stop
+    // (250 ms), its hold (250 ms) and settling back (100 ms)
+    run([] { return false; }, 1500ms);
     const float finalB = b.position().x;
     const float finalSeen = a.scene.registry().get<kast::Transform>(cloneB).position.x;
     int still = 0;
-    float biggest = 0;
+    float biggest = 0, fastest = 0;
     // Past the first update's latency, the clone should move on (nearly) every frame: 20 Hz or 10 Hz stepping would
     // leave runs of frames standing still and then jump.
     const size_t from = trail.size() / 4;
@@ -2729,10 +3092,12 @@ int liveReplicationCheck(const std::string& authUrl, const std::string& mailpitU
         const float step = trail[i] - trail[i - 1];
         still += step < 1e-4f;
         biggest = std::max(biggest, step);
+        fastest = std::max(fastest, step / std::max(frameDt[i - 1], 1e-3f)); // trail[i]: after the frame of dt[i - 1]
     }
     const int frames = static_cast<int>(trail.size() - from - 1);
     kast::log::info(std::format("live replication: B walked to x {:.2f}; A shows B at x {:.2f}; {} frames, {} standing "
-                                "still, largest step {:.3f} m", finalB, finalSeen, frames, still, biggest));
+                                "still, largest step {:.3f} m, fastest {:.1f} m/s", finalB, finalSeen, frames, still,
+                                biggest, fastest));
     check(std::abs(finalSeen - finalB) < 0.05f, "live replication: A's clone of B ends where B is");
     check(still * 10 <= frames && biggest < 0.25f,
           "live replication: B's clone moves smoothly on A (no 10/20 Hz stepping)");

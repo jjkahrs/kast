@@ -29,13 +29,16 @@ struct SystemStatus {
     std::string error; // why it is disabled ("path:line: ..."), empty when ok
 };
 
-// A kast.sendTo/sendNearby/broadcast call, queued until World sends it as ServerEvent.
+// A kast.sendTo/sendNearby/broadcast call, queued until World sends it as ServerEvent; or a kast.reply (To::reply),
+// sent as Reply{requestId, ok, json} to entity's owner (name unused).
 struct ClientEvent {
-    enum class To { owner, nearby, all };
+    enum class To { owner, nearby, all, reply };
     To to = To::all;
     uint32_t entity = 0; // wire id; unused for all
     std::string name;
     std::string json;
+    uint32_t requestId = 0; // reply only
+    bool ok = false;        // reply only
 };
 
 // An NPC type (LUA_ROOT/npcs/, docs/services/world/npcs.html#npc-definitions): the name and template its NPCs get, and the components they

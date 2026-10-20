@@ -2,7 +2,7 @@
 # Runs every integration scenario against the compose stack (docker compose up -d --build first).
 # Prints PASS/FAIL per scenario and exits non-zero if any failed.
 # Scenarios 10-13 stop/restart containers, so run this against a test stack only.
-# --starter-mmo runs only scenarios 23-24 (samples/starter-mmo combat), against the stack with the sample's override.
+# --starter-mmo runs only scenarios 23-24 and 28 (samples/starter-mmo combat), against the stack with the sample's override.
 set -u
 cd "$(dirname "$0")/.."
 export MSYS_NO_PATHCONV=1 # Git Bash on Windows: keep container paths as written
@@ -102,6 +102,7 @@ if [ "${1:-}" = "--starter-mmo" ]; then
     bot() { docker compose -f docker-compose.yml -f ../../samples/starter-mmo/docker-compose.override.yml run --rm -T bot --run-id "$RUN" --char-option class=warrior "$@"; }
     scenario "23 starter-mmo: Bat refused at 8 m, killed in one hit 2.5 m away, its corpse looted, back 30 s later" --scenario combat-bat
     scenario "24 starter-mmo: Guard: bad targets refused, cooldown, hits back, out of range refused" --scenario combat-rules
+    scenario "28 starter-mmo: power requests: Reply ok before combat.power, cooldown / target rejections routed by requestId" --scenario combat-request
     summary
 fi
 
@@ -214,5 +215,10 @@ fi
 
 # 25: zone objects on the sample hills (docs/services/world/maps.html#objects) with the sample lua/systems/test_hooks.lua
 scenario "25 zone objects: Interact on another map / out of range / unknown id -> nothing, in range -> test.shrine event; into the obstacle crate -> Correction" --scenario objects
+
+# 26-27: client prediction (docs/services/world/protocol.html#movement); meant for a stack with the lag simulator on
+# (SIM_LATENCY_MS=150 SIM_JITTER_MS=50 in .env), and pass without it too
+scenario "26 lag run: 10 s at 7 m/s with turns -> 0 Corrections" --scenario lag-run
+scenario "27 lag reject: one 50 m jump while running -> exactly 1 Correction, the rebased client and the server agree" --scenario lag-reject
 
 summary

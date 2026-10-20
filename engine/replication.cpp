@@ -5,6 +5,7 @@
 #include "lua_components.h"
 #include "math3d.h"
 
+#include <algorithm>
 #include <cmath>
 #include <format>
 
@@ -14,6 +15,7 @@ namespace {
 using Json = nlohmann::json;
 
 constexpr float kEpsilon = 1e-4f; // meters / radians: smaller changes (physics jitter) are not a move
+constexpr float kVelocityWindow = 0.5f; // s: a clone's velocity is mostly its last ~5 EntityMoves' (at 10 Hz)
 
 bx::Vec3 vec3(const Json& json) { return {json.value("x", 0.0f), json.value("y", 0.0f), json.value("z", 0.0f)}; }
 
@@ -81,6 +83,104 @@ void MoveThrottle::known(const bx::Vec3& position, float heading)
     heading_ = heading;
 }
 
+MoveHistory::Stamp MoveHistory::sent(const bx::Vec3& position)
+{
+    deltas_.push_back({++seq_, last_ ? bx::sub(position, *last_) : bx::Vec3{0.0f, 0.0f, 0.0f}});
+    if (deltas_.size() > kCapacity) // ponytail: a Correction acking older than this loses those deltas (never at 10 Hz)
+        deltas_.pop_front();
+    last_ = position;
+    return {seq_, epoch_};
+}
+
+void MoveHistory::placed(const bx::Vec3& position, std::optional<uint32_t> epoch)
+{
+    deltas_.clear();
+    last_ = position;
+    if (epoch)
+        epoch_ = *epoch;
+}
+
+bx::Vec3 MoveHistory::rebase(const bx::Vec3& position, uint32_t ackSeq, uint32_t epoch, const bx::Vec3& current)
+{
+    std::erase_if(deltas_, [&](const Delta& d) { return d.seq <= ackSeq; });
+    bx::Vec3 rebased = last_ ? bx::add(position, bx::sub(current, *last_)) : position; // + the unsent delta
+    for (const Delta& d : deltas_)
+        rebased = bx::add(rebased, d.delta);
+    epoch_ = epoch;
+    last_ = rebased;
+    return rebased;
+}
+
+bool CorrectionBlend::correct(const bx::Vec3& shown, const bx::Vec3& rebased, float threshold, float duration)
+{
+    const bx::Vec3 error = bx::sub(shown, rebased);
+    if (duration <= 0.0f || bx::length(error) >= threshold) {
+        reset();
+        return true;
+    }
+    error_ = error;
+    elapsed_ = 0.0f;
+    duration_ = duration;
+    return false;
+}
+
+bx::Vec3 CorrectionBlend::step(float dt)
+{
+    const bx::Vec3 before = offset();
+    elapsed_ += dt;
+    return bx::sub(offset(), before);
+}
+
+bx::Vec3 CorrectionBlend::offset() const
+{
+    return interpolate(error_, {0.0f, 0.0f, 0.0f}, elapsed_, duration_); // a straight line to none, like a clone
+}
+
+void RemoteMotion::place(const bx::Vec3& position, float heading)
+{
+    *this = {};
+    to_ = position;
+    time_ = kVelocityWindow; // standing that long: the first steps' velocity ramps up instead of trusting one sample
+    headingFrom_ = heading_ = heading;
+}
+
+void RemoteMotion::moved(const bx::Vec3& position, float heading, float duration, float maxExtrapolation)
+{
+    const bx::Vec3 shown = this->position(duration, maxExtrapolation);
+    headingFrom_ = this->heading(duration);
+    if (moving_) {
+        const float fade = std::exp(-elapsed_ / kVelocityWindow);
+        distance_ = bx::add(bx::mul(distance_, fade), bx::sub(position, to_));
+        time_ = time_ * fade + std::min(elapsed_, duration + maxExtrapolation); // a restart after a stop: not idle time
+        if (time_ > 1e-3f)
+            velocity_ = bx::mul(distance_, 1.0f / time_);
+    }
+    to_ = position;
+    heading_ = heading;
+    elapsed_ = 0.0f;
+    moving_ = true;
+    error_ = bx::sub(shown, position);
+    const float speed = bx::length(velocity_);
+    converge_ = speed > kEpsilon ? std::clamp(bx::length(error_) / (0.35f * speed), duration, std::max(duration, 0.5f))
+                                 : duration;
+}
+
+bx::Vec3 RemoteMotion::position(float duration, float maxExtrapolation) const
+{
+    bx::Vec3 path = bx::add(to_, bx::mul(velocity_, std::min(elapsed_, maxExtrapolation)));
+    if (elapsed_ > 2.0f * maxExtrapolation) // stopped: back onto the server's position
+        path = interpolate(path, to_, elapsed_ - 2.0f * maxExtrapolation, duration);
+    return bx::add(path, interpolate(error_, {0.0f, 0.0f, 0.0f}, elapsed_, converge_));
+}
+
+float RemoteMotion::heading(float duration) const
+{
+    if (duration <= 0.0f || elapsed_ >= duration)
+        return heading_;
+    const float turn = std::remainder(heading_ - headingFrom_, 2.0f * 3.14159265f); // the short way, -pi..pi
+    return headingFrom_ + turn * elapsed_ / duration;
+}
+
 void Replication::start(Scene& scene, EventBus& bus, WorldClient& world)
 {
     stop(true);
@@ -114,7 +214,7 @@ void Replication::start(Scene& scene, EventBus& bus, WorldClient& world)
         setMap(e);
         placeLocal(e);
     }));
-    subscriptions_.push_back(bus.subscribe("world.correction", [this](const Json& e) { placeLocal(e); }));
+    subscriptions_.push_back(bus.subscribe("world.correction", [this](const Json& e) { reconcile(e); }));
     // Moved by the server (another map, or a teleport): everyone around is gone; the new neighbours Spawn next.
     subscriptions_.push_back(bus.subscribe("world.mapChanged", [this](const Json& e) {
         despawnAll();
@@ -124,25 +224,20 @@ void Replication::start(Scene& scene, EventBus& bus, WorldClient& world)
     subscriptions_.push_back(bus.subscribe("world.spawn", [this](const Json& e) {
         const bx::Vec3 at = vec3(e.value("position", Json::object()));
         spawn(e.value("entityId", 0u), {.name = e.value("name", ""), .npc = e.value("kind", "") == "npc",
-                                        .templateName = e.value("template", ""), .from = at, .to = at,
-                                        .heading = e.value("heading", 0.0f)});
+                                        .templateName = e.value("template", "")},
+              at, e.value("heading", 0.0f));
     }));
     subscriptions_.push_back(bus.subscribe("world.entityMove", [this](const Json& e) {
         const auto it = remotes_.find(e.value("entityId", 0u));
         if (it == remotes_.end())
             return;
-        Remote& remote = it->second;
-        remote.from = scene_->valid(remote.entity) ? scene_->registry().get<Transform>(remote.entity).position
-                                                   : remote.to;
-        remote.to = vec3(e.value("position", Json::object()));
-        remote.heading = e.value("heading", 0.0f);
-        remote.elapsed = 0.0f;
-        if (scene_->valid(remote.entity)) // ponytail: heading snaps; slerp it if turning looks choppy
-            scene_->registry().get<Transform>(remote.entity).rotation = yawRotation(remote.heading);
+        it->second.motion.moved(vec3(e.value("position", Json::object())), e.value("heading", 0.0f),
+                                interpolationSeconds(), extrapolationSeconds());
     }));
     subscriptions_.push_back(bus.subscribe("world.despawn", [this](const Json& e) { despawn(e.value("entityId", 0u)); }));
     subscriptions_.push_back(bus.subscribe("world.disconnected", [this](const Json&) {
         despawnAll();
+        history_.reset();
         localId_.reset();
         localComponents_.clear();
         localPose_.reset();
@@ -170,8 +265,8 @@ void Replication::start(Scene& scene, EventBus& bus, WorldClient& world)
     std::unordered_map<uint32_t, Remote> known;
     known.swap(remotes_);
     for (auto& [id, remote] : known) {
-        remote.from = remote.to;
-        spawn(id, remote);
+        spawn(id, remote, remote.motion.position(interpolationSeconds(), extrapolationSeconds()),
+              remote.motion.heading(interpolationSeconds()));
         publishComponents(id, remotes_[id].components);
     }
 }
@@ -194,10 +289,12 @@ void Replication::stop(bool remembered)
         localComponents_.clear();
         localPose_.reset();
         map_.reset();
+        history_.reset();
     }
     for (auto& [id, remote] : remotes_)
         remote.entity = entt::null; // the scene goes; start() re-creates them
     throttle_.reset();
+    blend_.reset();
     scene_ = nullptr;
     bus_ = nullptr;
     world_ = nullptr;
@@ -221,26 +318,42 @@ float Replication::interpolationSeconds() const
     return managers.empty() ? 0.0f : managers.get<NetworkReplication>(managers.front()).interpolationMs / 1000.0f;
 }
 
+float Replication::extrapolationSeconds() const
+{
+    auto managers = scene_->registry().view<NetworkReplication>();
+    return managers.empty() ? 0.0f : managers.get<NetworkReplication>(managers.front()).maxExtrapolationMs / 1000.0f;
+}
+
+void Replication::showRemote(Remote& remote)
+{
+    Transform& t = scene_->registry().get<Transform>(remote.entity);
+    t.position = remote.motion.position(interpolationSeconds(), extrapolationSeconds());
+    t.rotation = yawRotation(remote.motion.heading(interpolationSeconds()));
+}
+
 void Replication::update(float dt)
 {
     if (!scene_)
         return;
     time_ += dt;
-    if (const entt::entity player = localPlayer(); player != entt::null && world_->state() == WorldState::InWorld) {
-        const Transform& t = scene_->registry().get<Transform>(player);
-        localPose_ = {t.position, t.rotation}; // what this frame's systems did, for the next scene's player
-        const float heading = headingOf(t.rotation);
-        if (throttle_.shouldSend(t.position, heading, time_,
-                                 scene_->registry().get<NetworkLocalPlayer>(player).sendRateHz))
-            world_->move(t.position.x, t.position.y, t.position.z, heading);
+    if (const entt::entity player = localPlayer(); player != entt::null) {
+        Transform& t = scene_->registry().get<Transform>(player);
+        t.position = bx::add(t.position, blend_.step(dt)); // the blend on top of what this frame's systems did
+        if (world_->state() == WorldState::InWorld) {
+            const bx::Vec3 position = bx::sub(t.position, blend_.offset()); // true: the blend is not a move
+            localPose_ = {position, t.rotation}; // what this frame's systems did, for the next scene's player
+            const float heading = headingOf(t.rotation);
+            if (throttle_.shouldSend(position, heading, time_,
+                                     scene_->registry().get<NetworkLocalPlayer>(player).sendRateHz)) {
+                const MoveHistory::Stamp stamp = history_.sent(position);
+                world_->move(position.x, position.y, position.z, heading, stamp.seq, stamp.epoch);
+            }
+        }
     }
-    const float duration = interpolationSeconds();
     for (auto& [id, remote] : remotes_) {
-        if (!scene_->valid(remote.entity))
-            continue; // a script destroyed it: it stays gone until the server despawns and respawns the player
-        remote.elapsed += dt;
-        scene_->registry().get<Transform>(remote.entity).position =
-            interpolate(remote.from, remote.to, remote.elapsed, duration);
+        remote.motion.step(dt);
+        if (scene_->valid(remote.entity)) // else a script destroyed it: gone until the server respawns the player
+            showRemote(remote);
     }
 }
 
@@ -257,6 +370,29 @@ void Replication::applyMap()
             terrain.map = *map_;
 }
 
+// Not a placement: the player keeps walking from where it would be had the server known its unacked Moves all along.
+// The server does not know the rebased position until a Move of the new epoch says so: the throttle takes only the
+// Correction's position as known, so a rebase that moved on from it goes out. A small error blends out of the shown
+// position (CorrectionBlend); a large one snaps.
+void Replication::reconcile(const Json& payload)
+{
+    const bx::Vec3 position = vec3(payload.value("position", Json::object()));
+    Pose pose = localPose_.value_or(Pose{});
+    const entt::entity player = localPlayer();
+    if (player != entt::null) // where it truly is: the shown position less what is still blending
+        pose = {bx::sub(scene_->registry().get<Transform>(player).position, blend_.offset()),
+                scene_->registry().get<Transform>(player).rotation};
+    pose.position = history_.rebase(position, payload.value("ackSeq", 0u), payload.value("epoch", 0u), pose.position);
+    localPose_ = pose;
+    if (player == entt::null)
+        return;
+    Transform& t = scene_->registry().get<Transform>(player);
+    const NetworkLocalPlayer& settings = scene_->registry().get<NetworkLocalPlayer>(player);
+    if (blend_.correct(t.position, pose.position, settings.smoothingThreshold, settings.smoothingMs / 1000.0f))
+        t.position = pose.position;
+    throttle_.known(position, headingOf(t.rotation));
+}
+
 // Remembered even when the scene has no local player (a character select scene): the next scene's player gets it.
 void Replication::placeLocal(const Json& payload)
 {
@@ -264,18 +400,21 @@ void Replication::placeLocal(const Json& payload)
         localId_ = payload.value("entityId", 0u);
         localComponents_.clear();
     }
-    Pose pose = localPose_.value_or(Pose{});
-    if (const entt::entity player = localPlayer(); player != entt::null)
-        pose.rotation = scene_->registry().get<Transform>(player).rotation; // a correction keeps the heading
-    pose.position = vec3(payload.value("position", Json::object()));
-    if (payload.contains("heading")) // world.entered / world.mapChanged; a correction carries the position only
-        pose.rotation = yawRotation(payload.value("heading", 0.0f));
-    localPose_ = pose;
+    const bx::Vec3 position = vec3(payload.value("position", Json::object()));
+    // The world.entered start() replays after a scene switch puts the player where it already is: not a placement,
+    // its Moves in flight still count. (seq and epoch are the connection's: reset by world.disconnected only.)
+    const bx::Vec3& was = localPose_ ? localPose_->position : position;
+    if (payload.contains("epoch")) // world.mapChanged: always a placement, Moves from before it are dropped
+        history_.placed(position, payload.value("epoch", 0u));
+    else if (!localPose_ || was.x != position.x || was.y != position.y || was.z != position.z)
+        history_.placed(position);
+    localPose_ = Pose{position, yawRotation(payload.value("heading", 0.0f))};
     placePlayer();
 }
 
 void Replication::placePlayer()
 {
+    blend_.reset(); // a placement (map change, teleport, scene switch) snaps
     const entt::entity player = localPlayer();
     if (player == entt::null || !localPose_)
         return;
@@ -285,8 +424,9 @@ void Replication::placePlayer()
     throttle_.known(t.position, headingOf(t.rotation));
 }
 
-void Replication::spawn(uint32_t id, Remote remote)
+void Replication::spawn(uint32_t id, Remote remote, const bx::Vec3& position, float heading)
 {
+    remote.motion.place(position, heading);
     despawn(id); // an id the server reuses without a despawn we saw
     const auto [source, root] = cloneSource(remote);
     if (!source) {
@@ -296,9 +436,7 @@ void Replication::spawn(uint32_t id, Remote remote)
     remote.entity = copyInto(*source, root, *scene_, entt::null);
     entt::registry& registry = scene_->registry();
     registry.get<Name>(remote.entity).value = remote.name;
-    Transform& t = registry.get<Transform>(remote.entity);
-    t.position = interpolate(remote.from, remote.to, remote.elapsed, interpolationSeconds());
-    t.rotation = yawRotation(remote.heading);
+    showRemote(remote);
     registry.emplace_or_replace<NetworkEntity>(remote.entity, static_cast<int>(id));
     for (const auto& [name, data] : remote.components)
         applyComponent(remote.entity, name, &data);

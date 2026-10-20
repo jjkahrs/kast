@@ -1,5 +1,5 @@
-// One TLS client connection: framing, frame/rate limits, handshake deadline, heartbeat and batched writes.
-// Knows nothing about game rules; decoded messages go to on_message. All calls happen on the io thread.
+// One TLS client connection: framing, frame/rate limits, handshake deadline, heartbeat, batched writes and the lag
+// simulator. Knows nothing about game rules; decoded messages go to on_message. All calls happen on the io thread.
 #pragma once
 #include "../core/clock.h"
 #include "../core/rate_limiter.h"
@@ -9,9 +9,12 @@
 #include <asio.hpp>
 #include <asio/ssl.hpp>
 
+#include <algorithm>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <random>
 #include <vector>
 
 namespace kast::net {
@@ -24,7 +27,16 @@ struct SessionLimits {
     double msgRate = 60, msgBurst = 120;
     Millis msgRateGrace{2000};
     size_t maxSendBuffer = 1 << 20;
+    Millis simLatency{0}, simJitter{0}; // lag simulator (SIM_LATENCY_MS / SIM_JITTER_MS): both 0 = off
 };
+
+// The lag simulator's delivery time for a message that came (or was sent) at now: latency +- jitter, uniform, but
+// never before the previous message's (order is kept) nor before now.
+inline TimePoint lag_due(TimePoint now, TimePoint previous, Millis latency, Millis jitter, std::minstd_rand& rng) {
+    const auto j = jitter.count();
+    const Millis offset{j ? std::uniform_int_distribution<long long>(-j, j)(rng) : 0};
+    return std::max({now, previous, now + latency + offset});
+}
 
 class Session : public std::enable_shared_from_this<Session> {
 public:
@@ -47,9 +59,20 @@ public:
     std::string remote() const { return remote_; }
 
 private:
+    struct Delayed {
+        TimePoint due;
+        proto::Message msg;
+    };
+    using DelayQueue = std::deque<Delayed>;
+
     void read_header();
     void read_payload(uint16_t length, proto::Opcode op);
     void handle_frame(proto::Opcode op);
+    void deliver(proto::Message&& m); // a received message: Ping answered here, the rest to on_message
+    void write(const proto::Message& m);
+    bool lagged() const { return limits_.simLatency.count() > 0 || limits_.simJitter.count() > 0; }
+    void delay(DelayQueue& queue, asio::steady_timer& timer, proto::Message m);
+    void arm_delay(DelayQueue& queue, asio::steady_timer& timer);
     void schedule_flush();
     void flush();
     void arm_heartbeat();
@@ -74,6 +97,9 @@ private:
     asio::steady_timer handshakeTimer_;
     asio::steady_timer heartbeatTimer_;
     asio::steady_timer closeTimer_;
+    DelayQueue lagIn_, lagOut_;
+    asio::steady_timer lagInTimer_, lagOutTimer_;
+    std::minstd_rand lagRng_;
     TimePoint lastReceive_;
     uint32_t pingNonce_ = 0;
     MessageRateLimiter rate_;

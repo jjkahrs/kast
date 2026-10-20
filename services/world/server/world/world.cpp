@@ -131,14 +131,19 @@ bool World::transfer(entt::entity e, const Destination& to) {
     grid_.remove(id, cell.cell);
     cell.cell = grid_.cell_of(to.map, pos.x, pos.z);
     grid_.insert(id, cell.cell);
-    if (auto* ms = reg_.try_get<MoveState>(e)) ms->budget = {0, now_}; // in-flight moves from the old map: Correction
+    // Moves in flight from the old place are of the old epoch: dropped without a Correction (MapChange tells the new one).
+    uint32_t epoch = 0;
+    if (auto* ms = reg_.try_get<MoveState>(e)) {
+        ms->budget = {0, now_};
+        epoch = ++ms->epoch;
+    }
     reg_.remove<Moved>(e); // a move this tick must not reach the new neighbours as EntityMove
     // Out of every view at once, both ways: the mover gets MapChange, then a Despawn per old neighbour; they get its
     // Despawn. The next aoi pass sends Spawns for whoever is in range now, on the new map or (a teleport within
     // the map) the same neighbours again at the new position. No Moved: nobody may see an EntityMove to where it went.
     if (const auto* link = reg_.try_get<SessionLink>(e)) {
         reg_.emplace_or_replace<Dirty>(e);
-        send_(link->sessionId, proto::MapChange{to.map, pos, to.heading});
+        send_(link->sessionId, proto::MapChange{to.map, pos, to.heading, epoch});
         for (uint32_t other : reg_.get<Visible>(e).ids) send_(link->sessionId, proto::Despawn{other});
         set_area(reg_, maps_, lua_.bus(), e);
     }
@@ -213,8 +218,8 @@ void World::push_say(entt::entity e, std::string text) {
     if (reg_.valid(e)) reg_.get<PendingSay>(e).texts.push_back(std::move(text));
 }
 
-void World::push_client_event(entt::entity e, std::string name, nlohmann::json data) {
-    if (reg_.valid(e)) reg_.get<PendingClientEvents>(e).events.push_back({std::move(name), std::move(data)});
+void World::push_client_event(entt::entity e, std::string name, nlohmann::json data, uint32_t requestId) {
+    if (reg_.valid(e)) reg_.get<PendingClientEvents>(e).events.push_back({std::move(name), std::move(data), requestId});
 }
 
 void World::push_interact(entt::entity e, uint32_t objectId) {

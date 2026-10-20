@@ -232,18 +232,24 @@ struct AudioSource {
 constexpr float kMaxMoveRateHz = 30.0f; // half the world server's 60 messages/s, leaving room for chat and pings
 
 // The local player: while in the world its Transform position (and yaw as heading) is sent as Move at most
-// sendRateHz times a second, only when it changed; world.entered places it, world.correction snaps it back.
+// sendRateHz times a second, only when it changed; world.entered places it, world.correction moves it to the server's
+// position + the moves still in flight: blended over smoothingMs if that is under smoothingThreshold meters away, else
+// snapped.
 struct NetworkLocalPlayer {
-    float sendRateHz = 10.0f; // 1..kMaxMoveRateHz
+    float sendRateHz = 10.0f;         // 1..kMaxMoveRateHz
+    float smoothingThreshold = 2.0f;  // m, >= 0; 0 = always snap
+    float smoothingMs = 100.0f;       // 0..1000, 0 = snap
 };
 
 // One per scene. templateEntity: the name of the entity cloned (with its subtree) for every remote player the world
 // server spawns; it is taken out of the scene for Play, so it never renders, simulates or reaches scripts.
 // interpolationMs: how long a clone takes to reach each new server position (about the senders' Move interval).
+// maxExtrapolationMs: how long a clone keeps moving along its last velocity once there, waiting for the next one.
 struct NetworkReplication {
     std::string templateEntity;
     float interpolationMs = 100.0f; // 0..1000, 0 = snap
     std::string npcTemplates; // an entity whose children are the NPC templates, by name; empty = none
+    float maxExtrapolationMs = 250.0f; // 0..1000, 0 = hold at each server position
 };
 
 // Added to each clone: the world server's entity id (an unsigned 32-bit id; ids past 2^31 read negative).

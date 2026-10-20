@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <format>
 #include <stdexcept>
+#include <utility>
 
 namespace kast::nettest {
 namespace {
@@ -317,6 +318,11 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
     std::string playing;
     const proto::Vec3 spawn{100, 0, 100};
     proto::Vec3 valid = spawn; // the last accepted Move
+    uint32_t epoch = 0;        // bumped by each rejection; older Moves are dropped silently, like the real server
+    bool holdNext = false;     // Say "hold": the next Correction waits until 3 more Moves arrived (in flight behind it)
+    int heldFor = 0;           // Moves still to come before the held Correction goes out
+    bool rejectNext = false;   // Say "reject": the next Move is rejected whatever its distance (a small error)
+    std::vector<uint8_t> held; // its frame
     for (;;) {
         uint8_t header[proto::kHeaderSize];
         asio::read(socket, asio::buffer(header));
@@ -378,6 +384,7 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
             if (const auto it = find(enter->charId); it != chars.end()) {
                 playing = it->name;
                 valid = spawn;
+                epoch = 0;
                 queue(proto::EnterWorldOk{1, 1, spawn, 0.5f});
                 queue(proto::Spawn{2, "Other", {101, 0, 100}, 0});
                 queue(proto::EntityMove{2, {102, 0, 100}, 1});
@@ -387,10 +394,18 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
             }
         } else if (const auto* move = std::get_if<proto::Move>(&message)) {
             // Like the real server's speed check, coarsely: a jump over 20 m on x/z is rejected.
-            if (std::hypot(move->pos.x - valid.x, move->pos.z - valid.z) > 20.0f)
-                queue(proto::Correction{valid});
-            else
+            if (move->epoch < epoch) {
+                if (heldFor > 0 && --heldFor == 0)
+                    out.insert(out.end(), held.begin(), held.end());
+            } else if (std::exchange(rejectNext, false) || std::hypot(move->pos.x - valid.x, move->pos.z - valid.z) > 20.0f) {
+                queue(proto::Correction{valid, move->seq, ++epoch});
+                if (std::exchange(holdNext, false)) {
+                    held.swap(out);
+                    heldFor = 3;
+                }
+            } else {
                 valid = move->pos;
+            }
         } else if (const auto* say = std::get_if<proto::Say>(&message)) {
             queue(proto::ChatMsg{playing, say->text});
             if (say->text == "bye")
@@ -405,15 +420,26 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
                 queue(proto::ServerEvent{"broken", "{not json"}); // ignored with a warning
                 queue(proto::ServerEvent{"ping", "null"});
             }
+            if (say->text == "hold")
+                holdNext = true;
+            if (say->text == "reject")
+                rejectNext = true;
             if (say->text == "npc")
                 queue(proto::Spawn{3, "Guard", {103, 0, 100}, 0.25f, proto::SpawnKind::npc, "Guard"});
-            if (say->text == "mapchange") { // like a transfer: MapChange, then the old neighbour's Despawn
+            if (say->text == "mapchange") { // like a transfer: MapChange (a new epoch), then the old neighbour's Despawn
                 valid = {300, 0, 310};
-                queue(proto::MapChange{2, valid, 1.5f});
+                queue(proto::MapChange{2, valid, 1.5f, ++epoch});
                 queue(proto::Despawn{3});
             }
         } else if (const auto* event = std::get_if<proto::ClientEvent>(&message)) {
-            queue(proto::ServerEvent{"echo." + event->name, event->json}); // kast.world.send's frame, back as an event
+            if (event->requestId == 0) {
+                queue(proto::ServerEvent{"echo." + event->name, event->json}); // kast.world.send's frame, back as an event
+            } else if (event->name == "test.ok") { // answered twice: the second is ignored
+                queue(proto::Reply{event->requestId, true, event->json});
+                queue(proto::Reply{event->requestId, true, event->json});
+            } else if (event->name == "test.no") {
+                queue(proto::Reply{event->requestId, false, R"("no_way")"});
+            } // any other request: never answered
         } else {
             queue(proto::Disconnect{proto::Code::unexpected_message});
             return flush();

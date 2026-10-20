@@ -4,8 +4,10 @@
 -- exactly what this file allows. All powers are instant, with cooldowns only.
 --
 -- The client asks with kast.world.send("combat.power", {power = <id>, target = <npc entity or nil>}), which arrives
--- here as "client.combat.power" {entity = caster, data}. data is untrusted: the power is refused (the caster alone gets
--- "combat.rejected" {reason}) and nothing changes unless, in this order: the caster is alive ("dead"); power is a power
+-- here as "client.combat.power" {entity = caster, data}; scripts/powers.lua asks with kast.world.request instead, which
+-- adds requestId, answered with kast.reply: ok {power = <id>} once used, or the reason. data is untrusted: the power is
+-- refused (the caster alone gets the reason as the request's rejection, or "combat.rejected" {reason} without a
+-- requestId) and nothing changes unless, in this order: the caster is alive ("dead"); power is a power
 -- id ("unknown_power") of the caster's class ("wrong_class"); for a damage power, target is an NPC ("target") that is
 -- alive ("target_dead"); the power's own cooldown has passed ("cooldown") and so has the global cooldown, GCD seconds
 -- that any power starts for all of the caster's powers ("gcd"); a damage power's target is on the caster's map within
@@ -216,7 +218,8 @@ local function startFight(npc, player)
     kast.fsm.change(npc, "combat")
 end
 
-local function reject(e, reason)
+local function reject(e, reason, requestId)
+    if requestId then return kast.reply(e, requestId, false, reason) end
     kast.sendTo(e, "combat.rejected", {reason = reason})
 end
 
@@ -258,22 +261,25 @@ end
 local function onPower(event)
     local caster = event.entity
     local data = type(event.data) == "table" and event.data or {}
-    if not alive(caster) then return reject(caster, "dead") end
+    local request = event.requestId
+    local function refuse(reason) return reject(caster, reason, request) end
+    if not alive(caster) then return refuse("dead") end
     local power = type(data.power) == "string" and POWER[data.power]
-    if not power then return reject(caster, "unknown_power") end
+    if not power then return refuse("unknown_power") end
     if not exists(caster, "Class") or kast.get(caster, "Class").id ~= CLASS_OF[power.id] then
-        return reject(caster, "wrong_class")
+        return refuse("wrong_class")
     end
     local target = data.target
     local problem = power.damage and targetProblem(target)
-    if problem then return reject(caster, problem) end
+    if problem then return refuse(problem) end
     local ready = readyAt[caster] or {}
-    if (ready[power.id] or 0) > now then return reject(caster, "cooldown") end
-    if (gcdUntil[caster] or 0) > now then return reject(caster, "gcd") end
+    if (ready[power.id] or 0) > now then return refuse("cooldown") end
+    if (gcdUntil[caster] or 0) > now then return refuse("gcd") end
     problem = power.damage and reachProblem(caster, target, power)
-    if problem then return reject(caster, problem) end
+    if problem then return refuse(problem) end
     ready[power.id] = now + power.cooldown
     readyAt[caster], gcdUntil[caster] = ready, now + GCD
+    if request then kast.reply(caster, request, true, {power = power.id}) end -- before its effects' events
 
     local used = {caster = caster, casterName = name(caster), power = power.id, name = power.name, effect = power.effect}
     if power.damage then

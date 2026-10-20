@@ -2,10 +2,15 @@
 -- server (systems/combat.lua) decides everything. On entering it sends "class.powers" {class, gcd, powers = {{id, name,
 -- key, cooldown, effect}, ...}}: the bar shows exactly those, one button per key, "<key> <name>".
 -- Key 1-3, or a click on a bar button (its data-event, "combat.power" {id = "power_<key>"}, which tests publish too),
--- asks kast.world.send("combat.power", {power = <id>, target = <the target of scripts/combat.lua's "target.selected">}).
+-- asks kast.world.request("combat.power", {power = <id>, target = <the target of scripts/combat.lua's
+-- "target.selected">}), predicted: the power's cooldown and the global cooldown start at once, and "power.predicted"
+-- {power, cooldown = seconds left} goes on the bus (scripts/player.lua plays the attack clip). The server refusing it (or not answering in 2 s:
+-- "timeout") rolls the cooldowns back (those this press started and nothing since replaced) and publishes
+-- "power.rejected" {power, reason, predicted, cooldown} (scripts/player.lua stops the clip, scripts/combat.lua logs the
+-- reason). A press while the power still cools down here predicts nothing: the server's refusal is only logged.
 -- Keys typed into a GUI text field do nothing, and neither does anything while the local player is dead. A button
--- greys (class "power cooling") and counts down the seconds left while its own cooldown or the global cooldown runs;
--- both start when the server confirms the power (its "combat.power" with caster = me), so a refused one starts nothing.
+-- greys (class "power cooling") and counts down the seconds left while its own cooldown or the global cooldown runs.
+-- The server's "combat.power" with caster = me starts them too unless already running (a press the client gave up on).
 -- Effects, from the server's "combat.power" for every player in view (the local one too), each a primitive like
 -- scripts/combat.lua's target marker: "bolt" a small sphere flying from the caster to the target in BOLT_SECONDS;
 -- "nova" a frost ring of the power's radius around the caster and "heal" a glow on it, both for FLASH_SECONDS;
@@ -46,10 +51,8 @@ local function pressed(name, down)
     return down and not was
 end
 
-local function use(key)
-    local power = powers[key]
-    if power and not dead then kast.world.send("combat.power", {power = power.id, target = target}) end
-end
+-- Seconds until power may be used again: its own cooldown or the global one, whichever ends last.
+local function cooldownLeft(power) return math.max((readyAt[power.id] or 0) - now, gcdUntil - now, 0) end
 
 -- The bar: name and key per button, greyed with the seconds left while cooling down. Writes only what changed.
 local function refreshBar()
@@ -57,7 +60,7 @@ local function refreshBar()
         local power = powers[key]
         local text, cooling = "", false
         if power then
-            local left = math.max((readyAt[power.id] or 0) - now, gcdUntil - now)
+            local left = cooldownLeft(power)
             cooling = left > 0
             text = cooling and string.format("%d %s (%d)", key, power.name, math.ceil(left))
                 or string.format("%d %s", key, power.name)
@@ -68,6 +71,31 @@ local function refreshBar()
             kast.gui.setAttribute("power_" .. key, "class", cooling and "power cooling" or "power")
         end
     end
+end
+
+-- Asks for the power on key; predicted unless it is still cooling down here (the server then says why not).
+local function use(key)
+    local power = powers[key]
+    if not power or dead then return end
+    local predicted = cooldownLeft(power) <= 0
+    local before, mine = {ready = readyAt[power.id], gcd = gcdUntil}, {}
+    kast.world.request("combat.power", {power = power.id, target = target}, {
+        predict = predicted and function()
+            mine.ready, mine.gcd = now + power.cooldown, now + gcd
+            readyAt[power.id], gcdUntil = mine.ready, mine.gcd
+            refreshBar()
+            kast.publish("power.predicted", {power = power.id, cooldown = cooldownLeft(power)})
+        end or nil,
+        rejected = function(reason)
+            if predicted then -- what this press started, unless something since replaced it
+                if readyAt[power.id] == mine.ready then readyAt[power.id] = before.ready end
+                if gcdUntil == mine.gcd then gcdUntil = before.gcd end
+                refreshBar()
+            end
+            kast.publish("power.rejected", {power = power.id, reason = reason, predicted = predicted,
+                                            cooldown = cooldownLeft(power)})
+        end,
+    })
 end
 
 local function entityOf(id) return id == me and player or (entities[id] and entities[id].entity) end
@@ -184,11 +212,13 @@ return {
             refreshBar()
         end, {replay = true}) -- replay: sent once on entering, maybe before this zone's scene loaded
         kast.subscribe("server.combat.power", function(e)
-            if e.caster == me then
+            if e.caster == me then -- predicted already, unless use() gave up on it (timeout)
                 for _, power in pairs(powers) do
-                    if power.id == e.power then readyAt[power.id] = now + power.cooldown end
+                    if power.id == e.power and (readyAt[power.id] or 0) <= now then
+                        readyAt[power.id] = now + power.cooldown
+                    end
                 end
-                gcdUntil = now + gcd
+                if gcdUntil <= now then gcdUntil = now + gcd end
             end
             show(e)
             logPower(e)

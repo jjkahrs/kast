@@ -27,6 +27,8 @@ public:
     // Hello + Auth; true once AuthOk arrives (stored in authOk).
     asio::awaitable<bool> login(const std::string& token, uint16_t version = proto::kProtocolVersion);
 
+    // A Move goes out with the next seq and the epoch of the last Correction / MapChange (whatever the caller put in
+    // them), like the engine's client.
     void send(const proto::Message& m);
     void send_raw(std::vector<uint8_t> bytes);
     void close();
@@ -43,6 +45,8 @@ public:
     std::optional<proto::Code> disconnectReason;
     std::optional<proto::AuthOk> authOk;
     std::string lastError;
+    uint32_t moveSeq = 0;   // the last Move's seq
+    uint32_t moveEpoch = 0; // from the last Correction or MapChange (the reader loop takes it as soon as it arrives)
 
     std::function<void(const proto::Message&)> onMessage; // when set, messages bypass the queue
     std::function<void(const proto::Message&)> onSkipped;

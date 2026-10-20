@@ -28,6 +28,9 @@ int main() {
     }
     const Config& cfg = loaded.config;
     log::set_level(cfg.logLevel);
+    if (cfg.simLatencyMs || cfg.simJitterMs)
+        log::warn("LAG SIMULATOR ON: every message is delayed both ways; never run this in production",
+                  {{"SIM_LATENCY_MS", cfg.simLatencyMs}, {"SIM_JITTER_MS", cfg.simJitterMs}});
 
     // Maps, then the Lua component definitions: a broken one stops the start before anything else happens.
     std::vector<std::string> mapErrors;

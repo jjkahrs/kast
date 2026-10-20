@@ -32,6 +32,8 @@ local REJECTED = {
     unknown_power = "Unknown power",
     wrong_class = "Your class can't use that",
     dead = "You are dead",
+    timeout = "No answer from the server",
+    disconnected = "Disconnected",
 }
 
 local me                -- the local player's server entity id
@@ -234,6 +236,7 @@ return {
             log(e.entity == me and "You revive" or e.name .. " revives")
         end)
         kast.subscribe("server.combat.rejected", function(e) log("* " .. (REJECTED[e.reason] or e.reason)) end)
+        kast.subscribe("power.rejected", function(e) log("* " .. (REJECTED[e.reason] or e.reason)) end) -- predicted
     end,
 
     update = function(dt)
