@@ -1,6 +1,9 @@
 #include "gui_render.h"
 
 #include "fs_gui.bin.h"
+#include "fs_gui_blur.bin.h"
+#include "fs_gui_gradient.bin.h"
+#include "fs_gui_matrix.bin.h"
 #include "files.h"
 #include "gui.h"
 #include "log.h"
@@ -12,6 +15,7 @@
 #include <bx/math.h>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <format>
 
@@ -27,6 +31,18 @@ struct Geometry {
 Rml::TextureHandle toRml(bgfx::TextureHandle texture) { return static_cast<Rml::TextureHandle>(texture.idx) + 1; }
 bgfx::TextureHandle toBgfx(Rml::TextureHandle texture) { return {static_cast<uint16_t>(texture - 1)}; }
 
+constexpr uint64_t kLayerFlags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_POINT;
+constexpr uint32_t kLinearClamp = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP; // for resampling a layer
+constexpr uint64_t kReplaceState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
+constexpr uint64_t kBlendState =
+    kReplaceState | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
+
+bgfx::ProgramHandle guiProgram(const uint8_t* fs, uint32_t fsSize)
+{
+    return bgfx::createProgram(bgfx::createShader(bgfx::makeRef(vs_gui, sizeof(vs_gui))),
+                               bgfx::createShader(bgfx::makeRef(fs, fsSize)), true);
+}
+
 } // namespace
 
 void GuiRenderer::init()
@@ -36,39 +52,101 @@ void GuiRenderer::init()
         .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
         .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
         .end(); // Rml::Vertex order
-    program_ = bgfx::createProgram(bgfx::createShader(bgfx::makeRef(vs_gui, sizeof(vs_gui))),
-                                   bgfx::createShader(bgfx::makeRef(fs_gui, sizeof(fs_gui))), true);
+    program_ = guiProgram(fs_gui, sizeof(fs_gui));
+    matrixProgram_ = guiProgram(fs_gui_matrix, sizeof(fs_gui_matrix));
+    blurProgram_ = guiProgram(fs_gui_blur, sizeof(fs_gui_blur));
+    gradientProgram_ = guiProgram(fs_gui_gradient, sizeof(fs_gui_gradient));
     sampler_ = bgfx::createUniform("s_tex", bgfx::UniformType::Sampler);
+    matrix_ = bgfx::createUniform("u_matrix", bgfx::UniformType::Mat4);
+    blur_ = bgfx::createUniform("u_blur", bgfx::UniformType::Vec4);
+    weights_ = bgfx::createUniform("u_weights", bgfx::UniformType::Vec4, 2);
+    gradient_ = bgfx::createUniform("u_gradient", bgfx::UniformType::Vec4);
+    shape_ = bgfx::createUniform("u_shape", bgfx::UniformType::Vec4);
+    stopColor_ = bgfx::createUniform("u_stopColor", bgfx::UniformType::Vec4, kMaxGradientStops);
+    stopPos_ = bgfx::createUniform("u_stopPos", bgfx::UniformType::Vec4, kMaxGradientStops);
     const uint32_t white = 0xffffffff;
     white_ = bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::RGBA8, 0, bgfx::copy(&white, sizeof(white)));
 }
 
 void GuiRenderer::shutdown()
 {
-    if (bgfx::isValid(program_))
-        bgfx::destroy(program_);
-    if (bgfx::isValid(sampler_))
-        bgfx::destroy(sampler_);
+    destroyLayers();
+    for (bgfx::ProgramHandle* program : {&program_, &matrixProgram_, &blurProgram_, &gradientProgram_}) {
+        if (bgfx::isValid(*program))
+            bgfx::destroy(*program);
+        *program = BGFX_INVALID_HANDLE;
+    }
+    for (bgfx::UniformHandle* uniform :
+         {&sampler_, &matrix_, &blur_, &weights_, &gradient_, &shape_, &stopColor_, &stopPos_}) {
+        if (bgfx::isValid(*uniform))
+            bgfx::destroy(*uniform);
+        *uniform = BGFX_INVALID_HANDLE;
+    }
     if (bgfx::isValid(white_))
         bgfx::destroy(white_);
-    program_ = BGFX_INVALID_HANDLE;
-    sampler_ = BGFX_INVALID_HANDLE;
     white_ = BGFX_INVALID_HANDLE;
 }
 
 void GuiRenderer::begin(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, int width, int height)
 {
-    view_ = view;
+    if (width != width_ || height != height_)
+        destroyLayers(); // the pool is the GUI's size; recreated as layers are pushed
+    firstView_ = view_ = view;
+    base_ = frameBuffer;
+    width_ = static_cast<uint16_t>(width);
+    height_ = static_cast<uint16_t>(height);
+    top_ = viewLayer_ = 0;
     scissor_ = false;
     transform_.reset();
-    float proj[16];
-    bx::mtxOrtho(proj, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 0.0f, 1000.0f, 0.0f,
+    bx::mtxOrtho(proj_, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 0.0f, 1000.0f, 0.0f,
                  bgfx::getCaps()->homogeneousDepth);
+    setView(view, frameBuffer);
+}
+
+void GuiRenderer::setView(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer)
+{
     bgfx::setViewFrameBuffer(view, frameBuffer);
-    bgfx::setViewRect(view, 0, 0, static_cast<uint16_t>(width), static_cast<uint16_t>(height));
-    bgfx::setViewTransform(view, nullptr, proj);
+    bgfx::setViewRect(view, 0, 0, width_, height_);
+    bgfx::setViewTransform(view, nullptr, proj_);
     bgfx::setViewMode(view, bgfx::ViewMode::Sequential);
     bgfx::touch(view);
+}
+
+bool GuiRenderer::target(Rml::LayerHandle layer) { return layer == viewLayer_ || nextView(layer, false); }
+
+bool GuiRenderer::nextView(Rml::LayerHandle layer, bool clear)
+{
+    if (view_ + 1 >= firstView_ + gui::kViews) {
+        // ponytail: a fixed view budget per frame; past it, draws that need another view are dropped. Raise
+        // gui::kViews (the hosts reserve it) if documents stack that many effects.
+        if (!viewsWarned_)
+            log::warn(std::format("GUI effects need more than {} bgfx views in a frame; some are not drawn", gui::kViews));
+        viewsWarned_ = true;
+        return false;
+    }
+    ++view_;
+    viewLayer_ = layer;
+    setView(view_, frameBuffer(layer));
+    bgfx::setViewName(view_, layer ? "GUI layer" : "GUI");
+    bgfx::setViewClear(view_, clear ? BGFX_CLEAR_COLOR : BGFX_CLEAR_NONE, 0); // views keep their clear across frames
+    return true;
+}
+
+bgfx::FrameBufferHandle GuiRenderer::frameBuffer(Rml::LayerHandle layer) const
+{
+    return layer == 0 ? base_ : layers_[layer - 1];
+}
+
+void GuiRenderer::destroyLayers()
+{
+    for (bgfx::FrameBufferHandle layer : layers_) {
+        bgfx::destroy(bgfx::getTexture(layer)); // its color; the stencil is shared
+        bgfx::destroy(layer);
+    }
+    layers_.clear();
+    if (bgfx::isValid(stencil_))
+        bgfx::destroy(stencil_);
+    stencil_ = BGFX_INVALID_HANDLE;
 }
 
 Rml::CompiledGeometryHandle GuiRenderer::CompileGeometry(Rml::Span<const Rml::Vertex> vertices,
@@ -84,10 +162,16 @@ Rml::CompiledGeometryHandle GuiRenderer::CompileGeometry(Rml::Span<const Rml::Ve
     return reinterpret_cast<Rml::CompiledGeometryHandle>(geometry);
 }
 
-void GuiRenderer::RenderGeometry(Rml::CompiledGeometryHandle handle, Rml::Vector2f translation, Rml::TextureHandle texture)
+void GuiRenderer::RenderGeometry(Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation, Rml::TextureHandle texture)
+{
+    submit(geometry, translation, texture ? toBgfx(texture) : white_, program_, kBlendState, clipTest());
+}
+
+void GuiRenderer::submit(Rml::CompiledGeometryHandle handle, Rml::Vector2f translation, bgfx::TextureHandle texture,
+                         bgfx::ProgramHandle program, uint64_t state, uint32_t stencil)
 {
     const auto* geometry = reinterpret_cast<const Geometry*>(handle);
-    if (!geometry)
+    if (!geometry || !target(top_))
         return;
     float model[16];
     bx::mtxTranslate(model, translation.x, translation.y, 0.0f);
@@ -99,16 +183,32 @@ void GuiRenderer::RenderGeometry(Rml::CompiledGeometryHandle handle, Rml::Vector
     bgfx::setTransform(model);
     bgfx::setVertexBuffer(0, geometry->vertices);
     bgfx::setIndexBuffer(geometry->indices);
-    bgfx::setTexture(0, sampler_, texture ? toBgfx(texture) : white_);
+    bgfx::setTexture(0, sampler_, texture);
+    applyScissor();
+    bgfx::setState(state);
+    bgfx::setStencil(stencil);
+    bgfx::submit(view_, program);
+}
+
+void GuiRenderer::applyScissor()
+{
     if (scissor_) { // clamped at the top-left corner: a region off-screen there loses the off-screen part
         const int x0 = std::max(scissorRegion_.Left(), 0), y0 = std::max(scissorRegion_.Top(), 0);
         const int x1 = std::max(scissorRegion_.Right(), x0), y1 = std::max(scissorRegion_.Bottom(), y0);
         bgfx::setScissor(static_cast<uint16_t>(x0), static_cast<uint16_t>(y0), static_cast<uint16_t>(x1 - x0),
                          static_cast<uint16_t>(y1 - y0));
     }
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA));
-    bgfx::submit(view_, program_);
+}
+
+void GuiRenderer::applyScissor(float scale)
+{
+    const Rml::Rectanglei region = scissor_ ? scissorRegion_ : Rml::Rectanglei::FromSize({width_, height_});
+    const int x0 = std::clamp(static_cast<int>(std::floor(region.Left() * scale)), 0, int(width_));
+    const int y0 = std::clamp(static_cast<int>(std::floor(region.Top() * scale)), 0, int(height_));
+    const int x1 = std::clamp(static_cast<int>(std::ceil(region.Right() * scale)), x0, int(width_));
+    const int y1 = std::clamp(static_cast<int>(std::ceil(region.Bottom() * scale)), y0, int(height_));
+    bgfx::setScissor(static_cast<uint16_t>(x0), static_cast<uint16_t>(y0), static_cast<uint16_t>(x1 - x0),
+                     static_cast<uint16_t>(y1 - y0));
 }
 
 void GuiRenderer::ReleaseGeometry(Rml::CompiledGeometryHandle handle)
@@ -165,6 +265,166 @@ void GuiRenderer::SetTransform(const Rml::Matrix4f* transform)
         transform_ = *transform;
     else
         transform_.reset();
+}
+
+void GuiRenderer::ensureLayer(Rml::LayerHandle layer)
+{
+    if (!bgfx::isValid(stencil_))
+        stencil_ =
+            bgfx::createTexture2D(width_, height_, false, 1, bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT_WRITE_ONLY);
+    while (layers_.size() < static_cast<size_t>(layer)) {
+        const bgfx::TextureHandle textures[] = {
+            bgfx::createTexture2D(width_, height_, false, 1, bgfx::TextureFormat::RGBA8, kLayerFlags), stencil_};
+        layers_.push_back(bgfx::createFrameBuffer(2, textures, false));
+        log::info(std::format("GUI layer framebuffer {} created ({}x{})", layers_.size(), width_, height_));
+    }
+}
+
+Rml::LayerHandle GuiRenderer::PushLayer()
+{
+    ensureLayer(++top_);
+    nextView(top_, true); // RmlUi expects it transparent: the whole layer is cleared, not just the scissor region
+    return top_;
+}
+
+void GuiRenderer::CompositeLayers(Rml::LayerHandle source, Rml::LayerHandle destination, Rml::BlendMode blendMode,
+                                  Rml::Span<const Rml::CompiledFilterHandle> filters)
+{
+    // ponytail: source == destination (RmlUi 6.2 never asks for it) would read the target it draws into; copy via a
+    // spare layer if needed.
+    if (source == destination)
+        return;
+    if (source == 0 && !bgfx::isValid(base_)) {
+        // backdrop-filter reads the base layer, but the backbuffer can't be sampled: drawn without the effect, and
+        // the host gives later frames a readable target (gui::wantsReadableTarget).
+        wantsReadable_ = true;
+        return;
+    }
+    Image image{source, 1.0f};
+    for (Rml::CompiledFilterHandle filter : filters)
+        if (!applyFilter(*reinterpret_cast<const GuiFilter*>(filter), image))
+            return;
+    if (!target(destination))
+        return;
+    applyScissor();
+    bgfx::setState(blendMode == Rml::BlendMode::Replace ? kReplaceState : kBlendState);
+    drawImage(image, 1.0f, program_, {}, clipTest());
+}
+
+void GuiRenderer::drawImage(Image image, float toScale, bgfx::ProgramHandle program, Rml::Vector2f offset,
+                            uint32_t stencil)
+{
+    if (bgfx::getAvailTransientVertexBuffer(3, layout_) < 3)
+        return;
+    bgfx::TransientVertexBuffer vertices;
+    bgfx::allocTransientVertexBuffer(&vertices, 3, layout_);
+    // One triangle past the target's corners in GUI pixels, drawn at toScale; each pixel samples image's texel under
+    // it (SetTransform is for geometry only).
+    const float w = width_, h = height_;
+    const bool bottomLeft = bgfx::getCaps()->originBottomLeft;
+    const auto uv = [&](float x, float y) {
+        const float v = (y - offset.y) * image.scale / h;
+        return Rml::Vector2f((x - offset.x) * image.scale / w, bottomLeft ? 1.0f - v : v);
+    };
+    const Rml::ColourbPremultiplied white(255, 255, 255, 255);
+    const Rml::Vertex triangle[3] = {{{0.0f, 0.0f}, white, uv(0.0f, 0.0f)},
+                                     {{2.0f * w, 0.0f}, white, uv(2.0f * w, 0.0f)},
+                                     {{0.0f, 2.0f * h}, white, uv(0.0f, 2.0f * h)}};
+    bx::memCopy(vertices.data, triangle, sizeof(triangle));
+    float model[16];
+    bx::mtxScale(model, toScale, toScale, 1.0f);
+    bgfx::setTransform(model);
+    bgfx::setVertexBuffer(0, &vertices);
+    // The layer's own point sampling for a 1:1 copy, bilinear when scaling.
+    bgfx::setTexture(0, sampler_, bgfx::getTexture(frameBuffer(image.layer)),
+                     image.scale == toScale ? UINT32_MAX : kLinearClamp);
+    bgfx::setStencil(stencil);
+    bgfx::submit(view_, program);
+}
+
+uint32_t GuiRenderer::clipTest() const
+{
+    if (!clipMask_ || !maskInLayer_ || viewLayer_ == 0)
+        return BGFX_STENCIL_NONE;
+    return BGFX_STENCIL_TEST_EQUAL | BGFX_STENCIL_FUNC_REF(clipRef_) | BGFX_STENCIL_FUNC_RMASK(0xff) |
+           BGFX_STENCIL_OP_FAIL_S_KEEP | BGFX_STENCIL_OP_FAIL_Z_KEEP | BGFX_STENCIL_OP_PASS_Z_KEEP;
+}
+
+void GuiRenderer::EnableClipMask(bool enable) { clipMask_ = enable; }
+
+void GuiRenderer::RenderToClipMask(Rml::ClipMaskOperation operation, Rml::CompiledGeometryHandle geometry,
+                                   Rml::Vector2f translation)
+{
+    maskInLayer_ = top_ != 0;
+    if (!maskInLayer_ || !target(top_))
+        return;
+    // As RmlUi's GL3 backend: Set / SetInverse clear the stencil to outside / inside and draw the geometry as the
+    // other; Intersect counts up where the geometry is, and only the highest count is inside.
+    constexpr uint32_t kWrite = BGFX_STENCIL_TEST_ALWAYS | BGFX_STENCIL_FUNC_RMASK(0xff) | BGFX_STENCIL_OP_FAIL_S_KEEP |
+                                BGFX_STENCIL_OP_FAIL_Z_KEEP;
+    uint32_t write = kWrite | BGFX_STENCIL_OP_PASS_Z_INCR;
+    if (operation == Rml::ClipMaskOperation::Intersect) {
+        ++clipRef_;
+    } else {
+        const bool inverse = operation == Rml::ClipMaskOperation::SetInverse;
+        clipRef_ = 1;
+        bgfx::setState(0); // no color (the spare layer is just some texture not drawn into): the whole stencil
+        drawImage({spare({}), 1.0f}, 1.0f, program_, {},
+                  kWrite | BGFX_STENCIL_FUNC_REF(inverse ? 1 : 0) | BGFX_STENCIL_OP_PASS_Z_REPLACE);
+        write = kWrite | BGFX_STENCIL_FUNC_REF(inverse ? 0 : 1) | BGFX_STENCIL_OP_PASS_Z_REPLACE;
+    }
+    submit(geometry, translation, white_, program_, 0, write);
+}
+
+void GuiRenderer::present(bgfx::ViewId view, bgfx::TextureHandle texture, int width, int height)
+{
+    if (bgfx::getAvailTransientVertexBuffer(3, layout_) < 3)
+        return;
+    bgfx::TransientVertexBuffer vertices;
+    bgfx::allocTransientVertexBuffer(&vertices, 3, layout_);
+    const bool bottomLeft = bgfx::getCaps()->originBottomLeft;
+    const float top = bottomLeft ? 1.0f : 0.0f, bottom = bottomLeft ? -1.0f : 2.0f; // v at y = 0 and y = 2h
+    const float w = static_cast<float>(width), h = static_cast<float>(height);
+    const Rml::ColourbPremultiplied white(255, 255, 255, 255);
+    const Rml::Vertex triangle[3] = {
+        {{0.0f, 0.0f}, white, {0.0f, top}}, {{2.0f * w, 0.0f}, white, {2.0f, top}}, {{0.0f, 2.0f * h}, white, {0.0f, bottom}}};
+    bx::memCopy(vertices.data, triangle, sizeof(triangle));
+    float proj[16];
+    bx::mtxOrtho(proj, 0.0f, w, h, 0.0f, 0.0f, 1000.0f, 0.0f, bgfx::getCaps()->homogeneousDepth);
+    bgfx::setViewName(view, "GUI present");
+    bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
+    bgfx::setViewRect(view, 0, 0, static_cast<uint16_t>(width), static_cast<uint16_t>(height));
+    bgfx::setViewTransform(view, nullptr, proj);
+    bgfx::setVertexBuffer(0, &vertices);
+    bgfx::setTexture(0, sampler_, texture);
+    bgfx::setState(kReplaceState);
+    bgfx::submit(view, program_);
+}
+
+void GuiRenderer::PopLayer()
+{
+    if (top_ > 0)
+        --top_;
+}
+
+Rml::TextureHandle GuiRenderer::SaveLayerAsTexture()
+{
+    // The top layer inside the scissor region (RmlUi sets one first). Not the base layer: it may be the backbuffer.
+    const int x0 = std::clamp(scissorRegion_.Left(), 0, int(width_));
+    const int y0 = std::clamp(scissorRegion_.Top(), 0, int(height_));
+    const int x1 = std::clamp(scissorRegion_.Right(), x0, int(width_));
+    const int y1 = std::clamp(scissorRegion_.Bottom(), y0, int(height_));
+    // A view of its own: bgfx blits at the start of a view, so the copy comes after the layer's draws so far.
+    if (top_ == 0 || x1 == x0 || y1 == y0 || !nextView(top_, false))
+        return 0;
+    const bgfx::TextureHandle texture =
+        bgfx::createTexture2D(static_cast<uint16_t>(x1 - x0), static_cast<uint16_t>(y1 - y0), false, 1,
+                              bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+    if (!bgfx::isValid(texture))
+        return 0;
+    bgfx::blit(view_, texture, 0, 0, bgfx::getTexture(frameBuffer(top_)), static_cast<uint16_t>(x0),
+               static_cast<uint16_t>(y0), static_cast<uint16_t>(x1 - x0), static_cast<uint16_t>(y1 - y0));
+    return toRml(texture);
 }
 
 } // namespace kast

@@ -74,8 +74,11 @@ button {
     text-align: center;
 }
 
-button:hover {
+/* Glows are box-shadows (docs/engine/game-gui.html, GUI effects). RmlUi keeps a shadow off its element before blurring
+   it, so it is fainter than a browser's: a wide spread and a short blur keep it bright at the edge. */
+button:hover, button.power:hover {
     background-color: #ffcc00;
+    box-shadow: 0 0 8px 6px #ffcc00;
 }
 
 button:active {
@@ -107,6 +110,7 @@ button.class_button:hover {
 button.class_button.selected {
     background-color: #ffcc00;
     color: #000000;
+    box-shadow: 0 0 6px 4px #ffcc00;
 }
 
 .status {
@@ -177,7 +181,7 @@ button.class_button.selected {
     padding: 3px 12px 6px 12px;
 }
 
-/* The class's powers (scripts/powers.lua): bottom centre; a button greys while it cools down. */
+/* The class's powers (scripts/powers.lua): bottom centre; a ready button glows, it greys while it cools down. */
 #action_bar {
     position: absolute;
     left: 50%;
@@ -195,11 +199,13 @@ button.power {
     margin: 0 2px;
     padding: 10px 0;
     font-size: 15px;
+    box-shadow: 0 0 6px 3px #ffaa00;
 }
 
 button.power.cooling {
     background-color: #454545;
     color: #a0a0a0;
+    box-shadow: none;
 }
 
 /* Narrow views (the editor's Game view): centred, the bar would cover the chat box; start it right of the chat. */

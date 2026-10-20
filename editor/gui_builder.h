@@ -33,6 +33,7 @@ public:
     static constexpr const char* kStyleWindow = "###GUI Style";
     static constexpr const char* kPreviewWindow = "###GUI Preview";
 
+    // Draws the preview in previewView .. previewView + kast::gui::kViews - 1.
     explicit GuiBuilder(bgfx::ViewId previewView) : target_(previewView, "GUI Preview") {}
     void shutdown();
 

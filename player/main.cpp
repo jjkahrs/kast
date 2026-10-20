@@ -32,7 +32,8 @@ namespace {
 
 constexpr bgfx::ViewId kShadowViews = 0; // the scene's shadow maps (Renderer::kShadowViews)
 constexpr bgfx::ViewId kGameView = kShadowViews + kast::Renderer::kShadowViews; // then its post passes
-constexpr bgfx::ViewId kGuiView = kGameView + kast::PostProcess::kViews; // the scene's game GUIs, over the scene
+constexpr bgfx::ViewId kGuiView = kGameView + kast::PostProcess::kViews; // the scene's game GUIs (kast::gui::kViews), over the scene
+constexpr bgfx::ViewId kPresentView = kGuiView + kast::gui::kViews; // the readable target onto the screen, if used
 constexpr uint32_t kClearColor = 0x202020ff;
 constexpr int kScreenshotTimeoutFrames = 30;
 constexpr const char* kPakFileName = "game.pak";
@@ -176,6 +177,12 @@ int main(int argc, char** argv)
     double gpuMs = 0.0; // --gpu-stats: summed after the warmup
     int gpuFrames = 0;
     kast::SceneGui gui("game");
+    // Scene and GUI draw on the backbuffer until a GUI reads what is under it (backdrop-filter), then into this
+    // sampleable target, copied onto the screen after the GUI. ponytail: switched the frame after the first read, so
+    // that one frame draws the backdrop without its effect.
+    bgfx::FrameBufferHandle readable = BGFX_INVALID_HANDLE;
+    int readableWidth = 0;
+    int readableHeight = 0;
     SDL_Window* window = nullptr;
     uint64_t lastTicks = 0;
     int frame = 0;
@@ -232,7 +239,18 @@ int main(int argc, char** argv)
                                  bgfx::getCaps()->homogeneousDepth, view, proj);
             renderer.render(scene, project.root, post.sceneView(), view, proj, kShadowViews);
         }
-        post.apply(scene.postProcessing, true, BGFX_INVALID_HANDLE);
+        if (kast::gui::wantsReadableTarget() && width > 0 && height > 0 &&
+            (!bgfx::isValid(readable) || width != readableWidth || height != readableHeight)) {
+            if (bgfx::isValid(readable))
+                bgfx::destroy(readable);
+            readable = bgfx::createFrameBuffer(static_cast<uint16_t>(width), static_cast<uint16_t>(height),
+                                               bgfx::TextureFormat::BGRA8,
+                                               BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+            readableWidth = width;
+            readableHeight = height;
+            kast::log::info(std::format("Drawing through a readable {}x{} framebuffer (a GUI reads its backdrop)", width, height));
+        }
+        post.apply(scene.postProcessing, true, readable);
         if (const bgfx::Stats* stats = bgfx::getStats(); options->gpuStats && frame >= kGpuStatsWarmupFrames) {
             // The last frame's views (the profiler's per-view timers), so the vsync wait isn't counted.
             for (uint16_t i = 0; i < stats->numViews; ++i)
@@ -242,7 +260,9 @@ int main(int argc, char** argv)
         }
         if (width > 0 && height > 0) {
             gui.context().resize(width, height);
-            gui.context().render(kGuiView, BGFX_INVALID_HANDLE);
+            gui.context().render(kGuiView, readable);
+            if (bgfx::isValid(readable))
+                kast::gui::present(kPresentView, bgfx::getTexture(readable), width, height);
         }
 
         // ponytail: same --frames/--screenshot sequence as editor/main.cpp; move into kast::run if a third host needs it.
@@ -274,6 +294,8 @@ int main(int argc, char** argv)
         gui.clear();
         gui.context().release();
         kast::gui::shutdown();
+        if (bgfx::isValid(readable))
+            bgfx::destroy(readable);
         post.shutdown();
         renderer.shutdown();
     };

@@ -16,6 +16,7 @@
 #include <crash_dialogs.h>
 #include <event_bus.h>
 #include <gui_events.h>
+#include <gui_render.h>
 #include <files.h>
 #include <gui.h>
 #include <input.h>
@@ -1144,6 +1145,46 @@ end, update = function() end })");
     check(logged("Item rejected: items/sub/bad.lua: \"quality\" must be one of \"poor\", \"common\", \"uncommon\", \"rare\", \"epic\""),
           "a rejected item file is logged with its path and reason");
     lua.stop();
+}
+
+// GuiRenderer's filter and gradient compilers (CPU only, no bgfx): every effect RmlUi asks for compiles; an unknown
+// or broken one returns 0 (the element draws without it) and warns once however often it is asked for.
+void checkGuiEffectCompile()
+{
+    kast::GuiRenderer renderer;
+    const size_t start = kast::log::lines().size();
+    const auto warnings = [&](std::string_view text) {
+        return std::count_if(kast::log::lines().begin() + static_cast<std::ptrdiff_t>(start), kast::log::lines().end(),
+                             [&](const std::string& line) { return line.find(text) != std::string::npos; });
+    };
+    for (const char* name : {"opacity", "brightness", "contrast", "grayscale", "sepia", "hue-rotate", "saturate", "invert",
+                             "blur", "drop-shadow"}) {
+        const Rml::CompiledFilterHandle filter = renderer.CompileFilter(name, {{"value", Rml::Variant(0.5f)}});
+        check(filter != 0, std::format("GUI filter '{}' compiles", name).c_str());
+        renderer.ReleaseFilter(filter);
+    }
+    const Rml::ColorStopList stops = {{Rml::ColourbPremultiplied(255, 0, 0, 255), Rml::NumericValue(0.0f, Rml::Unit::NUMBER)},
+                                      {Rml::ColourbPremultiplied(0, 0, 255, 255), Rml::NumericValue(1.0f, Rml::Unit::NUMBER)}};
+    for (const char* name : {"linear-gradient", "radial-gradient", "conic-gradient"})
+        for (bool repeating : {false, true}) {
+            const Rml::CompiledShaderHandle shader = renderer.CompileShader(
+                name, {{"color_stop_list", Rml::Variant(stops)}, {"repeating", Rml::Variant(repeating)}});
+            check(shader != 0, std::format("GUI shader '{}' (repeating {}) compiles", name, repeating).c_str());
+            renderer.ReleaseShader(shader);
+        }
+
+    check(renderer.CompileFilter("glitter", {}) == 0 && renderer.CompileFilter("glitter", {}) == 0,
+          "an unknown GUI filter compiles to 0");
+    check(warnings("GUI filter 'glitter' is not supported") == 1, "an unknown GUI filter warns once");
+    check(renderer.CompileFilter("blur", {{"sigma", Rml::Variant(-2.0f)}}) == 0, "a negative blur compiles to 0");
+    check(renderer.CompileFilter("brightness", {{"value", Rml::Variant(std::nanf(""))}}) == 0,
+          "a NaN brightness compiles to 0");
+    check(warnings("GUI filter 'blur' has invalid parameters") == 1 && warnings("GUI filter 'brightness' has invalid") == 1,
+          "bad filter parameters warn");
+    check(renderer.CompileShader("noise", {}) == 0 && warnings("GUI shader 'noise' is not supported") == 1,
+          "an unknown GUI shader compiles to 0 and warns");
+    check(renderer.CompileShader("linear-gradient", {}) == 0 && warnings("GUI linear-gradient has no color stops") == 1,
+          "a gradient without stops compiles to 0 and warns");
 }
 
 void checkLuaGui()
@@ -2890,7 +2931,7 @@ void checkBuildSettings()
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
                                        "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                       "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene",
+                                       "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "ui_effects.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
 
@@ -2911,7 +2952,7 @@ void checkBuildSettings()
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
                                                           "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                                          "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene",
+                                                          "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "ui_effects.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
@@ -8628,6 +8669,7 @@ int main(int argc, char** argv)
     checkPrefabEditMode();
     checkLuaInstantiate();
     checkLuaGui();
+    checkGuiEffectCompile();
     checkLuaItems();
     checkLuaSandbox();
     checkLuaStringMetatable();

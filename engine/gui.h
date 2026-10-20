@@ -19,11 +19,24 @@ class Context;
 // Roboto as its fallback font face. See docs/engine/game-gui.html.
 namespace kast::gui {
 
+// bgfx views one GuiContext::render takes: its view and the kViews - 1 after it. A document draws in the first until it
+// pushes a layer (filter, backdrop-filter, box-shadow); each later switch of render target (layer, composite, saved
+// texture, filter pass) takes the next view, in order. Hosts reserve the whole range for each context they render in a
+// frame. A blurred box-shadow costs about 9 views the frame its texture is made (then it is cached), a blur filter
+// 3 to 5 per frame, a color filter 2.
+constexpr bgfx::ViewId kViews = 80;
+
 // Starts RmlUi; call after bgfx::init. False (logged) if it fails; GUI calls then do nothing.
 bool init();
 // Before bgfx::shutdown. Every Context is gone afterwards.
 void shutdown();
 bool ready();
+// True once a document had to read the backbuffer a GuiContext::render drew on (backdrop-filter reads what is under
+// it; that frame drew it without the effect). A host drawing the GUI on the backbuffer should from then on draw the
+// scene and GUI into a sampleable framebuffer and put it on screen with present().
+bool wantsReadableTarget();
+// Copies texture over the whole backbuffer (width x height pixels) in view.
+void present(bgfx::ViewId view, bgfx::TextureHandle texture, int width, int height);
 // Warnings and errors RmlUi has logged since init: a load or parse went wrong if it grew meanwhile.
 uint64_t problemCount();
 // SDL sends typed text (SDL_EVENT_TEXT_INPUT, what RmlUi text fields insert) only while text input is on: turns it on
@@ -55,7 +68,8 @@ public:
     // Pixel size of the area the documents lay out in.
     void resize(int width, int height);
     // Updates and draws the documents into view on frameBuffer (BGFX_INVALID_HANDLE = backbuffer) at the resize()
-    // size. The view's clear is the caller's.
+    // size, using views view .. view + gui::kViews - 1 (only the first unless a document has effects). The view's
+    // clear is the caller's.
     void render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer);
     // Mouse, wheel, key and text events. Event positions are mapped to the context as (p - origin) * scale.
     void onEvent(const SDL_Event& event, float originX = 0.0f, float originY = 0.0f, float scale = 1.0f);

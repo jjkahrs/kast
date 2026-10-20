@@ -40,7 +40,29 @@ add_test(NAME starter_mmo_player
           "-DWORK_DIR=${KAST_STARTER_OUT}/game.run" -DEXPECT=0 "-DSCREENSHOT=${KAST_STARTER_OUT}/starter_mmo_player.png"
           "-DEXPECT_OUTPUT=Online Services enabled: auth http://localhost:3100, CA file 'certs/world_dev_ca.pem'"
           "-DEXTRA_ARGS=--no-audio-device" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
-set_tests_properties(starter_mmo_login_screenshot starter_mmo_build PROPERTIES FIXTURES_REQUIRED starter_mmo_copied)
+# GUI glows (ui/starter.rcss box-shadows): the mouse held over Log in (50 px below the Game view's centre) glows it, 3 and
+# 11 px left of its edge fading over the card, while Create an account doesn't; the HUD's ready powers glow in the GUI
+# Builder preview (scaled to the panel), above, below and not far off.
+add_test(NAME starter_mmo_login_hover_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${KAST_STARTER_OUT}/starter_mmo_login_hover.png"
+          "-DEXTRA_ARGS=--project ${KAST_STARTER_COPY} --play --no-audio-device --sim-mouse 60,none,0,0,0,0,50" -DFRAMES=120
+          "-DEXPECT_OUTPUT=GUI layer framebuffer 1 created" "-DFORBID_OUTPUT=\\[error\\]|Lua error|\\[warn\\] RmlUi|GUI filter|GUI effects need"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME starter_mmo_login_hover_probe COMMAND kast_self_check --probe-png "${KAST_STARTER_OUT}/starter_mmo_login_hover.png"
+         0.3910,0.4493,255,204,0,6 0.3262,0.4493,160,133,23,14 0.3199,0.4493,76,69,43,12 0.3262,0.5215,49,49,49,4)
+add_test(NAME starter_mmo_hud_glow_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${KAST_STARTER_OUT}/starter_mmo_hud_glow.png"
+          "-DEXTRA_ARGS=--project ${KAST_STARTER_COPY} --open-gui ui/hud.rml --size 1600x1000" -DFRAMES=60
+          "-DEXPECT_OUTPUT=GUI layer framebuffer 1 created" "-DFORBID_OUTPUT=\\[error\\]|\\[warn\\] RmlUi|GUI filter|GUI effects need"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME starter_mmo_hud_glow_probe COMMAND kast_self_check --probe-png "${KAST_STARTER_OUT}/starter_mmo_hud_glow.png"
+         0.4334,0.6285,255,170,0,6 0.4334,0.6185,84,75,51,14 0.4334,0.6405,105,82,37,14 0.4334,0.6485,43,52,64,6)
+set_tests_properties(starter_mmo_login_hover_screenshot PROPERTIES FIXTURES_SETUP starter_mmo_hover_shot)
+set_tests_properties(starter_mmo_login_hover_probe PROPERTIES FIXTURES_REQUIRED starter_mmo_hover_shot)
+set_tests_properties(starter_mmo_hud_glow_screenshot PROPERTIES FIXTURES_SETUP starter_mmo_hud_shot)
+set_tests_properties(starter_mmo_hud_glow_probe PROPERTIES FIXTURES_REQUIRED starter_mmo_hud_shot)
+set_tests_properties(starter_mmo_login_screenshot starter_mmo_build starter_mmo_login_hover_screenshot starter_mmo_hud_glow_screenshot
+                     PROPERTIES FIXTURES_REQUIRED starter_mmo_copied)
 set_tests_properties(starter_mmo_build PROPERTIES FIXTURES_SETUP starter_mmo_built)
 set_tests_properties(starter_mmo_player PROPERTIES FIXTURES_REQUIRED starter_mmo_built)
 
