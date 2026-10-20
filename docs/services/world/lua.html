@@ -194,8 +194,13 @@ gives both the same names, stack sizes and qualities. NPC <a href="npcs.html#npc
 <td><code>false</code>: the server refuses every <code>Move</code> from player <code>e</code> (one <code>Correction</code> back to where it stands per tick) until set <code>true</code> again. Not saved: a character logs in movable. Raises for an NPC (<code>kast.setMovable: entity N is an NPC; only players send moves</code>) and for a non-boolean</td>
 </tr>
 <tr>
-<td><code>kast.log/warn/error(msg)</code></td>
-<td>A server log line <code>&lt;system path&gt;: &lt;msg&gt;</code> at that level</td>
+<td><code>kast.debug/log/warn/error(msg [, fields])</code></td>
+<td>A server log line <code>&lt;system path&gt;: &lt;msg&gt;</code> at debug, info, warn or error (<code>LOG_LEVEL</code> filters them;
+  <code>kast.debug</code> shows only with <code>LOG_LEVEL=debug</code>). <code>fields</code> is a table of plain data, as an event payload, and becomes JSON fields
+  after <code>msg</code>: <code>kast.log("hit", {player = 7, zone = "x"})</code> logs <code>{"ts":…,"level":"info","msg":"systems/a.lua: hit","player":7,"zone":"x"}</code>;
+  nested tables become nested JSON. Raises (at the script's file:line, naming the function, e.g. <code>kast.log: fields must be a table, got 5</code>)
+  when <code>fields</code> is not a table, is a list, holds a function, userdata or thread, contains itself, or uses the reserved keys
+  <code>ts</code>, <code>level</code> or <code>msg</code>. Never log tokens, passwords or chat text</td>
 </tr>
 <tr>
 <td><code>kast.publish(name [, payload])</code></td>

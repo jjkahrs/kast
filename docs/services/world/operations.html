@@ -13,7 +13,17 @@
 <main>
 <h1 id="operations">Operations</h1>
 <ul>
-<li><strong>Logs:</strong> JSON lines on stdout (<code>ts</code>, <code>level</code>, <code>msg</code>, fields).</li>
+<li><strong>Logs:</strong> JSON lines on stdout: <code>ts</code> (UTC, <code>2026-10-15T12:34:56.789Z</code>), <code>level</code>, <code>msg</code>, then the fields.
+  <code>LOG_LEVEL</code> (<code>debug</code>, <code>info</code>, <code>warn</code>, <code>error</code>) drops lower levels before anything is queued.<ul>
+<li><strong>Asynchronous:</strong> the caller (the tick, the DB worker, Lua) only builds the line and queues it; a background thread (Quill) writes stdout.
+  <code>ts</code> is the time of the call, not of the write.</li>
+<li><strong>Never dropped:</strong> each thread's queue grows to 64 MiB; past that the caller blocks until the writer catches up.</li>
+<li><strong>Flushed on exit:</strong> everything queued is written when the process exits normally: after <code>shutdown complete</code>, after SIGINT/SIGTERM
+  (the graceful shutdown, then the normal exit; on Linux a signal before the server is up also flushes), and after a fatal startup error (exit 1).</li>
+<li><strong>Crashes:</strong> SIGSEGV, SIGABRT (<code>abort()</code>), SIGFPE and SIGILL (on Windows also any unhandled SEH exception) write the queued lines,
+  then <code>Received signal</code> and <code>Program terminated unexpectedly</code> lines, before the process dies with the signal.</li>
+</ul>
+</li>
 <li><strong>Tick stats:</strong> every <code>TICK_STATS_INTERVAL_SECONDS</code>, the server logs a <code>tick stats</code> line, and a <code>tick stats total</code> line on shutdown. They contain:<ul>
 <li><code>p50_ms</code>, <code>p99_ms</code> and <code>max_ms</code>: systems time per tick.</li>
 <li><code>lag_p99_ms</code> and <code>lag_max_ms</code>: how late the tick timer fired.</li>

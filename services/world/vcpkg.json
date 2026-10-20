@@ -13,6 +13,7 @@
     "luajit",
     "sol2",
     "stb",
-    "recastnavigation"
+    "recastnavigation",
+    "quill"
   ]
 }

@@ -5,8 +5,10 @@
 #include "auth/jwks_cache.h"
 #include "auth/jwt_verify.h"
 #include "core/config.h"
+#include "core/log.h"
 #include "core/rate_limiter.h"
 #include "core/tick_stats.h"
+#include "core/utc.h"
 #include "net/session.h"
 #include "world/aoi_grid.h"
 #include "world/rules.h"
@@ -21,9 +23,15 @@
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
 
+#include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
+#include <mutex>
 #include <source_location>
+#include <string_view>
+#include <thread>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -639,6 +647,74 @@ void checkJwksCache() {
     check(!JwksCache::parse(R"({"nokeys":1})"), "JWKS without keys rejected");
 }
 
+// --- logging cost (ctest log_bench): stdout goes to the null device so the console is not what is measured ---
+
+// Caller-side ns per line of the pre-Quill path: JSON line built and written with a locked fwrite + fflush.
+double sync_stdout_ns(int n) {
+    std::mutex m;
+    const auto t = std::chrono::steady_clock::now();
+    for (int i = 0; i < n; ++i) {
+        nlohmann::json line = {{"ts", utc_iso8601(std::chrono::system_clock::now())}, {"level", "info"},
+                               {"msg", "bench line"}};
+        line.update(nlohmann::json{{"i", i}, {"zone", "x"}});
+        const std::string out = line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + '\n';
+        std::lock_guard lock(m);
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        std::fflush(stdout);
+    }
+    return std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t).count() / n;
+}
+
+// Caller-side ns per line of log::info (before the backend has written them).
+double log_info_ns(int n) {
+    const auto t = std::chrono::steady_clock::now();
+    for (int i = 0; i < n; ++i) log::info("bench line", {{"i", i}, {"zone", "x"}});
+    const double ns = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t).count() / n;
+    log::flush();
+    return ns;
+}
+
+int log_bench() {
+#ifdef _WIN32
+    FILE* null = nullptr;
+    if (freopen_s(&null, "NUL", "w", stdout) != 0) return 1;
+#else
+    if (!std::freopen("/dev/null", "w", stdout)) return 1;
+#endif
+    constexpr int kLines = 100000;
+    log_info_ns(kLines / 10); // warm up (backend thread, queue allocation)
+    const double before = sync_stdout_ns(kLines);
+    const double after = log_info_ns(kLines);
+    std::fprintf(stderr, "log bench: %d lines, sync stdout %.0f ns/line, log::info %.0f ns/line (caller side)\n",
+                 kLines, before, after);
+#ifdef NDEBUG // unoptimized timings are printed only
+    check(after < before, "log::info costs the caller less than a synchronous stdout write");
+#endif
+
+    // Queue pressure: 4 threads log as fast as they can (several MiB each, faster than stdout); none is dropped.
+    std::atomic<int> seen{0};
+    log::set_test_sink([&seen](const std::string&) { ++seen; });
+    std::vector<std::thread> threads;
+    for (int t = 0; t < 4; ++t)
+        threads.emplace_back([t] { for (int i = 0; i < kLines; ++i) log::info("pressure", {{"t", t}, {"i", i}}); });
+    for (auto& th : threads) th.join();
+    log::flush();
+    log::set_test_sink(nullptr);
+    std::fprintf(stderr, "log bench: %d of %d lines reached the sink\n", seen.load(), 4 * kLines);
+    check(seen == 4 * kLines, "no log line is dropped under queue pressure");
+    std::fprintf(stderr, "%d checks, %d failed\n", g_checks, g_failures);
+    return g_failures == 0 ? 0 : 1;
+}
+
+// A line logged right before a crash must still reach stdout (ctest log_flush; Quill's crash handler flushes).
+int log_crash(std::string_view how) {
+    log::info("before crash", {{"how", how}});
+    if (how == "abort") std::abort();
+    volatile int* null = nullptr;
+    *null = 1; // SIGSEGV / access violation
+    return 0;
+}
+
 } // namespace
 
 int lua_checks(int& checks); // lua_checks.cpp
@@ -660,8 +736,10 @@ static void disable_crash_dialogs() {
 #endif
 }
 
-int main() {
+int main(int argc, char** argv) {
     disable_crash_dialogs();
+    if (argc > 1 && std::string_view(argv[1]) == "--log-bench") return log_bench();
+    if (argc > 2 && std::string_view(argv[1]) == "--log-crash") return log_crash(argv[2]);
     checkCodecRoundTrip();
     checkFrameRejection();
     checkNames();
