@@ -1726,7 +1726,8 @@ string(REPLACE "ui/main_menu.rml" "ui/missing.rml" ui_bad_scene "${ui_scene}")
 file(WRITE "${KAST_HEALTH_PROJECT}/ui_bad_path.scene" "${ui_bad_scene}")
 add_test(NAME ui_play_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_play.png"
-          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui.scene --play" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui.scene --play" "-DFORBID_OUTPUT=GUI layer framebuffer"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME ui_play_hidden_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_play_hidden.png"
           "-DEXTRA_ARGS=--scene ${KAST_HEALTH_PROJECT}/ui_hidden.scene --play"
@@ -1741,6 +1742,25 @@ add_test(NAME ui_bad_path_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_bad_path.png"
           "-DEXTRA_ARGS=--scene ${KAST_HEALTH_PROJECT}/ui_bad_path.scene --play"
           "-DEXPECT_OUTPUT=UI document 'ui/missing.rml' not found" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# GUI layers: the main menu with filter: opacity(0.5) on its panel draws the panel through an offscreen layer (filters
+# are skipped until they are compiled, so it looks as without the filter: probes match ui_play.png's colors); the plain
+# menu (ui_play_screenshot) creates no layer framebuffer.
+file(READ "${KAST_TEST_PROJECT}/ui/main_menu.rml" ui_layer_rml)
+string(REPLACE "main_menu.rcss" "layer_menu.rcss" ui_layer_rml "${ui_layer_rml}")
+file(WRITE "${KAST_HEALTH_PROJECT}/ui/layer_menu.rml" "${ui_layer_rml}")
+file(READ "${KAST_TEST_PROJECT}/ui/main_menu.rcss" ui_layer_rcss)
+file(WRITE "${KAST_HEALTH_PROJECT}/ui/layer_menu.rcss" "${ui_layer_rcss}\n.panel { filter: opacity(0.5); }\n")
+string(REPLACE "ui/main_menu.rml" "ui/layer_menu.rml" ui_layer_scene "${ui_scene}")
+file(WRITE "${KAST_HEALTH_PROJECT}/ui_layer.scene" "${ui_layer_scene}")
+add_test(NAME ui_layer_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_layer.png"
+          "-DEXTRA_ARGS=--scene ${KAST_HEALTH_PROJECT}/ui_layer.scene --play"
+          "-DEXPECT_OUTPUT=GUI layer framebuffer 1 created"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(ui_layer_screenshot PROPERTIES FIXTURES_SETUP ui_layer_shot)
+add_test(NAME ui_layer_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/ui_layer.png"
+         0.3281,0.1806,29,37,53,4 0.4375,0.3708,58,111,176,4 0.3750,0.4861,54,60,74,4 0.2344,0.5556,233,229,224,4)
+set_tests_properties(ui_layer_probe PROPERTIES FIXTURES_REQUIRED ui_layer_shot)
 # A synthetic click on the Start button publishes menu.start (Events panel) and scripts/ui_menu.lua logs it.
 add_test(NAME ui_click_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_click.png"

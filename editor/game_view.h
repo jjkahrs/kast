@@ -11,7 +11,7 @@
 // The Game panel: renders the scene from its active Camera (kast::activeCamera) with its post-processing and no
 // grid, gizmos or other editor overlays, live in edit mode too, and the scene's game GUIs (UIDocument, see
 // scene_gui.h) over it in Play mode, not post-processed. Uses views first .. first + Renderer::kShadowViews +
-// PostProcess::kViews - 1 (shadow maps, then the scene and post passes) and guiView. Comes to the front when Play starts. While it is focused and playing, the host feeds SDL input to
+// PostProcess::kViews - 1 (shadow maps, then the scene and post passes) and guiView .. guiView + gui::kViews - 1. Comes to the front when Play starts. While it is focused and playing, the host feeds SDL input to
 // Document::input and onEvent, and the Scene panel's shortcuts don't apply (it isn't focused).
 class GameViewport {
 public:

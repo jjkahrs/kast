@@ -19,6 +19,11 @@ class Context;
 // Roboto as its fallback font face. See docs/engine/game-gui.html.
 namespace kast::gui {
 
+// bgfx views one GuiContext::render takes: its view and the kViews - 1 after it. A document draws in the first until it
+// pushes a layer (filter, backdrop-filter, box-shadow); each later switch of render target (layer, composite, saved
+// texture) takes the next view, in order. Hosts reserve the whole range for each context they render in a frame.
+constexpr bgfx::ViewId kViews = 32;
+
 // Starts RmlUi; call after bgfx::init. False (logged) if it fails; GUI calls then do nothing.
 bool init();
 // Before bgfx::shutdown. Every Context is gone afterwards.
@@ -55,7 +60,8 @@ public:
     // Pixel size of the area the documents lay out in.
     void resize(int width, int height);
     // Updates and draws the documents into view on frameBuffer (BGFX_INVALID_HANDLE = backbuffer) at the resize()
-    // size. The view's clear is the caller's.
+    // size, using views view .. view + gui::kViews - 1 (only the first unless a document has effects). The view's
+    // clear is the caller's.
     void render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer);
     // Mouse, wheel, key and text events. Event positions are mapped to the context as (p - origin) * scale.
     void onEvent(const SDL_Event& event, float originX = 0.0f, float originY = 0.0f, float scale = 1.0f);

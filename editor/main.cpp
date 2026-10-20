@@ -54,9 +54,10 @@ constexpr float kZoneFarPlane = 6000.0f;
 constexpr bgfx::ViewId kViewportViews = kast::Renderer::kShadowViews + kast::PostProcess::kViews;
 constexpr bgfx::ViewId kSceneView = 1; // then its overlays
 constexpr bgfx::ViewId kGameView = kSceneView + kViewportViews + 1;
-constexpr bgfx::ViewId kGameGuiView = kGameView + kViewportViews; // the game GUIs, over the Game view's scene
-constexpr bgfx::ViewId kGuiPreviewView = kGameGuiView + 1; // the GUI Builder's preview
+constexpr bgfx::ViewId kGameGuiView = kGameView + kViewportViews; // the game GUIs (kast::gui::kViews), over the Game view's scene
+constexpr bgfx::ViewId kGuiPreviewView = kGameGuiView + kast::gui::kViews; // the GUI Builder's preview
 constexpr bgfx::ViewId kImGuiView = 255; // last, so the UI draws over everything
+static_assert(kGuiPreviewView + kast::gui::kViews <= kImGuiView, "the GUI views must end before ImGui's");
 constexpr uint32_t kBackbufferClearColor = 0x202020ff;
 // --add-component-popup, --open-menu, --open-build-settings, --open-online-settings, --open-preferences, --focus-panel and --assets-* wait this long: focus changes while the first frames dock the windows close
 // popups.

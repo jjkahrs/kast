@@ -32,7 +32,7 @@ namespace {
 
 constexpr bgfx::ViewId kShadowViews = 0; // the scene's shadow maps (Renderer::kShadowViews)
 constexpr bgfx::ViewId kGameView = kShadowViews + kast::Renderer::kShadowViews; // then its post passes
-constexpr bgfx::ViewId kGuiView = kGameView + kast::PostProcess::kViews; // the scene's game GUIs, over the scene
+constexpr bgfx::ViewId kGuiView = kGameView + kast::PostProcess::kViews; // the scene's game GUIs (kast::gui::kViews), over the scene
 constexpr uint32_t kClearColor = 0x202020ff;
 constexpr int kScreenshotTimeoutFrames = 30;
 constexpr const char* kPakFileName = "game.pak";
