@@ -21,14 +21,22 @@ namespace kast::gui {
 
 // bgfx views one GuiContext::render takes: its view and the kViews - 1 after it. A document draws in the first until it
 // pushes a layer (filter, backdrop-filter, box-shadow); each later switch of render target (layer, composite, saved
-// texture) takes the next view, in order. Hosts reserve the whole range for each context they render in a frame.
-constexpr bgfx::ViewId kViews = 32;
+// texture, filter pass) takes the next view, in order. Hosts reserve the whole range for each context they render in a
+// frame. A blurred box-shadow costs about 9 views the frame its texture is made (then it is cached), a blur filter
+// 3 to 5 per frame, a color filter 2.
+constexpr bgfx::ViewId kViews = 80;
 
 // Starts RmlUi; call after bgfx::init. False (logged) if it fails; GUI calls then do nothing.
 bool init();
 // Before bgfx::shutdown. Every Context is gone afterwards.
 void shutdown();
 bool ready();
+// True once a document had to read the backbuffer a GuiContext::render drew on (backdrop-filter reads what is under
+// it; that frame drew it without the effect). A host drawing the GUI on the backbuffer should from then on draw the
+// scene and GUI into a sampleable framebuffer and put it on screen with present().
+bool wantsReadableTarget();
+// Copies texture over the whole backbuffer (width x height pixels) in view.
+void present(bgfx::ViewId view, bgfx::TextureHandle texture, int width, int height);
 // Warnings and errors RmlUi has logged since init: a load or parse went wrong if it grew meanwhile.
 uint64_t problemCount();
 // SDL sends typed text (SDL_EVENT_TEXT_INPUT, what RmlUi text fields insert) only while text input is on: turns it on

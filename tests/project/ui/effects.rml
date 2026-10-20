@@ -1,0 +1,25 @@
+<rml>
+    <head>
+        <title>Effects</title>
+        <link type="text/rcss" href="effects.rcss"/>
+    </head>
+    <body>
+        <!-- One element per GUI effect at a fixed spot (effects.rcss), for the effects screenshot probes. -->
+        <div id="glow" class="box">Glow</div>
+        <div id="blur" class="box">Blur</div>
+        <div id="gray" class="box">Gray</div>
+        <div id="linear" class="box"></div>
+        <div id="drop" class="box">Drop</div>
+        <div id="stripes"></div>
+        <div id="backdrop" class="box">Glass</div>
+        <div id="radial" class="box"></div>
+        <div id="conic" class="box"></div>
+        <div id="sepia" class="box">Sepia</div>
+        <div id="invert" class="box">Invert</div>
+        <div id="hue" class="box">Hue</div>
+        <div id="bright" class="box">Bright</div>
+        <div id="contrast" class="box">Contrast</div>
+        <div id="saturate" class="box">Saturate</div>
+        <div id="opacity" class="box">Opacity</div>
+    </body>
+</rml>

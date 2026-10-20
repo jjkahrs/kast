@@ -151,6 +151,14 @@ uint64_t problemCount() { return g_globals ? g_globals->system.problems : 0; }
 
 GuiRenderer* renderer() { return g_globals ? &g_globals->renderer : nullptr; }
 
+bool wantsReadableTarget() { return g_globals && g_globals->renderer.wantsReadableTarget(); }
+
+void present(bgfx::ViewId view, bgfx::TextureHandle texture, int width, int height)
+{
+    if (g_globals)
+        g_globals->renderer.present(view, texture, width, height);
+}
+
 void setDragDocument(std::string sourceUrl)
 {
     if (g_globals)

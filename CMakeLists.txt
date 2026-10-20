@@ -44,7 +44,8 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
              engine/shaders/vs_mesh_instanced engine/shaders/vs_shadow engine/shaders/vs_shadow_skinned
              engine/shaders/vs_shadow_instanced engine/shaders/fs_shadow
              engine/shaders/fs_line engine/shaders/vs_sky engine/shaders/fs_sky
-             engine/shaders/gui/vs_gui engine/shaders/gui/fs_gui
+             engine/shaders/gui/vs_gui engine/shaders/gui/fs_gui engine/shaders/gui/fs_gui_matrix
+             engine/shaders/gui/fs_gui_blur engine/shaders/gui/fs_gui_gradient
              engine/shaders/post/vs_post engine/shaders/post/fs_post_bright engine/shaders/post/fs_post_down
              engine/shaders/post/fs_post_up engine/shaders/post/fs_post_final engine/shaders/post/fs_post_fxaa)
   get_filename_component(shader ${path} NAME)
@@ -116,7 +117,7 @@ add_library(kast_engine STATIC
   engine/systems.cpp engine/renderer.cpp engine/shadow.cpp engine/frustum.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
-  engine/gui.cpp engine/gui_render.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
+  engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
   engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/world_client.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
@@ -1215,7 +1216,8 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "health|Health Test|health.scene|FALSE" "health_no_systems|Health Test|health.scene|TRUE"
                "events|Events Test|events.scene|FALSE" "events_no_systems|Events Test|events.scene|TRUE"
                "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow"
-               "ui|UI Test|ui.scene|FALSE" "lights|Lights Test|point_lights.scene|FALSE"
+               "ui|UI Test|ui.scene|FALSE" "effects|Effects Test|ui_effects.scene|FALSE"
+               "lights|Lights Test|point_lights.scene|FALSE"
                "materials|Materials Test|materials.scene|FALSE" "post|Post Test|post_processing.scene|FALSE"
                "models|Models Test|models_anim.scene|FALSE" "shadows|Shadows Test|shadows.scene|FALSE"
                "shadows_off|Shadows Test|shadows_sun_off.scene|FALSE"
@@ -1742,9 +1744,10 @@ add_test(NAME ui_bad_path_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_bad_path.png"
           "-DEXTRA_ARGS=--scene ${KAST_HEALTH_PROJECT}/ui_bad_path.scene --play"
           "-DEXPECT_OUTPUT=UI document 'ui/missing.rml' not found" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
-# GUI layers: the main menu with filter: opacity(0.5) on its panel draws the panel through an offscreen layer (filters
-# are skipped until they are compiled, so it looks as without the filter: probes match ui_play.png's colors); the plain
-# menu (ui_play_screenshot) creates no layer framebuffer.
+# GUI layers: the main menu with filter: opacity(0.5) on its panel draws the panel through an offscreen layer; the plain
+# menu (ui_play_screenshot) creates no layer framebuffer. Probes: 0.5 * layer + (1 - 0.5 * alpha) * scene, from
+# ui_play.png's colors over ui_play_hidden.png's scene (the panel's #1b2333dd: alpha 0.87; the button and the text's
+# panel opaque). The floor is outside the panel.
 file(READ "${KAST_TEST_PROJECT}/ui/main_menu.rml" ui_layer_rml)
 string(REPLACE "main_menu.rcss" "layer_menu.rcss" ui_layer_rml "${ui_layer_rml}")
 file(WRITE "${KAST_HEALTH_PROJECT}/ui/layer_menu.rml" "${ui_layer_rml}")
@@ -1759,8 +1762,32 @@ add_test(NAME ui_layer_screenshot
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(ui_layer_screenshot PROPERTIES FIXTURES_SETUP ui_layer_shot)
 add_test(NAME ui_layer_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/ui_layer.png"
-         0.3281,0.1806,29,37,53,4 0.4375,0.3708,58,111,176,4 0.3750,0.4861,54,60,74,4 0.2344,0.5556,233,229,224,4)
+         0.3281,0.1806,36,45,58,4 0.4375,0.3708,146,170,200,4 0.3750,0.4861,144,144,149,4 0.2344,0.5556,233,229,224,4)
 set_tests_properties(ui_layer_probe PROPERTIES FIXTURES_REQUIRED ui_layer_shot)
+# GUI effects: ui_effects.scene shows ui/effects.rml (one element per effect, placed by effects.rcss). In Play the
+# glow is outside its box only (the box keeps #313131) and fades; the backdrop blur mixes the stripes under the glass;
+# RmlUi and the GUI renderer must not warn. The built game "effects" in KAST_GAMES draws it in the player.
+add_test(NAME ui_effects_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_effects.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui_effects.scene --play" "-DEXPECT_OUTPUT=GUI layer framebuffer 1 created"
+          "-DFORBID_OUTPUT=\\[warn\\] RmlUi|GUI filter|GUI shader|GUI effects need"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(ui_effects_screenshot PROPERTIES FIXTURES_SETUP ui_effects_shot)
+add_test(NAME ui_effects_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/ui_effects.png"
+         0.2301,0.1590,61,41,0,12 0.2184,0.1590,3,3,0,8 0.2402,0.1313,49,49,49,3 0.3824,0.3007,136,151,32,16)
+set_tests_properties(ui_effects_probe PROPERTIES FIXTURES_REQUIRED ui_effects_shot)
+# The same in the built player (1280x720, GUI pixels 1:1), every effect: glow near / far / inside, blur edge between
+# the box and the black, grayscale r = g = b, linear gradient ends, drop-shadow and its box, backdrop blur, radial
+# center and corner, conic top, then sepia, invert, hue-rotate, brightness, contrast, saturate(0) and opacity(0.5) of
+# #3a6fb0 (red for grayscale and hue-rotate) by RmlUi's color matrices. backdrop-filter switches the player to a
+# readable target.
+add_test(NAME player_effects_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/player_effects.png"
+         0.0293,0.0979,61,41,0,12 0.0176,0.0979,3,3,0,8 0.0395,0.0701,49,49,49,3 0.1723,0.0979,32,61,97,16
+         0.3207,0.0701,54,54,54,3 0.4559,0.0979,248,0,7,10 0.5449,0.0979,5,0,250,10 0.1285,0.2785,0,206,0,16
+         0.0395,0.2368,58,111,176,3 0.1816,0.2396,136,151,32,16 0.3598,0.2646,252,252,3,10 0.3145,0.2257,13,13,242,16
+         0.5004,0.2271,253,2,0,10 0.0395,0.4035,141,126,98,3 0.1801,0.4035,197,144,79,3 0.3207,0.4035,0,113,0,3
+         0.4613,0.4035,87,167,255,3 0.0395,0.5701,0,94,225,3 0.1801,0.5701,104,104,104,3 0.3207,0.5701,29,55,88,3)
+set_tests_properties(player_effects_probe PROPERTIES FIXTURES_REQUIRED player_effects_shot)
 # A synthetic click on the Start button publishes menu.start (Events panel) and scripts/ui_menu.lua logs it.
 add_test(NAME ui_click_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_click.png"
