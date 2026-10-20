@@ -351,6 +351,9 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
             queue(proto::Ping{kFakeWorldPing});
             queue(proto::AuthOk{42, proto::Role::player});
         } else if (std::holds_alternative<proto::Pong>(message)) {
+        } else if (const auto* ping = std::get_if<proto::Ping>(&message)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(fake.pongDelayMs.load()));
+            queue(proto::Pong{ping->nonce});
         } else if (std::holds_alternative<proto::CharListReq>(message)) {
             queue(proto::CharList{chars});
         } else if (const auto* create = std::get_if<proto::CharCreate>(&message)) {

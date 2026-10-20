@@ -16,7 +16,7 @@
 
 // WorldClient: the game side of the world server protocol (docs/services/world/protocol.html) over a Network TLS connection,
 // encoded and decoded by services/world/protocol (kast_protocol). Connects to a realm from the auth service's realm
-// list with the AuthClient's access token, answers Ping, and turns every server message and the connection's life
+// list with the AuthClient's access token, pings it (rttMs), answers its Pings, and turns every server message and the connection's life
 // into "world.*" events (docs/engine/online-services.html#kastworld). One connection at a time. No Lua, no EventBus, no scene: LuaSystems owns
 // one per Play session, routes the Network results and auth events to it and publishes what poll() returns. Never logs
 // the access token; chat text only at debug level. Same threading rule as Network.
@@ -25,6 +25,30 @@ namespace kast {
 enum class WorldState { Disconnected, Connecting, Lobby, InWorld };
 
 const char* worldStateName(WorldState state); // "disconnected", "connecting", "lobby", "inWorld"
+
+// Client round-trip time: while connected, a Ping every kInterval; the RTT is that of the newest answered one. The
+// clock is passed in, so tests need no sleeping.
+class PingTracker {
+public:
+    using Clock = std::chrono::steady_clock;
+    static constexpr std::chrono::seconds kInterval{1};
+    static constexpr std::chrono::seconds kTimeout{5}; // unanswered this long: no RTT, and its late Pong is ignored
+
+    // The nonce of the Ping to send now, if one is due. Forgets the Pings past kTimeout (so at most
+    // kTimeout / kInterval + 1 are outstanding).
+    std::optional<uint32_t> due(Clock::time_point now);
+    void pong(uint32_t nonce, Clock::time_point now); // ignored for a nonce never sent or already forgotten
+    // Whole ms; nullopt before the first Pong and while a Ping is unanswered past kTimeout.
+    std::optional<int> rttMs(Clock::time_point now) const;
+    size_t outstanding() const { return sent_.size(); }
+
+private:
+    uint32_t nonce_ = 0;
+    std::optional<Clock::time_point> last_; // the last Ping's send time
+    std::map<uint32_t, Clock::time_point> sent_; // unanswered nonce -> send time
+    std::optional<int> rtt_;
+    Clock::time_point rttSent_; // the send time of the Ping rtt_ measured
+};
 
 // "host:port" -> {host, port}; nullopt for anything else (port 1..65535).
 std::optional<std::pair<std::string, uint16_t>> parseHostPort(const std::string& text);
@@ -42,6 +66,8 @@ public:
     void reset(std::optional<AuthConfig> config = std::nullopt);
     bool enabled() const { return enabled_; }
     WorldState state() const { return state_; }
+    // The connection's round-trip time in whole ms (PingTracker); nullopt while not connected.
+    std::optional<int> rttMs() const;
 
     // Editor only: "host:port" replacing every realm's address (nullopt: use the realm's). Throws std::invalid_argument
     // if it isn't host:port. The shipped player never calls it.
@@ -113,6 +139,7 @@ private:
     std::map<std::string, nlohmann::json> latest_; // event name -> its last payload, see latest()
     uint32_t requestSerial_ = 0;                   // the last requestId
     std::map<uint32_t, std::chrono::steady_clock::time_point> requests_; // unanswered requestId -> deadline
+    PingTracker ping_; // reset with each connection
 };
 
 } // namespace kast

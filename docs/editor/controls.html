@@ -83,6 +83,15 @@ released, cursor unlocked) whenever the Game panel or the editor window loses fo
 switches scenes; <code>kast_player.exe</code> clears it the same way on window focus loss and scene switches. The cursor stays
 normal unless a system locks it with <code>kast.input.setCursorLocked(true)</code> (<code>kast::CursorLock</code>: SDL relative mouse mode,
 the cursor hidden; on unlock it reappears where the lock began).</p>
+<p id="stats-overlay"><strong>Stats overlay (F3)</strong>: during Play (playing or paused), with the Game panel focused, F3 shows
+or hides one line at the bottom-left of the Game image: <code>FPS 144  Ping 42 ms</code>. FPS is averaged over the last 0.5 s;
+Ping is the world server round-trip time (<a href="../engine/networking.html">Networking</a>, World round-trip time), <code>--</code>
+when not connected or when a Ping has gone unanswered for more than 5 s. F3 does nothing while stopped or with another
+panel focused, and Stop hides the overlay. It is off at every start and never saved. It also works in the built game
+(<code>kast_player.exe</code>), where F3 toggles it at any time. The editor draws it with ImGui over the Game image; the player
+draws it as bgfx debug text at the window's bottom-left (bgfx debug text always lands at the window's corner, not over a
+panel). <code>kast_player --sim-key frame,key</code> (repeatable) presses a key on that frame (tests, e.g.
+<code>--sim-key 30,F3</code>), like the editor's <code>--sim-key</code>.</p>
 <p><strong>Systems panel</strong> (below Hierarchy): the scene's Lua systems in run order. <strong>Add Script...</strong> picks an existing <code>.lua</code>
 file inside the active project (a file outside it is rejected with an error), <strong>New from Template</strong> writes
 <code>&lt;project&gt;/scripts/new_system.lua</code> (then <code>new_system_2.lua</code>, ...) and adds it; both store project-relative paths. The

@@ -1,6 +1,7 @@
 #include "game_view.h"
 
 #include <imgui.h>
+#include <log.h>
 
 void GameViewport::shutdown()
 {
@@ -23,11 +24,26 @@ void GameViewport::syncGui(Document& doc)
         gui_.sync(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), doc.lua.bus());
 }
 
+void GameViewport::drawStats(const Document& doc) const
+{
+    constexpr float kPad = 4.0f;
+    const std::string text = kast::statsOverlayText(fps_.fps(), doc.lua.world().rttMs());
+    const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
+    const ImVec2 min(imageMin_.x, imageMin_.y + imageSize_.y - textSize.y - 2.0f * kPad);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(min, ImVec2(min.x + textSize.x + 2.0f * kPad, imageMin_.y + imageSize_.y), IM_COL32(0, 0, 0, 160));
+    draw->AddText(ImVec2(min.x + kPad, min.y + kPad), IM_COL32_WHITE, text.c_str());
+}
+
 void GameViewport::draw(Document& doc)
 {
     syncGui(doc);
     const bool visible = beginViewportPanel("Game", doc, PanelFocus::Game);
     focused_ = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+    fps_.addFrame(ImGui::GetIO().DeltaTime);
+    const bool f3 = focused_ && ImGui::Shortcut(ImGuiKey_F3); // hardcoded, like Ctrl+P
+    if (stats_.update(f3, focused_, doc.play))
+        kast::log::info(stats_.visible ? "Stats overlay shown" : "Stats overlay hidden");
     const ImVec2 size = ImGui::GetContentRegionAvail();
     const entt::entity camera = kast::activeCamera(doc.scene);
     if (visible && size.x > 0.0f && size.y > 0.0f) {
@@ -51,6 +67,8 @@ void GameViewport::draw(Document& doc)
             imageMin_ = ImGui::GetCursorScreenPos();
             imageSize_ = size;
             ImGui::Image(static_cast<ImTextureID>(target_.texture().idx), size);
+            if (stats_.visible)
+                drawStats(doc);
         }
         if (camera == entt::null) {
             const char* text = "No Camera in scene";

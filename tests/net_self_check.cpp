@@ -1217,8 +1217,40 @@ bool throwsLogic(const std::function<void()>& fn, const std::string& part)
 
 Json pos(float x, float y, float z) { return {{"x", x}, {"y", y}, {"z", z}}; }
 
+// PingTracker on a made-up clock: cadence, RTT, ignored Pongs, the timeout and bounded bookkeeping.
+void checkPingTracker()
+{
+    using kast::PingTracker;
+    const PingTracker::Clock::time_point t0{};
+    PingTracker p;
+    check(!p.rttMs(t0), "ping: no RTT before any Pong");
+    const std::optional<uint32_t> first = p.due(t0);
+    check(first && !p.due(t0 + 999ms) && p.outstanding() == 1, "ping: the first Ping goes at once, the next not before 1 s");
+    p.pong(*first + 100, t0 + 10ms);
+    check(!p.rttMs(t0 + 10ms) && p.outstanding() == 1, "ping: a Pong of an unknown nonce is ignored");
+    p.pong(*first, t0 + 42ms);
+    check(p.rttMs(t0 + 42ms) == 42 && p.outstanding() == 0, "ping: the matching Pong gives the RTT (42 ms)");
+    p.pong(*first, t0 + 90ms);
+    check(p.rttMs(t0 + 90ms) == 42, "ping: a second Pong of an answered nonce is ignored");
+    const std::optional<uint32_t> second = p.due(t0 + 1s);
+    check(second && *second != *first, "ping: a new nonce every 1 s");
+    check(p.rttMs(t0 + 6s) == 42, "ping: an unanswered Ping 5 s old still shows the last RTT");
+    check(!p.rttMs(t0 + 6s + 1ms), "ping: an unanswered Ping older than 5 s -> no RTT");
+    for (int s = 2; s <= 60; ++s) // nothing answered for a minute
+        p.due(t0 + std::chrono::seconds(s));
+    check(p.outstanding() <= 6, std::format("ping: outstanding Pings stay bounded ({} after 60 unanswered)", p.outstanding()));
+    p.pong(*second, t0 + 61s);
+    check(!p.rttMs(t0 + 61s), "ping: a late Pong of a timed-out nonce is ignored");
+    const std::optional<uint32_t> fresh = p.due(t0 + 61s);
+    p.pong(*fresh, t0 + 61s + 7ms);
+    check(!p.rttMs(t0 + 61s + 7ms), "ping: still -- while older unanswered Pings are past 5 s");
+    p.due(t0 + 66s); // forgets the timed-out ones
+    check(fresh && p.rttMs(t0 + 66s) == 7, "ping: once they are forgotten, the fresh answered Ping's RTT shows");
+}
+
 void checkWorldClient()
 {
+    checkPingTracker();
     check(kast::parseHostPort("127.0.0.1:7777") == std::pair(std::string("127.0.0.1"), uint16_t{7777}) &&
               kast::parseHostPort("world.example.com:1") && !kast::parseHostPort("host") &&
               !kast::parseHostPort(":7777") && !kast::parseHostPort("host:") && !kast::parseHostPort("host:0") &&
@@ -1270,6 +1302,22 @@ void checkWorldClient()
           "world: Hello + Auth -> world.connected {accountId, role}; state lobby");
     check(fake.seen().size() == requestsBefore, "world: a cached realm needs no new realm request");
     check(r.waitFor([&] { return fakeWorld.pongs() == 1; }), "world: the server's Ping is answered with its nonce");
+    check(r.waitFor([&] { return w.rttMs().has_value(); }) &&
+              std::ranges::any_of(fakeWorld.seen(), [](const proto::Message& m) { return std::holds_alternative<proto::Ping>(m); }),
+          std::format("world: the client pings the server and measures an RTT ({} ms)", w.rttMs().value_or(-1)));
+    {
+        // A lagged server: the RTT shown rises by about the added delay within a couple of Pings.
+        constexpr int kLagMs = 200;
+        const int before = *w.rttMs();
+        fakeWorld.pongDelayMs = kLagMs;
+        const bool rose = r.waitFor([&] { return w.rttMs().value_or(0) >= kLagMs; }, 4s);
+        const int lagged = w.rttMs().value_or(-1);
+        fakeWorld.pongDelayMs = 0;
+        kast::log::info(std::format("world: RTT {} ms, with {} ms of server lag {} ms", before, kLagMs, lagged));
+        check(rose && lagged - before >= kLagMs - 20 && lagged - before <= kLagMs + 100,
+              std::format("world: {} ms of server lag raises the RTT from {} to {} ms", kLagMs, before, lagged));
+        r.waitFor([&] { return w.rttMs().value_or(kLagMs) < kLagMs; }, 4s); // back to normal for the checks below
+    }
     {
         const std::vector<proto::Message> seen = fakeWorld.seen();
         check(seen.size() >= 2 && std::get_if<proto::Hello>(&seen[0]) &&
@@ -1378,6 +1426,7 @@ void checkWorldClient()
     const Json* bye = r.next("world.disconnected");
     check(bye && bye->value("code", "") == "client_disconnect" && w.state() == kast::WorldState::Disconnected,
           "world: disconnect -> world.disconnected client_disconnect");
+    check(!w.rttMs(), "world: no RTT once disconnected (the overlay shows Ping --)");
     check(!w.latest("world.entered") && !w.latest("server.quest.update") && !w.latest("world.disconnected"),
           "world: world.disconnected forgets the connection's latest events");
     w.disconnect();
@@ -2871,11 +2920,14 @@ int liveWorldCheck(const std::string& authUrl, const std::string& mailpitUrl, co
           "live world: the list holds the live character only");
 
     // The server checks idleness on its heartbeat (every PING_INTERVAL_MS, 20 s), so a silent client is dropped within
-    // IDLE_TIMEOUT_MS + 20 s = 80 s of its last message.
+    // IDLE_TIMEOUT_MS + 20 s = 80 s of its last message. (The client's own 1 s Pings keep it from ever being silent.)
     kast::log::info("live world: idling in the lobby for 85 s (IDLE_TIMEOUT_MS 60 s + one 20 s heartbeat)");
     a.waitFor([&] { return a.count("world.disconnected") > 0; }, 85s);
     check(a.count("world.disconnected") == 0 && a.world.state() == kast::WorldState::Lobby,
           "live world: Ping answered, the idle connection survives past IDLE_TIMEOUT_MS");
+    check(a.world.rttMs().has_value(),
+          std::format("live world: the server answers the client's Pings (RTT {} ms)", a.world.rttMs().value_or(-1)));
+    kast::log::info(std::format("live world: RTT {} ms", a.world.rttMs().value_or(-1)));
 
     a.world.enterWorld(idA);
     const Json* enteredA = a.next("world.entered");

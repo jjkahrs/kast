@@ -4,6 +4,7 @@
 
 #include <codec.h>
 
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <format>
@@ -90,6 +91,46 @@ void WorldClient::reset(std::optional<AuthConfig> config)
     events_.clear();
     latest_.clear();
     requests_.clear(); // no events: the Lua state that asked is gone
+    ping_ = {};
+}
+
+std::optional<uint32_t> PingTracker::due(Clock::time_point now)
+{
+    std::erase_if(sent_, [&](const auto& ping) {
+        const bool expired = now - ping.second > kTimeout;
+        if (expired && ping.second > rttSent_) // timed out after the measured one: that RTT is stale
+            rtt_.reset();
+        return expired;
+    });
+    if (last_ && now - *last_ < kInterval)
+        return std::nullopt;
+    last_ = now;
+    sent_[++nonce_] = now;
+    return nonce_;
+}
+
+void PingTracker::pong(uint32_t nonce, Clock::time_point now)
+{
+    const auto it = sent_.find(nonce);
+    if (it == sent_.end())
+        return;
+    rtt_ = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second).count());
+    rttSent_ = it->second;
+    sent_.erase(it);
+}
+
+std::optional<int> PingTracker::rttMs(Clock::time_point now) const
+{
+    if (std::ranges::any_of(sent_, [&](const auto& ping) { return now - ping.second > kTimeout; }))
+        return std::nullopt;
+    return rtt_;
+}
+
+std::optional<int> WorldClient::rttMs() const
+{
+    if (state_ != WorldState::Lobby && state_ != WorldState::InWorld)
+        return std::nullopt;
+    return ping_.rttMs(std::chrono::steady_clock::now());
 }
 
 void WorldClient::setAddressOverride(std::optional<std::string> hostPort)
@@ -327,7 +368,7 @@ void WorldClient::dispatch(const auto& m)
     } else if constexpr (std::is_same_v<T, proto::Ping>) {
         send(proto::Pong{m.nonce});
     } else if constexpr (std::is_same_v<T, proto::Pong>) {
-        // the client never pings
+        ping_.pong(m.nonce, std::chrono::steady_clock::now());
     } else if constexpr (std::is_same_v<T, proto::CharList>) {
         Json list = Json::array();
         for (const proto::CharInfo& c : m.chars)
@@ -401,6 +442,7 @@ void WorldClient::drop(const std::string& code, const std::string& reason)
     for (const auto& [id, deadline] : requests_) // never answered now
         emit("world.reply", {{"requestId", id}, {"ok", false}, {"reason", "disconnected"}});
     requests_.clear();
+    ping_ = {};
     emit("world.disconnected", {{"code", code}, {"reason", reason}});
 }
 
@@ -422,6 +464,9 @@ const Json* WorldClient::latest(const std::string& name) const
 std::vector<NetEvent> WorldClient::poll()
 {
     expireRequests();
+    if (state_ == WorldState::Lobby || state_ == WorldState::InWorld)
+        if (const std::optional<uint32_t> nonce = ping_.due(std::chrono::steady_clock::now()))
+            send(proto::Ping{*nonce});
     std::vector<NetEvent> out;
     out.swap(events_);
     return out;

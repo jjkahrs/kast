@@ -195,6 +195,13 @@ or url, bytes in/out, last error) and the HTTP requests in flight; otherwise an 
 <p>C++: <code>kast::Network</code> (from <code>LuaSystems::network()</code>; no Lua or ImGui): <code>open</code>, <code>send</code>, <code>close</code>, <code>request</code>, <code>poll</code> (the
 queued events) and <code>status()</code> (what the panel shows). Every call must come from the thread that made it (asserted in
 debug builds).</p>
+<p><strong>World round-trip time</strong>: while <code>kast::WorldClient</code> is connected to a world server (lobby or in the
+world) it sends its own <code>Ping{nonce}</code> every 1 s (steady clock) and times the matching <code>Pong</code>; it still answers the
+server's Pings with <code>Pong</code>. <code>WorldClient::rttMs()</code> is the newest answered Ping's round trip in whole ms, read by the
+<a href="../editor/controls.html#stats-overlay">F3 stats overlay</a>. It is empty (the overlay shows <code>Ping -- ms</code>) when not
+connected (offline play, Online Services disabled, before the first Pong) and while a Ping is unanswered for more than
+5 s. Pings unanswered after 5 s are forgotten, so a late Pong for one is ignored and at most six are outstanding. The
+bookkeeping is <code>kast::PingTracker</code> (<code>engine/world_client.h</code>), which takes the time as an argument for tests.</p>
 <p><strong>Built game</strong>: Build ships OpenSSL's <code>libssl-3-x64.dll</code> and <code>libcrypto-3-x64.dll</code> next to the exe.</p>
 <p><strong>Sample</strong>: <code>tests/project/net_a.scene</code> (<code>scripts/net_a.lua</code>) opens TCP, TLS, ws and wss connections to
 <code>kast_net_test_server</code> (<code>tests/net_test_server.cpp</code>, ports 47701-47706) and, in the frame all four open, starts a

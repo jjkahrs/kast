@@ -16,6 +16,7 @@
 #include <scene.h>
 #include <scene_gui.h>
 #include <scene_io.h>
+#include <stats_overlay.h>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -27,6 +28,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -39,13 +42,14 @@ constexpr int kScreenshotTimeoutFrames = 30;
 constexpr const char* kPakFileName = "game.pak";
 constexpr int kGuiClickFrame = 10; // --gui-click: once the GUIs have loaded and laid out
 constexpr const char* kUsage =
-    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--size WxH] [--window-pos X,Y] [--gpu-stats] [--no-instancing] [--no-culling] [--no-audio-device]";
+    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--sim-key frame,key]... [--size WxH] [--window-pos X,Y] [--gpu-stats] [--no-instancing] [--no-culling] [--no-audio-device]";
 constexpr int kGpuStatsWarmupFrames = 10; // --gpu-stats: skip startup frames (shader and target creation)
 
 struct Options {
     int frames = 0;         // 0 = run until quit
     std::string screenshot; // captured after the last frame
     std::string guiClick;   // tests: click this GUI element id on frame kGuiClickFrame
+    std::vector<std::pair<int, SDL_Scancode>> simKeys; // tests: these keys pressed on these frames (pushed SDL events)
     int width = kast::AppConfig{}.width, height = kast::AppConfig{}.height; // --size: window size
     std::optional<std::pair<int, int>> windowPos; // --window-pos: window top-left
     bool gpuStats = false;  // log the average GPU frame time on exit
@@ -77,6 +81,19 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.screenshot = argv[++i];
         } else if (arg == "--gui-click" && hasValue) {
             options.guiClick = argv[++i];
+        } else if (arg == "--sim-key" && hasValue) {
+            const std::string_view text = argv[++i];
+            const size_t comma = text.find(',');
+            int frame = 0;
+            const SDL_Scancode key = comma == std::string_view::npos
+                                         ? SDL_SCANCODE_UNKNOWN
+                                         : SDL_GetScancodeFromName(std::string(text.substr(comma + 1)).c_str());
+            if (key == SDL_SCANCODE_UNKNOWN || !parseInt(text.substr(0, comma), frame)) {
+                kast::log::error(std::format("Invalid --sim-key '{}', expected frame,key (an SDL key name such as F3). {}",
+                                             text, kUsage));
+                return std::nullopt;
+            }
+            options.simKeys.emplace_back(frame, key);
         } else if (arg == "--size" && hasValue) {
             const std::string_view text = argv[++i];
             const size_t x = text.find('x');
@@ -177,6 +194,7 @@ int main(int argc, char** argv)
     double gpuMs = 0.0; // --gpu-stats: summed after the warmup
     int gpuFrames = 0;
     kast::SceneGui gui("game");
+    kast::StatsOverlay stats(options->gpuStats ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE); // F3
     // Scene and GUI draw on the backbuffer until a GUI reads what is under it (backdrop-filter), then into this
     // sampleable target, copied onto the screen after the GUI. ponytail: switched the frame after the first read, so
     // that one frame draws the backdrop without its effect.
@@ -217,10 +235,14 @@ int main(int argc, char** argv)
         input.view = {0.0f, 0.0f, static_cast<float>(windowWidth), static_cast<float>(windowHeight)};
         input.onEvent(event);
         gui.context().onEvent(event);
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F3 && !event.key.repeat)
+            stats.toggle();
     };
     hooks.frame = [&] {
         const uint64_t ticks = SDL_GetTicksNS();
-        if (kast::tickPlay(scene, lua, static_cast<float>(ticks - lastTicks) * 1e-9f))
+        const double dt = static_cast<double>(ticks - lastTicks) * 1e-9;
+        stats.frame(dt, lua.world().rttMs());
+        if (kast::tickPlay(scene, lua, static_cast<float>(dt)))
             gui.clear(); // kast.loadScene: the new scene's GUIs load below
         gui.sync(scene, project.root, lua.bus());
         kast::gui::syncTextInput(window, gui.focusedField().has_value());
@@ -267,6 +289,16 @@ int main(int argc, char** argv)
 
         // ponytail: same --frames/--screenshot sequence as editor/main.cpp; move into kast::run if a third host needs it.
         ++frame;
+        for (const auto& [keyFrame, scancode] : options->simKeys) { // handled from the next frame, like a real press
+            if (frame != keyFrame)
+                continue;
+            SDL_Event event{};
+            event.key = {.type = SDL_EVENT_KEY_DOWN, .windowID = SDL_GetWindowID(window), .scancode = scancode, .down = true};
+            SDL_PushEvent(&event);
+            event.key.type = SDL_EVENT_KEY_UP;
+            event.key.down = false;
+            SDL_PushEvent(&event);
+        }
         if (!options->guiClick.empty() && frame == kGuiClickFrame && !gui.click(options->guiClick))
             kast::log::error(std::format("--gui-click {}: no such element in a visible GUI", options->guiClick));
         if (options->frames == 0 || frame < options->frames)

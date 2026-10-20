@@ -156,13 +156,14 @@ Server::Body serveFakeAuth(FakeAuth& fake);
 // ComponentUpdate{2, Health, {current 42.5, max 100}}, a ComponentUpdate with invalid JSON and ComponentRemove{2, Health}
 // if text is "components", or ServerEvent{quest.update, {quest 7, steps [1, 2], done false}}, a ServerEvent with invalid
 // JSON and ServerEvent{ping, null} if text is "events", or the NPC Spawn{3, "Guard", (103, 0, 100), 0.25, npc, "Guard"} if
-// text is "npc". ClientEvent without a requestId -> ServerEvent{"echo.<name>", its JSON}; a request named "test.ok" ->
+// text is "npc". Ping -> Pong{its nonce}, after pongDelayMs (a lagged server). ClientEvent without a requestId -> ServerEvent{"echo.<name>", its JSON}; a request named "test.ok" ->
 // Reply{its id, ok, its JSON} twice, "test.no" -> Reply{its id, rejected, "no_way"}, any other: no answer. Anything else:
 // Disconnect{unexpected_message}.
 constexpr uint32_t kFakeWorldPing = 4242;
 
 class FakeWorld {
 public:
+    std::atomic<int> pongDelayMs = 0;
     void record(proto::Message message);
     std::vector<proto::Message> seen() const; // every client message so far, all connections
     int pongs() const;                        // Pong{kFakeWorldPing} received

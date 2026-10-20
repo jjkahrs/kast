@@ -12,6 +12,7 @@
 #include "gui_doc.h"  // GUI Builder document model; links editor/gui_doc.cpp
 #include "gui_undo.h" // GUI Builder undo steps; links editor/gui_undo.cpp
 #include "recent_projects.h" // Project Manager list; links editor/recent_projects.cpp
+#include "stats_toggle.h" // the Game panel's F3 rule; header only
 
 #include <components.h>
 #include <crash_dialogs.h>
@@ -46,6 +47,7 @@
 #include <sky.h>
 #include <frustum.h>
 #include <state_machines.h>
+#include <stats_overlay.h>
 #include <systems.h>
 #include <terrain.h>
 
@@ -568,6 +570,40 @@ void checkCameras()
     check(near(transformPoint(view, {-1, 0, 0}), {0, 0, -3}), "view: world camera transform, scale ignored");
     check(near(transformPoint(view, {2, 1, 0}), {0, 1, 0}), "view: camera up is world up");
     check(near(proj[5], 1.0f), "proj: 90 deg fov from the component");
+}
+
+// The F3 overlay's FPS (a 0.5 s rolling average of injected frame times) and its text.
+void checkStatsOverlay()
+{
+    kast::FpsAverage fps;
+    check(fps.fps() == 0, "stats: FPS 0 before any frame");
+    for (int i = 0; i < 100; ++i)
+        fps.addFrame(1.0 / 144.0);
+    check(fps.fps() == 144, "stats: steady 144 Hz frames -> FPS 144");
+    fps.addFrame(0.1); // one hitch only dents a 0.5 s average
+    check(fps.fps() >= 100 && fps.fps() < 144, "stats: one 100 ms hitch averages in, no drop to 10");
+    for (int i = 0; i < 40; ++i) // 0.67 s of 60 Hz pushes every older frame out of the window
+        fps.addFrame(1.0 / 60.0);
+    check(fps.fps() == 60, "stats: after 0.67 s at 60 Hz only those count");
+    fps.addFrame(1.5); // a 1.5 s stall alone covers the window
+    check(fps.fps() == 1, "stats: a 1.5 s frame alone -> FPS 0.67, rounded to 1");
+    check(kast::statsOverlayText(144, 42) == "FPS 144  Ping 42 ms", "stats: text 'FPS 144  Ping 42 ms'");
+    check(kast::statsOverlayText(60, std::nullopt) == "FPS 60  Ping -- ms", "stats: no RTT -> 'Ping -- ms'");
+    check(kast::statsOverlayText(0, 0) == "FPS 0  Ping 0 ms", "stats: zeros print as numbers");
+    kast::StatsOverlay overlay;
+    check(!overlay.visible(), "stats: the overlay starts hidden");
+
+    StatsToggle game; // the editor's Game panel
+    check(!game.visible, "stats: the editor overlay starts hidden");
+    check(!game.update(true, true, PlayState::Stopped) && !game.visible, "stats: F3 while Stopped does nothing");
+    check(!game.update(true, false, PlayState::Playing) && !game.visible, "stats: F3 with the Game panel unfocused does nothing");
+    check(!game.update(false, true, PlayState::Playing) && !game.visible, "stats: no F3, no change");
+    check(game.update(true, true, PlayState::Playing) && game.visible, "stats: F3 on the focused Game panel while Playing shows it");
+    check(!game.update(false, false, PlayState::Paused) && game.visible, "stats: Pause and focus loss keep it shown");
+    check(game.update(true, true, PlayState::Paused) && !game.visible, "stats: F3 while Paused hides it");
+    check(game.update(true, true, PlayState::Paused) && game.visible, "stats: F3 while Paused shows it");
+    check(game.update(false, true, PlayState::Stopped) && !game.visible, "stats: Stop hides it");
+    check(!game.update(false, true, PlayState::Playing) && !game.visible, "stats: the next Play starts with it hidden");
 }
 
 void checkInput()
@@ -9855,6 +9891,7 @@ int main(int argc, char** argv)
     checkMaterialScenes();
     checkLuaMaterials();
     checkCameras();
+    checkStatsOverlay();
     checkInput();
     checkRotatorSystem();
     checkSnapshot();
