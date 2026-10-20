@@ -32,7 +32,8 @@ set(KAST_COMPILE_OPTIONS /W4 /WX /permissive- /utf-8)
 # Added to every exe: makes the process code page UTF-8 (see the manifest).
 set(KAST_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/utf8.manifest")
 
-# --- shaders: compiled to DX11 bytecode headers with vcpkg's shaderc; each dir has its own varying.def.sc ---
+# --- shaders: compiled to DX11 bytecode headers with vcpkg's shaderc; each dir has its own varying.def.sc. vs_* are
+# vertex, cs_* compute, the rest fragment shaders ---
 # ponytail: host triplet == target triplet (x64-windows); look in the host triplet dir if cross-compiling ever happens.
 find_program(KAST_SHADERC shaderc PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/bgfx" NO_DEFAULT_PATH REQUIRED)
 set(KAST_SHADER_INCLUDE "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/bgfx")
@@ -44,6 +45,7 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
              engine/shaders/vs_mesh_instanced engine/shaders/vs_shadow engine/shaders/vs_shadow_skinned
              engine/shaders/vs_shadow_instanced engine/shaders/fs_shadow
              engine/shaders/fs_line engine/shaders/vs_sky engine/shaders/fs_sky
+             engine/shaders/cs_particle_sim engine/shaders/vs_particle engine/shaders/fs_particle
              engine/shaders/gui/vs_gui engine/shaders/gui/fs_gui engine/shaders/gui/fs_gui_matrix
              engine/shaders/gui/fs_gui_blur engine/shaders/gui/fs_gui_gradient
              engine/shaders/post/vs_post engine/shaders/post/fs_post_bright engine/shaders/post/fs_post_down
@@ -54,6 +56,8 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
   string(SUBSTRING ${shader} 0 2 stage)
   if(stage STREQUAL "vs")
     set(type vertex)
+  elseif(stage STREQUAL "cs")
+    set(type compute)
   else()
     set(type fragment)
   endif()
@@ -118,7 +122,7 @@ add_library(kast_engine STATIC
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
-  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/world_client.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp ${KAST_ENGINE_SHADERS})
+  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/world_client.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/particles.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
@@ -1227,7 +1231,8 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "prefabs|Prefabs Test|prefabs.scene|FALSE" "zone_objects|Zone Objects Test|zone_objects.scene|FALSE"
                "sky|Sky Test|sky_procedural.scene|FALSE" "sky_off|Sky Test|sky_off.scene|FALSE"
                "sky_moved|Sky Test|sky_moved.scene|FALSE" "sky_cube|Sky Test|sky_cubemap.scene|FALSE"
-               "sky_cube_back|Sky Test|sky_cubemap_back.scene|FALSE" "sky_fallback|Sky Test|sky_missing_face.scene|FALSE")
+               "sky_cube_back|Sky Test|sky_cubemap_back.scene|FALSE" "sky_fallback|Sky Test|sky_missing_face.scene|FALSE"
+               "particles|Particles Test|particles_shapes.scene|FALSE")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
@@ -2009,6 +2014,9 @@ include(cmake/zone_tests.cmake)
 
 # samples/starter-mmo: the editor + services sample project.
 include(cmake/starter_mmo_tests.cmake)
+
+# GPU particles: screenshots read back at known pixels, and kast_self_check --particles.
+include(cmake/particle_tests.cmake)
 
 # Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.
 get_property(kast_tests DIRECTORY PROPERTY TESTS)

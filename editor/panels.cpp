@@ -352,7 +352,9 @@ bool Panels::drawValue(entt::entity entity, const std::string& key, const kast::
     }
     case FieldKind::Vec3: {
         float v[3] = {value[0].get<float>(), value[1].get<float>(), value[2].get<float>()};
-        if (!(field.color ? ImGui::ColorEdit3(label, v) : ImGui::DragFloat3(label, v, 0.05f)))
+        // A color allowed past 1 (e.g. an HDR particle color) edits as floats without the 0..1 clamp.
+        const ImGuiColorEditFlags hdr = field.max && *field.max > 1.0 ? ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float : 0;
+        if (!(field.color ? ImGui::ColorEdit3(label, v, hdr) : ImGui::DragFloat3(label, v, 0.05f)))
             return false;
         value = Json::array({kast::jsonNumber(v[0]), kast::jsonNumber(v[1]), kast::jsonNumber(v[2])});
         return true;

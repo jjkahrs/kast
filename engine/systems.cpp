@@ -1,6 +1,7 @@
 #include "systems.h"
 
 #include "animation.h"
+#include "particles.h"
 
 #include <cmath>
 
@@ -23,7 +24,7 @@ void rotatorSystem(Scene& scene, float dt)
 
 void tickSystems(Scene& scene, float dt)
 {
-    static constexpr System kSystems[] = {rotatorSystem, animatorSystem};
+    static constexpr System kSystems[] = {rotatorSystem, animatorSystem, particleSystem};
     for (System system : kSystems)
         system(scene, dt);
 }

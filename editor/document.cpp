@@ -7,6 +7,7 @@
 #include <app.h>
 #include <log.h>
 #include <lua_components.h>
+#include <particles.h>
 #include <scene_io.h>
 #include <play.h>
 #include <prefab.h>
@@ -246,6 +247,7 @@ void startPlay(Document& doc)
         doc.playSceneName.clear();
         ++doc.playGeneration;
         doc.scene.registry().clear<kast::AnimatorState>(); // Play starts clips from 0, not from the Edit preview
+        doc.scene.registry().clear<kast::ParticleEmitterState>(); // and emitters afresh
         std::optional<kast::AuthConfig> auth;
         if (std::string error; doc.project && !(auth = kast::authConfig(*doc.project, error)) && !error.empty())
             kast::log::error(std::format("Online Services: {}; kast.auth is off for this Play session", error));
@@ -297,9 +299,10 @@ void stopPlay(Document& doc)
 void updatePlay(Document& doc, float dt)
 {
     if (doc.play == PlayState::Stopped) {
-        // Edit mode previews animation (playOnStart clips, the Inspector's Play/Pause and scrub). AnimatorState is
-        // never saved and doesn't dirty the scene.
+        // Edit mode previews animation (playOnStart clips, the Inspector's Play/Pause and scrub) and particles.
+        // AnimatorState and ParticleEmitterState are never saved and don't dirty the scene.
         kast::animatorSystem(doc.scene, dt);
+        kast::particleSystem(doc.scene, dt);
         return;
     }
     if (doc.play != PlayState::Playing)

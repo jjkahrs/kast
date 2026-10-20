@@ -250,6 +250,10 @@
 <td>Open the <code>--select</code> entity's override context menu of that field (or <code>Component</code>, its header) after 12 frames, with the Apply submenu open when the entity is nested, for screenshots. The field must be overridden.</td>
 </tr>
 <tr>
+<td><code>--fixed-dt &lt;seconds&gt;</code></td>
+<td>Play and the edit mode preview (animation, particles) advance this many seconds every frame instead of the real frame time, so screenshots of moving scenes come out the same every run (e.g. <code>--fixed-dt 0.016666667</code> with <code>--frames 120</code>: exactly 2 seconds). Tests use it.</td>
+</tr>
+<tr>
 <td><code>--no-vsync</code></td>
 <td>Present frames as fast as possible instead of at the display's refresh rate (with <code>--log-fps</code>, to measure headroom).</td>
 </tr>

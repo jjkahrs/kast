@@ -37,6 +37,7 @@
 #include <post_process.h>
 #include <prefab.h>
 #include <project.h>
+#include <particles.h>
 #include <renderer.h>
 #include <scene.h>
 #include <scene_gui.h>
@@ -322,7 +323,7 @@ void checkComponentRegistry()
                                                  "DirectionalLight", "PointLight", "Camera", "Rotator", "Collider",
                                                  "Rigidbody", "CharacterController", "StateMachine", "UIDocument",
                                                  "AudioSource", "NetworkLocalPlayer", "NetworkReplication",
-                                                 "NetworkEntity", "Terrain", "TerrainTile"},
+                                                 "NetworkEntity", "Terrain", "TerrainTile", "ParticleEmitter"},
           "built-in component types in registration order");
     check(kast::componentInfo(kast::findComponentType("TerrainTile")).runtime &&
               !kast::componentInfo(kast::findComponentType("Terrain")).runtime,
@@ -2928,6 +2929,8 @@ void checkBuildSettings()
                                        "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
                                        "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene",
+                                       "particles_blend.scene", "particles_fog.scene", "particles_hdr.scene",
+                                       "particles_shapes.scene", "particles_space.scene", "particles_texture.scene",
                                        "physics.scene",
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
@@ -2949,7 +2952,10 @@ void checkBuildSettings()
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
                                                           "models_material.scene", "models_missing.scene", "net_a.scene",
-                                                          "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "physics.scene",
+                                                          "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene",
+                                                          "particles_blend.scene", "particles_fog.scene", "particles_hdr.scene",
+                                                          "particles_shapes.scene", "particles_space.scene",
+                                                          "particles_texture.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
                                                           "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
@@ -5205,6 +5211,316 @@ end })");
     check(doc.scene.sky.mode == kast::SkyMode::Procedural && doc.scene.sky.faces[5].empty() &&
               near(doc.scene.sky.top, {0, 0, 1}),
           "Stop restores the sky kast.sky.set changed");
+}
+
+// ParticleEmitter JSON: round trip with its enums by name; bad values are rejected, also at scene load.
+void checkParticleJson()
+{
+    const entt::meta_type type = kast::findComponentType("ParticleEmitter");
+    check(type && kast::componentInfo(type).removable && !kast::componentInfo(type).runtime,
+          "particles: ParticleEmitter is registered and authored");
+    kast::ParticleEmitter custom;
+    custom.shape = kast::ParticleShape::Box;
+    custom.space = kast::ParticleSpace::Local;
+    custom.blend = kast::ParticleBlend::Additive;
+    custom.maxParticles = 65536;
+    custom.startColor = {16.0f, 4.0f, 0.0f};
+    custom.texture = "textures/spark.png";
+    const nlohmann::ordered_json json = kast::componentToJson(entt::meta_any{custom});
+    check(json["shape"] == "box" && json["space"] == "local" && json["blend"] == "additive" &&
+              json["maxParticles"] == 65536 && json["texture"] == "textures/spark.png",
+          "particles: enums save by name, the fields by key");
+    std::string error;
+    const entt::meta_any loaded = kast::componentFromJson(type, json, error);
+    check(loaded && error.empty() && kast::componentToJson(loaded) == json, "particles: JSON round trip");
+    check(kast::componentToJson(entt::meta_any{kast::ParticleEmitter{}}).size() == 26, "particles: 26 fields");
+
+    const std::pair<const char*, nlohmann::ordered_json> bad[] = {
+        {"torus", {{"shape", "torus"}}},
+        {"multiply", {{"blend", "multiply"}}},
+        {"maxParticles", {{"maxParticles", 0}}},
+        {"maxParticles", {{"maxParticles", 65537}}},
+        {"startAlpha", {{"startAlpha", 1.5}}},
+        {"endAlpha", {{"endAlpha", -0.1}}},
+        {"rate", {{"rate", "fast"}}},
+        {"rate", {{"rate", -1}}},
+        {"startColor", {{"startColor", {17, 0, 0}}}},
+        {"duration", {{"duration", 0}}},
+        {"lifetimeMin", {{"lifetimeMin", 0}}},
+        {"coneAngle", {{"coneAngle", 181}}},
+        {"boxSize", {{"boxSize", {1, -1, 1}}}},
+        {"burstCount", {{"burstCount", -1}}},
+        {"looping", {{"looping", 1}}},
+    };
+    for (const auto& [mention, change] : bad) {
+        nlohmann::ordered_json value = json;
+        for (const auto& [key, v] : change.items())
+            value[key] = v;
+        error.clear();
+        check(!kast::componentFromJson(type, value, error) && contains(error, mention),
+              std::format("particles: {} rejected ({})", change.dump(), error).c_str());
+    }
+
+    // At scene load: a clear error naming the field, and the scene being loaded into is left as it was.
+    kast::Scene scene;
+    scene.create("Kept");
+    nlohmann::ordered_json file = kast::sceneToJson(scene);
+    nlohmann::ordered_json bogus = json;
+    bogus["maxParticles"] = 0;
+    file["entities"][0]["components"]["ParticleEmitter"] = bogus;
+    error.clear();
+    check(!kast::sceneFromJson(file, scene, error) && contains(error, "maxParticles") && contains(error, "65536"),
+          "particles: a scene with a bad emitter does not load, and says why");
+    check(scene.children(entt::null).size() == 1 && !scene.registry().all_of<kast::ParticleEmitter>(scene.children(entt::null)[0]),
+          "particles: the failed load leaves the scene as it was");
+    file["entities"][0]["components"]["ParticleEmitter"] = json;
+    check(kast::sceneFromJson(file, scene, error) &&
+              scene.registry().get<kast::ParticleEmitter>(scene.children(entt::null)[0]).shape == kast::ParticleShape::Box,
+          "particles: a scene with an emitter loads");
+}
+
+// The emitter clock: frame-rate independent spawning with the fraction carried, bursts per cycle, one-shot end, the
+// large-dt clamp, pause; particleSystem's states, and Play start / Stop.
+void checkParticleClock()
+{
+    check(kast::clampParticleDt(5.0f) == kast::kMaxParticleDt && kast::clampParticleDt(-1.0f) == 0.0f &&
+              kast::clampParticleDt(std::nanf("")) == 0.0f && kast::clampParticleDt(0.02f) == 0.02f,
+          "particles: dt clamps to 0..0.1 s (NaN: 0)");
+    kast::ParticleEmitter emitter;
+    emitter.rate = 10.0f;
+    const auto running = [] {
+        kast::ParticleEmitterState state;
+        state.playing = true;
+        return state;
+    };
+    kast::ParticleEmitterState state = running();
+    const int first = kast::advanceEmitter(emitter, state, 0.05f);
+    const int second = kast::advanceEmitter(emitter, state, 0.05f);
+    const int third = kast::advanceEmitter(emitter, state, 0.05f);
+    check(first == 0 && second == 1 && third == 0 && near(state.accumulator, 0.5f) && state.spawned == 1,
+          "particles: rate x dt with the fraction carried to the next frame");
+    kast::ParticleEmitterState fine = running(), coarse = running();
+    for (int i = 0; i < 300; ++i)
+        kast::advanceEmitter(emitter, fine, 1.0f / 300.0f);
+    for (int i = 0; i < 10; ++i)
+        kast::advanceEmitter(emitter, coarse, 0.1f);
+    check((fine.spawned == 10 || fine.spawned == 9) && coarse.spawned == 10 && std::abs(fine.simTime - coarse.simTime) < 1e-3,
+          "particles: the same second spawns the same at 300 fps and at 10 fps (to float rounding)");
+    kast::ParticleEmitterState hitch = running();
+    check(kast::advanceEmitter(emitter, hitch, 30.0f) == 1 && near(static_cast<float>(hitch.simTime), 0.1f),
+          "particles: a 30 s hitch simulates and spawns only 0.1 s");
+
+    kast::ParticleEmitter bursts;
+    bursts.rate = 0.0f;
+    bursts.burstCount = 5;
+    bursts.duration = 1.0f;
+    state = running();
+    check(kast::advanceEmitter(bursts, state, 0.05f) == 5, "particles: the burst goes out at the start");
+    int later = 0;
+    for (int i = 0; i < 18; ++i) // to 0.95 s
+        later += kast::advanceEmitter(bursts, state, 0.05f);
+    check(later == 0 && state.cycle == 0, "particles: no burst within the cycle");
+    check(kast::advanceEmitter(bursts, state, 0.06f) == 5 && state.cycle == 1 && state.playing,
+          "particles: looping: the next cycle starts with its burst");
+    bursts.duration = 0.01f;
+    const int many = kast::advanceEmitter(bursts, state, 0.1f);
+    check(many >= 45 && many <= 55, "particles: one burst per cycle, several cycles in a frame");
+
+    kast::ParticleEmitter oneShot = emitter;
+    oneShot.looping = false;
+    oneShot.duration = 0.2f;
+    state = running();
+    int total = 0;
+    for (int i = 0; i < 10; ++i)
+        total += kast::advanceEmitter(oneShot, state, 0.05f);
+    check(total == 2 && !state.playing && near(static_cast<float>(state.simTime), 0.5f),
+          "particles: a one-shot stops emitting after its cycle; its particles keep simulating");
+    state = running();
+    state.paused = true;
+    check(kast::advanceEmitter(emitter, state, 1.0f) == 0 && state.simTime == 0.0, "particles: paused: nothing moves");
+
+    kast::Scene scene;
+    entt::registry& registry = scene.registry();
+    const entt::entity a = scene.create("A");
+    const entt::entity b = scene.create("B");
+    const entt::entity c = scene.create("C");
+    registry.emplace<kast::ParticleEmitter>(a, emitter);
+    registry.emplace<kast::ParticleEmitter>(b, emitter);
+    registry.emplace<kast::ParticleEmitter>(c).playOnStart = false;
+    kast::particleSystem(scene, 0.1f);
+    const auto* sa = registry.try_get<kast::ParticleEmitterState>(a);
+    const auto* sb = registry.try_get<kast::ParticleEmitterState>(b);
+    const auto* sc = registry.try_get<kast::ParticleEmitterState>(c);
+    check(sa && sb && sc && sa->playing && !sc->playing && sa->spawned == 1 && sc->spawned == 0,
+          "particles: particleSystem makes the states, playing if playOnStart");
+    check(sa && sb && sa->id != sb->id && sa->seed != sb->seed, "particles: each emitter has its own id and seed");
+    const uint64_t oldId = sa ? sa->id : 0;
+    registry.remove<kast::ParticleEmitter>(a);
+    kast::particleSystem(scene, 0.1f);
+    check(!registry.all_of<kast::ParticleEmitterState>(a), "particles: removing the emitter drops its state");
+    registry.emplace<kast::ParticleEmitter>(a, emitter);
+    kast::particleSystem(scene, 0.1f);
+    check(registry.get<kast::ParticleEmitterState>(a).id != oldId, "particles: re-adding starts a fresh emitter");
+
+    // Play starts afresh from the edit mode preview; Stop's restored scene has no state until the preview ticks again.
+    Document doc;
+    resetToDefault(doc);
+    const entt::entity cube = doc.scene.children(entt::null)[2];
+    doc.scene.registry().emplace<kast::ParticleEmitter>(cube, emitter);
+    for (int i = 0; i < 10; ++i)
+        updatePlay(doc, 0.1f);
+    const auto* edit = doc.scene.registry().try_get<kast::ParticleEmitterState>(cube);
+    check(edit && edit->spawned == 10, "particles: edit mode previews the emitter");
+    const uint64_t editId = edit ? edit->id : 0;
+    startPlay(doc);
+    updatePlay(doc, 0.1f);
+    const auto* play = doc.scene.registry().try_get<kast::ParticleEmitterState>(cube);
+    check(play && play->id != editId && play->spawned == 1, "particles: Play starts the emitter afresh");
+    const uint64_t playId = play ? play->id : 0;
+    stopPlay(doc);
+    const entt::entity restored = doc.scene.children(entt::null)[2];
+    check(!doc.scene.registry().all_of<kast::ParticleEmitterState>(restored), "particles: Stop drops the Play state");
+    updatePlay(doc, 0.1f);
+    const auto* after = doc.scene.registry().try_get<kast::ParticleEmitterState>(restored);
+    check(after && after->id != playId && after->spawned == 1, "particles: after Stop the preview starts again");
+}
+
+// The culling bound: shape reach (scaled), flight at the top speed for the longest life, the fall, half the largest size.
+void checkParticleBounds()
+{
+    kast::ParticleEmitter emitter; // radius 0.25, speed <= 1, life <= 3, size <= 0.5 x endSize 2
+    check(near(kast::particleReach(emitter, 1.0f), 0.25f + 3.0f + 0.5f), "particles: default reach");
+    emitter.gravity = {0.0f, -2.0f, 0.0f};
+    check(near(kast::particleReach(emitter, 1.0f), 0.25f + 3.0f + 9.0f + 0.5f), "particles: gravity adds g t^2 / 2");
+    emitter.gravity = {0.0f, 0.0f, 0.0f};
+    check(near(kast::particleReach(emitter, 2.0f), 0.5f + 3.0f + 0.5f), "particles: world space: scale grows the shape only");
+    emitter.space = kast::ParticleSpace::Local;
+    check(near(kast::particleReach(emitter, 2.0f), 0.5f + 6.0f + 0.5f), "particles: local space: scale grows the flight too");
+    emitter.space = kast::ParticleSpace::World;
+    emitter.shape = kast::ParticleShape::Box;
+    emitter.boxSize = {2.0f, 0.0f, 0.0f};
+    emitter.speedMin = -4.0f; // either order, either sign
+    check(near(kast::particleReach(emitter, 1.0f), 1.0f + 12.0f + 0.5f), "particles: box half diagonal, |speed|");
+
+    kast::ParticleEmitter small;
+    small.lifetimeMin = small.lifetimeMax = 1.0f;
+    float world[16];
+    kast::mtxFromTrs(world, {10.0f, 0.0f, -5.0f}, bx::Quaternion{bx::InitIdentity}, {1.0f, 3.0f, 1.0f});
+    const kast::Aabb box = kast::particleBounds(small, world);
+    const float reach = 0.25f * 3.0f + 1.0f + 0.5f;
+    check(near(box.min, {10.0f - reach, -reach, -5.0f - reach}) && near(box.max, {10.0f + reach, reach, -5.0f + reach}),
+          "particles: bounds around the emitter's world position, by the largest scale axis");
+    float view[16], proj[16], viewProj[16];
+    bx::mtxLookAt(view, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}, bx::Handedness::Right);
+    bx::mtxProj(proj, 60.0f, 1.0f, 0.1f, 100.0f, false, bx::Handedness::Right);
+    bx::mtxMul(viewProj, view, proj);
+    const kast::Frustum frustum = kast::frustumFromViewProj(viewProj, false);
+    kast::mtxFromTrs(world, {0.0f, 0.0f, -10.0f}, bx::Quaternion{bx::InitIdentity}, {1.0f, 1.0f, 1.0f});
+    check(kast::intersects(frustum, kast::particleBounds(small, world)), "particles: an emitter in view is drawn");
+    kast::mtxFromTrs(world, {0.0f, 0.0f, 10.0f}, bx::Quaternion{bx::InitIdentity}, {1.0f, 1.0f, 1.0f});
+    check(!kast::intersects(frustum, kast::particleBounds(small, world)), "particles: one behind the camera is culled");
+    small.speedMin = small.speedMax = 30.0f; // flies into view within its life
+    check(kast::intersects(frustum, kast::particleBounds(small, world)), "particles: unless its particles can fly into view");
+}
+
+// Headless bgfx (Noop renderer): without compute, one warning and no GPU work; with it (Noop claims compute support)
+// the renderer's emitter buffers come and go with emitters, scenes and Play, and nothing is left after shutdown.
+void checkParticlesNoop()
+{
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    if (!bgfx::init(init)) {
+        check(false, "particles: headless bgfx starts");
+        return;
+    }
+    const auto handles = [] {
+        bgfx::frame(); // frees what was destroyed
+        const bgfx::Stats* stats = bgfx::getStats();
+        return std::array<uint32_t, 4>{stats->numDynamicVertexBuffers, stats->numVertexBuffers, stats->numPrograms,
+                                       stats->numUniforms};
+    };
+    const auto buffers = [&] { return handles()[0]; };
+    const std::array<uint32_t, 4> start = handles();
+
+    kast::Scene scene;
+    const entt::entity a = scene.create("A");
+    const entt::entity b = scene.create("B");
+    scene.registry().emplace<kast::ParticleEmitter>(a);
+    scene.registry().emplace<kast::ParticleEmitter>(b);
+    kast::particleSystem(scene, 0.1f);
+    {
+        const std::string warning = "Particles: the GPU has no compute shader support";
+        const auto count = [&] {
+            return std::ranges::count_if(kast::log::lines(), [&](const std::string& line) { return contains(line, warning); });
+        };
+        const auto before = count();
+        kast::ParticleRenderer noCompute;
+        noCompute.init(0);
+        const bool none = noCompute.simulate(scene, 0, nullptr).empty() && noCompute.simulate(scene, 0, nullptr).empty();
+        check(none && noCompute.emitters() == 0 && buffers() == start[0], "particles: no compute: nothing simulated or drawn");
+        check(count() - before == 1, "particles: no compute: one warning");
+        noCompute.shutdown();
+        check(handles() == start, "particles: no compute: no GPU handles");
+    }
+
+    { // off screen: not drawn, still simulated (its buffer stays and is stepped, so there's no pop on return)
+        kast::ParticleRenderer particles;
+        particles.init(bgfx::getCaps()->supported);
+        float away[16], proj[16], viewProj[16];
+        bx::mtxLookAt(away, {0.0f, 0.0f, 10.0f}, {0.0f, 0.0f, 20.0f}, {0.0f, 1.0f, 0.0f}, bx::Handedness::Right);
+        bx::mtxProj(proj, 60.0f, 1.0f, 0.1f, 100.0f, false, bx::Handedness::Right);
+        bx::mtxMul(viewProj, away, proj);
+        const kast::Frustum frustum = kast::frustumFromViewProj(viewProj, false);
+        const size_t shown = particles.simulate(scene, 0, nullptr).size();
+        const size_t culled = particles.simulate(scene, 0, &frustum).size();
+        check(shown == 2 && culled == 0 && particles.emitters() == 2, "particles: off screen: culled, still simulated");
+        particles.shutdown();
+        check(handles() == start, "particles: ParticleRenderer shutdown frees everything");
+    }
+
+    kast::Renderer renderer;
+    renderer.init();
+    const uint32_t base = buffers();
+    float view[16], proj[16];
+    bx::mtxLookAt(view, {0.0f, 1.0f, 5.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, bx::Handedness::Right);
+    bx::mtxProj(proj, 60.0f, 1.0f, 0.1f, 100.0f, false, bx::Handedness::Right);
+    const auto render = [&](kast::Scene& s) {
+        kast::particleSystem(s, 0.1f);
+        renderer.render(s, {}, kast::Renderer::kShadowViews, view, proj, 0);
+        return buffers() - base;
+    };
+    const uint32_t two = render(scene);
+    scene.registry().get<kast::ParticleEmitter>(a).maxParticles = 50;
+    const uint32_t resized = render(scene);
+    scene.registry().remove<kast::ParticleEmitter>(a);
+    const uint32_t removed = render(scene);
+    scene.destroy(b);
+    const uint32_t destroyed = render(scene);
+    check(two == 2 && resized == 2 && removed == 1 && destroyed == 0,
+          "particles: a buffer per emitter: remade on resize, freed with the component and the entity");
+    kast::Scene other;
+    other.registry().emplace<kast::ParticleEmitter>(other.create("C"));
+    const uint32_t switched = render(other);
+    other.registry().clear<kast::ParticleEmitterState>(); // as startPlay does
+    const uint32_t replayed = render(other);
+    std::string error;
+    const nlohmann::ordered_json snapshot = kast::sceneToJson(other);
+    check(kast::sceneFromJson(snapshot, other, error), "particles: the snapshot restores");
+    const uint32_t restored = render(other);
+    const uint32_t back = render(scene);
+    check(switched == 1 && replayed == 1 && restored == 1 && back == 0,
+          "particles: scene switch, Play start and Stop's restore replace the buffers, never add to them");
+    render(other);
+    renderer.shutdown();
+    const std::array<uint32_t, 4> end = handles();
+    kast::log::info(std::format("particles leak check: dynamic vertex buffers {} at start, {} after Renderer init; over "
+                                "that: 2 emitters +{}, one resized +{}, component removed +{}, entity destroyed +{}, scene "
+                                "switch +{}, Play start +{}, Stop +{}, back to the empty scene +{}; after shutdown {}. "
+                                "Vertex buffers {} -> {}, programs {} -> {}, uniforms {} -> {}",
+                                start[0], base, two, resized, removed, destroyed, switched, replayed, restored, back, end[0],
+                                start[1], end[1], start[2], end[2], start[3], end[3]));
+    check(end == start, "particles: Renderer shutdown leaves no GPU handles");
+    bgfx::shutdown();
 }
 
 // --probe-png <png> <fx,fy,r,g,b,tolerance>...: each pixel at (fx, fy) (0..1 across and down the image) is within
@@ -9246,6 +9562,15 @@ int main(int argc, char** argv)
         kast::log::info(g_failures == 0 ? "All undo checks passed" : std::format("{} undo check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--particles") { // only the particle checks
+        checkParticleJson();
+        checkParticleClock();
+        checkParticleBounds();
+        checkParticlesNoop();
+        removeTree(testRoot());
+        kast::log::info(g_failures == 0 ? "All particle checks passed" : std::format("{} particle check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--net") // only the networking checks
         return netSelfCheck() == 0 ? 0 : 1;
     if (argc == 4 && std::string_view(argv[1]) == "--live-auth") // against a running services/world stack
@@ -9378,6 +9703,10 @@ int main(int argc, char** argv)
     checkAudioSourceComponent();
     checkAudioProjectSettings();
     checkAudioPlaySession();
+    checkParticleJson();
+    checkParticleClock();
+    checkParticleBounds();
+    checkParticlesNoop();
     g_failures += netSelfCheck(); // tests/net_self_check.cpp
     checkMountedPak(); // last: the mounted pak hides the disk for the rest of the run
     removeTree(testRoot());
