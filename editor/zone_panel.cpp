@@ -499,6 +499,9 @@ void ZonePanel::run(Document& doc, ZoneSession& zone, const Pending& pending)
 void ZonePanel::setTerrainMap(Document& doc, int id)
 {
     entt::entity terrain = firstTerrain(doc);
+    const auto idOf = [&](entt::entity entity) { return doc.scene.registry().get<kast::PersistentId>(entity).value; };
+    beginSceneEdit(doc, "Set Terrain Map",
+                   {.entities = terrain == entt::null ? std::vector<kast::EntityId>() : std::vector{idOf(terrain)}});
     if (terrain == entt::null) {
         terrain = doc.scene.create("Terrain");
         doc.scene.registry().emplace<kast::Terrain>(terrain);
@@ -507,6 +510,7 @@ void ZonePanel::setTerrainMap(Document& doc, int id)
     }
     doc.scene.registry().get<kast::Terrain>(terrain).map = id;
     markDirty(doc);
+    endSceneEdit(doc, {idOf(terrain)});
 }
 
 void ZonePanel::drawUnsavedPrompt(Document& doc, ZoneSession& zone)

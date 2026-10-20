@@ -103,6 +103,21 @@ bool Scene::reparent(entt::entity entity, entt::entity newParent)
     return true;
 }
 
+void Scene::setSiblingIndex(entt::entity entity, size_t index)
+{
+    if (!valid(entity))
+        return;
+    std::vector<entt::entity>& list = siblings(parent(entity));
+    list.erase(std::find(list.begin(), list.end(), entity));
+    list.insert(list.begin() + static_cast<ptrdiff_t>(std::min(index, list.size())), entity);
+}
+
+size_t Scene::siblingIndex(entt::entity entity) const
+{
+    const std::vector<entt::entity>& list = children(parent(entity));
+    return static_cast<size_t>(std::find(list.begin(), list.end(), entity) - list.begin());
+}
+
 bool Scene::isSelfOrAncestor(entt::entity ancestor, entt::entity entity) const
 {
     for (entt::entity e = entity; e != entt::null; e = parent(e))

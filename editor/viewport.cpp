@@ -1,5 +1,6 @@
 #include "viewport.h"
 
+#include "assets.h"
 #include "ui_common.h"
 
 #include <log.h>
@@ -97,9 +98,11 @@ entt::entity dropPrefabOnView(Document& doc, const std::string& path, const kast
         nearest = ray.direction.y != 0.0f ? -ray.origin.y / ray.direction.y : -1.0f; // the y = 0 plane, if ahead
     if (nearest < 0.0f)
         nearest = kDropDistance;
+    beginSceneEdit(doc, std::format("Add {}", utf8(fromUtf8(path).stem()))); // one step with the placement
     const entt::entity entity = dropPrefab(doc, path, entt::null, error);
     if (entity != entt::null)
         doc.scene.registry().get<kast::Transform>(entity).position = bx::mad(ray.direction, nearest, ray.origin);
+    endSceneEdit(doc);
     return entity;
 }
 
@@ -397,6 +400,9 @@ void SceneViewport::manipulate(Document& doc, const float* view, const float* pr
     ImGuizmo::Enable(drag_ == Drag::None && !ImGui::GetIO().KeyAlt);
     float world[16];
     scene.worldMatrix(entity, world);
+    // The entity before this frame's drag: one undo step from the first change until the gizmo lets go.
+    const SceneScope scope{.entities = {scene.registry().get<kast::PersistentId>(entity).value}};
+    const SceneState before = doc.recording || doc.play != PlayState::Stopped ? SceneState() : captureScene(scene, scope);
     if (!ImGuizmo::Manipulate(view, proj, static_cast<ImGuizmo::OPERATION>(operation_),
                               local_ ? ImGuizmo::LOCAL : ImGuizmo::WORLD, world))
         return;
@@ -414,6 +420,8 @@ void SceneViewport::manipulate(Document& doc, const float* view, const float* pr
     }
     kast::Transform& transform = scene.registry().get<kast::Transform>(entity);
     kast::decomposeTrs(local, transform.position, transform.rotation, transform.scale);
+    const char* verb = operation_ == ImGuizmo::ROTATE ? "Rotate" : operation_ == ImGuizmo::SCALE ? "Scale" : "Move";
+    sceneGesture(doc, std::format("{} {}", verb, scene.registry().get<kast::Name>(entity).value), scope, before);
     markDirty(doc);
 }
 

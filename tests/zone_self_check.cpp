@@ -27,6 +27,7 @@
 #include <stb_image_write.h>
 #include <filesystem>
 #include <functional>
+#include <tuple>
 #include <map>
 #include <set>
 #include <string>
@@ -385,6 +386,8 @@ void check_png() {
 std::string serialize(const ZoneState& s) {
     std::string out = s.manifest.dump() + "\n" + s.areas.dump() + "\n";
     for (const auto& [t, j] : s.spawns) out += tile_name(t) + ":" + j.dump() + "\n";
+    for (const auto& [t, j] : s.objects) out += "objects " + tile_name(t) + ":" + j.dump() + "\n";
+    for (const auto& [t, j] : s.interactables) out += "interactables " + tile_name(t) + ":" + j.dump() + "\n";
     for (const auto& [t, h] : s.heights) out += tile_name(t) + ":" + encode_r16(*h);
     return out;
 }
@@ -769,7 +772,8 @@ void check_process_runner() {
     CHECK(run.exitCode() == 0 && fs::exists(root / "maps" / "sculpt" / ".server" / "nav" / "1_1.navtile"));
 }
 
-// Each kind of edit undoes to the exact files before it and redoes to the exact files after.
+// Each kind of edit undoes to the exact files before it and redoes to the exact files after, as one step named for
+// what it changed.
 void check_undo_each() {
     const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "undo_each");
     Project p = scan_project(root);
@@ -778,35 +782,122 @@ void check_undo_each() {
     const std::string png = encode_png16(km::Heights(size_t(km::kTileSamples) * km::kTileSamples, 1234));
     std::string err;
     Brush brush;
-    const std::vector<std::pair<const char*, std::function<void(ZoneState&)>>> edits = {
-        {"raise", [&](ZoneState& s) { apply_brush(info, s, 256, 256, brush, 5); }},
-        {"flatten", [&](ZoneState& s) { brush.mode = BrushMode::Flatten; brush.target = 2; apply_brush(info, s, 256, 256, brush, 1); }},
-        {"import", [&](ZoneState& s) { import_png16(info, s, {1, 1}, png, err); }},
-        {"height range", [&](ZoneState& s) { set_height_range(info, s, -20, 80); }},
-        {"manifest", [](ZoneState& s) { s.manifest["name"] = "Renamed"; s.manifest["material"] = "materials/stone.mat"; }},
-        {"add area", [](ZoneState& s) { add_rect_area(s, "a", {10, 10}, {90, 90}, 1); }},
-        {"move vertex", [](ZoneState& s) { move_area_vertex(areas_list(s)[0], 1, {120, 5}); }},
-        {"portal", [](ZoneState& s) { areas_list(s)[0]["portal"] = {{"map", 10u}, {"pos", vec3_json({128, 0, 100})}, {"heading", 0}}; }},
-        {"add spawn", [](ZoneState& s) { add_spawn(s, "x", "Guard", {100, 0, 100}, 0, 5); }},
-        {"add path", [](ZoneState& s) { add_path(s, *find_spawn(s, "x"), "p", {{100, 0, 100}, {150, 0, 100}}, 1, false); }},
-        {"move spawn", [](ZoneState& s) { move_spawn(s, *find_spawn(s, "x"), {400, 0, 400}); }},
-        {"delete spawn", [](ZoneState& s) { delete_spawn(s, *find_spawn(s, "x")); }},
-        {"delete area", [](ZoneState& s) { delete_area(s, 0); }},
-        {"add tile", [&](ZoneState& s) { add_tile(info, s, {2, 1}); }},
-        {"remove tile", [&](ZoneState& s) { remove_tile(info, s, {0, 1}); }},
-        {"map spawn", [](ZoneState& s) { s.manifest["spawn"]["pos"] = vec3_json({300, 1, 300}); }},
+    const auto first_object = [](const ZoneState& s) { return all_objects(s).front(); };
+    const std::vector<std::tuple<const char*, const char*, std::function<void(ZoneState&)>>> edits = {
+        {"raise", "Edit Terrain", [&](ZoneState& s) { apply_brush(info, s, 256, 256, brush, 5); }},
+        {"flatten", "Edit Terrain", [&](ZoneState& s) { brush.mode = BrushMode::Flatten; brush.target = 2; apply_brush(info, s, 256, 256, brush, 1); }},
+        {"import", "Edit Terrain", [&](ZoneState& s) { import_png16(info, s, {1, 1}, png, err); }},
+        {"height range", "Edit Terrain", [&](ZoneState& s) { set_height_range(info, s, -20, 80); }},
+        {"manifest", "Edit Map", [](ZoneState& s) { s.manifest["name"] = "Renamed"; s.manifest["material"] = "materials/stone.mat"; }},
+        {"add area", "Edit Areas", [](ZoneState& s) { add_rect_area(s, "a", {10, 10}, {90, 90}, 1); }},
+        {"move vertex", "Edit Areas", [](ZoneState& s) { move_area_vertex(areas_list(s)[0], 1, {120, 5}); }},
+        {"portal", "Edit Areas", [](ZoneState& s) { areas_list(s)[0]["portal"] = {{"map", 10u}, {"pos", vec3_json({128, 0, 100})}, {"heading", 0}}; }},
+        {"add spawn", "Edit Spawns", [](ZoneState& s) { add_spawn(s, "x", "Guard", {100, 0, 100}, 0, 5); }},
+        {"add path", "Edit Spawns", [](ZoneState& s) { add_path(s, *find_spawn(s, "x"), "p", {{100, 0, 100}, {150, 0, 100}}, 1, false); }},
+        {"move spawn", "Edit Spawns", [](ZoneState& s) { move_spawn(s, *find_spawn(s, "x"), {400, 0, 400}); }},
+        {"delete spawn", "Edit Spawns", [](ZoneState& s) { delete_spawn(s, *find_spawn(s, "x")); }},
+        {"delete area", "Edit Areas", [](ZoneState& s) { delete_area(s, 0); }},
+        {"add object", "Edit Objects", [](ZoneState& s) { add_object(s, km::ObjectType::Interactable, "prefabs/chest.prefab", {100, 0, 100}, 0, 1); }},
+        {"move object", "Edit Objects", [&](ZoneState& s) { move_object(s, first_object(s), {400, 0, 400}); }}, // into another tile
+        {"delete object", "Edit Objects", [&](ZoneState& s) { delete_object(s, first_object(s)); }},
+        {"add tile", "Edit Terrain", [&](ZoneState& s) { add_tile(info, s, {2, 1}); }},
+        {"remove tile", "Edit Terrain", [&](ZoneState& s) { remove_tile(info, s, {0, 1}); }},
+        {"map spawn", "Edit Map", [](ZoneState& s) { s.manifest["spawn"]["pos"] = vec3_json({300, 1, 300}); }},
     };
-    for (const auto& [name, fn] : edits) {
+    for (const auto& [name, step, fn] : edits) {
         const std::string before = serialize(doc.state);
+        const size_t steps = doc.history().size();
         doc.edit(fn);
         const std::string after = serialize(doc.state);
+        const bool named = doc.history().size() == steps + 1 && doc.history().undoName() == step;
         doc.undo();
         const bool undone = serialize(doc.state) == before;
         doc.redo();
         const bool redone = serialize(doc.state) == after;
-        if (before == after || !undone || !redone) std::fprintf(stderr, "  undo/redo of \"%s\"\n", name);
-        CHECK(before != after && undone && redone);
+        if (before == after || !undone || !redone || !named) std::fprintf(stderr, "  undo/redo of \"%s\"\n", name);
+        CHECK(before != after && undone && redone && named);
     }
+}
+
+// The zone's history (docs/editor/undo-redo.html): a stroke is one step, no-op edits record nothing, undo is refused
+// mid-stroke, a new edit discards the redo branch, 100 steps at most, the saved state is clean again after undo / redo,
+// and each map (each loaded doc) has its own steps.
+void check_undo_history() {
+    const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "undo_history");
+    Project p = scan_project(root);
+    ZoneDoc doc = flat_map(p);
+    ZoneDoc capped = flat_map(p); // before doc is saved over the folder new_map wants
+    CHECK(!doc.canUndo() && !doc.canRedo() && doc.history().size() == 0);
+    const km::MapInfo info = info_of(doc);
+    const auto dab = [&](ZoneState& s, float x) { apply_brush(info, s, x, 256, Brush{}, 2); };
+
+    // A stroke of several dabs: one step; undo is refused until it ends.
+    const std::string start = serialize(doc.state);
+    doc.begin();
+    for (float x = 100; x <= 400; x += 20) dab(doc.state, x);
+    const std::string stroked = serialize(doc.state);
+    doc.undo();
+    CHECK(doc.editing() && serialize(doc.state) == stroked && !doc.canUndo());
+    doc.commit();
+    CHECK(doc.history().size() == 1 && doc.history().undoName() == "Edit Terrain");
+    doc.undo();
+    CHECK(serialize(doc.state) == start && doc.canRedo());
+    doc.redo();
+    CHECK(serialize(doc.state) == stroked);
+
+    // No-op edits: nothing changed, or changed and changed back within one gesture (a field typed and restored).
+    doc.edit([](ZoneState&) {});
+    doc.edit([](ZoneState& s) {
+        const Json name = s.manifest["name"];
+        s.manifest["name"] = "Typing";
+        s.manifest["name"] = name;
+    });
+    CHECK(doc.history().size() == 1);
+
+    // A new edit after undo discards the redo branch.
+    doc.edit([](ZoneState& s) { s.manifest["name"] = "A"; });
+    doc.undo();
+    CHECK(doc.canRedo());
+    doc.edit([](ZoneState& s) { s.manifest["name"] = "B"; });
+    CHECK(!doc.canRedo() && doc.history().size() == 2 && doc.state.manifest["name"] == "B");
+    doc.undo();
+    CHECK(doc.state.manifest["name"] != "A" && doc.state.manifest["name"] != "B");
+    doc.redo();
+    CHECK(doc.state.manifest["name"] == "B");
+
+    // Save point: clean after save, dirty after an edit, clean when undone to it, dirty again on redo.
+    CHECK(save_map(p, doc, false).empty() && !doc.dirty());
+    doc.edit([&](ZoneState& s) { dab(s, 256); });
+    CHECK(doc.dirty());
+    doc.undo();
+    CHECK(!doc.dirty());
+    doc.redo();
+    CHECK(doc.dirty());
+
+    // Per map: another map's steps are its own, and a copied (reloaded, new) doc starts with none.
+    std::string err;
+    auto other = load_map(p, "meadow", err);
+    CHECK(other.has_value() && !other->canUndo());
+    if (other) {
+        const Json name = other->state.manifest["name"];
+        other->edit([](ZoneState& s) { s.manifest["name"] = "Other"; });
+        const std::string mine = serialize(doc.state);
+        const size_t mySteps = doc.history().size();
+        other->undo();
+        CHECK(other->state.manifest["name"] == name && serialize(doc.state) == mine && doc.history().size() == mySteps);
+        const ZoneDoc copy = *other;
+        CHECK(!copy.canUndo() && !copy.canRedo() && other->canRedo());
+    }
+
+    // The cap: 105 edits keep the last 100; undoing them all lands on the state after the 5th.
+    std::string afterFifth;
+    for (int i = 1; i <= 105; ++i) {
+        capped.edit([i](ZoneState& s) { s.manifest["name"] = "Edit " + std::to_string(i); });
+        if (i == 5) afterFifth = serialize(capped.state);
+    }
+    CHECK(capped.history().size() == UndoStack::kMaxSteps);
+    while (capped.canUndo()) capped.undo();
+    CHECK(serialize(capped.state) == afterFifth && capped.state.manifest["name"] == "Edit 5");
 }
 
 } // namespace
@@ -1004,6 +1095,7 @@ int main(int argc, char** argv) {
     check_objects();
     check_scatter();
     check_undo_each();
+    check_undo_history();
     check_tiles();
     check_process_runner();
     check_terrain_gen();

@@ -310,6 +310,11 @@ public:
     // or the move would put part of entity's subtree deeper than kMaxHierarchyDepth.
     bool reparent(entt::entity entity, entt::entity newParent);
 
+    // Moves entity to position index among its siblings (past the end: last). No-op if entity isn't valid.
+    void setSiblingIndex(entt::entity entity, size_t index);
+    // entity's position among its siblings.
+    size_t siblingIndex(entt::entity entity) const;
+
     // True if ancestor is entity or one of its ancestors.
     bool isSelfOrAncestor(entt::entity ancestor, entt::entity entity) const;
 

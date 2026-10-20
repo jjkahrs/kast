@@ -113,7 +113,7 @@ target_link_libraries(kast_map PUBLIC nlohmann_json::nlohmann_json)
 
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
-  engine/app.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/prefab.cpp engine/components.cpp
+  engine/app.cpp engine/undo.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/prefab.cpp engine/components.cpp
   engine/systems.cpp engine/renderer.cpp engine/shadow.cpp engine/frustum.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
@@ -142,7 +142,7 @@ target_link_libraries(kast_player PRIVATE kast_engine SDL3::SDL3)
 
 # --- editor ---
 add_executable(kast_editor
-  editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
+  editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
   editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp editor/editor_settings.cpp
   editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp editor/zone_cli.cpp
@@ -173,7 +173,7 @@ target_include_directories(kast_zone_self_check SYSTEM PRIVATE "${Stb_INCLUDE_DI
 
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
-add_executable(kast_self_check tests/self_check.cpp tests/net_self_check.cpp tests/net_test_util.cpp editor/document.cpp editor/build.cpp editor/camera.cpp
+add_executable(kast_self_check tests/self_check.cpp tests/net_self_check.cpp tests/net_test_util.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp
   editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/external_editor.cpp editor/editor_settings.cpp
   editor/online.cpp "${KAST_MANIFEST}")
 target_include_directories(kast_self_check PRIVATE editor)
@@ -1961,6 +1961,11 @@ add_test(NAME gui_builder_add_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_add.png"
           "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} ${builder_args} --gui-select buttons --gui-add Button"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# GUI Builder undo (docs/editor/undo-redo.html): the --gui-add step undone and redone through the builder's history.
+add_test(NAME gui_builder_undo_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_undo.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} ${builder_args} --gui-select buttons --gui-add Button --gui-undo 1 --gui-redo 1"
+          "-DEXPECT_OUTPUT=Undo Add Button.*Redo Add Button" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME gui_builder_save
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_save.png"
           "-DEXTRA_ARGS=--project ${KAST_NEW_GUI_PROJECT} ${builder_args} --gui-select buttons --gui-add Button --gui-save"

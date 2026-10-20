@@ -69,10 +69,10 @@ constexpr const char* kUsage =
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
     "[--focus-panel Window] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
-    "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy]] [--sim-key frame,key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
+    "[--gui-add Panel|Text|Button] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] [--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy]] [--sim-key frame,key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
-    "[--prefab-save] [--prefab-back] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [zone edits] | "
+    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [zone edits] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel (without --play: on the Scene view), for
@@ -134,12 +134,14 @@ struct Options {
     std::optional<std::array<float, 3>> focus; // --focus x,z,distance: the Scene camera's pivot on the zone ground
     std::optional<std::array<int, 2>> promptRemoveTile; // --prompt-remove-tile: open the Zone tab's remove-tile dialog
     bool fileSave = false;  // --file-save: File > Save (as Ctrl+S) at frame kAddComponentPopupFrame, for tests
+    int undo = 0, redo = 0; // --scene-undo N / --scene-redo N: scene Undo N times, then Redo N times, after the startup edits
     std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting", "Post Processing", "Physics", "Mixer", "Network" and "Online" also open it) to the front, for screenshots
     std::string openGui;            // open this .rml in the GUI Builder (relative paths: to the project, else the cwd)
     std::string guiSelect;          // then select the element with this id in it
     std::optional<std::pair<int, int>> guiPreviewSize; // add this GUI Preview resolution and pick it
     std::optional<std::pair<int, int>> guiPick; // click the GUI Preview here (preview pixels, kAddComponentPopupFrame)
     std::optional<GuiKind> guiAdd; // then add this element as the GUI Hierarchy's + buttons do
+    int guiUndo = 0, guiRedo = 0;  // then GUI Undo N times, then Redo N times
     bool guiSave = false;          // then save the GUI as its Save button does
     std::string guiClick;           // with --play: click the game GUI element with this id (frame kAddComponentPopupFrame)
     std::optional<SimMouse> simMouse; // push these SDL mouse events on the Game panel (--play) or Scene view (the cursor lock isn't applied)
@@ -393,6 +395,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
                 return std::nullopt;
         } else if (arg == "--gui-add" && hasValue && parseGuiKind(argv[i + 1], options.guiAdd)) {
             ++i;
+        } else if (arg == "--gui-undo" && hasValue && parsePositive(argv[i + 1], options.guiUndo)) {
+            ++i;
+        } else if (arg == "--gui-redo" && hasValue && parsePositive(argv[i + 1], options.guiRedo)) {
+            ++i;
         } else if (arg == "--gui-save") {
             options.guiSave = true;
         } else if (arg == "--gui-pick" && hasValue) {
@@ -429,6 +435,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.sculptLoop = true;
         } else if (arg == "--file-save") {
             options.fileSave = true;
+        } else if (arg == "--scene-undo" && hasValue && parsePositive(argv[i + 1], options.undo)) {
+            ++i;
+        } else if (arg == "--scene-redo" && hasValue && parsePositive(argv[i + 1], options.redo)) {
+            ++i;
         } else if (arg == "--focus" && hasValue) {
             if (!(options.focus = zone_cli::parseFocus(argv[++i]))) {
                 kast::log::error(std::format("Invalid --focus '{}', expected x,z,distance", argv[i]));
@@ -552,14 +562,15 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.prefabBackPrompt ||
                              options.noVsync || options.noInstancing || options.noCulling || !options.worldAddress.empty() || options.onlineLoginEnv ||
                              options.onlineCompose || !options.zoneOps.empty() || options.headless || options.noRecycle ||
-                             options.sculptLoop || options.focus || options.promptRemoveTile || options.fileSave;
+                             options.sculptLoop || options.focus || options.promptRemoveTile || options.fileSave ||
+                             options.undo || options.redo;
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --select-network-entity, --add-component-popup, --new-component[-prompt], "
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
                          "--assets-menu, "
                          "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
                          "--gui-click, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
-                         "steps, --assets-delete, --inspector-apply-menu, --file-save and the zone flags require "
+                         "steps, --scene-undo, --scene-redo, --assets-delete, --inspector-apply-menu, --file-save and the zone flags require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
     }
@@ -567,8 +578,9 @@ std::optional<Options> parseArgs(int argc, char** argv)
         kast::log::error("--save-scene requires --scene <file> or --project <dir>");
         return std::nullopt;
     }
-    if ((!options.guiSelect.empty() || options.guiPick || options.guiAdd || options.guiSave) && options.openGui.empty()) {
-        kast::log::error("--gui-select, --gui-pick, --gui-add and --gui-save require --open-gui <file.rml>");
+    if ((!options.guiSelect.empty() || options.guiPick || options.guiAdd || options.guiUndo || options.guiRedo ||
+         options.guiSave) && options.openGui.empty()) {
+        kast::log::error("--gui-select, --gui-pick, --gui-add, --gui-undo, --gui-redo and --gui-save require --open-gui <file.rml>");
         return std::nullopt;
     }
     if (!options.guiClick.empty() && !options.play) {
@@ -630,12 +642,64 @@ void buildDefaultLayout(ImGuiID dockspace)
     ImGui::DockBuilderFinish(dockspace);
 }
 
+// The root window that has keyboard focus (a docked panel, not its child windows); empty for none, menus and popups.
+std::string focusedWindow()
+{
+    const ImGuiWindow* window = ImGui::GetCurrentContext()->NavWindow;
+    if (!window || !window->RootWindow || (window->RootWindow->Flags & ImGuiWindowFlags_Popup) ||
+        std::string_view(window->RootWindow->Name).starts_with("##"))
+        return {};
+    return window->RootWindow->Name;
+}
+
+// The document Edit > Undo / Redo and the shortcuts act on, by the focused window (menus and popups: the one before).
+// The GUI Builder's panels edit the open GUI, the Zone tab the open map; every other window edits the scene (or the open
+// prefab).
+UndoTarget focusedUndoTarget(const std::string& window, Document& doc, GuiBuilder& guiBuilder, ZoneSession& zone)
+{
+    constexpr const char* kGuiWindows[] = {GuiBuilder::kHierarchyWindow, GuiBuilder::kInspectorWindow,
+                                           GuiBuilder::kStyleWindow, GuiBuilder::kPreviewWindow};
+    if (std::ranges::any_of(kGuiWindows, [&](const char* id) { return window.ends_with(id); }))
+        return {.history = &guiBuilder.history(),
+                .undo = [&guiBuilder] { guiBuilder.undo(); },
+                .redo = [&guiBuilder] { guiBuilder.redo(); },
+                .blocked = doc.play != PlayState::Stopped};
+    if (window == ZonePanel::kWindow) {
+        zone::ZoneDoc* z = zone.zone();
+        if (!z)
+            return {}; // no map: the scene's history stays out of the way
+        // Blocked mid-stroke, and while the tab is read-only (Play, prefab edit mode).
+        return {.history = &z->history(),
+                .undo = [z] { z->undo(); },
+                .redo = [z] { z->redo(); },
+                .blocked = doc.play != PlayState::Stopped || doc.prefabEdit.has_value() || z->editing()};
+    }
+    return {.history = &doc.history,
+            .undo = [&doc] { undoScene(doc); },
+            .redo = [&doc] { redoScene(doc); },
+            .blocked = doc.play != PlayState::Stopped};
+}
+
+// Ctrl+Z undo, Ctrl+Y and Ctrl+Shift+Z redo; ignored while a text field or drag (ImGui's own undo) or the gizmo is
+// active, and while a modal or file dialog is open.
+void undoShortcuts(const UndoTarget& target, const FileActions& files)
+{
+    if (!files.idle() || ImGui::IsAnyItemActive() || ImGuizmo::IsUsing())
+        return;
+    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, ImGuiInputFlags_RouteGlobal) && target.canUndo())
+        target.undo();
+    if ((ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Y, ImGuiInputFlags_RouteGlobal) ||
+         ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z, ImGuiInputFlags_RouteGlobal)) &&
+        target.canRedo())
+        target.redo();
+}
+
 // openMenu: a main menu to open this frame (--open-menu), or empty. openPreferences: set when File > Preferences... is
 // chosen. showLighting, showPostProcessing, showPhysics, showMixer, showNetwork, showOnline: those panels' visibility,
-// toggled in the Window menu.
-void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu, bool& openPreferences,
-                 bool& showLighting, bool& showPostProcessing, bool& showPhysics, bool& showMixer, bool& showNetwork,
-                 bool& showOnline)
+// toggled in the Window menu. undo: what the Edit menu acts on.
+void drawMenuBar(FileActions& files, Document& doc, const UndoTarget& undo, const std::string& openMenu,
+                 bool& openPreferences, bool& showLighting, bool& showPostProcessing, bool& showPhysics, bool& showMixer,
+                 bool& showNetwork, bool& showOnline)
 {
     if (ImGui::BeginMainMenuBar()) {
         if (!openMenu.empty())
@@ -656,6 +720,18 @@ void drawMenuBar(FileActions& files, Document& doc, const std::string& openMenu,
             ImGui::Separator();
             if (ImGui::MenuItem("Exit"))
                 files.exit();
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Edit")) {
+            // "###" keeps each item's id while its label names the step.
+            const bool canUndo = undo.canUndo() && files.idle();
+            const bool canRedo = undo.canRedo() && files.idle();
+            const std::string undoLabel = canUndo ? "Undo " + undo.history->undoName() : "Undo";
+            const std::string redoLabel = canRedo ? "Redo " + undo.history->redoName() : "Redo";
+            if (ImGui::MenuItem((undoLabel + "###undo").c_str(), "Ctrl+Z", false, canUndo))
+                undo.undo();
+            if (ImGui::MenuItem((redoLabel + "###redo").c_str(), "Ctrl+Y", false, canRedo))
+                undo.redo();
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("GameObject")) {
@@ -838,6 +914,7 @@ bool runPrefabStep(Document& doc, const std::string& flag, const std::string& va
             return false;
         }
         entt::registry& registry = doc.scene.registry();
+        beginSceneEdit(doc, std::format("Set {}", target), {.entities = {id}}); // as an Inspector edit
         if (target == "Name") {
             ok = json.is_string();
             if (ok)
@@ -854,6 +931,7 @@ bool runPrefabStep(Document& doc, const std::string& flag, const std::string& va
         }
         if (ok)
             markDirty(doc);
+        endSceneEdit(doc);
     } else if (flag == "--prefab-revert" || flag == "--prefab-apply") {
         const std::optional<PrefabOp> op = parsePrefabOp(value, flag == "--prefab-apply");
         if (!op) {
@@ -970,6 +1048,10 @@ int main(int argc, char** argv)
     }
     if (!options->dropModel.empty())
         createModelEntity(doc, options->dropModel, entt::null);
+    for (int i = 0; i < options->undo; ++i)
+        undoScene(doc);
+    for (int i = 0; i < options->redo; ++i)
+        redoScene(doc);
     refreshStateMachines(doc); // the Inspector and State Machines panel list them from the first frame
     const std::filesystem::path settingsFile =
         options->settingsFile.empty() ? defaultEditorSettingsFile() : std::filesystem::absolute(options->settingsFile);
@@ -1077,6 +1159,7 @@ int main(int argc, char** argv)
     if (options->simOnLog.empty())
         simStart = 0;
     float componentPollSeconds = 0.0f;
+    std::string undoWindow; // the last focused window that isn't a menu or popup: picks the Edit menu's document
     ExternalEditor externalEditor(settingsFile);
     std::string preferencesDraft; // the Preferences modal's edit of the command
     std::string composeDraft;     // and of the compose folder
@@ -1165,7 +1248,14 @@ int main(int argc, char** argv)
         }
 
         bool openPreferences = options->openPreferences && frames.frame() == kAddComponentPopupFrame;
-        drawMenuBar(files, doc, frames.frame() == kAddComponentPopupFrame ? options->openMenu : std::string(),
+        if (std::string window = focusedWindow(); !window.empty())
+            undoWindow = std::move(window);
+        const UndoTarget undo = focusedUndoTarget(undoWindow, doc, guiBuilder, zone);
+        undoShortcuts(undo, files);
+        // With --open-gui or --focus-panel: after the panel took the focus (which closes menus) and the --gui-* edits.
+        const int openMenuFrame =
+            kAddComponentPopupFrame + (options->openGui.empty() && options->focusPanel.empty() ? 0 : 10);
+        drawMenuBar(files, doc, undo, frames.frame() == openMenuFrame ? options->openMenu : std::string(),
                     openPreferences, showLighting, showPostProcessing, showPhysics, showMixer, showNetwork, showOnline);
         const ImGuiID dockspace = ImGui::GetID("MainDockSpace");
         if (!ImGui::DockBuilderGetNode(dockspace)) // no saved layout in imgui.ini
@@ -1211,6 +1301,12 @@ int main(int argc, char** argv)
         }
         if (options->guiAdd && frames.frame() == kAddComponentPopupFrame + 7)
             guiBuilder.requestAdd(*options->guiAdd);
+        if (frames.frame() == kAddComponentPopupFrame + 8) { // after --gui-add's edit was applied
+            for (int i = 0; i < options->guiUndo; ++i)
+                guiBuilder.undo();
+            for (int i = 0; i < options->guiRedo; ++i)
+                guiBuilder.redo();
+        }
         if (options->guiSave && frames.frame() == kAddComponentPopupFrame + 9)
             guiBuilder.save();
         if (!options->guiClick.empty() && frames.frame() == kAddComponentPopupFrame && !game.gui().click(options->guiClick))
@@ -1281,6 +1377,10 @@ int main(int argc, char** argv)
         drawConsole(); // submitted after Assets, Events and State Machines so Console is the front tab on first run
         drawPreferences(externalEditor, online, preferencesDraft, composeDraft, openPreferences);
         externalEditor.poll();
+        if (!ImGui::IsAnyItemActive() && !ImGuizmo::IsUsing()) {
+            endSceneGesture(doc); // the field, drag or gizmo let go: its undo step is complete
+            guiBuilder.endGesture();
+        }
         files.update();
         if (game.hasInput(doc))
             doc.input.endFrame();

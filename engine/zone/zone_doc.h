@@ -1,8 +1,9 @@
 // The zone builder's document: one map's files as JSON (edited in place, so keys the tool does not know survive), its
-// tile heights, and undo/redo as whole-state snapshots. No file IO (zone_io.h) and no window.
+// tile heights, and its undo history (docs/editor/undo-redo.html). No file IO (zone_io.h) and no window.
 #pragma once
 #include <heights.h>
 #include <map.h>
+#include <undo.h>
 
 #include <nlohmann/json.hpp>
 
@@ -27,10 +28,10 @@ struct TileLess {
 template <typename T>
 using TileMap = std::map<TileKey, T, TileLess>;
 
-// Shared between snapshots until a tile is edited (copy on write), so an undo step costs only the tiles it touched.
+// Shared between states until a tile is edited (copy on write), so an undo step holds only the tiles it touched.
 using HeightsPtr = std::shared_ptr<const kast::map::Heights>;
 
-// Everything one undo step restores.
+// Everything a map's files hold.
 struct ZoneState {
     Json manifest;               // map.json
     Json areas;                  // areas.json; null: no file
@@ -62,8 +63,9 @@ public:
     std::optional<kast::map::MapInfo> info(std::string& err) const;
     bool dirty() const { return !same(state, saved); }
 
-    // Undo: begin() before an edit (a sculpt stroke: on mouse down), commit() after (mouse up). A commit that changed
-    // nothing adds no step. edit() does both around fn.
+    // Undo: begin() before an edit (a sculpt stroke: on mouse down), commit() after (mouse up). The commit records one
+    // step holding only the parts the edit changed, before and after, named for what changed ("Sculpt Terrain"); one
+    // that changed nothing adds no step. edit() does both around fn.
     void begin();
     void commit();
     template <typename Fn>
@@ -74,15 +76,27 @@ public:
     }
     // Between begin() and commit(): mid-stroke.
     bool editing() const { return pending_.has_value(); }
-    bool canUndo() const { return !undo_.empty(); }
-    bool canRedo() const { return !redo_.empty(); }
+    bool canUndo() const { return history().canUndo(); }
+    bool canRedo() const { return history().canRedo(); }
+    // No-op mid-stroke.
     void undo();
     void redo();
+    // The steps (UndoStack::kMaxSteps at most). A copied or moved doc starts with none: steps act on the doc that
+    // recorded them.
+    const UndoStack& history() const { return history_.stack; }
 
 private:
-    // ponytail: unbounded history; cap it if long sessions run out of memory (a sculpt step is ~130 KB per tile).
-    std::vector<ZoneState> undo_, redo_;
-    std::optional<ZoneState> pending_;
+    struct History {
+        UndoStack stack;
+        History() = default;
+        History(const History&) {}
+        History& operator=(const History&) {
+            stack.clear(true);
+            return *this;
+        }
+    };
+    History history_;
+    std::optional<ZoneState> pending_; // the state at begin()
 };
 
 } // namespace zone

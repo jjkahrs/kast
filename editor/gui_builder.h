@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gui_doc.h"
+#include "gui_undo.h"
 #include "viewport.h"
 
 #include <gui.h>
@@ -22,7 +23,8 @@ class ElementDocument;
 //   (in the Console) is not applied: the preview keeps the last good one.
 // - GUI Preview: the document rendered by RmlUi at a chosen resolution, scaled to fit; click selects the deepest
 //   element under the cursor; the selection is outlined (an overlay, not in the file).
-// Edits mark the GUI dirty ("*" in the titles); Save or Ctrl+S (a builder panel focused) writes both files. Files
+// Edits mark the GUI dirty ("*" in the titles) and are steps on its own undo history (gui_undo.h), cleared when a GUI is
+// opened or reloaded; an Inspector or Style text field is one step from activation to letting go. Save or Ctrl+S (a builder panel focused) writes both files. Files
 // changed on disk reload when clean, else Reload / Keep mine is asked. Opening another GUI or quitting while dirty asks
 // Save / Discard / Cancel first.
 class GuiBuilder {
@@ -48,6 +50,14 @@ public:
     std::string selectedId() const { return GuiDoc::attribute(selected_, "id"); } // "" if none or no id
     // Adds an element of kind as the GUI Hierarchy's + buttons do (applied when the panel next draws).
     void requestAdd(GuiKind kind) { edit_ = {Edit::Op::Add, addParent(), {}, kind}; }
+    // The open GUI's undo history (Edit > Undo / Redo while a builder panel is focused).
+    const UndoStack& history() const { return history_; }
+    // Undo / redo a step, then reselect the element it affected and set the dirty flag from the save point.
+    void undo();
+    void redo();
+    // Records the Inspector or Style text field edit in progress, if any, as one step (main calls it once no widget is
+    // active; undo, redo and hierarchy edits call it first).
+    void endGesture();
     // Writes the .rml and .rcss (Save button, Ctrl+S). False (logged) if a write fails.
     bool save();
     // Adds WxH to the preview resolutions and picks it.
@@ -80,6 +90,9 @@ private:
     void close();
     bool applyRcss(); // validates rcssText_; on success it becomes the preview's sheet
     void markRmlDirty();
+    // Records the step that turned before into after (see pushGuiStep); false if it changed nothing.
+    bool record(std::string name, std::optional<GuiElementCopy> before, std::optional<GuiElementCopy> after);
+    void afterUndoRedo();
     void rememberFileTimes();
     std::string title(const char* name, const char* window) const;
     pugi::xml_node addParent() const; // the selected Panel, else <body>
@@ -112,6 +125,14 @@ private:
     Edit edit_;
     std::string inspectorBuffer_[4]; // id, class, text, data-event of inspectorNode_
     pugi::xml_node inspectorNode_;
+    UndoStack history_;
+    struct Gesture {
+        std::string name;
+        pugi::xml_node node;
+        GuiElementCopy before;
+    };
+    std::optional<Gesture> gesture_; // an Inspector field being edited
+    std::string rcssCommitted_;      // rcssText_ as of the last Style step (or load)
 
     std::filesystem::path pendingOpen_; // waits on the unsaved-changes prompt
     bool openPromptRequested_ = false;

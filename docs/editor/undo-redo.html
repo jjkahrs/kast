@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Undo and redo - Kast Editor</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html" class="active">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
+<main>
+<h1 id="undo-redo">Undo and redo</h1>
+<p>Every in-memory edit in the Scene (and a prefab in prefab edit mode), the GUI Builder and the Zone builder can be undone
+and redone. Each document keeps its own history of steps; a step is one user gesture with a name ("Move Cube", "Delete
+Panel", "Edit Terrain"). Nothing on disk is ever undone: file writes, asset create / rename / delete, project and build
+changes are not steps.</p>
+
+<h2 id="using">Menu and shortcuts</h2>
+<table>
+<thead><tr><th>Input</th><th>Action</th></tr></thead>
+<tbody>
+<tr><td><strong>Edit &gt; Undo &lt;step&gt;</strong>, Ctrl+Z</td><td>Undo the last step of the focused panel's document.</td></tr>
+<tr><td><strong>Edit &gt; Redo &lt;step&gt;</strong>, Ctrl+Y, Ctrl+Shift+Z</td><td>Redo the step last undone.</td></tr>
+</tbody>
+</table>
+<p>The menu items name the step they act on and are greyed (just "Undo" / "Redo") when there is none or undo is blocked.
+The shortcuts are ignored while a text field is being edited (its own text undo wins), while a drag or the gizmo is in
+progress, and while a modal dialog is open. Each undo / redo logs <code>Undo &lt;step&gt;</code> / <code>Redo &lt;step&gt;</code> in the
+Console.</p>
+
+<h2 id="documents">Which document: the focused panel</h2>
+<ul>
+<li><strong>Scene</strong>: Scene view, Hierarchy, Inspector, Lighting, Post Processing, Physics and every other panel not
+  listed below (menus keep the panel focused before them). In prefab edit mode these act on the open prefab instead.</li>
+<li><strong>GUI Builder</strong>: GUI Hierarchy, GUI Inspector, GUI Style and GUI Preview act on the open GUI.</li>
+<li><strong>Zone</strong>: the Zone tab acts on the open zone map (a sculpt in the Scene view is the zone's step, undone from
+  the Zone tab).</li>
+</ul>
+<p>The histories are independent: undo in the GUI Builder never touches the scene, a zone undo never touches the
+scene or a GUI, and so on.</p>
+
+<h2 id="steps">What is undoable</h2>
+<h3 id="scene">Scene and prefab edit mode</h3>
+<ul>
+<li>Create object, model or prefab instance (drop), delete, duplicate.</li>
+<li>Rename, reparent and reorder in the Hierarchy.</li>
+<li>Every Inspector field, component add / remove, Lua system add / remove / move.</li>
+<li>Gizmo move / rotate / scale.</li>
+<li>Lighting, Post Processing and Physics panel settings.</li>
+<li>Prefab <strong>Revert</strong> and <strong>Unpack</strong> (scene only, no file written).</li>
+</ul>
+<h3 id="gui">GUI Builder</h3>
+<ul>
+<li>Add, delete, move and reparent elements.</li>
+<li>Inspector edits of id, class, text and <code>data-event</code>.</li>
+<li>Style (<code>.rcss</code>) text edits.</li>
+</ul>
+<h3 id="zone">Zone builder</h3>
+<p>Every edit that marks the zone unsaved: terrain sculpt / flatten strokes, height range, heightmap import and
+generation, terrain colors, tiles added / removed, the map's fields and spawn point, areas and their vertices and portals,
+spawns and their paths, objects placed / moved / deleted / edited and scatter / erase strokes. A step holds only the parts
+of the map the edit changed (the tiles a stroke touched, the areas file, a tile's objects), as they were before and
+after. Steps are named for what changed: <em>Edit Terrain</em>, <em>Edit Map</em>, <em>Edit Areas</em>, <em>Edit Spawns</em>,
+<em>Edit Objects</em>. The tab's own <strong>Undo</strong> / <strong>Redo</strong> buttons use the same history.</p>
+
+<h2 id="gestures">One step per gesture</h2>
+<p>A gizmo drag, a slider or drag-number drag, a text field from activation to commit, a brush, scatter or erase stroke
+and a handle drag in the Scene view are each one step. An edit that changes nothing (a field typed and restored, a click
+that moves nothing) records no step, and leaves the unsaved mark as it was.</p>
+
+<h2 id="history">History rules</h2>
+<ul>
+<li><strong>Cap</strong>: 100 steps per document; the 101st drops the oldest.</li>
+<li><strong>Redo branch</strong>: a new edit after an undo discards the steps that could have been redone.</li>
+<li><strong>Save point</strong>: undoing or redoing back to the state that was last saved clears the unsaved <code>*</code> in the
+  title (the Zone tab's <code>* unsaved</code> for a map); moving away sets it again. A saved state that was discarded from
+  the redo branch or dropped by the cap is out of reach: the document stays unsaved.</li>
+<li><strong>Selection</strong> follows undo / redo: the entity (by its id) or GUI element the step affected is selected again;
+  if it no longer exists the selection is cleared.</li>
+</ul>
+
+<h2 id="clearing">What clears a history</h2>
+<ul>
+<li><strong>Scene</strong>: New, Open, and the operations that write files and change the scene: Create Prefab, prefab
+  Apply, asset rename / move that rewrites the scene's paths, New Lua Component, a Lua component hot reload that migrates
+  fields, and a prefab refresh (for a scene with prefab instances).</li>
+<li><strong>Prefab edit mode</strong>: opening a prefab gives it a fresh history and the scene's waits behind it;
+  switching to another prefab drops the prefab's; <strong>Back</strong> drops it and the scene's history returns. Apply
+  in prefab mode also clears the waiting scene's history if it has instances.</li>
+<li><strong>GUI Builder</strong>: opening another GUI, reloading it from disk, or closing it.</li>
+<li><strong>Zone</strong>: opening another map or creating a New Map (each map loads with an empty history).</li>
+</ul>
+
+<h2 id="play">Play mode</h2>
+<p>During Play and Pause, Undo and Redo are greyed and the shortcuts do nothing; edits made while playing are never
+recorded. Stop restores the scene as it was before Play, so the history is intact and usable after Stop. The Zone tab is
+read-only during Play and in prefab edit mode, and its undo is blocked then too.</p>
+
+<h2 id="testing">Test flags and checks</h2>
+<table>
+<thead><tr><th>Flag</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>--scene-undo &lt;N&gt;</code>, <code>--scene-redo &lt;N&gt;</code></td><td>Undo the scene (or open prefab) N times, then redo N times, after the startup edits.</td></tr>
+<tr><td><code>--gui-undo &lt;N&gt;</code>, <code>--gui-redo &lt;N&gt;</code></td><td>With <code>--open-gui</code>: the same on the open GUI.</td></tr>
+<tr><td><code>--undo</code>, <code>--redo</code></td><td>Zone edit flags: undo / redo one step of the open map.</td></tr>
+<tr><td><code>--focus-panel &lt;Window&gt; --open-menu Edit</code></td><td>Screenshot the Edit menu as that panel's document sees it.</td></tr>
+</tbody>
+</table>
+<p>See <a href="command-line.html">Command line</a>. <code>kast_self_check --undo</code> checks the undo stack, scene, prefab
+mode and GUI histories; <code>kast_zone_self_check</code> checks the zone's (every edit type undone and redone exactly, one
+step per stroke, no-op edits, the cap, the redo branch, the save point and per-map histories).</p>
+</main>
+</div>
+</body>
+</html>
