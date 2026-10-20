@@ -122,7 +122,7 @@ add_library(kast_engine STATIC
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
-  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/world_client.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/particles.cpp ${KAST_ENGINE_SHADERS})
+  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/particles.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
@@ -1258,6 +1258,18 @@ foreach(game ${KAST_GAMES})
   set_tests_properties(player_${name}_screenshot PROPERTIES FIXTURES_REQUIRED game_${name}_built
                        FIXTURES_SETUP player_${name}_shot TIMEOUT 90)
 endforeach()
+# F3 stats overlay (docs/editor/controls.html#stats-overlay): a pushed F3 on frame 30 shows "FPS <n>  Ping -- ms" at
+# the bottom-left (offline: no world server), so the shot differs from the plain one; off at start, so that one has none.
+add_test(NAME player_lights_f3_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/lights" "-DEXE=Lights Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/lights_f3.run" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_lights_f3.png"
+          -DEXPECT=0 "-DEXTRA_ARGS=--sim-key 30,F3" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_lights_f3_screenshot PROPERTIES FIXTURES_REQUIRED game_lights_built
+                     FIXTURES_SETUP player_lights_f3_shot TIMEOUT 90)
+add_test(NAME player_lights_f3_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_lights.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_lights_f3.png"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(player_lights_f3_differs PROPERTIES FIXTURES_REQUIRED "player_lights_shot;player_lights_f3_shot")
 # Skies in the player (the scenes are under Skies above). Colors read back at known screen positions (1280x720, from the
 # cameras' orientations): the gradient (the same from a camera 1 km away: the sky ignores translation), the fogged far
 # cube at the fog color while the sky stays unfogged, sky off clearing to the fog color as before skies, every cube
