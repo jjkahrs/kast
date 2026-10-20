@@ -53,6 +53,8 @@ asio::awaitable<void> WorldClient::read_loop() {
             }
             if (auto* ping = std::get_if<proto::Ping>(&m)) { send(proto::Pong{ping->nonce}); continue; }
             if (auto* d = std::get_if<proto::Disconnect>(&m)) disconnectReason = d->reason;
+            if (auto* c = std::get_if<proto::Correction>(&m)) moveEpoch = c->epoch;
+            if (auto* mc = std::get_if<proto::MapChange>(&m)) moveEpoch = mc->epoch;
             if (onMessage) onMessage(m);
             else inbox_.push_back(std::move(m));
             signal();
@@ -68,7 +70,14 @@ asio::awaitable<void> WorldClient::read_loop() {
 
 void WorldClient::send(const proto::Message& m) {
     if (closed_) return;
-    proto::encode(pending_, m);
+    if (const auto* move = std::get_if<proto::Move>(&m)) {
+        proto::Move stamped = *move;
+        stamped.seq = ++moveSeq;
+        stamped.epoch = moveEpoch;
+        proto::encode(pending_, proto::Message{stamped});
+    } else {
+        proto::encode(pending_, m);
+    }
     flush();
 }
 

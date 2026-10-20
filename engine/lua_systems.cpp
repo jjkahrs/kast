@@ -125,6 +125,12 @@ struct LuaSystems::State {
     uint64_t indexedAt = 0; // Scene::creations() when ids was built
     std::map<std::string, std::shared_ptr<const PrefabAsset>> prefabs; // kast.instantiate's, loaded once per session
     System* current = nullptr; // whose code is running: log prefixes, event publisher and subscription owner
+    struct Request {           // a kast.world.request waiting for its world.reply
+        System* owner;
+        sol::protected_function confirmed, rejected; // either may be empty
+    };
+    std::map<uint32_t, Request> requests; // by requestId
+    EventBus::Subscription replies;       // world.reply -> requests
 
     void init(const std::vector<std::string>& paths);
     void tick(float dt);
@@ -1340,6 +1346,65 @@ void LuaSystems::State::bindSkyApi()
 void LuaSystems::State::bindWorldApi()
 {
     worldApi = makeWorldApi(lua, world);
+    // kast.world.request(name, data?, handlers?): kast.world.send tagged with a requestId (returned), for a predicted
+    // action. handlers {predict, confirmed, rejected, timeout}: predict() runs at once, after the send; then exactly
+    // one of confirmed(data) (the server's kast.reply ok) or rejected(reason) (its reason, "timeout" after timeout
+    // seconds, default 2, or "disconnected") runs from the event drain, as the calling system's.
+    worldApi.set_function("request", [this](sol::this_state L, const sol::object& name, const sol::object& data,
+                                            const sol::object& handlers) {
+        if (name.get_type() != sol::type::string)
+            raise(L, std::format("kast.world.request: name must be a string, got {}", toString(L, name)));
+        const nlohmann::json json = worldEventData(L, "kast.world.request", data);
+        sol::table h = handlers.get_type() == sol::type::table ? handlers.as<sol::table>() : lua.create_table();
+        if (handlers.get_type() != sol::type::table && handlers.get_type() != sol::type::lua_nil)
+            raise(L, std::format("kast.world.request: handlers must be a table, got {}", toString(L, handlers)));
+        const auto handler = [&](const char* key) {
+            const sol::object fn = h[key];
+            if (fn.get_type() != sol::type::function && fn.get_type() != sol::type::lua_nil)
+                raise(L, std::format("kast.world.request: handlers.{} must be a function, got {}", key, toString(L, fn)));
+            // on the main thread: fn's own may be a coroutine, collected before the drain
+            return fn.get_type() == sol::type::function ? sol::protected_function(lua.lua_state(), fn)
+                                                        : sol::protected_function();
+        };
+        const sol::object timeout = h["timeout"];
+        const double seconds = timeout.get_type() == sol::type::number ? timeout.as<double>()
+                               : timeout.get_type() == sol::type::lua_nil ? 2.0 : -1.0;
+        if (!(seconds > 0.0 && seconds <= 3600.0))
+            raise(L, std::format("kast.world.request: handlers.timeout must be seconds in (0, 3600], got {}",
+                                 toString(L, timeout)));
+        if (!current)
+            raise(L, "kast.world.request: only a system can make requests");
+        Request request{current, handler("confirmed"), handler("rejected")};
+        const sol::protected_function predict = handler("predict");
+        uint32_t id = 0;
+        try {
+            id = world.request(name.as<std::string>(), json,
+                               std::chrono::milliseconds(std::max<int64_t>(1, std::llround(seconds * 1000.0))));
+        } catch (const std::logic_error& e) { // WorldClient's messages start with the function's name
+            raise(L, std::format("kast.world.{}", e.what()));
+        }
+        requests[id] = std::move(request);
+        if (replies.id() == 0)
+            replies = bus.subscribe("world.reply", [this](const nlohmann::json& reply) {
+                const auto it = requests.find(reply.value("requestId", 0u));
+                if (it == requests.end()) // an earlier session's
+                    return;
+                Request r = std::move(it->second);
+                requests.erase(it);
+                const bool ok = reply.value("ok", false);
+                const sol::protected_function& fn = ok ? r.confirmed : r.rejected;
+                if (fn && r.owner->ok)
+                    call(*r.owner, fn, ok ? "request confirmed" : "request rejected",
+                         ok ? jsonToLua(lua, reply.value("data", nlohmann::json::object()))
+                            : sol::make_object(lua, reply.value("reason", std::string())));
+            });
+        if (predict) { // inside the caller's own call: its error, at this line
+            sol::protected_function_result result = predict();
+            if (!result.valid())
+                raise(L, std::format("kast.world.request: predict: {}", result.get<sol::error>().what()));
+        }
+        return id;
+    });
 }
 
 void LuaSystems::State::bindNetApi()

@@ -5,6 +5,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
+
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -60,10 +62,17 @@ public:
     // [a-z0-9._]) and the encoded size (<= 1 KB) first, then the state (InWorld); each throws std::logic_error.
     // data must be a JSON object.
     void sendEvent(const std::string& name, const nlohmann::json& data);
+    // The same ClientEvent tagged with a new requestId (returned; never 0), which the server's Lua answers with
+    // kast.reply: world.reply {requestId, ok = true, data} or {requestId, ok = false, reason}. No answer within
+    // timeout: world.reply {requestId, ok = false, reason = "timeout"} (a late answer is then ignored); the connection
+    // dropping: reason "disconnected", just before world.disconnected. Exactly one world.reply per request.
+    uint32_t request(const std::string& name, const nlohmann::json& data,
+                     std::chrono::milliseconds timeout = std::chrono::seconds(2));
     // Interact{objectId}: activates a zone object (an interactable's id). The server answers only through its Lua.
     void interact(uint32_t objectId);
-    // Move{position, heading (radians, atan2(dx, dz)), clientTimeMs}. Rejected moves come back as world.correction.
-    void move(float x, float y, float z, float heading);
+    // Move{position, heading (radians, atan2(dx, dz)), clientTimeMs, seq, epoch}: seq and epoch are the caller's
+    // (Replication's MoveHistory). A rejected move comes back as world.correction {position, ackSeq, epoch}.
+    void move(float x, float y, float z, float heading, uint32_t seq, uint32_t epoch);
 
     // Takes a Network result of this client's connections (true), else leaves it alone (false).
     bool handle(const NetEvent& event);
@@ -85,6 +94,8 @@ private:
     void dispatch(const auto& message);
     void drop(const std::string& code, const std::string& reason); // closes, world.disconnected {code, reason}
     void emit(std::string name, nlohmann::json payload);
+    std::string eventJson(const std::string& name, const nlohmann::json& data, const char* function) const;
+    void expireRequests(); // world.reply timeout for the requests past their deadline
 
     Network& network_;
     AuthClient& auth_;
@@ -100,6 +111,8 @@ private:
     uint64_t realmsRequest_ = 0;             // the AuthClient call id of that list, 0 if it used the cache
     std::vector<NetEvent> events_;
     std::map<std::string, nlohmann::json> latest_; // event name -> its last payload, see latest()
+    uint32_t requestSerial_ = 0;                   // the last requestId
+    std::map<uint32_t, std::chrono::steady_clock::time_point> requests_; // unanswered requestId -> deadline
 };
 
 } // namespace kast

@@ -6,8 +6,9 @@
 -- Zone obstacles (the meadow's rocks, trees and shrine: static colliders, maps/meadow/objects) stop the character; it
 -- slides along them when it can. The world server cuts the same shapes from its navmesh.
 -- Replication sends the moves to the server.
--- Combat (systems/combat.lua on the server): the character plays ATTACK_CLIP when the server confirms one of its
--- powers and HIT_CLIP when it is hit, while standing still; dead, it plays DEATH_CLIP and does not move or jump (the
+-- Combat (systems/combat.lua on the server): the character plays ATTACK_CLIP as soon as one of its powers is used
+-- (scripts/powers.lua's "power.predicted"), stopped if the server refuses it ("power.rejected"), and HIT_CLIP when it
+-- is hit, while standing still; dead, it plays DEATH_CLIP and does not move or jump (the
 -- server refuses its moves anyway) until it revives. The camera still works.
 local RUN_SPEED = 7 -- m/s, forward and strafing (the world server allows 10)
 local BACK_SPEED = 4.5 -- m/s, backpedalling
@@ -134,7 +135,8 @@ return {
         kast.subscribe("world.entered", function(e)
             snapBehind, me, dead, action = true, e.entityId, false, nil
         end)
-        kast.subscribe("server.combat.power", function(e) if e.caster == me then action = ATTACK_CLIP end end)
+        kast.subscribe("power.predicted", function() action = ATTACK_CLIP end)
+        kast.subscribe("power.rejected", function(e) if e.predicted and action == ATTACK_CLIP then action = nil end end)
         kast.subscribe("server.combat.hit", function(e)
             if e.target == me and action ~= ATTACK_CLIP then action = HIT_CLIP end
         end)

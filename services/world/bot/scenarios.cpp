@@ -1380,6 +1380,150 @@ asio::awaitable<void> combat_rules(Ctx& x) {
     a->close();
 }
 
+// --- 26 / 27: client prediction (run with the server's lag simulator on, SIM_LATENCY_MS / SIM_JITTER_MS) ---
+
+// A run at 7 m/s (under MAX_SPEED) round a 5 m circle that starts at `from`, turning all the way: where it is after
+// `seconds`, and its heading (the direction of travel).
+std::pair<proto::Vec3, float> circle(const proto::Vec3& from, float seconds) {
+    constexpr float speed = 7, radius = 5;
+    const float a = speed * seconds / radius;
+    return {{from.x - radius + radius * std::cos(a), from.y, from.z + radius * std::sin(a)}, std::atan2(-std::sin(a), std::cos(a))};
+}
+
+// The round trip of a Ping through the lag simulator, printed as evidence it is on.
+asio::awaitable<void> print_round_trip(WorldClient& c) {
+    const auto start = std::chrono::steady_clock::now();
+    c.send(proto::Ping{77});
+    const auto pong = co_await c.wait_for<proto::Pong>(Millis(5000));
+    const auto ms = std::chrono::duration_cast<Millis>(std::chrono::steady_clock::now() - start).count();
+    std::printf("  round trip %s\n", pong ? (std::to_string(ms) + " ms").c_str() : "unknown (no Pong)");
+}
+
+// 10 s at 7 m/s round the circle, one Move every 100 ms like the engine's client: no Correction at all.
+asio::awaitable<void> lag_run(Ctx& x) {
+    proto::EnterWorldOk ea;
+    auto a = co_await x.enter("s26a", ea);
+    if (!a) co_return;
+    co_await drain(*a, Millis(1500)); // spawns; the move budget fills
+    co_await print_round_trip(*a);
+    asio::steady_timer t(co_await asio::this_coro::executor);
+    auto next = std::chrono::steady_clock::now();
+    size_t corrections = 0;
+    for (int i = 1; i <= 100; ++i) {
+        next += Millis(100);
+        t.expires_at(next);
+        co_await t.async_wait(asio::use_awaitable);
+        const auto [p, heading] = circle(ea.pos, 0.1f * static_cast<float>(i));
+        a->send(proto::Move{p, heading, static_cast<uint32_t>(i * 100)});
+        corrections += only<proto::Correction>(co_await drain(*a, Millis(5))).size(); // drain(0) and (1) see nothing: whole ms left
+    }
+    corrections += only<proto::Correction>(co_await drain(*a, Millis(1000))).size(); // the last moves' answers
+    x.check.expect(corrections == 0, "10 s at 7 m/s with turns: " + std::to_string(corrections) + " Corrections (want 0)");
+    x.check.expect(!a->closed(), "still connected (100 Moves in 10 s: under the rate limit)");
+    a->close();
+}
+
+// The same run with one cheat 3 s in (the client jumps 50 m and keeps running from there): exactly one Correction,
+// none for the moves already in flight behind it, and once the bot rebases like the engine's client (the Correction's
+// pos + everything it moved since the Move ackSeq) the server takes its moves again: an observer's last EntityMove
+// is where the bot ends.
+asio::awaitable<void> lag_reject(Ctx& x) {
+    proto::EnterWorldOk ea, eb;
+    auto b = co_await x.enter("s27b", eb);
+    auto a = co_await x.enter("s27a", ea);
+    if (!a || !b) co_return;
+    co_await drain(*a, Millis(1500));
+    co_await drain(*b, Millis(0));
+    asio::steady_timer t(co_await asio::this_coro::executor);
+    auto next = std::chrono::steady_clock::now();
+    std::map<uint32_t, proto::Vec3> sent; // seq -> position
+    proto::Vec3 offset{0, 0, 0}, p{};
+    std::vector<proto::Correction> corrections;
+    uint32_t cheatSeq = 0;
+    auto cheatAt = std::chrono::steady_clock::now();
+    const auto handle = [&](const std::vector<proto::Message>& msgs) {
+        for (const auto& c : only<proto::Correction>(msgs)) {
+            if (corrections.empty())
+                std::printf("  the Correction came %lld ms after the cheating Move (one round trip + up to a tick + 100 ms of polling)\n",
+                            static_cast<long long>(std::chrono::duration_cast<Millis>(std::chrono::steady_clock::now() - cheatAt).count()));
+            corrections.push_back(c);
+            const auto acked = sent.find(c.ackSeq);
+            if (acked == sent.end()) continue;
+            offset.x += c.pos.x - acked->second.x; // rebased = c.pos + (where it is now - where it was at ackSeq)
+            offset.z += c.pos.z - acked->second.z;
+        }
+    };
+    for (int i = 1; i <= 100; ++i) {
+        next += Millis(100);
+        t.expires_at(next);
+        co_await t.async_wait(asio::use_awaitable);
+        handle(co_await drain(*a, Millis(5))); // what has come so far (drain(0) and (1) see nothing: whole ms left)
+        if (i == 30) offset.x += 50; // the cheat
+        const auto [onCircle, heading] = circle(ea.pos, 0.1f * static_cast<float>(i));
+        p = {onCircle.x + offset.x, onCircle.y, onCircle.z + offset.z};
+        a->send(proto::Move{p, heading, static_cast<uint32_t>(i * 100)});
+        sent[a->moveSeq] = p;
+        if (i == 30) {
+            cheatSeq = a->moveSeq;
+            cheatAt = std::chrono::steady_clock::now();
+        }
+    }
+    handle(co_await drain(*a, Millis(1000)));
+    x.check.expect(corrections.size() == 1, "a 50 m jump while running: " + std::to_string(corrections.size()) +
+                                                " Corrections (want exactly 1, no cascade)");
+    if (!corrections.empty())
+        x.check.expect(corrections[0].ackSeq == cheatSeq && corrections[0].epoch == 1,
+                       "the Correction acks the cheating Move (seq " + std::to_string(corrections[0].ackSeq) + ", want " +
+                           std::to_string(cheatSeq) + ") and starts epoch 1 (got " + std::to_string(corrections[0].epoch) + ")");
+    std::optional<proto::Vec3> seen;
+    for (const auto& m : only<proto::EntityMove>(co_await drain(*b, Millis(500))))
+        if (m.entityId == ea.entityId) seen = m.pos;
+    x.check.expect(seen && distance_xz(*seen, p) < 0.01f, "the server ends where the rebased bot ends " + fmt(p) +
+                                                              " (observer's last EntityMove " + (seen ? fmt(*seen) : "none") + ")");
+    a->close();
+    b->close();
+}
+
+// --- 28: predicted actions (kast.world.request / kast.reply), starter-mmo, best with the lag simulator on ---
+
+// A Warrior's requests (ClientEvent with a requestId, as the engine's kast.world.request sends them): Shield Wall ->
+// Reply{id, ok, {power}} before its combat.power; Shield Wall again -> Reply{id, rejected, "cooldown"}; Strike at no
+// NPC -> Reply{id, rejected, "target"}. None of them gets combat.rejected; a plain send (no requestId) still does.
+asio::awaitable<void> combat_request(Ctx& x) {
+    proto::EnterWorldOk ok;
+    auto a = co_await x.enter("s28", ok);
+    if (!a) co_return;
+    co_await drain(*a, Millis(1000)); // spawns, class.powers
+    co_await print_round_trip(*a);
+    const auto request = [&](uint32_t id, const nlohmann::json& data) {
+        a->send(proto::ClientEvent{"combat.power", data.dump(), id});
+    };
+    const auto start = std::chrono::steady_clock::now();
+    request(101, {{"power", "shield_wall"}});
+    const auto first = co_await a->wait_for<proto::Reply>(Millis(3000));
+    const auto ms = std::chrono::duration_cast<Millis>(std::chrono::steady_clock::now() - start).count();
+    std::printf("  Reply to request 101 after %lld ms\n", static_cast<long long>(ms));
+    auto msgs = co_await drain(*a, Millis(600));
+    x.check.expect(first && first->requestId == 101 && first->ok && first->json == R"({"power":"shield_wall"})",
+                   "Shield Wall: Reply{101, ok, {power = shield_wall}}" +
+                       (first ? " (got " + std::to_string(first->requestId) + " " + first->json + ")" : " (none)"));
+    const auto used = named(msgs, "combat.power");
+    x.check.expect(used.size() == 1 && used[0].value("power", "") == "shield_wall" && named(msgs, "combat.rejected").empty(),
+                   "then its combat.power; no combat.rejected");
+    request(102, {{"power", "shield_wall"}});
+    request(103, {{"power", "strike"}, {"target", "guard"}});
+    a->send(proto::ClientEvent{"combat.power", nlohmann::json{{"power", "strike"}, {"target", "guard"}}.dump()});
+    msgs = co_await drain(*a, Millis(1500));
+    const auto replies = only<proto::Reply>(msgs);
+    x.check.expect(replies.size() == 2 && replies[0] == proto::Reply{102, false, R"("cooldown")"} &&
+                       replies[1] == proto::Reply{103, false, R"("target")"},
+                   "Shield Wall again: Reply{102, rejected, cooldown}; Strike at no NPC: Reply{103, rejected, target}");
+    const auto refused = named(msgs, "combat.rejected");
+    x.check.expect(refused.size() == 1 && refused[0].value("reason", "") == "target" && named(msgs, "combat.power").empty(),
+                   "kast.world.send's way unchanged: the plain send alone gets combat.rejected {reason = target}");
+    a->close();
+}
+
 } // namespace
 
 int run_scenario(const Options& o) {
@@ -1397,6 +1541,7 @@ int run_scenario(const Options& o) {
         {"portal", portal},             {"respawn", respawn},         {"terrain", terrain},
         {"navmesh", navmesh},           {"client-events", client_events}, {"client-event-rate", client_event_rate},
         {"combat-bat", combat_bat},     {"combat-rules", combat_rules}, {"objects", objects},
+        {"lag-run", lag_run},           {"lag-reject", lag_reject},     {"combat-request", combat_request},
     };
     auto it = all.find(o.scenario);
     if (it == all.end()) {

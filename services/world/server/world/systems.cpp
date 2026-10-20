@@ -3,6 +3,7 @@
 #include "components.h"
 
 #include <algorithm>
+#include <optional>
 
 namespace kast::world {
 namespace {
@@ -35,15 +36,17 @@ proto::Spawn spawn_message(const entt::registry& reg, entt::entity e) {
 }
 
 // Validates each queued Move against map bounds, the navmesh (if the map has one and rules.navCheck), speed and the
-// ground; a rejected move snaps the client back with Correction. A MoveLock'd character (kast.setMovable) has every
-// move rejected.
+// ground; a rejected move snaps the client back with Correction{pos, its seq, a new epoch}. Moves of an older epoch
+// were sent before the client heard of that Correction: dropped without another (the client replays them on top of
+// the Correction itself). A MoveLock'd character (kast.setMovable) has every move rejected.
 // ponytail: off_mesh corrects at once, so a player cannot drop off a cliff face; a grace period if falls are wanted.
 void movement_system(entt::registry& reg, const MoveRules& rules, const Maps& maps, const Send& send, TimePoint now) {
     for (auto [e, pending, tf, mr, ms, link] : reg.view<PendingMoves, Transform, MapRef, MoveState, SessionLink>().each()) {
         if (pending.moves.empty()) continue;
-        bool corrected = false;
+        std::optional<uint32_t> rejected; // the seq of the rejected move
         for (const auto& m : pending.moves) {
-            if (reg.all_of<MoveLock>(e)) { corrected = true; break; }
+            if (m.epoch < ms.epoch) continue;
+            if (reg.all_of<MoveLock>(e)) { rejected = m.seq; break; }
             proto::Vec3 to = m.pos;
             const auto ground = maps.ground(mr.map, to.x, to.z); // nullopt: off the map
             const bool onMesh = !rules.navCheck || !maps.nav().has(mr.map) || maps.nav().on_mesh(mr.map, to, rules.maxAir);
@@ -53,10 +56,11 @@ void movement_system(entt::registry& reg, const MoveRules& rules, const Maps& ma
                 reg.emplace_or_replace<Moved>(e);
                 reg.emplace_or_replace<Dirty>(e);
             } else {
-                corrected = true;
+                rejected = m.seq;
+                break; // the rest of the batch is of the old epoch now
             }
         }
-        if (corrected) send(link.sessionId, proto::Correction{tf.pos});
+        if (rejected) send(link.sessionId, proto::Correction{tf.pos, *rejected, ++ms.epoch});
         pending.moves.clear();
     }
 }
@@ -159,7 +163,9 @@ void client_event_in_system(entt::registry& reg, EventBus& bus, TimePoint now) {
                 log::debug("client event rate limited", {{"char", ch.charId}, {"event", event.name}});
                 continue;
             }
-            bus.publish("client." + event.name, {{"entity", wire_id(e)}, {"data", std::move(event.data)}});
+            nlohmann::json payload{{"entity", wire_id(e)}, {"data", std::move(event.data)}};
+            if (event.requestId) payload["requestId"] = event.requestId; // answered with kast.reply
+            bus.publish("client." + event.name, std::move(payload));
         }
         pending.events.clear();
     }
@@ -257,6 +263,12 @@ void component_replication_system(entt::registry& reg, const lua::Defs& defs, co
 
 void client_event_system(entt::registry& reg, std::vector<lua::ClientEvent> events, const Send& send) {
     for (auto& event : events) {
+        if (event.to == lua::ClientEvent::To::reply) { // kast.reply: the requester alone, if still here
+            const auto e = from_wire(event.entity);
+            if (const auto* link = reg.valid(e) ? reg.try_get<SessionLink>(e) : nullptr)
+                send(link->sessionId, proto::Reply{event.requestId, event.ok, std::move(event.json)});
+            continue;
+        }
         const proto::ServerEvent msg{std::move(event.name), std::move(event.json)};
         if (event.to == lua::ClientEvent::To::all) {
             for (auto [e, link] : reg.view<SessionLink>().each()) send(link.sessionId, msg);

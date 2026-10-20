@@ -7,6 +7,7 @@
 #include "core/config.h"
 #include "core/rate_limiter.h"
 #include "core/tick_stats.h"
+#include "net/session.h"
 #include "world/aoi_grid.h"
 #include "world/rules.h"
 
@@ -87,20 +88,39 @@ void checkCodecRoundTrip() {
     roundtrip(CharList{{{1, "Alice", {1, 2, 3}, {{"class", "priest"}}}, {2, "Bob", {4, 5, 6}}}}, "CharList with options");
     roundtrip(CharDeleted{5}, "CharDeleted");
     roundtrip(EnterWorldOk{11, 2, {1, 0, 1}, 1.f}, "EnterWorldOk");
-    roundtrip(MapChange{65535, {-3, 4, 5000}, 2.5f}, "MapChange");
+    roundtrip(MapChange{65535, {-3, 4, 5000}, 2.5f, 0xFFFFFFFE}, "MapChange");
     roundtrip(CharError{Opcode::CharCreate, Code::name_taken}, "CharError");
     roundtrip(Spawn{3, "Dave", {10, 0, 10}, 0.5f, SpawnKind::player, ""}, "Spawn");
     roundtrip(Spawn{4, "Guard", {12, 1, 10}, 1.5f, SpawnKind::npc, "Guard"}, "Spawn npc");
     roundtrip(Despawn{3}, "Despawn");
     roundtrip(EntityMove{3, {11, 0, 12}, 0.25f}, "EntityMove");
-    roundtrip(Correction{{1, 2, 3}}, "Correction");
+    roundtrip(Correction{{1, 2, 3}, 0xFFFFFFFEu, 7}, "Correction");
+    roundtrip(Move{{1, 2, 3}, 0.5f, 99, 0xFFFFFFFFu, 3}, "Move");
     roundtrip(ChatMsg{"Eve", "hi all"}, "ChatMsg");
 
     // exact byte layout: u16 len, u16 opcode, payload, little-endian
     const auto f = encode(Message{Hello{0x0102}});
     check(f == std::vector<uint8_t>{2, 0, 1, 0, 0x02, 0x01}, "Hello bytes little-endian");
 
-    check(kProtocolVersion == 5, "protocol version 5");
+    roundtrip(ClientEvent{"combat.power", R"({"power":"strike"})", 0xFFFFFFFEu}, "ClientEvent with requestId");
+    roundtrip(Reply{0xFFFFFFFEu, true, R"({"power":"strike"})"}, "Reply ok");
+    roundtrip(Reply{3, false, R"("range")"}, "Reply rejected");
+    check(kProtocolVersion == 7, "protocol version 7");
+    // v7 ClientEvent: str name, str json, u32 requestId (0: kast.world.send); Reply: u32 requestId, u8 ok (0/1), str json
+    const auto cev = encode(Message{ClientEvent{"a", "{}", 0x01020304}});
+    check(cev.size() == 4 + 3 + 4 + 4 && cev[11] == 0x04 && cev[14] == 0x01, "ClientEvent requestId after json");
+    const std::vector<uint8_t> badOk{1, 0, 0, 0, 2, 0, 0};
+    Message replyOut;
+    check(decode_payload(Opcode::Reply, badOk, replyOut) == DecodeStatus::malformed, "a Reply with ok 2 is malformed");
+    // v6 Move: vec3 pos, f32 heading, u32 clientTimeMs, u32 seq, u32 epoch; Correction: vec3 pos, u32 ackSeq, u32 epoch
+    const auto mv = encode(Message{Move{{0, 0, 0}, 0, 0, 0x01020304, 0x05060708}});
+    check(mv.size() == 4 + 12 + 4 + 4 + 4 + 4 && mv[24] == 0x04 && mv[27] == 0x01 && mv[28] == 0x08 && mv[31] == 0x05,
+          "Move seq then epoch after clientTimeMs");
+    const auto co = encode(Message{Correction{{0, 0, 0}, 0x01020304, 0x05060708}});
+    check(co.size() == 4 + 12 + 4 + 4 && co[16] == 0x04 && co[20] == 0x08, "Correction ackSeq then epoch after pos");
+    std::vector<uint8_t> v5Move(12 + 4 + 4); // a v5 Move: no seq, no epoch
+    Message v5Out;
+    check(decode_payload(Opcode::Move, v5Move, v5Out) == DecodeStatus::malformed, "a v5 Move is malformed in v6");
     // v4 CharCreate: str name, u8 count, count x (str key, str value), keys in order; a key twice is malformed
     const auto cc = encode(Message{CharCreate{"Al", {{"b", "2"}, {"a", "1"}}}});
     check(cc == std::vector<uint8_t>{17, 0, 0x11, 0, 2, 0, 'A', 'l', 2, 1, 0, 'a', 1, 0, '1', 1, 0, 'b', 1, 0, '2'},
@@ -124,16 +144,16 @@ void checkCodecRoundTrip() {
     check(!valid_char_options({{"a", std::string(33, 'x')}}) && !valid_char_options({{"a", "tab\t"}}) &&
               !valid_char_options({{"a", "\xC3\xA9"}}),
           "options: long, control and non-ASCII values refused");
-    // v3 EnterWorldOk: u32 entityId, u16 map, vec3 pos, f32 heading; MapChange: u16 map, vec3 pos, f32 heading
+    // v3 EnterWorldOk: u32 entityId, u16 map, vec3 pos, f32 heading; v6 MapChange: u16 map, vec3 pos, f32 heading, u32 epoch
     const auto ewo = encode(Message{EnterWorldOk{1, 0x0201, {0, 0, 0}, 0}});
     check(ewo.size() == 4 + 4 + 2 + 12 + 4 && ewo[8] == 0x01 && ewo[9] == 0x02, "EnterWorldOk map follows entityId");
     const auto mc = encode(Message{MapChange{0x0201, {0, 0, 0}, 0}});
-    check(mc.size() == 4 + 2 + 12 + 4 && mc[2] == 0x28 && mc[3] == 0x01 && mc[4] == 0x01 && mc[5] == 0x02,
+    check(mc.size() == 4 + 2 + 12 + 4 + 4 && mc[2] == 0x28 && mc[3] == 0x01 && mc[4] == 0x01 && mc[5] == 0x02,
           "MapChange opcode 0x0128, map first");
     check(std::string(opcode_name(Opcode::MapChange)) == "MapChange", "MapChange name");
-    // ClientEvent: opcode 0x0022, str name, str json (ServerEvent's layout)
+    // ClientEvent: opcode 0x0022, str name, str json (ServerEvent's layout), v7 u32 requestId
     const auto ce = encode(Message{ClientEvent{"a.b", "{}"}});
-    check(ce == std::vector<uint8_t>{9, 0, 0x22, 0, 3, 0, 'a', '.', 'b', 2, 0, '{', '}'}, "ClientEvent bytes");
+    check(ce == std::vector<uint8_t>{13, 0, 0x22, 0, 3, 0, 'a', '.', 'b', 2, 0, '{', '}', 0, 0, 0, 0}, "ClientEvent bytes");
     check(std::string(opcode_name(Opcode::ClientEvent)) == "ClientEvent", "ClientEvent name");
     // v5 Interact: opcode 0x0023, u32 objectId
     roundtrip(Interact{0xFFFFFFFFu}, "Interact");
@@ -428,6 +448,17 @@ void checkConfig() {
         check(r.errors.size() == 1 && r.errors[0].starts_with("MAX_NPCS"), "MAX_NPCS out of range or not a whole number refused");
     }
 
+    env.erase("MAX_NPCS");
+    check(ok.config.simLatencyMs == 0 && ok.config.simJitterMs == 0, "SIM_LATENCY_MS / SIM_JITTER_MS default 0 (lag simulator off)");
+    env["SIM_LATENCY_MS"] = "150";
+    env["SIM_JITTER_MS"] = "50";
+    const auto lag = load_config(lookup);
+    check(lag.errors.empty() && lag.config.simLatencyMs == 150 && lag.config.simJitterMs == 50, "SIM_LATENCY_MS / SIM_JITTER_MS read");
+    env["SIM_JITTER_MS"] = "-5";
+    check(load_config(lookup).errors.size() == 1, "negative SIM_JITTER_MS refused");
+    env.erase("SIM_LATENCY_MS");
+    env.erase("SIM_JITTER_MS");
+
     env.erase("DB_HOST");
     env["REALM_ID"] = "abc";
     env["MAX_FRAME_BYTES"] = "999999";
@@ -436,6 +467,30 @@ void checkConfig() {
     env["MAX_NPCS"] = "lots";
     auto bad = load_config(lookup);
     check(bad.errors.size() == 6, "every bad variable reported, MAX_NPCS with the others");
+}
+
+// The lag simulator's schedule (net/session.h lag_due): latency +- jitter, never reordering, never in the past.
+void checkLagSim() {
+    std::minstd_rand rng(1);
+    TimePoint previous = T0;
+    bool ordered = true, inRange = true, spread = false;
+    Millis first{-1};
+    for (int i = 0; i < 1000; ++i) {
+        const TimePoint now = T0 + Millis(i); // one message a millisecond: jitter would reorder them
+        const TimePoint due = net::lag_due(now, previous, Millis(150), Millis(50), rng);
+        ordered &= due >= previous;
+        const auto delay = std::chrono::duration_cast<Millis>(due - now);
+        inRange &= delay >= Millis(100) && delay <= Millis(200); // waiting for the previous one never exceeds it either
+        if (first.count() < 0) first = delay;
+        spread |= delay != first;
+        previous = due;
+    }
+    check(ordered && inRange && spread, "lag sim: delays of 150 +- 50 ms, in order");
+    check(net::lag_due(T0, T0, Millis(0), Millis(0), rng) == T0, "lag sim: 0 / 0 delivers at once");
+    std::minstd_rand fixed(7);
+    bool exact = true;
+    for (int i = 0; i < 100; ++i) exact &= net::lag_due(T0 + Millis(i), T0, Millis(150), Millis(0), fixed) == T0 + Millis(i + 150);
+    check(exact, "lag sim: no jitter -> exactly the latency");
 }
 
 void checkTickStats() {
@@ -616,6 +671,7 @@ int main() {
     checkClientEvents();
     checkMessageRate();
     checkConfig();
+    checkLagSim();
     checkTickStats();
     checkJwt();
     checkJwksCache();

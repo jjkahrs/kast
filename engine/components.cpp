@@ -135,17 +135,23 @@ const char* validateAudioSource(const entt::meta_any& component)
 
 const char* validateNetworkLocalPlayer(const entt::meta_any& component)
 {
-    const float rate = component.cast<const NetworkLocalPlayer&>().sendRateHz;
-    if (!(rate >= 1.0f && rate <= kMaxMoveRateHz))
+    const auto& player = component.cast<const NetworkLocalPlayer&>();
+    if (!(player.sendRateHz >= 1.0f && player.sendRateHz <= kMaxMoveRateHz))
         return "\"sendRateHz\" must be between 1 and 30"; // kMaxMoveRateHz
+    if (!(player.smoothingThreshold >= 0.0f))
+        return "\"smoothingThreshold\" must be >= 0";
+    if (!(player.smoothingMs >= 0.0f && player.smoothingMs <= 1000.0f))
+        return "\"smoothingMs\" must be between 0 and 1000";
     return nullptr;
 }
 
 const char* validateNetworkReplication(const entt::meta_any& component)
 {
-    const float ms = component.cast<const NetworkReplication&>().interpolationMs;
-    if (!(ms >= 0.0f && ms <= 1000.0f))
+    const auto& manager = component.cast<const NetworkReplication&>();
+    if (!(manager.interpolationMs >= 0.0f && manager.interpolationMs <= 1000.0f))
         return "\"interpolationMs\" must be between 0 and 1000";
+    if (!(manager.maxExtrapolationMs >= 0.0f && manager.maxExtrapolationMs <= 1000.0f))
+        return "\"maxExtrapolationMs\" must be between 0 and 1000";
     return nullptr;
 }
 
@@ -273,11 +279,14 @@ void registerBuiltins()
         .data<&AudioSource::playOnStart>("playOnStart").custom<FieldInfo>("Play On Start");
 
     registerComponent<NetworkLocalPlayer>("NetworkLocalPlayer", {"Network Local Player", true, validateNetworkLocalPlayer})
-        .data<&NetworkLocalPlayer::sendRateHz>("sendRateHz").custom<FieldInfo>("Send Rate (Hz)", false, 1.0, double(kMaxMoveRateHz));
+        .data<&NetworkLocalPlayer::sendRateHz>("sendRateHz").custom<FieldInfo>("Send Rate (Hz)", false, 1.0, double(kMaxMoveRateHz))
+        .data<&NetworkLocalPlayer::smoothingThreshold>("smoothingThreshold").custom<FieldInfo>(FieldInfo{.displayName = "Smoothing Threshold (m)", .min = 0.0, .optional = true})
+        .data<&NetworkLocalPlayer::smoothingMs>("smoothingMs").custom<FieldInfo>(FieldInfo{.displayName = "Smoothing (ms)", .min = 0.0, .max = 1000.0, .optional = true});
     registerComponent<NetworkReplication>("NetworkReplication", {"Network Replication", true, validateNetworkReplication})
         .data<&NetworkReplication::templateEntity>("templateEntity").custom<FieldInfo>("Template Entity")
         .data<&NetworkReplication::interpolationMs>("interpolationMs").custom<FieldInfo>("Interpolation (ms)", false, 0.0, 1000.0)
-        .data<&NetworkReplication::npcTemplates>("npcTemplates").custom<FieldInfo>(FieldInfo{.displayName = "NPC Templates", .optional = true});
+        .data<&NetworkReplication::npcTemplates>("npcTemplates").custom<FieldInfo>(FieldInfo{.displayName = "NPC Templates", .optional = true})
+        .data<&NetworkReplication::maxExtrapolationMs>("maxExtrapolationMs").custom<FieldInfo>(FieldInfo{.displayName = "Max Extrapolation (ms)", .min = 0.0, .max = 1000.0, .optional = true});
     registerComponent<NetworkEntity>("NetworkEntity", {"Network Entity"})
         .data<&NetworkEntity::entityId>("entityId").custom<FieldInfo>("Entity Id");
     registerComponent<Terrain>("Terrain", {"Terrain", true, validateTerrain})

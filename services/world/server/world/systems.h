@@ -63,7 +63,8 @@ void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send);
 void replication_system(entt::registry& reg, const Send& send);
 void chat_system(entt::registry& reg, const ChatRules& rules, const Send& send, TimePoint now);
 // Publishes each character's ClientEvents (kast.world.send) on the Lua bus as "client.<name>" {entity, data}, in
-// arrival order; past the character's ClientEventLimit they are dropped and counted.
+// arrival order, plus requestId for a kast.world.request; past the character's ClientEventLimit they are dropped and
+// counted (a dropped request is never answered: the client times it out).
 void client_event_in_system(entt::registry& reg, EventBus& bus, TimePoint now);
 // Each player's Interacts (docs/services/world/events.html#interactables): one on the player's map (Maps::interactable)
 // with the player within its range of the shape's edge (map::footprint_distance, horizontal) publishes the object's
@@ -74,7 +75,8 @@ void interact_system(entt::registry& reg, const Maps& maps, EventBus& bus);
 void component_replication_system(entt::registry& reg, const lua::Defs& defs, const Send& send);
 // Sends the client events Lua queued (kast.sendTo/sendNearby/broadcast) as ServerEvent, in call order. The audience is
 // taken now: owner = the character's session, nearby = it and every session that sees it, all = every player. A
-// target no longer in the world is skipped, and an NPC target has no client of its own.
+// target no longer in the world is skipped, and an NPC target has no client of its own. A kast.reply goes as Reply to
+// its entity's session alone.
 void client_event_system(entt::registry& reg, std::vector<lua::ClientEvent> events, const Send& send);
 void save_system(entt::registry& reg, const lua::Defs& defs, const Save& save, Millis interval, TimePoint now);
 void end_of_tick_system(entt::registry& reg);

@@ -7,6 +7,9 @@
 # systems/ and ignores the rest. MAP_ROOT is maps/. Back to the default content:
 #
 #   docker compose up -d --force-recreate world
+#
+# The server's lag simulator (SIM_LATENCY_MS / SIM_JITTER_MS, docker-compose.yml) works with this file too: set both in
+# services/world/.env or the shell, e.g. SIM_LATENCY_MS=150 SIM_JITTER_MS=50 docker compose -f ... up -d world
 services:
   world:
     environment:

@@ -30,6 +30,8 @@ net::SessionLimits session_limits(const Config& c) {
     l.msgBurst = c.msgBurst;
     l.msgRateGrace = Millis(c.msgRateGraceMs);
     l.maxSendBuffer = c.maxSendBufferBytes;
+    l.simLatency = Millis(c.simLatencyMs);
+    l.simJitter = Millis(c.simJitterMs);
     return l;
 }
 
@@ -254,7 +256,7 @@ void GameServer::handle_world(Client& c, proto::Message&& m) {
             c.session->disconnect(proto::Code::malformed);
             return;
         }
-        world_.push_client_event(c.entity, std::move(ev->name), std::move(*data));
+        world_.push_client_event(c.entity, std::move(ev->name), std::move(*data), ev->requestId);
         return;
     }
     const proto::Opcode op = proto::opcode_of(m);

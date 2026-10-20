@@ -255,6 +255,11 @@ struct TestWorld {
         db::CharRow row{charId, 1, name, map, {x, 0, z}, 0.5f, components, std::move(options)};
         return world.spawn(sid, row, T0);
     }
+    // A Move of e's current epoch, as from a client that has heard every Correction so far.
+    void move(entt::entity e, proto::Move m) {
+        m.epoch = world.registry().get<world::MoveState>(e).epoch;
+        world.push_move(e, m);
+    }
     Json value(entt::entity e, const std::string& name) {
         auto& p = lua::pool(world.registry(), name);
         return p.contains(e) ? p.get(e).value : Json();
@@ -973,6 +978,60 @@ void checkLuaEventHooks() {
     w.world.shutdown_scripts();
     w.world.bus().drain();
     check(got.size() == 3, "events: a graceful shutdown drops the queued events (onEnter, onLeave, shutdown)");
+}
+
+// kast.world.request's server side: "client.<name>" carries requestId (none for kast.world.send); kast.reply answers
+// it to the owner alone as Reply{requestId, ok, data or the reason}; bad arguments raise.
+void checkReply() {
+    LuaRoot r;
+    r.write("systems/ask.lua", R"(return {
+    init = function()
+        kast.subscribe("client.ask", function(e)
+            if e.data.yes then kast.reply(e.entity, e.requestId, true, {echo = e.data.n})
+            else kast.reply(e.entity, e.requestId, false, "nope") end
+        end)
+        kast.subscribe("client.plain", function(e) kast.sendTo(e.entity, "plain", {request = tostring(e.requestId)}) end)
+        kast.subscribe("client.bad", function(e)
+            local errors = {}
+            for _, a in ipairs({{e.entity, 0, true}, {e.entity, "x", true}, {e.entity, e.requestId, "yes"},
+                                {e.entity, e.requestId, false, 5}, {e.entity, e.requestId, false, nil}}) do
+                local ok, err = pcall(kast.reply, a[1], a[2], a[3], a[4])
+                errors[#errors + 1] = ok and "no error" or err
+            end
+            kast.reply(e.entity, e.requestId, true) -- nil data: {}
+            kast.sendTo(e.entity, "errors", {list = errors})
+        end)
+    end,
+    update = function(dt) end,
+})");
+    TestWorld w({});
+    const auto loadErrors = w.world.load_scripts(r.root);
+    check(loadErrors.empty(), "reply system loads " + (loadErrors.empty() ? "" : loadErrors[0]));
+    const auto a = w.spawn(1, 91, "Alice", 1000, 1000);
+    w.spawn(2, 92, "Bob", 1010, 1000);
+    w.sent.clear();
+    w.world.push_client_event(a, "ask", nlohmann::json{{"yes", true}, {"n", 4}}, 11);
+    w.world.push_client_event(a, "ask", nlohmann::json::object(), 12);
+    w.world.push_client_event(a, "plain", nlohmann::json::object());
+    w.world.push_client_event(a, "bad", nlohmann::json::object(), 13);
+    w.world.tick(T0);
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    check(w.sent.of<proto::Reply>(1) == std::vector<proto::Reply>{{11, true, R"({"echo":4})"}, {12, false, R"("nope")"},
+                                                                  {13, true, "{}"}},
+          "kast.reply: Reply{requestId, ok, data JSON / the reason as a JSON string}, in call order");
+    check(w.sent.of<proto::Reply>(2).empty(), "kast.reply: the owner alone");
+    const auto events = w.sent.of<proto::ServerEvent>(1);
+    check(events.size() == 2 && events[0].json == R"({"request":"nil"})", "kast.world.send's client event has no requestId");
+    const Json errors = events.size() == 2 ? Json::parse(events[1].json)["list"] : Json();
+    const auto has = [&](size_t i, const std::string& part) {
+        return errors.is_array() && i < errors.size() && errors[i].get<std::string>().find(part) != std::string::npos;
+    };
+    check(has(0, "kast.reply: requestId must be a client event's requestId, got 0") &&
+              has(1, "kast.reply: requestId must be a client event's requestId, got x") &&
+              has(2, "kast.reply: ok must be a boolean, got yes") &&
+              has(3, "kast.reply: a rejection's reason must be a string, got 5") &&
+              has(4, "kast.reply: a rejection's reason must be a string, got nil"),
+          "kast.reply: bad arguments raise " + errors.dump());
 }
 
 // kast.sendTo / sendNearby / broadcast: audiences, call order, after component replication, before Despawn.
@@ -2243,6 +2302,42 @@ return {
     for (const auto& s : w.world.script_status()) check(s.ok, "client events: system still enabled " + s.error);
 }
 
+// Move seq / epoch (protocol v6): a rejection sends one Correction{pos, the rejected seq, epoch + 1}; the rest of its
+// batch and every later Move of the old epoch (in flight when the Correction went out) are dropped without another.
+void checkMoveEpochs() {
+    TestWorld w({});
+    const auto alice = w.spawn(1, 41, "Alice", 1000, 1000);
+    w.world.tick(T0);
+    w.sent.clear();
+    const auto& tf = w.world.registry().get<world::Transform>(alice);
+    const auto& ms = w.world.registry().get<world::MoveState>(alice);
+    const auto move = [&](float x, uint32_t seq, uint32_t epoch) { w.world.push_move(alice, {{x, 0, 1000}, 0, 0, seq, epoch}); };
+    move(1001, 1, 0);
+    w.world.tick(T0 + std::chrono::milliseconds(500));
+    check(tf.pos.x == 1001 && w.sent.of<proto::Correction>(1).empty() && ms.epoch == 0, "epochs: a valid move, no Correction");
+    move(1100, 2, 0); // a teleport
+    move(1101, 3, 0); // sent right after it, same epoch
+    w.world.tick(T0 + std::chrono::milliseconds(1000));
+    auto corr = w.sent.of<proto::Correction>(1);
+    check(corr.size() == 1 && corr[0].pos == proto::Vec3{1001, 0, 1000} && corr[0].ackSeq == 2 && corr[0].epoch == 1 &&
+              ms.epoch == 1 && tf.pos.x == 1001,
+          "epochs: a rejection -> one Correction{last accepted pos, ackSeq of the rejected move, epoch 1}; the rest of the batch dropped");
+    w.sent.clear();
+    move(1102, 4, 0); // in flight when the Correction went out
+    move(1103, 5, 0);
+    w.world.tick(T0 + std::chrono::milliseconds(1100));
+    check(w.sent.of<proto::Correction>(1).empty() && tf.pos.x == 1001, "epochs: stale-epoch moves dropped silently, not applied");
+    move(1003, 6, 1); // the client rebased: 1001 + the 2 m it walked since
+    w.world.tick(T0 + std::chrono::milliseconds(1500));
+    check(w.sent.of<proto::Correction>(1).empty() && tf.pos.x == 1003, "epochs: a move of the new epoch is accepted");
+    move(1200, 7, 1);
+    move(1004, 8, 0); // an older epoch than the current one in the same batch: ignored, not a second rejection
+    w.world.tick(T0 + std::chrono::milliseconds(2000));
+    corr = w.sent.of<proto::Correction>(1);
+    check(corr.size() == 1 && corr[0].ackSeq == 7 && corr[0].epoch == 2 && corr[0].pos.x == 1003 && ms.epoch == 2,
+          "epochs: the next rejection -> ackSeq 7, epoch 2");
+}
+
 // kast.setMovable: a locked character's moves are all refused with one Correction a tick; unlocked, they work again.
 // kast.map.spawn(map): the map's spawn point.
 void checkMovableAndMapSpawn() {
@@ -2273,12 +2368,12 @@ end })");
     const auto alice = w.spawn(1, 41, "Alice", 1000, 1000);
     w.world.tick(T0); // locks
     w.sent.clear();
-    w.world.push_move(alice, proto::Move{{1001, 0, 1000}, 0, 0});
-    w.world.push_move(alice, proto::Move{{1002, 0, 1000}, 0, 0});
+    w.move(alice, proto::Move{{1001, 0, 1000}, 0, 0});
+    w.move(alice, proto::Move{{1002, 0, 1000}, 0, 0});
     w.world.tick(T0 + std::chrono::milliseconds(500)); // refused, then unlocks
     const auto& tf = w.world.registry().get<world::Transform>(alice);
     check(tf.pos.x == 1000 && w.sent.of<proto::Correction>(1).size() == 1, "movable: locked moves -> one Correction, no move");
-    w.world.push_move(alice, proto::Move{{1001, 0, 1000}, 0, 0});
+    w.move(alice, proto::Move{{1001, 0, 1000}, 0, 0});
     w.world.tick(T0 + std::chrono::milliseconds(1000));
     check(tf.pos.x == 1001, "movable: unlocked moves are accepted again");
     check_lua_expectations("movable", "lock lua done");
@@ -2348,12 +2443,29 @@ void checkStarterMmoCombat() {
     run(0.1);
     check(health(bat) == 10 && rejected(1) == std::vector<std::string>{"range", "target", "target", "target"},
           "starter-mmo: out of range / a player / unknown / not a number refused: " + Json(rejected(1)).dump());
+    // The same as a kast.world.request (requestId 7): kast.reply's Reply to the caster alone, no combat.rejected.
+    w.sent.clear();
+    w.world.push_client_event(alice, "combat.power", nlohmann::json{{"power", "strike"}, {"target", wire(bat)}}, 7);
+    run(0.1);
+    check(w.sent.of<proto::Reply>(1) == std::vector<proto::Reply>{{7, false, R"("range")"}} && rejected(1).empty() &&
+              w.sent.of<proto::Reply>(2).empty() && health(bat) == 10,
+          "starter-mmo: a refused request gets Reply{its id, rejected, the reason}, to the caster only");
 
     // Bob 2 m from the Bat: one hit kills it; both see the hit and the death; its corpse stays 60 s (Bob never loots
-    // it), then goes, and the Bat is back respawnSec (30 s) after that.
+    // it), then goes, and the Bat is back respawnSec (30 s) after that. Bob asks with a request (requestId 8): the
+    // same hit, plus Reply{8, ok, {power}} before the events.
     w.sent.clear();
-    attack(bob, wire(bat));
+    w.world.push_client_event(bob, "combat.power", nlohmann::json{{"power", "strike"}, {"target", wire(bat)}}, 8);
     w.world.tick(t += std::chrono::milliseconds(50));
+    check(w.sent.of<proto::Reply>(2) == std::vector<proto::Reply>{{8, true, R"({"power":"strike"})"}} &&
+              w.sent.of<proto::Reply>(1).empty() && [&] {
+                  for (const auto& m : w.sent.bySession[2]) { // the first of the Reply and the ServerEvents
+                      if (std::holds_alternative<proto::Reply>(m)) return true;
+                      if (std::holds_alternative<proto::ServerEvent>(m)) return false;
+                  }
+                  return false;
+              }(),
+          "starter-mmo: a request used gets Reply{its id, ok, {power}} before its events, to the caster only");
     const double bobAfterHit = health(bob);
     const auto hits = events(1, "combat.hit");
     const auto used = events(2, "combat.power");
@@ -2434,7 +2546,7 @@ void checkStarterMmoCombat() {
     check(health(dave) == 0 && deaths.size() == 1 && deaths[0]["entity"] == wire(dave) && deaths[0]["name"] == "Dave",
           "starter-mmo: Dave at 0 Health dies (combat.death)");
     const proto::Vec3 deadAt = reg.get<world::Transform>(dave).pos;
-    w.world.push_move(dave, proto::Move{{deadAt.x + 1, deadAt.y, deadAt.z}, 0, 0});
+    w.move(dave, proto::Move{{deadAt.x + 1, deadAt.y, deadAt.z}, 0, 0});
     attack(dave, wire(guard));
     run(0.1);
     check(reg.get<world::Transform>(dave).pos == deadAt && !w.sent.of<proto::Correction>(4).empty() &&
@@ -2448,14 +2560,14 @@ void checkStarterMmoCombat() {
     check(health(dave) == 140 && std::hypot(dp.x - 128, dp.z - 128) < 0.01f && events(4, "combat.revive").size() == 1 &&
               !w.sent.of<proto::MapChange>(4).empty(),
           "starter-mmo: revived 5 s later at the map spawn (128, 128) with a Warrior's full 140 Health");
-    w.world.push_move(dave, proto::Move{{dp.x + 0.5f, *w.maps.ground(10, dp.x + 0.5f, dp.z), dp.z}, 0, 0});
+    w.move(dave, proto::Move{{dp.x + 0.5f, *w.maps.ground(10, dp.x + 0.5f, dp.z), dp.z}, 0, 0});
     run(0.5);
     check(reg.get<world::Transform>(dave).pos.x == dp.x + 0.5f, "starter-mmo: moves accepted again after the revive");
     // Walking does not drain Health any more.
     const double walked = health(dave);
     for (int i = 1; i <= 20; ++i) {
         const float x = dp.x + 0.5f + 0.2f * static_cast<float>(i);
-        w.world.push_move(dave, proto::Move{{x, *w.maps.ground(10, x, dp.z), dp.z}, 0, 0});
+        w.move(dave, proto::Move{{x, *w.maps.ground(10, x, dp.z), dp.z}, 0, 0});
         w.world.tick(t += std::chrono::milliseconds(50));
     }
     check(health(dave) == walked, "starter-mmo: walking does not drain Health");
@@ -2468,7 +2580,7 @@ void checkStarterMmoCombat() {
             const float dx = x - p.x, dz = z - p.z, d = std::hypot(dx, dz), step = speed * 0.05f;
             if (d < 0.01f) return;
             const float k = std::min(1.0f, step / d), nx = p.x + dx * k, nz = p.z + dz * k;
-            w.world.push_move(e, proto::Move{{nx, *w.maps.ground(10, nx, nz), nz}, std::atan2(dx, dz), 0});
+            w.move(e, proto::Move{{nx, *w.maps.ground(10, nx, nz), nz}, std::atan2(dx, dz), 0});
             w.world.tick(t += std::chrono::milliseconds(50));
         }
     };
@@ -2626,7 +2738,7 @@ void checkStarterMmoLoot() {
             const float dx = x - p.x, dz = z - p.z, d = std::hypot(dx, dz);
             if (d < 0.01f) return;
             const float k = std::min(1.0f, 0.4f / d), nx = p.x + dx * k, nz = p.z + dz * k;
-            w.world.push_move(e, proto::Move{{nx, *w.maps.ground(11, nx, nz), nz}, 0, 0});
+            w.move(e, proto::Move{{nx, *w.maps.ground(11, nx, nz), nz}, 0, 0});
             w.world.tick(t += std::chrono::milliseconds(50));
         }
     };
@@ -3484,17 +3596,17 @@ void checkMapWorld() {
 
     // Move onto an undeclared tile: Correction, not applied. A move on the map is.
     w.sent.clear();
-    w.world.push_move(near, {{1015, 0, 1000}, 0, 0});
+    w.move(near, {{1015, 0, 1000}, 0, 0});
     w.world.tick(T0 + std::chrono::seconds(1));
     check(w.sent.of<proto::Correction>(7).empty() && w.world.registry().get<world::Transform>(near).pos.x == 1015, "on-map move accepted");
     w.sent.clear();
     const auto edger = w.spawn(8, 8, "Edger", 2045, 500);
-    w.world.push_move(edger, {{2050, 0, 500}, 0, 0});
+    w.move(edger, {{2050, 0, 500}, 0, 0});
     w.world.tick(T0 + std::chrono::seconds(3));
     const auto corr = w.sent.of<proto::Correction>(8);
     check(corr.size() == 1 && corr[0].pos == proto::Vec3{2045, 0, 500}, "move onto undeclared tile 8 -> Correction");
     w.sent.clear();
-    w.world.push_move(edger, {{2048, 0, 500}, 0, 0});
+    w.move(edger, {{2048, 0, 500}, 0, 0});
     w.world.tick(T0 + std::chrono::seconds(4));
     check(w.sent.of<proto::Correction>(8).size() == 1, "x = 2048 exactly is tile 8: Correction");
     w.world.despawn(edger);
@@ -3519,12 +3631,19 @@ void checkMapWorld() {
           "new neighbour: Spawn at the destination");
     check(spawnsOf(6).empty(), "the map-1 player at the same x/z still sees nothing");
 
-    // A move from before the client got MapChange (old-map coordinates): Correction to the new position.
+    // A move from before the client got MapChange (old-map coordinates, the old epoch): dropped, no Correction; one of
+    // MapChange's epoch from there is still validated (Correction to the new position).
+    check(mc[0].epoch == 1, "MapChange carries the session's new epoch");
     w.sent.clear();
-    w.world.push_move(a, {{1001, 0, 1000}, 0, 0});
+    w.world.push_move(a, {{1001, 0, 1000}, 0, 0, 1, 0}); // sent with the epoch before MapChange
     w.world.tick(T0 + std::chrono::seconds(6));
+    check(w.sent.of<proto::Correction>(1).empty() &&
+              w.world.registry().get<world::Transform>(a).pos == proto::Vec3{310, 0, 300},
+          "stale old-map move (old epoch) dropped without a Correction");
+    w.move(a, {{1001, 0, 1000}, 0, 0, 2});
+    w.world.tick(T0 + std::chrono::milliseconds(6100));
     check(w.sent.of<proto::Correction>(1).size() == 1 && w.sent.of<proto::Correction>(1)[0].pos == proto::Vec3{310, 0, 300},
-          "stale old-map move corrected");
+          "an old-map move of the new epoch is corrected");
 
     // Teleport within the map, next to the same neighbour: both get Despawn now and Spawn again on the next tick, so a
     // client that dropped its remotes on MapChange gets them back.
@@ -3779,7 +3898,7 @@ void checkAreaWorld() {
     std::vector<std::vector<std::string>> perStep;
     for (int i = 0; i < 3; ++i) {
         events.clear();
-        w.world.push_move(a, {path[i], 2.4f, 0});
+        w.move(a, {path[i], 2.4f, 0});
         w.world.tick(T0 + std::chrono::seconds(i + 1));
         perStep.push_back(events);
     }
@@ -3793,7 +3912,7 @@ void checkAreaWorld() {
     // Into cave_mouth: transferred in the same tick, before the aoi pass.
     w.sent.clear();
     events.clear();
-    w.world.push_move(a, {{1045, 0, 998}, 2.8f, 0});
+    w.move(a, {{1045, 0, 998}, 2.8f, 0});
     w.world.tick(T0 + std::chrono::seconds(4));
     const auto& tf = reg.get<world::Transform>(a);
     check(reg.get<world::MapRef>(a).map == 2 && tf.pos == proto::Vec3{256, 0, 240} && tf.heading == 3.14f,
@@ -3826,7 +3945,7 @@ void checkAreaWorld() {
 
     // No ping-pong: the destination is not in a portal, and staying put fires nothing more.
     events.clear();
-    w.world.push_move(a, {{256, 0, 241}, 0, 0});
+    w.move(a, {{256, 0, 241}, 0, 0});
     w.world.tick(T0 + std::chrono::seconds(5));
     check(reg.get<world::MapRef>(a).map == 2 && events.empty(), "moving on the cave map: no transfer, no events");
     w.world.despawn(a);
@@ -3968,16 +4087,16 @@ void checkGround() {
 
     // Moves: under the ground lifted, rising into the air corrected, falling accepted.
     w.sent.clear();
-    w.world.push_move(under, {{101, ramp(101, 100) - 5, 100}, 0, 0});
+    w.move(under, {{101, ramp(101, 100) - 5, 100}, 0, 0});
     w.world.tick(at(1));
     check(w.sent.of<proto::Correction>(1).empty() && on_ramp(reg.get<world::Transform>(under).pos.y, 101, 100),
           "move 5 m under the ground: accepted, lifted onto it");
-    w.world.push_move(under, {{102, ramp(102, 100) + 10, 100}, 0, 0});
+    w.move(under, {{102, ramp(102, 100) + 10, 100}, 0, 0});
     w.world.tick(at(2));
     const auto fly = w.sent.of<proto::Correction>(1);
     check(fly.size() == 1 && fly[0].pos == reg.get<world::Transform>(under).pos && fly[0].pos.x == 101,
           "rising 10 m above the ground: Correction to the last position");
-    w.world.push_move(sky, {{121, ramp(121, 100) + 49, 100}, 0, 0});
+    w.move(sky, {{121, ramp(121, 100) + 49, 100}, 0, 0});
     w.world.tick(at(3));
     check(w.sent.of<proto::Correction>(2).empty() && on_ramp(reg.get<world::Transform>(sky).pos.y - 49, 121, 100),
           "falling from 50 m above the ground: accepted");
@@ -4129,7 +4248,7 @@ void checkNavmesh() {
         const auto e = w.world.spawn(1, {1, 1, "Walker", map, from, 0, ""}, T0);
         w.world.tick(T0);
         w.sent.clear();
-        w.world.push_move(e, {to, 0, 0});
+        w.move(e, {to, 0, 0});
         w.world.tick(T0 + std::chrono::seconds(1));
         return w.sent.of<proto::Correction>(1).size();
     };
@@ -4830,7 +4949,7 @@ void checkObstacleNavmesh() {
         const auto e = w.world.spawn(1, {1, 1, "Walker", 1, from, 0, ""}, T0);
         w.world.tick(T0);
         w.sent.clear();
-        w.world.push_move(e, {to, 0, 0});
+        w.move(e, {to, 0, 0});
         w.world.tick(T0 + std::chrono::seconds(1));
         return w.sent.of<proto::Correction>(1).size();
     };
@@ -4858,6 +4977,7 @@ int lua_checks(int& checks) {
     checkLuaEventFailures();
     checkLuaEventHooks();
     checkClientEvents();
+    checkReply();
     checkFsmDefinitions();
     checkFsmRules();
     checkFsmQueue();
@@ -4874,6 +4994,7 @@ int lua_checks(int& checks) {
     checkRespawn();
     checkSpawnLua();
     checkClientEventsIn();
+    checkMoveEpochs();
     checkMovableAndMapSpawn();
 #ifdef KAST_STARTER_MMO
     checkStarterMmoCombat();

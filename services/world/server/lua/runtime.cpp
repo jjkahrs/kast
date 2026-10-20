@@ -748,6 +748,29 @@ struct Runtime::Impl {
         api.set_function("broadcast", [this](sol::this_state L, const sol::object& name, const sol::object& value) {
             queue_client_event(L, "kast.broadcast", ClientEvent::To::all, 0, name, value);
         });
+        // kast.reply(entity, requestId, ok, dataOrReason): answers a "client.<name>" event's requestId (a client's
+        // kast.world.request) to entity's owner: ok true with data (a table, nil: {}), false with the reason (a string).
+        api.set_function("reply", [this](sol::this_state L, const sol::object& id, const sol::object& requestId,
+                                         const sol::object& ok, const sol::object& value) {
+            const uint32_t entity = target(L, "kast.reply", id);
+            const uint32_t request = requestId.get_type() == sol::type::number ? target(L, "kast.reply", requestId) : 0;
+            if (request == 0)
+                raise(L, std::format("kast.reply: requestId must be a client event's requestId, got {}", to_string(L, requestId)));
+            if (ok.get_type() != sol::type::boolean)
+                raise(L, std::format("kast.reply: ok must be a boolean, got {}", to_string(L, ok)));
+            nlohmann::json json;
+            if (ok.as<bool>()) {
+                json = value.get_type() == sol::type::lua_nil ? nlohmann::json::object() : payload(L, "kast.reply", value);
+            } else if (value.get_type() == sol::type::string) {
+                json = value.as<std::string>();
+            } else {
+                raise(L, std::format("kast.reply: a rejection's reason must be a string, got {}", to_string(L, value)));
+            }
+            std::string text = json.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+            if (!proto::ServerEvent::fits(3, text.size())) // Reply: u32 + u8 + str, the size of a 3-byte-named event
+                raise(L, std::format("kast.reply: {} bytes of data is too large to send", text.size()));
+            clientEvents.push_back({ClientEvent::To::reply, entity, {}, std::move(text), request, ok.as<bool>()});
+        });
 
         const auto logger = [this](void (*write)(std::string_view, nlohmann::json)) {
             return [this, write](sol::this_state L, const sol::object& message) {

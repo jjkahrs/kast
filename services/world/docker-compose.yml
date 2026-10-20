@@ -19,6 +19,9 @@ services:
       MAP_ROOT: /app/maps
       # The sample's game state machine (lua/fsms/zone_cycle.lua); set GAME_STATE_MACHINES in .env to override.
       GAME_STATE_MACHINES: ${GAME_STATE_MACHINES-zone_cycle}
+      # Lag simulator, testing only (0 = off): from .env or the shell, e.g. SIM_LATENCY_MS=150 SIM_JITTER_MS=50.
+      SIM_LATENCY_MS: ${SIM_LATENCY_MS:-0}
+      SIM_JITTER_MS: ${SIM_JITTER_MS:-0}
     ports:
       - "${WORLD_HOST_PORT:-7777}:7777"
     volumes:
