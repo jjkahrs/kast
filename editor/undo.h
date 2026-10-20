@@ -48,7 +48,7 @@ private:
 // What Edit > Undo / Redo and Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z act on: the focused panel's document. Each surface wires
 // its history and the actions that undo / redo it and then update the document (dirty flag, selection).
 struct UndoTarget {
-    UndoStack* history = nullptr; // null: nothing to undo
+    const UndoStack* history = nullptr; // null: nothing to undo
     std::function<void()> undo, redo;
     bool blocked = false; // e.g. during Play: shown greyed, shortcuts ignored
     bool canUndo() const { return history && !blocked && history->canUndo(); }

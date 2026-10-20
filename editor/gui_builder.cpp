@@ -115,6 +115,9 @@ bool GuiBuilder::load(const std::filesystem::path& rml)
     rememberFileTimes();
     selected_ = {};
     inspectorNode_ = {};
+    history_.clear(true);
+    gesture_.reset();
+    rcssCommitted_ = rcssText_;
     if (!selectedId.empty())
         selectById(selectedId);
     previewStale_ = true;
@@ -131,6 +134,9 @@ void GuiBuilder::close()
     rmlDirty_ = rcssDirty_ = false;
     selected_ = {};
     inspectorNode_ = {};
+    history_.clear(true);
+    gesture_.reset();
+    rcssCommitted_.clear();
     previewStale_ = true;
 }
 
@@ -138,12 +144,14 @@ bool GuiBuilder::save()
 {
     if (rml_.empty())
         return true;
+    endGesture(); // the save point comes after a text field edit in progress
     std::string error;
     if (!writeTextFile(rml_, doc_.serialize(), error) || (!rcss_.empty() && !writeTextFile(rcss_, rcssText_, error))) {
         kast::log::error(std::format("Cannot save GUI: {}", error));
         return false;
     }
     rmlDirty_ = rcssDirty_ = false;
+    history_.markSaved();
     rememberFileTimes();
     kast::log::info(std::format("Saved GUI '{}'", rml_.string()));
     return true;
@@ -170,6 +178,53 @@ bool GuiBuilder::applyRcss()
 void GuiBuilder::markRmlDirty()
 {
     rmlDirty_ = true;
+    previewStale_ = true;
+}
+
+bool GuiBuilder::record(std::string name, std::optional<GuiElementCopy> before, std::optional<GuiElementCopy> after)
+{
+    return pushGuiStep(history_, doc_.body().root(), std::move(name), std::move(before), std::move(after),
+                       [this](pugi::xml_node node) { selected_ = node; });
+}
+
+void GuiBuilder::endGesture()
+{
+    if (const std::optional<Gesture> gesture = std::exchange(gesture_, std::nullopt))
+        record(gesture->name, gesture->before, copyGuiElement(gesture->node));
+    if (rcssText_ == rcssCommitted_)
+        return;
+    const auto setRcss = [this](const std::string& text) {
+        rcssText_ = rcssCommitted_ = text;
+        applyRcss();
+    };
+    history_.push({"Edit Style", [setRcss, before = rcssCommitted_] { setRcss(before); },
+                   [setRcss, after = rcssText_] { setRcss(after); }});
+    rcssCommitted_ = rcssText_;
+}
+
+void GuiBuilder::undo()
+{
+    endGesture();
+    if (history_.canUndo())
+        kast::log::info(std::format("Undo {}", history_.undoName()));
+    history_.undo();
+    afterUndoRedo();
+}
+
+void GuiBuilder::redo()
+{
+    endGesture();
+    if (history_.canRedo())
+        kast::log::info(std::format("Redo {}", history_.redoName()));
+    history_.redo();
+    afterUndoRedo();
+}
+
+void GuiBuilder::afterUndoRedo()
+{
+    rmlDirty_ = !history_.atSavePoint(); // the history covers the .rcss too: one flag stands for both
+    rcssDirty_ = false;
+    inspectorNode_ = {};
     previewStale_ = true;
 }
 
@@ -367,31 +422,47 @@ void GuiBuilder::drawNode(pugi::xml_node node)
 void GuiBuilder::applyEdit()
 {
     const Edit edit = std::exchange(edit_, Edit{});
-    bool changed = false;
+    if (edit.op == Edit::Op::None)
+        return;
+    endGesture();
+    const std::string kind = guiKindLabel(guiKind(edit.node));
+    std::optional<GuiElementCopy> before = edit.op == Edit::Op::Add ? std::nullopt : std::optional(copyGuiElement(edit.node));
+    std::optional<GuiElementCopy> after;
+    std::string name;
     switch (edit.op) {
     case Edit::Op::Add:
         if (pugi::xml_node added = doc_.add(edit.kind, edit.node)) {
             selected_ = added;
-            changed = true;
+            after = copyGuiElement(added);
+            name = std::format("Add {}", guiKindLabel(edit.kind));
         }
         break;
     case Edit::Op::Delete:
         for (pugi::xml_node node = selected_; node; node = node.parent())
             if (node == edit.node)
                 selected_ = {}; // going with its subtree
-        changed = doc_.remove(edit.node);
+        if (!doc_.remove(edit.node))
+            before.reset();
+        name = "Delete " + kind;
         break;
     case Edit::Op::Move:
-        changed = doc_.move(edit.node, edit.delta);
+        if (doc_.move(edit.node, edit.delta))
+            after = copyGuiElement(edit.node);
+        name = std::format("Move {} {}", kind, edit.delta < 0 ? "Up" : "Down");
         break;
     case Edit::Op::Reparent:
-        changed = doc_.reparent(edit.node, edit.parent);
-        if (!changed)
+        if (doc_.reparent(edit.node, edit.parent))
+            after = copyGuiElement(edit.node);
+        else
             kast::log::warn("GUI Hierarchy: can't move an element into itself");
+        name = "Reparent " + kind;
         break;
     case Edit::Op::None:
         break;
     }
+    // Delete has no after; the others have one only if they happened.
+    const bool changed = (edit.op == Edit::Op::Delete ? before.has_value() : after.has_value()) &&
+                         record(name, std::move(before), std::move(after));
     if (changed) {
         inspectorNode_ = {}; // an edit may free nodes; refill the Inspector from the selection
         markRmlDirty();
@@ -421,29 +492,33 @@ void GuiBuilder::drawInspector()
             if (kind == GuiKind::Unknown) {
                 ImGui::TextDisabled("Not editable in the builder; kept as written. It can be moved or deleted.");
             } else {
-                if (ImGui::InputText("id", &inspectorBuffer_[0])) {
-                    GuiDoc::setAttribute(selected_, "id", inspectorBuffer_[0]);
-                    markRmlDirty();
-                }
-                if (ImGui::InputText("class", &inspectorBuffer_[1])) {
-                    GuiDoc::setAttribute(selected_, "class", inspectorBuffer_[1]);
-                    markRmlDirty();
-                }
-                if (kind == GuiKind::Text || kind == GuiKind::Button) {
-                    if (GuiDoc::hasEditableText(selected_)) {
-                        if (ImGui::InputText("text", &inspectorBuffer_[2])) {
-                            GuiDoc::setText(selected_, inspectorBuffer_[2]);
-                            markRmlDirty();
-                        }
-                    } else {
-                        ImGui::TextDisabled("text: holds other elements; edit it in the .rml");
-                    }
-                }
-                if (kind == GuiKind::Button) {
-                    if (ImGui::InputText("data-event", &inspectorBuffer_[3])) {
-                        GuiDoc::setAttribute(selected_, "data-event", inspectorBuffer_[3]);
+                // One step per field edit: the element is copied before its first change, recorded when it lets go.
+                const auto field = [&](const char* label, std::string& buffer, auto set) {
+                    const bool changed = ImGui::InputText(label, &buffer);
+                    if (ImGui::IsItemActive() && !gesture_)
+                        gesture_ = Gesture{std::format("Edit {} {}", guiKindLabel(kind), label), selected_,
+                                           copyGuiElement(selected_)};
+                    if (changed) {
+                        set(buffer);
                         markRmlDirty();
                     }
+                    if (ImGui::IsItemDeactivated())
+                        endGesture();
+                };
+                const auto attribute = [&](const char* name) {
+                    return [this, name](const std::string& value) { GuiDoc::setAttribute(selected_, name, value); };
+                };
+                field("id", inspectorBuffer_[0], attribute("id"));
+                field("class", inspectorBuffer_[1], attribute("class"));
+                if (kind == GuiKind::Text || kind == GuiKind::Button) {
+                    if (GuiDoc::hasEditableText(selected_))
+                        field("text", inspectorBuffer_[2],
+                              [this](const std::string& value) { GuiDoc::setText(selected_, value); });
+                    else
+                        ImGui::TextDisabled("text: holds other elements; edit it in the .rml");
+                }
+                if (kind == GuiKind::Button) {
+                    field("data-event", inspectorBuffer_[3], attribute("data-event"));
                     ImGui::TextDisabled("Clicks publish this event on the event bus (empty: none).");
                 }
             }
@@ -487,6 +562,9 @@ void GuiBuilder::drawStyle()
                 rcssDirty_ = true;
                 rcssEditedAt_ = ImGui::GetTime();
             }
+            if (ImGui::IsItemDeactivated())
+                endGesture(); // the Style edit is one step
+
         }
     } else if (rml_.empty()) {
         ImGui::TextDisabled("No GUI open.");

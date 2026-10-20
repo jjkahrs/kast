@@ -10,6 +10,7 @@
 #include "document.h" // editor Play mode; links editor/document.cpp, no window needed
 #include "external_editor.h" // external editor command; links editor/external_editor.cpp
 #include "gui_doc.h"  // GUI Builder document model; links editor/gui_doc.cpp
+#include "gui_undo.h" // GUI Builder undo steps; links editor/gui_undo.cpp
 #include "recent_projects.h" // Project Manager list; links editor/recent_projects.cpp
 
 #include <components.h>
@@ -9054,6 +9055,139 @@ void checkPrefabModeUndo()
     closePrefab(doc);
 }
 
+// --- GUI Builder undo (editor/gui_undo.h): the steps GuiBuilder records, on a GuiDoc ---
+
+// edit changes doc and records exactly one step: undo puts back the serialized document, redo the edited one.
+template <typename Fn>
+void checkGuiUndoRedo(GuiDoc& doc, UndoStack& history, const char* what, Fn&& edit)
+{
+    const std::string before = doc.serialize();
+    const size_t steps = history.size();
+    edit();
+    const std::string after = doc.serialize();
+    const std::string name = std::format("gui undo: {}", what);
+    check(after != before, (name + ": changes the document").c_str());
+    check(history.size() == steps + 1 && history.canUndo() && !history.canRedo(), (name + ": records one step").c_str());
+    history.undo();
+    check(doc.serialize() == before, (name + ": undo restores the exact prior state").c_str());
+    history.redo();
+    check(doc.serialize() == after, (name + ": redo restores the exact post state").c_str());
+}
+
+void checkGuiUndo()
+{
+    GuiDoc doc;
+    std::string error;
+    check(doc.parse(kGuiSample, error), "gui undo: parses the sample");
+    const pugi::xml_node root = doc.body().root();
+    UndoStack history;
+    pugi::xml_node selected;
+    const auto select = [&](pugi::xml_node node) { selected = node; };
+    const auto selectedId = [&] { return GuiDoc::attribute(selected, "id"); };
+    const auto record = [&](const char* name, std::optional<GuiElementCopy> before, std::optional<GuiElementCopy> after) {
+        return pushGuiStep(history, root, name, std::move(before), std::move(after), select);
+    };
+    // As GuiBuilder::applyEdit: copy before, edit, copy after.
+    const auto relocate = [&](const char* id, auto edit) {
+        const pugi::xml_node node = guiNode(doc, id);
+        GuiElementCopy before = copyGuiElement(node);
+        edit(node);
+        record("Move", std::move(before), copyGuiElement(node));
+    };
+    const auto setAttribute = [&](const char* id, const char* name, const char* value) {
+        const pugi::xml_node node = guiNode(doc, id);
+        GuiElementCopy before = copyGuiElement(node);
+        GuiDoc::setAttribute(node, name, value);
+        return record("Edit", std::move(before), copyGuiElement(node));
+    };
+
+    checkGuiUndoRedo(doc, history, "add", [&] {
+        GuiDoc::setAttribute(doc.add(GuiKind::Text, guiNode(doc, "panel")), "id", "added");
+        record("Add Text", std::nullopt, copyGuiElement(guiNode(doc, "added")));
+    });
+    history.undo();
+    check(!selected && !guiNode(doc, "added"), "gui undo: undoing an add clears the selection");
+    history.redo();
+    check(selectedId() == "added", "gui undo: redoing an add selects the element");
+    checkGuiUndoRedo(doc, history, "delete", [&] {
+        const pugi::xml_node node = guiNode(doc, "title");
+        GuiElementCopy before = copyGuiElement(node);
+        doc.remove(node);
+        record("Delete Text", std::move(before), std::nullopt);
+    });
+    history.undo();
+    check(selectedId() == "title" && selected == guiNode(doc, "title"), "gui undo: undoing a delete selects the element again");
+    history.redo();
+    check(!selected, "gui undo: redoing a delete clears the selection");
+    checkGuiUndoRedo(doc, history, "move up", [&] { relocate("go", [&](pugi::xml_node node) { doc.move(node, -1); }); });
+    checkGuiUndoRedo(doc, history, "move past a comment", [&] {
+        relocate("panel", [&](pugi::xml_node node) { doc.move(node, 1); }); // <!-- keep me --> stays first
+    });
+    checkGuiUndoRedo(doc, history, "reparent", [&] {
+        relocate("quiet", [&](pugi::xml_node node) { doc.reparent(node, guiNode(doc, "panel")); });
+    });
+    history.undo();
+    check(selectedId() == "quiet" && selected.parent() == doc.body(), "gui undo: undoing a reparent selects it where it was");
+    history.redo();
+    checkGuiUndoRedo(doc, history, "attribute", [&] { setAttribute("panel", "class", "box wide"); });
+    checkGuiUndoRedo(doc, history, "remove attribute", [&] { setAttribute("go", "data-event", ""); });
+    checkGuiUndoRedo(doc, history, "text", [&] {
+        const pugi::xml_node node = guiNode(doc, "go");
+        GuiElementCopy before = copyGuiElement(node);
+        GuiDoc::setText(node, "Go & on"); // one step for the whole field edit, as the Inspector's gesture
+        GuiDoc::setText(node, "Go & onward");
+        record("Edit Button text", std::move(before), copyGuiElement(node));
+    });
+    history.undo();
+    check(selectedId() == "go" && GuiDoc::text(selected) == "Go", "gui undo: undoing a text edit selects the element");
+    history.redo();
+
+    const size_t steps = history.size();
+    const std::string unchanged = doc.serialize();
+    check(!setAttribute("panel", "class", "box wide") && history.size() == steps, "gui undo: no step for an unchanged field");
+    const pugi::xml_node last = GuiDoc::elements(guiNode(doc, "panel")).back();
+    GuiElementCopy before = copyGuiElement(last);
+    doc.reparent(last, guiNode(doc, "panel")); // already its last child
+    check(!record("Reparent", std::move(before), copyGuiElement(last)) && history.size() == steps &&
+              doc.serialize() == unchanged,
+          "gui undo: no step for a reparent that moved nothing");
+
+    history.clear(true);
+    setAttribute("mixed", "class", "a");
+    check(!history.atSavePoint(), "gui undo: an edit leaves the save point");
+    history.undo();
+    check(history.atSavePoint(), "gui undo: undo back to the save point");
+    history.redo();
+    history.markSaved();
+    setAttribute("mixed", "class", "b");
+    history.undo();
+    check(history.atSavePoint() && GuiDoc::attribute(guiNode(doc, "mixed"), "class") == "a",
+          "gui undo: undo back to the last save");
+    setAttribute("mixed", "class", "c");
+    check(!history.canRedo() && GuiDoc::attribute(guiNode(doc, "mixed"), "class") == "c",
+          "gui undo: a new edit discards the redo branch");
+
+    history.clear(true);
+    const std::string start = doc.serialize();
+    for (int i = 1; i <= 101; ++i)
+        setAttribute("mixed", "class", std::format("c{}", i).c_str());
+    check(history.size() == UndoStack::kMaxSteps, "gui undo: capped at 100 steps");
+    while (history.canUndo())
+        history.undo();
+    check(GuiDoc::attribute(guiNode(doc, "mixed"), "class") == "c1" && doc.serialize() != start && !history.atSavePoint(),
+          "gui undo: the 101st step dropped the oldest");
+
+    Document scene;
+    resetToDefault(scene);
+    const nlohmann::ordered_json sceneBefore = kast::sceneToJson(scene.scene);
+    history.redo();
+    history.undo();
+    setAttribute("mixed", "class", "independent");
+    history.undo();
+    check(kast::sceneToJson(scene.scene) == sceneBefore && scene.history.size() == 0 && !scene.dirty,
+          "gui undo: GUI steps never touch the scene or its history");
+}
+
 void checkLuaInstantiate()
 {
     const std::filesystem::path dir = projectTestDir("kast_prefab_lua", "Prefabs");
@@ -9107,6 +9241,7 @@ int main(int argc, char** argv)
         checkSceneUndo();
         checkPrefabUndo();
         checkPrefabModeUndo();
+        checkGuiUndo();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All undo checks passed" : std::format("{} undo check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
@@ -9158,6 +9293,7 @@ int main(int argc, char** argv)
     checkSceneUndo();
     checkPrefabUndo();
     checkPrefabModeUndo();
+    checkGuiUndo();
     checkLuaInstantiate();
     checkLuaGui();
     checkGuiEffectCompile();
