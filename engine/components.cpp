@@ -1,5 +1,6 @@
 #include "components.h"
 
+#include "particles.h"
 #include "scene_io.h"
 
 #include <entt/core/hashed_string.hpp>
@@ -165,6 +166,43 @@ const char* validateTerrain(const entt::meta_any& component)
     return nullptr;
 }
 
+const char* validateParticleEmitter(const entt::meta_any& component)
+{
+    const auto& e = component.cast<const ParticleEmitter&>();
+    const auto finite = [](const bx::Vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
+    if (!(e.duration >= 0.01f))
+        return "\"duration\" must be >= 0.01";
+    if (!(e.rate >= 0.0f && std::isfinite(e.rate)))
+        return "\"rate\" must be >= 0";
+    if (e.burstCount < 0 || e.burstCount > kMaxParticles)
+        return "\"burstCount\" must be between 0 and 65536"; // kMaxParticles
+    if (e.maxParticles < 1 || e.maxParticles > kMaxParticles)
+        return "\"maxParticles\" must be between 1 and 65536"; // kMaxParticles
+    if (!(e.coneAngle >= 0.0f && e.coneAngle <= 180.0f))
+        return "\"coneAngle\" must be between 0 and 180";
+    if (!(e.radius >= 0.0f && std::isfinite(e.radius)))
+        return "\"radius\" must be >= 0";
+    if (!(finite(e.boxSize) && e.boxSize.x >= 0.0f && e.boxSize.y >= 0.0f && e.boxSize.z >= 0.0f))
+        return "\"boxSize\" must be >= 0 on every axis";
+    if (!(e.lifetimeMin > 0.0f && e.lifetimeMax > 0.0f && std::isfinite(e.lifetimeMin) && std::isfinite(e.lifetimeMax)))
+        return "\"lifetimeMin\" and \"lifetimeMax\" must be > 0";
+    if (!(std::isfinite(e.speedMin) && std::isfinite(e.speedMax)))
+        return "\"speedMin\" and \"speedMax\" must be finite";
+    if (!(e.startSizeMin >= 0.0f && e.startSizeMax >= 0.0f && std::isfinite(e.startSizeMin) && std::isfinite(e.startSizeMax)))
+        return "\"startSizeMin\" and \"startSizeMax\" must be >= 0";
+    if (!(e.endSize >= 0.0f && std::isfinite(e.endSize)))
+        return "\"endSize\" must be >= 0";
+    for (const bx::Vec3& color : {e.startColor, e.endColor})
+        for (float channel : {color.x, color.y, color.z})
+            if (!(channel >= 0.0f && channel <= kMaxParticleColor))
+                return "\"startColor\" and \"endColor\" channels must be between 0 and 16"; // kMaxParticleColor
+    if (!(e.startAlpha >= 0.0f && e.startAlpha <= 1.0f && e.endAlpha >= 0.0f && e.endAlpha <= 1.0f))
+        return "\"startAlpha\" and \"endAlpha\" must be between 0 and 1";
+    if (!finite(e.gravity))
+        return "\"gravity\" must be finite";
+    return nullptr;
+}
+
 void registerBuiltins()
 {
     registerComponent<Transform>("Transform", {"Transform", false})
@@ -296,6 +334,49 @@ void registerBuiltins()
         .data<&TerrainTile::map>("map").custom<FieldInfo>("Map")
         .data<&TerrainTile::tx>("tx").custom<FieldInfo>("Tile X")
         .data<&TerrainTile::tz>("tz").custom<FieldInfo>("Tile Z");
+
+    entt::meta_factory<ParticleShape>{}
+        .type("ParticleShape")
+        .data<ParticleShape::Cone>("cone").custom<FieldInfo>("Cone")
+        .data<ParticleShape::Sphere>("sphere").custom<FieldInfo>("Sphere")
+        .data<ParticleShape::Box>("box").custom<FieldInfo>("Box");
+    entt::meta_factory<ParticleSpace>{}
+        .type("ParticleSpace")
+        .data<ParticleSpace::World>("world").custom<FieldInfo>("World")
+        .data<ParticleSpace::Local>("local").custom<FieldInfo>("Local");
+    entt::meta_factory<ParticleBlend>{}
+        .type("ParticleBlend")
+        .data<ParticleBlend::Alpha>("alpha").custom<FieldInfo>("Alpha")
+        .data<ParticleBlend::Additive>("additive").custom<FieldInfo>("Additive");
+    constexpr double maxParticles = kMaxParticles;
+    constexpr double maxColor = kMaxParticleColor;
+    registerComponent<ParticleEmitter>("ParticleEmitter", {"Particle Emitter", true, validateParticleEmitter})
+        .data<&ParticleEmitter::playOnStart>("playOnStart").custom<FieldInfo>("Play On Start")
+        .data<&ParticleEmitter::looping>("looping").custom<FieldInfo>("Looping")
+        .data<&ParticleEmitter::duration>("duration").custom<FieldInfo>("Duration (s)", false, 0.01)
+        .data<&ParticleEmitter::rate>("rate").custom<FieldInfo>("Rate (per s)", false, 0.0)
+        .data<&ParticleEmitter::burstCount>("burstCount").custom<FieldInfo>("Burst Count", false, 0.0, maxParticles)
+        .data<&ParticleEmitter::maxParticles>("maxParticles").custom<FieldInfo>("Max Particles", false, 1.0, maxParticles)
+        .data<&ParticleEmitter::shape>("shape").custom<FieldInfo>("Shape")
+        .data<&ParticleEmitter::coneAngle>("coneAngle").custom<FieldInfo>("Cone Angle", false, 0.0, 180.0)
+        .data<&ParticleEmitter::radius>("radius").custom<FieldInfo>("Radius", false, 0.0)
+        .data<&ParticleEmitter::boxSize>("boxSize").custom<FieldInfo>("Box Size")
+        .data<&ParticleEmitter::emitFromSurface>("emitFromSurface").custom<FieldInfo>("Emit From Surface")
+        .data<&ParticleEmitter::lifetimeMin>("lifetimeMin").custom<FieldInfo>("Lifetime Min (s)", false, 0.001)
+        .data<&ParticleEmitter::lifetimeMax>("lifetimeMax").custom<FieldInfo>("Lifetime Max (s)", false, 0.001)
+        .data<&ParticleEmitter::speedMin>("speedMin").custom<FieldInfo>("Speed Min")
+        .data<&ParticleEmitter::speedMax>("speedMax").custom<FieldInfo>("Speed Max")
+        .data<&ParticleEmitter::startSizeMin>("startSizeMin").custom<FieldInfo>("Start Size Min", false, 0.0)
+        .data<&ParticleEmitter::startSizeMax>("startSizeMax").custom<FieldInfo>("Start Size Max", false, 0.0)
+        .data<&ParticleEmitter::endSize>("endSize").custom<FieldInfo>("End Size (x start)", false, 0.0)
+        .data<&ParticleEmitter::startColor>("startColor").custom<FieldInfo>("Start Color", true, 0.0, maxColor)
+        .data<&ParticleEmitter::endColor>("endColor").custom<FieldInfo>("End Color", true, 0.0, maxColor)
+        .data<&ParticleEmitter::startAlpha>("startAlpha").custom<FieldInfo>("Start Alpha", false, 0.0, 1.0)
+        .data<&ParticleEmitter::endAlpha>("endAlpha").custom<FieldInfo>("End Alpha", false, 0.0, 1.0)
+        .data<&ParticleEmitter::gravity>("gravity").custom<FieldInfo>("Gravity")
+        .data<&ParticleEmitter::space>("space").custom<FieldInfo>("Space")
+        .data<&ParticleEmitter::texture>("texture").custom<FieldInfo>("Texture")
+        .data<&ParticleEmitter::blend>("blend").custom<FieldInfo>("Blend");
 }
 
 // ponytail: not thread-safe; registration happens on the main thread before any scene work.

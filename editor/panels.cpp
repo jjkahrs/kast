@@ -8,6 +8,7 @@
 #include <log.h>
 #include <lua_components.h>
 #include <material.h>
+#include <particles.h>
 #include <physics.h>
 #include <prefab.h>
 #include <scene_io.h>
@@ -352,7 +353,9 @@ bool Panels::drawValue(entt::entity entity, const std::string& key, const kast::
     }
     case FieldKind::Vec3: {
         float v[3] = {value[0].get<float>(), value[1].get<float>(), value[2].get<float>()};
-        if (!(field.color ? ImGui::ColorEdit3(label, v) : ImGui::DragFloat3(label, v, 0.05f)))
+        // A color allowed past 1 (e.g. an HDR particle color) edits as floats without the 0..1 clamp.
+        const ImGuiColorEditFlags hdr = field.max && *field.max > 1.0 ? ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float : 0;
+        if (!(field.color ? ImGui::ColorEdit3(label, v, hdr) : ImGui::DragFloat3(label, v, 0.05f)))
             return false;
         value = Json::array({kast::jsonNumber(v[0]), kast::jsonNumber(v[1]), kast::jsonNumber(v[2])});
         return true;
@@ -516,6 +519,7 @@ void Panels::drawInspector(Document& doc)
                         const bool model = type.meta() && type.meta() == entt::resolve<kast::ModelRenderer>();
                         const bool animator = type.meta() && type.meta() == entt::resolve<kast::Animator>();
                         const bool sound = type.meta() && type.meta() == entt::resolve<kast::AudioSource>();
+                        const bool particles = type.meta() && type.meta() == entt::resolve<kast::ParticleEmitter>();
                         const auto drawOne = [&](const kast::FieldDesc& field, Json& value) {
                             if (mesh && field.name == "material")
                                 return drawMaterialPicker(doc, value);
@@ -529,6 +533,8 @@ void Panels::drawInspector(Document& doc)
                                 return drawSoundPicker(doc, value);
                             return drawField(entity, type, field, value);
                         };
+                        if (particles) // on top: the emitter has many fields
+                            drawParticlePreview(doc, entity);
                         for (const kast::FieldDesc& field : type.fields()) {
                             ImGui::PushID(field.name.c_str()); // each field's override menu
                             const bool edited = drawOne(field, json[field.name]);
@@ -1153,6 +1159,24 @@ void Panels::drawAnimatorPreview(Document& doc, entt::entity entity)
         state->time = time; // scrubbing pauses, so the pose stays where it was dragged
         state->playing = false;
     }
+}
+
+// Runtime only, like the Animator preview: ParticleEmitterState is never saved, undone or marked dirty.
+void Panels::drawParticlePreview(Document& doc, entt::entity entity)
+{
+    entt::registry& registry = doc.scene.registry();
+    kast::ParticleEmitterState& state = kast::emitterState(registry, entity);
+    ImGui::SeparatorText("Preview (not saved)");
+    const float width = ImGui::GetFrameHeight() * 3.0f;
+    if (ImGui::Button("Restart", ImVec2(width, 0.0f)))
+        kast::restartEmitter(state);
+    ImGui::SameLine();
+    if (ImGui::Button(state.paused ? "Resume" : "Pause", ImVec2(width, 0.0f)))
+        state.paused = !state.paused;
+    ImGui::SameLine();
+    ImGui::Text("%d alive", kast::aliveParticles(registry.get<kast::ParticleEmitter>(entity), state));
+    ImGui::SetItemTooltip("Estimated: those spawned within the last Lifetime Max seconds, at most Max Particles");
+    ImGui::Separator();
 }
 
 void Panels::drawMaterialInspector(Document& doc)

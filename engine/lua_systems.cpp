@@ -11,6 +11,7 @@
 #include "material.h"
 #include "math3d.h"
 #include "network.h"
+#include "particles.h"
 #include "project.h"
 #include "scene_io.h"
 
@@ -115,6 +116,7 @@ struct LuaSystems::State {
     sol::table audioApi;   // kast.audio.*
     sol::table netApi;     // kast.net.*
     sol::table skyApi;     // kast.sky.*
+    sol::table particlesApi; // kast.particles.*
     sol::table authApi;    // kast.auth.*, only while Online Services are enabled
     sol::table worldApi;   // kast.world.*, likewise
     sol::table guiApi;     // kast.gui.*, only with a GuiAccess
@@ -163,6 +165,7 @@ struct LuaSystems::State {
     void bindAudioApi();
     void bindNetApi();
     void bindSkyApi();
+    void bindParticlesApi();
     void bindAuthApi();
     void bindWorldApi();
     void bindGuiApi();
@@ -352,6 +355,7 @@ sol::environment LuaSystems::State::environment()
     kast["audio"] = readOnly(audioApi);
     kast["net"] = readOnly(netApi);
     kast["sky"] = readOnly(skyApi);
+    kast["particles"] = readOnly(particlesApi);
     kast["items"] = itemTable();
     if (auth.enabled())
         kast["auth"] = readOnly(authApi);
@@ -884,6 +888,7 @@ void LuaSystems::State::bindApi()
     bindAudioApi();
     bindNetApi();
     bindSkyApi();
+    bindParticlesApi();
     bindAuthApi();
     bindWorldApi();
     bindGuiApi();
@@ -1300,6 +1305,42 @@ void LuaSystems::State::bindGuiApi()
 
 // kast.sky.*: the scene's sky as its "sky" block (scene_io.h), but colors as {x=, y=, z=} like kast.get's Vec3 fields.
 // Runtime only: never saved, and Stop restores the scene's own.
+// kast.particles.*(entity, ...): runtime control of an entity's ParticleEmitter (see particles.h); an invalid entity, one
+// without an emitter or a bad argument raises.
+void LuaSystems::State::bindParticlesApi()
+{
+    // The entity's emitter and its state (made on first use, as particleSystem would).
+    const auto emitter = [this](lua_State* L, const char* name, const sol::object& id) {
+        const entt::entity e = entity(L, id);
+        auto* found = scene.registry().try_get<ParticleEmitter>(e);
+        if (!found)
+            raise(L, std::format("kast.particles.{}: entity {} has no ParticleEmitter", name, toString(L, id)));
+        return std::pair<ParticleEmitter&, ParticleEmitterState&>{*found, emitterState(scene.registry(), e)};
+    };
+
+    particlesApi = lua.create_table();
+    particlesApi.set_function("play", [emitter](sol::this_state L, const sol::object& id) {
+        playEmitter(emitter(L, "play", id).second);
+    });
+    particlesApi.set_function("stop", [emitter](sol::this_state L, const sol::object& id, const sol::object& clear) {
+        const bool none = clear.get_type() == sol::type::lua_nil || clear.get_type() == sol::type::none;
+        if (!none && clear.get_type() != sol::type::boolean)
+            raise(L, std::format("kast.particles.stop: clear must be true, false or nil, got {}", toString(L, clear)));
+        stopEmitter(emitter(L, "stop", id).second, !none && clear.as<bool>());
+    });
+    particlesApi.set_function("burst", [emitter](sol::this_state L, const sol::object& id, const sol::object& n) {
+        const double count = n.get_type() == sol::type::number ? n.as<double>() : -1.0;
+        if (!(count >= 0.0 && count <= kMaxExactInteger && count == std::floor(count)))
+            raise(L, std::format("kast.particles.burst: count must be a whole number >= 0, got {}", toString(L, n)));
+        auto [found, state] = emitter(L, "burst", id);
+        return burstEmitter(found, state, static_cast<int>(std::min<double>(count, kMaxParticles)));
+    });
+    particlesApi.set_function("alive", [emitter](sol::this_state L, const sol::object& id) {
+        auto [found, state] = emitter(L, "alive", id);
+        return aliveParticles(found, state);
+    });
+}
+
 void LuaSystems::State::bindSkyApi()
 {
     const FieldDesc color{.name = "", .kind = FieldKind::Vec3};

@@ -1,0 +1,266 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.5,
+            7
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Camera": {
+          "verticalFovDegrees": 60,
+          "nearPlane": 0.1,
+          "farPlane": 1000
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Near",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.5,
+            4
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ParticleEmitter": {
+          "playOnStart": true,
+          "looping": false,
+          "duration": 5,
+          "rate": 0,
+          "burstCount": 1,
+          "maxParticles": 1,
+          "shape": "cone",
+          "coneAngle": 0,
+          "radius": 0,
+          "boxSize": [
+            1,
+            1,
+            1
+          ],
+          "emitFromSurface": false,
+          "lifetimeMin": 1000,
+          "lifetimeMax": 1000,
+          "speedMin": 0,
+          "speedMax": 0,
+          "startSizeMin": 1,
+          "startSizeMax": 1,
+          "endSize": 1,
+          "startColor": [
+            1,
+            1,
+            1
+          ],
+          "endColor": [
+            1,
+            1,
+            1
+          ],
+          "startAlpha": 1,
+          "endAlpha": 1,
+          "gravity": [
+            0,
+            0,
+            0
+          ],
+          "space": "world",
+          "texture": "",
+          "blend": "alpha"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Mid Alpha",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -4,
+            1.5,
+            -7
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ParticleEmitter": {
+          "playOnStart": true,
+          "looping": false,
+          "duration": 5,
+          "rate": 0,
+          "burstCount": 1,
+          "maxParticles": 1,
+          "shape": "cone",
+          "coneAngle": 0,
+          "radius": 0,
+          "boxSize": [
+            1,
+            1,
+            1
+          ],
+          "emitFromSurface": false,
+          "lifetimeMin": 1000,
+          "lifetimeMax": 1000,
+          "speedMin": 0,
+          "speedMax": 0,
+          "startSizeMin": 3,
+          "startSizeMax": 3,
+          "endSize": 1,
+          "startColor": [
+            1,
+            1,
+            1
+          ],
+          "endColor": [
+            1,
+            1,
+            1
+          ],
+          "startAlpha": 1,
+          "endAlpha": 1,
+          "gravity": [
+            0,
+            0,
+            0
+          ],
+          "space": "world",
+          "texture": "",
+          "blend": "alpha"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Mid Additive",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            4,
+            1.5,
+            -7
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ParticleEmitter": {
+          "playOnStart": true,
+          "looping": false,
+          "duration": 5,
+          "rate": 0,
+          "burstCount": 1,
+          "maxParticles": 1,
+          "shape": "cone",
+          "coneAngle": 0,
+          "radius": 0,
+          "boxSize": [
+            1,
+            1,
+            1
+          ],
+          "emitFromSurface": false,
+          "lifetimeMin": 1000,
+          "lifetimeMax": 1000,
+          "speedMin": 0,
+          "speedMax": 0,
+          "startSizeMin": 3,
+          "startSizeMax": 3,
+          "endSize": 1,
+          "startColor": [
+            1,
+            1,
+            1
+          ],
+          "endColor": [
+            1,
+            1,
+            1
+          ],
+          "startAlpha": 1,
+          "endAlpha": 1,
+          "gravity": [
+            0,
+            0,
+            0
+          ],
+          "space": "world",
+          "texture": "",
+          "blend": "additive"
+        }
+      }
+    }
+  ],
+  "postProcessing": {
+    "fog": {
+      "enabled": true,
+      "color": [
+        0,
+        1,
+        0
+      ],
+      "density": 0.06,
+      "start": 0
+    }
+  },
+  "editor": {
+    "camera": {
+      "pivot": [
+        0,
+        1.2,
+        0
+      ],
+      "yaw": 0,
+      "pitch": 0,
+      "distance": 7
+    }
+  }
+}

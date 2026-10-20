@@ -13,6 +13,8 @@
 -- The server's combat.* events become combat log lines in the chat box ("chat.local", scripts/chat.lua): hits (with
 -- the power's name, and what a shield absorbed), dodges, deaths, revives and refusals ("* ..."); other players' clones
 -- play the attack (on any power they use), hit and death clips (the local player's are scripts/player.lua's).
+-- Each hit throws a one-shot burst of sparks (SPARK_*, textures/particles/spark.png) at the target's chest: an entity
+-- with a stopped, non-looping ParticleEmitter and kast.particles.burst, destroyed once kast.particles.alive reaches 0.
 --
 -- Bandwidth: none; everything here is local.
 local TAB_RANGE = 40 -- m
@@ -21,6 +23,13 @@ local PICK = {Guard = {y = 1.1, radius = 1.2}, Bat = {y = 2.25, radius = 1.0}} -
 local PICK_DEFAULT = {y = 1, radius = 1}
 local MARKER_SCALE = {x = 2, y = 0.06, z = 2}
 local MARKER_MATERIAL = "materials/gold.mat"
+local SPARK_COUNT, SPARK_HEIGHT = 24, 1.2 -- particles, m above the target's feet
+local SPARK_EMITTER = {
+    playOnStart = false, looping = false, rate = 0, maxParticles = SPARK_COUNT, shape = "sphere", radius = 0.1,
+    lifetimeMin = 0.25, lifetimeMax = 0.5, speedMin = 3, speedMax = 6, startSizeMin = 0.25, startSizeMax = 0.4,
+    endSize = 0.3, startColor = {x = 6, y = 4, z = 1.2}, endColor = {x = 3, y = 0.6, z = 0.1}, startAlpha = 1,
+    endAlpha = 0, gravity = {x = 0, y = -9.8, z = 0}, texture = "textures/particles/spark.png", blend = "additive",
+}
 local ATTACK_CLIP, HIT_CLIP, DEATH_CLIP, IDLE_CLIP = "Punch_Jab", "Hit_Chest", "Death_A", "Idle_A"
 local REJECTED = {
     range = "Out of range",
@@ -44,6 +53,7 @@ local target, marker    -- the target's server id, the marker entity under its c
 local held = {}         -- key or button name -> down last frame
 local clicks = {}       -- button -> the press being watched: {origin, dir, travel}
 local oneShots = {}     -- remote player clone -> true while an attack or hit clip plays
+local sparks = {}       -- spark burst entities still flying
 
 local function log(text) kast.publish("chat.local", {text = text}) end
 
@@ -174,6 +184,19 @@ local function playOnce(id, clip)
     oneShots[c.entity] = clip ~= DEATH_CLIP or nil
 end
 
+local function sparkAt(id)
+    local c = clones[id]
+    local entity = c and c.entity or (id == me and player)
+    if not entity then return end
+    local p = position(entity)
+    local spark = kast.create("Hit Sparks")
+    kast.set(spark, "Transform", {position = {x = p.x, y = p.y + SPARK_HEIGHT, z = p.z}})
+    kast.add(spark, "ParticleEmitter")
+    kast.set(spark, "ParticleEmitter", SPARK_EMITTER)
+    kast.particles.burst(spark, SPARK_COUNT)
+    sparks[spark] = true
+end
+
 local function forget(id)
     if id == target then clearTarget() end
     clones[id] = nil
@@ -205,6 +228,7 @@ return {
         kast.subscribe("server.combat.power", function(e) playOnce(e.caster, ATTACK_CLIP) end)
         kast.subscribe("server.combat.hit", function(e)
             playOnce(e.target, HIT_CLIP)
+            sparkAt(e.target)
             if e.power then -- a player's power
                 if e.attacker == me then
                     log(string.format("You cast %s on %s for %d", e.power, e.targetName, e.damage))
@@ -240,6 +264,13 @@ return {
     end,
 
     update = function(dt)
+        for spark in pairs(sparks) do -- burnt out (or gone with the scene): destroyed
+            local ok, alive = pcall(kast.particles.alive, spark)
+            if not ok or alive == 0 then
+                pcall(kast.destroy, spark)
+                sparks[spark] = nil
+            end
+        end
         local inWorld = kast.world and kast.world.state() == "inWorld"
         if not inWorld or not player then return end
         local keys = not dead and not (kast.gui and kast.gui.focusedField())

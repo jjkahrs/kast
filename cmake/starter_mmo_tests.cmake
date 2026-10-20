@@ -65,6 +65,11 @@ set_tests_properties(starter_mmo_login_screenshot starter_mmo_build starter_mmo_
                      PROPERTIES FIXTURES_REQUIRED starter_mmo_copied)
 set_tests_properties(starter_mmo_build PROPERTIES FIXTURES_SETUP starter_mmo_built)
 set_tests_properties(starter_mmo_player PROPERTIES FIXTURES_REQUIRED starter_mmo_built)
+# Hit sparks (scripts/combat.lua): offline, a test-only driver publishes the server's hit; the burst's entity goes once
+# kast.particles.alive is 0.
+add_test(NAME starter_mmo_hit_sparks
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSAMPLE=${KAST_STARTER}" "-DOUT=${KAST_STARTER_OUT}/hit_sparks"
+          "-DSCREENSHOT=${KAST_STARTER_OUT}/starter_mmo_hit_sparks.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_hit_sparks.cmake")
 
 # Live. RUN_SERIAL: they change which content the shared compose stack serves.
 set(live_args "-DWORLD_DIR=${KAST_WORLD_DIR}" "-DSAMPLE=${KAST_STARTER}" "-DSTATE=${KAST_STARTER_STATE}")

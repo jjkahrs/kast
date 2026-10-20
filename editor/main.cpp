@@ -72,7 +72,7 @@ constexpr const char* kUsage =
     "[--gui-add Panel|Text|Button] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] [--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy]] [--sim-key frame,key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
-    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [zone edits] | "
+    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [zone edits] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel (without --play: on the Scene view), for
@@ -166,6 +166,7 @@ struct Options {
     std::optional<OnlineModel::Compose> onlineCompose; // press the Online panel's Start, Stop or Status at startup
     bool logFps = false;            // log frames per second, editor CPU and GPU frame times once a second
     std::string crash;              // --crash abort|assert: fail on purpose, to test KAST_NO_CRASH_DIALOGS
+    float fixedDt = 0.0f;           // --fixed-dt: Play and the edit mode preview advance this many seconds a frame (0: real time)
     bool noVsync = false;           // present as fast as possible, to measure the frame rate past the display's
     bool noInstancing = false;      // the Scene and Game views draw every mesh one by one (Renderer::setInstancing)
     bool noCulling = false;         // the Scene and Game views draw every mesh in every pass (Renderer::setCulling)
@@ -526,6 +527,13 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.windowPos = kast::parseWindowPos(value);
             if (!options.windowPos) {
                 kast::log::error(std::format("Invalid --window-pos '{}', expected X,Y. {}", value, kUsage));
+                return std::nullopt;
+            }
+        } else if (arg == "--fixed-dt" && hasValue) { // deterministic screenshots of anything that moves
+            const std::string_view value = argv[++i];
+            if (!parsePositive(value, options.fixedDt)) {
+                kast::log::error(std::format("Invalid --fixed-dt '{}', expected a positive number of seconds. {}", value,
+                                             kUsage));
                 return std::nullopt;
             }
         } else if (arg == "--ui-scale" && hasValue) {
@@ -1234,7 +1242,7 @@ int main(int argc, char** argv)
             playAfterLogin = false;
             startPlay(doc);
         }
-        updatePlay(doc, ImGui::GetIO().DeltaTime);
+        updatePlay(doc, options->fixedDt > 0.0f ? options->fixedDt : ImGui::GetIO().DeltaTime);
         if (game.hasInput(doc)) // otherwise ImGui's backend turns text input on and off for its own fields
             kast::gui::syncTextInput(mainWindow, game.gui().focusedField().has_value());
         componentPollSeconds += ImGui::GetIO().DeltaTime;

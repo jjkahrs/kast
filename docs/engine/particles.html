@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Particles - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="particles.html" class="active">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li></ul></nav>
+<main>
+<h1 id="particles">Particles</h1>
+<p>A <code>ParticleEmitter</code> component turns an entity into a GPU particle system: fire, smoke, sparks, magic. Particles are
+spawned, moved and killed by a compute shader (<code>engine/shaders/cs_particle_sim.sc</code>) and drawn as camera-facing, unlit,
+fogged billboards (<code>vs_particle.sc</code> / <code>fs_particle.sc</code>). The CPU only keeps each emitter's clock and decides how many
+particles to spawn (<code>engine/particles.h</code>). The Scene view previews emitters in edit mode, and the Game view, Play and
+the built game all draw them. The editor side (the shape gizmo, the Inspector's Restart / Pause / count and
+<strong>GameObject &gt; Particle System</strong>) is in <a href="../editor/controls.html#particles">Editor controls</a>.</p>
+<p>Particle state (the clock, live particles) is runtime only: it is never saved, never copied by Duplicate or a prefab,
+and Play's Stop throws it away with the rest of the Play scene, so the edit-mode preview starts over.</p>
+
+<h2 id="fields">Fields</h2>
+<p>Defaults are what <strong>Add Component</strong>, <strong>GameObject &gt; Particle System</strong> and <code>kast.add</code> start with.
+Ranges are min/max pairs: each particle picks uniformly between them, in either order. Colors are linear RGB.</p>
+<table>
+<thead><tr><th>Field</th><th>Default</th><th>Valid</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>playOnStart</code></td><td>true</td><td>bool</td><td>Emitting as soon as the emitter is first seen (scene load, Play, the edit-mode preview, a Lua <code>kast.add</code>). Off: nothing until <code>kast.particles.play</code>, <code>burst</code> or the Inspector's Restart.</td></tr>
+<tr><td><code>looping</code></td><td>true</td><td>bool</td><td>Off: one cycle of <code>duration</code>, then the emitter stops (its particles finish their life).</td></tr>
+<tr><td><code>duration</code></td><td>5</td><td>&gt;= 0.01 s</td><td>One cycle.</td></tr>
+<tr><td><code>rate</code></td><td>10</td><td>&gt;= 0 per s</td><td>Continuous emission; the fraction carries over to the next frame.</td></tr>
+<tr><td><code>burstCount</code></td><td>0</td><td>0..65536</td><td>Emitted at once at the start of each cycle.</td></tr>
+<tr><td><code>maxParticles</code></td><td>1000</td><td>1..65536</td><td>The emitter's capacity. When it is full, new particles replace the oldest (even living ones).</td></tr>
+<tr><td><code>shape</code></td><td>"cone"</td><td><code>"cone"</code>, <code>"sphere"</code>, <code>"box"</code></td><td>See <a href="#shapes">Shapes</a>.</td></tr>
+<tr><td><code>coneAngle</code></td><td>25</td><td>0..180 degrees</td><td>Cone spread around local +Y; 0 is a straight beam.</td></tr>
+<tr><td><code>radius</code></td><td>0.25</td><td>&gt;= 0 m</td><td>The cone's base disc and the sphere's radius.</td></tr>
+<tr><td><code>boxSize</code></td><td>[1, 1, 1]</td><td>&gt;= 0 m per axis</td><td>The box's full extents.</td></tr>
+<tr><td><code>emitFromSurface</code></td><td>false</td><td>bool</td><td>Spawn on the cone disc's rim or the sphere's / box's shell instead of anywhere inside.</td></tr>
+<tr><td><code>lifetimeMin</code>, <code>lifetimeMax</code></td><td>2, 3</td><td>&gt; 0 s</td><td>How long each particle lives.</td></tr>
+<tr><td><code>speedMin</code>, <code>speedMax</code></td><td>0.5, 1</td><td>finite m/s</td><td>Initial speed along the shape's direction (negative goes backwards).</td></tr>
+<tr><td><code>startSizeMin</code>, <code>startSizeMax</code></td><td>0.3, 0.5</td><td>&gt;= 0 m</td><td>Billboard width at birth.</td></tr>
+<tr><td><code>endSize</code></td><td>2</td><td>&gt;= 0</td><td>A <strong>multiplier</strong> of the particle's start size at the end of its life (1 = constant, 0 = shrinks away), linear over the lifetime.</td></tr>
+<tr><td><code>startColor</code>, <code>endColor</code></td><td>[1, 1, 1]</td><td>0..16 per channel</td><td>Linear RGB, lerped over the lifetime. Above 1 is HDR: it glows with bloom on (<a href="post-processing.html">Post-processing</a>).</td></tr>
+<tr><td><code>startAlpha</code>, <code>endAlpha</code></td><td>0.8, 0</td><td>0..1</td><td>Opacity, lerped over the lifetime.</td></tr>
+<tr><td><code>gravity</code></td><td>[0, 0, 0]</td><td>finite m/s&sup2;</td><td>Constant acceleration in world space, e.g. [0, -9.8, 0], or sideways for wind.</td></tr>
+<tr><td><code>space</code></td><td>"world"</td><td><code>"world"</code>, <code>"local"</code></td><td>See <a href="#space">Space</a>.</td></tr>
+<tr><td><code>texture</code></td><td>""</td><td>project-relative path</td><td>Multiplies color and alpha; empty draws a procedural soft circle. See <a href="#texture">Texture</a>.</td></tr>
+<tr><td><code>blend</code></td><td>"alpha"</td><td><code>"alpha"</code>, <code>"additive"</code></td><td>See <a href="#blend">Blend</a>.</td></tr>
+</tbody>
+</table>
+
+<h2 id="scene-file">Scene file</h2>
+<p>The campfire flame in <code>samples/starter-mmo/scenes/meadow.scene</code>:</p>
+<pre><code class="language-json">"ParticleEmitter": {
+  "playOnStart": true,
+  "looping": true,
+  "duration": 5,
+  "rate": 45,
+  "burstCount": 0,
+  "maxParticles": 64,
+  "shape": "cone",
+  "coneAngle": 10,
+  "radius": 0.3,
+  "boxSize": [1, 1, 1],
+  "emitFromSurface": false,
+  "lifetimeMin": 0.6,
+  "lifetimeMax": 1.0,
+  "speedMin": 0.9,
+  "speedMax": 1.6,
+  "startSizeMin": 0.5,
+  "startSizeMax": 0.75,
+  "endSize": 0.3,
+  "startColor": [4, 1.5, 0.35],
+  "endColor": [1.2, 0.2, 0.02],
+  "startAlpha": 1,
+  "endAlpha": 0,
+  "gravity": [0, 0, 0],
+  "space": "world",
+  "texture": "textures/particles/fire.png",
+  "blend": "additive"
+}</code></pre>
+<p>Like every built-in component, all fields must be present (the editor always saves all of them): a missing field
+(<code>"ParticleEmitter": missing field "playOnStart"</code>), a wrong type, an unknown enum value or a value out of range fails
+the scene load with a message naming the field (<code>"maxParticles" must be between 1 and 65536</code>) and leaves the open
+scene as it was. Texture paths are not checked at load.</p>
+
+<h2 id="shapes">Shapes</h2>
+<p>Shapes live in the entity's local space, so its Transform positions, turns and scales them. Kast is Y-up
+(<a href="coordinates-and-scenes.html">Coordinates and scenes</a>): an unrotated emitter sprays upward.</p>
+<ul>
+<li><strong>cone</strong>: from a disc of <code>radius</code> in the local XZ plane, each particle heading within <code>coneAngle</code> of local +Y
+  (uniform over that cap of directions). <code>coneAngle</code> 0 is a beam, 90 a hemisphere, 180 every direction.</li>
+<li><strong>sphere</strong>: from inside a ball of <code>radius</code> (uniform by volume), each particle heading straight out from the center.</li>
+<li><strong>box</strong>: from inside <code>boxSize</code> centered on the entity, every particle heading along local +Y (a curtain or rain sheet;
+  turn the entity upside down for rain).</li>
+</ul>
+<p>With <code>emitFromSurface</code> the cone spawns on its disc's rim, the sphere on its shell and the box on a random face. Each
+particle's spawn time is spread over the frame, so a fast stream doesn't come out in clumps.</p>
+
+<h2 id="space">Space</h2>
+<ul>
+<li><strong>world</strong> [default]: particles are spawned at the entity's current transform and then stay in the world; a moving
+  emitter leaves a trail (a torch carried by a running character). Gravity is world space.</li>
+<li><strong>local</strong>: particles live in the entity's space and move, turn and scale with it (an aura around a moving
+  character). Gravity is still given in world space and turned into the entity's space each frame.</li>
+</ul>
+
+<h2 id="blend">Blend</h2>
+<ul>
+<li><strong>alpha</strong> [default]: ordinary transparency (<code>src * alpha + dst * (1 - alpha)</code>): smoke, dust, leaves.</li>
+<li><strong>additive</strong>: <code>src * alpha + dst</code>, light that only brightens: fire, sparks, magic. Order doesn't matter, so overlaps
+  never look wrong.</li>
+</ul>
+<p>Particles are drawn after the opaque meshes and the sky, depth tested against them but not writing depth. Each
+emitter is one draw, sorted back to front with the other blended draws (transparent meshes, other emitters) by its
+position; the particles inside one emitter are <strong>not</strong> sorted, which is invisible for additive particles and usually
+fine for soft alpha ones.</p>
+<p><strong>Fog</strong>: particles are fogged like meshes (<a href="post-processing.html">Post-processing and fog</a>). Alpha particles fade toward
+the fog color; additive ones fade toward black (adding fog color would brighten them).</p>
+
+<h2 id="texture">Texture</h2>
+<p>A PNG or JPG in the project, read as sRGB like a material's base color. Its RGB multiplies the particle's color and its
+alpha the particle's alpha, so a white image with the shape in alpha is tinted by <code>startColor</code> / <code>endColor</code>. The image
+covers the whole billboard, its top-left at the quad's top-left. An empty <code>texture</code> draws a soft round falloff. A
+missing or unreadable file logs one warning (<code>Texture 'textures/missing_particle.png': cannot read the file</code>) and draws
+the soft circle. <code>samples/starter-mmo/textures/particles/</code> has 64x64 <code>fire.png</code>, <code>smoke.png</code> and <code>spark.png</code>.</p>
+
+<h2 id="culling">Culling bound</h2>
+<p>With culling on, an emitter is simulated and drawn only while a box around its world position intersects the camera's
+view (<a href="instancing-and-culling.html">Instancing and culling</a>). The box's half size is the farthest a particle can get:</p>
+<pre><code>shape reach x scale    (radius, or half the box diagonal; times the entity's largest scale)
++ max(|speedMin|, |speedMax|) x max lifetime    (times that scale in local space)
++ 1/2 |gravity| x max lifetime^2
++ 1/2 max start size x max(1, endSize)</code></pre>
+<p>Known gap: a <code>world</code> space emitter that moves leaves particles behind it, outside that box, so a long trail can be
+culled a little early once the emitter itself is out of view. Culling saves only the draw: off-screen emitters are
+still simulated every frame, so they look right the moment they come back into view.</p>
+
+<h2 id="time">Time</h2>
+<p>Emitters tick in Play (and the built game) with the frame's time, and in the editor's edit mode for the preview. A
+frame longer than 0.1 s (a hitch, a load) simulates only 0.1 s, so particles never jump or flood. Pausing Play holds
+them. <code>--fixed-dt S</code> (<a href="../editor/command-line.html">command line</a>) steps every frame by exactly S for repeatable
+captures. Each emitter's random stream is seeded from its entity, so two identical emitters don't look identical.</p>
+
+<h2 id="no-compute">No compute shaders</h2>
+<p>The simulation needs compute shaders (Direct3D 11/12, Vulkan or OpenGL 4.3). On a GPU or renderer without them
+(<code>BGFX_CAPS_COMPUTE</code> missing, also the Noop renderer of headless runs), Kast logs one warning, <code>Particles: the GPU has no
+compute shader support; ParticleEmitters are not drawn</code>, and skips every emitter. Nothing else changes: the scene loads,
+the CPU clocks still tick and the Lua API still works. There is no CPU fallback.</p>
+
+<h2 id="lua">Lua</h2>
+<p>Fields are ordinary component fields: <code>kast.get(e, "ParticleEmitter")</code>, <code>kast.set(e, "ParticleEmitter", {rate = 50})</code>
+(partial; colors, box size and gravity as <code>{x =, y =, z =}</code> tables, enums as strings) and <code>kast.add</code> /
+<code>kast.remove</code>. A change takes effect on the next frame; changing <code>maxParticles</code> empties the emitter (its GPU buffer
+is remade). <code>kast.particles</code> controls an emitter at runtime; none of it is saved. Every function takes an entity id
+like the rest of the API; an invalid id raises (<code>invalid entity id X</code>) and an entity without an emitter raises
+<code>kast.particles.&lt;fn&gt;: entity X has no ParticleEmitter</code>.</p>
+<table>
+<thead><tr><th>Function</th><th>Returns</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>kast.particles.play(e)</code></td><td>—</td><td>Starts emitting, or resumes a paused emitter. A stopped emitter starts its cycle over (with its burst).</td></tr>
+<tr><td><code>kast.particles.stop(e, clear)</code></td><td>—</td><td>Stops emitting. <code>clear = true</code> also kills the live particles; otherwise (false or nil) they finish their life.</td></tr>
+<tr><td><code>kast.particles.burst(e, n)</code></td><td>integer</td><td>Spawns <code>n</code> particles (a whole number &gt;= 0) at once, even while stopped or not started; clamped to <code>maxParticles</code>. Returns how many.</td></tr>
+<tr><td><code>kast.particles.alive(e)</code></td><td>integer</td><td>The live particle count, estimated (see <a href="#alive">Alive count</a>).</td></tr>
+</tbody>
+</table>
+<pre><code class="language-lua">-- A one-shot burst of sparks that cleans up after itself (samples/starter-mmo/scripts/combat.lua does this per hit).
+local spark = kast.create("Sparks")
+kast.set(spark, "Transform", {position = {x = 10, y = 1.2, z = 4}})
+kast.add(spark, "ParticleEmitter")
+kast.set(spark, "ParticleEmitter", {playOnStart = false, looping = false, rate = 0, maxParticles = 24,
+                                    shape = "sphere", lifetimeMin = 0.25, lifetimeMax = 0.5, speedMin = 3,
+                                    speedMax = 6, gravity = {x = 0, y = -9.8, z = 0}, blend = "additive",
+                                    texture = "textures/particles/spark.png"})
+kast.particles.burst(spark, 24)
+-- later, in update:
+if kast.particles.alive(spark) == 0 then kast.destroy(spark) end</code></pre>
+<p><code>kast.particles</code> also exists in the world server's Lua, CPU only (nothing is drawn there); the server never reads
+emitters from scenes and nothing about particles is sent over the network. Effects are client side.</p>
+
+<h2 id="alive">Alive count</h2>
+<p>The count is a CPU estimate, not a GPU readback: the particles spawned within the last <code>max(lifetimeMin, lifetimeMax)</code>
+seconds of the emitter's simulated time, capped at <code>maxParticles</code>. No particle lives longer than that, so with fixed
+settings it never under-counts: <strong>0 means every particle is dead</strong>, which is what cleanup code needs. It over-counts
+particles that drew a shorter lifetime and ones replaced early in a full ring. Shortening <code>lifetimeMax</code> while
+particles are flying can under-count them. The Inspector shows the same estimate.</p>
+
+<h2 id="limits">Limits</h2>
+<ul>
+<li>65,536 particles per emitter. Each emitter keeps a ring of <code>maxParticles</code> slots on the GPU (48 bytes each) and
+  <strong>draws every slot</strong>, dead ones collapsing to nothing, so the draw cost follows <code>maxParticles</code>, not the live count:
+  size it to about <code>rate x lifetimeMax + burstCount</code>. <code>tests/scenes/particles_stress.scene</code> (8 emitters, 100,000 live
+  particles) is the benchmark: run it with <code>--play --log-fps --no-vsync</code>.</li>
+<li>Unlit, no shadows, no collision (physics, terrain or depth), no soft particles (they cut sharply into geometry).</li>
+<li>Only linear start-to-end color, alpha and size; no curves, flipbooks, trails, sub-emitters or mesh emission.</li>
+<li>No per-particle sorting (see <a href="#blend">Blend</a>).</li>
+<li>No CPU fallback (see <a href="#no-compute">No compute shaders</a>) and no network replication.</li>
+</ul>
+</main>
+</div>
+</body>
+</html>

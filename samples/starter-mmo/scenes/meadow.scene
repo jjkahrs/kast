@@ -450,6 +450,227 @@
           "id": 26
         }
       ]
+    },
+    {
+      "id": 30,
+      "name": "Campfire",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            130,
+            6.38,
+            135
+          ],
+          "rotation": [
+            0,
+            0.0,
+            0,
+            1.0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": 31,
+      "name": "Campfire Log A",
+      "parent": 30,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.12,
+            0
+          ],
+          "rotation": [
+            0,
+            0.382683,
+            0,
+            0.92388
+          ],
+          "scale": [
+            1.3,
+            0.24,
+            0.24
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/bark.mat"
+        }
+      }
+    },
+    {
+      "id": 32,
+      "name": "Campfire Log B",
+      "parent": 30,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.12,
+            0
+          ],
+          "rotation": [
+            0,
+            -0.382683,
+            0,
+            0.92388
+          ],
+          "scale": [
+            1.3,
+            0.24,
+            0.24
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/bark.mat"
+        }
+      }
+    },
+    {
+      "id": 33,
+      "name": "Campfire Fire",
+      "parent": 30,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.2,
+            0
+          ],
+          "rotation": [
+            0,
+            0.0,
+            0,
+            1.0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ParticleEmitter": {
+          "playOnStart": true,
+          "looping": true,
+          "duration": 5,
+          "rate": 45,
+          "burstCount": 0,
+          "maxParticles": 64,
+          "shape": "cone",
+          "coneAngle": 10,
+          "radius": 0.3,
+          "boxSize": [
+            1,
+            1,
+            1
+          ],
+          "emitFromSurface": false,
+          "lifetimeMin": 0.6,
+          "lifetimeMax": 1.0,
+          "speedMin": 0.9,
+          "speedMax": 1.6,
+          "startSizeMin": 0.5,
+          "startSizeMax": 0.75,
+          "endSize": 0.3,
+          "startColor": [
+            4,
+            1.5,
+            0.35
+          ],
+          "endColor": [
+            1.2,
+            0.2,
+            0.02
+          ],
+          "startAlpha": 1,
+          "endAlpha": 0,
+          "gravity": [
+            0,
+            0,
+            0
+          ],
+          "space": "world",
+          "texture": "textures/particles/fire.png",
+          "blend": "additive"
+        }
+      }
+    },
+    {
+      "id": 34,
+      "name": "Campfire Smoke",
+      "parent": 30,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.1,
+            0
+          ],
+          "rotation": [
+            0,
+            0.0,
+            0,
+            1.0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ParticleEmitter": {
+          "playOnStart": true,
+          "looping": true,
+          "duration": 5,
+          "rate": 5,
+          "burstCount": 0,
+          "maxParticles": 40,
+          "shape": "cone",
+          "coneAngle": 12,
+          "radius": 0.2,
+          "boxSize": [
+            1,
+            1,
+            1
+          ],
+          "emitFromSurface": false,
+          "lifetimeMin": 4,
+          "lifetimeMax": 6,
+          "speedMin": 0.5,
+          "speedMax": 0.8,
+          "startSizeMin": 0.4,
+          "startSizeMax": 0.6,
+          "endSize": 4,
+          "startColor": [
+            0.3,
+            0.3,
+            0.3
+          ],
+          "endColor": [
+            0.55,
+            0.55,
+            0.55
+          ],
+          "startAlpha": 0.55,
+          "endAlpha": 0,
+          "gravity": [
+            0.15,
+            0,
+            0.05
+          ],
+          "space": "world",
+          "texture": "textures/particles/smoke.png",
+          "blend": "alpha"
+        }
+      }
     }
   ],
   "systems": [

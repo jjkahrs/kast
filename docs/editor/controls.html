@@ -123,6 +123,17 @@ root. The <strong>GameObject</strong> menu creates at the root.</p>
 <p>Inspector: the name, then one collapsible section per component, with widgets generated from the component's
 registered fields (rotation as Euler degrees, colors as color pickers, enums as combos). The <strong>x</strong> on a section header
 removes that component (not shown for Transform); <strong>Add Component</strong> lists the registered types the entity doesn't have.</p>
+<p id="particles"><strong>Particles</strong> (<a href="../engine/particles.html">ParticleEmitter</a>): <strong>GameObject &gt; Particle System</strong> (also
+in the Hierarchy's Create menu) creates an entity named "Particle System" with a Transform and a default ParticleEmitter
+(an upward cone of soft white particles), selected, as one undo step like the other GameObject entries. Emitters play
+in the Scene and Game views in edit mode too (a preview; nothing about it is saved). The selected entity's emitter
+shows its emission shape as orange (#ffaa00) lines in the Scene view, in the entity's transform (scale included): a
+cone's base disc and its spread over the first metre (a cylinder at Cone Angle 0), a sphere's three circles, or the
+box's twelve edges. The ParticleEmitter section starts with a <strong>Preview (not saved)</strong> row: <strong>Restart</strong> kills the live
+particles and plays the cycle from the start (even with Play On Start off), <strong>Pause</strong> / <strong>Resume</strong> freezes and
+continues the simulation, and <strong>N alive</strong> is the live count, the same CPU estimate as <code>kast.particles.alive</code>
+(<a href="../engine/particles.html#alive">Alive count</a>). These work in edit mode and during Play, are not undo steps and never
+mark the scene dirty. Field edits are ordinary undoable edits and show in the preview at once.</p>
 <p><strong>Play mode</strong> (the Play / Pause / Stop icon buttons at the right of the Scene / Game tab bar, whichever tab is shown, or of the Scene title bar while it floats; hidden when the bar is too narrow. Or Ctrl+P): Play snapshots the scene in memory and runs the systems
 (e.g. <code>Rotator</code>) every frame; Pause holds them, Play or Pause again resumes; Stop restores the snapshot exactly (scene,
 unsaved-changes flag, selection by id; the editor camera stays where it is). Play (from stopped, including <code>--play</code>)

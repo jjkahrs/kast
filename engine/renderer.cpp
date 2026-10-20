@@ -50,6 +50,7 @@ constexpr float kFrustumPreviewAspect = 16.0f / 9.0f; // ponytail: fixed; pass t
 constexpr uint32_t kPointLightRangeColor = 0xff40d0f0;
 constexpr uint32_t kColliderColor = 0xff40ff60; // ABGR: green
 constexpr int kRangeCircleSegments = 48;
+constexpr uint32_t kParticleShapeColor = 0xff00aaff; // ABGR: the editor's orange
 constexpr int kSphereStacks = 16;
 constexpr int kSphereSlices = 32;
 constexpr uint64_t kState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS |
@@ -426,6 +427,7 @@ void Renderer::init()
     white_ = bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
                                    bgfx::copy(&white, sizeof(white)));
     sky_.init();
+    particles_.init(bgfx::getCaps()->supported);
 }
 
 void Renderer::shutdown()
@@ -472,6 +474,7 @@ void Renderer::shutdown()
     previewTexture_ = BGFX_INVALID_HANDLE;
     bgfx::destroy(white_);
     sky_.shutdown();
+    particles_.shutdown();
 }
 
 // ponytail: full-res tiles (66049 vertices, 131072 triangles each); LOD and skirts when the draw distance grows.
@@ -604,7 +607,7 @@ void Renderer::loadTexture(const std::string& path, bool srgb, Texture& texture)
         error = std::format("cannot decode it as PNG or JPG ({})", stbi_failure_reason());
     }
     if (!image) {
-        warnOnce(std::format("Texture '{}': {}; using white", path, error));
+        warnOnce(std::format("Texture '{}': {}; drawing without it", path, error));
         return;
     }
     texture.handle = createTexture(*image, srgb);
@@ -1060,6 +1063,10 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         blended.push_back(&item);
         centers.push_back(bx::mul(bx::add(item.bounds.min, item.bounds.max), 0.5f));
     }
+    // Each emitter is one blended draw at its position, sorted with the blended meshes (its particles aren't sorted).
+    const std::vector<ParticleRenderer::Draw> particles = particles_.simulate(scene, view, culling_ ? &frustum : nullptr);
+    for (const ParticleRenderer::Draw& emitter : particles)
+        centers.push_back(emitter.center);
     std::vector<const DrawItem*> batch;
     for (const std::vector<size_t>& indices :
          batchDraws(opaque.size(), [&](size_t i) { return batchKey(*opaque[i], opaqueLights[i]); })) {
@@ -1077,8 +1084,15 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             submit(*opaque[i], opaqueLights[i]);
     }
     sky_.draw(scene.sky, root_, view, viewMtx, projMtx); // behind the opaque meshes, under the blended ones
-    for (size_t i : backToFront(centers, eye))
-        submit(*blended[i], nearestPointLights(pointLights, blended[i]->bounds));
+    for (size_t i : backToFront(centers, eye)) {
+        if (i < blended.size()) {
+            submit(*blended[i], nearestPointLights(pointLights, blended[i]->bounds));
+            continue;
+        }
+        const ParticleRenderer::Draw& emitter = particles[i - blended.size()];
+        const bgfx::TextureHandle image = texture(emitter.emitter->texture, true); // white_: none or failed to load
+        particles_.draw(emitter, view, image, image.idx != white_.idx, fogColor, fogParams, cameraPos);
+    }
 }
 
 void Renderer::renderOverlays(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx,
@@ -1091,6 +1105,7 @@ void Renderer::renderOverlays(const Scene& scene, bgfx::ViewId view, const float
     drawCameraFrustums(scene, view);
     drawPointLightRange(scene, view, selected);
     drawColliderWireframe(scene, view, selected);
+    drawParticleShape(scene, view, selected);
 }
 
 void Renderer::drawGrid(bgfx::ViewId view)
@@ -1163,6 +1178,23 @@ void Renderer::drawColliderWireframe(const Scene& scene, bgfx::ViewId view, entt
     for (const auto& [a, b] : colliderWireframe(scene, selected)) {
         lines.push_back({a.x, a.y, a.z, kColliderColor});
         lines.push_back({b.x, b.y, b.z, kColliderColor});
+    }
+    submitLines(lines, lineLayout_, lineProgram_, view);
+}
+
+// The selected entity's ParticleEmitter shape (particleShapeLines) in its transform, scale included.
+void Renderer::drawParticleShape(const Scene& scene, bgfx::ViewId view, entt::entity selected)
+{
+    const auto* emitter = scene.valid(selected) ? scene.registry().try_get<ParticleEmitter>(selected) : nullptr;
+    if (!emitter)
+        return;
+    float world[16];
+    scene.worldMatrix(selected, world);
+    std::vector<LineVertex> lines;
+    for (const auto& [a, b] : particleShapeLines(*emitter)) {
+        const bx::Vec3 wa = bx::mul(a, world), wb = bx::mul(b, world);
+        lines.push_back({wa.x, wa.y, wa.z, kParticleShapeColor});
+        lines.push_back({wb.x, wb.y, wb.z, kParticleShapeColor});
     }
     submitLines(lines, lineLayout_, lineProgram_, view);
 }
