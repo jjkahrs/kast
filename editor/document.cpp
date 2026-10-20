@@ -471,9 +471,6 @@ entt::entity dropPrefab(Document& doc, const std::string& path, entt::entity par
     return entity;
 }
 
-namespace {
-
-// refreshPrefabs without touching the histories.
 void reloadInstances(Document& doc)
 {
     if (!doc.project)
@@ -487,6 +484,8 @@ void reloadInstances(Document& doc)
     selectById(doc, selected);
     ++doc.sceneGeneration;
 }
+
+namespace {
 
 bool hasInstances(const kast::Scene& scene) { return !scene.registry().view<kast::PrefabInstance>().empty(); }
 
@@ -730,6 +729,7 @@ bool saveFile(Document& doc, const std::string& path, std::string& error)
             return false;
         doc.dirty = false;
         doc.history.markSaved();
+        ++doc.prefabSaves;
         kast::log::info(std::format("Saved prefab '{}'", *prefab));
         return true;
     }

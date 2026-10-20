@@ -37,6 +37,7 @@ public:
     void addAbsent(kast::EntityId id);
     bool covers(kast::EntityId id) const;
     bool coversSettings() const { return settings_.has_value(); }
+    bool hasPrefabInstances() const; // any copy is (part of) a prefab instance
     std::vector<kast::EntityId> ids() const; // in capture order
     // Puts the copies back: deep entities are rebuilt with their ids where they were (or removed if absent), shallow
     // ones get their name and components back.

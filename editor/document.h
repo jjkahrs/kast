@@ -49,6 +49,9 @@ struct Document {
     // The scene's edit history (in prefab edit mode: the open prefab's) and the step being recorded (scene_undo.h).
     UndoStack history;
     std::optional<SceneRecording> recording;
+    // Bumped when prefab edit mode saves a .prefab: a scene step recorded before then holds instances as their prefab
+    // was, so applying it reloads the instances (scene_undo.cpp).
+    uint32_t prefabSaves = 0;
 
     // Prefab edit mode: scene, path, dirty and selection are the open .prefab's (path: its file; saving writes the
     // prefab), and the scene being edited waits here. No Play while it is set.
@@ -194,6 +197,8 @@ entt::entity dropPrefab(Document& doc, const std::string& path, entt::entity par
 // Reloads doc.scene (and the scene waiting behind prefab edit mode) so every instance shows its prefab file as it is
 // now, keeping overrides and the selection (by id). Logs failures. Clears the undo histories of scenes holding instances.
 void refreshPrefabs(Document& doc);
+// refreshPrefabs without touching the histories.
+void reloadInstances(Document& doc);
 // Enters prefab edit mode on path (or switches to it while already editing one): doc.scene becomes the prefab, with an
 // empty undo history (the scene's waits). Unsaved changes of a prefab already open are discarded (FileActions prompts
 // first).

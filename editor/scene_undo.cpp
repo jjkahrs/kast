@@ -88,6 +88,11 @@ SceneState::Record* SceneState::find(kast::EntityId id)
 
 bool SceneState::covers(kast::EntityId id) const { return std::ranges::find(records_, id, &Record::id) != records_.end(); }
 
+bool SceneState::hasPrefabInstances() const
+{
+    return !stash_.registry().view<kast::PrefabLink>().empty() || !stash_.registry().view<kast::PrefabInstance>().empty();
+}
+
 std::vector<kast::EntityId> SceneState::ids() const
 {
     std::vector<kast::EntityId> ids;
@@ -214,10 +219,13 @@ SceneState captureScene(const kast::Scene& scene, const SceneScope& scope)
 namespace {
 
 // Puts state back into doc.scene and selects the first of its entities that exists (none: no selection; a settings-only
-// state keeps the selection).
-void applySceneState(Document& doc, const SceneState& state)
+// state keeps the selection). prefabSaves: doc.prefabSaves when the step was recorded; if a prefab was saved since,
+// the copies' instances are as their prefab was then, so instances reload from the files.
+void applySceneState(Document& doc, const SceneState& state, uint32_t prefabSaves)
 {
     state.restore(doc.scene);
+    if (prefabSaves != doc.prefabSaves && state.hasPrefabInstances())
+        reloadInstances(doc); // ponytail: reloads the whole scene, only after a prefab save
     for (kast::EntityId id : state.ids())
         if (selectById(doc, id))
             break;
@@ -237,8 +245,9 @@ void commitSceneEdit(Document& doc)
         doc.dirty = !doc.history.atSavePoint(); // a no-op edit may have called markDirty
         return;
     }
-    doc.history.push({std::move(recording.name), [&doc, before] { applySceneState(doc, *before); },
-                      [&doc, after] { applySceneState(doc, *after); }});
+    const uint32_t saves = doc.prefabSaves;
+    doc.history.push({std::move(recording.name), [&doc, before, saves] { applySceneState(doc, *before, saves); },
+                      [&doc, after, saves] { applySceneState(doc, *after, saves); }});
     doc.dirty = true;
 }
 
