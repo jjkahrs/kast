@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html" class="active">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html" class="active">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
 <main>
 <h1 id="run">Run</h1>
 <pre><code class="language-bat">build\release\kast_editor.exe
@@ -108,7 +108,7 @@
 </tr>
 <tr>
 <td><code>--open-menu &lt;Name&gt;</code></td>
-<td>Open that main menu (e.g. <code>Build</code>) after the first 10 frames, for screenshots.</td>
+<td>Open that main menu (e.g. <code>Build</code>) after the first 10 frames, for screenshots; with <code>--focus-panel</code> after 20 frames, once the panel took the focus (e.g. <code>--focus-panel Zone --open-menu Edit</code> shows the zone's undo step).</td>
 </tr>
 <tr>
 <td><code>--open-build-settings</code></td>
@@ -442,7 +442,7 @@ the terrain), headings radians, tiles <code>tx,tz</code>. The full list is also 
 <tr><td colspan="2"><strong>Undo, checks and saving</strong></td></tr>
 <tr>
 <td><code>--undo</code>, <code>--redo</code></td>
-<td>Undo / redo one step (exit 1 if there is none).</td>
+<td>Undo / redo one step of the map's history (exit 1 if there is none); logs <code>Undo &lt;step&gt;</code> / <code>Redo &lt;step&gt;</code>.</td>
 </tr>
 <tr>
 <td><code>--validate</code></td>

@@ -653,8 +653,9 @@ std::string focusedWindow()
 }
 
 // The document Edit > Undo / Redo and the shortcuts act on, by the focused window (menus and popups: the one before).
-// The GUI Builder's panels edit the open GUI; every other window but the Zone tab edits the scene (or the open prefab).
-UndoTarget focusedUndoTarget(const std::string& window, Document& doc, GuiBuilder& guiBuilder)
+// The GUI Builder's panels edit the open GUI, the Zone tab the open map; every other window edits the scene (or the open
+// prefab).
+UndoTarget focusedUndoTarget(const std::string& window, Document& doc, GuiBuilder& guiBuilder, ZoneSession& zone)
 {
     constexpr const char* kGuiWindows[] = {GuiBuilder::kHierarchyWindow, GuiBuilder::kInspectorWindow,
                                            GuiBuilder::kStyleWindow, GuiBuilder::kPreviewWindow};
@@ -663,8 +664,16 @@ UndoTarget focusedUndoTarget(const std::string& window, Document& doc, GuiBuilde
                 .undo = [&guiBuilder] { guiBuilder.undo(); },
                 .redo = [&guiBuilder] { guiBuilder.redo(); },
                 .blocked = doc.play != PlayState::Stopped};
-    if (window == ZonePanel::kWindow)
-        return {}; // ponytail: no history wired for zones yet, so the scene's stays out of their way
+    if (window == ZonePanel::kWindow) {
+        zone::ZoneDoc* z = zone.zone();
+        if (!z)
+            return {}; // no map: the scene's history stays out of the way
+        // Blocked mid-stroke, and while the tab is read-only (Play, prefab edit mode).
+        return {.history = &z->history(),
+                .undo = [z] { z->undo(); },
+                .redo = [z] { z->redo(); },
+                .blocked = doc.play != PlayState::Stopped || doc.prefabEdit.has_value() || z->editing()};
+    }
     return {.history = &doc.history,
             .undo = [&doc] { undoScene(doc); },
             .redo = [&doc] { redoScene(doc); },
@@ -1241,10 +1250,11 @@ int main(int argc, char** argv)
         bool openPreferences = options->openPreferences && frames.frame() == kAddComponentPopupFrame;
         if (std::string window = focusedWindow(); !window.empty())
             undoWindow = std::move(window);
-        const UndoTarget undo = focusedUndoTarget(undoWindow, doc, guiBuilder);
+        const UndoTarget undo = focusedUndoTarget(undoWindow, doc, guiBuilder, zone);
         undoShortcuts(undo, files);
-        // With --open-gui: after the builder's panels took the focus (which closes menus) and the --gui-* edits.
-        const int openMenuFrame = kAddComponentPopupFrame + (options->openGui.empty() ? 0 : 10);
+        // With --open-gui or --focus-panel: after the panel took the focus (which closes menus) and the --gui-* edits.
+        const int openMenuFrame =
+            kAddComponentPopupFrame + (options->openGui.empty() && options->focusPanel.empty() ? 0 : 10);
         drawMenuBar(files, doc, undo, frames.frame() == openMenuFrame ? options->openMenu : std::string(),
                     openPreferences, showLighting, showPostProcessing, showPhysics, showMixer, showNetwork, showOnline);
         const ImGuiID dockspace = ImGui::GetID("MainDockSpace");

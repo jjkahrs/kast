@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="zone-builder.html" class="active">Zone Builder</a></li></ul></nav>
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="zone-builder.html" class="active">Zone Builder</a></li></ul></nav>
 <main>
 <h1 id="zone-builder">Zone Builder</h1>
 <p>The editor's <strong>Zone</strong> tab and the Scene view create and edit a project's zone maps (<code>maps/&lt;folder&gt;/</code>, see
@@ -226,8 +226,9 @@ unique on the map, and each interactable object with a server entry of the same 
 an object). Any problem: nothing of the zone is written, the tab comes to the front with <strong>Problems</strong> listing them all
 (file and message, as the server reports them), and the Console repeats them; the scene itself still saves. Only files
 that changed are written; a map opened and saved unchanged keeps every byte.</p>
-<p><strong>Undo</strong> / <strong>Redo</strong> are the tab's buttons only (there is no keyboard shortcut and they do not touch the scene): they
-cover every zone edit, and a brush or scatter stroke, a drag or one field edit is one step.</p>
+<p><strong>Undo</strong> / <strong>Redo</strong> (the tab's buttons, and <strong>Edit &gt; Undo / Redo</strong>, Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z while
+the Zone tab has focus) cover every zone edit, and a brush or scatter stroke, a drag or one field edit is one step. The
+map has its own history, apart from the scene's: see <a href="undo-redo.html#zone">Undo and redo</a>.</p>
 <p><strong>Unsaved changes.</strong> The editor's Save / Don't Save / Cancel prompt (New, Open, Open Recent, switching project,
 quitting) counts unsaved zone edits too, and so does changing the map in the Zone tab or the Inspector (<strong>Don't Save</strong>
 reloads the zone from disk).</p>

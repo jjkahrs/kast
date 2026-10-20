@@ -190,7 +190,8 @@ bool GuiBuilder::record(std::string name, std::optional<GuiElementCopy> before, 
 void GuiBuilder::endGesture()
 {
     if (const std::optional<Gesture> gesture = std::exchange(gesture_, std::nullopt))
-        record(gesture->name, gesture->before, copyGuiElement(gesture->node));
+        if (!record(gesture->name, gesture->before, copyGuiElement(gesture->node)) && history_.atSavePoint())
+            rmlDirty_ = false; // the field ended where it started: still the saved document
     if (rcssText_ == rcssCommitted_)
         return;
     const auto setRcss = [this](const std::string& text) {
