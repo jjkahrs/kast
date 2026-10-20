@@ -182,7 +182,7 @@ return {
             for _, power in ipairs(e.powers) do powers[power.key] = power end
             kast.gui.setVisible("action_bar", true)
             refreshBar()
-        end)
+        end, {replay = true}) -- replay: sent once on entering, maybe before this zone's scene loaded
         kast.subscribe("server.combat.power", function(e)
             if e.caster == me then
                 for _, power in pairs(powers) do

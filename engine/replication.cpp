@@ -145,22 +145,41 @@ void Replication::start(Scene& scene, EventBus& bus, WorldClient& world)
         despawnAll();
         localId_.reset();
         localComponents_.clear();
+        localPose_.reset();
         map_.reset();
     }));
     subscriptions_.push_back(bus.subscribe("world.component", [this](const Json& e) { applyComponent(e, false); }));
     subscriptions_.push_back(bus.subscribe("world.componentRemoved", [this](const Json& e) { applyComponent(e, true); }));
     applyMap(); // a scene switch: the new scene's terrain shows the map the player is on
+    placePlayer(); // and its player stands where the old scene's stood (or where the server put it)
     if (const entt::entity player = localPlayer(); player != entt::null) // a scene switch: the new scene's player
         for (const auto& [name, data] : localComponents_)
             applyComponent(player, name, &data);
 
+    // A scene switch in the world: the new scene's scripts hear where the player is and every replicated value again,
+    // as if it had just entered (they missed the originals, the old scene's scripts got them).
+    if (localId_ && map_ && localPose_) {
+        bus.publish("world.entered",
+                    {{"entityId", *localId_}, {"map", *map_},
+                     {"position", {{"x", localPose_->position.x}, {"y", localPose_->position.y}, {"z", localPose_->position.z}}},
+                     {"heading", headingOf(localPose_->rotation)}},
+                    "kast.replication");
+        publishComponents(*localId_, localComponents_);
+    }
     // Remote players already in view (a scene switch): their clones in the new scene, where they were last shown.
     std::unordered_map<uint32_t, Remote> known;
     known.swap(remotes_);
     for (auto& [id, remote] : known) {
         remote.from = remote.to;
         spawn(id, remote);
+        publishComponents(id, remotes_[id].components);
     }
+}
+
+void Replication::publishComponents(uint32_t id, const std::map<std::string, Json>& components)
+{
+    for (const auto& [name, data] : components)
+        bus_->publish("world.component", {{"entityId", id}, {"name", name}, {"data", data}}, "kast.replication");
 }
 
 void Replication::stop(bool remembered)
@@ -173,6 +192,7 @@ void Replication::stop(bool remembered)
         remotes_.clear();
         localId_.reset();
         localComponents_.clear();
+        localPose_.reset();
         map_.reset();
     }
     for (auto& [id, remote] : remotes_)
@@ -208,6 +228,7 @@ void Replication::update(float dt)
     time_ += dt;
     if (const entt::entity player = localPlayer(); player != entt::null && world_->state() == WorldState::InWorld) {
         const Transform& t = scene_->registry().get<Transform>(player);
+        localPose_ = {t.position, t.rotation}; // what this frame's systems did, for the next scene's player
         const float heading = headingOf(t.rotation);
         if (throttle_.shouldSend(t.position, heading, time_,
                                  scene_->registry().get<NetworkLocalPlayer>(player).sendRateHz))
@@ -236,19 +257,31 @@ void Replication::applyMap()
             terrain.map = *map_;
 }
 
+// Remembered even when the scene has no local player (a character select scene): the next scene's player gets it.
 void Replication::placeLocal(const Json& payload)
 {
-    const entt::entity player = localPlayer();
-    if (player == entt::null)
-        return;
-    Transform& t = scene_->registry().get<Transform>(player);
-    t.position = vec3(payload.value("position", Json::object()));
-    if (payload.contains("heading")) // world.entered / world.mapChanged; a correction carries the position only
-        t.rotation = yawRotation(payload.value("heading", 0.0f));
     if (payload.contains("entityId")) { // world.entered: a new character, so none of the old one's components
         localId_ = payload.value("entityId", 0u);
         localComponents_.clear();
     }
+    Pose pose = localPose_.value_or(Pose{});
+    if (const entt::entity player = localPlayer(); player != entt::null)
+        pose.rotation = scene_->registry().get<Transform>(player).rotation; // a correction keeps the heading
+    pose.position = vec3(payload.value("position", Json::object()));
+    if (payload.contains("heading")) // world.entered / world.mapChanged; a correction carries the position only
+        pose.rotation = yawRotation(payload.value("heading", 0.0f));
+    localPose_ = pose;
+    placePlayer();
+}
+
+void Replication::placePlayer()
+{
+    const entt::entity player = localPlayer();
+    if (player == entt::null || !localPose_)
+        return;
+    Transform& t = scene_->registry().get<Transform>(player);
+    t.position = localPose_->position;
+    t.rotation = localPose_->rotation;
     throttle_.known(t.position, headingOf(t.rotation));
 }
 
@@ -270,7 +303,8 @@ void Replication::spawn(uint32_t id, Remote remote)
     for (const auto& [name, data] : remote.components)
         applyComponent(remote.entity, name, &data);
     bus_->publish("world.entitySpawned",
-                  {{"entityId", id}, {"entity", registry.get<PersistentId>(remote.entity).value}, {"name", remote.name}},
+                  {{"entityId", id}, {"entity", registry.get<PersistentId>(remote.entity).value}, {"name", remote.name},
+                   {"kind", remote.npc ? "npc" : "player"}, {"template", remote.templateName}},
                   "kast.replication");
     remotes_[id] = std::move(remote);
 }

@@ -1,15 +1,14 @@
--- World scene flow: shows the props of the map the player is on (MapProps groups) on entering and after a portal (the
--- Terrain switches by itself, docs/engine/terrain.html), and sends the player back to login when the world connection drops or
+-- World flow, in every scene where the player can be connected (scenes/characters.scene and each zone's scene): loads
+-- the scene of the map the player is on when it enters the world or a portal moves it to another map (each zone has
+-- its own scene, whose Terrain names its map), and sends the player back to login when the world connection drops or
 -- the auth session expires, telling the login screen why through the "session" game machine (fsms/session.lua).
-local PARKED = -1000 -- ponytail: props of other maps are moved out of view, not destroyed; fine for a few props
+-- After a switch the new scene's scripts get world.entered again (engine replication), which is already its scene.
+local SCENES = {[10] = "scenes/meadow.scene", [11] = "scenes/cavern.scene"} -- map id -> its zone scene
 
-local homes = {} -- MapProps entity -> its scene position
-
-local function showMap(map)
-    for e, home in pairs(homes) do
-        local here = kast.get(e, "MapProps").map == map
-        kast.set(e, "Transform", {position = {x = home.x, y = here and home.y or PARKED, z = home.z}})
-    end
+local function loadZone(map)
+    local scene = SCENES[map]
+    if not scene then return kast.warn("world: no scene for map " .. tostring(map)) end
+    if scene ~= kast.currentScene() then kast.loadScene(scene) end
 end
 
 local function backToLogin(reason)
@@ -20,12 +19,10 @@ end
 
 return {
     init = function()
-        for e in kast.query("MapProps") do homes[e] = kast.get(e, "Transform").position end
-        showMap(10)
-        kast.subscribe("world.entered", function(e) showMap(e.map) end)
+        kast.subscribe("world.entered", function(e) loadZone(e.map) end)
         kast.subscribe("world.mapChanged", function(e)
             kast.log(string.format("world: map changed to %d at %.1f, %.1f", e.map, e.position.x, e.position.z))
-            showMap(e.map)
+            loadZone(e.map)
         end)
         kast.subscribe("world.disconnected", function(e)
             kast.warn("world: disconnected (" .. e.code .. ")")

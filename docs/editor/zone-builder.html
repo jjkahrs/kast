@@ -30,6 +30,14 @@ zone is open at a time.</p>
 <li><strong>Map not found or broken</strong>: a <code>Terrain.map</code> id no project map has, or a map that fails to load, shows the error
   in the tab (and once in the Console); nothing of the zone is drawn.</li>
 </ul>
+<p id="one-scene-per-zone"><strong>One scene per zone.</strong> A zone's scene is the one whose <code>Terrain</code> entity names that
+map: open it to edit the zone in the Zone tab. It holds that zone's own client content (props such as its portal arch)
+and instances of the prefabs every zone shares (player, camera, replication, NPC templates, in-world GUI), so a change
+to a shared prefab reaches every zone. At run time the game loads the zone's scene when the player enters the world or a
+portal moves it to another map (a <code>world.entered</code> / <code>world.mapChanged</code> subscriber calling
+<code>kast.loadScene</code>; replication carries the player and what is in view across). <code>samples/starter-mmo</code>:
+<code>scenes/meadow.scene</code> is the Meadow (map 10), <code>scenes/cavern.scene</code> the Cavern (map 11), and
+<code>scripts/world_flow.lua</code> holds the map-to-scene table.</p>
 
 <h2 id="scene-view">Scene view</h2>
 <p>In edit mode the Scene view draws <strong>every declared tile</strong> of the zone with the map's material (and the

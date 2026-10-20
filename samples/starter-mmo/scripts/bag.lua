@@ -136,7 +136,7 @@ return {
         end)
         kast.subscribe("bag.toggle", function() setOpen(not open) end)
         kast.subscribe("bag.slot.drop", onDrop)
-        kast.subscribe("server.equipment.gear", function(e) gear = e end)
+        kast.subscribe("server.equipment.gear", function(e) gear = e end, {replay = true}) -- replay: sent once on entering, maybe before this zone's scene loaded
         kast.subscribe("bag.destroy_confirm", function()
             if doomed then kast.world.send("inventory.destroy", doomed) end
             closeDialog()

@@ -1,0 +1,16 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Player",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [128, 0, 128], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "NetworkLocalPlayer": {"sendRateHz": 10},
+        "ModelRenderer": {"model": "models/female-128-anim.glb", "materials": []},
+        "Animator": {"clip": "Idle_A", "loop": true, "speed": 1, "playOnStart": true}
+      }
+    }
+  ]
+}

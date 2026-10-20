@@ -7,7 +7,7 @@ body {
     font-family: Roboto;
     font-size: 18px;
     color: #f0f0f0;
-    pointer-events: none; /* the world scene stacks full-screen documents: only their panels take the mouse */
+    pointer-events: none; /* the zone scenes stack full-screen documents: only their panels take the mouse */
 }
 
 .screen, .card, .window, #hud, #target_frame, #chat, #action_bar {
@@ -121,7 +121,7 @@ button.class_button.selected {
     color: #a0a0a0;
 }
 
-/* In-world overlays (world.scene): small and in the corners, so the world stays visible. */
+/* In-world overlays (the zone scenes, prefabs/world_ui.prefab): small and in the corners, so the world stays visible. */
 #hud {
     position: absolute;
     left: 12px;

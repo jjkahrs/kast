@@ -1,0 +1,14 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Sun",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [128, 60, 128], "rotation": [-0.408218, -0.23457, -0.109382, 0.875426], "scale": [1, 1, 1]},
+        "DirectionalLight": {"color": [1, 0.95, 0.88], "intensity": 1.1}
+      }
+    }
+  ]
+}

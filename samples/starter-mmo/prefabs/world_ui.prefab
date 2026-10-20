@@ -1,0 +1,58 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "World UI",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
+      }
+    },
+    {
+      "id": 2,
+      "name": "HUD",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "UIDocument": {"path": "ui/hud.rml", "visible": true}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Chat",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "UIDocument": {"path": "ui/chat.rml", "visible": true}
+      }
+    },
+    {
+      "id": 4,
+      "name": "Bag",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "UIDocument": {"path": "ui/bag.rml", "visible": true}
+      }
+    },
+    {
+      "id": 5,
+      "name": "Loot",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "UIDocument": {"path": "ui/loot.rml", "visible": true}
+      }
+    },
+    {
+      "id": 6,
+      "name": "Character Window",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "UIDocument": {"path": "ui/character.rml", "visible": true}
+      }
+    }
+  ]
+}

@@ -7,7 +7,8 @@
 # Live (the services/world compose stack): starter_mmo_live_setup restarts the stack with the sample's compose override,
 # adds "Starter Realm" and readies the test account from KAST_ONLINE_EMAIL / KAST_ONLINE_PASSWORD (the environment ctest
 # runs in; unset = skip). Three stages then play test-time copies through the sample's screens (character list, the
-# Meadow with the Guard, an idle kast_bot, the HUD and a chat line, both portals into the Cavern), a secrets check
+# Meadow with the Guard, an idle kast_bot, the HUD and a chat line, both portals into the Cavern, the zone scenes loaded
+# on each portal), a secrets check
 # follows, and starter_mmo_live_teardown puts the default world mounts back. Each prints "SKIP: ..." and is skipped
 # without docker, a running engine or the credentials.
 set(KAST_STARTER "${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo")
@@ -68,6 +69,9 @@ foreach(stage
     "starter_mmo_live_chars|chars|Starter|420|OFF|picking realm Starter Realm&test driver: characters: .*Starter|"
     "starter_mmo_live_world|world|Starter|900|ON|test driver: entered map 10&spawn npc Guard template 'Guard'&spawn player [^ ]+ template ''&test driver: Health [0-9]+ / 140 on&test driver: Wallet [0-9]+ gold&test driver: chat Starter[a-j]+: hello from the starter sample|"
     "starter_mmo_live_cavern|cavern|Explorer|1800|OFF|test driver: entered map 1[01]&crossed to map 10&crossed to map 11&spawn npc Bat template 'Bat'&world: map changed to 11|"
+    # One scene per zone (scripts/world_flow.lua): meadow.scene on entering, cavern.scene through the portal (map 11,
+    # where the server put the player, HUD and chat shown, the Bat), meadow.scene again on the way back (the Guard, the bot):
+    "starter_mmo_live_travel|travel|Traveler|3000|ON|test driver: entered map 10&Switched to scene 'scenes/characters.scene'.*Switched to scene 'scenes/meadow.scene'.*Switched to scene 'scenes/cavern.scene'.*Switched to scene 'scenes/meadow.scene'&test driver: scene scenes/meadow.scene: terrain map 10&test driver: scene scenes/cavern.scene: terrain map 11, player at 128.0, 128.0.*cloned Bat.*test driver: scene scenes/meadow.scene: terrain map 10, player at 140.0, 128.0.*cloned Guard.*test driver: back in the meadow: Guard and [1-9][0-9]* player&test driver: documents shown: ui/bag.rml ui/character.rml ui/chat.rml ui/hud.rml ui/loot.rml|--screenshot-on-log 30,SHOT"
     # scripts/player.lua's camera: behind the character at 10 m, zoomed all the way out, orbited by a left drag
     "starter_mmo_live_camera|camera|Starter|900|OFF|test driver: entered map 10|"
     "starter_mmo_live_camera_zoom|camera|Starter|900|OFF|test driver: entered map 10|--sim-mouse 800,none,0,0,-10"
@@ -185,10 +189,10 @@ add_test(NAME starter_mmo_live_secrets
   COMMAND "${CMAKE_COMMAND}" "-DSAMPLE=${KAST_STARTER}" "-DSTATE=${KAST_STARTER_STATE}" "-DSHOTS=${live_shots}"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_live_secrets.cmake")
 set_tests_properties(starter_mmo_live_secrets PROPERTIES FIXTURES_REQUIRED starter_mmo_live
-                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_world;starter_mmo_live_cavern;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_death;starter_mmo_live_revive;${inventory_stages};${class_stages};${equip_stages}"
+                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_world;starter_mmo_live_cavern;starter_mmo_live_travel;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_death;starter_mmo_live_revive;${inventory_stages};${class_stages};${equip_stages}"
                      SKIP_REGULAR_EXPRESSION "SKIP: ")
 set_tests_properties(starter_mmo_live_setup starter_mmo_live_teardown starter_mmo_live_chars starter_mmo_live_world
-                     starter_mmo_live_cavern starter_mmo_live_camera starter_mmo_live_camera_zoom
+                     starter_mmo_live_cavern starter_mmo_live_travel starter_mmo_live_camera starter_mmo_live_camera_zoom
                      starter_mmo_live_camera_orbit starter_mmo_live_combat_target starter_mmo_live_combat
                      starter_mmo_live_combat_guard starter_mmo_live_death starter_mmo_live_revive starter_mmo_live_secrets
                      ${inventory_stages} ${class_stages} ${equip_stages} PROPERTIES RUN_SERIAL TRUE)

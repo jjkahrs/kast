@@ -267,7 +267,7 @@ add_test(NAME scene_panel_no_room
 # its objects too. A Terrain map id the project has no map for is reported once, and the editor carries on.
 add_test(NAME editor_zone_scene
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_scene.png"
-          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo/scenes/world.scene"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo/scenes/meadow.scene"
           "-DEXPECT_OUTPUT=Zone: loaded maps/meadow \\(map 10\\)" -DEXPECT_COUNT=1
           "-DFORBID_OUTPUT=did not load|\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME editor_zone_missing_map
@@ -279,12 +279,12 @@ add_test(NAME editor_zone_missing_map
 # before it existed (tests/layouts/pre_zone.ini); --zone-section expands its Map and Problems sections.
 add_test(NAME editor_zone_tab
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_tab.png"
-          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo/scenes/world.scene --zone-section Map,Problems --size 1600x1000"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo/scenes/meadow.scene --zone-section Map,Problems --size 1600x1000"
           -DFOCUS_PANEL=Zone "-DLAYOUT_SAME_DOCK=Hierarchy;Zone" "-DEXPECT_OUTPUT=Zone: loaded maps/meadow \\(map 10\\)"
           "-DFORBID_OUTPUT=\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME editor_zone_tab_old_layout
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_tab_old_layout.png"
-          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo/scenes/world.scene --zone-section Map,Problems --size 1600x1000"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo/scenes/meadow.scene --zone-section Map,Problems --size 1600x1000"
           -DFOCUS_PANEL=Zone "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_zone.ini"
           "-DLAYOUT_SAME_DOCK=Hierarchy;Zone;Systems" "-DFORBID_OUTPUT=\\[error\\]"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")

@@ -1,9 +1,14 @@
 -- TEST ONLY (ctest starter_mmo_live_*, cmake/starter_mmo_live_play.cmake): added to a copy of samples/starter-mmo's
--- realms and world scenes, never to the sample itself. It plays the sample's screens the way a player would, by
+-- realms, characters, meadow and cavern scenes, never to the sample itself. Each scene runs its own copy, so what must
+-- outlive a zone switch is in the "test_route" game machine (the portals taken) or comes again from replication
+-- (world.entered, world.entitySpawned, world.component); each zone scene logs itself, its Terrain map, where the
+-- player stands and the documents shown. It plays the sample's screens the way a player would, by
 -- publishing the events their buttons publish (realms.pick, characters.pick / .create, chat.send) and filling text
 -- fields with kast.gui.setText, so the sample's own handlers do the work, then logs what arrives for the test to check.
 -- Stages: "chars" stops at the character list; "world" enters as CHARACTER, steps beside the idle bot at the spawn and
 -- chats; "cavern" enters as CHARACTER and walks through the portals until it has crossed both ways and is in the Cavern.
+-- "travel" enters in the Meadow, takes the portal into the Cavern, waits for the Bat's clone and walks back, then logs
+-- the Meadow's clones (the Guard and the idle bot) a moment later.
 -- "camera" enters as CHARACTER and stands still, for screenshots of scripts/player.lua's camera (with --sim-mouse).
 -- Combat stages (scripts/combat.lua, the server's systems/combat.lua) face north on entering (the camera looks north)
 -- and get to their map through the portals first. "combat_target" stands 2.5 m north of the Cavern's Bat, so the
@@ -134,7 +139,6 @@ local EQUIP_STAGES = {equip_open = true, equip_drag = true, equip_tooltip = true
 
 local player
 local map
-local crossings = 0
 local target
 local elapsed = 0
 local chatted = false
@@ -160,6 +164,9 @@ local windowToggles = 0   -- character.visibility events
 
 local function log(format, ...) kast.log("test driver: " .. string.format(format, ...)) end
 
+local function crossings() return tonumber(kast.fsm.state("test_route"):sub(2)) end -- portals taken since Play
+local clones = {} -- this scene's clones: name -> true
+
 local function attack() kast.publish("combat.power", {id = "power_1"}) end -- as a click on the action bar's first button
 
 local function shoot(why)
@@ -169,6 +176,7 @@ local function shoot(why)
 end
 
 local function faceNorth() -- before scripts/player.lua's next update puts the camera behind the character
+    if not player then return end -- scenes/characters.scene: the zone scene's world.entered faces it
     kast.set(player, "Transform", {rotation = {x = 0, y = 0, z = 0, w = 1}})
 end
 
@@ -515,6 +523,20 @@ local function classStage()
     stepIndex, stepAt = stepIndex + 1, elapsed
 end
 
+-- The travel stage: Meadow -> Cavern (once the Bat is there) -> Meadow, then what is in view.
+local function travelStage()
+    if crossings() < 2 then
+        target = (map == MEADOW or bat) and GATES[map] or nil
+    elseif guard and elapsed > 2 and not shot then
+        local players = 0
+        for name in pairs(clones) do
+            if name ~= "Guard" and name ~= "Bat" then players = players + 1 end
+        end
+        log("back in the meadow: Guard and %d player(s)", players)
+        shoot("back in the meadow")
+    end
+end
+
 local function walk(dt)
     local p = kast.get(player, "Transform").position
     local dx, dz = target.x - p.x, target.z - p.z
@@ -532,6 +554,18 @@ end
 return {
     init = function()
         for e in kast.query("NetworkLocalPlayer") do player = e end
+        for e in kast.query("Terrain") do -- a zone scene: replication already put the player where the server has it
+            local p = kast.get(player, "Transform").position
+            log("scene %s: terrain map %d, player at %.1f, %.1f", tostring(kast.currentScene()), kast.get(e, "Terrain").map,
+                p.x, p.z)
+            local shown = {}
+            for doc in kast.query("UIDocument") do
+                local d = kast.get(doc, "UIDocument")
+                if d.visible then shown[#shown + 1] = d.path end
+            end
+            table.sort(shown)
+            log("documents shown: %s", table.concat(shown, " "))
+        end
         kast.subscribe("auth.realms", function(e)
             for i, realm in ipairs(e.realms) do
                 if realm.name == REALM then
@@ -594,7 +628,7 @@ return {
         kast.subscribe("world.mapChanged", function(e)
             map = e.map
             if FIGHT_MAP[STAGE] then faceNorth() end
-            crossings = crossings + 1
+            kast.fsm.change("test_route", "c" .. crossings() + 1)
             log("crossed to map %d", e.map)
         end)
         kast.subscribe("world.spawn", function(e)
@@ -602,6 +636,7 @@ return {
         end)
         kast.subscribe("world.entitySpawned", function(e)
             log("cloned %s (server id %d)", e.name, e.entityId)
+            clones[e.name] = true
             if e.name == "Guard" then guard, guardId = e.entity, e.entityId end
             if e.name == "Bat" then bat, batId = e.entity, e.entityId end
         end)
@@ -731,9 +766,10 @@ return {
             kast.publish("chat.send")
         end
         if STAGE == "cavern" then
-            local done = crossings >= 2 and map == CAVERN
+            local done = crossings() >= 2 and map == CAVERN
             target = not done and GATES[map] or nil
         end
+        if STAGE == "travel" then travelStage() end
         if BAG_STAGE[STAGE] or STAGE == "bag_drag_mouse" then bagStage() end
         if STAGE == "rock" or STAGE == "shrine" then zoneStage() end
         if EQUIP_STAGES[STAGE] then equipStage() end

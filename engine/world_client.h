@@ -72,6 +72,10 @@ public:
     void observe(const NetEvent& authEvent);
     // The events since the last poll, oldest first.
     std::vector<NetEvent> poll();
+    // The last payload of each event this connection emitted (since world.connected; none after world.disconnected),
+    // for kast.subscribe's replay: a scene loaded later catches up on what its scripts missed (a game's one-shot
+    // server.* events; Replication itself tells a new scene world.entered and world.component again). Null if none.
+    const nlohmann::json* latest(const std::string& name) const;
 
 private:
     void require(WorldState state, const char* function) const;
@@ -95,6 +99,7 @@ private:
     std::optional<uint64_t> pendingRealm_;   // connect() waiting for a realm list
     uint64_t realmsRequest_ = 0;             // the AuthClient call id of that list, 0 if it used the cache
     std::vector<NetEvent> events_;
+    std::map<std::string, nlohmann::json> latest_; // event name -> its last payload, see latest()
 };
 
 } // namespace kast

@@ -68,8 +68,8 @@ the same switches as flags:</p>
 <tr><td><code>--no-culling</code></td><td>Every draw in the camera pass, every cascade and every cube face of each shadowed point light in range.</td></tr>
 </table>
 <p>With <code>--log-fps</code> the editor logs the draw call count once a second, which shows what batching saves:</p>
-<pre><code>kast_editor --scene samples/starter-mmo/scenes/world.scene --play --focus-panel Scene --log-fps --no-vsync
-kast_editor --scene samples/starter-mmo/scenes/world.scene --play --focus-panel Scene --log-fps --no-vsync --no-instancing --no-culling</code></pre>
+<pre><code>kast_editor --scene samples/starter-mmo/scenes/meadow.scene --play --focus-panel Scene --log-fps --no-vsync
+kast_editor --scene samples/starter-mmo/scenes/meadow.scene --play --focus-panel Scene --log-fps --no-vsync --no-instancing --no-culling</code></pre>
 <p>The single-draw shaders (<code>vs_mesh</code>, <code>vs_shadow</code>) transform exactly as the instanced ones do (model matrix, then
 <code>u_viewProj</code>), so a mesh covers the same pixels drawn either way: screenshots with and without the flags match.</p>
 </main>

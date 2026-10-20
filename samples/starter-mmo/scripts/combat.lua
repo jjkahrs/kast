@@ -37,7 +37,6 @@ local REJECTED = {
 local me                -- the local player's server entity id
 local dead = false      -- the local player is dead: no targeting keys
 local player            -- the local player's scene entity
-local npcIds = {}       -- server ids of the NPCs in view (world.spawn kind "npc") -> template
 local clones = {}       -- server id -> {entity = clone, name =, template = (NPCs)}
 local target, marker    -- the target's server id, the marker entity under its clone
 local held = {}         -- key or button name -> down last frame
@@ -175,24 +174,21 @@ end
 
 local function forget(id)
     if id == target then clearTarget() end
-    npcIds[id], clones[id] = nil, nil
+    clones[id] = nil
 end
 
 local function forgetAll()
     clearTarget()
-    npcIds, clones, oneShots = {}, {}, {}
+    clones, oneShots = {}, {}
 end
 
 return {
     init = function()
         for e in kast.query("NetworkLocalPlayer") do player = e end
         kast.subscribe("world.entered", function(e) me, dead = e.entityId, false end)
-        kast.subscribe("world.spawn", function(e)
-            if e.kind == "npc" then npcIds[e.entityId] = e.template end
-        end)
-        kast.subscribe("world.entitySpawned", function(e)
-            clones[e.entityId] = {entity = e.entity, name = e.name, template = npcIds[e.entityId]}
-            if npcIds[e.entityId] then tip(clones[e.entityId]) end -- a corpse coming into view
+        kast.subscribe("world.entitySpawned", function(e) -- also each clone a zone switch re-creates
+            clones[e.entityId] = {entity = e.entity, name = e.name, template = e.kind == "npc" and e.template or nil}
+            if e.kind == "npc" then tip(clones[e.entityId]) end -- a corpse coming into view
         end)
         kast.subscribe("world.component", function(e)
             local c = clones[e.entityId]
