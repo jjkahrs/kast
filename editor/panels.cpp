@@ -66,6 +66,18 @@ void markOverride(float top, float bottom)
     ImGui::GetWindowDrawList()->PopClipRect();
 }
 
+// The Lighting, Post Processing and Physics panels: the scene settings before this frame's edits; a change makes one undo
+// step named name, open until the widget lets go.
+SceneState settingsBefore(const Document& doc)
+{
+    return doc.recording || doc.play != PlayState::Stopped ? SceneState() : captureScene(doc.scene, {.settings = true});
+}
+void settingsChanged(Document& doc, const char* name, const SceneState& before)
+{
+    sceneGesture(doc, name, {.settings = true}, before);
+    markDirty(doc);
+}
+
 bool acceptEntityDrop(entt::entity& dropped)
 {
     bool accepted = false;
@@ -220,8 +232,11 @@ void Panels::drawNode(Document& doc, entt::entity entity)
             commit = !cancel;
         }
         if (commit && !renameBuffer_.empty() && renameBuffer_ != name) {
+            beginSceneEdit(doc, std::format("Rename {}", name),
+                           {.entities = {registry.get<kast::PersistentId>(entity).value}});
             name = renameBuffer_;
             markDirty(doc);
+            endSceneEdit(doc);
         }
         if (commit || cancel)
             renaming_ = entt::null;
@@ -278,13 +293,18 @@ void Panels::applyEdit(Document& doc)
     case Edit::Op::Reparent:
         if (!scene.valid(edit.target) || scene.parent(edit.target) == edit.parent)
             break;
-        if (const char* blocker = kast::reparentBlocker(scene, edit.target))
+        if (const char* blocker = kast::reparentBlocker(scene, edit.target)) {
             kast::log::warn(std::format("Cannot move '{}': {}", scene.registry().get<kast::Name>(edit.target).value, blocker));
-        else if (scene.reparent(edit.target, edit.parent))
+            break;
+        }
+        beginSceneEdit(doc, std::format("Move {}", scene.registry().get<kast::Name>(edit.target).value),
+                       {.entities = {scene.registry().get<kast::PersistentId>(edit.target).value}, .deep = true});
+        if (scene.reparent(edit.target, edit.parent))
             markDirty(doc);
         else
             kast::log::warn(std::format("Cannot parent '{}' under its own descendant",
                                         scene.registry().get<kast::Name>(edit.target).value));
+        endSceneEdit(doc);
         break;
     case Edit::Op::None:
         break;
@@ -439,8 +459,16 @@ void Panels::drawInspector(Document& doc)
         } else {
             entt::registry& registry = doc.scene.registry();
             const entt::entity entity = doc.selected;
+            // The entity before this frame's edits: an undo step that starts now goes back to it.
+            const SceneScope scope{.entities = {registry.get<kast::PersistentId>(entity).value}};
+            const SceneState before =
+                doc.recording || doc.play != PlayState::Stopped ? SceneState() : captureScene(doc.scene, scope);
+            const std::string entityName = registry.get<kast::Name>(entity).value;
+            std::string step = std::format("Edit {}", entityName);
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.65f); // leave room for the labels
             bool changed = ImGui::InputText("Name", &registry.get<kast::Name>(entity).value);
+            if (changed)
+                step = std::format("Rename {}", entityName);
             const bool linked = registry.all_of<kast::PrefabLink>(entity);
             const Json overrides = linked ? kast::prefabOverrides(doc.scene, entity) : Json();
             const auto overridden = [&](const char* kind, const std::string& key) {
@@ -530,6 +558,7 @@ void Panels::drawInspector(Document& doc)
             if (removed) {
                 kast::removeComponent(registry, entity, removed);
                 changed = true;
+                step = std::format("Remove {}", removed.displayName());
             }
 
             // Data of components with no valid definition: read-only, saved unchanged, removable.
@@ -553,6 +582,7 @@ void Panels::drawInspector(Document& doc)
             if (!removedMissing.empty()) {
                 kast::removePreservedComponent(registry, entity, removedMissing);
                 changed = true;
+                step = std::format("Remove {}", removedMissing);
             }
             ImGui::PopItemWidth();
 
@@ -580,14 +610,17 @@ void Panels::drawInspector(Document& doc)
                     if (ImGui::Selectable(type.displayName())) {
                         kast::addComponent(registry, entity, type);
                         changed = true;
+                        step = std::format("Add {}", type.displayName());
                     }
                 }
                 if (!any)
                     ImGui::TextDisabled("Every component is already added");
                 ImGui::EndPopup();
             }
-            if (changed)
+            if (changed) {
+                sceneGesture(doc, step, scope, before); // one step until the field or drag lets go
                 markDirty(doc);
+            }
         }
     }
     drawNewComponentModal(doc); // outside the selection branch, so --new-component-prompt shows it without one
@@ -1399,6 +1432,7 @@ void Panels::drawLighting(Document& doc, bool& open, const std::string& skyError
     const float em = ImGui::GetFontSize();
     ImGui::SetNextWindowSize(ImVec2(em * 22, em * 24), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Lighting", &open)) {
+        const SceneState before = settingsBefore(doc);
         bool changed = false;
         const auto color = [&](const char* label, bx::Vec3& value) {
             if (ImGui::ColorEdit3(label, &value.x)) {
@@ -1441,7 +1475,7 @@ void Panels::drawLighting(Document& doc, bool& open, const std::string& skyError
         }
         ImGui::PopID();
         if (changed)
-            markDirty(doc);
+            settingsChanged(doc, "Edit Lighting", before);
     }
     ImGui::End();
 }
@@ -1575,9 +1609,10 @@ void Panels::drawPhysics(Document& doc, bool& open)
     ImGui::SetNextWindowSize(ImVec2(em * 22, em * 5), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Physics", &open)) {
         // Read by the simulation every step, so a change in Play applies at once (and Stop reverts it).
+        const SceneState before = settingsBefore(doc);
         if (ImGui::DragFloat3("Gravity", &doc.scene.physics.gravity.x, 0.05f, -1000.0f, 1000.0f, "%.2f",
                               ImGuiSliderFlags_AlwaysClamp))
-            markDirty(doc);
+            settingsChanged(doc, "Edit Physics", before);
     }
     ImGui::End();
 }
@@ -1590,6 +1625,7 @@ void Panels::drawPostProcessing(Document& doc, bool& open)
     ImGui::SetNextWindowSize(ImVec2(em * 24, em * 30), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Post Processing", &open)) {
         kast::ScenePostProcessing& post = doc.scene.postProcessing;
+        const SceneState before = settingsBefore(doc);
         constexpr ImGuiSliderFlags kClamp = ImGuiSliderFlags_AlwaysClamp;
         bool changed = false;
         // A card per effect: a collapsing header and its enable checkbox; the controls (body) show while it's open.
@@ -1651,7 +1687,7 @@ void Panels::drawPostProcessing(Document& doc, bool& open)
         });
         ImGui::PopID();
         if (changed)
-            markDirty(doc);
+            settingsChanged(doc, "Edit Post Processing", before);
     }
     ImGui::End();
 }

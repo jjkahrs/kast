@@ -143,9 +143,12 @@ entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent)
 {
     kast::Scene& scene = doc.scene;
     const char* name = kind == ObjectKind::Empty ? "Empty" : objectKindLabel(kind);
+    beginSceneEdit(doc, std::format("Create {}", name));
     const entt::entity entity = scene.create(name, parent);
-    if (entity == entt::null)
+    if (entity == entt::null) {
+        endSceneEdit(doc);
         return entity; // parent is at the hierarchy depth limit
+    }
     switch (kind) {
     case ObjectKind::Cube: scene.registry().emplace<kast::MeshRenderer>(entity, kast::Primitive::Cube); break;
     case ObjectKind::Plane: scene.registry().emplace<kast::MeshRenderer>(entity, kast::Primitive::Plane); break;
@@ -161,14 +164,19 @@ entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent)
     }
     doc.selected = entity;
     markDirty(doc);
+    endSceneEdit(doc, {scene.registry().get<kast::PersistentId>(entity).value});
     return entity;
 }
 
 entt::entity createModelEntity(Document& doc, const std::string& path, entt::entity parent)
 {
-    const entt::entity entity = doc.scene.create(std::filesystem::path(path).stem().string(), parent);
-    if (entity == entt::null)
+    const std::string name = std::filesystem::path(path).stem().string();
+    beginSceneEdit(doc, std::format("Create {}", name));
+    const entt::entity entity = doc.scene.create(name, parent);
+    if (entity == entt::null) {
+        endSceneEdit(doc);
         return entity; // parent is at the hierarchy depth limit
+    }
     doc.scene.registry().emplace<kast::ModelRenderer>(entity, path);
     if (doc.project)
         kast::models().setRoot(doc.project->root);
@@ -176,6 +184,7 @@ entt::entity createModelEntity(Document& doc, const std::string& path, entt::ent
         doc.scene.registry().emplace<kast::Animator>(entity, kast::defaultClip(*model));
     doc.selected = entity;
     markDirty(doc);
+    endSceneEdit(doc, {doc.scene.registry().get<kast::PersistentId>(entity).value});
     return entity;
 }
 
@@ -183,23 +192,32 @@ void deleteSelected(Document& doc)
 {
     if (!doc.scene.valid(doc.selected))
         return;
+    const entt::registry& registry = doc.scene.registry();
+    beginSceneEdit(doc, std::format("Delete {}", registry.get<kast::Name>(doc.selected).value),
+                   {.entities = {registry.get<kast::PersistentId>(doc.selected).value}, .deep = true});
     doc.scene.destroy(doc.selected);
     doc.selected = entt::null;
     markDirty(doc);
+    endSceneEdit(doc);
 }
 
 void duplicateSelected(Document& doc)
 {
     if (!doc.scene.valid(doc.selected))
         return;
+    beginSceneEdit(doc, std::format("Duplicate {}", doc.scene.registry().get<kast::Name>(doc.selected).value));
     doc.selected = kast::duplicateLinked(doc.scene, doc.selected);
     markDirty(doc);
+    endSceneEdit(doc, {doc.scene.registry().get<kast::PersistentId>(doc.selected).value});
 }
 
 void markDirty(Document& doc)
 {
-    if (doc.play == PlayState::Stopped)
-        doc.dirty = true;
+    if (doc.play != PlayState::Stopped)
+        return;
+    doc.dirty = true;
+    if (!doc.recording)
+        doc.history.forgetSavePoint();
 }
 
 bool selectById(Document& doc, kast::EntityId id)
@@ -218,6 +236,7 @@ void startPlay(Document& doc)
         return;
     }
     if (doc.play == PlayState::Stopped) {
+        endSceneGesture(doc); // a gesture still open is an edit-mode step
         doc.playSnapshot = kast::sceneToJson(doc.scene);
         doc.playSnapshotDirty = doc.dirty;
         doc.focusRequest = PanelFocus::Game;
@@ -313,15 +332,19 @@ bool addSystem(Document& doc, const std::filesystem::path& script, std::string& 
         error = std::format("'{}' is outside the project '{}'", script.string(), doc.project->root.string());
         return false;
     }
+    beginSceneEdit(doc, "Add Lua System", {.settings = true});
     doc.scene.systems.push_back(*path);
     markDirty(doc);
+    endSceneEdit(doc);
     return true;
 }
 
 void removeSystem(Document& doc, size_t index)
 {
+    beginSceneEdit(doc, "Remove Lua System", {.settings = true});
     doc.scene.systems.erase(doc.scene.systems.begin() + static_cast<ptrdiff_t>(index));
     markDirty(doc);
+    endSceneEdit(doc);
 }
 
 void moveSystem(Document& doc, size_t index, int delta)
@@ -329,19 +352,20 @@ void moveSystem(Document& doc, size_t index, int delta)
     const ptrdiff_t target = static_cast<ptrdiff_t>(index) + delta;
     if (target < 0 || target >= std::ssize(doc.scene.systems))
         return;
+    beginSceneEdit(doc, "Move Lua System", {.settings = true});
     std::swap(doc.scene.systems[index], doc.scene.systems[static_cast<size_t>(target)]);
     markDirty(doc);
+    endSceneEdit(doc);
 }
 
 void remapScenePaths(Document& doc, const std::string& from, const std::string& to)
 {
-    if (remapProjectPaths(doc.scene.systems, from, to))
-        markDirty(doc);
+    bool changed = remapProjectPaths(doc.scene.systems, from, to);
     for (auto [entity, mesh] : doc.scene.registry().view<kast::MeshRenderer>().each()) {
         std::vector<std::string> path = {mesh.material};
         if (remapProjectPaths(path, from, to)) {
             mesh.material = path[0];
-            markDirty(doc);
+            changed = true;
         }
     }
     for (auto [entity, model] : doc.scene.registry().view<kast::ModelRenderer>().each()) {
@@ -349,8 +373,7 @@ void remapScenePaths(Document& doc, const std::string& from, const std::string& 
         const bool moved = remapProjectPaths(path, from, to);
         model.model = path[0];
         const bool overrides = remapProjectPaths(model.materials, from, to);
-        if (moved || overrides)
-            markDirty(doc);
+        changed = changed || moved || overrides;
     }
     // Instances (also in the scene waiting behind prefab edit mode, which is dirtied with it); refreshPrefabs then
     // reloads them from the moved files.
@@ -367,11 +390,16 @@ void remapScenePaths(Document& doc, const std::string& from, const std::string& 
         }
         return changed;
     };
-    if (remapInstances(doc.scene))
+    // The files moved, so the histories' copies would put the old paths back: they are dropped.
+    if (remapInstances(doc.scene) || changed) {
         markDirty(doc);
+        clearSceneHistory(doc);
+    }
     if (doc.prefabEdit) {
-        if (remapInstances(doc.prefabEdit->scene))
+        if (remapInstances(doc.prefabEdit->scene)) {
             doc.prefabEdit->dirty = true;
+            doc.prefabEdit->history.clear(false);
+        }
         std::vector<std::string> paths = {doc.prefabEdit->prefab};
         if (remapProjectPaths(paths, from, to))
             doc.prefabEdit->prefab = paths[0];
@@ -412,6 +440,7 @@ bool createPrefabFrom(Document& doc, entt::entity entity, const std::string& fol
         return false;
     doc.selected = entity;
     markDirty(doc);
+    clearSceneHistory(doc); // it wrote a file
     return true;
 }
 
@@ -429,16 +458,23 @@ entt::entity dropPrefab(Document& doc, const std::string& path, entt::entity par
                             path == doc.prefabEdit->prefab ? "is" : "contains", doc.prefabEdit->prefab);
         return entt::null;
     }
+    beginSceneEdit(doc, std::format("Add {}", utf8(fromUtf8(path).stem())));
     const entt::entity entity = kast::instantiatePrefab(doc.scene, asset, parent, error);
-    if (entity == entt::null)
+    if (entity == entt::null) {
+        endSceneEdit(doc);
         return entity;
+    }
     doc.selected = entity;
     markDirty(doc);
+    endSceneEdit(doc, {doc.scene.registry().get<kast::PersistentId>(entity).value});
     kast::log::info(std::format("Added an instance of '{}'", path));
     return entity;
 }
 
-void refreshPrefabs(Document& doc)
+namespace {
+
+// refreshPrefabs without touching the histories.
+void reloadInstances(Document& doc)
 {
     if (!doc.project)
         return;
@@ -452,6 +488,22 @@ void refreshPrefabs(Document& doc)
     ++doc.sceneGeneration;
 }
 
+bool hasInstances(const kast::Scene& scene) { return !scene.registry().view<kast::PrefabInstance>().empty(); }
+
+} // namespace
+
+void refreshPrefabs(Document& doc)
+{
+    if (!doc.project)
+        return;
+    reloadInstances(doc);
+    // The histories' copies hold the instances as their prefabs were.
+    if (hasInstances(doc.scene))
+        clearSceneHistory(doc);
+    if (doc.prefabEdit && hasInstances(doc.prefabEdit->scene))
+        doc.prefabEdit->history.clear(!doc.prefabEdit->dirty);
+}
+
 bool openPrefab(Document& doc, const std::string& path, std::string& error)
 {
     if (const char* blocker = prefabEditBlocker(doc)) {
@@ -462,15 +514,18 @@ bool openPrefab(Document& doc, const std::string& path, std::string& error)
     const std::optional<std::filesystem::path> file = kast::resolveProjectPath(doc.project->root, path, error);
     if (!file || !kast::loadPrefabScene(doc.project->root, path, prefab, error))
         return false;
+    endSceneGesture(doc);
     if (!doc.prefabEdit) {
         const kast::EntityId selected =
             doc.scene.valid(doc.selected) ? doc.scene.registry().get<kast::PersistentId>(doc.selected).value : 0;
-        doc.prefabEdit = Document::PrefabEdit{std::move(doc.scene), doc.camera, doc.path, doc.dirty, selected, path};
+        doc.prefabEdit = Document::PrefabEdit{std::move(doc.scene), doc.camera, doc.path, doc.dirty, selected, path,
+                                              std::move(doc.history)};
     }
     doc.prefabEdit->prefab = path;
     doc.scene = std::move(prefab);
     doc.path = file->string();
     doc.dirty = false;
+    clearSceneHistory(doc); // the prefab's own; a prefab open before is dropped
     doc.selected = entt::null;
     doc.camera = EditorCamera{.pivot = {0.0f, 0.5f, 0.0f}, .yaw = 30.0f, .pitch = -25.0f, .distance = 7.0f};
     ++doc.sceneGeneration;
@@ -488,8 +543,10 @@ void closePrefab(Document& doc)
     doc.camera = waiting.camera;
     doc.path = waiting.path;
     doc.dirty = waiting.dirty;
+    doc.recording.reset();
+    doc.history = std::move(waiting.history); // the prefab's is dropped
     selectById(doc, waiting.selected);
-    refreshPrefabs(doc); // bumps sceneGeneration
+    reloadInstances(doc); // bumps sceneGeneration
     kast::log::info(std::format("Back to scene '{}' from prefab '{}'", displayName(doc), waiting.prefab));
 }
 
@@ -512,6 +569,16 @@ bool runPrefabOp(Document& doc, const PrefabOp& op, std::string& error)
         return false;
     }
     const std::filesystem::path& projectRoot = doc.project->root;
+    // Revert* and Unpack are scene steps; Apply* writes prefab files, so it drops the history instead.
+    const bool apply = op.kind >= Kind::ApplyField && op.kind <= Kind::ApplyAll;
+    const std::string& name = doc.scene.registry().get<kast::Name>(entity).value;
+    const bool field = op.kind == Kind::RevertField || op.kind == Kind::RevertComponent;
+    if (!apply)
+        beginSceneEdit(doc,
+                       op.kind == Kind::Unpack ? std::format("Unpack {}", name)
+                       : field                 ? std::format("Revert {}{}{}", op.component, op.field.empty() ? "" : ".", op.field)
+                                               : std::format("Revert {}", name),
+                       {.entities = {op.entity}, .deep = !field});
     bool ok = true;
     switch (op.kind) {
     case Kind::RevertField:
@@ -545,11 +612,19 @@ bool runPrefabOp(Document& doc, const PrefabOp& op, std::string& error)
     if (!ok) {
         if (error.empty())
             error = "nothing to revert";
+        if (!apply)
+            endSceneEdit(doc);
         return false;
     }
     markDirty(doc);
-    if (op.kind >= Kind::RevertDeleted && op.kind != Kind::Unpack) // the scene was reloaded; prefab files may have changed
-        refreshPrefabs(doc);
+    if (apply) {
+        refreshPrefabs(doc); // prefab files changed
+        clearSceneHistory(doc);
+    } else {
+        if (op.kind == Kind::RevertDeleted || op.kind == Kind::RevertAll) // the scene was reloaded
+            reloadInstances(doc);
+        endSceneEdit(doc);
+    }
     selectById(doc, op.entity);
     return true;
 }
@@ -608,6 +683,7 @@ void resetToDefault(Document& doc)
     doc.path.clear();
     doc.selected = entt::null;
     doc.dirty = false;
+    clearSceneHistory(doc);
     ++doc.sceneGeneration;
 }
 
@@ -619,8 +695,10 @@ bool openFile(Document& doc, const std::string& path, std::string& error)
     kast::Scene scene;
     kast::SceneLoadReport report;
     if (!kast::loadScene(path, scene, error, &report, rootOf(project).value_or(std::filesystem::path()))) {
-        if (kast::activateComponentDefinitions(rootOf(doc.project), &doc.scene)) // back to the kept scene's project
+        if (kast::activateComponentDefinitions(rootOf(doc.project), &doc.scene)) { // back to the kept scene's project
             markDirty(doc);
+            clearSceneHistory(doc); // migrated: the copies hold the old component data
+        }
         return false;
     }
     EditorCamera camera;
@@ -633,6 +711,7 @@ bool openFile(Document& doc, const std::string& path, std::string& error)
     doc.selected = entt::null;
     doc.dirty = report.migrated; // Lua component data fixed by the drift rules
     doc.prefabEdit.reset();
+    clearSceneHistory(doc);
     ++doc.sceneGeneration;
     kast::log::info(std::format("Opened scene '{}'", path));
     return true;
@@ -640,6 +719,7 @@ bool openFile(Document& doc, const std::string& path, std::string& error)
 
 bool saveFile(Document& doc, const std::string& path, std::string& error)
 {
+    endSceneGesture(doc);
     if (doc.prefabEdit) { // the open prefab, as a prefab: the project and the waiting scene stay
         const std::optional<std::string> prefab = kast::toProjectPath(doc.project->root, path);
         if (!prefab) {
@@ -649,6 +729,7 @@ bool saveFile(Document& doc, const std::string& path, std::string& error)
         if (!kast::savePrefab(doc.scene, doc.project->root, *prefab, error))
             return false;
         doc.dirty = false;
+        doc.history.markSaved();
         kast::log::info(std::format("Saved prefab '{}'", *prefab));
         return true;
     }
@@ -664,9 +745,12 @@ bool saveFile(Document& doc, const std::string& path, std::string& error)
     doc.path = path;
     doc.project = std::move(project);
     doc.dirty = false;
+    doc.history.markSaved();
     kast::log::info(std::format("Saved scene '{}'", path));
-    if (projectChanged && kast::activateComponentDefinitions(rootOf(doc.project), &doc.scene))
+    if (projectChanged && kast::activateComponentDefinitions(rootOf(doc.project), &doc.scene)) {
         markDirty(doc); // the new project's Lua component definitions changed the scene
+        clearSceneHistory(doc);
+    }
     return true;
 }
 
@@ -697,8 +781,10 @@ bool canEditComponents(const Document& doc) { return doc.play == PlayState::Stop
 
 void refreshComponents(Document& doc)
 {
-    if (doc.play == PlayState::Stopped && kast::refreshComponentDefinitions(doc.scene))
+    if (doc.play == PlayState::Stopped && kast::refreshComponentDefinitions(doc.scene)) {
         markDirty(doc);
+        clearSceneHistory(doc); // migrated: the copies hold the old component data
+    }
 }
 
 std::filesystem::path newComponentFile(const std::filesystem::path& projectRoot, std::string& typeName)
@@ -838,6 +924,7 @@ bool newLuaComponent(Document& doc, entt::entity entity, std::string_view name, 
     }
     kast::addComponent(doc.scene.registry(), entity, type);
     markDirty(doc);
+    clearSceneHistory(doc); // it wrote a file
     return true;
 }
 

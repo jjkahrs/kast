@@ -230,6 +230,10 @@
 <td>In prefab edit mode: <strong>Back</strong> to the scene without a prompt (unsaved prefab changes are discarded), refreshing its instances.</td>
 </tr>
 <tr>
+<td><code>--scene-undo &lt;N&gt;</code>, <code>--scene-redo &lt;N&gt;</code></td>
+<td>After the steps above: <strong>Edit &gt; Undo</strong> on the scene (or the open prefab) N times, then <strong>Redo</strong> N times, e.g. to screenshot a <code>--set-field</code> undone. Each logs <code>Undo &lt;step&gt;</code> / <code>Redo &lt;step&gt;</code>.</td>
+</tr>
+<tr>
 <td><code>--assets-delete &lt;path&gt;</code></td>
 <td>Open the Assets <strong>Delete Asset</strong> confirmation for this entry after 12 frames, for screenshots (for a prefab it lists the scenes and prefabs using it).</td>
 </tr>

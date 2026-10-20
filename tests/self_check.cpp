@@ -8576,6 +8576,312 @@ void checkPrefabEditMode()
           "prefab edit: runPrefabOp reverts by id");
 }
 
+// --- Undo / redo (editor/undo.h, editor/scene_undo.h) ---
+
+void checkUndoStack()
+{
+    UndoStack stack;
+    int value = 0;
+    const auto step = [&](int to) {
+        const int from = value;
+        value = to;
+        stack.push({std::format("Set {}", to), [&value, from] { value = from; }, [&value, to] { value = to; }});
+    };
+    check(!stack.canUndo() && !stack.canRedo() && stack.undoName().empty() && stack.atSavePoint(),
+          "undo stack: empty, at its save point");
+    step(1);
+    step(2);
+    check(stack.canUndo() && stack.undoName() == "Set 2" && !stack.canRedo() && !stack.atSavePoint(),
+          "undo stack: push records a step");
+    stack.undo();
+    check(value == 1 && stack.redoName() == "Set 2" && stack.undoName() == "Set 1", "undo stack: undo runs the step's undo");
+    stack.redo();
+    check(value == 2 && !stack.canRedo(), "undo stack: redo runs the step's redo");
+    stack.undo();
+    stack.undo();
+    check(value == 0 && stack.atSavePoint(), "undo stack: undo back to the save point");
+    stack.redo();
+    stack.markSaved();
+    step(5);
+    stack.undo();
+    check(stack.atSavePoint() && value == 1, "undo stack: the save point after a save");
+    step(7);
+    check(!stack.canRedo() && stack.size() == 2 && value == 7, "undo stack: a new step discards the redo branch");
+    stack.undo();
+    check(stack.atSavePoint(), "undo stack: the save point before the discarded branch is kept");
+    stack.redo();
+    stack.markSaved();
+    stack.undo();
+    step(9); // the save point (after Set 7) was in the discarded branch
+    stack.undo();
+    stack.undo();
+    stack.redo();
+    stack.redo();
+    check(!stack.atSavePoint() && value == 9, "undo stack: a discarded save point is unreachable");
+
+    stack.clear(true);
+    for (int i = 1; i <= 101; ++i)
+        step(i);
+    check(stack.size() == UndoStack::kMaxSteps && stack.undoName() == "Set 101", "undo stack: capped at 100 steps");
+    while (stack.canUndo())
+        stack.undo();
+    check(value == 1 && !stack.atSavePoint(), "undo stack: the 101st push dropped the oldest (and the save point)");
+    stack.clear(false);
+    check(!stack.atSavePoint() && stack.size() == 0, "undo stack: clear(false) leaves no save point");
+
+    UndoTarget target{.history = &stack, .undo = [] {}, .redo = [] {}};
+    step(3);
+    check(target.canUndo() && !target.canRedo(), "undo target: follows its history");
+    target.blocked = true;
+    check(!target.canUndo() && !target.canRedo(), "undo target: blocked (Play) can't undo or redo");
+}
+
+kast::EntityId selectedId(const Document& doc)
+{
+    return doc.scene.valid(doc.selected) ? doc.scene.registry().get<kast::PersistentId>(doc.selected).value : 0;
+}
+
+// edit makes exactly one step: undo puts the scene back as it was before (serialized form), redo as it was after.
+template <typename Fn>
+void checkUndoRedo(Document& doc, const char* what, Fn&& edit)
+{
+    const nlohmann::ordered_json before = kast::sceneToJson(doc.scene);
+    const size_t steps = doc.history.size();
+    edit();
+    const nlohmann::ordered_json after = kast::sceneToJson(doc.scene);
+    const std::string name = std::format("scene undo: {}", what);
+    check(after != before, (name + ": changes the scene").c_str());
+    // One undo getting back to before (below) proves it is one step.
+    check(doc.history.size() <= steps + 1 && doc.history.canUndo() && !doc.history.canRedo(),
+          (name + ": records a step").c_str());
+    undoScene(doc);
+    check(kast::sceneToJson(doc.scene) == before, (name + ": undo restores the exact prior state").c_str());
+    redoScene(doc);
+    check(kast::sceneToJson(doc.scene) == after, (name + ": redo restores the exact post state").c_str());
+}
+
+void checkSceneUndo()
+{
+    const std::filesystem::path dir = projectTestDir("kast_scene_undo", "Undo");
+    Document doc;
+    resetToDefault(doc); // light, ground, cube, camera
+    doc.project = kast::Project{.root = dir, .name = "Undo"};
+    check(doc.history.size() == 0 && !doc.dirty && doc.history.atSavePoint(), "scene undo: New starts an empty history");
+    const auto id = [&](const char* name) { return idOf(doc.scene, named(doc.scene, name)); };
+    const auto entity = [&](kast::EntityId id) { return kast::findById(doc.scene, id); };
+    const kast::EntityId cube = id("Cube"), ground = id("Ground");
+
+    checkUndoRedo(doc, "create", [&] { createObject(doc, ObjectKind::Sphere, entt::null); });
+    check(doc.history.undoName() == "Create Sphere", "scene undo: the step is named after the edit");
+    const kast::EntityId sphere = id("Sphere");
+    undoScene(doc);
+    check(doc.selected == entt::null, "scene undo: undoing a create clears the selection (the entity is gone)");
+    redoScene(doc);
+    check(selectedId(doc) == sphere, "scene undo: redoing a create selects it again, by id");
+
+    checkUndoRedo(doc, "create model", [&] { createModelEntity(doc, "models/none.glb", entity(sphere)); });
+
+    // Delete Ground (the second root, with a child): undo puts it back in place, with its ids.
+    doc.scene.create("Pebble", entity(ground));
+    doc.selected = entity(ground);
+    checkUndoRedo(doc, "delete", [&] { deleteSelected(doc); });
+    check(doc.selected == entt::null, "scene undo: redo of a delete leaves nothing selected");
+    undoScene(doc);
+    check(selectedId(doc) == ground && doc.scene.children(entt::null)[1] == doc.selected &&
+              childNamed(doc.scene, doc.selected, "Pebble") != entt::null,
+          "scene undo: undoing a delete reselects the entity, at its old place with its children");
+
+    doc.selected = entity(ground);
+    checkUndoRedo(doc, "duplicate", [&] { duplicateSelected(doc); });
+
+    // Reparent (Hierarchy drag) keeps the world transform: undo puts back the parent, place and local transform.
+    checkUndoRedo(doc, "reparent", [&] {
+        beginSceneEdit(doc, "Move Cube", {.entities = {cube}, .deep = true});
+        doc.scene.reparent(entity(cube), entity(id("Main Camera")));
+        markDirty(doc);
+        endSceneEdit(doc);
+    });
+    checkUndoRedo(doc, "rename", [&] { // Hierarchy F2
+        beginSceneEdit(doc, "Rename Cube", {.entities = {cube}});
+        doc.scene.registry().get<kast::Name>(entity(cube)).value = "Box";
+        markDirty(doc);
+        endSceneEdit(doc);
+    });
+
+    // An Inspector field (or gizmo) drag over several frames is one step, closed once it lets go.
+    const auto frame = [&](const char* name, const SceneScope& scope, auto&& change) {
+        const SceneState before = doc.recording ? SceneState() : captureScene(doc.scene, scope);
+        change();
+        sceneGesture(doc, name, scope, before);
+        markDirty(doc);
+    };
+    checkUndoRedo(doc, "inspector drag", [&] {
+        for (int i = 1; i <= 5; ++i)
+            frame("Edit Box", {.entities = {cube}},
+                  [&] { doc.scene.registry().get<kast::Transform>(entity(cube)).position.y += 0.25f; });
+        check(doc.history.undoName() != "Edit Box", "scene undo: no step while the drag is on");
+        endSceneGesture(doc);
+    });
+    check(doc.history.undoName() == "Edit Box", "scene undo: the drag is one step once it lets go");
+    checkUndoRedo(doc, "add component", [&] {
+        frame("Add Rotator", {.entities = {cube}}, [&] { doc.scene.registry().emplace<kast::Rotator>(entity(cube)); });
+        endSceneGesture(doc);
+    });
+    checkUndoRedo(doc, "remove component", [&] {
+        frame("Remove Mesh Renderer", {.entities = {cube}},
+              [&] { doc.scene.registry().remove<kast::MeshRenderer>(entity(cube)); });
+        endSceneGesture(doc);
+    });
+    doc.selected = entt::null;
+    undoScene(doc);
+    check(selectedId(doc) == cube && doc.scene.registry().all_of<kast::MeshRenderer>(doc.selected),
+          "scene undo: undoing an Inspector edit reselects its entity");
+    redoScene(doc);
+    checkUndoRedo(doc, "gizmo drag", [&] {
+        for (int i = 1; i <= 3; ++i)
+            frame("Rotate Box", {.entities = {cube}}, [&] {
+                doc.scene.registry().get<kast::Transform>(entity(cube)).rotation = kast::quatFromEulerDeg({0.0f, 10.0f * i, 0.0f});
+            });
+        endSceneGesture(doc);
+    });
+
+    // Scene settings (Lighting, Post Processing, Physics panels) and the Lua systems list.
+    checkUndoRedo(doc, "lighting", [&] {
+        frame("Edit Lighting", {.settings = true}, [&] { doc.scene.lighting.ambientIntensity = 0.7f; });
+        frame("Edit Lighting", {.settings = true}, [&] { doc.scene.lighting.ambientIntensity = 0.8f; });
+        endSceneGesture(doc);
+    });
+    std::string error;
+    writeFile(dir / "scripts/a.lua", "return { update = function() end }");
+    writeFile(dir / "scripts/b.lua", "return { update = function() end }");
+    checkUndoRedo(doc, "add system", [&] { addSystem(doc, dir / "scripts/a.lua", error); });
+    addSystem(doc, dir / "scripts/b.lua", error);
+    checkUndoRedo(doc, "move system", [&] { moveSystem(doc, 1, -1); });
+    checkUndoRedo(doc, "remove system", [&] { removeSystem(doc, 0); });
+
+    // Edits that change nothing record nothing.
+    size_t steps = doc.history.size();
+    moveSystem(doc, 0, -1); // already at the top
+    frame("Edit Box", {.entities = {cube}}, [] {});
+    endSceneGesture(doc);
+    beginSceneEdit(doc, "Rename Box", {.entities = {cube}});
+    endSceneEdit(doc);
+    doc.selected = entt::null;
+    deleteSelected(doc);
+    check(doc.history.size() == steps, "scene undo: no step for edits that change nothing");
+
+    // Save point: undo back to it clears dirty ("*" goes), redo away sets it again.
+    check(saveFile(doc, (dir / "undo.scene").string(), error) && !doc.dirty, "scene undo: save");
+    createObject(doc, ObjectKind::Cube, entt::null);
+    check(doc.dirty && contains(windowTitle(doc), "*"), "scene undo: an edit after saving is dirty");
+    undoScene(doc);
+    check(!doc.dirty && !contains(windowTitle(doc), "*"), "scene undo: undo back to the save point is clean");
+    undoScene(doc);
+    check(doc.dirty, "scene undo: undo past the save point is dirty");
+    redoScene(doc);
+    check(!doc.dirty, "scene undo: redo back to the save point is clean");
+    redoScene(doc);
+    check(doc.dirty, "scene undo: redo away from the save point is dirty");
+    undoScene(doc);
+    createObject(doc, ObjectKind::Plane, entt::null);
+    check(doc.dirty && !doc.history.canRedo(), "scene undo: a new edit after undo discards the redo branch");
+    undoScene(doc);
+    check(!doc.dirty, "scene undo: the save point before the discarded branch is still reachable");
+    doc.scene.registry().get<kast::Name>(entity(ground)).value = "Renamed by a script"; // an edit that is no step
+    markDirty(doc);
+    redoScene(doc);
+    undoScene(doc);
+    check(doc.dirty, "scene undo: after an edit that is no step, undo never gets back to clean");
+
+    for (int i = 0; i < 101; ++i)
+        createObject(doc, ObjectKind::Empty, entt::null);
+    check(doc.history.size() == UndoStack::kMaxSteps, "scene undo: capped at 100 steps");
+
+    // Play: undo / redo blocked, Play edits never recorded, history intact and usable after Stop.
+    steps = doc.history.size();
+    const nlohmann::ordered_json edited = kast::sceneToJson(doc.scene);
+    const kast::EntityId last = selectedId(doc);
+    startPlay(doc);
+    undoScene(doc);
+    createObject(doc, ObjectKind::Cube, entt::null);
+    check(doc.history.size() == steps && !doc.history.canRedo(), "scene undo: Play blocks undo and records nothing");
+    stopPlay(doc);
+    check(kast::sceneToJson(doc.scene) == edited, "scene undo: Stop restores the scene the history matches");
+    undoScene(doc);
+    check(doc.history.canRedo() && entity(last) == entt::null && doc.selected == entt::null,
+          "scene undo: undo works after Stop");
+
+    // Cleared by New, Open and the ops that write files.
+    resetToDefault(doc);
+    check(doc.history.size() == 0 && !doc.recording, "scene undo: New clears the history");
+    createObject(doc, ObjectKind::Cube, entt::null);
+    check(openFile(doc, (dir / "undo.scene").string(), error) && doc.history.size() == 0 && doc.history.atSavePoint(),
+          "scene undo: Open clears the history");
+    createObject(doc, ObjectKind::Cube, entt::null);
+    remapScenePaths(doc, "scripts/nothing.lua", "scripts/other.lua");
+    check(doc.history.size() == 1, "scene undo: a remap that changes nothing keeps the history");
+    remapScenePaths(doc, "scripts/a.lua", "scripts/c.lua");
+    check(doc.history.size() == 0 && doc.dirty && !doc.history.atSavePoint(),
+          "scene undo: an asset rename / move that remaps the scene clears it");
+    createObject(doc, ObjectKind::Cube, entt::null);
+    check(newLuaComponent(doc, doc.selected, "UndoTag", error) && doc.history.size() == 0,
+          "scene undo: New Lua Component clears the history");
+    createObject(doc, ObjectKind::Cube, entt::null);
+    writeFile(dir / "components/undo_tag.lua", R"(return { name = "UndoTag", fields = { { name = "n", type = "int" } } })");
+    refreshComponents(doc);
+    check(doc.history.size() == 0, "scene undo: a Lua component hot reload that migrates instances clears the history");
+    kast::activateComponentDefinitions(std::nullopt, nullptr);
+}
+
+void checkPrefabUndo()
+{
+    const std::filesystem::path dir = projectTestDir("kast_prefab_undo", "Prefabs");
+    {
+        kast::Scene scene;
+        const entt::entity orc = makeOrc(scene, dir);
+        scene.registry().get<kast::Collider>(childNamed(scene, orc, "Club")).radius = 0.95f; // an override
+        scene.destroy(childNamed(scene, orc, "Cape"));                                      // a deleted child
+        std::string error;
+        check(kast::saveScene(scene, (dir / "main.scene").string(), error), "prefab undo: write main.scene");
+    }
+    Document doc;
+    std::string error;
+    check(openFile(doc, (dir / "main.scene").string(), error), "prefab undo: open main.scene");
+    const kast::EntityId orc = idOf(doc.scene, named(doc.scene, "Orc"));
+    const kast::EntityId club = idOf(doc.scene, named(doc.scene, "Club"));
+    using Kind = PrefabOp::Kind;
+    checkUndoRedo(doc, "prefab revert field", [&] {
+        runPrefabOp(doc, {.kind = Kind::RevertField, .entity = club, .component = "Collider", .field = "radius"}, error);
+    });
+    checkUndoRedo(doc, "prefab revert all", [&] { runPrefabOp(doc, {.kind = Kind::RevertAll, .entity = orc}, error); });
+    checkUndoRedo(doc, "prefab unpack", [&] { runPrefabOp(doc, {.kind = Kind::Unpack, .entity = orc}, error); });
+    checkUndoRedo(doc, "prefab drop", [&] { dropPrefab(doc, "prefabs/orc.prefab", entt::null, error); });
+    undoScene(doc);
+    undoScene(doc);
+    check(kast::isPrefabRoot(doc.scene, kast::findById(doc.scene, orc)) && selectedId(doc) == orc,
+          "prefab undo: undoing Unpack links the instance again and selects it");
+
+    // Prefab edit mode has its own history; the scene's waits and comes back.
+    const size_t sceneSteps = doc.history.size();
+    check(sceneSteps > 0 && openPrefab(doc, "prefabs/orc.prefab", error) && doc.history.size() == 0,
+          "prefab undo: opening a prefab starts its own empty history");
+    createObject(doc, ObjectKind::Cube, doc.scene.children(entt::null).front());
+    check(doc.history.size() == 1, "prefab undo: prefab edits are recorded on the prefab's history");
+    closePrefab(doc);
+    check(doc.history.size() == sceneSteps, "prefab undo: Back restores the scene's history");
+
+    // Apply and Create Prefab write files: they clear it.
+    selectById(doc, club);
+    doc.scene.registry().get<kast::Collider>(doc.selected).friction = 0.1f;
+    check(runPrefabOp(doc, {.kind = Kind::ApplyField, .entity = club, .component = "Collider", .field = "friction"}, error) &&
+              doc.history.size() == 0,
+          "prefab undo: Apply clears the history");
+    createObject(doc, ObjectKind::Cube, entt::null);
+    std::string path;
+    check(createPrefabFrom(doc, doc.selected, "prefabs", path, error) && doc.history.size() == 0,
+          "prefab undo: Create Prefab clears the history");
+}
+
 void checkLuaInstantiate()
 {
     const std::filesystem::path dir = projectTestDir("kast_prefab_lua", "Prefabs");
@@ -8624,6 +8930,14 @@ int main(int argc, char** argv)
         return probePng(argc, argv);
     if (argc == 2 && std::string_view(argv[1]) == "--bench-physics")
         return benchPhysics();
+    if (argc == 2 && std::string_view(argv[1]) == "--undo") { // only the undo / redo checks
+        checkUndoStack();
+        checkSceneUndo();
+        checkPrefabUndo();
+        removeTree(testRoot());
+        kast::log::info(g_failures == 0 ? "All undo checks passed" : std::format("{} undo check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--net") // only the networking checks
         return netSelfCheck() == 0 ? 0 : 1;
     if (argc == 4 && std::string_view(argv[1]) == "--live-auth") // against a running services/world stack
@@ -8667,6 +8981,9 @@ int main(int argc, char** argv)
     checkMissingPrefabs();
     checkPrefabRemap();
     checkPrefabEditMode();
+    checkUndoStack();
+    checkSceneUndo();
+    checkPrefabUndo();
     checkLuaInstantiate();
     checkLuaGui();
     checkGuiEffectCompile();

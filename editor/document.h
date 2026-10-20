@@ -1,6 +1,8 @@
 #pragma once
 
 #include "camera.h"
+#include "scene_undo.h"
+#include "undo.h"
 
 #include <input.h>
 #include <lua_systems.h>
@@ -44,6 +46,10 @@ struct Document {
 
     PanelFocus focusRequest = PanelFocus::None; // set by Play/Stop, cleared by the panel that takes focus
 
+    // The scene's edit history (in prefab edit mode: the open prefab's) and the step being recorded (scene_undo.h).
+    UndoStack history;
+    std::optional<SceneRecording> recording;
+
     // Prefab edit mode: scene, path, dirty and selection are the open .prefab's (path: its file; saving writes the
     // prefab), and the scene being edited waits here. No Play while it is set.
     struct PrefabEdit {
@@ -53,6 +59,7 @@ struct Document {
         bool dirty = false;
         kast::EntityId selected = 0;
         std::string prefab; // the open prefab, project-relative
+        UndoStack history;  // the scene's, kept while the prefab is open
     };
     std::optional<PrefabEdit> prefabEdit;
 
@@ -61,7 +68,8 @@ struct Document {
     std::function<void(kast::LuaSystems&)> onPlayStarted, onPlayStopping;
 };
 
-// Sets dirty, except during Play: play-mode edits are discarded on Stop.
+// Sets dirty, except during Play: play-mode edits are discarded on Stop. Outside a scene step recording
+// (beginSceneEdit) the edit can't be undone, so the history's save point is lost.
 void markDirty(Document& doc);
 // Selects the entity with this PersistentId; clears the selection if there is none. Returns whether it was found.
 bool selectById(Document& doc, kast::EntityId id);
@@ -86,8 +94,8 @@ bool addSystem(Document& doc, const std::filesystem::path& script, std::string& 
 void removeSystem(Document& doc, size_t index);
 void moveSystem(Document& doc, size_t index, int delta); // delta -1 = up, +1 = down; no-op past either end
 // After an asset rename / move (project-relative from -> to): the scene's systems, MeshRenderer materials and
-// ModelRenderer models and material overrides that pointed at from or inside it follow. Marks the document dirty if
-// any changed.
+// ModelRenderer models and material overrides that pointed at from or inside it follow. Marks the document dirty and
+// clears its undo history if any changed.
 void remapScenePaths(Document& doc, const std::string& from, const std::string& to);
 // Writes a template system as <project>/scripts/new_system[_N].lua and adds it. Needs a project and a saved scene.
 // False + error if not.
@@ -98,8 +106,8 @@ bool writeNewSystem(const std::filesystem::path& dir, std::filesystem::path& fil
 
 // Lua components (Components panel). Definitions hot-reload while stopped and are frozen during Play.
 bool canEditComponents(const Document& doc); // a project is active and Play is stopped
-// Hot reload: picks up added, removed and modified definition files and migrates doc.scene (marking it dirty if any
-// instance data changed). Does nothing during Play, so pending changes apply after Stop, to the restored scene.
+// Hot reload: picks up added, removed and modified definition files and migrates doc.scene (marking it dirty and
+// clearing the undo history if any instance data changed). Does nothing during Play, so pending changes apply after Stop, to the restored scene.
 void refreshComponents(Document& doc);
 // The file New from Template would write: <root>/components/new_component[_N].lua, with type name NewComponent[N].
 std::filesystem::path newComponentFile(const std::filesystem::path& projectRoot, std::string& typeName);
@@ -117,7 +125,7 @@ std::filesystem::path luaComponentFile(const std::filesystem::path& projectRoot,
 // and an existing luaComponentFile (case-insensitive).
 std::string newComponentNameError(const Document& doc, std::string_view name);
 // Writes that file from the template with name (trimmed) as the type name, loads it, adds it to entity and marks the
-// document dirty. False + error if entity is invalid or newComponentNameError isn't empty (nothing written), the write
+// document dirty (clearing the undo history). False + error if entity is invalid or newComponentNameError isn't empty (nothing written), the write
 // fails, or the definition doesn't load (file kept, nothing added). Never overwrites a file.
 bool newLuaComponent(Document& doc, entt::entity entity, std::string_view name, std::string& error);
 
@@ -162,6 +170,7 @@ constexpr ObjectKind kObjectKinds[] = {ObjectKind::Empty, ObjectKind::Cube, Obje
                                        ObjectKind::Camera};
 const char* objectKindLabel(ObjectKind kind); // menu label, e.g. "Create Empty", "Cube"
 
+// Scene edits below are undo steps (scene_undo.h) unless they say they clear the history.
 // Adds an object under parent (entt::null = root), selects it and marks the document dirty. Does nothing and returns
 // entt::null if parent is at kast::kMaxHierarchyDepth (also createModelEntity).
 entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent);
@@ -177,19 +186,20 @@ void duplicateSelected(Document& doc); // instances inside the copy stay linked 
 // Why prefabs can't be changed now (no project, or Play not stopped); null if they can.
 const char* prefabEditBlocker(const Document& doc);
 // Writes entity's subtree as <folder>/<entity name>.prefab (uniquePrefabName; folder "" = the project root), makes
-// entity an instance of it and selects it. path is the prefab written.
+// entity an instance of it and selects it. path is the prefab written. Clears the undo history.
 bool createPrefabFrom(Document& doc, entt::entity entity, const std::string& folder, std::string& path, std::string& error);
 // A new instance of the prefab under parent (entt::null = root), selected. Refused if it would contain the prefab open
 // in prefab edit mode.
 entt::entity dropPrefab(Document& doc, const std::string& path, entt::entity parent, std::string& error);
 // Reloads doc.scene (and the scene waiting behind prefab edit mode) so every instance shows its prefab file as it is
-// now, keeping overrides and the selection (by id). Logs failures.
+// now, keeping overrides and the selection (by id). Logs failures. Clears the undo histories of scenes holding instances.
 void refreshPrefabs(Document& doc);
-// Enters prefab edit mode on path (or switches to it while already editing one): doc.scene becomes the prefab. Unsaved
-// changes of a prefab already open are discarded (FileActions prompts first).
+// Enters prefab edit mode on path (or switches to it while already editing one): doc.scene becomes the prefab, with an
+// empty undo history (the scene's waits). Unsaved changes of a prefab already open are discarded (FileActions prompts
+// first).
 bool openPrefab(Document& doc, const std::string& path, std::string& error);
 // Leaves prefab edit mode, discarding unsaved prefab changes: the waiting scene comes back with its instances
-// refreshed. No-op outside edit mode.
+// refreshed and its undo history. No-op outside edit mode.
 void closePrefab(Document& doc);
 // An Inspector prefab action (and the --prefab-* flags): on entity (by id); component "Name" means the entity name.
 struct PrefabOp {
@@ -202,7 +212,7 @@ struct PrefabOp {
     kast::EntityId local = 0; // *Deleted: the deleted child's prefab-local id
 };
 // Runs op (prefabEditBlocker applies); Apply writes the .prefab files and every instance refreshes. Marks the document
-// dirty when it changed. False + error if it couldn't run.
+// dirty when it changed. Revert* and Unpack are undo steps; Apply* clears the history. False + error if it couldn't run.
 bool runPrefabOp(Document& doc, const PrefabOp& op, std::string& error);
 // "<scene name> > <prefab file name>" in prefab edit mode, else displayName.
 std::string breadcrumb(const Document& doc);
