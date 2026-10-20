@@ -29,9 +29,8 @@ so vcpkg builds ports with VS 2022 even when newer Visual Studio versions are in
 ## Quick start
 
 ```bat
-build.bat              :: configure + build (debug). build.bat release for optimized
-build.bat relwithdebinfo          :: optimized with debug info: near-release speed, still debuggable
-run.bat                :: run build\debug\kast_editor.exe from the repo root
+build.bat              :: configure + build (relwithdebinfo: optimized, still debuggable). build.bat debug|release for the others
+run.bat                :: run build\relwithdebinfo\kast_editor.exe from the repo root
 run.bat release --size 1600x900   :: optional preset, then any editor flags
 run.bat debug --ui-scale 2.0      :: force UI scale (default: monitor's display scale)
 ```
@@ -92,7 +91,7 @@ Output goes to `build/<preset>/`: `kast_editor.exe`, `kast_player.exe` (the game
 ## Start the editor
 
 ```bat
-run.bat                :: build\debug\kast_editor.exe from the repo root
+run.bat                :: build\relwithdebinfo\kast_editor.exe from the repo root
 build\release\kast_editor.exe
 ```
 

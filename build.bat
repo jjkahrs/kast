@@ -1,8 +1,8 @@
 @echo off
-rem Builds the editor. Usage: build.bat [debug|release|relwithdebinfo]   (default: debug)
+rem Builds the editor. Usage: build.bat [debug|release|relwithdebinfo]   (default: relwithdebinfo)
 setlocal
 set "PRESET=%~1"
-if "%PRESET%"=="" set "PRESET=debug"
+if "%PRESET%"=="" set "PRESET=relwithdebinfo"
 if /i not "%PRESET%"=="debug" if /i not "%PRESET%"=="release" if /i not "%PRESET%"=="relwithdebinfo" (
     echo Usage: build.bat [debug^|release^|relwithdebinfo]
     exit /b 2
