@@ -1,10 +1,12 @@
 #pragma once
 
 #include "document.h"
+#include "stats_toggle.h"
 #include "viewport.h"
 
 #include <renderer.h>
 #include <scene_gui.h>
+#include <stats_overlay.h>
 
 #include <imgui.h>
 
@@ -12,7 +14,8 @@
 // grid, gizmos or other editor overlays, live in edit mode too, and the scene's game GUIs (UIDocument, see
 // scene_gui.h) over it in Play mode, not post-processed. Uses views first .. first + Renderer::kShadowViews +
 // PostProcess::kViews - 1 (shadow maps, then the scene and post passes) and guiView .. guiView + gui::kViews - 1. Comes to the front when Play starts. While it is focused and playing, the host feeds SDL input to
-// Document::input and onEvent, and the Scene panel's shortcuts don't apply (it isn't focused).
+// Document::input and onEvent, and the Scene panel's shortcuts don't apply (it isn't focused). F3 there shows the stats
+// overlay (StatsToggle) at the image's bottom-left, in ImGui: bgfx debug text would land at the window's corner.
 class GameViewport {
 public:
     GameViewport(bgfx::ViewId first, bgfx::ViewId guiView)
@@ -39,6 +42,7 @@ public:
 
 private:
     void syncGui(Document& doc);
+    void drawStats(const Document& doc) const;
 
     bgfx::ViewId shadowViews_;
     kast::PostProcess post_;
@@ -51,4 +55,6 @@ private:
     ImVec2 imageSize_{0.0f, 0.0f};
     float pixelScale_ = 1.0f;
     bool focused_ = false;
+    StatsToggle stats_;
+    kast::FpsAverage fps_; // the editor's frame rate, shared with kast_player's overlay
 };

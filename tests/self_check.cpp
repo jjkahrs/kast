@@ -12,6 +12,7 @@
 #include "gui_doc.h"  // GUI Builder document model; links editor/gui_doc.cpp
 #include "gui_undo.h" // GUI Builder undo steps; links editor/gui_undo.cpp
 #include "recent_projects.h" // Project Manager list; links editor/recent_projects.cpp
+#include "stats_toggle.h" // the Game panel's F3 rule; header only
 
 #include <components.h>
 #include <crash_dialogs.h>
@@ -591,6 +592,18 @@ void checkStatsOverlay()
     check(kast::statsOverlayText(0, 0) == "FPS 0  Ping 0 ms", "stats: zeros print as numbers");
     kast::StatsOverlay overlay;
     check(!overlay.visible(), "stats: the overlay starts hidden");
+
+    StatsToggle game; // the editor's Game panel
+    check(!game.visible, "stats: the editor overlay starts hidden");
+    check(!game.update(true, true, PlayState::Stopped) && !game.visible, "stats: F3 while Stopped does nothing");
+    check(!game.update(true, false, PlayState::Playing) && !game.visible, "stats: F3 with the Game panel unfocused does nothing");
+    check(!game.update(false, true, PlayState::Playing) && !game.visible, "stats: no F3, no change");
+    check(game.update(true, true, PlayState::Playing) && game.visible, "stats: F3 on the focused Game panel while Playing shows it");
+    check(!game.update(false, false, PlayState::Paused) && game.visible, "stats: Pause and focus loss keep it shown");
+    check(game.update(true, true, PlayState::Paused) && !game.visible, "stats: F3 while Paused hides it");
+    check(game.update(true, true, PlayState::Paused) && game.visible, "stats: F3 while Paused shows it");
+    check(game.update(false, true, PlayState::Stopped) && !game.visible, "stats: Stop hides it");
+    check(!game.update(false, true, PlayState::Playing) && !game.visible, "stats: the next Play starts with it hidden");
 }
 
 void checkInput()

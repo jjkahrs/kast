@@ -258,6 +258,24 @@ add_test(NAME game_play_screenshot
 add_test(NAME game_play_differs
   COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/scene_basic.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/game_play.png"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+# F3 stats overlay in the Game panel (docs/editor/controls.html#stats-overlay): --play focuses it, a pushed F3 shows
+# "FPS <n>  Ping -- ms" at the image's bottom-left (ImGui text; the shot differs from game_play.png), a second F3 hides
+# it, and F3 with another panel focused does nothing. Paused / Stopped: StatsToggle in engine_self_check.
+add_test(NAME game_f3_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/game_f3.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/basic.scene --play --sim-key 30,F3"
+          "-DEXPECT_OUTPUT=Stats overlay shown" -DEXPECT_COUNT=1 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME game_f3_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/game_play.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/game_f3.png"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+add_test(NAME game_f3_twice
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/game_f3_twice.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/basic.scene --play --sim-key 30,F3 --sim-key 50,F3"
+          "-DEXPECT_OUTPUT=Stats overlay shown.*Stats overlay hidden" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME game_f3_unfocused
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/game_f3_unfocused.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/basic.scene --play --sim-key 30,F3" -DFOCUS_PANEL=Hierarchy
+          "-DFORBID_OUTPUT=Stats overlay" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME game_no_camera
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/game_no_camera.png"
           "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/no_camera.scene --play" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
@@ -304,6 +322,8 @@ set_tests_properties(scene_play_screenshot PROPERTIES FIXTURES_SETUP play_shot)
 set_tests_properties(game_play_screenshot PROPERTIES FIXTURES_SETUP game_shot)
 set_tests_properties(scene_play_differs PROPERTIES FIXTURES_REQUIRED "basic_shot;play_shot")
 set_tests_properties(game_play_differs PROPERTIES FIXTURES_REQUIRED "basic_shot;game_shot")
+set_tests_properties(game_f3_screenshot PROPERTIES FIXTURES_SETUP game_f3_shot)
+set_tests_properties(game_f3_differs PROPERTIES FIXTURES_REQUIRED "game_shot;game_f3_shot")
 # Lua systems: lua.scene in Play vs the same scene with its "systems" emptied, so only the scripts can differ.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_SCENES}/lua.scene")
 file(READ "${KAST_TEST_SCENES}/lua.scene" lua_scene)
