@@ -2927,6 +2927,7 @@ int liveWorldCheck(const std::string& authUrl, const std::string& mailpitUrl, co
           "live world: Ping answered, the idle connection survives past IDLE_TIMEOUT_MS");
     check(a.world.rttMs().has_value(),
           std::format("live world: the server answers the client's Pings (RTT {} ms)", a.world.rttMs().value_or(-1)));
+    kast::log::info(std::format("live world: RTT {} ms", a.world.rttMs().value_or(-1)));
 
     a.world.enterWorld(idA);
     const Json* enteredA = a.next("world.entered");
