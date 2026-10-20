@@ -1580,6 +1580,7 @@ void checkProjectDocument()
           "Open: the project is found walking up from the scene");
     check(projectScenePath(doc) == "scenes/start.scene", "the scene's project-relative path");
     check(windowTitle(doc) == "Kast Editor - Alpha - start", "title with a project");
+    check(windowTitle(doc, true) == "Kast Editor - Alpha - start*", "title with unsaved zone changes only");
     doc.dirty = true;
     check(windowTitle(doc) == "Kast Editor - Alpha - start*", "title with a project and unsaved changes");
     resetToDefault(doc);

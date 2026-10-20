@@ -1,10 +1,10 @@
-// Assert-style checks for the zone builder's document, file and terrain logic (tools/zone-builder), no window. Works
-// on copies of the sample maps in a temp folder. Exit 0 if every check passes. Run by CTest as zone_builder_self_check.
-#include <process_runner.h>
-#include <terrain_edit.h>
-#include <zone_doc.h>
-#include <zone_edit.h>
-#include <zone_io.h>
+// Assert-style checks for the zone builder's document, file and terrain logic (engine/zone), no window. Works
+// on copies of the sample maps in a temp folder. Exit 0 if every check passes. Run by CTest as zone_self_check.
+#include <zone/process_runner.h>
+#include <zone/terrain_edit.h>
+#include <zone/zone_doc.h>
+#include <zone/zone_edit.h>
+#include <zone/zone_io.h>
 
 #include <event_bus.h>
 #include <files.h>

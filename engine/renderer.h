@@ -78,15 +78,17 @@ public:
     void shutdown();
     // Materials and textures load from projectRoot (empty = none: every material path renders as an error). Files
     // changed on disk since loaded reload first. shadowViews: the first of kShadowViews views, all before view.
+    // extra: another scene whose meshes, models and terrain draw too, lit by scene's lights, sky and fog (the editor's
+    // open zone over the edited scene).
     void render(const Scene& scene, const std::filesystem::path& projectRoot, bgfx::ViewId view, const float* viewMtx,
-                const float* projMtx, bgfx::ViewId shadowViews);
+                const float* projMtx, bgfx::ViewId shadowViews, const Scene* extra = nullptr);
     // Into an already encoded (sRGB) target after post, depth-tested against the scene's depth. selected: the
     // editor's selection.
     void renderOverlays(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx,
                         entt::entity selected);
     // Until replaced (empty materialPath: none), terrain whose map material is materialPath draws with material, and
-    // the sRGB texture texturePath is image instead of either file: the zone builder's preview of a material it has
-    // not saved yet.
+    // the sRGB texture texturePath is image instead of either file: the editor's zone preview of a material not
+    // saved yet (Zone Builder, Create texture & material).
     void setPreview(const std::string& materialPath, const Material& material, const std::string& texturePath,
                     MipImage image);
     // Both on by default. Instancing off: every draw is its own submit. Culling off: every draw goes to every pass.
@@ -142,8 +144,10 @@ private:
     void clearTextures();
     const GpuModel* gpuModel(const std::string& path); // null if the model fails to load
     void clearModels();
-    // Builds, rebuilds (new data) and drops the GPU meshes of the scene's TerrainTiles, then appends their draws.
+    // Builds the GPU meshes of the scene's TerrainTiles (one per TerrainTileData: new data, new mesh), marks them used
+    // and appends their draws. pruneTerrain then drops the meshes no rendered scene used this frame.
     void addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws);
+    void pruneTerrain();
     void clearTerrain();
     // Appends the draws of a ModelRenderer entity (an error cube if its model fails to load).
     void addModelDraws(const Scene& scene, entt::entity entity, const ModelRenderer& renderer, const float* world,
@@ -170,15 +174,16 @@ private:
 
     // GPU copy of a TerrainTile's heights: kTileSamples^2 vertices in tile-local metres; indices are terrainIndices_.
     struct TerrainMesh {
-        std::shared_ptr<const TerrainTileData> data; // rebuilt when the tile's data changes
+        std::shared_ptr<const TerrainTileData> data; // the key's, kept alive so no other data reuses its address
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
         Aabb bounds{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}}; // world space
+        bool used = false; // by a tile this frame
     };
 
     std::array<Mesh, 3> meshes_; // indexed by Primitive
     bgfx::VertexLayout meshLayout_;  // MeshVertex: primitives and terrain
     bgfx::IndexBufferHandle terrainIndices_ = BGFX_INVALID_HANDLE; // 32-bit, map::for_each_triangle, shared by tiles
-    std::map<entt::entity, TerrainMesh> terrain_;
+    std::map<const TerrainTileData*, TerrainMesh> terrain_; // data is kept alive by its mesh
     bgfx::VertexLayout lineLayout_;
     bgfx::VertexBufferHandle grid_ = BGFX_INVALID_HANDLE;
     bgfx::VertexLayout modelLayout_; // ModelVertex

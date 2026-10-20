@@ -6,6 +6,9 @@
 #include <renderer.h>
 
 #include <bgfx/bgfx.h>
+#include <imgui.h>
+
+#include <functional>
 
 inline constexpr uint32_t kViewportClearColor = 0x2b3440ff; // Scene and Game panel background (sRGB)
 
@@ -63,6 +66,25 @@ public:
     void draw(Document& doc);
     void setPostEffects(bool on) { postEffects_ = on; } // the toolbar's "Post" toggle
     kast::Renderer& renderer() { return renderer_; }     // --no-instancing, --no-culling
+    // Drawn with the document's scene, lit by it (Renderer::render's extra): the open zone in edit mode. Null: none.
+    void setExtraScene(const kast::Scene* scene) { extraScene_ = scene; }
+    // Called each frame the scene image shows, before the gizmo, with the view-projection and the image's rect (ImGui
+    // points), to draw over it with the window's draw list: the zone overlays.
+    std::function<void(const float* viewProj, float x, float y, float width, float height)> overlay;
+    // The Scene view image this frame, for the caller's own mouse handling: viewProj, the image's rect (ImGui points),
+    // whether the mouse is over it, and whether a camera drag (right fly, middle pan, Alt + left orbit) holds the mouse.
+    struct Input {
+        const float* viewProj;
+        float x, y, width, height;
+        bool hovered;
+        bool cameraDrag;
+    };
+    // Called each frame the scene image shows, before overlay: true when the left mouse belongs to the caller this frame
+    // (the zone's active tool, a zone handle it hit or drags), so the gizmo is hidden and a click selects nothing. The
+    // camera keeps its controls either way.
+    std::function<bool(const Input&)> input;
+    // The scene image's center in window points (--sim-mouse without --play).
+    ImVec2 imageCenter() const { return imageCenter_; }
 
 private:
     enum class Drag { None, Fly, Orbit, Pan };
@@ -81,4 +103,6 @@ private:
     Drag drag_ = Drag::None;
     int operation_ = 0; // ImGuizmo::OPERATION; int so this header stays ImGuizmo-free
     bool local_ = true;
+    const kast::Scene* extraScene_ = nullptr;
+    ImVec2 imageCenter_{0.0f, 0.0f};
 };

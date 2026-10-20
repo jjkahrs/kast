@@ -88,6 +88,7 @@ void WorldClient::reset(std::optional<AuthConfig> config)
     pendingRealm_.reset();
     realmsRequest_ = 0;
     events_.clear();
+    latest_.clear();
 }
 
 void WorldClient::setAddressOverride(std::optional<std::string> hostPort)
@@ -359,7 +360,20 @@ void WorldClient::drop(const std::string& code, const std::string& reason)
     emit("world.disconnected", {{"code", code}, {"reason", reason}});
 }
 
-void WorldClient::emit(std::string name, Json payload) { events_.push_back({std::move(name), std::move(payload)}); }
+void WorldClient::emit(std::string name, Json payload)
+{
+    if (name == "world.connected" || name == "world.disconnected")
+        latest_.clear(); // a new connection, or none: nothing of the old one is replayed
+    if (name != "world.disconnected")
+        latest_[name] = payload;
+    events_.push_back({std::move(name), std::move(payload)});
+}
+
+const Json* WorldClient::latest(const std::string& name) const
+{
+    const auto it = latest_.find(name);
+    return it == latest_.end() ? nullptr : &it->second;
+}
 
 std::vector<NetEvent> WorldClient::poll()
 {

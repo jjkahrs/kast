@@ -283,19 +283,24 @@ void SceneViewport::draw(Document& doc)
             doc.camera.projMatrix(proj, size.x / size.y);
             bx::mtxMul(viewProj, view, proj);
             renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), post_.sceneView(), view,
-                             proj, shadowViews_);
+                             proj, shadowViews_, extraScene_);
             post_.apply(doc.scene.postProcessing, postEffects_, target_.frameBuffer());
             renderer_.renderOverlays(doc.scene, target_.view(), view, proj, doc.selected);
 
+            imageCenter_ = ImVec2(origin.x + size.x * 0.5f, origin.y + size.y * 0.5f);
+            const bool claimed =
+                input && input({viewProj, origin.x, origin.y, size.x, size.y, hovered, drag_ != Drag::None});
+            if (overlay)
+                overlay(viewProj, origin.x, origin.y, size.x, size.y);
             ImGuizmo::SetDrawlist();
             ImGuizmo::SetRect(origin.x, origin.y, size.x, size.y);
-            const bool gizmoShown = doc.scene.valid(doc.selected);
+            const bool gizmoShown = doc.scene.valid(doc.selected) && !claimed;
             if (gizmoShown)
                 manipulate(doc, view, proj);
 
             const ImGuiIO& io = ImGui::GetIO();
             const bool onGizmo = gizmoShown && (ImGuizmo::IsOver() || ImGuizmo::IsUsing());
-            if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && !onGizmo)
+            if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && !onGizmo && !claimed)
                 pick(doc, viewProj, io.MousePos.x - origin.x, io.MousePos.y - origin.y, size.x, size.y);
             shortcuts(doc);
         } else {

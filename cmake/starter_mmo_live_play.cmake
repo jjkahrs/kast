@@ -1,9 +1,10 @@
 # One samples/starter-mmo live stage: plays a fresh copy of the sample (STATE/<STAGE>_project, with the real dev CA
 # setup_realm.cmake copied) in the editor, logged in through --online-login-env (KAST_ONLINE_EMAIL /
-# KAST_ONLINE_PASSWORD from the environment), and takes a screenshot. The copy's realms and world scenes also run
-# starter_mmo_test_driver.lua (TEST ONLY, configured with STAGE and CHARACTER), which drives the sample's own screens
-# by publishing the events their buttons publish. BOT=ON first starts an idle kast_bot (compose service "bot") standing
-# at the Meadow spawn and stops it afterwards. Every EXPECT_ALL regex must match the editor's log, which is kept in
+# KAST_ONLINE_PASSWORD from the environment), and takes a screenshot. The copy's realms, characters and zone scenes
+# also run starter_mmo_test_driver.lua (TEST ONLY, configured with STAGE and CHARACTER), which drives the sample's own
+# screens by publishing the events their buttons publish; its game machine "test_route" (a copy's fsms/ and
+# project.kast only) counts the portals it took across the zone scenes' switches. BOT=ON first starts an idle kast_bot
+# (compose service "bot") standing at the Meadow spawn and stops it afterwards. Every EXPECT_ALL regex must match the editor's log, which is kept in
 # STATE/<STAGE>.log; an [error] line, an RmlUi warning or a GUI image warning fails. Prints "SKIP: ..." when the setup didn't finish (no docker or credentials).
 # Usage: cmake -DEDITOR=<exe> -DWORLD_DIR=<dir> -DSAMPLE=<dir> -DSTATE=<dir> -DSTAGE=<name> -DCHARACTER=<name>
 #              -DSCREENSHOT=<png> -DFRAMES=<n> -DEXPECT_ALL=<regex;...> [-DBOT=ON] [-DEDITOR_ARGS=<flags>]
@@ -18,7 +19,7 @@ set(project "${STATE}/${STAGE}_project")
 file(REMOVE_RECURSE "${project}")
 file(COPY "${SAMPLE}/" DESTINATION "${project}")
 configure_file("${CMAKE_CURRENT_LIST_DIR}/starter_mmo_test_driver.lua" "${project}/scripts/test_driver.lua" @ONLY)
-foreach(scene_script "realms|realms" "world|world_flow")
+foreach(scene_script "realms|realms" "characters|world_flow" "meadow|world_flow" "cavern|world_flow")
   string(REPLACE "|" ";" scene_script "${scene_script}")
   list(GET scene_script 0 scene)
   list(GET scene_script 1 script)
@@ -26,6 +27,12 @@ foreach(scene_script "realms|realms" "world|world_flow")
   string(REPLACE "\"scripts/${script}.lua\"" "\"scripts/${script}.lua\", \"scripts/test_driver.lua\"" text "${text}")
   file(WRITE "${project}/scenes/${scene}.scene" "${text}")
 endforeach()
+file(WRITE "${project}/fsms/test_route.lua" "-- TEST ONLY: portals the test driver took (kept across kast.loadScene)
+return { name = \"test_route\", initial = \"c0\", states = { c0 = {}, c1 = {}, c2 = {}, c3 = {}, c4 = {} } }
+")
+file(READ "${project}/project.kast" text)
+string(REPLACE "\"stateMachines\": [\"session\"]" "\"stateMachines\": [\"session\", \"test_route\"]" text "${text}")
+file(WRITE "${project}/project.kast" "${text}")
 
 # The same compose files as the setup, and --no-deps: a "run" with other files would recreate the world server
 # without the test-only Lua.

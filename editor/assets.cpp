@@ -279,24 +279,6 @@ bool moveAsset(const fs::path& source, const fs::path& destDir, std::string& err
     return moveOnDisk(source, destDir / source.filename(), "move", error);
 }
 
-bool recycleAsset(const fs::path& target, std::string& error)
-{
-    std::wstring from = fs::absolute(target).lexically_normal().native();
-    from.push_back(L'\0'); // a list of names, ended by an empty one
-    SHFILEOPSTRUCTW op{};
-    op.wFunc = FO_DELETE;
-    op.pFrom = from.c_str();
-    // FOF_WANTNUKEWARNING: Windows still asks before deleting for good what it can't recycle (too big, no bin).
-    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT | FOF_WANTNUKEWARNING;
-    const int result = SHFileOperationW(&op);
-    if (result == 0 && !op.fAnyOperationsAborted)
-        return true;
-    error = result != 0 ? std::format("Cannot move '{}' to the Recycle Bin: {} (error {:#x})", utf8(target.filename()),
-                                      std::system_category().message(result), result)
-                        : std::format("Deleting '{}' was cancelled", utf8(target.filename()));
-    return false;
-}
-
 std::string uniquePrefabName(const fs::path& dir, const std::string& entityName)
 {
     std::string stem = entityName;

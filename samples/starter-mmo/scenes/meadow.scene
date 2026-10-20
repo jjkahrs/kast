@@ -1,0 +1,505 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Sun",
+      "parent": null,
+      "prefab": "prefabs/sun.prefab",
+      "instance": [
+        {
+          "source": 1,
+          "id": 1,
+          "components": {
+            "Transform": {
+              "position": [
+                128,
+                60,
+                128
+              ],
+              "rotation": [
+                -0.408218,
+                -0.23457,
+                -0.109382,
+                0.875426
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Terrain",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Terrain": {
+          "map": 10,
+          "radius": 1
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Player",
+      "parent": null,
+      "prefab": "prefabs/player.prefab",
+      "instance": [
+        {
+          "source": 1,
+          "id": 3,
+          "components": {
+            "Transform": {
+              "position": [
+                128,
+                0,
+                128
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Remote Player",
+      "parent": null,
+      "prefab": "prefabs/remote_player.prefab",
+      "instance": [
+        {
+          "source": 1,
+          "id": 4,
+          "components": {
+            "Transform": {
+              "position": [
+                131,
+                0,
+                128
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "NPC Templates",
+      "parent": null,
+      "prefab": "prefabs/npc_templates.prefab",
+      "instance": [
+        {
+          "source": 1,
+          "id": 5,
+          "components": {
+            "Transform": {
+              "position": [
+                120,
+                0,
+                120
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            }
+          }
+        },
+        {
+          "source": 2,
+          "id": 6
+        },
+        {
+          "source": 3,
+          "id": 7
+        },
+        {
+          "source": 4,
+          "id": 8
+        },
+        {
+          "source": 5,
+          "id": 9
+        },
+        {
+          "source": 6,
+          "id": 10
+        },
+        {
+          "source": 7,
+          "id": 11
+        },
+        {
+          "source": 8,
+          "id": 12
+        },
+        {
+          "source": 9,
+          "id": 13
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "name": "Replication",
+      "parent": null,
+      "prefab": "prefabs/replication.prefab",
+      "instance": [
+        {
+          "source": 1,
+          "id": 14,
+          "components": {
+            "Transform": {
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "name": "Main Camera",
+      "parent": null,
+      "prefab": "prefabs/main_camera.prefab",
+      "instance": [
+        {
+          "source": 1,
+          "id": 15,
+          "components": {
+            "Transform": {
+              "position": [
+                128,
+                7,
+                139
+              ],
+              "rotation": [
+                -0.241922,
+                0,
+                0,
+                0.970296
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "name": "Cavern Gate Pillar North",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            153,
+            7.5,
+            123.5
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            0.8,
+            4,
+            0.8
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/portal.mat"
+        }
+      }
+    },
+    {
+      "id": 17,
+      "name": "Cavern Gate Pillar South",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            153,
+            7.5,
+            132.5
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            0.8,
+            4,
+            0.8
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/portal.mat"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "name": "Cavern Gate Lintel",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            153,
+            9.8,
+            128
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            0.8,
+            0.6,
+            9.8
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/portal.mat"
+        }
+      }
+    },
+    {
+      "id": 19,
+      "name": "Rock A",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            112,
+            6.6,
+            140
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            2.5,
+            1.2,
+            1.8
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/stone.mat"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "name": "Rock B",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            142,
+            4.84,
+            104
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1.6,
+            0.8,
+            2.2
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/stone.mat"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "name": "World UI",
+      "parent": null,
+      "prefab": "prefabs/world_ui.prefab",
+      "instance": [
+        {
+          "source": 1,
+          "id": 21,
+          "components": {
+            "Transform": {
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            }
+          }
+        },
+        {
+          "source": 2,
+          "id": 22
+        },
+        {
+          "source": 3,
+          "id": 23
+        },
+        {
+          "source": 4,
+          "id": 24
+        },
+        {
+          "source": 5,
+          "id": 25
+        },
+        {
+          "source": 6,
+          "id": 26
+        }
+      ]
+    }
+  ],
+  "systems": [
+    "scripts/hud.lua",
+    "scripts/chat.lua",
+    "scripts/player.lua",
+    "scripts/combat.lua",
+    "scripts/powers.lua",
+    "scripts/world_flow.lua",
+    "scripts/bag.lua",
+    "scripts/character.lua",
+    "scripts/loot.lua",
+    "scripts/shrines.lua"
+  ],
+  "lighting": {
+    "ambientColor": [
+      0.7,
+      0.75,
+      1
+    ],
+    "ambientIntensity": 0.3
+  },
+  "sky": {
+    "mode": "procedural",
+    "top": [
+      0.12,
+      0.32,
+      0.78
+    ],
+    "horizon": [
+      0.62,
+      0.74,
+      0.86
+    ],
+    "bottom": [
+      0.3,
+      0.32,
+      0.28
+    ]
+  },
+  "editor": {
+    "camera": {
+      "pivot": [
+        128,
+        0,
+        128
+      ],
+      "yaw": 20,
+      "pitch": -25,
+      "distance": 25
+    }
+  }
+}

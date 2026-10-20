@@ -2,8 +2,7 @@
 
 #include "terrain_edit.h"
 
-#include <assets.h> // recycleAsset
-#include <files.h>
+#include <files.h> // recycleFile
 #include <objects.h>
 
 #include <algorithm>
@@ -365,7 +364,7 @@ std::vector<ZoneError> save_map(Project& project, ZoneDoc& doc, bool recycle) {
         const fs::path path = project.root / u8path(file);
         std::string err;
         std::error_code ec;
-        if (recycle ? !recycleAsset(path, err) : !fs::remove(path, ec)) errors.push_back({file, recycle ? err : ec.message()});
+        if (recycle ? !kast::recycleFile(path, err) : !fs::remove(path, ec)) errors.push_back({file, recycle ? err : ec.message()});
     };
 
     // The generated terrain texture and material follow the heights and colors on every save, once Create assigned

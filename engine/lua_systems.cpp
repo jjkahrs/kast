@@ -789,23 +789,33 @@ void LuaSystems::State::bindApi()
             raise(L, std::format("kast.publish: {}", error));
         bus.publish(std::move(event), std::move(json), who());
     });
-    api.set_function("subscribe", [this](sol::this_state L, const sol::object& name, const sol::object& fn) {
+    api.set_function("subscribe", [this](sol::this_state L, const sol::object& name, const sol::object& fn,
+                                         const sol::object& options) {
         std::string event = eventName(L, "kast.subscribe", name);
         if (fn.get_type() != sol::type::function)
             raise(L, std::format("kast.subscribe: callback must be a function, got {}", toString(L, fn)));
+        if (options != sol::lua_nil && options.get_type() != sol::type::table)
+            raise(L, std::format("kast.subscribe: options must be a table, got {}", toString(L, options)));
         if (!current)
             raise(L, "kast.subscribe: only a system can subscribe");
+        const bool replay = options != sol::lua_nil && options.as<sol::table>().get_or("replay", false);
         System* owner = current;
         std::string what = std::format("event '{}'", event);
-        EventBus::Subscription subscription = bus.subscribe(
-            std::move(event), [this, owner, what = std::move(what),
-                               // on the main thread: fn's own may be a coroutine, collected before the drain
-                               callback = sol::protected_function(lua.lua_state(), fn)](const nlohmann::json& payload) {
+        // on the main thread: fn's own may be a coroutine, collected before the drain
+        sol::protected_function callback(lua.lua_state(), fn);
+        const nlohmann::json* missed = replay && world.enabled() ? world.latest(event) : nullptr;
+        EventBus::Subscription subscription =
+            bus.subscribe(std::move(event), [this, owner, what, callback](const nlohmann::json& payload) {
                 if (owner->ok) // a disabled system's subscriptions are gone; this guards the rest of its drain
                     call(*owner, callback, what, jsonToLua(lua, payload));
             });
         const uint64_t id = subscription.id();
         owner->subscriptions.push_back(std::move(subscription));
+        if (missed) { // the world connection's last one, right away: a scene loaded after it catches up
+            sol::protected_function_result result = callback(jsonToLua(lua, *missed));
+            if (!result.valid()) // inside the caller's own call: its error, at this line
+                raise(L, std::format("kast.subscribe: replaying {}: {}", what, result.get<sol::error>().what()));
+        }
         return reinterpret_cast<void*>(static_cast<uintptr_t>(id)); // ponytail: 64-bit ids in a pointer, x64 only
     });
     api.set_function("unsubscribe", [this](sol::this_state L, const sol::object& handle) {

@@ -1364,6 +1364,10 @@ void checkWorldClient()
     check(serverPing && serverPing->is_null() && r.count("server.broken") == 0 &&
               logged("World: ignored ServerEvent \"broken\" with invalid JSON"),
           "a ServerEvent with invalid JSON is warned and dropped; the next one still arrives");
+    check(w.latest("world.mapChanged") && *w.latest("world.mapChanged") == *mapChanged &&
+              w.latest("server.quest.update") && *w.latest("server.quest.update") == *quest && !w.latest("server.broken") &&
+              !w.latest("server.never"),
+          "world: latest(name) is the last payload of that event, null if none came");
     w.say("bye");
     const Json* despawn = r.next("world.despawn");
     check(despawn && *despawn == Json{{"entityId", 2}}, "world.despawn {entityId}");
@@ -1372,6 +1376,8 @@ void checkWorldClient()
     const Json* bye = r.next("world.disconnected");
     check(bye && bye->value("code", "") == "client_disconnect" && w.state() == kast::WorldState::Disconnected,
           "world: disconnect -> world.disconnected client_disconnect");
+    check(!w.latest("world.entered") && !w.latest("server.quest.update") && !w.latest("world.disconnected"),
+          "world: world.disconnected forgets the connection's latest events");
     w.disconnect();
     r.pump();
     check(r.count("world.disconnected") == 3, "world: disconnect while disconnected publishes nothing");
@@ -1485,6 +1491,14 @@ return {{
     writeFile(dir / "scripts/b.lua", R"(return {
     init = function()
         assert(kast.world.state() == "inWorld", "the connection survives kast.loadScene")
+        local ok, err = pcall(kast.subscribe, "world.entered", function() end, 5)
+        assert(not ok and string.find(err, "kast.subscribe: options must be a table, got 5", 1, true), tostring(err))
+        local initializing = true
+        kast.subscribe("world.connected", function(e)
+            kast.log(string.format("lua world replayed connected %d in init %s", e.accountId, tostring(initializing)))
+        end, {replay = true})
+        kast.subscribe("world.charError", function() kast.log("lua world replayed nothing") end, {replay = true})
+        initializing = false
         kast.subscribe("world.spawn", function(e) kast.log("lua world spawn " .. e.entityId .. " " .. e.name) end)
         kast.subscribe("world.chat", function(e) kast.log("lua world chat from " .. e.from) end)
         kast.subscribe("server.quest.update", function(e)
@@ -1518,6 +1532,8 @@ return {{
     check(playUntil(doc, "lua world connected 42 player lobby"), "kast.world.connect -> world.connected, state lobby");
     check(playUntil(doc, "lua world created Hero 100 mage"), "kast.world.createCharacter(name, options) -> world.charCreated with options");
     check(playUntil(doc, "lua world entered 1 at 100,0,100"), "kast.world.enterWorld -> world.entered");
+    check(playUntil(doc, "lua world replayed connected 42 in init true") && !logged("lua world replayed nothing"),
+          "kast.subscribe(name, fn, {replay = true}): a later scene gets the connection's last event of that name at once");
     check(playUntil(doc, "lua world chat from Hero"), "kast.world.say -> world.chat (after a scene switch)");
     check(playUntil(doc, "lua server event quest 7 steps 2"), "kast.subscribe(\"server.<name>\") gets the ServerEvent payload");
     check(playUntil(doc, "lua client event echoed quest 7"), "kast.world.send -> ClientEvent{name, JSON object}");
@@ -1770,8 +1786,9 @@ void checkReplicationOffline()
           "replication: world.spawn clones the template subtree at the spawn position (snapped), with NetworkEntity");
     bus.drain();
     check(spawned.size() == 2 && spawned[0].value("entityId", 0) == 2 && spawned[0].value("name", "") == "Other" &&
-              spawned[0].value("entity", uint64_t{0}) == reg.get<kast::PersistentId>(other).value,
-          "replication: world.entitySpawned {entityId, entity, name} follows each clone");
+              spawned[0].value("entity", uint64_t{0}) == reg.get<kast::PersistentId>(other).value &&
+              spawned[0].value("kind", "") == "player" && spawned[0].value("template", "x") == "",
+          "replication: world.entitySpawned {entityId, entity, name, kind, template} follows each clone");
     bus.publish("world.entityMove", {{"entityId", 2}, {"position", at(20, 0, 10)}, {"heading", 1.0}});
     bus.drain();
     r.update(0.025f);
@@ -2051,6 +2068,51 @@ void checkReplicationComponents()
     check(!kast::hasComponent(nreg, r.clone(2), health) && !kast::hasComponent(nreg, nextPlayer, health),
           "replication: world.componentRemoved removes it from the clone and the local player");
     r.stop();
+
+    // Entering from a scene with no local player and no template (character select), then switching to a zone scene:
+    // the zone's player gets the server's position, heading and components, its clones the players already in view.
+    kast::EventBus lobbyBus;
+    kast::Scene lobby;
+    lobby.create("Characters");
+    kast::Replication lr;
+    lr.start(lobby, lobbyBus, world);
+    lobbyBus.publish("world.entered", {{"entityId", 1}, {"map", 10}, {"position", at(140, 5, 120)}, {"heading", 1.0}});
+    lobbyBus.publish("world.spawn", {{"entityId", 2}, {"name", "Other"}, {"position", at(141, 5, 120)}, {"heading", 0}});
+    lobbyBus.publish("world.component", {{"entityId", 1}, {"name", "Health"}, {"data", {{"current", 25}}}});
+    lobbyBus.drain();
+    lr.stop(true);
+    kast::Scene zone;
+    const entt::entity zonePlayer = build(zone);
+    std::vector<std::string> told; // what the zone's scripts would hear
+    kast::EventBus::Subscription tellEntered = lobbyBus.subscribe("world.entered", [&](const Json& e) {
+        told.push_back(std::format("entered {} map {} at {},{},{}", e.value("entityId", 0), e.value("map", 0),
+                                   e["position"].value("x", 0.0f), e["position"].value("y", 0.0f),
+                                   e["position"].value("z", 0.0f)));
+    });
+    kast::EventBus::Subscription tellComponent = lobbyBus.subscribe("world.component", [&](const Json& e) {
+        told.push_back(std::format("component {} {}", e.value("entityId", 0), e.value("name", "")));
+    });
+    lr.start(zone, lobbyBus, world);
+    lobbyBus.drain();
+    check((told == std::vector<std::string>{"entered 1 map 10 at 140,5,120", "component 1 Health"}),
+          "replication: after a switch the new scene hears world.entered (map, pose now) and the replicated values again");
+    const auto& zreg = zone.registry();
+    const kast::Transform& zt = zreg.get<kast::Transform>(zonePlayer);
+    check(approx(zt.position, {140, 5, 120}) && approx(kast::headingOf(zt.rotation), 1.0f),
+          "replication: world.entered in a scene with no local player places the next scene's player");
+    check(kast::hasComponent(zreg, zonePlayer, health) && kast::componentToJson(zreg, zonePlayer, health)["current"] == 25.0,
+          "replication: the local player's components from a scene with no local player reach the next scene's");
+    check(zone.valid(lr.clone(2)) && approx(zreg.get<kast::Transform>(lr.clone(2)).position, {141, 5, 120}),
+          "replication: a remote player spawned in a scene with no template is cloned in the next scene");
+    lobbyBus.publish("world.disconnected", {{"code", "connection_closed"}, {"reason", "x"}});
+    lobbyBus.drain();
+    lr.stop(true);
+    kast::Scene again;
+    const entt::entity againPlayer = build(again);
+    lr.start(again, lobbyBus, world);
+    check(approx(again.registry().get<kast::Transform>(againPlayer).position, {0, 0, 0}),
+          "replication: after world.disconnected a new scene's player is not placed");
+    lr.stop();
     kast::activateComponentDefinitions(std::nullopt, nullptr);
 }
 
@@ -2073,6 +2135,20 @@ void checkReplicationFakeServer()
     const std::filesystem::path source = KAST_TEST_PROJECT_DIR;
     std::filesystem::copy_file(source / "online_replication.scene", dir / "online_replication.scene");
     std::filesystem::copy_file(source / "scripts/online_replication_demo.lua", dir / "scripts/online_replication_demo.lua");
+    // The scene a switch goes to: the same entities, a script that only logs despawns (the demo would log in again).
+    {
+        std::ifstream in(source / "online_replication.scene");
+        Json switched = Json::parse(in);
+        switched["systems"] = {"scripts/left.lua"};
+        writeFile(dir / "switched.scene", switched.dump(2));
+    }
+    writeFile(dir / "scripts/left.lua", R"(return {
+    init = function()
+        kast.subscribe("world.despawn", function(e) kast.log("replication: server id " .. e.entityId .. " left") end)
+    end,
+    update = function(dt) end,
+}
+)");
     // A teleport from a script, 50 m in one frame: the server must reject it.
     writeFile(dir / "scripts/teleport.lua", R"(return {
     init = function()
@@ -2082,6 +2158,7 @@ void checkReplicationFakeServer()
                 kast.set(e, "Transform", {position = {x = p.x + 50, y = p.y, z = p.z}})
             end
         end)
+        kast.subscribe("test.switch", function() kast.loadScene("switched.scene") end)
     end,
     update = function(dt) end,
 }
@@ -2161,6 +2238,24 @@ void checkReplicationFakeServer()
     check(approx(reg.get<kast::Transform>(player).position, walked, 1e-3f),
           std::format("replication: the player is snapped back to x {} (now {})", walked.x,
                       reg.get<kast::Transform>(player).position.x));
+
+    // A scene switch: the new scene's player stands where the old one walked to, and the remote player is there.
+    const size_t movesBefore = moves(fakeWorld).size();
+    doc.lua.bus().publish("test.switch", Json::object());
+    updatePlay(doc, 0.016f);
+    const entt::entity switched = named(scene, "Player");
+    check(scene.valid(switched) && approx(reg.get<kast::Transform>(switched).position, walked, 1e-3f) &&
+              approx(kast::headingOf(reg.get<kast::Transform>(switched).rotation), 0.5f),
+          "replication: after a kast.loadScene switch the local player keeps its position and heading");
+    check(scene.valid(doc.lua.replication().clone(2)) && countNamed(scene, "Remote Body") == 1,
+          "replication: after a kast.loadScene switch the remote player is cloned again");
+    for (int frame = 0; frame < 20; ++frame) {
+        updatePlay(doc, 0.016f);
+        std::this_thread::sleep_for(1ms);
+    }
+    std::this_thread::sleep_for(100ms);
+    check(moves(fakeWorld).size() == movesBefore,
+          "replication: a scene switch sends no Move (the player is where the server knows it)");
 
     doc.lua.world().say("bye"); // the fake world despawns entity 2
     check(playUntil(doc, "replication: server id 2 left"), "replication: world.despawn arrives");

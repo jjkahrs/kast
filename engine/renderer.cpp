@@ -478,22 +478,14 @@ void Renderer::shutdown()
 void Renderer::addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws)
 {
     const entt::registry& registry = scene.registry();
-    for (auto it = terrain_.begin(); it != terrain_.end();) {
-        const auto* tile = scene.valid(it->first) ? registry.try_get<TerrainTile>(it->first) : nullptr;
-        if (tile && tile->data == it->second.data) {
-            ++it;
-            continue;
-        }
-        bgfx::destroy(it->second.vertices);
-        it = terrain_.erase(it);
-    }
     for (auto [entity, tile] : registry.view<TerrainTile>().each()) {
         if (!tile.data)
             continue;
         const TerrainTileData& data = *tile.data;
         const map::MapInfo& info = *data.map;
-        auto [it, added] = terrain_.try_emplace(entity);
+        auto [it, added] = terrain_.try_emplace(tile.data.get());
         TerrainMesh& mesh = it->second;
+        mesh.used = true;
         if (added) {
             constexpr int n = map::kTileSamples;
             // UV per tile sample: tiled = local / 8 (world xz / 8; tile-local gives the same wrap, 256 / 8 being whole,
@@ -539,9 +531,21 @@ void Renderer::addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws)
     }
 }
 
+void Renderer::pruneTerrain()
+{
+    for (auto it = terrain_.begin(); it != terrain_.end();) {
+        if (std::exchange(it->second.used, false)) {
+            ++it;
+            continue;
+        }
+        bgfx::destroy(it->second.vertices);
+        it = terrain_.erase(it);
+    }
+}
+
 void Renderer::clearTerrain()
 {
-    for (auto& [entity, mesh] : terrain_)
+    for (auto& [data, mesh] : terrain_)
         bgfx::destroy(mesh.vertices);
     terrain_.clear();
 }
@@ -888,7 +892,7 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
 }
 
 void Renderer::render(const Scene& scene, const std::filesystem::path& projectRoot, bgfx::ViewId view,
-                      const float* viewMtx, const float* projMtx, bgfx::ViewId shadowViews)
+                      const float* viewMtx, const float* projMtx, bgfx::ViewId shadowViews, const Scene* extra)
 {
     setProjectRoot(projectRoot);
     bgfx::setViewTransform(view, viewMtx, projMtx);
@@ -932,25 +936,32 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
                                light.castShadows, light.bias});
     }
 
-    WorldMatrices worldOf(scene);
     std::vector<DrawItem> draws;
     std::vector<std::vector<Mat4>> boneSets;
-    for (auto [entity, mesh] : registry.view<MeshRenderer>().each()) {
-        const auto* instance = registry.try_get<MaterialInstance>(entity);
-        const Mesh& gpu = meshes_[static_cast<size_t>(mesh.primitive)];
-        DrawItem item;
-        item.world = worldOf(entity);
-        item.bounds = transformBounds(primitiveBounds(mesh.primitive), item.world.data());
-        item.material = instance ? &instance->material : &materials_.get(mesh.material);
-        item.vertices = gpu.vertices;
-        item.indices = gpu.indices;
-        item.castShadows = mesh.castShadows;
-        item.receiveShadows = mesh.receiveShadows;
-        draws.push_back(item);
-    }
-    for (auto [entity, model] : registry.view<ModelRenderer>().each())
-        addModelDraws(scene, entity, model, worldOf(entity).data(), draws, boneSets);
-    addTerrainDraws(scene, draws);
+    const auto addDraws = [&](const Scene& from) {
+        const entt::registry& entities = from.registry();
+        WorldMatrices worldOf(from);
+        for (auto [entity, mesh] : entities.view<MeshRenderer>().each()) {
+            const auto* instance = entities.try_get<MaterialInstance>(entity);
+            const Mesh& gpu = meshes_[static_cast<size_t>(mesh.primitive)];
+            DrawItem item;
+            item.world = worldOf(entity);
+            item.bounds = transformBounds(primitiveBounds(mesh.primitive), item.world.data());
+            item.material = instance ? &instance->material : &materials_.get(mesh.material);
+            item.vertices = gpu.vertices;
+            item.indices = gpu.indices;
+            item.castShadows = mesh.castShadows;
+            item.receiveShadows = mesh.receiveShadows;
+            draws.push_back(item);
+        }
+        for (auto [entity, model] : entities.view<ModelRenderer>().each())
+            addModelDraws(from, entity, model, worldOf(entity).data(), draws, boneSets);
+        addTerrainDraws(from, draws);
+    };
+    addDraws(scene);
+    if (extra)
+        addDraws(*extra);
+    pruneTerrain();
 
     const ShadowFrame shadows = renderShadows(sun, {lightDir[0], lightDir[1], lightDir[2]}, draws, boneSets,
                                               pointLights, viewMtx, projMtx, shadowViews);

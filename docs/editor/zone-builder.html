@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zone Builder - Kast Editor</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="zone-builder.html" class="active">Zone Builder</a></li></ul></nav>
+<main>
+<h1 id="zone-builder">Zone Builder</h1>
+<p>The editor's <strong>Zone</strong> tab and the Scene view create and edit a project's zone maps (<code>maps/&lt;folder&gt;/</code>, see
+<a href="../services/world/maps.html#maps">Maps</a> and <a href="../engine/terrain.html#terrain">Terrain</a>) in 3D and save them in
+place, in the formats the engine and the world server load. The zone logic is the <code>kast_zone</code> library
+(<code>engine/zone/</code>); the tab and the Scene view tools are editor code (<code>editor/zone_*</code>).</p>
+
+<h2 id="scene-link">A zone is the scene's Terrain map</h2>
+<p>The zone is the map whose id is in the open scene's <strong>first</strong> entity with a <code>Terrain</code> component (the same
+rule Play's terrain streaming follows). Picking another map or creating a New Map in the Zone tab sets that
+<code>Terrain.map</code> (and marks the scene unsaved); editing <code>Terrain.map</code> in the Inspector opens that map instead. One
+zone is open at a time.</p>
+<ul>
+<li><strong>No project</strong>: the tab says a project is required (maps live in the project's <code>maps/</code> folder).</li>
+<li><strong>No Terrain entity</strong>: the tab says so and offers <strong>Add Terrain entity</strong> (created, selected, scene marked
+  unsaved); picking or creating a map adds one too.</li>
+<li><strong>Several Terrain entities</strong>: the first one is used, and a note names it.</li>
+<li><strong>Map not found or broken</strong>: a <code>Terrain.map</code> id no project map has, or a map that fails to load, shows the error
+  in the tab (and once in the Console); nothing of the zone is drawn.</li>
+</ul>
+<p id="one-scene-per-zone"><strong>One scene per zone.</strong> A zone's scene is the one whose <code>Terrain</code> entity names that
+map: open it to edit the zone in the Zone tab. It holds that zone's own client content (props such as its portal arch)
+and instances of the prefabs every zone shares (player, camera, replication, NPC templates, in-world GUI), so a change
+to a shared prefab reaches every zone. At run time the game loads the zone's scene when the player enters the world or a
+portal moves it to another map (a <code>world.entered</code> / <code>world.mapChanged</code> subscriber calling
+<code>kast.loadScene</code>; replication carries the player and what is in view across). <code>samples/starter-mmo</code>:
+<code>scenes/meadow.scene</code> is the Meadow (map 10), <code>scenes/cavern.scene</code> the Cavern (map 11), and
+<code>scripts/world_flow.lua</code> holds the map-to-scene table.</p>
+
+<h2 id="scene-view">Scene view</h2>
+<p>In edit mode the Scene view draws <strong>every declared tile</strong> of the zone with the map's material (and the
+<a href="#generated-terrain">generated terrain texture</a>, if any), plus every zone object as its prefab, from the zone's
+in-memory state: edits show straight away. The camera's near and far planes widen while a zone is shown, for 2 km
+maps. Overlays: tile borders, the player spawn (with its heading), areas (portals in blue, the selected one with corner
+handles), spawns (with heading), patrol paths, zone objects (a dot each; obstacles' and interactables' shapes outlined
+on the ground) and the brush ring. They are drawn over the terrain, not hidden by hills.</p>
+<p><strong>Play</strong> does not use the in-memory zone: as before, the terrain streams around the player by
+<code>Terrain.radius</code> from the saved map files. Starting Play with unsaved zone edits logs a Console warning saying so.</p>
+<p id="input"><strong>Input.</strong> The editor camera keeps its controls (<a href="controls.html#editor-controls">Editor controls</a>:
+right drag flies, Alt + left drag orbits, middle drag pans, the wheel zooms).</p>
+<ul>
+<li>With a <strong>zone tool</strong> active (Raise, Lower, Flatten, Area Rect, Area Polygon, Place Spawn, Path Points, Place on
+  terrain, Place Object, Scatter), left mouse in the Scene view goes to that tool: it never selects an entity or moves
+  the gizmo. <strong>Esc</strong> first cancels an area being drawn, then clears the tool. Clicking an active tool's button
+  turns it off.</li>
+<li>With <strong>no zone tool</strong>, left click selects entities and the gizmo works as usual, except that while the Zone tab
+  is the front tab the zone's handles (area vertices, spawns, path points, object dots) take priority when hit: click
+  to select, drag to move (snapped to the ground, one undo step per drag).</li>
+<li>Any left click on the terrain also picks the tile the <a href="#terrain">Heightmap</a> import/export works on.</li>
+</ul>
+
+<h2 id="zone-tab">The Zone tab</h2>
+<p>The tab sits beside <strong>Hierarchy</strong> in the left dock (also added there on the first run with an older
+<code>imgui.ini</code>). On top: the open map (<code>maps/&lt;folder&gt; (id N)</code>, with <code>* unsaved</code> while there are
+unsaved edits), <strong>Save Zone</strong>, <strong>Undo</strong>, <strong>Redo</strong> and the tool buttons (the active one highlighted). Below
+it, collapsing sections:</p>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Edits</th>
+<th>Writes</th>
+</tr>
+</thead>
+<tbody>
+<tr id="map">
+<td><strong>Map</strong></td>
+<td>the map picker (every <code>maps/*/map.json</code> of the project) and <strong>New Map...</strong> (folder: letters, digits, <code>_</code>,
+<code>-</code>; name; id, the lowest unused by default, a used one refused; 1-8 by 1-8 tiles; nothing is written until you save);
+id, name, material (a project <code>.mat</code>), player spawn (x, z on the ground, heading; <strong>Place on terrain</strong> then
+click), own <code>nav</code> settings, and the <strong>tile grid</strong> (+z up): click a free cell to add a tile (its edges take its
+neighbours' heights, so no seam), a tile to remove it (a dialog lists the files that go and the spawns lost). Changing the id
+changes the Terrain entity's <code>map</code> too.</td>
+<td><code>map.json</code>; on save, a removed tile's <code>heights/</code>, <code>.server/spawns/</code>, <code>objects/</code>,
+<code>.server/interactables/</code> and <code>.server/nav/</code> files are deleted (to the Recycle Bin)</td>
+</tr>
+<tr id="terrain">
+<td><strong>Terrain</strong></td>
+<td><strong>Raise</strong>, <strong>Lower</strong>, <strong>Flatten</strong> brushes (left drag in the Scene view; radius, strength, falloff;
+Shift+click picks Flatten's height), the <strong>height range</strong> (<strong>Apply range</strong> re-quantizes every tile so world
+heights stay put; a confirm shows how many samples clip; <strong>Revert</strong>), <strong>Heightmap</strong>: <strong>Import PNG...</strong> /
+<strong>Export PNG...</strong> of the last clicked tile (257 x 257 16-bit grayscale; anything else is refused with the reason; an
+import's edges are copied onto its neighbours); <strong>Generate</strong>, <strong>Height colors</strong> and <strong>Terrain texture</strong>, see
+<a href="#generated-terrain">Generated terrain</a></td>
+<td><code>heights/&lt;tx&gt;_&lt;tz&gt;.r16</code> for each edited tile only; an edited tile's old <code>.png</code> is deleted (the loaders read
+<code>.r16</code> first); the generated terrain texture and material</td>
+</tr>
+<tr id="areas">
+<td><strong>Areas</strong></td>
+<td><strong>Area Rect</strong> (drag), <strong>Area Polygon</strong> (click points; click the first point or Enter closes, Backspace drops one,
+Esc cancels); select by clicking (or in the list), drag corners (a rect stays a rect); id (children follow a rename), name,
+priority (new areas get one above the highest), parent, portal (target map from the project, arrival position and
+heading); <code>y</code>, <code>music</code>, <code>flags</code> and unknown keys are kept, not edited</td>
+<td><code>areas.json</code></td>
+</tr>
+<tr id="spawns">
+<td><strong>Spawns</strong></td>
+<td><strong>Place Spawn</strong> (click), drag to move (snapped to the ground), id, NPC (the <code>name</code> of each <code>npcs/*.lua</code>, or
+any text), position, heading, respawn seconds or never; the selected spawn's patrol path: <strong>New path from here</strong>,
+<strong>Path Points</strong> (click to add), wait, loop or walk back, remove the last point, delete</td>
+<td><code>.server/spawns/&lt;tx&gt;_&lt;tz&gt;.json</code> of the tile each spawn stands in: moving one across a tile border moves it to
+that file with its path (copied if other spawns still use it, renamed if the name is taken)</td>
+</tr>
+<tr>
+<td><strong>Objects</strong></td>
+<td><strong>Place Object</strong> (pick a prefab and a type, click the terrain), <strong>Scatter</strong> (a brush of visuals), select by
+clicking an object's dot or in the list, drag to move; type, prefab, position, yaw, scale, shape, and an interactable's
+id, name, range, event and data: see <a href="#objects">Objects</a></td>
+<td><code>objects/&lt;tx&gt;_&lt;tz&gt;.json</code> and <code>.server/interactables/&lt;tx&gt;_&lt;tz&gt;.json</code> of the tile each object stands
+in; a tile left with none loses its files</td>
+</tr>
+<tr id="bake">
+<td><strong>Bake</strong></td>
+<td><strong>Bake Navmesh</strong>: runs <code>kast_mapbake &lt;mapDir&gt;</code> on the saved, valid map in the background (disabled while
+the zone has unsaved edits); its output and exit code show below and in the Console. The exe path is the
+<code>kast_mapbake.exe</code> field, kept as the editor setting <code>"mapbake"</code> (<code>%APPDATA%/Kast/Editor/editor_settings.json</code>,
+or <code>--settings-file</code>); empty means <code>services/world/build/{release,debug}/kast_mapbake.exe</code> of this source tree,
+then next to <code>kast_editor.exe</code></td>
+<td><code>.server/nav/*.navtile</code> (by <code>kast_mapbake</code>, see <a href="../../services/world/tools/mapbake/docs/index.html">Map Bake</a>)</td>
+</tr>
+<tr id="problems">
+<td><strong>Problems</strong></td>
+<td>the last validation (on load, a blocked save or a bake); opens by itself when there are new ones</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>Everything the tab does is also logged to the <strong>Console</strong> (<code>Zone: ...</code> lines: loads, strokes, placements, saves,
+problems, Bake output).</p>
+
+<h2 id="objects">Objects</h2>
+<p>Zone objects are prefabs placed on the map's tiles (formats: <a href="../services/world/maps.html#objects">World
+Server, Maps, Objects</a>; in game: <a href="../engine/terrain.html#objects">Engine, Terrain</a>). The project's
+<code>.prefab</code> files are listed in the <strong>Objects</strong> section.</p>
+<ul>
+<li><strong>Types:</strong> <strong>Visual</strong> (grass, flowers: client only, blocks nothing), <strong>Obstacle</strong> (rocks, walls, trees: blocks
+  players and NPCs; the server knows only its shape) and <strong>Interactable</strong> (blocks like an obstacle, and a player can
+  activate it; the server publishes its event).</li>
+<li><strong>Place Object:</strong> pick the prefab and the type, then click the terrain: the object stands on the ground there (y
+  snapped), yaw 0, scale 1. A new obstacle or interactable gets a 1 m box shape; a new interactable gets the next free
+  id on the map and a server entry (range 3, event <code>&lt;prefab name&gt;.activated</code>).</li>
+<li><strong>Select and move:</strong> with no tool and the Zone tab in front, click an object's dot to select it (or pick it in the
+  list) and drag to move it on the ground. Moving one into another tile moves it to that tile's file, an interactable's
+  server entry with it.</li>
+<li><strong>Fields:</strong> type (an interactable turned obstacle loses its id and server entry; a visual keeps an old shape unused),
+  prefab, position (x, z; y follows the ground), yaw (degrees here, radians in the file), scale (the prefab only), shape
+  (<strong>Box</strong> half extents, turned by yaw, or <strong>Cylinder</strong> radius and height, in metres, standing on the object). An
+  interactable also has its <strong>id</strong> (unique on the map: a used one is not taken), <strong>name</strong>, and the server-only
+  <strong>range</strong>, <strong>event</strong> and <strong>data</strong> (a JSON object, checked as you type: text that isn't one shows the problem and keeps the
+  last valid data; empty removes it). The server entry's <code>pos</code>, <code>yaw</code>, <code>shape</code> and <code>name</code> always follow the object.</li>
+<li><strong>Overlays:</strong> a dot per object (green visuals, orange obstacles, blue interactables with <code>#id name</code>, the selection in
+  yellow) and each shape's outline on the ground (16 points for a cylinder). The Scene view draws each object's prefab,
+  scaled and turned; a tile's objects are rebuilt when they change.</li>
+<li><strong>Scatter</strong> (visuals only): tick prefabs (one is picked at random per object), set the radius, how many per dab, random yaw
+  or not, the scale range and the <strong>seed</strong>. Drag on the terrain: a dab on mouse down and another each time the brush has moved
+  its radius, each placing that many visuals at random points of the circle, on the ground (points off the map are
+  skipped). The whole stroke is one undo step. <strong>Erase visuals</strong> turns the brush into an eraser that removes every
+  visual inside the circle (obstacles and interactables stay). The random numbers come from the seed (xorshift32, the
+  same on every machine): changing the seed or pressing <strong>Restart</strong> starts its sequence again, so the same seed and strokes
+  give the same objects.</li>
+<li><strong>Save</strong> writes each changed tile's <code>objects/</code> and <code>.server/interactables/</code> file and deletes a tile's files once it has
+  none. Unknown keys in the files are kept. Re-bake the navmesh (<a href="#bake">Bake</a>) after placing, moving or removing an
+  obstacle or interactable.</li>
+</ul>
+
+<h2 id="generated-terrain">Generated terrain</h2>
+<p><strong>Generate heights</strong> (Terrain section) replaces the heights of every declared tile with fBm Perlin noise: <strong>Seed</strong> (or
+<strong>Randomize</strong>), <strong>Scale</strong> (metres per noise feature, default 256), <strong>Octaves</strong> (5), <strong>Persistence</strong>
+(the amplitude ratio between octaves, 0.5) and <strong>Lacunarity</strong> (the frequency ratio, 2). The noise is sampled at each
+sample's map position, so tiles sharing an edge get the same samples (no seams, whatever the tile layout), and it is
+stretched over the whole height range: the lowest sample is the range's min, the highest its max. The same seed and
+settings on the same tiles give the same heights. The player spawn moves up or down onto the new ground. One
+<strong>Generate heights</strong> is one undo step.</p>
+<p><strong>Height colors</strong> is a gradient over the height range: stops at a position (0 % = the range's min, 100 % = its
+max) with a color. Between two stops the color blends linearly; below the lowest and above the highest it is that
+stop's. <strong>Add stop</strong>, <strong>Remove</strong> (at least 2 stay), drag a position or pick a color; each change is one undo step. The default
+is sand, grass, rock, snow. It is kept in <code>map.json</code> as <code>"terrainColors"</code> (see
+<a href="../engine/terrain.html#generated-texture">Terrain</a>).</p>
+<p><strong>Create texture &amp; material</strong> (Terrain section) sets the map's material to <code>materials/&lt;folder&gt;_terrain.mat</code>,
+<code>"terrainUv": "map"</code> (one texture over the whole map) and the default colors if the map has none, as one undo step.
+The Scene view shows the result straight away; nothing is written until you save. Then every save writes:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>textures/&lt;folder&gt;_terrain.png</code></td>
+<td>8-bit RGB, the color of the ground at each pixel: 1 px per metre over the bounding box of the declared tiles (256 px
+per tile), shrunk to fit 4096 px on the longest side; grey where no tile is. Row 0 is the box's min z</td>
+</tr>
+<tr>
+<td><code>materials/&lt;folder&gt;_terrain.mat</code></td>
+<td>white base color times that texture, metallic 0, roughness 0.9</td>
+</tr>
+</tbody>
+</table>
+<p>Both are re-baked on every save of the map, so the texture follows sculpting and color edits. These two paths are the
+only files a zone save writes outside <code>maps/</code>: other materials and textures are never touched, and if one of
+them already exists before the map has been saved using it (someone else's file), the save is blocked with a problem
+on that file. Picking another material in the Map section keeps it; the generated files are then no longer written.</p>
+
+<h2 id="saving">Saving, undo and Play</h2>
+<p><strong>Save Zone</strong> (the tab), and <strong>File &gt; Save</strong> / <strong>Ctrl+S</strong> (the scene, then the zone if it has unsaved edits),
+first check the map as the world server would load it: <code>kast_map</code>'s <code>parse_manifest</code>, <code>parse_areas</code> and
+<code>parse_spawns</code> for every tile's file, spawn ids unique on the map, spawn files on declared tiles, the map id unused by
+the project's other maps, portals to an existing map, onto its tiles and not into a portal there, valid
+<code>terrainColors</code>, no foreign file at the generated terrain texture or material path, every objects file
+(<code>parse_objects</code>: any bad entry) and interactables file (<code>parse_interactables</code>) on a declared tile, interactable ids
+unique on the map, and each interactable object with a server entry of the same id in its tile's file (and each entry with
+an object). Any problem: nothing of the zone is written, the tab comes to the front with <strong>Problems</strong> listing them all
+(file and message, as the server reports them), and the Console repeats them; the scene itself still saves. Only files
+that changed are written; a map opened and saved unchanged keeps every byte.</p>
+<p><strong>Undo</strong> / <strong>Redo</strong> are the tab's buttons only (there is no keyboard shortcut and they do not touch the scene): they
+cover every zone edit, and a brush or scatter stroke, a drag or one field edit is one step.</p>
+<p><strong>Unsaved changes.</strong> The editor's Save / Don't Save / Cancel prompt (New, Open, Open Recent, switching project,
+quitting) counts unsaved zone edits too, and so does changing the map in the Zone tab or the Inspector (<strong>Don't Save</strong>
+reloads the zone from disk).</p>
+<p><strong>Read-only.</strong> During Play and in prefab edit mode the tab is read-only (tools off, no zone overlays in the Scene
+view); a note at the top says why.</p>
+
+<h2 id="command-line">Command line</h2>
+<p><code>kast_editor</code> runs the same edits from the command line (tests and scripts), e.g.:</p>
+<pre><code class="language-bat">build\debug\kast_editor.exe --project samples\starter-mmo --map meadow ^
+  --scatter 128,128,40,200,7,0.8,1.4,prefabs/grass.prefab --add-object obstacle,prefabs/rock.prefab,141,108,0.3,1,cylinder,1.2,1.4 ^
+  --save-zone --headless
+build\debug\kast_editor.exe --project samples\starter-mmo --new-map dunes,2,2 --generate-heights 7 ^
+  --terrain-colors 0,0.76,0.7,0.5,40,0.33,0.52,0.21,100,0.95,0.95,0.97 --create-terrain-material --save-zone --headless
+</code></pre>
+<p>Every flag and its syntax: <a href="command-line.html#zone">Command line, Zone edits</a>.</p>
+</main>
+</div>
+</body>
+</html>

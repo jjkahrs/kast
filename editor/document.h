@@ -229,8 +229,9 @@ std::string newProjectError(std::string_view name, const std::string& dir);
 // error if newProjectError fails or a write fails; a folder made by this call is removed.
 bool createProject(std::string_view name, const std::string& dir, std::filesystem::path& created, std::string& error);
 std::string displayName(const Document& doc);
-// "Kast Editor - [<project> - ]<scene>[*][ (Playing|Paused[: <switched scene>])]"
-std::string windowTitle(const Document& doc);
+// "Kast Editor - [<project> - ]<scene>[*][ (Playing|Paused[: <switched scene>])]"; "*" when the scene or (extraDirty,
+// FileActions::extra: the open zone) has unsaved changes.
+std::string windowTitle(const Document& doc, bool extraDirty = false);
 
 // File menu behavior: New/Open/Save/Save As with native dialogs, unsaved-changes and error modals, window title.
 class FileActions {
@@ -273,6 +274,16 @@ public:
 
     // Call once per frame inside the ImGui frame: shortcuts, dialog results, modals, title.
     void update();
+
+    // Unsaved work kept outside the scene (main wires the Zone tab's map): the unsaved-changes prompt covers it, Save
+    // writes it after the scene, Don't Save drops it. Not while a prefab is open (it belongs to the scene behind it).
+    // Unset members: nothing extra.
+    struct Extra {
+        std::function<std::string()> unsaved; // what has unsaved changes, for the prompt ("maps/meadow"); empty: none
+        std::function<bool()> save;           // writes it; false (logged) if it couldn't
+        std::function<void()> discard;        // drops the changes
+    };
+    Extra extra;
     // AppHooks::quitRequested: false while the user still has to confirm unsaved changes.
     bool onQuitRequested();
 
@@ -280,7 +291,11 @@ private:
     enum class Pending { None, New, Open, OpenPath, Quit, Build, BuildAndRun, OpenPrefab, Back };
     enum class DialogKind { Open, SaveAs, BuildFolder, CaFile };
 
-    // Runs action now, or after the unsaved-changes modal if the document is dirty.
+    // extra.unsaved(), or empty (unset, or a prefab is open).
+    std::string extraUnsaved() const;
+    // The document or extra has unsaved changes.
+    bool unsaved() const { return doc_.dirty || !extraUnsaved().empty(); }
+    // Runs action now, or after the unsaved-changes modal if unsaved().
     void request(Pending action);
     void perform(Pending action);
     void showSaveDialog(Pending after);

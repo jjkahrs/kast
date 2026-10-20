@@ -6,8 +6,8 @@
 #include <string>
 
 // The per-user editor settings file (editor_settings.json, shared by every project): one JSON object whose keys belong
-// to the features using them ("externalEditor", "onlineEmail", "composeFolder", "worldOverride"). Never holds
-// passwords or tokens. No ImGui.
+// to the features using them ("externalEditor", "onlineEmail", "composeFolder", "worldOverride", the Zone tab's
+// "mapbake"). Never holds passwords or tokens. No ImGui.
 
 // <SDL_GetPrefPath("Kast", "Editor")>/editor_settings.json (%APPDATA%/Kast/Editor). Empty if SDL can't make that folder.
 std::filesystem::path defaultEditorSettingsFile();

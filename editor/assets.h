@@ -66,9 +66,7 @@ bool renameAsset(const std::filesystem::path& source, const std::string& name, s
 // Moves source into folder destDir, keeping its name. False + error (disk unchanged) if destDir is source or inside
 // it, the name is taken there (ignoring case) or the move fails. Never overwrites.
 bool moveAsset(const std::filesystem::path& source, const std::filesystem::path& destDir, std::string& error);
-// Sends target to the Recycle Bin, without a prompt unless Windows can't recycle it (it then asks before deleting it
-// for good). False + error if that fails or is cancelled.
-bool recycleAsset(const std::filesystem::path& target, std::string& error);
+// Recycle Bin: kast::recycleFile (files.h).
 
 // Prefabs (see prefab.h).
 // "<name>.prefab", else "<name>_2.prefab", ...: the first not taken in dir (ignoring case). name is an entity name with

@@ -11,6 +11,10 @@
 #include "recent_projects.h"
 #include "ui_common.h"
 #include "viewport.h"
+#include "zone_cli.h"
+#include "zone_panel.h"
+#include "zone_render.h"
+#include "zone_session.h"
 
 #include <app.h>
 #include <audio.h>
@@ -29,12 +33,14 @@
 #include <imgui_internal.h> // DockBuilder API
 #include <imgui_stdlib.h>
 
+#include <array>
 #include <cassert>
 #include <charconv>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -42,6 +48,8 @@
 
 namespace {
 
+constexpr float kZoneNearPlane = 0.5f; // the editor camera's planes while the Scene view shows a zone
+constexpr float kZoneFarPlane = 6000.0f;
 // Each viewport's shadow maps, then its scene and post passes (see SceneViewport, GameViewport).
 constexpr bgfx::ViewId kViewportViews = kast::Renderer::kShadowViews + kast::PostProcess::kViews;
 constexpr bgfx::ViewId kSceneView = 1; // then its overlays
@@ -59,14 +67,15 @@ constexpr const char* kUsage =
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
-    "[--focus-panel Window] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
+    "[--focus-panel Window] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|Button] [--gui-save] [--gui-click id] [--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy]] [--sim-key frame,key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
-    "[--prefab-save] [--prefab-back] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] | "
+    "[--prefab-save] [--prefab-back] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [zone edits] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
-// --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel, for screenshots of mouse-driven games.
+// --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel (without --play: on the Scene view), for
+// screenshots of mouse-driven games and tests of Scene view clicks (the Zone tab tools).
 struct SimMouse {
     int frame = 0;  // the press (at the Game image's center) and the wheel go out on this frame
     int button = 0; // SDL_BUTTON_LEFT / SDL_BUTTON_RIGHT, 0 = none
@@ -112,6 +121,18 @@ struct Options {
     std::optional<std::pair<Panels::AssetCreate, std::string>> assetsCreate; // run Assets Create in that folder
     bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
     bool openOnlineSettings = false; // open the Online Services modal (needs --project) for screenshots
+    std::vector<std::string> zoneSections; // --zone-section: expand these Zone tab sections, collapse the others (with --focus-panel Zone), for screenshots
+    std::optional<ZonePanel::Tool> zoneTool; // --zone-tool: this Zone tab tool is active (tests, with --sim-mouse)
+    std::string zoneSelect; // --zone-select: select this zone area or spawn id, or "object:tx,tz,index"
+    bool bake = false;      // --bake: Bake Navmesh on the zone (--frames counts once it ends; exit 1 if it fails)
+    std::string mapbake;    // --mapbake: the kast_mapbake.exe for this run (not saved to the settings)
+    std::vector<zone_cli::Op> zoneOps; // --map, --new-map, --sculpt, ..., --save-zone (zone_cli.h), in order, before the window
+    bool headless = false;  // --headless: run the zone edits (and --bake) and exit without opening a window
+    bool noRecycle = false; // --no-recycle: zone saves delete files instead of sending them to the Recycle Bin
+    bool sculptLoop = false; // --sculpt-loop: a moving brush sculpts the zone every frame (the --log-fps benchmark)
+    std::optional<std::array<float, 3>> focus; // --focus x,z,distance: the Scene camera's pivot on the zone ground
+    std::optional<std::array<int, 2>> promptRemoveTile; // --prompt-remove-tile: open the Zone tab's remove-tile dialog
+    bool fileSave = false;  // --file-save: File > Save (as Ctrl+S) at frame kAddComponentPopupFrame, for tests
     std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting", "Post Processing", "Physics", "Mixer", "Network" and "Online" also open it) to the front, for screenshots
     std::string openGui;            // open this .rml in the GUI Builder (relative paths: to the project, else the cwd)
     std::string guiSelect;          // then select the element with this id in it
@@ -120,7 +141,7 @@ struct Options {
     std::optional<GuiKind> guiAdd; // then add this element as the GUI Hierarchy's + buttons do
     bool guiSave = false;          // then save the GUI as its Save button does
     std::string guiClick;           // with --play: click the game GUI element with this id (frame kAddComponentPopupFrame)
-    std::optional<SimMouse> simMouse; // with --play: push these SDL mouse events (the cursor lock isn't applied)
+    std::optional<SimMouse> simMouse; // push these SDL mouse events on the Game panel (--play) or Scene view (the cursor lock isn't applied)
     std::vector<SimKey> simKeys;      // with --play: these key presses
     std::string simOnLog;             // --sim-on-log: simMouse's and simKeys' frames count from the first log line with this
     std::string projectsFile;       // the recent-projects list; empty = the one in %APPDATA%
@@ -383,6 +404,40 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.openMenu = argv[++i];
         } else if (arg == "--focus-panel" && hasValue) {
             options.focusPanel = argv[++i];
+        } else if (arg == "--zone-section" && hasValue) {
+            for (const auto part : std::views::split(std::string_view(argv[++i]), ','))
+                options.zoneSections.emplace_back(std::string_view(part.begin(), part.end()));
+        } else if (arg == "--zone-tool" && hasValue) {
+            if (!(options.zoneTool = ZonePanel::toolNamed(argv[++i]))) {
+                kast::log::error(std::format("Unknown --zone-tool '{}'", argv[i]));
+                return std::nullopt;
+            }
+        } else if (arg == "--zone-select" && hasValue) {
+            options.zoneSelect = argv[++i];
+        } else if (arg == "--bake") {
+            options.bake = true;
+        } else if (arg == "--mapbake" && hasValue) {
+            options.mapbake = argv[++i];
+        } else if (const std::optional<bool> zoneValue = zone_cli::takesValue(arg); zoneValue && (!*zoneValue || hasValue)) {
+            options.zoneOps.push_back({std::string(arg), *zoneValue ? argv[++i] : ""});
+        } else if (arg == "--headless") {
+            options.headless = true;
+        } else if (arg == "--no-recycle") {
+            options.noRecycle = true;
+        } else if (arg == "--sculpt-loop") {
+            options.sculptLoop = true;
+        } else if (arg == "--file-save") {
+            options.fileSave = true;
+        } else if (arg == "--focus" && hasValue) {
+            if (!(options.focus = zone_cli::parseFocus(argv[++i]))) {
+                kast::log::error(std::format("Invalid --focus '{}', expected x,z,distance", argv[i]));
+                return std::nullopt;
+            }
+        } else if (arg == "--prompt-remove-tile" && hasValue) {
+            if (!(options.promptRemoveTile = zone_cli::parseTile(argv[++i]))) {
+                kast::log::error(std::format("Invalid --prompt-remove-tile '{}', expected tx,tz", argv[i]));
+                return std::nullopt;
+            }
         } else if (arg == "--projects-file" && hasValue) {
             options.projectsFile = argv[++i];
         } else if (arg == "--settings-file" && hasValue) {
@@ -473,7 +528,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
             if (*options.uiScale != scale)
                 kast::log::warn(std::format("--ui-scale {} clamped to {:.2f}", value, *options.uiScale));
         } else {
-            kast::log::error(std::format("Invalid argument '{}'. {}", arg, kUsage));
+            kast::log::error(std::format("Invalid argument '{}'. {} {}", arg, kUsage, zone_cli::kUsage));
             return std::nullopt;
         }
     }
@@ -486,7 +541,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     const bool editorFlags = options.select != 0 || options.play || options.selectNetworkEntity || options.addComponentPopup ||
                              options.newComponentPrompt || !options.newComponent.empty() || !options.openMenu.empty() ||
-                             options.openBuildSettings || options.openOnlineSettings || !options.focusPanel.empty() || options.newStateMachinePrompt ||
+                             options.openBuildSettings || options.openOnlineSettings || !options.focusPanel.empty() || !options.zoneSections.empty() || options.zoneTool || !options.zoneSelect.empty() || options.bake || !options.mapbake.empty() || options.newStateMachinePrompt ||
                              options.assetsMenu || options.assetsCreate || !options.assetsSelect.empty() ||
                              !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
@@ -495,14 +550,15 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.prefabSteps.empty() || !options.assetsDelete.empty() || !options.inspectorApplyMenu.empty() ||
                              options.prefabBackPrompt ||
                              options.noVsync || options.noInstancing || options.noCulling || !options.worldAddress.empty() || options.onlineLoginEnv ||
-                             options.onlineCompose;
+                             options.onlineCompose || !options.zoneOps.empty() || options.headless || options.noRecycle ||
+                             options.sculptLoop || options.focus || options.promptRemoveTile || options.fileSave;
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --select-network-entity, --add-component-popup, --new-component[-prompt], "
-                         "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, "
+                         "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
                          "--assets-menu, "
                          "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
                          "--gui-click, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
-                         "steps, --assets-delete and --inspector-apply-menu require "
+                         "steps, --assets-delete, --inspector-apply-menu, --file-save and the zone flags require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
     }
@@ -516,10 +572,6 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     if (!options.guiClick.empty() && !options.play) {
         kast::log::error("--gui-click requires --play");
-        return std::nullopt;
-    }
-    if (options.simMouse && !options.play) {
-        kast::log::error("--sim-mouse requires --play");
         return std::nullopt;
     }
     if (!options.simKeys.empty() && !options.play) {
@@ -559,6 +611,7 @@ void buildDefaultLayout(ImGuiID dockspace)
     const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.3f, nullptr, &center);
     ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.35f, nullptr, &left);
     ImGui::DockBuilderDockWindow("Hierarchy", left);
+    ImGui::DockBuilderDockWindow(ZonePanel::kWindow, left);
     const ImGuiID leftLowest = ImGui::DockBuilderSplitNode(leftBottom, ImGuiDir_Down, 0.5f, nullptr, &leftBottom);
     ImGui::DockBuilderDockWindow("Systems", leftBottom);
     ImGui::DockBuilderDockWindow("Components", leftLowest);
@@ -919,9 +972,34 @@ int main(int argc, char** argv)
     refreshStateMachines(doc); // the Inspector and State Machines panel list them from the first frame
     const std::filesystem::path settingsFile =
         options->settingsFile.empty() ? defaultEditorSettingsFile() : std::filesystem::absolute(options->settingsFile);
+    ZoneSession zone; // the scene's zone: the Scene view shows it, the Zone tab edits it
+    zone.setRecycle(!options->noRecycle);
+    if (!options->zoneOps.empty() || options->headless) { // the zone edit flags (zone_cli.h)
+        if (!doc.project) {
+            kast::log::error("The zone flags need a project: --project <dir> or a --scene inside one");
+            return 1;
+        }
+        zone.openProject(doc.project->root);
+        if (!zone_cli::run(zone, options->zoneOps))
+            return 1;
+        if (options->headless)
+            return options->bake ? zone_cli::bakeHeadless(zone, settingsFile, options->mapbake) : 0;
+        // The window shows the map they opened: the scene's Terrain entity points at it (added if there is none).
+        const auto terrains = doc.scene.registry().view<kast::Terrain>();
+        if (const std::optional<int> map = zone.loadedMap();
+            map && (terrains.empty() || doc.scene.registry().get<kast::Terrain>(terrains.front()).map != *map))
+            ZonePanel::setTerrainMap(doc, *map);
+        if (zone.zone())
+            zone_cli::frameZone(doc.camera, *zone.zone());
+    }
     // The Online panel's login goes to each Play session and comes back at Stop (refresh tokens rotate: one holder).
     OnlineModel online(settingsFile);
-    doc.onPlayStarted = [&online](kast::LuaSystems& lua) { online.lendSession(lua.auth()); };
+    doc.onPlayStarted = [&online, &zone](kast::LuaSystems& lua) {
+        online.lendSession(lua.auth());
+        if (zone.dirty())
+            kast::log::warn(std::format("Zone: maps/{} has unsaved changes; Play uses the saved map files",
+                                        zone.zone()->folder));
+    };
     doc.onPlayStopping = [&online](kast::LuaSystems& lua) { online.reclaimSession(lua.auth()); };
     // Editor Play's world address: --world-address, else the Online panel's override (applied every frame below).
     const auto applyWorldOverride = [&] {
@@ -946,6 +1024,13 @@ int main(int argc, char** argv)
             playAfterLogin = options->play;
         }
     }
+    zone.update(doc); // before --play, which freezes it: the Zone tab shows the zone during that Play
+    if (options->focus) {
+        const auto [x, z, distance] = *options->focus;
+        doc.camera.pivot = {x, zone_cli::groundY(zone.zone(), x, z), z};
+        doc.camera.distance = distance;
+        doc.camera.pitch = -50.0f;
+    }
     if (options->play && !playAfterLogin)
         startPlay(doc);
     if (options->onlineCompose && !online.runCompose(*options->onlineCompose))
@@ -961,6 +1046,26 @@ int main(int argc, char** argv)
     if (options->newStateMachinePrompt)
         panels.openNewStateMachine(*options->newStateMachinePrompt);
     SceneViewport viewport(kSceneView);
+    ZoneRender zoneRender;
+    ZonePanel zonePanel(settingsFile);
+    if (!options->mapbake.empty())
+        zonePanel.setMapbake(options->mapbake);
+    bool bakeStarted = false; // --bake: once (the frame count holds while it runs)
+    int bakeFrames = 0;       // --bake: frames drawn while kast_mapbake ran
+    // A dirty zone is part of the unsaved-changes prompt, and File > Save / Ctrl+S writes it after the scene.
+    files.extra = {.unsaved = [&] { return zone.dirty() ? "maps/" + zone.zone()->folder : std::string(); },
+                   .save = [&] { return zonePanel.save(zone); },
+                   .discard = [&] { zone.reload(); }};
+    // The open zone in the Scene view, edit mode only: Play streams the saved map from disk (TerrainStreamer), and a
+    // prefab is edited on its own.
+    const auto showZone = [&] { return doc.play == PlayState::Stopped && !doc.prefabEdit; };
+    viewport.overlay = [&](const float* viewProj, float x, float y, float width, float height) {
+        zoneRender.drawOverlays(ImGui::GetWindowDrawList(), viewProj, x, y, width, height);
+        if (showZone())
+            zonePanel.drawSceneOverlay(zone, ImGui::GetWindowDrawList(), viewProj, x, y, width, height);
+    };
+    // An active Zone tab tool gets the Scene view's left mouse instead of picking and the gizmo.
+    viewport.input = [&](const SceneViewport::Input& input) { return showZone() && zonePanel.sceneInput(zone, input); };
     GuiBuilder guiBuilder(kGuiPreviewView);
     UiScale uiScale(options->uiScale);
     FrameLimit frames(options->frames, options->screenshot);
@@ -1082,6 +1187,18 @@ int main(int argc, char** argv)
             const std::string id = "###" + options->focusPanel;
             ImGui::SetWindowFocus(ImGui::FindWindowByName(id.c_str()) ? id.c_str() : options->focusPanel.c_str());
         }
+        if (!options->zoneSections.empty() && frames.frame() == kAddComponentPopupFrame)
+            zonePanel.showSections(options->zoneSections);
+        if (options->zoneTool && frames.frame() == kAddComponentPopupFrame)
+            zonePanel.setTool(*options->zoneTool);
+        if (!options->zoneSelect.empty() && frames.frame() == kAddComponentPopupFrame)
+            zonePanel.select(zone, options->zoneSelect);
+        if (options->bake && frames.frame() == kAddComponentPopupFrame && !std::exchange(bakeStarted, true))
+            zonePanel.startBake(zone);
+        if (options->promptRemoveTile && frames.frame() == kAddComponentPopupFrame + 2) // after --focus-panel
+            zonePanel.askRemoveTile({(*options->promptRemoveTile)[0], (*options->promptRemoveTile)[1]});
+        if (options->fileSave && frames.frame() == kAddComponentPopupFrame)
+            files.save();
         if (!options->openGui.empty() && frames.frame() == kAddComponentPopupFrame)
             guiBuilder.focusPanels(); // again: the first frames' docking undid the focus open() asked for
         if (options->guiPick && frames.frame() == kAddComponentPopupFrame + 6) { // the preview has been laid out
@@ -1112,6 +1229,21 @@ int main(int argc, char** argv)
         panels.drawHierarchy(doc, files);
         // Before the views render: Inspector edits (a material saved to disk) show in this frame's Scene and Game.
         panels.drawInspector(doc);
+        zonePanel.guardMapChange(doc, zone); // an Inspector edit of Terrain.map waits for the unsaved-zone prompt
+        zone.update(doc);
+        // Layouts saved before the Zone tab existed: dock it as a tab beside Hierarchy.
+        if (const ImGuiWindowSettings* hierarchy = ImGui::FindWindowSettingsByID(ImHashStr("Hierarchy"));
+            hierarchy && !ImGui::FindWindowSettingsByID(ImHashStr(ZonePanel::kWindow)))
+            ImGui::SetNextWindowDockID(hierarchy->DockId, ImGuiCond_FirstUseEver);
+        if (options->sculptLoop && showZone() && zone.zone())
+            zone_cli::sculptLoop(*zone.zone(), frames.frame());
+        zonePanel.draw(doc, zone); // before the zone is synced: its edits show this frame
+        zoneRender.sync(showZone() ? zone.zone() : nullptr, doc.project ? doc.project->root : std::filesystem::path(),
+                        viewport.renderer());
+        viewport.setExtraScene(zoneRender.scene());
+        // A whole 2 km+ map in view: a farther far plane, and a farther near plane for depth precision.
+        doc.camera.nearPlane = zoneRender.scene() ? kZoneNearPlane : EditorCamera::kNear;
+        doc.camera.farPlane = zoneRender.scene() ? kZoneFarPlane : EditorCamera::kFar;
         viewport.draw(doc); // submitted before Game so Scene is the front tab on first run
         // Layouts saved before the Game panel existed: dock it as a tab beside Scene.
         if (const ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("Scene")))
@@ -1164,7 +1296,8 @@ int main(int argc, char** argv)
         if (simStart) {
             const int frame = frames.frame() - *simStart;
             if (options->simMouse)
-                pushSimMouse(*options->simMouse, frame, game.imageCenter(), SDL_GetWindowID(mainWindow));
+                pushSimMouse(*options->simMouse, frame, options->play ? game.imageCenter() : viewport.imageCenter(),
+                             SDL_GetWindowID(mainWindow));
             for (const SimKey& key : options->simKeys)
                 pushSimKey(key, frame, SDL_GetWindowID(mainWindow));
         }
@@ -1173,7 +1306,14 @@ int main(int argc, char** argv)
         bgfx::touch(kImGuiView);
         darkenTextOnAccent(ImGui::GetDrawData());
         imgui_bgfx::render(ImGui::GetDrawData());
-        frames.endFrame();
+        // --bake: the frame count waits for kast_mapbake, so the screenshot shows its result (the UI keeps drawing).
+        if (options->bake && zonePanel.baking()) {
+            ++bakeFrames;
+        } else {
+            if (const int drawn = std::exchange(bakeFrames, 0); drawn > 0)
+                kast::log::info(std::format("{} frames drawn while kast_mapbake ran", drawn));
+            frames.endFrame();
+        }
         if (options->logFps)
             fpsLog.endFrame(frameStart);
     };
@@ -1202,5 +1342,7 @@ int main(int argc, char** argv)
                                hooks);
     if (code != 0)
         return code;
+    if (options->bake && zonePanel.bakeExit() != 0)
+        return 1;
     return frames.failed() ? 1 : 0;
 }

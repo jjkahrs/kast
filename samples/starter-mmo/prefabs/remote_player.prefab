@@ -1,0 +1,15 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Remote Player",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [131, 0, 128], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "ModelRenderer": {"model": "models/female-128-anim.glb", "materials": ["materials/gold.mat"]},
+        "Animator": {"clip": "Idle_A", "loop": true, "speed": 1, "playOnStart": true}
+      }
+    }
+  ]
+}

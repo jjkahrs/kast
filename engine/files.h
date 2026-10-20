@@ -24,6 +24,10 @@ bool writeFileAtomic(const std::filesystem::path& file, const std::function<bool
 // Every regular file under dir, recursively, sorted. Empty if there is no such directory.
 std::vector<std::filesystem::path> listFiles(const std::filesystem::path& dir);
 
+// Sends target to the Recycle Bin, without a prompt unless Windows can't recycle it (it then asks before deleting it
+// for good). False + error if that fails or is cancelled.
+bool recycleFile(const std::filesystem::path& target, std::string& error);
+
 // From now on, files are read only from pak, as if it were extracted at root (an absolute directory).
 void mountPak(Pak pak, const std::filesystem::path& root);
 

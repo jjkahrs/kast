@@ -1,7 +1,7 @@
--- Character select (the "Characters" UIDocument of scenes/world.scene, ui/characters.rml): lists the account's
--- characters on the realm (the first four, "Play <Name> (<Class>)"), creates one, enters the world with the one
--- clicked. On world.entered it hides itself and shows the HUD and chat. The realm screen connected; the connection
--- survives kast.loadScene.
+-- Character select (scenes/characters.scene, ui/characters.rml): lists the account's characters on the realm (the
+-- first four, "Play <Name> (<Class>)"), creates one, enters the world with the one clicked; scripts/world_flow.lua then
+-- loads the scene of the map it entered on, whose HUD and chat show from the start. The realm screen connected; the
+-- connection survives kast.loadScene.
 -- A new character needs a class: the four class buttons ("characters.class" {id = "class_<id>"}) pick one, highlight it
 -- and show its description; Create sends kast.world.createCharacter(name, {class = <id>}), which the server's
 -- systems/classes.lua checks. Without a class picked, Create only says so.
@@ -26,17 +26,9 @@ local picked -- the class id picked for the next character
 
 local function status(text) kast.gui.setText("characters_status", text) end
 
-local function showDocuments(inWorld)
-    for e in kast.query("UIDocument") do
-        local path = kast.get(e, "UIDocument").path
-        kast.set(e, "UIDocument", {visible = (path == "ui/characters.rml") ~= inWorld})
-    end
-end
-
 return {
     init = function()
         for i = 1, MAX do kast.gui.setVisible("char_" .. i, false) end
-        showDocuments(false)
         if not kast.world or kast.world.state() ~= "lobby" then
             return status("Not connected: Play scenes/login.scene to log in and pick a realm.")
         end
@@ -77,7 +69,6 @@ return {
             kast.world.listCharacters()
         end)
         kast.subscribe("world.charError", function(e) status(ERRORS[e.code] or e.code) end)
-        kast.subscribe("world.entered", function() showDocuments(true) end)
         kast.world.listCharacters()
     end,
     update = function(dt) end,

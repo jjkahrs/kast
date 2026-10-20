@@ -21,6 +21,9 @@
 // component on the clone or the local player (added if absent, drift rules for mismatches; a name with no Lua
 // definition is a Console warning, once per name). The world client knows nothing about entities; only this unit does.
 // world.entered / world.mapChanged also set every Terrain's map (terrain.h streams it).
+// A kast.loadScene switch keeps the map, the local player's id, pose and components and the remote players in view: the
+// new scene's Terrain, local player and clones pick them up, even after a scene with no local player (character select),
+// and its scripts get world.entered (the player's map and pose now), world.entitySpawned and world.component again.
 // Positions are Transform positions: keep the local player and the template at the root (clones are created there).
 namespace kast {
 
@@ -84,7 +87,8 @@ private:
 
     entt::entity localPlayer() const;
     float interpolationSeconds() const;
-    void placeLocal(const nlohmann::json& payload);
+    void placeLocal(const nlohmann::json& payload); // remembers the pose, then placePlayer
+    void placePlayer();                             // the scene's local player at localPose_ (if known)
     void setMap(const nlohmann::json& payload); // world.entered / world.mapChanged "map", then applyMap
     void applyMap();                            // every Terrain shows map_ (if known)
     // Copies every child of the entity named folderName into npcTemplates_, then takes that entity out of the scene.
@@ -97,6 +101,8 @@ private:
     void despawnAll();
     void applyComponent(const nlohmann::json& event, bool removed);
     void applyComponent(entt::entity entity, const std::string& name, const nlohmann::json* data);
+    // world.component again for each remembered value of server entity id (a scene switch's new scripts).
+    void publishComponents(uint32_t id, const std::map<std::string, nlohmann::json>& components);
 
     Scene* scene_ = nullptr;
     EventBus* bus_ = nullptr;
@@ -111,6 +117,11 @@ private:
     std::optional<int> map_;                                      // the map the server put the local player on
     std::optional<uint32_t> localId_;                             // the local player's server entity id
     std::map<std::string, nlohmann::json> localComponents_;        // re-applied to a new scene's local player
+    struct Pose {
+        bx::Vec3 position{0.0f, 0.0f, 0.0f};
+        bx::Quaternion rotation{0.0f, 0.0f, 0.0f, 1.0f};
+    };
+    std::optional<Pose> localPose_; // where the local player is (server placement, then each sent frame)
     std::set<std::string> warned_;                                // unknown names and drift fixes, warned once
 };
 

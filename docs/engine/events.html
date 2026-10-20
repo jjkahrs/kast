@@ -43,9 +43,9 @@ return {
 <td>Queues an event. <code>name</code>: a non-empty string. <code>payload</code>: plain data (below); omitted or <code>nil</code> is JSON <code>null</code>. The payload is deep-copied now: later changes to the table don't affect the event.</td>
 </tr>
 <tr>
-<td><code>kast.subscribe(name, fn)</code></td>
+<td><code>kast.subscribe(name, fn [, options])</code></td>
 <td>handle</td>
-<td><code>fn(payload)</code> is called for every later event named exactly <code>name</code> (no wildcards). <code>name</code>: a non-empty string, <code>fn</code>: a function.</td>
+<td><code>fn(payload)</code> is called for every later event named exactly <code>name</code> (no wildcards). <code>name</code>: a non-empty string, <code>fn</code>: a function, <code>options</code>: a table or <code>nil</code>. <code>{replay = true}</code>: also call <code>fn</code> at once (inside <code>kast.subscribe</code>) with the world connection's last <code>world.*</code> / <code>server.*</code> event of that name, if one came since <code>world.connected</code> (none after <code>world.disconnected</code>, or without Online Services). For a scene loaded after a one-time event its scripts still need, such as a <code>server.*</code> event sent on entering the world (<a href="online-services.html#scene-switches">Online Services, scene switches</a>). An error in that call raises at the <code>kast.subscribe</code> line.</td>
 </tr>
 <tr>
 <td><code>kast.unsubscribe(handle)</code></td>

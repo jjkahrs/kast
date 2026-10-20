@@ -21,16 +21,16 @@ The same folder is the game project (client) **and** the world server's Lua and 
 | Path | Side | What |
 |---|---|---|
 | `project.kast` | client | `Starter MMO`, starts at `scenes/login.scene`, Online Services on (`http://localhost:3100`, CA `certs/world_dev_ca.pem`), game state machine `session` |
-| `scenes/` | client | `login`, `register`, `realms` (one screen each) and `world` (character select, then the game) |
+| `scenes/` | client | `login`, `register`, `realms`, `characters` (one screen each), then one scene per zone: `meadow` (map 10) and `cavern` (map 11) |
 | `scripts/` | client | one Lua system per screen or concern; they talk through the event bus. `characters.lua`: the character list and creation with a class; `combat.lua`: targeting, the target marker, the combat log, tipped corpses and right clicks on them; `powers.lua`: the action bar, keys 1-3, power requests (`kast.world.send`) and their effects; `loot.lua`: the loot window and the sparkle over your corpses; `bag.lua`: the bag window, its drags and tooltips; `character.lua`: the character window (paper doll), its drags, stats and tooltips; `shrines.lua`: E uses the nearest interactable (the Meadow Shrine); `player.lua`: movement, stopped by the zone obstacles |
 | `ui/` | client | RmlUi documents, one per screen, sharing `starter.rcss` (the Kast editor palette) |
-| `components/` | **both** | `Health` (replicated to everyone in view), `Wallet` (owner only), `Class` (warrior, mage, priest or rogue; owner only, saved), `Inventory` (the bag, owner only, saved), `Equipment` (7 gear slots, owner only, saved), `Corpse` (who may loot a dead NPC, everyone in view), `MapProps` (client-side tag) |
+| `components/` | **both** | `Health` (replicated to everyone in view), `Wallet` (owner only), `Class` (warrior, mage, priest or rogue; owner only, saved), `Inventory` (the bag, owner only, saved), `Equipment` (7 gear slots, owner only, saved), `Corpse` (who may loot a dead NPC, everyone in view) |
 | `items/` | **both** | one item per file (`id`, `name`, `icon`, `quality`, `maxStack`, `sellPrice`, `description`): Bat Wing, Linen Cloth, Minor Healing Potion, and the gear: Worn Shortsword, Leather Cap, Linen Tunic, Patched Trousers, Worn Boots, Cloth Gloves, Wooden Shield; `kast.items` on both sides. Which slot gear fits and its stats are `systems/inventory.lua`'s `GEAR` table (item files may hold only those seven keys) |
 | `fsms/` | both | `patrol` (the Guard's machine, server: walking, waiting, combat, returning), `creature` (the Bat's machine, server: idle, combat, returning), `session` (why the client is on the login screen) |
 | `npcs/` | server | the `Guard` and `Bat` NPC definitions; their `template` names the client entity they are shown as, `loot` what they drop |
 | `systems/` | server | `classes.lua` (which classes a new character may have, `Class` and max Health on entering), `combat.lua` (the powers of each class, NPCs fighting back, roots, buffs, tagging, death and revive), `inventory.lua` (bag and equipment requests, the `GEAR` table, loot rolls, corpses), `regen.lua` (Health regen out of combat, 1 gold per login), `events.lua` (welcome / arrival messages), `npcs.lua` (patrols), `shrines.lua` (the Meadow Shrine: Health back to full and a blessing in the chat box) |
 | `maps/meadow`, `maps/cavern` | both | map 10 and map 11: one 256 m tile each, heightmap, `areas.json` with a portal each way; `.server/spawns/` (server only) places the Guard and the Bat. The Meadow also has zone objects (`objects/0_0.json`: grass and flowers, rocks, trees and the Meadow Shrine; `.server/interactables/0_0.json`, server only: the shrine's event) and its baked navtile (`.server/nav/`, the rocks, trees and shrine cut out) |
-| `prefabs/`, `materials/`, `models/`, `textures/` | client | the zone objects' prefabs, built from primitives (`grass`, `flower`, `rock`, `tree`, `shrine`); primitives' materials (the power effects: `fire`, `arcane`, `holy`, `frost`, `steel`, `shadow`), the animated character (`female-128-anim.glb`, from `tests/project/models`), item icons (`textures/icons/`, 64x64 placeholders), the character window's silhouette (`textures/character_silhouette.png`, a placeholder) |
+| `prefabs/`, `materials/`, `models/`, `textures/` | client | the zone objects' prefabs, built from primitives (`grass`, `flower`, `rock`, `tree`, `shrine`); the entities every zone scene shares (`sun`, `player`, `remote_player`, `npc_templates` with the Guard and the Bat, `replication`, `main_camera`, `world_ui` with the HUD, chat, bag, loot and character window documents): edit one and both zones change; primitives' materials (the power effects: `fire`, `arcane`, `holy`, `frost`, `steel`, `shadow`), the animated character (`female-128-anim.glb`, from `tests/project/models`), item icons (`textures/icons/`, 64x64 placeholders), the character window's silhouette (`textures/character_silhouette.png`, a placeholder) |
 | `docker-compose.override.yml` | dev | runs the `services/world` stack with this folder's Lua and maps |
 | `setup_realm.cmake` | dev | copies the stack's dev CA into `certs/` and adds the realm `Starter Realm` |
 
@@ -182,17 +182,17 @@ running it twice adds nothing.
   Equipping raises the max but not your current Health; unequipping lowers the max and clamps your Health to it.
   Gear is saved with the character. Any class can wear anything; Main Hand and Off Hand are independent.
 - **Portal**: the orange arch about 25 m east of the spawn is the `cavern_gate` portal: walk into it and the server
-  moves you to the Cavern (`world.mapChanged`); the terrain and props switch and the Bat is in front of you. The arch
-  west of the Cavern's arrival point takes you back.
+  moves you to the Cavern (`world.mapChanged`); the client loads `scenes/cavern.scene` and the Bat is in front of you.
+  The arch west of the Cavern's arrival point takes you back to `scenes/meadow.scene`.
 - **Meadow objects** (zone objects, [Engine, Terrain](../../docs/engine/terrain.html#objects)): grass and flowers you
   walk through; rocks, trees and the Meadow Shrine (north-west of the spawn) that stop you, and you slide along them.
   The world server knows only their shapes, cut out of the Meadow's navmesh, so it would correct a move into one too.
   Walk within 3 m of the shrine: the chat box says `[E] Use the Meadow Shrine`. Press **E**: `scripts/shrines.lua`
   calls `kast.interact`, the server checks you are on the Meadow and in range, and `systems/shrines.lua` (subscribed to
   the shrine's `shrine.activated` event) restores your Health and answers `* The shrine hums softly. You feel
-  refreshed.` Elsewhere, E says `There is nothing here to use.` Edit them with the
-  [Zone Builder](../../tools/zone-builder/docs/index.html#objects) (`--project samples/starter-mmo --map meadow`),
-  then re-bake (its **Bake** panel) and restart the world server.
+  refreshed.` Elsewhere, E says `There is nothing here to use.` Edit them in the editor's
+  [Zone tab](../../docs/editor/zone-builder.html#objects) (open `scenes/meadow.scene`: its Terrain entity names the Meadow, map 10),
+  then re-bake (its **Bake** section) and restart the world server.
 - Losing the world connection or the auth session returns you to the login screen with the reason.
 
 To see another player, run a second client (a built game, below), or a bot from `services/world` (`--char-option`
@@ -216,8 +216,15 @@ of the client project.
   survive the switch. Buttons publish their `data-event` (`login.submit`, `realms.pick`, ...); the screen's script
   subscribes, reads the fields with `kast.gui.value` and writes status text with `kast.gui.setText`. Passwords are read
   once and the field is cleared.
-- **Character select lives in the world scene**, so `world.entered` places the scene's own `NetworkLocalPlayer`. It
-  hides its document and shows the HUD and chat ones.
+- **One scene per zone**: `scenes/characters.scene` enters the world; `scripts/world_flow.lua` (in it and in every
+  zone scene) then loads the scene of the player's map from its table (`10` -> `meadow.scene`, `11` ->
+  `cavern.scene`), again on each `world.mapChanged` to another map. A zone's scene holds its `Terrain` (the map it
+  names), its own props (the portal arch, rocks, stalagmites) and instances of the shared prefabs. Replication carries
+  the player's position, the replicated components and the players and NPCs in view into the new scene and tells its
+  scripts `world.entered` and `world.component` again; the one-time `welcome`, `class.powers` and `equipment.gear`
+  events are caught up with `kast.subscribe(..., {replay = true})` ([Online
+  Services](../../docs/engine/online-services.html#replication)). A new map needs its scene and a line in that table.
+  The chat box starts empty in each zone.
 - **Shared components**: the server's `systems/classes.lua` and `regen.lua` write `Class`, `Health` and `Wallet`;
   replication applies each
   `world.component` to the local player, and `scripts/hud.lua` shows the values. Both sides load the same
@@ -231,7 +238,8 @@ of the client project.
   `systems/combat.lua`: client scripts can't load server files (no `require` in the sandbox), so the client learns
   names, keys and cooldowns from that event instead.
 - **NPCs**: the server's spawn files place `npc` definitions whose `template` (`Guard`, `Bat`) names an entity under
-  the world scene's `NPC Templates`. The client clones that entity for each NPC in view.
+  `NPC Templates` (`prefabs/npc_templates.prefab`, in each zone scene). The client clones that entity for each NPC
+  in view.
 - **Items and loot**: both sides load `items/` (`kast.items`). The server rolls `kast.npcDef(name).loot` on `npc.died`
   (published by `systems/combat.lua`) and keeps the contents to itself: clients only see `Corpse {owner}`, and the owner
   asks for the contents (`loot.open`). The bag is two parallel arrays (`items`, `counts`) because component fields
@@ -247,8 +255,6 @@ of the client project.
   `bag.slot.start` / `bag.slot.drop` with the target slot and Shift ([Game GUI](../../docs/engine/game-gui.html#drag-and-drop)).
   Drops carry the target's document, so a bag slot dropped on `ui/character.rml` is `scripts/character.lua`'s to equip
   (the bag ignores it), and equipment slots (`data-drag="equip.slot"`) dropped on `ui/bag.rml` unequip.
-- **Maps**: the client's `Terrain` follows the server's map, and `scripts/world_flow.lua` shows the props tagged with
-  that map's `MapProps`.
 - **Why back at login**: `world_flow.lua` records the reason in the `session` game state machine, which survives
   `kast.loadScene`, and `login.lua` shows it.
 
@@ -273,6 +279,8 @@ of the client project.
   - `starter_mmo_live_chars`: the character list.
   - `starter_mmo_live_world`: the Meadow with the Guard, an idle `kast_bot`, the HUD and a chat line.
   - `starter_mmo_live_cavern`: both portals, ending in the Cavern with the Bat.
+  - `starter_mmo_live_travel`: enters in `meadow.scene`, walks the portal into `cavern.scene` (Terrain map 11, the
+    Bat cloned, HUD and chat shown, the player where the server put it) and back into `meadow.scene` (the Guard).
   - `starter_mmo_live_camera`, `_camera_zoom`, `_camera_orbit`: `scripts/player.lua`'s camera behind the character,
     zoomed out and orbited by a left drag (the editor's `--sim-mouse`).
   - `starter_mmo_live_rock`: real W presses (`--sim-key`) walk the character into a Meadow rock; it stops 1.65 m from

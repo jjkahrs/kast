@@ -1,0 +1,14 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [128, 7, 139], "rotation": [-0.241922, 0, 0, 0.970296], "scale": [1, 1, 1]},
+        "Camera": {"verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 600}
+      }
+    }
+  ]
+}

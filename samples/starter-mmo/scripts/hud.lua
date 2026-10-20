@@ -18,7 +18,7 @@ return {
             showMap(e.map)
         end)
         kast.subscribe("world.mapChanged", function(e) showMap(e.map) end)
-        kast.subscribe("server.welcome", function(e) kast.gui.setText("hud_name", e.name) end)
+        kast.subscribe("server.welcome", function(e) kast.gui.setText("hud_name", e.name) end, {replay = true}) -- replay: sent once on entering, maybe before this zone's scene loaded
         kast.subscribe("target.selected", function(e)
             target = e.entityId
             kast.gui.setText("target_name", e.name)

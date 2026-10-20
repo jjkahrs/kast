@@ -29,21 +29,23 @@
           gui (RmlUi setup, file/log interfaces, GuiContext: one RmlUi context drawn into a bgfx view, SDL input),
           gui_render (RmlUi render interface on bgfx), gui_events (button click -&gt; event bus adapter),
           scene_gui (a scene's UIDocuments in Play: load, stack, show/hide, hot reload, kast.gui access),
-          gui_access (what kast.gui may do to the GUIs), shaders/
-player/   main.cpp (kast_player: the built game client)
-tools/    zone-builder/ (kast_zone_builder, its README.md and docs/): zone_doc (map JSON + heights, undo snapshots),
+          gui_access (what kast.gui may do to the GUIs), shaders/,
+          zone/ (kast_zone, the Zone Builder's logic, no window): zone_doc (map JSON + heights, undo snapshots),
           zone_io (project maps, load, validate, save, npc names), terrain_edit (picking, brushes, height range, PNG16,
-          tiles), zone_edit (areas, spawns, paths), process_runner (kast_mapbake in the background), zone_view
-          (Renderer + PostProcess into the backbuffer, camera, overlays), zone_panels + zone_objects (ImGui panels and
-          3D tools), main.cpp (CLI)
+          generated heights, height colors, terrain texture, tiles), zone_edit (areas, spawns, paths, zone objects,
+          scatter), process_runner (kast_mapbake in the background)
+player/   main.cpp (kast_player: the built game client)
 editor/   main.cpp (CLI, dock layout, menus, console), document (scene, Play mode, file actions, dialogs, modals, title),
           camera (editor camera), viewport (Scene panel: render, camera input, picking, gizmo),
           game_view (Game panel: render from the active camera, game GUIs over it in Play),
           gui_doc (GUI Builder document model: RML tree edits, serialize, Create/rename GUI files),
           gui_builder (GUI Hierarchy, GUI Inspector, GUI Style, GUI Preview),
           panels (Hierarchy, Inspector incl. AudioSource Preview, Systems, Components, Assets, Lighting, Mixer, Network), build (Build: game.pak, exe, DLLs, last folder),
+          zone_session (the scene's zone: the first Terrain entity's map in a ZoneDoc), zone_render (the zone's tiles and
+          objects in the Scene view), zone_panel + zone_terrain + zone_objects (the Zone tab and its Scene view tools),
+          zone_cli (the zone edit flags),
           imgui_bgfx (ImGui renderer for bgfx), shaders/
-tests/    self_check.cpp, zone_builder_self_check.cpp, net_self_check.cpp, net_test_util (loopback servers, test certificates),
+tests/    self_check.cpp, zone_self_check.cpp, net_self_check.cpp, net_test_util (loopback servers, test certificates),
           net_test_server.cpp (kast_net_test_server) + net_test_server_data/ (its key), focus_probe.cpp, scenes/ (a project: project.kast, basic.scene, lua.scene + scripts/, no_camera.scene,
           malformed.scene, v1.scene, v3.scene), project/ (scene-switch and Lua components project: project.kast,
           scene_a.scene, scene_b.scene, health.scene, ui.scene + ui/main_menu.rml/.rcss, scripts/,
@@ -51,7 +53,7 @@ tests/    self_check.cpp, zone_builder_self_check.cpp, net_self_check.cpp, net_t
           scripts/audio_sfx.lua, net_a.scene, net_b.scene + scripts/net_a.lua, net_b.lua + certs/net_test_ca.pem)
 cmake/    smoke_test.cmake, roundtrip_test.cmake, load_fails_test.cmake, differs_test.cmake, build_test.cmake,
           player_test.cmake, starter_mmo_*.cmake / .ps1 / .lua (the samples/starter-mmo tests),
-          zone_builder_tests.cmake + zone_builder_test.cmake (the zone builder's)
+          zone_tests.cmake + zone_test.cmake + editor_zone_bake_test.cmake (the Zone Builder's)
 docs/     HTML/CSS documentation: editor/, engine/, services/auth/, services/world/, development/ (style.css shared)
 samples/  starter-mmo/ (an online game project that is also the world server's Lua and maps: its README.md)
 </code></pre>

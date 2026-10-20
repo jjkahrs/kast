@@ -1,5 +1,5 @@
 -- Realm screen (scenes/realms.scene, ui/realms.rml): lists kast.auth.realms() as buttons (the first four), connects to
--- the one clicked, and on world.connected goes on to the world scene, where the character is chosen.
+-- the one clicked, and on world.connected goes on to scenes/characters.scene, where the character is chosen.
 local MAX = 4
 local realms = {}
 
@@ -27,7 +27,7 @@ return {
             status("Connecting to " .. realm.name .. "...")
             kast.world.connect(realm.id)
         end)
-        kast.subscribe("world.connected", function() kast.loadScene("scenes/world.scene") end)
+        kast.subscribe("world.connected", function() kast.loadScene("scenes/characters.scene") end)
         kast.subscribe("world.disconnected", function(e) status("Could not connect: " .. e.code) end)
         kast.subscribe("realms.logout", function()
             kast.auth.logout()

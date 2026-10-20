@@ -454,7 +454,7 @@ saved in scenes like any other:</p>
   A name with no Lua definition in the project is a Console warning, once per name, and is ignored. The last values
   are kept per player, so a clone re-created after a scene switch (and the new scene's local player) gets them again.
   Scripts get the same events to react to (e.g. <code>kast.subscribe("world.component", ...)</code>).</li>
-<li><strong>Event</strong>: after each clone is made, <code>world.entitySpawned {entityId, entity, name}</code> (publisher <code>kast.replication</code>,
+<li><strong>Event</strong>: after each clone is made, <code>world.entitySpawned {entityId, entity, name, kind, template}</code> (publisher <code>kast.replication</code>; <code>kind</code> and <code>template</code> as in its <code>world.spawn</code>, so a scene loaded after the spawn still knows an NPC;
   delivered the frame after <code>world.spawn</code>), so scripts can decorate it: <code>entity</code> is the clone's id for <code>kast.get</code> /
   <code>kast.set</code> / <code>kast.add</code>. Scripts still get every <code>world.*</code> event; the clone exists before any <code>world.spawn</code> subscriber
   runs.</li>
@@ -463,8 +463,18 @@ saved in scenes like any other:</p>
 <li><strong>Rates</strong>: the world server accepts 60 messages a second per connection; <code>sendRateHz</code> is capped at 30 to leave room
   for chat and pings. Remote players send about 10 moves a second, so keep <code>interpolationMs</code> near their interval
   (100 ms): shorter makes clones stop between updates, longer adds lag.</li>
-<li><strong>Scene switches</strong> keep the connection: the new scene's template is cloned for every remote player still in view,
-  where it was last shown (an NPC from the new scene's NPC templates), and the new scene's local player is sent once.</li>
+<li id="scene-switches"><strong>Scene switches</strong> keep the connection and what replication knows: the map (the new scene's
+  <code>Terrain</code> shows it), the local player's server id, position, heading and replicated components (the new scene's
+  <code>NetworkLocalPlayer</code> is placed where the old one stood, with no <code>Move</code> sent for it) and the players and NPCs in view (the
+  new scene's template is cloned for each, where it was last shown; an NPC from the new scene's NPC templates). That
+  holds across a scene with no <code>NetworkLocalPlayer</code> or template too, such as a character select scene that enters the
+  world and then loads a zone's scene. The new scene's scripts then get, before any other event, <code>world.entered</code>
+  (the player's server id, map, position and heading now; publisher <code>kast.replication</code>), <code>world.component</code> for each
+  replicated value and <code>world.entitySpawned</code> for each clone, as if they had just entered. A game's one-time
+  <code>server.*</code> events (sent once on entering) are caught up with <code>kast.subscribe(name, fn, {replay = true})</code>
+  (<a href="events.html">Events</a>), which calls <code>fn</code> at once with the connection's last event of that name.
+  <code>samples/starter-mmo</code> loads one scene per zone this way
+  (<a href="../editor/zone-builder.html#one-scene-per-zone">Zone Builder</a>).</li>
 <li><strong>NPCs</strong>: the world server's NPCs (<a href="../services/world/npcs.html">World Server, NPCs</a>) arrive like players, with <code>kind</code> <code>"npc"</code> and a
   <code>template</code>. Put one entity per NPC type under an entity named in <code>npcTemplates</code> (e.g. <code>NPC Templates</code> &gt; <code>Guard</code>,
   <code>Merchant</code>), named after the template the server's <code>kast.create</code> uses. Players are never cloned from them.</li>

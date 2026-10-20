@@ -131,7 +131,7 @@ set_source_files_properties(engine/lua_systems.cpp PROPERTIES COMPILE_OPTIONS /b
 target_link_libraries(kast_engine
   PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json RmlUi::RmlUi kast_map
   PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 assimp::assimp Jolt::Jolt "${LUAJIT_LIBRARY}" kast_protocol
-          Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto crypt32)
+          Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto crypt32 shell32) # shell32: recycleFile
 
 # --- player: the prebuilt game client the editor's Build menu copies; engine only, no ImGui ---
 # A Windows-subsystem app (no console window); SDL_main.h supplies WinMain.
@@ -144,39 +144,31 @@ add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
   editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp editor/editor_settings.cpp
-  editor/online.cpp editor/online_panel.cpp editor/kast_editor.rc
+  editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp editor/zone_cli.cpp
+  editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 # The Online panel's default compose folder: services/world of this source tree, if it is still there at run time.
 target_compile_definitions(kast_editor PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_editor PRIVATE kast_engine SDL3::SDL3 imgui::imgui imguizmo::imguizmo pugixml::pugixml shell32) # shell32: Recycle Bin
+target_link_libraries(kast_editor PRIVATE kast_engine kast_zone SDL3::SDL3 imgui::imgui imguizmo::imguizmo pugixml::pugixml shell32) # shell32: Recycle Bin
 add_dependencies(kast_editor kast_player) # Build copies kast_player.exe from next to kast_editor.exe
 
-# --- zone builder: standalone zone map editor (tools/zone-builder, tools/zone-builder/docs/index.html) ---
-# The document, file and terrain logic, without a window, shared with its self-check. editor/assets.cpp: Recycle Bin.
-add_library(kast_zone_core STATIC
-  tools/zone-builder/zone_doc.cpp tools/zone-builder/zone_io.cpp tools/zone-builder/terrain_edit.cpp
-  tools/zone-builder/zone_edit.cpp tools/zone-builder/process_runner.cpp
-  editor/assets.cpp editor/build.cpp editor/editor_settings.cpp)
-target_include_directories(kast_zone_core PUBLIC tools/zone-builder editor)
-target_compile_options(kast_zone_core PRIVATE ${KAST_COMPILE_OPTIONS})
-target_include_directories(kast_zone_core SYSTEM PRIVATE "${Stb_INCLUDE_DIR}") # stb_perlin, stb_image_write
-target_link_libraries(kast_zone_core PUBLIC kast_engine kast_map SDL3::SDL3 shell32)
+# --- zone: the zone (map) document, file and terrain editing logic (engine/zone), no window. Its own library, not
+# part of kast_engine: only editing tools link it, so the shipped kast_player stays free of it (and of KAST_SOURCE_DIR). ---
+add_library(kast_zone STATIC
+  engine/zone/zone_doc.cpp engine/zone/zone_io.cpp engine/zone/terrain_edit.cpp engine/zone/zone_edit.cpp
+  engine/zone/process_runner.cpp)
+target_compile_options(kast_zone PRIVATE ${KAST_COMPILE_OPTIONS})
+target_include_directories(kast_zone SYSTEM PRIVATE "${Stb_INCLUDE_DIR}") # stb_perlin, stb_image_write
+target_link_libraries(kast_zone PUBLIC kast_engine kast_map)
 # Bake Navmesh's default kast_mapbake: services/world/build of this source tree, if it is still there at run time.
-target_compile_definitions(kast_zone_core PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-add_executable(kast_zone_builder
-  tools/zone-builder/main.cpp tools/zone-builder/zone_view.cpp tools/zone-builder/zone_panels.cpp
-  tools/zone-builder/zone_objects.cpp
-  editor/camera.cpp editor/imgui_bgfx.cpp editor/ui_common.cpp "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
-target_include_directories(kast_zone_builder PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
-target_compile_options(kast_zone_builder PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_zone_builder PRIVATE kast_zone_core imgui::imgui)
-add_executable(kast_zone_builder_self_check tests/zone_builder_self_check.cpp "${KAST_MANIFEST}")
-target_compile_definitions(kast_zone_builder_self_check PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-target_compile_options(kast_zone_builder_self_check PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_zone_builder_self_check PRIVATE kast_zone_core)
-target_include_directories(kast_zone_builder_self_check SYSTEM PRIVATE "${Stb_INCLUDE_DIR}") # stb_image_write: 8-bit PNGs to reject
+target_compile_definitions(kast_zone PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_executable(kast_zone_self_check tests/zone_self_check.cpp "${KAST_MANIFEST}")
+target_compile_definitions(kast_zone_self_check PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(kast_zone_self_check PRIVATE ${KAST_COMPILE_OPTIONS})
+target_link_libraries(kast_zone_self_check PRIVATE kast_zone)
+target_include_directories(kast_zone_self_check SYSTEM PRIVATE "${Stb_INCLUDE_DIR}") # stb_image_write: 8-bit PNGs to reject
 
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
@@ -206,7 +198,7 @@ enable_testing()
 set(KAST_TEST_SCENES "${CMAKE_CURRENT_SOURCE_DIR}/tests/scenes")
 set(KAST_TEST_PROJECT "${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
 add_test(NAME engine_self_check COMMAND kast_self_check)
-add_test(NAME zone_builder_self_check COMMAND kast_zone_builder_self_check)
+add_test(NAME zone_self_check COMMAND kast_zone_self_check)
 # kast.auth against the real auth service in the services/world compose stack (cd services/world && docker compose
 # up -d --build); skipped, not failed, when it isn't running.
 add_test(NAME auth_live COMMAND kast_self_check --live-auth http://localhost:3100 http://localhost:8026)
@@ -271,6 +263,37 @@ add_test(NAME scene_panel_no_room
           "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/basic.scene" -DFOCUS_PANEL=Scene
           "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/short_scene_panel.ini"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# The Scene view shows the zone named by the scene's Terrain entity in edit mode: the map loads (once), every prefab of
+# its objects too. A Terrain map id the project has no map for is reported once, and the editor carries on.
+add_test(NAME editor_zone_scene
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_scene.png"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo/scenes/meadow.scene"
+          "-DEXPECT_OUTPUT=Zone: loaded maps/meadow \\(map 10\\)" -DEXPECT_COUNT=1
+          "-DFORBID_OUTPUT=did not load|\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME editor_zone_missing_map
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_missing_map.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/missing_map.scene"
+          "-DEXPECT_OUTPUT=Zone: the Terrain map did not load: no map with id 999" -DEXPECT_COUNT=1 -DFOCUS_PANEL=Zone
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# The Zone tab (docs/editor/zone-builder.html) is a tab beside Hierarchy in the default layout and in a layout saved
+# before it existed (tests/layouts/pre_zone.ini); --zone-section expands its Map and Problems sections.
+add_test(NAME editor_zone_tab
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_tab.png"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo/scenes/meadow.scene --zone-section Map,Problems --size 1600x1000"
+          -DFOCUS_PANEL=Zone "-DLAYOUT_SAME_DOCK=Hierarchy;Zone" "-DEXPECT_OUTPUT=Zone: loaded maps/meadow \\(map 10\\)"
+          "-DFORBID_OUTPUT=\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME editor_zone_tab_old_layout
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_tab_old_layout.png"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo/scenes/meadow.scene --zone-section Map,Problems --size 1600x1000"
+          -DFOCUS_PANEL=Zone "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_zone.ini"
+          "-DLAYOUT_SAME_DOCK=Hierarchy;Zone;Systems" "-DFORBID_OUTPUT=\\[error\\]"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# No project: the tab says one is required (tests/scenes has a project.kast, so a copy of basic.scene outside it).
+file(COPY_FILE "${KAST_TEST_SCENES}/basic.scene" "${CMAKE_CURRENT_BINARY_DIR}/no_project_basic.scene")
+add_test(NAME editor_zone_no_project
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_no_project.png"
+          "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_BINARY_DIR}/no_project_basic.scene" -DFOCUS_PANEL=Zone
+          "-DFORBID_OUTPUT=Zone: |\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(scene_screenshot PROPERTIES FIXTURES_SETUP basic_shot)
 set_tests_properties(scene_play_screenshot PROPERTIES FIXTURES_SETUP play_shot)
 set_tests_properties(game_play_screenshot PROPERTIES FIXTURES_SETUP game_shot)
@@ -652,6 +675,73 @@ set_tests_properties(terrain_switch_play_differs PROPERTIES
                      FIXTURES_REQUIRED "terrain_switch_before_play_shot;terrain_switch_after_play_shot")
 set_tests_properties(terrain_sun_cast_off_play_differs PROPERTIES
                      FIXTURES_REQUIRED "terrain_play_shot;terrain_sun_cast_off_play_shot")
+# The Zone tab's Terrain entity cases: none (terrain_off: the tab offers Add Terrain entity and the map picker, nothing
+# loads) and two (a second Terrain on map 1 added after the first: the tab names the one whose map is the zone).
+string(JSON terrain_count LENGTH "${terrain_scene}" entities)
+string(JSON terrain_two SET "${terrain_scene}" entities ${terrain_count}
+       [=[{"id": 90, "name": "Second Terrain", "parent": null, "components": {"Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}, "Terrain": {"map": 1, "radius": 1}}}]=])
+file(WRITE "${KAST_SHADOW_PROJECT}/zone_two_terrains.scene" "${terrain_two}")
+add_test(NAME editor_zone_no_terrain
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_no_terrain.png"
+          "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/terrain_off.scene --zone-section Map,Problems" -DFOCUS_PANEL=Zone
+          "-DFORBID_OUTPUT=Zone: |\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# During Play the Zone tab is read-only (and the Scene view has no zone overlays).
+add_test(NAME editor_zone_tab_play
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_tab_play.png"
+          "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/terrain.scene --play" -DFOCUS_PANEL=Zone
+          "-DEXPECT_OUTPUT=Zone: loaded maps/hills \\(map 3\\)" "-DFORBID_OUTPUT=Play uses the saved|\\[error\\]"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME editor_zone_two_terrains
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_two_terrains.png"
+          "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/zone_two_terrains.scene" -DFOCUS_PANEL=Zone
+          "-DEXPECT_OUTPUT=Zone: loaded maps/[a-z]+ \\(map [13]\\)" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# Zone tab tools in the Scene view (--zone-tool, --sim-mouse on the Scene view): zone_tools is terrain.scene with a Box
+# at the editor camera's pivot, so the scripted click lands on the Box over the terrain. With a tool the click is the
+# zone's (a stroke, the spawn moved; the Box is not selected); without one it selects the Box (no zone edit). In memory
+# only: nothing is saved.
+string(JSON zone_tools SET "${terrain_scene}" entities ${terrain_count}
+       [=[{"id": 91, "name": "Box", "parent": null, "components": {"Transform": {"position": [256, 26, 256], "rotation": [0, 0, 0, 1], "scale": [6, 6, 6]}, "MeshRenderer": {"primitive": "cube", "material": ""}}}]=])
+file(WRITE "${KAST_SHADOW_PROJECT}/zone_tools.scene" "${zone_tools}")
+function(kast_zone_tool_test name args)
+  add_test(NAME editor_zone_tool_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_tool_${name}.png"
+            "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/zone_tools.scene --zone-section Terrain ${args}" -DFOCUS_PANEL=Zone
+            ${ARGN} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endfunction()
+kast_zone_tool_test(raise "--zone-tool Raise --sim-mouse 40,left,40,0,0" "-DEXPECT_OUTPUT=Zone: Raise stroke"
+                    -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\\\[error\\\\]")
+kast_zone_tool_test(ring "--zone-tool Lower --sim-mouse 40,none,0,0,0" "-DFORBID_OUTPUT=stroke|\\\\[error\\\\]")
+kast_zone_tool_test(set_spawn "--zone-tool SetSpawn --sim-mouse 40,left,0,0,0"
+                    "-DEXPECT_OUTPUT=Zone: player spawn at 25[0-9][.][0-9], [0-9.]+, 25[0-9][.][0-9]" -DEXPECT_COUNT=1
+                    "-DFORBID_OUTPUT=\\\\[error\\\\]")
+kast_zone_tool_test(none "--sim-mouse 40,left,0,0,0" "-DFORBID_OUTPUT=Zone: (.* stroke|player spawn)|\\\\[error\\\\]")
+# Areas, spawns, paths, objects (zone_objects.cpp): each tool's click or drag is one logged edit at the pivot.
+kast_zone_tool_test(area_rect "--zone-tool AreaRect --sim-mouse 40,left,80,-40,0"
+                    "-DEXPECT_OUTPUT=Zone: area area added [(][0-9]+ x [0-9]+ m[)]" -DEXPECT_COUNT=1
+                    "-DFORBID_OUTPUT=\\\\[error\\\\]")
+kast_zone_tool_test(place_spawn "--zone-tool PlaceSpawn --sim-mouse 40,left,0,0,0"
+                    "-DEXPECT_OUTPUT=Zone: spawn npc_1 [(]npc[)] placed at 25[0-9][.][0-9]" -DEXPECT_COUNT=1
+                    "-DFORBID_OUTPUT=\\\\[error\\\\]")
+kast_zone_tool_test(path_points "--zone-tool PathPoints --zone-select sentry_1 --sim-mouse 40,left,0,0,0"
+                    "-DEXPECT_OUTPUT=Zone: path point added to sentry_1 at 25[0-9][.][0-9]" -DEXPECT_COUNT=1
+                    "-DFORBID_OUTPUT=\\\\[error\\\\]")
+kast_zone_tool_test(place_object "--zone-tool PlaceObject --sim-mouse 40,left,0,0,0"
+                    "-DEXPECT_OUTPUT=Zone: Obstacle [A-Za-z]+ [(]tile 1_1, #[0-9]+[)] placed at 25[0-9]" -DEXPECT_COUNT=1
+                    "-DFORBID_OUTPUT=\\\\[error\\\\]")
+# A scatter drag (several dabs) is one stroke: one undo step, logged once.
+kast_zone_tool_test(scatter "--zone-tool Scatter --sim-mouse 40,left,200,0,0"
+                    "-DEXPECT_OUTPUT=Zone: Scatter stroke [(][1-9][0-9]* visual" -DEXPECT_COUNT=1
+                    "-DFORBID_OUTPUT=\\\\[error\\\\]")
+# No tool: a drag starting on a zone handle (the Zone tab in front) moves it, one undo step, instead of picking.
+# zone_handles is zone_tools with the editor camera's pivot on spawn sentry_1 (maps/hills, ground y ~7).
+string(JSON zone_handles SET "${zone_tools}" editor camera pivot [=[[150, 7, 331]]=])
+file(WRITE "${KAST_SHADOW_PROJECT}/zone_handles.scene" "${zone_handles}")
+add_test(NAME editor_zone_handle_drag
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_handle_drag.png"
+          "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/zone_handles.scene --zone-section Spawns --sim-mouse 40,left,60,0,0"
+          -DFOCUS_PANEL=Zone "-DEXPECT_OUTPUT=Zone: moved spawn sentry_1" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 # Zone objects: tests/project/zone_objects.scene on the hills' fixtures (maps/hills/objects; docs/engine/terrain.html#objects).
 # In Play the Hero walks into the obstacle crate and stops at its side, the Walker through the visual crate.
 add_test(NAME zone_objects_play_screenshot
@@ -1791,7 +1881,7 @@ add_test(NAME editor_audio_play_no_focus
 set_tests_properties(editor_no_focus launcher_no_focus editor_audio_play_no_focus PROPERTIES TIMEOUT 120 RESOURCE_LOCK no_focus_dir)
 set_tests_properties(player_no_focus PROPERTIES FIXTURES_REQUIRED game_switch_built TIMEOUT 90)
 
-include(cmake/zone_builder_tests.cmake)
+include(cmake/zone_tests.cmake)
 
 # samples/starter-mmo: the editor + services sample project.
 include(cmake/starter_mmo_tests.cmake)

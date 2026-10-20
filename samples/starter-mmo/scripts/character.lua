@@ -106,12 +106,13 @@ return {
     init = function()
         setOpen(false)
         kast.subscribe("world.entered", function(e) me = e.entityId end)
-        kast.subscribe("server.welcome", function(e) kast.gui.setText("character_name", e.name) end)
+        -- replay: sent once on entering, maybe before this zone's scene loaded
+        kast.subscribe("server.welcome", function(e) kast.gui.setText("character_name", e.name) end, {replay = true})
         kast.subscribe("server.equipment.gear", function(e)
             gear = e
             for i = 1, SLOTS do drawSlot(i) end
             drawStats()
-        end)
+        end, {replay = true})
         kast.subscribe("world.component", function(e)
             if e.entityId ~= me then return end
             if e.name == "Equipment" then

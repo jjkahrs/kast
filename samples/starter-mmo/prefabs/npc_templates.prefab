@@ -1,0 +1,83 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "NPC Templates",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [120, 0, 120], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Guard",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Guard Body",
+      "parent": 2,
+      "components": {
+        "Transform": {"position": [0, 0.9, 0], "rotation": [0, 0, 0, 1], "scale": [0.8, 1.8, 0.6]},
+        "MeshRenderer": {"primitive": "cube", "material": "materials/guard_armor.mat"}
+      }
+    },
+    {
+      "id": 4,
+      "name": "Guard Helmet",
+      "parent": 2,
+      "components": {
+        "Transform": {"position": [0, 2.05, 0], "rotation": [0, 0, 0, 1], "scale": [0.55, 0.55, 0.55]},
+        "MeshRenderer": {"primitive": "sphere", "material": "materials/gold.mat"}
+      }
+    },
+    {
+      "id": 5,
+      "name": "Guard Spear",
+      "parent": 2,
+      "components": {
+        "Transform": {"position": [0.55, 1.3, 0], "rotation": [0, 0, 0, 1], "scale": [0.08, 2.6, 0.08]},
+        "MeshRenderer": {"primitive": "cube", "material": "materials/stone.mat"}
+      }
+    },
+    {
+      "id": 6,
+      "name": "Bat",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
+      }
+    },
+    {
+      "id": 7,
+      "name": "Bat Body",
+      "parent": 6,
+      "components": {
+        "Transform": {"position": [0, 2.2, 0], "rotation": [0, 0, 0, 1], "scale": [0.5, 0.4, 0.5]},
+        "MeshRenderer": {"primitive": "sphere", "material": "materials/bat_wing.mat"}
+      }
+    },
+    {
+      "id": 8,
+      "name": "Bat Wing Left",
+      "parent": 6,
+      "components": {
+        "Transform": {"position": [-0.6, 2.3, 0], "rotation": [0, 0, 0, 1], "scale": [0.9, 0.05, 0.4]},
+        "MeshRenderer": {"primitive": "cube", "material": "materials/bat_wing.mat"}
+      }
+    },
+    {
+      "id": 9,
+      "name": "Bat Wing Right",
+      "parent": 6,
+      "components": {
+        "Transform": {"position": [0.6, 2.3, 0], "rotation": [0, 0, 0, 1], "scale": [0.9, 0.05, 0.4]},
+        "MeshRenderer": {"primitive": "cube", "material": "materials/bat_wing.mat"}
+      }
+    }
+  ]
+}
