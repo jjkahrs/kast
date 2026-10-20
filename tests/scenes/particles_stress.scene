@@ -1,0 +1,599 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            4,
+            14
+          ],
+          "rotation": [
+            -0.130526,
+            0,
+            0,
+            0.991445
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Camera": {
+          "verticalFovDegrees": 60,
+          "nearPlane": 0.1,
+          "farPlane": 1000
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Stress 1",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -10.5,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ParticleEmitter": {
+          "playOnStart": true,
+          "looping": true,
+          "duration": 5,
+          "rate": 5000,
+          "burstCount": 0,
+          "maxParticles": 12500,
+          "shape": "cone",
+          "coneAngle": 30,
+          "radius": 0.5,
+          "boxSize": [
+            2,
+            0.2,
+            2
+          ],
+          "emitFromSurface": false,
+          "lifetimeMin": 2.5,
+          "lifetimeMax": 2.5,
+          "speedMin": 1,
+          "speedMax": 3,
+          "startSizeMin": 0.1,
+          "startSizeMax": 0.2,
+          "endSize": 1,
+          "startColor": [
+            1,
+            0.4,
+            0.1
+          ],
+          "endColor": [
+            1,
+            0.9,
+            0.2
+          ],
+          "startAlpha": 0.9,
+          "endAlpha": 0,
+          "gravity": [
+            0,
+            -0.5,
+            0
+          ],
+          "space": "world",
+          "texture": "",
+          "blend": "additive"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Stress 2",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -7.5,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ParticleEmitter": {
+          "playOnStart": true,
+          "looping": true,
+          "duration": 5,
+          "rate": 5000,
+          "burstCount": 0,
+          "maxParticles": 12500,
+          "shape": "sphere",
+          "coneAngle": 30,
+          "radius": 0.5,
+          "boxSize": [
+            2,
+            0.2,
+            2
+          ],
+          "emitFromSurface": false,
+          "lifetimeMin": 2.5,
+          "lifetimeMax": 2.5,
+          "speedMin": 1,
+          "speedMax": 3,
+          "startSizeMin": 0.1,
+          "startSizeMax": 0.2,
+          "endSize": 1,
+          "startColor": [
+            0.2,
+            0.6,
+            1
+          ],
+          "endColor": [
+            1,
+            0.3,
+            0.8
+          ],
+          "startAlpha": 0.9,
+          "endAlpha": 0,
+          "gravity": [
+            0,
+            -0.5,
+            0
+          ],
+          "space": "world",
+          "texture": "",
+          "blend": "alpha"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Stress 3",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -4.5,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ParticleEmitter": {
+          "playOnStart": true,
+          "looping": true,
+          "duration": 5,
+          "rate": 5000,
+          "burstCount": 0,
+          "maxParticles": 12500,
+          "shape": "box",
+          "coneAngle": 30,
+          "radius": 0.5,
+          "boxSize": [
+            2,
+            0.2,
+            2
+          ],
+          "emitFromSurface": false,
+          "lifetimeMin": 2.5,
+          "lifetimeMax": 2.5,
+          "speedMin": 1,
+          "speedMax": 3,
+          "startSizeMin": 0.1,
+          "startSizeMax": 0.2,
+          "endSize": 1,
+          "startColor": [
+            0.3,
+            1,
+            0.3
+          ],
+          "endColor": [
+            0.6,
+            0.3,
+            1
+          ],
+          "startAlpha": 0.9,
+          "endAlpha": 0,
+          "gravity": [
+            0,
+            -0.5,
+            0
+          ],
+          "space": "world",
+          "texture": "",
+          "blend": "additive"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Stress 4",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -1.5,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ParticleEmitter": {
+          "playOnStart": true,
+          "looping": true,
+          "duration": 5,
+          "rate": 5000,
+          "burstCount": 0,
+          "maxParticles": 12500,
+          "shape": "cone",
+          "coneAngle": 30,
+          "radius": 0.5,
+          "boxSize": [
+            2,
+            0.2,
+            2
+          ],
+          "emitFromSurface": false,
+          "lifetimeMin": 2.5,
+          "lifetimeMax": 2.5,
+          "speedMin": 1,
+          "speedMax": 3,
+          "startSizeMin": 0.1,
+          "startSizeMax": 0.2,
+          "endSize": 1,
+          "startColor": [
+            1,
+            0.9,
+            0.2
+          ],
+          "endColor": [
+            0.2,
+            1,
+            0.9
+          ],
+          "startAlpha": 0.9,
+          "endAlpha": 0,
+          "gravity": [
+            0,
+            -0.5,
+            0
+          ],
+          "space": "world",
+          "texture": "",
+          "blend": "alpha"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Stress 5",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            1.5,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ParticleEmitter": {
+          "playOnStart": true,
+          "looping": true,
+          "duration": 5,
+          "rate": 5000,
+          "burstCount": 0,
+          "maxParticles": 12500,
+          "shape": "sphere",
+          "coneAngle": 30,
+          "radius": 0.5,
+          "boxSize": [
+            2,
+            0.2,
+            2
+          ],
+          "emitFromSurface": false,
+          "lifetimeMin": 2.5,
+          "lifetimeMax": 2.5,
+          "speedMin": 1,
+          "speedMax": 3,
+          "startSizeMin": 0.1,
+          "startSizeMax": 0.2,
+          "endSize": 1,
+          "startColor": [
+            1,
+            0.3,
+            0.8
+          ],
+          "endColor": [
+            1,
+            1,
+            1
+          ],
+          "startAlpha": 0.9,
+          "endAlpha": 0,
+          "gravity": [
+            0,
+            -0.5,
+            0
+          ],
+          "space": "world",
+          "texture": "",
+          "blend": "additive"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Stress 6",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            4.5,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ParticleEmitter": {
+          "playOnStart": true,
+          "looping": true,
+          "duration": 5,
+          "rate": 5000,
+          "burstCount": 0,
+          "maxParticles": 12500,
+          "shape": "box",
+          "coneAngle": 30,
+          "radius": 0.5,
+          "boxSize": [
+            2,
+            0.2,
+            2
+          ],
+          "emitFromSurface": false,
+          "lifetimeMin": 2.5,
+          "lifetimeMax": 2.5,
+          "speedMin": 1,
+          "speedMax": 3,
+          "startSizeMin": 0.1,
+          "startSizeMax": 0.2,
+          "endSize": 1,
+          "startColor": [
+            0.6,
+            0.3,
+            1
+          ],
+          "endColor": [
+            1,
+            0.4,
+            0.1
+          ],
+          "startAlpha": 0.9,
+          "endAlpha": 0,
+          "gravity": [
+            0,
+            -0.5,
+            0
+          ],
+          "space": "world",
+          "texture": "",
+          "blend": "alpha"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Stress 7",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            7.5,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ParticleEmitter": {
+          "playOnStart": true,
+          "looping": true,
+          "duration": 5,
+          "rate": 5000,
+          "burstCount": 0,
+          "maxParticles": 12500,
+          "shape": "cone",
+          "coneAngle": 30,
+          "radius": 0.5,
+          "boxSize": [
+            2,
+            0.2,
+            2
+          ],
+          "emitFromSurface": false,
+          "lifetimeMin": 2.5,
+          "lifetimeMax": 2.5,
+          "speedMin": 1,
+          "speedMax": 3,
+          "startSizeMin": 0.1,
+          "startSizeMax": 0.2,
+          "endSize": 1,
+          "startColor": [
+            0.2,
+            1,
+            0.9
+          ],
+          "endColor": [
+            0.2,
+            0.6,
+            1
+          ],
+          "startAlpha": 0.9,
+          "endAlpha": 0,
+          "gravity": [
+            0,
+            -0.5,
+            0
+          ],
+          "space": "world",
+          "texture": "",
+          "blend": "additive"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Stress 8",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            10.5,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ParticleEmitter": {
+          "playOnStart": true,
+          "looping": true,
+          "duration": 5,
+          "rate": 5000,
+          "burstCount": 0,
+          "maxParticles": 12500,
+          "shape": "sphere",
+          "coneAngle": 30,
+          "radius": 0.5,
+          "boxSize": [
+            2,
+            0.2,
+            2
+          ],
+          "emitFromSurface": false,
+          "lifetimeMin": 2.5,
+          "lifetimeMax": 2.5,
+          "speedMin": 1,
+          "speedMax": 3,
+          "startSizeMin": 0.1,
+          "startSizeMax": 0.2,
+          "endSize": 1,
+          "startColor": [
+            1,
+            1,
+            1
+          ],
+          "endColor": [
+            0.3,
+            1,
+            0.3
+          ],
+          "startAlpha": 0.9,
+          "endAlpha": 0,
+          "gravity": [
+            0,
+            -0.5,
+            0
+          ],
+          "space": "world",
+          "texture": "",
+          "blend": "alpha"
+        }
+      }
+    }
+  ],
+  "editor": {
+    "camera": {
+      "pivot": [
+        0,
+        2,
+        0
+      ],
+      "yaw": 0,
+      "pitch": -8,
+      "distance": 14
+    }
+  }
+}

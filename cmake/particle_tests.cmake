@@ -105,5 +105,9 @@ add_test(NAME player_particles_probe
           0.3750,0.5556,0,0,0,8 0.6094,0.5556,0,0,0,8)
 set_tests_properties(player_particles_probe PROPERTIES FIXTURES_REQUIRED player_particles_shot)
 
+# Stress (docs/engine/particles.html#limits): 8 emitters x 12,500 = 100,000 live particles load and play without errors.
+# The frame time is measured by hand: kast_editor --scene tests/scenes/particles_stress.scene --play --log-fps --no-vsync.
+kast_particle_shot(stress "${CMAKE_CURRENT_SOURCE_DIR}/tests/scenes/particles_stress.scene")
+
 # The CPU side, the JSON, the no-compute path and the GPU handle bookkeeping (Noop renderer): kast_self_check --particles.
 add_test(NAME particles_self_check COMMAND kast_self_check --particles)

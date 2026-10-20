@@ -270,11 +270,12 @@ std::vector<ParticleRenderer::Draw> ParticleRenderer::simulate(const Scene& scen
         const auto [it, added] = gpu_.try_emplace(state.id);
         Gpu& gpu = it->second;
         gpu.used = true;
-        // New, or this renderer missed many ticks (e.g. a hidden editor tab): catch up from the last tick only, not
-        // from when the state was made, dropping what this renderer still had (rather than a burst of maxParticles).
+        // New, or this renderer missed many ticks (e.g. a hidden editor tab): catch up from the last tick only (and the
+        // bursts since, e.g. kast.particles.burst on an emitter made after this frame's tick), not from when the state
+        // was made, dropping what this renderer still had (rather than a burst of maxParticles).
         const bool stale = !added && state.simTime - gpu.simTime > state.lastDt + kMaxParticleDt;
         if (added || stale) {
-            gpu.spawned = state.spawned - std::min(state.spawned, state.lastSpawn);
+            gpu.spawned = state.spawned - std::min(state.spawned, state.lastSpawn + state.pending);
             gpu.simTime = state.simTime - state.lastDt;
             gpu.clears = state.clears - (stale ? 1 : 0); // stale: cleared below
         }
