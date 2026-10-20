@@ -45,3 +45,15 @@ div {
 #contrast { left: 40px; top: 400px; background-color: #3a6fb0; filter: contrast(2); }
 #saturate { left: 220px; top: 400px; background-color: #3a6fb0; filter: saturate(0); }
 #opacity { left: 400px; top: 400px; background-color: #3a6fb0; filter: opacity(0.5); }
+#rradial {
+    left: 580px;
+    top: 400px;
+    width: 60px;
+    decorator: repeating-radial-gradient(circle, #ff0000 0px, #ff0000 8px, #0000ff 8px, #0000ff 16px);
+}
+#rconic {
+    left: 660px;
+    top: 400px;
+    width: 60px;
+    decorator: repeating-conic-gradient(#ff0000 0deg, #ff0000 45deg, #00ff00 45deg, #00ff00 90deg);
+}

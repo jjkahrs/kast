@@ -21,5 +21,7 @@
         <div id="contrast" class="box">Contrast</div>
         <div id="saturate" class="box">Saturate</div>
         <div id="opacity" class="box">Opacity</div>
+        <div id="rradial" class="box"></div>
+        <div id="rconic" class="box"></div>
     </body>
 </rml>

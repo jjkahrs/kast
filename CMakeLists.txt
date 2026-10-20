@@ -1765,29 +1765,88 @@ add_test(NAME ui_layer_probe COMMAND kast_self_check --probe-png "${CMAKE_CURREN
          0.3281,0.1806,36,45,58,4 0.4375,0.3708,146,170,200,4 0.3750,0.4861,144,144,149,4 0.2344,0.5556,233,229,224,4)
 set_tests_properties(ui_layer_probe PROPERTIES FIXTURES_REQUIRED ui_layer_shot)
 # GUI effects: ui_effects.scene shows ui/effects.rml (one element per effect, placed by effects.rcss). In Play the
-# glow is outside its box only (the box keeps #313131) and fades; the backdrop blur mixes the stripes under the glass;
-# RmlUi and the GUI renderer must not warn. The built game "effects" in KAST_GAMES draws it in the player.
+# editor's Game view and the built player (game "effects" in KAST_GAMES) draw it at 1:1 GUI pixels, so both are probed
+# with kast_effects_probes: "x,y,r,g,b,tolerance" at GUI pixels (effects.rcss), turned into --probe-png's fractions
+# of a <width>x<height> screenshot whose GUI starts at (<left>, <top>). RmlUi and the GUI renderer must not warn.
+# - box-shadow 0 0 12px 4px #ffaa00 (#glow): 61,41,0 2.5px outside the box, 38,25,0 at 8.5px, 3,3,0 at 17.5px; the
+#   box keeps #313131. As RmlUi 6.2's GL3 backend (GeometryBoxShadow.cpp, RenderToClipMask): the shadow is drawn
+#   through the box's SetInverse clip mask before its blur (sigma 6), so a 4px ring outside the border box is
+#   blurred: Phi((4 - d) / 6) - Phi(-d / 6) of #ffaa00 at d px out = 0.26, 0.148, 0.010 (a browser blurs the whole
+#   spread box: 0.60, 0.23, 0.01).
+# - blur(4px) of #3a6fb0 (#blur) falls off across its left edge: Phi(d / 4) at d = 12.5, 6.5, 0.5, -3.5, -9.5 px
+#   inside = 1, 0.95, 0.55, 0.19, 0.01.
+# - grayscale r = g = b; linear-gradient ends; drop-shadow (green, offset) and its box; backdrop blur of the stripes
+#   under the glass; radial center and corner; conic top; repeating-linear stripes above the glass (red 0-10px,
+#   green 10-20px); then sepia, invert, hue-rotate, brightness, contrast, saturate(0) and opacity(0.5) of #3a6fb0
+#   (red for grayscale and hue-rotate) by RmlUi's color matrices.
+# - repeating-radial-gradient (#rradial, red 0-8px, blue 8-16px from its center) at radius 4.5, 12.5, 20.5, 27.5;
+#   repeating-conic-gradient (#rconic, red 0-45deg, green 45-90deg clockwise from the top) at 22.5, 67.5, 112.5
+#   and 157.5deg, radius 20.
+set(KAST_EFFECTS_PROBES
+    37,70,61,41,0,12 31,70,38,25,0,8 22,70,3,3,0,8 50,50,49,49,49,3
+    232,70,58,111,176,3 226,70,55,105,166,4 220,70,32,61,97,8 216,70,11,21,34,8 210,70,1,1,1,4
+    410,50,54,54,54,3 583,70,248,0,7,10 697,70,5,0,250,10 164,200,0,206,0,16 50,170,58,111,176,3
+    232,172,136,151,32,16 460,190,252,252,3,10 402,162,13,13,242,16 640,163,253,2,0,10
+    205,150,255,0,0,10 215,150,0,255,0,10 225,150,255,0,0,10 235,150,0,255,0,10
+    50,290,141,126,98,3 230,290,197,144,79,3 410,290,0,113,0,3 590,290,87,167,255,3
+    50,410,0,94,225,3 230,410,104,104,104,3 410,410,29,55,88,3
+    614,430,255,0,0,10 622,430,0,0,255,10 630,430,255,0,0,10 637,430,0,0,255,10
+    697,411,255,0,0,10 708,422,0,255,0,10 708,437,255,0,0,10 697,448,0,255,0,10)
+function(kast_effects_probes out width height left top)
+  set(probes "")
+  foreach(probe ${KAST_EFFECTS_PROBES})
+    string(REPLACE "," ";" probe "${probe}")
+    list(POP_FRONT probe x y)
+    set(fractions "")
+    foreach(axis "${x};${left};${width}" "${y};${top};${height}")
+      list(GET axis 0 at)
+      list(GET axis 1 origin)
+      list(GET axis 2 size)
+      math(EXPR n "((2 * (${at} + ${origin}) + 1) * 10000 + ${size}) / (2 * ${size})") # the pixel's center, 4 places
+      string(LENGTH "${n}" digits)
+      math(EXPR zeros "4 - ${digits}")
+      string(REPEAT "0" ${zeros} pad)
+      list(APPEND fractions "0.${pad}${n}")
+    endforeach()
+    list(JOIN fractions "," fractions)
+    list(JOIN probe "," color)
+    list(APPEND probes "${fractions},${color}")
+  endforeach()
+  set(${out} ${probes} PARENT_SCOPE)
+endfunction()
 add_test(NAME ui_effects_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_effects.png"
           "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui_effects.scene --play" "-DEXPECT_OUTPUT=GUI layer framebuffer 1 created"
           "-DFORBID_OUTPUT=\\[warn\\] RmlUi|GUI filter|GUI shader|GUI effects need"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(ui_effects_screenshot PROPERTIES FIXTURES_SETUP ui_effects_shot)
+kast_effects_probes(play_effects_probes 1280 720 257 44) # the editor's Game view
 add_test(NAME ui_effects_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/ui_effects.png"
-         0.2301,0.1590,61,41,0,12 0.2184,0.1590,3,3,0,8 0.2402,0.1313,49,49,49,3 0.3824,0.3007,136,151,32,16)
+         ${play_effects_probes})
 set_tests_properties(ui_effects_probe PROPERTIES FIXTURES_REQUIRED ui_effects_shot)
-# The same in the built player (1280x720, GUI pixels 1:1), every effect: glow near / far / inside, blur edge between
-# the box and the black, grayscale r = g = b, linear gradient ends, drop-shadow and its box, backdrop blur, radial
-# center and corner, conic top, then sepia, invert, hue-rotate, brightness, contrast, saturate(0) and opacity(0.5) of
-# #3a6fb0 (red for grayscale and hue-rotate) by RmlUi's color matrices. backdrop-filter switches the player to a
-# readable target.
+# The same in the built player (1280x720). backdrop-filter switches the player to a readable target.
+kast_effects_probes(player_effects_probes 1280 720 0 0)
 add_test(NAME player_effects_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/player_effects.png"
-         0.0293,0.0979,61,41,0,12 0.0176,0.0979,3,3,0,8 0.0395,0.0701,49,49,49,3 0.1723,0.0979,32,61,97,16
-         0.3207,0.0701,54,54,54,3 0.4559,0.0979,248,0,7,10 0.5449,0.0979,5,0,250,10 0.1285,0.2785,0,206,0,16
-         0.0395,0.2368,58,111,176,3 0.1816,0.2396,136,151,32,16 0.3598,0.2646,252,252,3,10 0.3145,0.2257,13,13,242,16
-         0.5004,0.2271,253,2,0,10 0.0395,0.4035,141,126,98,3 0.1801,0.4035,197,144,79,3 0.3207,0.4035,0,113,0,3
-         0.4613,0.4035,87,167,255,3 0.0395,0.5701,0,94,225,3 0.1801,0.5701,104,104,104,3 0.3207,0.5701,29,55,88,3)
+         ${player_effects_probes})
 set_tests_properties(player_effects_probe PROPERTIES FIXTURES_REQUIRED player_effects_shot)
+# A filter the renderer can't compile (a negative blur RmlUi parses but GuiRenderer rejects) warns exactly once however
+# many frames ask for it (RmlUi adds its own "Could not compile filter on element"), and the element still draws,
+# unfiltered: #3a6fb0 inside it (GUI pixel 70,60).
+file(WRITE "${KAST_HEALTH_PROJECT}/ui/bad_filter.rml"
+     "<rml><head><style>body { width: 100%; height: 100%; background-color: #000000; }\n"
+     "#bad { position: absolute; left: 40px; top: 40px; width: 120px; height: 60px; background-color: #3a6fb0;\n"
+     "       filter: blur(-4px); }</style></head><body><div id=\"bad\"></div></body></rml>\n")
+string(REPLACE "ui/main_menu.rml" "ui/bad_filter.rml" ui_bad_filter_scene "${ui_scene}")
+file(WRITE "${KAST_HEALTH_PROJECT}/ui_bad_filter.scene" "${ui_bad_filter_scene}")
+add_test(NAME ui_bad_filter_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_bad_filter.png"
+          "-DEXTRA_ARGS=--scene ${KAST_HEALTH_PROJECT}/ui_bad_filter.scene --play"
+          "-DEXPECT_OUTPUT=GUI filter 'blur' has invalid parameters" -DEXPECT_COUNT=1
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(ui_bad_filter_screenshot PROPERTIES FIXTURES_SETUP ui_bad_filter_shot)
+add_test(NAME ui_bad_filter_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/ui_bad_filter.png"
+         0.2555,0.1444,58,111,176,3)
+set_tests_properties(ui_bad_filter_probe PROPERTIES FIXTURES_REQUIRED ui_bad_filter_shot)
 # A synthetic click on the Start button publishes menu.start (Events panel) and scripts/ui_menu.lua logs it.
 add_test(NAME ui_click_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_click.png"
@@ -1855,6 +1914,19 @@ add_test(NAME gui_builder_pick_differs
           "-DB=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_pick.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
 set_tests_properties(gui_builder_pick_screenshot PROPERTIES FIXTURES_SETUP gui_builder_pick_shot)
 set_tests_properties(gui_builder_pick_differs PROPERTIES FIXTURES_REQUIRED "gui_builder_shot;gui_builder_pick_shot")
+# The GUI Builder previews ui/effects.rml through the same renderer: no RmlUi or GUI renderer warning, and probes
+# (preview at 1280x720 scaled into the panel) show the glow outside the box, the box keeping #313131, and the linear
+# gradient's ends.
+add_test(NAME gui_builder_effects_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_effects.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --open-gui ui/effects.rml --size 1600x1000"
+          "-DEXPECT_OUTPUT=GUI layer framebuffer 1 created" "-DFORBID_OUTPUT=\\[warn\\] RmlUi|GUI filter|GUI shader|GUI effects need"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(gui_builder_effects_screenshot PROPERTIES FIXTURES_SETUP gui_builder_effects_shot)
+add_test(NAME gui_builder_effects_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/gui_builder_effects.png"
+         0.2184,0.1675,61,41,0,12 0.2153,0.1675,38,25,0,8 0.2103,0.1675,1,1,0,8 0.2253,0.1505,49,49,49,3
+         0.4734,0.1675,247,0,8,10 0.5266,0.1675,5,0,250,10)
+set_tests_properties(gui_builder_effects_probe PROPERTIES FIXTURES_REQUIRED gui_builder_effects_shot)
 # The Inspector's UI Document (path combo, Visible) on the Main Menu entity; ui.scene survives save/load.
 add_test(NAME ui_document_inspector_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
