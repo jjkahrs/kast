@@ -23,7 +23,7 @@ The same folder is the game project (client) **and** the world server's Lua and 
 | `project.kast` | client | `Starter MMO`, starts at `scenes/login.scene`, Online Services on (`http://localhost:3100`, CA `certs/world_dev_ca.pem`), game state machine `session` |
 | `scenes/` | client | `login`, `register`, `realms`, `characters` (one screen each), then one scene per zone: `meadow` (map 10) and `cavern` (map 11) |
 | `scripts/` | client | one Lua system per screen or concern; they talk through the event bus. `characters.lua`: the character list and creation with a class; `combat.lua`: targeting, the target marker, the combat log, tipped corpses and right clicks on them; `powers.lua`: the action bar, keys 1-3, power requests (`kast.world.send`) and their effects; `loot.lua`: the loot window and the sparkle over your corpses; `bag.lua`: the bag window, its drags and tooltips; `character.lua`: the character window (paper doll), its drags, stats and tooltips; `shrines.lua`: E uses the nearest interactable (the Meadow Shrine); `player.lua`: movement, stopped by the zone obstacles |
-| `ui/` | client | RmlUi documents, one per screen, sharing `starter.rcss` (the Kast editor palette) |
+| `ui/` | client | RmlUi documents, one per screen, sharing `starter.rcss` (the Kast editor palette; `box-shadow` glows on a hovered button, the picked class and ready powers) |
 | `components/` | **both** | `Health` (replicated to everyone in view), `Wallet` (owner only), `Class` (warrior, mage, priest or rogue; owner only, saved), `Inventory` (the bag, owner only, saved), `Equipment` (7 gear slots, owner only, saved), `Corpse` (who may loot a dead NPC, everyone in view) |
 | `items/` | **both** | one item per file (`id`, `name`, `icon`, `quality`, `maxStack`, `sellPrice`, `description`): Bat Wing, Linen Cloth, Minor Healing Potion, and the gear: Worn Shortsword, Leather Cap, Linen Tunic, Patched Trousers, Worn Boots, Cloth Gloves, Wooden Shield; `kast.items` on both sides. Which slot gear fits and its stats are `systems/inventory.lua`'s `GEAR` table (item files may hold only those seven keys) |
 | `fsms/` | both | `patrol` (the Guard's machine, server: walking, waiting, combat, returning), `creature` (the Bat's machine, server: idle, combat, returning), `session` (why the client is on the login screen) |
@@ -263,7 +263,8 @@ of the client project.
 `ctest --preset debug -R starter_mmo` (registered in `cmake/starter_mmo_tests.cmake`):
 
 - **Always run**: the editor opens the project with no warning or error; a copy plays the login screen
-  (`build/debug/starter_mmo/starter_mmo_login.png`), builds, and its player starts with Online Services on.
+  (`build/debug/starter_mmo/starter_mmo_login.png`); a hover glows Log in (`starter_mmo_login_hover.png`) and the GUI
+  Builder shows the HUD's ready powers glowing (`starter_mmo_hud_glow.png`), both pixel-probed; it builds, and its player starts with Online Services on.
 - **Live**, against the compose stack, with a test account in the environment only:
 
   ```sh

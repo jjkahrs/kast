@@ -157,6 +157,77 @@ document reloads; fix a broken file and it shows again. Not in the built game.</
 <p><strong>Sample</strong>: <code>tests/project/ui.scene</code> has a <em>Main Menu</em> entity with a <code>UIDocument</code> for <code>ui/main_menu.rml</code>
 (+ <code>main_menu.rcss</code>: a panel with a title, a subtitle holding an unknown <code>&lt;span&gt;</code>, and Start / Quit buttons publishing
 <code>menu.start</code> / <code>menu.quit</code>); <code>scripts/ui_menu.lua</code> logs both events.</p>
+<h2 id="effects">Effects: glow, filters and gradients</h2>
+<p>RmlUi's CSS effects draw in Play (the Game view), the GUI Builder preview and the built player alike
+(<code>engine/gui_render.cpp</code>, <code>engine/gui_effects.cpp</code>, shaders <code>engine/shaders/gui/fs_gui_matrix.sc</code>,
+<code>fs_gui_blur.sc</code>, <code>fs_gui_gradient.sc</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Supported</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>box-shadow</code></td>
+<td>Offset, blur, spread and colour; several shadows, comma separated. The way to make an element glow.</td>
+</tr>
+<tr>
+<td><code>filter</code></td>
+<td><code>blur()</code>, <code>drop-shadow()</code> and the colour filters <code>opacity()</code>, <code>brightness()</code>, <code>contrast()</code>,
+<code>grayscale()</code>, <code>sepia()</code>, <code>hue-rotate()</code>, <code>saturate()</code>, <code>invert()</code>; several, space separated, apply in order.</td>
+</tr>
+<tr>
+<td><code>backdrop-filter</code></td>
+<td>The same filters on what is behind the element, e.g. <code>blur()</code> for frosted glass under a translucent background.</td>
+</tr>
+<tr>
+<td><code>decorator</code></td>
+<td><code>linear-gradient</code>, <code>radial-gradient</code>, <code>conic-gradient</code> and their <code>repeating-</code> forms, up to 16 colour stops (more are dropped).</td>
+</tr>
+</tbody>
+</table>
+<p><strong>A glow</strong> is a <code>box-shadow</code> with no offset. The Starter MMO's buttons (<code>samples/starter-mmo/ui/starter.rcss</code>):</p>
+<pre><code class="language-css">button:hover { background-color: #ffcc00; box-shadow: 0 0 8px 6px #ffcc00; }   /* hover glow */
+button.power { box-shadow: 0 0 6px 3px #ffaa00; }                               /* a ready power */
+button.power.cooling { box-shadow: none; }
+</code></pre>
+<p><strong>Fainter than a browser</strong>: like RmlUi's own reference renderer, the engine keeps the shadow off the element
+<em>before</em> blurring it, so only the ring the spread adds outside the element is blurred. Near the element a glow
+is therefore dimmer than a browser draws it: <code>0 0 12px 4px #ffaa00</code> gives about 26% of the colour 2.5 px out, where a
+browser gives about 60%. For a bright glow use a larger spread and a shorter blur (<code>0 0 8px 6px</code>), a brighter colour, or
+stack two shadows (<code>box-shadow: 0 0 6px 4px #ffcc00, 0 0 16px 6px #ffaa00</code>).</p>
+<p><strong>Performance</strong>: effects cost only where they are used. A document without shadows, filters or gradients draws
+exactly as before, in one bgfx view, with no offscreen targets (<code>ctest -R ui_play</code> checks <code>main_menu.rml</code> creates none).
+The first effect creates the GUI's layers: RGBA8 render targets the size of the GUI (logged as
+<code>GUI layer framebuffer N created</code>) and one depth-stencil buffer, kept for later frames and recreated when the GUI resizes.
+Every change of render target uses another bgfx view, out of <code>gui::kViews</code> (80) per GUI each frame:</p>
+<ul>
+<li>a blurred <code>box-shadow</code> about 9 views, but only on the frame it is drawn into its texture; it is cached after that
+until the element's size or shadow changes (a hover glow bakes each time the mouse arrives; animating a shadow re-bakes it
+every frame);</li>
+<li>a <code>blur()</code> filter 3 to 5 views every frame, more for a large radius; a <code>drop-shadow()</code> 2 more than its blur;</li>
+<li>a colour filter or <code>opacity()</code> about 2 views every frame;</li>
+<li>a gradient decorator none: it draws in the element's own pass.</li>
+</ul>
+<p>Past the budget the engine logs <code>GUI effects need more than 80 bgfx views in a frame; some are not drawn</code> once, and the
+draws that needed more views are skipped that frame. <code>backdrop-filter</code> must read what is already drawn: in the built
+player, which draws to the window's backbuffer, the first frame that needs it draws without the effect, and from then on
+the player draws scene and GUI into a readable target and copies it to the window (one full-screen copy per frame).</p>
+<p><strong>Failures</strong> never stop the document: the element draws without the effect.</p>
+<ul>
+<li>An unknown filter or gradient name, or one RmlUi can't parse, is RmlUi's own warning (<code>RmlUi: ...</code>) about the style
+sheet, and never reaches the renderer.</li>
+<li>Invalid parameters (<code>filter: blur(-4px)</code>) log <code>GUI filter 'blur' has invalid parameters: elements using it draw
+without it</code> once per filter, plus RmlUi's <code>Could not compile filter on element: ...</code>.</li>
+</ul>
+<p><strong>Not supported</strong>: <code>mask-image</code> (the renderer has no <code>SaveLayerAsMaskImage</code>), and clip masks in general.
+Clip masks work inside effect layers only, where <code>box-shadow</code> needs them; on the document's base layer they do nothing,
+so <code>overflow: hidden</code> on a transformed or rounded element clips to its plain rectangle (scissor) instead of its shape.</p>
+<p>Tests: <code>ctest -R "effects|ui_layer|bad_filter|starter_mmo_(login_hover|hud_glow)"</code> plays
+<code>tests/project/ui/effects.rml</code> (one element per effect) in the Game view, the GUI Builder and the built player and
+checks each effect's pixels.</p>
 </main>
 </div>
 </body>
