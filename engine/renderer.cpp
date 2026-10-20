@@ -50,6 +50,7 @@ constexpr float kFrustumPreviewAspect = 16.0f / 9.0f; // ponytail: fixed; pass t
 constexpr uint32_t kPointLightRangeColor = 0xff40d0f0;
 constexpr uint32_t kColliderColor = 0xff40ff60; // ABGR: green
 constexpr int kRangeCircleSegments = 48;
+constexpr uint32_t kParticleShapeColor = 0xff00aaff; // ABGR: the editor's orange
 constexpr int kSphereStacks = 16;
 constexpr int kSphereSlices = 32;
 constexpr uint64_t kState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS |
@@ -1104,6 +1105,7 @@ void Renderer::renderOverlays(const Scene& scene, bgfx::ViewId view, const float
     drawCameraFrustums(scene, view);
     drawPointLightRange(scene, view, selected);
     drawColliderWireframe(scene, view, selected);
+    drawParticleShape(scene, view, selected);
 }
 
 void Renderer::drawGrid(bgfx::ViewId view)
@@ -1176,6 +1178,23 @@ void Renderer::drawColliderWireframe(const Scene& scene, bgfx::ViewId view, entt
     for (const auto& [a, b] : colliderWireframe(scene, selected)) {
         lines.push_back({a.x, a.y, a.z, kColliderColor});
         lines.push_back({b.x, b.y, b.z, kColliderColor});
+    }
+    submitLines(lines, lineLayout_, lineProgram_, view);
+}
+
+// The selected entity's ParticleEmitter shape (particleShapeLines) in its transform, scale included.
+void Renderer::drawParticleShape(const Scene& scene, bgfx::ViewId view, entt::entity selected)
+{
+    const auto* emitter = scene.valid(selected) ? scene.registry().try_get<ParticleEmitter>(selected) : nullptr;
+    if (!emitter)
+        return;
+    float world[16];
+    scene.worldMatrix(selected, world);
+    std::vector<LineVertex> lines;
+    for (const auto& [a, b] : particleShapeLines(*emitter)) {
+        const bx::Vec3 wa = bx::mul(a, world), wb = bx::mul(b, world);
+        lines.push_back({wa.x, wa.y, wa.z, kParticleShapeColor});
+        lines.push_back({wb.x, wb.y, wb.z, kParticleShapeColor});
     }
     submitLines(lines, lineLayout_, lineProgram_, view);
 }

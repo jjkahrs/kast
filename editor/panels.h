@@ -144,6 +144,7 @@ private:
     void stopPreview();
     // Play/Pause and a time scrub on the Animator's runtime state: poses the model, never saved, never dirties.
     void drawAnimatorPreview(Document& doc, entt::entity entity);
+    void drawParticlePreview(Document& doc, entt::entity entity);
     // The Inspector for the .mat in inspectedMaterial_: every edit saves the file (the renderers reload it).
     void drawMaterialInspector(Document& doc);
     // Generated Inspector widgets for a component field's JSON value (built-in or Lua); true if they changed it.

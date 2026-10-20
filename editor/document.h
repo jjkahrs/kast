@@ -167,10 +167,10 @@ bool setGlobalStateMachine(Document& doc, const std::string& name, bool global, 
 // there is none or the save fails (the project is unchanged).
 bool setBusDefault(Document& doc, kast::AudioBus bus, kast::BusMix level, std::string& error);
 
-enum class ObjectKind { Empty, Cube, Plane, Sphere, Model, DirectionalLight, PointLight, Camera };
+enum class ObjectKind { Empty, Cube, Plane, Sphere, Model, DirectionalLight, PointLight, Camera, ParticleSystem };
 constexpr ObjectKind kObjectKinds[] = {ObjectKind::Empty, ObjectKind::Cube, ObjectKind::Plane, ObjectKind::Sphere,
                                        ObjectKind::Model, ObjectKind::DirectionalLight, ObjectKind::PointLight,
-                                       ObjectKind::Camera};
+                                       ObjectKind::Camera, ObjectKind::ParticleSystem};
 const char* objectKindLabel(ObjectKind kind); // menu label, e.g. "Create Empty", "Cube"
 
 // Scene edits below are undo steps (scene_undo.h) unless they say they clear the history.

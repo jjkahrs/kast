@@ -35,8 +35,11 @@ int advanceEmitter(const ParticleEmitter& emitter, ParticleEmitterState& state, 
 {
     dt = state.paused ? 0.0f : clampParticleDt(dt);
     state.lastDt = dt;
-    state.lastSpawn = 0;
+    state.lastSpawn = std::exchange(state.pending, 0);
     state.simTime += dt;
+    const double life = std::max(emitter.lifetimeMin, emitter.lifetimeMax);
+    while (!state.births.empty() && state.simTime - state.births.front().first >= life)
+        state.births.pop_front(); // all dead
     if (!state.playing || state.paused)
         return 0;
     const float duration = std::max(emitter.duration, kMinParticleDuration);
@@ -65,8 +68,67 @@ int advanceEmitter(const ParticleEmitter& emitter, ParticleEmitterState& state, 
     state.accumulator -= whole;
     count = std::min<int64_t>(count + static_cast<int64_t>(whole), kMaxParticles);
     state.spawned += static_cast<uint64_t>(count);
-    state.lastSpawn = static_cast<uint64_t>(count);
+    state.lastSpawn += static_cast<uint64_t>(count);
+    if (count > 0)
+        state.births.emplace_back(state.simTime, static_cast<uint32_t>(count));
     return static_cast<int>(count);
+}
+
+ParticleEmitterState& emitterState(entt::registry& registry, entt::entity entity)
+{
+    if (auto* state = registry.try_get<ParticleEmitterState>(entity))
+        return *state;
+    auto& state = registry.emplace<ParticleEmitterState>(entity);
+    state.id = g_nextStateId++;
+    const auto* persistent = registry.try_get<PersistentId>(entity);
+    state.seed = seedOf(persistent ? persistent->value : static_cast<uint64_t>(entt::to_integral(entity)));
+    state.playing = registry.get<ParticleEmitter>(entity).playOnStart;
+    return state;
+}
+
+void playEmitter(ParticleEmitterState& state)
+{
+    state.paused = false;
+    if (std::exchange(state.playing, true))
+        return;
+    state.time = 0.0f;
+    state.started = false; // the cycle's burst goes out again
+}
+
+void stopEmitter(ParticleEmitterState& state, bool clear)
+{
+    state.playing = false;
+    if (!clear)
+        return;
+    ++state.clears;
+    state.births.clear();
+}
+
+void restartEmitter(ParticleEmitterState& state)
+{
+    stopEmitter(state, true);
+    state.cycle = 0;
+    state.accumulator = 0.0f;
+    playEmitter(state);
+}
+
+int burstEmitter(const ParticleEmitter& emitter, ParticleEmitterState& state, int count)
+{
+    count = std::clamp(count, 0, std::clamp(emitter.maxParticles, 1, kMaxParticles));
+    state.spawned += static_cast<uint64_t>(count);
+    state.pending += static_cast<uint64_t>(count);
+    if (count > 0)
+        state.births.emplace_back(state.simTime, static_cast<uint32_t>(count));
+    return count;
+}
+
+int aliveParticles(const ParticleEmitter& emitter, const ParticleEmitterState& state)
+{
+    const double life = std::max(emitter.lifetimeMin, emitter.lifetimeMax);
+    uint64_t alive = 0;
+    for (const auto& [born, count] : state.births)
+        alive += state.simTime - born < life ? count : 0;
+    return static_cast<int>(std::min<uint64_t>(alive, std::clamp(emitter.maxParticles, 1, kMaxParticles)));
 }
 
 void particleSystem(Scene& scene, float dt)
@@ -75,17 +137,8 @@ void particleSystem(Scene& scene, float dt)
     // A state outlives nothing: re-adding the component starts a fresh emitter.
     const auto orphans = registry.view<ParticleEmitterState>(entt::exclude<ParticleEmitter>);
     registry.remove<ParticleEmitterState>(orphans.begin(), orphans.end());
-    for (auto [entity, emitter] : registry.view<ParticleEmitter>().each()) {
-        auto* state = registry.try_get<ParticleEmitterState>(entity);
-        if (!state) {
-            state = &registry.emplace<ParticleEmitterState>(entity);
-            state->id = g_nextStateId++;
-            const auto* persistent = registry.try_get<PersistentId>(entity);
-            state->seed = seedOf(persistent ? persistent->value : static_cast<uint64_t>(entt::to_integral(entity)));
-            state->playing = emitter.playOnStart;
-        }
-        advanceEmitter(emitter, *state, dt);
-    }
+    for (auto [entity, emitter] : registry.view<ParticleEmitter>().each())
+        advanceEmitter(emitter, emitterState(registry, entity), dt);
 }
 
 float particleReach(const ParticleEmitter& emitter, float maxScale)
@@ -107,6 +160,48 @@ Aabb particleBounds(const ParticleEmitter& emitter, const float* world)
     const float reach = particleReach(emitter, maxScale);
     const bx::Vec3 center{world[12], world[13], world[14]};
     return {bx::sub(center, reach), bx::add(center, reach)};
+}
+
+std::vector<std::pair<bx::Vec3, bx::Vec3>> particleShapeLines(const ParticleEmitter& emitter)
+{
+    constexpr int kSegments = 32;
+    std::vector<std::pair<bx::Vec3, bx::Vec3>> lines;
+    // kSegments segments through point(angle), angle 0..2 pi.
+    const auto circle = [&](auto point) {
+        for (int i = 0; i < kSegments; ++i)
+            lines.emplace_back(point(2.0f * bx::kPi * i / kSegments), point(2.0f * bx::kPi * (i + 1) / kSegments));
+    };
+    const float r = emitter.radius;
+    switch (emitter.shape) {
+    case ParticleShape::Sphere:
+        circle([&](float a) { return bx::Vec3{r * std::cos(a), r * std::sin(a), 0.0f}; });
+        circle([&](float a) { return bx::Vec3{0.0f, r * std::cos(a), r * std::sin(a)}; });
+        circle([&](float a) { return bx::Vec3{r * std::cos(a), 0.0f, r * std::sin(a)}; });
+        break;
+    case ParticleShape::Box: {
+        const bx::Vec3 h = bx::mul(emitter.boxSize, 0.5f);
+        const auto corner = [&](int i) { return bx::Vec3{i & 1 ? h.x : -h.x, i & 2 ? h.y : -h.y, i & 4 ? h.z : -h.z}; };
+        for (int i = 0; i < 8; ++i)
+            for (int bit = 1; bit < 8; bit <<= 1)
+                if (!(i & bit))
+                    lines.emplace_back(corner(i), corner(i | bit));
+        break;
+    }
+    case ParticleShape::Cone: {
+        // Rim point at angle a, moved one metre along the steepest emission direction there.
+        const float angle = bx::toRad(std::clamp(emitter.coneAngle, 0.0f, 180.0f));
+        const auto rim = [&](float a, float along) {
+            return bx::Vec3{(r + along * std::sin(angle)) * std::cos(a), along * std::cos(angle),
+                            (r + along * std::sin(angle)) * std::sin(a)};
+        };
+        circle([&](float a) { return rim(a, 0.0f); });
+        circle([&](float a) { return rim(a, 1.0f); });
+        for (int i = 0; i < 4; ++i)
+            lines.emplace_back(rim(0.5f * bx::kPi * i, 0.0f), rim(0.5f * bx::kPi * i, 1.0f));
+        break;
+    }
+    }
+    return lines;
 }
 
 void ParticleRenderer::init(uint64_t supportedCaps)

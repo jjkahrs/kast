@@ -66,7 +66,7 @@ void buildMips(MipImage& image, bool srgb);
 // Shadows: cascaded shadow maps for that DirectionalLight and cube shadow maps for the kMaxShadowedPointLights
 // castShadows PointLights nearest the eye, rendered in kShadowViews views before the scene's (see shadow.h).
 // renderOverlays draws the editor's: a ground grid, axis lines, a short frustum preview per Camera, the range of the
-// selected PointLight and the selected entity's collider.
+// selected PointLight, the selected entity's collider and its ParticleEmitter's shape.
 // Every pass culls its draws to its view frustum (main camera, each cascade, each cube face), and draws that share
 // buffers, material, shadow flags and (main pass) point lights, unskinned and not blended, are drawn as one GPU-instanced
 // submit (see docs/engine/instancing-and-culling.html).
@@ -173,6 +173,7 @@ private:
     void drawCameraFrustums(const Scene& scene, bgfx::ViewId view);
     void drawPointLightRange(const Scene& scene, bgfx::ViewId view, entt::entity selected);
     void drawColliderWireframe(const Scene& scene, bgfx::ViewId view, entt::entity selected);
+    void drawParticleShape(const Scene& scene, bgfx::ViewId view, entt::entity selected);
 
     // GPU copy of a TerrainTile's heights: kTileSamples^2 vertices in tile-local metres; indices are terrainIndices_.
     struct TerrainMesh {

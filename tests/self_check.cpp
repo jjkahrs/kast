@@ -9544,6 +9544,256 @@ end, update = function() end })");
           "kast.instantiate: failures are logged with why");
     lua.stop();
 }
+// Runtime controls on the CPU emitter state (kast.particles, the Inspector) and the alive estimate.
+void checkParticleControls()
+{
+    kast::ParticleEmitter emitter;
+    emitter.rate = 0.0f;
+    emitter.burstCount = 3;
+    emitter.maxParticles = 50;
+    emitter.lifetimeMin = 1.0f;
+    emitter.lifetimeMax = 2.0f;
+    kast::ParticleEmitterState state; // stopped
+    check(kast::advanceEmitter(emitter, state, 0.1f) == 0 && kast::aliveParticles(emitter, state) == 0,
+          "particles: a stopped emitter spawns nothing");
+    check(kast::burstEmitter(emitter, state, 7) == 7 && state.spawned == 7 && kast::aliveParticles(emitter, state) == 7,
+          "particles: burst spawns even when stopped");
+    check(kast::burstEmitter(emitter, state, 500) == 50 && kast::burstEmitter(emitter, state, -4) == 0 &&
+              kast::aliveParticles(emitter, state) == 50,
+          "particles: burst clamps to 0..maxParticles; alive is at most maxParticles");
+    kast::advanceEmitter(emitter, state, 0.1f);
+    check(state.lastSpawn == 57, "particles: bursts since the last tick count as its spawns (for a renderer's first sight)");
+    for (int i = 0; i < 18; ++i)
+        kast::advanceEmitter(emitter, state, 0.1f);
+    check(kast::aliveParticles(emitter, state) == 50, "particles: alive until lifetimeMax has passed");
+    kast::advanceEmitter(emitter, state, 0.1f);
+    check(kast::aliveParticles(emitter, state) == 0 && state.births.empty(), "particles: then none (an upper bound)");
+
+    kast::playEmitter(state);
+    check(state.playing && kast::advanceEmitter(emitter, state, 0.1f) == 3, "particles: play starts the cycle with its burst");
+    state.paused = true;
+    kast::playEmitter(state);
+    check(!state.paused && state.playing && kast::advanceEmitter(emitter, state, 0.1f) == 0,
+          "particles: play resumes a paused emitter without restarting its cycle");
+    const uint32_t clears = state.clears;
+    kast::stopEmitter(state, false);
+    check(!state.playing && state.clears == clears && kast::aliveParticles(emitter, state) == 3,
+          "particles: stop: no more spawns, the live ones finish their life");
+    kast::playEmitter(state);
+    check(kast::advanceEmitter(emitter, state, 0.1f) == 3, "particles: play after stop restarts the cycle (its burst again)");
+    kast::stopEmitter(state, true);
+    check(!state.playing && state.clears == clears + 1 && kast::aliveParticles(emitter, state) == 0,
+          "particles: stop(clear) kills the live particles");
+    state.paused = true;
+    state.time = 0.5f;
+    state.cycle = 4;
+    kast::restartEmitter(state);
+    check(state.playing && !state.paused && state.time == 0.0f && state.cycle == 0 && state.clears == clears + 2 &&
+              kast::advanceEmitter(emitter, state, 0.1f) == 3,
+          "particles: restart clears and plays from the start");
+}
+
+// The shape gizmo's lines: each shape's own outline, in local space.
+void checkParticleGizmo()
+{
+    kast::ParticleEmitter emitter;
+    emitter.radius = 2.0f;
+    emitter.shape = kast::ParticleShape::Sphere;
+    const auto sphere = kast::particleShapeLines(emitter);
+    check(sphere.size() == 96 && std::ranges::all_of(sphere, [](const auto& line) {
+              return near(bx::length(line.first), 2.0f) && near(bx::length(line.second), 2.0f);
+          }),
+          "particles gizmo: a sphere is three circles of its radius");
+    emitter.shape = kast::ParticleShape::Box;
+    emitter.boxSize = {2.0f, 4.0f, 6.0f};
+    const auto box = kast::particleShapeLines(emitter);
+    check(box.size() == 12 && std::ranges::all_of(box, [](const auto& line) {
+              const float d = bx::length(bx::sub(line.second, line.first));
+              return near(d, 2.0f) || near(d, 4.0f) || near(d, 6.0f);
+          }) && near(box[0].first, {-1.0f, -2.0f, -3.0f}),
+          "particles gizmo: a box is its twelve edges, centered");
+    emitter.shape = kast::ParticleShape::Cone;
+    emitter.radius = 0.5f;
+    emitter.coneAngle = 0.0f;
+    const auto beam = kast::particleShapeLines(emitter);
+    check(beam.size() == 68 && near(beam[32].first, {0.5f, 1.0f, 0.0f}) && near(beam.back().second, {0.0f, 1.0f, -0.5f}),
+          "particles gizmo: cone angle 0 is a cylinder one metre up");
+    emitter.coneAngle = 45.0f;
+    const auto cone = kast::particleShapeLines(emitter);
+    const float spread = 0.5f + std::sqrt(0.5f);
+    check(near(cone[0].first, {0.5f, 0.0f, 0.0f}) && near(cone[32].first, {spread, std::sqrt(0.5f), 0.0f}),
+          "particles gizmo: a cone's base disc and its spread at coneAngle");
+}
+
+// Editor paths: GameObject > Particle System, undo/redo of its creation and of a field edit (the preview follows),
+// Duplicate, save -> reopen and prefabs keep the emitter.
+void checkParticleEditor()
+{
+    const std::filesystem::path dir = projectTestDir("kast_particle_editor", "Particles");
+    check(std::ranges::find(kObjectKinds, ObjectKind::ParticleSystem) != std::end(kObjectKinds) &&
+              std::string(objectKindLabel(ObjectKind::ParticleSystem)) == "Particle System",
+          "particles: the GameObject menu has Particle System");
+    Document doc;
+    resetToDefault(doc);
+    doc.project = kast::Project{.root = dir, .name = "Particles"};
+    checkUndoRedo(doc, "create particle system", [&] { createObject(doc, ObjectKind::ParticleSystem, entt::null); });
+    check(doc.history.undoName() == "Create Particle System", "particles: the create step is named");
+    const entt::entity made = named(doc.scene, "Particle System");
+    const auto* emitter = made == entt::null ? nullptr : doc.scene.registry().try_get<kast::ParticleEmitter>(made);
+    check(emitter && doc.selected == made && doc.scene.registry().all_of<kast::Transform>(made) &&
+              kast::componentToJson(entt::meta_any{*emitter}) == kast::componentToJson(entt::meta_any{kast::ParticleEmitter{}}),
+          "particles: Particle System is a selected entity with a Transform and a default emitter");
+    const kast::EntityId id = idOf(doc.scene, made);
+    undoScene(doc);
+    check(named(doc.scene, "Particle System") == entt::null, "particles: undo removes the created emitter");
+    updatePlay(doc, 0.1f); // the preview's state goes with it
+    check(doc.scene.registry().view<kast::ParticleEmitterState>().empty(), "particles: no state left after undo");
+    redoScene(doc);
+    const auto entity = [&] { return kast::findById(doc.scene, id); };
+    check(doc.scene.registry().all_of<kast::ParticleEmitter>(entity()), "particles: redo brings it back by id");
+
+    // A field edit (an Inspector drag) and its undo: the preview spawns at the rate in the scene right now.
+    updatePlay(doc, 0.1f);
+    const auto spawnedIn = [&](float seconds) {
+        const uint64_t before = doc.scene.registry().get<kast::ParticleEmitterState>(entity()).spawned;
+        for (int i = 0; i < static_cast<int>(seconds * 10.0f + 0.5f); ++i)
+            updatePlay(doc, 0.1f);
+        return doc.scene.registry().get<kast::ParticleEmitterState>(entity()).spawned - before;
+    };
+    const uint64_t defaultRate = spawnedIn(1.0f);
+    const SceneScope scope{.entities = {id}};
+    const SceneState before = captureScene(doc.scene, scope);
+    doc.scene.registry().get<kast::ParticleEmitter>(entity()).rate = 100.0f;
+    sceneGesture(doc, "Edit Particle System", scope, before);
+    markDirty(doc);
+    endSceneGesture(doc);
+    const uint64_t edited = spawnedIn(1.0f);
+    const uint64_t stateId = doc.scene.registry().get<kast::ParticleEmitterState>(entity()).id;
+    undoScene(doc);
+    const uint64_t undone = spawnedIn(1.0f);
+    redoScene(doc);
+    const uint64_t redone = spawnedIn(1.0f);
+    check(defaultRate == 10 && edited == 100 && undone == 10 && redone == 100,
+          std::format("particles: undo/redo of a field edit changes the live preview (spawned per second: {}, {}, {}, {})",
+                      defaultRate, edited, undone, redone).c_str());
+    check(doc.scene.registry().get<kast::ParticleEmitterState>(entity()).id == stateId,
+          "particles: undoing a field edit keeps the running preview (no restart)");
+
+    // Restart / Pause / the count are runtime only: no undo step, not dirty.
+    const size_t steps = doc.history.size();
+    const bool dirty = doc.dirty;
+    kast::restartEmitter(doc.scene.registry().get<kast::ParticleEmitterState>(entity()));
+    doc.scene.registry().get<kast::ParticleEmitterState>(entity()).paused = true;
+    check(doc.history.size() == steps && doc.dirty == dirty, "particles: Restart / Pause add no undo step, dirty nothing");
+
+    // Duplicate copies the emitter (not its runtime state).
+    kast::ParticleEmitter& source = doc.scene.registry().get<kast::ParticleEmitter>(entity());
+    source.shape = kast::ParticleShape::Box;
+    source.blend = kast::ParticleBlend::Additive;
+    source.texture = "textures/spark.png";
+    const nlohmann::ordered_json fields = kast::componentToJson(entt::meta_any{source});
+    doc.selected = entity();
+    duplicateSelected(doc);
+    const entt::entity copy = doc.selected;
+    const auto* copied = doc.scene.registry().try_get<kast::ParticleEmitter>(copy);
+    check(copy != entity() && copied && kast::componentToJson(entt::meta_any{*copied}) == fields &&
+              !doc.scene.registry().all_of<kast::ParticleEmitterState>(copy),
+          "particles: Duplicate copies the emitter, not its runtime state");
+
+    // Save -> reopen.
+    std::string error;
+    const std::string path = (dir / "emitters.scene").string();
+    check(kast::saveScene(doc.scene, path, error), "particles: save the scene");
+    Document reopened;
+    check(openFile(reopened, path, error), "particles: reopen the scene");
+    const entt::entity loaded = kast::findById(reopened.scene, id);
+    const auto* loadedEmitter = loaded == entt::null ? nullptr : reopened.scene.registry().try_get<kast::ParticleEmitter>(loaded);
+    check(loadedEmitter && kast::componentToJson(entt::meta_any{*loadedEmitter}) == fields,
+          "particles: the emitter round-trips through save -> reopen");
+
+    // Prefab: create from the emitter, instantiate, and the instance has the same emitter; the file has it too.
+    check(kast::createPrefab(doc.scene, entity(), "prefabs/sparks.prefab", dir, error), "particles: create a prefab");
+    std::shared_ptr<const kast::PrefabAsset> asset;
+    check(kast::loadPrefab(dir, "prefabs/sparks.prefab", asset, error), "particles: load the prefab");
+    const entt::entity instance = asset ? kast::instantiatePrefab(doc.scene, asset, entt::null, error) : entt::null;
+    const auto* instanced = instance == entt::null ? nullptr : doc.scene.registry().try_get<kast::ParticleEmitter>(instance);
+    check(instanced && kast::componentToJson(entt::meta_any{*instanced}) == fields,
+          "particles: the emitter round-trips through a prefab");
+    const nlohmann::ordered_json prefabFile = readJson(dir / "prefabs/sparks.prefab");
+    check(prefabFile["entities"][0]["components"]["ParticleEmitter"]["shape"] == "box", "particles: the prefab file has it");
+}
+
+// kast.particles from Lua: argument errors, and play / stop / burst / alive on the emitters' CPU state.
+void checkParticleLua()
+{
+    const std::filesystem::path dir = luaTestDir();
+    Document doc;
+    doc.path = (dir / "particles.scene").string();
+    doc.project = kast::Project{.root = dir, .name = "Particles"};
+    entt::registry& registry = doc.scene.registry();
+    const entt::entity running = doc.scene.create("Running");
+    registry.emplace<kast::ParticleEmitter>(running).rate = 100.0f;
+    const entt::entity idle = doc.scene.create("Idle");
+    kast::ParticleEmitter& idleEmitter = registry.emplace<kast::ParticleEmitter>(idle);
+    idleEmitter.playOnStart = false;
+    idleEmitter.rate = 0.0f;
+    idleEmitter.burstCount = 7;
+    idleEmitter.maxParticles = 100;
+    const entt::entity plain = doc.scene.create("Plain");
+    writeFile(dir / "scripts/particles.lua", std::format(R"lua(local RUNNING, IDLE, PLAIN = {}, {}, {}
+local function fails(part, fn, ...)
+    local ok, err = pcall(fn, ...)
+    assert(not ok, "expected an error mentioning " .. part)
+    assert(string.find(err, part, 1, true), "error '" .. tostring(err) .. "' does not mention " .. part)
+end
+local frame = 0
+return {{ update = function(dt)
+    frame = frame + 1
+    local p = kast.particles
+    if frame == 1 then
+        assert(p.alive(IDLE) == 0, "a stopped emitter has none")
+        assert(p.burst(IDLE, 5) == 5 and p.alive(IDLE) == 5, "burst while stopped")
+        assert(p.burst(IDLE, 1000) == 100 and p.alive(IDLE) == 100, "burst and alive clamp to maxParticles")
+        p.stop(IDLE, true)
+        assert(p.alive(IDLE) == 0, "stop(clear) kills them")
+        p.play(IDLE)
+        p.stop(RUNNING)
+        p.stop(RUNNING, false)
+        fails("invalid entity id 999999", p.play, 999999)
+        fails("invalid entity id nil", p.alive)
+        fails("kast.particles.play: entity " .. PLAIN .. " has no ParticleEmitter", p.play, PLAIN)
+        fails("kast.particles.alive: entity " .. PLAIN .. " has no ParticleEmitter", p.alive, PLAIN)
+        fails("kast.particles.stop: clear must be true, false or nil, got 1", p.stop, RUNNING, 1)
+        fails("kast.particles.burst: count must be a whole number >= 0, got -1", p.burst, IDLE, -1)
+        fails("kast.particles.burst: count must be a whole number >= 0, got 1.5", p.burst, IDLE, 1.5)
+        fails("kast.particles.burst: count must be a whole number >= 0", p.burst, IDLE, "3")
+        fails("kast.particles.burst: count must be a whole number >= 0", p.burst, IDLE)
+        fails("particles.lua:", function() p.burst(PLAIN, 1) end) -- raised at the calling line
+        fails("kast is read-only", function() p.play = nil end)
+    elseif frame == 2 then
+        assert(p.alive(RUNNING) > 0, "stopped without clear: the live particles finish their life")
+        assert(p.alive(IDLE) >= 7, "play started the cycle with its burst")
+        kast.log("particles lua checks done")
+    end
+end }}
+)lua",
+                                                         idOf(doc.scene, running), idOf(doc.scene, idle), idOf(doc.scene, plain)));
+    doc.scene.systems = {"scripts/particles.lua"};
+    startPlay(doc);
+    updatePlay(doc, 0.1f);
+    const auto* runningState = registry.try_get<kast::ParticleEmitterState>(running);
+    const auto* idleState = registry.try_get<kast::ParticleEmitterState>(idle);
+    check(runningState && !runningState->playing && idleState && idleState->playing && idleState->clears == 1 &&
+              idleState->spawned == 105,
+          "kast.particles: stop / play / burst / stop(clear) change the emitters' state");
+    const uint64_t spawned = runningState ? runningState->spawned : 0;
+    updatePlay(doc, 0.1f);
+    check(registry.get<kast::ParticleEmitterState>(running).spawned == spawned, "kast.particles: a stopped emitter spawns no more");
+    checkOk(doc.lua, 0, "kast.particles asserts pass");
+    check(logged("particles lua checks done"), "kast.particles checks ran");
+    stopPlay(doc);
+}
+
 int main(int argc, char** argv)
 {
     kast::disableCrashDialogsIfRequested();
@@ -9567,6 +9817,10 @@ int main(int argc, char** argv)
         checkParticleClock();
         checkParticleBounds();
         checkParticlesNoop();
+        checkParticleControls();
+        checkParticleGizmo();
+        checkParticleEditor();
+        checkParticleLua();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All particle checks passed" : std::format("{} particle check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
@@ -9707,6 +9961,10 @@ int main(int argc, char** argv)
     checkParticleClock();
     checkParticleBounds();
     checkParticlesNoop();
+    checkParticleControls();
+    checkParticleGizmo();
+    checkParticleEditor();
+    checkParticleLua();
     g_failures += netSelfCheck(); // tests/net_self_check.cpp
     checkMountedPak(); // last: the mounted pak hides the disk for the rest of the run
     removeTree(testRoot());

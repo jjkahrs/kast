@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <string>
 #include <vector>
@@ -70,8 +71,11 @@ struct ParticleEmitterState {
     uint64_t spawned = 0;     // particles requested since the state was made
     double simTime = 0.0;     // seconds simulated since the state was made
     uint32_t clears = 0;      // bumped to kill every live particle
-    uint64_t lastSpawn = 0;   // the last tick's share of spawned
+    uint64_t lastSpawn = 0;   // the last tick's share of spawned (with the bursts since the tick before)
     float lastDt = 0.0f;      // and of simTime: a renderer seeing the state first catches up from there
+    uint64_t pending = 0;     // burstEmitter's particles since the last tick
+    int capacity = 0;         // maxParticles at the last tick: a change empties the GPU ring
+    std::deque<std::pair<double, uint32_t>> births; // (simTime, count) of the spawns still possibly alive
 };
 
 // dt clamped to 0..kMaxParticleDt.
@@ -79,6 +83,22 @@ float clampParticleDt(float dt);
 // Advances the emitter's clock by dt (clamped) and returns how many particles to spawn: the cycle's burst at its start
 // plus rate * dt with the fraction carried over. A non-looping emitter stops playing at the end of its cycle.
 int advanceEmitter(const ParticleEmitter& emitter, ParticleEmitterState& state, float dt);
+// entity's state (it must have a ParticleEmitter), made on first sight: playing if playOnStart.
+ParticleEmitterState& emitterState(entt::registry& registry, entt::entity entity);
+// Runtime controls (kast.particles, the editor's Inspector); none is saved or undoable.
+// Starts or resumes; a stopped emitter starts its cycle over (with its burst).
+void playEmitter(ParticleEmitterState& state);
+// Stops emitting; clear also kills the live particles, else they finish their life.
+void stopEmitter(ParticleEmitterState& state, bool clear);
+// Kills the live particles and plays from the start of the cycle.
+void restartEmitter(ParticleEmitterState& state);
+// Spawns count particles (clamped to 0..maxParticles) at the next simulate, even when stopped; returns how many.
+int burstEmitter(const ParticleEmitter& emitter, ParticleEmitterState& state, int count);
+// Live particles, estimated on the CPU (no GPU readback): those spawned within the last lifetimeMax seconds of
+// simulated time, at most maxParticles. An upper bound: 0 means every particle is dead.
+// ponytail: births are kept per tick (about lifetimeMax * fps entries); shortening lifetimeMax at runtime under-counts
+// the particles already flying. A delayed GPU readback of an alive counter if exact counts matter.
+int aliveParticles(const ParticleEmitter& emitter, const ParticleEmitterState& state);
 // Ticks every ParticleEmitter (making its state on first sight: playing if playOnStart). Play and the editor's edit
 // mode preview call it; GPU-free.
 void particleSystem(Scene& scene, float dt);
@@ -88,6 +108,9 @@ void particleSystem(Scene& scene, float dt);
 // bound. World space particles left behind by a moving emitter can fall outside it (culled a little early).
 float particleReach(const ParticleEmitter& emitter, float maxScale);
 Aabb particleBounds(const ParticleEmitter& emitter, const float* world);
+// The emission shape as line segments in the entity's local space (the editor's gizmo): a sphere's three circles, the
+// box's twelve edges, or the cone's base disc and its spread over the first metre (a cylinder at coneAngle 0).
+std::vector<std::pair<bx::Vec3, bx::Vec3>> particleShapeLines(const ParticleEmitter& emitter);
 
 // The GPU side of the emitters drawn by one Renderer. Buffers are made on first sight of a state and destroyed when
 // it is gone (entity, component, scene or project), its maxParticles changes, or on shutdown.
