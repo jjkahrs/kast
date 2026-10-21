@@ -328,7 +328,11 @@ void Replication::showRemote(Remote& remote)
 {
     Transform& t = scene_->registry().get<Transform>(remote.entity);
     t.position = remote.motion.position(interpolationSeconds(), extrapolationSeconds());
-    t.rotation = yawRotation(remote.motion.heading(interpolationSeconds()));
+    const float heading = remote.motion.heading(interpolationSeconds());
+    if (remote.shownHeading != heading) {
+        t.rotation = yawRotation(heading);
+        remote.shownHeading = heading;
+    }
 }
 
 void Replication::update(float dt)
@@ -427,6 +431,7 @@ void Replication::placePlayer()
 void Replication::spawn(uint32_t id, Remote remote, const bx::Vec3& position, float heading)
 {
     remote.motion.place(position, heading);
+    remote.shownHeading.reset(); // a new clone
     despawn(id); // an id the server reuses without a despawn we saw
     const auto [source, root] = cloneSource(remote);
     if (!source) {
