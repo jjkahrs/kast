@@ -3731,8 +3731,10 @@ int liveOnlineCheck(const std::string& authUrl, const std::string& mailpitUrl, c
                (what == OnlineModel::Compose::Ps || pollUntil(online, project, [&] { return !online.composeBusy(); }, 60s));
     };
     const auto running = [&] {
-        return online.services().size() >= 4 &&
-               std::ranges::all_of(online.services(), [](const ComposeService& s) { return s.state == "running"; });
+        // chat-db-init is a one-shot (the chat database), done once it exited
+        return online.services().size() >= 4 && std::ranges::all_of(online.services(), [](const ComposeService& s) {
+                   return s.state == "running" || (s.name == "chat-db-init" && s.state == "exited");
+               });
     };
     if (!compose(OnlineModel::Compose::Ps, 60s) || !online.composeError().empty()) {
         kast::log::warn(std::format("SKIPPED: docker compose ps failed ({}); is Docker Desktop running?", online.composeError()));
