@@ -50,6 +50,11 @@
 -- emote, a whisper to itself, General, /join Trade, Trade, zone, a whisper to nobody), then fills the field, focuses it
 -- and logs KEYS: --sim-key presses Enter, which sends it. "chat_down" enters with the chat service stopped
 -- (starter_mmo_live_play.cmake STOP_CHAT), waits for the box's "unavailable" line and says something (still works).
+-- Loading screen (ui/loading.rml, scripts/characters.lua, scripts/loading.lua): "loading" shoots right after the click
+-- (the screen up); "loaded" waits in the Meadow for the "loading" game machine to be back at idle (the screen gone),
+-- chats and shoots once its line comes back; "enter_error" asks for the character list in the frame the click is
+-- handled (update runs before the drain that delivers it), so the server refuses the click's enterWorld (rate_limited:
+-- one request at a time), then clicks again when that list comes and goes on as "loaded".
 -- "SHOT" log lines are for --screenshot-on-log: the moment a stage's screenshot should show.
 local STAGE, CHARACTER = "@STAGE@", "@CHARACTER@"
 local REALM = "Starter Realm"
@@ -857,6 +862,7 @@ return {
             local p = kast.get(player, "Transform").position
             log("scene %s: terrain map %d, player at %.1f, %.1f", tostring(kast.currentScene()), kast.get(e, "Terrain").map,
                 p.x, p.z)
+            log("loading machine: %s", kast.fsm.state("loading"))
             local shown = {}
             for doc in kast.query("UIDocument") do
                 local d = kast.get(doc, "UIDocument")
@@ -891,10 +897,15 @@ return {
             end
             for i, character in ipairs(e.characters) do
                 if character.name == CHARACTER then
+                    if STAGE == "enter_error" then
+                        if phase == "pick" or phase == "again" then return end
+                        phase = phase == "refused" and "again" or "pick" -- "refused": the list update asked for
+                    end
                     if STAGE ~= "chars" then
                         log("entering as %s", CHARACTER)
                         kast.publish("characters.pick", {id = "char_" .. i})
                     end
+                    if STAGE == "loading" then shoot("loading screen") end
                     return
                 end
             end
@@ -1071,6 +1082,7 @@ return {
         kast.subscribe("world.chat", function(e)
             if e.kind == "say" then log("chat %s: %s", e.from, e.text) else log("chat %s %s: %s", e.kind, e.from, e.text) end
             if STAGE == "chat" and not myName then myName = e.from end
+            if STAGE == "loaded" or STAGE == "enter_error" then shoot("zone up") end
         end)
         kast.subscribe("chat.message", function(e)
             log("chat message %s %s%s: %s", e.kind, e.channel and (e.channel .. " ") or "", e.from or e.to, e.text)
@@ -1128,6 +1140,10 @@ return {
             rolledBackAt = nil
             log("clip after the rollback: %s", clipNow())
         end
+        if STAGE == "enter_error" and phase == "pick" then -- before this frame's drain delivers the click
+            phase = "refused"
+            kast.world.listCharacters() -- still in flight when the click's enterWorld arrives
+        end
         if STAGE == "class_pick" then
             elapsed = elapsed + dt
             if phase == "unpicked" and elapsed >= waitUntil then
@@ -1141,6 +1157,12 @@ return {
         end
         if not player or not map then return end
         elapsed = elapsed + dt
+        if (STAGE == "loaded" or STAGE == "enter_error") and not chatted and kast.fsm.state("loading") == "idle" then
+            chatted = true
+            log("loading screen hidden after %d frame(s)", frame)
+            kast.gui.setText("chat_input", "hello after loading")
+            kast.publish("chat.send")
+        end
         if STAGE == "world" and not chatted and elapsed > 1 then
             chatted = true
             kast.gui.setText("chat_input", "hello from the starter sample")

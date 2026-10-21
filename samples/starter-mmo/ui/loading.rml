@@ -1,0 +1,12 @@
+<rml>
+    <head>
+        <title>Loading</title>
+        <link type="text/rcss" href="starter.rcss"/>
+    </head>
+    <body>
+        <div id="loading" class="screen">
+            <div id="loading_spinner"></div>
+            <p id="loading_text">Entering the world...</p>
+        </div>
+    </body>
+</rml>

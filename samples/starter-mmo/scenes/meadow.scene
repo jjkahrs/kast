@@ -671,6 +671,35 @@
           "blend": "alpha"
         }
       }
+    },
+    {
+      "id": 35,
+      "name": "Loading",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UIDocument": {
+          "path": "ui/loading.rml",
+          "visible": true
+        }
+      }
     }
   ],
   "systems": [
@@ -680,6 +709,7 @@
     "scripts/combat.lua",
     "scripts/powers.lua",
     "scripts/world_flow.lua",
+    "scripts/loading.lua",
     "scripts/bag.lua",
     "scripts/character.lua",
     "scripts/loot.lua",
