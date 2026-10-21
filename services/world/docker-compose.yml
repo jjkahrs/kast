@@ -1,4 +1,4 @@
-# World test stack: world + real auth (built from ../auth, unmodified) + one MySQL 8.4 + Mailpit.
+# World test stack: world + chat (../chat) + real auth (built from ../auth, unmodified) + one MySQL 8.4 + Mailpit.
 # Requires .env (cp .env.example .env). Host ports differ from the auth stack so both can run side by side.
 name: kast-world
 
@@ -22,6 +22,13 @@ services:
       # Lag simulator, testing only (0 = off): from .env or the shell, e.g. SIM_LATENCY_MS=150 SIM_JITTER_MS=50.
       SIM_LATENCY_MS: ${SIM_LATENCY_MS:-0}
       SIM_JITTER_MS: ${SIM_JITTER_MS:-0}
+      # The chat service (docs/services/chat): clients are told CHAT_PUBLIC_HOST:CHAT_HOST_PORT (the host's view); the
+      # internal link goes to the compose service. The world starts and runs without it.
+      CHAT_PUBLIC_HOST: ${CHAT_PUBLIC_HOST:-127.0.0.1}
+      CHAT_PUBLIC_PORT: ${CHAT_HOST_PORT:-7778}
+      CHAT_LINK_HOST: chat
+      CHAT_LINK_PORT: 7779
+      CHAT_LINK_SECRET: ${CHAT_LINK_SECRET:?set CHAT_LINK_SECRET in .env}
     ports:
       - "${WORLD_HOST_PORT:-7777}:7777"
     volumes:
@@ -46,6 +53,66 @@ services:
       start_period: 10s
     stop_grace_period: 15s # SIGTERM -> graceful shutdown (SHUTDOWN_TIMEOUT_MS) before Docker's SIGKILL
     restart: unless-stopped
+
+  # Chat service (docs/services/chat): whispers, channels, zone chat, GM mutes. Shares the world's dev certificate
+  # (world-certs, read-only: the world makes it), so clients trust one CA file.
+  chat:
+    build:
+      context: ..
+      dockerfile: chat/Dockerfile
+    image: kast-chat:dev
+    environment:
+      CHAT_PORT: 7778
+      CHAT_LINK_PORT: 7779
+      CHAT_LINK_SECRET: ${CHAT_LINK_SECRET:?set CHAT_LINK_SECRET in .env}
+      CHAT_CHANNELS: ${CHAT_CHANNELS:-General,Trade,LFG}
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: ${CHAT_DB_USER:-kast_chat}
+      DB_PASSWORD: ${CHAT_DB_PASSWORD:?set CHAT_DB_PASSWORD in .env}
+      DB_NAME: ${CHAT_DB_NAME:-kast_chat}
+      AUTH_JWKS_URL: http://auth:3000/.well-known/jwks.json
+      JWT_ISSUER: ${JWT_ISSUER:-kast-auth}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-kast}
+      TLS_CERT_FILE: /app/certs/server.crt
+      TLS_KEY_FILE: /app/certs/server.key
+      MIGRATIONS_DIR: /app/migrations
+      LOG_LEVEL: ${CHAT_LOG_LEVEL:-info}
+    ports:
+      - "${CHAT_HOST_PORT:-7778}:7778"
+    volumes:
+      - world-certs:/app/certs:ro
+    depends_on:
+      chat-db-init:
+        condition: service_completed_successfully
+      auth:
+        condition: service_healthy
+      world:
+        condition: service_healthy # it makes the dev certificate
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7778"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    stop_grace_period: 10s
+    restart: unless-stopped
+
+  # The chat database and user, on a fresh or an existing mysql volume (docker/chat-db-init.sh), before chat starts.
+  chat-db-init:
+    image: mysql:8.4
+    entrypoint: ["sh", "/init/chat-db-init.sh"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      CHAT_DB_NAME: ${CHAT_DB_NAME:-kast_chat}
+      CHAT_DB_USER: ${CHAT_DB_USER:-kast_chat}
+      CHAT_DB_PASSWORD: ${CHAT_DB_PASSWORD:?set CHAT_DB_PASSWORD in .env}
+    volumes:
+      - ./docker/chat-db-init.sh:/init/chat-db-init.sh:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
 
   auth:
     build: ../auth
@@ -111,11 +178,13 @@ services:
     restart: unless-stopped
 
   # Test client, run on demand: docker compose run --rm bot --scenario auth
+  # No depends_on chat: the chat-down scenario stops it, and a run would start it again.
   bot:
     image: kast-world:dev
     profiles: ["tools"]
     entrypoint: ["./kast_bot", "--auth-url", "http://auth:3000", "--mailpit-url", "http://mailpit:8025",
-                 "--host", "world", "--port", "7777", "--ca", "/certs/server.crt", "--map-root", "/app/maps"]
+                 "--host", "world", "--port", "7777", "--ca", "/certs/server.crt", "--map-root", "/app/maps",
+                 "--chat-host", "chat", "--chat-port", "7778", "--chat-link-port", "7779"]
     volumes:
       - world-certs:/certs:ro
       - ../../tests/project/maps:/app/maps:ro # terrain scenario: the world's maps, for ground heights

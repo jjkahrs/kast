@@ -15,6 +15,9 @@ struct Options {
     AuthEndpoints auth;
     std::string host = "localhost";
     uint16_t port = 7777;
+    std::string chatHost = "localhost"; // the chat service (same CA as the world server)
+    uint16_t chatPort = 7778;
+    uint16_t chatLinkPort = 7779;     // its internal world link: the chat-auth scenario checks its refusals
     std::string caFile;           // server certificate / CA to trust
     std::string runId = "run";    // namespaces the bot accounts of one run
     std::string mode = "scenario";

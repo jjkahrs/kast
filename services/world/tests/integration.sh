@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs every integration scenario against the compose stack (docker compose up -d --build first).
 # Prints PASS/FAIL per scenario and exits non-zero if any failed.
-# Scenarios 10-13 stop/restart containers, so run this against a test stack only.
+# Scenarios 10-13, 34 and 37 stop/restart containers, so run this against a test stack only.
 # --starter-mmo runs only scenarios 23-24 and 28 (samples/starter-mmo combat), against the stack with the sample's override.
 set -u
 cd "$(dirname "$0")/.."
@@ -220,5 +220,72 @@ scenario "25 zone objects: Interact on another map / out of range / unknown id -
 # (SIM_LATENCY_MS=150 SIM_JITTER_MS=50 in .env), and pass without it too
 scenario "26 lag run: 10 s at 7 m/s with turns -> 0 Corrections" --scenario lag-run
 scenario "27 lag reject: one 50 m jump while running -> exactly 1 Correction, the rebased client and the server agree" --scenario lag-reject
+
+# 29-37: proximity chat kinds on the world server, and the chat service (docs/services/chat)
+wait_healthy chat || echo "WARNING: the chat service is not healthy; scenarios 30-37 will fail"
+scenario "29 yell within CHAT_YELL_RADIUS (past the AOI radius, not past its own); emote in say range" --scenario yell
+scenario "30 chat: ChatServer announced, whisper across maps, offline name -> not_online" --scenario chat-whisper
+scenario "31 chat: General auto-joined, Trade join/leave, non-members don't hear" --scenario chat-channels
+scenario "32 chat: zone reaches the sender's map only and follows map changes" --scenario chat-zone
+scenario "33 chat: ignore drops whisper/channel/zone lines, unignore restores" --scenario chat-ignore
+
+# 34: the GM account gets role gm in auth's database, then the mute must survive `docker compose restart chat`
+name="34 chat: player can't mute, GM can; chat + say/yell/emote dropped; survives a chat restart; expires; unmute"
+echo "--- $name"
+log="$LOGDIR/34.log"
+ok=0
+bot --scenario chat-mute-setup >"$log" 2>&1 || ok=1
+email=$(grep '^GM_EMAIL' "$log" | awk '{print $2}')
+docker compose exec -T -e EMAIL="$email" mysql sh -c \
+    'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" -e "UPDATE accounts SET role = '\''gm'\'' WHERE email = '\''$EMAIL'\''"' \
+    >>"$log" 2>&1 || ok=1
+bot --scenario chat-mute >>"$log" 2>&1 &
+botpid=$!
+if wait_line "$log" 'READY restart-chat' 120; then
+    docker compose restart -t 10 chat >/dev/null 2>&1 && echo "  chat restarted"
+else
+    ok=1
+fi
+wait $botpid || ok=1
+grep -v -E '^ *(Container|Network) ' "$log"
+record "$name" $ok "see $log"
+
+scenario "35 chat: control chars stripped, oversize/invalid UTF-8 rejected, rate limit, no disconnect" --scenario chat-limits
+# root: reads auth's private key from its volume to mint an expired token (test only)
+echo "--- 36 chat refusals: bad/expired JWT, no character, wrong link secret/version"
+docker compose run --rm -T --user root bot --run-id "$RUN" --scenario chat-auth --auth-key /auth-keys/jwt-private.pem \
+    2>&1 | tee "$LOGDIR/36.log" | grep -v -E '^ *(Container|Network) '
+record "36 chat refusals: bad/expired JWT, no character, wrong link secret/version" "${PIPESTATUS[0]}" "see $LOGDIR/36.log"
+
+# 37: chat stopped -> say still works; started again -> clients reconnect, General, whispers
+name="37 chat down: say still works; chat back: reconnect, General rejoined, whispers work"
+echo "--- $name"
+log="$LOGDIR/37.log"
+ok=0
+bot --scenario chat-down >"$log" 2>&1 &
+botpid=$!
+if wait_line "$log" 'READY stop-chat' 120; then
+    docker compose stop -t 10 chat >/dev/null 2>&1 && echo "  chat stopped"
+    if wait_line "$log" 'READY start-chat' 120; then
+        docker compose start chat >/dev/null 2>&1 && echo "  chat started"
+    else
+        ok=1
+        docker compose start chat >/dev/null 2>&1
+    fi
+else
+    ok=1
+fi
+wait $botpid || ok=1
+grep -v -E '^ *(Container|Network) ' "$log"
+wait_healthy chat || ok=1
+record "$name" $ok "see $log"
+
+# Chat text never reaches the chat service's log at info (its own lines carry no text field).
+name="38 chat service log: no chat text at info level"
+if docker compose logs --no-color chat 2>&1 | grep -E 'psst, cave dweller|hello General|WTS sword|free at last' >/dev/null; then
+    record "$name" 1 "chat text found in docker compose logs chat"
+else
+    record "$name" 0 ""
+fi
 
 summary
