@@ -99,7 +99,13 @@ running it twice adds nothing.
 - **World**: World of Warcraft-style controls. W runs forward, S backpedals, A/D turn, Space jumps. Hold the left
   mouse button and drag to look around the character; hold the right button to turn the camera and the character (A/D
   then strafe). The wheel zooms. A press on the chat box or HUD doesn't move the camera. The HUD (top left) shows your
-  name and class, Health and Gold as the server replicates them. Type in the chat box and press **Send**; everyone nearby sees it. The Guard
+  name and class, Health and Gold as the server replicates them. Press **Enter** (or click the chat box), type and press **Enter** again (or **Send**); plain text is
+  said to everyone nearby. Slash commands (`scripts/chat.lua`): `/s` say, `/y` yell (the whole map within 300 m),
+  `/me waves` (an emote: "Name waves"), `/w name text` whisper (any map), `/1 /2 /3 text` the General / Trade / LFG
+  channels, `/join Trade`, `/leave Trade`, `/z text` everyone on this map, `/ignore name`, `/unignore name`, and for GM
+  accounts `/mute name minutes` and `/unmute name`. Lines are coloured by kind (`[General] Name: ...`, `Name whispers:
+  ...`, `To Name: ...`, `Name yells: ...`); whispers, channels and zone chat go through the stack's chat service
+  (`services/chat`), and if it is down the box says so while say keeps working. The Guard
   patrols a 10 m square just ahead of the spawn.
 - **Combat** (tab-target): **Tab** cycles the NPCs in view, nearest first, within 40 m; a **left click** (without
   dragging) on an NPC selects it; **Esc** clears the target. The target gets a gold disc under it and a frame at the top

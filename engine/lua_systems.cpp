@@ -6,6 +6,7 @@
 #include "lua_items.h"
 #include "lua_sandbox.h"
 #include "lua_state_machines.h"
+#include "lua_chat_api.h"
 #include "lua_world_api.h"
 #include "files.h"
 #include "material.h"
@@ -86,9 +87,9 @@ struct PendingScene {
 struct LuaSystems::State {
     State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, std::string scenePath, Input* input,
           EventBus& bus, StateMachines& fsm, Physics& physics, Audio& audio, Network& network, AuthClient& auth,
-          WorldClient& world, GuiAccess* gui)
+          WorldClient& world, ChatClient& chat, GuiAccess* gui)
         : scene(scene), projectRoot(projectRoot), scenePath(std::move(scenePath)), input(input), bus(bus), fsm(fsm),
-          physics(physics), audio(audio), network(network), auth(auth), world(world), gui(gui)
+          physics(physics), audio(audio), network(network), auth(auth), world(world), chat(chat), gui(gui)
     {
     }
 
@@ -103,6 +104,7 @@ struct LuaSystems::State {
     Network& network;
     AuthClient& auth;
     WorldClient& world;
+    ChatClient& chat;
     GuiAccess* gui; // null: no game GUIs here, kast.gui is nil
     std::unordered_map<entt::entity, AudioHandle> sources; // the last voice each AudioSource started (kast.audio.stopSource)
     MaterialLibrary materials; // shared .mat files, for kast.get/setMaterialProperty
@@ -119,6 +121,7 @@ struct LuaSystems::State {
     sol::table particlesApi; // kast.particles.*
     sol::table authApi;    // kast.auth.*, only while Online Services are enabled
     sol::table worldApi;   // kast.world.*, likewise
+    sol::table chatApi;    // kast.chat.*, likewise
     sol::table guiApi;     // kast.gui.*, only with a GuiAccess
     DefinitionFiles fsmFiles; // state machine definition files at the last load, for hot reload
     std::string callbackPath; // the definition file whose enter/exit is running (log prefixes, event publisher)
@@ -361,6 +364,8 @@ sol::environment LuaSystems::State::environment()
         kast["auth"] = readOnly(authApi);
     if (world.enabled())
         kast["world"] = readOnly(worldApi);
+    if (chat.enabled())
+        kast["chat"] = readOnly(chatApi);
     if (gui)
         kast["gui"] = readOnly(guiApi);
     env["kast"] = readOnly(kast);
@@ -891,6 +896,7 @@ void LuaSystems::State::bindApi()
     bindParticlesApi();
     bindAuthApi();
     bindWorldApi();
+    chatApi = makeChatApi(lua, chat); // kast.chat.*: see lua_chat_api.h
     bindGuiApi();
 }
 
@@ -1673,6 +1679,7 @@ void LuaSystems::start(Scene& scene, const std::optional<std::filesystem::path>&
     network_.stop();
     replication_.stop(); // forgets the remote players
     world_.reset(auth);
+    chat_.reset(auth);
     auth_.reset(std::move(auth));
     audio_.start(projectRoot);
     terrain_.start(projectRoot);
@@ -1690,7 +1697,7 @@ void LuaSystems::launch(Scene& scene, const std::optional<std::filesystem::path>
     if (gui_)
         gui_->reset(); // the old scene's documents and writes; the inits' writes apply as the new documents load
     state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_, physics_, audio_, network_, auth_,
-                                     world_, gui_);
+                                     world_, chat_, gui_);
     state_->playOnStart(); // before the inits, which may stop them
     state_->init(scene.systems);
 }
@@ -1704,14 +1711,18 @@ bool LuaSystems::tick(float dt)
     // inits ran at the end of the previous tick, get everything received since.
     // The auth and world clients' own results answer only to them: they hold tokens and raw frames.
     for (NetEvent& event : network_.poll())
-        if (!auth_.handle(event) && !world_.handle(event))
+        if (!auth_.handle(event) && !world_.handle(event) && !chat_.handle(event))
             bus_.publish(std::move(event.name), std::move(event.payload), "kast.net");
     for (NetEvent& event : auth_.poll()) {
         world_.observe(event); // realm lists, for kast.world.connect
         bus_.publish(std::move(event.name), std::move(event.payload), "kast.auth");
     }
-    for (NetEvent& event : world_.poll())
+    for (NetEvent& event : world_.poll()) {
+        chat_.observe(event); // where the chat service is, and when the world connection ends
         bus_.publish(std::move(event.name), std::move(event.payload), "kast.world");
+    }
+    for (NetEvent& event : chat_.poll())
+        bus_.publish(std::move(event.name), std::move(event.payload), "kast.chat");
     state_->tick(dt);
     replication_.update(dt); // sends what this frame's systems did to the local player
     if (!state_->pending)
@@ -1749,6 +1760,7 @@ void LuaSystems::stop()
     replication_.stop();
     network_.stop();
     world_.reset();
+    chat_.reset();
     auth_.reset(); // memory only: Stop logs out
 }
 

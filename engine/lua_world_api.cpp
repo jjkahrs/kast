@@ -80,9 +80,11 @@ sol::table makeWorldApi(sol::state& lua, WorldClient& world)
         const uint64_t c = id(L, "enterWorld", "charId", charId);
         guarded(L, [&] { world.enterWorld(c); });
     });
-    worldApi.set_function("say", [=, &world](sol::this_state L, const sol::object& message) {
+    // kast.world.say(text, kind?): kind "say" (nil), "yell" or "emote".
+    worldApi.set_function("say", [=, &world](sol::this_state L, const sol::object& message, const sol::object& kind) {
         const std::string t = text(L, "say", "text", message);
-        guarded(L, [&] { world.say(t); });
+        const std::string k = kind.get_type() == sol::type::lua_nil ? std::string("say") : text(L, "say", "kind", kind);
+        guarded(L, [&] { world.say(t, k); });
     });
     // kast.world.send(name, data?): data is a table with string keys (nil: {}); "client.<name>" on the server's bus.
     worldApi.set_function("send", [=, &world](sol::this_state L, const sol::object& name, const sol::object& data) {

@@ -159,11 +159,14 @@ Server::Body serveFakeAuth(FakeAuth& fake);
 // text is "npc". Ping -> Pong{its nonce}, after pongDelayMs (a lagged server). ClientEvent without a requestId -> ServerEvent{"echo.<name>", its JSON}; a request named "test.ok" ->
 // Reply{its id, ok, its JSON} twice, "test.no" -> Reply{its id, rejected, "no_way"}, any other: no answer. Anything else:
 // Disconnect{unexpected_message}.
+// Chat (v8): with chatPort set, EnterWorldOk is followed by ChatServer{127.0.0.1, chatPort}; a Say comes back as
+// ChatMsg with its kind, and Say "mute me" as ChatNotice{muted, 3 minutes} instead.
 constexpr uint32_t kFakeWorldPing = 4242;
 
 class FakeWorld {
 public:
     std::atomic<int> pongDelayMs = 0;
+    std::atomic<int> chatPort = 0; // the FakeChat's, announced after EnterWorldOk; 0: none
     void record(proto::Message message);
     std::vector<proto::Message> seen() const; // every client message so far, all connections
     int pongs() const;                        // Pong{kFakeWorldPing} received
@@ -175,5 +178,25 @@ private:
 
 // A TLS Server body (construct the Server with a cert) running fake's connections one after another.
 Server::Body serveFakeWorld(FakeWorld& fake);
+
+// A fake chat service (docs/services/chat/protocol.html) for ChatClient tests. Hello must be kProtocolVersion; Auth gets
+// AuthOk{42, player} then ChatChannel{1, General, joined} (with refuse set: Disconnect{no_character} instead). ChatJoin
+// / ChatLeave of General, Trade or LFG -> ChatChannel{1 / 2 / 3, its name, joined or not} (anything else: ChatNotice
+// no_channel). ChatSend whisper: to "Nobody" -> ChatNotice{not_online, Nobody}, else ChatLine{whisper_sent, to, text}
+// then ChatLine{whisper from to, "re: " text}; channel -> ChatLine{channel, its name, "Hero", text}; zone ->
+// ChatLine{zone, "Hero", text}; text "shutdown" -> Disconnect{server_shutdown} and close. ChatIgnore -> ChatNotice
+// ignored / unignored; ChatMute -> mute_set (minutes) / mute_cleared (0). Ping -> Pong.
+class FakeChat {
+public:
+    std::atomic<bool> refuse = false;
+    void record(proto::Message message);
+    std::vector<proto::Message> seen() const; // every client message so far, all connections
+
+private:
+    mutable std::mutex mutex_;
+    std::vector<proto::Message> seen_;
+};
+
+Server::Body serveFakeChat(FakeChat& fake);
 
 } // namespace kast::nettest

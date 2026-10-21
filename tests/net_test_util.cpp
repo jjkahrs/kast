@@ -389,6 +389,8 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
                 valid = spawn;
                 epoch = 0;
                 queue(proto::EnterWorldOk{1, 1, spawn, 0.5f});
+                if (fake.chatPort)
+                    queue(proto::ChatServer{"127.0.0.1", static_cast<uint16_t>(fake.chatPort.load())});
                 queue(proto::Spawn{2, "Other", {101, 0, 100}, 0});
                 queue(proto::EntityMove{2, {102, 0, 100}, 1});
                 queue(proto::Correction{spawn});
@@ -410,7 +412,10 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
                 valid = move->pos;
             }
         } else if (const auto* say = std::get_if<proto::Say>(&message)) {
-            queue(proto::ChatMsg{playing, say->text});
+            if (say->text == "mute me")
+                queue(proto::ChatNotice{proto::ChatNoticeCode::muted, "", 3});
+            else
+                queue(proto::ChatMsg{say->kind, playing, say->text});
             if (say->text == "bye")
                 queue(proto::Despawn{2});
             if (say->text == "components") {
@@ -451,7 +456,117 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
     }
 }
 
+// One chat connection until either side closes it.
+void runFakeChat(FakeChat& fake, TlsSocket& socket)
+{
+    std::vector<uint8_t> out;
+    const auto queue = [&](const proto::Message& m) { proto::encode(out, m); };
+    const auto flush = [&] {
+        asio::write(socket, asio::buffer(out));
+        out.clear();
+    };
+    static const char* const kChannels[] = {"General", "Trade", "LFG"};
+    const auto number = [](const std::string& name) {
+        for (int i = 0; i < 3; ++i)
+            if (name == kChannels[i])
+                return i + 1;
+        return 0;
+    };
+    for (;;) {
+        uint8_t header[proto::kHeaderSize];
+        asio::read(socket, asio::buffer(header));
+        const proto::Header h = proto::parse_header(header);
+        std::vector<uint8_t> payload(h.length);
+        asio::read(socket, asio::buffer(payload));
+        proto::Message message;
+        if (proto::decode_payload(h.opcode, payload, message) != proto::DecodeStatus::ok) {
+            queue(proto::Disconnect{proto::Code::malformed});
+            return flush();
+        }
+        fake.record(message);
+        if (const auto* hello = std::get_if<proto::Hello>(&message)) {
+            if (hello->protocolVersion != proto::kProtocolVersion) {
+                queue(proto::Disconnect{proto::Code::protocol_mismatch});
+                return flush();
+            }
+        } else if (std::holds_alternative<proto::Auth>(message)) {
+            if (fake.refuse) {
+                queue(proto::Disconnect{proto::Code::no_character});
+                return flush();
+            }
+            queue(proto::AuthOk{42, proto::Role::player});
+            queue(proto::ChatChannel{1, "General", true});
+        } else if (const auto* ping = std::get_if<proto::Ping>(&message)) {
+            queue(proto::Pong{ping->nonce});
+        } else if (std::holds_alternative<proto::Pong>(message)) {
+        } else if (const auto* join = std::get_if<proto::ChatJoin>(&message)) {
+            if (const int n = number(join->channel))
+                queue(proto::ChatChannel{static_cast<uint8_t>(n), join->channel, true});
+            else
+                queue(proto::ChatNotice{proto::ChatNoticeCode::no_channel, join->channel, 0});
+        } else if (const auto* leave = std::get_if<proto::ChatLeave>(&message)) {
+            if (const int n = number(leave->channel))
+                queue(proto::ChatChannel{static_cast<uint8_t>(n), leave->channel, false});
+            else
+                queue(proto::ChatNotice{proto::ChatNoticeCode::no_channel, leave->channel, 0});
+        } else if (const auto* send = std::get_if<proto::ChatSend>(&message)) {
+            if (send->text == "shutdown") {
+                queue(proto::Disconnect{proto::Code::server_shutdown});
+                return flush();
+            }
+            switch (send->target) {
+            case proto::ChatTarget::whisper:
+                if (send->to == "Nobody") {
+                    queue(proto::ChatNotice{proto::ChatNoticeCode::not_online, send->to, 0});
+                } else {
+                    queue(proto::ChatLine{proto::ChatTarget::whisper_sent, "", send->to, send->text});
+                    queue(proto::ChatLine{proto::ChatTarget::whisper, "", send->to, "re: " + send->text});
+                }
+                break;
+            case proto::ChatTarget::channel: queue(proto::ChatLine{proto::ChatTarget::channel, send->to, "Hero", send->text}); break;
+            default: queue(proto::ChatLine{proto::ChatTarget::zone, "", "Hero", send->text}); break;
+            }
+        } else if (const auto* ignore = std::get_if<proto::ChatIgnore>(&message)) {
+            queue(proto::ChatNotice{ignore->on ? proto::ChatNoticeCode::ignored : proto::ChatNoticeCode::unignored, ignore->name, 0});
+        } else if (const auto* mute = std::get_if<proto::ChatMute>(&message)) {
+            queue(proto::ChatNotice{mute->minutes ? proto::ChatNoticeCode::mute_set : proto::ChatNoticeCode::mute_cleared,
+                                    mute->name, mute->minutes});
+        } else {
+            queue(proto::Disconnect{proto::Code::unexpected_message});
+            return flush();
+        }
+        flush();
+    }
+}
+
 } // namespace
+
+void FakeChat::record(proto::Message message)
+{
+    const std::lock_guard lock(mutex_);
+    seen_.push_back(std::move(message));
+}
+
+std::vector<proto::Message> FakeChat::seen() const
+{
+    const std::lock_guard lock(mutex_);
+    return seen_;
+}
+
+Server::Body serveFakeChat(FakeChat& fake)
+{
+    return [&fake](Server& server) {
+        while (!server.stopping()) {
+            try {
+                TlsSocket socket = server.acceptTls();
+                runFakeChat(fake, socket);
+                boost::system::error_code ec;
+                socket.lowest_layer().shutdown(tcp::socket::shutdown_both, ec);
+            } catch (const std::exception&) { // the client went away, or the destructor's wake-up connect
+            }
+        }
+    };
+}
 
 Server::Body serveFakeWorld(FakeWorld& fake)
 {

@@ -8,7 +8,8 @@
 # STATE/<STAGE>.log; an [error] line, an RmlUi warning or a GUI image warning fails. Prints "SKIP: ..." when the setup didn't finish (no docker or credentials).
 # Usage: cmake -DEDITOR=<exe> -DWORLD_DIR=<dir> -DSAMPLE=<dir> -DSTATE=<dir> -DSTAGE=<name> -DCHARACTER=<name>
 #              -DSCREENSHOT=<png> -DFRAMES=<n> -DEXPECT_ALL=<regex;...> [-DBOT=ON] [-DEDITOR_ARGS=<flags>]
-#              -P starter_mmo_live_play.cmake
+#              [-DSTOP_CHAT=ON] -P starter_mmo_live_play.cmake
+# STOP_CHAT=ON stops the stack's chat service for the run and starts it again afterwards.
 # EDITOR_ARGS go to the editor too (e.g. --sim-mouse for the camera stages).
 if(NOT EXISTS "${STATE}/ready")
   message("SKIP: starter_mmo_live_setup did not get the stack ready (see its output)")
@@ -51,12 +52,19 @@ if(BOT)
   execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 8) # registers through Mailpit, then enters at the spawn
 endif()
 
+if(STOP_CHAT)
+  execute_process(COMMAND docker compose ${override} stop chat WORKING_DIRECTORY "${WORLD_DIR}" OUTPUT_QUIET ERROR_QUIET)
+endif()
 set(log "${STATE}/${STAGE}.log")
 execute_process(COMMAND "${CMAKE_COMMAND}" "-DEDITOR=${EDITOR}" "-DSCREENSHOT=${SCREENSHOT}" "-DFRAMES=${FRAMES}"
                         "-DEXTRA_ARGS=--project ${project} --online-login-env --play --no-audio-device --size 1600x1000 ${EDITOR_ARGS}"
                         "-DOUTPUT_FILE=${log}" "-DFORBID_OUTPUT=\\[error\\]|\\[warn\\] RmlUi|GUI image"
                         -P "${CMAKE_CURRENT_LIST_DIR}/smoke_test.cmake"
                 RESULT_VARIABLE result)
+if(STOP_CHAT)
+  execute_process(COMMAND docker compose ${override} up -d --wait --no-deps chat WORKING_DIRECTORY "${WORLD_DIR}"
+                  OUTPUT_QUIET ERROR_QUIET)
+endif()
 if(bot)
   execute_process(COMMAND docker logs "${bot}" OUTPUT_FILE "${STATE}/${STAGE}_bot.log" ERROR_FILE "${STATE}/${STAGE}_bot.log")
   execute_process(COMMAND docker stop "${bot}" OUTPUT_QUIET ERROR_QUIET)

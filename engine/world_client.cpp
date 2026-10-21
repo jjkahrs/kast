@@ -238,10 +238,15 @@ void WorldClient::enterWorld(uint64_t charId)
     send(proto::EnterWorld{charId});
 }
 
-void WorldClient::say(const std::string& text)
+void WorldClient::say(const std::string& text, const std::string& kind)
 {
+    static constexpr std::pair<const char*, proto::ChatKind> kinds[] = {
+        {"say", proto::ChatKind::say}, {"yell", proto::ChatKind::yell}, {"emote", proto::ChatKind::emote}};
+    const auto it = std::ranges::find_if(kinds, [&](const auto& k) { return kind == k.first; });
+    if (it == std::end(kinds))
+        throw std::logic_error(std::format("say: kind must be 'say', 'yell' or 'emote', got '{}'", kind));
     require(WorldState::InWorld, "say");
-    send(proto::Say{text});
+    send(proto::Say{it->second, text});
 }
 
 std::string WorldClient::eventJson(const std::string& name, const nlohmann::json& data, const char* function) const
@@ -401,7 +406,12 @@ void WorldClient::dispatch(const auto& m)
     } else if constexpr (std::is_same_v<T, proto::Correction>) {
         emit("world.correction", {{"position", position(m.pos)}, {"ackSeq", m.ackSeq}, {"epoch", m.epoch}});
     } else if constexpr (std::is_same_v<T, proto::ChatMsg>) {
-        emit("world.chat", {{"from", m.fromName}, {"text", m.text}}); // never logged (world server rule)
+        static constexpr const char* kinds[] = {"say", "yell", "emote"};
+        emit("world.chat", {{"kind", kinds[static_cast<int>(m.kind)]}, {"from", m.fromName}, {"text", m.text}}); // never logged
+    } else if constexpr (std::is_same_v<T, proto::ChatServer>) {
+        emit("world.chatServer", {{"host", m.host}, {"port", m.port}}); // ChatClient connects there
+    } else if constexpr (std::is_same_v<T, proto::ChatNotice>) {
+        emit("chat.error", {{"code", proto::chat_notice_name(m.code)}, {"name", m.name}, {"minutes", m.minutes}});
     } else if constexpr (std::is_same_v<T, proto::ComponentUpdate>) {
         Json data = Json::parse(m.json, nullptr, false);
         if (data.is_discarded()) // the server only sends valid JSON; one bad value isn't worth the connection

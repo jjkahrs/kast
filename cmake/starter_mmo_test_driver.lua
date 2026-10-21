@@ -45,6 +45,10 @@
 -- RmlUi publishes it, a raw request, a known bag): the refusals, then the Guard. "equip_persist" (equip_combat's
 -- character) logs its gear after the relog and opens both windows. "equip_tooltip" (equip_drag's character, the Leather
 -- Cap left in bag slot 2) opens the bag and logs HOVER: --sim-mouse hovers that slot for its tooltip.
+-- Chat (scripts/chat.lua, the chat service): "chat" (Meadow) types CHAT_STEPS into the chat box one by one (yell,
+-- emote, a whisper to itself, General, /join Trade, Trade, zone, a whisper to nobody), then fills the field, focuses it
+-- and logs KEYS: --sim-key presses Enter, which sends it. "chat_down" enters with the chat service stopped
+-- (starter_mmo_live_play.cmake STOP_CHAT), waits for the box's "unavailable" line and says something (still works).
 -- "SHOT" log lines are for --screenshot-on-log: the moment a stage's screenshot should show.
 local STAGE, CHARACTER = "@STAGE@", "@CHARACTER@"
 local REALM = "Starter Realm"
@@ -161,6 +165,10 @@ local charReplies = 0     -- world.charCreated / charError answers (class_pick)
 local equipped = {}       -- the local Equipment, as replicated
 local stats               -- the last "character.stats"
 local windowToggles = 0   -- character.visibility events
+local myName              -- the character's name, from its own first world.chat (chat stage)
+-- The chat stage's lines, typed into the chat box 0.8 s apart (5 per 10 s on each server). "%me" is myName.
+local CHAT_STEPS = {"/y Hello Meadow!", "/me waves", "/w %me psst", "/1 Hello General", "/join Trade", "/2 WTS sword",
+                    "/z Anyone in the Meadow?", "/w Nobodyhere hi"}
 
 local function log(format, ...) kast.log("test driver: " .. string.format(format, ...)) end
 -- Predicted powers (scripts/powers.lua): frames counted from the step's key press to the attack clip and the cooldown.
@@ -1042,7 +1050,24 @@ return {
             hits = hits + 1
             if hits >= ATTACKS_ON_GUARD then shoot("guard hit " .. hits .. " times") end
         end)
-        kast.subscribe("world.chat", function(e) log("chat %s: %s", e.from, e.text) end)
+        kast.subscribe("world.chat", function(e)
+            if e.kind == "say" then log("chat %s: %s", e.from, e.text) else log("chat %s %s: %s", e.kind, e.from, e.text) end
+            if STAGE == "chat" and not myName then myName = e.from end
+        end)
+        kast.subscribe("chat.message", function(e)
+            log("chat message %s %s%s: %s", e.kind, e.channel and (e.channel .. " ") or "", e.from or e.to, e.text)
+        end)
+        kast.subscribe("chat.channel", function(e) log("chat channel %s %d %s", e.channel, e.number, e.joined and "joined" or "left") end)
+        kast.subscribe("chat.error", function(e) log("chat error %s %s", e.code, e.name) end)
+        kast.subscribe("chat.status", function(e)
+            log("chat status: %s", e.connected and "connected" or "unavailable")
+            if STAGE == "chat_down" and not e.connected and phase == "arrive" then
+                waitUntil = elapsed + 1.5
+                phase = "down"
+                kast.gui.setText("chat_input", "Say still works") -- proximity chat is the world server's
+                kast.publish("chat.send")
+            end
+        end)
         kast.subscribe("world.component", function(e)
             if e.name == "Health" then log("Health %d / %d on %d", e.data.current, e.data.max, e.entityId) end
             if e.name == "Class" then log("Class %s on %d", e.data.id, e.entityId) end
@@ -1099,6 +1124,30 @@ return {
             chatted = true
             kast.gui.setText("chat_input", "hello from the starter sample")
             kast.publish("chat.send")
+        end
+        if STAGE == "chat" and elapsed > 3 then
+            if phase == "arrive" then phase, step, waitUntil = "typing", 0, elapsed end
+            if phase == "typing" and elapsed >= waitUntil and (step == 0 or myName) then
+                step, waitUntil = step + 1, elapsed + 0.8
+                local line = CHAT_STEPS[step]
+                if line then
+                    kast.gui.setText("chat_input", (line:gsub("%%me", myName or "")))
+                    kast.publish("chat.send")
+                else
+                    phase, waitUntil, keysFrame = "keys", elapsed + 4, frame
+                    kast.gui.setText("chat_input", "sent with Enter")
+                    log("chat focused: %s", tostring(kast.gui.focus("chat_input")))
+                    log("KEYS")
+                end
+            elseif phase == "keys" and elapsed >= waitUntil then
+                phase = "done"
+                log("chat field after Enter: '%s'", kast.gui.value("chat_input") or "?")
+                shoot("chat")
+            end
+        end
+        if STAGE == "chat_down" and phase == "down" and elapsed >= waitUntil then
+            phase = "done"
+            shoot("chat unavailable")
         end
         if STAGE == "cavern" then
             local done = crossings() >= 2 and map == CAVERN
