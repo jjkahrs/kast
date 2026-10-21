@@ -65,6 +65,10 @@ set_tests_properties(starter_mmo_login_screenshot starter_mmo_build starter_mmo_
                      PROPERTIES FIXTURES_REQUIRED starter_mmo_copied)
 set_tests_properties(starter_mmo_build PROPERTIES FIXTURES_SETUP starter_mmo_built)
 set_tests_properties(starter_mmo_player PROPERTIES FIXTURES_REQUIRED starter_mmo_built)
+# The quest definitions (.server/quests/) stay out of the client's game.pak.
+add_test(NAME starter_mmo_pak_server_only
+  COMMAND "${CMAKE_COMMAND}" "-DPAK=${KAST_STARTER_OUT}/game/game.pak" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_pak_check.cmake")
+set_tests_properties(starter_mmo_pak_server_only PROPERTIES FIXTURES_REQUIRED starter_mmo_built)
 # Hit sparks (scripts/combat.lua): offline, a test-only driver publishes the server's hit; the burst's entity goes once
 # kast.particles.alive is 0.
 add_test(NAME starter_mmo_hit_sparks
@@ -98,7 +102,7 @@ foreach(stage
     "starter_mmo_live_cavern|cavern|Explorer|1800|OFF|test driver: entered map 1[01]&crossed to map 10&crossed to map 11&spawn npc Bat template 'Bat'&world: map changed to 11|"
     # One scene per zone (scripts/world_flow.lua): meadow.scene on entering, cavern.scene through the portal (map 11,
     # where the server put the player, HUD and chat shown, the Bat), meadow.scene again on the way back (the Guard, the bot):
-    "starter_mmo_live_travel|travel|Traveler|3000|ON|test driver: entered map 10&Switched to scene 'scenes/characters.scene'.*Switched to scene 'scenes/meadow.scene'.*Switched to scene 'scenes/cavern.scene'.*Switched to scene 'scenes/meadow.scene'&test driver: scene scenes/meadow.scene: terrain map 10&test driver: scene scenes/cavern.scene: terrain map 11, player at 128.0, 128.0.*cloned Bat.*test driver: scene scenes/meadow.scene: terrain map 10, player at 140.0, 128.0.*cloned Guard.*test driver: back in the meadow: Guard and [1-9][0-9]* player&test driver: documents shown: ui/bag.rml ui/character.rml ui/chat.rml ui/hud.rml ui/loot.rml|--screenshot-on-log 30,SHOT"
+    "starter_mmo_live_travel|travel|Traveler|3000|ON|test driver: entered map 10&Switched to scene 'scenes/characters.scene'.*Switched to scene 'scenes/meadow.scene'.*Switched to scene 'scenes/cavern.scene'.*Switched to scene 'scenes/meadow.scene'&test driver: scene scenes/meadow.scene: terrain map 10&test driver: scene scenes/cavern.scene: terrain map 11, player at 128.0, 128.0.*cloned Bat.*test driver: scene scenes/meadow.scene: terrain map 10, player at 140.0, 128.0.*cloned Guard.*test driver: back in the meadow: Guard and [1-9][0-9]* player&test driver: documents shown: ui/bag.rml ui/character.rml ui/chat.rml ui/hud.rml ui/loot.rml ui/quest.rml ui/quest_log.rml|--screenshot-on-log 30,SHOT"
     # scripts/player.lua's camera: behind the character at 10 m, zoomed all the way out, orbited by a left drag
     "starter_mmo_live_camera|camera|Starter|900|OFF|test driver: entered map 10|"
     "starter_mmo_live_camera_zoom|camera|Starter|900|OFF|test driver: entered map 10|--sim-mouse 800,none,0,0,-10"
@@ -169,7 +173,22 @@ foreach(stage
     "starter_mmo_live_equip_rules|equip_rules|Ruler|9000|OFF|test driver: combat log: [*] Can't equip that there&test driver: rejected wrong_slot&test driver: equipment 6=worn_shortsword&test driver: rejected full&test driver: combat log: [*] Inventory is full&test driver: combat log: You cast Strike on Guard for 15&test driver: rejected combat&test driver: combat log: [*] Can't do that in combat|--screenshot-on-log 20,SHOT"
     # Sword, tunic and shield: Strike 15, 155 max Health, the Guard's 5 down to 1 by 4 Armor; then the same after a relog:
     "starter_mmo_live_equip_combat|equip_combat|Brawler|9000|OFF|test driver: equipment 2=linen_tunic 6=worn_shortsword 7=wooden_shield&test driver: Health [0-9]+ / 155 on&test driver: combat log: You cast Strike on Guard for 15&test driver: combat log: Guard hits you for 1|--screenshot-on-log 20,SHOT"
-    "starter_mmo_live_equip_persist|equip_persist|Brawler|6000|OFF|test driver: equipment after relog: 2=linen_tunic 6=worn_shortsword 7=wooden_shield&test driver: Health [0-9]+ / 155 on&test driver: stats: max health 155, armor 4, damage [+]3|--screenshot-on-log 30,SHOT")
+    "starter_mmo_live_equip_persist|equip_persist|Brawler|6000|OFF|test driver: equipment after relog: 2=linen_tunic 6=worn_shortsword 7=wooden_shield&test driver: Health [0-9]+ / 155 on&test driver: stats: max health 155, armor 4, damage [+]3|--screenshot-on-log 30,SHOT"
+    # Quests (scripts/quest.lua, scripts/quest_log.lua; the server's systems/quests.lua, .server/quests/). Quester's
+    # chain, one stage further each: the Elder's yellow !, "Too far away" from 6.4 m, then a real right click
+    # (--sim-mouse 40 px below the view's centre) opens its dialog:
+    "starter_mmo_live_quest_dialog|quest_dialog|Quester|6000|OFF|test driver: quest markers: Elder available&test driver: marker Elder available: 2 yellow, 0 grey part.s.&test driver: combat log: [*] Too far away&test driver: CLICK.*test driver: quest dialog: Elder: bat_trouble available|--sim-mouse 30,right,0,0,0,0,40 --sim-on-log CLICK --screenshot-on-log 30,SHOT"
+    # Accept: 0/3 and the grey ?; real keys: L opens the log, L typed into the focused chat field is an "l":
+    "starter_mmo_live_quest_log|quest_log|Quester|6000|OFF|test driver: quest accepted: Bat Trouble&test driver: combat log: Quest accepted: Bat Trouble&test driver: quests: bat_trouble 0/3. completed -&test driver: marker Elder progress: 0 yellow, 6 grey part.s.&test driver: quest log open: true&test driver: quest log sync: Bat Trouble&test driver: chat focused: true, focusedField chat_input&test driver: after L, chat, L: 1 log toggle.s., chat field 'l'|--sim-key 30,L --sim-key 150,L --sim-on-log KEYS --screenshot-on-log 30,SHOT"
+    # Three Bats in the Cavern (looted, seeded), the yellow ? back in the Meadow, the turn-in (+10 gold), Wings for the
+    # Elder taken at 3/5 (the 3 looted wings count), Bat Trouble refused as completed:
+    "starter_mmo_live_quest_kills|quest_kills|Quester|400000|OFF|test driver: Bats slain: bat_trouble 1/3&test driver: Bats slain: bat_trouble 2/3&test driver: Bats slain: bat_trouble 3/3&test driver: marker Elder ready: 6 yellow, 0 grey part.s.&test driver: quest completed: Bat Trouble .10 gold.&test driver: gold [+]10&test driver: quest dialog: Elder: wings_for_the_elder available&test driver: quests: wings_for_the_elder 3/5. completed bat_trouble&test driver: rejected quest completed&test driver: combat log: [*] You have already completed that quest|--screenshot-on-log 30,SHOT"
+    # 5 Bat Wings (test-only), the log at 5/5, the turn-in: wings gone, +15 gold, the Leather Cap in the bag:
+    "starter_mmo_live_quest|quest|Quester|40000|OFF|test driver: log at wings_for_the_elder 5/5&test driver: quest completed: Wings for the Elder .15 gold.&test driver: gold [+]15&test driver: after the turn-in: bag 1=leather_cap:1. none. completed bat_trouble, wings_for_the_elder&test driver: quest dialog: Elder: nothing|--screenshot-on-log 30,SHOT"
+    # Every illegal request refused with its reason; abandon resets; a full bag refuses the turn-in; then Rejecter's
+    # state after a relog:
+    "starter_mmo_live_quest_rejects|quest_rejects|Rejecter|100000|OFF|test driver: rejected quest unknown_quest&test driver: rejected quest requires&test driver: rejected quest not_active.*test driver: rejected quest not_active&test driver: rejected quest active&test driver: rejected quest incomplete&test driver: rejected quest log_full&test driver: rejected quest dead.*test driver: rejected quest dead&test driver: before abandon: bat_trouble 2/3&test driver: after abandon: none&test driver: re-accepted: bat_trouble 0/3&test driver: rejected quest range&test driver: rejected quest completed&test driver: rejected quest full&test driver: combat log: [*] Inventory is full&test driver: full turn-in changed nothing: bag true, gold true, wings_for_the_elder 5/5. completed bat_trouble|--screenshot-on-log 30,SHOT"
+    "starter_mmo_live_quest_persist|quest_persist|Rejecter|6000|OFF|test driver: quests after relog: wings_for_the_elder 5/5. completed bat_trouble&test driver: marker Elder ready|--screenshot-on-log 30,SHOT")
   string(REPLACE "|" ";" stage "${stage}")
   list(GET stage 0 name)
   list(GET stage 1 stage_name)
@@ -206,8 +225,10 @@ set(class_stages starter_mmo_live_class_pick starter_mmo_live_class_warrior star
     starter_mmo_live_class_list starter_mmo_live_legacy)
 set(equip_stages starter_mmo_live_equip_open starter_mmo_live_equip_drag starter_mmo_live_equip_tooltip starter_mmo_live_equip_rules
     starter_mmo_live_equip_combat starter_mmo_live_equip_persist)
+set(quest_stages starter_mmo_live_quest_dialog starter_mmo_live_quest_log starter_mmo_live_quest_kills starter_mmo_live_quest
+    starter_mmo_live_quest_rejects starter_mmo_live_quest_persist)
 set(previous starter_mmo_live_revive)
-foreach(name IN LISTS inventory_stages class_stages equip_stages)
+foreach(name IN LISTS inventory_stages class_stages equip_stages quest_stages)
   set_tests_properties(${name} PROPERTIES DEPENDS "starter_mmo_live_setup;${previous}" TIMEOUT 420)
   set(previous ${name})
 endforeach()
@@ -216,11 +237,13 @@ add_test(NAME starter_mmo_live_secrets
   COMMAND "${CMAKE_COMMAND}" "-DSAMPLE=${KAST_STARTER}" "-DSTATE=${KAST_STARTER_STATE}" "-DSHOTS=${live_shots}"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_live_secrets.cmake")
 set_tests_properties(starter_mmo_live_secrets PROPERTIES FIXTURES_REQUIRED starter_mmo_live
-                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_world;starter_mmo_live_cavern;starter_mmo_live_travel;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_death;starter_mmo_live_revive;${inventory_stages};${class_stages};${equip_stages}"
+                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_world;starter_mmo_live_cavern;starter_mmo_live_travel;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_death;starter_mmo_live_revive;${inventory_stages};${class_stages};${equip_stages};${quest_stages}"
                      SKIP_REGULAR_EXPRESSION "SKIP: ")
 set_tests_properties(starter_mmo_live_setup starter_mmo_live_teardown starter_mmo_live_chars starter_mmo_live_world
                      starter_mmo_live_cavern starter_mmo_live_travel starter_mmo_live_camera starter_mmo_live_camera_zoom
                      starter_mmo_live_camera_orbit starter_mmo_live_combat_target starter_mmo_live_combat
                      starter_mmo_live_combat_guard starter_mmo_live_death starter_mmo_live_revive starter_mmo_live_secrets
-                     ${inventory_stages} ${class_stages} ${equip_stages} PROPERTIES RUN_SERIAL TRUE)
+                     ${inventory_stages} ${class_stages} ${equip_stages} ${quest_stages} PROPERTIES RUN_SERIAL TRUE)
+# The Bat kills wait for respawns (30 s after each looted corpse goes).
+set_tests_properties(starter_mmo_live_quest_kills PROPERTIES TIMEOUT 900)
 set_tests_properties(starter_mmo_live_setup PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP: ")

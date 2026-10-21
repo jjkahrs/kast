@@ -53,6 +53,24 @@
         "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
         "UIDocument": {"path": "ui/character.rml", "visible": true}
       }
+    },
+    {
+      "id": 7,
+      "name": "Quest Dialog",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "UIDocument": {"path": "ui/quest.rml", "visible": true}
+      }
+    },
+    {
+      "id": 8,
+      "name": "Quest Log",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "UIDocument": {"path": "ui/quest_log.rml", "visible": true}
+      }
     }
   ]
 }

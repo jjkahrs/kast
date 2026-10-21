@@ -11,10 +11,12 @@ A small but complete Kast online game, made to read and copy. You open it in the
    server), die and revive;
 7. loot what they drop into a World of Warcraft-style 16-slot bag, and sort it by drag and drop;
 8. open the character window (C), a WoW-style paper doll, and equip gear from the bag that changes your Armor, Damage
-   and max Health on the server.
+   and max Health on the server;
+9. take a two-quest chain from the Elder near the Meadow spawn (kill 3 Bats, then bring 5 Bat Wings), track it in the
+   quest log (L) and turn it in for gold and a Leather Cap.
 
 The same folder is the game project (client) **and** the world server's Lua and maps: client and server share
-`components/`.
+`components/`. Only `.server/quests/` (the quest definitions) stays out of the client: dot-folders never ship.
 
 ## What is where
 
@@ -22,15 +24,16 @@ The same folder is the game project (client) **and** the world server's Lua and 
 |---|---|---|
 | `project.kast` | client | `Starter MMO`, starts at `scenes/login.scene`, Online Services on (`http://localhost:3100`, CA `certs/world_dev_ca.pem`), game state machine `session` |
 | `scenes/` | client | `login`, `register`, `realms`, `characters` (one screen each), then one scene per zone: `meadow` (map 10, with a campfire: additive fire and alpha smoke `ParticleEmitter`s a few metres north of the spawn) and `cavern` (map 11) |
-| `scripts/` | client | one Lua system per screen or concern; they talk through the event bus. `characters.lua`: the character list and creation with a class; `combat.lua`: targeting, the target marker, the combat log, a spark burst on each hit (a one-shot `ParticleEmitter` destroyed once `kast.particles.alive` is 0), tipped corpses and right clicks on them; `powers.lua`: the action bar, keys 1-3, power requests (`kast.world.send`) and their effects; `loot.lua`: the loot window and the sparkle over your corpses; `bag.lua`: the bag window, its drags and tooltips; `character.lua`: the character window (paper doll), its drags, stats and tooltips; `shrines.lua`: E uses the nearest interactable (the Meadow Shrine); `player.lua`: movement, stopped by the zone obstacles |
+| `scripts/` | client | one Lua system per screen or concern; they talk through the event bus. `characters.lua`: the character list and creation with a class; `combat.lua`: targeting, the target marker, the combat log, a spark burst on each hit (a one-shot `ParticleEmitter` destroyed once `kast.particles.alive` is 0), tipped corpses and right clicks on them; `powers.lua`: the action bar, keys 1-3, power requests (`kast.world.send`) and their effects; `loot.lua`: the loot window and the sparkle over your corpses; `bag.lua`: the bag window, its drags and tooltips; `character.lua`: the character window (paper doll), its drags, stats and tooltips; `shrines.lua`: E uses the nearest interactable (the Meadow Shrine); `quest.lua`: the quest markers over the Elder, right clicks on it and the quest dialog; `quest_log.lua`: the quest log (L); `player.lua`: movement, stopped by the zone obstacles |
 | `ui/` | client | RmlUi documents, one per screen, sharing `starter.rcss` (the Kast editor palette; `box-shadow` glows on a hovered button, the picked class and ready powers) |
-| `components/` | **both** | `Health` (replicated to everyone in view), `Wallet` (owner only), `Class` (warrior, mage, priest or rogue; owner only, saved), `Inventory` (the bag, owner only, saved), `Equipment` (7 gear slots, owner only, saved), `Corpse` (who may loot a dead NPC, everyone in view) |
+| `components/` | **both** | `Health` (replicated to everyone in view), `Wallet` (owner only), `Class` (warrior, mage, priest or rogue; owner only, saved), `Inventory` (the bag, owner only, saved), `Equipment` (7 gear slots, owner only, saved), `Quests` (active quest ids, their objectives' progress and the completed ids, owner only, saved), `Corpse` (who may loot a dead NPC, everyone in view) |
 | `items/` | **both** | one item per file (`id`, `name`, `icon`, `quality`, `maxStack`, `sellPrice`, `description`): Bat Wing, Linen Cloth, Minor Healing Potion, and the gear: Worn Shortsword, Leather Cap, Linen Tunic, Patched Trousers, Worn Boots, Cloth Gloves, Wooden Shield; `kast.items` on both sides. Which slot gear fits and its stats are `systems/inventory.lua`'s `GEAR` table (item files may hold only those seven keys) |
 | `fsms/` | both | `patrol` (the Guard's machine, server: walking, waiting, combat, returning), `creature` (the Bat's machine, server: idle, combat, returning), `session` (why the client is on the login screen) |
-| `npcs/` | server | the `Guard` and `Bat` NPC definitions; their `template` names the client entity they are shown as, `loot` what they drop |
-| `systems/` | server | `classes.lua` (which classes a new character may have, `Class` and max Health on entering), `combat.lua` (the powers of each class, NPCs fighting back, roots, buffs, tagging, death and revive), `inventory.lua` (bag and equipment requests, the `GEAR` table, loot rolls, corpses), `regen.lua` (Health regen out of combat, 1 gold per login), `events.lua` (welcome / arrival messages), `npcs.lua` (patrols), `shrines.lua` (the Meadow Shrine: Health back to full and a blessing in the chat box) |
-| `maps/meadow`, `maps/cavern` | both | map 10 and map 11: one 256 m tile each, heightmap, `areas.json` with a portal each way; `.server/spawns/` (server only) places the Guard and the Bat. The Meadow also has zone objects (`objects/0_0.json`: grass and flowers, rocks, trees and the Meadow Shrine; `.server/interactables/0_0.json`, server only: the shrine's event) and its baked navtile (`.server/nav/`, the rocks, trees and shrine cut out) |
-| `prefabs/`, `materials/`, `models/`, `textures/` | client | the zone objects' prefabs, built from primitives (`grass`, `flower`, `rock`, `tree`, `shrine`); the entities every zone scene shares (`sun`, `player`, `remote_player`, `npc_templates` with the Guard and the Bat, `replication`, `main_camera`, `world_ui` with the HUD, chat, bag, loot and character window documents): edit one and both zones change; primitives' materials (the power effects: `fire`, `arcane`, `holy`, `frost`, `steel`, `shadow`), the animated character (`female-128-anim.glb`, from `tests/project/models`), item icons (`textures/icons/`, 64x64 placeholders), the character window's silhouette (`textures/character_silhouette.png`, a placeholder), particle images (`textures/particles/`: 64x64 `fire`, `smoke`, `spark`, white with the shape in alpha so the emitter tints them; generated once by a throwaway script) |
+| `npcs/` | server | the `Guard`, `Bat` and `Elder` NPC definitions; their `template` names the client entity they are shown as, `loot` what they drop. The Elder has no `Health`: friendly, it can't be targeted or hurt |
+| `.server/quests/` | server only | one quest per file (`bat_trouble.lua`, `wings_for_the_elder.lua`): giver, texts, objectives, rewards, prerequisites. A dot-folder, so Build leaves it out of `game.pak`; the server reads it with `kast.definitions` |
+| `systems/` | server | `classes.lua` (which classes a new character may have, `Class` and max Health on entering), `combat.lua` (the powers of each class, NPCs fighting back, roots, buffs, tagging, death and revive), `inventory.lua` (bag and equipment requests, the `GEAR` table, loot rolls, corpses), `regen.lua` (Health regen out of combat, 1 gold per login), `events.lua` (welcome / arrival messages), `npcs.lua` (patrols), `shrines.lua` (the Meadow Shrine: Health back to full and a blessing in the chat box), `quests.lua` (the quest definitions, quest requests, kill and collect progress, the turn-in, each player's markers) |
+| `maps/meadow`, `maps/cavern` | both | map 10 and map 11: one 256 m tile each, heightmap, `areas.json` with a portal each way; `.server/spawns/` (server only) places the Guard, the Elder and the Bat. The Meadow also has zone objects (`objects/0_0.json`: grass and flowers, rocks, trees and the Meadow Shrine; `.server/interactables/0_0.json`, server only: the shrine's event) and its baked navtile (`.server/nav/`, the rocks, trees and shrine cut out) |
+| `prefabs/`, `materials/`, `models/`, `textures/` | client | the zone objects' prefabs, built from primitives (`grass`, `flower`, `rock`, `tree`, `shrine`); the entities every zone scene shares (`sun`, `player`, `remote_player`, `npc_templates` with the Guard, the Bat and the Elder (a blue robe, white beard and a staff), `replication`, `main_camera`, `world_ui` with the HUD, chat, bag, loot, character window, quest dialog and quest log documents): edit one and both zones change; primitives' materials (the power effects: `fire`, `arcane`, `holy`, `frost`, `steel`, `shadow`), the animated character (`female-128-anim.glb`, from `tests/project/models`), item icons (`textures/icons/`, 64x64 placeholders), the character window's silhouette (`textures/character_silhouette.png`, a placeholder), particle images (`textures/particles/`: 64x64 `fire`, `smoke`, `spark`, white with the shape in alpha so the emitter tints them; generated once by a throwaway script) |
 | `docker-compose.override.yml` | dev | runs the `services/world` stack with this folder's Lua and maps |
 | `setup_realm.cmake` | dev | copies the stack's dev CA into `certs/` and adds the realm `Starter Realm` |
 
@@ -52,14 +55,15 @@ docker compose -f docker-compose.yml -f ../../samples/starter-mmo/docker-compose
 docker compose logs world    # "maps loaded" with Meadow (10) and Cavern (11), "Lua loaded", no "Lua error"
 ```
 
-`--build` matters after a World Server update (this sample needs one that loads `items/` and NPC `loot`): an older image
+`--build` matters after a World Server update (this sample needs one that loads `items/`, NPC `loot` and has
+`kast.definitions`, which `systems/quests.lua` reads its quests with; the log then says `quests loaded` with `count` 2): an older image
 refuses the sample's NPC definitions and the `world` container never gets healthy.
 
 The override mounts this folder as the world server's `LUA_ROOT` and `maps/` as its `MAP_ROOT`, starts new characters
 on map 10 and runs no server game state machine. `services/world/docker-compose.yml` itself is unchanged. To go back
 to the default content (`services/world/lua`, `tests/project/maps`): `docker compose up -d --force-recreate world`.
 
-After editing anything under `components/`, `fsms/`, `items/`, `npcs/`, `systems/` or `maps/`, restart the world server with the
+After editing anything under `components/`, `fsms/`, `items/`, `npcs/`, `systems/`, `.server/quests/` or `maps/`, restart the world server with the
 same two `-f` files (`... up -d --force-recreate world`). A broken file refuses the start; `docker compose logs world`
 says which.
 
@@ -181,6 +185,27 @@ running it twice adds nothing.
   and buffs are unchanged. **Stamina** gives 5 max Health a point on top of the class's (a Warrior in the full set: 175).
   Equipping raises the max but not your current Health; unequipping lowers the max and clamps your Health to it.
   Gear is saved with the character. Any class can wear anything; Main Hand and Off Hand are independent.
+- **Quests**: the **Elder**, a robed figure with a white beard and a staff, stands about 6 m north-west of the spawn. It
+  is friendly: Tab and left clicks skip it and powers on it say `* Invalid target`. Over its head floats a yellow **!**
+  when it has a quest for you, a yellow **?** when one is ready to turn in, a grey **?** while one is in progress, nothing
+  otherwise; each player sees their own.
+  - **Right click** the Elder (press and release without dragging) within 5 m: the quest dialog opens (further away:
+    `* Too far away`). It lists the Elder's quests for you; the chosen one shows its text, objectives, rewards (gold,
+    item icons with quality-coloured names) and **Accept** or **Complete**. **Close**, **Esc** or walking more than 5 m
+    away closes it, and it closes by itself when nothing is left to show.
+  - **Bat Trouble**: kill 3 Bats in the Cavern, 10 gold. Every player who hit a Bat and has the quest gets the kill,
+    not only the one who tagged it. Then **Wings for the Elder** (only after Bat Trouble): bring 5 Bat Wings, 15 gold
+    and a Leather Cap. Its progress is the Bat Wings in your bag right now: wings you already had count, and destroying
+    them lowers it. Turning it in takes the 5 wings; with no room left for the cap it says `* Inventory is full` and
+    nothing changes. Quests can't be repeated.
+  - **L** opens and closes the quest log (typed into the chat box, L is just an "l"): your active quests (up to 20) with
+    their progress (`Bats slain: 2/3`, `Bat Wing: 4/5`); click one for its text and rewards, **Abandon** drops it and its
+    progress (take it again from the Elder).
+  - Quests, their progress and the completed ones are saved with the character. Every action is a request
+    (`kast.world.send("quest.accept", {npc, quest})`, ...) that `systems/quests.lua` checks; a refusal is a `* ...` line
+    (`* You can't take that quest yet`, `* You are already on that quest`, `* You have already completed that quest`,
+    `* Quest not complete`, `* Quest log is full`, `* You are dead`, ...). Objective updates add no chat lines: the log
+    and the dialog show them.
 - **Portal**: the orange arch about 25 m east of the spawn is the `cavern_gate` portal: walk into it and the server
   moves you to the Cavern (`world.mapChanged`); the client loads `scenes/cavern.scene` and the Bat is in front of you.
   The arch west of the Cavern's arrival point takes you back to `scenes/meadow.scene`.
@@ -207,8 +232,9 @@ docker compose -f docker-compose.yml -f ../../samples/starter-mmo/docker-compose
 **Build > Build...** (or `kast_editor --project samples/starter-mmo --build <folder>`) writes `Starter MMO.exe`,
 `game.pak` and the DLLs. Run setup step 2 first: Build checks the CA file. The built game starts at the login screen and
 logs `Online Services enabled: auth http://localhost:3100, CA file 'certs/world_dev_ca.pem'`. Everything in the folder
-except dot-folders ships in `game.pak`, server Lua included. Fine for a sample; a real game keeps server-only code out
-of the client project.
+except dot-folders ships in `game.pak`, server Lua included, but not the quests (`.server/quests/`): players can't read
+what a quest asks or gives before the server tells them. Fine for a sample; a real game keeps all server-only code out
+of the client project, in dot-folders or elsewhere.
 
 ## How it fits together
 
@@ -251,6 +277,15 @@ of the client project.
   step, and system files can't share `readBag` / `writeBag`. After every change (and on entering) it publishes
   `equipment.stats {entity, armor, damage, stamina}` on the server bus: `combat.lua` keeps each player's Armor and
   Damage from it, `classes.lua` sets `Health.max` (class base + 5 per Stamina). Neither reads the gear itself.
+- **Quests**: the definitions are server-only (`.server/quests/`, read once by `systems/quests.lua` with the World
+  Server's `kast.definitions`), so the client learns a quest only from the server's answers: `quest.dialog` (the giver's
+  quests for you, with text, objectives and rewards) and `quest.log` (your active ones). Your state is the `Quests`
+  component (three primitive arrays: active ids, 4 progress counts per active quest, completed ids), owner-only, which
+  the log and dialog read for progress. Kill credit comes from `systems/combat.lua`'s `npc.died {npc, definition,
+  tagger, damagers}` on the server bus; collect progress from `systems/inventory.lua`'s `inventory.changed {entity}`;
+  the turn-in asks `inventory.lua` for one all-or-nothing `inventory.exchange` (take the wings, give the cap and the
+  gold), since only it changes the bag. The markers are worked out per player on the server and sent to that player
+  alone (`quest.markers`); `scripts/quest.lua` builds the ! and ? from cubes over every clone of that giver.
 - **Drag and drop** is the engine's: a slot has RCSS `drag: clone` and `data-drag="bag.slot"`, so RmlUi drags publish
   `bag.slot.start` / `bag.slot.drop` with the target slot and Shift ([Game GUI](../../docs/engine/game-gui.html#drag-and-drop)).
   Drops carry the target's document, so a bag slot dropped on `ui/character.rml` is `scripts/character.lua`'s to equip
@@ -267,7 +302,8 @@ of the client project.
   Builder shows the HUD's ready powers glowing (`starter_mmo_hud_glow.png`), both pixel-probed; it builds, and its player starts with Online Services on.
   `starter_mmo_hit_sparks` plays the Meadow offline with a test-only driver (`cmake/starter_mmo_hit_driver.lua`) that
   publishes the server's `combat.hit`: 24 sparks, their entity destroyed once none is alive, then a second burst
-  (`starter_mmo_hit_sparks.png`).
+  (`starter_mmo_hit_sparks.png`). `starter_mmo_pak_server_only` checks the built `game.pak` holds nothing from `.server/` (no quest
+  definitions or quest text) but does hold `scripts/quest.lua`.
 - **Live**, against the compose stack, with a test account in the environment only:
 
   ```sh
@@ -332,7 +368,20 @@ of the client project.
     Strike on the Guard, in combat, each in the chat box. `starter_mmo_live_equip_combat`: `Brawler` in sword, tunic
     and shield: 155 max Health, Strike 15, the Guard's hits down to 1. `starter_mmo_live_equip_persist`: `Brawler`
     again after the relog: the same gear, 155 max Health, Armor 4, Damage +3, both windows open.
-  The test-time compose file also lets the test account hold 20 characters, since each stage has its own.
+  - Quest stages (the test server's `test.quests` sets a `Quests` state, `test.health` a Health, `test.bag` the 5 Bat
+    Wings; `Quester` goes one step further each): `starter_mmo_live_quest_dialog`: the Elder's yellow ! (its two cubes),
+    `* Too far away` from 6.4 m, then a real right click (`--sim-mouse`) opens the dialog. `starter_mmo_live_quest_log`:
+    Accept, 0/3 and the grey ?; real keys: L opens the log, L typed into the focused chat field is an "l".
+    `starter_mmo_live_quest_kills`: three Bats killed and looted in the Cavern (1/3, 2/3, 3/3), the yellow ? back in the
+    Meadow, the turn-in (+10 gold), Wings for the Elder taken at 3/5 (the looted wings count), Bat Trouble refused as
+    completed. `starter_mmo_live_quest`: 5 Bat Wings, the log at 5/5, the turn-in: wings gone, +15 gold, the Leather Cap
+    in the bag, nothing left to offer. `starter_mmo_live_quest_rejects` (`Rejecter`): unknown quest, prerequisites
+    unmet, turn-in and abandon of a quest not taken, already active, incomplete turn-in, a 21st quest, dead, out of
+    range and already completed, each refused with its reason; Abandon in the log resets 2/3 and the quest is taken
+    again at 0/3; a full bag refuses the turn-in with `* Inventory is full` and changes nothing.
+    `starter_mmo_live_quest_persist`: `Rejecter` again after the relog: Wings for the Elder at 5/5, Bat Trouble
+    completed, the yellow ?.
+  The test-time compose file also lets the test account hold 24 characters, since each stage has its own.
 
   The engine's drag and drop itself is checked by `ctest -R ui_drag` (a real `--sim-mouse` drag, with and without
   Shift, in `tests/project/ui_drag.scene`); the server's bag and loot rules by `world_self_check` (`starter-mmo loot`), and every class and power rule (damage,
@@ -340,7 +389,10 @@ of the client project.
   checks. Its `starter-mmo equipment` checks cover equip, unequip and both swaps, every refusal (wrong slot, occupied,
   full, dead, in combat, bad indices, a mismatched item), saved gear cleanup, Armor (with its minimum and its order
   before Shield Wall and Power Shield), Damage on melee and ranged powers, Stamina's max Health with clamping, revive
-  and login with gear, and the gear saved across a relog.
+  and login with gear, and the gear saved across a relog. Its `starter-mmo quests` checks (several players beside the Elder
+  and Bats made with more Health) cover kill credit for every player who hit a Bat (two players credited for one Bat,
+  one who never hit it not), every quest refusal, markers and `Quests` reaching their owner only, collect progress,
+  both turn-ins, the full-bag refusal and the quests saved across a relog.
 
   The combat stages take their screenshot a moment after the driver logs its shot line (the editor's
   `--screenshot-on-log`).

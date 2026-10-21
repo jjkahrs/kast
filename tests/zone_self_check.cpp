@@ -486,7 +486,7 @@ void check_areas() {
 
 void check_spawns() {
     const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "spawns");
-    CHECK(npc_names(kSource / "samples" / "starter-mmo") == (std::vector<std::string>{"Bat", "Guard"}));
+    CHECK(npc_names(kSource / "samples" / "starter-mmo") == (std::vector<std::string>{"Bat", "Elder", "Guard"}));
     Project p = scan_project(root);
     ZoneDoc doc = flat_map(p);
     std::string err;

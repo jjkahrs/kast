@@ -480,3 +480,105 @@ button.loot_entry:hover {
 .gear_stats {
     color: #1eff00;
 }
+
+/* Quest dialog and quest log (ui/quest.rml, ui/quest_log.rml; scripts/quest.lua, scripts/quest_log.lua). The marks
+   are the overhead markers' colours: #ffcc00 for ! (available) and ? (ready), grey for ? in progress. Rewards reuse the
+   loot window's icon and quality-coloured names. The dialog sits under the HUD, where the loot window opens, the log
+   top right. */
+#quest_dialog {
+    left: 12px;
+    top: 168px;
+    width: 330px;
+}
+
+#quest_log {
+    right: 12px;
+    top: 12px;
+    width: 320px;
+}
+
+button.quest_choice, button.qlog_row {
+    display: block;
+    margin-top: 3px;
+    padding: 4px 8px;
+    background-color: #000000;
+    color: #f0f0f0;
+    text-align: left;
+    border-radius: 4px;
+}
+
+button.quest_choice:hover, button.qlog_row:hover {
+    background-color: #454545;
+    box-shadow: none;
+}
+
+button.quest_choice.selected, button.qlog_row.selected {
+    background-color: #454545;
+    border: 1px #ffcc00;
+}
+
+.quest_mark {
+    margin-right: 8px;
+    font-size: 16px;
+    color: #ffcc00;
+}
+
+.quest_mark.progress {
+    color: #9d9d9d;
+}
+
+.quest_title {
+    margin-top: 8px;
+    font-size: 16px;
+    color: #ffcc00;
+}
+
+.quest_text {
+    margin-top: 4px;
+    font-size: 13px;
+}
+
+.quest_heading {
+    margin-top: 6px;
+    color: #ffaa00;
+}
+
+.quest_objective, .qlog_row_progress {
+    font-size: 13px;
+    color: #c8c8c8;
+}
+
+.quest_reward {
+    height: 30px;
+    margin-top: 2px;
+}
+
+.quest_reward .icon {
+    width: 28px;
+    height: 28px;
+}
+
+.quest_reward .loot_name {
+    width: 260px;
+}
+
+.quest_buttons {
+    margin-top: 6px;
+}
+
+button.quest_button {
+    display: inline-block;
+    width: 100px;
+    margin: 6px 4px 0 0;
+    padding: 6px 0;
+}
+
+#qlog_list {
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+#qlog_abandon {
+    margin-top: 8px;
+    padding: 6px 0;
+}

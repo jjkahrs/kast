@@ -35,6 +35,14 @@
 -- the owner gets "loot.contents" again, or "loot.closed" {target} when the corpse is empty and goes (also when it
 -- times out).
 --
+-- Other systems change the bag through the server bus, so the bag rules stay here:
+--   "inventory.exchange" {entity, ref, take = {{item, count}, ...}?, give = {{item, count}, ...}?, gold?} takes the
+--   items out of the bag (any slots), then puts the given ones in (stacks first, then empty slots) and adds gold to
+--   the Wallet, all or nothing; answered on the bus with "inventory.exchanged" {entity, ref, ok, reason?}: reason
+--   "missing" (not enough to take) or "full" (what is given doesn't fit after the take). systems/quests.lua turns in
+--   quests with it.
+--   Every bag write publishes "inventory.changed" {entity} (systems/quests.lua's collect objectives).
+--
 -- Bandwidth: one event per request back to the requester only, plus the Inventory / Wallet / Equipment change (owner
 -- only) and the Corpse component once per death (everyone in view). "equipment.gear" once per login. Nothing per tick.
 local SLOTS = 16
@@ -90,6 +98,7 @@ end
 
 local function writeBag(e, items, counts)
     kast.set(e, "Inventory", {items = items, counts = counts})
+    kast.publish("inventory.changed", {entity = e})
 end
 
 -- Puts up to count of item into the bag arrays: same-item stacks first, then empty slots. Returns what didn't fit.
@@ -110,6 +119,37 @@ local function addTo(items, counts, item, count)
         end
     end
     return count
+end
+
+-- Takes count of item out of the bag arrays, last slots first. Returns false (arrays partly changed) if there is less.
+local function removeFrom(items, counts, item, count)
+    for i = SLOTS, 1, -1 do
+        if count == 0 then return true end
+        if items[i] == item then
+            local n = math.min(count, counts[i])
+            counts[i], count = counts[i] - n, count - n
+            if counts[i] == 0 then items[i] = "" end
+        end
+    end
+    return count == 0
+end
+
+local function onExchange(event)
+    local e = event.entity
+    local function answer(reason)
+        kast.publish("inventory.exchanged", {entity = e, ref = event.ref, ok = reason == nil, reason = reason})
+    end
+    if not exists(e, "Inventory") then return answer("missing") end -- logged out meanwhile
+    local items, counts = readBag(e)
+    for _, entry in ipairs(event.take or {}) do
+        if not removeFrom(items, counts, entry.item, entry.count) then return answer("missing") end
+    end
+    for _, entry in ipairs(event.give or {}) do
+        if addTo(items, counts, entry.item, entry.count) > 0 then return answer("full") end
+    end
+    writeBag(e, items, counts)
+    if (event.gold or 0) > 0 then kast.set(e, "Wallet", {gold = kast.get(e, "Wallet").gold + event.gold}) end
+    answer(nil)
 end
 
 local function onMove(event)
@@ -343,6 +383,7 @@ return {
         kast.subscribe("client.loot.open", onLootOpen)
         kast.subscribe("client.loot.take", onLootTake)
         kast.subscribe("client.loot.take_all", onLootTakeAll)
+        kast.subscribe("inventory.exchange", onExchange)
     end,
 
     onEnter = function(e)

@@ -1,0 +1,37 @@
+<rml>
+    <head>
+        <title>Quest</title>
+        <link type="text/rcss" href="starter.rcss"/>
+    </head>
+    <body>
+        <!-- scripts/quest.lua: the quest giver's dialog (the server's quest.dialog). The list shows its quests for this
+             character (yellow ! available, yellow ? ready, grey ? in progress); the chosen one's text, objectives
+             (with progress once taken), rewards and Accept or Complete below. Close, Esc or walking away closes it. -->
+        <div id="quest_dialog" class="window">
+            <p id="quest_giver" class="window_title">-</p>
+            <div id="quest_list">
+                <button id="quest_choice_1" class="quest_choice" data-event="quest.choose"><span id="quest_choice_1_mark" class="quest_mark">!</span><span id="quest_choice_1_title">-</span></button>
+                <button id="quest_choice_2" class="quest_choice" data-event="quest.choose"><span id="quest_choice_2_mark" class="quest_mark">!</span><span id="quest_choice_2_title">-</span></button>
+                <button id="quest_choice_3" class="quest_choice" data-event="quest.choose"><span id="quest_choice_3_mark" class="quest_mark">!</span><span id="quest_choice_3_title">-</span></button>
+                <button id="quest_choice_4" class="quest_choice" data-event="quest.choose"><span id="quest_choice_4_mark" class="quest_mark">!</span><span id="quest_choice_4_title">-</span></button>
+            </div>
+            <p id="quest_title" class="quest_title">-</p>
+            <p id="quest_text" class="quest_text">-</p>
+            <p class="quest_heading">Objectives</p>
+            <p id="quest_objective_1" class="quest_objective">-</p>
+            <p id="quest_objective_2" class="quest_objective">-</p>
+            <p id="quest_objective_3" class="quest_objective">-</p>
+            <p id="quest_objective_4" class="quest_objective">-</p>
+            <p id="quest_rewards_heading" class="quest_heading">Rewards</p>
+            <div id="quest_reward_gold" class="quest_reward"><div class="icon coin"></div><p id="quest_reward_gold_name" class="loot_name">-</p></div>
+            <div id="quest_reward_1" class="quest_reward"><div id="quest_reward_1_icon" class="icon"></div><p id="quest_reward_1_name" class="loot_name">-</p></div>
+            <div id="quest_reward_2" class="quest_reward"><div id="quest_reward_2_icon" class="icon"></div><p id="quest_reward_2_name" class="loot_name">-</p></div>
+            <div id="quest_reward_3" class="quest_reward"><div id="quest_reward_3_icon" class="icon"></div><p id="quest_reward_3_name" class="loot_name">-</p></div>
+            <div class="quest_buttons">
+                <button id="quest_accept" class="quest_button" data-event="quest.accept">Accept</button>
+                <button id="quest_complete" class="quest_button" data-event="quest.complete">Complete</button>
+                <button id="quest_close" class="quest_button secondary" data-event="quest.close">Close</button>
+            </div>
+        </div>
+    </body>
+</rml>

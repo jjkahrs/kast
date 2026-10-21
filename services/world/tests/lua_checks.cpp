@@ -2865,6 +2865,285 @@ void checkStarterMmoLoot() {
     for (const auto& st : w.world.script_status()) check(st.ok, "starter-mmo loot: system still enabled " + st.path + " " + st.error);
 }
 
+// The starter-mmo sample's quests (samples/starter-mmo/systems/quests.lua, .server/quests/, components/quests.lua,
+// npcs/elder.lua, the kill credit in systems/combat.lua and the turn-in exchange in systems/inventory.lua), in a copy of
+// its server Lua with the test-only system (test.bag, test.quests, test.health). Bats with more Health are made here
+// beside the Meadow's Elder, so several players can hit one before it dies.
+void checkStarterMmoQuests() {
+    LogCapture capture;
+    const fs::path sample = KAST_STARTER_MMO;
+    LuaRoot r;
+    for (const char* dir : {"components", "fsms", "items", "npcs", "systems", ".server"})
+        fs::copy(sample / dir, r.root / dir, fs::copy_options::recursive);
+    fs::copy_file(KAST_STARTER_MMO_TEST_LUA, r.root / "systems" / "zz_test.lua");
+    const auto defs = lua::load_component_defs(r.root, world::kReservedComponentNames);
+    std::vector<std::string> mapErrors;
+    world::WorldRules rules;
+    rules.startMap = 10;
+    TestWorld w(defs.defs, rules, world::Maps::load(sample / "maps", mapErrors));
+    const auto errors = w.world.load_scripts(r.root);
+    check(defs.errors.empty() && errors.empty(), "starter-mmo quests: loads " + (errors.empty() ? std::string() : errors[0]));
+    if (!errors.empty()) return;
+    check(said("quests loaded"), "starter-mmo quests: the server logs its quests loaded");
+    auto& reg = w.world.registry();
+    TimePoint t = T0;
+    w.world.tick(t);
+    const auto run = [&](double seconds) {
+        for (int i = 0; i < std::max(1, static_cast<int>(std::lround(seconds * 20))); ++i)
+            w.world.tick(t += std::chrono::milliseconds(50));
+    };
+    const auto send = [&](entt::entity from, const std::string& name, const Json& data) {
+        w.world.push_client_event(from, name, nlohmann::json::parse(data.dump()));
+        run(0.11); // under the 10 client events a second limit
+    };
+    const auto events = [&](uint32_t sid, const std::string& name) {
+        std::vector<Json> out;
+        for (const auto& e : w.sent.of<proto::ServerEvent>(sid))
+            if (e.name == name) out.push_back(Json::parse(e.json));
+        return out;
+    };
+    using Reasons = std::vector<std::string>;
+    const auto rejected = [&](uint32_t sid, const std::string& name = "quest.rejected") {
+        Reasons out;
+        for (const auto& e : events(sid, name)) out.push_back(e["reason"]);
+        return out;
+    };
+    const auto marker = [&](uint32_t sid) { // the Elder's marker as last sent to sid
+        const auto m = events(sid, "quest.markers");
+        return m.empty() ? std::string("<none>") : m.back()["markers"].value("Elder", std::string("<missing>"));
+    };
+    const auto quests = [&](entt::entity e) { return w.value(e, "Quests"); };
+    const auto progress = [&](entt::entity e) {
+        const Json q = quests(e);
+        return q["progress"].empty() ? -1 : q["progress"][0].get<int>();
+    };
+    const auto gold = [&](entt::entity e) { return w.value(e, "Wallet")["gold"].get<int>(); };
+    using Slots = std::vector<std::string>;
+    const auto bag = [&](entt::entity e) {
+        const Json v = w.value(e, "Inventory");
+        Slots out;
+        for (size_t i = 0; i < 16; ++i)
+            out.push_back(v["items"][i].get<std::string>().empty() ? "" : v["items"][i].get<std::string>() + ":" +
+                                                                                  std::to_string(v["counts"][i].get<int>()));
+        while (!out.empty() && out.back().empty()) out.pop_back();
+        return out;
+    };
+    const auto setBag = [&](entt::entity e, const Slots& slots) {
+        Json items = Json::array(), counts = Json::array();
+        for (const std::string& s : slots) {
+            const size_t colon = s.find(':');
+            items.push_back(s.empty() ? "" : s.substr(0, colon));
+            counts.push_back(s.empty() ? 0 : std::stoi(s.substr(colon + 1)));
+        }
+        send(e, "test.bag", Json{{"items", items}, {"counts", counts}});
+    };
+    const auto bat = [&](float x, float z, int health) {
+        Json components{{"Health", {{"current", health}, {"max", health}, {"regen", false}}}};
+        return w.world.create_npc("Bat", "Bat", 10, proto::Vec3{x, 0, z}, 0, "Bat", lua::Json::parse(components.dump()));
+    };
+    const auto strike = [&](entt::entity from, entt::entity target) {
+        send(from, "combat.power", {{"power", "strike"}, {"target", wire(target)}});
+        run(1.6); // past Strike's cooldown
+    };
+    entt::entity elder = entt::null;
+    for (auto [e, n] : reg.view<world::Npc>().each())
+        if (n.npc == "Elder") elder = e;
+    check(elder != entt::null, "starter-mmo quests: the Elder spawns in the Meadow");
+    if (elder == entt::null) return;
+    const proto::Vec3 elderAt = reg.get<world::Transform>(elder).pos;
+    check(std::hypot(elderAt.x - 128, elderAt.z - 128) < 8 && !w.value(elder, "Health").is_object(),
+          "starter-mmo quests: the Elder stands near the Meadow spawn, without Health");
+    const Json talk{{"npc", wire(elder)}};
+    const auto at = [&](const std::string& quest) { return Json{{"npc", wire(elder)}, {"quest", quest}}; };
+
+    // Ann, Ben, Dee and Eve stand by the Elder (Eve 2.5 m north of it), Cid 6.4 m away. Everyone fresh sees "!".
+    const auto ann = w.spawn(1, 901, "Ann", 124, 131.5f, "", 10);
+    const auto ben = w.spawn(2, 902, "Ben", 125.5f, 131.5f, "", 10);
+    const auto cid = w.spawn(3, 903, "Cid", 128, 128, "", 10);
+    const auto dee = w.spawn(4, 904, "Dee", 122.5f, 131.5f, "", 10);
+    const auto eve = w.spawn(5, 905, "Eve", 124, 135.5f, "", 10);
+    run(0.2);
+    check(marker(1) == "available" && marker(2) == "available" && quests(ann)["active"].empty(),
+          "starter-mmo quests: a fresh character sees the Elder's available marker (" + marker(1) + ")");
+
+    // The Elder can't be fought: powers on it are refused, it has no Health, it is never hurt.
+    send(ann, "combat.power", {{"power", "strike"}, {"target", wire(elder)}});
+    check(rejected(1, "combat.rejected") == Reasons{"target"} && reg.valid(elder),
+          "starter-mmo quests: a power on the Elder is refused (target)");
+    run(1.6);
+    w.sent.clear();
+
+    // Talking: the dialog lists what the Elder has for this character; too far or not a giver: refused.
+    send(ann, "quest.talk", talk);
+    const auto dialog = events(1, "quest.dialog");
+    check(dialog.size() == 1 && dialog[0]["giver"] == "Elder" && dialog[0]["quests"].size() == 1 &&
+              dialog[0]["quests"][0]["id"] == "bat_trouble" && dialog[0]["quests"][0]["state"] == "available" &&
+              dialog[0]["quests"][0]["objectives"][0]["label"] == "Bats slain" &&
+              dialog[0]["quests"][0]["objectives"][0]["count"] == 3 && dialog[0]["quests"][0]["rewards"]["gold"] == 10,
+          "starter-mmo quests: talking lists Bat Trouble (available, Bats slain 3, 10 gold): " +
+              (dialog.empty() ? std::string("-") : dialog[0].dump()));
+    send(cid, "quest.talk", talk);
+    send(ann, "quest.talk", {{"npc", 999999}});
+    send(ann, "quest.talk", {{"npc", "x"}});
+    for (auto [e, n] : reg.view<world::Npc>().each())
+        if (n.npc == "Guard") send(ann, "quest.talk", {{"npc", wire(e)}});
+    check(rejected(3) == Reasons{"range"} && rejected(1) == Reasons{"giver", "giver", "giver"},
+          "starter-mmo quests: talking from 6.4 m (range) or to a non-giver (giver) is refused");
+    w.sent.clear();
+
+    // Illegal accepts, turn-ins and abandons change nothing.
+    const Json fresh = quests(ann);
+    send(ann, "quest.accept", at("no_such_quest"));
+    send(ann, "quest.accept", at("wings_for_the_elder"));
+    send(ann, "quest.complete", at("bat_trouble"));
+    send(ann, "quest.abandon", {{"quest", "bat_trouble"}});
+    send(cid, "quest.accept", at("bat_trouble"));
+    send(ann, "quest.accept", "nope");
+    check(rejected(1) == Reasons{"unknown_quest", "requires", "not_active", "not_active", "unknown_quest"} &&
+              rejected(3) == Reasons{"range"} && quests(ann) == fresh && quests(cid)["active"].empty(),
+          "starter-mmo quests: unknown quest, prerequisites unmet, turn-in / abandon of a quest not taken, out of "
+          "range, malformed: refused, nothing changes: " + Json(rejected(1)).dump());
+    w.sent.clear();
+
+    // Ann accepts Bat Trouble: active at 0/3, her marker turns to "progress"; Ben's doesn't change, and he never gets
+    // her Quests. Accepting it again, or turning it in now, is refused.
+    send(ann, "quest.accept", at("bat_trouble"));
+    check(events(1, "quest.accepted").size() == 1 && quests(ann)["active"] == Json::parse(R"(["bat_trouble"])") &&
+              progress(ann) == 0 && marker(1) == "progress" && events(2, "quest.markers").empty(),
+          "starter-mmo quests: accepted: active at 0/3, Ann's marker progress, none sent to Ben");
+    check(events(1, "quest.dialog").size() == 1 && events(1, "quest.dialog")[0]["quests"][0]["state"] == "progress",
+          "starter-mmo quests: the dialog comes again after an accept (Bat Trouble in progress)");
+    send(ann, "quest.accept", at("bat_trouble"));
+    send(ann, "quest.complete", at("bat_trouble"));
+    check(rejected(1) == Reasons{"active", "incomplete"}, "starter-mmo quests: already active / incomplete turn-in refused");
+    send(ann, "quest.log", Json::object());
+    const auto log = events(1, "quest.log");
+    check(log.size() == 1 && log[0]["quests"].size() == 1 && log[0]["quests"][0]["title"] == "Bat Trouble" &&
+              log[0]["quests"][0]["state"] == "progress",
+          "starter-mmo quests: the log sync lists the active quest");
+    send(ben, "quest.accept", at("bat_trouble"));
+    send(eve, "quest.accept", at("bat_trouble"));
+    const std::array players{ann, ben, cid, dee, eve};
+    bool ownerOnly = true;
+    for (uint32_t sid = 1; sid <= 5; ++sid)
+        for (const auto& u : w.sent.of<proto::ComponentUpdate>(sid))
+            if (u.name == "Quests" && u.entityId != wire(players[sid - 1])) ownerOnly = false;
+    check(ownerOnly && marker(2) == "progress" && marker(3) == "<none>",
+          "starter-mmo quests: Quests and the markers go to their owner only");
+    w.sent.clear();
+
+    // Kill credit: Ann, Ben and Dee (no quest) each hit a 30 Health Bat, Dee's hit kills it. Ann and Ben (damagers
+    // with the quest) get 1, though Ann tagged it; Eve has the quest but never hit it: 0.
+    const auto b1 = bat(124, 130, 30);
+    strike(ann, b1);
+    strike(ben, b1);
+    strike(dee, b1);
+    check(!reg.valid(b1) || w.value(b1, "Health")["current"] == 0, "starter-mmo quests: the Bat died");
+    check(progress(ann) == 1 && progress(ben) == 1 && progress(eve) == 0 && quests(dee)["active"].empty(),
+          std::format("starter-mmo quests: every damager with the quest gets the kill (Ann {}, Ben {}), not Eve ({})",
+                      progress(ann), progress(ben), progress(eve)));
+    // Ben alone kills one: only Ben counts.
+    strike(ben, bat(125.5f, 130, 10));
+    check(progress(ann) == 1 && progress(ben) == 2, "starter-mmo quests: a Bat only Ben hit counts for Ben only");
+    // Abandon resets: Ben drops Bat Trouble (2/3) and takes it again at 0/3.
+    send(ben, "quest.abandon", {{"quest", "bat_trouble"}});
+    const bool dropped = quests(ben)["active"].empty() && quests(ben)["progress"].empty() && marker(2) == "available";
+    send(ben, "quest.accept", at("bat_trouble"));
+    check(dropped && events(2, "quest.abandoned").size() == 1 && progress(ben) == 0,
+          "starter-mmo quests: abandon drops the quest and its progress; taken again at 0/3");
+    // Ann's two more kills: 3/3, her marker "ready"; a kill past the count doesn't go over it.
+    strike(ann, bat(123, 130, 10));
+    strike(ann, bat(124, 130, 10));
+    check(progress(ann) == 3 && marker(1) == "ready", "starter-mmo quests: 3/3 and the ready marker");
+    strike(ann, bat(124.5f, 130, 10));
+    check(progress(ann) == 3, "starter-mmo quests: progress stops at the count");
+    w.sent.clear();
+
+    // Turn-in: +10 gold, completed, Wings for the Elder now available ("available" marker); Bat Trouble can't be
+    // taken again.
+    const int goldBefore = gold(ann);
+    send(ann, "quest.complete", at("bat_trouble"));
+    run(0.1);
+    const auto done = events(1, "quest.completed");
+    check(done.size() == 1 && done[0]["gold"] == 10 && gold(ann) == goldBefore + 10 && quests(ann)["active"].empty() &&
+              quests(ann)["completed"] == Json::parse(R"(["bat_trouble"])") && marker(1) == "available",
+          "starter-mmo quests: turned in: +10 gold, completed, the next quest available: " + quests(ann).dump());
+    const auto after = events(1, "quest.dialog");
+    check(!after.empty() && after.back()["quests"].size() == 1 && after.back()["quests"][0]["id"] == "wings_for_the_elder",
+          "starter-mmo quests: the dialog after the turn-in offers Wings for the Elder");
+    send(ann, "quest.accept", at("bat_trouble"));
+    check(rejected(1) == Reasons{"completed"}, "starter-mmo quests: a completed quest can't be taken again");
+    w.sent.clear();
+
+    // Wings for the Elder: the bag's live count of Bat Wings, those held before accepting included, capped at 5;
+    // destroying some lowers it.
+    setBag(ann, {"bat_wing:3", "linen_cloth:2"});
+    send(ann, "quest.accept", at("wings_for_the_elder"));
+    const int pre = progress(ann);
+    setBag(ann, {"bat_wing:4", "linen_cloth:2", "bat_wing:3"});
+    const int capped = progress(ann);
+    const std::string readyMarker = marker(1);
+    send(ann, "inventory.destroy", {{"slot", 3}, {"item", "bat_wing"}});
+    check(pre == 3 && capped == 5 && readyMarker == "ready" && progress(ann) == 4 && marker(1) == "progress",
+          std::format("starter-mmo quests: collect progress follows the bag: held 3 -> {}, 7 -> {} (capped, {}), one "
+                      "stack destroyed -> {}", pre, capped, readyMarker, progress(ann)));
+    // No room for the Leather Cap once the 5 wings are taken (20 Bat Wings, 15 full stacks): refused, nothing changes.
+    Slots full{"bat_wing:20"};
+    for (int i = 0; i < 15; ++i) full.push_back("linen_cloth:20");
+    setBag(ann, full);
+    const int goldReady = gold(ann);
+    w.sent.clear();
+    send(ann, "quest.complete", at("wings_for_the_elder"));
+    run(0.1);
+    check(rejected(1) == Reasons{"full"} && bag(ann) == full && gold(ann) == goldReady &&
+              quests(ann)["active"] == Json::parse(R"(["wings_for_the_elder"])") && progress(ann) == 5,
+          "starter-mmo quests: no room for the reward: full, bag, gold and quest unchanged");
+    // With room: 5 wings out, the cap into the slot they leave, +15 gold, both completed, nothing left to offer.
+    setBag(ann, {"bat_wing:5", "linen_cloth:20"});
+    w.sent.clear();
+    send(ann, "quest.complete", at("wings_for_the_elder"));
+    run(0.1);
+    const auto last = events(1, "quest.dialog");
+    check(bag(ann) == Slots{"leather_cap:1", "linen_cloth:20"} && gold(ann) == goldReady + 15 &&
+              quests(ann)["completed"] == Json::parse(R"(["bat_trouble","wings_for_the_elder"])") &&
+              quests(ann)["active"].empty() && marker(1) == "" && !last.empty() && last.back()["quests"].empty(),
+          "starter-mmo quests: turned in: wings gone, Leather Cap in the bag, +15 gold, no marker: " + Json(bag(ann)).dump());
+
+    // A full log (20 made-up quests set by the test system): the 21st is refused. A dead player is refused.
+    Json filler = Json::array();
+    for (int i = 1; i <= 20; ++i) filler.push_back("filler_" + std::to_string(i));
+    send(cid, "test.quests", {{"active", filler}, {"progress", Json::array()}, {"completed", Json::array()}});
+    reg.get<world::Transform>(cid).pos = reg.get<world::Transform>(dee).pos;
+    w.sent.clear();
+    send(cid, "quest.accept", at("bat_trouble"));
+    check(rejected(3) == Reasons{"log_full"} && quests(cid)["active"].size() == 20,
+          "starter-mmo quests: a 21st quest is refused (log_full)");
+    send(dee, "test.health", {{"current", 0}});
+    const Json deeBefore = quests(dee);
+    send(dee, "quest.talk", talk);
+    send(dee, "quest.accept", at("bat_trouble"));
+    send(dee, "quest.abandon", {{"quest", "bat_trouble"}});
+    check(rejected(4) == Reasons{"dead", "dead", "dead"} && quests(dee) == deeBefore && events(4, "quest.dialog").empty(),
+          "starter-mmo quests: a dead player is refused");
+
+    // Saved with the character: Ben after one more kill (1/3) and Ann (both completed) are the same after a relog.
+    strike(ben, bat(125.5f, 130, 10));
+    for (const auto& [who, sid, id] : {std::tuple{ben, 2u, uint64_t{902}}, std::tuple{ann, 1u, uint64_t{901}}}) {
+        const Json before = quests(who);
+        w.world.despawn(who);
+        std::string saved = "{}";
+        for (const auto& s : w.sent.saves)
+            if (s.charId == id && s.components) saved = *s.components;
+        w.sent.clear();
+        const auto back = w.spawn(sid, id, id == 901 ? "Ann" : "Ben", 124, 131.5f, saved, 10);
+        run(0.2);
+        check(Json::parse(saved).contains("Quests") && quests(back) == before,
+              "starter-mmo quests: Quests saved and the same after a relog: " + before.dump() + " -> " + quests(back).dump());
+        if (id == 902) check(progress(back) == 1 && marker(2) == "progress", "starter-mmo quests: Ben's 1/3 kept, marker progress");
+    }
+    for (const auto& st : w.world.script_status()) check(st.ok, "starter-mmo quests: system still enabled " + st.path + " " + st.error);
+}
+
 // The starter-mmo sample's classes and powers (samples/starter-mmo/systems/classes.lua, combat.lua, npcs.lua,
 // components/class.lua), in a copy of its server Lua with the test-only system (test.seed makes Evasion's rolls
 // known). Dummies are NPCs with 1000 Health made here; with the "Guard" definition and a creature machine they fight
@@ -4523,6 +4802,45 @@ end, update = function() end }
     check_lua_expectations("items lua", "items lua done");
 }
 
+// kast.definitions(folder): every .lua file under it, sorted by path, as fresh plain-data copies plus their paths;
+// a missing folder is none; bad folders and bad files raise.
+void checkDefinitionsApi() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write(".server/quests/b.lua", "return {id = 'b', objectives = {{type = 'kill', count = 3}}, requires = {'a'}}");
+    r.write(".server/quests/a.lua", "return {id = 'a', title = 'A'}");
+    r.write(".server/quests/sub/c.lua", "return {id = 'c'}");
+    r.write(".server/quests/notes.txt", "not lua");
+    r.write("bad/fn.lua", "return {f = function() end}");
+    r.write("bad2/two.lua", "return {}, {}");
+    r.write("systems/defs.lua", std::string(kLuaExpect) + R"lua(
+return { init = function()
+    local list, paths = kast.definitions(".server/quests")
+    expect(#list == 3 and #paths == 3, "kast.definitions: every .lua file, recursively")
+    expect(paths[1] == ".server/quests/a.lua" and paths[2] == ".server/quests/b.lua" and paths[3] == ".server/quests/sub/c.lua",
+           "kast.definitions: sorted LUA_ROOT-relative paths")
+    expect(list[1].title == "A" and list[2].objectives[1].count == 3 and list[2].requires[1] == "a" and list[3].id == "c",
+           "kast.definitions: the returned tables")
+    list[1].title = "changed"
+    expect(kast.definitions(".server/quests")[1].title == "A", "kast.definitions returns fresh copies")
+    local none, nopaths = kast.definitions("nope/none")
+    expect(#none == 0 and #nopaths == 0, "kast.definitions: a missing folder is none")
+    for _, bad in ipairs({"", "/abs", "../x", "a/../b", "a//b", "./a", "a\\b", "c:x"}) do
+        local ok, err = pcall(kast.definitions, bad)
+        expect(not ok and string.find(err, "kast.definitions: folder must be a relative path", 1, true), "kast.definitions refuses folder [" .. bad .. "]")
+    end
+    raises("kast.definitions: folder must be a relative path", function() kast.definitions(5) end)
+    raises("kast.definitions: bad/fn.lua", function() kast.definitions("bad") end)
+    raises("kast.definitions: bad2/two.lua: must return exactly one table", function() kast.definitions("bad2") end)
+    kast.log("definitions lua done")
+end, update = function() end }
+)lua");
+    TestWorld w({});
+    const auto errors = w.world.load_scripts(r.root);
+    check(errors.empty(), "definitions lua: loads " + joined(errors));
+    check_lua_expectations("definitions lua", "definitions lua done");
+}
+
 constexpr const char* kNpcDefs[][2] = {
     {"npcs/guard.lua", "return {name = 'Guard', template = 'GuardTpl', components = {Stats = {hp = 50, tags = {'x', 'y'}}, "
                        "Hp = {cur = 7}, StateMachine = {machine = 'plain'}}}"},
@@ -5083,9 +5401,11 @@ int lua_checks(int& checks) {
     checkStarterMmoLoot();
     checkStarterMmoClasses();
     checkStarterMmoEquipment();
+    checkStarterMmoQuests();
 #endif
     checkNpcDefinitionErrors();
     checkItemsAndLoot();
+    checkDefinitionsApi();
     checkNpcCreateFromDefinitions();
     checkNpcSpawnDefinitions();
     checkTileMath();

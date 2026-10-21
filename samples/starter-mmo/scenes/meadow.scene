@@ -683,7 +683,9 @@
     "scripts/bag.lua",
     "scripts/character.lua",
     "scripts/loot.lua",
-    "scripts/shrines.lua"
+    "scripts/shrines.lua",
+    "scripts/quest.lua",
+    "scripts/quest_log.lua"
   ],
   "lighting": {
     "ambientColor": [

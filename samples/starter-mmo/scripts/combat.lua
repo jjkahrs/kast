@@ -5,8 +5,10 @@
 -- terrain is closer); Escape clears. The target clears when its NPC despawns or dies (or the map changes). A gold disc
 -- (MARKER_*) under the target shows it. "target.selected" {entityId, name, health} / "target.cleared" go on the bus for the
 -- HUD's target frame (scripts/hud.lua).
--- Dead NPCs (replicated Health 0) are corpses: never targeted, tipped onto their side. A right click (press and release
--- without dragging, not on the GUI) on a corpse publishes "loot.clicked" {entityId} for scripts/loot.lua.
+-- Dead NPCs (replicated Health 0) are corpses: never targeted, tipped onto their side. NPCs without Health are friendly
+-- (the server's npcs/elder.lua; it refuses powers on them too): never targeted either. A right click (press and release
+-- without dragging, not on the GUI) on a corpse publishes "loot.clicked" {entityId} for scripts/loot.lua, on a friendly
+-- NPC "npc.clicked" {entityId, name} (scripts/quest.lua talks to it).
 -- Keys typed into a GUI text field do nothing, as in scripts/player.lua, and neither do they while the local player is
 -- dead. The keys' actions are also bus events, "combat.target_next" and "combat.target_clear", for buttons (and tests)
 -- to publish.
@@ -19,7 +21,7 @@
 -- Bandwidth: none; everything here is local.
 local TAB_RANGE = 40 -- m
 local CLICK_SLOP = 4 -- pixels of mouse travel a click may have; more is a camera drag
-local PICK = {Guard = {y = 1.1, radius = 1.2}, Bat = {y = 2.25, radius = 1.0}} -- by template: sphere over the feet
+local PICK = {Guard = {y = 1.1, radius = 1.2}, Bat = {y = 2.25, radius = 1.0}, Elder = {y = 1.1, radius = 1.1}} -- by template: sphere over the feet
 local PICK_DEFAULT = {y = 1, radius = 1}
 local MARKER_SCALE = {x = 2, y = 0.06, z = 2}
 local MARKER_MATERIAL = "materials/gold.mat"
@@ -91,6 +93,8 @@ local function isDead(c)
     return kast.has(c.entity, "Health") and kast.get(c.entity, "Health").current <= 0
 end
 
+local function isFriendly(c) return not kast.has(c.entity, "Health") end -- an NPC the server won't let anyone fight
+
 -- Lays a corpse's clone on its side: its heading turn, then a quarter roll about its own forward axis.
 local function tip(c, dead)
     if c.tipped or not (dead or isDead(c)) then return end
@@ -108,7 +112,7 @@ end
 local function nearbyNpcs()
     local list, from = {}, position(player)
     for id, c in pairs(clones) do
-        if c.template and not isDead(c) then
+        if c.template and not isDead(c) and not isFriendly(c) then
             local d = distance(position(c.entity), from)
             if d <= TAB_RANGE then list[#list + 1] = {id = id, d = d} end
         end
@@ -138,16 +142,18 @@ local function raySphere(origin, dir, center, radius)
     return t >= 0 and t or nil
 end
 
--- The NPC (corpses: dead ones only, else living ones) the ray hits first, unless the terrain is closer.
-local function pick(origin, dir, corpses)
+-- The NPC the ray hits first, unless the terrain is closer: for a right click (talk) a corpse or a friendly NPC, else
+-- a living one that can be fought.
+local function pick(origin, dir, talk)
     local best, bestT
     for id, c in pairs(clones) do
-        if c.template and isDead(c) == corpses then
+        local dead = c.template and isDead(c)
+        if c.template and (talk and (dead or isFriendly(c)) or not talk and not dead and not isFriendly(c)) then
             local p = position(c.entity)
             local shape = PICK[c.template] or PICK_DEFAULT
             local center = {x = p.x, y = p.y + shape.y, z = p.z}
             local radius = shape.radius
-            if corpses then center, radius = {x = p.x, y = p.y + 0.5, z = p.z}, shape.y + shape.radius end -- lying down
+            if dead then center, radius = {x = p.x, y = p.y + 0.5, z = p.z}, shape.y + shape.radius end -- lying down
             local t = raySphere(origin, dir, center, radius)
             if t and (not bestT or t < bestT) then best, bestT = id, t end
         end
@@ -285,7 +291,11 @@ return {
         local right = watchClick(inWorld, "right")
         if right then
             local id = pick(right.origin, right.dir, true)
-            if id then kast.publish("loot.clicked", {entityId = id}) end
+            if id and isFriendly(clones[id]) then
+                kast.publish("npc.clicked", {entityId = id, name = clones[id].name})
+            elseif id then
+                kast.publish("loot.clicked", {entityId = id})
+            end
         end
         for entity in pairs(oneShots) do -- an attack or hit clip ended: back to standing
             local ok, state = pcall(kast.getAnimationState, entity)

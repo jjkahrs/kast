@@ -78,6 +78,59 @@
         "Transform": {"position": [0.6, 2.3, 0], "rotation": [0, 0, 0, 1], "scale": [0.9, 0.05, 0.4]},
         "MeshRenderer": {"primitive": "cube", "material": "materials/bat_wing.mat"}
       }
+    },
+    {
+      "id": 10,
+      "name": "Elder",
+      "parent": 1,
+      "components": {
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
+      }
+    },
+    {
+      "id": 11,
+      "name": "Elder Robe",
+      "parent": 10,
+      "components": {
+        "Transform": {"position": [0, 0.85, 0], "rotation": [0, 0, 0, 1], "scale": [0.85, 1.7, 0.85]},
+        "MeshRenderer": {"primitive": "sphere", "material": "materials/elder_robe.mat"}
+      }
+    },
+    {
+      "id": 12,
+      "name": "Elder Head",
+      "parent": 10,
+      "components": {
+        "Transform": {"position": [0, 1.85, 0], "rotation": [0, 0, 0, 1], "scale": [0.42, 0.45, 0.42]},
+        "MeshRenderer": {"primitive": "sphere", "material": "materials/elder_skin.mat"}
+      }
+    },
+    {
+      "id": 13,
+      "name": "Elder Beard",
+      "parent": 10,
+      "components": {
+        "Transform": {"position": [0, 1.62, 0.16], "rotation": [0, 0, 0, 1], "scale": [0.32, 0.42, 0.18]},
+        "MeshRenderer": {"primitive": "sphere", "material": "materials/elder_beard.mat"}
+      }
+    },
+    {
+      "id": 14,
+      "name": "Elder Staff",
+      "parent": 10,
+      "components": {
+        "Transform": {"position": [0.55, 1.1, 0.15], "rotation": [0, 0, 0, 1], "scale": [0.07, 2.2, 0.07]},
+        "MeshRenderer": {"primitive": "cube", "material": "materials/bark.mat"}
+      }
+    },
+    {
+      "id": 15,
+      "name": "Elder Staff Orb",
+      "parent": 10,
+      "components": {
+        "Transform": {"position": [0.55, 2.28, 0.15], "rotation": [0, 0, 0, 1], "scale": [0.2, 0.2, 0.2]},
+        "MeshRenderer": {"primitive": "sphere", "material": "materials/frost.mat", "castShadows": false}
+      }
     }
   ]
 }

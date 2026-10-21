@@ -30,9 +30,12 @@
 -- (kast.map.path, or straight on a map without a navmesh) and hits it for its NPC_ATTACKS damage every interval while
 -- within ATTACK_RANGE. It gives up ("returning") once it is LEASH_RANGE from its spawn point or its target is dead,
 -- gone or on another map; back at its spawn point it heals to full and goes back to patrolling (Guard) or standing
--- (Bat). tagged[npc] is forgotten when it gets home healed. At 0 Health an NPC dies: its machine goes "dead" (a corpse:
--- no walking, no fighting, refused as a target) and "npc.died" {npc, tagger} goes on the server bus;
--- systems/inventory.lua rolls its loot and removes the corpse later, and its spawn file brings it back respawnSec after.
+-- (Bat). tagged[npc] is forgotten when it gets home healed, and so are its damagers (every player who hit it). At 0
+-- Health an NPC dies: its machine goes "dead" (a corpse: no walking, no fighting, refused as a target) and "npc.died"
+-- {npc, definition (its npcs/ name), tagger, damagers = {player, ...}} goes on the server bus; systems/inventory.lua
+-- rolls its loot for the tagger and removes the corpse later, systems/quests.lua credits every damager's kill
+-- objectives, and its spawn file brings it back respawnSec after. An NPC without Health (a friendly one, such as
+-- npcs/elder.lua) is never a target ("target").
 --
 -- A character at 0 Health is dead for REVIVE_SECONDS: it cannot move (kast.setMovable) or use powers, and NPCs drop it.
 -- Then it revives at its map's spawn point (kast.map.spawn) with Health.max (its class's plus its gear's Stamina). One that logged out dead
@@ -96,6 +99,7 @@ local rootedUntil = {}  -- npc -> time it may move again
 local deadUntil = {}    -- player -> time it revives
 local fights = {}       -- npc -> {target = player, swingAt = time, home = {x, y, z}, route = corners, leg, repathAt}
 local tagged = {}       -- npc -> the player who hit it first
+local damagers = {}     -- npc -> {[player] = true} for every player who hit it since it was last at home
 local gear = {}         -- player -> {armor =, damage =}, its gear's totals ("equipment.stats")
 
 local function exists(e, component)
@@ -178,8 +182,12 @@ local function hit(attacker, target, damage, player, extra)
         fights[target], rootedUntil[target] = nil, nil
         if exists(target, "StateMachine") then kast.fsm.change(target, "dead") end
         kast.sendNearby(player, "combat.death", {entity = target, name = name(target)})
-        kast.publish("npc.died", {npc = target, tagger = tagged[target]})
-        tagged[target] = nil
+        local credited = {}
+        for player in pairs(damagers[target] or {}) do credited[#credited + 1] = player end
+        table.sort(credited)
+        kast.publish("npc.died", {npc = target, definition = kast.get(target, "Npc").npc, tagger = tagged[target],
+                                  damagers = credited})
+        tagged[target], damagers[target] = nil, nil
     end
 end
 
@@ -286,6 +294,8 @@ local function onPower(event)
         used.target, used.targetName = target, name(target)
         kast.sendNearby(caster, "combat.power", used)
         tagged[target] = tagged[target] or caster
+        damagers[target] = damagers[target] or {}
+        damagers[target][caster] = true
         hit(caster, target, power.damage + (gear[caster] and gear[caster].damage or 0), caster, {power = power.name})
         if alive(target) and exists(target, "StateMachine") then startFight(target, caster) end
     elseif power.root then
@@ -362,7 +372,7 @@ local function goHome(npc, f, dt)
     local health = kast.get(npc, "Health")
     kast.set(npc, "Health", {current = health.max})
     if exists(npc, "Spawn") then kast.set(npc, "Transform", {heading = kast.get(npc, "Spawn").heading}) end
-    fights[npc], tagged[npc] = nil, nil
+    fights[npc], tagged[npc], damagers[npc] = nil, nil, nil
     kast.fsm.change(npc, RESUME_STATE[kast.get(npc, "StateMachine").machine] or "idle")
 end
 
@@ -396,7 +406,7 @@ return {
     update = function(dt)
         now = now + dt
         for npc in pairs(tagged) do
-            if not exists(npc, "Npc") then tagged[npc] = nil end
+            if not exists(npc, "Npc") then tagged[npc], damagers[npc] = nil, nil end
         end
         for npc, at in pairs(rootedUntil) do
             if at <= now or not exists(npc, "Npc") then rootedUntil[npc] = nil end
