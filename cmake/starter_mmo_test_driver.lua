@@ -65,6 +65,8 @@ local STAGE_CLASS = {mage = "mage", mage_bolt = "mage", priest = "priest", rogue
 local CLASS = STAGE_CLASS[STAGE] or "warrior"
 -- Each step waits `after` seconds, walks to its spot (go m south of the Guard, or "front" / "behind" the Bat), waits for
 -- its condition (bat: a living Bat; near: the Guard within that many m; log: a combat log line), then does the rest.
+-- A Meadow stage starts once the Guard is at full Health: the stage before may have left it hurt, chasing, rooted or
+-- dead, and it only heals when back home (the server's systems/combat.lua), so a first hit could kill it.
 local CLASS_STEPS = {
     warrior = {
         {go = 8}, {tab = true}, {press = 1},                          -- * Out of range
@@ -83,7 +85,7 @@ local CLASS_STEPS = {
     priest = {
         {go = 10}, {tab = true}, {press = 3},                         -- Power Shield
         {after = 1.1, press = 1},                                     -- Smite 10: the Guard comes and hits the shield
-        {log = "Power Shield absorbs 5", press = 2},                  -- Heal
+        {after = 1.1, log = "Power Shield absorbs 5", press = 2},     -- Heal, past the GCD
         {after = 0.3, shot = "power shield"},
     },
     rogue = {
@@ -150,6 +152,8 @@ local elapsed = 0
 local chatted = false
 local me
 local guard, guardId -- the Guard's clone and server id
+local health = {}    -- server id -> the latest replicated Health
+local guardWaitLogged = false
 local targeted, engaged, hits, nextAttack, shot = false, false, 0, 0, false
 local bat, batId          -- the latest Bat clone and its server id
 local corpses = {}        -- server id -> Corpse.owner
@@ -522,6 +526,14 @@ end
 local function classStage()
     local s = CLASS_STEPS[STAGE][stepIndex]
     if not s or elapsed - stepAt < (s.after or 0) then return end
+    if stepIndex == 1 and FIGHT_MAP[STAGE] == MEADOW then
+        local h = guardId and health[guardId]
+        if not (guard and h and h.current == h.max) then
+            if not guardWaitLogged and h then log("waiting for the Guard to heal: %d / %d", h.current, h.max) end
+            guardWaitLogged = guardWaitLogged or h ~= nil
+            return
+        end
+    end
     if s.go then
         local where = spot(s.go)
         if not where then return end
@@ -1075,7 +1087,10 @@ return {
             end
         end)
         kast.subscribe("world.component", function(e)
-            if e.name == "Health" then log("Health %d / %d on %d", e.data.current, e.data.max, e.entityId) end
+            if e.name == "Health" then
+                health[e.entityId] = e.data
+                log("Health %d / %d on %d", e.data.current, e.data.max, e.entityId)
+            end
             if e.name == "Class" then log("Class %s on %d", e.data.id, e.entityId) end
             if e.name == "Wallet" then
                 log("Wallet %d gold on %d", e.data.gold, e.entityId)
