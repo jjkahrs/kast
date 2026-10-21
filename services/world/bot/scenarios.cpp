@@ -226,7 +226,7 @@ asio::awaitable<void> chat(Ctx& x) {
     co_await drain(*b, Millis(300));
     co_await drain(*c, Millis(300));
 
-    a->send(proto::Say{"hello in range"});
+    a->send(proto::Say{proto::ChatKind::say, "hello in range"});
     auto own = co_await a->wait_for<proto::ChatMsg>(Millis(2000));
     auto inRange = co_await b->wait_for<proto::ChatMsg>(Millis(2000));
     auto outRange = co_await c->wait_for<proto::ChatMsg>(Millis(1500));
@@ -235,13 +235,13 @@ asio::awaitable<void> chat(Ctx& x) {
                    "B in range gets ChatMsg from " + (inRange ? inRange->fromName : std::string("?")));
     x.check.expect(!outRange, "C out of range gets nothing");
 
-    a->send(proto::Say{"bad\x01\x1b[31m\ttext"});
+    a->send(proto::Say{proto::ChatKind::say, "bad\x01\x1b[31m\ttext"});
     auto clean = co_await b->wait_for<proto::ChatMsg>(Millis(2000));
     x.check.expect(clean && clean->text == "bad[31mtext", "control characters stripped");
-    a->send(proto::Say{std::string(257, 'x')});
-    a->send(proto::Say{"bad \xC3"});
+    a->send(proto::Say{proto::ChatKind::say, std::string(257, 'x')});
+    a->send(proto::Say{proto::ChatKind::say, "bad \xC3"});
 
-    for (int i = 0; i < 6; ++i) a->send(proto::Say{"spam " + std::to_string(i)});
+    for (int i = 0; i < 6; ++i) a->send(proto::Say{proto::ChatKind::say, "spam " + std::to_string(i)});
     auto msgs = only<proto::ChatMsg>(co_await drain(*b, Millis(1500)));
     // the oversized and invalid ones still count: 4 used, so only 1 of the 6 spam messages gets through
     x.check.expect(msgs.size() == 1, "rate limit: 5 per 10 s (1 of 6 spam delivered; got " +

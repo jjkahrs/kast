@@ -1,5 +1,7 @@
-// Pure validation rules applied to untrusted client input: character names, chat text, movement.
+// Pure validation rules applied to untrusted client input: character names and chat text (core/chat_rules.h), client
+// events, movement.
 #pragma once
+#include "../core/chat_rules.h"
 #include "../core/clock.h"
 
 #include <messages.h>
@@ -11,11 +13,8 @@
 
 namespace kast {
 
-// 3-16 ASCII letters. Uniqueness (case-insensitive) is enforced by the database.
-bool valid_character_name(std::string_view name);
+// valid_character_name and sanitize_chat: core/chat_rules.h, shared with the chat service.
 
-// Valid UTF-8, control characters stripped, 1..maxBytes bytes after stripping. nullopt = reject.
-std::optional<std::string> sanitize_chat(std::string_view text, size_t maxBytes);
 // A ClientEvent's payload as a JSON object, or nullopt if the event is invalid: name not 1-32 chars of [a-z0-9._],
 // JSON over kClientEventJsonMax bytes, not JSON, or not an object.
 std::optional<nlohmann::json> client_event_data(const proto::ClientEvent& ev);

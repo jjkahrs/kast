@@ -11,8 +11,6 @@
 namespace kast::db {
 namespace {
 
-constexpr const char* kLockName = "kast_world_migrate";
-
 std::string trim(const std::string& s) {
     const auto b = s.find_first_not_of(" \t\r\n");
     if (b == std::string::npos) return {};
@@ -48,8 +46,8 @@ std::vector<std::string> split_statements(const std::string& sql) {
     return out;
 }
 
-std::vector<std::string> migrate(Connection& conn, const std::string& dir) {
-    auto lock = conn.exec("SELECT GET_LOCK(?, 60)", {std::string(kLockName)});
+std::vector<std::string> migrate(Connection& conn, const std::string& dir, const std::string& lockName) {
+    auto lock = conn.exec("SELECT GET_LOCK(?, 60)", {lockName});
     if (lock.rows.empty() || lock.rows[0][0] != "1") throw std::runtime_error("timed out waiting for the migration lock");
 
     std::vector<std::string> applied;
@@ -74,10 +72,10 @@ std::vector<std::string> migrate(Connection& conn, const std::string& dir) {
             applied.push_back(f);
         }
     } catch (...) {
-        conn.exec("SELECT RELEASE_LOCK(?)", {std::string(kLockName)});
+        conn.exec("SELECT RELEASE_LOCK(?)", {lockName});
         throw;
     }
-    conn.exec("SELECT RELEASE_LOCK(?)", {std::string(kLockName)});
+    conn.exec("SELECT RELEASE_LOCK(?)", {lockName});
     return applied;
 }
 

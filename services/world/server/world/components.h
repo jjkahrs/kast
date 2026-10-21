@@ -51,7 +51,7 @@ struct PendingMoves {
     std::vector<proto::Move> moves;
 };
 struct PendingSay {
-    std::vector<std::string> texts;
+    std::vector<proto::Say> says; // kind + text, unchecked
 };
 
 struct ChatLimit {

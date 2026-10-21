@@ -8,8 +8,9 @@
 
 namespace kast::db {
 
-// Returns the files applied by this call. Throws DbError (or std::runtime_error for I/O) on failure.
-std::vector<std::string> migrate(Connection& conn, const std::string& dir);
+// Returns the files applied by this call. Throws DbError (or std::runtime_error for I/O) on failure. lockName: the
+// MySQL named lock (server-wide), one per service.
+std::vector<std::string> migrate(Connection& conn, const std::string& dir, const std::string& lockName = "kast_world_migrate");
 
 // Splits a migration file into statements: ';' at the end of a line ends one; full-line "--" comments are dropped.
 // ponytail: line-based split, so a ';' that ends a line inside a string literal would break it; use a real

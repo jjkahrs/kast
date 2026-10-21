@@ -40,7 +40,20 @@ void write_pem(const std::filesystem::path& path, bool isKey, EVP_PKEY* key, X50
     if (!ok) throw std::runtime_error("cannot write " + path.string());
 }
 
-// Self-signed EC P-256 certificate for localhost, the compose service name `world`, and 127.0.0.1. Valid 10 years.
+// Every name the dev certificate covers: localhost, the compose services `world` and `chat` (which shares the world
+// server's dev certificate) and 127.0.0.1.
+constexpr const char* kDevNames = "DNS:localhost,DNS:world,DNS:chat,IP:127.0.0.1";
+
+// A dev certificate from before `chat` was one of its names: regenerated, so the chat service's clients can verify it.
+bool dev_cert_current(const std::filesystem::path& certPath) {
+    BIO* bio = BIO_new_file(certPath.string().c_str(), "rb");
+    if (!bio) return false;
+    X509Ptr cert(PEM_read_bio_X509(bio, nullptr, nullptr, nullptr));
+    BIO_free(bio);
+    return cert && X509_check_host(cert.get(), "chat", 0, 0, nullptr) == 1;
+}
+
+// Self-signed EC P-256 certificate for kDevNames. Valid 10 years.
 void generate_dev_cert(const std::filesystem::path& certPath, const std::filesystem::path& keyPath) {
     PkeyPtr key(EVP_EC_gen("P-256"));
     X509Ptr cert(X509_new());
@@ -53,7 +66,7 @@ void generate_dev_cert(const std::filesystem::path& certPath, const std::filesys
     X509_NAME* name = X509_get_subject_name(cert.get());
     X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("kast-world-dev"), -1, -1, 0);
     X509_set_issuer_name(cert.get(), name);
-    add_ext(cert.get(), NID_subject_alt_name, "DNS:localhost,DNS:world,IP:127.0.0.1");
+    add_ext(cert.get(), NID_subject_alt_name, kDevNames);
     add_ext(cert.get(), NID_basic_constraints, "critical,CA:TRUE"); // lets clients trust it directly as a CA file
     add_ext(cert.get(), NID_key_usage, "critical,digitalSignature,keyCertSign");
     if (!X509_sign(cert.get(), key.get(), EVP_sha256())) throw std::runtime_error("dev certificate signing failed");
@@ -77,7 +90,7 @@ asio::ssl::context make_server_tls(const TlsFiles& files) {
         const auto dir = std::filesystem::path(files.devCertDir);
         cert = (dir / "server.crt").string();
         key = (dir / "server.key").string();
-        if (!std::filesystem::exists(cert) || !std::filesystem::exists(key)) {
+        if (!std::filesystem::exists(cert) || !std::filesystem::exists(key) || !dev_cert_current(cert)) {
             generate_dev_cert(cert, key);
             log::warn("generated self-signed dev TLS certificate; set TLS_CERT_FILE/TLS_KEY_FILE in production",
                       {{"cert", cert}});
@@ -91,6 +104,20 @@ asio::ssl::context make_server_tls(const TlsFiles& files) {
     } catch (const std::exception& e) {
         throw std::runtime_error("TLS certificate/key: " + std::string(e.what()));
     }
+    return ctx;
+}
+
+asio::ssl::context make_client_tls(const std::string& caFile, const std::string& host) {
+    asio::ssl::context ctx(asio::ssl::context::tls_client);
+    ctx.set_options(asio::ssl::context::no_tlsv1 | asio::ssl::context::no_tlsv1_1);
+    try {
+        if (caFile.empty()) ctx.set_default_verify_paths();
+        else ctx.load_verify_file(caFile);
+    } catch (const std::exception& e) {
+        throw std::runtime_error("TLS CA file " + caFile + ": " + e.what());
+    }
+    ctx.set_verify_mode(asio::ssl::verify_peer);
+    ctx.set_verify_callback(asio::ssl::host_name_verification(host));
     return ctx;
 }
 

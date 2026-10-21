@@ -88,7 +88,11 @@ public:
     bool transfer(entt::entity e, const Destination& to);
 
     void push_move(entt::entity e, const proto::Move& m);
-    void push_say(entt::entity e, std::string text);
+    void push_say(entt::entity e, proto::Say say);
+    // The chat service's mutes (via the chat link): chat_system drops a muted character's says, yells and emotes.
+    Mutes& mutes() { return mutes_; }
+    // The map e is on (MapRef).
+    uint16_t map_of(entt::entity e) const;
     // A ClientEvent GameServer already checked (valid name, JSON object within kClientEventJsonMax).
     void push_client_event(entt::entity e, std::string name, nlohmann::json data, uint32_t requestId = 0);
     // An Interact; checked by interact_system on the next tick.
@@ -110,6 +114,7 @@ private:
     entt::registry reg_;
     AoiGrid grid_;
     lua::Runtime lua_; // after reg_ and grid_: it holds a reference and creates NPCs through this World
+    Mutes mutes_;
     Spawner spawner_; // every loaded spawn file entry, in Maps order; SpawnRef indexes it
     size_t population_ = 0;
     TimePoint now_{}; // the current tick's time (transfer resets move budgets to it)

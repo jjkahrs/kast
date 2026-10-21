@@ -3,6 +3,7 @@
 #include "components.h"
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 
 namespace kast::world {
@@ -134,24 +135,44 @@ void replication_system(entt::registry& reg, const Send& send) {
     }
 }
 
-// "say": sanitized, rate limited, delivered to the sender and everyone in range.
-void chat_system(entt::registry& reg, const ChatRules& rules, const Send& send, TimePoint now) {
+namespace {
+// ponytail: a yell scans every player (O(players), at most CHAT_RATE_COUNT per window each); an AoiGrid query with the
+// yell radius if yells ever get hot.
+std::vector<uint32_t> yell_audience(const entt::registry& reg, entt::entity e, float radius) {
+    std::vector<uint32_t> sessions;
+    const auto& from = reg.get<Transform>(e).pos;
+    const uint16_t map = reg.get<MapRef>(e).map;
+    for (auto [other, tf, mr, link] : reg.view<Transform, MapRef, SessionLink>().each())
+        if (other != e && mr.map == map && std::hypot(tf.pos.x - from.x, tf.pos.z - from.z) <= radius)
+            sessions.push_back(link.sessionId);
+    return sessions;
+}
+} // namespace
+
+void chat_system(entt::registry& reg, const ChatRules& rules, const Mutes& mutes, const Send& send, TimePoint now,
+                 SysTime wallNow) {
     for (auto [e, pending, limit, ch, link] : reg.view<PendingSay, ChatLimit, CharacterRef, SessionLink>().each()) {
-        for (const auto& text : pending.texts) {
+        for (auto& say : pending.says) {
             if (!limit.limiter.allow(now)) {
                 log::debug("chat rate limited", {{"char", ch.charId}});
                 continue;
             }
-            auto clean = sanitize_chat(text, rules.maxBytes);
+            auto clean = sanitize_chat(say.text, rules.maxBytes);
             if (!clean) {
-                log::debug("chat rejected", {{"char", ch.charId}, {"bytes", text.size()}});
+                log::debug("chat rejected", {{"char", ch.charId}, {"bytes", say.text.size()}});
                 continue;
             }
-            const proto::ChatMsg msg{ch.name, std::move(*clean)};
+            if (const auto left = mutes.minutes_left(ch.name, wallNow)) {
+                log::debug("chat muted", {{"char", ch.charId}});
+                send(link.sessionId, proto::ChatNotice{proto::ChatNoticeCode::muted, "", *left});
+                continue;
+            }
+            const proto::ChatMsg msg{say.kind, ch.name, std::move(*clean)};
             send(link.sessionId, msg);
-            for (uint32_t sid : audience(reg, e)) send(sid, msg);
+            const auto to = say.kind == proto::ChatKind::yell ? yell_audience(reg, e, rules.yellRadius) : audience(reg, e);
+            for (uint32_t sid : to) send(sid, msg);
         }
-        pending.texts.clear();
+        pending.says.clear();
     }
 }
 
