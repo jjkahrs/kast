@@ -1220,7 +1220,9 @@ return {
     check(keys == std::vector<std::string>{"ts", "level", "msg"}, "a line starts ts, level, msg");
     const std::string ts = dbg.value("ts", "");
     check(ts.size() == 24 && ts[10] == 'T' && ts[19] == '.' && ts.back() == 'Z', "ts is ISO 8601 UTC with ms: " + ts);
-    check(contains(g_log[said_first("with fields")], R"("msg":"systems/logs.lua: with fields","player":7,"zone":"x"})"),
+    const size_t withFields = said_first("with fields");
+    check(withFields != SIZE_MAX &&
+              contains(g_log[withFields], R"("msg":"systems/logs.lua: with fields","player":7,"zone":"x"})"),
           "kast.log fields: \"player\":7,\"zone\":\"x\" after msg");
     const auto nested = line("nested");
     check(nested.value("level", "") == "warn" && nested["pos"] == nlohmann::ordered_json{{"x", 1}, {"y", 2.5}} &&

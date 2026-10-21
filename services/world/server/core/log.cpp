@@ -54,13 +54,14 @@ std::string json_line(nlohmann::json ts, nlohmann::json level, nlohmann::json ms
     return line;
 }
 
-const char* name_of(quill::LogLevel l) {
-    if (l <= quill::LogLevel::Debug) return "debug";
-    if (l <= quill::LogLevel::Notice) return "info";
-    return l == quill::LogLevel::Warning ? "warn" : "error";
+Level level_of(quill::LogLevel l) {
+    if (l <= quill::LogLevel::Debug) return Level::debug;
+    if (l <= quill::LogLevel::Notice) return Level::info;
+    return l == quill::LogLevel::Warning ? Level::warn : Level::error;
 }
 
-// Runs on the backend thread: stdout (stdio-buffered, flushed by the backend when idle) and the test sink.
+// Runs on the backend thread: stdout and the test sink. Debug/info lines stay stdio-buffered until the backend is
+// idle; warn/error lines are flushed at once, so they survive a SIGKILL that comes after they were written.
 class JsonStdoutSink final : public quill::Sink {
 public:
     void set_test_sink(std::function<void(const std::string&)> sink) {
@@ -73,19 +74,18 @@ protected:
                    const std::string&, std::string_view, quill::LogLevel level, std::string_view, std::string_view,
                    const std::vector<std::pair<std::string, std::string>>*, std::string_view message,
                    std::string_view) override {
-        std::string line;
-        if (meta >= std::begin(kLine) && meta < std::end(kLine)) {
-            line = message;
-        } else { // Quill's own lines (the crash handler): wrap them in the same JSON shape
+        std::string wrapped;
+        if (meta < std::begin(kLine) || meta >= std::end(kLine)) { // Quill's own lines (crash handler): same JSON shape
             const auto t = std::chrono::system_clock::time_point(
                 std::chrono::duration_cast<std::chrono::system_clock::duration>(std::chrono::nanoseconds(ts)));
-            line = json_line(utc_iso8601(t), name_of(level), message, nullptr);
+            wrapped = json_line(utc_iso8601(t), kNames[static_cast<int>(level_of(level))], message, nullptr);
+            message = wrapped;
         }
-        line += '\n';
-        std::fwrite(line.data(), 1, line.size(), stdout);
-        line.pop_back();
+        std::fwrite(message.data(), 1, message.size(), stdout);
+        std::fputc('\n', stdout);
+        if (level >= quill::LogLevel::Warning) std::fflush(stdout);
         std::lock_guard lock(m_);
-        if (test_) test_(line);
+        if (test_) test_(std::string(message));
     }
     void flush_sink() override { std::fflush(stdout); }
 
@@ -111,16 +111,18 @@ Backend& backend() {
         };
         quill::SignalHandlerOptions signals;
         signals.logger_name = "kast";
+        // Crash signals only. Quill's SIGINT/SIGTERM handler std::exit(0)s, skipping main's graceful shutdown (and
+        // the save flush); the backend can start after main's asio::signal_set, so it would replace that too.
 #ifdef _WIN32
-        signals.catchable_signals = {SIGABRT, SIGFPE, SIGILL, SIGSEGV};
+        // Windows: crashes go through the process-wide SEH filter start() installs. The CRT's SIGSEGV/SIGFPE/SIGILL
+        // handlers are per thread, so only the process-wide SIGABRT (abort()) is hooked here.
+        signals.catchable_signals = {SIGABRT};
 #else
-        // SIGINT/SIGTERM: only until main installs its graceful-shutdown handler (asio::signal_set replaces these).
-        signals.catchable_signals = {SIGINT, SIGTERM, SIGABRT, SIGFPE, SIGILL, SIGSEGV};
+        signals.catchable_signals = {SIGABRT, SIGFPE, SIGILL, SIGSEGV};
 #endif
         quill::Backend::start<QueueOptions>(options, signals);
 #ifdef _WIN32
-        // Windows start() hooks crashes (SEH) and Ctrl+C. Ctrl+C would std::exit past the graceful shutdown, so it
-        // goes; abort() and the CRT crash signals are hooked like on Linux.
+        // start() also hooks Ctrl+C, which would std::exit past the graceful shutdown: unhook it.
         SetConsoleCtrlHandler(quill::detail::on_console_signal<QueueOptions>, FALSE);
         quill::init_signal_handler<QueueOptions>(signals.catchable_signals);
 #endif

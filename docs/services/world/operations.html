@@ -19,9 +19,13 @@
   <code>ts</code> is the time of the call, not of the write.</li>
 <li><strong>Never dropped:</strong> each thread's queue grows to 64 MiB; past that the caller blocks until the writer catches up.</li>
 <li><strong>Flushed on exit:</strong> everything queued is written when the process exits normally: after <code>shutdown complete</code>, after SIGINT/SIGTERM
-  (the graceful shutdown, then the normal exit; on Linux a signal before the server is up also flushes), and after a fatal startup error (exit 1).</li>
-<li><strong>Crashes:</strong> SIGSEGV, SIGABRT (<code>abort()</code>), SIGFPE and SIGILL (on Windows also any unhandled SEH exception) write the queued lines,
-  then <code>Received signal</code> and <code>Program terminated unexpectedly</code> lines, before the process dies with the signal.</li>
+  (the graceful shutdown, then the normal exit), and after a fatal startup error (exit 1). The logger never handles SIGINT/SIGTERM itself; one
+  that arrives before the server is up kills the process with the default action, and lines still queued are lost.</li>
+<li><strong>warn and error flushed at once:</strong> the writer flushes stdout after each <code>warn</code> or <code>error</code> line, so one already written
+  survives a SIGKILL (a <code>docker stop</code> timeout, the OOM killer). <code>debug</code>/<code>info</code> lines are flushed when the writer is idle.</li>
+<li><strong>Crashes:</strong> SIGSEGV, SIGABRT (<code>abort()</code>), SIGFPE and SIGILL (on Windows <code>abort()</code> and any unhandled SEH exception, such as
+  an access violation, on any thread) write the queued lines, then <code>Received signal</code>/<code>Received exception</code> and
+  <code>Program terminated unexpectedly</code> lines, before the process dies.</li>
 </ul>
 </li>
 <li><strong>Tick stats:</strong> every <code>TICK_STATS_INTERVAL_SECONDS</code>, the server logs a <code>tick stats</code> line, and a <code>tick stats total</code> line on shutdown. They contain:<ul>
