@@ -188,7 +188,12 @@ foreach(stage
     # Every illegal request refused with its reason; abandon resets; a full bag refuses the turn-in; then Rejecter's
     # state after a relog:
     "starter_mmo_live_quest_rejects|quest_rejects|Rejecter|100000|OFF|test driver: rejected quest unknown_quest&test driver: rejected quest requires&test driver: rejected quest not_active.*test driver: rejected quest not_active&test driver: rejected quest active&test driver: rejected quest incomplete&test driver: rejected quest log_full&test driver: rejected quest dead.*test driver: rejected quest dead&test driver: before abandon: bat_trouble 2/3&test driver: after abandon: none&test driver: re-accepted: bat_trouble 0/3&test driver: rejected quest range&test driver: rejected quest completed&test driver: rejected quest full&test driver: combat log: [*] Inventory is full&test driver: full turn-in changed nothing: bag true, gold true, wings_for_the_elder 5/5. completed bat_trouble|--screenshot-on-log 30,SHOT"
-    "starter_mmo_live_quest_persist|quest_persist|Rejecter|6000|OFF|test driver: quests after relog: wings_for_the_elder 5/5. completed bat_trouble&test driver: marker Elder ready|--screenshot-on-log 30,SHOT")
+    "starter_mmo_live_quest_persist|quest_persist|Rejecter|6000|OFF|test driver: quests after relog: wings_for_the_elder 5/5. completed bat_trouble&test driver: marker Elder ready|--screenshot-on-log 30,SHOT"
+    # Chat (scripts/chat.lua, services/chat): slash commands typed into the chat box (yell, emote, a whisper to itself,
+    # General, /join Trade, Trade, zone, a whisper to nobody), then real Enter (--sim-key Return on the driver's KEYS
+    # line) sends the field. The chat service stopped (STOP_CHAT, chat_down): say still works, the box says it's down.
+    "starter_mmo_live_chat|chat|Chatter|3000|OFF|test driver: chat status: connected&test driver: chat channel General 1 joined&test driver: chat yell Chatter[a-j]+: Hello Meadow!&test driver: chat emote Chatter[a-j]+: waves&test driver: chat message whisper_sent Chatter[a-j]+: psst&test driver: chat message whisper Chatter[a-j]+: psst&test driver: chat message channel General Chatter[a-j]+: Hello General&test driver: chat channel Trade 2 joined&test driver: chat message channel Trade Chatter[a-j]+: WTS sword&test driver: chat message zone Chatter[a-j]+: Anyone in the Meadow.&test driver: chat error not_online Nobodyhere&test driver: chat focused: true&test driver: chat Chatter[a-j]+: sent with Enter&test driver: chat field after Enter: ''|--sim-key 10,Return --sim-on-log KEYS --screenshot-on-log 30,SHOT"
+    "starter_mmo_live_chat_down|chat_down|Chatter|3000|OFF|test driver: chat status: unavailable&test driver: chat Chatter[a-j]+: Say still works|--screenshot-on-log 30,SHOT")
   string(REPLACE "|" ";" stage "${stage}")
   list(GET stage 0 name)
   list(GET stage 1 stage_name)
@@ -199,11 +204,16 @@ foreach(stage
   list(GET stage 6 editor_args)
   string(REPLACE "&" "$<SEMICOLON>" expected "${expected}")
   set(shot "${KAST_STARTER_OUT}/${name}.png")
+  set(stop_chat OFF)
+  if(stage_name STREQUAL "chat_down")
+    set(stop_chat ON)
+  endif()
   list(APPEND live_shots "${shot}")
   add_test(NAME ${name}
     COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" ${live_args} "-DSTAGE=${stage_name}"
             "-DCHARACTER=${character}" "-DSCREENSHOT=${shot}" "-DFRAMES=${frames}" "-DBOT=${bot}"
-            "-DEXPECT_ALL=${expected}" "-DEDITOR_ARGS=${editor_args}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_live_play.cmake")
+            "-DEXPECT_ALL=${expected}" "-DEDITOR_ARGS=${editor_args}" "-DSTOP_CHAT=${stop_chat}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_live_play.cmake")
   set_tests_properties(${name} PROPERTIES FIXTURES_REQUIRED starter_mmo_live DEPENDS starter_mmo_live_setup
                        SKIP_REGULAR_EXPRESSION "SKIP: " TIMEOUT 300)
 endforeach()
@@ -237,9 +247,10 @@ add_test(NAME starter_mmo_live_secrets
   COMMAND "${CMAKE_COMMAND}" "-DSAMPLE=${KAST_STARTER}" "-DSTATE=${KAST_STARTER_STATE}" "-DSHOTS=${live_shots}"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_live_secrets.cmake")
 set_tests_properties(starter_mmo_live_secrets PROPERTIES FIXTURES_REQUIRED starter_mmo_live
-                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_world;starter_mmo_live_cavern;starter_mmo_live_travel;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_death;starter_mmo_live_revive;${inventory_stages};${class_stages};${equip_stages};${quest_stages}"
+                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_world;starter_mmo_live_chat;starter_mmo_live_chat_down;starter_mmo_live_cavern;starter_mmo_live_travel;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_death;starter_mmo_live_revive;${inventory_stages};${class_stages};${equip_stages};${quest_stages}"
                      SKIP_REGULAR_EXPRESSION "SKIP: ")
 set_tests_properties(starter_mmo_live_setup starter_mmo_live_teardown starter_mmo_live_chars starter_mmo_live_world
+                     starter_mmo_live_chat starter_mmo_live_chat_down
                      starter_mmo_live_cavern starter_mmo_live_travel starter_mmo_live_camera starter_mmo_live_camera_zoom
                      starter_mmo_live_camera_orbit starter_mmo_live_combat_target starter_mmo_live_combat
                      starter_mmo_live_combat_guard starter_mmo_live_death starter_mmo_live_revive starter_mmo_live_secrets

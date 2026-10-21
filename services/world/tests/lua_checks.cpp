@@ -3919,6 +3919,55 @@ size_t first_of(const Sent& sent, uint32_t sid) {
     return SIZE_MAX;
 }
 
+// Proximity chat (chat_system): say to the AOI audience, yell within CHAT_YELL_RADIUS on the same map (past the 128 m
+// view radius, not past its own), emote to the say audience with its kind, and a muted character dropped with a notice.
+void checkProximityChat() {
+    world::WorldRules rules;
+    rules.chatRateCount = 100;
+    rules.chat.yellRadius = 300;
+    TestWorld w({}, rules);
+    const auto a = w.spawn(1, 1, "Alice", 1000, 1000);
+    w.spawn(2, 2, "Bob", 1100, 1000);   // 100 m: in view
+    w.spawn(3, 3, "Carol", 1250, 1000); // 250 m: past the view radius, in yell range
+    w.spawn(4, 4, "Dave", 1310, 1000);  // 310 m: past the yell radius
+    w.spawn(5, 5, "Eve", 300, 300, "", 2);   // map 2
+    w.world.tick(T0);
+    const auto heard = [&](proto::ChatKind kind, const std::string& text) {
+        std::set<uint32_t> sids;
+        for (uint32_t sid = 1; sid <= 5; ++sid)
+            for (const auto& m : w.sent.of<proto::ChatMsg>(sid))
+                if (m.kind == kind && m.fromName == "Alice" && m.text == text) sids.insert(sid);
+        return sids;
+    };
+    w.sent.clear();
+    w.world.push_say(a, {proto::ChatKind::say, "hi"});
+    w.world.push_say(a, {proto::ChatKind::yell, "HEY"});
+    w.world.push_say(a, {proto::ChatKind::emote, "waves"});
+    w.world.tick(T0 + std::chrono::seconds(1));
+    check(heard(proto::ChatKind::say, "hi") == std::set<uint32_t>{1, 2}, "say: the sender and the player in view only");
+    check(heard(proto::ChatKind::yell, "HEY") == std::set<uint32_t>{1, 2, 3},
+          "yell: in view and 250 m away (past the view radius), not 310 m away nor on map 2");
+    check(heard(proto::ChatKind::emote, "waves") == std::set<uint32_t>{1, 2}, "emote: the say audience, kind emote");
+
+    w.sent.clear();
+    w.world.mutes().set("aLiCe", std::chrono::system_clock::now() + std::chrono::minutes(3));
+    w.world.push_say(a, {proto::ChatKind::say, "muted"});
+    w.world.push_say(a, {proto::ChatKind::yell, "muted"});
+    w.world.push_say(a, {proto::ChatKind::emote, "muted"});
+    w.world.tick(T0 + std::chrono::seconds(2));
+    const auto notices = w.sent.of<proto::ChatNotice>(1);
+    check(heard(proto::ChatKind::say, "muted").empty() && heard(proto::ChatKind::yell, "muted").empty() &&
+              heard(proto::ChatKind::emote, "muted").empty(),
+          "muted (any case of the name): say, yell and emote reach nobody");
+    check(notices.size() == 3 && notices[0].code == proto::ChatNoticeCode::muted && notices[0].minutes == 3,
+          "muted: a ChatNotice{muted, 3 minutes left} per message, to the sender only");
+    w.world.mutes().set("Alice", std::chrono::system_clock::now() - std::chrono::seconds(1));
+    w.sent.clear();
+    w.world.push_say(a, {proto::ChatKind::say, "free"});
+    w.world.tick(T0 + std::chrono::seconds(3));
+    check(heard(proto::ChatKind::say, "free") == std::set<uint32_t>{1, 2}, "an expired mute no longer drops anything");
+}
+
 void checkMapWorld() {
     LogCapture capture;
     TestWorld w({});
@@ -5412,6 +5461,7 @@ int lua_checks(int& checks) {
     checkManifests();
     checkHeights();
     checkMapWorld();
+    checkProximityChat();
     checkMapLua();
     checkAreaShapes();
     checkAreaLoading();

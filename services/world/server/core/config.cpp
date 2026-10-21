@@ -2,89 +2,15 @@
 
 #include <map.h>
 
-#include <algorithm>
-#include <charconv>
 #include <cmath>
-#include <cstdlib>
 #include <limits>
 
 namespace kast {
-namespace {
-
-class Loader {
-public:
-    explicit Loader(const EnvLookup& env) : env_(env) {}
-    std::vector<std::string> errors;
-
-    void str(const char* name, std::string& out, bool required = false) {
-        auto v = env_(name);
-        if (v && !v->empty()) out = *v;
-        else if (required) errors.push_back(std::string(name) + ": required");
-    }
-
-    template <typename T>
-    bool num(const char* name, T& out, double min, double max, bool required = false) {
-        auto v = env_(name);
-        if (!v || v->empty()) {
-            if (required) errors.push_back(std::string(name) + ": required");
-            return false;
-        }
-        T parsed{};
-        const char* end = v->data() + v->size();
-        auto [p, ec] = std::from_chars(v->data(), end, parsed);
-        if (ec != std::errc() || p != end || parsed < min || parsed > max) {
-            errors.push_back(std::string(name) + ": must be a number in [" + fmt(min) + ", " + fmt(max) + "], got \"" +
-                             *v + "\"");
-            return false;
-        }
-        out = parsed;
-        return true;
-    }
-
-    // Comma-separated; spaces around names and empty entries are ignored.
-    void list(const char* name, std::vector<std::string>& out) {
-        auto v = env_(name);
-        if (!v) return;
-        for (size_t start = 0; start <= v->size();) {
-            const size_t end = std::min(v->find(',', start), v->size());
-            std::string item = v->substr(start, end - start);
-            item.erase(0, item.find_first_not_of(" \t"));
-            item.erase(item.find_last_not_of(" \t") + 1);
-            if (!item.empty()) out.push_back(std::move(item));
-            start = end + 1;
-        }
-    }
-
-private:
-    static std::string fmt(double d) {
-        std::string s = std::to_string(d);
-        s.erase(s.find_last_not_of('0') + 1);
-        if (s.back() == '.') s.pop_back();
-        return s;
-    }
-    const EnvLookup& env_;
-};
-
-} // namespace
-
-std::optional<std::string> process_env(const char* name) {
-#ifdef _MSC_VER
-    char* buf = nullptr;
-    size_t len = 0;
-    if (_dupenv_s(&buf, &len, name) != 0 || !buf) return std::nullopt;
-    std::string s(buf);
-    std::free(buf);
-    return s;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::optional<std::string>(v) : std::nullopt;
-#endif
-}
 
 ConfigResult load_config(const EnvLookup& env) {
     ConfigResult r;
     Config& c = r.config;
-    Loader l(env);
+    EnvLoader l(env);
     constexpr double u32max = std::numeric_limits<uint32_t>::max();
 
     l.str("WORLD_HOST", c.host);
@@ -146,6 +72,18 @@ ConfigResult load_config(const EnvLookup& env) {
     l.num("CHAT_MAX_BYTES", c.chatMaxBytes, 1, 4000);
     l.num("CHAT_RATE_COUNT", c.chatRateCount, 1, 1000);
     l.num("CHAT_RATE_WINDOW_MS", c.chatRateWindowMs, 1, u32max);
+    l.num("CHAT_YELL_RADIUS", c.chatYellRadius, 1, 1e5);
+    l.str("CHAT_PUBLIC_HOST", c.chatPublicHost);
+    l.num("CHAT_PUBLIC_PORT", c.chatPublicPort, 1, 65535);
+    l.str("CHAT_LINK_HOST", c.chatLinkHost);
+    l.num("CHAT_LINK_PORT", c.chatLinkPort, 1, 65535);
+    l.str("CHAT_LINK_SECRET", c.chatLinkSecret);
+    l.str("CHAT_LINK_CA_FILE", c.chatLinkCaFile);
+    l.num("CHAT_LINK_RETRY_MIN_MS", c.chatLinkRetryMinMs, 10, u32max);
+    l.num("CHAT_LINK_RETRY_MAX_MS", c.chatLinkRetryMaxMs, 10, u32max);
+    if (c.chatLinkRetryMinMs > c.chatLinkRetryMaxMs) l.errors.push_back("CHAT_LINK_RETRY_MIN_MS: must be <= CHAT_LINK_RETRY_MAX_MS");
+    if (!c.chatLinkHost.empty() && c.chatLinkSecret.size() < 16)
+        l.errors.push_back("CHAT_LINK_SECRET: at least 16 characters when CHAT_LINK_HOST is set");
 
     l.num("SAVE_INTERVAL_MS", c.saveIntervalMs, 100, u32max);
     l.num("SAVE_RETRY_MIN_MS", c.saveRetryMinMs, 10, u32max);

@@ -9,6 +9,7 @@ world::WorldRules world_rules(const Config& c) {
     world::WorldRules r;
     r.move = {c.maxSpeed, c.speedTolerance, c.moveBurstSec, c.minY, c.maxY, c.groundTolerance, c.maxAir, c.moveNavCheck};
     r.chat.maxBytes = c.chatMaxBytes;
+    r.chat.yellRadius = c.chatYellRadius;
     r.cellSize = c.aoiCellSize;
     r.viewRadius = c.aoiViewRadius;
     r.startMap = c.startMap;
@@ -55,7 +56,22 @@ GameServer::GameServer(asio::io_context& io, const Config& cfg, const world::Map
              [this](const db::CharSave& s) { db_.save(s); }, std::move(defs)),
       tickTimer_(io), tickPeriod_(Millis(1000 / cfg.tickHz)), windowTicks_(std::make_unique<TickStats>()),
       totalTicks_(std::make_unique<TickStats>()), windowLag_(std::make_unique<TickStats>()),
-      totalLag_(std::make_unique<TickStats>()), shutdownTimer_(io) {}
+      totalLag_(std::make_unique<TickStats>()), shutdownTimer_(io) {
+    if (cfg.chatLinkHost.empty()) return;
+    // The dev setup's chat service presents this server's own certificate (they share TLS_DEV_CERT_DIR).
+    const std::string ownCert = cfg.tlsCertFile.empty() ? cfg.tlsDevCertDir + "/server.crt" : cfg.tlsCertFile;
+    chatLink_ = std::make_unique<ChatLink>(
+        io,
+        ChatLink::Options{cfg.chatLinkHost, cfg.chatLinkPort, cfg.chatLinkSecret,
+                          cfg.chatLinkCaFile.empty() ? ownCert : cfg.chatLinkCaFile, Millis(cfg.chatLinkRetryMinMs),
+                          Millis(cfg.chatLinkRetryMaxMs)},
+        [this] { return chat_snapshot(); },
+        [this](const proto::MuteState& m) {
+            if (m.untilMs == 0) world_.mutes().erase(m.name);
+            else world_.mutes().set(m.name, SysTime(std::chrono::milliseconds(m.untilMs)));
+        },
+        [this] { world_.mutes().clear(); });
+}
 
 void GameServer::start() {
     const asio::ip::tcp::endpoint ep(asio::ip::make_address(cfg_.host), cfg_.port);
@@ -65,6 +81,7 @@ void GameServer::start() {
     acceptor_.listen();
     log::info("listening", {{"host", cfg_.host}, {"port", cfg_.port}, {"realm", cfg_.realmId}, {"tickHz", cfg_.tickHz}});
     accept();
+    if (chatLink_) chatLink_->start();
     nextTick_ = SteadyClock::now();
     windowStart_ = nextTick_;
     schedule_tick();
@@ -239,6 +256,12 @@ void GameServer::handle_lobby(Client& c, proto::Message&& m) {
                 if (!*row) return char_error(*cl, proto::Opcode::EnterWorld, proto::Code::not_found);
                 cl->entity = world_.spawn(sid, **row, SteadyClock::now());
                 cl->phase = Phase::world;
+                cl->charId = (*row)->id;
+                cl->charName = (*row)->name;
+                cl->reportedMap = world_.map_of(cl->entity);
+                if (!cfg_.chatPublicHost.empty())
+                    cl->session->send(proto::ChatServer{cfg_.chatPublicHost, cfg_.chatPublicPort});
+                if (chatLink_) chatLink_->char_online({cl->accountId, cl->charId, cl->charName, cl->reportedMap});
                 log::info("entered world", {{"account", cl->accountId}, {"char", (*row)->id},
                                             {"population", world_.population()}});
             });
@@ -247,7 +270,7 @@ void GameServer::handle_lobby(Client& c, proto::Message&& m) {
 
 void GameServer::handle_world(Client& c, proto::Message&& m) {
     if (auto* mv = std::get_if<proto::Move>(&m)) { world_.push_move(c.entity, *mv); return; }
-    if (auto* say = std::get_if<proto::Say>(&m)) { world_.push_say(c.entity, std::move(say->text)); return; }
+    if (auto* say = std::get_if<proto::Say>(&m)) { world_.push_say(c.entity, std::move(*say)); return; }
     if (auto* in = std::get_if<proto::Interact>(&m)) { world_.push_interact(c.entity, in->objectId); return; }
     if (auto* ev = std::get_if<proto::ClientEvent>(&m)) {
         auto data = client_event_data(*ev);
@@ -271,8 +294,26 @@ void GameServer::handle_world(Client& c, proto::Message&& m) {
 void GameServer::leave_world(Client& c) {
     if (c.phase != Phase::world) return;
     world_.despawn(c.entity); // queues the save
+    if (chatLink_) chatLink_->char_offline(c.charId);
     c.entity = entt::null;
     c.phase = Phase::lobby;
+}
+
+std::vector<proto::CharOnline> GameServer::chat_snapshot() const {
+    std::vector<proto::CharOnline> chars;
+    for (const auto& [id, c] : clients_)
+        if (c.phase == Phase::world) chars.push_back({c.accountId, c.charId, c.charName, c.reportedMap});
+    return chars;
+}
+
+void GameServer::report_maps() {
+    for (auto& [id, c] : clients_) {
+        if (c.phase != Phase::world) continue;
+        const uint16_t map = world_.map_of(c.entity);
+        if (map == c.reportedMap) continue;
+        c.reportedMap = map;
+        chatLink_->map_changed(c.charId, map);
+    }
 }
 
 void GameServer::on_closed(net::Session& s) {
@@ -304,6 +345,7 @@ void GameServer::tick() {
     const TimePoint start = SteadyClock::now();
     const double lagMs = std::chrono::duration<double, std::milli>(start - nextTick_).count();
     world_.tick(start);
+    if (chatLink_) report_maps();
     const double ms = std::chrono::duration<double, std::milli>(SteadyClock::now() - start).count();
     windowTicks_->add(ms);
     totalTicks_->add(ms);
@@ -343,6 +385,7 @@ void GameServer::shutdown(std::function<void()> onDone) {
     asio::error_code ec;
     acceptor_.close(ec);
     tickTimer_.cancel();
+    if (chatLink_) chatLink_->stop();
     log_tick_stats("tick stats total", *totalTicks_, *totalLag_);
 
     world_.shutdown_scripts(); // onLeave changes are part of the saves below

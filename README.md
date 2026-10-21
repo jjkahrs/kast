@@ -6,11 +6,12 @@ Current Version: 0.1.0
 Kast is a C++20 game engine for building MMORPGs. `engine/` is the reusable runtime (SDL3 window + bgfx Direct3D 11, EnTT
 scene, renderer, scene files); `editor/` is the Unity-style editor (`kast_editor`) built on it with Dear ImGui docking
 and ImGuizmo. `services/` holds the game services: the authentication server (`services/auth`, accounts, sessions and
-the realm list) and the world server (`services/world`). `samples/starter-mmo` is a complete online game project.
+the realm list), the world server (`services/world`) and the chat service (`services/chat`: whispers, channels, zone
+chat, GM mutes; one per realm). `samples/starter-mmo` is a complete online game project.
 
 Documentation is HTML under [`docs/`](docs/index.html): [Editor](docs/editor/index.html),
 [Engine](docs/engine/index.html), [Auth Server](docs/services/auth/index.html),
-[World Server](docs/services/world/index.html), [Development](docs/development/tests.html) (tests, source layout).
+[World Server](docs/services/world/index.html), [Chat Server](docs/services/chat/index.html), [Development](docs/development/tests.html) (tests, source layout).
 Zone maps are built in the editor's Zone tab ([Zone Builder](docs/editor/zone-builder.html)). Tools document
 themselves in their own folders: [Map Bake](services/world/tools/mapbake/README.md).
 
@@ -112,16 +113,20 @@ docker compose up -d --build
 curl -s localhost:3000/health   # {"status":"ok","db":"ok"}
 ```
 
-**World server** (world + auth built from `../auth` + MySQL + Mailpit; details in
-[World Server setup](docs/services/world/setup.html)):
+**World server and chat service** (world + chat + auth built from `../auth` + MySQL + Mailpit; details in
+[World Server setup](docs/services/world/setup.html) and [Chat service setup](docs/services/chat/setup.html)):
 
 ```sh
 cd services/world
-cp .env.example .env              # dev defaults; change the passwords
-docker compose up -d --build      # world + auth (built from ../auth) + MySQL 8.4 + Mailpit
+cp .env.example .env              # dev defaults; change the passwords and CHAT_LINK_SECRET (16+ characters)
+docker compose up -d --build      # world (7777) + chat (7778) + auth (3100) + MySQL 8.4 + Mailpit
 docker compose ps                 # all healthy
-docker compose logs world         # "migration applied", "listening"
+docker compose logs world         # "migration applied", "listening", "chat link: up"
+docker compose logs chat          # "listening", "world link up"
 ```
+
+The chat service also builds on its own on Windows: `cd services/chat && cmake --preset debug && cmake --build --preset
+debug && ctest --preset debug` (it compiles `services/world`'s protocol and shared server code).
 
 `docker compose down` stops a stack and keeps its data; `down -v` also deletes it. To build the world server on
 Windows instead (MSVC + vcpkg), see [World Server setup](docs/services/world/setup.html#building-on-windows-msvc--vcpkg).

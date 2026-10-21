@@ -214,8 +214,10 @@ void World::push_move(entt::entity e, const proto::Move& m) {
     if (reg_.valid(e)) reg_.get<PendingMoves>(e).moves.push_back(m);
 }
 
-void World::push_say(entt::entity e, std::string text) {
-    if (reg_.valid(e)) reg_.get<PendingSay>(e).texts.push_back(std::move(text));
+uint16_t World::map_of(entt::entity e) const { return reg_.get<MapRef>(e).map; }
+
+void World::push_say(entt::entity e, proto::Say say) {
+    if (reg_.valid(e)) reg_.get<PendingSay>(e).says.push_back(std::move(say));
 }
 
 void World::push_client_event(entt::entity e, std::string name, nlohmann::json data, uint32_t requestId) {
@@ -241,7 +243,7 @@ void World::tick(TimePoint now) {
     for (const auto& [e, portal] : area_system(reg_, maps_, lua_.bus()))
         transfer(e, {portal.map, {portal.pos[0], portal.pos[1], portal.pos[2]}, portal.heading});
     aoi_system(reg_, grid_, send_);
-    chat_system(reg_, rules_.chat, send_, now);
+    chat_system(reg_, rules_.chat, mutes_, send_, now, std::chrono::system_clock::now());
     client_event_in_system(reg_, lua_.bus(), now); // delivered by the drain after this tick's Lua update
     interact_system(reg_, maps_, lua_.bus());      // likewise
     spawner_system(reg_, spawner_, rules_.maxNpcs, now, [this](const SpawnRecord& r) {

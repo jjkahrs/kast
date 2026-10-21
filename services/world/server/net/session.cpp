@@ -4,9 +4,9 @@
 namespace kast::net {
 
 Session::Session(uint32_t id, asio::ip::tcp::socket socket, asio::ssl::context& tls, const SessionLimits& limits,
-                 OnMessage onMessage, OnClosed onClosed)
+                 OnMessage onMessage, OnClosed onClosed, asio::ssl::stream_base::handshake_type role)
     : id_(id), stream_(std::move(socket), tls), limits_(limits), onMessage_(std::move(onMessage)),
-      onClosed_(std::move(onClosed)), handshakeTimer_(stream_.get_executor()), heartbeatTimer_(stream_.get_executor()),
+      onClosed_(std::move(onClosed)), role_(role), handshakeTimer_(stream_.get_executor()), heartbeatTimer_(stream_.get_executor()),
       closeTimer_(stream_.get_executor()), lagInTimer_(stream_.get_executor()), lagOutTimer_(stream_.get_executor()),
       lagRng_(id), lastReceive_(SteadyClock::now()),
       rate_(limits.msgRate, limits.msgBurst, limits.msgRateGrace) {
@@ -24,7 +24,7 @@ void Session::start(std::optional<proto::Code> rejectWith) {
         log::info("handshake timeout", {{"session", self->id_}, {"remote", self->remote_}, {"tls", self->tlsDone_}});
         self->disconnect(proto::Code::handshake_timeout);
     });
-    stream_.async_handshake(asio::ssl::stream_base::server, [self, rejectWith](asio::error_code ec) {
+    stream_.async_handshake(role_, [self, rejectWith](asio::error_code ec) {
         if (self->closed_) return;
         if (ec) {
             log::debug("tls handshake failed", {{"session", self->id_}, {"remote", self->remote_}, {"error", ec.message()}});
@@ -35,6 +35,7 @@ void Session::start(std::optional<proto::Code> rejectWith) {
         if (rejectWith) { self->disconnect(*rejectWith); return; }
         self->read_header();
         self->arm_heartbeat();
+        self->flush(); // what a client-role session sent before the handshake finished
     });
 }
 
@@ -135,7 +136,7 @@ void Session::schedule_flush() {
 }
 
 void Session::flush() {
-    if (closed_ || writing_now_ || pending_.empty()) return;
+    if (closed_ || writing_now_ || pending_.empty() || !tlsDone_) return;
     writing_.swap(pending_);
     pending_.clear();
     writing_now_ = true;

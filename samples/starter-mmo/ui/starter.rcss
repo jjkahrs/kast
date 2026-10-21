@@ -227,9 +227,23 @@ button.power.cooling {
     border-radius: 6px;
 }
 
+/* scripts/chat.lua's lines, newest last; a long line wraps and the box grows upwards. Colours by kind, WoW-like. */
 #chat_log {
-    height: 120px;
+    min-height: 170px;
 }
+
+.chat_line {
+    line-height: 17px;
+    color: #f0f0f0;
+}
+
+.chat_yell { color: #ff4040; }
+.chat_emote { color: #ff9933; }
+.chat_whisper { color: #ff80ff; }
+.chat_channel { color: #ffc8a0; }
+.chat_zone { color: #a0d8ff; }
+.chat_system { color: #ffcc00; }
+.chat_error { color: #ff6060; }
 
 #chat_row {
     margin-top: 6px;

@@ -1,8 +1,10 @@
 #include "scenarios.h"
 
 #include <heights.h>
+#include <asio/experimental/awaitable_operators.hpp>
 #include <jwt-cpp/traits/nlohmann-json/defaults.h>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -226,7 +228,7 @@ asio::awaitable<void> chat(Ctx& x) {
     co_await drain(*b, Millis(300));
     co_await drain(*c, Millis(300));
 
-    a->send(proto::Say{"hello in range"});
+    a->send(proto::Say{proto::ChatKind::say, "hello in range"});
     auto own = co_await a->wait_for<proto::ChatMsg>(Millis(2000));
     auto inRange = co_await b->wait_for<proto::ChatMsg>(Millis(2000));
     auto outRange = co_await c->wait_for<proto::ChatMsg>(Millis(1500));
@@ -235,13 +237,13 @@ asio::awaitable<void> chat(Ctx& x) {
                    "B in range gets ChatMsg from " + (inRange ? inRange->fromName : std::string("?")));
     x.check.expect(!outRange, "C out of range gets nothing");
 
-    a->send(proto::Say{"bad\x01\x1b[31m\ttext"});
+    a->send(proto::Say{proto::ChatKind::say, "bad\x01\x1b[31m\ttext"});
     auto clean = co_await b->wait_for<proto::ChatMsg>(Millis(2000));
     x.check.expect(clean && clean->text == "bad[31mtext", "control characters stripped");
-    a->send(proto::Say{std::string(257, 'x')});
-    a->send(proto::Say{"bad \xC3"});
+    a->send(proto::Say{proto::ChatKind::say, std::string(257, 'x')});
+    a->send(proto::Say{proto::ChatKind::say, "bad \xC3"});
 
-    for (int i = 0; i < 6; ++i) a->send(proto::Say{"spam " + std::to_string(i)});
+    for (int i = 0; i < 6; ++i) a->send(proto::Say{proto::ChatKind::say, "spam " + std::to_string(i)});
     auto msgs = only<proto::ChatMsg>(co_await drain(*b, Millis(1500)));
     // the oversized and invalid ones still count: 4 used, so only 1 of the 6 spam messages gets through
     x.check.expect(msgs.size() == 1, "rate limit: 5 per 10 s (1 of 6 spam delivered; got " +
@@ -1524,6 +1526,455 @@ asio::awaitable<void> combat_request(Ctx& x) {
     a->close();
 }
 
+// --- 29-37: proximity chat kinds and the chat service (docs/services/chat) ---
+
+// A player in the world and on the chat service: the world connection, the chat connection, its character's name.
+struct Chatter {
+    std::shared_ptr<WorldClient> world, chat;
+    proto::EnterWorldOk ok;
+    std::string name;
+    std::string token;
+    std::optional<proto::ChatServer> chatServer; // as the world server announced it
+    void close() {
+        if (chat) chat->close();
+        if (world) world->close();
+    }
+};
+
+// Connect + Hello + Auth to the chat service (port: o.chatPort, or the link port for the link checks); the client
+// once AuthOk came, else nullptr with the reason in why.
+asio::awaitable<std::shared_ptr<WorldClient>> chat_connect(Ctx& x, const std::string& token, std::string* why = nullptr) {
+    auto c = std::make_shared<WorldClient>(co_await asio::this_coro::executor, x.tls);
+    if (!co_await c->connect(x.o.chatHost, x.o.chatPort)) {
+        if (why) *why = "connect: " + c->lastError;
+        co_return nullptr;
+    }
+    if (!co_await c->login(token)) {
+        if (why) *why = c->disconnectReason ? proto::code_name(*c->disconnectReason) : "no AuthOk";
+        c->close();
+        co_return nullptr;
+    }
+    co_return c;
+}
+
+// Tries chat_connect every second for up to `seconds` (the chat service restarting).
+asio::awaitable<std::shared_ptr<WorldClient>> chat_reconnect(Ctx& x, const std::string& token, int seconds) {
+    for (int i = 0; i < seconds; ++i) {
+        if (auto c = co_await chat_connect(x, token)) co_return c;
+        co_await sleep_for(Millis(1000));
+    }
+    co_return nullptr;
+}
+
+// Logs tag in, enters the world with its character (created with a new random name if it has none), takes the world's
+// ChatServer and connects to the chat service (which auto-joins General).
+asio::awaitable<std::optional<Chatter>> chatter(Ctx& x, const std::string& tag) {
+    Chatter p;
+    p.token = x.token(tag);
+    p.world = co_await x.login(p.token, tag);
+    if (!p.world) co_return std::nullopt;
+    std::optional<proto::CharList> list;
+    co_await request(*p.world, proto::CharListReq{}, &list);
+    if (list && !list->chars.empty()) {
+        p.name = list->chars.front().name;
+    } else {
+        std::optional<proto::CharCreated> created;
+        co_await request(*p.world, proto::CharCreate{random_name(), x.o.charOptions}, &created);
+        p.name = created ? created->character.name : "";
+    }
+    std::string err;
+    if (!co_await enter_world(*p.world, "unused", p.ok, err)) {
+        x.check.expect(false, tag + " entered world (" + err + ")");
+        co_return std::nullopt;
+    }
+    p.chatServer = co_await p.world->wait_for<proto::ChatServer>(Millis(3000));
+    p.chat = co_await chat_connect(x, p.token, &err);
+    x.check.expect(p.chat != nullptr, tag + " (" + p.name + ") on the chat service" + (p.chat ? "" : " (" + err + ")"));
+    if (!p.chat) co_return std::nullopt;
+    co_return p;
+}
+
+template <typename T>
+asio::awaitable<std::vector<T>> collect(WorldClient& c, Millis window) {
+    co_return only<T>(co_await drain(c, window));
+}
+
+bool has_line(const std::vector<proto::ChatLine>& lines, proto::ChatTarget target, const std::string& name,
+              const std::string& text) {
+    return std::ranges::any_of(lines, [&](const proto::ChatLine& l) { return l.target == target && l.name == name && l.text == text; });
+}
+
+// The lines c receives within window: has one {target, name, text}?
+asio::awaitable<bool> hears(WorldClient& c, proto::ChatTarget target, const std::string& name, const std::string& text,
+                            Millis window = Millis(1200)) {
+    co_return has_line(co_await collect<proto::ChatLine>(c, window), target, name, text);
+}
+
+// The world ChatMsgs c receives within window: has one {kind, text}?
+asio::awaitable<bool> hears_say(WorldClient& c, proto::ChatKind kind, const std::string& text, Millis window = Millis(800)) {
+    for (const auto& m : co_await collect<proto::ChatMsg>(c, window))
+        if (m.kind == kind && m.text == text) co_return true;
+    co_return false;
+}
+
+// The last ChatNotice c receives within window.
+asio::awaitable<std::optional<proto::ChatNotice>> notice(WorldClient& c, Millis window = Millis(1200)) {
+    const auto n = co_await collect<proto::ChatNotice>(c, window);
+    co_return n.empty() ? std::nullopt : std::optional(n.back());
+}
+
+std::string notice_name(const std::optional<proto::ChatNotice>& n) {
+    return n ? proto::chat_notice_name(n->code) : "none";
+}
+
+// Walks c from its spawn into the start map's cave_mouth portal, onto map 2; true once MapChange{2} came.
+asio::awaitable<bool> to_cave(WorldClient& c, const proto::EnterWorldOk& ok) {
+    co_await walk(c, ok.pos, 1042 - ok.pos.x, 999 - ok.pos.z);
+    const auto mc = co_await c.wait_for<proto::MapChange>(Millis(3000));
+    co_return mc && mc->map == 2;
+}
+
+// --- 29: say / yell / emote ranges on the world server ---
+asio::awaitable<void> yell(Ctx& x) {
+    proto::EnterWorldOk ea, eb, ec, ed;
+    auto a = co_await x.enter("s29a", ea);
+    auto b = co_await x.enter("s29b", eb);
+    auto c = co_await x.enter("s29c", ec);
+    auto d = co_await x.enter("s29d", ed);
+    if (!a || !b || !c || !d) co_return;
+    // From the spawn (1024, 1024), clear of the start map's portals (all east of x 1040): B 100 m west (in view),
+    // C 200 m north (past the 128 m view radius, inside the 300 m yell radius), D 320 m south (past both).
+    using namespace asio::experimental::awaitable_operators;
+    co_await (walk(*b, eb.pos, -100, 0) && walk(*c, ec.pos, 0, 200) && walk(*d, ed.pos, 0, -320));
+    co_await sleep_for(Millis(500));
+    for (auto* p : {&a, &b, &c, &d}) co_await drain(**p, Millis(100));
+
+    a->send(proto::Say{proto::ChatKind::say, "say test"});
+    const bool sayA = co_await hears_say(*a, proto::ChatKind::say, "say test");
+    const bool sayB = co_await hears_say(*b, proto::ChatKind::say, "say test", Millis(200));
+    const bool sayC = co_await hears_say(*c, proto::ChatKind::say, "say test", Millis(200));
+    x.check.expect(sayA && sayB && !sayC, "say: the sender and B (100 m), not C (200 m)");
+    a->send(proto::Say{proto::ChatKind::yell, "YELL TEST"});
+    const bool yB = co_await hears_say(*b, proto::ChatKind::yell, "YELL TEST");
+    const bool yC = co_await hears_say(*c, proto::ChatKind::yell, "YELL TEST", Millis(200));
+    const bool yD = co_await hears_say(*d, proto::ChatKind::yell, "YELL TEST", Millis(200));
+    x.check.expect(yB && yC, "yell reaches B (100 m) and C (200 m, beyond the AOI view radius)");
+    x.check.expect(!yD, "yell does not reach D (320 m, beyond CHAT_YELL_RADIUS 300)");
+    a->send(proto::Say{proto::ChatKind::emote, "waves"});
+    const bool eA = co_await hears_say(*a, proto::ChatKind::emote, "waves");
+    const bool eB = co_await hears_say(*b, proto::ChatKind::emote, "waves", Millis(200));
+    const bool eC = co_await hears_say(*c, proto::ChatKind::emote, "waves", Millis(200));
+    x.check.expect(eA && eB && !eC, "emote: kind emote to the say audience (A, B), not C");
+    for (auto* p : {&a, &b, &c, &d}) (*p)->close();
+}
+
+// --- 30: whispers across maps, and to an offline name ---
+asio::awaitable<void> chat_whisper(Ctx& x) {
+    auto a = co_await chatter(x, "s30a");
+    auto b = co_await chatter(x, "s30b");
+    if (!a || !b) co_return;
+    x.check.expect(a->chatServer && a->chatServer->port > 0 && !a->chatServer->host.empty(),
+                   "the world announces the chat service after EnterWorldOk (" +
+                       (a->chatServer ? a->chatServer->host + ":" + std::to_string(a->chatServer->port) : "none") + ")");
+    x.check.expect(co_await to_cave(*b->world, b->ok), "B walks into the cave portal: map 2");
+    co_await drain(*a->chat, Millis(300));
+    co_await drain(*b->chat, Millis(300));
+    a->chat->send(proto::ChatSend{proto::ChatTarget::whisper, b->name, "psst, cave dweller"});
+    x.check.expect(co_await hears(*b->chat, proto::ChatTarget::whisper, a->name, "psst, cave dweller"),
+                   "whisper reaches B on another map");
+    x.check.expect(co_await hears(*a->chat, proto::ChatTarget::whisper_sent, b->name, "psst, cave dweller", Millis(300)),
+                   "A gets the echo: To " + b->name);
+    const std::string nobody = random_name();
+    a->chat->send(proto::ChatSend{proto::ChatTarget::whisper, nobody, "hello?"});
+    const auto n = co_await notice(*a->chat);
+    x.check.expect(n && n->code == proto::ChatNoticeCode::not_online && n->name == nobody,
+                   "whisper to an offline name -> ChatNotice not_online (got " + notice_name(n) + ")");
+    a->close();
+    b->close();
+}
+
+// --- 31: the fixed channels ---
+asio::awaitable<void> chat_channels(Ctx& x) {
+    auto a = co_await chatter(x, "s31a");
+    auto b = co_await chatter(x, "s31b");
+    auto c = co_await chatter(x, "s31c");
+    if (!a || !b || !c) co_return;
+    const auto general = co_await collect<proto::ChatChannel>(*c->chat, Millis(500));
+    x.check.expect(!general.empty() && general[0].number == 1 && general[0].channel == "General" && general[0].joined,
+                   "a connected client is in General, channel 1");
+    co_await drain(*a->chat, Millis(100));
+    co_await drain(*b->chat, Millis(100));
+    a->chat->send(proto::ChatSend{proto::ChatTarget::channel, "General", "hello General"});
+    const bool genB = co_await hears(*b->chat, proto::ChatTarget::channel, a->name, "hello General");
+    const bool genC = co_await hears(*c->chat, proto::ChatTarget::channel, a->name, "hello General", Millis(300));
+    x.check.expect(genB && genC, "General reaches B and C");
+
+    a->chat->send(proto::ChatJoin{"Trade"});
+    const auto trade = co_await a->chat->wait_for<proto::ChatChannel>(Millis(1500));
+    x.check.expect(trade && trade->number == 2 && trade->channel == "Trade" && trade->joined, "join Trade -> ChatChannel{2, Trade}");
+    a->chat->send(proto::ChatSend{proto::ChatTarget::channel, "Trade", "WTS sword"});
+    const bool tradeA = co_await hears(*a->chat, proto::ChatTarget::channel, a->name, "WTS sword");
+    const bool tradeB = co_await hears(*b->chat, proto::ChatTarget::channel, a->name, "WTS sword", Millis(300));
+    x.check.expect(tradeA && !tradeB, "Trade reaches its member A, not B (not a member)");
+    b->chat->send(proto::ChatSend{proto::ChatTarget::channel, "Trade", "me too"});
+    const auto n = co_await notice(*b->chat);
+    x.check.expect(n && n->code == proto::ChatNoticeCode::not_in_channel, "a non-member sending to Trade -> not_in_channel (got " + notice_name(n) + ")");
+    b->chat->send(proto::ChatJoin{"Trade"});
+    co_await b->chat->wait_for<proto::ChatChannel>(Millis(1500));
+    a->chat->send(proto::ChatSend{proto::ChatTarget::channel, "Trade", "WTB shield"});
+    const bool joinedB = co_await hears(*b->chat, proto::ChatTarget::channel, a->name, "WTB shield");
+    const bool stillC = co_await hears(*c->chat, proto::ChatTarget::channel, a->name, "WTB shield", Millis(300));
+    x.check.expect(joinedB && !stillC, "after joining Trade B hears it; C (not a member) still doesn't");
+    b->chat->send(proto::ChatLeave{"Trade"});
+    const auto left = co_await b->chat->wait_for<proto::ChatChannel>(Millis(1500));
+    x.check.expect(left && left->channel == "Trade" && !left->joined, "leave Trade -> ChatChannel{joined 0}");
+    a->chat->send(proto::ChatSend{proto::ChatTarget::channel, "Trade", "last call"});
+    x.check.expect(!co_await hears(*b->chat, proto::ChatTarget::channel, a->name, "last call"), "after leaving, B no longer hears Trade");
+    a->close();
+    b->close();
+    c->close();
+}
+
+// --- 32: the zone channel follows map changes ---
+asio::awaitable<void> chat_zone(Ctx& x) {
+    auto a = co_await chatter(x, "s32a");
+    auto b = co_await chatter(x, "s32b");
+    auto c = co_await chatter(x, "s32c");
+    if (!a || !b || !c) co_return;
+    x.check.expect(co_await to_cave(*c->world, c->ok), "C walks into the cave: map 2");
+    co_await sleep_for(Millis(300)); // the map change reaches the chat service over the link
+    for (auto* p : {&*a, &*b, &*c}) co_await drain(*p->chat, Millis(100));
+    a->chat->send(proto::ChatSend{proto::ChatTarget::zone, "", "zone one"});
+    const bool zB = co_await hears(*b->chat, proto::ChatTarget::zone, a->name, "zone one");
+    const bool zC = co_await hears(*c->chat, proto::ChatTarget::zone, a->name, "zone one", Millis(300));
+    x.check.expect(zB && !zC, "A's zone line reaches B (map 1), not C (map 2)");
+    x.check.expect(co_await to_cave(*b->world, b->ok), "B walks into the cave: map 2");
+    co_await sleep_for(Millis(300));
+    for (auto* p : {&*a, &*b, &*c}) co_await drain(*p->chat, Millis(100));
+    a->chat->send(proto::ChatSend{proto::ChatTarget::zone, "", "zone two"});
+    x.check.expect(!co_await hears(*b->chat, proto::ChatTarget::zone, a->name, "zone two"), "after B's map change, A's zone line no longer reaches B");
+    c->chat->send(proto::ChatSend{proto::ChatTarget::zone, "", "cave zone"});
+    const bool caveB = co_await hears(*b->chat, proto::ChatTarget::zone, c->name, "cave zone");
+    const bool caveA = co_await hears(*a->chat, proto::ChatTarget::zone, c->name, "cave zone", Millis(300));
+    x.check.expect(caveB && !caveA, "C's zone line (map 2) reaches B now, not A");
+    a->close();
+    b->close();
+    c->close();
+}
+
+// --- 33: ignore / unignore ---
+asio::awaitable<void> chat_ignore(Ctx& x) {
+    auto a = co_await chatter(x, "s33a");
+    auto b = co_await chatter(x, "s33b");
+    auto c = co_await chatter(x, "s33c");
+    if (!a || !b || !c) co_return;
+    for (auto* p : {&*a, &*b, &*c}) co_await drain(*p->chat, Millis(300));
+    b->chat->send(proto::ChatIgnore{a->name, true});
+    const auto ig = co_await notice(*b->chat);
+    x.check.expect(ig && ig->code == proto::ChatNoticeCode::ignored, "ignore -> ChatNotice ignored (got " + notice_name(ig) + ")");
+    a->chat->send(proto::ChatSend{proto::ChatTarget::whisper, b->name, "ignored whisper"});
+    a->chat->send(proto::ChatSend{proto::ChatTarget::channel, "General", "ignored channel"});
+    a->chat->send(proto::ChatSend{proto::ChatTarget::zone, "", "ignored zone"});
+    const auto toB = co_await collect<proto::ChatLine>(*b->chat, Millis(1500));
+    const auto toC = co_await collect<proto::ChatLine>(*c->chat, Millis(300));
+    x.check.expect(toB.empty(), "B gets none of the ignored sender's whisper, channel and zone lines (" + std::to_string(toB.size()) + ")");
+    x.check.expect(has_line(toC, proto::ChatTarget::channel, a->name, "ignored channel") &&
+                       has_line(toC, proto::ChatTarget::zone, a->name, "ignored zone"),
+                   "C still hears A");
+    b->chat->send(proto::ChatIgnore{a->name, false});
+    const auto un = co_await notice(*b->chat);
+    x.check.expect(un && un->code == proto::ChatNoticeCode::unignored, "unignore -> ChatNotice unignored");
+    co_await sleep_for(Millis(1000));
+    a->chat->send(proto::ChatSend{proto::ChatTarget::whisper, b->name, "heard again"});
+    x.check.expect(co_await hears(*b->chat, proto::ChatTarget::whisper, a->name, "heard again"), "after unignore B hears A again");
+    a->close();
+    b->close();
+    c->close();
+}
+
+// --- 34: GM mutes. Needs the gm account (tag s34g) to have role gm in auth's database (integration.sh sets it after
+// "chat-mute-setup"). Prints "READY restart-chat" after the mute; the script restarts the chat service, the mute must
+// survive it; then it runs out after its minute; mute + unmute last.
+asio::awaitable<void> chat_mute_setup(Ctx& x) {
+    x.token("s34g"); // registers the account
+    std::printf("GM_EMAIL %s\n", bot_account(x.o, "s34g").email.c_str());
+    co_return;
+}
+
+asio::awaitable<void> chat_mute(Ctx& x) {
+    auto a = co_await chatter(x, "s34a");
+    auto b = co_await chatter(x, "s34b");
+    auto g = co_await chatter(x, "s34g");
+    if (!a || !b || !g) co_return;
+    x.check.expect(g->world->authOk && g->world->authOk->role == proto::Role::gm, "s34g's token says role gm");
+    for (auto* p : {&*a, &*b, &*g}) co_await drain(*p->chat, Millis(300));
+    a->chat->send(proto::ChatMute{b->name, 1});
+    const auto refused = co_await notice(*a->chat);
+    x.check.expect(refused && refused->code == proto::ChatNoticeCode::not_allowed, "a player can't mute: not_allowed (got " + notice_name(refused) + ")");
+    g->chat->send(proto::ChatMute{b->name, 1});
+    const auto set = co_await notice(*g->chat);
+    const auto told = co_await notice(*b->chat, Millis(300));
+    const auto mutedAt = std::chrono::steady_clock::now();
+    x.check.expect(set && set->code == proto::ChatNoticeCode::mute_set && set->minutes == 1, "the GM mutes B for 1 minute: mute_set");
+    x.check.expect(told && told->code == proto::ChatNoticeCode::you_muted, "B is told: you_muted (got " + notice_name(told) + ")");
+
+    const auto muted_everywhere = [&](const char* when) -> asio::awaitable<void> {
+        b->chat->send(proto::ChatSend{proto::ChatTarget::channel, "General", "can I talk?"});
+        const auto n = co_await notice(*b->chat);
+        x.check.expect(n && n->code == proto::ChatNoticeCode::muted && !co_await hears(*a->chat, proto::ChatTarget::channel, b->name, "can I talk?", Millis(300)),
+                       std::string(when) + ": B's channel line dropped, ChatNotice muted (got " + notice_name(n) + ")");
+        for (auto kind : {proto::ChatKind::say, proto::ChatKind::yell, proto::ChatKind::emote}) {
+            b->world->send(proto::Say{kind, "muted proximity"});
+            const auto wn = co_await notice(*b->world, Millis(800));
+            const bool heardA = co_await hears_say(*a->world, kind, "muted proximity", Millis(200));
+            x.check.expect(wn && wn->code == proto::ChatNoticeCode::muted && !heardA,
+                           std::string(when) + ": B's world " + (kind == proto::ChatKind::say ? "say" : kind == proto::ChatKind::yell ? "yell" : "emote") +
+                               " dropped with ChatNotice muted from the world server");
+        }
+    };
+    co_await muted_everywhere("muted");
+    const auto firstBatch = std::chrono::steady_clock::now();
+
+    std::printf("READY restart-chat\n");
+    std::fflush(stdout);
+    co_await b->chat->wait_closed(Millis(60000)); // the chat service goes down
+    co_await sleep_for(Millis(2000));
+    for (auto* p : {&*a, &*b, &*g}) {
+        p->chat->close();
+        p->chat = co_await chat_reconnect(x, p->token, 60);
+        x.check.expect(p->chat != nullptr, p->name + " reconnects after the chat service restart");
+        if (!p->chat) co_return;
+    }
+    co_await sleep_for(Millis(1500)); // the world link is back too: its mutes re-synced
+    while (std::chrono::steady_clock::now() < firstBatch + std::chrono::seconds(11)) // the world's 5 per 10 s say limit
+        co_await sleep_for(Millis(500));
+    for (auto* p : {&*a, &*b, &*g}) co_await drain(*p->chat, Millis(200));
+    co_await muted_everywhere("after the chat restart (persisted)");
+
+    // The mute ends a minute after it was set.
+    while (std::chrono::steady_clock::now() < mutedAt + std::chrono::seconds(62)) co_await sleep_for(Millis(1000));
+    b->chat->send(proto::ChatSend{proto::ChatTarget::channel, "General", "free at last"});
+    x.check.expect(co_await hears(*a->chat, proto::ChatTarget::channel, b->name, "free at last"), "the mute expired after 1 minute: B talks on General");
+    b->world->send(proto::Say{proto::ChatKind::say, "free say"});
+    x.check.expect(co_await hears_say(*a->world, proto::ChatKind::say, "free say"), "... and in say");
+
+    g->chat->send(proto::ChatMute{b->name, 5});
+    co_await notice(*g->chat);
+    g->chat->send(proto::ChatMute{b->name, 0});
+    const auto cleared = co_await notice(*g->chat);
+    const auto unmuted = co_await notice(*b->chat, Millis(300));
+    x.check.expect(cleared && cleared->code == proto::ChatNoticeCode::mute_cleared && unmuted &&
+                       unmuted->code == proto::ChatNoticeCode::you_unmuted,
+                   "mute 5 then unmute: mute_cleared to the GM, you_unmuted to B");
+    co_await sleep_for(Millis(300));
+    b->world->send(proto::Say{proto::ChatKind::say, "unmuted say"});
+    x.check.expect(co_await hears_say(*a->world, proto::ChatKind::say, "unmuted say"), "unmuted: B's say reaches A");
+    a->close();
+    b->close();
+    g->close();
+}
+
+// --- 35: the chat service's text rules, as the world's ---
+asio::awaitable<void> chat_limits(Ctx& x) {
+    auto a = co_await chatter(x, "s35a");
+    auto b = co_await chatter(x, "s35b");
+    if (!a || !b) co_return;
+    for (auto* p : {&*a, &*b}) co_await drain(*p->chat, Millis(300));
+    a->chat->send(proto::ChatSend{proto::ChatTarget::channel, "General", "bad\x01\x1b[31m\ttext"});
+    x.check.expect(co_await hears(*b->chat, proto::ChatTarget::channel, a->name, "bad[31mtext"), "control characters stripped");
+    a->chat->send(proto::ChatSend{proto::ChatTarget::channel, "General", std::string(257, 'x')});
+    const auto big = co_await notice(*a->chat);
+    a->chat->send(proto::ChatSend{proto::ChatTarget::channel, "General", "bad \xC3"});
+    const auto utf = co_await notice(*a->chat);
+    x.check.expect(big && big->code == proto::ChatNoticeCode::rejected && utf && utf->code == proto::ChatNoticeCode::rejected,
+                   "over 256 bytes and invalid UTF-8 -> ChatNotice rejected");
+    for (int i = 0; i < 6; ++i) a->chat->send(proto::ChatSend{proto::ChatTarget::channel, "General", "spam " + std::to_string(i)});
+    const auto lines = co_await collect<proto::ChatLine>(*b->chat, Millis(1500));
+    const auto limited = co_await notice(*a->chat, Millis(300));
+    // the oversized and invalid ones count: 3 used, so 2 of the 6 spam lines get through
+    x.check.expect(lines.size() == 2 && limited && limited->code == proto::ChatNoticeCode::rate_limited,
+                   "rate limit 5 per 10 s: 2 of 6 spam lines delivered (" + std::to_string(lines.size()) + "), then rate_limited");
+    x.check.expect(!a->chat->closed() && !b->chat->closed(), "rejected and rate-limited chat is dropped, not fatal");
+    a->close();
+    b->close();
+}
+
+// --- 36: who the chat service refuses ---
+asio::awaitable<void> chat_reject_login(Ctx& x, const std::string& what, const std::string& token, Code expect) {
+    auto c = std::make_shared<WorldClient>(co_await asio::this_coro::executor, x.tls);
+    if (!co_await c->connect(x.o.chatHost, x.o.chatPort)) { x.check.expect(false, what + ": connect"); co_return; }
+    co_await c->login(token);
+    co_await c->wait_closed(Millis(10000));
+    x.check.expect(!c->authOk && c->disconnectReason == expect,
+                   "chat: " + what + " -> " + proto::code_name(expect) + " (got " +
+                       (c->disconnectReason ? proto::code_name(*c->disconnectReason) : "none") + ")");
+}
+
+asio::awaitable<void> chat_link_reject(Ctx& x, const std::string& what, const proto::LinkHello& hello, Code expect) {
+    auto c = std::make_shared<WorldClient>(co_await asio::this_coro::executor, x.tls);
+    if (!co_await c->connect(x.o.chatHost, x.o.chatLinkPort)) { x.check.expect(false, what + ": connect"); co_return; }
+    c->send(hello);
+    co_await c->wait_closed(Millis(5000));
+    x.check.expect(c->disconnectReason == expect, "chat link: " + what + " -> " + proto::code_name(expect) + " (got " +
+                                                      (c->disconnectReason ? proto::code_name(*c->disconnectReason) : "none") + ")");
+}
+
+asio::awaitable<void> chat_auth(Ctx& x) {
+    const std::string good = x.token("s36");
+    co_await chat_reject_login(x, "garbage token", "not-a-jwt", Code::invalid_token);
+    co_await chat_reject_login(x, "token with tampered signature", good.substr(0, good.size() - 4) + "AAAA", Code::invalid_token);
+    std::string err;
+    const std::string expired = mint_expired_token(x, err);
+    x.check.expect(!expired.empty(), "minted an expired token with auth's key" + (err.empty() ? "" : " (" + err + ")"));
+    if (!expired.empty()) co_await chat_reject_login(x, "expired token", expired, Code::token_expired);
+    const auto t0 = std::chrono::steady_clock::now();
+    co_await chat_reject_login(x, "valid token, no character in a world", good, Code::no_character);
+    const double held = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    x.check.expect(held > 4 && held < 8, "... after being held CHAT_BIND_TIMEOUT_MS (" + std::to_string(held) + " s)");
+    co_await chat_link_reject(x, "wrong shared secret", {proto::kProtocolVersion, "wrong-secret-0123456789"}, Code::invalid_token);
+    co_await chat_link_reject(x, "wrong protocol version", {7, "wrong-secret-0123456789"}, Code::protocol_mismatch);
+    {
+        auto c = std::make_shared<WorldClient>(co_await asio::this_coro::executor, x.tls);
+        co_await c->connect(x.o.chatHost, x.o.chatLinkPort);
+        c->send(proto::CharOnline{1, 1, "Sneaky", 1});
+        co_await c->wait_closed(Millis(5000));
+        x.check.expect(c->disconnectReason == Code::unexpected_message, "chat link: CharOnline before LinkHello -> unexpected_message");
+    }
+}
+
+// --- 37: the chat service down and back. Prints "READY stop-chat" (the script stops it), then "READY start-chat" once
+// proximity chat was checked without it; the clients reconnect, rejoin General, whispers work again.
+asio::awaitable<void> chat_down(Ctx& x) {
+    auto a = co_await chatter(x, "s37a");
+    auto b = co_await chatter(x, "s37b");
+    if (!a || !b) co_return;
+    std::printf("READY stop-chat\n");
+    std::fflush(stdout);
+    const bool aLost = co_await a->chat->wait_closed(Millis(60000));
+    const bool bLost = co_await b->chat->wait_closed(Millis(5000));
+    x.check.expect(aLost && bLost, "both chat connections close when the chat service stops");
+    co_await sleep_for(Millis(1000));
+    std::string why;
+    x.check.expect(!co_await chat_connect(x, a->token, &why), "the chat service is unreachable (" + why + ")");
+    co_await drain(*b->world, Millis(300));
+    a->world->send(proto::Say{proto::ChatKind::say, "say without chat"});
+    x.check.expect(co_await hears_say(*b->world, proto::ChatKind::say, "say without chat", Millis(1500)), "say still works without the chat service");
+    x.check.expect(!a->world->closed() && !b->world->closed(), "the world connections stay up");
+    std::printf("READY start-chat\n");
+    std::fflush(stdout);
+    for (auto* p : {&*a, &*b}) {
+        p->chat = co_await chat_reconnect(x, p->token, 90);
+        x.check.expect(p->chat != nullptr, p->name + " reconnects to the chat service");
+        if (!p->chat) co_return;
+        const auto general = co_await p->chat->wait_for<proto::ChatChannel>(Millis(2000));
+        x.check.expect(general && general->channel == "General" && general->joined, p->name + " is in General again");
+    }
+    a->chat->send(proto::ChatSend{proto::ChatTarget::whisper, b->name, "you're back"});
+    x.check.expect(co_await hears(*b->chat, proto::ChatTarget::whisper, a->name, "you're back"), "whispers work again");
+    a->close();
+    b->close();
+}
+
 } // namespace
 
 int run_scenario(const Options& o) {
@@ -1542,6 +1993,10 @@ int run_scenario(const Options& o) {
         {"navmesh", navmesh},           {"client-events", client_events}, {"client-event-rate", client_event_rate},
         {"combat-bat", combat_bat},     {"combat-rules", combat_rules}, {"objects", objects},
         {"lag-run", lag_run},           {"lag-reject", lag_reject},     {"combat-request", combat_request},
+        {"yell", yell},                 {"chat-whisper", chat_whisper}, {"chat-channels", chat_channels},
+        {"chat-zone", chat_zone},       {"chat-ignore", chat_ignore},   {"chat-mute-setup", chat_mute_setup},
+        {"chat-mute", chat_mute},       {"chat-limits", chat_limits},   {"chat-auth", chat_auth},
+        {"chat-down", chat_down},
     };
     auto it = all.find(o.scenario);
     if (it == all.end()) {

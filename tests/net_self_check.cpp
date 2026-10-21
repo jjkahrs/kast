@@ -4,6 +4,7 @@
 
 #include "auth_client.h"
 #include "build.h"
+#include "chat_client.h"
 #include "document.h"
 #include "external_editor.h"
 #include "online.h"
@@ -1137,7 +1138,8 @@ struct WorldRun {
     Network net;
     kast::AuthClient auth{net};
     kast::WorldClient world{net, auth};
-    std::vector<NetEvent> events;     // world.*
+    kast::ChatClient chat{net, auth}; // disabled unless a check resets it with a config
+    std::vector<NetEvent> events;     // world.* and chat.*
     std::vector<NetEvent> authEvents; // auth.*
     std::unordered_map<std::string, size_t> taken; // per event name: how many next() returned
     bool unowned = false;
@@ -1150,12 +1152,16 @@ struct WorldRun {
     void pump()
     {
         for (NetEvent& e : net.poll())
-            unowned |= !auth.handle(e) && !world.handle(e);
+            unowned |= !auth.handle(e) && !world.handle(e) && !chat.handle(e);
         for (NetEvent& e : auth.poll()) {
             world.observe(e);
             authEvents.push_back(std::move(e));
         }
-        for (NetEvent& e : world.poll())
+        for (NetEvent& e : world.poll()) {
+            chat.observe(e);
+            events.push_back(std::move(e));
+        }
+        for (NetEvent& e : chat.poll())
             events.push_back(std::move(e));
     }
     bool waitFor(const std::function<bool()>& done, std::chrono::milliseconds timeout = 5s)
@@ -1385,7 +1391,7 @@ void checkWorldClient()
           "world: character calls in the world throw");
     w.say("secret-chat-text-1");
     const Json* chat = r.next("world.chat");
-    check(chat && *chat == Json{{"from", "Hero"}, {"text", "secret-chat-text-1"}}, "world.chat {from, text}");
+    check(chat && *chat == Json{{"kind", "say"}, {"from", "Hero"}, {"text", "secret-chat-text-1"}}, "world.chat {kind, from, text}");
     w.say("components");
     const Json* component = r.next("world.component");
     check(component && *component == Json{{"entityId", 2}, {"name", "Health"}, {"data", {{"current", 42.5}, {"max", 100}}}},
@@ -1482,6 +1488,124 @@ void checkWorldClient()
 
 // kast.world in Play: nil while Online Services are off (checkAuthLuaApi), every function and its errors, the whole
 // flow from Lua, the connection kept across kast.loadScene, events from "kast.world", no raw frames on the bus.
+// --- kast::ChatClient, against FakeAuth + FakeWorld (announcing a FakeChat) ---
+
+// A world.say kind, the world's ChatServer starting the chat connection, every chat request and event, a muted say's
+// chat.error from the world server, the service going away and coming back (rejoining Trade), and the world
+// disconnect ending it for good.
+void checkChatClient()
+{
+    FakeAuth fake;
+    Server authServer(serveFakeAuth(fake));
+    const Cert cert = makeCert("DNS:localhost,IP:127.0.0.1");
+    FakeChat fakeChat;
+    Server chatServer(serveFakeChat(fakeChat), 0, &cert);
+    FakeWorld fakeWorld;
+    fakeWorld.chatPort = chatServer.port();
+    Server worldServer(serveFakeWorld(fakeWorld), 0, &cert);
+    fake.worldPort = worldServer.port();
+    WorldRun r(std::format("http://127.0.0.1:{}", authServer.port()), cert.certPem);
+    auto& c = r.chat;
+    {
+        Network net;
+        kast::AuthClient auth{net};
+        kast::ChatClient off{net, auth};
+        check(!off.enabled() && throwsLogic([&] { off.whisper("Bob", "x"); }, "whisper: Online Services are disabled"),
+              "chat: disabled until reset with a config; calls throw");
+    }
+    c.reset(kast::AuthConfig{"", cert.certPem});
+    check(c.enabled() && kast::chatStateName(c.state()) == std::string("disconnected") &&
+              throwsLogic([&] { c.zone("x"); }, "zone: needs the chat service connected, it is 'disconnected'"),
+          "chat: starts disconnected; requests throw until connected");
+    check(r.login() && r.connect(3), "chat: log in and connect to the world");
+    r.world.createCharacter("Hero");
+    const Json* created = r.next("world.charCreated");
+    r.world.enterWorld(created ? created->at("character").value("id", uint64_t{0}) : 0);
+    const Json* where = r.next("world.chatServer");
+    check(where && *where == Json{{"host", "127.0.0.1"}, {"port", chatServer.port()}},
+          "world.chatServer {host, port} after EnterWorldOk");
+    const Json* up = r.next("chat.status");
+    check(up && *up == Json{{"connected", true}} && c.state() == kast::ChatState::Connected,
+          "the chat client connects there by itself: chat.status {connected = true}");
+    const Json* general = r.next("chat.channel");
+    check(general && *general == Json{{"channel", "General"}, {"number", 1}, {"joined", true}} &&
+              c.channels() == std::map<int, std::string>{{1, "General"}},
+          "chat.channel {General, 1, joined}; channels() lists it");
+    {
+        const std::vector<proto::Message> seen = fakeChat.seen();
+        const auto* auth = seen.size() >= 2 ? std::get_if<proto::Auth>(&seen[1]) : nullptr;
+        check(std::get_if<proto::Hello>(&seen[0]) && auth && auth->accessToken == fake.accessToken(),
+              "chat: Hello then Auth{the session's access token}, like the world connection");
+    }
+
+    r.world.say("hear me", "yell");
+    const Json* yell = r.next("world.chat");
+    check(yell && *yell == Json{{"kind", "yell"}, {"from", "Hero"}, {"text", "hear me"}}, "world.say(text, yell) -> world.chat {kind yell}");
+    check(throwsLogic([&] { r.world.say("x", "shout"); }, "say: kind must be 'say', 'yell' or 'emote'"), "world.say with an unknown kind throws");
+    r.world.say("mute me");
+    const Json* muted = r.next("chat.error");
+    check(muted && muted->value("code", "") == "muted" && muted->value("minutes", 0) == 3,
+          "a muted say: the world's ChatNotice is chat.error {code muted, minutes}");
+
+    c.whisper("Bob", "psst");
+    const Json* sent = r.next("chat.message");
+    const Json* reply = r.next("chat.message");
+    check(sent && *sent == Json{{"kind", "whisper_sent"}, {"to", "Bob"}, {"text", "psst"}} && reply &&
+              *reply == Json{{"kind", "whisper"}, {"from", "Bob"}, {"text", "re: psst"}},
+          "whisper: chat.message {whisper_sent, to} then {whisper, from}");
+    c.whisper("Nobody", "hello?");
+    const Json* offline = r.next("chat.error");
+    check(offline && *offline == Json{{"code", "not_online"}, {"name", "Nobody"}, {"minutes", 0}}, "whisper to an offline name -> chat.error not_online");
+    c.join("Trade");
+    const Json* trade = r.next("chat.channel");
+    check(trade && trade->value("number", 0) == 2 && c.channelName(2, "send") == "Trade" &&
+              throwsLogic([&] { c.channelName(3, "send"); }, "send: not in a channel numbered 3"),
+          "join Trade -> chat.channel number 2; channelName maps numbers it is in only");
+    c.sendChannel("Trade", "WTS");
+    const Json* line = r.next("chat.message");
+    check(line && *line == Json{{"kind", "channel"}, {"from", "Hero"}, {"text", "WTS"}, {"channel", "Trade"}, {"number", 2}},
+          "a channel line: chat.message {kind channel, from, text, channel, number}");
+    c.zone("near?");
+    const Json* zone = r.next("chat.message");
+    check(zone && zone->value("kind", "") == "zone", "zone -> chat.message {kind zone}");
+    c.ignore("Mallory", true);
+    const Json* ignored = r.next("chat.notice");
+    check(ignored && ignored->value("code", "") == "ignored" && ignored->value("name", "") == "Mallory", "ignore -> chat.notice ignored");
+
+    // The service goes away and refuses for a while: chat.status false, requests throw; back: reconnects, Trade again.
+    fakeChat.refuse = true;
+    c.sendChannel("General", "shutdown");
+    const Json* down = r.next("chat.status");
+    check(down && down->value("connected", true) == false && down->value("reason", "") == "server_shutdown" &&
+              throwsLogic([&] { c.whisper("Bob", "x"); }, "whisper: needs the chat service connected"),
+          "the service shuts down: chat.status {connected = false, reason}; requests throw");
+    r.waitFor([] { return false; }, 2500ms); // a refused retry or two
+    check(r.count("chat.status") == 2, "refused reconnects don't repeat chat.status false");
+    fakeChat.refuse = false;
+    const size_t joinsBefore = static_cast<size_t>(std::ranges::count_if(fakeChat.seen(), [](const proto::Message& m) {
+        return std::holds_alternative<proto::ChatJoin>(m);
+    }));
+    const Json* back = r.next("chat.status", 10s);
+    check(back && back->value("connected", false), "the service back: reconnected with backoff, chat.status {connected = true}");
+    check(r.waitFor([&] {
+              const auto seen = fakeChat.seen();
+              return std::ranges::any_of(seen.begin() + static_cast<std::ptrdiff_t>(std::min(seen.size(), joinsBefore)), seen.end(),
+                                         [](const proto::Message& m) {
+                                             const auto* j = std::get_if<proto::ChatJoin>(&m);
+                                             return j && j->channel == "Trade";
+                                         });
+          }),
+          "after the reconnect it joins Trade again");
+
+    const int connections = chatServer.accepted();
+    r.world.disconnect();
+    const Json* gone = r.next("chat.status");
+    check(gone && gone->value("connected", true) == false && c.state() == kast::ChatState::Disconnected,
+          "world.disconnected ends the chat connection: chat.status {connected = false}");
+    r.waitFor([] { return false; }, 2500ms);
+    check(chatServer.accepted() == connections, "... and it doesn't reconnect without a world");
+}
+
 void checkWorldLuaApi()
 {
     FakeAuth fake;
@@ -3547,6 +3671,7 @@ int netSelfCheck()
     checkAuthRefresh();
     checkAuthLuaApi();
     checkWorldClient();
+    checkChatClient();
     checkWorldLuaApi();
     checkWorldSendOffline();
     checkReplicationOffline();
@@ -3606,8 +3731,10 @@ int liveOnlineCheck(const std::string& authUrl, const std::string& mailpitUrl, c
                (what == OnlineModel::Compose::Ps || pollUntil(online, project, [&] { return !online.composeBusy(); }, 60s));
     };
     const auto running = [&] {
-        return online.services().size() >= 4 &&
-               std::ranges::all_of(online.services(), [](const ComposeService& s) { return s.state == "running"; });
+        // chat-db-init is a one-shot (the chat database), done once it exited
+        return online.services().size() >= 4 && std::ranges::all_of(online.services(), [](const ComposeService& s) {
+                   return s.state == "running" || (s.name == "chat-db-init" && s.state == "exited");
+               });
     };
     if (!compose(OnlineModel::Compose::Ps, 60s) || !online.composeError().empty()) {
         kast::log::warn(std::format("SKIPPED: docker compose ps failed ({}); is Docker Desktop running?", online.composeError()));

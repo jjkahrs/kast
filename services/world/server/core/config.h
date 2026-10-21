@@ -1,5 +1,6 @@
 // All settings come from environment variables, validated at startup (see docs/services/world/configuration.html for the table).
 #pragma once
+#include "env.h"
 #include "log.h"
 
 #include <cstdint>
@@ -57,6 +58,16 @@ struct Config {
     uint32_t chatMaxBytes = 256;
     uint32_t chatRateCount = 5;
     uint32_t chatRateWindowMs = 10000;
+    float chatYellRadius = 300; // m, same map; may exceed aoiViewRadius
+    // chat service (docs/services/chat): where clients find it (empty host: not announced) and the internal link
+    // (empty host: no link; mutes then never reach this server)
+    std::string chatPublicHost;
+    uint16_t chatPublicPort = 7778;
+    std::string chatLinkHost;
+    uint16_t chatLinkPort = 7779;
+    std::string chatLinkSecret;
+    std::string chatLinkCaFile; // empty: trust this server's own TLS certificate (the dev setup shares it)
+    uint32_t chatLinkRetryMinMs = 500, chatLinkRetryMaxMs = 30000;
     // persistence / ops
     uint32_t saveIntervalMs = 60000;
     uint32_t saveRetryMinMs = 500;
@@ -68,14 +79,11 @@ struct Config {
     log::Level logLevel = log::Level::info;
 };
 
-using EnvLookup = std::function<std::optional<std::string>(const char* name)>;
-
 struct ConfigResult {
     Config config;
     std::vector<std::string> errors; // one line per bad or missing variable
 };
 
 ConfigResult load_config(const EnvLookup& env);
-std::optional<std::string> process_env(const char* name);
 
 } // namespace kast

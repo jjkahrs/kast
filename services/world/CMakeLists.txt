@@ -22,20 +22,11 @@ find_package(Stb REQUIRED) # header-only: stb_image decodes 16-bit PNG heightmap
 find_path(LUAJIT_INCLUDE_DIR luajit.h PATH_SUFFIXES luajit luajit-2.1 REQUIRED)
 find_library(LUAJIT_LIBRARY NAMES lua51 luajit-5.1 REQUIRED)
 
-# World code only; vcpkg headers are SYSTEM includes, so their warnings are suppressed.
-if(MSVC)
-  set(WORLD_COMPILE_OPTIONS /W4 /WX /permissive- /utf-8 /bigobj)
-  set(WORLD_DEFINITIONS _WIN32_WINNT=0x0A00 WIN32_LEAN_AND_MEAN NOMINMAX)
-else()
-  set(WORLD_COMPILE_OPTIONS -Wall -Wextra -Werror)
-  set(WORLD_DEFINITIONS)
-endif()
-list(APPEND WORLD_DEFINITIONS ASIO_NO_DEPRECATED CPPHTTPLIB_OPENSSL_SUPPORT JWT_DISABLE_PICOJSON)
-
-# --- protocol: frame format + messages; no Asio/DB/ECS, reusable by a game client ---
-add_library(kast_protocol STATIC protocol/codec.cpp)
-target_include_directories(kast_protocol PUBLIC protocol)
-target_compile_options(kast_protocol PRIVATE ${WORLD_COMPILE_OPTIONS})
+# Shared with services/chat: kast_protocol and kast_service_core, and the warning flags (WORLD_* below).
+# vcpkg headers are SYSTEM includes, so their warnings are suppressed.
+include(service_core.cmake)
+set(WORLD_COMPILE_OPTIONS ${KAST_SERVICE_COMPILE_OPTIONS})
+set(WORLD_DEFINITIONS ${KAST_SERVICE_DEFINITIONS})
 
 # --- map: map.json manifests, tile math and heightmaps; std + nlohmann_json + stb only, no file IO, shared with the engine ---
 add_library(kast_map STATIC map/map.cpp map/heights.cpp map/objects.cpp)
@@ -44,21 +35,12 @@ target_include_directories(kast_map SYSTEM PRIVATE "${Stb_INCLUDE_DIR}")
 target_compile_options(kast_map PRIVATE ${WORLD_COMPILE_OPTIONS})
 target_link_libraries(kast_map PUBLIC nlohmann_json::nlohmann_json)
 
-# --- world_core: everything in the server except main(), so the self-check links the same code ---
+# --- world_core: everything in the world server except main() and kast_service_core, so the self-check links the same code ---
 add_library(world_core STATIC
   server/core/config.cpp
-  server/core/log.cpp
   server/core/tick_stats.cpp
-  server/core/utc.cpp
   server/db/char_repo.cpp
   server/db/db_worker.cpp
-  server/db/migrate.cpp
-  server/db/mysql.cpp
-  server/auth/jwks_cache.cpp
-  server/auth/jwt_verify.cpp
-  server/auth/token_service.cpp
-  server/net/session.cpp
-  server/net/tls_context.cpp
   server/world/aoi_grid.cpp
   server/world/maps.cpp
   server/world/nav.cpp
@@ -73,14 +55,14 @@ add_library(world_core STATIC
   server/lua/runtime.cpp
   server/lua/sandbox.cpp
   server/lua/state_machines.cpp
+  server/app/chat_link.cpp
   server/app/game_server.cpp
 )
 target_include_directories(world_core PUBLIC server)
 target_compile_options(world_core PRIVATE ${WORLD_COMPILE_OPTIONS})
 target_compile_definitions(world_core PUBLIC ${WORLD_DEFINITIONS})
-target_link_libraries(world_core PUBLIC kast_protocol kast_map asio::asio OpenSSL::SSL OpenSSL::Crypto
-  unofficial::libmysql::libmysql jwt-cpp::jwt-cpp httplib::httplib EnTT::EnTT nlohmann_json::nlohmann_json
-  PRIVATE quill::quill RecastNavigation::Detour sol2::sol2 "${LUAJIT_LIBRARY}" ${CMAKE_DL_LIBS})
+target_link_libraries(world_core PUBLIC kast_service_core kast_map EnTT::EnTT
+  PRIVATE RecastNavigation::Detour sol2::sol2 "${LUAJIT_LIBRARY}" ${CMAKE_DL_LIBS})
 target_include_directories(world_core SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}")
 # As the engine: sol2 on the LuaJIT (Lua 5.1) API with argument checks; C++ exceptions in bindings are caught by
 # sol2 and become Lua errors carrying the binding's message (with the script's file:line).

@@ -35,7 +35,8 @@
 -- stands still and logs its Class (cmake/starter_mmo_live_legacy.cmake strips the class first).
 -- Zone objects (maps/meadow/objects, scripts/player.lua, scripts/shrines.lua): "rock" walks to ROCK_SPOT, faces north
 -- and logs KEYS: --sim-key presses W over and over, scripts/player.lua walks the character north into the rock, which
--- stops it; then the driver logs where it stopped. "shrine" walks to SHRINE_SPOT, faces the Meadow Shrine and logs
+-- stops it; then the driver logs where it stopped. "shrine" (which starts where "rock" left the character, against the
+-- rock) steps back to ROCK_CLEAR, walks to SHRINE_SPOT, faces the Meadow Shrine and logs
 -- PRESS: --sim-key presses E, scripts/shrines.lua activates it and the server's answer shows in the chat box.
 -- Equipment (scripts/character.lua, the server's systems/inventory.lua, combat.lua, classes.lua; Meadow): each stage
 -- starts bare (the test server's "test.equipment") with a known bag. "equip_open" logs KEYS: --sim-key presses C (the
@@ -45,6 +46,10 @@
 -- RmlUi publishes it, a raw request, a known bag): the refusals, then the Guard. "equip_persist" (equip_combat's
 -- character) logs its gear after the relog and opens both windows. "equip_tooltip" (equip_drag's character, the Leather
 -- Cap left in bag slot 2) opens the bag and logs HOVER: --sim-mouse hovers that slot for its tooltip.
+-- Chat (scripts/chat.lua, the chat service): "chat" (Meadow) types CHAT_STEPS into the chat box one by one (yell,
+-- emote, a whisper to itself, General, /join Trade, Trade, zone, a whisper to nobody), then fills the field, focuses it
+-- and logs KEYS: --sim-key presses Enter, which sends it. "chat_down" enters with the chat service stopped
+-- (starter_mmo_live_play.cmake STOP_CHAT), waits for the box's "unavailable" line and says something (still works).
 -- "SHOT" log lines are for --screenshot-on-log: the moment a stage's screenshot should show.
 local STAGE, CHARACTER = "@STAGE@", "@CHARACTER@"
 local REALM = "Starter Realm"
@@ -60,6 +65,8 @@ local STAGE_CLASS = {mage = "mage", mage_bolt = "mage", priest = "priest", rogue
 local CLASS = STAGE_CLASS[STAGE] or "warrior"
 -- Each step waits `after` seconds, walks to its spot (go m south of the Guard, or "front" / "behind" the Bat), waits for
 -- its condition (bat: a living Bat; near: the Guard within that many m; log: a combat log line), then does the rest.
+-- A Meadow stage starts once the Guard is at full Health: the stage before may have left it hurt, chasing, rooted or
+-- dead, and it only heals when back home (the server's systems/combat.lua), so a first hit could kill it.
 local CLASS_STEPS = {
     warrior = {
         {go = 8}, {tab = true}, {press = 1},                          -- * Out of range
@@ -78,7 +85,7 @@ local CLASS_STEPS = {
     priest = {
         {go = 10}, {tab = true}, {press = 3},                         -- Power Shield
         {after = 1.1, press = 1},                                     -- Smite 10: the Guard comes and hits the shield
-        {log = "Power Shield absorbs 5", press = 2},                  -- Heal
+        {after = 1.1, log = "Power Shield absorbs 5", press = 2},     -- Heal, past the GCD
         {after = 0.3, shot = "power shield"},
     },
     rogue = {
@@ -113,6 +120,7 @@ local CLASS_STEPS = {
     },
 }
 local ROCK_SPOT = {x = 141, z = 103} -- 5 m south of the rock at (141, 108), a 1.2 m cylinder
+local ROCK_CLEAR = {x = 138, z = 105} -- the straight way from it to SHRINE_SPOT misses the rock (off the navmesh)
 local SHRINE_SPOT = {x = 118, z = 136.5} -- 2 m from the Meadow Shrine's edge (118, 140): within its range 3
 local BAT_SPOT = {x = 128, z = 122.5} -- 2.5 m north of the Bat (128, 120): in reach, the Bat between camera and player
 local GUARD_REACH = 2.6 -- m: close enough to hit (the server allows 3)
@@ -144,6 +152,8 @@ local elapsed = 0
 local chatted = false
 local me
 local guard, guardId -- the Guard's clone and server id
+local health = {}    -- server id -> the latest replicated Health
+local guardWaitLogged = false
 local targeted, engaged, hits, nextAttack, shot = false, false, 0, 0, false
 local bat, batId          -- the latest Bat clone and its server id
 local corpses = {}        -- server id -> Corpse.owner
@@ -161,6 +171,10 @@ local charReplies = 0     -- world.charCreated / charError answers (class_pick)
 local equipped = {}       -- the local Equipment, as replicated
 local stats               -- the last "character.stats"
 local windowToggles = 0   -- character.visibility events
+local myName              -- the character's name, from its own first world.chat (chat stage)
+-- The chat stage's lines, typed into the chat box 0.8 s apart (5 per 10 s on each server). "%me" is myName.
+local CHAT_STEPS = {"/y Hello Meadow!", "/me waves", "/w %me psst", "/1 Hello General", "/join Trade", "/2 WTS sword",
+                    "/z Anyone in the Meadow?", "/w Nobodyhere hi"}
 
 local function log(format, ...) kast.log("test driver: " .. string.format(format, ...)) end
 -- Predicted powers (scripts/powers.lua): frames counted from the step's key press to the attack clip and the cooldown.
@@ -435,6 +449,10 @@ end
 local function zoneStage()
     local spot = STAGE == "rock" and ROCK_SPOT or SHRINE_SPOT
     if phase == "arrive" then
+        phase = "go"
+        if STAGE == "shrine" then target = ROCK_CLEAR end -- walk() clears it there
+    elseif phase == "go" then
+        if target == ROCK_CLEAR then return end
         target = not at(spot) and spot or nil
         if target then return end
         faceNorth()
@@ -508,6 +526,14 @@ end
 local function classStage()
     local s = CLASS_STEPS[STAGE][stepIndex]
     if not s or elapsed - stepAt < (s.after or 0) then return end
+    if stepIndex == 1 and FIGHT_MAP[STAGE] == MEADOW then
+        local h = guardId and health[guardId]
+        if not (guard and h and h.current == h.max) then
+            if not guardWaitLogged and h then log("waiting for the Guard to heal: %d / %d", h.current, h.max) end
+            guardWaitLogged = guardWaitLogged or h ~= nil
+            return
+        end
+    end
     if s.go then
         local where = spot(s.go)
         if not where then return end
@@ -1042,9 +1068,29 @@ return {
             hits = hits + 1
             if hits >= ATTACKS_ON_GUARD then shoot("guard hit " .. hits .. " times") end
         end)
-        kast.subscribe("world.chat", function(e) log("chat %s: %s", e.from, e.text) end)
+        kast.subscribe("world.chat", function(e)
+            if e.kind == "say" then log("chat %s: %s", e.from, e.text) else log("chat %s %s: %s", e.kind, e.from, e.text) end
+            if STAGE == "chat" and not myName then myName = e.from end
+        end)
+        kast.subscribe("chat.message", function(e)
+            log("chat message %s %s%s: %s", e.kind, e.channel and (e.channel .. " ") or "", e.from or e.to, e.text)
+        end)
+        kast.subscribe("chat.channel", function(e) log("chat channel %s %d %s", e.channel, e.number, e.joined and "joined" or "left") end)
+        kast.subscribe("chat.error", function(e) log("chat error %s %s", e.code, e.name) end)
+        kast.subscribe("chat.status", function(e)
+            log("chat status: %s", e.connected and "connected" or "unavailable")
+            if STAGE == "chat_down" and not e.connected and phase == "arrive" then
+                waitUntil = elapsed + 1.5
+                phase = "down"
+                kast.gui.setText("chat_input", "Say still works") -- proximity chat is the world server's
+                kast.publish("chat.send")
+            end
+        end)
         kast.subscribe("world.component", function(e)
-            if e.name == "Health" then log("Health %d / %d on %d", e.data.current, e.data.max, e.entityId) end
+            if e.name == "Health" then
+                health[e.entityId] = e.data
+                log("Health %d / %d on %d", e.data.current, e.data.max, e.entityId)
+            end
             if e.name == "Class" then log("Class %s on %d", e.data.id, e.entityId) end
             if e.name == "Wallet" then
                 log("Wallet %d gold on %d", e.data.gold, e.entityId)
@@ -1099,6 +1145,30 @@ return {
             chatted = true
             kast.gui.setText("chat_input", "hello from the starter sample")
             kast.publish("chat.send")
+        end
+        if STAGE == "chat" and elapsed > 3 then
+            if phase == "arrive" then phase, step, waitUntil = "typing", 0, elapsed end
+            if phase == "typing" and elapsed >= waitUntil and (step == 0 or myName) then
+                step, waitUntil = step + 1, elapsed + 0.8
+                local line = CHAT_STEPS[step]
+                if line then
+                    kast.gui.setText("chat_input", (line:gsub("%%me", myName or "")))
+                    kast.publish("chat.send")
+                else
+                    phase, waitUntil, keysFrame = "keys", elapsed + 4, frame
+                    kast.gui.setText("chat_input", "sent with Enter")
+                    log("chat focused: %s", tostring(kast.gui.focus("chat_input")))
+                    log("KEYS")
+                end
+            elseif phase == "keys" and elapsed >= waitUntil then
+                phase = "done"
+                log("chat field after Enter: '%s'", kast.gui.value("chat_input") or "?")
+                shoot("chat")
+            end
+        end
+        if STAGE == "chat_down" and phase == "down" and elapsed >= waitUntil then
+            phase = "done"
+            shoot("chat unavailable")
         end
         if STAGE == "cavern" then
             local done = crossings() >= 2 and map == CAVERN

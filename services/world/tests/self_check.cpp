@@ -87,7 +87,9 @@ void checkCodecRoundTrip() {
     roundtrip(CharDelete{1234567890123ull}, "CharDelete");
     roundtrip(EnterWorld{99}, "EnterWorld");
     roundtrip(Move{{1.5f, -2.25f, 1000.f}, 3.14f, 123456}, "Move");
-    roundtrip(Say{"hello \xC3\xA9"}, "Say");
+    roundtrip(Say{ChatKind::say, "hello \xC3\xA9"}, "Say");
+    roundtrip(Say{ChatKind::yell, "HELLO"}, "Say yell");
+    roundtrip(Say{ChatKind::emote, "waves"}, "Say emote");
     roundtrip(AuthOk{77, Role::gm}, "AuthOk");
     roundtrip(Disconnect{Code::logged_in_elsewhere}, "Disconnect");
     roundtrip(CharList{{{1, "Alice", {1, 2, 3}}, {2, "Bob", {4, 5, 6}}}}, "CharList");
@@ -105,7 +107,44 @@ void checkCodecRoundTrip() {
     roundtrip(EntityMove{3, {11, 0, 12}, 0.25f}, "EntityMove");
     roundtrip(Correction{{1, 2, 3}, 0xFFFFFFFEu, 7}, "Correction");
     roundtrip(Move{{1, 2, 3}, 0.5f, 99, 0xFFFFFFFFu, 3}, "Move");
-    roundtrip(ChatMsg{"Eve", "hi all"}, "ChatMsg");
+    roundtrip(ChatMsg{ChatKind::say, "Eve", "hi all"}, "ChatMsg");
+    roundtrip(ChatMsg{ChatKind::yell, "Eve", "HI ALL"}, "ChatMsg yell");
+    roundtrip(ChatMsg{ChatKind::emote, "Eve", "waves"}, "ChatMsg emote");
+    // v8 Say: u8 kind, str text; ChatMsg: u8 kind, str fromName, str text; a kind past emote is malformed
+    check(encode(Message{Say{ChatKind::emote, "a"}}) == std::vector<uint8_t>{4, 0, 0x21, 0, 2, 1, 0, 'a'}, "Say bytes: kind first");
+    check(encode(Message{ChatMsg{ChatKind::yell, "B", "a"}}) == std::vector<uint8_t>{7, 0, 0x24, 0x01, 1, 1, 0, 'B', 1, 0, 'a'},
+          "ChatMsg bytes: kind first");
+    Message kindOut;
+    check(decode_payload(Opcode::Say, std::vector<uint8_t>{3, 1, 0, 'a'}, kindOut) == DecodeStatus::malformed, "Say kind 3 is malformed");
+    check(decode_payload(Opcode::Say, std::vector<uint8_t>{1, 0, 'a'}, kindOut) == DecodeStatus::malformed, "a v7 Say (no kind) is malformed");
+    // the chat service's messages and the internal link
+    roundtrip(ChatServer{"chat.example.com", 7778}, "ChatServer");
+    roundtrip(ChatSend{ChatTarget::whisper, "Bob", "psst"}, "ChatSend whisper");
+    roundtrip(ChatSend{ChatTarget::channel, "Trade", "WTS"}, "ChatSend channel");
+    roundtrip(ChatSend{ChatTarget::zone, "", "anyone?"}, "ChatSend zone");
+    roundtrip(ChatJoin{"Trade"}, "ChatJoin");
+    roundtrip(ChatLeave{"LFG"}, "ChatLeave");
+    roundtrip(ChatIgnore{"Mallory", true}, "ChatIgnore");
+    roundtrip(ChatIgnore{"Mallory", false}, "ChatIgnore off");
+    roundtrip(ChatMute{"Mallory", 15}, "ChatMute");
+    roundtrip(ChatLine{ChatTarget::whisper_sent, "", "Bob", "psst"}, "ChatLine whisper_sent");
+    roundtrip(ChatLine{ChatTarget::channel, "General", "Alice", "hi"}, "ChatLine channel");
+    roundtrip(ChatChannel{2, "Trade", true}, "ChatChannel");
+    roundtrip(ChatNotice{ChatNoticeCode::muted, "", 14}, "ChatNotice");
+    roundtrip(LinkHello{8, "s3cret-shared-value"}, "LinkHello");
+    roundtrip(LinkOk{}, "LinkOk");
+    roundtrip(CharOnline{7, 1234567890123ull, "Alice", 11}, "CharOnline");
+    roundtrip(MapChanged{1234567890123ull, 10}, "MapChanged");
+    roundtrip(CharOffline{99}, "CharOffline");
+    roundtrip(MuteState{"Mallory", 1790000000000ull}, "MuteState");
+    check(decode_payload(Opcode::ChatSend, std::vector<uint8_t>{3, 0, 0, 1, 0, 'a'}, kindOut) == DecodeStatus::malformed,
+          "ChatSend target whisper_sent (3) is malformed: only the server echoes");
+    check(decode_payload(Opcode::ChatNotice, std::vector<uint8_t>{0, 0, 0, 0, 0, 0, 0}, kindOut) == DecodeStatus::malformed &&
+              decode_payload(Opcode::ChatNotice, std::vector<uint8_t>{15, 0, 0, 0, 0, 0, 0}, kindOut) == DecodeStatus::malformed,
+          "ChatNotice codes 0 and 15 are malformed");
+    check(std::string(opcode_name(Opcode::MuteState)) == "MuteState" && std::string(code_name(Code::no_character)) == "no_character" &&
+              std::string(chat_notice_name(ChatNoticeCode::you_unmuted)) == "you_unmuted",
+          "chat opcode, code and notice names");
 
     // exact byte layout: u16 len, u16 opcode, payload, little-endian
     const auto f = encode(Message{Hello{0x0102}});
@@ -114,7 +153,7 @@ void checkCodecRoundTrip() {
     roundtrip(ClientEvent{"combat.power", R"({"power":"strike"})", 0xFFFFFFFEu}, "ClientEvent with requestId");
     roundtrip(Reply{0xFFFFFFFEu, true, R"({"power":"strike"})"}, "Reply ok");
     roundtrip(Reply{3, false, R"("range")"}, "Reply rejected");
-    check(kProtocolVersion == 7, "protocol version 7");
+    check(kProtocolVersion == 8, "protocol version 8");
     // v7 ClientEvent: str name, str json, u32 requestId (0: kast.world.send); Reply: u32 requestId, u8 ok (0/1), str json
     const auto cev = encode(Message{ClientEvent{"a", "{}", 0x01020304}});
     check(cev.size() == 4 + 3 + 4 + 4 && cev[11] == 0x04 && cev[14] == 0x01, "ClientEvent requestId after json");
@@ -195,7 +234,7 @@ void checkFrameRejection() {
     std::vector<uint8_t> big = {0x01, 0x10, 0x21, 0x00}; // len 4097, Say
     check(decode_frame(big, 4096).status == DecodeStatus::too_large, "oversized frame rejected from header");
     // truncated: header promises more than arrived
-    auto f = encode(Message{Say{"hello"}});
+    auto f = encode(Message{Say{ChatKind::say, "hello"}});
     f.pop_back();
     check(decode_frame(f, 4096).status == DecodeStatus::need_more, "partial frame waits for more");
     check(decode_frame(std::span(f).first(3), 4096).status == DecodeStatus::need_more, "partial header waits");
@@ -467,6 +506,23 @@ void checkConfig() {
     check(load_config(lookup).errors.size() == 1, "negative SIM_JITTER_MS refused");
     env.erase("SIM_LATENCY_MS");
     env.erase("SIM_JITTER_MS");
+
+    check(ok.config.chatYellRadius == 300 && ok.config.chatPublicHost.empty() && ok.config.chatPublicPort == 7778 &&
+              ok.config.chatLinkHost.empty() && ok.config.chatLinkPort == 7779,
+          "chat defaults: yell 300 m, chat service not announced, no chat link");
+    env["CHAT_YELL_RADIUS"] = "450";
+    env["CHAT_PUBLIC_HOST"] = "127.0.0.1";
+    env["CHAT_LINK_HOST"] = "chat";
+    env["CHAT_LINK_SECRET"] = "too-short";
+    const auto shortSecret = load_config(lookup);
+    check(shortSecret.errors.size() == 1 && shortSecret.errors[0].starts_with("CHAT_LINK_SECRET"),
+          "CHAT_LINK_HOST with a secret under 16 characters refused");
+    env["CHAT_LINK_SECRET"] = "0123456789abcdef";
+    const auto linked = load_config(lookup);
+    check(linked.errors.empty() && linked.config.chatYellRadius == 450 && linked.config.chatPublicHost == "127.0.0.1" &&
+              linked.config.chatLinkHost == "chat",
+          "CHAT_YELL_RADIUS / CHAT_PUBLIC_HOST / CHAT_LINK_HOST + a 16-character secret read");
+    for (const char* name : {"CHAT_YELL_RADIUS", "CHAT_PUBLIC_HOST", "CHAT_LINK_HOST", "CHAT_LINK_SECRET"}) env.erase(name);
 
     env.erase("DB_HOST");
     env["REALM_ID"] = "abc";

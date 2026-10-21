@@ -56,6 +56,21 @@ const char* opcode_name(Opcode op) {
     case Opcode::ServerEvent: return "ServerEvent";
     case Opcode::MapChange: return "MapChange";
     case Opcode::Reply: return "Reply";
+    case Opcode::ChatServer: return "ChatServer";
+    case Opcode::ChatSend: return "ChatSend";
+    case Opcode::ChatJoin: return "ChatJoin";
+    case Opcode::ChatLeave: return "ChatLeave";
+    case Opcode::ChatIgnore: return "ChatIgnore";
+    case Opcode::ChatMute: return "ChatMute";
+    case Opcode::ChatLine: return "ChatLine";
+    case Opcode::ChatChannel: return "ChatChannel";
+    case Opcode::ChatNotice: return "ChatNotice";
+    case Opcode::LinkHello: return "LinkHello";
+    case Opcode::LinkOk: return "LinkOk";
+    case Opcode::CharOnline: return "CharOnline";
+    case Opcode::MapChanged: return "MapChanged";
+    case Opcode::CharOffline: return "CharOffline";
+    case Opcode::MuteState: return "MuteState";
     }
     return "unknown";
 }
@@ -83,6 +98,27 @@ const char* code_name(Code c) {
     case Code::not_found: return "not_found";
     case Code::already_in_world: return "already_in_world";
     case Code::options_invalid: return "options_invalid";
+    case Code::no_character: return "no_character";
+    }
+    return "unknown";
+}
+
+const char* chat_notice_name(ChatNoticeCode c) {
+    switch (c) {
+    case ChatNoticeCode::not_online: return "not_online";
+    case ChatNoticeCode::muted: return "muted";
+    case ChatNoticeCode::not_allowed: return "not_allowed";
+    case ChatNoticeCode::no_channel: return "no_channel";
+    case ChatNoticeCode::not_in_channel: return "not_in_channel";
+    case ChatNoticeCode::rate_limited: return "rate_limited";
+    case ChatNoticeCode::rejected: return "rejected";
+    case ChatNoticeCode::bad_name: return "bad_name";
+    case ChatNoticeCode::ignored: return "ignored";
+    case ChatNoticeCode::unignored: return "unignored";
+    case ChatNoticeCode::mute_set: return "mute_set";
+    case ChatNoticeCode::mute_cleared: return "mute_cleared";
+    case ChatNoticeCode::you_muted: return "you_muted";
+    case ChatNoticeCode::you_unmuted: return "you_unmuted";
     }
     return "unknown";
 }

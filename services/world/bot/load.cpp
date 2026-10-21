@@ -117,7 +117,7 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
             ++st.movesSent;
         }
         if (o.behaviour == "chat" && tick % 40 == 0) { // every 4 s: under the 5 per 10 s limit
-            c->send(proto::Say{"hello from a load bot"});
+            c->send(proto::Say{proto::ChatKind::say, "hello from a load bot"});
             ++st.says;
         }
     }

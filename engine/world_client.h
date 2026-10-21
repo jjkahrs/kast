@@ -17,7 +17,8 @@
 // WorldClient: the game side of the world server protocol (docs/services/world/protocol.html) over a Network TLS connection,
 // encoded and decoded by services/world/protocol (kast_protocol). Connects to a realm from the auth service's realm
 // list with the AuthClient's access token, pings it (rttMs), answers its Pings, and turns every server message and the connection's life
-// into "world.*" events (docs/engine/online-services.html#kastworld). One connection at a time. No Lua, no EventBus, no scene: LuaSystems owns
+// into "world.*" events (docs/engine/online-services.html#kastworld); a ChatNotice (a muted say) becomes "chat.error",
+// as ChatClient's. One connection at a time. No Lua, no EventBus, no scene: LuaSystems owns
 // one per Play session, routes the Network results and auth events to it and publishes what poll() returns. Never logs
 // the access token; chat text only at debug level. Same threading rule as Network.
 namespace kast {
@@ -83,7 +84,9 @@ public:
     void createCharacter(const std::string& name, const std::map<std::string, std::string>& options = {});
     void deleteCharacter(uint64_t charId);
     void enterWorld(uint64_t charId);
-    void say(const std::string& text);
+    // kind: "say" (the players in view), "yell" (the map within the server's CHAT_YELL_RADIUS) or "emote" (shown as
+    // "<name> <text>" in say range); another kind throws std::logic_error.
+    void say(const std::string& text, const std::string& kind = "say");
     // ClientEvent{name, data as JSON} for the server's Lua ("client.<name>"). Checks the name (1-32 chars of
     // [a-z0-9._]) and the encoded size (<= 1 KB) first, then the state (InWorld); each throws std::logic_error.
     // data must be a JSON object.

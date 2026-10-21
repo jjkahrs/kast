@@ -2,6 +2,7 @@
 
 #include "audio.h"
 #include "auth_client.h"
+#include "chat_client.h"
 #include "event_bus.h"
 #include "gui_access.h"
 #include "input.h"
@@ -93,6 +94,11 @@ public:
     // drop the connection. Its address override (editor only) outlives them.
     WorldClient& world() { return world_; }
     const WorldClient& world() const { return world_; }
+    // The session's chat service client (kast.chat.* from C++): enabled with auth, it follows the world connection
+    // (connects where world.chatServer says, ends with world.disconnected); its "chat.*" events are published on bus()
+    // by tick(). Kept across kast.loadScene switches.
+    ChatClient& chat() { return chat_; }
+    const ChatClient& chat() const { return chat_; }
     // The session's entity replication (docs/engine/online-services.html#replication): started with each scene before
     // physics and the inits (it takes the template entity out), updated by tick() after the systems.
     Replication& replication() { return replication_; }
@@ -119,6 +125,7 @@ private:
     Network network_;
     AuthClient auth_{network_};
     WorldClient world_{network_, auth_};
+    ChatClient chat_{network_, auth_};
     Replication replication_; // subscribes on bus_, sends through world_
     GuiAccess* gui_ = nullptr;
     std::unique_ptr<State> state_;

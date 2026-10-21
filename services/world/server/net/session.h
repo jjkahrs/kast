@@ -1,4 +1,4 @@
-// One TLS client connection: framing, frame/rate limits, handshake deadline, heartbeat, batched writes and the lag
+// One TLS connection (a client's, or the world server's chat link): framing, frame/rate limits, handshake deadline, heartbeat, batched writes and the lag
 // simulator. Knows nothing about game rules; decoded messages go to on_message. All calls happen on the io thread.
 #pragma once
 #include "../core/clock.h"
@@ -43,8 +43,11 @@ public:
     using OnMessage = std::function<void(Session&, proto::Message&&)>;
     using OnClosed = std::function<void(Session&)>;
 
+    // role client: this end connects (the world server's chat link); the TLS handshake runs as the client and the
+    // context does the peer verification.
     Session(uint32_t id, asio::ip::tcp::socket socket, asio::ssl::context& tls, const SessionLimits& limits,
-            OnMessage onMessage, OnClosed onClosed);
+            OnMessage onMessage, OnClosed onClosed,
+            asio::ssl::stream_base::handshake_type role = asio::ssl::stream_base::server);
 
     // rejectWith: complete TLS, send Disconnect{rejectWith}, close (e.g. server_full).
     void start(std::optional<proto::Code> rejectWith = std::nullopt);
@@ -83,6 +86,7 @@ private:
     SessionLimits limits_;
     OnMessage onMessage_;
     OnClosed onClosed_;
+    asio::ssl::stream_base::handshake_type role_;
     std::string remote_;
 
     std::array<uint8_t, proto::kHeaderSize> header_{};

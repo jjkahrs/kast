@@ -1,4 +1,7 @@
-// Every wire message: opcode, struct and payload layout (see docs/services/world/protocol.html). C = client->server, S = server->client.
+// Every wire message: opcode, struct and payload layout (see docs/services/world/protocol.html, and
+// docs/services/chat/protocol.html for the chat service's). C = client->server, S = server->client; the chat service
+// speaks the same frames (Hello, Auth, Ping/Pong, AuthOk, Disconnect, then the Chat* messages), and L = the internal
+// link between a world server (client end) and the chat service.
 #pragma once
 #include "wire.h"
 
@@ -11,7 +14,7 @@
 
 namespace kast::proto {
 
-constexpr uint16_t kProtocolVersion = 7;
+constexpr uint16_t kProtocolVersion = 8;
 constexpr size_t kHeaderSize = 4; // u16 payload length + u16 opcode
 constexpr size_t kMaxPayloadBytes = 0xFFFF; // the u16 length field's limit
 
@@ -28,6 +31,11 @@ enum class Opcode : uint16_t {
     Say = 0x0021,          // C
     ClientEvent = 0x0022,  // C
     Interact = 0x0023,     // C
+    ChatSend = 0x0030,     // C (chat service)
+    ChatJoin = 0x0031,     // C (chat service)
+    ChatLeave = 0x0032,    // C (chat service)
+    ChatIgnore = 0x0033,   // C (chat service)
+    ChatMute = 0x0034,     // C (chat service)
     AuthOk = 0x0102,       // S
     Disconnect = 0x0103,   // S
     CharList = 0x0110,     // S
@@ -45,6 +53,16 @@ enum class Opcode : uint16_t {
     ServerEvent = 0x0127,     // S
     MapChange = 0x0128,       // S
     Reply = 0x0129,           // S
+    ChatServer = 0x012A,      // S
+    ChatLine = 0x0130,        // S (chat service)
+    ChatChannel = 0x0131,     // S (chat service)
+    ChatNotice = 0x0132,      // S (chat service; the world server for a muted say)
+    LinkHello = 0x0200,       // L world -> chat
+    LinkOk = 0x0201,          // L chat -> world
+    CharOnline = 0x0202,      // L world -> chat
+    MapChanged = 0x0203,      // L world -> chat
+    CharOffline = 0x0204,     // L world -> chat
+    MuteState = 0x0205,       // L chat -> world
 };
 
 // Reason codes carried by Disconnect and CharError.
@@ -70,6 +88,7 @@ enum class Code : uint16_t {
     not_found = 23,
     already_in_world = 24,
     options_invalid = 25,
+    no_character = 26, // chat service: the account has no character in a world (yet)
 };
 
 const char* code_name(Code c);
@@ -199,11 +218,21 @@ struct Move {
     bool operator==(const Move&) const = default;
 };
 
+// v8: proximity chat on the world server. say: the AOI audience; yell: everyone on the map within CHAT_YELL_RADIUS;
+// emote: free text shown as "<name> <text>", to the say audience.
+enum class ChatKind : uint8_t { say = 0, yell = 1, emote = 2 };
+inline ChatKind read_chat_kind(Reader& r) {
+    const uint8_t v = r.u8();
+    if (v > static_cast<uint8_t>(ChatKind::emote)) r.fail();
+    return static_cast<ChatKind>(v);
+}
+
 struct Say {
     static constexpr Opcode op = Opcode::Say;
+    ChatKind kind = ChatKind::say;
     std::string text;
-    void write(Writer& w) const { w.str(text); }
-    void read(Reader& r) { text = r.str(); }
+    void write(Writer& w) const { w.u8(static_cast<uint8_t>(kind)); w.str(text); }
+    void read(Reader& r) { kind = read_chat_kind(r); text = r.str(); }
     bool operator==(const Say&) const = default;
 };
 
@@ -379,10 +408,11 @@ struct Correction {
 
 struct ChatMsg {
     static constexpr Opcode op = Opcode::ChatMsg;
+    ChatKind kind = ChatKind::say;
     std::string fromName;
     std::string text;
-    void write(Writer& w) const { w.str(fromName); w.str(text); }
-    void read(Reader& r) { fromName = r.str(); text = r.str(); }
+    void write(Writer& w) const { w.u8(static_cast<uint8_t>(kind)); w.str(fromName); w.str(text); }
+    void read(Reader& r) { kind = read_chat_kind(r); fromName = r.str(); text = r.str(); }
     bool operator==(const ChatMsg&) const = default;
 };
 
@@ -452,9 +482,215 @@ struct Reply {
     bool operator==(const Reply&) const = default;
 };
 
+// --- chat service (docs/services/chat/protocol.html) ---
+
+// Where the realm's chat service listens: sent by the world server right after EnterWorldOk (CHAT_PUBLIC_HOST /
+// CHAT_PUBLIC_PORT); not sent when it has none. The client opens a second TLS connection there with the same token.
+struct ChatServer {
+    static constexpr Opcode op = Opcode::ChatServer;
+    std::string host;
+    uint16_t port = 0;
+    void write(Writer& w) const { w.str(host); w.u16(port); }
+    void read(Reader& r) { host = r.str(); port = r.u16(); }
+    bool operator==(const ChatServer&) const = default;
+};
+
+// Who a chat-service line goes to. whisper_sent: only in ChatLine, the echo of the sender's own whisper.
+enum class ChatTarget : uint8_t { whisper = 0, channel = 1, zone = 2, whisper_sent = 3 };
+inline ChatTarget read_chat_target(Reader& r, ChatTarget max) {
+    const uint8_t v = r.u8();
+    if (v > static_cast<uint8_t>(max)) r.fail();
+    return static_cast<ChatTarget>(v);
+}
+
+// to: the character name for whisper, the channel name for channel, empty for zone (the sender's map).
+struct ChatSend {
+    static constexpr Opcode op = Opcode::ChatSend;
+    ChatTarget target = ChatTarget::whisper;
+    std::string to;
+    std::string text;
+    void write(Writer& w) const { w.u8(static_cast<uint8_t>(target)); w.str(to); w.str(text); }
+    void read(Reader& r) { target = read_chat_target(r, ChatTarget::zone); to = r.str(); text = r.str(); }
+    bool operator==(const ChatSend&) const = default;
+};
+
+struct ChatJoin {
+    static constexpr Opcode op = Opcode::ChatJoin;
+    std::string channel;
+    void write(Writer& w) const { w.str(channel); }
+    void read(Reader& r) { channel = r.str(); }
+    bool operator==(const ChatJoin&) const = default;
+};
+
+struct ChatLeave {
+    static constexpr Opcode op = Opcode::ChatLeave;
+    std::string channel;
+    void write(Writer& w) const { w.str(channel); }
+    void read(Reader& r) { channel = r.str(); }
+    bool operator==(const ChatLeave&) const = default;
+};
+
+// on 1: ignore name's whispers, channel and zone lines until logout; on 0: stop.
+struct ChatIgnore {
+    static constexpr Opcode op = Opcode::ChatIgnore;
+    std::string name;
+    bool on = true;
+    void write(Writer& w) const { w.str(name); w.u8(on ? 1 : 0); }
+    void read(Reader& r) {
+        name = r.str();
+        const uint8_t v = r.u8();
+        if (v > 1) r.fail();
+        on = v == 1;
+    }
+    bool operator==(const ChatIgnore&) const = default;
+};
+
+// GM / admin only: mutes name for minutes (0: unmutes).
+struct ChatMute {
+    static constexpr Opcode op = Opcode::ChatMute;
+    std::string name;
+    uint32_t minutes = 0;
+    void write(Writer& w) const { w.str(name); w.u32(minutes); }
+    void read(Reader& r) { name = r.str(); minutes = r.u32(); }
+    bool operator==(const ChatMute&) const = default;
+};
+
+// A line for this client. channel: the channel's name (target channel), empty otherwise. name: the sender (whisper,
+// channel, zone) or the recipient (whisper_sent).
+struct ChatLine {
+    static constexpr Opcode op = Opcode::ChatLine;
+    ChatTarget target = ChatTarget::whisper;
+    std::string channel;
+    std::string name;
+    std::string text;
+    void write(Writer& w) const { w.u8(static_cast<uint8_t>(target)); w.str(channel); w.str(name); w.str(text); }
+    void read(Reader& r) {
+        target = read_chat_target(r, ChatTarget::whisper_sent);
+        channel = r.str();
+        name = r.str();
+        text = r.str();
+    }
+    bool operator==(const ChatLine&) const = default;
+};
+
+// Channel membership changed: joined 1 with the channel's number (its place in CHAT_CHANNELS, from 1), joined 0 left.
+struct ChatChannel {
+    static constexpr Opcode op = Opcode::ChatChannel;
+    uint8_t number = 0;
+    std::string channel;
+    bool joined = true;
+    void write(Writer& w) const { w.u8(number); w.str(channel); w.u8(joined ? 1 : 0); }
+    void read(Reader& r) {
+        number = r.u8();
+        channel = r.str();
+        const uint8_t v = r.u8();
+        if (v > 1) r.fail();
+        joined = v == 1;
+    }
+    bool operator==(const ChatChannel&) const = default;
+};
+
+// Errors and confirmations for chat requests; the connection stays. name / minutes as the code says.
+enum class ChatNoticeCode : uint8_t {
+    not_online = 1,     // whisper: name has no chat connection
+    muted = 2,          // you are muted for minutes more: your message was dropped (chat service and world server)
+    not_allowed = 3,    // mute / unmute: GM or admin only
+    no_channel = 4,     // join / leave / send: no such channel (name)
+    not_in_channel = 5, // send / leave: you are not in channel name
+    rate_limited = 6,   // over CHAT_RATE_COUNT per CHAT_RATE_WINDOW_MS: dropped
+    rejected = 7,       // empty, over CHAT_MAX_BYTES or invalid UTF-8: dropped
+    bad_name = 8,       // whisper / ignore / mute: not a valid character name
+    ignored = 9,        // ignore: done (name)
+    unignored = 10,     // unignore: done (name)
+    mute_set = 11,      // mute: name muted for minutes
+    mute_cleared = 12,  // unmute: name unmuted
+    you_muted = 13,     // a GM muted you for minutes
+    you_unmuted = 14,   // your mute was lifted
+};
+
+struct ChatNotice {
+    static constexpr Opcode op = Opcode::ChatNotice;
+    ChatNoticeCode code = ChatNoticeCode::not_online;
+    std::string name;
+    uint32_t minutes = 0;
+    void write(Writer& w) const { w.u8(static_cast<uint8_t>(code)); w.str(name); w.u32(minutes); }
+    void read(Reader& r) {
+        const uint8_t v = r.u8();
+        if (v < 1 || v > static_cast<uint8_t>(ChatNoticeCode::you_unmuted)) r.fail();
+        code = static_cast<ChatNoticeCode>(v);
+        name = r.str();
+        minutes = r.u32();
+    }
+    bool operator==(const ChatNotice&) const = default;
+};
+
+const char* chat_notice_name(ChatNoticeCode c);
+
+// --- internal link: world server -> chat service (CHAT_LINK_*), never from a game client ---
+
+// First message on the link; a wrong secret is answered Disconnect{invalid_token}, a wrong version
+// Disconnect{protocol_mismatch}.
+struct LinkHello {
+    static constexpr Opcode op = Opcode::LinkHello;
+    uint16_t protocolVersion = kProtocolVersion;
+    std::string secret;
+    void write(Writer& w) const { w.u16(protocolVersion); w.str(secret); }
+    void read(Reader& r) { protocolVersion = r.u16(); secret = r.str(); }
+    bool operator==(const LinkHello&) const = default;
+};
+
+// The link is up: every current mute follows as MuteState; the world server then sends CharOnline for every character
+// it has in the world.
+struct LinkOk {
+    static constexpr Opcode op = Opcode::LinkOk;
+    void write(Writer&) const {}
+    void read(Reader&) {}
+    bool operator==(const LinkOk&) const = default;
+};
+
+struct CharOnline {
+    static constexpr Opcode op = Opcode::CharOnline;
+    uint64_t accountId = 0;
+    uint64_t charId = 0;
+    std::string name;
+    uint16_t map = 0;
+    void write(Writer& w) const { w.u64(accountId); w.u64(charId); w.str(name); w.u16(map); }
+    void read(Reader& r) { accountId = r.u64(); charId = r.u64(); name = r.str(); map = r.u16(); }
+    bool operator==(const CharOnline&) const = default;
+};
+
+struct MapChanged {
+    static constexpr Opcode op = Opcode::MapChanged;
+    uint64_t charId = 0;
+    uint16_t map = 0;
+    void write(Writer& w) const { w.u64(charId); w.u16(map); }
+    void read(Reader& r) { charId = r.u64(); map = r.u16(); }
+    bool operator==(const MapChanged&) const = default;
+};
+
+struct CharOffline {
+    static constexpr Opcode op = Opcode::CharOffline;
+    uint64_t charId = 0;
+    void write(Writer& w) const { w.u64(charId); }
+    void read(Reader& r) { charId = r.u64(); }
+    bool operator==(const CharOffline&) const = default;
+};
+
+// name is muted until untilMs (Unix ms, wall clock); 0: not muted (any more).
+struct MuteState {
+    static constexpr Opcode op = Opcode::MuteState;
+    std::string name;
+    uint64_t untilMs = 0;
+    void write(Writer& w) const { w.str(name); w.u64(untilMs); }
+    void read(Reader& r) { name = r.str(); untilMs = r.u64(); }
+    bool operator==(const MuteState&) const = default;
+};
+
 using Message = std::variant<Hello, Auth, Ping, Pong, CharListReq, CharCreate, CharDelete, EnterWorld, Move, Say, ClientEvent, Interact,
                              AuthOk, Disconnect, CharList, CharCreated, CharDeleted, EnterWorldOk, CharError, Spawn,
                              Despawn, EntityMove, Correction, ChatMsg, ComponentUpdate,
-                             ComponentRemove, ServerEvent, MapChange, Reply>;
+                             ComponentRemove, ServerEvent, MapChange, Reply, ChatServer, ChatSend, ChatJoin, ChatLeave,
+                             ChatIgnore, ChatMute, ChatLine, ChatChannel, ChatNotice, LinkHello, LinkOk, CharOnline,
+                             MapChanged, CharOffline, MuteState>;
 
 } // namespace kast::proto
