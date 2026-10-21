@@ -14,6 +14,7 @@ find_package(httplib CONFIG REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(sol2 CONFIG REQUIRED)
+find_package(quill CONFIG REQUIRED) # async logging backend, private to server/core/log.cpp
 find_package(recastnavigation CONFIG REQUIRED) # navmesh: Recast in tools/mapbake, Detour in server/world/nav.cpp
 find_package(Stb REQUIRED) # header-only: stb_image decodes 16-bit PNG heightmaps (map/heights.cpp)
 # vcpkg's luajit port ships no CMake config: headers in include/luajit (Windows) or include/luajit-2.1 (Linux),
@@ -79,7 +80,7 @@ target_compile_options(world_core PRIVATE ${WORLD_COMPILE_OPTIONS})
 target_compile_definitions(world_core PUBLIC ${WORLD_DEFINITIONS})
 target_link_libraries(world_core PUBLIC kast_protocol kast_map asio::asio OpenSSL::SSL OpenSSL::Crypto
   unofficial::libmysql::libmysql jwt-cpp::jwt-cpp httplib::httplib EnTT::EnTT nlohmann_json::nlohmann_json
-  PRIVATE RecastNavigation::Detour sol2::sol2 "${LUAJIT_LIBRARY}" ${CMAKE_DL_LIBS})
+  PRIVATE quill::quill RecastNavigation::Detour sol2::sol2 "${LUAJIT_LIBRARY}" ${CMAKE_DL_LIBS})
 target_include_directories(world_core SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}")
 # As the engine: sol2 on the LuaJIT (Lua 5.1) API with argument checks; C++ exceptions in bindings are caught by
 # sol2 and become Lua errors carrying the binding's message (with the script's file:line).
@@ -129,6 +130,11 @@ if(EXISTS "${KAST_STARTER_MMO}")
                              KAST_STARTER_MMO_TEST_LUA="${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/starter_mmo_test_server.lua")
 endif()
 add_test(NAME world_self_check COMMAND world_self_check)
+# Caller-side logging cost vs a synchronous stdout write, and no lines lost under queue pressure.
+add_test(NAME log_bench COMMAND world_self_check --log-bench)
+# Lines logged right before a crash or a fatal startup error still reach stdout.
+add_test(NAME log_flush COMMAND ${CMAKE_COMMAND} -DCHECK=$<TARGET_FILE:world_self_check> -DWORLD=$<TARGET_FILE:kast_world>
+  -DOUT=${CMAKE_CURRENT_BINARY_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/log_flush.cmake)
 # kast_mapbake's lint exits (tests/mapbake fixtures); in the repo also that the sample hills' stored navtiles are current.
 set(MAPBAKE_HILLS "")
 if(EXISTS "${KAST_SAMPLE_MAPS}")

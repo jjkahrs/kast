@@ -13,7 +13,13 @@
 <main>
 <h1 id="tests">Tests</h1>
 <ul>
-<li><strong>Self-check</strong> (<code>tests/self_check.cpp</code> + <code>tests/lua_checks.cpp</code>, ctest <code>world_self_check</code>): assert-style checks of the pure logic with an injected clock, so nothing sleeps. The Lua checks write their scripts to a temp folder and drive a <code>World</code> with captured sends, saves and log lines. They cover the event bus (the engine's cases), <code>kast.publish/subscribe/unsubscribe</code> and the client sends: audiences, order, rejections and timing. They also cover state machines, from definitions to C++ / Lua parity.</li>
+<li><strong>Self-check</strong> (<code>tests/self_check.cpp</code> + <code>tests/lua_checks.cpp</code>, ctest <code>world_self_check</code>): assert-style checks of the pure logic with an injected clock, so nothing sleeps. The Lua checks write their scripts to a temp folder and drive a <code>World</code> with captured sends, saves and log lines. They cover the event bus (the engine's cases), <code>kast.publish/subscribe/unsubscribe</code> and the client sends: audiences, order, rejections and timing. They also cover state machines, from definitions to C++ / Lua parity, and Lua logging
+  (<code>kast.debug</code>, fields tables, their errors, <code>LOG_LEVEL</code>). Log lines are written by a background thread, so the checks call
+  <code>log::flush()</code> before reading what they captured.</li>
+<li><strong>Logging</strong> (ctest <code>log_bench</code> and <code>log_flush</code>): <code>log_bench</code> (<code>world_self_check --log-bench</code>, stdout to the null device)
+  prints the caller-side ns per line of <code>log::info</code> and of the old synchronous write, fails a release build if <code>log::info</code> is not cheaper,
+  and checks that 4 threads &times; 100,000 lines all reach the sink. <code>log_flush</code> checks that the line logged right before a SIGSEGV and an
+  <code>abort()</code> (<code>world_self_check --log-crash segv|abort</code>) and before <code>kast_world</code>'s fatal startup error (a missing <code>MAP_ROOT</code>) is on stdout.</li>
 <li><strong>Client events</strong> (<code>self_check.cpp</code> + <code>lua_checks.cpp</code>): the <code>ClientEvent</code> codec round trip, its exact
   bytes and opcode name; <code>client_event_data</code> refusing a bad name, more than 1 KB, text that isn't JSON and JSON that isn't
   an object. With a <code>World</code> (<code>checkClientEventsIn</code>): <code>client.&lt;name&gt;</code> delivered to a subscriber with the sender's

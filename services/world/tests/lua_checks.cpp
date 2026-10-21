@@ -635,20 +635,34 @@ void checkReplication() {
 
 // --- events (docs/services/world/events.html): the same cases as the engine's checks ---
 
-std::vector<std::string> g_log; // log lines while a LogCapture lives
+std::vector<std::string> g_log; // log lines while a LogCapture lives; the log backend thread appends
+
+// The captured lines, once the log backend has written everything logged so far.
+const std::vector<std::string>& captured() {
+    log::flush();
+    return g_log;
+}
+void clear_log() {
+    log::flush();
+    g_log.clear();
+}
 
 struct LogCapture {
     LogCapture() {
-        g_log.clear();
+        clear_log();
         log::set_test_sink([](const std::string& line) { g_log.push_back(line); });
     }
-    ~LogCapture() { log::set_test_sink(nullptr); }
+    ~LogCapture() {
+        log::flush();
+        log::set_test_sink(nullptr);
+    }
 };
 
 // Index of the first captured log line containing part, or SIZE_MAX.
 size_t log_index(const std::string& part) {
-    for (size_t i = 0; i < g_log.size(); ++i)
-        if (contains(g_log[i], part)) return i;
+    const auto& lines = captured();
+    for (size_t i = 0; i < lines.size(); ++i)
+        if (contains(lines[i], part)) return i;
     return SIZE_MAX;
 }
 bool logged(const std::string& part) { return log_index(part) != SIZE_MAX; }
@@ -1137,8 +1151,9 @@ void checkCodec() {
 // Indexes of the captured log lines whose "msg" contains part (log lines are JSON: quotes in msg are escaped).
 std::vector<size_t> said_at(const std::string& part) {
     std::vector<size_t> out;
-    for (size_t i = 0; i < g_log.size(); ++i) {
-        const auto line = nlohmann::json::parse(g_log[i], nullptr, false);
+    const auto& lines = captured();
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const auto line = nlohmann::json::parse(lines[i], nullptr, false);
         if (line.is_object() && contains(line.value("msg", ""), part)) out.push_back(i);
     }
     return out;
@@ -1162,6 +1177,67 @@ local function raises(want, f)
     elseif not string.find(err, want, 1, true) then kast.error("FAIL got [" .. tostring(err) .. "] wanted [" .. want .. "]") end
 end
 )";
+
+// kast.debug/log/warn/error(message [, fields]): fields become JSON on the line; bad fields raise at file:line.
+void checkLuaLogging() {
+    LogCapture capture;
+    log::set_level(log::Level::debug);
+    LuaRoot r;
+    r.write("systems/logs.lua", std::string(kLuaExpect) + R"lua(local t = {}
+t.self = t
+return {
+    init = function()
+        kast.debug("dbg line")
+        kast.log("with fields", {player = 7, zone = "x"})
+        kast.warn("nested", {pos = {x = 1, y = 2.5}, tags = {"a", "b"}})
+        kast.error("no fields", {})
+        raises("kast.log: fields must be a table, got 5", function() kast.log("m", 5) end)
+        raises("kast.log: fields must be a table of named fields", function() kast.log("m", {1, 2}) end)
+        raises("kast.warn: payload.cb: a function can't be sent", function() kast.warn("m", {cb = print}) end)
+        raises("kast.error: payload.self: the table contains itself (cycle)", function() kast.error("m", t) end)
+        raises('kast.log: "ts" is reserved', function() kast.log("m", {ts = 1}) end)
+        raises('kast.debug: "level" is reserved', function() kast.debug("m", {level = "x"}) end)
+        raises('kast.log: "msg" is reserved', function() kast.log("m", {nested = {}, msg = "x"}) end)
+        local ok, err = pcall(function() kast.log("m", true) end)
+        expect(not ok and string.find(err, "systems/logs.lua:%d+: kast.log: fields") ~= nil, "error at file:line: " .. tostring(err))
+        kast.log("logging checks done")
+    end,
+    update = function() kast.debug("tick debug"); kast.log("tick info"); kast.warn("tick warn") end,
+})lua");
+    TestWorld w({});
+    const auto errors = w.world.load_scripts(r.root);
+    check(errors.empty(), "lua logging: loads" + (errors.empty() ? "" : ": " + errors[0]));
+    check_lua_expectations("lua logging", "logging checks done");
+
+    const auto line = [](const std::string& msg) {
+        const size_t i = said_first("systems/logs.lua: " + msg);
+        return i == SIZE_MAX ? nlohmann::ordered_json() : nlohmann::ordered_json::parse(g_log[i]);
+    };
+    const auto dbg = line("dbg line");
+    check(dbg.value("level", "") == "debug", "kast.debug logs at debug");
+    std::vector<std::string> keys;
+    for (const auto& [key, unused] : dbg.items()) keys.push_back(key);
+    check(keys == std::vector<std::string>{"ts", "level", "msg"}, "a line starts ts, level, msg");
+    const std::string ts = dbg.value("ts", "");
+    check(ts.size() == 24 && ts[10] == 'T' && ts[19] == '.' && ts.back() == 'Z', "ts is ISO 8601 UTC with ms: " + ts);
+    check(contains(g_log[said_first("with fields")], R"("msg":"systems/logs.lua: with fields","player":7,"zone":"x"})"),
+          "kast.log fields: \"player\":7,\"zone\":\"x\" after msg");
+    const auto nested = line("nested");
+    check(nested.value("level", "") == "warn" && nested["pos"] == nlohmann::ordered_json{{"x", 1}, {"y", 2.5}} &&
+              nested["tags"] == nlohmann::ordered_json{"a", "b"},
+          "nested tables become nested JSON");
+    check(line("no fields").size() == 3, "an empty fields table adds nothing");
+
+    log::set_level(log::Level::warn);
+    clear_log();
+    w.world.tick(T0);
+    check(!said("tick debug") && !said("tick info") && said("tick warn"), "LOG_LEVEL warn: info and debug are dropped");
+    log::set_level(log::Level::debug);
+    clear_log();
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    check(said("tick debug") && said("tick info"), "LOG_LEVEL debug: kast.debug shows");
+    log::set_level(log::Level::info);
+}
 
 // Every callback logs "<enter|exit> <from>-><to> entity <id>".
 constexpr const char* kDoor = R"(local function note(what) return function(ctx)
@@ -1279,11 +1355,11 @@ void checkFsmRules() {
     w.world.tick(T0);
     check(changed.empty() && fsm.state("door") == "closed", "fsm: no fsm.changed for the first entry");
 
-    g_log.clear();
+    clear_log();
     check(fsm.canChange("door", "open") && fsm.canChange("door", "locked") && fsm.canChange("door", "broken") &&
               !fsm.canChange("door", "closed") && !fsm.canChange("door", "flying"),
           "fsm: canChange: listed, omitted and \"*\" allowed; self not listed and unknown denied");
-    check(g_log.empty() && fsm.state("door") == "closed", "fsm: canChange has no side effects and logs nothing");
+    check(captured().empty() && fsm.state("door") == "closed", "fsm: canChange has no side effects and logs nothing");
 
     check(!fsm.change("door", "closed") &&
               said(R"(State machine "door": "closed" can't be entered from "closed" (allowedFrom); staying in "closed")"),
@@ -1294,7 +1370,7 @@ void checkFsmRules() {
     w.world.tick(T0 + std::chrono::milliseconds(50));
     check(changed.empty(), "fsm: a denial publishes no event");
 
-    g_log.clear();
+    clear_log();
     check(fsm.change("door", "open") && fsm.state("door") == "open", "fsm: an allowed change applies immediately");
     check(said_first("exit closed->open") < said_first("enter closed->open") && said("enter closed->open entity nil"),
           "fsm: exit(old), then enter(new) with the same ctx");
@@ -1307,7 +1383,7 @@ void checkFsmRules() {
 
     changed.clear();
     check(fsm.change("door", "broken"), "fsm: \"*\" from open");
-    g_log.clear();
+    clear_log();
     check(fsm.change("door", "broken") && said("exit broken->broken") && said("enter broken->broken"),
           "fsm: a self-transition allowed by \"*\" runs exit and enter");
     check(fsm.change("door", "locked") && fsm.change("door", "locked"), "fsm: a self-transition allowed by an omitted allowedFrom");
@@ -1348,7 +1424,7 @@ void checkFsmQueue() {
     check(w.world.load_scripts(r.root, {"q", "r"}).empty(), "fsm queue: loads");
     std::vector<nlohmann::json> changed;
     EventBus::Subscription sub = w.world.bus().subscribe("fsm.changed", [&](const nlohmann::json& p) { changed.push_back(p); });
-    g_log.clear();
+    clear_log();
     check(w.world.fsm().change("q", "b"), "fsm queue: change returns true");
     const std::vector<size_t> order = {said_first("exit a"),      said_first("enter b"),     said_first("queued c true"),
                                        said_first("queued y true"), said_first("still b"),   said_first("enter b done"),
@@ -1544,7 +1620,7 @@ return {
     const auto dave = w.spawn(3, 95, "Dave", 1020, 1000);
     std::vector<nlohmann::json> changed;
     EventBus::Subscription sub = w.world.bus().subscribe("fsm.changed", [&](const nlohmann::json& p) { changed.push_back(p); });
-    g_log.clear();
+    clear_log();
     w.world.tick(T0);
     auto& fsm = w.world.fsm();
     const lua::StateMachines::Target d = wire(dave);
@@ -1587,7 +1663,7 @@ return {
             if (auto* u = std::get_if<proto::ComponentUpdate>(&m); u && u->name == "StateMachine") replicated = true;
     check(!replicated, "fsm: StateMachine is never replicated");
     check(w.sent.of<proto::ComponentUpdate>(1).size() > 0, "fsm: other components still replicate");
-    g_log.clear();
+    clear_log();
     w.sent.clear();
     w.world.despawn(alice);
     check(w.sent.saves.size() == 1 && w.sent.saves[0].components && contains(*w.sent.saves[0].components, "Health") &&
@@ -4978,6 +5054,7 @@ int lua_checks(int& checks) {
     checkLuaEventHooks();
     checkClientEvents();
     checkReply();
+    checkLuaLogging();
     checkFsmDefinitions();
     checkFsmRules();
     checkFsmQueue();

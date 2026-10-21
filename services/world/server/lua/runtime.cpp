@@ -772,14 +772,26 @@ struct Runtime::Impl {
             clientEvents.push_back({ClientEvent::To::reply, entity, {}, std::move(text), request, ok.as<bool>()});
         });
 
-        const auto logger = [this](void (*write)(std::string_view, nlohmann::json)) {
-            return [this, write](sol::this_state L, const sol::object& message) {
-                write(std::format("{}: {}", who(), to_string(L, message)), nlohmann::json::object());
+        // kast.log(message [, fields]): fields is plain data (as an event payload) and becomes JSON fields on the line.
+        const auto logger = [this](const char* function, void (*write)(std::string_view, nlohmann::json)) {
+            return [this, function, write](sol::this_state L, const sol::object& message, const sol::object& fields) {
+                nlohmann::json json = nlohmann::json::object();
+                if (fields.valid()) {
+                    if (fields.get_type() != sol::type::table)
+                        raise(L, std::format("{}: fields must be a table, got {}", function, to_string(L, fields)));
+                    json = payload(L, function, fields);
+                    if (!json.is_object()) raise(L, std::format("{}: fields must be a table of named fields", function));
+                    for (const char* reserved : {"ts", "level", "msg"})
+                        if (json.contains(reserved))
+                            raise(L, std::format("{}: \"{}\" is reserved and can't be a field", function, reserved));
+                }
+                write(std::format("{}: {}", who(), to_string(L, message)), std::move(json));
             };
         };
-        api.set_function("log", logger(log::info));
-        api.set_function("warn", logger(log::warn));
-        api.set_function("error", logger(log::error));
+        api.set_function("debug", logger("kast.debug", log::debug));
+        api.set_function("log", logger("kast.log", log::info));
+        api.set_function("warn", logger("kast.warn", log::warn));
+        api.set_function("error", logger("kast.error", log::error));
     }
 };
 

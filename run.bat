@@ -1,8 +1,8 @@
 @echo off
-rem Runs the editor from the repo root. Usage: run.bat [debug|release|relwithdebinfo] [editor flags...]   (default: debug)
+rem Runs the editor from the repo root. Usage: run.bat [debug|release|relwithdebinfo] [editor flags...]   (default: relwithdebinfo)
 setlocal
 cd /d "%~dp0"
-set "PRESET=debug"
+set "PRESET=relwithdebinfo"
 rem The flags go to the editor as typed: %1 / shift would split a value like -1880,40 at the comma.
 set "ARGS= %*"
 for %%p in (debug release relwithdebinfo) do if /i "%~1"=="%%p" (
