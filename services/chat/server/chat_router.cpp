@@ -165,8 +165,8 @@ void ChatRouter::send_chat(Character& c, const proto::ChatSend& m, TimePoint now
         if (!valid_character_name(m.to)) return notice(c, ChatNoticeCode::bad_name, m.to);
         const Character* to = by_name(m.to);
         if (!to || !to->session) return notice(c, ChatNoticeCode::not_online, m.to);
-        deliver(c, {to}, {ChatTarget::whisper, "", c.name, *text});
-        send_(c.session, proto::ChatLine{ChatTarget::whisper_sent, "", to->name, std::move(*text)});
+        send_(c.session, proto::ChatLine{ChatTarget::whisper_sent, "", to->name, *text}); // the echo first
+        deliver(c, {to}, {ChatTarget::whisper, "", c.name, std::move(*text)});
         return;
     }
     case ChatTarget::channel: {
