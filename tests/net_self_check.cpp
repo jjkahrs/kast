@@ -2260,6 +2260,18 @@ void checkReplicationNpcs()
     bus.drain();
     r.update(0.2f);
     check(approx(reg.get<kast::Transform>(guard).position, {34, 0, 40}), "replication npcs: world.entityMove moves an NPC clone");
+    // A script's rotation on a clone that stands (scripts/combat.lua tips corpses over) stays until the server turns it.
+    const bx::Quaternion tipped{0.5f, 0.5f, 0.5f, 0.5f};
+    s.registry().get<kast::Transform>(guard).rotation = tipped;
+    r.update(0.2f);
+    const bx::Quaternion kept = reg.get<kast::Transform>(guard).rotation;
+    check(kept.x == tipped.x && kept.y == tipped.y && kept.z == tipped.z && kept.w == tipped.w,
+          "replication npcs: a script's rotation on a standing clone is kept");
+    bus.publish("world.entityMove", {{"entityId", 10}, {"position", at(34, 0, 40)}, {"heading", 2.0}});
+    bus.drain();
+    r.update(0.2f);
+    check(approx(kast::headingOf(reg.get<kast::Transform>(guard).rotation), 2.0f),
+          "replication npcs: a later world.entityMove turns the clone again");
     bus.publish("world.despawn", {{"entityId", 10}});
     bus.drain();
     check(r.clone(10) == entt::null && !s.valid(guard) && countNamed(s, "Guard Body") == 0,

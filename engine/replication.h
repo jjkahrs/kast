@@ -173,6 +173,7 @@ private:
         bool npc = false;
         std::string templateName; // an NPC's template (world.spawn "template")
         RemoteMotion motion;
+        std::optional<float> shownHeading; // last heading written to the clone: a script's rotation stays until it turns
         entt::entity entity = entt::null;
         std::map<std::string, nlohmann::json> components; // last replicated values, re-applied to a new clone
     };
