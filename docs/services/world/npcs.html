@@ -88,6 +88,13 @@ NPC of that type starts with. Spawn files (<code>npc</code>) and <code>kast.crea
 <li><strong>When:</strong> an NPC gets its components when it is created, so the first <code>Spawn</code> a player gets is followed by its <code>aoi</code>
   components in the usual AOI-enter full set. A respawned NPC starts with fresh definition data. <code>persist</code> is ignored
   and <code>owner</code> components reach nobody, as for every NPC.</li>
+<li id="friendly-npcs"><strong>Friendly NPCs:</strong> the server has no hostile / friendly flag; what an NPC is depends on its
+  components and the systems. The starter-mmo sample's convention: an NPC <em>without</em> <code>Health</code> is friendly. Its
+  <code>systems/combat.lua</code> refuses any power aimed at an NPC without <code>Health</code> (<code>target</code>) and Frost Nova queries
+  <code>Npc</code> + <code>Health</code>, so such an NPC never fights, is never hurt and never dies; with no <code>loot</code> it drops nothing.
+  Clients see the same thing (no <code>Health</code> replicated) and don't target it (<code>scripts/combat.lua</code>). Its quest giver,
+  <code>npcs/elder.lua</code>, is just <code>{name = "Elder", template = "Elder"}</code>, placed by the Meadow's spawn file without a path;
+  <code>systems/quests.lua</code> makes it a quest giver because quests name it as their <code>giver</code>.</li>
 </ul>
 <h1 id="npc-spawns">NPC spawns</h1>
 <p>A map's NPCs are data: one file per tile, <code>&lt;MAP_ROOT&gt;/&lt;folder&gt;/.server/spawns/&lt;tx&gt;_&lt;tz&gt;.json</code>. The dot-folder keeps it

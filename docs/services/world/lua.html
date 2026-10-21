@@ -45,6 +45,11 @@ server replicates to the matching component on the local player and on remote cl
 <td><code>LUA_ROOT/systems/*.lua</code></td>
 <td>Systems, not recursive, run in alphabetical filename order</td>
 </tr>
+<tr>
+<td>Any other folder</td>
+<td>Read only when a system asks: <a href="#definitions"><code>kast.definitions(folder)</code></a>. A dot-folder (<code>.server/quests/</code>)
+keeps game data out of a client build that shares the folder (the editor's Build leaves dot-folders out of <code>game.pak</code>)</td>
+</tr>
 </tbody>
 </table>
 <ul>
@@ -127,6 +132,26 @@ gives both the same names, stack sizes and qualities. NPC <a href="npcs.html#npc
   read-only all the way down (writing raises <code>kast is read-only</code>). What an item <em>does</em> is up to the systems; the
   starter-mmo sample's <code>systems/inventory.lua</code> keeps a bag of them.</li>
 </ul>
+<h2 id="definitions">Game data folders (<code>kast.definitions</code>)</h2>
+<p>A game's own data (quests, vendors, dialog...) can live in any folder under <code>LUA_ROOT</code>, one plain-data table per file,
+and a system reads it with <code>kast.definitions(folder)</code>. The server gives the files no meaning: the system checks them.</p>
+<pre><code class="language-lua">local quests, paths = kast.definitions(&quot;.server/quests&quot;)
+-- quests: {table, ...}, one per .lua file under LUA_ROOT/.server/quests (recursively), sorted by path
+-- paths:  {&quot;.server/quests/bat_trouble.lua&quot;, ...}, LUA_ROOT-relative, for error messages
+</code></pre>
+<ul>
+<li><strong>Folder:</strong> a relative, <code>/</code>-separated path without empty, <code>.</code> or <code>..</code> parts and without <code>\</code> or <code>:</code>,
+  so it stays under <code>LUA_ROOT</code>; anything else raises <code>kast.definitions: folder must be a relative path ...</code>. A missing
+  folder returns two empty tables.</li>
+<li><strong>Files:</strong> each runs once in the definition sandbox and must return exactly one plain-data table (no functions or
+  metatables). A file that fails raises <code>kast.definitions: &lt;path&gt;: ...</code> in the caller; called from <code>init</code>, that refuses
+  the start like any <code>init</code> error.</li>
+<li><strong>Read once:</strong> the first call per folder reads the files; later calls (any system) return fresh copies of the same
+  data, so a system may change what it gets. Call it from <code>init</code>: the files are not read again until restart.</li>
+<li><strong>Server-only data:</strong> the editor's Build leaves dot-folders out of <code>game.pak</code>, so a folder such as
+  <code>.server/quests/</code> in a project the client and server share never reaches players. The starter-mmo sample keeps its
+  quests there (<code>systems/quests.lua</code>).</li>
+</ul>
 <h2 id="systems">Systems</h2>
 <p>A system file returns a table; only <code>update</code> is required:</p>
 <pre><code class="language-lua">return {
@@ -160,6 +185,10 @@ gives both the same names, stack sizes and qualities. NPC <a href="npcs.html#npc
 <tr>
 <td><code>kast.items</code></td>
 <td>The <a href="#items">item definitions</a> by id, read-only</td>
+</tr>
+<tr>
+<td><code>kast.definitions(folder)</code></td>
+<td>The <a href="#definitions">plain-data tables</a> returned by every <code>.lua</code> file under <code>LUA_ROOT/folder</code>, and their paths</td>
 </tr>
 <tr>
 <td><code>kast.npcDef(name)</code></td>

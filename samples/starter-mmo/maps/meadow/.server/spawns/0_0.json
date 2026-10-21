@@ -5,6 +5,7 @@
                      "points": [[134, 0, 122], [134, 0, 112], [124, 0, 112], [124, 0, 122]]}
   },
   "spawns": [
-    {"id": "guard_1", "npc": "Guard", "pos": [134, 0, 122], "heading": 0, "respawnSec": 5, "path": "spawn_patrol"}
+    {"id": "guard_1", "npc": "Guard", "pos": [134, 0, 122], "heading": 0, "respawnSec": 5, "path": "spawn_patrol"},
+    {"id": "elder_1", "npc": "Elder", "pos": [124, 0, 133], "heading": 2.5, "respawnSec": 5}
   ]
 }

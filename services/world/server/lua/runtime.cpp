@@ -11,6 +11,8 @@
 #include <cmath>
 #include <format>
 #include <limits>
+#include <map>
+#include <ranges>
 
 namespace kast::lua {
 namespace {
@@ -54,6 +56,16 @@ struct System {
 
 uint32_t wire(entt::entity e) { return entt::to_integral(e); }
 
+// kast.definitions' folder: "/"-separated, relative, no empty, "." or ".." part (so it stays under LUA_ROOT).
+bool relative_folder(std::string_view folder) {
+    if (folder.empty() || folder.find_first_of("\\:") != std::string_view::npos) return false;
+    for (const auto part : std::views::split(folder, '/')) {
+        const std::string_view p(part.begin(), part.end());
+        if (p.empty() || p == "." || p == "..") return false;
+    }
+    return true;
+}
+
 // The writable StateMachine built-in, stored like a Lua component that is never persisted or replicated: kast.add/set/
 // get/has/remove/query and their checks work on it unchanged, and World (persistence, replication) never sees it.
 Defs with_state_machine(Defs defs) {
@@ -86,6 +98,12 @@ struct Runtime::Impl {
     std::vector<ClientEvent> clientEvents; // kast.sendTo/sendNearby/broadcast since the last take
     ItemDefs items;                        // items/, loaded before the NPCs (loot tables name them)
     NpcDefs npcDefs;                       // npcs/, loaded after the machines (StateMachine data names one)
+    std::filesystem::path luaRoot;         // LUA_ROOT, set by load
+    struct Definitions {
+        std::vector<nlohmann::json> tables;
+        std::vector<std::string> paths; // LUA_ROOT-relative
+    };
+    std::map<std::string, Definitions, std::less<>> definitions; // kast.definitions, by folder, read on first use
     System* current = nullptr;
     bool returnedTrue = false; // the last call()'s first result was true
     std::string callbackPath; // the definition file whose enter/exit is running, if no system is
@@ -604,6 +622,42 @@ struct Runtime::Impl {
             if (movable.as<bool>()) reg.remove<world::MoveLock>(e);
             else reg.emplace_or_replace<world::MoveLock>(e);
         });
+        // kast.definitions(folder): the plain-data tables returned by every .lua file under LUA_ROOT/folder (recursively,
+        // sorted by path) and, as a second result, their LUA_ROOT-relative paths. Read once per folder (the first call),
+        // then fresh copies. folder is "/"-separated and relative, without "." or ".." parts (".server/quests"); a
+        // missing folder is none. A file that fails, or doesn't return exactly one plain-data table, raises.
+        api.set_function("definitions", [this](sol::this_state L, const sol::object& folder) {
+            if (folder.get_type() != sol::type::string || !relative_folder(folder.as<std::string>()))
+                raise(L, std::format("kast.definitions: folder must be a relative path such as \".server/quests\" "
+                                     "(\"/\"-separated, no \".\" or \"..\" parts), got {}", to_string(L, folder)));
+            const std::string name = folder.as<std::string>();
+            auto it = definitions.find(name);
+            if (it == definitions.end()) {
+                Definitions loaded;
+                std::error_code ec;
+                for (const auto& file : definition_files(luaRoot, name.c_str())) {
+                    const std::string path = std::filesystem::relative(file, luaRoot, ec).generic_string();
+                    nlohmann::json json;
+                    std::string error;
+                    try {
+                        const sol::table table = run_definition_file(lua, file, path, "{...}");
+                        if (!lua_to_json(table, json, error)) error = path + ": " + error;
+                    } catch (const InvalidDefinition& e) {
+                        error = e.what();
+                    }
+                    if (!error.empty()) raise(L, "kast.definitions: " + error);
+                    loaded.tables.push_back(std::move(json));
+                    loaded.paths.push_back(path);
+                }
+                it = definitions.emplace(name, std::move(loaded)).first;
+            }
+            sol::table tables = lua.create_table(), paths = lua.create_table();
+            for (size_t i = 0; i < it->second.tables.size(); ++i) {
+                tables[i + 1] = json_to_lua(lua, it->second.tables[i]);
+                paths[i + 1] = it->second.paths[i];
+            }
+            return std::make_tuple(tables, paths);
+        });
         // Players leave only by logging out: destroy takes NPCs.
         // kast.npcDef(name): {name =, template =, loot = <table or nil>} of an npcs/ definition (a fresh copy), nil if none.
         api.set_function("npcDef", [this](sol::this_state L, const sol::object& name) -> sol::object {
@@ -800,6 +854,7 @@ Runtime::Runtime(entt::registry& reg, Defs defs, NpcHooks npcs)
 Runtime::~Runtime() = default;
 
 std::vector<std::string> Runtime::load(const std::filesystem::path& root, std::vector<std::string> gameMachines) {
+    impl_->luaRoot = root;
     // Definitions first: an init may already use kast.fsm.
     std::vector<std::string> errors = impl_->load_machines(root, std::move(gameMachines));
     for (std::string& e : impl_->load_items(root)) errors.push_back(std::move(e)); // before the NPCs: loot names items

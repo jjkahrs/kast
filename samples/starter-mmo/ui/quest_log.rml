@@ -1,0 +1,47 @@
+<rml>
+    <head>
+        <title>Quest Log</title>
+        <link type="text/rcss" href="starter.rcss"/>
+    </head>
+    <body>
+        <!-- scripts/quest_log.lua: L opens and closes the quest log. Each active quest (the replicated Quests, titles
+             and objectives from the server's quest.log) with its objectives' progress; the chosen one's text and
+             rewards below, and Abandon. -->
+        <div id="quest_log" class="window">
+            <p class="window_title">Quest Log <span id="qlog_count"></span></p>
+            <p id="qlog_empty" class="quest_text">No quests. Look for a yellow ! over a friendly NPC.</p>
+            <div id="qlog_list">
+                <button id="qlog_row_1" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_1_title" class="qlog_row_title">-</p><p id="qlog_row_1_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_2" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_2_title" class="qlog_row_title">-</p><p id="qlog_row_2_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_3" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_3_title" class="qlog_row_title">-</p><p id="qlog_row_3_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_4" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_4_title" class="qlog_row_title">-</p><p id="qlog_row_4_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_5" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_5_title" class="qlog_row_title">-</p><p id="qlog_row_5_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_6" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_6_title" class="qlog_row_title">-</p><p id="qlog_row_6_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_7" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_7_title" class="qlog_row_title">-</p><p id="qlog_row_7_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_8" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_8_title" class="qlog_row_title">-</p><p id="qlog_row_8_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_9" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_9_title" class="qlog_row_title">-</p><p id="qlog_row_9_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_10" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_10_title" class="qlog_row_title">-</p><p id="qlog_row_10_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_11" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_11_title" class="qlog_row_title">-</p><p id="qlog_row_11_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_12" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_12_title" class="qlog_row_title">-</p><p id="qlog_row_12_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_13" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_13_title" class="qlog_row_title">-</p><p id="qlog_row_13_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_14" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_14_title" class="qlog_row_title">-</p><p id="qlog_row_14_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_15" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_15_title" class="qlog_row_title">-</p><p id="qlog_row_15_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_16" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_16_title" class="qlog_row_title">-</p><p id="qlog_row_16_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_17" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_17_title" class="qlog_row_title">-</p><p id="qlog_row_17_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_18" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_18_title" class="qlog_row_title">-</p><p id="qlog_row_18_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_19" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_19_title" class="qlog_row_title">-</p><p id="qlog_row_19_progress" class="qlog_row_progress">-</p></button>
+                <button id="qlog_row_20" class="qlog_row" data-event="quest.log_select"><p id="qlog_row_20_title" class="qlog_row_title">-</p><p id="qlog_row_20_progress" class="qlog_row_progress">-</p></button>
+            </div>
+            <div id="qlog_detail">
+                <p id="qlog_title" class="quest_title">-</p>
+                <p id="qlog_text" class="quest_text">-</p>
+                <p id="qlog_rewards_heading" class="quest_heading">Rewards</p>
+                <div id="qlog_reward_gold" class="quest_reward"><div class="icon coin"></div><p id="qlog_reward_gold_name" class="loot_name">-</p></div>
+            <div id="qlog_reward_1" class="quest_reward"><div id="qlog_reward_1_icon" class="icon"></div><p id="qlog_reward_1_name" class="loot_name">-</p></div>
+            <div id="qlog_reward_2" class="quest_reward"><div id="qlog_reward_2_icon" class="icon"></div><p id="qlog_reward_2_name" class="loot_name">-</p></div>
+            <div id="qlog_reward_3" class="quest_reward"><div id="qlog_reward_3_icon" class="icon"></div><p id="qlog_reward_3_name" class="loot_name">-</p></div>
+                <button id="qlog_abandon" class="secondary" data-event="quest.log_abandon">Abandon</button>
+            </div>
+        </div>
+    </body>
+</rml>

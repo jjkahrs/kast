@@ -548,6 +548,268 @@ local function travelStage()
     end
 end
 
+-- The quest stages (QUEST_STEPS): see the header.
+local ELDER_SPOT = {x = 124, z = 135} -- 2 m north of the Elder (124, 133): facing north, it is between camera and player
+local ELDER_FAR = {x = 128, z = 138}  -- 6.4 m from the Elder: beyond the 5 m talk range
+local GOALS = {bat_trouble = 3, wings_for_the_elder = 5} -- .server/quests/ objective counts, for the log lines
+local FILLER = {}
+for i = 1, 20 do FILLER[i] = "filler_" .. i end
+local QUEST_FULL_BAG = {"bat_wing:20"}
+for i = 2, 16 do QUEST_FULL_BAG[i] = "linen_cloth:20" end
+local elder, elderId
+local quests = {active = {}, progress = {}, completed = {}} -- the replicated Quests
+local questMarkers = {}   -- the last "quest.markers"
+local dialogs, accepted, completed, abandoned, lootClosed = 0, 0, 0, 0, 0
+local lastDialog          -- the last "quest.dialog"
+local questRejects = {}   -- reason -> times refused
+local logToggles = 0      -- quest_log.visibility events
+local questBag, questGold -- bag and gold before the full-bag turn-in
+
+local function questProgress(id)
+    for i, active in ipairs(quests.active) do
+        if active == id then return quests.progress[(i - 1) * 4 + 1] or 0 end
+    end
+end
+
+local function questsText()
+    local parts = {}
+    for i, id in ipairs(quests.active) do
+        parts[#parts + 1] = string.format("%s %d/%d", id, quests.progress[(i - 1) * 4 + 1] or 0, GOALS[id] or 0)
+    end
+    return string.format("%s; completed %s", #parts > 0 and table.concat(parts, ", ") or "none",
+                         #quests.completed > 0 and table.concat(quests.completed, ", ") or "-")
+end
+
+local function markerParts() -- cubes of scripts/quest.lua's markers in the scene, by colour
+    local yellow, grey = 0, 0
+    for e in kast.query("MeshRenderer") do
+        local m = kast.get(e, "MeshRenderer").material
+        if m == "materials/quest_yellow.mat" then yellow = yellow + 1 end
+        if m == "materials/quest_grey.mat" then grey = grey + 1 end
+    end
+    return yellow, grey
+end
+
+local function logMarker()
+    local yellow, grey = markerParts()
+    log("marker Elder %s: %d yellow, %d grey part(s)", tostring(questMarkers.Elder), yellow, grey)
+end
+
+local function talk() kast.publish("npc.clicked", {entityId = elderId, name = "Elder"}) end -- as a right click would
+local function ask(name, quest) kast.world.send(name, {npc = elderId, quest = quest}) end    -- a raw request
+local function refused(reason, n) return function() return (questRejects[reason] or 0) >= (n or 1) end end
+local function doneAt(n) return function() return done >= n end end
+local function dialogWith(id, state)
+    return function()
+        for _, q in ipairs(lastDialog and lastDialog.quests or {}) do
+            if q.id == id and q.state == state then return true end
+        end
+        return false
+    end
+end
+local function setQuests(active, progress, completedIds)
+    kast.world.send("test.quests", {active = active or {}, progress = progress or {}, completed = completedIds or {}})
+end
+local function fresh() -- each stage that starts a chain starts it from nothing
+    setQuests()
+    setBag({})
+end
+
+-- One Bat kill in the Cavern (seeded loot: 1 gold, a Bat Wing, Linen Cloth), looted empty so the corpse goes.
+local function killBat(k)
+    return {
+        {map = CAVERN, resume = k == 1 and CAVERN or nil, wait = batAlive, go = BAT_SPOT, run = function()
+            kast.world.send("test.seed", {seed = SEED})
+            kast.publish("combat.target_next")
+            nextAttack = elapsed
+        end},
+        {wait = function()
+            if not batAlive() then return true end
+            if elapsed >= nextAttack then
+                nextAttack = elapsed + ATTACK_EVERY
+                kast.publish("combat.target_next") -- the Bat again if its clone came late
+                attack()
+            end
+            return false
+        end},
+        {wait = function() return batId and corpses[batId] == me end,
+         run = function() kast.publish("loot.clicked", {entityId = batId}) end},
+        {wait = function() return lootClosed >= k end, run = function() log("Bats slain: %s (at %.0f s)", questsText(), elapsed) end},
+    }
+end
+
+local QUEST_STEPS = {
+    quest_dialog = {
+        {run = fresh},
+        {wait = function() return done >= 2 and elder and questMarkers.Elder == "available" end, after = 1, run = logMarker},
+        {go = ELDER_FAR, run = talk},                                             -- * Too far away
+        {wait = function() return logged["* Too far away"] end, go = ELDER_SPOT, run = faceNorth},
+        {after = 1.5, run = function() log("CLICK") end},                         -- --sim-mouse right-clicks the Elder
+        {wait = function() return dialogs >= 1 end, after = 0.7, run = function() shoot("quest dialog") end},
+    },
+    quest_log = {
+        {run = fresh},
+        {wait = function() return done >= 2 and elder end, go = ELDER_SPOT, run = talk},
+        {wait = dialogWith("bat_trouble", "available"), run = function() kast.publish("quest.accept") end},
+        {wait = function() return accepted >= 1 and questProgress("bat_trouble") == 0 and questMarkers.Elder == "progress" end,
+         after = 1, run = function()
+            log("quests: %s", questsText())
+            logMarker()
+            kast.publish("quest.close")
+            faceNorth()
+            keysFrame = frame
+            log("KEYS")                                                           -- --sim-key: L, then L in the chat
+        end},
+        {wait = function() return frame >= keysFrame + KEYS_DONE_FRAMES end, run = function()
+            log("after L, chat, L: %d log toggle(s), chat field '%s'", logToggles, kast.gui.value("chat_input") or "?")
+            shoot("quest log")
+        end},
+    },
+    quest_kills = { -- resume: where a zone scene reached through a portal (a fresh driver) starts on that map
+        {run = function()
+            setQuests({"bat_trouble"}, {0, 0, 0, 0})                          -- quest_log's state, also on a rerun
+            setBag({})
+        end},
+        killBat(1)[1], killBat(1)[2], killBat(1)[3], killBat(1)[4],
+        killBat(2)[1], killBat(2)[2], killBat(2)[3], killBat(2)[4],
+        killBat(3)[1], killBat(3)[2], killBat(3)[3], killBat(3)[4],
+        {map = MEADOW, resume = MEADOW, wait = function() return elder and questMarkers.Elder == "ready" end, after = 1.5, run = logMarker},
+        {go = ELDER_SPOT, run = function()
+            faceNorth()
+            talk()
+        end},
+        {wait = dialogWith("bat_trouble", "ready"), run = function()
+            goldBefore = gold
+            kast.publish("quest.complete")
+        end},
+        {wait = dialogWith("wings_for_the_elder", "available"), run = function() kast.publish("quest.accept") end},
+        {wait = function() return questProgress("wings_for_the_elder") end, run = function()
+            log("quests: %s", questsText())
+            ask("quest.accept", "bat_trouble")                                    -- * already completed
+        end},
+        {wait = refused("completed"), after = 0.5, run = function() shoot("next quest") end},
+    },
+    quest = {
+        {run = function()
+            setQuests({"wings_for_the_elder"}, {3, 0, 0, 0}, {"bat_trouble"})    -- quest_kills' state, also on a rerun
+            setBag({"bat_wing:5"})                                                -- test-only: the 5 Bat Wings
+        end},
+        {wait = function() return done >= 2 and questProgress("wings_for_the_elder") == 5 end, run = function()
+            kast.publish("quest_log.toggle")
+        end},
+        {after = 1.5, run = function()
+            log("log at %s", questsText())
+            kast.publish("quest_log.toggle")
+        end},
+        {go = ELDER_SPOT, run = function()
+            faceNorth()
+            goldBefore = gold
+            talk()
+        end},
+        {wait = dialogWith("wings_for_the_elder", "ready"), run = function() kast.publish("quest.complete") end},
+        {wait = function() return completed >= 1 end, after = 1, run = function()
+            log("after the turn-in: bag %s; %s", bagText(), questsText())
+            kast.publish("bag.toggle")
+        end},
+        {after = 1, run = function() shoot("quest done") end},
+    },
+    quest_rejects = {
+        {run = function()
+            fresh()
+            kast.world.send("test.health", {current = 140})
+        end},
+        {wait = function() return done >= 3 and elder end, go = ELDER_SPOT, run = function() ask("quest.accept", "no_such_quest") end},
+        {wait = refused("unknown_quest"), run = function() ask("quest.accept", "wings_for_the_elder") end},
+        {wait = refused("requires"), run = function() ask("quest.complete", "bat_trouble") end},
+        {wait = refused("not_active"), run = function() kast.world.send("quest.abandon", {quest = "bat_trouble"}) end},
+        {wait = refused("not_active", 2), run = talk},
+        {wait = dialogWith("bat_trouble", "available"), run = function() kast.publish("quest.accept") end},
+        {wait = function() return accepted >= 1 end, run = function() ask("quest.accept", "bat_trouble") end},
+        {wait = refused("active"), run = function() ask("quest.complete", "bat_trouble") end},
+        {wait = refused("incomplete"), run = function() setQuests(FILLER) end},   -- 20 made-up quests
+        {wait = function() return done >= 4 and #quests.active == 20 end, run = function() ask("quest.accept", "bat_trouble") end},
+        {wait = refused("log_full"), run = function() kast.world.send("test.health", {current = 0}) end},
+        {wait = doneAt(5), run = function() kast.world.send("quest.talk", {npc = elderId}) end},
+        {wait = refused("dead"), run = function() ask("quest.accept", "bat_trouble") end},
+        {wait = refused("dead", 2), run = function()
+            kast.world.send("test.health", {current = 140})
+            setQuests({"bat_trouble"}, {2, 0, 0, 0})                              -- Bat Trouble at 2/3
+        end},
+        {wait = function() return done >= 7 and questProgress("bat_trouble") == 2 end, run = function()
+            log("before abandon: %s", questsText())
+            kast.publish("quest_log.toggle")
+        end},
+        {after = 1.5, run = function() kast.publish("quest.log_abandon") end},  -- the log's Abandon button
+        {wait = function() return abandoned >= 1 and #quests.active == 0 end, run = function()
+            log("after abandon: %s", questsText())
+            talk()
+        end},
+        {wait = function() return dialogs >= 3 end, run = function() kast.publish("quest.accept") end},
+        {wait = function() return accepted >= 2 end, run = function() log("re-accepted: %s", questsText()) end},
+        {go = ELDER_FAR, run = function()
+            talk()                                                                -- * Too far away (client)
+            kast.world.send("quest.talk", {npc = elderId})                        -- range (server)
+        end},
+        {wait = function() return logged["* Too far away"] and refused("range")() end, run = function()
+            setQuests({}, {}, {"bat_trouble"})
+        end},
+        {wait = doneAt(8), go = ELDER_SPOT, run = function() ask("quest.accept", "bat_trouble") end},
+        {wait = refused("completed"), run = talk},
+        {wait = dialogWith("wings_for_the_elder", "available"), run = function() kast.publish("quest.accept") end},
+        {wait = function() return questProgress("wings_for_the_elder") end, run = function() setBag(QUEST_FULL_BAG) end},
+        {wait = function() return done >= 9 and questProgress("wings_for_the_elder") == 5 end, after = 0.5, run = function()
+            questBag, questGold = bagText(), gold
+            ask("quest.complete", "wings_for_the_elder")                          -- no room for the Leather Cap
+        end},
+        {wait = refused("full"), after = 1, run = function()
+            log("full turn-in changed nothing: bag %s, gold %s, %s", tostring(bagText() == questBag),
+                tostring(gold == questGold), questsText())
+            faceNorth()
+            shoot("quest rejects")
+        end},
+    },
+    quest_persist = {
+        {wait = function() return elder and questMarkers.Elder end, after = 3, run = function()
+            log("quests after relog: %s", questsText())
+            logMarker()
+            kast.publish("quest_log.toggle")
+        end},
+        {after = 1.5, run = function() shoot("quest persist") end},
+    },
+}
+
+-- The quest stages: one QUEST_STEPS step at a time. A step waits `after` seconds, gets to `map` (through the portals)
+-- and to `go`, waits for `wait`, then runs `run`. A zone scene reached through a portal (a fresh copy of this driver)
+-- starts at the first step whose `resume` is its map.
+local questStep, questStepAt = nil, 0
+local QUEST_STEP_GAP = 0.25 -- s between steps at least: up to 2 requests a step stays under the server's 10 events/s
+local function questStage()
+    if not questStep then
+        if elapsed < 1 then return end -- the portal count of the scene switch settles first
+        questStep = 1
+        for i, s in ipairs(QUEST_STEPS[STAGE]) do
+            if crossings() > 0 and s.resume == map and questStep == 1 then questStep = i end
+        end
+    end
+    local s = QUEST_STEPS[STAGE][questStep]
+    if not s or elapsed - questStepAt < math.max(s.after or 0, QUEST_STEP_GAP) then return end
+    if elapsed - questStepAt > 90 then -- ends the run (with its log) instead of waiting for the test's timeout
+        log("quest step %d stuck: %s", questStep, questsText())
+        return shoot("stuck")
+    end
+    if s.map and map ~= s.map then
+        target = GATES[map]
+        return
+    end
+    if s.go and not at(s.go) then
+        target = s.go
+        return
+    end
+    if s.wait and not s.wait() then return end
+    if s.run then s.run() end
+    questStep, questStepAt = questStep + 1, elapsed
+end
+
 local function walk(dt)
     local p = kast.get(player, "Transform").position
     local dx, dz = target.x - p.x, target.z - p.z
@@ -631,7 +893,7 @@ return {
         end)
         kast.subscribe("world.entered", function(e)
             map, me = e.map, e.entityId
-            if FIGHT_MAP[STAGE] then faceNorth() end
+            if FIGHT_MAP[STAGE] or QUEST_STEPS[STAGE] then faceNorth() end
             log("entered map %d at %.1f, %.1f", e.map, e.position.x, e.position.z)
             if STAGE == "world" then target = {x = 124, z = 128} end -- 4 m west of the spawn, where the bot stands
             if STAGE == "bag_persist" then kast.publish("bag.toggle") end
@@ -650,12 +912,14 @@ return {
             clones[e.name] = true
             if e.name == "Guard" then guard, guardId = e.entity, e.entityId end
             if e.name == "Bat" then bat, batId = e.entity, e.entityId end
+            if e.name == "Elder" then elder, elderId = e.entity, e.entityId end
         end)
         kast.subscribe("world.despawn", function(e)
             log("despawn %d", e.entityId)
             corpses[e.entityId] = nil
             if e.entityId == batId then bat, batId = nil, nil end
             if e.entityId == guardId then guard, guardId = nil, nil end -- its clone is gone (map change, death)
+            if e.entityId == elderId then elder, elderId = nil, nil end
         end)
         kast.subscribe("server.test.done", function(e)
             done = done + 1
@@ -674,6 +938,7 @@ return {
             for _, entry in ipairs(e.items or {}) do items[#items + 1] = entry.item .. " x" .. entry.count end
             log("loot window: %d gold, %s", e.gold, #items > 0 and table.concat(items, ", ") or "no items")
             if STAGE == "loot_window" then return shoot("loot window") end
+            if STAGE == "quest_kills" then return kast.publish("loot.take_all") end
             if (STAGE == "loot" or STAGE == "bag_full") and phase == "window" then
                 phase = "taking"
                 kast.publish("loot.take_all")
@@ -683,12 +948,51 @@ return {
         end)
         kast.subscribe("server.loot.closed", function(e)
             log("loot closed (corpse %d)", e.target)
+            lootClosed = lootClosed + 1
             if STAGE == "loot" then -- the bag update came with the take, before this
                 phase = "bag"
                 kast.publish("bag.toggle")
                 shoot("bag after loot")
             elseif STAGE == "loot_rejects" then
                 shoot("rejects done")
+            end
+        end)
+        kast.subscribe("server.quest.markers", function(e)
+            questMarkers = e.markers
+            log("quest markers: Elder %s", tostring(e.markers.Elder))
+        end, {replay = true}) -- replay: a zone scene after a portal gets the last ones
+        kast.subscribe("server.quest.dialog", function(e)
+            dialogs, lastDialog = dialogs + 1, e
+            local list = {}
+            for _, q in ipairs(e.quests) do list[#list + 1] = q.id .. " " .. q.state end
+            log("quest dialog: %s: %s", e.giver, #list > 0 and table.concat(list, ", ") or "nothing")
+        end)
+        kast.subscribe("server.quest.accepted", function(e)
+            accepted = accepted + 1
+            log("quest accepted: %s", e.title)
+        end)
+        kast.subscribe("server.quest.completed", function(e)
+            completed = completed + 1
+            log("quest completed: %s (%d gold)", e.title, e.gold)
+        end)
+        kast.subscribe("server.quest.abandoned", function(e)
+            abandoned = abandoned + 1
+            log("quest abandoned: %s", e.quest)
+        end)
+        kast.subscribe("server.quest.rejected", function(e)
+            questRejects[e.reason] = (questRejects[e.reason] or 0) + 1
+            log("rejected quest %s", e.reason)
+        end)
+        kast.subscribe("server.quest.log", function(e)
+            local list = {}
+            for _, q in ipairs(e.quests) do list[#list + 1] = q.title end
+            log("quest log sync: %s", #list > 0 and table.concat(list, ", ") or "none")
+        end)
+        kast.subscribe("quest_log.visibility", function(e)
+            logToggles = logToggles + 1
+            log("quest log open: %s", tostring(e.open))
+            if STAGE == "quest_log" and e.open then
+                log("chat focused: %s, focusedField %s", tostring(kast.gui.focus("chat_input")), tostring(kast.gui.focusedField()))
             end
         end)
         kast.subscribe("character.visibility", function(e)
@@ -756,6 +1060,10 @@ return {
             if e.name == "Equipment" and e.entityId == me then
                 for i = 1, 7 do equipped[i] = e.data.items[i] or "" end
                 log("equipment %s", gearText())
+            end
+            if e.name == "Quests" and e.entityId == me then
+                quests = e.data
+                log("quests: %s", questsText())
             end
             if e.name == "Inventory" and e.entityId == me then
                 for i = 1, 16 do bagItems[i], bagCounts[i] = e.data.items[i] or "", e.data.counts[i] or 0 end
@@ -833,6 +1141,7 @@ return {
                 end
             end
         end
+        if QUEST_STEPS[STAGE] then questStage() end
         if target then walk(dt) end
     end,
 }
