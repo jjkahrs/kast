@@ -7,12 +7,12 @@
 <link rel="stylesheet" href="../../style.css">
 </head>
 <body>
-<header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="../auth/index.html">Auth Server</a><a href="index.html">World Server</a><a href="../../development/tests.html">Development</a></nav></header>
+<header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="../auth/index.html">Auth Server</a><a href="index.html">World Server</a><a href="../chat/index.html">Chat Server</a><a href="../../development/tests.html">Development</a></nav></header>
 <div class="layout">
 <nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html" class="active">Protocol</a></li></ul></nav>
 <main>
 <h1 id="kast-world-protocol">Kast World Protocol</h1>
-<p><strong>Protocol version: 5</strong> (<code>kProtocolVersion</code> in <code>protocol/messages.h</code>, sent in <code>Hello</code>). A client on any other version gets <code>protocol_mismatch</code>.</p>
+<p><strong>Protocol version: 8</strong> (<code>kProtocolVersion</code> in <code>protocol/messages.h</code>, sent in <code>Hello</code>). A client on any other version gets <code>protocol_mismatch</code>.</p>
 <table>
 <thead>
 <tr>
@@ -21,6 +21,18 @@
 </tr>
 </thead>
 <tbody>
+<tr>
+<td>8</td>
+<td>Chat: <code>Say</code> and <code>ChatMsg</code> start with <code>u8 kind</code> (say, yell, emote); new <code>ChatServer</code> (<code>0x012A</code>) after <code>EnterWorldOk</code>; <code>ChatNotice</code> (<code>0x0132</code>) for a muted say; the chat service's messages (<code>0x0030</code>&ndash;<code>0x0034</code>, <code>0x0130</code>&ndash;<code>0x0132</code>) and its internal link (<code>0x0200</code>&ndash;<code>0x0205</code>); new code <code>no_character</code> (26). See <a href="#proximity-chat">Proximity chat</a> and <a href="../chat/protocol.html">Chat service protocol</a></td>
+</tr>
+<tr>
+<td>7</td>
+<td>Requests: <code>ClientEvent</code> gains <code>u32 requestId</code>; new <code>Reply</code> (<code>0x0129</code>)</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Client prediction: <code>Move</code> gains <code>u32 seq, u32 epoch</code>; <code>Correction</code> gains <code>u32 ackSeq, u32 epoch</code>; <code>MapChange</code> gains <code>u32 epoch</code></td>
+</tr>
 <tr>
 <td>5</td>
 <td>Zone objects: new <code>Interact</code> (<code>0x0023</code>). See <a href="#interact">Interact</a></td>
@@ -132,7 +144,8 @@
 <li><strong>Connection limit:</strong> a connection beyond <code>MAX_CONNECTIONS</code> completes TLS, then gets <code>Disconnect{server_full}</code>.</li>
 </ul>
 <h2 id="messages">Messages</h2>
-<p>C = client to server, S = server to client. "Payload" lists fields in wire order.</p>
+<p>C = client to server, S = server to client, L = the internal link between a world server and the chat service.
+"(chat)": a message of the <a href="../chat/protocol.html">chat service</a>'s own connection, never sent to or by the world server. "Payload" lists fields in wire order.</p>
 <table>
 <thead>
 <tr>
@@ -201,7 +214,7 @@
 <td><code>0x0021</code></td>
 <td>Say</td>
 <td>C</td>
-<td><code>str text</code> (UTF-8)</td>
+<td><code>u8 kind</code> (0 say, 1 yell, 2 emote; another value is malformed), <code>str text</code> (UTF-8). See <a href="#proximity-chat">Proximity chat</a></td>
 </tr>
 <tr>
 <td><code>0x0022</code></td>
@@ -214,6 +227,36 @@
 <td>Interact</td>
 <td>C</td>
 <td><code>u32 objectId</code> (activates an interactable zone object, see <a href="#interact">Interact</a>)</td>
+</tr>
+<tr>
+<td><code>0x0030</code></td>
+<td>ChatSend</td>
+<td>C (chat)</td>
+<td><code>u8 target</code> (0 whisper, 1 channel, 2 zone), <code>str to, str text</code>. To the <a href="../chat/protocol.html">chat service</a>, never the world server</td>
+</tr>
+<tr>
+<td><code>0x0031</code></td>
+<td>ChatJoin</td>
+<td>C (chat)</td>
+<td><code>str channel</code></td>
+</tr>
+<tr>
+<td><code>0x0032</code></td>
+<td>ChatLeave</td>
+<td>C (chat)</td>
+<td><code>str channel</code></td>
+</tr>
+<tr>
+<td><code>0x0033</code></td>
+<td>ChatIgnore</td>
+<td>C (chat)</td>
+<td><code>str name, u8 on</code></td>
+</tr>
+<tr>
+<td><code>0x0034</code></td>
+<td>ChatMute</td>
+<td>C (chat)</td>
+<td><code>str name, u32 minutes</code> (0: unmute; GM / admin only)</td>
 </tr>
 <tr>
 <td><code>0x0102</code></td>
@@ -285,7 +328,7 @@
 <td><code>0x0124</code></td>
 <td>ChatMsg</td>
 <td>S</td>
-<td><code>str fromName, str text</code></td>
+<td><code>u8 kind, str fromName, str text</code></td>
 </tr>
 <tr>
 <td><code>0x0125</code></td>
@@ -310,6 +353,72 @@
 <td>MapChange</td>
 <td>S</td>
 <td><code>u16 map, vec3 pos, f32 heading</code> (you were moved: to another map, or within yours)</td>
+</tr>
+<tr>
+<td><code>0x0129</code></td>
+<td>Reply</td>
+<td>S</td>
+<td><code>u32 requestId, u8 ok, str json</code> (the answer to a <code>ClientEvent</code> with a <code>requestId</code>)</td>
+</tr>
+<tr>
+<td><code>0x012A</code></td>
+<td>ChatServer</td>
+<td>S</td>
+<td><code>str host, u16 port</code>: where the realm's chat service listens (<code>CHAT_PUBLIC_HOST</code> / <code>CHAT_PUBLIC_PORT</code>), right after <code>EnterWorldOk</code>; not sent without <code>CHAT_PUBLIC_HOST</code></td>
+</tr>
+<tr>
+<td><code>0x0130</code></td>
+<td>ChatLine</td>
+<td>S (chat)</td>
+<td><code>u8 target</code> (0 whisper, 1 channel, 2 zone, 3 whisper_sent), <code>str channel, str name, str text</code></td>
+</tr>
+<tr>
+<td><code>0x0131</code></td>
+<td>ChatChannel</td>
+<td>S (chat)</td>
+<td><code>u8 number, str channel, u8 joined</code></td>
+</tr>
+<tr>
+<td><code>0x0132</code></td>
+<td>ChatNotice</td>
+<td>S</td>
+<td><code>u8 code, str name, u32 minutes</code>; from the world server only <code>muted</code> (a dropped say, yell or emote). Codes: <a href="../chat/protocol.html#notices">chat service protocol</a></td>
+</tr>
+<tr>
+<td><code>0x0200</code></td>
+<td>LinkHello</td>
+<td>L</td>
+<td><code>u16 protocolVersion, str secret</code>: world server to chat service, first on the <a href="../chat/protocol.html#link">internal link</a></td>
+</tr>
+<tr>
+<td><code>0x0201</code></td>
+<td>LinkOk</td>
+<td>L</td>
+<td>(empty): chat service to world server</td>
+</tr>
+<tr>
+<td><code>0x0202</code></td>
+<td>CharOnline</td>
+<td>L</td>
+<td><code>u64 accountId, u64 charId, str name, u16 map</code></td>
+</tr>
+<tr>
+<td><code>0x0203</code></td>
+<td>MapChanged</td>
+<td>L</td>
+<td><code>u64 charId, u16 map</code></td>
+</tr>
+<tr>
+<td><code>0x0204</code></td>
+<td>CharOffline</td>
+<td>L</td>
+<td><code>u64 charId</code></td>
+</tr>
+<tr>
+<td><code>0x0205</code></td>
+<td>MuteState</td>
+<td>L</td>
+<td><code>str name, u64 untilMs</code> (Unix ms; 0: not muted)</td>
 </tr>
 </tbody>
 </table>
@@ -364,13 +473,16 @@
   checked from the new position with an empty speed budget, so it gets <code>Correction</code>.</li>
 <li><strong>Others:</strong> a player who changes map is a plain <code>Despawn</code> to its old neighbours and a <code>Spawn</code> to its new ones.</li>
 </ul>
-<h3 id="say-chat">Say chat</h3>
+<h3 id="proximity-chat">Proximity chat (say, yell, emote)</h3>
+<p>The world server owns proximity chat; whispers, channels and the zone channel are the <a href="../chat/index.html">chat service</a>'s.</p>
 <ul>
-<li><strong>Delivery:</strong> <code>Say</code> goes to the sender and to everyone in range as <code>ChatMsg{fromName, text}</code>.</li>
+<li><strong>Delivery:</strong> <code>Say{kind, text}</code> goes to the sender and back as <code>ChatMsg{kind, fromName, text}</code>: <code>say</code> to everyone in view (the AOI audience), <code>yell</code> to every player on the same map within <code>CHAT_YELL_RADIUS</code> (default 300 m, x/z; it may reach past the view radius), <code>emote</code> to the say audience, shown as "<em>Name</em> <em>text</em>" (<code>/me waves</code>: "Alice waves").</li>
+<li><strong>Muted characters:</strong> while the chat service has the character muted (its <code>MuteState</code>s over the link), a say, yell or emote is dropped and the sender gets <code>ChatNotice{muted, "", minutes left}</code>. With the link down, the last mutes it sent stay in force until they end.</li>
+<li><strong>Where chat is:</strong> right after <code>EnterWorldOk</code> the server sends <code>ChatServer{host, port}</code> (when <code>CHAT_PUBLIC_HOST</code> is set); the client opens a second TLS connection there with the same access token. See <a href="../chat/protocol.html">Chat service protocol</a>.</li>
 <li><strong>Size:</strong> the text must be valid UTF-8 and at most <code>CHAT_MAX_BYTES</code> (default 256) bytes.</li>
 <li><strong>Control characters:</strong> C0, DEL and C1 are stripped.</li>
 <li><strong>Rate limit:</strong> <code>CHAT_RATE_COUNT</code> per <code>CHAT_RATE_WINDOW_MS</code> (default 5 per 10 s). Rejected messages count toward it.</li>
-<li><strong>Rejected messages</strong> (invalid, too long or over the rate) are dropped silently.</li>
+<li><strong>Rejected messages</strong> (invalid, too long or over the rate) are dropped silently. The chat service applies the same rules (the same code, <code>sanitize_chat</code> and <code>WindowLimiter</code>) and answers with a <code>ChatNotice</code> instead.</li>
 </ul>
 <h3 id="client-events">Client events</h3>
 <p>A client sends a named event to the server's Lua systems as <code>ClientEvent</code> (the engine's <code>kast.world.send(name, data)</code>,
@@ -597,6 +709,12 @@ that sends one gets <code>Disconnect{unexpected_message}</code>.</p>
 <td><code>options_invalid</code></td>
 <td>E</td>
 <td><code>CharCreate</code> options over the limits, or refused by the server's Lua</td>
+</tr>
+<tr>
+<td>26</td>
+<td><code>no_character</code></td>
+<td>D</td>
+<td>Chat service: the account has no character in a world (after <code>CHAT_BIND_TIMEOUT_MS</code>), or its character left</td>
 </tr>
 </tbody>
 </table>

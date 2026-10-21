@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="../style.css">
 </head>
 <body>
-<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../development/tests.html">Development</a></nav></header>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
 <nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html" class="active">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li></ul></nav>
 <main>
@@ -226,10 +226,10 @@ number &gt;= 0, got x</code>). Everything the server or the network decides arri
 <td><code>world.entered</code> or <code>world.charError</code></td>
 </tr>
 <tr>
-<td><code>say(text)</code></td>
+<td><code>say(text, kind?)</code></td>
 <td><code>inWorld</code></td>
-<td><code>Say</code> (UTF-8, at most 256 bytes; the server drops invalid or rate-limited ones silently)</td>
-<td><code>world.chat</code>, to the sender too</td>
+<td><code>Say{kind, text}</code> (UTF-8, at most 256 bytes; the server drops invalid or rate-limited ones silently). <code>kind</code>: <code>"say"</code> (nil: the players in view), <code>"yell"</code> (everyone on the map within the server's <code>CHAT_YELL_RADIUS</code>) or <code>"emote"</code> (say range, shown as "<em>Name</em> <em>text</em>"); another kind raises</td>
+<td><code>world.chat</code>, to the sender too; <code>chat.error</code> <code>muted</code> if the character is muted</td>
 </tr>
 <tr>
 <td><code>send(name, data)</code></td>
@@ -336,8 +336,18 @@ ground plane, y up); <code>heading</code> is a number:</p>
 </tr>
 <tr>
 <td><code>world.chat</code></td>
-<td><code>{from, text}</code></td>
+<td><code>{kind, from, text}</code>: <code>kind</code> is <code>say</code>, <code>yell</code> or <code>emote</code></td>
 <td><code>ChatMsg</code></td>
+</tr>
+<tr>
+<td><code>world.chatServer</code></td>
+<td><code>{host, port}</code>: where the realm's chat service is, right after <code>world.entered</code>; <a href="#kastchat"><code>kast.chat</code></a> connects there by itself</td>
+<td><code>ChatServer</code></td>
+</tr>
+<tr>
+<td><code>chat.error</code></td>
+<td><code>{code = "muted", name, minutes}</code>: a say, yell or emote dropped because the character is muted (the same event the chat service's errors use)</td>
+<td><code>ChatNotice</code></td>
 </tr>
 <tr>
 <td><code>world.component</code></td>
@@ -394,7 +404,7 @@ ground plane, y up); <code>heading</code> is a number:</p>
         end)
         kast.subscribe(&quot;world.charCreated&quot;, function(e) kast.world.enterWorld(e.character.id) end)
         kast.subscribe(&quot;world.entered&quot;, function() kast.world.say(&quot;hello&quot;) end)
-        kast.subscribe(&quot;world.chat&quot;, function(e) kast.log(e.from .. &quot;: &quot; .. e.text) end)
+        kast.subscribe(&quot;world.chat&quot;, function(e) kast.log(e.kind .. &quot; &quot; .. e.from .. &quot;: &quot; .. e.text) end)
         kast.subscribe(&quot;world.disconnected&quot;, function(e) kast.warn(&quot;world: &quot; .. e.code .. &quot; &quot; .. e.reason) end)
         kast.auth.login(&quot;me@example.com&quot;, &quot;my password&quot;)
     end,
@@ -417,6 +427,107 @@ the world's dev certificate out of the container (<code>docker compose cp world:
 <code>Kast Live</code> (127.0.0.1:7777) to auth's database; <code>world_live</code> drives two accounts through it. A world server
 started with a sample's compose override is switched to the default one for the test and switched back afterwards
 (<code>world_live_teardown</code>).</p>
+<h2 id="kastchat">kast.chat</h2>
+<p>Lua access to the realm's <a href="../services/chat/index.html">chat service</a> (whispers, the fixed channels, the zone channel, ignore, GM
+mutes; wire format in the <a href="../services/chat/protocol.html">chat service protocol</a>). The engine owns the connection
+(<code>engine/chat_client.h</code>, <code>kast::ChatClient</code>), a second TLS connection next to the world's, trusting the same
+<code>online.caFile</code>. It follows the world connection on its own: when the world server announces the chat service
+(<code>world.chatServer</code>, after <code>world.entered</code>) it connects there with the current <code>kast.auth</code> access token; if
+the connection drops or is refused it reconnects with backoff (1 s, doubling to 30 s) while the world connection lasts,
+and once back it is in General again (the service's doing) and rejoins the other channels it was in;
+<code>world.disconnected</code> ends it. Proximity chat (<code>kast.world.say</code>) never depends on it. It shows in the Network
+panel as <code>kast.chat.&lt;n&gt;</code>; it never logs the token or chat text.</p>
+<p>Requests need state <code>connected</code>, else they raise at the calling line (<code>kast.chat.whisper: needs the chat service
+connected, it is 'disconnected'</code>), as do arguments of the wrong type. What the service decides arrives as events.</p>
+<table>
+<thead>
+<tr><th>Function</th><th>Sends</th><th>Answered by</th></tr>
+</thead>
+<tbody>
+<tr>
+<td><code>state()</code></td>
+<td></td>
+<td><code>"disconnected"</code>, <code>"connecting"</code> or <code>"connected"</code></td>
+</tr>
+<tr>
+<td><code>channels()</code></td>
+<td></td>
+<td><code>{{number = 1, name = "General"}, ...}</code>: the channels it is in, by number (the service's <code>CHAT_CHANNELS</code> order)</td>
+</tr>
+<tr>
+<td><code>whisper(name, text)</code></td>
+<td><code>ChatSend</code> whisper</td>
+<td><code>chat.message</code> <code>whisper_sent</code>, or <code>chat.error</code> <code>not_online</code> / <code>bad_name</code></td>
+</tr>
+<tr>
+<td><code>send(channel, text)</code></td>
+<td><code>ChatSend</code> channel; <code>channel</code> is a name or the number of a channel it is in (another number raises)</td>
+<td><code>chat.message</code> <code>channel</code> (to the sender too), or <code>chat.error</code> <code>not_in_channel</code> / <code>no_channel</code></td>
+</tr>
+<tr>
+<td><code>zone(text)</code></td>
+<td><code>ChatSend</code> zone: everyone on the character's map</td>
+<td><code>chat.message</code> <code>zone</code> (to the sender too)</td>
+</tr>
+<tr>
+<td><code>join(channel)</code> / <code>leave(channel)</code></td>
+<td><code>ChatJoin</code> / <code>ChatLeave</code></td>
+<td><code>chat.channel</code>, or <code>chat.error</code> <code>no_channel</code> / <code>not_in_channel</code></td>
+</tr>
+<tr>
+<td><code>ignore(name)</code> / <code>unignore(name)</code></td>
+<td><code>ChatIgnore</code></td>
+<td><code>chat.notice</code> <code>ignored</code> / <code>unignored</code></td>
+</tr>
+<tr>
+<td><code>mute(name, minutes)</code> / <code>unmute(name)</code></td>
+<td><code>ChatMute</code> (minutes a whole number &gt;= 1). GM / admin accounts only: the service checks the token's role</td>
+<td><code>chat.notice</code> <code>mute_set</code> / <code>mute_cleared</code>, or <code>chat.error</code> <code>not_allowed</code></td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr><th>Event</th><th>Payload</th><th>From</th></tr>
+</thead>
+<tbody>
+<tr>
+<td><code>chat.status</code></td>
+<td><code>{connected}</code>, plus <code>reason</code> when false. Sent when it changes: connected, or the first failure after that (refused retries don't repeat it)</td>
+<td>the connection</td>
+</tr>
+<tr>
+<td><code>chat.message</code></td>
+<td><code>{kind, from, text}</code>; <code>kind</code> <code>whisper</code>, <code>channel</code> (with <code>channel</code> and <code>number</code>) or <code>zone</code>; <code>{kind = "whisper_sent", to, text}</code> for your own whisper. Never logged</td>
+<td><code>ChatLine</code></td>
+</tr>
+<tr>
+<td><code>chat.channel</code></td>
+<td><code>{channel, number, joined}</code></td>
+<td><code>ChatChannel</code></td>
+</tr>
+<tr>
+<td><code>chat.error</code></td>
+<td><code>{code, name, minutes}</code>: <code>not_online</code>, <code>muted</code>, <code>not_allowed</code>, <code>no_channel</code>, <code>not_in_channel</code>, <code>rate_limited</code>, <code>rejected</code>, <code>bad_name</code> (<a href="../services/chat/protocol.html#notices">notices</a>). <code>muted</code> also comes from the world server for a proximity message</td>
+<td><code>ChatNotice</code></td>
+</tr>
+<tr>
+<td><code>chat.notice</code></td>
+<td><code>{code, name, minutes}</code>: <code>ignored</code>, <code>unignored</code>, <code>mute_set</code>, <code>mute_cleared</code>, <code>you_muted</code>, <code>you_unmuted</code></td>
+<td><code>ChatNotice</code></td>
+</tr>
+</tbody>
+</table>
+<pre><code class="language-lua">kast.subscribe(&quot;chat.message&quot;, function(e)
+    if e.kind == &quot;whisper&quot; then kast.log(e.from .. &quot; whispers: &quot; .. e.text)
+    elseif e.kind == &quot;channel&quot; then kast.log(&quot;[&quot; .. e.channel .. &quot;] &quot; .. e.from .. &quot;: &quot; .. e.text) end
+end)
+kast.subscribe(&quot;chat.status&quot;, function(e) if e.connected then kast.chat.send(1, &quot;hello General&quot;) end end)
+</code></pre>
+<p>C++: <code>LuaSystems::chat()</code> is the session's <code>kast::ChatClient</code>. <code>tick()</code> hands it the Network results of its
+connections and every world event before it is published (<code>observe</code>), then publishes its events after the
+<code>world.*</code> ones. The starter-mmo sample's <code>scripts/chat.lua</code> is a complete chat box: slash commands, coloured lines,
+Enter to send.</p>
 <h2 id="replication">Replication</h2>
 <p>Networked players without sync code (<code>engine/replication.h</code>). Three built-in components, edited in the Inspector and
 saved in scenes like any other:</p>

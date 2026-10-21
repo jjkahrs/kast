@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="../../style.css">
 </head>
 <body>
-<header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="../auth/index.html">Auth Server</a><a href="index.html">World Server</a><a href="../../development/tests.html">Development</a></nav></header>
+<header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="../auth/index.html">Auth Server</a><a href="index.html">World Server</a><a href="../chat/index.html">Chat Server</a><a href="../../development/tests.html">Development</a></nav></header>
 <div class="layout">
 <nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html" class="active">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
 <main>
@@ -235,7 +235,42 @@
 <tr>
 <td><code>CHAT_RATE_COUNT</code> / <code>CHAT_RATE_WINDOW_MS</code></td>
 <td><code>5</code> / <code>10000</code></td>
-<td>Say rate limit</td>
+<td>Say rate limit (say, yell and emote together)</td>
+</tr>
+<tr>
+<td><code>CHAT_YELL_RADIUS</code></td>
+<td><code>300</code></td>
+<td>m (x/z) a yell reaches on the yeller's map; may exceed <code>AOI_VIEW_RADIUS</code> (protocol: <a href="protocol.html#proximity-chat">proximity chat</a>)</td>
+</tr>
+<tr>
+<td><code>CHAT_PUBLIC_HOST</code> / <code>CHAT_PUBLIC_PORT</code></td>
+<td>(empty) / <code>7778</code></td>
+<td>Where clients find the realm's <a href="../chat/index.html">chat service</a>: sent as <code>ChatServer</code> after <code>EnterWorldOk</code>. Empty host: not announced (no whispers or channels for the clients)</td>
+</tr>
+<tr>
+<td><code>CHAT_LINK_HOST</code> / <code>CHAT_LINK_PORT</code></td>
+<td>(empty) / <code>7779</code></td>
+<td>The chat service's internal link port. Empty host: no link (the chat service never learns who is online, and no mutes reach this server)</td>
+</tr>
+<tr>
+<td><code>CHAT_LINK_SECRET</code></td>
+<td>(required with <code>CHAT_LINK_HOST</code>)</td>
+<td>Shared secret, at least 16 characters; the same as the chat service's <code>CHAT_LINK_SECRET</code>. Never logged</td>
+</tr>
+<tr>
+<td><code>CHAT_LINK_CA_FILE</code></td>
+<td>(empty)</td>
+<td>PEM the chat service's certificate must chain to (its name must be <code>CHAT_LINK_HOST</code>). Empty: this server's own certificate (<code>TLS_CERT_FILE</code>, or the dev one), which the dev compose stack shares with the chat service</td>
+</tr>
+<tr>
+<td><code>CHAT_LINK_RETRY_MIN_MS</code> / <code>CHAT_LINK_RETRY_MAX_MS</code></td>
+<td><code>500</code> / <code>30000</code></td>
+<td>Reconnect backoff of the link (doubling). The world runs normally while the link is down</td>
+</tr>
+<tr>
+<td><code>SIM_LATENCY_MS</code> / <code>SIM_JITTER_MS</code></td>
+<td><code>0</code> / <code>0</code></td>
+<td>Testing only: the lag simulator holds every message both ways latency &plusmn; jitter ms, in order (0 = off); logged as a warning at startup</td>
 </tr>
 <tr>
 <td><code>SAVE_INTERVAL_MS</code></td>
@@ -305,9 +340,14 @@
 <td></td>
 </tr>
 <tr>
-<td><code>WORLD_HOST_PORT</code> / <code>AUTH_HOST_PORT</code> / <code>MYSQL_HOST_PORT</code> / <code>MAILPIT_HOST_PORT</code></td>
-<td><code>7777</code> / <code>3100</code> / <code>3307</code> / <code>8026</code></td>
-<td></td>
+<td><code>WORLD_HOST_PORT</code> / <code>AUTH_HOST_PORT</code> / <code>MYSQL_HOST_PORT</code> / <code>MAILPIT_HOST_PORT</code> / <code>CHAT_HOST_PORT</code></td>
+<td><code>7777</code> / <code>3100</code> / <code>3307</code> / <code>8026</code> / <code>7778</code></td>
+<td><code>CHAT_HOST_PORT</code> is also what the world announces (<code>CHAT_PUBLIC_PORT</code>) in the compose stack</td>
+</tr>
+<tr>
+<td><code>CHAT_DB_PASSWORD</code></td>
+<td>(required)</td>
+<td>The chat service's MySQL user (<code>kast_chat</code>, made by the <code>chat-db-init</code> service). The compose file also reads <code>CHAT_LINK_SECRET</code> (both services), <code>CHAT_DB_USER</code>, <code>CHAT_DB_NAME</code>, <code>CHAT_CHANNELS</code> and <code>CHAT_LOG_LEVEL</code>; see <a href="../chat/configuration.html">chat configuration</a></td>
 </tr>
 </tbody>
 </table>
