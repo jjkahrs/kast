@@ -2,6 +2,9 @@
 -- first four, "Play <Name> (<Class>)"), creates one, enters the world with the one clicked; scripts/world_flow.lua then
 -- loads the scene of the map it entered on, whose HUD and chat show from the start. The realm screen connected; the
 -- connection survives kast.loadScene.
+-- The click shows the loading screen (ui/loading.rml) at once and puts the "loading" game machine (fsms/loading.lua) in
+-- "entering", so the zone's scripts/loading.lua keeps it up until the zone renders. A character error, or no
+-- world.entered within ENTER_TIMEOUT, hides it again and says why.
 -- A new character needs a class: the four class buttons ("characters.class" {id = "class_<id>"}) pick one, highlight it
 -- and show its description; Create sends kast.world.createCharacter(name, {class = <id>}), which the server's
 -- systems/classes.lua checks. Without a class picked, Create only says so.
@@ -13,6 +16,7 @@ local CLASSES = { -- id -> what the class buttons show; the server decides what 
     rogue = {name = "Rogue", description = "A quick melee fighter who strikes from behind and dodges."},
 }
 local DEFAULT_CLASS = "warrior" -- what systems/classes.lua makes a character created before classes
+local ENTER_TIMEOUT = 15 -- s from the click to world.entered
 local ERRORS = {
     name_taken = "That name is taken on this realm.",
     name_invalid = "Names are 3-16 letters (A-Z), no spaces or digits.",
@@ -23,11 +27,22 @@ local ERRORS = {
 }
 local characters = {}
 local picked -- the class id picked for the next character
+local entering -- s since the click, while the loading screen is up
 
 local function status(text) kast.gui.setText("characters_status", text) end
 
+local function stopEntering(text)
+    entering = nil
+    kast.gui.setVisible("loading", false)
+    kast.fsm.change("loading", "idle")
+    kast.log("loading: hidden, " .. text)
+    status(text)
+end
+
 return {
     init = function()
+        kast.gui.setVisible("loading", false)
+        if kast.fsm.state("loading") ~= "idle" then kast.fsm.change("loading", "idle") end -- left by a disconnect
         for i = 1, MAX do kast.gui.setVisible("char_" .. i, false) end
         if not kast.world or kast.world.state() ~= "lobby" then
             return status("Not connected: Play scenes/login.scene to log in and pick a realm.")
@@ -46,8 +61,12 @@ return {
         end)
         kast.subscribe("characters.pick", function(e)
             local character = characters[tonumber(e.id:match("^char_(%d+)$"))]
-            if not character then return end
-            status("Entering the world as " .. character.name .. "...")
+            if not character or entering then return end
+            kast.gui.setText("loading_text", "Entering the world as " .. character.name .. "...")
+            kast.gui.setVisible("loading", true)
+            kast.fsm.change("loading", "entering")
+            entering = 0
+            kast.log("loading: shown for " .. character.name)
             kast.world.enterWorld(character.id)
         end)
         kast.subscribe("characters.class", function(e)
@@ -68,8 +87,16 @@ return {
             kast.gui.setText("char_name", "")
             kast.world.listCharacters()
         end)
-        kast.subscribe("world.charError", function(e) status(ERRORS[e.code] or e.code) end)
+        kast.subscribe("world.charError", function(e)
+            local text = ERRORS[e.code] or e.code
+            if entering then return stopEntering(text) end
+            status(text)
+        end)
         kast.world.listCharacters()
     end,
-    update = function(dt) end,
+    update = function(dt)
+        if not entering then return end
+        entering = entering + dt
+        if entering >= ENTER_TIMEOUT then stopEntering("Couldn't enter the world. Try again.") end
+    end,
 }

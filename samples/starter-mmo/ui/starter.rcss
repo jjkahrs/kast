@@ -596,3 +596,32 @@ button.quest_button {
     margin-top: 8px;
     padding: 6px 0;
 }
+
+/* Loading screen (ui/loading.rml): over everything from the Play click until the zone renders. Shown by the sheet:
+   scripts/characters.lua and scripts/loading.lua hide it with kast.gui.setVisible, which only sets display: none. */
+#loading {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+
+#loading_spinner {
+    width: 56px;
+    height: 56px;
+    border: 6px #313131;
+    border-top-color: #ffaa00;
+    border-radius: 34px;
+    animation: 1s infinite loading_spin;
+}
+
+@keyframes loading_spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+#loading_text {
+    margin-top: 24px;
+    font-size: 24px;
+    color: #ffcc00;
+}

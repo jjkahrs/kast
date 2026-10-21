@@ -32,7 +32,7 @@ file(WRITE "${project}/fsms/test_route.lua" "-- TEST ONLY: portals the test driv
 return { name = \"test_route\", initial = \"c0\", states = { c0 = {}, c1 = {}, c2 = {}, c3 = {}, c4 = {} } }
 ")
 file(READ "${project}/project.kast" text)
-string(REPLACE "\"stateMachines\": [\"session\"]" "\"stateMachines\": [\"session\", \"test_route\"]" text "${text}")
+string(REPLACE "\"stateMachines\": [\"session\"" "\"stateMachines\": [\"session\", \"test_route\"" text "${text}")
 file(WRITE "${project}/project.kast" "${text}")
 
 # The same compose files as the setup, and --no-deps: a "run" with other files would recreate the world server

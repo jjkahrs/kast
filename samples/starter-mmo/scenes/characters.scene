@@ -59,6 +59,35 @@
           "visible": true
         }
       }
+    },
+    {
+      "id": 3,
+      "name": "Loading",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UIDocument": {
+          "path": "ui/loading.rml",
+          "visible": true
+        }
+      }
     }
   ],
   "systems": [
