@@ -35,7 +35,8 @@
 -- stands still and logs its Class (cmake/starter_mmo_live_legacy.cmake strips the class first).
 -- Zone objects (maps/meadow/objects, scripts/player.lua, scripts/shrines.lua): "rock" walks to ROCK_SPOT, faces north
 -- and logs KEYS: --sim-key presses W over and over, scripts/player.lua walks the character north into the rock, which
--- stops it; then the driver logs where it stopped. "shrine" walks to SHRINE_SPOT, faces the Meadow Shrine and logs
+-- stops it; then the driver logs where it stopped. "shrine" (which starts where "rock" left the character, against the
+-- rock) steps back to ROCK_CLEAR, walks to SHRINE_SPOT, faces the Meadow Shrine and logs
 -- PRESS: --sim-key presses E, scripts/shrines.lua activates it and the server's answer shows in the chat box.
 -- Equipment (scripts/character.lua, the server's systems/inventory.lua, combat.lua, classes.lua; Meadow): each stage
 -- starts bare (the test server's "test.equipment") with a known bag. "equip_open" logs KEYS: --sim-key presses C (the
@@ -117,6 +118,7 @@ local CLASS_STEPS = {
     },
 }
 local ROCK_SPOT = {x = 141, z = 103} -- 5 m south of the rock at (141, 108), a 1.2 m cylinder
+local ROCK_CLEAR = {x = 138, z = 105} -- the straight way from it to SHRINE_SPOT misses the rock (off the navmesh)
 local SHRINE_SPOT = {x = 118, z = 136.5} -- 2 m from the Meadow Shrine's edge (118, 140): within its range 3
 local BAT_SPOT = {x = 128, z = 122.5} -- 2.5 m north of the Bat (128, 120): in reach, the Bat between camera and player
 local GUARD_REACH = 2.6 -- m: close enough to hit (the server allows 3)
@@ -443,6 +445,10 @@ end
 local function zoneStage()
     local spot = STAGE == "rock" and ROCK_SPOT or SHRINE_SPOT
     if phase == "arrive" then
+        phase = "go"
+        if STAGE == "shrine" then target = ROCK_CLEAR end -- walk() clears it there
+    elseif phase == "go" then
+        if target == ROCK_CLEAR then return end
         target = not at(spot) and spot or nil
         if target then return end
         faceNorth()
