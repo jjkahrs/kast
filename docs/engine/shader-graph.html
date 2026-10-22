@@ -97,8 +97,11 @@ param along UV over time and tints it.</p>
 <tr><td><code>sample_texture</code></td><td>Sample Texture</td><td>texture: texture2D (required), uv vec2 (unlinked: UV)</td>
   <td>rgba vec4, rgb vec3, r, g, b, a float</td><td></td><td>fragment()</td></tr>
 </table>
-<p>This is the first node set; the full library (math, texture and UV, effects, Custom Expression) follows with the
-editor's Shader Graph panels.</p>
+<p>These are the core types. The full library (inputs, material, vertex and light built-ins, math, vector, texture and UV,
+effects and the Custom Expression node) is <code>shaderGraphNodeDefs()</code> in <code>engine/shader_graph.cpp</code>; its node
+reference is in the editor's Shader Graph documentation. A graph using Scene Color, Depth Fade or the Screen / Depth Texture
+inputs follows the <code>SCREEN_TEXTURE</code> / <code>DEPTH_TEXTURE</code> rule: only blend and additive materials, else
+<code>node 4 (Scene Color) samples SCREEN_TEXTURE, which is only for blend and additive materials ...</code>.</p>
 
 <h2 id="graph-types">Types and links</h2>
 <ul>
@@ -115,7 +118,7 @@ editor's Shader Graph panels.</p>
 <h2 id="graph-codegen">Code generation</h2>
 <p><code>generateKShader</code> writes the params as <code>param</code> lines, then <code>fragment()</code>, then <code>vertex()</code> and
 <code>light()</code> only when their output node has a linked input. Each function holds the nodes upstream of its output node,
-in topological order (the lowest id first among the nodes that are ready), each after a <code>// @node &lt;id&gt;</code> line, with
+in topological order (the lowest id first among the nodes that are ready), each after a <code>// @node &lt;id&gt; &lt;type&gt;</code> line, with
 one temp variable per output (<code>n&lt;id&gt;_&lt;pin&gt;</code>). Unlinked output pins are not written, so they keep what the
 built-in material computes. A node feeding two stages is emitted in each. The text depends only on the graph, not on the
 order of its nodes or links, which matters because the compile cache and <code>game.pak</code> key the bytecode by it. The
@@ -126,21 +129,21 @@ param texture2D pattern = white srgb;
 
 void fragment()
 {
-    // @node 2
+    // @node 2 uv
     vec2 n2_out = UV;
     ...
-    // @node 6
+    // @node 6 add
     vec2 n6_out = n2_out + vec2_splat(n5_out);
-    // @node 7
-    // @node 8
+    // @node 7 param
+    // @node 8 sample_texture
     vec4 n8_rgba = texture2D(pattern, n6_out);
     vec3 n8_rgb = n8_rgba.rgb;
     ...
-    // @node 10
+    // @node 10 multiply
     vec3 n10_out = n8_rgb * n9_out;
-    // @node 11
+    // @node 11 constant_float
     float n11_out = 0.3;
-    // @node 1
+    // @node 1 output_fragment
     ALBEDO = n10_out;
     ROUGHNESS = n11_out;
 }</code></pre>

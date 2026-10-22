@@ -441,10 +441,21 @@ bool checkShaderAlphaMode(const Material& material, const ShaderSource& source, 
     if (!(source.screenTexture || source.depthTexture) || material.alphaMode == AlphaMode::Blend ||
         material.alphaMode == AlphaMode::Additive)
         return true;
+    std::string what = source.screenTexture ? "SCREEN_TEXTURE" : "DEPTH_TEXTURE";
+    // A shader graph's: the node sampling it ("node 4 (Scene Color) samples SCREEN_TEXTURE, which is ...").
+    const std::regex word("\\b" + what + "\\b");
+    int line = 0;
+    for (std::string_view text : splitLines(source.code)) {
+        ++line;
+        if (std::regex_search(text.begin(), text.end(), word)) {
+            if (const std::string node = graphNodeNameAtLine(source.code, line); !node.empty())
+                what = std::format("{} samples {}, which", node, what);
+            break;
+        }
+    }
     error = std::format("{} is only for blend and additive materials (drawn after the opaque scene it copies); this "
                         "material's alphaMode is {}",
-                        source.screenTexture ? "SCREEN_TEXTURE" : "DEPTH_TEXTURE",
-                        material.alphaMode == AlphaMode::Mask ? "mask" : "opaque");
+                        what, material.alphaMode == AlphaMode::Mask ? "mask" : "opaque");
     return false;
 }
 

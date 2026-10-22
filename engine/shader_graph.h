@@ -30,6 +30,13 @@ struct GraphPinDef {
     std::string_view fallback = {};
 };
 
+// A node setting: a string (count 0) or that many numbers (constant values). fallback: a string setting's default.
+struct GraphSettingDef {
+    std::string_view name;
+    int count = 0;
+    std::string_view fallback = {};
+};
+
 // What a node type is. Each output is a temp variable of the generated code, from code with "{pin}" replaced by an
 // input's (or an earlier output's, or a setting's) code.
 struct GraphNodeDef {
@@ -39,14 +46,18 @@ struct GraphNodeDef {
     unsigned stages = kStageAll; // where it may be emitted
     std::vector<GraphPinDef> inputs;
     std::vector<std::pair<GraphPinDef, std::string_view>> outputs; // pin, code
-    // Settings by name, each a string or that many numbers (constant values): {"param", 0}, {"value", 3}.
-    std::vector<std::pair<std::string_view, int>> settings;
+    std::vector<GraphSettingDef> settings; // {"param"}, {"value", 3}
     unsigned output = 0; // an output node: the stage whose built-ins its inputs write (0: not one)
+    std::string_view helper = {}; // functions its code calls, written once before fragment() when the node is used
 };
 
 // Every node type, and one by its id (null if unknown).
 const std::vector<GraphNodeDef>& shaderGraphNodeDefs();
 const GraphNodeDef* findGraphNodeDef(std::string_view type);
+
+// The Custom Expression node: typed pins from its "inputs" / "outputs" settings ("vec3 a, float b"; inputs may also be
+// texture2D) and a GLSL "code" body that assigns the outputs. The body is .kshader source, only ever handed to shaderc.
+constexpr std::string_view kCustomExpression = "custom_expression";
 
 struct GraphNode {
     int id = 0; // > 0, unique in the graph
@@ -79,6 +90,13 @@ struct ShaderGraph {
     std::vector<GraphComment> comments;
 };
 
+// A node's type with its pins: findGraphNodeDef's, except a Custom Expression's pins come from its settings. Null for an
+// unknown type or settings that are wrong (graphNodeSettingsError says why).
+const GraphNodeDef* graphNodeDef(const GraphNode& node);
+// What is wrong with a node's settings, as {setting, message} ({"mask", "must be 1 to 4 of x, y, z, w ..."}); empty if
+// nothing (a swizzle mask, a noise kind, a Custom Expression's pin lists).
+std::pair<std::string, std::string> graphNodeSettingsError(const GraphNode& node);
+
 // False + error ("nodes[2].inputs.b: ...", "node 4: the links form a cycle") if json is not a valid graph: unknown keys,
 // a wrong version, bad values, unknown node types or pins, duplicate ids, texture / number mismatches, cycles. Missing
 // optional fields get their defaults.
@@ -109,12 +127,15 @@ struct LinkCheck {
 };
 LinkCheck canLink(const ShaderGraph& graph, const GraphPin& from, const GraphPin& to);
 
-// The .kshader text of graph: its params, then fragment(), then vertex() and light() only when their output node has a
-// linked input. A temp variable per node output in topological order (ties by id) after a "// @node <id>" line, so the
-// text is the same for the same graph in any node order. Empty if issues gets an error (warnings still generate).
+// The .kshader text of graph: its params, its nodes' helper functions, then fragment(), then vertex() and light() only
+// when their output node has a linked input. A temp variable per node output in topological order (ties by id) after a
+// "// @node <id> <type>" line, so the text is the same for the same graph in any node order. A Custom Expression's code
+// goes in a block of its own after its marker. Empty if issues gets an error (warnings still generate).
 std::string generateKShader(const ShaderGraph& graph, std::vector<GraphIssue>& issues);
 // The node whose code is at a line (from 1) of generateKShader's text; 0 outside every node (params, signatures).
 int graphNodeAtLine(std::string_view kshaderText, int line);
+// The same node as "node <id> (<title>)", or "" outside every node.
+std::string graphNodeNameAtLine(std::string_view kshaderText, int line);
 // errors (mapShaderErrors' "line <n>: ..." lines, for generateKShader's text) with "node <id>: " before each mapped line.
 std::string mapGraphErrors(std::string_view kshaderText, std::string_view errors);
 
