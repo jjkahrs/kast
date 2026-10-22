@@ -120,3 +120,74 @@ kast_graph_shot(sim_copy_paste "${KAST_GRAPH_ARGS} --sim-mouse 30,left,315,-270,
 kast_graph_shot(sim_revert "${KAST_GRAPH_UPDATE_ARGS} --graph-add constant_vec3,900,500 --graph-set 12.value=[1,0,0] --graph-link 12.out,1.EMISSION --open-graph shaders/empty.kshadergraph --sim-mouse 45,left,0,0,0,-176,121,1"
   -DFRAMES=90 "-DEXPECT_OUTPUT=live-updated.*Opened shader graph '[^']*empty.kshadergraph'.*Recompiled shader 'shaders/graph_demo.kshadergraph'"
   "-DFORBID_OUTPUT=Saved shader graph")
+
+# Phase 5: the samples. shader_graphs.scene is custom_shaders.scene with materials/graph_*.mat, whose shaders are
+# shader_graphs/*.kshadergraph: the hand-written pulse, wind, dissolve, water and toon samples rebuilt as graphs, with
+# no Custom Expression. At frames 60 and 120, in the Scene view and in Play (the dissolve's threshold driven by
+# scripts/dissolve_driver.lua), each shot must match custom_shaders.scene's (shader_custom*) with kast_self_check
+# --diff-png at a mean of at most 1/255: the whole window, and each sample's crop (pixel rects in the 1600x900 default
+# layout's Scene view and Game view).
+set(graphs_compiled "Compiled shader 'shader_graphs/(pulse|wind|dissolve|water|toon)\\.kshadergraph'")
+kast_shader_shot(graphs "${KAST_SHADER_TEST_PROJECT}" shader_graphs.scene
+  "-DEXPECT_OUTPUT=${graphs_compiled}" -DEXPECT_COUNT=5 "-DFORBID_OUTPUT=\\[error\\]|\\[warn\\]|magenta")
+kast_shader_shot(graphs_f60 "${KAST_SHADER_TEST_PROJECT}" shader_graphs.scene -DFRAMES=60)
+kast_shader_shot(graphs_play "${KAST_SHADER_TEST_PROJECT}" shader_graphs.scene PLAY
+  "-DEXPECT_OUTPUT=${graphs_compiled}" -DEXPECT_COUNT=5 "-DFORBID_OUTPUT=\\[error\\]|\\[warn\\]|magenta")
+kast_shader_shot(graphs_play_f60 "${KAST_SHADER_TEST_PROJECT}" shader_graphs.scene PLAY -DFRAMES=60)
+set(KAST_SAMPLE_CROPS_SCENE "wind|480,320,230,140" "character|645,290,75,85" "dissolve|695,340,140,135"
+    "toon|730,270,160,130" "pulse|870,370,125,125" "water|800,295,340,100")
+set(KAST_SAMPLE_CROPS_GAME "wind|335,255,310,180" "character|600,215,80,105" "dissolve|650,265,210,190"
+    "toon|705,190,210,175" "pulse|915,315,195,190" "water|800,240,476,110")
+foreach(shot "f120||SCENE" "f60|_f60|SCENE" "play_f120|_play|GAME" "play_f60|_play_f60|GAME")
+  string(REPLACE "|" ";" shot "${shot}")
+  list(GET shot 0 name)
+  list(GET shot 1 suffix)
+  list(GET shot 2 view)
+  foreach(crop "all|" ${KAST_SAMPLE_CROPS_${view}})
+    string(REPLACE "|" ";" crop "${crop}")
+    list(GET crop 0 sample)
+    list(GET crop 1 rect)
+    add_test(NAME shader_graph_samples_${name}_${sample}
+      COMMAND kast_self_check --diff-png "${CMAKE_CURRENT_BINARY_DIR}/shader_custom${suffix}.png"
+              "${CMAKE_CURRENT_BINARY_DIR}/shader_graphs${suffix}.png" 0.00392 ${rect})
+    set_tests_properties(shader_graph_samples_${name}_${sample} PROPERTIES
+                         FIXTURES_REQUIRED "shader_custom${suffix}_shot;shader_graphs${suffix}_shot")
+  endforeach()
+endforeach()
+# The wind's and the dissolve's crops, shadows included, change between frames 60 and 120 (a mean over 1/255 per
+# channel: "diff FAIL"): the grass sways in the Scene view and in Play, the dissolve's threshold moves in Play.
+foreach(moving "wind_scene|_f60||480,320,230,140" "wind_play|_play_f60|_play|335,255,310,180"
+               "dissolve_play|_play_f60|_play|650,265,210,190")
+  string(REPLACE "|" ";" moving "${moving}")
+  list(GET moving 0 name)
+  list(GET moving 1 a)
+  list(GET moving 2 b)
+  list(GET moving 3 rect)
+  add_test(NAME shader_graph_samples_${name}_animates
+    COMMAND kast_self_check --diff-png "${CMAKE_CURRENT_BINARY_DIR}/shader_graphs${a}.png"
+            "${CMAKE_CURRENT_BINARY_DIR}/shader_graphs${b}.png" 1 ${rect})
+  set_tests_properties(shader_graph_samples_${name}_animates PROPERTIES PASS_REGULAR_EXPRESSION "diff FAIL: mean"
+                       FIXTURES_REQUIRED "shader_graphs${a}_shot;shader_graphs${b}_shot")
+endforeach()
+# The player: Build shader_graphs.scene (no shaderc.exe in the game; player_test.cmake checks), its graphs load
+# precompiled, and its 957x584 screenshot (the Game view's size in the default layout) matches the editor's Play shot's
+# Game view (shown from window pixel 321,44, its left column and bottom row hidden under the panel's edges).
+kast_game_project(shader_graphs "Shader Test" shader_graphs.scene FALSE "")
+add_test(NAME build_game_shader_graphs
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/shader_graphs"
+          "-DOUT=${KAST_GAME_OUT}/shader_graphs" "-DEXE=Shader Test.exe" -DEXPECT=0
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+add_test(NAME player_shader_graphs_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/shader_graphs" "-DEXE=Shader Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/shader_graphs.run" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_shader_graphs.png"
+          "-DEXTRA_ARGS=--fixed-dt 0.016 --size 957x584" -DEXPECT=0
+          "-DEXPECT_OUTPUT=Loaded shader 'shader_graphs/water\\.kshadergraph' \\(precompiled\\)" "-DFORBID_OUTPUT=\\[error\\]|magenta"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+add_test(NAME player_shader_graphs_matches_editor
+  COMMAND kast_self_check --diff-png "${CMAKE_CURRENT_BINARY_DIR}/shader_graphs_play.png"
+          "${CMAKE_CURRENT_BINARY_DIR}/player_shader_graphs.png" 0.00392 322,44,955,583,1,0)
+set_tests_properties(build_game_shader_graphs PROPERTIES FIXTURES_SETUP game_shader_graphs_built)
+set_tests_properties(player_shader_graphs_screenshot PROPERTIES FIXTURES_REQUIRED game_shader_graphs_built
+                     FIXTURES_SETUP player_shader_graphs_shot TIMEOUT 90)
+set_tests_properties(player_shader_graphs_matches_editor PROPERTIES
+                     FIXTURES_REQUIRED "player_shader_graphs_shot;shader_graphs_play_shot")

@@ -1,0 +1,437 @@
+{
+  "version": 1,
+  "params": [
+    {
+      "name": "noise",
+      "type": "texture2D",
+      "default": "white",
+      "srgb": false
+    },
+    {
+      "name": "threshold",
+      "type": "float",
+      "default": 0.35,
+      "range": [
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "edge_width",
+      "type": "float",
+      "default": 0.08,
+      "range": [
+        0.0,
+        0.3
+      ]
+    },
+    {
+      "name": "edge_color",
+      "type": "color",
+      "default": [
+        1.0,
+        0.35,
+        0.05,
+        1.0
+      ]
+    },
+    {
+      "name": "edge_intensity",
+      "type": "float",
+      "default": 6.0,
+      "range": [
+        0.0,
+        20.0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": 1,
+      "type": "output_fragment",
+      "position": [
+        1610.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 2,
+      "type": "param",
+      "position": [
+        0.0,
+        0.0
+      ],
+      "settings": {
+        "param": "noise"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 3,
+      "type": "sample_texture",
+      "position": [
+        230.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 4,
+      "type": "param",
+      "position": [
+        230.0,
+        194.0
+      ],
+      "settings": {
+        "param": "threshold"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 5,
+      "type": "step",
+      "position": [
+        1150.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 6,
+      "type": "material_base_color",
+      "position": [
+        1150.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 7,
+      "type": "multiply",
+      "position": [
+        1380.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 8,
+      "type": "param",
+      "position": [
+        460.0,
+        0.0
+      ],
+      "settings": {
+        "param": "edge_width"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 9,
+      "type": "subtract",
+      "position": [
+        460.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 10,
+      "type": "smoothstep",
+      "position": [
+        690.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {
+        "edge0": 0.0
+      }
+    },
+    {
+      "id": 11,
+      "type": "one_minus",
+      "position": [
+        920.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 12,
+      "type": "param",
+      "position": [
+        460.0,
+        196.0
+      ],
+      "settings": {
+        "param": "edge_color"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 13,
+      "type": "swizzle",
+      "position": [
+        690.0,
+        122.0
+      ],
+      "settings": {
+        "mask": "rgb"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 14,
+      "type": "param",
+      "position": [
+        690.0,
+        220.0
+      ],
+      "settings": {
+        "param": "edge_intensity"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 15,
+      "type": "multiply",
+      "position": [
+        920.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 16,
+      "type": "multiply",
+      "position": [
+        1150.0,
+        220.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 17,
+      "type": "material_emission",
+      "position": [
+        1150.0,
+        318.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 18,
+      "type": "add",
+      "position": [
+        1380.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {}
+    }
+  ],
+  "links": [
+    {
+      "from": [
+        2,
+        "out"
+      ],
+      "to": [
+        3,
+        "texture"
+      ]
+    },
+    {
+      "from": [
+        4,
+        "out"
+      ],
+      "to": [
+        5,
+        "edge"
+      ]
+    },
+    {
+      "from": [
+        3,
+        "r"
+      ],
+      "to": [
+        5,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        5,
+        "out"
+      ],
+      "to": [
+        7,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        6,
+        "a"
+      ],
+      "to": [
+        7,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        7,
+        "out"
+      ],
+      "to": [
+        1,
+        "ALPHA"
+      ]
+    },
+    {
+      "from": [
+        3,
+        "r"
+      ],
+      "to": [
+        9,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        4,
+        "out"
+      ],
+      "to": [
+        9,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        8,
+        "out"
+      ],
+      "to": [
+        10,
+        "edge1"
+      ]
+    },
+    {
+      "from": [
+        9,
+        "out"
+      ],
+      "to": [
+        10,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        10,
+        "out"
+      ],
+      "to": [
+        11,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        12,
+        "out"
+      ],
+      "to": [
+        13,
+        "v"
+      ]
+    },
+    {
+      "from": [
+        13,
+        "out"
+      ],
+      "to": [
+        15,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        14,
+        "out"
+      ],
+      "to": [
+        15,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        15,
+        "out"
+      ],
+      "to": [
+        16,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        11,
+        "out"
+      ],
+      "to": [
+        16,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        17,
+        "rgb"
+      ],
+      "to": [
+        18,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        16,
+        "out"
+      ],
+      "to": [
+        18,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        18,
+        "out"
+      ],
+      "to": [
+        1,
+        "EMISSION"
+      ]
+    }
+  ],
+  "comments": []
+}

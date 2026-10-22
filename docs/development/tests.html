@@ -113,6 +113,10 @@ every test runs with <code>KAST_WINDOW_POS=secondary</code>, which opens windows
 <td>Shader graphs (<a href="../engine/shader-graph.html#shader-graph">.kshadergraph</a>): <code>materials.scene</code> and <code>material_features.scene</code> in a project copy whose every <code>.mat</code> uses <code>shaders/empty.kshadergraph</code> (an unconnected Fragment Output) must match the built-in shots, <code>kast_self_check --diff-png &lt;a.png&gt; &lt;b.png&gt; &lt;maxMeanAbsDiff&gt;</code> (the mean absolute difference per RGB channel, 0..255, over every pixel; it prints the mean and the largest difference) at most 1/255; <code>shader_graph_demo.scene</code> compiles <code>graph_demo.kshadergraph</code> without errors or warnings and differs from a copy without it; the built game loads it precompiled (no <code>shaderc.exe</code> next to it). <code>engine_self_check</code> (and <code>kast_self_check --shaders</code>) covers the rest: byte-identical round trips, every JSON rejection with its path, <code>canLink</code>, deterministic codegen (exact text, any node order), node ids on validation errors and on a shaderc error, every stage compiling, the library, material properties, Build and the player's library.</td>
 </tr>
 <tr>
+<td><code>shader_graph_samples_*</code> (and the <code>shader_graphs*_screenshot</code> / <code>shader_custom*_screenshot</code> shots), <code>shader_graph_samples_*_animates</code>, <code>build_game_shader_graphs</code>, <code>player_shader_graphs_screenshot</code>, <code>player_shader_graphs_matches_editor</code></td>
+<td>The <a href="../editor/shader-graph.html#sg-samples">shader graph samples</a>: <code>shader_graphs.scene</code> (the five hand-written samples rebuilt as <code>shader_graphs/*.kshadergraph</code>, no Custom Expression) against <code>custom_shaders.scene</code>, at frames 60 and 120, in the Scene view and in Play (the dissolve driven by Lua): <code>--diff-png</code> at a mean of at most 1/255 over the whole window and over each sample's crop (wind, character, dissolve, toon, pulse, water). The wind's crop (shadows included) changes between the two frames in both, the dissolve's in Play. The built game (no <code>shaderc.exe</code>) loads the graphs precompiled and its 957x584 screenshot matches the editor's Play shot's Game view. <code>engine_self_check</code> checks that the five sample files round-trip byte for byte, generate with no error or warning and hold no Custom Expression.</td>
+</tr>
+<tr>
 <td><code>shader_light_pbr_same</code>, <code>shader_light_differs</code>, <code>shader_screen_animates</code>, <code>shader_screen_identity_same</code> (and their <code>shader_*_screenshot</code> shots), <code>player_shader_screen_identity_same</code></td>
 <td><a href="../engine/shaders.html#kshader-light">light()</a> and <a href="../engine/shaders.html#kshader-screen">SCREEN_TEXTURE / DEPTH_TEXTURE</a>: <code>shader_light.scene</code> (cel bands from <code>light_bands.kshader</code>, sun shadows, a point light, fog) differs from a copy without its shader materials, and its sphere whose <code>light()</code> calls the template's <code>shade()</code> renders exactly as the built-in shader; <code>shader_screen.scene</code>'s water (refraction and depth foam) changes between frames 60 and 120; an unlit blend plane showing <code>SCREEN_TEXTURE</code> at <code>SCREEN_UV</code> (magenta if <code>linearDepth()</code> of <code>DEPTH_TEXTURE</code> is wrong) renders exactly as a transparent one, in the editor and in the player. The self-check (<code>--shaders</code>) covers <code>light()</code> code generation and compiles, the opaque / mask rejection (also in the Build), and counts the copies: only on frames a blended draw in view samples them.</td>
 </tr>
@@ -608,6 +612,19 @@ every test runs with <code>KAST_WINDOW_POS=secondary</code>, which opens windows
 </table>
 <p>The screenshot tests each open a real window for ~2 seconds, in a fresh working directory (<code>&lt;png&gt;.run/</code>) so they
 always start from the default layout.</p>
+<h2 id="image-checks">Image checks</h2>
+<p>Screenshot tests read and compare PNGs with <code>kast_self_check</code>:</p>
+<ul>
+<li><code>kast_self_check --probe-png &lt;png&gt; &lt;fx,fy,r,g,b,tolerance&gt;...</code>: each pixel at (fx, fy) (0..1 across and down
+  the image) is within <code>tolerance</code> of r, g, b (0..255) per channel. Prints each probe's color; fails if any is off.</li>
+<li><code>kast_self_check --diff-png &lt;a.png&gt; &lt;b.png&gt; &lt;maxMeanAbsDiff&gt; [x,y,w,h[,bx,by]]</code>: the mean absolute
+  difference per RGB channel (0..255) over every pixel of two same-sized images is at most <code>maxMeanAbsDiff</code> (the shader
+  tests use 0.00392, 1/255). Prints <code>diff ok: mean 0.000000 (limit 0.003920), max 0 over 1600x900</code> (or <code>diff
+  FAIL: ...</code>), the mean and the largest single difference, and exits 1 above the limit. With a rect, only the w x h pixels
+  at x, y (window pixels from the top left) are compared, e.g. one object's crop; with <code>bx,by</code> b's rect starts there
+  instead, so an editor shot's Game view can be compared with a player screenshot of the view's size
+  (<code>322,44,955,583,1,0</code>). A test that wants images to <em>differ</em> passes on <code>diff FAIL: mean</code>.</li>
+</ul>
 </main>
 </div>
 </body>

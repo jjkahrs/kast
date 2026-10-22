@@ -351,7 +351,9 @@ return {
 <h2 id="kshader-samples">Samples</h2>
 <p><code>tests/project/custom_shaders.scene</code> shows the five samples under a shadowing sun, a warm point light and fog. Open
 it and press Play to see the dissolve animate. The files are in <code>tests/project/shaders/</code> and
-<code>tests/project/materials/shader_*.mat</code>.</p>
+<code>tests/project/materials/shader_*.mat</code>. The same five, built as node graphs without code, are in
+<code>tests/project/shader_graphs/</code> on <code>shader_graphs.scene</code>, which renders identically
+(<a href="../editor/shader-graph.html#sg-samples">Shader Graph samples</a>).</p>
 <table>
 <tr><th>Sample</th><th>Shows</th><th>How</th></tr>
 <tr><td><code>pulse.kshader</code><br>(Pulse Cube)</td><td>scrolling, pulsing emissive lines</td><td><code>fragment()</code> only: bands from <code>fract(UV.y * lines - TIME * scroll_speed)</code>, <code>EMISSION</code> times a <code>sin(TIME)</code> pulse; params for color, speed and intensity</td></tr>

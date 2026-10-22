@@ -2431,7 +2431,8 @@ include(cmake/starter_mmo_tests.cmake)
 # GPU particles: screenshots read back at known pixels, and kast_self_check --particles.
 include(cmake/particle_tests.cmake)
 
-# Shader Graph panels: --open-graph / --graph-* screenshots, Save, Assets > Create > Shader Graph, reload on disk change.
+# Shader Graph panels: --open-graph / --graph-* screenshots, Save, Assets > Create > Shader Graph, reload on disk change;
+# the graph samples (shader_graphs.scene) against the hand-written ones, in the editor and the player.
 include(cmake/shader_graph_tests.cmake)
 
 # Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.

@@ -9,13 +9,14 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html" class="active">Shaders</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html" class="active">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
 <main>
 <h1 id="editor-shaders">Shaders in the editor</h1>
 <p>A user shader (<code>.kshader</code>) changes how the meshes of a material are drawn: their color per pixel, their shape per
 vertex, how lights shade them. This page is the workflow; the language, every built-in and the samples are in the engine's
 <a href="../engine/shaders.html#shaders">Shaders</a> reference. You edit <code>.kshader</code> files in your own text editor; Kast
-compiles them in the background and shows the result live.</p>
+compiles them in the background and shows the result live. To build a shader from nodes instead of code, use the
+<a href="shader-graph.html#shader-graph">Shader Graph</a>; a material picks a <code>.kshadergraph</code> the same way.</p>
 
 <h2 id="shaders-create">1. Create a shader</h2>
 <p>In the <strong>Assets</strong> panel, open the folder you want (e.g. <code>shaders/</code>) and choose <strong>Create &gt; Shader</strong>.

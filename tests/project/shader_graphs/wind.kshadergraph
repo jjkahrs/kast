@@ -1,0 +1,1229 @@
+{
+  "version": 1,
+  "params": [
+    {
+      "name": "strength",
+      "type": "float",
+      "default": 0.3,
+      "range": [
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "speed",
+      "type": "float",
+      "default": 2.0,
+      "range": [
+        0.0,
+        8.0
+      ]
+    },
+    {
+      "name": "wave",
+      "type": "float",
+      "default": 0.8,
+      "range": [
+        0.0,
+        4.0
+      ]
+    },
+    {
+      "name": "direction",
+      "type": "vec2",
+      "default": [
+        1.0,
+        0.35
+      ]
+    },
+    {
+      "name": "base",
+      "type": "float",
+      "default": -0.5
+    },
+    {
+      "name": "height",
+      "type": "float",
+      "default": 1.0,
+      "range": [
+        0.1,
+        4.0
+      ]
+    },
+    {
+      "name": "tip",
+      "type": "color",
+      "default": [
+        0.9,
+        1.0,
+        0.45,
+        1.0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": 1,
+      "type": "output_vertex",
+      "position": [
+        3450.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 2,
+      "type": "output_fragment",
+      "position": [
+        3450.0,
+        146.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 3,
+      "type": "vertex_position",
+      "position": [
+        690.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 4,
+      "type": "model_matrix",
+      "position": [
+        0.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 5,
+      "type": "param",
+      "position": [
+        0.0,
+        98.0
+      ],
+      "settings": {
+        "param": "direction"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 6,
+      "type": "normalize",
+      "position": [
+        230.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 7,
+      "type": "swizzle",
+      "position": [
+        920.0,
+        0.0
+      ],
+      "settings": {
+        "mask": "y"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 8,
+      "type": "param",
+      "position": [
+        920.0,
+        98.0
+      ],
+      "settings": {
+        "param": "base"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 9,
+      "type": "subtract",
+      "position": [
+        1150.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 10,
+      "type": "param",
+      "position": [
+        1150.0,
+        98.0
+      ],
+      "settings": {
+        "param": "height"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 11,
+      "type": "divide",
+      "position": [
+        1380.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 12,
+      "type": "saturate",
+      "position": [
+        1610.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 13,
+      "type": "time",
+      "position": [
+        460.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 14,
+      "type": "param",
+      "position": [
+        460.0,
+        98.0
+      ],
+      "settings": {
+        "param": "speed"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 15,
+      "type": "multiply",
+      "position": [
+        690.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 16,
+      "type": "swizzle",
+      "position": [
+        230.0,
+        98.0
+      ],
+      "settings": {
+        "mask": "xz"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 17,
+      "type": "dot",
+      "position": [
+        460.0,
+        196.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 18,
+      "type": "param",
+      "position": [
+        460.0,
+        294.0
+      ],
+      "settings": {
+        "param": "wave"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 19,
+      "type": "multiply",
+      "position": [
+        690.0,
+        196.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 20,
+      "type": "subtract",
+      "position": [
+        920.0,
+        196.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 21,
+      "type": "param",
+      "position": [
+        1610.0,
+        98.0
+      ],
+      "settings": {
+        "param": "strength"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 22,
+      "type": "multiply",
+      "position": [
+        1840.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 23,
+      "type": "multiply",
+      "position": [
+        2070.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 24,
+      "type": "multiply",
+      "position": [
+        1150.0,
+        196.0
+      ],
+      "settings": {},
+      "inputs": {
+        "b": 2.7
+      }
+    },
+    {
+      "id": 25,
+      "type": "add",
+      "position": [
+        1380.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {
+        "b": 1.3
+      }
+    },
+    {
+      "id": 26,
+      "type": "sin",
+      "position": [
+        1610.0,
+        196.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 27,
+      "type": "sin",
+      "position": [
+        1840.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 28,
+      "type": "multiply",
+      "position": [
+        1840.0,
+        196.0
+      ],
+      "settings": {},
+      "inputs": {
+        "a": 0.35
+      }
+    },
+    {
+      "id": 29,
+      "type": "add",
+      "position": [
+        2070.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 30,
+      "type": "multiply",
+      "position": [
+        2300.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 31,
+      "type": "model_matrix",
+      "position": [
+        2300.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {
+        "v": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "w": 0.0
+      }
+    },
+    {
+      "id": 32,
+      "type": "length",
+      "position": [
+        2530.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 33,
+      "type": "model_matrix",
+      "position": [
+        2300.0,
+        196.0
+      ],
+      "settings": {},
+      "inputs": {
+        "v": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "w": 0.0
+      }
+    },
+    {
+      "id": 34,
+      "type": "length",
+      "position": [
+        2530.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 35,
+      "type": "split",
+      "position": [
+        2300.0,
+        294.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 36,
+      "type": "multiply",
+      "position": [
+        2530.0,
+        196.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 37,
+      "type": "divide",
+      "position": [
+        2760.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 38,
+      "type": "multiply",
+      "position": [
+        2530.0,
+        294.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 39,
+      "type": "divide",
+      "position": [
+        2760.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 40,
+      "type": "combine",
+      "position": [
+        2990.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 41,
+      "type": "add",
+      "position": [
+        3220.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 42,
+      "type": "param",
+      "position": [
+        2070.0,
+        196.0
+      ],
+      "settings": {
+        "param": "tip"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 43,
+      "type": "swizzle",
+      "position": [
+        2300.0,
+        440.0
+      ],
+      "settings": {
+        "mask": "rgb"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 44,
+      "type": "lerp",
+      "position": [
+        2530.0,
+        392.0
+      ],
+      "settings": {},
+      "inputs": {
+        "a": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 45,
+      "type": "split",
+      "position": [
+        2760.0,
+        196.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 46,
+      "type": "combine",
+      "position": [
+        2990.0,
+        146.0
+      ],
+      "settings": {},
+      "inputs": {
+        "w": 1.0
+      }
+    },
+    {
+      "id": 47,
+      "type": "vertex_color",
+      "position": [
+        2990.0,
+        292.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 48,
+      "type": "multiply",
+      "position": [
+        3220.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 49,
+      "type": "vertex_color",
+      "position": [
+        2760.0,
+        342.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 50,
+      "type": "swizzle",
+      "position": [
+        2990.0,
+        390.0
+      ],
+      "settings": {
+        "mask": "rgb"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 51,
+      "type": "surface",
+      "position": [
+        2990.0,
+        488.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 52,
+      "type": "multiply",
+      "position": [
+        3220.0,
+        196.0
+      ],
+      "settings": {},
+      "inputs": {}
+    }
+  ],
+  "links": [
+    {
+      "from": [
+        5,
+        "out"
+      ],
+      "to": [
+        6,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        3,
+        "out"
+      ],
+      "to": [
+        7,
+        "v"
+      ]
+    },
+    {
+      "from": [
+        7,
+        "out"
+      ],
+      "to": [
+        9,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        8,
+        "out"
+      ],
+      "to": [
+        9,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        9,
+        "out"
+      ],
+      "to": [
+        11,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        10,
+        "out"
+      ],
+      "to": [
+        11,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        11,
+        "out"
+      ],
+      "to": [
+        12,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        13,
+        "out"
+      ],
+      "to": [
+        15,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        14,
+        "out"
+      ],
+      "to": [
+        15,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        4,
+        "out"
+      ],
+      "to": [
+        16,
+        "v"
+      ]
+    },
+    {
+      "from": [
+        16,
+        "out"
+      ],
+      "to": [
+        17,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        6,
+        "out"
+      ],
+      "to": [
+        17,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        17,
+        "out"
+      ],
+      "to": [
+        19,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        18,
+        "out"
+      ],
+      "to": [
+        19,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        15,
+        "out"
+      ],
+      "to": [
+        20,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        19,
+        "out"
+      ],
+      "to": [
+        20,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        21,
+        "out"
+      ],
+      "to": [
+        22,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        12,
+        "out"
+      ],
+      "to": [
+        22,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        22,
+        "out"
+      ],
+      "to": [
+        23,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        12,
+        "out"
+      ],
+      "to": [
+        23,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        20,
+        "out"
+      ],
+      "to": [
+        24,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        24,
+        "out"
+      ],
+      "to": [
+        25,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        25,
+        "out"
+      ],
+      "to": [
+        26,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        20,
+        "out"
+      ],
+      "to": [
+        27,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        26,
+        "out"
+      ],
+      "to": [
+        28,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        27,
+        "out"
+      ],
+      "to": [
+        29,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        28,
+        "out"
+      ],
+      "to": [
+        29,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        23,
+        "out"
+      ],
+      "to": [
+        30,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        29,
+        "out"
+      ],
+      "to": [
+        30,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        31,
+        "out"
+      ],
+      "to": [
+        32,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        33,
+        "out"
+      ],
+      "to": [
+        34,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        6,
+        "out"
+      ],
+      "to": [
+        35,
+        "v"
+      ]
+    },
+    {
+      "from": [
+        35,
+        "x"
+      ],
+      "to": [
+        36,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        30,
+        "out"
+      ],
+      "to": [
+        36,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        36,
+        "out"
+      ],
+      "to": [
+        37,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        32,
+        "out"
+      ],
+      "to": [
+        37,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        35,
+        "y"
+      ],
+      "to": [
+        38,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        30,
+        "out"
+      ],
+      "to": [
+        38,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        38,
+        "out"
+      ],
+      "to": [
+        39,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        34,
+        "out"
+      ],
+      "to": [
+        39,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        37,
+        "out"
+      ],
+      "to": [
+        40,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        39,
+        "out"
+      ],
+      "to": [
+        40,
+        "z"
+      ]
+    },
+    {
+      "from": [
+        3,
+        "out"
+      ],
+      "to": [
+        41,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        40,
+        "xyz"
+      ],
+      "to": [
+        41,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        41,
+        "out"
+      ],
+      "to": [
+        1,
+        "VERTEX"
+      ]
+    },
+    {
+      "from": [
+        42,
+        "out"
+      ],
+      "to": [
+        43,
+        "v"
+      ]
+    },
+    {
+      "from": [
+        43,
+        "out"
+      ],
+      "to": [
+        44,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        12,
+        "out"
+      ],
+      "to": [
+        44,
+        "t"
+      ]
+    },
+    {
+      "from": [
+        44,
+        "out"
+      ],
+      "to": [
+        45,
+        "v"
+      ]
+    },
+    {
+      "from": [
+        45,
+        "x"
+      ],
+      "to": [
+        46,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        45,
+        "y"
+      ],
+      "to": [
+        46,
+        "y"
+      ]
+    },
+    {
+      "from": [
+        45,
+        "z"
+      ],
+      "to": [
+        46,
+        "z"
+      ]
+    },
+    {
+      "from": [
+        47,
+        "out"
+      ],
+      "to": [
+        48,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        46,
+        "xyzw"
+      ],
+      "to": [
+        48,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        48,
+        "out"
+      ],
+      "to": [
+        1,
+        "COLOR"
+      ]
+    },
+    {
+      "from": [
+        49,
+        "out"
+      ],
+      "to": [
+        50,
+        "v"
+      ]
+    },
+    {
+      "from": [
+        51,
+        "albedo"
+      ],
+      "to": [
+        52,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        50,
+        "out"
+      ],
+      "to": [
+        52,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        52,
+        "out"
+      ],
+      "to": [
+        2,
+        "ALBEDO"
+      ]
+    }
+  ],
+  "comments": []
+}

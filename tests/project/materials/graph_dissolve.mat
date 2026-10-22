@@ -1,0 +1,9 @@
+{
+  "version": 3,
+  "baseColor": [0.55, 0.3, 0.85, 1],
+  "roughness": 0.4,
+  "alphaMode": "mask",
+  "cullMode": "none",
+  "shader": "shader_graphs/dissolve.kshadergraph",
+  "params": { "noise": "textures/noise.png", "threshold": 0.35 }
+}

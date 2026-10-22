@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html" class="active">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html" class="active">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
 <main>
 <h1 id="run">Run</h1>
 <pre><code class="language-bat">build\release\kast_editor.exe
@@ -120,7 +120,7 @@
 </tr>
 <tr>
 <td><code>--focus-panel &lt;Window&gt;</code></td>
-<td>Bring that editor window (e.g. <code>Events</code>, <code>"State Machines"</code>, <code>"GUI Preview"</code>) to the front of its dock after the first 10 frames, for screenshots. <code>Lighting</code>, <code>"Post Processing"</code>, <code>Physics</code>, <code>Mixer</code>, <code>Network</code> and <code>Online</code> also open those hidden panels.</td>
+<td>Bring that editor window (e.g. <code>Events</code>, <code>"State Machines"</code>, <code>"GUI Preview"</code>) to the front of its dock after the first 10 frames (with <code>--open-graph</code>: 3 frames after the graph's panels took the focus, e.g. <code>--focus-panel Scene</code> to watch a live update), for screenshots. <code>Lighting</code>, <code>"Post Processing"</code>, <code>Physics</code>, <code>Mixer</code>, <code>Network</code> and <code>Online</code> also open those hidden panels.</td>
 </tr>
 <tr>
 <td><code>--zone-section &lt;Name[,Name...]&gt;</code></td>
@@ -155,12 +155,12 @@
 <td>Open that Assets entry's context menu (<code>/</code> = the panel background) with its Create submenu open, for screenshots.</td>
 </tr>
 <tr>
-<td><code>--assets-create system\|fsm\|gui\|material\|shader:&lt;folder&gt;</code></td>
-<td>Run Assets &gt; Create &gt; Lua System / State Machine / GUI / Material / Shader in that project folder (empty = the root) after the first 10 frames, as the menu does (the new file's rename starts).</td>
+<td><code>--assets-create system\|fsm\|gui\|material\|shader\|shadergraph:&lt;folder&gt;</code></td>
+<td>Run Assets &gt; Create &gt; Lua System / State Machine / GUI / Material / Shader / Shader Graph in that project folder (empty = the root) after the first 10 frames, as the menu does (the new file's rename starts).</td>
 </tr>
 <tr>
 <td><code>--material-set &lt;field&gt;=&lt;json&gt;</code> (repeatable), <code>--material-undo N</code>, <code>--material-redo N</code></td>
-<td>With <code>--assets-select</code> of a <code>.mat</code>: set that field or <code>.kshader</code> param as an Inspector edit does (saved, one undo step each, in order), then Undo N times, then Redo N times, at frame 11. For tests of the material Inspector's undo.</td>
+<td>With <code>--assets-select</code> of a <code>.mat</code>: set that field or <code>.kshader</code> / <code>.kshadergraph</code> param as an Inspector edit does (saved, one undo step each, in order), then Undo N times, then Redo N times, at frame 11. For tests of the material Inspector's undo.</td>
 </tr>
 <tr>
 <td><code>--open-gui &lt;file.rml&gt;</code></td>
@@ -294,12 +294,12 @@
 <td>Press the Online panel's <strong>Start</strong>, <strong>Stop</strong> or <strong>Status</strong> at startup (e.g. with <code>--log-fps</code> to watch the frame rate while the stack starts).</td>
 </tr>
 <tr>
-<td><code>--sim-mouse &lt;frame,button,dx,dy,wheel[,sx,sy]&gt;</code></td>
-<td>With <code>--play</code> (without it: the Scene view's image instead, e.g. for <code>--zone-tool</code>): on frame <code>frame</code>, move the mouse to the center of the Game panel's image (or <code>sx, sy</code> pixels from it), press <code>button</code> (<code>left</code>, <code>right</code> or <code>none</code>) and turn the wheel by <code>wheel</code> notches; the next frame move it by <code>dx, dy</code> pixels (with <code>none</code>: a hover there, held until the run ends), the frame after release it there (a game GUI sees a drag and drop). <code>left+shift</code> / <code>right+shift</code> also hold Shift from the press until after the release. Synthetic SDL events, so <code>kast.input</code> and the game GUIs get them as from a real mouse while the Game panel is focused. <code>kast.input.setCursorLocked</code> is not applied to the window in such a run, so the real cursor is never grabbed. Example: <code>--sim-mouse 600,left,240,-40,0</code>.</td>
+<td><code>--sim-mouse &lt;frame,button,dx,dy,wheel[,sx,sy[,hold]]&gt;</code></td>
+<td>With <code>--play</code> (without it: the Scene view's image instead, e.g. for <code>--zone-tool</code>, or the Shader Graph canvas that covers it with <code>--open-graph</code>): on frame <code>frame</code>, move the mouse to the center of the Game panel's image (or <code>sx, sy</code> pixels from it), press <code>button</code> (<code>left</code>, <code>right</code> or <code>none</code>) and turn the wheel by <code>wheel</code> notches; the next frame move it by <code>dx, dy</code> pixels (with <code>none</code>: a hover there, held until the run ends), then keep the button down there for <code>hold</code> frames (default 1) and release it (a game GUI sees a drag and drop; the Shader Graph canvas needs a hold of a few frames to accept a link). Each run logs <code>--sim-mouse: press at X,Y</code> in window points. <code>left+shift</code> / <code>right+shift</code> also hold Shift from the press until after the release. Synthetic SDL events, so <code>kast.input</code> and the game GUIs get them as from a real mouse while the Game panel is focused. <code>kast.input.setCursorLocked</code> is not applied to the window in such a run, so the real cursor is never grabbed. Example: <code>--sim-mouse 600,left,240,-40,0</code>.</td>
 </tr>
 <tr>
-<td><code>--sim-key &lt;frame,key&gt;</code></td>
-<td>With <code>--play</code>, repeatable: on frame <code>frame</code> press <code>key</code> (an SDL key name: <code>B</code>, <code>Escape</code>, <code>Tab</code>) on the Game panel, with the character it types (a letter or digit, lower case) for a focused game GUI text field, and release it two frames later. Synthetic SDL events, like <code>--sim-mouse</code>. Example: <code>--sim-key 600,B</code>.</td>
+<td><code>--sim-key &lt;frame,[ctrl+]key&gt;</code></td>
+<td>With <code>--play</code> or <code>--open-graph</code>, repeatable: on frame <code>frame</code> press <code>key</code> (an SDL key name: <code>B</code>, <code>Escape</code>, <code>Tab</code>, <code>Delete</code>) on the Game panel (with <code>--open-graph</code>: the focused panel, e.g. the canvas); <code>ctrl+</code> holds Ctrl with it (<code>ctrl+C</code>, <code>ctrl+V</code>; it types nothing), with the character it types (a letter or digit, lower case) for a focused game GUI text field, and release it two frames later. Synthetic SDL events, like <code>--sim-mouse</code>. Example: <code>--sim-key 600,B</code>.</td>
 </tr>
 <tr>
 <td><code>--sim-on-log &lt;text&gt;</code></td>
@@ -318,8 +318,90 @@
 <p>Without <code>--project</code>, <code>--scene</code>, <code>--save-scene</code> or <code>--build</code>, <code>kast_editor</code> runs the Project Manager instead of the
 editor. Editor-only flags (<code>--select</code>, <code>--play</code>, <code>--select-network-entity</code>, <code>--add-component-popup</code>, <code>--new-component[-prompt]</code>,
 <code>--new-state-machine-prompt</code>, <code>--open-menu</code>, <code>--open-build-settings</code>, <code>--open-online-settings</code>, <code>--focus-panel</code>, <code>--zone-section</code>, <code>--zone-tool</code>, <code>--assets-*</code>, <code>--open-gui</code>,
-<code>--gui-*</code>, <code>--zone-select</code>, <code>--bake</code>, <code>--mapbake</code>, <code>--file-save</code>, the <a href="#zone">zone edits</a>) then are invalid arguments, as are Project Manager flags (<code>--launcher</code>, <code>--new-project</code>,
+<code>--gui-*</code>, <code>--open-graph</code>, <code>--graph-*</code>, <code>--zone-select</code>, <code>--bake</code>, <code>--mapbake</code>, <code>--file-save</code>, the <a href="#zone">zone edits</a>) then are invalid arguments, as are Project Manager flags (<code>--launcher</code>, <code>--new-project</code>,
 <code>--launcher-open</code>, <code>--</code>) together with the editor's.</p>
+<h2 id="shader-graph-flags">Shader Graph</h2>
+<p>The <a href="shader-graph.html#shader-graph">Shader Graph</a> panels' edits, for tests and screenshots. They need a project
+(<code>--project</code>, or a <code>--scene</code> inside one) and <code>--open-graph</code>. <code>--open-graph</code> opens the graph at
+startup; every other flag below (and a later <code>--open-graph</code>) is a <em>step</em>: the steps run in command-line order at
+frame 17, through the same model the panels edit, each one undo step on the graph's history, and the canvas then zooms to fit
+the graph. Node ids are those in the file; pins are <code>N.pin</code> (<code>12.out</code>, <code>1.EMISSION</code>). A step that fails
+logs <code>[error] --graph-... &lt;value&gt;: &lt;why&gt;</code>. In PowerShell, quote values with commas
+(<code>'7.out,6.b'</code>), which it would otherwise split.</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--open-graph &lt;file.kshadergraph&gt;</code></td>
+<td>Open the graph in the Shader Graph, Graph Inspector and Shader Preview panels (relative paths: to the project, else the working directory) and bring them to the front. Opening compiles it (for the preview). With unsaved changes, a later <code>--open-graph</code> asks Save / Discard / Cancel.</td>
+</tr>
+<tr>
+<td><code>--graph-add &lt;type&gt;[,x,y]</code></td>
+<td>Add a node of that type id (<a href="shader-graph.html#sg-nodes">node reference</a>) at canvas position x, y (default: the view's center); logs <code>--graph-add &lt;type&gt;: node N</code> with its new id.</td>
+</tr>
+<tr>
+<td><code>--graph-link &lt;N.pin,M.pin&gt;</code></td>
+<td>Link output <code>N.pin</code> into input <code>M.pin</code> (replacing that input's link). A link Kast refuses logs <code>[warn] --graph-link ... refused: &lt;why&gt;</code> and shows the red link and why on the canvas for 5 s, as a refused drag does.</td>
+</tr>
+<tr>
+<td><code>--graph-unlink &lt;N.pin&gt;</code></td>
+<td>Remove the link into input <code>N.pin</code>.</td>
+</tr>
+<tr>
+<td><code>--graph-select &lt;N[,M...]&gt;</code>, <code>--graph-delete &lt;N[,M...]&gt;</code></td>
+<td>Select those nodes, or delete them (with their links).</td>
+</tr>
+<tr>
+<td><code>--graph-set &lt;N.setting=json&gt;</code></td>
+<td>Set a node's setting as the Graph Inspector does, e.g. <code>12.value=[1,0,0]</code>, <code>4.mask="zyx"</code>, <code>9.param="speed"</code>. In ctest arguments, which split on spaces, write a space in a JSON string as <code> </code>.</td>
+</tr>
+<tr>
+<td><code>--graph-comment &lt;title,x,y,w,h&gt;</code></td>
+<td>Add a comment frame.</td>
+</tr>
+<tr>
+<td><code>--graph-paste &lt;x,y&gt;</code></td>
+<td>Copy the nodes of the last <code>--graph-select</code> and paste them with their top-left at x, y (fresh ids, their links kept), then select them; logs <code>--graph-paste x,y: nodes 12,13,14</code>.</td>
+</tr>
+<tr>
+<td><code>--graph-undo &lt;N&gt;</code>, <code>--graph-redo &lt;N&gt;</code></td>
+<td>Undo, or redo, N steps of the graph's history (each logs <code>Undo &lt;step&gt;</code> / <code>Redo &lt;step&gt;</code>).</td>
+</tr>
+<tr>
+<td><code>--graph-save</code></td>
+<td>Save the graph as its <strong>Save</strong> button does.</td>
+</tr>
+<tr>
+<td><code>--graph-add-menu &lt;N.pin&gt;\|/</code></td>
+<td>Open the add menu at the view's center: filtered to the nodes that link to that pin, or (<code>/</code>) all of them.</td>
+</tr>
+<tr>
+<td><code>--graph-preview sphere\|cube\|plane</code></td>
+<td>Show the Shader Preview on that mesh.</td>
+</tr>
+<tr>
+<td><code>--graph-view-code</code></td>
+<td>Open the Shader Preview's <strong>View generated code</strong> window (the <code>.kshader</code> text the library compiles).</td>
+</tr>
+</tbody>
+</table>
+<p>Canvas gestures run through <code>--sim-mouse</code> (offsets from the Scene view's image center, which the canvas covers: 800,352
+in the 1600x900 default layout) and <code>--sim-key</code>, e.g. a link dragged from a pin and held over another
+(<code>--sim-mouse 30,left,201,-164,0,86,160,8</code>), a box selection then <code>--sim-key 45,Delete</code>, or
+<code>--sim-key 45,ctrl+C --sim-key 55,ctrl+V</code>. The canvas logs what they did (<code>Shader Graph: linked 11.out to
+1.EMISSION</code>, <code>deleted 3 nodes</code>, <code>copied 3 nodes</code>, <code>pasted 3 nodes at x,y</code>, <code>add menu, N entries
+that link from 11.out</code>), and a live update logs <code>Shader Graph: '&lt;path&gt;' live-updated X s after the edit (N frames
+drawn while it compiled)</code> (or <code>live-update failed ...</code>), which <code>--screenshot-on-log 10,live-updated</code> can wait
+for. Example: <code>kast_editor --scene tests/project/shader_graph_demo.scene --open-graph shaders/graph_demo.kshadergraph
+--focus-panel Scene --graph-add constant_vec3,900,500 --graph-set 12.value=[1,0,0] --graph-link 12.out,1.EMISSION</code> turns
+the demo's meshes red in the Scene view without saving.</p>
+<p>Screenshots are compared with <code>kast_self_check --diff-png</code> and read with <code>--probe-png</code>; see
+<a href="../development/tests.html#image-checks">Tests: image checks</a>.</p>
 <h2 id="zone">Zone edits</h2>
 <p>The <a href="zone-builder.html#zone-builder">Zone Builder</a>'s edits, for tests and scripts. They need a project
 (<code>--project &lt;dir&gt;</code> with a <code>project.kast</code>, or a <code>--scene</code> inside one) and run in command-line order before

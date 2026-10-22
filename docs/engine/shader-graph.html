@@ -78,7 +78,10 @@ renders exactly as the built-in material:</p>
 }
 </code></pre>
 <p><code>tests/project/shaders/graph_demo.kshadergraph</code> (on the meshes of <code>shader_graph_demo.scene</code>) scrolls a texture
-param along UV over time and tints it.</p>
+param along UV over time and tints it. <code>tests/project/shader_graphs/</code> holds the five
+<a href="shaders.html#kshader-samples">samples</a> (pulse, wind, dissolve, water, toon) rebuilt as graphs; on
+<code>shader_graphs.scene</code> they render the same pixels as the hand-written <code>.kshader</code> files on
+<code>custom_shaders.scene</code> (<a href="../editor/shader-graph.html#sg-samples">Samples</a>).</p>
 
 <h2 id="graph-nodes">Node types</h2>
 <table>
@@ -97,9 +100,10 @@ param along UV over time and tints it.</p>
 <tr><td><code>sample_texture</code></td><td>Sample Texture</td><td>texture: texture2D (required), uv vec2 (unlinked: UV)</td>
   <td>rgba vec4, rgb vec3, r, g, b, a float</td><td></td><td>fragment()</td></tr>
 </table>
-<p>These are the core types. The full library (inputs, material, vertex and light built-ins, math, vector, texture and UV,
-effects and the Custom Expression node) is <code>shaderGraphNodeDefs()</code> in <code>engine/shader_graph.cpp</code>; its node
-reference is in the editor's Shader Graph documentation. A graph using Scene Color, Depth Fade or the Screen / Depth Texture
+<p>These are the core types. The full library, 75 types (inputs, material, vertex and light built-ins, math, vector,
+texture and UV, effects and the Custom Expression node), is <code>shaderGraphNodeDefs()</code> in
+<code>engine/shader_graph.cpp</code>; every type's pins, types, stages and generated code are in the editor's
+<a href="../editor/shader-graph.html#sg-nodes">node reference</a>. A graph using Scene Color, Depth Fade or the Screen / Depth Texture
 inputs follows the <code>SCREEN_TEXTURE</code> / <code>DEPTH_TEXTURE</code> rule: only blend and additive materials, else
 <code>node 4 (Scene Color) samples SCREEN_TEXTURE, which is only for blend and additive materials ...</code>.</p>
 
@@ -119,7 +123,11 @@ inputs follows the <code>SCREEN_TEXTURE</code> / <code>DEPTH_TEXTURE</code> rule
 <p><code>generateKShader</code> writes the params as <code>param</code> lines, then <code>fragment()</code>, then <code>vertex()</code> and
 <code>light()</code> only when their output node has a linked input. Each function holds the nodes upstream of its output node,
 in topological order (the lowest id first among the nodes that are ready), each after a <code>// @node &lt;id&gt; &lt;type&gt;</code> line, with
-one temp variable per output (<code>n&lt;id&gt;_&lt;pin&gt;</code>). Unlinked output pins are not written, so they keep what the
+one temp variable per output (<code>n&lt;id&gt;_&lt;pin&gt;</code>; a texture output is the param's name itself). An output
+node's linked inputs are assigned to the built-ins (<code>ALBEDO = n10_out;</code>), the Light Output's added
+(<code>DIFFUSE_LIGHT += ...;</code>, once per light). Helper functions a node needs (Noise's) are written once, before
+<code>fragment()</code>. A Custom Expression's code goes in a block of its own after its marker, its pins as locals
+(<a href="../editor/shader-graph.html#sg-custom">rules</a>). Unlinked output pins are not written, so they keep what the
 built-in material computes. A node feeding two stages is emitted in each. The text depends only on the graph, not on the
 order of its nodes or links, which matters because the compile cache and <code>game.pak</code> key the bytecode by it. The
 demo graph generates:</p>
@@ -161,6 +169,13 @@ checked against the stages of the outputs it reaches. A param error is put on th
 (<code>node 0</code> is the graph itself, e.g. a fifth texture param no node uses). shaderc's errors, which come back with
 <code>.kshader</code> line numbers, are mapped to the node whose <code>// @node</code> block holds the line:
 <code>node 10: line 28: error X3004: undeclared identifier '...'</code>.</p>
+
+<h2 id="graph-live">Unsaved edits</h2>
+<p>The editor's live update hands the library the open graph's current JSON with
+<code>ShaderLibrary::setOverride(path, text)</code>: until it is cleared, the library generates and compiles that instead of
+the file, on its worker thread, keeping the last good program meanwhile, and every material naming the path (Scene and Game
+views, the preview, Lua) uses it. <code>setOverride(path, std::nullopt)</code> goes back to the file. <code>text(path)</code> is the
+exact <code>.kshader</code> text of the last load, what <strong>View generated code</strong> shows.</p>
 
 <h2 id="graph-player">Build and the player</h2>
 <p>Build compiles every shipped <code>.kshadergraph</code>, as it does every shipped <code>.kshader</code>, into <code>game.pak</code>

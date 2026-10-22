@@ -2977,7 +2977,7 @@ void checkBuildSettings()
                                        "physics.scene",
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                       "shader_errors.scene", "shader_graph_demo.scene", "shader_light.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
+                                       "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                        "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "ui_effects.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
@@ -3001,7 +3001,7 @@ void checkBuildSettings()
                                                           "particles_texture.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                                          "shader_errors.scene", "shader_graph_demo.scene", "shader_light.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
+                                                          "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                                           "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "ui_effects.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
@@ -5595,9 +5595,11 @@ int probePng(int argc, char** argv)
     return failed == 0 ? 0 : 1;
 }
 
-// --diff-png <a.png> <b.png> <maxMeanAbsDiff>: the mean absolute difference per RGB channel (0..255) over every pixel
-// of two same-sized images is at most maxMeanAbsDiff. Prints the mean and the largest single difference.
-int diffPng(char** argv)
+// --diff-png <a.png> <b.png> <maxMeanAbsDiff> [x,y,w,h[,bx,by]]: the mean absolute difference per RGB channel (0..255)
+// over every pixel of two same-sized images is at most maxMeanAbsDiff. Prints the mean and the largest single
+// difference. With a rect, only the w x h pixels at x, y (from the top left) are compared, at bx, by in b if given (e.g.
+// an editor shot's Game view against a player screenshot of the view's size).
+int diffPng(int argc, char** argv)
 {
     std::array<std::optional<kast::MipImage>, 2> images;
     for (size_t i = 0; i < 2; ++i) {
@@ -5611,24 +5613,45 @@ int diffPng(char** argv)
     }
     const kast::MipImage& a = *images[0];
     const kast::MipImage& b = *images[1];
-    if (a.width != b.width || a.height != b.height) {
+    int x = 0, y = 0, w = a.width, h = a.height, bx = -1, by = -1;
+    if (argc == 6) {
+        const int fields = std::sscanf(argv[5], "%d,%d,%d,%d,%d,%d", &x, &y, &w, &h, &bx, &by);
+        if (fields != 4 && fields != 6) {
+            std::printf("diff: bad rect '%s' (expected x,y,w,h or x,y,w,h,bx,by)\n", argv[5]);
+            return 1;
+        }
+    } else if (a.width != b.width || a.height != b.height) {
         std::printf("diff FAIL: sizes differ (%dx%d, %dx%d)\n", a.width, a.height, b.width, b.height);
+        return 1;
+    }
+    if (bx < 0) {
+        bx = x;
+        by = y;
+    }
+    const auto fits = [&](const kast::MipImage& image, int left, int top) {
+        return left >= 0 && top >= 0 && w > 0 && h > 0 && left + w <= image.width && top + h <= image.height;
+    };
+    if (!fits(a, x, y) || !fits(b, bx, by)) {
+        std::printf("diff FAIL: the rect %s is outside an image (%dx%d, %dx%d)\n", argv[5], a.width, a.height, b.width,
+                    b.height);
         return 1;
     }
     const double limit = std::atof(argv[4]);
     double sum = 0.0;
     int max = 0;
-    const size_t pixels = static_cast<size_t>(a.width) * a.height;
-    for (size_t p = 0; p < pixels; ++p)
-        for (size_t c = 0; c < 3; ++c) {
-            const int d = std::abs(a.rgba[p * 4 + c] - b.rgba[p * 4 + c]);
-            sum += d;
-            max = std::max(max, d);
+    for (int row = 0; row < h; ++row)
+        for (int col = 0; col < w; ++col) {
+            const size_t pa = (static_cast<size_t>(y + row) * a.width + x + col) * 4;
+            const size_t pb = (static_cast<size_t>(by + row) * b.width + bx + col) * 4;
+            for (size_t c = 0; c < 3; ++c) {
+                const int d = std::abs(a.rgba[pa + c] - b.rgba[pb + c]);
+                sum += d;
+                max = std::max(max, d);
+            }
         }
-    const double mean = sum / (static_cast<double>(pixels) * 3.0);
+    const double mean = sum / (static_cast<double>(w) * h * 3.0);
     const bool ok = mean <= limit;
-    std::printf("diff %s: mean %.6f (limit %.6f), max %d over %dx%d\n", ok ? "ok" : "FAIL", mean, limit, max, a.width,
-                a.height);
+    std::printf("diff %s: mean %.6f (limit %.6f), max %d over %dx%d\n", ok ? "ok" : "FAIL", mean, limit, max, w, h);
     return ok ? 0 : 1;
 }
 
@@ -6567,7 +6590,11 @@ void checkShaderBuild()
 void checkShaderGraphs()
 {
     std::string error;
-    for (const char* name : {"shaders/graph_demo.kshadergraph", "shaders/empty.kshadergraph"}) {
+    // shader_graphs/: the phase 5 samples, the hand-written shaders/*.kshader samples rebuilt without Custom Expression
+    // nodes; their screenshots must match custom_shaders.scene's (cmake/shader_graph_tests.cmake).
+    for (const char* name : {"shaders/graph_demo.kshadergraph", "shaders/empty.kshadergraph", "shader_graphs/pulse.kshadergraph",
+                             "shader_graphs/wind.kshadergraph", "shader_graphs/dissolve.kshadergraph",
+                             "shader_graphs/water.kshadergraph", "shader_graphs/toon.kshadergraph"}) {
         std::string text;
         kast::ShaderGraph graph;
         const bool read = kast::readFile(std::filesystem::path(KAST_TEST_PROJECT_DIR) / name, text);
@@ -6577,6 +6604,10 @@ void checkShaderGraphs()
                   kast::parseShaderGraph(kast::shaderGraphText(graph), reloaded, error) &&
                   kast::shaderGraphText(reloaded) == text,
               std::format("{} round-trips byte for byte ({})", name, error).c_str());
+        std::vector<kast::GraphIssue> issues;
+        check(!kast::generateKShader(graph, issues).empty() && issues.empty() &&
+                  std::ranges::none_of(graph.nodes, [](const kast::GraphNode& n) { return n.type == kast::kCustomExpression; }),
+              std::format("{} generates with no error or warning and no Custom Expression", name).c_str());
     }
     const auto parse = [&](const std::string& json, kast::ShaderGraph& graph) {
         error.clear();
@@ -11706,8 +11737,8 @@ int main(int argc, char** argv)
     kast::Audio::setDefaultOutput(kast::Audio::Output::Offline); // no sound from the checks; render() pulls the mix
     if (argc >= 3 && std::string_view(argv[1]) == "--probe-png")
         return probePng(argc, argv);
-    if (argc == 5 && std::string_view(argv[1]) == "--diff-png")
-        return diffPng(argv);
+    if ((argc == 5 || argc == 6) && std::string_view(argv[1]) == "--diff-png")
+        return diffPng(argc, argv);
     if (argc == 2 && std::string_view(argv[1]) == "--bench-physics")
         return benchPhysics();
     if (argc == 2 && std::string_view(argv[1]) == "--undo") { // only the undo / redo checks
