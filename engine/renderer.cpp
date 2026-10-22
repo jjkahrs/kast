@@ -164,6 +164,14 @@ const bgfx::Memory* copyOf(const std::vector<T>& data)
     return bgfx::copy(data.data(), static_cast<uint32_t>(data.size() * sizeof(T)));
 }
 
+// transpose(inverse(world)): u_normalMatrix (vs_mesh.sc).
+void normalMatrix(const Mat4& world, float* out)
+{
+    float inverse[16];
+    bx::mtxInverse(inverse, world.data());
+    bx::mtxTranspose(out, inverse);
+}
+
 bgfx::ProgramHandle makeProgram(const uint8_t* vs, uint32_t vsSize, const uint8_t* fs, uint32_t fsSize)
 {
     return bgfx::createProgram(bgfx::createShader(bgfx::makeRef(vs, vsSize)), bgfx::createShader(bgfx::makeRef(fs, fsSize)),
@@ -397,8 +405,9 @@ void Renderer::init()
         .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Tangent, 4, bgfx::AttribType::Float)
         .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
         .end();
-    static_assert(sizeof(MeshVertex) == 12 * sizeof(float), "MeshVertex must match meshLayout_");
+    static_assert(sizeof(MeshVertex) == 12 * sizeof(float) + 4, "MeshVertex must match meshLayout_");
     for (size_t i = 0; i < meshes_.size(); ++i) {
         const MeshData data = primitiveMesh(static_cast<Primitive>(i));
         meshes_[i].vertices = bgfx::createVertexBuffer(copyOf(data.vertices), meshLayout_);
@@ -416,8 +425,9 @@ void Renderer::init()
         .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Indices, 4, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Weight, 4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
         .end();
-    static_assert(sizeof(ModelVertex) == 20 * sizeof(float), "ModelVertex must match modelLayout_");
+    static_assert(sizeof(ModelVertex) == 20 * sizeof(float) + 4, "ModelVertex must match modelLayout_");
 
     lineLayout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
@@ -425,9 +435,14 @@ void Renderer::init()
         .end();
     grid_ = bgfx::createVertexBuffer(copyOf(makeGrid()), lineLayout_);
 
-    meshProgram_ = makeProgram(vs_mesh, sizeof(vs_mesh), fs_mesh, sizeof(fs_mesh));
-    skinnedProgram_ = makeProgram(vs_mesh_skinned, sizeof(vs_mesh_skinned), fs_mesh, sizeof(fs_mesh));
-    instancedProgram_ = makeProgram(vs_mesh_instanced, sizeof(vs_mesh_instanced), fs_mesh, sizeof(fs_mesh));
+    meshVertex_ = bgfx::createShader(bgfx::makeRef(vs_mesh, sizeof(vs_mesh)));
+    skinnedVertex_ = bgfx::createShader(bgfx::makeRef(vs_mesh_skinned, sizeof(vs_mesh_skinned)));
+    instancedVertex_ = bgfx::createShader(bgfx::makeRef(vs_mesh_instanced, sizeof(vs_mesh_instanced)));
+    const bgfx::ShaderHandle meshFragment = bgfx::createShader(bgfx::makeRef(fs_mesh, sizeof(fs_mesh)));
+    meshProgram_ = bgfx::createProgram(meshVertex_, meshFragment);
+    skinnedProgram_ = bgfx::createProgram(skinnedVertex_, meshFragment);
+    instancedProgram_ = bgfx::createProgram(instancedVertex_, meshFragment);
+    bgfx::destroy(meshFragment); // the programs keep it
     lineProgram_ = makeProgram(vs_line, sizeof(vs_line), fs_line, sizeof(fs_line));
     shadowProgram_ = makeProgram(vs_shadow, sizeof(vs_shadow), fs_shadow, sizeof(fs_shadow));
     shadowSkinnedProgram_ = makeProgram(vs_shadow_skinned, sizeof(vs_shadow_skinned), fs_shadow, sizeof(fs_shadow));
@@ -459,6 +474,14 @@ void Renderer::init()
     shadowParams_ = bgfx::createUniform("u_shadowParams", bgfx::UniformType::Vec4);
     pointShadow_ = bgfx::createUniform("u_pointShadow", bgfx::UniformType::Vec4, kMaxPointLights);
     csmSampler_ = bgfx::createUniform("s_csm", bgfx::UniformType::Sampler);
+    kastParams_ = bgfx::createUniform("u_kastParams", bgfx::UniformType::Vec4, kMaxShaderParams);
+    for (size_t i = 0; i < kMaxShaderTextures; ++i)
+        shaderTextureSamplers_[i] = bgfx::createUniform(std::format("s_kastTexture{}", i).c_str(), bgfx::UniformType::Sampler);
+    screenSampler_ = bgfx::createUniform("s_kastScreen", bgfx::UniformType::Sampler);
+    depthSampler_ = bgfx::createUniform("s_kastDepth", bgfx::UniformType::Sampler);
+    if (bgfx::getCaps()->limits.maxTextureSamplers < kMaxTextureSamplers)
+        log::error(std::format("This GPU takes {} textures per draw; .kshader texture2D params need {}",
+                               bgfx::getCaps()->limits.maxTextureSamplers, kMaxTextureSamplers));
     for (size_t i = 0; i < kMaxShadowedPointLights; ++i) {
         pointShadowSamplers_[i] = bgfx::createUniform(std::format("s_pointShadow{}", i).c_str(), bgfx::UniformType::Sampler);
         cubes_[i] = BGFX_INVALID_HANDLE;
@@ -472,6 +495,8 @@ void Renderer::init()
     const uint32_t flat = 0xffff8080; // ABGR: (0.5, 0.5, 1), the tangent-space normal (0, 0, 1)
     flatNormal_ = bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
                                         bgfx::copy(&flat, sizeof(flat)));
+    const uint32_t black = 0xff000000;
+    black_ = bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE, bgfx::copy(&black, sizeof(black)));
     sky_.init();
     particles_.init(bgfx::getCaps()->supported);
 }
@@ -485,9 +510,14 @@ void Renderer::shutdown()
     clearTerrain();
     bgfx::destroy(terrainIndices_);
     bgfx::destroy(grid_);
+    for (auto& [path, shader] : userShaders_)
+        destroy(shader);
+    userShaders_.clear();
     bgfx::destroy(meshProgram_);
     bgfx::destroy(skinnedProgram_);
     bgfx::destroy(instancedProgram_);
+    for (bgfx::ShaderHandle shader : {meshVertex_, skinnedVertex_, instancedVertex_})
+        bgfx::destroy(shader);
     bgfx::destroy(lineProgram_);
     bgfx::destroy(shadowProgram_);
     bgfx::destroy(shadowSkinnedProgram_);
@@ -496,9 +526,12 @@ void Renderer::shutdown()
                                         pointColor_, emissive_, materialParams_, materialExt_, uvTransform_, time_,
                                         cameraPos_, fogColor_, fogParams_, baseColorSampler_, metallicRoughnessSampler_,
                                         normalSampler_, occlusionSampler_, emissiveSampler_, csmMtx_, csmSplits_,
-                                        csmBias_, shadowParams_, pointShadow_, csmSampler_})
+                                        csmBias_, shadowParams_, pointShadow_, csmSampler_, kastParams_, screenSampler_,
+                                        depthSampler_})
         bgfx::destroy(uniform);
     for (bgfx::UniformHandle uniform : pointShadowSamplers_)
+        bgfx::destroy(uniform);
+    for (bgfx::UniformHandle uniform : shaderTextureSamplers_)
         bgfx::destroy(uniform);
     // Frame buffers first: they don't own their textures (destroyTexture = false).
     for (const auto& faces : cubeFrameBuffers_)
@@ -521,6 +554,8 @@ void Renderer::shutdown()
     previewTexture_ = BGFX_INVALID_HANDLE;
     bgfx::destroy(white_);
     bgfx::destroy(flatNormal_);
+    bgfx::destroy(black_);
+    destroyCopies();
     sky_.shutdown();
     particles_.shutdown();
 }
@@ -613,6 +648,8 @@ void Renderer::setProjectRoot(const std::filesystem::path& root)
     materials_.reloadChanged();
     models().setRoot(root);
     models().reloadChanged();
+    shaders().setRoot(root);
+    shaders().reloadChanged();
     // ponytail: one stat per texture per frame, as for materials; watch the folder if projects grow to thousands.
     for (auto& [key, texture] : textures_)
         if (!root_.empty() && modifiedTime(root_ / textureFile(key.first)) != texture.mtime)
@@ -722,6 +759,82 @@ const Renderer::GpuModel* Renderer::gpuModel(const std::string& path)
     return &gpu;
 }
 
+const Renderer::UserShader* Renderer::userShader(const std::string& path)
+{
+    const std::shared_ptr<const CompiledShader> compiled = shaders().get(path);
+    auto it = userShaders_.find(path);
+    if (it != userShaders_.end() && it->second.source == compiled)
+        return compiled ? &it->second : nullptr;
+    if (it != userShaders_.end()) { // recompiled or now failing: drop the old programs
+        destroy(it->second);
+        userShaders_.erase(it);
+    }
+    if (!compiled)
+        return nullptr;
+    UserShader& shader = userShaders_[path];
+    shader.source = compiled;
+    // A stage it has no bytecode for (no vertex()) takes the built-in shader.
+    const auto make = [&](ShaderStage stage, bgfx::ShaderHandle builtin) {
+        const std::vector<uint8_t>& bytecode = compiled->stage(stage);
+        if (bytecode.empty())
+            return builtin;
+        shader.shaders.push_back(
+            bgfx::createShader(bgfx::copy(bytecode.data(), static_cast<uint32_t>(bytecode.size()))));
+        return shader.shaders.back();
+    };
+    const bgfx::ShaderHandle fragment = make(ShaderStage::Fragment, BGFX_INVALID_HANDLE);
+    const bgfx::ShaderHandle shadow = make(ShaderStage::Shadow, BGFX_INVALID_HANDLE);
+    const bgfx::ShaderHandle vertex = make(ShaderStage::Vertex, meshVertex_);
+    const bgfx::ShaderHandle skinned = make(ShaderStage::SkinnedVertex, skinnedVertex_);
+    const bgfx::ShaderHandle instanced = make(ShaderStage::InstancedVertex, instancedVertex_);
+    shader.mesh = bgfx::createProgram(vertex, fragment);
+    shader.skinned = bgfx::createProgram(skinned, fragment);
+    shader.instanced = bgfx::createProgram(instanced, fragment);
+    shader.shadowMesh = bgfx::createProgram(vertex, shadow);
+    shader.shadowSkinned = bgfx::createProgram(skinned, shadow);
+    shader.shadowInstanced = bgfx::createProgram(instanced, shadow);
+    return &shader;
+}
+
+void Renderer::destroy(UserShader& shader)
+{
+    for (bgfx::ProgramHandle program : {shader.mesh, shader.skinned, shader.instanced, shader.shadowMesh,
+                                        shader.shadowSkinned, shader.shadowInstanced})
+        bgfx::destroy(program);
+    for (bgfx::ShaderHandle handle : shader.shaders)
+        bgfx::destroy(handle);
+}
+
+void Renderer::resolveShaders(std::vector<DrawItem>& draws)
+{
+    // Once per distinct material; a null material: its shader is still compiling for the first time, so it isn't drawn.
+    std::map<const Material*, std::pair<const Material*, const UserShader*>> resolved;
+    for (DrawItem& item : draws) {
+        if (item.material->shader.empty())
+            continue;
+        auto [it, added] = resolved.try_emplace(item.material, item.material, nullptr);
+        if (added) {
+            const Material& material = *item.material;
+            const UserShader* shader = userShader(material.shader); // null: the library logged why, or compiling
+            const bool compiling = !shader && shaders().status(material.shader).state == ShaderLibrary::State::Compiling;
+            std::string error;
+            std::vector<std::string> unknown;
+            if (shader && (!checkShaderParams(material, shader->source->source, error, unknown) ||
+                           !checkShaderAlphaMode(material, shader->source->source, error))) {
+                warnOnce(std::format("Shader '{}': {}; rendering the material magenta", material.shader, error));
+                shader = nullptr;
+            }
+            for (const std::string& name : unknown)
+                warnOnce(std::format("Shader '{}' declares no param '{}'; ignoring the material's value", material.shader,
+                                     name));
+            it->second = {compiling ? nullptr : shader ? &material : &errorMaterial(), shader};
+        }
+        item.material = it->second.first;
+        item.shader = it->second.second;
+    }
+    std::erase_if(draws, [](const DrawItem& item) { return !item.material; });
+}
+
 void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const ModelRenderer& renderer, const float* world,
                              std::vector<DrawItem>& draws, std::vector<std::vector<Mat4>>& boneSets)
 {
@@ -783,18 +896,25 @@ bool Renderer::instanced(const std::vector<const DrawItem*>& batch, bgfx::Instan
 }
 
 void Renderer::submitShadowCasters(const std::vector<const DrawItem*>& batch, const std::vector<std::vector<Mat4>>& boneSets,
-                                   bgfx::ViewId view)
+                                   const bx::Vec3& eye, bgfx::ViewId view)
 {
     // The batch shares its material, buffers and skinning (BatchKey).
     const DrawItem& first = *batch.front();
     const Material& material = *first.material;
+    const UserShader* shader = first.shader;
     const float params[4] = {0.0f, 0.0f, material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f, 0.0f};
     const float uvTransform[4] = {material.uvScale[0], material.uvScale[1], material.uvOffset[0], material.uvOffset[1]};
+    const float cameraPos[4] = {eye.x, eye.y, eye.z, 1.0f};
     const auto setMaterial = [&] {
-        bgfx::setUniform(baseColor_, material.baseColor.data());
-        bgfx::setUniform(materialParams_, params);
-        bgfx::setUniform(uvTransform_, uvTransform);
-        bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
+        if (shader) { // its vertex() and fragment() run here too: all that fs_mesh.sc reads before its shadow cut
+            setMaterialState(first);
+            bgfx::setUniform(cameraPos_, cameraPos);
+        } else {
+            bgfx::setUniform(baseColor_, material.baseColor.data());
+            bgfx::setUniform(materialParams_, params);
+            bgfx::setUniform(uvTransform_, uvTransform);
+            bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
+        }
         bgfx::setVertexBuffer(0, first.vertices);
         bgfx::setIndexBuffer(first.indices);
         bgfx::setState(kShadowState);
@@ -803,17 +923,25 @@ void Renderer::submitShadowCasters(const std::vector<const DrawItem*>& batch, co
     if (instanced(batch, instances)) {
         setMaterial();
         bgfx::setInstanceDataBuffer(&instances);
-        bgfx::submit(view, shadowInstancedProgram_);
+        bgfx::submit(view, shader ? shader->shadowInstanced : shadowInstancedProgram_);
         return;
     }
     for (const DrawItem* item : batch) {
         setMaterial();
         bgfx::setTransform(item->world.data());
+        if (shader) {
+            float normal[16];
+            normalMatrix(item->world, normal);
+            bgfx::setUniform(normalMatrix_, normal);
+        }
         if (item->bones >= 0) {
             const std::vector<Mat4>& bones = boneSets[static_cast<size_t>(item->bones)];
             bgfx::setUniform(bones_, bones.data(), static_cast<uint16_t>(bones.size()));
         }
-        bgfx::submit(view, item->bones >= 0 ? shadowSkinnedProgram_ : shadowProgram_);
+        if (shader)
+            bgfx::submit(view, item->bones >= 0 ? shader->shadowSkinned : shader->shadowMesh);
+        else
+            bgfx::submit(view, item->bones >= 0 ? shadowSkinnedProgram_ : shadowProgram_);
     }
 }
 
@@ -836,6 +964,9 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
         for (size_t i : indices)
             batches.back().push_back(casters[i]);
     }
+    float cameraWorld[16];
+    bx::mtxInverse(cameraWorld, viewMtx);
+    const bx::Vec3 eye{cameraWorld[12], cameraWorld[13], cameraWorld[14]};
     std::vector<const DrawItem*> inView;
     const auto submitCasters = [&](const Frustum& frustum, const auto& keep, bgfx::ViewId view) {
         for (const std::vector<const DrawItem*>& batch : batches) {
@@ -844,13 +975,10 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
                 if (keep(*item) && !culled(*item, frustum))
                     inView.push_back(item);
             if (!inView.empty())
-                submitShadowCasters(inView, boneSets, view);
+                submitShadowCasters(inView, boneSets, eye, view);
         }
     };
     const bool homogeneousDepth = bgfx::getCaps()->homogeneousDepth;
-    float cameraWorld[16];
-    bx::mtxInverse(cameraWorld, viewMtx);
-    const bx::Vec3 eye{cameraWorld[12], cameraWorld[13], cameraWorld[14]};
 
     frame.sun = sun && sun->castShadows;
     if (frame.sun) {
@@ -948,6 +1076,91 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
     return frame;
 }
 
+void Renderer::setMaterialState(const DrawItem& item)
+{
+    const Material& material = *item.material;
+    const bx::Vec3 radiance = emissiveRadiance(material);
+    const float emissive[4] = {radiance.x, radiance.y, radiance.z, 0.0f};
+    const bool blend = material.alphaMode == AlphaMode::Blend;
+    const bool additive = material.alphaMode == AlphaMode::Additive;
+    // z: fragments with alpha below it are discarded (-1 = none); w: 1 outputs alpha (blend), 2 also fogs toward
+    // black (additive), 0 outputs 1.
+    const float params[4] = {material.metallic, material.roughness,
+                             material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f,
+                             additive ? 2.0f : blend ? 1.0f : 0.0f};
+    const bgfx::TextureHandle normalMap = texture(material.normalTexture, false, flatNormal_);
+    const float materialExt[4] = {material.normalScale, material.occlusionStrength,
+                                  normalMap.idx != flatNormal_.idx ? 1.0f : 0.0f, material.unlit ? 1.0f : 0.0f};
+    const float uvTransform[4] = {material.uvScale[0], material.uvScale[1], material.uvOffset[0], material.uvOffset[1]};
+    const float time[4] = {timeSeconds_, 0.0f, 0.0f, 0.0f};
+
+    bgfx::setUniform(baseColor_, material.baseColor.data());
+    bgfx::setUniform(emissive_, emissive);
+    bgfx::setUniform(materialParams_, params);
+    bgfx::setUniform(materialExt_, materialExt);
+    bgfx::setUniform(uvTransform_, uvTransform);
+    bgfx::setUniform(time_, time);
+    bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
+    bgfx::setTexture(1, metallicRoughnessSampler_, texture(material.metallicRoughnessTexture, false));
+    bgfx::setTexture(7, normalSampler_, normalMap);
+    bgfx::setTexture(8, occlusionSampler_, texture(material.occlusionTexture, false));
+    bgfx::setTexture(9, emissiveSampler_, texture(material.emissiveTexture, true));
+    if (item.shader) {
+        const ShaderSource& source = item.shader->source->source;
+        const auto values = shaderParamValues(material, source);
+        bgfx::setUniform(kastParams_, values.data(), kMaxShaderParams);
+        for (const ShaderParam& param : source.params) {
+            if (param.type != ShaderParamType::Texture2D)
+                continue;
+            const bgfx::TextureHandle fallback = param.texture == TextureDefault::Black    ? black_
+                                                 : param.texture == TextureDefault::Normal ? flatNormal_
+                                                                                           : white_;
+            bgfx::setTexture(static_cast<uint8_t>(kFirstShaderTextureStage + param.slot),
+                             shaderTextureSamplers_[static_cast<size_t>(param.slot)],
+                             texture(shaderParamTexture(material, param), param.srgb, fallback));
+        }
+    }
+}
+
+void Renderer::setTarget(bgfx::FrameBufferHandle target, uint16_t width, uint16_t height)
+{
+    target_ = target;
+    targetWidth_ = width;
+    targetHeight_ = height;
+}
+
+void Renderer::copyScene(bgfx::ViewId view, bgfx::FrameBufferHandle target, bool screen, bool depth)
+{
+    if (copyWidth_ != targetWidth_ || copyHeight_ != targetHeight_) {
+        destroyCopies();
+        copyWidth_ = targetWidth_;
+        copyHeight_ = targetHeight_;
+    }
+    if (screen) {
+        if (!bgfx::isValid(screenCopy_))
+            screenCopy_ = bgfx::createTexture2D(copyWidth_, copyHeight_, false, 1, bgfx::TextureFormat::RGBA16F,
+                                                BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_UVW_CLAMP);
+        bgfx::blit(view, screenCopy_, 0, 0, bgfx::getTexture(target, 0));
+        ++copies_.screen;
+    }
+    if (depth) {
+        if (!bgfx::isValid(depthCopy_)) // D3D11 copies depth whole: the target's format and size
+            depthCopy_ = bgfx::createTexture2D(copyWidth_, copyHeight_, false, 1, bgfx::TextureFormat::D24S8,
+                                               BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
+        bgfx::blit(view, depthCopy_, 0, 0, bgfx::getTexture(target, 1));
+        ++copies_.depth;
+    }
+}
+
+void Renderer::destroyCopies()
+{
+    for (bgfx::TextureHandle* copy : {&screenCopy_, &depthCopy_}) {
+        if (bgfx::isValid(*copy))
+            bgfx::destroy(*copy);
+        *copy = BGFX_INVALID_HANDLE;
+    }
+}
+
 void Renderer::render(const Scene& scene, const std::filesystem::path& projectRoot, bgfx::ViewId view,
                       const float* viewMtx, const float* projMtx, bgfx::ViewId shadowViews, const Scene* extra)
 {
@@ -959,6 +1172,10 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     bx::mtxInverse(cameraWorld, viewMtx);
     const bx::Vec3 eye{cameraWorld[12], cameraWorld[13], cameraWorld[14]};
     const float cameraPos[4] = {eye.x, eye.y, eye.z, 1.0f};
+    const bgfx::FrameBufferHandle target = std::exchange(target_, BGFX_INVALID_HANDLE); // for this render() only
+    // Blended draws go to blendView: the copies blit at its start, after view's opaque meshes and sky.
+    const bgfx::ViewId blendView = bgfx::isValid(target) ? static_cast<bgfx::ViewId>(view + 1) : view;
+    bool screenCopied = false, depthCopied = false;
 
     float lightDir[4] = {0.0f, -1.0f, 0.0f, 0.0f};
     float lightColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -1020,6 +1237,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     if (extra)
         addDraws(*extra);
     pruneTerrain();
+    resolveShaders(draws);
 
     const ShadowFrame shadows = renderShadows(sun, {lightDir[0], lightDir[1], lightDir[2]}, draws, boneSets,
                                               pointLights, viewMtx, projMtx, shadowViews);
@@ -1048,27 +1266,10 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             pointShadow[slot][2] = light.range;
         }
         const float shadowParams[4] = {item.receiveShadows ? 1.0f : 0.0f, shadows.sun ? 1.0f : 0.0f, 0.0f, 0.0f};
-        const bx::Vec3 radiance = emissiveRadiance(material);
-        const float emissive[4] = {radiance.x, radiance.y, radiance.z, 0.0f};
         const bool blend = material.alphaMode == AlphaMode::Blend;
         const bool additive = material.alphaMode == AlphaMode::Additive;
-        // z: fragments with alpha below it are discarded (-1 = none); w: 1 outputs alpha (blend), 2 also fogs toward
-        // black (additive), 0 outputs 1.
-        const float params[4] = {material.metallic, material.roughness,
-                                 material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f,
-                                 additive ? 2.0f : blend ? 1.0f : 0.0f};
-        const bgfx::TextureHandle normalMap = texture(material.normalTexture, false, flatNormal_);
-        const float materialExt[4] = {material.normalScale, material.occlusionStrength,
-                                      normalMap.idx != flatNormal_.idx ? 1.0f : 0.0f, material.unlit ? 1.0f : 0.0f};
-        const float uvTransform[4] = {material.uvScale[0], material.uvScale[1], material.uvOffset[0], material.uvOffset[1]};
-        const float time[4] = {timeSeconds_, 0.0f, 0.0f, 0.0f};
 
-        bgfx::setUniform(baseColor_, material.baseColor.data());
-        bgfx::setUniform(emissive_, emissive);
-        bgfx::setUniform(materialParams_, params);
-        bgfx::setUniform(materialExt_, materialExt);
-        bgfx::setUniform(uvTransform_, uvTransform);
-        bgfx::setUniform(time_, time);
+        setMaterialState(item);
         bgfx::setUniform(cameraPos_, cameraPos);
         bgfx::setUniform(fogColor_, fogColor);
         bgfx::setUniform(fogParams_, fogParams);
@@ -1084,32 +1285,32 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             bgfx::setUniform(csmSplits_, shadows.csmSplits);
             bgfx::setUniform(csmBias_, shadows.csmBias, kMaxShadowCascades);
         }
+        if (item.shader && item.shader->source->source.screenTexture)
+            bgfx::setTexture(kScreenTextureStage, screenSampler_, screenCopied ? screenCopy_ : black_);
+        if (item.shader && item.shader->source->source.depthTexture)
+            bgfx::setTexture(kDepthTextureStage, depthSampler_, depthCopied ? depthCopy_ : white_);
         bgfx::setTexture(2, csmSampler_, shadows.sun ? csm_ : noShadow2D_);
         for (size_t cube = 0; cube < kMaxShadowedPointLights; ++cube)
             bgfx::setTexture(static_cast<uint8_t>(3 + cube), pointShadowSamplers_[cube],
                              cube < shadows.pointLights.size() ? cubes_[cube] : noShadowCube_);
-        bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
-        bgfx::setTexture(1, metallicRoughnessSampler_, texture(material.metallicRoughnessTexture, false));
-        bgfx::setTexture(7, normalSampler_, normalMap);
-        bgfx::setTexture(8, occlusionSampler_, texture(material.occlusionTexture, false));
-        bgfx::setTexture(9, emissiveSampler_, texture(material.emissiveTexture, true));
         bgfx::setVertexBuffer(0, item.vertices);
         bgfx::setIndexBuffer(item.indices);
         bgfx::setState((additive ? kAdditiveState : blend ? kBlendState : kState) | cullState(material.cullMode, item.mirrored));
     };
-    const auto submit = [&](const DrawItem& item, const std::vector<size_t>& nearest) {
-        float inverse[16];
-        float normalMatrix[16];
-        bx::mtxInverse(inverse, item.world.data());
-        bx::mtxTranspose(normalMatrix, inverse);
+    const auto submit = [&](bgfx::ViewId to, const DrawItem& item, const std::vector<size_t>& nearest) {
+        float normal[16];
+        normalMatrix(item.world, normal);
         setDrawState(item, nearest);
         bgfx::setTransform(item.world.data());
-        bgfx::setUniform(normalMatrix_, normalMatrix);
+        bgfx::setUniform(normalMatrix_, normal);
         if (item.bones >= 0) {
             const std::vector<Mat4>& bones = boneSets[static_cast<size_t>(item.bones)];
             bgfx::setUniform(bones_, bones.data(), static_cast<uint16_t>(bones.size()));
         }
-        bgfx::submit(view, item.bones >= 0 ? skinnedProgram_ : meshProgram_);
+        if (item.shader)
+            bgfx::submit(to, item.bones >= 0 ? item.shader->skinned : item.shader->mesh);
+        else
+            bgfx::submit(to, item.bones >= 0 ? skinnedProgram_ : meshProgram_);
     };
 
     // Opaque and mask meshes in the view now, batched; blended ones after, one by one far to near by world-space
@@ -1146,21 +1347,35 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         if (instanced(batch, instances)) {
             setDrawState(*batch.front(), opaqueLights[indices.front()]);
             bgfx::setInstanceDataBuffer(&instances);
-            bgfx::submit(view, instancedProgram_);
+            bgfx::submit(view, batch.front()->shader ? batch.front()->shader->instanced : instancedProgram_);
             continue;
         }
         for (size_t i : indices)
-            submit(*opaque[i], opaqueLights[i]);
+            submit(view, *opaque[i], opaqueLights[i]);
     }
     sky_.draw(scene.sky, root_, view, viewMtx, projMtx); // behind the opaque meshes, under the blended ones
+    if (blendView != view) {
+        bgfx::setViewName(blendView, "Scene blended");
+        bgfx::setViewFrameBuffer(blendView, target);
+        bgfx::setViewRect(blendView, 0, 0, targetWidth_, targetHeight_);
+        bgfx::setViewClear(blendView, BGFX_CLEAR_NONE);
+        bgfx::setViewTransform(blendView, viewMtx, projMtx);
+        bgfx::setViewMode(blendView, bgfx::ViewMode::Sequential);
+        // Copied only for a blended .kshader in view that samples them (opaque and mask ones may not: resolveShaders).
+        for (const DrawItem* item : blended) {
+            screenCopied = screenCopied || (item->shader && item->shader->source->source.screenTexture);
+            depthCopied = depthCopied || (item->shader && item->shader->source->source.depthTexture);
+        }
+        copyScene(blendView, target, screenCopied, depthCopied);
+    }
     for (size_t i : backToFront(centers, eye)) {
         if (i < blended.size()) {
-            submit(*blended[i], nearestPointLights(pointLights, blended[i]->bounds));
+            submit(blendView, *blended[i], nearestPointLights(pointLights, blended[i]->bounds));
             continue;
         }
         const ParticleRenderer::Draw& emitter = particles[i - blended.size()];
         const bgfx::TextureHandle image = texture(emitter.emitter->texture, true); // white_: none or failed to load
-        particles_.draw(emitter, view, image, image.idx != white_.idx, fogColor, fogParams, cameraPos);
+        particles_.draw(emitter, blendView, image, image.idx != white_.idx, fogColor, fogParams, cameraPos);
     }
 }
 

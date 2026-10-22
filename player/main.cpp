@@ -42,7 +42,7 @@ constexpr int kScreenshotTimeoutFrames = 30;
 constexpr const char* kPakFileName = "game.pak";
 constexpr int kGuiClickFrame = 10; // --gui-click: once the GUIs have loaded and laid out
 constexpr const char* kUsage =
-    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--sim-key frame,key]... [--size WxH] [--window-pos X,Y] [--gpu-stats] [--no-instancing] [--no-culling] [--no-audio-device]";
+    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--sim-key frame,key]... [--size WxH] [--window-pos X,Y] [--fixed-dt S] [--gpu-stats] [--no-instancing] [--no-culling] [--no-audio-device]";
 constexpr int kGpuStatsWarmupFrames = 10; // --gpu-stats: skip startup frames (shader and target creation)
 
 struct Options {
@@ -52,6 +52,7 @@ struct Options {
     std::vector<std::pair<int, SDL_Scancode>> simKeys; // tests: these keys pressed on these frames (pushed SDL events)
     int width = kast::AppConfig{}.width, height = kast::AppConfig{}.height; // --size: window size
     std::optional<std::pair<int, int>> windowPos; // --window-pos: window top-left
+    float fixedDt = 0.0f;   // --fixed-dt: each frame advances this many seconds (0: real time), as in the editor
     bool gpuStats = false;  // log the average GPU frame time on exit
     bool noInstancing = false; // draw every mesh one by one (Renderer::setInstancing)
     bool noCulling = false;    // draw every mesh in every pass (Renderer::setCulling)
@@ -107,6 +108,14 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.windowPos = kast::parseWindowPos(text);
             if (!options.windowPos) {
                 kast::log::error(std::format("Invalid --window-pos '{}', expected X,Y. {}", text, kUsage));
+                return std::nullopt;
+            }
+        } else if (arg == "--fixed-dt" && hasValue) { // deterministic screenshots of anything that moves
+            const std::string_view text = argv[++i];
+            auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), options.fixedDt);
+            if (ec != std::errc{} || ptr != text.data() + text.size() || !(options.fixedDt > 0.0f)) {
+                kast::log::error(std::format("Invalid --fixed-dt '{}', expected a positive number of seconds. {}", text,
+                                             kUsage));
                 return std::nullopt;
             }
         } else if (arg == "--gpu-stats") {
@@ -241,7 +250,7 @@ int main(int argc, char** argv)
     };
     hooks.frame = [&] {
         const uint64_t ticks = SDL_GetTicksNS();
-        const double dt = static_cast<double>(ticks - lastTicks) * 1e-9;
+        const double dt = options->fixedDt > 0.0f ? options->fixedDt : static_cast<double>(ticks - lastTicks) * 1e-9;
         stats.frame(dt, lua.world().rttMs());
         shaderClock.advance(dt);
         renderer.setTime(shaderClock.seconds());
@@ -262,6 +271,7 @@ int main(int argc, char** argv)
             float view[16], proj[16];
             kast::cameraMatrices(scene, camera, static_cast<float>(width) / static_cast<float>(height),
                                  bgfx::getCaps()->homogeneousDepth, view, proj);
+            renderer.setTarget(post.target(), post.width(), post.height());
             renderer.render(scene, project.root, post.sceneView(), view, proj, kShadowViews);
         }
         if (kast::gui::wantsReadableTarget() && width > 0 && height > 0 &&

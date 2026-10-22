@@ -1,0 +1,6 @@
+{
+  "version": 3,
+  "alphaMode": "blend",
+  "unlit": true,
+  "shader": "shaders/water.kshader"
+}

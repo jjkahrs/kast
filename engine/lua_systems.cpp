@@ -15,6 +15,7 @@
 #include "particles.h"
 #include "project.h"
 #include "scene_io.h"
+#include "shader.h"
 
 #include <SDL3/SDL.h>
 #include <sol/sol.hpp>
@@ -473,6 +474,10 @@ ComponentType LuaSystems::State::componentType(lua_State* L, const std::string& 
 
 const Material& LuaSystems::State::material(lua_State* L, entt::entity e)
 {
+    // A shader's params are known once the library has a root, which the renderer gives it on its first frame; a
+    // system's first update can run before that (Play's first frame), so give it the project root here.
+    if (shaders().root().empty() && projectRoot)
+        shaders().setRoot(*projectRoot);
     if (const auto* instance = scene.registry().try_get<MaterialInstance>(e))
         return instance->material;
     const auto* mesh = scene.registry().try_get<MeshRenderer>(e);
@@ -665,10 +670,11 @@ void LuaSystems::State::bindApi()
 
     // Per-entity material properties (Unity's renderer.material): the first set copies the entity's MeshRenderer
     // material into a MaterialInstance only it renders with; reads come from the instance, else the shared .mat.
-    // Fields and checks as in .mat files; colors as {r, g, b[, a]} or {x =, y =, z =[, w =]}.
+    // Fields and checks as in .mat files, plus the params of its .kshader; colors as {r, g, b[, a]} or
+    // {x =, y =, z =[, w =]}; a texture2D param as its path.
     api.set_function("getMaterialProperty", [this](sol::this_state L, const sol::object& id, const std::string& name) {
         const entt::entity e = entity(L, id);
-        const std::optional<Json> value = materialField(material(L, e), name);
+        const std::optional<Json> value = materialProperty(material(L, e), name);
         if (!value)
             raise(L, std::format("unknown material property \"{}\"", name));
         if (value->is_boolean())
@@ -686,7 +692,7 @@ void LuaSystems::State::bindApi()
         const entt::entity e = entity(L, id);
         Material copy = material(L, e);
         std::string error;
-        if (!setMaterialField(copy, name, materialValueToJson(value), error))
+        if (!setMaterialProperty(copy, name, materialValueToJson(value), error))
             raise(L, error);
         registry.emplace_or_replace<MaterialInstance>(e, std::move(copy));
     });

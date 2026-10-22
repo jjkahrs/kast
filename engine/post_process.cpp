@@ -124,7 +124,8 @@ void PostProcess::begin(uint16_t width, uint16_t height, const bx::Vec3& clearCo
 {
     if ((width != width_ || height != height_) && width > 0 && height > 0) {
         destroyTargets();
-        depth_ = bgfx::createTexture2D(width, height, false, 1, bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT_WRITE_ONLY);
+        // Not write-only: Renderer::render copies it for DEPTH_TEXTURE.
+        depth_ = bgfx::createTexture2D(width, height, false, 1, bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT);
         const bgfx::TextureHandle textures[] = {
             bgfx::createTexture2D(width, height, false, 1, bgfx::TextureFormat::RGBA16F, kTargetFlags), depth_};
         scene_ = bgfx::createFrameBuffer(2, textures, true);
@@ -168,7 +169,7 @@ void PostProcess::apply(const ScenePostProcessing& post, bool effects, bgfx::Fra
 {
     if (!valid())
         return;
-    bgfx::ViewId view = first_ + 1;
+    bgfx::ViewId view = first_ + 2; // after the scene's two
     const bgfx::TextureHandle sceneColor = bgfx::getTexture(scene_);
 
     // Bloom: soft-threshold to half size, blur down to 1/32 (4 bilinear taps over a 4x4 texel box), then back up,
@@ -198,7 +199,7 @@ void PostProcess::apply(const ScenePostProcessing& post, bool effects, bgfx::Fra
         }
     }
 
-    view = first_ + 1 + 2 * kBloomLevels - 1; // final, then FXAA, whether or not bloom ran
+    view = first_ + 2 + 2 * kBloomLevels - 1; // final, then FXAA, whether or not bloom ran
     const auto& tone = post.tonemapping;
     const auto& grading = post.colorGrading;
     const auto& vignette = post.vignette;

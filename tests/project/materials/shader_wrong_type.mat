@@ -1,0 +1,5 @@
+{
+  "version": 3,
+  "shader": "shaders/showcase.kshader",
+  "params": { "stripes": [1, 2] }
+}

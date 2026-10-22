@@ -1,0 +1,8 @@
+// Deliberately broken (shader_errors.scene): line 4 declares a param of a type that doesn't exist.
+param float fine = 1.0;
+
+param vec5 nope = vec5(1.0);
+
+void fragment()
+{
+}

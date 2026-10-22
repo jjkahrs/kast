@@ -63,12 +63,14 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
   endif()
   set(src "${CMAKE_CURRENT_SOURCE_DIR}/${path}.sc")
   set(out "${KAST_SHADER_OUT}/${shader}.bin.h")
+  file(GLOB headers "${CMAKE_CURRENT_SOURCE_DIR}/${dir}/*.sh") # e.g. engine/shaders/mesh.sh, included from the dir
   add_custom_command(
     OUTPUT "${out}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${KAST_SHADER_OUT}"
     COMMAND "${KAST_SHADERC}" -f "${src}" -o "${out}" --bin2c ${shader} --type ${type}
-            --platform windows -p s_5_0 -i "${KAST_SHADER_INCLUDE}" --varyingdef "${varying}"
-    DEPENDS "${src}" "${varying}"
+            --platform windows -p s_5_0 -i "${KAST_SHADER_INCLUDE}" -i "${CMAKE_CURRENT_SOURCE_DIR}/${dir}"
+            --varyingdef "${varying}"
+    DEPENDS "${src}" "${varying}" ${headers}
     COMMENT "shaderc ${shader}.sc"
     VERBATIM)
   if(dir MATCHES "^engine/")
@@ -77,6 +79,28 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
     list(APPEND KAST_EDITOR_SHADERS "${out}")
   endif()
 endforeach()
+
+# --- shader tools: .kshader files compile in the editor at run time (editor/shader_compiler.cpp) with this shaderc,
+# next to the editor, plus bgfx's shader headers and the mesh templates in kshader/ beside it. The player gets none. ---
+set(KAST_SHADER_TOOLS)
+foreach(pair "${KAST_SHADERC}|shaderc.exe"
+             "${KAST_SHADER_INCLUDE}/bgfx_shader.sh|kshader/include/bgfx_shader.sh"
+             "${KAST_SHADER_INCLUDE}/bgfx_compute.sh|kshader/include/bgfx_compute.sh"
+             "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/fs_mesh.sc|kshader/mesh/fs_mesh.sc"
+             "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/vs_mesh.sc|kshader/mesh/vs_mesh.sc"
+             "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/vs_mesh_skinned.sc|kshader/mesh/vs_mesh_skinned.sc"
+             "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/vs_mesh_instanced.sc|kshader/mesh/vs_mesh_instanced.sc"
+             "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/mesh.sh|kshader/mesh/mesh.sh"
+             "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/varying.def.sc|kshader/mesh/varying.def.sc")
+  string(REPLACE "|" ";" pair "${pair}")
+  list(GET pair 0 from)
+  list(GET pair 1 to)
+  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${to}"
+                     COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${from}" "${CMAKE_CURRENT_BINARY_DIR}/${to}"
+                     DEPENDS "${from}" VERBATIM)
+  list(APPEND KAST_SHADER_TOOLS "${CMAKE_CURRENT_BINARY_DIR}/${to}")
+endforeach()
+add_custom_target(kast_shader_tools DEPENDS ${KAST_SHADER_TOOLS})
 
 # --- Fonts: TTFs embedded as byte array headers, regenerated when the TTF changes ---
 set(KAST_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -118,7 +142,7 @@ target_link_libraries(kast_map PUBLIC nlohmann_json::nlohmann_json)
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/undo.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/prefab.cpp engine/components.cpp
-  engine/systems.cpp engine/renderer.cpp engine/shadow.cpp engine/frustum.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
+  engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shadow.cpp engine/frustum.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
@@ -149,7 +173,7 @@ add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
   editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp editor/editor_settings.cpp
-  editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp editor/zone_cli.cpp
+  editor/shader_compiler.cpp editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp editor/zone_cli.cpp
   editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
@@ -157,7 +181,7 @@ target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENE
 target_compile_definitions(kast_editor PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_editor PRIVATE kast_engine kast_zone SDL3::SDL3 imgui::imgui imguizmo::imguizmo pugixml::pugixml shell32) # shell32: Recycle Bin
-add_dependencies(kast_editor kast_player) # Build copies kast_player.exe from next to kast_editor.exe
+add_dependencies(kast_editor kast_player kast_shader_tools) # Build copies kast_player.exe from next to kast_editor.exe
 
 # --- zone: the zone (map) document, file and terrain editing logic (engine/zone), no window. Its own library, not
 # part of kast_engine: only editing tools link it, so the shipped kast_player stays free of it (and of KAST_SOURCE_DIR). ---
@@ -179,8 +203,9 @@ target_include_directories(kast_zone_self_check SYSTEM PRIVATE "${Stb_INCLUDE_DI
 # Also builds the editor Document (Play mode) so it can be checked without a window.
 add_executable(kast_self_check tests/self_check.cpp tests/net_self_check.cpp tests/net_test_util.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp
   editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/external_editor.cpp editor/editor_settings.cpp
-  editor/online.cpp "${KAST_MANIFEST}")
+  editor/shader_compiler.cpp editor/online.cpp "${KAST_MANIFEST}")
 target_include_directories(kast_self_check PRIVATE editor)
+add_dependencies(kast_self_check kast_shader_tools) # the .kshader checks compile with them
 target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project"
                            KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS} /bigobj) # one big file of checks
@@ -962,13 +987,223 @@ add_test(NAME assets_create_material_screenshot
 add_test(NAME assets_create_material_written
   COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_NEW_MATERIAL_PROJECT}/materials/new_material.mat")
 set_tests_properties(assets_create_material_written PROPERTIES PASS_REGULAR_EXPRESSION
-  "\"version\": 2,.*\"baseColor\": \\[.*0.8.*\"metallic\": 0[.0]*,.*\"roughness\": 0.5,.*\"alphaMode\": \"opaque\".*\"cullMode\": \"back\",.*\"unlit\": false")
+  "\"version\": 3,.*\"baseColor\": \\[.*0.8.*\"metallic\": 0[.0]*,.*\"roughness\": 0.5,.*\"alphaMode\": \"opaque\".*\"cullMode\": \"back\",.*\"unlit\": false,.*\"shader\": \"\",.*\"params\": {}")
 set_tests_properties(new_material_project_clean PROPERTIES FIXTURES_SETUP new_material_clean)
 set_tests_properties(new_material_project_copy PROPERTIES FIXTURES_REQUIRED new_material_clean
                      FIXTURES_SETUP new_material_copy)
 set_tests_properties(assets_create_material_screenshot PROPERTIES FIXTURES_REQUIRED new_material_copy
                      FIXTURES_SETUP new_material_made)
 set_tests_properties(assets_create_material_written PROPERTIES FIXTURES_REQUIRED new_material_made)
+# User shaders (.kshader, docs/engine/shaders.html). Every shot here has the Assets panel in front, covering the Console
+# (whose log differs), and compares two runs of one project layout:
+# - shader_empty_*: tests/project's materials.scene and material_features.scene in a copy whose every .mat (without a
+#   shader of its own) uses shaders/empty.kshader, an empty fragment(), must be identical to the same scenes in a plain
+#   copy (both folders are named "project", so the panels match).
+# - shader_errors: shader_errors.scene's four cubes (a GLSL error on line 7, a bad param line, a missing .kshader, a
+#   wrong-typed param value) must render exactly as the error material (a copy with every material a missing .mat),
+#   logging the .kshader line.
+# - shader_showcase: shader_showcase.scene (params, a texture param, TIME, vertex colors) must differ from a copy
+#   without its shader materials.
+set(KAST_SHADER_BUILTIN_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/shader_builtin/project")
+set(KAST_EMPTY_SHADER_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/shader_empty/project")
+set(KAST_SHADER_TEST_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/shader_test_project")
+foreach(dir "${KAST_SHADER_BUILTIN_PROJECT}" "${KAST_EMPTY_SHADER_PROJECT}" "${KAST_SHADER_TEST_PROJECT}")
+  file(REMOVE_RECURSE "${dir}")
+  file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${dir}")
+endforeach()
+file(GLOB empty_shader_mats "${KAST_TEST_PROJECT}/materials/*.mat")
+foreach(mat ${empty_shader_mats})
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${mat}")
+  file(READ "${mat}" mat_text)
+  if(NOT mat_text MATCHES "\"shader\"")
+    string(REGEX REPLACE "(\"version\": [0-9]+)" "\\1, \"shader\": \"shaders/empty.kshader\"" mat_text "${mat_text}")
+    get_filename_component(mat_name "${mat}" NAME)
+    file(WRITE "${KAST_EMPTY_SHADER_PROJECT}/materials/${mat_name}" "${mat_text}")
+  endif()
+endforeach()
+# kast_shader_shot(<name> <project> <scene> [PLAY] [smoke_test.cmake -D...]): shader_<name>.png, fixture
+# shader_<name>_shot. PLAY shoots the Game view in Play (Lua systems run) instead of the Scene view.
+function(kast_shader_shot name project scene)
+  set(play "")
+  if(PLAY IN_LIST ARGN)
+    list(REMOVE_ITEM ARGN PLAY)
+    set(play " --play")
+  endif()
+  add_test(NAME shader_${name}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/shader_${name}.png"
+            "-DEXTRA_ARGS=--scene ${project}/${scene} --size 1600x900 --fixed-dt 0.016${play}" -DFOCUS_PANEL=Assets ${ARGN}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+  set_tests_properties(shader_${name}_screenshot PROPERTIES FIXTURES_SETUP shader_${name}_shot)
+endfunction()
+# kast_shader_compare(<test> <a> <b> <same: ON / OFF>): shader_<a>.png against shader_<b>.png.
+function(kast_shader_compare test a b same)
+  add_test(NAME ${test}
+    COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/shader_${a}.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/shader_${b}.png"
+            -DSAME=${same} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+  set_tests_properties(${test} PROPERTIES FIXTURES_REQUIRED "shader_${a}_shot;shader_${b}_shot")
+endfunction()
+foreach(scene materials material_features)
+  kast_shader_shot(builtin_${scene} "${KAST_SHADER_BUILTIN_PROJECT}" ${scene}.scene "-DFORBID_OUTPUT=Compiled shader")
+  kast_shader_shot(empty_${scene} "${KAST_EMPTY_SHADER_PROJECT}" ${scene}.scene
+                   "-DEXPECT_OUTPUT=Compiled shader 'shaders/empty.kshader'" -DEXPECT_COUNT=1)
+  kast_shader_compare(shader_empty_${scene}_same builtin_${scene} empty_${scene} ON)
+endforeach()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/shader_errors.scene"
+             "${KAST_TEST_PROJECT}/shader_showcase.scene")
+file(READ "${KAST_TEST_PROJECT}/shader_errors.scene" shader_scene)
+string(REGEX REPLACE "materials/shader_[a-z_]+\\.mat" "materials/does_not_exist.mat" shader_scene "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_errors_reference.scene" "${shader_scene}")
+file(READ "${KAST_TEST_PROJECT}/shader_showcase.scene" shader_scene)
+string(REGEX REPLACE "materials/shader_[a-z_]+\\.mat" "" shader_scene "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_showcase_builtin.scene" "${shader_scene}")
+kast_shader_shot(errors "${KAST_SHADER_TEST_PROJECT}" shader_errors.scene
+  "-DEXPECT_OUTPUT=\\[error\\] Shader 'shaders/broken.kshader': line 7: error X3004: undeclared identifier 'undeclaredThing'"
+  -DEXPECT_COUNT=1)
+kast_shader_shot(errors_log "${KAST_SHADER_TEST_PROJECT}" shader_errors.scene
+  "-DEXPECT_OUTPUT=Shader 'shaders/showcase.kshader': param 'stripes' is a float: its value must be a number.*Shader 'shaders/does_not_exist.kshader': cannot read the file.*Shader 'shaders/bad_param.kshader': line 4: unknown param type 'vec5'")
+kast_shader_shot(errors_reference "${KAST_SHADER_TEST_PROJECT}" shader_errors_reference.scene)
+kast_shader_compare(shader_errors_magenta_same errors_reference errors ON)
+kast_shader_shot(showcase "${KAST_SHADER_TEST_PROJECT}" shader_showcase.scene
+  "-DEXPECT_OUTPUT=Shader 'shaders/showcase.kshader' declares no param 'removed_param'" -DEXPECT_COUNT=1
+  "-DFORBID_OUTPUT=\\[error\\]|magenta")
+kast_shader_shot(showcase_builtin "${KAST_SHADER_TEST_PROJECT}" shader_showcase_builtin.scene)
+kast_shader_compare(shader_showcase_differs showcase_builtin showcase OFF)
+# - shader_vertex_offset: lift.kshader's vertex() raising a cube and an instanced batch of spheres, and a mask material
+#   whose fragment() cuts every pixel, must render exactly as the plain meshes placed higher and a fully transparent
+#   cutout (shader_vertex_offset_reference.scene): shadows follow vertex() and fragment()'s ALPHA.
+# - shader_vertex: sway.kshader's vertex() on a cutout primitive, an instanced batch and a skinned model must compile
+#   and differ from a copy without its shader materials.
+kast_shader_shot(vertex_offset "${KAST_SHADER_TEST_PROJECT}" shader_vertex_offset.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/lift.kshader'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]|magenta")
+kast_shader_shot(vertex_offset_reference "${KAST_SHADER_TEST_PROJECT}" shader_vertex_offset_reference.scene)
+kast_shader_compare(shader_vertex_offset_same vertex_offset_reference vertex_offset ON)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/shader_vertex.scene")
+file(READ "${KAST_TEST_PROJECT}/shader_vertex.scene" shader_scene)
+string(REGEX REPLACE "materials/shader_[a-z_]+\\.mat" "" shader_scene "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_vertex_builtin.scene" "${shader_scene}")
+kast_shader_shot(vertex "${KAST_SHADER_TEST_PROJECT}" shader_vertex.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/sway.kshader'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]|magenta")
+kast_shader_shot(vertex_builtin "${KAST_SHADER_TEST_PROJECT}" shader_vertex_builtin.scene)
+kast_shader_compare(shader_vertex_differs vertex_builtin vertex OFF)
+# light(), SCREEN_TEXTURE and DEPTH_TEXTURE (phase 5):
+# - shader_light: light_bands.kshader's light() bands under a shadowing sun, a point light and fog; differs from a copy
+#   without its shader materials. shader_light_pbr_same: light_pbr.kshader's light(), calling the template's own shade()
+#   with its inputs, must render exactly as the built-in shader (a copy whose sphere has no material).
+# - shader_screen: screen_water.kshader's refraction (SCREEN_TEXTURE) and foam (DEPTH_TEXTURE), moving with TIME.
+# - shader_screen_identity_same: an unlit blend plane showing SCREEN_TEXTURE at SCREEN_UV (magenta where linearDepth()
+#   of DEPTH_TEXTURE puts the scene in front of it) must render exactly as a fully transparent plane.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/shader_light.scene"
+             "${KAST_TEST_PROJECT}/shader_screen_identity.scene")
+file(READ "${KAST_TEST_PROJECT}/shader_light.scene" shader_scene)
+string(REGEX REPLACE "materials/shader_light_pbr\\.mat" "" light_reference "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_light_reference.scene" "${light_reference}")
+string(REGEX REPLACE "materials/shader_[a-z_]+\\.mat" "" shader_scene "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_light_builtin.scene" "${shader_scene}")
+file(READ "${KAST_TEST_PROJECT}/shader_screen_identity.scene" shader_scene)
+string(REGEX REPLACE "materials/shader_screen_identity\\.mat" "materials/screen_clear.mat" shader_scene "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_screen_identity_reference.scene" "${shader_scene}")
+kast_shader_shot(light "${KAST_SHADER_TEST_PROJECT}" shader_light.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/light_bands.kshader'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]|magenta")
+kast_shader_shot(light_reference "${KAST_SHADER_TEST_PROJECT}" shader_light_reference.scene
+  "-DFORBID_OUTPUT=\\[error\\]|magenta|light_pbr")
+kast_shader_shot(light_builtin "${KAST_SHADER_TEST_PROJECT}" shader_light_builtin.scene)
+kast_shader_compare(shader_light_pbr_same light_reference light ON)
+kast_shader_compare(shader_light_differs light_builtin light OFF)
+kast_shader_shot(screen "${KAST_SHADER_TEST_PROJECT}" shader_screen.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/screen_water.kshader'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]|magenta")
+kast_shader_shot(screen_f60 "${KAST_SHADER_TEST_PROJECT}" shader_screen.scene -DFRAMES=60)
+kast_shader_compare(shader_screen_animates screen_f60 screen OFF)
+kast_shader_shot(screen_identity "${KAST_SHADER_TEST_PROJECT}" shader_screen_identity.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/screen_identity.kshader'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]|magenta")
+kast_shader_shot(screen_identity_reference "${KAST_SHADER_TEST_PROJECT}" shader_screen_identity_reference.scene)
+kast_shader_compare(shader_screen_identity_same screen_identity_reference screen_identity ON)
+# The samples (phase 6): custom_shaders.scene, all five tests/project/shaders samples (pulse, wind, dissolve, water,
+# toon) under a shadowing sun, a point light and fog, wind also on a skinned model.
+# - shader_custom: every sample compiles, nothing renders magenta; shader_custom_animates: TIME moves them (frame 60
+#   against 120).
+# - shader_custom_play: in Play, scripts/dissolve_driver.lua animates the dissolve's threshold param (Lua
+#   kast.setMaterialProperty on a .kshader param from the first frame); shader_custom_play_lua_differs: a copy without
+#   the script differs at the same frame.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/custom_shaders.scene")
+file(READ "${KAST_TEST_PROJECT}/custom_shaders.scene" shader_scene)
+string(REPLACE "\"scripts/dissolve_driver.lua\"" "" shader_scene "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/custom_shaders_no_systems.scene" "${shader_scene}")
+set(custom_shaders_compiled "Compiled shader 'shaders/(pulse|wind|dissolve|water|toon)\\.kshader'")
+kast_shader_shot(custom "${KAST_SHADER_TEST_PROJECT}" custom_shaders.scene
+  "-DEXPECT_OUTPUT=${custom_shaders_compiled}" -DEXPECT_COUNT=5 "-DFORBID_OUTPUT=\\[error\\]|\\[warn\\]|magenta")
+kast_shader_shot(custom_f60 "${KAST_SHADER_TEST_PROJECT}" custom_shaders.scene -DFRAMES=60)
+kast_shader_compare(shader_custom_animates custom_f60 custom OFF)
+kast_shader_shot(custom_play "${KAST_SHADER_TEST_PROJECT}" custom_shaders.scene PLAY
+  "-DEXPECT_OUTPUT=${custom_shaders_compiled}" -DEXPECT_COUNT=5 "-DFORBID_OUTPUT=\\[error\\]|\\[warn\\]|magenta")
+kast_shader_shot(custom_play_f60 "${KAST_SHADER_TEST_PROJECT}" custom_shaders.scene PLAY -DFRAMES=60)
+kast_shader_shot(custom_play_no_systems "${KAST_SHADER_TEST_PROJECT}" custom_shaders_no_systems.scene PLAY)
+kast_shader_compare(shader_custom_play_animates custom_play_f60 custom_play OFF)
+kast_shader_compare(shader_custom_play_lua_differs custom_play_no_systems custom_play OFF)
+# Editor workflow (phase 3), in a fresh copy of the test project (the shader cache and new files land in it):
+# - shader_cache_first / _second: the second start loads showcase.kshader from <project>/.kast/shader_cache.
+# - shader_new: Assets > Create > Shader writes a starter that compiles (the Inspector shows it).
+# - shader_inspector_params: the Inspector's Shader section for params.kshader (one param of every type);
+#   shader_inspector_broken: a material whose .kshader fails shows the error at its line.
+# - shader_material_edit: Inspector edits of params (--material-set) save the .mat; undo / redo save it back
+#   (shader_material_undo: two edits then Undo; shader_material_redo: an edit, Undo, Redo).
+# - shader_hot_reload: cmake/shader_hot_reload_test.ps1 (a .kshader saved while the editor runs shows within 2 s; a
+#   broken save keeps the last good shader on screen and shows the error).
+set(KAST_SHADER_EDITOR_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/shader_editor_project")
+add_test(NAME shader_editor_project_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${KAST_SHADER_EDITOR_PROJECT}")
+add_test(NAME shader_editor_project_copy
+  COMMAND "${CMAKE_COMMAND}" -E copy_directory "${KAST_TEST_PROJECT}" "${KAST_SHADER_EDITOR_PROJECT}")
+set_tests_properties(shader_editor_project_clean PROPERTIES FIXTURES_SETUP shader_editor_clean)
+set_tests_properties(shader_editor_project_copy PROPERTIES FIXTURES_REQUIRED shader_editor_clean
+                     FIXTURES_SETUP shader_editor_copy)
+kast_shader_shot(cache_first "${KAST_SHADER_EDITOR_PROJECT}" shader_showcase.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/showcase.kshader' in [0-9.]+ s" -DEXPECT_COUNT=1)
+kast_shader_shot(cache_second "${KAST_SHADER_EDITOR_PROJECT}" shader_showcase.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/showcase.kshader' \\(cache hit\\)" -DEXPECT_COUNT=1
+  "-DFORBID_OUTPUT=Compiled shader 'shaders/showcase.kshader' in")
+set_tests_properties(shader_cache_first_screenshot PROPERTIES FIXTURES_REQUIRED shader_editor_copy
+                     FIXTURES_SETUP shader_cache_filled)
+set_tests_properties(shader_cache_second_screenshot PROPERTIES FIXTURES_REQUIRED shader_cache_filled)
+kast_shader_compare(shader_cache_same cache_first cache_second ON)
+add_test(NAME shader_new_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/shader_new.png"
+          "-DEXTRA_ARGS=--project ${KAST_SHADER_EDITOR_PROJECT} --assets-create shader:shaders --size 1600x900"
+          "-DFOCUS_PANEL=Assets" "-DMUST_EXIST=${KAST_SHADER_EDITOR_PROJECT}/shaders/new_shader.kshader"
+          "-DEXPECT_OUTPUT=Created shader 'shaders/new_shader.kshader'.*Compiled shader 'shaders/new_shader.kshader'"
+          "-DFORBID_OUTPUT=\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# Every editor run in the shared copy waits for cache_first (it must compile, not hit the cache) and holds a lock, so
+# parallel ctest runs don't race on its files.
+set_tests_properties(shader_new_screenshot PROPERTIES FIXTURES_REQUIRED "shader_editor_copy;shader_cache_filled")
+kast_shader_shot(inspector_params "${KAST_SHADER_TEST_PROJECT}" shader_showcase.scene
+  "-DEXTRA_ARGS=--scene ${KAST_SHADER_TEST_PROJECT}/shader_showcase.scene --size 1600x900 --assets-select materials/shader_params.mat"
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/params.kshader'" "-DFORBID_OUTPUT=Shader 'shaders/params.kshader'")
+kast_shader_shot(inspector_broken "${KAST_SHADER_TEST_PROJECT}" shader_errors.scene
+  "-DEXTRA_ARGS=--scene ${KAST_SHADER_TEST_PROJECT}/shader_errors.scene --size 1600x900 --assets-select materials/shader_broken.mat")
+# Undo: amount 0.2 stays, the offset edit after it is undone. Redo: the scale edit is undone, then redone.
+kast_shader_shot(material_undo "${KAST_SHADER_EDITOR_PROJECT}" shader_showcase.scene
+  "-DEXTRA_ARGS=--scene ${KAST_SHADER_EDITOR_PROJECT}/shader_showcase.scene --size 1600x900 --assets-select materials/shader_params.mat --material-set amount=0.2 --material-set offset=[1,1] --material-undo 1"
+  "-DEXPECT_OUTPUT=--material-set amount = 0.2.*--material-set offset = \\[1,1\\]" "-DFORBID_OUTPUT=\\[error\\]")
+set_tests_properties(shader_material_undo_screenshot PROPERTIES FIXTURES_REQUIRED "shader_editor_copy;shader_cache_filled"
+                     FIXTURES_SETUP shader_material_undone)
+add_test(NAME shader_material_undo_written
+  COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_SHADER_EDITOR_PROJECT}/materials/shader_params.mat")
+set_tests_properties(shader_material_undo_written PROPERTIES FIXTURES_REQUIRED shader_material_undone
+  PASS_REGULAR_EXPRESSION "\"amount\": 0.2,.*\"tint\"" FAIL_REGULAR_EXPRESSION "offset")
+kast_shader_shot(material_redo "${KAST_SHADER_EDITOR_PROJECT}" shader_showcase.scene
+  "-DEXTRA_ARGS=--scene ${KAST_SHADER_EDITOR_PROJECT}/shader_showcase.scene --size 1600x900 --assets-select materials/shader_params.mat --material-set scale=5 --material-undo 1 --material-redo 1"
+  "-DFORBID_OUTPUT=\\[error\\]")
+set_tests_properties(shader_material_redo_screenshot PROPERTIES FIXTURES_REQUIRED shader_material_undone
+                     FIXTURES_SETUP shader_material_redone)
+set_tests_properties(shader_cache_first_screenshot shader_cache_second_screenshot shader_new_screenshot
+                     shader_material_undo_screenshot shader_material_redo_screenshot
+                     PROPERTIES RESOURCE_LOCK shader_editor_project)
+add_test(NAME shader_material_redo_written
+  COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_SHADER_EDITOR_PROJECT}/materials/shader_params.mat")
+set_tests_properties(shader_material_redo_written PROPERTIES FIXTURES_REQUIRED shader_material_redone
+  PASS_REGULAR_EXPRESSION "\"amount\": 0.2,.*\"scale\": 5[.0]*,.*\"tint\"")
+add_test(NAME shader_hot_reload
+  COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File "${CMAKE_CURRENT_SOURCE_DIR}/cmake/shader_hot_reload_test.ps1"
+          -Editor "$<TARGET_FILE:kast_editor>" -Project "${KAST_TEST_PROJECT}" -Out "${CMAKE_CURRENT_BINARY_DIR}/shader_hot_reload")
+set_tests_properties(shader_hot_reload PROPERTIES PASS_REGULAR_EXPRESSION "\nOK" TIMEOUT 300)
 add_test(NAME project_startup
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/project_startup.png"
           "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
@@ -1225,7 +1460,8 @@ kast_model_shot(models_missing "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/models
 kast_model_shot(models_lua "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/models_lua.scene --play"
                 "-DEXPECT_OUTPUT=clips: 178, first Angry.*unknown clip: false [^\n]*has no clip \"No_Such_Clip\".*bad entity: false invalid entity id 999999.*no animator: false entity [0-9]+ needs an \"Animator\" and a \"ModelRenderer\".*state: Angry [0-9.]+ true, speed 1.5")
 kast_model_shot(models_inspector_preview "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/models_anim.scene --select 3 --size 1600x900")
-# Build: --build packages configure-time copies of tests/project (tests never write into them) into
+# Build: --build packages configure-time copies of tests/project (tests never change their content; Build fills their
+# .kast/shader_cache) into
 # build/<preset>/game_out/<name>/, then the built player runs from a copy of that folder. Each copy gets its own
 # project.kast; the "systems": [] variants show that only the Lua code (run from game.pak) changes the shot.
 set(KAST_GAME_OUT "${CMAKE_CURRENT_BINARY_DIR}/game_out")
@@ -1241,6 +1477,8 @@ function(kast_game_project name project_name start_scene empty_systems)
   file(WRITE "${dir}/project.kast"
        "{\n  \"version\": 1,\n  \"name\": \"${project_name}\",\n  \"startScene\": \"${start_scene}\"${machines}\n}\n")
   file(WRITE "${dir}/.kast/editor.json" "{\n  \"buildFolder\": \"C:/elsewhere\"\n}\n") # must stay out of game.pak
+  # Build compiles every shipped .kshader and fails on a broken one: drop the deliberately broken test shaders.
+  file(REMOVE "${dir}/shaders/broken.kshader" "${dir}/shaders/bad_param.kshader")
   if(empty_systems)
     file(READ "${dir}/${start_scene}" scene)
     string(REGEX REPLACE "\"systems\": \\[[^]]*\\]" "\"systems\": []" scene "${scene}")
@@ -1428,6 +1666,95 @@ foreach(pak missing corrupt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
   set_tests_properties(player_${pak}_pak PROPERTIES FIXTURES_REQUIRED game_switch_built TIMEOUT 90)
 endforeach()
+# Shaders in the player: Build compiles every shipped .kshader into game.pak (kast::shaderPakPath) and the player loads
+# that bytecode ("Loaded shader ... (precompiled)"; player_test.cmake fails if a shaderc.exe is next to it). The vertex
+# scenes have no Main Camera (editor views), so their game copies get one at their editor camera's view. Each game
+# runs at --fixed-dt 0.016 like the editor's shader shots. player_shader_offset_same: lift.kshader's vertex() and
+# hidden.kshader's cutout render exactly as the plain meshes placed higher (as shader_vertex_offset_same in the editor).
+# build_game_broken_shader: a broken .kshader fails the Build naming the file and line, writing nothing.
+foreach(game "shader_showcase|shader_showcase.scene|showcase"
+             "shader_vertex|shader_vertex.scene|sway|0, 4.5285, 5.3245|-0.300706, 0, 0, 0.953717"
+             "shader_offset|shader_vertex_offset.scene|lift|0, 4.6036, 8.1568|-0.216440, 0, 0, 0.976296"
+             "shader_offset_ref|shader_vertex_offset_reference.scene|-|0, 4.6036, 8.1568|-0.216440, 0, 0, 0.976296"
+             "shader_light|shader_light.scene|light_bands"
+             "shader_screen|shader_screen.scene|screen_water"
+             "shader_screen_identity|shader_screen_identity.scene|screen_identity"
+             "shader_screen_identity_ref|shader_screen_identity.scene|-"
+             "custom_shaders|custom_shaders.scene|dissolve")
+  string(REPLACE "|" ";" game "${game}")
+  list(GET game 0 name)
+  list(GET game 1 scene)
+  list(GET game 2 shader)
+  list(LENGTH game fields)
+  kast_game_project(${name} "Shader Test" ${scene} FALSE "")
+  if(fields GREATER 3)
+    list(GET game 3 position)
+    list(GET game 4 rotation)
+    set(scene_file "${CMAKE_CURRENT_BINARY_DIR}/game_projects/${name}/${scene}")
+    file(READ "${scene_file}" scene_text)
+    string(REGEX REPLACE "}[\r\n]+  \\][\r\n]+}[\r\n]*$"
+           "},\n    {\"id\": 900, \"name\": \"Main Camera\", \"parent\": null, \"components\": {\"Transform\": {\"position\": [${position}], \"rotation\": [${rotation}], \"scale\": [1, 1, 1]}, \"Camera\": {\"verticalFovDegrees\": 60, \"nearPlane\": 0.1, \"farPlane\": 1000}}}\n  ]\n}\n"
+           camera_scene "${scene_text}")
+    if(camera_scene STREQUAL scene_text)
+      message(FATAL_ERROR "Shader game ${name}: no entity list end found in ${scene}")
+    endif()
+    file(WRITE "${scene_file}" "${camera_scene}")
+  endif()
+  set(expect "Window title: Shader Test")
+  if(NOT shader STREQUAL "-")
+    set(expect "Loaded shader 'shaders/${shader}\\.kshader' \\(precompiled\\)")
+  endif()
+  add_test(NAME build_game_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/${name}"
+            "-DOUT=${KAST_GAME_OUT}/${name}" "-DEXE=Shader Test.exe" -DEXPECT=0
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+  add_test(NAME player_${name}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/${name}" "-DEXE=Shader Test.exe"
+            "-DWORK_DIR=${KAST_GAME_OUT}/${name}.run" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_${name}.png"
+            "-DEXTRA_ARGS=--fixed-dt 0.016" -DEXPECT=0 "-DEXPECT_OUTPUT=${expect}" "-DFORBID_OUTPUT=\\[error\\]|magenta"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+  set_tests_properties(build_game_${name} PROPERTIES FIXTURES_SETUP game_${name}_built)
+  set_tests_properties(player_${name}_screenshot PROPERTIES FIXTURES_REQUIRED game_${name}_built
+                       FIXTURES_SETUP player_${name}_shot TIMEOUT 90)
+endforeach()
+add_test(NAME player_shader_offset_same
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_shader_offset_ref.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_shader_offset.png" -DSAME=ON
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(player_shader_offset_same PROPERTIES FIXTURES_REQUIRED "player_shader_offset_shot;player_shader_offset_ref_shot")
+# player_shader_screen_identity_same: SCREEN_TEXTURE / DEPTH_TEXTURE in the player (as shader_screen_identity_same);
+# the reference game's plane is the fully transparent screen_clear.mat.
+file(READ "${CMAKE_CURRENT_BINARY_DIR}/game_projects/shader_screen_identity_ref/shader_screen_identity.scene" scene_text)
+string(REPLACE "materials/shader_screen_identity.mat" "materials/screen_clear.mat" scene_text "${scene_text}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/game_projects/shader_screen_identity_ref/shader_screen_identity.scene" "${scene_text}")
+add_test(NAME player_shader_screen_identity_same
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_shader_screen_identity_ref.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_shader_screen_identity.png" -DSAME=ON
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(player_shader_screen_identity_same PROPERTIES
+                     FIXTURES_REQUIRED "player_shader_screen_identity_shot;player_shader_screen_identity_ref_shot")
+# player_custom_shaders_animates: the samples in the player move between frames 60 and 120 (TIME, and the dissolve
+# driven by scripts/dissolve_driver.lua as in the editor's Play).
+add_test(NAME player_custom_shaders_f60_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/custom_shaders" "-DEXE=Shader Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/custom_shaders_f60.run" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_custom_shaders_f60.png"
+          "-DEXTRA_ARGS=--fixed-dt 0.016 --frames 60" -DEXPECT=0 "-DFORBID_OUTPUT=\\[error\\]|magenta"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_custom_shaders_f60_screenshot PROPERTIES FIXTURES_REQUIRED game_custom_shaders_built
+                     FIXTURES_SETUP player_custom_shaders_f60_shot TIMEOUT 90)
+add_test(NAME player_custom_shaders_animates
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_custom_shaders_f60.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_custom_shaders.png" -DSAME=OFF
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(player_custom_shaders_animates PROPERTIES
+                     FIXTURES_REQUIRED "player_custom_shaders_shot;player_custom_shaders_f60_shot")
+kast_game_project(broken_shader "Broken Shader" shader_showcase.scene FALSE "")
+file(COPY "${KAST_TEST_PROJECT}/shaders/broken.kshader" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/game_projects/broken_shader/shaders")
+add_test(NAME build_game_broken_shader
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/broken_shader"
+          "-DOUT=${KAST_GAME_OUT}/broken_shader" -DEXPECT=1
+          "-DEXPECT_OUTPUT=Build failed: shader 'shaders/broken.kshader': line 7: error X3004: undeclared identifier 'undeclaredThing'"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
 # A game in a non-ASCII folder still finds its game.pak (UTF-8 paths, cmake/utf8.manifest).
 add_test(NAME player_non_ascii_folder
   COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/switch" "-DEXE=Switch Test.exe"

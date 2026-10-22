@@ -1,0 +1,15 @@
+// Sample 1 (custom_shaders.scene): scrolling, pulsing emissive lines. fragment() only, driven by TIME and params.
+param color glow = color(0.2, 0.8, 1.0);     // linear; the lines' emission at full pulse
+param float lines = 6.0 range(1, 24);        // lines per UV unit along V
+param float scroll_speed = 0.4 range(0, 4);  // UV units per second
+param float pulse_speed = 3.0 range(0, 12);  // radians per second
+param float intensity = 4.0 range(0, 16);    // HDR multiplier, so the lines bloom
+
+void fragment()
+{
+    float stripe = fract(UV.y * lines - TIME * scroll_speed);
+    float band = smoothstep(0.0, 0.15, stripe) * (1.0 - smoothstep(0.35, 0.5, stripe));
+    float pulse = 0.55 + 0.45 * sin(TIME * pulse_speed);
+    ALBEDO *= mix(1.0, 0.2, band); // dark under the lines, so they read as light
+    EMISSION += glow.rgb * band * pulse * intensity;
+}

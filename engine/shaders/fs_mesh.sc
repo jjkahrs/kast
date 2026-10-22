@@ -1,13 +1,16 @@
-$input v_normal, v_tangent, v_worldPos, v_texcoord0
+$input v_normal, v_tangent, v_worldPos, v_texcoord0, v_color0
+
+// The mesh fragment template: Kast's built-in shader as is, and every .kshader's fragment() at the //@user line
+// (shader.cpp generateShader; see docs/engine/shaders.html). With KAST_SHADOW it is the .kshader's shadow pass shader.
 
 #include <bgfx_shader.sh>
+#include <mesh.sh>
 
 #define MAX_POINT_LIGHTS 8 // kMaxPointLights in renderer.h
 #define MAX_CASCADES 4     // kMaxShadowCascades in scene.h
 #define CSM_TEXEL (1.0 / 4096.0)        // one texel of the cascade atlas: 2x2 kCascadeSize in shadow.h
 #define POINT_SHADOW_SIZE 1024.0        // kPointShadowSize in shadow.h
 #define POINT_SHADOW_NEAR 0.05          // kPointShadowNear in shadow.h
-#define PI 3.14159265
 
 SAMPLER2D(s_baseColor, 0);         // sRGB, sampled as linear; white if the material has none
 SAMPLER2D(s_metallicRoughness, 1); // linear, glTF packing: G = roughness, B = metallic; white if none
@@ -19,14 +22,11 @@ SAMPLERCUBESHADOW(s_pointShadow3, 6);
 SAMPLER2D(s_normal, 7);            // linear tangent-space normal, glTF / OpenGL (+Y green); flat (0.5, 0.5, 1) if none
 SAMPLER2D(s_occlusion, 8);         // linear, R = ambient occlusion; white if none
 SAMPLER2D(s_emissive, 9);          // sRGB, sampled as linear, times u_emissive; white if none
+// Stages 10..13: a .kshader's texture2D params (shader.cpp generateShader).
+SAMPLER2D(s_kastScreen, 14); // SCREEN_TEXTURE: the opaque scene's HDR linear color (Renderer::render copies it)
+SAMPLER2D(s_kastDepth, 15);  // DEPTH_TEXTURE: the opaque scene's depth (D3D 0..1); linearDepth() makes it meters
 
-uniform vec4 u_baseColor;  // linear RGBA, times the base color texture
-uniform vec4 u_emissive;   // rgb: linear, added after lighting
-uniform vec4 u_material;   // x: metallic, y: roughness, z: alpha cutoff (-1 = none), w: 0 opaque, 1 blend, 2 additive
 uniform vec4 u_materialExt; // x: normal scale, y: occlusion strength, z: 1 if a normal texture is bound, w: 1 if unlit
-uniform vec4 u_uvTransform; // xy: scale, zw: offset; every texture of the material samples uv * scale + offset
-uniform vec4 u_time;        // x: seconds, wrapping every kShaderTimePeriod (shader_clock.h); no material uses it yet
-uniform vec4 u_cameraPos;  // xyz: world position of the eye
 uniform vec4 u_lightDir;   // xyz: world direction the light travels; w: 1 if the scene has a light, else 0
 uniform vec4 u_lightColor; // rgb: light color * intensity
 uniform vec4 u_ambient;    // rgb: scene ambient color * intensity
@@ -136,39 +136,178 @@ vec3 fogged(vec3 color, vec3 worldPos)
     return u_material.w > 1.5 ? color * (1.0 - fog) : mix(color, u_fogColor.rgb, fog);
 }
 
+// What fragment() reads and writes (the uppercase built-ins below). main() fills it with what the built-in material
+// computes, so a fragment() that writes nothing changes nothing.
+struct KastFragment {
+    vec2 uv;             // UV0 * uvScale + uvOffset: where the material's textures sample
+    vec4 color;          // vertex color (COLOR0), white if the mesh has none
+    vec3 normal;         // world, unit; the normal map then bends it
+    vec4 tangent;        // world xyz (interpolated), w: bitangent handedness
+    vec3 worldPos;
+    vec3 viewPos;        // right-handed view space: the camera looks down -Z
+    vec4 fragCoord;      // window pixel position, as gl_FragCoord
+    vec3 albedo;         // linear base color
+    float alpha;
+    float metallic;
+    float roughness;
+    vec3 emission;       // linear HDR, added after lighting
+    vec3 normalMap;      // tangent-space normal as stored in a texture (0..1, flat = 0.5, 0.5, 1)
+    float normalMapDepth; // scales the normal map's XY (the material's normalScale)
+    float ao;            // ambient occlusion: darkens ambient light only
+    vec2 screenUv;       // FRAG_COORD.xy over the view's size: (0, 0) top-left, where SCREEN_TEXTURE and DEPTH_TEXTURE sample
+};
+
+// What light() reads and writes, once per light. Its parameter is named kast_f too, so NORMAL, ALBEDO, METALLIC and
+// ROUGHNESS mean these fields inside light() (and KastFragment's in fragment()).
+struct KastLight {
+    vec3 lightDirection; // world, unit: from the surface toward the light
+    vec3 lightColor;     // color * intensity
+    float attenuation;   // distance falloff (point lights) times shadow: 0..1
+    vec3 normal;         // world, unit: after fragment() and the normal map
+    vec3 view;           // world, unit: from the surface toward the camera
+    vec3 albedo;
+    float metallic;      // 0..1
+    float roughness;     // 0.04..1
+    vec3 diffuse;        // accumulated over the lights, from 0; the color is diffuse + specular, then ambient and fog
+    vec3 specular;
+};
+
+// Built-ins: fragment() inputs and outputs (fields of its kast_f) and texture helpers; mesh.sh has those of every stage.
+// The names are reserved: a .kshader param may not take one (shaderBuiltinNames in shader.cpp lists them).
+#define UV kast_f.uv
+#define COLOR kast_f.color
+#define NORMAL kast_f.normal
+#define TANGENT kast_f.tangent
+#define WORLD_POSITION kast_f.worldPos
+#define VIEW_POSITION kast_f.viewPos
+#define FRAG_COORD kast_f.fragCoord
+#define ALBEDO kast_f.albedo
+#define ALPHA kast_f.alpha
+#define METALLIC kast_f.metallic
+#define ROUGHNESS kast_f.roughness
+#define EMISSION kast_f.emission
+#define NORMAL_MAP kast_f.normalMap
+#define NORMAL_MAP_DEPTH kast_f.normalMapDepth
+#define AO kast_f.ao
+#define SCREEN_UV kast_f.screenUv
+#define SCREEN_TEXTURE s_kastScreen
+#define DEPTH_TEXTURE s_kastDepth
+#define LIGHT_DIRECTION kast_f.lightDirection
+#define LIGHT_COLOR kast_f.lightColor
+#define ATTENUATION kast_f.attenuation
+#define VIEW kast_f.view
+#define DIFFUSE_LIGHT kast_f.diffuse
+#define SPECULAR_LIGHT kast_f.specular
+vec4 sampleBaseColor(vec2 uv) { return texture2D(s_baseColor, uv); }
+vec4 sampleMetallicRoughness(vec2 uv) { return texture2D(s_metallicRoughness, uv); }
+vec4 sampleNormal(vec2 uv) { return texture2D(s_normal, uv); }
+vec4 sampleOcclusion(vec2 uv) { return texture2D(s_occlusion, uv); }
+vec4 sampleEmissive(vec2 uv) { return texture2D(s_emissive, uv); }
+// A DEPTH_TEXTURE value as the view depth in meters (positive, along the camera's forward), as -VIEW_POSITION.z.
+float linearDepth(float depth)
+{
+    vec4 p = mul(u_invProj, vec4(0.0, 0.0, depth, 1.0));
+    return -p.z / p.w;
+}
+
+//@user
+#ifndef KAST_FRAGMENT
+void fragment(inout KastFragment kast_f) {}
+#endif
+
 void main()
 {
-    vec2 uv = v_texcoord0 * u_uvTransform.xy + u_uvTransform.zw;
-    vec4 base = u_baseColor * texture2D(s_baseColor, uv);
-    if (base.a < u_material.z)
+    KastFragment f;
+    f.uv = v_texcoord0 * u_uvTransform.xy + u_uvTransform.zw;
+    vec4 base = u_baseColor * texture2D(s_baseColor, f.uv);
+    vec4 mr = texture2D(s_metallicRoughness, f.uv);
+    f.color = v_color0;
+    f.normal = normalize(v_normal);
+    f.tangent = v_tangent;
+    f.worldPos = v_worldPos;
+    f.viewPos = mul(u_view, vec4(v_worldPos, 1.0)).xyz;
+    f.fragCoord = gl_FragCoord;
+    f.albedo = base.rgb;
+    f.alpha = base.a;
+    f.metallic = u_material.x * mr.b;
+    f.roughness = u_material.y * mr.g;
+    f.emission = u_emissive.rgb * texture2D(s_emissive, f.uv).rgb;
+    f.normalMap = texture2D(s_normal, f.uv).xyz;
+    f.normalMapDepth = u_materialExt.x; // glTF normalTexture.scale
+    // Ambient occlusion darkens ambient light only: ao = 1 + strength * (R - 1).
+    f.ao = 1.0 + u_materialExt.y * (texture2D(s_occlusion, f.uv).r - 1.0);
+    f.screenUv = (gl_FragCoord.xy - u_viewRect.xy) * u_viewTexel.xy;
+    fragment(f);
+
+    if (f.alpha < u_material.z)
         discard;
-    vec3 emissive = u_emissive.rgb * texture2D(s_emissive, uv).rgb;
-    float alpha = u_material.w > 0.5 ? base.a : 1.0;
+#ifdef KAST_SHADOW
+    // The .kshader's shadow pass (fs_shadow.sc for the built-in material): depth only, cut out as the surface is.
+    gl_FragColor = vec4_splat(0.0);
+    return;
+#endif
+    float alpha = u_material.w > 0.5 ? f.alpha : 1.0;
     if (u_materialExt.w > 0.5) { // unlit
-        gl_FragColor = vec4(fogged(base.rgb + emissive, v_worldPos), alpha);
+        gl_FragColor = vec4(fogged(f.albedo + f.emission, v_worldPos), alpha);
         return;
     }
-    vec4 mr = texture2D(s_metallicRoughness, uv);
-    float metallic = saturate(u_material.x * mr.b);
-    float roughness = clamp(u_material.y * mr.g, 0.04, 1.0); // a 0 roughness highlight is infinitely thin: floored
-    vec3 albedo = base.rgb;
+    float metallic = saturate(f.metallic);
+    float roughness = clamp(f.roughness, 0.04, 1.0); // a 0 roughness highlight is infinitely thin: floored
+    vec3 albedo = f.albedo;
     vec3 f0 = mix(vec3_splat(0.04), albedo, metallic);
 
-    vec3 n = normalize(v_normal);
+    vec3 n = f.normal;
+    // A shader writing NORMAL or NORMAL_MAP (KAST_CUSTOM_NORMAL) always gets this, which also renormalizes NORMAL.
+#ifdef KAST_CUSTOM_NORMAL
+    if (true) {
+#else
     if (u_materialExt.z > 0.5) {
+#endif
         // Gram-Schmidt: the interpolated tangent made perpendicular to n again; bitangent = cross(n, t) * handedness.
-        vec3 t = v_tangent.xyz - n * dot(n, v_tangent.xyz);
+        vec3 t = f.tangent.xyz - n * dot(n, f.tangent.xyz);
         if (dot(t, t) > 1e-12) {
             t = normalize(t);
-            vec3 b = cross(n, t) * (v_tangent.w < 0.0 ? -1.0 : 1.0);
-            vec3 tn = texture2D(s_normal, uv).xyz * 2.0 - 1.0;
-            tn.xy *= u_materialExt.x; // glTF normalTexture.scale
+            vec3 b = cross(n, t) * (f.tangent.w < 0.0 ? -1.0 : 1.0);
+            vec3 tn = f.normalMap * 2.0 - 1.0;
+            tn.xy *= f.normalMapDepth;
             n = normalize(t * tn.x + b * tn.y + n * tn.z);
         }
     }
     vec3 v = normalize(u_cameraPos.xyz - v_worldPos);
 
     bool receive = u_shadowParams.x > 0.5;
+#ifdef KAST_LIGHT
+    // The .kshader's light() instead of shade(): once for the directional light, once per point light reaching the
+    // mesh (unused slots are black), accumulating DIFFUSE_LIGHT and SPECULAR_LIGHT.
+    KastLight l;
+    l.normal = n;
+    l.view = v;
+    l.albedo = albedo;
+    l.metallic = metallic;
+    l.roughness = roughness;
+    l.diffuse = vec3_splat(0.0);
+    l.specular = vec3_splat(0.0);
+    if (u_lightDir.w > 0.5) {
+        l.lightDirection = -u_lightDir.xyz;
+        l.lightColor = u_lightColor.rgb;
+        l.attenuation = receive && dot(u_lightColor.rgb, u_lightColor.rgb) > 0.0 ? csmShadow(v_worldPos, n) : 1.0;
+        light(l);
+    }
+    for (int i = 0; i < MAX_POINT_LIGHTS; ++i) {
+        if (dot(u_pointColor[i].rgb, u_pointColor[i].rgb) <= 0.0)
+            continue;
+        vec3 toLight = u_pointPosRange[i].xyz - v_worldPos;
+        float d = length(toLight);
+        float attenuation = falloff(d, u_pointPosRange[i].w);
+        if (receive && u_pointShadow[i].x >= 0.0 && attenuation > 0.0)
+            attenuation *= pointShadow(u_pointShadow[i], -toLight, n);
+        l.lightDirection = toLight / max(d, 1e-4);
+        l.lightColor = u_pointColor[i].rgb;
+        l.attenuation = attenuation;
+        light(l);
+    }
+    vec3 color = l.diffuse + l.specular;
+#else
     vec3 sun = u_lightColor.rgb * u_lightDir.w;
     if (receive && dot(sun, sun) > 0.0)
         sun *= csmShadow(v_worldPos, n);
@@ -181,16 +320,15 @@ void main()
             light *= pointShadow(u_pointShadow[i], -toLight, n);
         color += shade(n, v, toLight / max(d, 1e-4), light, albedo, f0, metallic, roughness);
     }
+#endif
 
     // Ambient, no IBL: diffuse ambient plus a flat specular term weighted by the roughness-aware Schlick Fresnel
     // F = F0 + (max(1 - roughness, F0) - F0) * (1 - N.V)^5, so metals (no diffuse) still show ambient.
     float nv = max(dot(n, v), 0.0);
     vec3 fAmbient = f0 + (max(vec3_splat(1.0 - roughness), f0) - f0) * pow(saturate(1.0 - nv), 5.0);
-    // Ambient occlusion darkens ambient light only: ao = 1 + strength * (R - 1).
-    float ao = 1.0 + u_materialExt.y * (texture2D(s_occlusion, uv).r - 1.0);
-    color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo + fAmbient) * u_ambient.rgb * ao;
+    color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo + fAmbient) * u_ambient.rgb * f.ao;
 
-    color += emissive;
+    color += f.emission;
 
     // Linear HDR: the post chain (post_process.h) tonemaps and encodes to sRGB.
     gl_FragColor = vec4(fogged(color, v_worldPos), alpha);

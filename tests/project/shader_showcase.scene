@@ -1,0 +1,206 @@
+{
+  "version": 5,
+  "lighting": {
+    "ambientColor": [
+      0.7,
+      0.8,
+      1
+    ],
+    "ambientIntensity": 0.3
+  },
+  "editor": {
+    "camera": {
+      "pivot": [
+        0,
+        0.6,
+        0
+      ],
+      "yaw": 0,
+      "pitch": -15,
+      "distance": 7
+    }
+  },
+  "entities": [
+    {
+      "id": 1,
+      "name": "Sun",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            4,
+            0
+          ],
+          "rotation": [
+            -0.408218,
+            -0.23457,
+            -0.109382,
+            0.875426
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "DirectionalLight": {
+          "color": [
+            1,
+            0.95,
+            0.9
+          ],
+          "intensity": 1.1
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            10,
+            1,
+            6
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "plane",
+          "material": ""
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Showcase Cube",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -2.2,
+            0.5,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/shader_showcase.mat"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Showcase Sphere",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.5,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "sphere",
+          "material": "materials/shader_showcase.mat"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Vertex Colors",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            2.2,
+            0.5,
+            0
+          ],
+          "rotation": [
+            0.3826834323650898,
+            0,
+            0,
+            0.9238795325112867
+          ],
+          "scale": [
+            1.5,
+            1.5,
+            1.5
+          ]
+        },
+        "ModelRenderer": {
+          "model": "models/vertex_colors.gltf",
+          "materials": [
+            "materials/shader_vertex_colors.mat"
+          ]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            2.5,
+            6
+          ],
+          "rotation": [
+            -0.17364817766693033,
+            0,
+            0,
+            0.984807753012208
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Camera": {
+          "verticalFovDegrees": 60,
+          "nearPlane": 0.1,
+          "farPlane": 1000
+        }
+      }
+    }
+  ]
+}

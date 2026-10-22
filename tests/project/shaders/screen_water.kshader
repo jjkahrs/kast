@@ -1,0 +1,15 @@
+// SCREEN_TEXTURE refraction and DEPTH_TEXTURE foam (shader_screen.scene), for a blend material: the opaque scene behind
+// the surface, sampled with a wavy offset and tinted, turning to foam where the geometry behind is less than
+// foam_depth meters away.
+param float strength = 0.015;
+param float foam_depth = 0.3;
+param color tint = color(0.55, 0.8, 1.0);
+
+void fragment()
+{
+    vec2 wave = vec2(sin(UV.y * 60.0 + TIME * 3.0), cos(UV.x * 60.0 + TIME * 3.0)) * strength;
+    float behind = linearDepth(texture2D(DEPTH_TEXTURE, SCREEN_UV).r) + VIEW_POSITION.z; // meters past the surface
+    ALBEDO = texture2D(SCREEN_TEXTURE, SCREEN_UV + wave).rgb * tint.rgb;
+    ALBEDO = mix(ALBEDO, vec3_splat(1.0), 1.0 - saturate(behind / foam_depth));
+    ALPHA = 1.0;
+}

@@ -9,6 +9,7 @@
 #include "online_panel.h"
 #include "panels.h"
 #include "recent_projects.h"
+#include "shader_compiler.h"
 #include "ui_common.h"
 #include "viewport.h"
 #include "zone_cli.h"
@@ -67,7 +68,7 @@ constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--screenshot-on-log frames,text] [--size WxH] [--window-pos X,Y] [--ui-scale F] [--projects-file list.json] "
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
-    "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material:folder] [--assets-select path] "
+    "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader:folder] [--assets-select path] [--material-set field=json] [--material-undo N] [--material-redo N] "
     "[--focus-panel Window] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|Button] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] [--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy]] [--sim-key frame,key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
@@ -119,6 +120,8 @@ struct Options {
     std::string openMenu;     // open this main menu (e.g. "Build") for screenshots
     std::optional<std::string> assetsMenu; // open this Assets entry's context menu + Create submenu ("" = background)
     std::string assetsSelect; // select this Assets entry (project-relative) as a click does: a .mat shows in the Inspector
+    std::vector<std::pair<std::string, nlohmann::ordered_json>> materialSets; // --material-set: Inspector edits of that .mat, in order
+    int materialUndo = 0, materialRedo = 0; // --material-undo N / --material-redo N: then material Undo N times, then Redo N times
     std::optional<std::pair<Panels::AssetCreate, std::string>> assetsCreate; // run Assets Create in that folder
     bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
     bool openOnlineSettings = false; // open the Online Services modal (needs --project) for screenshots
@@ -324,7 +327,8 @@ bool parseAssetCreate(std::string_view value, std::optional<std::pair<Panels::As
     constexpr std::pair<std::string_view, Panels::AssetCreate> kinds[] = {{"system:", Panels::AssetCreate::System},
                                                                           {"fsm:", Panels::AssetCreate::StateMachine},
                                                                           {"gui:", Panels::AssetCreate::Gui},
-                                                                          {"material:", Panels::AssetCreate::Material}};
+                                                                          {"material:", Panels::AssetCreate::Material},
+                                                                          {"shader:", Panels::AssetCreate::Shader}};
     for (const auto& [prefix, kind] : kinds)
         if (value.starts_with(prefix)) {
             out.emplace(kind, std::string(value.substr(prefix.size())));
@@ -378,6 +382,20 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.assetsMenu = std::string(path == "/" ? "" : path);
         } else if (arg == "--assets-select" && hasValue) {
             options.assetsSelect = argv[++i];
+        } else if (arg == "--material-set" && hasValue) {
+            const std::string_view text = argv[++i];
+            const size_t equals = text.find('=');
+            nlohmann::ordered_json value = nlohmann::ordered_json::parse(
+                text.substr(equals == std::string_view::npos ? text.size() : equals + 1), nullptr, false);
+            if (equals == std::string_view::npos || equals == 0 || value.is_discarded()) {
+                kast::log::error(std::format("Invalid --material-set '{}', expected field=json", text));
+                return std::nullopt;
+            }
+            options.materialSets.emplace_back(std::string(text.substr(0, equals)), std::move(value));
+        } else if (arg == "--material-undo" && hasValue && parsePositive(argv[i + 1], options.materialUndo)) {
+            ++i;
+        } else if (arg == "--material-redo" && hasValue && parsePositive(argv[i + 1], options.materialRedo)) {
+            ++i;
         } else if (arg == "--assets-create" && hasValue && parseAssetCreate(argv[i + 1], options.assetsCreate)) {
             ++i;
         } else if (arg == "--open-gui" && hasValue) {
@@ -562,6 +580,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.newComponentPrompt || !options.newComponent.empty() || !options.openMenu.empty() ||
                              options.openBuildSettings || options.openOnlineSettings || !options.focusPanel.empty() || !options.zoneSections.empty() || options.zoneTool || !options.zoneSelect.empty() || options.bake || !options.mapbake.empty() || options.newStateMachinePrompt ||
                              options.assetsMenu || options.assetsCreate || !options.assetsSelect.empty() ||
+                             !options.materialSets.empty() || options.materialUndo || options.materialRedo ||
                              !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
                              options.guiAdd || options.guiSave || !options.guiClick.empty() || options.openPreferences ||
@@ -661,10 +680,13 @@ std::string focusedWindow()
 }
 
 // The document Edit > Undo / Redo and the shortcuts act on, by the focused window (menus and popups: the one before).
-// The GUI Builder's panels edit the open GUI, the Zone tab the open map; every other window edits the scene (or the open
-// prefab).
-UndoTarget focusedUndoTarget(const std::string& window, Document& doc, GuiBuilder& guiBuilder, ZoneSession& zone)
+// The GUI Builder's panels edit the open GUI, the Zone tab the open map, the Inspector showing a material that .mat;
+// every other window edits the scene (or the open prefab).
+UndoTarget focusedUndoTarget(const std::string& window, Document& doc, GuiBuilder& guiBuilder, ZoneSession& zone,
+                             Panels& panels)
 {
+    if (UndoStack* materials = panels.materialHistory(); materials && window == "Inspector")
+        return {.history = materials, .undo = [materials] { materials->undo(); }, .redo = [materials] { materials->redo(); }};
     constexpr const char* kGuiWindows[] = {GuiBuilder::kHierarchyWindow, GuiBuilder::kInspectorWindow,
                                            GuiBuilder::kStyleWindow, GuiBuilder::kPreviewWindow};
     if (std::ranges::any_of(kGuiWindows, [&](const char* id) { return window.ends_with(id); }))
@@ -987,6 +1009,11 @@ int main(int argc, char** argv)
     const std::optional<Options> options = parseArgs(argc, argv);
     if (!options)
         return 2;
+    // .kshader materials compile with shaderc here (not in the player), on worker threads; a --screenshot run compiles
+    // each one when first drawn instead, so the shot is the same every run (--screenshot-on-log runs, e.g. the hot
+    // reload test, keep the worker threads).
+    kast::shaders().setCompiler(compileShader, shaderToolsVersion());
+    kast::shaders().setAsync(options->screenshot.empty() || options->screenshotOnLog);
     if (!options->crash.empty()) {
         kast::log::info(std::format("--crash {}", options->crash));
         assert(options->crash != "assert");
@@ -1260,7 +1287,7 @@ int main(int argc, char** argv)
         bool openPreferences = options->openPreferences && frames.frame() == kAddComponentPopupFrame;
         if (std::string window = focusedWindow(); !window.empty())
             undoWindow = std::move(window);
-        const UndoTarget undo = focusedUndoTarget(undoWindow, doc, guiBuilder, zone);
+        const UndoTarget undo = focusedUndoTarget(undoWindow, doc, guiBuilder, zone, panels);
         undoShortcuts(undo, files);
         // With --open-gui or --focus-panel: after the panel took the focus (which closes menus) and the --gui-* edits.
         const int openMenuFrame =
@@ -1333,6 +1360,18 @@ int main(int argc, char** argv)
             panels.requestAssetCreate(options->assetsCreate->first, options->assetsCreate->second);
         if (!options->assetsSelect.empty() && frames.frame() == kAddComponentPopupFrame)
             panels.selectAsset(options->assetsSelect);
+        if (frames.frame() == kAddComponentPopupFrame + 1) { // the Inspector has shown --assets-select's material
+            for (const auto& [field, value] : options->materialSets)
+                if (std::string error; panels.editMaterial(field, value, error))
+                    kast::log::info(std::format("--material-set {} = {}", field, value.dump()));
+                else
+                    kast::log::error(std::format("--material-set {}: {}", field, error));
+            UndoStack* history = panels.materialHistory();
+            for (int i = 0; history && i < options->materialUndo; ++i)
+                history->undo();
+            for (int i = 0; history && i < options->materialRedo; ++i)
+                history->redo();
+        }
         panels.drawHierarchy(doc, files);
         // Before the views render: Inspector edits (a material saved to disk) show in this frame's Scene and Game.
         panels.drawInspector(doc);

@@ -1,0 +1,19 @@
+// Sample 5 (custom_shaders.scene): toon / cel shading with light(). Each light's N.L is quantized into hard bands,
+// with a hard round highlight and a rim on the lit side. Ambient light, EMISSION and fog still apply after it.
+param float bands = 3.0 range(1, 8);
+param float highlight = 0.96 range(0.5, 1);  // cosine of the highlight's size: closer to 1 = smaller
+param float rim = 0.7 range(0, 1);           // 1 - N.V above which the rim shows
+param color rim_color = color(1.0, 0.9, 0.7);
+
+void fragment() {}
+
+void light()
+{
+    float lit = saturate(dot(NORMAL, LIGHT_DIRECTION)) * ATTENUATION;
+    float band = ceil(lit * bands) / bands;
+    DIFFUSE_LIGHT += ALBEDO * LIGHT_COLOR * band; // Kast doesn't multiply by ALBEDO afterwards
+    float shown = step(0.01, lit);
+    vec3 halfway = normalize(LIGHT_DIRECTION + VIEW);
+    SPECULAR_LIGHT += LIGHT_COLOR * step(highlight, dot(NORMAL, halfway)) * shown;
+    SPECULAR_LIGHT += rim_color.rgb * LIGHT_COLOR * 0.5 * step(rim, 1.0 - saturate(dot(NORMAL, VIEW))) * shown;
+}

@@ -1,0 +1,5 @@
+{
+  "version": 3,
+  "shader": "shaders/lift.kshader",
+  "params": { "lift": 1 }
+}

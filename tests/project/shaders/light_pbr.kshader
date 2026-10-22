@@ -1,0 +1,9 @@
+// light() calling the template's own Cook-Torrance shade() (fs_mesh.sc) with its inputs: it must render exactly as the
+// built-in shader does (shader_light_pbr_same).
+void fragment() {}
+
+void light()
+{
+    vec3 f0 = mix(vec3_splat(0.04), ALBEDO, METALLIC);
+    DIFFUSE_LIGHT += shade(NORMAL, VIEW, LIGHT_DIRECTION, LIGHT_COLOR * ATTENUATION, ALBEDO, f0, METALLIC, ROUGHNESS);
+}

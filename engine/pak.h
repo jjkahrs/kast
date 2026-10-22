@@ -47,9 +47,9 @@ private:
     std::map<std::string, Range> index_;
 };
 
-// Writes a pak holding root / each path (project-relative, '/'-separated) to out. False + error if a file can't be
-// read or out can't be written.
+// Writes a pak holding root / each path (project-relative, '/'-separated), then each generated entry (path, bytes), to
+// out. False + error if a file can't be read or out can't be written.
 bool writePak(const std::filesystem::path& root, const std::vector<std::string>& paths, const std::filesystem::path& out,
-              std::string& error);
+              std::string& error, const std::map<std::string, std::string>& generated = {});
 
 } // namespace kast

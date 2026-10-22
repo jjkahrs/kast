@@ -1,0 +1,6 @@
+{
+  "version": 3,
+  "baseColor": [0.9, 0.35, 0.2, 1],
+  "shader": "shaders/light_bands.kshader",
+  "params": { "bands": 3 }
+}

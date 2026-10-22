@@ -5,6 +5,7 @@
 #include "model.h"
 #include "particles.h"
 #include "scene.h"
+#include "shader.h"
 #include "shader_clock.h"
 #include "shadow.h"
 #include "sky.h"
@@ -35,6 +36,7 @@ struct MeshVertex {
     float nx, ny, nz;
     float tx, ty, tz, tw;
     float u, v; // (0, 0) is the image's top-left
+    uint32_t color = 0xffffffff; // RGBA8 (R in the low byte), linear: COLOR0, white
 };
 
 struct MeshData {
@@ -86,7 +88,9 @@ void buildMips(MipImage& image, bool srgb);
 // with their materials (PBR metallic-roughness, see fs_mesh.sc) lit by its ambient, its
 // first DirectionalLight and up to kMaxPointLights PointLights each, fogged by its postProcessing.fog, as linear HDR
 // color (for PostProcess). Opaque and mask meshes first, then its sky (sky.h), then blended ones and particle emitters
-// (particles.h, simulated on the GPU here) far to near.
+// (particles.h, simulated on the GPU here) far to near. Blended draws whose .kshader samples SCREEN_TEXTURE or
+// DEPTH_TEXTURE see a copy of the target's color or depth as the opaque meshes and the sky left it, made only on frames
+// such a draw is in view.
 // Shadows: cascaded shadow maps for that DirectionalLight and cube shadow maps for the kMaxShadowedPointLights
 // castShadows PointLights nearest the eye, rendered in kShadowViews views before the scene's (see shadow.h).
 // renderOverlays draws the editor's: a ground grid, axis lines, a short frustum preview per Camera, the range of the
@@ -103,7 +107,8 @@ public:
     void init();
     void shutdown();
     // Materials and textures load from projectRoot (empty = none: every material path renders as an error). Files
-    // changed on disk since loaded reload first. shadowViews: the first of kShadowViews views, all before view.
+    // changed on disk since loaded reload first. shadowViews: the first of kShadowViews views, all before view. With a
+    // target (setTarget) the blended draws go to view + 1, after the SCREEN_TEXTURE / DEPTH_TEXTURE copies.
     // extra: another scene whose meshes, models and terrain draw too, lit by scene's lights, sky and fog (the editor's
     // open zone over the edited scene).
     void render(const Scene& scene, const std::filesystem::path& projectRoot, bgfx::ViewId view, const float* viewMtx,
@@ -117,6 +122,15 @@ public:
     // saved yet (Zone Builder, Create texture & material).
     void setPreview(const std::string& materialPath, const Material& material, const std::string& texturePath,
                     MipImage image);
+    // What the next render() draws into with view (PostProcess::target(): RGBA16F color, D24S8 depth) and its size, so
+    // it can copy them for SCREEN_TEXTURE / DEPTH_TEXTURE. Set before each render(); without one (the default) blended
+    // draws stay in view and those sample black and the far plane.
+    void setTarget(bgfx::FrameBufferHandle target, uint16_t width, uint16_t height);
+    // Frames whose opaque scene color / depth was copied for SCREEN_TEXTURE / DEPTH_TEXTURE, since init.
+    struct SceneCopies {
+        uint64_t screen = 0, depth = 0;
+    };
+    const SceneCopies& sceneCopies() const { return copies_; }
     // u_time.x for this frame's mesh draws (ShaderClock::seconds).
     void setTime(float seconds) { timeSeconds_ = seconds; }
     // Both on by default. Instancing off: every draw is its own submit. Culling off: every draw goes to every pass.
@@ -135,6 +149,16 @@ private:
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
     };
+    // A .kshader's programs: its fs_mesh (main pass) and its shadow fragment shader (shadow passes), each with its mesh
+    // vertex shaders (the built-in ones if it has no vertex()). Rebuilt when the library hands out a different
+    // (recompiled) shader.
+    struct UserShader {
+        std::shared_ptr<const CompiledShader> source;
+        std::vector<bgfx::ShaderHandle> shaders; // the ones made from its bytecode (not the built-in vertex shaders)
+        bgfx::ProgramHandle mesh = BGFX_INVALID_HANDLE, skinned = BGFX_INVALID_HANDLE, instanced = BGFX_INVALID_HANDLE;
+        bgfx::ProgramHandle shadowMesh = BGFX_INVALID_HANDLE, shadowSkinned = BGFX_INVALID_HANDLE,
+                            shadowInstanced = BGFX_INVALID_HANDLE;
+    };
     // GPU copy of a Model, rebuilt when the library hands out a different (reloaded) one.
     struct GpuModel {
         std::shared_ptr<const Model> source;
@@ -146,6 +170,7 @@ private:
         Mat4 world{};
         Aabb bounds{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}}; // world space, for culling, point lights and blend sorting
         const Material* material = nullptr;
+        const UserShader* shader = nullptr; // the material's .kshader; null: the built-in mesh shader
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
         int bones = -1; // index into the frame's bone sets; -1 = not skinned
@@ -174,6 +199,11 @@ private:
     void clearTextures();
     const GpuModel* gpuModel(const std::string& path); // null if the model fails to load
     void clearModels();
+    const UserShader* userShader(const std::string& path); // null if the .kshader fails to load or compile
+    void destroy(UserShader& shader);
+    // Points each draw whose material has a .kshader at its programs; a shader that fails, or material values of the
+    // wrong type for it, draw with errorMaterial() instead.
+    void resolveShaders(std::vector<DrawItem>& draws);
     // Builds the GPU meshes of the scene's TerrainTiles (one per TerrainTileData: new data, new mesh), marks them used
     // and appends their draws. pruneTerrain then drops the meshes no rendered scene used this frame.
     void addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws);
@@ -187,10 +217,21 @@ private:
     ShadowFrame renderShadows(const DirectionalLight* sun, const bx::Vec3& sunDir, const std::vector<DrawItem>& draws,
                               const std::vector<std::vector<Mat4>>& boneSets, const std::vector<PointLightSample>& pointLights,
                               const float* viewMtx, const float* projMtx, bgfx::ViewId shadowViews);
-    // Draws one batch (see batchDraws) into a shadow view: instanced if it can be, else one by one.
+    // Draws one batch (see batchDraws) into a shadow view: instanced if it can be, else one by one. eye: the camera's
+    // world position (CAMERA_POSITION for .kshader casters).
     void submitShadowCasters(const std::vector<const DrawItem*>& batch, const std::vector<std::vector<Mat4>>& boneSets,
-                             bgfx::ViewId view);
+                             const bx::Vec3& eye, bgfx::ViewId view);
+    // The uniforms and textures of item's material (and its .kshader's params) and u_time, as fs_mesh.sc reads them.
+    void setMaterialState(const DrawItem& item);
+    // Blits the target's color (screen) and depth into screenCopy_ / depthCopy_ at the start of view, before its draws
+    // (creating them, or remaking them for a new size, first).
+    // ponytail: one copy per frame, of the opaque scene: blended surfaces don't see each other through SCREEN_TEXTURE;
+    // copy again before such a draw (as Godot's BackBufferCopy) if layered refraction is ever needed.
+    void copyScene(bgfx::ViewId view, bgfx::FrameBufferHandle target, bool screen, bool depth);
+    void destroyCopies();
     // Culling is on and item is outside frustum (posed draws never are: their bounds are the bind pose's).
+    // ponytail: by the undisplaced bounds; a .kshader vertex() moving geometry outside them can pop at the frustum's edge.
+    // Pad the bounds per material (a .kshader "cull margin") if that shows.
     bool culled(const DrawItem& item, const Frustum& frustum) const
     {
         return culling_ && !item.posed && !intersects(frustum, item.bounds);
@@ -218,6 +259,10 @@ private:
     bgfx::VertexLayout lineLayout_;
     bgfx::VertexBufferHandle grid_ = BGFX_INVALID_HANDLE;
     bgfx::VertexLayout modelLayout_; // ModelVertex
+    // The built-in mesh vertex shaders, shared by the built-in programs and every .kshader's.
+    bgfx::ShaderHandle meshVertex_ = BGFX_INVALID_HANDLE;
+    bgfx::ShaderHandle skinnedVertex_ = BGFX_INVALID_HANDLE;
+    bgfx::ShaderHandle instancedVertex_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle meshProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle skinnedProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle instancedProgram_ = BGFX_INVALID_HANDLE;
@@ -254,6 +299,8 @@ private:
     bgfx::UniformHandle pointShadow_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle csmSampler_ = BGFX_INVALID_HANDLE;
     std::array<bgfx::UniformHandle, kMaxShadowedPointLights> pointShadowSamplers_;
+    bgfx::UniformHandle kastParams_ = BGFX_INVALID_HANDLE; // u_kastParams: a .kshader's numeric params
+    std::array<bgfx::UniformHandle, kMaxShaderTextures> shaderTextureSamplers_; // s_kastTexture0.., its texture2D params
     // Created on first use: a 2x2 atlas of kCascadeSize cascades, and per shadowed point light a cube with a frame
     // buffer per face.
     bgfx::TextureHandle csm_ = BGFX_INVALID_HANDLE;
@@ -265,11 +312,22 @@ private:
     bgfx::TextureHandle noShadowCube_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle white_ = BGFX_INVALID_HANDLE; // 1x1: stands in for no texture and failed loads
     bgfx::TextureHandle flatNormal_ = BGFX_INVALID_HANDLE; // 1x1 (0.5, 0.5, 1): stands in for no normal texture
+    bgfx::TextureHandle black_ = BGFX_INVALID_HANDLE;      // 1x1 opaque black: a texture2D param's "black" default
+    // SCREEN_TEXTURE / DEPTH_TEXTURE (s_kastScreen, s_kastDepth): copies of the target, created on first use.
+    bgfx::UniformHandle screenSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle depthSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::FrameBufferHandle target_ = BGFX_INVALID_HANDLE; // setTarget, for one render()
+    uint16_t targetWidth_ = 0, targetHeight_ = 0;
+    bgfx::TextureHandle screenCopy_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle depthCopy_ = BGFX_INVALID_HANDLE;
+    uint16_t copyWidth_ = 0, copyHeight_ = 0;
+    SceneCopies copies_;
 
     std::filesystem::path root_;
     MaterialLibrary materials_;
     std::map<std::pair<std::string, bool>, Texture> textures_; // by (path, srgb)
     std::map<std::string, GpuModel> models_;                   // by project-relative path
+    std::map<std::string, UserShader> userShaders_;            // by project-relative .kshader path
     std::string previewMaterialPath_, previewTexturePath_;      // setPreview
     Material previewMaterial_;
     bgfx::TextureHandle previewTexture_ = BGFX_INVALID_HANDLE;

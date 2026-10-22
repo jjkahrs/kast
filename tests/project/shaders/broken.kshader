@@ -1,0 +1,8 @@
+// Deliberately broken (shader_errors.scene): line 7 uses a name that doesn't exist. Its materials render magenta and the
+// log says "Shader 'shaders/broken.kshader': line 7: error X3004: undeclared identifier 'undeclaredThing'".
+param float strength = 1.0 range(0, 2);
+
+void fragment()
+{
+    ALBEDO = vec3(strength, undeclaredThing, 0.0);
+}

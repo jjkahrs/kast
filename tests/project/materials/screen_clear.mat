@@ -1,0 +1,6 @@
+{
+  "version": 3,
+  "baseColor": [1, 1, 1, 0],
+  "alphaMode": "blend",
+  "unlit": true
+}

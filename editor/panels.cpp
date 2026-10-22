@@ -12,6 +12,7 @@
 #include <physics.h>
 #include <prefab.h>
 #include <scene_io.h>
+#include <shader.h>
 #include <state_machines.h>
 
 #include <SDL3/SDL.h>
@@ -28,10 +29,13 @@
 #include <filesystem>
 #include <format>
 #include <optional>
+#include <ranges>
 #include <system_error>
 #include <utility>
 
 namespace {
+
+bool hasExtension(const std::string& name, std::string_view extension); // below, with the other Assets helpers
 
 using Json = nlohmann::ordered_json;
 
@@ -452,10 +456,12 @@ void Panels::drawInspector(Document& doc)
         inspectedEntity_ = doc.selected;
         stopPreview();
         if (doc.scene.valid(doc.selected))
-            inspectedMaterial_.clear();
+            inspectedAsset_.clear();
     }
     if (ImGui::Begin("Inspector")) {
-        if (!inspectedMaterial_.empty()) {
+        if (hasExtension(inspectedAsset_, ".kshader")) {
+            drawShaderInspector(doc);
+        } else if (!inspectedAsset_.empty()) {
             drawMaterialInspector(doc);
         } else if (!doc.scene.valid(doc.selected)) {
             ImGui::TextDisabled("No entity selected");
@@ -914,7 +920,6 @@ bool Panels::drawStateMachineComponent(Document& doc, entt::entity entity)
 
 namespace {
 
-bool hasExtension(const std::string& name, std::string_view extension); // below, with the other Assets helpers
 
 // Project-relative paths of the files with one of these extensions, in Assets panel order.
 void collectFiles(const std::vector<AssetEntry>& entries, std::initializer_list<std::string_view> extensions,
@@ -926,6 +931,87 @@ void collectFiles(const std::vector<AssetEntry>& entries, std::initializer_list<
         else if (std::ranges::any_of(extensions, [&](std::string_view e) { return hasExtension(entry.name, e); }))
             out.push_back(entry.path);
     }
+}
+
+bool drawFilePicker(const char* label, const std::vector<std::string>& files, const char* none, std::string& path);
+
+// A .kshader's compile state: compiling, compiled, or the error with its .kshader line numbers.
+void drawShaderStatus(const kast::ShaderLibrary::Status& status)
+{
+    using State = kast::ShaderLibrary::State;
+    if (status.state == State::Compiling) {
+        ImGui::TextDisabled(status.hasShader ? "Compiling... (the last good version renders)" : "Compiling...");
+    } else if (status.state == State::Compiled) {
+        ImGui::TextColored(kOkColor, "Compiled");
+    } else if (status.state == State::Failed) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+        ImGui::TextWrapped("%s", status.hasShader ? "Compile failed: the last good version renders"
+                                                  : "Compile failed: renders magenta");
+        ImGui::TextWrapped("%s", status.error.c_str());
+        ImGui::PopStyleColor();
+    }
+}
+
+const char* shaderParamTypeName(kast::ShaderParamType type)
+{
+    constexpr const char* kNames[] = {"float", "vec2", "vec3", "vec4", "color", "texture2D"}; // ShaderParamType order
+    return kNames[static_cast<int>(type)];
+}
+
+// One widget per param the material's .kshader declares, showing the material's value or the default: a slider for a
+// ranged float, drag fields for numbers and vectors, a color picker, a texture picker. True if one changed m.params.
+bool drawShaderParams(const kast::ShaderSource& source, kast::Material& m, const std::vector<std::string>& textures)
+{
+    using Type = kast::ShaderParamType;
+    bool changed = false;
+    for (const kast::ShaderParam& param : source.params) {
+        ImGui::PushID(param.name.c_str());
+        const char* label = param.name.c_str();
+        const auto it = m.params.find(param.name);
+        if (param.type == Type::Texture2D) {
+            constexpr const char* kDefaults[] = {"Default (white)", "Default (black)", "Default (flat normal)"};
+            std::string path = it != m.params.end() ? it->second.texture : "";
+            if (drawFilePicker(label, textures, kDefaults[static_cast<int>(param.texture)], path)) {
+                if (path.empty())
+                    m.params.erase(param.name);
+                else
+                    m.params[param.name] = {.texture = path};
+                changed = true;
+            }
+        } else {
+            std::array<float, 4> v = param.value;
+            if (it != m.params.end()) {
+                std::ranges::copy(it->second.numbers | std::views::take(4), v.begin());
+                if (param.type == Type::Color && it->second.numbers.size() == 3)
+                    v[3] = 1.0f;
+            }
+            bool edited = false;
+            if (param.type == Type::Float && param.range)
+                edited = ImGui::SliderFloat(label, &v[0], (*param.range)[0], (*param.range)[1], "%.3f");
+            else if (param.type == Type::Float)
+                edited = ImGui::DragFloat(label, &v[0], 0.01f, -FLT_MAX, FLT_MAX, "%.3f");
+            else if (param.type == Type::Vec2)
+                edited = ImGui::DragFloat2(label, v.data(), 0.01f, -FLT_MAX, FLT_MAX, "%.3f");
+            else if (param.type == Type::Vec3)
+                edited = ImGui::DragFloat3(label, v.data(), 0.01f, -FLT_MAX, FLT_MAX, "%.3f");
+            else if (param.type == Type::Vec4)
+                edited = ImGui::DragFloat4(label, v.data(), 0.01f, -FLT_MAX, FLT_MAX, "%.3f");
+            else
+                edited = ImGui::ColorEdit4(label, v.data(), ImGuiColorEditFlags_Float);
+            if (edited) {
+                const int count = param.type == Type::Color ? 4 : kast::componentCount(param.type);
+                m.params[param.name] = {.numbers = std::vector<float>(v.begin(), v.begin() + count)};
+                changed = true;
+            }
+        }
+        ImGui::SetItemTooltip("%s param (line %d of the .kshader)", shaderParamTypeName(param.type), param.line);
+        ImGui::PopID();
+    }
+    for (const auto& [name, value] : m.params)
+        if (std::ranges::find(source.params, name, &kast::ShaderParam::name) == source.params.end())
+            ImGui::TextColored(ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled), "'%s': not a param of the shader (ignored)",
+                               name.c_str());
+    return changed;
 }
 
 // A combo of files with none first (path empty = none). A path that isn't listed is shown as missing and kept until
@@ -990,7 +1076,7 @@ bool Panels::drawUIDocumentComponent(Document& doc, entt::entity entity)
 void Panels::selectAsset(const std::string& path)
 {
     assetSelected_ = path;
-    inspectedMaterial_ = hasExtension(path, ".mat") ? path : "";
+    inspectedAsset_ = hasExtension(path, ".mat") || hasExtension(path, ".kshader") ? path : "";
     if (const size_t slash = path.rfind('/'); slash != std::string::npos)
         assetExpand_ = path.substr(0, slash); // its folder (one level), so the entry shows
     assetScrollTo_ = true;
@@ -1183,17 +1269,17 @@ void Panels::drawMaterialInspector(Document& doc)
 {
     if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
         refreshAssets(doc);
-    const std::filesystem::path file = assetsRoot_ / fromUtf8(inspectedMaterial_);
+    const std::filesystem::path file = assetsRoot_ / fromUtf8(inspectedAsset_);
     // Reloaded when another material is shown or its file changes on disk (an external edit).
     const auto mtime = kast::modifiedTime(file);
-    if (material_.path != inspectedMaterial_ || material_.mtime != mtime) {
-        material_.path = inspectedMaterial_;
+    if (material_.path != inspectedAsset_ || material_.mtime != mtime) {
+        material_.path = inspectedAsset_;
         material_.mtime = mtime;
         material_.error.clear();
         kast::loadMaterial(file, material_.value, material_.error);
     }
     beginCard();
-    ImGui::TextUnformatted(inspectedMaterial_.c_str());
+    ImGui::TextUnformatted(inspectedAsset_.c_str());
     ImGui::Separator();
     if (!material_.error.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
@@ -1206,6 +1292,7 @@ void Panels::drawMaterialInspector(Document& doc)
     std::vector<std::string> textures;
     collectFiles(assets_, {".png", ".jpg", ".jpeg"}, textures);
     kast::Material& m = material_.value;
+    const kast::Material before = m; // an edit starting this frame undoes to it
     ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.5f); // leave room for the labels
     bool changed = ImGui::ColorEdit4("Base Color", m.baseColor.data());
     changed = drawFilePicker("Base Texture", textures, "None", m.baseColorTexture) || changed;
@@ -1253,15 +1340,81 @@ void Panels::drawMaterialInspector(Document& doc)
     ImGui::SetItemTooltip("Faces not drawn; None for open meshes seen from both sides. Shadows always use both faces");
     changed = ImGui::Checkbox("Unlit", &m.unlit) || changed;
     ImGui::SetItemTooltip("Base color + emissive only: ignores lights, shadows and ambient (still fogged, still casts)");
+    ImGui::SeparatorText("Shader");
+    std::vector<std::string> shaderFiles;
+    collectFiles(assets_, {".kshader"}, shaderFiles);
+    changed = drawFilePicker("Shader", shaderFiles, "None (built-in)", m.shader) || changed;
+    ImGui::SetItemTooltip("A .kshader whose fragment() / vertex() run in the mesh shader (Assets > Create > Shader)");
+    if (!m.shader.empty()) {
+        const kast::ShaderLibrary::Status status = kast::shaders().status(m.shader);
+        drawShaderStatus(status);
+        if (std::string error; status.declaration && !kast::checkShaderAlphaMode(m, *status.declaration, error)) {
+            ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+            ImGui::TextWrapped("Renders magenta: %s", error.c_str());
+            ImGui::PopStyleColor();
+        }
+        if (status.declaration)
+            changed = drawShaderParams(*status.declaration, m, textures) || changed;
+    }
     ImGui::PopItemWidth();
     endCard();
-    if (!changed)
-        return;
-    // ponytail: saves on every changed frame while dragging (a few hundred bytes); debounce if it ever shows.
-    if (std::string error; saveMaterial(file, m, error))
-        material_.mtime = kast::modifiedTime(file);
-    else
-        kast::log::error(std::format("Cannot save material '{}': {}", inspectedMaterial_, error));
+    if (changed) {
+        // ponytail: saves on every changed frame while dragging (a few hundred bytes); debounce if it ever shows.
+        if (std::string error; saveMaterial(file, m, error))
+            material_.mtime = kast::modifiedTime(file);
+        else
+            kast::log::error(std::format("Cannot save material '{}': {}", inspectedAsset_, error));
+        if (!materialBefore_)
+            materialBefore_ = before;
+    }
+    // One undo step per gesture: a drag or a typed value ends when its widget lets go.
+    if (materialBefore_ && !ImGui::IsAnyItemActive()) {
+        pushMaterialStep(materialHistory_, file, std::format("Edit {}", utf8(file.filename())), *materialBefore_, m);
+        materialBefore_.reset();
+    }
+}
+
+bool Panels::editMaterial(const std::string& field, const nlohmann::ordered_json& value, std::string& error)
+{
+    const std::filesystem::path file = assetsRoot_ / fromUtf8(inspectedAsset_);
+    kast::Material m;
+    if (!hasExtension(inspectedAsset_, ".mat")) {
+        error = "no material in the Inspector";
+        return false;
+    }
+    if (!kast::loadMaterial(file, m, error))
+        return false;
+    const kast::Material before = m;
+    if (!kast::setMaterialProperty(m, field, value, error) || !saveMaterial(file, m, error))
+        return false;
+    pushMaterialStep(materialHistory_, file, std::format("Edit {}", utf8(file.filename())), before, m);
+    return true;
+}
+
+bool Panels::hasMaterial() const { return hasExtension(inspectedAsset_, ".mat"); }
+
+void Panels::drawShaderInspector(Document& doc)
+{
+    if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
+        refreshAssets(doc);
+    beginCard();
+    ImGui::TextUnformatted(inspectedAsset_.c_str());
+    ImGui::Separator();
+    const kast::ShaderLibrary::Status status = kast::shaders().status(inspectedAsset_);
+    drawShaderStatus(status);
+    if (status.declaration) {
+        ImGui::SeparatorText("Params");
+        if (status.declaration->params.empty())
+            ImGui::TextDisabled("None");
+        for (const kast::ShaderParam& param : status.declaration->params)
+            ImGui::BulletText("%s %s (line %d)", shaderParamTypeName(param.type), param.name.c_str(), param.line);
+        ImGui::TextDisabled(status.declaration->hasVertex ? "Has vertex(): also moves shadows" : "No vertex()");
+    }
+    ImGui::Spacing();
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("Edit it in the external editor (double-click in Assets); saving recompiles it.");
+    ImGui::PopStyleColor();
+    endCard();
 }
 
 void Panels::openNewStateMachine(std::string name)
@@ -1822,7 +1975,7 @@ void drawSpeakerIcon(float x, float y, float height, bool selected)
 bool isTextAsset(const std::string& name)
 {
     return hasExtension(name, ".lua") || hasExtension(name, ".rcss") || hasExtension(name, ".rml") ||
-           hasExtension(name, ".json") || hasExtension(name, ".mat");
+           hasExtension(name, ".json") || hasExtension(name, ".mat") || hasExtension(name, ".kshader");
 }
 
 bool acceptAssetDrop(std::string& dropped)
@@ -2101,6 +2254,9 @@ void Panels::drawAssetCreateMenu(const std::string& folder, const char* blocker)
     if (ImGui::MenuItem("Material", nullptr, false, !blocker))
         assetEdit_ = {AssetEdit::Op::NewMaterial, folder};
     disabledTooltip(blocker);
+    if (ImGui::MenuItem("Shader", nullptr, false, !blocker))
+        assetEdit_ = {AssetEdit::Op::NewShader, folder};
+    disabledTooltip(blocker);
     ImGui::EndMenu();
 }
 
@@ -2233,6 +2389,21 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui)
         }
         break;
     }
+    case AssetEdit::Op::NewShader: {
+        const std::filesystem::path dir = edit.path.empty() ? root : source;
+        std::filesystem::path file;
+        if (writeNewShader(dir, file, error)) {
+            const std::string name = utf8(file.filename());
+            assetExpand_ = edit.path;
+            selected = joinAsset(edit.path, name);
+            kast::log::info(std::format("Created shader '{}'", selected));
+            refreshAssets(doc);
+            selectAsset(selected);
+            startAssetRename(selected, name);
+            return;
+        }
+        break;
+    }
     case AssetEdit::Op::NewPrefab: {
         std::string path;
         if (createPrefabFrom(doc, edit.entity, edit.path, path, error)) {
@@ -2286,13 +2457,13 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui)
             if (scenePath)
                 doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
             remapScenePaths(doc, edit.path, selected); // systems, MeshRenderer materials, models, overrides, prefabs
-            for (const std::string& file : remapMaterialTextures(root, edit.path, selected))
-                kast::log::info(std::format("Updated texture paths in '{}'", file));
+            for (const std::string& file : remapMaterialPaths(root, edit.path, selected))
+                kast::log::info(std::format("Updated texture and shader paths in '{}'", file));
             for (const std::string& file : remapPrefabReferences(root, edit.path, selected))
                 kast::log::info(std::format("Updated prefab references in '{}'", file));
             refreshPrefabs(doc); // instances reload from the moved files
-            if (std::vector<std::string> path = {inspectedMaterial_}; remapProjectPaths(path, edit.path, selected))
-                inspectedMaterial_ = path[0];
+            if (std::vector<std::string> path = {inspectedAsset_}; remapProjectPaths(path, edit.path, selected))
+                inspectedAsset_ = path[0];
             if (newFsm) {
                 assetNewFsm_.clear();
                 refreshStateMachines(doc);

@@ -1,0 +1,5 @@
+{
+  "version": 3,
+  "alphaMode": "mask",
+  "shader": "shaders/hidden.kshader"
+}

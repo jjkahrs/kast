@@ -285,6 +285,7 @@ void SceneViewport::draw(Document& doc)
             doc.camera.viewMatrix(view);
             doc.camera.projMatrix(proj, size.x / size.y);
             bx::mtxMul(viewProj, view, proj);
+            renderer_.setTarget(post_.target(), post_.width(), post_.height());
             renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), post_.sceneView(), view,
                              proj, shadowViews_, extraScene_);
             post_.apply(doc.scene.postProcessing, postEffects_, target_.frameBuffer());

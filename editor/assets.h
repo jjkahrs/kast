@@ -1,6 +1,7 @@
 #pragma once
 
 #include <material.h>
+#include <undo.h>
 
 #include <filesystem>
 #include <optional>
@@ -54,10 +55,18 @@ bool writeTextFile(const std::filesystem::path& file, std::string_view text, std
 bool saveMaterial(const std::filesystem::path& file, const kast::Material& material, std::string& error);
 // Creates "new_material.mat" (else "new_material_2.mat", ...) with the default material in dir; file is where.
 bool writeNewMaterial(const std::filesystem::path& dir, std::filesystem::path& file, std::string& error);
-// Rewrites the texture paths of every valid .mat under root that point at from or inside it (project-relative, as
-// remapProjectPaths). Returns the .mat files changed (project-relative); a file that can't be written is logged.
-std::vector<std::string> remapMaterialTextures(const std::filesystem::path& root, const std::string& from,
-                                               const std::string& to);
+// Records on history an Inspector edit that saved after over before in the .mat file: undo and redo save that version
+// again (logging a failure). Nothing is recorded if before and after are the same.
+void pushMaterialStep(UndoStack& history, const std::filesystem::path& file, std::string name, const kast::Material& before,
+                      const kast::Material& after);
+// Creates "new_shader.kshader" (else "new_shader_2.kshader", ...) in dir: a commented starter with params, a
+// fragment() and a commented-out vertex(). file is where.
+bool writeNewShader(const std::filesystem::path& dir, std::filesystem::path& file, std::string& error);
+// Rewrites the paths of every valid .mat under root that point at from or inside it (project-relative, as
+// remapProjectPaths): its textures, texture2D param values and .kshader. Returns the .mat files changed
+// (project-relative); a file that can't be written is logged.
+std::vector<std::string> remapMaterialPaths(const std::filesystem::path& root, const std::string& from,
+                                            const std::string& to);
 // Creates folder name in dir. False + error (nothing created) if the name is invalid or taken.
 bool createAssetFolder(const std::filesystem::path& dir, const std::string& name, std::string& error);
 // Renames source in place. A name differing only in case is allowed. False + error (disk unchanged) if the name is

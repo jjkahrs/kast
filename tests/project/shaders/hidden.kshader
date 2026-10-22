@@ -1,0 +1,5 @@
+// Cuts every pixel out on an alphaMode mask material (shader_vertex_offset.scene): no surface and no shadow.
+void fragment()
+{
+    ALPHA = 0.0;
+}

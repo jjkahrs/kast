@@ -1,0 +1,6 @@
+{
+  "version": 3,
+  "baseColor": [0.95, 0.45, 0.2, 1],
+  "shader": "shaders/toon.kshader",
+  "params": { "bands": 3 }
+}

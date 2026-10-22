@@ -5,6 +5,7 @@
 
 #include <array>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,12 +16,21 @@
 // Texture paths are project-relative. GPU-free: parsing, validation and the path cache; the renderer owns the textures.
 namespace kast {
 
-constexpr int kMaterialFileVersion = 2; // version 1 files (no fields past alphaCutoff) still load, with the defaults
+// Versions 1 (no fields past alphaCutoff) and 2 (no shader / params) still load, with the defaults.
+constexpr int kMaterialFileVersion = 3;
 
 // Additive: src * alpha + dst, depth tested, no depth write, sorted with the blended draws.
 enum class AlphaMode { Opaque, Mask, Blend, Additive };
 // Which triangle faces are culled (not drawn); winding counter-clockwise from the front. Shadow passes draw both.
 enum class CullMode { None, Back, Front };
+
+// A .mat's value for one .kshader param: 1 to 4 numbers (float, vec2, vec3, vec4, color), or a texture path
+// (texture2D; empty = the param's default). Checked against the declaration when drawn (checkShaderParams, shader.h).
+struct ShaderParamValue {
+    std::vector<float> numbers; // empty: a texture
+    std::string texture;        // project-relative
+    bool operator==(const ShaderParamValue&) const = default;
+};
 
 struct Material {
     std::array<float, 4> baseColor{0.8f, 0.8f, 0.8f, 1.0f}; // linear RGBA 0..1
@@ -42,6 +52,8 @@ struct Material {
     float alphaCutoff = 0.5f; // 0..1, mask only
     CullMode cullMode = CullMode::Back;
     bool unlit = false; // base color + emissive only: no lights, shadows or ambient (still fogged, still casts)
+    std::string shader; // project-relative .kshader whose fragment() runs in the mesh shader; empty = the built-in one
+    std::map<std::string, ShaderParamValue> params; // the shader's param values by name; missing ones: its defaults
 };
 
 // What the shader adds after lighting: emissive * emissiveIntensity, or black when emission is off.
@@ -59,8 +71,8 @@ bool setMaterialField(Material& material, std::string_view name, const nlohmann:
 // One field as JSON (colors and vectors as arrays, alphaMode and cullMode by name); nullopt if name is not a field.
 std::optional<nlohmann::ordered_json> materialField(const Material& material, std::string_view name);
 
-// Strict: needs "version" 1 or kMaterialFileVersion; unknown keys and invalid values are errors; missing fields get their
-// defaults. Replaces out only on success.
+// Strict: needs "version" 1, 2 or kMaterialFileVersion; unknown keys and invalid values are errors; missing fields get
+// their defaults. Replaces out only on success.
 bool materialFromJson(const nlohmann::ordered_json& json, Material& out, std::string& error);
 // Every field in file order, "version" (kMaterialFileVersion) first.
 nlohmann::ordered_json materialToJson(const Material& material);

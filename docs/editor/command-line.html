@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html" class="active">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html" class="active">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
 <main>
 <h1 id="run">Run</h1>
 <pre><code class="language-bat">build\release\kast_editor.exe
@@ -155,8 +155,12 @@
 <td>Open that Assets entry's context menu (<code>/</code> = the panel background) with its Create submenu open, for screenshots.</td>
 </tr>
 <tr>
-<td><code>--assets-create system\|fsm\|gui:&lt;folder&gt;</code></td>
-<td>Run Assets &gt; Create &gt; Lua System / State Machine / GUI in that project folder (empty = the root) after the first 10 frames, as the menu does (the new file's rename starts).</td>
+<td><code>--assets-create system\|fsm\|gui\|material\|shader:&lt;folder&gt;</code></td>
+<td>Run Assets &gt; Create &gt; Lua System / State Machine / GUI / Material / Shader in that project folder (empty = the root) after the first 10 frames, as the menu does (the new file's rename starts).</td>
+</tr>
+<tr>
+<td><code>--material-set &lt;field&gt;=&lt;json&gt;</code> (repeatable), <code>--material-undo N</code>, <code>--material-redo N</code></td>
+<td>With <code>--assets-select</code> of a <code>.mat</code>: set that field or <code>.kshader</code> param as an Inspector edit does (saved, one undo step each, in order), then Undo N times, then Redo N times, at frame 11. For tests of the material Inspector's undo.</td>
 </tr>
 <tr>
 <td><code>--open-gui &lt;file.rml&gt;</code></td>
