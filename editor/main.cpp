@@ -9,6 +9,7 @@
 #include "online_panel.h"
 #include "panels.h"
 #include "recent_projects.h"
+#include "shader_compiler.h"
 #include "ui_common.h"
 #include "viewport.h"
 #include "zone_cli.h"
@@ -984,6 +985,7 @@ void drawConsole()
 int main(int argc, char** argv)
 {
     kast::disableCrashDialogsIfRequested();
+    kast::shaders().setCompiler(compileShader); // .kshader materials compile with shaderc here (not in the player)
     const std::optional<Options> options = parseArgs(argc, argv);
     if (!options)
         return 2;

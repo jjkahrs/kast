@@ -1,0 +1,4 @@
+{
+  "version": 3,
+  "shader": "shaders/does_not_exist.kshader"
+}

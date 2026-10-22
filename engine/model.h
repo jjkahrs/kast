@@ -36,6 +36,8 @@ struct ModelVertex {
     // ponytail: joint indices as floats; Uint8 needs uint shader inputs on DX11. 12 bytes per vertex if it matters.
     float joints[kMaxBoneWeights];
     float weights[kMaxBoneWeights]; // sum to 1 on skinned meshes, all 0 otherwise
+    // ponytail: 8 bits per linear channel (glTF COLOR_0 is linear), so dark gradients band; Half x4 if that shows.
+    uint32_t color = 0xffffffff; // RGBA8 (R in the low byte), linear: glTF COLOR_0, else white
 };
 
 struct ModelNode {

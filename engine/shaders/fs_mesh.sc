@@ -1,4 +1,7 @@
-$input v_normal, v_tangent, v_worldPos, v_texcoord0
+$input v_normal, v_tangent, v_worldPos, v_texcoord0, v_color0
+
+// The mesh fragment template: Kast's built-in shader as is, and every .kshader's fragment() at the //@user line
+// (shader.cpp generateShader; see docs/engine/shaders.html).
 
 #include <bgfx_shader.sh>
 
@@ -25,7 +28,7 @@ uniform vec4 u_emissive;   // rgb: linear, added after lighting
 uniform vec4 u_material;   // x: metallic, y: roughness, z: alpha cutoff (-1 = none), w: 0 opaque, 1 blend, 2 additive
 uniform vec4 u_materialExt; // x: normal scale, y: occlusion strength, z: 1 if a normal texture is bound, w: 1 if unlit
 uniform vec4 u_uvTransform; // xy: scale, zw: offset; every texture of the material samples uv * scale + offset
-uniform vec4 u_time;        // x: seconds, wrapping every kShaderTimePeriod (shader_clock.h); no material uses it yet
+uniform vec4 u_time;        // x: seconds, wrapping every kShaderTimePeriod (shader_clock.h)
 uniform vec4 u_cameraPos;  // xyz: world position of the eye
 uniform vec4 u_lightDir;   // xyz: world direction the light travels; w: 1 if the scene has a light, else 0
 uniform vec4 u_lightColor; // rgb: light color * intensity
@@ -136,33 +139,111 @@ vec3 fogged(vec3 color, vec3 worldPos)
     return u_material.w > 1.5 ? color * (1.0 - fog) : mix(color, u_fogColor.rgb, fog);
 }
 
+// What fragment() reads and writes (the uppercase built-ins below). main() fills it with what the built-in material
+// computes, so a fragment() that writes nothing changes nothing.
+struct KastFragment {
+    vec2 uv;             // UV0 * uvScale + uvOffset: where the material's textures sample
+    vec4 color;          // vertex color (COLOR0), white if the mesh has none
+    vec3 normal;         // world, unit; the normal map then bends it
+    vec4 tangent;        // world xyz (interpolated), w: bitangent handedness
+    vec3 worldPos;
+    vec3 viewPos;        // right-handed view space: the camera looks down -Z
+    vec4 fragCoord;      // window pixel position, as gl_FragCoord
+    vec3 albedo;         // linear base color
+    float alpha;
+    float metallic;
+    float roughness;
+    vec3 emission;       // linear HDR, added after lighting
+    vec3 normalMap;      // tangent-space normal as stored in a texture (0..1, flat = 0.5, 0.5, 1)
+    float normalMapDepth; // scales the normal map's XY (the material's normalScale)
+    float ao;            // ambient occlusion: darkens ambient light only
+};
+
+// Built-ins: fragment() inputs and outputs (fields of its kast_f), uniforms and texture helpers. The names are reserved:
+// a .kshader param may not take one (kBuiltinNames in shader.cpp lists them).
+#define UV kast_f.uv
+#define COLOR kast_f.color
+#define NORMAL kast_f.normal
+#define TANGENT kast_f.tangent
+#define WORLD_POSITION kast_f.worldPos
+#define VIEW_POSITION kast_f.viewPos
+#define FRAG_COORD kast_f.fragCoord
+#define ALBEDO kast_f.albedo
+#define ALPHA kast_f.alpha
+#define METALLIC kast_f.metallic
+#define ROUGHNESS kast_f.roughness
+#define EMISSION kast_f.emission
+#define NORMAL_MAP kast_f.normalMap
+#define NORMAL_MAP_DEPTH kast_f.normalMapDepth
+#define AO kast_f.ao
+#define TIME (u_time.x)
+#define CAMERA_POSITION (u_cameraPos.xyz)
+#define MATERIAL_BASE_COLOR (u_baseColor)
+#define MATERIAL_METALLIC (u_material.x)
+#define MATERIAL_ROUGHNESS (u_material.y)
+#define MATERIAL_EMISSION (u_emissive.rgb)
+#define MATERIAL_ALPHA_CUTOFF (u_material.z)
+#define MATERIAL_UV_TRANSFORM (u_uvTransform)
+vec4 sampleBaseColor(vec2 uv) { return texture2D(s_baseColor, uv); }
+vec4 sampleMetallicRoughness(vec2 uv) { return texture2D(s_metallicRoughness, uv); }
+vec4 sampleNormal(vec2 uv) { return texture2D(s_normal, uv); }
+vec4 sampleOcclusion(vec2 uv) { return texture2D(s_occlusion, uv); }
+vec4 sampleEmissive(vec2 uv) { return texture2D(s_emissive, uv); }
+
+//@user
+#ifndef KAST_FRAGMENT
+void fragment(inout KastFragment kast_f) {}
+#endif
+
 void main()
 {
-    vec2 uv = v_texcoord0 * u_uvTransform.xy + u_uvTransform.zw;
-    vec4 base = u_baseColor * texture2D(s_baseColor, uv);
-    if (base.a < u_material.z)
+    KastFragment f;
+    f.uv = v_texcoord0 * u_uvTransform.xy + u_uvTransform.zw;
+    vec4 base = u_baseColor * texture2D(s_baseColor, f.uv);
+    vec4 mr = texture2D(s_metallicRoughness, f.uv);
+    f.color = v_color0;
+    f.normal = normalize(v_normal);
+    f.tangent = v_tangent;
+    f.worldPos = v_worldPos;
+    f.viewPos = mul(u_view, vec4(v_worldPos, 1.0)).xyz;
+    f.fragCoord = gl_FragCoord;
+    f.albedo = base.rgb;
+    f.alpha = base.a;
+    f.metallic = u_material.x * mr.b;
+    f.roughness = u_material.y * mr.g;
+    f.emission = u_emissive.rgb * texture2D(s_emissive, f.uv).rgb;
+    f.normalMap = texture2D(s_normal, f.uv).xyz;
+    f.normalMapDepth = u_materialExt.x; // glTF normalTexture.scale
+    // Ambient occlusion darkens ambient light only: ao = 1 + strength * (R - 1).
+    f.ao = 1.0 + u_materialExt.y * (texture2D(s_occlusion, f.uv).r - 1.0);
+    fragment(f);
+
+    if (f.alpha < u_material.z)
         discard;
-    vec3 emissive = u_emissive.rgb * texture2D(s_emissive, uv).rgb;
-    float alpha = u_material.w > 0.5 ? base.a : 1.0;
+    float alpha = u_material.w > 0.5 ? f.alpha : 1.0;
     if (u_materialExt.w > 0.5) { // unlit
-        gl_FragColor = vec4(fogged(base.rgb + emissive, v_worldPos), alpha);
+        gl_FragColor = vec4(fogged(f.albedo + f.emission, v_worldPos), alpha);
         return;
     }
-    vec4 mr = texture2D(s_metallicRoughness, uv);
-    float metallic = saturate(u_material.x * mr.b);
-    float roughness = clamp(u_material.y * mr.g, 0.04, 1.0); // a 0 roughness highlight is infinitely thin: floored
-    vec3 albedo = base.rgb;
+    float metallic = saturate(f.metallic);
+    float roughness = clamp(f.roughness, 0.04, 1.0); // a 0 roughness highlight is infinitely thin: floored
+    vec3 albedo = f.albedo;
     vec3 f0 = mix(vec3_splat(0.04), albedo, metallic);
 
-    vec3 n = normalize(v_normal);
+    vec3 n = f.normal;
+    // A shader writing NORMAL or NORMAL_MAP (KAST_CUSTOM_NORMAL) always gets this, which also renormalizes NORMAL.
+#ifdef KAST_CUSTOM_NORMAL
+    if (true) {
+#else
     if (u_materialExt.z > 0.5) {
+#endif
         // Gram-Schmidt: the interpolated tangent made perpendicular to n again; bitangent = cross(n, t) * handedness.
-        vec3 t = v_tangent.xyz - n * dot(n, v_tangent.xyz);
+        vec3 t = f.tangent.xyz - n * dot(n, f.tangent.xyz);
         if (dot(t, t) > 1e-12) {
             t = normalize(t);
-            vec3 b = cross(n, t) * (v_tangent.w < 0.0 ? -1.0 : 1.0);
-            vec3 tn = texture2D(s_normal, uv).xyz * 2.0 - 1.0;
-            tn.xy *= u_materialExt.x; // glTF normalTexture.scale
+            vec3 b = cross(n, t) * (f.tangent.w < 0.0 ? -1.0 : 1.0);
+            vec3 tn = f.normalMap * 2.0 - 1.0;
+            tn.xy *= f.normalMapDepth;
             n = normalize(t * tn.x + b * tn.y + n * tn.z);
         }
     }
@@ -186,11 +267,9 @@ void main()
     // F = F0 + (max(1 - roughness, F0) - F0) * (1 - N.V)^5, so metals (no diffuse) still show ambient.
     float nv = max(dot(n, v), 0.0);
     vec3 fAmbient = f0 + (max(vec3_splat(1.0 - roughness), f0) - f0) * pow(saturate(1.0 - nv), 5.0);
-    // Ambient occlusion darkens ambient light only: ao = 1 + strength * (R - 1).
-    float ao = 1.0 + u_materialExt.y * (texture2D(s_occlusion, uv).r - 1.0);
-    color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo + fAmbient) * u_ambient.rgb * ao;
+    color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo + fAmbient) * u_ambient.rgb * f.ao;
 
-    color += emissive;
+    color += f.emission;
 
     // Linear HDR: the post chain (post_process.h) tonemaps and encodes to sRGB.
     gl_FragColor = vec4(fogged(color, v_worldPos), alpha);

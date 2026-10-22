@@ -102,6 +102,34 @@ bool texturePath(std::string_view name, const Json& json, std::string& out, std:
     return true;
 }
 
+// "params": an object of param values (ShaderParamValue). Which param takes which is the shader's to say.
+bool shaderParams(const Json& json, std::map<std::string, ShaderParamValue>& out, std::string& error)
+{
+    if (!json.is_object()) {
+        error = "\"params\" must be an object (param name: value)";
+        return false;
+    }
+    std::map<std::string, ShaderParamValue> params;
+    for (const auto& [name, value] : json.items()) {
+        ShaderParamValue& param = params[name];
+        const auto finite = [](const Json& v) { return v.is_number() && std::isfinite(v.get<double>()); };
+        if (finite(value)) {
+            param.numbers = {value.get<float>()};
+        } else if (value.is_array() && value.size() >= 2 && value.size() <= 4 && std::ranges::all_of(value, finite)) {
+            for (const Json& v : value)
+                param.numbers.push_back(v.get<float>());
+        } else if (value.is_string()) {
+            param.texture = value.get<std::string>();
+        } else {
+            error = std::format("\"params\": \"{}\" must be a finite number, an array of 2 to 4 finite numbers or a texture "
+                                "path", name);
+            return false;
+        }
+    }
+    out = std::move(params);
+    return true;
+}
+
 Json numbers(std::initializer_list<float> values)
 {
     Json out = Json::array();
@@ -162,7 +190,7 @@ const std::vector<std::string>& materialFieldNames()
     static const std::vector<std::string> names = {
         "baseColor", "baseColorTexture", "metallic", "roughness", "metallicRoughnessTexture", "normalTexture", "normalScale",
         "occlusionTexture", "occlusionStrength", "emissiveEnabled", "emissive", "emissiveIntensity", "emissiveTexture",
-        "uvScale", "uvOffset", "alphaMode", "alphaCutoff", "cullMode", "unlit"};
+        "uvScale", "uvOffset", "alphaMode", "alphaCutoff", "cullMode", "unlit", "shader", "params"};
     return names;
 }
 
@@ -218,6 +246,14 @@ bool setMaterialField(Material& material, std::string_view name, const Json& val
             error = "\"cullMode\" must be \"none\", \"back\" or \"front\"";
     } else if (name == "unlit") {
         ok = flag(name, value, m.unlit, error);
+    } else if (name == "shader") {
+        ok = value.is_string();
+        if (ok)
+            m.shader = value.get<std::string>();
+        else
+            error = "\"shader\" must be a string (a project-relative .kshader path, or empty for the built-in shader)";
+    } else if (name == "params") {
+        ok = shaderParams(value, m.params, error);
     } else {
         error = std::format("unknown field \"{}\"", name);
     }
@@ -266,6 +302,21 @@ std::optional<Json> materialField(const Material& m, std::string_view name)
         return nameOf(m.cullMode, kCullModes);
     if (name == "unlit")
         return m.unlit;
+    if (name == "shader")
+        return m.shader;
+    if (name == "params") {
+        Json params = Json::object();
+        for (const auto& [param, value] : m.params) {
+            if (value.numbers.empty())
+                params[param] = value.texture;
+            else if (value.numbers.size() == 1)
+                params[param] = jsonNumber(value.numbers[0]);
+            else
+                for (float v : value.numbers)
+                    params[param].push_back(jsonNumber(v));
+        }
+        return params;
+    }
     return std::nullopt;
 }
 
@@ -275,9 +326,10 @@ bool materialFromJson(const Json& json, Material& out, std::string& error)
         error = "must be a JSON object";
         return false;
     }
-    // Version 2 only added fields: a version 1 file is a version 2 file with those at their defaults.
-    if (!json.contains("version") || (json["version"] != 1 && json["version"] != kMaterialFileVersion)) {
-        error = std::format("\"version\" must be 1 or {}", kMaterialFileVersion);
+    // Versions 2 and 3 only added fields: an older file is a version 3 file with those at their defaults.
+    if (!json.contains("version") ||
+        (json["version"] != 1 && json["version"] != 2 && json["version"] != kMaterialFileVersion)) {
+        error = std::format("\"version\" must be 1, 2 or {}", kMaterialFileVersion);
         return false;
     }
     Material material;

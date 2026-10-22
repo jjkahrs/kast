@@ -5,6 +5,7 @@
 #include "model.h"
 #include "particles.h"
 #include "scene.h"
+#include "shader.h"
 #include "shader_clock.h"
 #include "shadow.h"
 #include "sky.h"
@@ -35,6 +36,7 @@ struct MeshVertex {
     float nx, ny, nz;
     float tx, ty, tz, tw;
     float u, v; // (0, 0) is the image's top-left
+    uint32_t color = 0xffffffff; // RGBA8 (R in the low byte), linear: COLOR0, white
 };
 
 struct MeshData {
@@ -135,6 +137,13 @@ private:
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
     };
+    // A .kshader's programs: its fs_mesh with each built-in mesh vertex shader. Rebuilt when the library hands out a
+    // different (recompiled) shader.
+    struct UserShader {
+        std::shared_ptr<const CompiledShader> source;
+        bgfx::ShaderHandle fragment = BGFX_INVALID_HANDLE;
+        bgfx::ProgramHandle mesh = BGFX_INVALID_HANDLE, skinned = BGFX_INVALID_HANDLE, instanced = BGFX_INVALID_HANDLE;
+    };
     // GPU copy of a Model, rebuilt when the library hands out a different (reloaded) one.
     struct GpuModel {
         std::shared_ptr<const Model> source;
@@ -146,6 +155,7 @@ private:
         Mat4 world{};
         Aabb bounds{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}}; // world space, for culling, point lights and blend sorting
         const Material* material = nullptr;
+        const UserShader* shader = nullptr; // the material's .kshader; null: the built-in mesh shader
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
         int bones = -1; // index into the frame's bone sets; -1 = not skinned
@@ -174,6 +184,11 @@ private:
     void clearTextures();
     const GpuModel* gpuModel(const std::string& path); // null if the model fails to load
     void clearModels();
+    const UserShader* userShader(const std::string& path); // null if the .kshader fails to load or compile
+    void destroy(UserShader& shader);
+    // Points each draw whose material has a .kshader at its programs; a shader that fails, or material values of the
+    // wrong type for it, draw with errorMaterial() instead.
+    void resolveShaders(std::vector<DrawItem>& draws);
     // Builds the GPU meshes of the scene's TerrainTiles (one per TerrainTileData: new data, new mesh), marks them used
     // and appends their draws. pruneTerrain then drops the meshes no rendered scene used this frame.
     void addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws);
@@ -218,6 +233,10 @@ private:
     bgfx::VertexLayout lineLayout_;
     bgfx::VertexBufferHandle grid_ = BGFX_INVALID_HANDLE;
     bgfx::VertexLayout modelLayout_; // ModelVertex
+    // The built-in mesh vertex shaders, shared by the built-in programs and every .kshader's.
+    bgfx::ShaderHandle meshVertex_ = BGFX_INVALID_HANDLE;
+    bgfx::ShaderHandle skinnedVertex_ = BGFX_INVALID_HANDLE;
+    bgfx::ShaderHandle instancedVertex_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle meshProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle skinnedProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle instancedProgram_ = BGFX_INVALID_HANDLE;
@@ -254,6 +273,8 @@ private:
     bgfx::UniformHandle pointShadow_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle csmSampler_ = BGFX_INVALID_HANDLE;
     std::array<bgfx::UniformHandle, kMaxShadowedPointLights> pointShadowSamplers_;
+    bgfx::UniformHandle kastParams_ = BGFX_INVALID_HANDLE; // u_kastParams: a .kshader's numeric params
+    std::array<bgfx::UniformHandle, kMaxShaderTextures> shaderTextureSamplers_; // s_kastTexture0.., its texture2D params
     // Created on first use: a 2x2 atlas of kCascadeSize cascades, and per shadowed point light a cube with a frame
     // buffer per face.
     bgfx::TextureHandle csm_ = BGFX_INVALID_HANDLE;
@@ -265,11 +286,13 @@ private:
     bgfx::TextureHandle noShadowCube_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle white_ = BGFX_INVALID_HANDLE; // 1x1: stands in for no texture and failed loads
     bgfx::TextureHandle flatNormal_ = BGFX_INVALID_HANDLE; // 1x1 (0.5, 0.5, 1): stands in for no normal texture
+    bgfx::TextureHandle black_ = BGFX_INVALID_HANDLE;      // 1x1 opaque black: a texture2D param's "black" default
 
     std::filesystem::path root_;
     MaterialLibrary materials_;
     std::map<std::pair<std::string, bool>, Texture> textures_; // by (path, srgb)
     std::map<std::string, GpuModel> models_;                   // by project-relative path
+    std::map<std::string, UserShader> userShaders_;            // by project-relative .kshader path
     std::string previewMaterialPath_, previewTexturePath_;      // setPreview
     Material previewMaterial_;
     bgfx::TextureHandle previewTexture_ = BGFX_INVALID_HANDLE;

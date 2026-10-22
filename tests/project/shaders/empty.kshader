@@ -1,0 +1,5 @@
+// A fragment() that writes nothing: every built-in it could write keeps what the built-in material computes, so a
+// material using it renders exactly as without it (the shader_empty_* tests compare screenshots).
+void fragment()
+{
+}

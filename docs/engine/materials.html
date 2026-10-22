@@ -16,7 +16,7 @@
 project, referenced by <code>MeshRenderer.material</code> (project-relative). Every field but <code>version</code> is optional (default in
 brackets); unknown keys and invalid values make the file invalid.</p>
 <pre><code class="language-json">{
-  &quot;version&quot;: 2,
+  &quot;version&quot;: 3,
   &quot;baseColor&quot;: [0.8, 0.8, 0.8, 1],
   &quot;baseColorTexture&quot;: &quot;textures/checker.png&quot;,
   &quot;metallic&quot;: 0,
@@ -35,12 +35,15 @@ brackets); unknown keys and invalid values make the file invalid.</p>
   &quot;alphaMode&quot;: &quot;opaque&quot;,
   &quot;alphaCutoff&quot;: 0.5,
   &quot;cullMode&quot;: &quot;back&quot;,
-  &quot;unlit&quot;: false
+  &quot;unlit&quot;: false,
+  &quot;shader&quot;: &quot;&quot;,
+  &quot;params&quot;: {}
 }
 </code></pre>
-<p><strong>Versions</strong>: files are version 2. Version 1 files (no fields after <code>alphaCutoff</code>) still load, with the defaults
-below for every newer field; saving any material (the Inspector, Create &gt; Material) writes version 2 with every field,
-in the order above. Other versions are invalid (<code>"version" must be 1 or 2</code>).</p>
+<p><strong>Versions</strong>: files are version 3. Version 1 (no fields after <code>alphaCutoff</code>) and version 2 (no <code>shader</code> /
+<code>params</code>) files still load, with the defaults below for every newer field; saving any material (the Inspector,
+Create &gt; Material) writes version 3 with every field, in the order above. Other versions are invalid
+(<code>"version" must be 1, 2 or 3</code>).</p>
 <ul>
 <li><code>baseColor</code> linear RGBA 0–1 [0.8 grey, alpha 1], times <code>baseColorTexture</code> (sRGB; project-relative, empty = none).</li>
 <li><code>metallic</code>, <code>roughness</code> 0–1 [0, 0.5], times <code>metallicRoughnessTexture</code> (linear, glTF packing: G = roughness,
@@ -83,6 +86,17 @@ in the order above. Other versions are invalid (<code>"version" must be 1 or 2</
   translucent (<code>blend</code>) mesh now shows only its front surface, not its inside, and terrain seen from underground is
   invisible. In this repository <code>samples/starter-mmo/materials/grass_material.mat</code> (the grass blade model) was
   migrated to <code>none</code>.</li>
+<li><code>shader</code> [empty = the built-in shader] (new in version 3): a project-relative <code>.kshader</code> file whose
+  <code>fragment()</code> runs inside the mesh shader (see <a href="shaders.html#user-shaders">User shaders</a>). Every field above still
+  applies to such a material: its values are what <code>fragment()</code> starts from, and alpha mode, cull mode, unlit and the
+  textures work as without a shader. A missing <code>.kshader</code>, or one that doesn't parse or compile, renders the material
+  magenta, with one error in the log naming the file and line.</li>
+<li><code>params</code> [{}] (new in version 3): values for the shader's declared params, by name. A number for a
+  <code>float</code>, an array of 2, 3 or 4 numbers for a <code>vec2</code>, <code>vec3</code> or <code>vec4</code> (3 or 4 for a <code>color</code>), a
+  project-relative texture path for a <code>texture2D</code> (empty: its declared default). Params the material doesn't list use
+  the shader's defaults. A value of the wrong type for its param renders the material magenta (logged once); a value for
+  a param the shader doesn't declare (the shader may have changed since the <code>.mat</code> was saved) is ignored with a
+  warning. In the file, the object must hold only numbers, arrays of 2 to 4 numbers or strings.</li>
 <li>Shading: Cook-Torrance (GGX distribution, Smith / Schlick-GGX geometry, Schlick Fresnel, F0 = mix(0.04, baseColor,
   metallic)) for the first <code>DirectionalLight</code> and up to 8 <code>PointLight</code>s per mesh; ambient adds a diffuse term and a flat
   specular term (roughness-aware Fresnel), so metals are not black with ambient light only. Direct light is scaled by

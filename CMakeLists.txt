@@ -78,6 +78,24 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
   endif()
 endforeach()
 
+# --- shader tools: .kshader files compile in the editor at run time (editor/shader_compiler.cpp) with this shaderc,
+# next to the editor, plus bgfx's shader headers and the mesh templates in kshader/ beside it. The player gets none. ---
+set(KAST_SHADER_TOOLS)
+foreach(pair "${KAST_SHADERC}|shaderc.exe"
+             "${KAST_SHADER_INCLUDE}/bgfx_shader.sh|kshader/include/bgfx_shader.sh"
+             "${KAST_SHADER_INCLUDE}/bgfx_compute.sh|kshader/include/bgfx_compute.sh"
+             "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/fs_mesh.sc|kshader/mesh/fs_mesh.sc"
+             "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/varying.def.sc|kshader/mesh/varying.def.sc")
+  string(REPLACE "|" ";" pair "${pair}")
+  list(GET pair 0 from)
+  list(GET pair 1 to)
+  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${to}"
+                     COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${from}" "${CMAKE_CURRENT_BINARY_DIR}/${to}"
+                     DEPENDS "${from}" VERBATIM)
+  list(APPEND KAST_SHADER_TOOLS "${CMAKE_CURRENT_BINARY_DIR}/${to}")
+endforeach()
+add_custom_target(kast_shader_tools DEPENDS ${KAST_SHADER_TOOLS})
+
 # --- Fonts: TTFs embedded as byte array headers, regenerated when the TTF changes ---
 set(KAST_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/generated")
 function(kast_embed_font font header array)
@@ -118,7 +136,7 @@ target_link_libraries(kast_map PUBLIC nlohmann_json::nlohmann_json)
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/undo.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/prefab.cpp engine/components.cpp
-  engine/systems.cpp engine/renderer.cpp engine/shadow.cpp engine/frustum.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
+  engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shadow.cpp engine/frustum.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
@@ -149,7 +167,7 @@ add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
   editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp editor/editor_settings.cpp
-  editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp editor/zone_cli.cpp
+  editor/shader_compiler.cpp editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp editor/zone_cli.cpp
   editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
@@ -157,7 +175,7 @@ target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENE
 target_compile_definitions(kast_editor PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_editor PRIVATE kast_engine kast_zone SDL3::SDL3 imgui::imgui imguizmo::imguizmo pugixml::pugixml shell32) # shell32: Recycle Bin
-add_dependencies(kast_editor kast_player) # Build copies kast_player.exe from next to kast_editor.exe
+add_dependencies(kast_editor kast_player kast_shader_tools) # Build copies kast_player.exe from next to kast_editor.exe
 
 # --- zone: the zone (map) document, file and terrain editing logic (engine/zone), no window. Its own library, not
 # part of kast_engine: only editing tools link it, so the shipped kast_player stays free of it (and of KAST_SOURCE_DIR). ---
@@ -179,8 +197,9 @@ target_include_directories(kast_zone_self_check SYSTEM PRIVATE "${Stb_INCLUDE_DI
 # Also builds the editor Document (Play mode) so it can be checked without a window.
 add_executable(kast_self_check tests/self_check.cpp tests/net_self_check.cpp tests/net_test_util.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp
   editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/external_editor.cpp editor/editor_settings.cpp
-  editor/online.cpp "${KAST_MANIFEST}")
+  editor/shader_compiler.cpp editor/online.cpp "${KAST_MANIFEST}")
 target_include_directories(kast_self_check PRIVATE editor)
+add_dependencies(kast_self_check kast_shader_tools) # the .kshader checks compile with them
 target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project"
                            KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS} /bigobj) # one big file of checks
@@ -962,13 +981,81 @@ add_test(NAME assets_create_material_screenshot
 add_test(NAME assets_create_material_written
   COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_NEW_MATERIAL_PROJECT}/materials/new_material.mat")
 set_tests_properties(assets_create_material_written PROPERTIES PASS_REGULAR_EXPRESSION
-  "\"version\": 2,.*\"baseColor\": \\[.*0.8.*\"metallic\": 0[.0]*,.*\"roughness\": 0.5,.*\"alphaMode\": \"opaque\".*\"cullMode\": \"back\",.*\"unlit\": false")
+  "\"version\": 3,.*\"baseColor\": \\[.*0.8.*\"metallic\": 0[.0]*,.*\"roughness\": 0.5,.*\"alphaMode\": \"opaque\".*\"cullMode\": \"back\",.*\"unlit\": false,.*\"shader\": \"\",.*\"params\": {}")
 set_tests_properties(new_material_project_clean PROPERTIES FIXTURES_SETUP new_material_clean)
 set_tests_properties(new_material_project_copy PROPERTIES FIXTURES_REQUIRED new_material_clean
                      FIXTURES_SETUP new_material_copy)
 set_tests_properties(assets_create_material_screenshot PROPERTIES FIXTURES_REQUIRED new_material_copy
                      FIXTURES_SETUP new_material_made)
 set_tests_properties(assets_create_material_written PROPERTIES FIXTURES_REQUIRED new_material_made)
+# User shaders (.kshader, docs/engine/shaders.html). Every shot here has the Assets panel in front, covering the Console
+# (whose log differs), and compares two runs of one project layout:
+# - shader_empty_*: tests/project's materials.scene and material_features.scene in a copy whose every .mat (without a
+#   shader of its own) uses shaders/empty.kshader, an empty fragment(), must be identical to the same scenes in a plain
+#   copy (both folders are named "project", so the panels match).
+# - shader_errors: shader_errors.scene's four cubes (a GLSL error on line 7, a bad param line, a missing .kshader, a
+#   wrong-typed param value) must render exactly as the error material (a copy with every material a missing .mat),
+#   logging the .kshader line.
+# - shader_showcase: shader_showcase.scene (params, a texture param, TIME, vertex colors) must differ from a copy
+#   without its shader materials.
+set(KAST_SHADER_BUILTIN_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/shader_builtin/project")
+set(KAST_EMPTY_SHADER_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/shader_empty/project")
+set(KAST_SHADER_TEST_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/shader_test_project")
+foreach(dir "${KAST_SHADER_BUILTIN_PROJECT}" "${KAST_EMPTY_SHADER_PROJECT}" "${KAST_SHADER_TEST_PROJECT}")
+  file(REMOVE_RECURSE "${dir}")
+  file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${dir}")
+endforeach()
+file(GLOB empty_shader_mats "${KAST_TEST_PROJECT}/materials/*.mat")
+foreach(mat ${empty_shader_mats})
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${mat}")
+  file(READ "${mat}" mat_text)
+  if(NOT mat_text MATCHES "\"shader\"")
+    string(REGEX REPLACE "(\"version\": [0-9]+)" "\\1, \"shader\": \"shaders/empty.kshader\"" mat_text "${mat_text}")
+    get_filename_component(mat_name "${mat}" NAME)
+    file(WRITE "${KAST_EMPTY_SHADER_PROJECT}/materials/${mat_name}" "${mat_text}")
+  endif()
+endforeach()
+# kast_shader_shot(<name> <project> <scene> [smoke_test.cmake -D...]): shader_<name>.png, fixture shader_<name>_shot.
+function(kast_shader_shot name project scene)
+  add_test(NAME shader_${name}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/shader_${name}.png"
+            "-DEXTRA_ARGS=--scene ${project}/${scene} --size 1600x900 --fixed-dt 0.016" -DFOCUS_PANEL=Assets ${ARGN}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+  set_tests_properties(shader_${name}_screenshot PROPERTIES FIXTURES_SETUP shader_${name}_shot)
+endfunction()
+# kast_shader_compare(<test> <a> <b> <same: ON / OFF>): shader_<a>.png against shader_<b>.png.
+function(kast_shader_compare test a b same)
+  add_test(NAME ${test}
+    COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/shader_${a}.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/shader_${b}.png"
+            -DSAME=${same} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+  set_tests_properties(${test} PROPERTIES FIXTURES_REQUIRED "shader_${a}_shot;shader_${b}_shot")
+endfunction()
+foreach(scene materials material_features)
+  kast_shader_shot(builtin_${scene} "${KAST_SHADER_BUILTIN_PROJECT}" ${scene}.scene "-DFORBID_OUTPUT=Compiled shader")
+  kast_shader_shot(empty_${scene} "${KAST_EMPTY_SHADER_PROJECT}" ${scene}.scene
+                   "-DEXPECT_OUTPUT=Compiled shader 'shaders/empty.kshader'" -DEXPECT_COUNT=1)
+  kast_shader_compare(shader_empty_${scene}_same builtin_${scene} empty_${scene} ON)
+endforeach()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/shader_errors.scene"
+             "${KAST_TEST_PROJECT}/shader_showcase.scene")
+file(READ "${KAST_TEST_PROJECT}/shader_errors.scene" shader_scene)
+string(REGEX REPLACE "materials/shader_[a-z_]+\\.mat" "materials/does_not_exist.mat" shader_scene "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_errors_reference.scene" "${shader_scene}")
+file(READ "${KAST_TEST_PROJECT}/shader_showcase.scene" shader_scene)
+string(REGEX REPLACE "materials/shader_[a-z_]+\\.mat" "" shader_scene "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_showcase_builtin.scene" "${shader_scene}")
+kast_shader_shot(errors "${KAST_SHADER_TEST_PROJECT}" shader_errors.scene
+  "-DEXPECT_OUTPUT=\\[error\\] Shader 'shaders/broken.kshader': line 7: error X3004: undeclared identifier 'undeclaredThing'"
+  -DEXPECT_COUNT=1)
+kast_shader_shot(errors_log "${KAST_SHADER_TEST_PROJECT}" shader_errors.scene
+  "-DEXPECT_OUTPUT=Shader 'shaders/showcase.kshader': param 'stripes' is a float: its value must be a number.*Shader 'shaders/does_not_exist.kshader': cannot read the file.*Shader 'shaders/bad_param.kshader': line 4: unknown param type 'vec5'")
+kast_shader_shot(errors_reference "${KAST_SHADER_TEST_PROJECT}" shader_errors_reference.scene)
+kast_shader_compare(shader_errors_magenta_same errors_reference errors ON)
+kast_shader_shot(showcase "${KAST_SHADER_TEST_PROJECT}" shader_showcase.scene
+  "-DEXPECT_OUTPUT=Shader 'shaders/showcase.kshader' declares no param 'removed_param'" -DEXPECT_COUNT=1
+  "-DFORBID_OUTPUT=\\[error\\]|magenta")
+kast_shader_shot(showcase_builtin "${KAST_SHADER_TEST_PROJECT}" shader_showcase_builtin.scene)
+kast_shader_compare(shader_showcase_differs showcase_builtin showcase OFF)
 add_test(NAME project_startup
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/project_startup.png"
           "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")

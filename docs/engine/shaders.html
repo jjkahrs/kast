@@ -32,6 +32,9 @@ to the normal. <code>vs_mesh</code> and <code>vs_mesh_instanced</code> carry the
 <code>vs_mesh_skinned</code> skins it like the normal first; a mirroring model matrix flips w. <code>fs_mesh</code> makes the
 interpolated tangent perpendicular to the normal again (Gram-Schmidt) before applying the normal map. The shadow
 shaders read only the position and UV of the same buffers, so their output is unchanged.</p>
+<p>Every layout also has a <strong>vertex color</strong> (<code>a_color0</code>, <code>COLOR0</code>, RGBA8 normalized, linear): a model's glTF
+<code>COLOR_0</code> (8 bits per channel; RGB colors get alpha 1), else white, as for the primitives and terrain. The vertex
+shaders pass it on as <code>v_color0</code>; the built-in material ignores it, a <code>.kshader</code> reads it as <code>COLOR</code>.</p>
 <h2 id="mesh-uniforms">Mesh material inputs</h2>
 <p><code>fs_mesh</code> samplers: <code>s_baseColor</code> (stage 0), <code>s_metallicRoughness</code> (1), the shadow maps (2–6), <code>s_normal</code> (7),
 <code>s_occlusion</code> (8), <code>s_emissive</code> (9). Uniforms besides the lights: <code>u_baseColor</code>, <code>u_emissive</code>, <code>u_material</code>
@@ -41,8 +44,103 @@ mask cutouts).</p>
 <p><strong><code>u_time</code></strong> (<code>vec4</code>, x = seconds) is set for every mesh draw. In the editor it advances by each frame's delta in edit
 mode and in Play (by exactly <code>--fixed-dt</code> per frame when that option is given) and holds while Play is paused; the
 player advances it every frame. It wraps to 0 every <strong>3600 seconds</strong> (<code>kShaderTimePeriod</code> in
-<code>engine/shader_clock.h</code>) so it keeps sub-millisecond float precision. No material feature reads it yet; the shader
-compiler drops it from <code>fs_mesh</code> until one does.</p>
+<code>engine/shader_clock.h</code>) so it keeps sub-millisecond float precision. The built-in material doesn't read it; a
+<code>.kshader</code> reads it as <code>TIME</code>.</p>
+<h2 id="user-shaders">User shaders (.kshader)</h2>
+<p>A <code>.kshader</code> file holds a <code>fragment()</code> function in the bgfx <code>.sc</code> GLSL dialect plus declared params. A material
+uses it through its <code>"shader"</code> field (see <a href="materials.html#materials">Materials</a>). Kast injects the file into its mesh
+shader <strong>template</strong>, <code>engine/shaders/fs_mesh.sc</code>, at its <code>//@user</code> line: the built-in mesh shader <em>is</em> that
+template compiled as is (with an empty default <code>fragment()</code>), so built-in and user shaders share all of the
+lighting, shadow, fog and alpha code. <code>main()</code> first fills every built-in with what the built-in material computes
+(base color times its texture, metallic / roughness times theirs, emissive, the normal map, AO), calls
+<code>fragment()</code>, then discards below the alpha cutoff (mask), lights the result (Cook-Torrance, shadows, ambient),
+adds <code>EMISSION</code> and fogs. A <code>fragment()</code> that writes nothing renders exactly as the material without a shader.</p>
+<pre><code>// shaders/stripes.kshader
+param color tint = color(1.0, 0.6, 0.3);
+param float stripes = 6.0 range(1, 20);
+param float speed = 0.5 range(0, 4);
+param texture2D pattern = white srgb;
+
+void fragment()
+{
+    float band = step(0.5, fract(UV.x * stripes + TIME * speed));
+    ALBEDO *= tint.rgb * COLOR.rgb * mix(0.35, 1.0, band) * texture2D(pattern, UV).rgb;
+    EMISSION += vec3(0.0, 0.3, 1.0) * band;
+}</code></pre>
+<h3 id="kshader-params">Params</h3>
+<p>One declaration per line, starting with <code>param</code>:
+<code>param &lt;type&gt; &lt;name&gt; [= &lt;default&gt;] [range(&lt;min&gt;, &lt;max&gt;)] [srgb];</code> (a trailing <code>//</code> comment is fine).</p>
+<table>
+<tr><th>Type</th><th>Default syntax</th><th>Without a default</th><th>In the code</th></tr>
+<tr><td><code>float</code></td><td><code>= 1.5</code>; optional <code>range(0, 10)</code> (the Inspector slider's bounds; not enforced)</td><td>0</td><td><code>float</code></td></tr>
+<tr><td><code>vec2</code>, <code>vec3</code>, <code>vec4</code></td><td><code>= vec3(1, 0.5, 0)</code>, or one number for all: <code>vec3(0.5)</code></td><td>zeros</td><td>that vector</td></tr>
+<tr><td><code>color</code></td><td><code>= color(r, g, b[, a])</code>, linear (a = 1 if left out)</td><td>white</td><td><code>vec4</code></td></tr>
+<tr><td><code>texture2D</code></td><td><code>= white</code>, <code>black</code> (opaque) or <code>normal</code> (flat, 0.5, 0.5, 1); flag <code>srgb</code> for color data</td><td>white, linear</td><td>a sampler: <code>texture2D(name, UV)</code></td></tr>
+</table>
+<p>Numeric params become slots of one uniform array (<code>u_kastParams[16]</code>, one <code>vec4</code> each), so a shader can declare
+at most <strong>16</strong> float / vector / color params. Names must be identifiers, unique, not a built-in below, not a
+keyword or type name, and not start with <code>u_</code>, <code>s_</code>, <code>v_</code>, <code>a_</code>, <code>i_</code>, <code>gl_</code>, <code>bgfx</code> or <code>kast</code>.
+Param lines are taken out of the code before it compiles (line numbers stay), so <code>param</code> can't start a code line.</p>
+<p><strong>Texture limit</strong>: a draw has <strong>16 sampler stages</strong> (D3D11's per-stage slot count, bgfx's
+<code>maxTextureSamplers</code>; the renderer logs an error at start if a GPU reports fewer). The mesh shader uses stages 0–9
+(material textures and shadow maps) and keeps 14 and 15 for <code>SCREEN_TEXTURE</code> / <code>DEPTH_TEXTURE</code>, so
+<code>texture2D</code> params take stages <strong>10–13: at most 4</strong> per shader. A 5th is a parse error:
+<code>line 5: too many texture2D params: at most 4 (sampler stages 10..13; ...)</code>.</p>
+<h3 id="kshader-builtins">fragment() built-ins</h3>
+<p>Uppercase names, as in Godot. They exist inside <code>fragment()</code> only (they are its parameter's fields), not in helper
+functions; pass what a helper needs as arguments. Spaces: world unless noted.</p>
+<table>
+<tr><th>Name</th><th>Type</th><th>In / out</th><th>Meaning</th></tr>
+<tr><td><code>UV</code></td><td>vec2</td><td>in</td><td>UV0 times the material's <code>uvScale</code> plus <code>uvOffset</code>: where its textures sample</td></tr>
+<tr><td><code>COLOR</code></td><td>vec4</td><td>in</td><td>vertex color (glTF <code>COLOR_0</code>), white if the mesh has none</td></tr>
+<tr><td><code>NORMAL</code></td><td>vec3</td><td>in / out</td><td>world normal, unit length; the normal map bends it after <code>fragment()</code></td></tr>
+<tr><td><code>TANGENT</code></td><td>vec4</td><td>in / out</td><td>world tangent (xyz, interpolated), w the bitangent's handedness</td></tr>
+<tr><td><code>WORLD_POSITION</code></td><td>vec3</td><td>in</td><td>the fragment's world position</td></tr>
+<tr><td><code>VIEW_POSITION</code></td><td>vec3</td><td>in</td><td>view space (right-handed: the camera looks down -Z)</td></tr>
+<tr><td><code>CAMERA_POSITION</code></td><td>vec3</td><td>in</td><td>the eye's world position</td></tr>
+<tr><td><code>FRAG_COORD</code></td><td>vec4</td><td>in</td><td>window pixel position (<code>gl_FragCoord</code>)</td></tr>
+<tr><td><code>TIME</code></td><td>float</td><td>in</td><td>seconds, <code>u_time.x</code> (wraps every 3600 s)</td></tr>
+<tr><td><code>ALBEDO</code></td><td>vec3</td><td>in / out</td><td>linear base color [baseColor times its texture]</td></tr>
+<tr><td><code>ALPHA</code></td><td>float</td><td>in / out</td><td>alpha [base color alpha]; mask cuts below the cutoff, blend and additive output it</td></tr>
+<tr><td><code>METALLIC</code>, <code>ROUGHNESS</code></td><td>float</td><td>in / out</td><td>[the material's, times its metallic-roughness texture]; clamped after</td></tr>
+<tr><td><code>EMISSION</code></td><td>vec3</td><td>in / out</td><td>linear HDR added after lighting [emissive color times intensity times its texture; black when off]</td></tr>
+<tr><td><code>NORMAL_MAP</code></td><td>vec3</td><td>in / out</td><td>tangent-space normal as stored in a texture, 0–1 [the normal texture, flat (0.5, 0.5, 1) without one]</td></tr>
+<tr><td><code>NORMAL_MAP_DEPTH</code></td><td>float</td><td>in / out</td><td>scales the normal map's XY [<code>normalScale</code>]</td></tr>
+<tr><td><code>AO</code></td><td>float</td><td>in / out</td><td>ambient occlusion, darkens ambient light only [from the occlusion texture and strength]</td></tr>
+<tr><td><code>MATERIAL_BASE_COLOR</code></td><td>vec4</td><td>in</td><td>the material's <code>baseColor</code></td></tr>
+<tr><td><code>MATERIAL_METALLIC</code>, <code>MATERIAL_ROUGHNESS</code></td><td>float</td><td>in</td><td>the material's scalars</td></tr>
+<tr><td><code>MATERIAL_EMISSION</code></td><td>vec3</td><td>in</td><td>emissive color times intensity (black when off)</td></tr>
+<tr><td><code>MATERIAL_ALPHA_CUTOFF</code></td><td>float</td><td>in</td><td>the mask cutoff; -1 unless <code>alphaMode</code> is mask</td></tr>
+<tr><td><code>MATERIAL_UV_TRANSFORM</code></td><td>vec4</td><td>in</td><td>xy <code>uvScale</code>, zw <code>uvOffset</code></td></tr>
+<tr><td><code>sampleBaseColor(uv)</code>, <code>sampleMetallicRoughness(uv)</code>, <code>sampleNormal(uv)</code>, <code>sampleOcclusion(uv)</code>, <code>sampleEmissive(uv)</code></td><td>vec4</td><td>functions</td><td>the material's textures at any UV (white / flat when it has none)</td></tr>
+</table>
+<p>A shader that mentions <code>NORMAL</code> or <code>NORMAL_MAP</code> always gets the normal-map step (which also renormalizes
+<code>NORMAL</code>); otherwise it runs only when the material has a normal texture, as in the built-in material. Unlit
+materials output <code>ALBEDO + EMISSION</code>. Also reserved, for later stages: <code>VERTEX</code>, <code>INSTANCE_ID</code>,
+<code>MODEL_MATRIX</code>, <code>WORLD_MATRIX</code>, <code>VIEW_MATRIX</code>, <code>PROJECTION_MATRIX</code>, <code>LIGHT_DIRECTION</code>,
+<code>LIGHT_COLOR</code>, <code>ATTENUATION</code>, <code>VIEW</code>, <code>DIFFUSE_LIGHT</code>, <code>SPECULAR_LIGHT</code>, <code>SCREEN_TEXTURE</code>,
+<code>SCREEN_UV</code>, <code>DEPTH_TEXTURE</code>, <code>PI</code>, <code>vertex</code>, <code>light</code>.</p>
+<h3 id="kshader-compile">Compiling and errors</h3>
+<p>The editor compiles a <code>.kshader</code> the first time a rendered material uses it, and again when the file changes, with
+the same <code>shaderc</code> and flags as the build (CMake copies <code>shaderc.exe</code> next to <code>kast_editor.exe</code>, with
+<code>kshader/include/</code> (bgfx's <code>bgfx_shader.sh</code>, <code>bgfx_compute.sh</code>) and <code>kshader/mesh/</code> (the template and its
+<code>varying.def.sc</code>) beside it). Each compile is logged (<code>Compiled shader 'shaders/stripes.kshader'</code>); both editor
+views share it. For now it compiles on the render thread, pausing the editor for the compile (about 0.1 s). The player
+does not compile shaders.</p>
+<p>Errors render every material using the shader magenta (the <code>errorMaterial</code>) and log one error per load, with the
+line in the <code>.kshader</code>: Kast puts a <code>#pragma kast_line &lt;n&gt;</code> marker before each of its lines, and maps the line of
+shaderc's error back to the nearest marker. Examples:</p>
+<pre><code>[error] Shader 'shaders/broken.kshader': line 7: error X3004: undeclared identifier 'undeclaredThing'; rendering it magenta
+[error] Shader 'shaders/bad_param.kshader': line 4: unknown param type 'vec5': float, vec2, vec3, vec4, color or texture2D; rendering it magenta
+[error] Shader 'shaders/none.kshader': cannot read the file; rendering it magenta
+[warn] Shader 'shaders/showcase.kshader': param 'stripes' is a float: its value must be a number; rendering the material magenta
+[warn] Shader 'shaders/showcase.kshader' declares no param 'removed_param'; ignoring the material's value</code></pre>
+<p>A missing <code>;</code> is reported on the line where the compiler sees the next token, as in any C compiler. Only errors
+within shaderc's listing (the lines around its first error) map to <code>.kshader</code> lines; others say
+<code>generated line &lt;n&gt;</code>. Preprocessor errors (an unterminated <code>#if</code>) are logged as shaderc prints them.</p>
+<p>Samples: <code>tests/project/shader_showcase.scene</code> (<code>shaders/showcase.kshader</code>: params, a texture param, <code>TIME</code>,
+vertex colors on <code>models/vertex_colors.gltf</code>) and <code>tests/project/shader_errors.scene</code> (a GLSL error, a bad param
+line, a missing shader, a wrong-typed value).</p>
 </main>
 </div>
 </body>

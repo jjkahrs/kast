@@ -1,5 +1,5 @@
-$input a_position, a_normal, a_tangent, a_texcoord0, i_data0, i_data1, i_data2, i_data3
-$output v_normal, v_tangent, v_worldPos, v_texcoord0
+$input a_position, a_normal, a_tangent, a_texcoord0, a_color0, i_data0, i_data1, i_data2, i_data3
+$output v_normal, v_tangent, v_worldPos, v_texcoord0, v_color0
 
 #include <bgfx_shader.sh>
 
@@ -20,4 +20,5 @@ void main()
     v_tangent = vec4(mul(model, vec4(a_tangent.xyz, 0.0)).xyz, a_tangent.w * (det < 0.0 ? -1.0 : 1.0)); // as vs_mesh.sc
     v_worldPos = worldPos.xyz;
     v_texcoord0 = a_texcoord0;
+    v_color0 = a_color0; // white unless the mesh has vertex colors; only .kshader fragment()s read it (COLOR)
 }

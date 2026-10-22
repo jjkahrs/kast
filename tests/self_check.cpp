@@ -12,6 +12,7 @@
 #include "gui_doc.h"  // GUI Builder document model; links editor/gui_doc.cpp
 #include "gui_undo.h" // GUI Builder undo steps; links editor/gui_undo.cpp
 #include "recent_projects.h" // Project Manager list; links editor/recent_projects.cpp
+#include "shader_compiler.h" // shaderc for .kshader files; links editor/shader_compiler.cpp
 #include "stats_toggle.h" // the Game panel's F3 rule; header only
 
 #include <components.h>
@@ -43,6 +44,7 @@
 #include <scene.h>
 #include <scene_gui.h>
 #include <scene_io.h>
+#include <shader.h>
 #include <shadow.h>
 #include <sky.h>
 #include <frustum.h>
@@ -70,12 +72,14 @@
 #include <optional>
 #include <process.h> // _getpid
 #include <random>
+#include <regex>
 #include <share.h>   // _SH_DENYRW
 #include <source_location>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <type_traits>
 
 int netSelfCheck(); // tests/net_self_check.cpp: returns its failure count
@@ -2970,7 +2974,7 @@ void checkBuildSettings()
                                        "physics.scene",
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                       "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
+                                       "shader_errors.scene", "shader_showcase.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                        "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "ui_effects.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
@@ -2994,7 +2998,7 @@ void checkBuildSettings()
                                                           "particles_texture.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                                          "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
+                                                          "shader_errors.scene", "shader_showcase.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                                           "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "ui_effects.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
@@ -5716,6 +5720,7 @@ void checkPostProcessing()
 // --- Materials ---
 
 void checkMaterialVersion2();
+void checkShaders();
 
 std::string materialError(const std::string& text)
 {
@@ -5753,9 +5758,9 @@ void checkMaterialFiles()
           "missing .mat fields get their defaults");
 
     const std::pair<const char*, const char*> bad[] = {
-        {R"({"metallic": 0})", "\"version\" must be 1 or 2"},
-        {R"({"version": 3})", "\"version\" must be 1 or 2"},
-        {R"({"version": 0})", "\"version\" must be 1 or 2"},
+        {R"({"metallic": 0})", "\"version\" must be 1, 2 or 3"},
+        {R"({"version": 4})", "\"version\" must be 1, 2 or 3"},
+        {R"({"version": 0})", "\"version\" must be 1, 2 or 3"},
         {R"([1, 2])", "must be a JSON object"},
         {R"({"version": 1, "shininess": 3})", "unknown field \"shininess\""},
         {R"({"version": 1, "metallic": 1.5})", "\"metallic\" must be a number between 0 and 1"},
@@ -5812,12 +5817,12 @@ void checkMaterialFiles()
 void checkMaterialVersion2()
 {
     using Json = nlohmann::ordered_json;
-    check(kast::kMaterialFileVersion == 2, "material files are version 2");
+    check(kast::kMaterialFileVersion == 3, "material files are version 3");
     check(kast::materialFieldNames() ==
               std::vector<std::string>{"baseColor", "baseColorTexture", "metallic", "roughness", "metallicRoughnessTexture",
                                        "normalTexture", "normalScale", "occlusionTexture", "occlusionStrength",
                                        "emissiveEnabled", "emissive", "emissiveIntensity", "emissiveTexture", "uvScale",
-                                       "uvOffset", "alphaMode", "alphaCutoff", "cullMode", "unlit"},
+                                       "uvOffset", "alphaMode", "alphaCutoff", "cullMode", "unlit", "shader", "params"},
           "material field names in file order");
 
     kast::Material m;
@@ -5833,10 +5838,14 @@ void checkMaterialVersion2()
               m.uvScale == std::array<float, 2>{4.0f, -2.0f} && m.uvOffset == std::array<float, 2>{0.25f, 10.5f} &&
               m.alphaMode == kast::AlphaMode::Additive && m.cullMode == kast::CullMode::Front && m.unlit,
           "version 2 field values (a packed ORM texture can be both occlusion and metallic-roughness)");
-    check(kast::materialToJson(m) == full, "a version 2 .mat round-trips exactly (every field, file order)");
+    Json full3 = full; // saved as version 3: the version 2 fields, then an empty shader and params
+    full3["version"] = 3;
+    full3["shader"] = "";
+    full3["params"] = Json::object();
+    check(kast::materialToJson(m) == full3, "a version 2 .mat round-trips exactly as version 3 (every field, file order)");
     kast::Material back;
-    check(kast::materialFromJson(kast::materialToJson(m), back, error) && kast::materialToJson(back) == full,
-          "version 2 parse of the written file");
+    check(kast::materialFromJson(kast::materialToJson(m), back, error) && kast::materialToJson(back) == full3,
+          "parse of the written file");
     for (const char* mode : {"none", "back", "front"})
         check(kast::setMaterialField(m, "cullMode", mode, error) && kast::materialField(m, "cullMode") == Json(mode),
               std::format("cullMode \"{}\" sets and reads back", mode).c_str());
@@ -5851,8 +5860,8 @@ void checkMaterialVersion2()
               m.uvOffset == std::array<float, 2>{0.0f, 0.0f} && m.cullMode == kast::CullMode::Back && !m.unlit,
           "version 1: the new fields get their defaults");
     const Json saved = kast::materialToJson(m);
-    check(saved["version"] == 2 && saved.size() == kast::materialFieldNames().size() + 1 && saved["cullMode"] == "back",
-          "saving a version 1 material writes version 2 with every field");
+    check(saved["version"] == 3 && saved.size() == kast::materialFieldNames().size() + 1 && saved["cullMode"] == "back",
+          "saving a version 1 material writes version 3 with every field");
     check(kast::defaultMaterial().cullMode == kast::CullMode::Back && !kast::defaultMaterial().unlit,
           "the default material culls back faces, like a .mat without cullMode");
     for (const std::filesystem::path& file : std::filesystem::directory_iterator(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "materials")) {
@@ -5881,6 +5890,292 @@ void checkMaterialVersion2()
           "a NaN uvOffset is rejected");
     check(!kast::setMaterialField(f, "normalScale", -inf, error) && contains(error, "\"normalScale\" must be a finite number"),
           "a non-finite normalScale is rejected");
+}
+
+// .kshader files: params, generated code, error line mapping, real shaderc compiles, the library; .mat version 3.
+void checkShaders()
+{
+    using Json = nlohmann::ordered_json;
+    kast::ShaderSource source;
+    std::string error;
+    const std::string valid = "// every param type\n"
+                              "param float speed = 2.5 range(0, 10);\n"
+                              "param float plain;\n"
+                              "  param vec2 scroll = vec2(0.1, -0.2); // trailing comment\n"
+                              "param vec3 tint = vec3(0.5);\n"
+                              "param vec4 data = vec4(1, 2, 3, 4);\n"
+                              "param color glow = color(1.0, 0.5, 0.25);\n"
+                              "param color shade;\n"
+                              "param texture2D noise = black srgb;\n"
+                              "param texture2D bumps = normal;\n"
+                              "param texture2D mask;\n"
+                              "void fragment()\n"
+                              "{\n"
+                              "    ALBEDO *= tint * speed;\n"
+                              "}\n";
+    check(kast::parseShader(valid, source, error), std::format("a .kshader with every param type parses ({})", error).c_str());
+    const auto param = [&](const char* name) -> const kast::ShaderParam& {
+        static const kast::ShaderParam none;
+        const auto it = std::ranges::find(source.params, std::string(name), &kast::ShaderParam::name);
+        return it == source.params.end() ? none : *it;
+    };
+    using Type = kast::ShaderParamType;
+    check(source.params.size() == 10, "10 params");
+    check(param("speed").type == Type::Float && param("speed").value[0] == 2.5f && param("speed").range &&
+              (*param("speed").range)[0] == 0.0f && (*param("speed").range)[1] == 10.0f && param("speed").line == 2,
+          "float with a default and a range, and its line");
+    check(param("plain").type == Type::Float && param("plain").value[0] == 0.0f && !param("plain").range,
+          "float without a default: 0, no range");
+    check(param("scroll").type == Type::Vec2 && param("scroll").value[0] == 0.1f && param("scroll").value[1] == -0.2f &&
+              param("scroll").line == 4,
+          "vec2 (indented, trailing comment)");
+    check(param("tint").type == Type::Vec3 && param("tint").value == std::array<float, 4>{0.5f, 0.5f, 0.5f, 0.0f},
+          "vec3(x) fills every component");
+    check(param("data").type == Type::Vec4 && param("data").value == std::array<float, 4>{1, 2, 3, 4}, "vec4");
+    check(param("glow").type == Type::Color && param("glow").value == std::array<float, 4>{1.0f, 0.5f, 0.25f, 1.0f},
+          "color(r, g, b): alpha 1");
+    check(param("shade").type == Type::Color && param("shade").value == std::array<float, 4>{1, 1, 1, 1},
+          "color without a default: white");
+    check(param("noise").type == Type::Texture2D && param("noise").texture == kast::TextureDefault::Black &&
+              param("noise").srgb,
+          "texture2D black srgb");
+    check(param("bumps").texture == kast::TextureDefault::Normal && !param("bumps").srgb, "texture2D normal, linear");
+    check(param("mask").texture == kast::TextureDefault::White, "texture2D without a default: white");
+    check(param("speed").slot == 0 && param("data").slot == 4 && param("shade").slot == 6 && param("noise").slot == 0 &&
+              param("mask").slot == 2,
+          "numeric params take u_kastParams slots in order, textures their own");
+    check(std::ranges::count(source.code, '\n') == 15 && !contains(source.code, "param float") &&
+              contains(source.code, "ALBEDO *= tint * speed;"),
+          "param lines are blanked, the line count kept");
+    check(!source.customNormal, "no NORMAL / NORMAL_MAP: the built-in normal mapping rule");
+    check(kast::parseShader("void fragment() { NORMAL_MAP = vec3(0.5, 0.5, 1.0); }", source, error) && source.customNormal,
+          "writing NORMAL_MAP turns on the always-applied normal map");
+
+    const std::pair<const char*, const char*> bad[] = {
+        {"void fragment() {}\nparam vec5 x;\n", "line 2: unknown param type 'vec5'"},
+        {"\n\nparam float x = ;\nvoid fragment() {}", "line 3: a float default must be a number"},
+        {"param float x = 1.0\nvoid fragment() {}", "line 1: expected ';' at the end"},
+        {"param vec3 x = vec3(1, 2);\nvoid fragment() {}", "line 1: vec3(...) takes 3 numbers, not 2"},
+        {"param vec2 x = vec3(1, 2, 3);\nvoid fragment() {}", "line 1: expected 'vec2', found 'vec3'"},
+        {"param texture2D t = grey;\nvoid fragment() {}", "line 1: a texture2D default must be white, black or normal"},
+        {"param vec2 x range(0, 1);\nvoid fragment() {}", "line 1: range(min, max) is only for float params"},
+        {"param float x range(1, 0);\nvoid fragment() {}", "line 1: range(min, max) needs min < max"},
+        {"param float x srgb;\nvoid fragment() {}", "line 1: srgb is only for texture2D params"},
+        {"param float x = 1; extra\nvoid fragment() {}", "line 1: unexpected 'extra' after ';'"},
+        {"param float ALBEDO = 1.0;\nvoid fragment() {}", "line 1: param 'ALBEDO' has the name of a built-in"},
+        {"param vec2 UV;\nvoid fragment() {}", "line 1: param 'UV' has the name of a built-in"},
+        {"param float sampleBaseColor;\nvoid fragment() {}", "param 'sampleBaseColor' has the name of a built-in"},
+        {"param float float;\nvoid fragment() {}", "line 1: param 'float' has a reserved name"},
+        {"param float u_time;\nvoid fragment() {}", "line 1: param 'u_time' has a reserved name"},
+        {"param float a;\nparam vec3 a;\nvoid fragment() {}", "line 2: param 'a' is already declared on line 1"},
+        {"param float speed;\n", "no fragment() function"},
+        {"// void fragment() {}\nvoid fragments() {}\n", "no fragment() function"},
+        {"/* void fragment() {} */\n", "no fragment() function"},
+    };
+    for (const auto& [text, expected] : bad) {
+        const bool ok = kast::parseShader(text, source, error);
+        check(!ok && contains(error, expected), std::format(".kshader {} is rejected: {} (got: {})", text, expected, error).c_str());
+    }
+    // The sampler-stage limit: 4 texture2D params (stages 10..13), 16 numeric ones.
+    std::string textures, numbers;
+    for (int i = 0; i < 5; ++i)
+        textures += std::format("param texture2D t{};\n", i);
+    check(!kast::parseShader(textures + "void fragment() {}", source, error) &&
+              contains(error, "line 5: too many texture2D params: at most 4 (sampler stages 10..13; a draw has 16, the mesh "
+                              "shader uses 0..9 and keeps 14..15 for SCREEN_TEXTURE and DEPTH_TEXTURE)"),
+          std::format("a 5th texture2D param is rejected with the sampler limit ({})", error).c_str());
+    for (int i = 0; i < 17; ++i)
+        numbers += std::format("param float f{};\n", i);
+    check(!kast::parseShader(numbers + "void fragment() {}", source, error) &&
+              contains(error, "line 17: too many params: at most 16"),
+          "a 17th numeric param is rejected");
+
+    // Material values: defaults unless the .mat sets them; wrong types fail; unknown names are reported, not failed.
+    check(kast::parseShader(valid, source, error), "parse again");
+    kast::Material material;
+    material.params["speed"] = {{4.0f}, ""};
+    material.params["glow"] = {{0.0f, 1.0f, 0.0f}, ""};
+    material.params["noise"] = {{}, "textures/noise.png"};
+    const auto values = kast::shaderParamValues(material, source);
+    check(values[0][0] == 4.0f && values[2] == std::array<float, 4>{0.1f, -0.2f, 0.0f, 0.0f} &&
+              values[5] == std::array<float, 4>{0.0f, 1.0f, 0.0f, 1.0f} && values[6] == std::array<float, 4>{1, 1, 1, 1},
+          "u_kastParams: material values over defaults (a 3-number color gets alpha 1)");
+    check(kast::shaderParamTexture(material, param("noise")) == "textures/noise.png" &&
+              kast::shaderParamTexture(material, param("mask")).empty(),
+          "texture params: the material's path, else the default");
+    std::vector<std::string> unknown;
+    material.params["gone"] = {{1.0f}, ""};
+    check(kast::checkShaderParams(material, source, error, unknown) && unknown == std::vector<std::string>{"gone"},
+          "a value for an undeclared param is reported as unknown, not an error");
+    for (const auto& [name, value, expected] :
+         std::vector<std::tuple<std::string, kast::ShaderParamValue, std::string>>{
+             {"speed", {{1, 2}, ""}, "param 'speed' is a float: its value must be a number"},
+             {"scroll", {{1, 2, 3}, ""}, "param 'scroll' is a vec2: its value must be an array of 2 numbers"},
+             {"glow", {{1, 2}, ""}, "param 'glow' is a color: its value must be an array of 3 or 4 numbers"},
+             {"noise", {{1}, ""}, "param 'noise' is a texture2D: its value must be a texture path"},
+             {"tint", {{}, "a.png"}, "param 'tint' is a vec3: its value must be an array of 3 numbers"}}) {
+        kast::Material wrong = material;
+        wrong.params[name] = value;
+        check(!kast::checkShaderParams(wrong, source, error, unknown) && error == expected,
+              std::format("wrong-typed value for '{}' fails: {}", name, error).c_str());
+    }
+
+    // .mat version 3: "shader" and "params" round-trip; versions 1 and 2 still load; params must have a value shape.
+    kast::Material m;
+    const Json v3 = Json::parse(R"({"version": 3, "shader": "shaders/water.kshader",
+        "params": {"speed": 2.5, "tint": [1, 0.5, 0], "noise": "textures/noise.png", "data": [1, 2, 3, 4]}})");
+    check(kast::materialFromJson(v3, m, error) && m.shader == "shaders/water.kshader" && m.params.size() == 4 &&
+              m.params["speed"].numbers == std::vector<float>{2.5f} && m.params["tint"].numbers.size() == 3 &&
+              m.params["noise"].texture == "textures/noise.png" && m.params["noise"].numbers.empty(),
+          std::format("a version 3 .mat with a shader and params loads ({})", error).c_str());
+    const Json saved = kast::materialToJson(m);
+    std::vector<std::string> keys;
+    for (const auto& [key, value] : saved.items())
+        keys.push_back(key);
+    std::vector<std::string> expectedKeys{"version"};
+    expectedKeys.insert(expectedKeys.end(), kast::materialFieldNames().begin(), kast::materialFieldNames().end());
+    check(saved["version"] == 3 && keys == expectedKeys, "saving writes version 3, every field in materialFieldNames order");
+    check(saved["shader"] == "shaders/water.kshader" &&
+              nlohmann::json::parse(saved["params"].dump()) == nlohmann::json::parse(v3["params"].dump()),
+          "shader and params round-trip (params sorted by name)");
+    kast::Material back;
+    check(kast::materialFromJson(saved, back, error) && kast::materialToJson(back) == saved && back.params == m.params,
+          "a saved version 3 .mat parses back the same");
+    for (const char* text : {R"({"version": 1, "metallic": 0.5})", R"({"version": 2, "unlit": true})",
+                             R"({"version": 3, "shader": ""})"})
+        check(kast::materialFromJson(Json::parse(text), m, error) && m.shader.empty() && m.params.empty(),
+              std::format("{} loads with the built-in shader", text).c_str());
+    for (const auto& [text, expected] : std::vector<std::pair<const char*, const char*>>{
+             {R"({"version": 3, "shader": 5})", "\"shader\" must be a string"},
+             {R"({"version": 3, "params": [1]})", "\"params\" must be an object"},
+             {R"({"version": 3, "params": {"a": true}})", "\"params\": \"a\" must be a finite number, an array of 2 to 4"},
+             {R"({"version": 3, "params": {"a": [1]}})", "\"params\": \"a\" must be a finite number, an array of 2 to 4"},
+             {R"({"version": 3, "params": {"a": [1, 2, 3, 4, 5]}})", "\"params\": \"a\" must be"},
+             {R"({"version": 3, "params": {"a": [1, "x"]}})", "\"params\": \"a\" must be"}})
+        check(contains(materialError(text), expected), std::format(".mat {} is rejected: {}", text, expected).c_str());
+
+    // Generated code: params and markers at the template's //@user line; the template's built-ins are all reserved.
+    std::string templateText = readText(std::filesystem::path(KAST_SOURCE_DIR) / "engine/shaders/fs_mesh.sc");
+    check(contains(templateText, "\n//@user"), "fs_mesh.sc has the //@user line");
+    std::smatch match;
+    const std::regex define(R"(#define (\w+) )");
+    bool reserved = true;
+    for (auto it = std::sregex_iterator(templateText.begin(), templateText.end(), define); it != std::sregex_iterator(); ++it)
+        if (const std::string name = (*it)[1].str(); !name.starts_with("MAX_") && !name.starts_with("CSM_") &&
+                                                      !name.starts_with("POINT_SHADOW_") &&
+                                                      std::ranges::find(kast::shaderBuiltinNames(), name) ==
+                                                          kast::shaderBuiltinNames().end()) {
+            reserved = false;
+            kast::log::error(std::format("fs_mesh.sc's #define {} is not in shaderBuiltinNames()", name));
+        }
+    check(reserved, "every built-in the template defines is a reserved param name");
+    check(kast::parseShader(valid, source, error), "parse again");
+    const std::string generated = kast::generateShader(templateText, source);
+    check(contains(generated, "#define KAST_FRAGMENT\n") && contains(generated, "uniform vec4 u_kastParams[16];\n") &&
+              contains(generated, "#define speed (u_kastParams[0].x)\n") &&
+              contains(generated, "#define scroll (u_kastParams[2].xy)\n") &&
+              contains(generated, "#define data (u_kastParams[4])\n") &&
+              contains(generated, "SAMPLER2D(s_kastTexture0, 10);\n#define noise s_kastTexture0\n") &&
+              contains(generated, "SAMPLER2D(s_kastTexture2, 12);\n") && contains(generated, "#undef speed\n") &&
+              contains(generated, "#pragma kast_line 12\nvoid fragment(inout KastFragment kast_f)\n") &&
+              contains(generated, "#pragma kast_line 14\n    ALBEDO *= tint * speed;\n") && !contains(generated, "\n//@user"),
+          "generated fs_mesh: params as uniforms / samplers, markers before each .kshader line, the template signature");
+    check(kast::generateShader("void main() {}\n", source).empty(), "a template without //@user generates nothing");
+    check(kast::parseShader("#define LONG(x) \\\n    (x)\nvoid fragment() {}\n", source, error) &&
+              contains(kast::generateShader(templateText, source), "#pragma kast_line 1\n#define LONG(x) \\\n    (x)\n#pragma kast_line 3\n"),
+          "no marker inside a macro continued with a backslash");
+
+    // shaderc's listing to .kshader lines: the marker nearest above the error's line.
+    const std::string listing = "Code:\n---\n    370: #pragma   kast_line 4\n    371: c = 1.0;\n    372: #pragma   kast_line 5\n"
+                                "\n>>> 373: c.x = undefinedThing;\n>>>   7:       ^\n\n    374: #pragma   kast_line 6\n---\n"
+                                "Error: D3DCompile failed 0x80004005 (373,7-20): error X3004: undeclared identifier "
+                                "'undefinedThing'\n(374,1): warning X3568: whatever\n(900,2): error X3000: syntax error\n"
+                                "\nFailed to build shader.\n";
+    check(kast::mapShaderErrors(listing) == "line 5: error X3004: undeclared identifier 'undefinedThing'\n"
+                                            "generated line 900: error X3000: syntax error",
+          std::format("shaderc errors map to .kshader lines: {}", kast::mapShaderErrors(listing)).c_str());
+    check(kast::mapShaderErrors("cpp: \"(null)\", line 0: Error: Inside #ifdef block at end of input, depth = 1\n"
+                                "Failed to build shader.\n") ==
+              "cpp: \"(null)\", line 0: Error: Inside #ifdef block at end of input, depth = 1",
+          "preprocessor errors pass through");
+
+    // Real compiles with the shaderc next to this program.
+    std::vector<uint8_t> bytecode;
+    check(kast::parseShader(valid, source, error) && compileShader(source, kast::ShaderStage::Fragment, bytecode, error) &&
+              !bytecode.empty(),
+          std::format("a valid .kshader compiles with shaderc ({})", error).c_str());
+    const std::string broken = "// line 1\n"
+                               "param float strength = 1.0;\n"
+                               "\n"
+                               "/* a comment\n"
+                               "   over lines */\n"
+                               "void fragment()\n"
+                               "{\n"
+                               "    ALBEDO = vec3(strength,\n"
+                               "                  0.5,\n"
+                               "                  nothingHere);\n"
+                               "}\n";
+    check(kast::parseShader(broken, source, error) && !compileShader(source, kast::ShaderStage::Fragment, bytecode, error) &&
+              contains(error, "line 10: error X3004: undeclared identifier 'nothingHere'"),
+          std::format("a GLSL error is reported at its .kshader line: {}", error).c_str());
+    check(kast::parseShader("void fragment()\n{\n    ALBEDO = 1.0\n    ALPHA = 0.5;\n}\n", source, error) &&
+              !compileShader(source, kast::ShaderStage::Fragment, bytecode, error) && contains(error, "line 4: error X3000"),
+          std::format("a missing ';' is reported where the compiler sees it (the next line): {}", error).c_str());
+
+    // The library: compiles once per change, null (logged once, with the line) when broken or missing.
+    const std::filesystem::path dir = testRoot() / "kast_shader_check";
+    removeTree(dir);
+    std::filesystem::create_directories(dir / "shaders");
+    writeFile(dir / "shaders/good.kshader", "param color tint;\nvoid fragment() { ALBEDO *= tint.rgb; }\n");
+    writeFile(dir / "shaders/bad.kshader", "void fragment()\n{\n    ALBEDO = missingName;\n}\n");
+    kast::ShaderLibrary library;
+    library.setRoot(dir);
+    check(!library.get("shaders/good.kshader"), "no compiler: no shader");
+    check(countLogged("Shader 'shaders/good.kshader': no shader compiler here") == 1, "no compiler is logged");
+    library.setRoot(testRoot()); // forget
+    library.setRoot(dir);
+    library.setCompiler(compileShader);
+    const auto good = library.get("shaders/good.kshader");
+    check(good && !good->fragment.empty() && good->source.params.size() == 1 && library.get("shaders/good.kshader") == good,
+          "a .kshader compiles once and is shared");
+    check(!library.get("shaders/bad.kshader") && !library.get("shaders/none.kshader"), "broken and missing: null");
+    for (int i = 0; i < 3; ++i)
+        library.reloadChanged();
+    check(countLogged("[error] Shader 'shaders/bad.kshader': line 3: error X3004: undeclared identifier 'missingName'; "
+                      "rendering it magenta") == 1,
+          "a broken .kshader logs one error naming the file and its line");
+    check(countLogged("Shader 'shaders/none.kshader': cannot read the file; rendering it magenta") == 1,
+          "a missing .kshader logs one error");
+    rewrite(dir / "shaders/good.kshader", "void fragment() { ALBEDO = vec3(1.0, 0.0, 0.0); }\n");
+    library.reloadChanged();
+    const auto changed = library.get("shaders/good.kshader");
+    check(changed && changed != good && changed->source.params.empty(), "a changed .kshader recompiles");
+    rewrite(dir / "shaders/bad.kshader", "void fragment() {}\n");
+    library.reloadChanged();
+    check(library.get("shaders/bad.kshader") != nullptr, "a fixed .kshader compiles");
+    removeTree(dir);
+
+    // COLOR0: glTF COLOR_0 imports (RGBA8, R in the low byte); models without it and primitives are white.
+    const auto model = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/vertex_colors.gltf", error);
+    std::vector<uint32_t> colors;
+    for (const kast::ModelMesh& mesh : model ? model->meshes : std::vector<kast::ModelMesh>{})
+        for (const kast::ModelVertex& v : mesh.vertices)
+            colors.push_back(v.color);
+    std::ranges::sort(colors);
+    std::string read;
+    for (uint32_t c : colors)
+        read += std::format(" {:08x}", c);
+    check(colors == std::vector<uint32_t>{0x80ffffff, 0xff0000ff, 0xff00ff00, 0xffff0000},
+          std::format("vertex_colors.gltf's COLOR_0 reads back as red, green, blue, half-transparent white:{}", read).c_str());
+    const auto plain = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/cube.gltf", error);
+    bool white = plain && !plain->meshes.empty();
+    for (const kast::ModelMesh& mesh : plain ? plain->meshes : std::vector<kast::ModelMesh>{})
+        for (const kast::ModelVertex& v : mesh.vertices)
+            white = white && v.color == 0xffffffff;
+    for (const kast::Primitive primitive : {kast::Primitive::Cube, kast::Primitive::Plane, kast::Primitive::Sphere})
+        for (const kast::MeshVertex& v : kast::primitiveMesh(primitive).vertices)
+            white = white && v.color == 0xffffffff;
+    check(white, "models without vertex colors and the primitives are white");
 }
 
 // Built-in primitive and terrain tangents: unit length, perpendicular to the normal, handedness +-1, along texture u.
@@ -10085,6 +10380,15 @@ int main(int argc, char** argv)
         kast::log::info(g_failures == 0 ? "All particle checks passed" : std::format("{} particle check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--shaders") { // only the material and .kshader checks
+        checkMaterialFiles();
+        checkShaders();
+        checkMaterialFeatureImport();
+        checkPrimitiveTangents();
+        removeTree(testRoot());
+        kast::log::info(g_failures == 0 ? "All shader checks passed" : std::format("{} shader check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--net") // only the networking checks
         return netSelfCheck() == 0 ? 0 : 1;
     if (argc == 4 && std::string_view(argv[1]) == "--live-auth") // against a running services/world stack
@@ -10110,6 +10414,7 @@ int main(int argc, char** argv)
     checkPostProcessing();
     checkSky();
     checkMaterialFiles();
+    checkShaders();
     checkPrimitiveTangents();
     checkMaterialFeatureImport();
     checkShaderClock();

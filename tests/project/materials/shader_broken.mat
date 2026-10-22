@@ -1,0 +1,5 @@
+{
+  "version": 3,
+  "baseColor": [0.8, 0.8, 0.8, 1],
+  "shader": "shaders/broken.kshader"
+}

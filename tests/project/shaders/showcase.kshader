@@ -1,0 +1,14 @@
+// Params, textures, TIME and vertex colors (shader_showcase.scene).
+param color tint = color(1.0, 1.0, 1.0);
+param float stripes = 6.0 range(1, 20);
+param float speed = 0.5 range(0, 4);
+param vec3 glow = vec3(0.0, 0.0, 0.0);
+param texture2D pattern = white srgb;
+
+void fragment()
+{
+    // Stripes scrolling along U over time, multiplied into the base color, tinted, times the vertex color.
+    float band = step(0.5, fract(UV.x * stripes + TIME * speed));
+    ALBEDO *= tint.rgb * COLOR.rgb * mix(0.35, 1.0, band) * texture2D(pattern, UV).rgb;
+    EMISSION += glow * band;
+}
