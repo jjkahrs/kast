@@ -4,6 +4,7 @@
 #include "document.h"
 #include "external_editor.h"
 #include "gui_builder.h"
+#include "shader_graph_editor.h"
 
 #include <components.h>
 #include <material.h>
@@ -36,13 +37,13 @@ public:
     // Opens the Assets context menu of the entry at path ("" = the panel background) with its Create submenu open, for
     // screenshots. The entry must be listed at the top level or inside an open folder.
     void openAssetMenu(std::string path) { assetMenuRequest_ = std::move(path); }
-    enum class AssetCreate { System, StateMachine, Gui, Material, Shader };
-    // Runs Assets Create > Lua System, State Machine, GUI, Material or Shader in folder ("" = the project root), as the
-    // menu does.
+    enum class AssetCreate { System, StateMachine, Gui, Material, Shader, ShaderGraph };
+    // Runs Assets Create > Lua System, State Machine, GUI, Material, Shader or Shader Graph in folder ("" = the project
+    // root), as the menu does.
     void requestAssetCreate(AssetCreate what, std::string folder)
     {
         constexpr AssetEdit::Op ops[] = {AssetEdit::Op::NewSystem, AssetEdit::Op::NewStateMachine, AssetEdit::Op::NewGui,
-                                         AssetEdit::Op::NewMaterial, AssetEdit::Op::NewShader};
+                                         AssetEdit::Op::NewMaterial, AssetEdit::Op::NewShader, AssetEdit::Op::NewShaderGraph};
         assetEdit_ = {ops[static_cast<int>(what)], std::move(folder)};
     }
     // Selects the Assets entry at path (project-relative), as a click does: a .mat or .kshader also shows in the
@@ -83,9 +84,9 @@ public:
     void drawNetwork(const Document& doc, bool& open);
     // Rescans the project's files for the Assets panel (main's poll). drawAssets also rescans when the project changes.
     void refreshAssets(const Document& doc);
-    // Double-clicked .rml files open in gui, .lua/.rcss/.json files in editor; renames and moves of gui's open files
-    // reach it.
-    void drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ExternalEditor& editor);
+    // Double-clicked .rml files open in gui, .kshadergraph files in graphs, .lua/.rcss/.json files in editor; renames
+    // and moves of their open files reach them.
+    void drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ExternalEditor& editor);
 
 private:
     // Tree edits are deferred to the end of drawHierarchy so the child lists are not changed mid-iteration.
@@ -100,7 +101,7 @@ private:
     // Assets panel file operations, deferred like Edit and applied at the end of drawAssets. Paths are
     // project-relative; "" is the project root.
     struct AssetEdit {
-        enum class Op { None, NewFolder, NewSystem, NewStateMachine, NewGui, NewMaterial, NewShader, NewPrefab, Rename, Move, Delete } op = Op::None;
+        enum class Op { None, NewFolder, NewSystem, NewStateMachine, NewGui, NewMaterial, NewShader, NewShaderGraph, NewPrefab, Rename, Move, Delete } op = Op::None;
         std::string path;   // the entry acted on (NewFolder and New*: the folder to create in)
         std::string target; // Rename: the new name; Move: the destination folder
         entt::entity entity = entt::null; // NewPrefab: the entity dropped from the Hierarchy
@@ -116,14 +117,14 @@ private:
     // Revert / Apply context menu. field empty: the whole component.
     void drawOverrideMenu(Document& doc, entt::entity entity, const std::string& component, const std::string& field,
                           bool overridden);
-    void drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ExternalEditor& editor,
+    void drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ExternalEditor& editor,
                        const AssetEntry& entry, const char* blocker);
     void drawAssetItems(const Document& doc, ExternalEditor& editor, const AssetEntry& entry, const char* blocker);
     void drawAssetCreateMenu(const std::string& folder, const char* blocker); // folder: "" = root
     void openRequestedAssetMenu(const char* popup); // opens popup (the last item's context menu) for openAssetMenu
     void startAssetRename(const std::string& path, const std::string& name);
     void requestAssetDelete(const Document& doc, const std::string& path);
-    void applyAssetEdit(Document& doc, GuiBuilder& gui);
+    void applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs);
     void assetsFailed(std::string error); // logs it and shows the Assets Error modal
     void drawCreateItems(entt::entity parent);
     void applyEdit(Document& doc);
@@ -153,7 +154,8 @@ private:
     // The Inspector for the .mat in inspectedAsset_: every edit saves the file (the renderers reload it) and is an undo
     // step on materialHistory_. Its Shader section picks the .kshader, shows its compile status and its params.
     void drawMaterialInspector(Document& doc);
-    // The Inspector for the .kshader in inspectedAsset_: compile status (errors with .kshader line numbers) and params.
+    // The Inspector for the .kshader or .kshadergraph in inspectedAsset_: compile status (errors with .kshader line
+    // numbers, a graph's on its nodes) and params; a graph also gets "Open in Shader Graph".
     void drawShaderInspector(Document& doc);
     bool hasMaterial() const; // the Inspector shows a .mat
     // Generated Inspector widgets for a component field's JSON value (built-in or Lua); true if they changed it.
@@ -218,9 +220,10 @@ private:
     kast::AudioHandle previewHandle_ = 0; // the playing preview; stale once it ends
     std::map<std::string, std::string> clipErrors_; // AudioSource clips checked since the last Assets scan: why each can't play ("" = ok)
 
-    // The Inspector shows inspectedAsset_ (a project-relative .mat or .kshader, set by selecting it in Assets) instead of the
+    // The Inspector shows inspectedAsset_ (a project-relative .mat, .kshader or .kshadergraph, set by selecting it in Assets) instead of the
     // selected entity until another entity is selected.
     std::string inspectedAsset_;
+    std::string openGraph_; // a .kshadergraph the Inspector's "Open in Shader Graph" asked for (drawAssets opens it)
     entt::entity inspectedEntity_ = entt::null; // doc.selected when last drawn
     struct {
         std::string path; // what value / error were loaded from

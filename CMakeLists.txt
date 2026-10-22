@@ -8,6 +8,7 @@ find_package(SDL3 CONFIG REQUIRED)
 find_package(bgfx CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(imguizmo CONFIG REQUIRED)
+find_package(unofficial-imgui-node-editor CONFIG REQUIRED) # the Shader Graph canvas: editor only
 find_package(EnTT CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(sol2 CONFIG REQUIRED)
@@ -142,7 +143,7 @@ target_link_libraries(kast_map PUBLIC nlohmann_json::nlohmann_json)
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/undo.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/prefab.cpp engine/components.cpp
-  engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shadow.cpp engine/frustum.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
+  engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
@@ -172,7 +173,7 @@ target_link_libraries(kast_player PRIVATE kast_engine SDL3::SDL3)
 add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
-  editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp editor/editor_settings.cpp
+  editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/shader_graph_doc.cpp editor/shader_graph_editor.cpp editor/shader_preview.cpp editor/external_editor.cpp editor/editor_settings.cpp
   editor/shader_compiler.cpp editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp editor/zone_cli.cpp
   editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
@@ -180,7 +181,8 @@ target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENE
 # The Online panel's default compose folder: services/world of this source tree, if it is still there at run time.
 target_compile_definitions(kast_editor PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_editor PRIVATE kast_engine kast_zone SDL3::SDL3 imgui::imgui imguizmo::imguizmo pugixml::pugixml shell32) # shell32: Recycle Bin
+target_link_libraries(kast_editor PRIVATE kast_engine kast_zone SDL3::SDL3 imgui::imgui imguizmo::imguizmo
+                      unofficial::imgui-node-editor::imgui-node-editor pugixml::pugixml shell32) # shell32: Recycle Bin
 add_dependencies(kast_editor kast_player kast_shader_tools) # Build copies kast_player.exe from next to kast_editor.exe
 
 # --- zone: the zone (map) document, file and terrain editing logic (engine/zone), no window. Its own library, not
@@ -202,8 +204,8 @@ target_include_directories(kast_zone_self_check SYSTEM PRIVATE "${Stb_INCLUDE_DI
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
 add_executable(kast_self_check tests/self_check.cpp tests/net_self_check.cpp tests/net_test_util.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp
-  editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/external_editor.cpp editor/editor_settings.cpp
-  editor/shader_compiler.cpp editor/online.cpp "${KAST_MANIFEST}")
+  editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/shader_graph_doc.cpp editor/external_editor.cpp
+  editor/editor_settings.cpp editor/shader_compiler.cpp editor/online.cpp "${KAST_MANIFEST}")
 target_include_directories(kast_self_check PRIVATE editor)
 add_dependencies(kast_self_check kast_shader_tools) # the .kshader checks compile with them
 target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project"
@@ -1139,6 +1141,41 @@ kast_shader_shot(custom_play_f60 "${KAST_SHADER_TEST_PROJECT}" custom_shaders.sc
 kast_shader_shot(custom_play_no_systems "${KAST_SHADER_TEST_PROJECT}" custom_shaders_no_systems.scene PLAY)
 kast_shader_compare(shader_custom_play_animates custom_play_f60 custom_play OFF)
 kast_shader_compare(shader_custom_play_lua_differs custom_play_no_systems custom_play OFF)
+# Shader graphs (.kshadergraph, docs/engine/shader-graph.html), phase 1:
+# - shader_graph_empty_*: materials.scene and material_features.scene in a copy whose every .mat (without a shader of its
+#   own) uses shaders/empty.kshadergraph (an unconnected Fragment Output) must match the built-in shots
+#   (kast_self_check --diff-png, mean at most 1/255).
+# - shader_graph_demo: shader_graph_demo.scene (graph_demo.kshadergraph: params, a texture param, UV, TIME, Add,
+#   Multiply, Sample Texture, a constant) compiles, nothing renders magenta, and differs from a copy without it.
+set(KAST_EMPTY_GRAPH_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/shader_graph_empty/project")
+file(REMOVE_RECURSE "${KAST_EMPTY_GRAPH_PROJECT}")
+file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${KAST_EMPTY_GRAPH_PROJECT}")
+foreach(mat ${empty_shader_mats})
+  file(READ "${mat}" mat_text)
+  if(NOT mat_text MATCHES "\"shader\"")
+    string(REGEX REPLACE "(\"version\": [0-9]+)" "\\1, \"shader\": \"shaders/empty.kshadergraph\"" mat_text "${mat_text}")
+    get_filename_component(mat_name "${mat}" NAME)
+    file(WRITE "${KAST_EMPTY_GRAPH_PROJECT}/materials/${mat_name}" "${mat_text}")
+  endif()
+endforeach()
+foreach(scene materials material_features)
+  kast_shader_shot(graph_empty_${scene} "${KAST_EMPTY_GRAPH_PROJECT}" ${scene}.scene
+                   "-DEXPECT_OUTPUT=Compiled shader 'shaders/empty.kshadergraph'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]")
+  add_test(NAME shader_graph_empty_${scene}_diff
+    COMMAND kast_self_check --diff-png "${CMAKE_CURRENT_BINARY_DIR}/shader_builtin_${scene}.png"
+            "${CMAKE_CURRENT_BINARY_DIR}/shader_graph_empty_${scene}.png" 0.00392)
+  set_tests_properties(shader_graph_empty_${scene}_diff PROPERTIES
+                       FIXTURES_REQUIRED "shader_builtin_${scene}_shot;shader_graph_empty_${scene}_shot")
+endforeach()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/shader_graph_demo.scene")
+file(READ "${KAST_TEST_PROJECT}/shader_graph_demo.scene" shader_scene)
+string(REGEX REPLACE "materials/shader_graph_demo\\.mat" "" shader_scene "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_graph_demo_builtin.scene" "${shader_scene}")
+kast_shader_shot(graph_demo "${KAST_SHADER_TEST_PROJECT}" shader_graph_demo.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/graph_demo.kshadergraph'" -DEXPECT_COUNT=1
+  "-DFORBID_OUTPUT=\\[error\\]|\\[warn\\]|magenta")
+kast_shader_shot(graph_demo_builtin "${KAST_SHADER_TEST_PROJECT}" shader_graph_demo_builtin.scene)
+kast_shader_compare(shader_graph_demo_differs graph_demo_builtin graph_demo OFF)
 # Editor workflow (phase 3), in a fresh copy of the test project (the shader cache and new files land in it):
 # - shader_cache_first / _second: the second start loads showcase.kshader from <project>/.kast/shader_cache.
 # - shader_new: Assets > Create > Shader writes a starter that compiles (the Inspector shows it).
@@ -1666,7 +1703,8 @@ foreach(pak missing corrupt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
   set_tests_properties(player_${pak}_pak PROPERTIES FIXTURES_REQUIRED game_switch_built TIMEOUT 90)
 endforeach()
-# Shaders in the player: Build compiles every shipped .kshader into game.pak (kast::shaderPakPath) and the player loads
+# Shaders in the player: Build compiles every shipped .kshader and .kshadergraph into game.pak (kast::shaderPakPath; a
+# graph's keyed by its generated text, which the player generates again from the shipped graph) and the player loads
 # that bytecode ("Loaded shader ... (precompiled)"; player_test.cmake fails if a shaderc.exe is next to it). The vertex
 # scenes have no Main Camera (editor views), so their game copies get one at their editor camera's view. Each game
 # runs at --fixed-dt 0.016 like the editor's shader shots. player_shader_offset_same: lift.kshader's vertex() and
@@ -1680,7 +1718,8 @@ foreach(game "shader_showcase|shader_showcase.scene|showcase"
              "shader_screen|shader_screen.scene|screen_water"
              "shader_screen_identity|shader_screen_identity.scene|screen_identity"
              "shader_screen_identity_ref|shader_screen_identity.scene|-"
-             "custom_shaders|custom_shaders.scene|dissolve")
+             "custom_shaders|custom_shaders.scene|dissolve"
+             "shader_graph_demo|shader_graph_demo.scene|graph_demo.kshadergraph")
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
   list(GET game 1 scene)
@@ -1703,6 +1742,9 @@ foreach(game "shader_showcase|shader_showcase.scene|showcase"
   set(expect "Window title: Shader Test")
   if(NOT shader STREQUAL "-")
     set(expect "Loaded shader 'shaders/${shader}\\.kshader' \\(precompiled\\)")
+    if(shader MATCHES "\\.kshadergraph$") # the player generates a graph's .kshader text from the shipped file
+      set(expect "Loaded shader 'shaders/${shader}' \\(precompiled\\)")
+    endif()
   endif()
   add_test(NAME build_game_${name}
     COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/${name}"
@@ -2388,6 +2430,10 @@ include(cmake/starter_mmo_tests.cmake)
 
 # GPU particles: screenshots read back at known pixels, and kast_self_check --particles.
 include(cmake/particle_tests.cmake)
+
+# Shader Graph panels: --open-graph / --graph-* screenshots, Save, Assets > Create > Shader Graph, reload on disk change;
+# the graph samples (shader_graphs.scene) against the hand-written ones, in the editor and the player.
+include(cmake/shader_graph_tests.cmake)
 
 # Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.
 get_property(kast_tests DIRECTORY PROPERTY TESTS)

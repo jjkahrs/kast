@@ -3,6 +3,7 @@
 #include "files.h"
 #include "log.h"
 #include "project.h"
+#include "shader_graph.h"
 
 #include <algorithm>
 #include <cctype>
@@ -174,7 +175,7 @@ bool parseParam(const std::vector<std::string>& tokens, ShaderParam& param, std:
                 return false;
             }
             if (values.size() == 1)
-                values.assign(static_cast<size_t>(count), values[0]);
+                values.assign(static_cast<size_t>(count), float(values[0])); // a copy: assign() may not take its own element
             std::ranges::copy(values, param.value.begin()); // color(r, g, b): alpha stays 1
         }
     }
@@ -324,6 +325,17 @@ std::string_view trim(std::string_view s)
 
 } // namespace
 
+std::string_view shaderParamTypeName(ShaderParamType type)
+{
+    return typeName(type);
+}
+
+std::optional<ShaderParamType> shaderParamTypeFromName(std::string_view name)
+{
+    const auto it = std::ranges::find(kTypes, name, &std::pair<ShaderParamType, std::string_view>::second);
+    return it == kTypes.end() ? std::nullopt : std::optional(it->first);
+}
+
 int componentCount(ShaderParamType type)
 {
     switch (type) {
@@ -429,10 +441,21 @@ bool checkShaderAlphaMode(const Material& material, const ShaderSource& source, 
     if (!(source.screenTexture || source.depthTexture) || material.alphaMode == AlphaMode::Blend ||
         material.alphaMode == AlphaMode::Additive)
         return true;
+    std::string what = source.screenTexture ? "SCREEN_TEXTURE" : "DEPTH_TEXTURE";
+    // A shader graph's: the node sampling it ("node 4 (Scene Color) samples SCREEN_TEXTURE, which is ...").
+    const std::regex word("\\b" + what + "\\b");
+    int line = 0;
+    for (std::string_view text : splitLines(source.code)) {
+        ++line;
+        if (std::regex_search(text.begin(), text.end(), word)) {
+            if (const std::string node = graphNodeNameAtLine(source.code, line); !node.empty())
+                what = std::format("{} samples {}, which", node, what);
+            break;
+        }
+    }
     error = std::format("{} is only for blend and additive materials (drawn after the opaque scene it copies); this "
                         "material's alphaMode is {}",
-                        source.screenTexture ? "SCREEN_TEXTURE" : "DEPTH_TEXTURE",
-                        material.alphaMode == AlphaMode::Mask ? "mask" : "opaque");
+                        what, material.alphaMode == AlphaMode::Mask ? "mask" : "opaque");
     return false;
 }
 
@@ -749,16 +772,40 @@ void ShaderLibrary::reloadChanged()
                 continue; // the next call looks again; a change saved meanwhile reloads after it
             finish(path, entry);
         }
-        if (modifiedTime(root_ / path) != entry.mtime)
+        if (entry.stale || (!entry.override && modifiedTime(root_ / path) != entry.mtime))
             load(path, entry);
     }
+}
+
+void ShaderLibrary::setOverride(const std::string& path, std::optional<std::string> text)
+{
+    if (path.empty() || root_.empty())
+        return;
+    auto [it, added] = entries_.try_emplace(path);
+    Entry& e = it->second;
+    if (!added && e.override == text)
+        return;
+    e.override = std::move(text);
+    if (e.pending.valid())
+        e.stale = true; // replacing the future would wait for the compile; reloadChanged loads it once it is in
+    else
+        load(path, e);
+}
+
+const std::string& ShaderLibrary::text(const std::string& path)
+{
+    static const std::string none;
+    return path.empty() || root_.empty() ? none : entry(path).text;
 }
 
 void ShaderLibrary::wait()
 {
     for (auto& [path, entry] : entries_)
-        if (entry.pending.valid())
+        while (entry.pending.valid()) {
             finish(path, entry);
+            if (entry.stale)
+                load(path, entry);
+        }
 }
 
 void ShaderLibrary::load(const std::string& path, Entry& entry)
@@ -766,12 +813,21 @@ void ShaderLibrary::load(const std::string& path, Entry& entry)
     std::string error, text;
     const std::optional<std::filesystem::path> file = resolveProjectPath(root_, path, error);
     entry.mtime = file ? modifiedTime(*file) : std::nullopt;
+    entry.stale = false;
+    entry.text.clear();
     auto source = std::make_shared<ShaderSource>();
     entry.declaration = nullptr;
-    if (file && !readFile(*file, text))
+    std::vector<std::string> warnings;
+    if (file && entry.override)
+        text = *entry.override;
+    else if (file && !readFile(*file, text))
         error = "cannot read the file";
-    else if (file && parseShader(text, *source, error))
+    if (file && error.empty() && shaderFileText(path, text, error, &warnings) && parseShader(text, *source, error)) {
         entry.declaration = source;
+        entry.text = text;
+    }
+    for (const std::string& warning : warnings)
+        log::warn(std::format("Shader '{}': {}", path, warning));
     if (entry.declaration && !compiler_) { // the player: game.pak's bytecode
         auto shader = std::make_shared<CompiledShader>();
         shader->source = *source;
@@ -798,13 +854,16 @@ void ShaderLibrary::load(const std::string& path, Entry& entry)
     }
     // The compile works on copies: the entry may be reloaded, or the library's root change, while it runs.
     const auto compile = [source = *source, text = std::move(text), compiler = compiler_, version = version_,
-                          cache = root_ / ".kast" / "shader_cache"] {
+                          cache = root_ / ".kast" / "shader_cache", graph = isShaderGraphPath(path)] {
         const auto start = std::chrono::steady_clock::now();
         auto shader = std::make_shared<CompiledShader>();
         shader->source = source;
         Result result;
-        if (!compileShaderStages(source, text, compiler, version, cache, *shader, result.cached, result.error))
+        if (!compileShaderStages(source, text, compiler, version, cache, *shader, result.cached, result.error)) {
+            if (graph) // .kshader lines to the graph's nodes
+                result.error = mapGraphErrors(text, result.error);
             return result;
+        }
         result.shader = std::move(shader);
         result.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         return result;

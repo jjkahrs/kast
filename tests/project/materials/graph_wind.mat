@@ -1,0 +1,6 @@
+{
+  "version": 3,
+  "baseColor": [0.2, 0.6, 0.18, 1],
+  "roughness": 0.8,
+  "shader": "shader_graphs/wind.kshadergraph"
+}

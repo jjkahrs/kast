@@ -251,7 +251,8 @@ bool setMaterialField(Material& material, std::string_view name, const Json& val
         if (ok)
             m.shader = value.get<std::string>();
         else
-            error = "\"shader\" must be a string (a project-relative .kshader path, or empty for the built-in shader)";
+            error = "\"shader\" must be a string (a project-relative .kshader or .kshadergraph path, or empty for the built-in "
+                    "shader)";
     } else if (name == "params") {
         ok = shaderParams(value, m.params, error);
     } else {

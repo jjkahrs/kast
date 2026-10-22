@@ -459,7 +459,7 @@ void Panels::drawInspector(Document& doc)
             inspectedAsset_.clear();
     }
     if (ImGui::Begin("Inspector")) {
-        if (hasExtension(inspectedAsset_, ".kshader")) {
+        if (hasExtension(inspectedAsset_, ".kshader") || hasExtension(inspectedAsset_, kast::kShaderGraphExtension)) {
             drawShaderInspector(doc);
         } else if (!inspectedAsset_.empty()) {
             drawMaterialInspector(doc);
@@ -952,12 +952,6 @@ void drawShaderStatus(const kast::ShaderLibrary::Status& status)
     }
 }
 
-const char* shaderParamTypeName(kast::ShaderParamType type)
-{
-    constexpr const char* kNames[] = {"float", "vec2", "vec3", "vec4", "color", "texture2D"}; // ShaderParamType order
-    return kNames[static_cast<int>(type)];
-}
-
 // One widget per param the material's .kshader declares, showing the material's value or the default: a slider for a
 // ranged float, drag fields for numbers and vectors, a color picker, a texture picker. True if one changed m.params.
 bool drawShaderParams(const kast::ShaderSource& source, kast::Material& m, const std::vector<std::string>& textures)
@@ -1004,7 +998,8 @@ bool drawShaderParams(const kast::ShaderSource& source, kast::Material& m, const
                 changed = true;
             }
         }
-        ImGui::SetItemTooltip("%s param (line %d of the .kshader)", shaderParamTypeName(param.type), param.line);
+        ImGui::SetItemTooltip("%s param (line %d of the .kshader)", kast::shaderParamTypeName(param.type).data(),
+                              param.line);
         ImGui::PopID();
     }
     for (const auto& [name, value] : m.params)
@@ -1076,7 +1071,10 @@ bool Panels::drawUIDocumentComponent(Document& doc, entt::entity entity)
 void Panels::selectAsset(const std::string& path)
 {
     assetSelected_ = path;
-    inspectedAsset_ = hasExtension(path, ".mat") || hasExtension(path, ".kshader") ? path : "";
+    inspectedAsset_ = hasExtension(path, ".mat") || hasExtension(path, ".kshader") ||
+                              hasExtension(path, kast::kShaderGraphExtension)
+                          ? path
+                          : "";
     if (const size_t slash = path.rfind('/'); slash != std::string::npos)
         assetExpand_ = path.substr(0, slash); // its folder (one level), so the entry shows
     assetScrollTo_ = true;
@@ -1342,9 +1340,10 @@ void Panels::drawMaterialInspector(Document& doc)
     ImGui::SetItemTooltip("Base color + emissive only: ignores lights, shadows and ambient (still fogged, still casts)");
     ImGui::SeparatorText("Shader");
     std::vector<std::string> shaderFiles;
-    collectFiles(assets_, {".kshader"}, shaderFiles);
+    collectFiles(assets_, {".kshader", kast::kShaderGraphExtension}, shaderFiles);
     changed = drawFilePicker("Shader", shaderFiles, "None (built-in)", m.shader) || changed;
-    ImGui::SetItemTooltip("A .kshader whose fragment() / vertex() run in the mesh shader (Assets > Create > Shader)");
+    ImGui::SetItemTooltip("A .kshader whose fragment() / vertex() run in the mesh shader (Assets > Create > Shader), or a "
+                          ".kshadergraph (Assets > Create > Shader Graph)");
     if (!m.shader.empty()) {
         const kast::ShaderLibrary::Status status = kast::shaders().status(m.shader);
         drawShaderStatus(status);
@@ -1407,13 +1406,19 @@ void Panels::drawShaderInspector(Document& doc)
         if (status.declaration->params.empty())
             ImGui::TextDisabled("None");
         for (const kast::ShaderParam& param : status.declaration->params)
-            ImGui::BulletText("%s %s (line %d)", shaderParamTypeName(param.type), param.name.c_str(), param.line);
+            ImGui::BulletText("%s %s (line %d)", kast::shaderParamTypeName(param.type).data(), param.name.c_str(), param.line);
         ImGui::TextDisabled(status.declaration->hasVertex ? "Has vertex(): also moves shadows" : "No vertex()");
     }
     ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("Edit it in the external editor (double-click in Assets); saving recompiles it.");
-    ImGui::PopStyleColor();
+    if (hasExtension(inspectedAsset_, kast::kShaderGraphExtension)) {
+        if (ImGui::Button("Open in Shader Graph"))
+            openGraph_ = inspectedAsset_; // drawAssets opens it: it has the Shader Graph panels
+        ImGui::TextDisabled("Or double-click it in Assets.");
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("Edit it in the external editor (double-click in Assets); saving recompiles it.");
+        ImGui::PopStyleColor();
+    }
     endCard();
 }
 
@@ -2032,10 +2037,12 @@ void Panels::refreshAssets(const Document& doc)
         assetRenaming_.clear();
 }
 
-void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ExternalEditor& editor)
+void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ExternalEditor& editor)
 {
     if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
         refreshAssets(doc);
+    if (!openGraph_.empty()) // the Inspector's "Open in Shader Graph"
+        graphs.open(assetsRoot_ / fromUtf8(std::exchange(openGraph_, {})));
     if (ImGui::Begin("Assets")) {
         if (!doc.project) {
             ImGui::TextDisabled("No project: open a project to browse its assets");
@@ -2044,7 +2051,7 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, Exte
                                   : !files.idle()                ? "Close the open dialog first"
                                                                  : nullptr;
             for (const AssetEntry& entry : assets_)
-                drawAssetNode(doc, files, gui, editor, entry, blocker);
+                drawAssetNode(doc, files, gui, graphs, editor, entry, blocker);
 
             // The rest of the panel: click clears selection, drop moves to the root, right-click creates at the root.
             ImVec2 rest = ImGui::GetContentRegionAvail();
@@ -2119,10 +2126,10 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, Exte
         }
     }
     ImGui::End();
-    applyAssetEdit(doc, gui);
+    applyAssetEdit(doc, gui, graphs);
 }
 
-void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ExternalEditor& editor,
+void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ExternalEditor& editor,
                            const AssetEntry& entry, const char* blocker)
 {
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
@@ -2152,6 +2159,9 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
     if (!entry.folder && hasExtension(entry.name, ".rml") && ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
         gui.open(assetsRoot_ / fromUtf8(entry.path));
+    if (!entry.folder && hasExtension(entry.name, kast::kShaderGraphExtension) && ImGui::IsItemHovered() &&
+        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        graphs.open(assetsRoot_ / fromUtf8(entry.path));
     if (!entry.folder && isTextAsset(entry.name) && !hasExtension(entry.name, ".rml") && ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) // .rml: the GUI Builder above; its menu opens it here
         editor.open(assetsRoot_ / fromUtf8(entry.path));
@@ -2204,7 +2214,7 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
 
     if (open && entry.folder) {
         for (const AssetEntry& child : entry.children)
-            drawAssetNode(doc, files, gui, editor, child, blocker);
+            drawAssetNode(doc, files, gui, graphs, editor, child, blocker);
         ImGui::TreePop();
     }
     ImGui::PopID();
@@ -2257,6 +2267,9 @@ void Panels::drawAssetCreateMenu(const std::string& folder, const char* blocker)
     if (ImGui::MenuItem("Shader", nullptr, false, !blocker))
         assetEdit_ = {AssetEdit::Op::NewShader, folder};
     disabledTooltip(blocker);
+    if (ImGui::MenuItem("Shader Graph", nullptr, false, !blocker))
+        assetEdit_ = {AssetEdit::Op::NewShaderGraph, folder};
+    disabledTooltip(blocker);
     ImGui::EndMenu();
 }
 
@@ -2307,7 +2320,7 @@ void Panels::assetsFailed(std::string error)
     assetsErrorRequested_ = true;
 }
 
-void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui)
+void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs)
 {
     const AssetEdit edit = std::exchange(assetEdit_, AssetEdit{});
     if (edit.op == AssetEdit::Op::None || !doc.project || doc.play != PlayState::Stopped)
@@ -2404,6 +2417,21 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui)
         }
         break;
     }
+    case AssetEdit::Op::NewShaderGraph: {
+        const std::filesystem::path dir = edit.path.empty() ? root : source;
+        std::filesystem::path file;
+        if (writeNewShaderGraph(dir, file, error)) {
+            const std::string name = utf8(file.filename());
+            assetExpand_ = edit.path;
+            selected = joinAsset(edit.path, name);
+            kast::log::info(std::format("Created shader graph '{}'", selected));
+            refreshAssets(doc);
+            selectAsset(selected);
+            startAssetRename(selected, name);
+            return;
+        }
+        break;
+    }
     case AssetEdit::Op::NewPrefab: {
         std::string path;
         if (createPrefabFrom(doc, edit.entity, edit.path, path, error)) {
@@ -2454,6 +2482,7 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui)
                                         edit.path, selected));
             assetSelected_ = selected;
             gui.remap(source, dest);
+            graphs.remap(source, dest);
             if (scenePath)
                 doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
             remapScenePaths(doc, edit.path, selected); // systems, MeshRenderer materials, models, overrides, prefabs

@@ -1,0 +1,703 @@
+{
+  "version": 1,
+  "params": [
+    {
+      "name": "glow",
+      "type": "color",
+      "default": [
+        0.2,
+        0.8,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "name": "lines",
+      "type": "float",
+      "default": 6.0,
+      "range": [
+        1.0,
+        24.0
+      ]
+    },
+    {
+      "name": "scroll_speed",
+      "type": "float",
+      "default": 0.4,
+      "range": [
+        0.0,
+        4.0
+      ]
+    },
+    {
+      "name": "pulse_speed",
+      "type": "float",
+      "default": 3.0,
+      "range": [
+        0.0,
+        12.0
+      ]
+    },
+    {
+      "name": "intensity",
+      "type": "float",
+      "default": 4.0,
+      "range": [
+        0.0,
+        16.0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": 1,
+      "type": "output_fragment",
+      "position": [
+        2760.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 2,
+      "type": "uv",
+      "position": [
+        0.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 3,
+      "type": "time",
+      "position": [
+        230.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 4,
+      "type": "swizzle",
+      "position": [
+        230.0,
+        98.0
+      ],
+      "settings": {
+        "mask": "y"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 5,
+      "type": "param",
+      "position": [
+        230.0,
+        196.0
+      ],
+      "settings": {
+        "param": "lines"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 6,
+      "type": "multiply",
+      "position": [
+        460.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 7,
+      "type": "param",
+      "position": [
+        230.0,
+        294.0
+      ],
+      "settings": {
+        "param": "scroll_speed"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 8,
+      "type": "multiply",
+      "position": [
+        460.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 9,
+      "type": "subtract",
+      "position": [
+        690.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 10,
+      "type": "fract",
+      "position": [
+        920.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 11,
+      "type": "smoothstep",
+      "position": [
+        1380.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {
+        "edge0": 0.0,
+        "edge1": 0.15
+      }
+    },
+    {
+      "id": 12,
+      "type": "smoothstep",
+      "position": [
+        1150.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {
+        "edge0": 0.35,
+        "edge1": 0.5
+      }
+    },
+    {
+      "id": 13,
+      "type": "one_minus",
+      "position": [
+        1380.0,
+        122.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 14,
+      "type": "multiply",
+      "position": [
+        1610.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 15,
+      "type": "param",
+      "position": [
+        920.0,
+        98.0
+      ],
+      "settings": {
+        "param": "pulse_speed"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 16,
+      "type": "multiply",
+      "position": [
+        1150.0,
+        122.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 17,
+      "type": "sin",
+      "position": [
+        1380.0,
+        220.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 18,
+      "type": "multiply",
+      "position": [
+        1610.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {
+        "a": 0.45
+      }
+    },
+    {
+      "id": 19,
+      "type": "add",
+      "position": [
+        1840.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {
+        "a": 0.55
+      }
+    },
+    {
+      "id": 20,
+      "type": "lerp",
+      "position": [
+        2300.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {
+        "a": 1.0,
+        "b": 0.2
+      }
+    },
+    {
+      "id": 21,
+      "type": "surface",
+      "position": [
+        2300.0,
+        122.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 22,
+      "type": "multiply",
+      "position": [
+        2530.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 23,
+      "type": "param",
+      "position": [
+        1380.0,
+        318.0
+      ],
+      "settings": {
+        "param": "glow"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 24,
+      "type": "swizzle",
+      "position": [
+        1610.0,
+        196.0
+      ],
+      "settings": {
+        "mask": "rgb"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 25,
+      "type": "multiply",
+      "position": [
+        1840.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 26,
+      "type": "multiply",
+      "position": [
+        2070.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 27,
+      "type": "param",
+      "position": [
+        2070.0,
+        98.0
+      ],
+      "settings": {
+        "param": "intensity"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 28,
+      "type": "multiply",
+      "position": [
+        2300.0,
+        244.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 29,
+      "type": "material_emission",
+      "position": [
+        2300.0,
+        342.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 30,
+      "type": "add",
+      "position": [
+        2530.0,
+        98.0
+      ],
+      "settings": {},
+      "inputs": {}
+    }
+  ],
+  "links": [
+    {
+      "from": [
+        2,
+        "out"
+      ],
+      "to": [
+        4,
+        "v"
+      ]
+    },
+    {
+      "from": [
+        4,
+        "out"
+      ],
+      "to": [
+        6,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        5,
+        "out"
+      ],
+      "to": [
+        6,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        3,
+        "out"
+      ],
+      "to": [
+        8,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        7,
+        "out"
+      ],
+      "to": [
+        8,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        6,
+        "out"
+      ],
+      "to": [
+        9,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        8,
+        "out"
+      ],
+      "to": [
+        9,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        9,
+        "out"
+      ],
+      "to": [
+        10,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        10,
+        "out"
+      ],
+      "to": [
+        11,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        10,
+        "out"
+      ],
+      "to": [
+        12,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        12,
+        "out"
+      ],
+      "to": [
+        13,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        11,
+        "out"
+      ],
+      "to": [
+        14,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        13,
+        "out"
+      ],
+      "to": [
+        14,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        3,
+        "out"
+      ],
+      "to": [
+        16,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        15,
+        "out"
+      ],
+      "to": [
+        16,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        16,
+        "out"
+      ],
+      "to": [
+        17,
+        "x"
+      ]
+    },
+    {
+      "from": [
+        17,
+        "out"
+      ],
+      "to": [
+        18,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        18,
+        "out"
+      ],
+      "to": [
+        19,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        14,
+        "out"
+      ],
+      "to": [
+        20,
+        "t"
+      ]
+    },
+    {
+      "from": [
+        21,
+        "albedo"
+      ],
+      "to": [
+        22,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        20,
+        "out"
+      ],
+      "to": [
+        22,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        22,
+        "out"
+      ],
+      "to": [
+        1,
+        "ALBEDO"
+      ]
+    },
+    {
+      "from": [
+        23,
+        "out"
+      ],
+      "to": [
+        24,
+        "v"
+      ]
+    },
+    {
+      "from": [
+        24,
+        "out"
+      ],
+      "to": [
+        25,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        14,
+        "out"
+      ],
+      "to": [
+        25,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        25,
+        "out"
+      ],
+      "to": [
+        26,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        19,
+        "out"
+      ],
+      "to": [
+        26,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        26,
+        "out"
+      ],
+      "to": [
+        28,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        27,
+        "out"
+      ],
+      "to": [
+        28,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        29,
+        "rgb"
+      ],
+      "to": [
+        30,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        28,
+        "out"
+      ],
+      "to": [
+        30,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        30,
+        "out"
+      ],
+      "to": [
+        1,
+        "EMISSION"
+      ]
+    }
+  ],
+  "comments": []
+}

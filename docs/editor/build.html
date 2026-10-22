@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html" class="active">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html" class="active">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
 <main>
 <h1 id="build">Build</h1>
 <p><strong>Build</strong> menu (enabled when a project is open and Play is stopped):</p>
@@ -66,6 +66,12 @@ file can collide with it). The <code>.kshader</code> sources ship too: the playe
 compiles: it loads that bytecode (<code>Loaded shader 'shaders/x.kshader' (precompiled)</code>) and has no <code>shaderc</code>. A
 shader that fails to compile or parse fails the Build, naming the file and the line, and writes nothing:</p>
 <pre><code>Build failed: shader 'shaders/broken.kshader': line 7: error X3004: undeclared identifier 'undeclaredThing'</code></pre>
+<p><strong>Shader graphs</strong> (<a href="shader-graph.html#shader-graph"><code>.kshadergraph</code></a>) are built the same
+way: Build generates each shipped graph's <code>.kshader</code> text and compiles that, keyed by the generated text. The graph
+file ships; the player generates the same text from it with the same engine code and loads the bytecode, never compiling
+(<code>Loaded shader 'shader_graphs/water.kshadergraph' (precompiled)</code>). A graph error fails the Build naming the file and
+the node:</p>
+<pre><code>Build failed: shader 'shaders/x.kshadergraph': node 5: UV is not available in light() (only in vertex(), fragment())</code></pre>
 <p>A shipped <code>.mat</code> whose <code>alphaMode</code> is opaque or mask and whose shader samples <code>SCREEN_TEXTURE</code> or
 <code>DEPTH_TEXTURE</code> (<a href="../engine/shaders.html#kshader-screen">blend and additive only</a>) fails the Build too:</p>
 <pre><code>Build failed: material 'materials/water.mat': SCREEN_TEXTURE is only for blend and additive materials (drawn after the opaque scene it copies); this material's alphaMode is mask</code></pre>

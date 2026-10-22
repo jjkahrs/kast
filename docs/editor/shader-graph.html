@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shader Graph - Kast Editor</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html" class="active">Shader Graph</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
+<main>
+<h1 id="shader-graph">Shader Graph</h1>
+<p>The Shader Graph builds a mesh surface shader from connected nodes, without writing code, like Unity's Shader Graph. A
+graph is a <code>.kshadergraph</code> file; Kast generates <a href="../engine/shaders.html#user-shaders"><code>.kshader</code></a> text
+from it, and everything after that is the <code>.kshader</code> path: a material uses a graph through its <strong>Shader</strong>
+picker, its params get the Inspector's widgets and Lua's <code>kast.getMaterialProperty</code> / <code>setMaterialProperty</code>,
+and Build ships it. The file format, the type rules and the code generation are in the engine's
+<a href="../engine/shader-graph.html#shader-graph">Shader graphs</a> reference.</p>
+<ul>
+<li><a href="#sg-start">Create and open a graph</a></li>
+<li><a href="#sg-panels">Panels</a></li>
+<li><a href="#sg-canvas">The canvas: nodes, links, the add menu</a></li>
+<li><a href="#sg-edit">Copy and paste, comments, delete</a></li>
+<li><a href="#sg-undo">Undo, Save and files changed on disk</a></li>
+<li><a href="#sg-preview">Preview and live update</a></li>
+<li><a href="#sg-errors">Errors</a></li>
+<li><a href="#sg-material">Use a graph from a material</a></li>
+<li><a href="#sg-nodes">Node reference</a></li>
+<li><a href="#sg-custom">Custom Expression</a></li>
+<li><a href="#sg-screen">SCREEN_TEXTURE and DEPTH_TEXTURE</a></li>
+<li><a href="#sg-limits">Limits</a></li>
+<li><a href="#sg-samples">Samples</a></li>
+<li><a href="#sg-cli">Command line</a></li>
+</ul>
+
+<h2 id="sg-start">Create and open a graph</h2>
+<ul>
+<li><strong>Create</strong>: in the <strong>Assets</strong> panel, open a folder and choose <strong>Create &gt; Shader Graph</strong>. Kast
+  writes <code>new_shader_graph.kshadergraph</code> (<code>new_shader_graph_2.kshadergraph</code>, ... if taken) and logs
+  <code>Created shader graph '...'</code>. The starter compiles as is: a <code>tint</code> color param, through a Swizzle
+  (<code>rgb</code>), into the Fragment Output's ALBEDO.</li>
+<li><strong>Open</strong>: double-click a <code>.kshadergraph</code> in the Assets panel. Selecting one (single click) shows its
+  compile status and params in the Inspector, with an <strong>Open in Shader Graph</strong> button. From the command line:
+  <code>--open-graph &lt;file&gt;</code>.</li>
+<li>One graph is open at a time. Opening another while the open one has unsaved changes asks
+  <strong>Save</strong> / <strong>Discard</strong> / <strong>Cancel</strong>. Renaming or moving the open graph in the Assets panel keeps
+  it open under its new path.</li>
+</ul>
+
+<h2 id="sg-panels">Panels</h2>
+<p>Three dockable panels, docked by default next to the views (<strong>Shader Graph</strong> with Scene and Game,
+<strong>Graph Inspector</strong> with the Inspector, <strong>Shader Preview</strong> with the Hierarchy). Opening a graph brings them
+to the front. Their titles show the file name, with a <code>*</code> while it has unsaved changes.</p>
+<ul>
+<li><strong>Shader Graph</strong>: the canvas. A summary line at its top reads <em>Compiled</em>, <em>Compiling...</em>, or in red
+  <em>Errors: the last good version renders - 1 error, 1 warning - node 12: ...</em>.</li>
+<li><strong>Graph Inspector</strong>:
+  <ul>
+  <li>always: <strong>Save</strong> and the node and link counts;</li>
+  <li>with one node selected: its title, id, type and the stages it may run in, its settings (a Param's param, a constant's
+    value, a Swizzle mask, a Noise kind, a Custom Expression's pins and code), a constant field for each unlinked number
+    input (inputs whose default is a built-in, e.g. <em>uv: UV when unlinked</em>, have none; a texture input reads
+    <em>link a texture2D</em>), and the node's errors and warnings;</li>
+  <li>with a comment frame selected: its title;</li>
+  <li>with nothing selected: the graph's <strong>params</strong>, the <code>.kshader</code>'s <code>param</code> lines. Each has a name,
+    a type (float, vec2, vec3, vec4, color, texture2D), a default, and a range (floats) or sRGB (textures); <strong>+ Param</strong>
+    adds one, <strong>Remove</strong> deletes one. Renaming a param renames it on its Param nodes; changing its type drops the links
+    the new type can't make. A material sets its own values in the Inspector.</li>
+  </ul></li>
+<li><strong>Shader Preview</strong>: the graph as it is now, saved or not, on a lit <strong>Sphere</strong>, <strong>Cube</strong> or
+  <strong>Plane</strong>, with a directional light, ambient light, the sky and TIME running. Drag to orbit, wheel to zoom. The
+  preview material is the built-in material's defaults plus the params' defaults; a graph that samples the screen or depth
+  texture gets alpha mode blend, so it can render. <strong>View generated code</strong> shows the <code>.kshader</code> text the
+  library compiles, read-only, with <strong>Copy to clipboard</strong>.</li>
+</ul>
+
+<h2 id="sg-canvas">The canvas: nodes, links, the add menu</h2>
+<ul>
+<li><strong>Pan</strong> by dragging the background with the right mouse button, <strong>zoom</strong> with the wheel.</li>
+<li><strong>Nodes</strong> have an orange header with their title (a Param node shows its param, <em>Param: speed</em>), inputs on
+  the left and outputs on the right. Pins are colored by type: float green, vec2 cyan, vec3 purple, vec4 blue, texture2D pink,
+  and grey for a math node's <em>dynamic</em> pins (they take the widest number linked in). A filled pin is linked.</li>
+<li><strong>Link</strong> by dragging from an output to an input (or back). A link Kast refuses (a texture into a number, a number
+  into a texture, a link that would close a cycle) shows red with the reason, <em>Can't link: a texture2D can't go into a float
+  input</em>, and is not made. A wider vector into a narrower input is allowed and truncated, with a warning on that node. An
+  input takes one link: a new one replaces the old. Select a link and press Delete to unlink.</li>
+<li><strong>The add menu</strong> opens at the cursor with a right-click on the background or <strong>Space</strong> over the canvas.
+  Type to search; entries are grouped by category (Output, Input, Constant, Params, Vertex, Material, Light, Math, Vector,
+  Texture, Effect, Custom, and Comment). The graph's params are listed as <em>Param: name</em>, which adds a Param node set to
+  it.</li>
+<li><strong>From a pin</strong>: drop a link dragged from a pin on empty canvas, and the add menu opens filtered to the nodes that
+  can link to it (<em>Nodes that link from 11.out</em>); the chosen node is added there already linked, through its first pin
+  that takes the link without a warning. Adding and linking is one undo step.</li>
+<li><strong>Select</strong>: click a node; Ctrl+click adds to the selection; drag a box on the background to select every node in
+  it.</li>
+</ul>
+
+<h2 id="sg-edit">Copy and paste, comments, delete</h2>
+<ul>
+<li><strong>Ctrl+C</strong> copies the selected nodes, the links between them and the params their Param nodes use, as
+  <code>.kshadergraph</code> text on the clipboard. <strong>Ctrl+X</strong> copies, then deletes. <strong>Ctrl+V</strong> pastes at the
+  mouse cursor, <strong>Ctrl+D</strong> duplicates the selection there. Pasted nodes get fresh ids, keep the links among
+  themselves (links from nodes that weren't copied are dropped) and are left selected. Pasting into another graph also adds
+  any param its Param nodes need that the graph lacks.</li>
+<li><strong>Delete</strong> removes the selected nodes and links, and the links into and out of those nodes.</li>
+<li><strong>Comment frames</strong>: choose <strong>Comment</strong> in the add menu to frame the selected nodes (or make a 300 x 200
+  frame at the cursor). A frame has a title (edit it in the Graph Inspector), resizes from its edges, and dragging it moves
+  the nodes inside it. Frames are only for reading the graph; they generate no code.</li>
+</ul>
+
+<h2 id="sg-undo">Undo, Save and files changed on disk</h2>
+<ul>
+<li>The graph has its <strong>own undo history</strong>: <strong>Ctrl+Z</strong> / <strong>Ctrl+Y</strong> while the Shader Graph or the
+  Graph Inspector is focused undo and redo graph edits, not scene edits. One step each: add, delete, link, unlink, a move (one
+  per drag), paste, a setting edit (from grabbing a field to releasing it), a constant, a param edit, and adding, moving or
+  resizing a comment. The history is cleared when a graph is opened or reloaded.</li>
+<li><strong>Save</strong> (the Graph Inspector's button, or <strong>Ctrl+S</strong> while a graph panel is focused) writes the file;
+  the title's <code>*</code> goes away. Undoing back to the saved state also clears it.</li>
+<li><strong>Changed on disk</strong> (by another program, or version control): with no unsaved changes the graph reloads; with
+  some, Kast asks <em>... changed on disk, and the Shader Graph has unsaved changes</em> <strong>Reload</strong> / <strong>Keep
+  mine</strong>.</li>
+<li><strong>Quitting</strong> with unsaved changes asks <strong>Save</strong> / <strong>Discard</strong> / <strong>Cancel</strong>, as opening
+  another graph does.</li>
+</ul>
+
+<h2 id="sg-preview">Preview and live update</h2>
+<p>Edits show <strong>before you save</strong>. 0.3 s after the last edit (each edit restarts the wait) Kast generates the graph's
+<code>.kshader</code> text and compiles it on the shader library's worker thread, so the editor keeps drawing frames while it
+compiles. When it is done, the Shader Preview <em>and every material using the graph</em> in the Scene and Game views (in Play
+too) draw the new version. From an edit to the new image takes about half a second (0.51 s measured with an empty shader
+cache, 0.35 s on a cache hit, debug build); the log says <code>Shader Graph: 'shaders/x.kshadergraph' live-updated 0.51 s after
+the edit (13 frames drawn while it compiled)</code>. Moving nodes and editing comments doesn't recompile.</p>
+<ul>
+<li>The file on disk only changes when you Save. The Shader Preview says <em>Unsaved edits shown</em> while the graph differs
+  from it.</li>
+<li>While a compile runs, and after one fails, the <strong>last good version keeps rendering</strong>. A graph that has never
+  compiled renders magenta, like a broken <code>.kshader</code>.</li>
+<li>Closing the graph without saving (<strong>Discard</strong>, or the file being removed) drops the unsaved version: the library
+  compiles the file on disk again and the views go back to it.</li>
+</ul>
+
+<h2 id="sg-errors">Errors</h2>
+<p>Errors are always on a node. The node is outlined <strong>red</strong> for an error and <strong>#ffcc00</strong> (yellow) for a
+warning; hovering it shows the message (<em>Error: line 31: error X3004: undeclared identifier 'undefinedThing'</em>), and
+selecting it lists them in the Graph Inspector. The canvas's summary line counts them, the log has them (<code>[error] Shader
+'shaders/x.kshadergraph': node 12: line 31: ...</code>), and the material Inspector of every <code>.mat</code> using the graph
+shows them in its Shader status. Where they come from:</p>
+<ul>
+<li><strong>Validation</strong>, before compiling: a node in a stage it isn't available in (<em>Light Direction is not available in
+  fragment() (only in light())</em>), a required input with no link (<em>input 'texture' needs a link</em>), a Param node naming a
+  param the graph doesn't have, a second output node of a kind, bad settings (a Swizzle mask, a Custom Expression pin list),
+  too many params or textures, a param named like a built-in. The graph doesn't compile; the last good version renders.</li>
+<li><strong>Warnings</strong>: a wider vector truncated into a narrower input (<em>input 'ALBEDO': vec4 truncated to vec3</em>). The
+  graph still compiles.</li>
+<li><strong>shaderc</strong>, the compiler: its errors come back with a line of the generated <code>.kshader</code>, which Kast maps to
+  the node whose code is on that line, e.g. a Custom Expression's body.</li>
+<li>The <a href="#sg-screen">screen / depth texture rule</a>, on the node that samples them.</li>
+</ul>
+
+<h2 id="sg-material">Use a graph from a material</h2>
+<p>Select a <code>.mat</code>: the Inspector's <strong>Shader</strong> picker lists the project's <code>.kshadergraph</code> files with
+its <code>.kshader</code> files. With a graph picked, the section shows its compile status and a widget per param, as for a
+<code>.kshader</code>. Param edits are undoable and saved to the
+<code>.mat</code>'s <code>params</code>, exactly as for a <code>.kshader</code>; see <a href="shaders.html#shaders-assign">Shaders in the
+editor</a>. In Lua, <code>kast.setMaterialProperty(entity, "speed", 2)</code> changes a graph param on one entity in Play, and Stop
+puts it back. A <code>.mat</code> names the graph as <code>"shader": "shader_graphs/water.kshadergraph"</code>.</p>
+
+<h2 id="sg-nodes">Node reference</h2>
+<p>Columns: the node's type id (as in the file) and title; its inputs, with the value an unlinked input takes in brackets
+(<em>req</em>: it must be linked); its outputs and the code each generates (<code>{pin}</code> is that input's code); the
+stages it may run in: V = <code>vertex()</code>, F = <code>fragment()</code>, L = <code>light()</code>. Unlinked number inputs can be
+given a constant in the Graph Inspector instead of their default. Each node's code is written once per stage it reaches, as
+<code>&lt;type&gt; n&lt;id&gt;_&lt;pin&gt; = &lt;code&gt;;</code> after a <code>// @node &lt;id&gt; &lt;type&gt;</code> line. <strong>dyn</strong>
+(dynamic) pins take the widest of the node's dynamic inputs; a float into a wider pin is splatted, a narrower vector padded
+with zeros, a wider one truncated (with a warning).</p>
+
+<h3 id="sg-nodes-output">Output</h3>
+<p>One of each at most. Their linked inputs are written into the built-ins; an unlinked one keeps what the built-in material
+computes (so an empty graph renders as the built-in material). <code>vertex()</code> and <code>light()</code> are only generated when
+their output node has a linked input.</p>
+<table>
+<thead><tr><th>Type / title</th><th>Inputs</th><th>Generated</th><th>Stages</th></tr></thead>
+<tbody>
+<tr><td><code>output_vertex</code> Vertex Output</td><td>VERTEX vec3, NORMAL vec3 (object space), UV vec2, COLOR vec4</td><td><code>VERTEX = {VERTEX};</code> ...</td><td>V</td></tr>
+<tr><td><code>output_fragment</code> Fragment Output</td><td>ALBEDO vec3, ALPHA float, METALLIC float, ROUGHNESS float, EMISSION vec3, NORMAL_MAP vec3 (tangent space, 0..1), NORMAL_MAP_DEPTH float, AO float</td><td><code>ALBEDO = {ALBEDO};</code> ...</td><td>F</td></tr>
+<tr><td><code>output_light</code> Light Output</td><td>DIFFUSE_LIGHT vec3, SPECULAR_LIGHT vec3</td><td><code>DIFFUSE_LIGHT += {DIFFUSE_LIGHT};</code> ... (added once per light)</td><td>L</td></tr>
+</tbody>
+</table>
+
+<h3 id="sg-nodes-input">Constant, Param and Input</h3>
+<table>
+<thead><tr><th>Type / title</th><th>Inputs</th><th>Outputs: code</th><th>Stages</th></tr></thead>
+<tbody>
+<tr><td><code>constant_float</code> Float, <code>constant_vec2</code> Vector 2, <code>constant_vec3</code> Vector 3, <code>constant_vec4</code> Vector 4, <code>constant_color</code> Color</td><td>setting <code>value</code>: 1, 2, 3, 4, 4 numbers</td><td>out float / vec2 / vec3 / vec4 / vec4: the literal, e.g. <code>vec3(1.0, 0.5, 0.0)</code></td><td>V F L</td></tr>
+<tr><td><code>param</code> Param</td><td>setting <code>param</code>: a param's name</td><td>out: the param's type (a color is a vec4, a texture2D a texture): the param's name</td><td>V F L</td></tr>
+<tr><td><code>uv</code> UV</td><td></td><td>out vec2: <code>UV</code> (the material's tiling and offset applied in fragment(), the mesh's raw UV in vertex())</td><td>V F</td></tr>
+<tr><td><code>time</code> Time</td><td></td><td>out float: <code>TIME</code> (seconds)</td><td>V F L</td></tr>
+<tr><td><code>vertex_color</code> Vertex Color</td><td></td><td>out vec4: <code>COLOR</code> (white if the mesh has none; in fragment(), as vertex() left it)</td><td>V F</td></tr>
+<tr><td><code>normal</code> Normal (World)</td><td></td><td>out vec3: <code>NORMAL</code> (world, unit)</td><td>F L</td></tr>
+<tr><td><code>tangent</code> Tangent (World)</td><td></td><td>out vec4: <code>TANGENT</code> (w: bitangent sign)</td><td>F</td></tr>
+<tr><td><code>world_position</code> World Position</td><td></td><td>out vec3: <code>WORLD_POSITION</code></td><td>F</td></tr>
+<tr><td><code>view_position</code> View Position</td><td></td><td>out vec3: <code>VIEW_POSITION</code> (view space, the camera looks down -Z)</td><td>F</td></tr>
+<tr><td><code>view_direction</code> View Direction</td><td></td><td>out vec3: <code>normalize(CAMERA_POSITION - WORLD_POSITION)</code></td><td>F</td></tr>
+<tr><td><code>camera_position</code> Camera Position</td><td></td><td>out vec3: <code>CAMERA_POSITION</code></td><td>V F L</td></tr>
+<tr><td><code>screen_uv</code> Screen UV</td><td></td><td>out vec2: <code>SCREEN_UV</code> ((0, 0) top-left)</td><td>F</td></tr>
+<tr><td><code>frag_coord</code> Frag Coord</td><td></td><td>out vec4: <code>FRAG_COORD</code> (window pixels)</td><td>F</td></tr>
+<tr><td><code>screen_texture</code> Screen Texture</td><td></td><td>out texture2D: <code>SCREEN_TEXTURE</code> (<a href="#sg-screen">blend / additive only</a>)</td><td>F L</td></tr>
+<tr><td><code>depth_texture</code> Depth Texture</td><td></td><td>out texture2D: <code>DEPTH_TEXTURE</code> (<a href="#sg-screen">blend / additive only</a>)</td><td>F L</td></tr>
+</tbody>
+</table>
+
+<h3 id="sg-nodes-vertex">Vertex</h3>
+<table>
+<thead><tr><th>Type / title</th><th>Inputs</th><th>Outputs: code</th><th>Stages</th></tr></thead>
+<tbody>
+<tr><td><code>vertex_position</code> Vertex Position (Object)</td><td></td><td>out vec3: <code>VERTEX</code></td><td>V</td></tr>
+<tr><td><code>vertex_normal</code> Vertex Normal (Object)</td><td></td><td>out vec3: <code>NORMAL</code></td><td>V</td></tr>
+<tr><td><code>instance_id</code> Instance ID</td><td></td><td>out float: <code>float(INSTANCE_ID)</code></td><td>V</td></tr>
+<tr><td><code>model_matrix</code> Model Matrix</td><td>v vec3 [<code>vec3_splat(0.0)</code>], w float [<code>1.0</code>]</td><td>out vec3: <code>mul(MODEL_MATRIX, vec4({v}, {w})).xyz</code>: object to world space (w 1: a point, e.g. the mesh's origin with v unlinked; w 0: a direction, whose length is the mesh's scale along it). MODEL_MATRIX is also WORLD_MATRIX.</td><td>V</td></tr>
+</tbody>
+</table>
+
+<h3 id="sg-nodes-material">Material</h3>
+<table>
+<thead><tr><th>Type / title</th><th>Inputs</th><th>Outputs: code</th><th>Stages</th></tr></thead>
+<tbody>
+<tr><td><code>material</code> Material Values</td><td></td><td>base_color vec4: <code>MATERIAL_BASE_COLOR</code>; metallic float: <code>MATERIAL_METALLIC</code>; roughness float: <code>MATERIAL_ROUGHNESS</code>; emission vec3: <code>MATERIAL_EMISSION</code>; alpha_cutoff float: <code>MATERIAL_ALPHA_CUTOFF</code> (the <code>.mat</code>'s values)</td><td>V F L</td></tr>
+<tr><td><code>material_base_color</code> Material Base Color</td><td>uv vec2 [<code>UV</code>]</td><td>rgba vec4: <code>MATERIAL_BASE_COLOR * sampleBaseColor({uv})</code>; rgb vec3: <code>{rgba}.rgb</code>; a float: <code>{rgba}.a</code> (what ALBEDO and ALPHA start from)</td><td>F</td></tr>
+<tr><td><code>material_metallic_roughness</code> Material Metallic Roughness</td><td>uv vec2 [<code>UV</code>]</td><td>metallic float: <code>MATERIAL_METALLIC * sampleMetallicRoughness({uv}).b</code>; roughness float: <code>MATERIAL_ROUGHNESS * sampleMetallicRoughness({uv}).g</code></td><td>F</td></tr>
+<tr><td><code>material_emission</code> Material Emission</td><td>uv vec2 [<code>UV</code>]</td><td>rgb vec3: <code>MATERIAL_EMISSION * sampleEmissive({uv}).rgb</code> (what EMISSION starts from)</td><td>F</td></tr>
+<tr><td><code>material_occlusion</code> Material Occlusion</td><td>uv vec2 [<code>UV</code>]</td><td>ao float: <code>sampleOcclusion({uv}).r</code> (the texture's R, without the material's occlusion strength)</td><td>F</td></tr>
+<tr><td><code>material_normal_map</code> Material Normal Map</td><td>uv vec2 [<code>UV</code>]</td><td>normal_map vec3: <code>sampleNormal({uv}).xyz</code> (as stored, 0..1: what NORMAL_MAP takes)</td><td>F</td></tr>
+<tr><td><code>surface</code> Surface</td><td></td><td>albedo vec3: <code>ALBEDO</code>; metallic float: <code>METALLIC</code>; roughness float: <code>ROUGHNESS</code>. In fragment(): what the built-in material computed, before Fragment Output writes them (multiply into it to tint, as <code>ALBEDO *= ...</code> does). In light(): the light's surface inputs.</td><td>F L</td></tr>
+</tbody>
+</table>
+
+<h3 id="sg-nodes-light">Light</h3>
+<table>
+<thead><tr><th>Type / title</th><th>Inputs</th><th>Outputs: code</th><th>Stages</th></tr></thead>
+<tbody>
+<tr><td><code>light_direction</code> Light Direction</td><td></td><td>out vec3: <code>LIGHT_DIRECTION</code> (world, unit, from the surface toward the light)</td><td>L</td></tr>
+<tr><td><code>light_color</code> Light Color</td><td></td><td>out vec3: <code>LIGHT_COLOR</code> (color * intensity)</td><td>L</td></tr>
+<tr><td><code>attenuation</code> Attenuation</td><td></td><td>out float: <code>ATTENUATION</code> (distance falloff times shadow, 0..1)</td><td>L</td></tr>
+<tr><td><code>view</code> View</td><td></td><td>out vec3: <code>VIEW</code> (world, unit, from the surface toward the camera)</td><td>L</td></tr>
+</tbody>
+</table>
+
+<h3 id="sg-nodes-math">Math</h3>
+<p>Every pin is dyn; every node has one output, <code>out</code>, of the node's dynamic type. Stages: all.</p>
+<table>
+<thead><tr><th>Type / title</th><th>Inputs</th><th>out =</th></tr></thead>
+<tbody>
+<tr><td><code>add</code> Add</td><td>a [0], b [0]</td><td><code>{a} + {b}</code></td></tr>
+<tr><td><code>subtract</code> Subtract</td><td>a [0], b [0]</td><td><code>{a} - {b}</code></td></tr>
+<tr><td><code>multiply</code> Multiply</td><td>a [1], b [1]</td><td><code>{a} * {b}</code></td></tr>
+<tr><td><code>divide</code> Divide</td><td>a [1], b [1]</td><td><code>{a} / {b}</code></td></tr>
+<tr><td><code>lerp</code> Lerp</td><td>a [0], b [1], t [0.5]</td><td><code>mix({a}, {b}, {t})</code></td></tr>
+<tr><td><code>clamp</code> Clamp</td><td>x [0], min [0], max [1]</td><td><code>clamp({x}, {min}, {max})</code></td></tr>
+<tr><td><code>saturate</code> Saturate</td><td>x [0]</td><td><code>saturate({x})</code></td></tr>
+<tr><td><code>step</code> Step</td><td>edge [0.5], x [0]</td><td><code>step({edge}, {x})</code> (1 where x &gt;= edge)</td></tr>
+<tr><td><code>smoothstep</code> Smoothstep</td><td>edge0 [0], edge1 [1], x [0]</td><td><code>smoothstep({edge0}, {edge1}, {x})</code></td></tr>
+<tr><td><code>pow</code> Power</td><td>x [0], exponent [1]</td><td><code>pow({x}, {exponent})</code></td></tr>
+<tr><td><code>sin</code> Sine, <code>cos</code> Cosine, <code>abs</code> Absolute, <code>fract</code> Fraction, <code>floor</code> Floor</td><td>x [0]</td><td><code>sin({x})</code>, <code>cos({x})</code>, <code>abs({x})</code>, <code>fract({x})</code>, <code>floor({x})</code></td></tr>
+<tr><td><code>min</code> Minimum, <code>max</code> Maximum</td><td>a [0], b [0]</td><td><code>min({a}, {b})</code>, <code>max({a}, {b})</code></td></tr>
+<tr><td><code>one_minus</code> One Minus</td><td>x [0]</td><td><code>1.0 - {x}</code></td></tr>
+<tr><td><code>remap</code> Remap</td><td>x [0], in_min [0], in_max [1], out_min [0], out_max [1]</td><td><code>{out_min} + ({x} - {in_min}) * ({out_max} - {out_min}) / ({in_max} - {in_min})</code></td></tr>
+</tbody>
+</table>
+
+<h3 id="sg-nodes-vector">Vector</h3>
+<p>Stages: all.</p>
+<table>
+<thead><tr><th>Type / title</th><th>Inputs</th><th>Outputs: code</th></tr></thead>
+<tbody>
+<tr><td><code>dot</code> Dot Product</td><td>a dyn [0], b dyn [0]</td><td>out float: <code>dot({a}, {b})</code></td></tr>
+<tr><td><code>cross</code> Cross Product</td><td>a vec3 [<code>vec3(1.0, 0.0, 0.0)</code>], b vec3 [<code>vec3(0.0, 1.0, 0.0)</code>]</td><td>out vec3: <code>cross({a}, {b})</code></td></tr>
+<tr><td><code>normalize</code> Normalize</td><td>x dyn [1]</td><td>out dyn: <code>normalize({x})</code> (link a vector)</td></tr>
+<tr><td><code>length</code> Length</td><td>x dyn [0]</td><td>out float: <code>length({x})</code> (link a vector)</td></tr>
+<tr><td><code>split</code> Split</td><td>v vec4 [<code>vec4_splat(0.0)</code>]</td><td>x, y, z, w float: <code>{v}.x</code> ... (a narrower vector is padded with zeros)</td></tr>
+<tr><td><code>combine</code> Combine</td><td>x, y, z, w float [0]</td><td>xyzw vec4: <code>vec4({x}, {y}, {z}, {w})</code>; xyz vec3: <code>{xyzw}.xyz</code>; xy vec2: <code>{xyzw}.xy</code></td></tr>
+<tr><td><code>swizzle</code> Swizzle</td><td>v vec4 [<code>vec4_splat(0.0)</code>]; setting <code>mask</code>: 1 to 4 of <code>xyzw</code> or of <code>rgba</code> [<code>xyz</code>]</td><td>out, as wide as the mask: <code>{v}.{mask}</code>, e.g. <code>zyx</code>, <code>rgb</code>, <code>y</code></td></tr>
+</tbody>
+</table>
+
+<h3 id="sg-nodes-texture">Texture and UV</h3>
+<table>
+<thead><tr><th>Type / title</th><th>Inputs</th><th>Outputs: code</th><th>Stages</th></tr></thead>
+<tbody>
+<tr><td><code>sample_texture</code> Sample Texture</td><td>texture texture2D [req: a texture2D Param], uv vec2 [<code>UV</code>]</td><td>rgba vec4: <code>texture2D({texture}, {uv})</code>; rgb vec3; r, g, b, a float</td><td>F</td></tr>
+<tr><td><code>sample_normal_map</code> Sample Normal Map</td><td>texture texture2D [req], uv vec2 [<code>UV</code>]</td><td>normal_map vec3: <code>texture2D({texture}, {uv}).xyz</code> (as stored, 0..1: link it to NORMAL_MAP); normal vec3: <code>{normal_map} * 2.0 - 1.0</code> (unpacked, tangent space)</td><td>F</td></tr>
+<tr><td><code>tiling_offset</code> Tiling And Offset</td><td>uv vec2 [<code>UV</code>], tiling vec2 [1], offset vec2 [0]</td><td>out vec2: <code>{uv} * {tiling} + {offset}</code></td><td>V F</td></tr>
+<tr><td><code>panner</code> Panner</td><td>uv vec2 [<code>UV</code>], speed vec2 [<code>vec2(0.1, 0.0)</code>], time float [<code>TIME</code>]</td><td>out vec2: <code>{uv} + {speed} * {time}</code></td><td>V F</td></tr>
+<tr><td><code>rotate_uv</code> Rotate UV</td><td>uv vec2 [<code>UV</code>], center vec2 [0.5], angle float [0] (radians, counterclockwise)</td><td>out vec2: uv rotated by angle about center</td><td>V F</td></tr>
+</tbody>
+</table>
+
+<h3 id="sg-nodes-effect">Effect</h3>
+<table>
+<thead><tr><th>Type / title</th><th>Inputs</th><th>Outputs: code</th><th>Stages</th></tr></thead>
+<tbody>
+<tr><td><code>fresnel</code> Fresnel</td><td>normal vec3 [<code>NORMAL</code>], view vec3 [<code>normalize(CAMERA_POSITION - WORLD_POSITION)</code>], power float [5]</td><td>out float: <code>pow(1.0 - saturate(dot({normal}, {view})), {power})</code></td><td>F</td></tr>
+<tr><td><code>noise</code> Noise</td><td>p vec3 [<code>vec3(UV, 0.0)</code>], scale float [1]; setting <code>kind</code>: <code>value_2d</code> (default), <code>value_3d</code>, <code>gradient_2d</code>, <code>gradient_3d</code></td><td>out float, 0..1: <code>kastNoise_&lt;kind&gt;({p} * {scale})</code> (2D kinds use p.xy). A helper function is written once before fragment().</td><td>V F</td></tr>
+<tr><td><code>depth_fade</code> Depth Fade</td><td>distance float [1]</td><td>depth float: <code>linearDepth(texture2D(DEPTH_TEXTURE, SCREEN_UV).r) + VIEW_POSITION.z</code> (meters of opaque scene behind the surface); fade float: <code>saturate({depth} / {distance})</code>. <a href="#sg-screen">Blend / additive only</a>.</td><td>F</td></tr>
+<tr><td><code>scene_color</code> Scene Color</td><td>offset vec2 [0]</td><td>rgb vec3: <code>texture2D(SCREEN_TEXTURE, SCREEN_UV + {offset}).rgb</code> (the opaque scene behind; offset it to refract). <a href="#sg-screen">Blend / additive only</a>.</td><td>F</td></tr>
+<tr><td><code>ndotl</code> N dot L</td><td>normal vec3 [<code>NORMAL</code>], light vec3 [<code>LIGHT_DIRECTION</code>]</td><td>out float: <code>saturate(dot({normal}, {light}))</code></td><td>L</td></tr>
+<tr><td><code>toon_bands</code> Toon Bands</td><td>x float [0], bands float [3], softness float [0]</td><td>out float: x in <code>bands</code> steps: <code>ceil({x} * {bands}) / {bands}</code> with softness 0; with softness &gt; 0, <code>(floor({x} * {bands}) + smoothstep(0.0, {softness}, fract({x} * {bands}))) / {bands}</code></td><td>V F L</td></tr>
+</tbody>
+</table>
+
+<h3 id="sg-nodes-custom">Custom</h3>
+<table>
+<thead><tr><th>Type / title</th><th>Inputs</th><th>Outputs</th><th>Stages</th></tr></thead>
+<tbody>
+<tr><td><code>custom_expression</code> Custom Expression</td><td>its settings' <code>inputs</code> (numbers unlinked: 0; textures: req)</td><td>its settings' <code>outputs</code>, assigned by its <code>code</code>: see <a href="#sg-custom">below</a></td><td>V F L</td></tr>
+</tbody>
+</table>
+
+<h2 id="sg-custom">Custom Expression</h2>
+<p>For what no node does: a block of shader code with typed pins you declare. Use it sparingly; the
+<a href="#sg-samples">samples</a> need none.</p>
+<ul>
+<li><strong>Settings</strong>: <code>inputs</code>, e.g. <code>vec3 color, float amount, texture2D mask</code> (float, vec2, vec3, vec4 or
+  texture2D); <code>outputs</code>, e.g. <code>vec3 result, float glow</code> (float to vec4; no textures); and <code>code</code>, the body.
+  Each pin becomes a pin of the node. Changing the lists drops the links of pins that went away.</li>
+<li><strong>Names</strong> must be identifiers, unique within the node, not a <code>.kshader</code> built-in (UV, ALBEDO, ...), not
+  a generated temp (<code>n&lt;digits&gt;_...</code>) and not one of the graph's params (params are macros and would rename
+  them).</li>
+<li><strong>The code</strong> is <code>.kshader</code> GLSL. It reads the inputs and assigns the outputs as local variables; the
+  outputs start at zero; it may use the built-ins of the stages it runs in, the params, and texture inputs with
+  <code>texture2D(mask, UV)</code>. It is generated inside its own block after the node's marker:
+<pre><code>    // @node 7 custom_expression
+    vec3 n7_result;
+    {
+        vec3 color = n3_out;
+        float amount = 0.0;
+        vec3 result = vec3_splat(0.0);
+        result = color * amount;     // the code, each line indented
+        n7_result = result;
+    }</code></pre>
+  so a compile error in it is reported on that node (<em>node 7: line 31: error X3004: undeclared identifier ...</em>).</li>
+<li>The text is shader source only: Kast passes it to the shader compiler and never runs it in the editor.</li>
+</ul>
+
+<h2 id="sg-screen">SCREEN_TEXTURE and DEPTH_TEXTURE</h2>
+<p>Scene Color, Depth Fade and the Screen Texture / Depth Texture inputs read the opaque scene drawn before the surface. Like
+a <code>.kshader</code> that samples them (<a href="../engine/shaders.html#kshader-screen">why</a>), a graph using any of them only
+works on materials whose alpha mode is <strong>blend</strong> or <strong>additive</strong> (drawn after that scene). On an opaque or
+mask material it renders magenta and the error names the node:</p>
+<pre><code>node 4 (Scene Color) samples SCREEN_TEXTURE, which is only for blend and additive materials (drawn after the opaque scene it copies); this material's alphaMode is opaque</code></pre>
+<p>The Shader Preview picks blend for such a graph by itself. Shadow passes never sample these textures.</p>
+
+<h2 id="sg-limits">Limits</h2>
+<ul>
+<li>The <code>.kshader</code> limits: at most <strong>16</strong> number params and <strong>4</strong> texture params; param names
+  follow the <code>.kshader</code> rules (identifiers, not a built-in's name).</li>
+<li>One Vertex Output, one Fragment Output and one Light Output at most; links may not form a cycle; an input takes one
+  link.</li>
+<li>Each node only runs in its stages (the tables above). A node feeding two stages is generated in each.</li>
+<li>Mesh surface shaders only (as <code>.kshader</code>): not post-processing, particles, the sky or game GUIs. No subgraphs,
+  reroute nodes or per-node preview thumbnails, and no conversion of a <code>.kshader</code> into a graph.</li>
+</ul>
+
+<h2 id="sg-samples">Samples</h2>
+<p><code>tests/project/shader_graphs/</code> rebuilds the five hand-written <a href="../engine/shaders.html#kshader-samples"><code>.kshader</code>
+samples</a> as graphs, with no Custom Expression nodes. <code>tests/project/shader_graphs.scene</code> is
+<code>custom_shaders.scene</code> (same camera, lights, fog, objects and skinned character) with its materials switched to
+<code>materials/graph_*.mat</code>, and renders the same image: the tests compare the two pixel for pixel at frames 60 and 120,
+in the Scene view and in Play.</p>
+<ul>
+<li><code>pulse.kshadergraph</code>: scrolling, pulsing emissive lines. UV.y (Swizzle <code>y</code>) times <code>lines</code> minus TIME
+  times <code>scroll_speed</code>, Fraction, two Smoothsteps for the band; Surface albedo times a Lerp darkens under it;
+  Material Emission plus <code>glow</code> times band, pulse and <code>intensity</code> into EMISSION.</li>
+<li><code>wind.kshadergraph</code>: grass bending in the wind (instanced, shadows sway). In the vertex stage, Model Matrix gives
+  the mesh's world origin (the phase) and its X / Z scale (Length of a transformed axis); the bend grows with the height
+  above <code>base</code>, offsets VERTEX through a Combine, and tints COLOR toward <code>tip</code>. Fragment: Surface albedo times
+  Vertex Color.</li>
+<li><code>dissolve.kshadergraph</code>: the <code>noise</code> texture param's R against <code>threshold</code> (Step) times the base color's
+  alpha into ALPHA (on an alpha mode mask material, so the shadow is cut too), and a glowing edge into EMISSION.
+  <code>scripts/dissolve_driver.lua</code> animates <code>threshold</code> in Play with <code>kast.setMaterialProperty</code>.</li>
+<li><code>water.kshadergraph</code>: waves in vertex() (two sine trains from the world position, through Model Matrix), a normal
+  from their slopes in fragment(), Fresnel toward <code>sky_color</code>, Depth Fade toward <code>deep_color</code>, Scene Color
+  refraction offset by the normal, and foam where the scene behind is close. Blend, unlit. The two wave chains share k,
+  the time terms and <code>wave_height</code>; each stage gets its own copy of them.</li>
+<li><code>toon.kshadergraph</code>: Light Output only. N dot L times Attenuation into Toon Bands, times Surface albedo and Light
+  Color into DIFFUSE_LIGHT; a hard highlight (Step of N against the half vector) and a rim (Step of one minus N.V) into
+  SPECULAR_LIGHT.</li>
+</ul>
+
+<h2 id="sg-cli">Command line</h2>
+<p>For tests and screenshots, the panels' edits run from flags: <code>--open-graph</code>, <code>--graph-add</code>,
+<code>--graph-link</code>, <code>--graph-unlink</code>, <code>--graph-select</code>, <code>--graph-delete</code>, <code>--graph-set</code>,
+<code>--graph-comment</code>, <code>--graph-paste</code>, <code>--graph-undo</code>, <code>--graph-redo</code>, <code>--graph-save</code>,
+<code>--graph-add-menu</code>, <code>--graph-preview</code>, <code>--graph-view-code</code>, plus <code>--assets-create
+shadergraph:&lt;folder&gt;</code> and canvas gestures with <code>--sim-mouse</code> / <code>--sim-key</code>. See
+<a href="command-line.html#shader-graph-flags">Command line: Shader Graph</a>.</p>
+</main>
+</div>
+</body>
+</html>

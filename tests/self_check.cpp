@@ -13,6 +13,7 @@
 #include "gui_undo.h" // GUI Builder undo steps; links editor/gui_undo.cpp
 #include "recent_projects.h" // Project Manager list; links editor/recent_projects.cpp
 #include "shader_compiler.h" // shaderc for .kshader files; links editor/shader_compiler.cpp
+#include "shader_graph_doc.h" // the Shader Graph panels' edit model; links editor/shader_graph_doc.cpp
 #include "stats_toggle.h" // the Game panel's F3 rule; header only
 
 #include <components.h>
@@ -45,6 +46,7 @@
 #include <scene_gui.h>
 #include <scene_io.h>
 #include <shader.h>
+#include <shader_graph.h>
 #include <shadow.h>
 #include <sky.h>
 #include <frustum.h>
@@ -2975,7 +2977,7 @@ void checkBuildSettings()
                                        "physics.scene",
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                       "shader_errors.scene", "shader_light.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
+                                       "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                        "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "ui_effects.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
@@ -2999,7 +3001,7 @@ void checkBuildSettings()
                                                           "particles_texture.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                                          "shader_errors.scene", "shader_light.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
+                                                          "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                                           "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "ui_effects.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
@@ -5593,6 +5595,66 @@ int probePng(int argc, char** argv)
     return failed == 0 ? 0 : 1;
 }
 
+// --diff-png <a.png> <b.png> <maxMeanAbsDiff> [x,y,w,h[,bx,by]]: the mean absolute difference per RGB channel (0..255)
+// over every pixel of two same-sized images is at most maxMeanAbsDiff. Prints the mean and the largest single
+// difference. With a rect, only the w x h pixels at x, y (from the top left) are compared, at bx, by in b if given (e.g.
+// an editor shot's Game view against a player screenshot of the view's size).
+int diffPng(int argc, char** argv)
+{
+    std::array<std::optional<kast::MipImage>, 2> images;
+    for (size_t i = 0; i < 2; ++i) {
+        std::string bytes;
+        if (kast::readFile(argv[2 + i], bytes))
+            images[i] = kast::decodeImage(bytes, false);
+        if (!images[i]) {
+            std::printf("diff: cannot read '%s' as PNG\n", argv[2 + i]);
+            return 1;
+        }
+    }
+    const kast::MipImage& a = *images[0];
+    const kast::MipImage& b = *images[1];
+    int x = 0, y = 0, w = a.width, h = a.height, bx = -1, by = -1;
+    if (argc == 6) {
+        const int fields = std::sscanf(argv[5], "%d,%d,%d,%d,%d,%d", &x, &y, &w, &h, &bx, &by);
+        if (fields != 4 && fields != 6) {
+            std::printf("diff: bad rect '%s' (expected x,y,w,h or x,y,w,h,bx,by)\n", argv[5]);
+            return 1;
+        }
+    } else if (a.width != b.width || a.height != b.height) {
+        std::printf("diff FAIL: sizes differ (%dx%d, %dx%d)\n", a.width, a.height, b.width, b.height);
+        return 1;
+    }
+    if (bx < 0) {
+        bx = x;
+        by = y;
+    }
+    const auto fits = [&](const kast::MipImage& image, int left, int top) {
+        return left >= 0 && top >= 0 && w > 0 && h > 0 && left + w <= image.width && top + h <= image.height;
+    };
+    if (!fits(a, x, y) || !fits(b, bx, by)) {
+        std::printf("diff FAIL: the rect %s is outside an image (%dx%d, %dx%d)\n", argv[5], a.width, a.height, b.width,
+                    b.height);
+        return 1;
+    }
+    const double limit = std::atof(argv[4]);
+    double sum = 0.0;
+    int max = 0;
+    for (int row = 0; row < h; ++row)
+        for (int col = 0; col < w; ++col) {
+            const size_t pa = (static_cast<size_t>(y + row) * a.width + x + col) * 4;
+            const size_t pb = (static_cast<size_t>(by + row) * b.width + bx + col) * 4;
+            for (size_t c = 0; c < 3; ++c) {
+                const int d = std::abs(a.rgba[pa + c] - b.rgba[pb + c]);
+                sum += d;
+                max = std::max(max, d);
+            }
+        }
+    const double mean = sum / (static_cast<double>(w) * h * 3.0);
+    const bool ok = mean <= limit;
+    std::printf("diff %s: mean %.6f (limit %.6f), max %d over %dx%d\n", ok ? "ok" : "FAIL", mean, limit, max, w, h);
+    return ok ? 0 : 1;
+}
+
 void checkPostProcessing()
 {
     // Shader math mirrors.
@@ -5724,6 +5786,9 @@ void checkMaterialVersion2();
 void checkShaders();
 void checkShaderBuild();
 void checkShaderLibraryAsync();
+void checkShaderGraphs();
+void checkShaderGraphNodes();
+void checkShaderGraphEdits();
 void checkShaderParamEditing();
 void checkSceneCopies();
 
@@ -6297,6 +6362,9 @@ void checkShaders()
     removeTree(dir);
     checkShaderLibraryAsync();
     checkShaderBuild();
+    checkShaderGraphs();
+    checkShaderGraphNodes();
+    checkShaderGraphEdits();
 
     // COLOR0: glTF COLOR_0 imports (RGBA8, R in the low byte); models without it and primitives are white.
     const auto model = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/vertex_colors.gltf", error);
@@ -6471,6 +6539,38 @@ void checkShaderBuild()
               std::format("a broken .kshader fails the Build with its file and line, writing nothing: {}", error).c_str());
     }
     std::filesystem::remove(root / "shaders/broken.kshader");
+    // A .kshadergraph ships too, and Build compiles it keyed by its generated text, which the player (no compiler)
+    // generates again from the shipped graph. A broken graph fails the Build naming the file and node.
+    std::string graphText, generated;
+    check(kast::readFile(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "shaders/graph_demo.kshadergraph", graphText),
+          "the demo graph reads");
+    writeFile(root / "shaders/demo.kshadergraph", graphText);
+    generated = graphText;
+    kast::Pak graphPak;
+    check(kast::shaderFileText("shaders/demo.kshadergraph", generated, error) &&
+              buildGame(project, dir / "graph", playerDir, exe, error) && graphPak.open(dir / "graph" / kGamePakName, error) &&
+              graphPak.find(kast::shaderPakPath(generated, kast::ShaderStage::Fragment)) &&
+              graphPak.find(kast::shaderPakPath(generated, kast::ShaderStage::Shadow)) && graphPak.find("shaders/demo.kshadergraph"),
+          std::format("Build compiles a .kshadergraph into game.pak by its generated text ({})", error).c_str());
+    const std::filesystem::path graphUnpacked = dir / "graph_unpacked";
+    for (const std::string& path : graphPak.list("")) {
+        std::filesystem::create_directories((graphUnpacked / path).parent_path());
+        writeFile(graphUnpacked / path, std::string(*graphPak.find(path)));
+    }
+    kast::ShaderLibrary graphPlayer;
+    graphPlayer.setRoot(graphUnpacked);
+    const auto graphShader = graphPlayer.get("shaders/demo.kshadergraph");
+    check(graphShader && graphShader->source.params.size() == 3 &&
+              countLogged("Loaded shader 'shaders/demo.kshadergraph' (precompiled)") == 1,
+          "without a compiler the library loads a graph's game.pak bytecode");
+    writeFile(root / "shaders/broken.kshadergraph",
+              R"({"version": 1, "nodes": [{"id": 1, "type": "output_light"}, {"id": 5, "type": "uv"}],
+                  "links": [{"from": [5, "out"], "to": [1, "DIFFUSE_LIGHT"]}]})");
+    check(!buildGame(project, dir / "bad", playerDir, exe, error) &&
+              contains(error, "Build failed: shader 'shaders/broken.kshadergraph': node 5: UV is not available in light()") &&
+              !std::filesystem::exists(dir / "bad"),
+          std::format("a broken .kshadergraph fails the Build with its file and node: {}", error).c_str());
+    std::filesystem::remove(root / "shaders/broken.kshadergraph");
     std::filesystem::create_directories(root / "materials");
     writeFile(root / "shaders/screen.kshader", "void fragment() { ALBEDO = texture2D(SCREEN_TEXTURE, SCREEN_UV).rgb; }\n");
     writeFile(root / "materials/water.mat", R"({"version": 3, "alphaMode": "mask", "shader": "shaders/screen.kshader"})");
@@ -6482,6 +6582,707 @@ void checkShaderBuild()
     writeFile(root / "materials/water.mat", R"({"version": 3, "alphaMode": "blend", "shader": "shaders/screen.kshader"})");
     check(buildGame(project, dir / "good", playerDir, exe, error),
           std::format("as a blend material it builds: {}", error).c_str());
+    removeTree(dir);
+}
+
+// Shader graphs (.kshadergraph): strict JSON with a byte-identical round trip, canLink's type rules, deterministic
+// codegen, node ids on validation and shaderc errors, the library and material properties.
+void checkShaderGraphs()
+{
+    std::string error;
+    // shader_graphs/: the phase 5 samples, the hand-written shaders/*.kshader samples rebuilt without Custom Expression
+    // nodes; their screenshots must match custom_shaders.scene's (cmake/shader_graph_tests.cmake).
+    for (const char* name : {"shaders/graph_demo.kshadergraph", "shaders/empty.kshadergraph", "shader_graphs/pulse.kshadergraph",
+                             "shader_graphs/wind.kshadergraph", "shader_graphs/dissolve.kshadergraph",
+                             "shader_graphs/water.kshadergraph", "shader_graphs/toon.kshadergraph"}) {
+        std::string text;
+        kast::ShaderGraph graph;
+        const bool read = kast::readFile(std::filesystem::path(KAST_TEST_PROJECT_DIR) / name, text);
+        std::erase(text, '\r'); // a Windows git checkout may have made the line ends CRLF; Kast writes '\n'
+        kast::ShaderGraph reloaded;
+        check(read && kast::parseShaderGraph(text, graph, error) && kast::shaderGraphText(graph) == text &&
+                  kast::parseShaderGraph(kast::shaderGraphText(graph), reloaded, error) &&
+                  kast::shaderGraphText(reloaded) == text,
+              std::format("{} round-trips byte for byte ({})", name, error).c_str());
+        std::vector<kast::GraphIssue> issues;
+        check(!kast::generateKShader(graph, issues).empty() && issues.empty() &&
+                  std::ranges::none_of(graph.nodes, [](const kast::GraphNode& n) { return n.type == kast::kCustomExpression; }),
+              std::format("{} generates with no error or warning and no Custom Expression", name).c_str());
+    }
+    const auto parse = [&](const std::string& json, kast::ShaderGraph& graph) {
+        error.clear();
+        return kast::parseShaderGraph(json, graph, error);
+    };
+    kast::ShaderGraph graph;
+    check(parse(R"({"version": 1, "nodes": [{"id": 3, "type": "output_fragment"}]})", graph) && graph.params.empty() &&
+              graph.nodes.size() == 1 && graph.nodes[0].position == std::array{0.0f, 0.0f} && graph.links.empty(),
+          std::format("missing optional fields get their defaults ({})", error).c_str());
+    for (const auto& [json, expected] : std::initializer_list<std::pair<const char*, const char*>>{
+             {R"({"version": 1, "colour": 1})", "colour: unknown key"},
+             {R"({"version": 2})", "version: must be 1"},
+             {R"({"nodes": []})", "version: must be 1"},
+             {R"({"version": 1, "nodes": [{"id": 1, "type": "output_fragment", "size": 2}]})", "nodes[0].size: unknown key"},
+             {R"({"version": 1, "nodes": [{"id": 1, "type": "blur"}]})", "nodes[0].type: unknown node type \"blur\""},
+             {R"({"version": 1, "nodes": [{"id": 0, "type": "time"}]})", "nodes[0].id: must be a whole number > 0"},
+             {R"({"version": 1, "nodes": [{"id": 1, "type": "time"}, {"id": 1, "type": "uv"}]})",
+              "nodes[1].id: 1 is already another node's id"},
+             {R"({"version": 1, "nodes": [{"id": 1, "type": "add", "inputs": {"a": [1, 2, 3, 4, 5]}}]})",
+              "nodes[0].inputs.a: must be a finite number or an array of 2 to 4 finite numbers"},
+             {R"({"version": 1, "nodes": [{"id": 1, "type": "add", "inputs": {"c": 1}}]})",
+              "nodes[0].inputs.c: Add has no input 'c'"},
+             {R"({"version": 1, "nodes": [{"id": 1, "type": "output_fragment", "inputs": {"ALPHA": 1}}]})",
+              "nodes[0].inputs.ALPHA: this input takes a link, not a constant"},
+             {R"({"version": 1, "nodes": [{"id": 1, "type": "param", "settings": {"param": 2}}]})",
+              "nodes[0].settings.param: must be a string"},
+             {R"({"version": 1, "nodes": [{"id": 1, "type": "constant_vec3", "settings": {"value": [1, 2]}}]})",
+              "nodes[0].settings.value: must be an array of 3 finite numbers"},
+             {R"({"version": 1, "params": [{"name": "a", "type": "vec5"}]})", "params[0].type: must be"},
+             {R"({"version": 1, "params": [{"name": "a", "type": "vec2", "range": [0, 1]}]})",
+              "params[0].range: is only for float params"},
+             {R"({"version": 1, "nodes": [{"id": 1, "type": "time"}], "links": [{"from": [9, "out"], "to": [1, "a"]}]})",
+              "links[0].from: no node 9"},
+             {R"({"version": 1, "nodes": [{"id": 1, "type": "time"}, {"id": 2, "type": "output_fragment"}],
+                 "links": [{"from": [1, "out"], "to": [2, "COLOUR"]}]})",
+              "links[0].to: Fragment Output (node 2) has no input 'COLOUR'"},
+             {R"({"version": 1, "nodes": [{"id": 1, "type": "time"}, {"id": 2, "type": "add"}],
+                 "links": [{"from": [1, "out"], "to": [2, "a"]}, {"from": [1, "out"], "to": [2, "a"]}]})",
+              "links[1].to: that input already has a link"},
+             {R"({"version": 1, "nodes": [{"id": 4, "type": "add"}, {"id": 7, "type": "multiply"}],
+                 "links": [{"from": [4, "out"], "to": [7, "a"]}, {"from": [7, "out"], "to": [4, "b"]}]})",
+              "node 4: the links form a cycle"},
+             {"{", "invalid JSON"}}) {
+        check(!parse(json, graph) && error.starts_with(expected),
+              std::format("a bad .kshadergraph is rejected: {} (got: {})", expected, error).c_str());
+    }
+
+    // canLink: splat, truncate (warning), texture / number refused, cycles refused.
+    check(parse(R"({"version": 1, "params": [{"name": "pattern", "type": "texture2D"}],
+        "nodes": [{"id": 1, "type": "output_fragment"}, {"id": 2, "type": "time"}, {"id": 3, "type": "constant_vec4"},
+                  {"id": 4, "type": "param", "settings": {"param": "pattern"}}, {"id": 5, "type": "add"},
+                  {"id": 6, "type": "multiply"}, {"id": 7, "type": "sample_texture"}],
+        "links": [{"from": [5, "out"], "to": [6, "a"]}]})", graph),
+          std::format("the canLink graph parses ({})", error).c_str());
+    const auto link = [&](int from, const char* out, int to, const char* in) { return kast::canLink(graph, {from, out}, {to, in}); };
+    kast::LinkCheck result = link(2, "out", 1, "ALBEDO");
+    check(result.allowed && !result.warning, "canLink: float -> vec3 is allowed (splatted)");
+    result = link(3, "out", 1, "ALPHA");
+    check(result.allowed && result.warning && result.message == "vec4 truncated to float",
+          std::format("canLink: vec4 -> float is allowed with a warning ({})", result.message).c_str());
+    result = link(4, "out", 5, "a");
+    check(!result.allowed && result.message == "a texture2D can't go into a number input",
+          std::format("canLink: texture -> number is refused ({})", result.message).c_str());
+    result = link(2, "out", 7, "texture");
+    check(!result.allowed && result.message == "a float can't go into a texture2D input",
+          std::format("canLink: number -> texture is refused ({})", result.message).c_str());
+    check(link(4, "out", 7, "texture").allowed, "canLink: a texture param into Sample Texture");
+    result = link(6, "out", 5, "b");
+    check(!result.allowed && result.message == "the link would close a cycle",
+          std::format("canLink: a link closing a cycle is refused ({})", result.message).c_str());
+    check(!link(5, "out", 5, "a").allowed && !link(2, "nope", 1, "ALBEDO").allowed && !link(2, "out", 99, "a").allowed,
+          "canLink: a node into itself and missing pins are refused");
+    check(kast::outputPinType(graph, {6, "out"}) == kast::PinType::Float &&
+              kast::outputPinType(graph, {4, "out"}) == kast::PinType::Texture2D,
+          "output types: a math node with float inputs is a float, a texture param a texture2D");
+
+    // Codegen: the demo graph's exact text, the same for any node order and run.
+    std::string demoText;
+    check(kast::readFile(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "shaders/graph_demo.kshadergraph", demoText) &&
+              parse(demoText, graph),
+          "the demo graph parses");
+    std::vector<kast::GraphIssue> issues;
+    const std::string demo = kast::generateKShader(graph, issues);
+    const std::string expected = "param vec3 tint = vec3(1, 0.6, 0.3);\n"
+                                 "param float speed = 0.5 range(0, 4);\n"
+                                 "param texture2D pattern = white srgb;\n"
+                                 "\n"
+                                 "void fragment()\n"
+                                 "{\n"
+                                 "    // @node 2 uv\n"
+                                 "    vec2 n2_out = UV;\n"
+                                 "    // @node 3 time\n"
+                                 "    float n3_out = TIME;\n"
+                                 "    // @node 4 param\n"
+                                 "    float n4_out = speed;\n"
+                                 "    // @node 5 multiply\n"
+                                 "    float n5_out = n3_out * n4_out;\n"
+                                 "    // @node 6 add\n"
+                                 "    vec2 n6_out = n2_out + vec2_splat(n5_out);\n"
+                                 "    // @node 7 param\n"
+                                 "    // @node 8 sample_texture\n"
+                                 "    vec4 n8_rgba = texture2D(pattern, n6_out);\n"
+                                 "    vec3 n8_rgb = n8_rgba.rgb;\n"
+                                 "    float n8_r = n8_rgba.r;\n"
+                                 "    float n8_g = n8_rgba.g;\n"
+                                 "    float n8_b = n8_rgba.b;\n"
+                                 "    float n8_a = n8_rgba.a;\n"
+                                 "    // @node 9 param\n"
+                                 "    vec3 n9_out = tint;\n"
+                                 "    // @node 10 multiply\n"
+                                 "    vec3 n10_out = n8_rgb * n9_out;\n"
+                                 "    // @node 11 constant_float\n"
+                                 "    float n11_out = 0.3;\n"
+                                 "    // @node 1 output_fragment\n"
+                                 "    ALBEDO = n10_out;\n"
+                                 "    ROUGHNESS = n11_out;\n"
+                                 "}\n";
+    check(issues.empty() && demo == expected, std::format("the demo graph generates its .kshader:\n{}", demo).c_str());
+    std::vector<kast::GraphIssue> again;
+    kast::ShaderGraph reordered = graph;
+    std::ranges::reverse(reordered.nodes);
+    std::ranges::reverse(reordered.links);
+    check(kast::generateKShader(graph, again) == demo && kast::generateKShader(reordered, again) == demo && again.empty(),
+          "codegen is deterministic: twice, and with the nodes and links in reverse order, the same text");
+    kast::ShaderSource source;
+    check(parse(R"({"version": 1, "nodes": [{"id": 1, "type": "output_fragment"}]})", graph) &&
+              kast::generateKShader(graph, issues) == "void fragment()\n{\n}\n" && issues.empty(),
+          "an unconnected Fragment Output is an empty fragment(): the built-in material's look");
+
+    // Every stage, compiled by shaderc: vertex() and light() only when their output node has a link.
+    check(parse(R"({"version": 1, "params": [{"name": "lift", "type": "float", "default": 0.25}],
+        "nodes": [{"id": 1, "type": "output_vertex"}, {"id": 2, "type": "output_fragment"}, {"id": 3, "type": "output_light"},
+                  {"id": 4, "type": "param", "settings": {"param": "lift"}}, {"id": 5, "type": "time"},
+                  {"id": 6, "type": "add", "inputs": {"b": [0, 0.1, 0]}},
+                  {"id": 7, "type": "constant_color", "settings": {"value": [1, 0.5, 0.25, 1]}}],
+        "links": [{"from": [4, "out"], "to": [6, "a"]}, {"from": [6, "out"], "to": [1, "VERTEX"]},
+                  {"from": [5, "out"], "to": [2, "EMISSION"]}, {"from": [7, "out"], "to": [3, "DIFFUSE_LIGHT"]},
+                  {"from": [5, "out"], "to": [3, "SPECULAR_LIGHT"]}]})", graph),
+          std::format("the three-stage graph parses ({})", error).c_str());
+    std::string text = kast::generateKShader(graph, issues);
+    check(issues.size() == 1 && issues[0] == kast::GraphIssue{3, "input 'DIFFUSE_LIGHT': vec4 truncated to vec3", true} &&
+              contains(text, "void vertex()\n{\n    // @node 4 param\n    float n4_out = lift;\n    // @node 6 add\n"
+                             "    vec3 n6_out = vec3_splat(n4_out) + vec3(0.0, 0.1, 0.0);\n    // @node 1 output_vertex\n"
+                             "    VERTEX = n6_out;\n}\n") &&
+              contains(text, "    DIFFUSE_LIGHT += (n7_out).xyz;\n    SPECULAR_LIGHT += vec3_splat(n5_out);\n") &&
+              contains(text, "    // @node 5 time\n    float n5_out = TIME;\n    // @node 2 output_fragment\n    EMISSION = vec3_splat(n5_out);\n"),
+          std::format("vertex(), fragment() and light(); a node feeding two stages is in both; a truncation warns on the "
+                      "node:\n{}",
+                      text)
+              .c_str());
+    bool compiled = kast::parseShader(text, source, error) && source.hasVertex && source.hasLight;
+    for (const kast::ShaderStage stage : kast::shaderStages(source)) {
+        std::vector<uint8_t> bytecode;
+        compiled = compiled && compileShader(source, stage, bytecode, error) && !bytecode.empty();
+    }
+    check(compiled && kast::shaderStages(source).size() == kast::kShaderStageCount,
+          std::format("a three-stage graph compiles for every stage ({})", error).c_str());
+    std::vector<uint8_t> bytecode;
+    check(kast::parseShader(demo, source, error) && compileShader(source, kast::ShaderStage::Fragment, bytecode, error),
+          std::format("the demo graph compiles ({})", error).c_str());
+
+    // shaderc errors map to the node whose line failed: a bad line injected into node 10's code (line 28).
+    std::string bad = demo;
+    bad.replace(bad.find("n8_rgb * n9_out"), 15, "n8_rgb * undefinedThing");
+    check(kast::parseShader(bad, source, error) && !compileShader(source, kast::ShaderStage::Fragment, bytecode, error),
+          "the injected bad line fails to compile");
+    const std::string mapped = kast::mapGraphErrors(bad, error);
+    check(mapped.starts_with("node 10: line 28: error X3004: undeclared identifier 'undefinedThing'"),
+          std::format("a shaderc error names its node: {}", mapped).c_str());
+    check(kast::graphNodeAtLine(demo, 1) == 0 && kast::graphNodeAtLine(demo, 5) == 0 && kast::graphNodeAtLine(demo, 8) == 2 &&
+              kast::graphNodeAtLine(demo, 28) == 10 && kast::graphNodeAtLine(demo, 33) == 1 &&
+              kast::graphNodeAtLine(demo, 34) == 0,
+          "lines map to nodes: params and signatures to none, code to the marker above it");
+    check(kast::mapGraphErrors(demo, "line 2: x\ncpp: other") == "line 2: x\ncpp: other", "unmapped lines are kept");
+
+    // Validation errors, each on its node.
+    const auto issuesOf = [&](const std::string& json) {
+        issues.clear();
+        text.clear();
+        if (parse(json, graph))
+            text = kast::generateKShader(graph, issues);
+        return issues;
+    };
+    using Issues = std::vector<kast::GraphIssue>;
+    check(issuesOf(R"({"version": 1, "nodes": [{"id": 1, "type": "output_light"}, {"id": 5, "type": "uv"}],
+                      "links": [{"from": [5, "out"], "to": [1, "DIFFUSE_LIGHT"]}]})") ==
+                  Issues{{5, "UV is not available in light() (only in vertex(), fragment())"}} &&
+              text.empty(),
+          "a UV into the Light Output: an error on the UV node, no text");
+    check(issuesOf(R"({"version": 1, "nodes": [{"id": 1, "type": "output_vertex"}, {"id": 2, "type": "sample_texture"}],
+                      "links": [{"from": [2, "rgb"], "to": [1, "VERTEX"]}]})") ==
+              Issues{{2, "Sample Texture is not available in vertex() (only in fragment())"}, {2, "input 'texture' needs a link"}},
+          "Sample Texture in vertex() without a texture: two errors on it");
+    check(issuesOf(R"({"version": 1, "params": [{"name": "ALBEDO", "type": "float"}],
+                      "nodes": [{"id": 1, "type": "output_fragment"}, {"id": 8, "type": "param", "settings": {"param": "ALBEDO"}}],
+                      "links": [{"from": [8, "out"], "to": [1, "ALPHA"]}]})") ==
+              Issues{{8, "param 'ALBEDO' has the name of a built-in"}},
+          "a param named like a built-in: the error is on its Param node");
+    check(issuesOf(R"({"version": 1, "params": [{"name": "a", "type": "texture2D"}, {"name": "b", "type": "texture2D"},
+                      {"name": "c", "type": "texture2D"}, {"name": "d", "type": "texture2D"}, {"name": "e", "type": "texture2D"}],
+                      "nodes": [{"id": 1, "type": "output_fragment"}]})").size() == 1 &&
+              issues[0].node == 0 && issues[0].message.starts_with("too many texture2D params: at most 4"),
+          "five texture params: a graph-level error (no node uses the fifth)");
+    check(issuesOf(R"({"version": 1, "nodes": [{"id": 1, "type": "output_fragment"}, {"id": 2, "type": "param", "settings": {"param": "zz"}},
+                                {"id": 3, "type": "output_fragment"}],
+                      "links": [{"from": [2, "out"], "to": [1, "AO"]}]})") ==
+              Issues{{3, "a second Fragment Output: a graph has at most one"}, {2, "the graph has no param 'zz'"}},
+          "a missing param and a second output node are errors on their nodes");
+
+    // The library: a graph compiles like a .kshader; its errors name the file and node (or JSON path); edits reload.
+    const std::filesystem::path dir = looseTestDir("kast_shader_graph_check");
+    std::filesystem::create_directories(dir / "shaders");
+    writeFile(dir / "shaders/demo.kshadergraph", demoText);
+    writeFile(dir / "shaders/bad.kshadergraph", R"({"version": 1, "nodes": [{"id": 1, "type": "output_light"}, {"id": 5, "type": "uv"}],
+        "links": [{"from": [5, "out"], "to": [1, "DIFFUSE_LIGHT"]}]})");
+    writeFile(dir / "shaders/typo.kshadergraph", R"({"version": 1, "nodes": [], "links": [{"from": [1, "out"]}]})");
+    kast::ShaderLibrary library;
+    library.setRoot(dir);
+    library.setCompiler(compileShader);
+    const auto shader = library.get("shaders/demo.kshadergraph");
+    check(shader && shader->source.params.size() == 3 && !shader->stage(kast::ShaderStage::Fragment).empty() &&
+              countLogged("Compiled shader 'shaders/demo.kshadergraph' in ") == 1,
+          "the library compiles a .kshadergraph");
+    check(!library.get("shaders/bad.kshadergraph") && !library.get("shaders/typo.kshadergraph"), "broken graphs: null");
+    check(countLogged("[error] Shader 'shaders/bad.kshadergraph': node 5: UV is not available in light() (only in vertex(), "
+                      "fragment()); rendering it magenta") == 1 &&
+              countLogged("[error] Shader 'shaders/typo.kshadergraph': links[0].to: must be [node id, \"pin\"]") == 1,
+          "a broken graph logs its file and node (or JSON path)");
+    std::string edited = demoText;
+    edited.replace(edited.find("\"multiply\""), 10, "\"add\"");
+    rewrite(dir / "shaders/demo.kshadergraph", edited);
+    library.reloadChanged();
+    const auto changed = library.get("shaders/demo.kshadergraph");
+    check(changed && changed != shader && countLogged("Recompiled shader 'shaders/demo.kshadergraph'") == 1,
+          "an edited graph recompiles");
+
+    // Live update (the Shader Graph's unsaved edits): an override is read instead of the file until cleared; text() is
+    // exactly what compiles; a broken override keeps the last good shader; clearing goes back to the file.
+    const auto generated = [](const std::string& graphText) {
+        kast::ShaderGraph graph;
+        std::string why;
+        std::vector<kast::GraphIssue> issues;
+        return kast::parseShaderGraph(graphText, graph, why) ? kast::generateKShader(graph, issues) : std::string();
+    };
+    const std::string badGraph = R"({"version": 1, "nodes": [{"id": 1, "type": "output_fragment"}, {"id": 5, "type": "uv"},
+        {"id": 6, "type": "light_direction"}], "links": [{"from": [6, "out"], "to": [1, "EMISSION"]}]})";
+    library.setOverride("shaders/demo.kshadergraph", demoText);
+    const auto live = library.get("shaders/demo.kshadergraph");
+    std::string onDisk;
+    check(live && live != changed && library.text("shaders/demo.kshadergraph") == generated(demoText) &&
+              !generated(demoText).empty() && kast::readFile(dir / "shaders/demo.kshadergraph", onDisk) && onDisk == edited,
+          "an override compiles instead of the file (text() is its generated code); the file is untouched");
+    library.reloadChanged();
+    check(library.get("shaders/demo.kshadergraph") == live, "while overridden, the unchanged file doesn't reload it");
+    library.setOverride("shaders/demo.kshadergraph", badGraph);
+    const kast::ShaderLibrary::Status broken = library.status("shaders/demo.kshadergraph");
+    check(library.get("shaders/demo.kshadergraph") == live && broken.state == kast::ShaderLibrary::State::Failed &&
+              broken.hasShader && contains(broken.error, "node 6: ") && library.text("shaders/demo.kshadergraph").empty(),
+          std::format("a broken override fails on its node and keeps the last good shader ({})", broken.error).c_str());
+    library.setOverride("shaders/demo.kshadergraph", std::nullopt);
+    check(library.get("shaders/demo.kshadergraph") != live &&
+              library.text("shaders/demo.kshadergraph") == generated(edited) &&
+              library.status("shaders/demo.kshadergraph").state == kast::ShaderLibrary::State::Compiled,
+          "clearing the override reloads the file on disk");
+    // Async (the editor): the compile runs on the worker; an override set meanwhile waits for it, then loads.
+    library.setAsync(true);
+    library.setOverride("shaders/demo.kshadergraph", demoText);
+    const bool compiling = library.status("shaders/demo.kshadergraph").state == kast::ShaderLibrary::State::Compiling;
+    library.setOverride("shaders/demo.kshadergraph", badGraph); // must not wait for the running compile
+    library.wait();
+    check(compiling && library.status("shaders/demo.kshadergraph").state == kast::ShaderLibrary::State::Failed &&
+              contains(library.status("shaders/demo.kshadergraph").error, "node 6: ") &&
+              library.get("shaders/demo.kshadergraph") != nullptr,
+          "async: an override compiles on the worker; one set while it runs loads after it");
+    library.setAsync(false);
+
+    // Materials name graphs; their params are material properties (the Inspector's and Lua's path).
+    kast::shaders().setRoot(dir);
+    kast::shaders().setCompiler(compileShader);
+    kast::Material material;
+    check(kast::materialFromJson(nlohmann::ordered_json::parse(R"({"version": 3, "shader": "shaders/demo.kshadergraph"})"),
+                                 material, error),
+          ".mat \"shader\" takes a .kshadergraph");
+    const std::optional<nlohmann::ordered_json> speed = kast::materialProperty(material, "speed");
+    check(speed && *speed == 0.5 && kast::setMaterialProperty(material, "speed", 2.0, error) &&
+              *kast::materialProperty(material, "speed") == 2.0 && !kast::setMaterialProperty(material, "tint", 2.0, error),
+          std::format("a graph's params are material properties, checked against their types ({})", error).c_str());
+    kast::shaders().setRoot(testRoot()); // forget
+    removeTree(dir);
+}
+
+// The shader graph node library: every node type, in a tiny graph wired into each stage it may run in, generates, parses
+// and compiles with shaderc; stage, SCREEN/DEPTH and Custom Expression errors are on the right node.
+void checkShaderGraphNodes()
+{
+    std::string error;
+    std::vector<kast::GraphIssue> issues;
+    kast::ShaderSource source;
+    std::vector<uint8_t> bytecode;
+    const auto hasError = [](const std::vector<kast::GraphIssue>& list) {
+        return std::ranges::any_of(list, [](const kast::GraphIssue& i) { return !i.warning; });
+    };
+    int checked = 0;
+    for (const kast::GraphNodeDef& def : kast::shaderGraphNodeDefs()) {
+        if (def.output)
+            continue;
+        // Node 2 is the one under test. Texture inputs take the "tex" param (node 3), dynamic ones a vec3 constant;
+        // the rest keep their fallbacks. Its outputs are summed (add nodes from 10) into each stage's output node;
+        // a texture output goes through a Custom Expression (node 4) sampling it.
+        kast::ShaderGraph graph;
+        graph.params = {{.name = "amount", .type = kast::ShaderParamType::Float, .value = {0.5f}},
+                        {.name = "tex", .type = kast::ShaderParamType::Texture2D}};
+        kast::GraphNode node{.id = 2, .type = std::string(def.type)};
+        for (const kast::GraphSettingDef& setting : def.settings)
+            node.settings[std::string(setting.name)] =
+                setting.count ? nlohmann::ordered_json(std::vector<float>(static_cast<size_t>(setting.count), 0.5f))
+                              : nlohmann::ordered_json(std::string(setting.fallback));
+        if (def.type == "param")
+            node.settings["param"] = "amount";
+        if (def.type == kast::kCustomExpression) {
+            node.settings["inputs"] = "vec3 a, float b, texture2D t";
+            node.settings["outputs"] = "vec3 result, float c";
+            node.settings["code"] = "result = a * b;\nc = b + texture2DLod(t, vec2_splat(0.5), 0.0).r;";
+        }
+        graph.nodes.push_back(node);
+        graph.nodes.push_back({.id = 3, .type = "param", .settings = {{"param", "tex"}}});
+        const kast::GraphNodeDef& pins = *kast::graphNodeDef(graph.nodes[0]);
+        for (const kast::GraphPinDef& pin : pins.inputs) {
+            if (pin.type == kast::PinType::Texture2D)
+                graph.links.push_back({{3, "out"}, {2, std::string(pin.name)}});
+            else if (pin.type == kast::PinType::Dynamic)
+                graph.nodes[0].inputs[std::string(pin.name)] = {0.5f, 0.25f, 0.75f};
+            else if (pin.fallback.empty()) // a required number: a constant of its width
+                graph.nodes[0].inputs[std::string(pin.name)].assign(static_cast<size_t>(pin.type) + 1, 0.5f);
+        }
+        std::optional<kast::GraphPin> sum;
+        int next = 10;
+        for (const auto& [pin, code] : pins.outputs) {
+            kast::GraphPin from{2, std::string(pin.name)};
+            if (kast::outputPinType(graph, from) == kast::PinType::Texture2D) {
+                graph.nodes.push_back({.id = 4, .type = std::string(kast::kCustomExpression),
+                                       .settings = {{"inputs", "texture2D t"}, {"outputs", "vec4 rgba"},
+                                                    {"code", "rgba = texture2DLod(t, vec2_splat(0.5), 0.0);"}}});
+                graph.links.push_back({from, {4, "t"}});
+                from = {4, "rgba"};
+            }
+            if (sum) {
+                graph.nodes.push_back({.id = next, .type = "add"});
+                graph.links.push_back({*sum, {next, "a"}});
+                graph.links.push_back({from, {next, "b"}});
+                from = {next++, "out"};
+            }
+            sum = from;
+        }
+        for (const auto& [stage, type, pin] : {std::tuple{kast::kStageVertex, "output_vertex", "VERTEX"},
+                                               {kast::kStageFragment, "output_fragment", "EMISSION"},
+                                               {kast::kStageLight, "output_light", "DIFFUSE_LIGHT"}}) {
+            if (!(def.stages & stage))
+                continue;
+            const int id = 100 + static_cast<int>(stage);
+            graph.nodes.push_back({.id = id, .type = type});
+            graph.links.push_back({*sum, {id, pin}});
+        }
+        kast::ShaderGraph parsed;
+        const bool strict = kast::shaderGraphFromJson(kast::shaderGraphToJson(graph), parsed, error);
+        const std::string text = strict ? kast::generateKShader(parsed, issues) : "";
+        std::string why = !strict ? error : hasError(issues) ? issues[0].message : "";
+        bool ok = strict && !hasError(issues) && kast::parseShader(text, source, why);
+        for (const kast::ShaderStage stage : {kast::ShaderStage::Fragment, kast::ShaderStage::Vertex})
+            if (ok && (stage == kast::ShaderStage::Vertex ? def.stages & kast::kStageVertex
+                                                          : def.stages & (kast::kStageFragment | kast::kStageLight))) {
+                ok = compileShader(source, stage, bytecode, why) && !bytecode.empty();
+                why = kast::mapGraphErrors(text, why);
+            }
+        check(ok, std::format("node '{}' generates, parses and compiles in every stage it allows ({}):\n{}", def.type,
+                              why, text)
+                      .c_str());
+        checked += ok;
+    }
+    check(checked > 60, std::format("{} node types checked", checked).c_str());
+
+    const auto issuesOf = [&](const std::string& json, kast::ShaderGraph& graph) {
+        issues.clear();
+        if (!kast::parseShaderGraph(json, graph, error))
+            return std::vector<kast::GraphIssue>{{-1, error}};
+        kast::generateKShader(graph, issues);
+        return issues;
+    };
+    using Issues = std::vector<kast::GraphIssue>;
+    kast::ShaderGraph graph;
+    // Stage availability: the error is on the node that can't run there.
+    check(issuesOf(R"({"version": 1, "nodes": [{"id": 1, "type": "output_fragment"}, {"id": 7, "type": "light_direction"}],
+                      "links": [{"from": [7, "out"], "to": [1, "ALBEDO"]}]})", graph) ==
+              Issues{{7, "Light Direction is not available in fragment() (only in light())"}},
+          "LIGHT_DIRECTION into the Fragment Output: an error on the Light Direction node");
+    check(issuesOf(R"({"version": 1, "nodes": [{"id": 1, "type": "output_vertex"}, {"id": 3, "type": "scene_color"}],
+                      "links": [{"from": [3, "rgb"], "to": [1, "VERTEX"]}]})", graph) ==
+              Issues{{3, "Scene Color is not available in vertex() (only in fragment())"}},
+          "Scene Color into the Vertex Output: an error on the Scene Color node");
+    check(issuesOf(R"({"version": 1, "nodes": [{"id": 1, "type": "output_vertex"}, {"id": 2, "type": "time"},
+                      {"id": 5, "type": "normal"}, {"id": 6, "type": "add"}],
+                      "links": [{"from": [2, "out"], "to": [6, "a"]}, {"from": [5, "out"], "to": [6, "b"]},
+                                {"from": [6, "out"], "to": [1, "VERTEX"]}]})", graph) ==
+              Issues{{5, "Normal (World) is not available in vertex() (only in fragment(), light())"}},
+          "a fragment-only input two links upstream of the Vertex Output: the error is on it, not on the add");
+
+    // SCREEN/DEPTH: Scene Color and Depth Fade only on blend and additive materials, with the node in the message.
+    const std::string screenGraph = R"({"version": 1, "nodes": [{"id": 1, "type": "output_fragment"},
+        {"id": 4, "type": "scene_color"}, {"id": 6, "type": "depth_fade"}],
+        "links": [{"from": [4, "rgb"], "to": [1, "ALBEDO"]}, {"from": [6, "fade"], "to": [1, "ALPHA"]}]})";
+    const std::string depthGraph = R"({"version": 1, "nodes": [{"id": 1, "type": "output_fragment"}, {"id": 6, "type": "depth_fade"}],
+        "links": [{"from": [6, "fade"], "to": [1, "ALPHA"]}]})";
+    for (const auto& [json, expected] : {std::pair{screenGraph, "node 4 (Scene Color) samples SCREEN_TEXTURE, which is"},
+                                         std::pair{depthGraph, "node 6 (Depth Fade) samples DEPTH_TEXTURE, which is"}}) {
+        std::string text;
+        const bool generated = kast::parseShaderGraph(json, graph, error) && !(text = kast::generateKShader(graph, issues)).empty() &&
+                               kast::parseShader(text, source, error);
+        kast::Material material;
+        std::string opaque, mask, blend, additive;
+        material.alphaMode = kast::AlphaMode::Opaque;
+        const bool opaqueRejected = !kast::checkShaderAlphaMode(material, source, opaque);
+        material.alphaMode = kast::AlphaMode::Mask;
+        const bool maskRejected = !kast::checkShaderAlphaMode(material, source, mask);
+        material.alphaMode = kast::AlphaMode::Blend;
+        const bool blendOk = kast::checkShaderAlphaMode(material, source, blend);
+        material.alphaMode = kast::AlphaMode::Additive;
+        const bool additiveOk = kast::checkShaderAlphaMode(material, source, additive);
+        check(generated && opaqueRejected && maskRejected && blendOk && additiveOk &&
+                  opaque == std::string(expected) + " only for blend and additive materials (drawn after the opaque scene "
+                                                    "it copies); this material's alphaMode is opaque" &&
+                  mask.starts_with(expected) && mask.ends_with("alphaMode is mask"),
+              std::format("a graph sampling the screen is rejected on opaque and mask materials, naming the node: {} / {}",
+                          opaque, mask)
+                  .c_str());
+    }
+
+    // Custom Expression: its pins come from its settings, checked strictly; its code compiles inside its node marker,
+    // so a bad body is a shaderc error on that node.
+    for (const auto& [settings, expected] : std::initializer_list<std::pair<const char*, const char*>>{
+             {R"("inputs": "vec5 a")", "nodes[1].settings.inputs: 'vec5' is not a type"},
+             {R"("inputs": "vec3")", "nodes[1].settings.inputs: 'vec3' is not '<type> <name>'"},
+             {R"("inputs": "float a,")", "nodes[1].settings.inputs: '' is not '<type> <name>'"},
+             {R"("inputs": "float UV")", "nodes[1].settings.inputs: 'UV' is a reserved name"},
+             {R"("inputs": "float n4_x")", "nodes[1].settings.inputs: 'n4_x' is a reserved name"},
+             {R"("inputs": "float a", "outputs": "vec3 a")", "nodes[1].settings.outputs: 'a' is already a pin of this node"},
+             {R"("outputs": "texture2D t")", "nodes[1].settings.outputs: 'texture2D' is not a type"}}) {
+        const auto got = issuesOf(std::format(R"({{"version": 1, "nodes": [{{"id": 1, "type": "output_fragment"}},
+            {{"id": 4, "type": "custom_expression", "settings": {{{}}}}}]}})", settings), graph);
+        check(got.size() == 1 && got[0].node == -1 && got[0].message.starts_with(expected),
+              std::format("a bad Custom Expression signature is rejected: {} (got: {})", expected,
+                          got.empty() ? "" : got[0].message)
+                  .c_str());
+    }
+    const Issues noise = issuesOf(R"({"version": 1, "nodes": [{"id": 4, "type": "noise", "settings": {"kind": "perlin"}}]})", graph);
+    check(issuesOf(R"({"version": 1, "nodes": [{"id": 4, "type": "swizzle", "settings": {"mask": "xq"}}]})", graph) ==
+                  Issues{{-1, "nodes[0].settings.mask: must be 1 to 4 of x, y, z, w (or of r, g, b, a), e.g. \"zyx\""}} &&
+              noise.size() == 1 && noise[0].message.starts_with("nodes[0].settings.kind: must be \"value_2d\""),
+          "a bad swizzle mask or noise kind is rejected with its JSON path");
+    graph.nodes = {{.id = 1, .type = "output_fragment"}, {.id = 4, .type = "swizzle", .settings = {{"mask", "rgbaa"}}}};
+    graph.links = {{{4, "out"}, {1, "ALBEDO"}}};
+    graph.params.clear();
+    check(kast::generateKShader(graph, issues).empty() && !issues.empty() && issues[0].node == 4 &&
+              issues[0].message.starts_with("mask must be 1 to 4"),
+          "a graph built in memory with a bad mask: the error is on its node");
+    check(issuesOf(R"({"version": 1, "params": [{"name": "amount", "type": "float"}],
+                      "nodes": [{"id": 1, "type": "output_fragment"},
+                                {"id": 4, "type": "custom_expression", "settings": {"outputs": "float amount"}}],
+                      "links": [{"from": [4, "amount"], "to": [1, "ALPHA"]}]})", graph) ==
+              Issues{{4, "pin 'amount' has the name of a param"}},
+          "a Custom Expression pin named like a param (a macro) is an error on its node");
+
+    const std::string custom = R"({"version": 1, "params": [{"name": "amount", "type": "float", "default": 0.5}],
+        "nodes": [{"id": 1, "type": "output_fragment"}, {"id": 2, "type": "param", "settings": {"param": "amount"}},
+                  {"id": 7, "type": "custom_expression",
+                   "settings": {"inputs": "float x", "outputs": "vec3 color", "code": "color = vec3(x, CODE, 0.0);"}}],
+        "links": [{"from": [2, "out"], "to": [7, "x"]}, {"from": [7, "color"], "to": [1, "ALBEDO"]}]})";
+    const auto withCode = [&](std::string_view code) {
+        std::string json = custom;
+        json.replace(json.find("CODE"), 4, code);
+        return json;
+    };
+    std::string text;
+    check(issuesOf(withCode("amount * 2.0"), graph).empty() && !(text = kast::generateKShader(graph, issues)).empty() &&
+              contains(text, "    // @node 7 custom_expression\n    vec3 n7_color;\n    {\n        float x = n2_out;\n"
+                             "        vec3 color = vec3_splat(0.0);\n        color = vec3(x, amount * 2.0, 0.0);\n"
+                             "        n7_color = color;\n    }\n") &&
+              kast::parseShader(text, source, error) && compileShader(source, kast::ShaderStage::Fragment, bytecode, error),
+          std::format("a Custom Expression's code is emitted in its own block after its marker and compiles ({}):\n{}",
+                      error, text)
+              .c_str());
+    check(issuesOf(withCode("undefinedThing"), graph).empty() && !(text = kast::generateKShader(graph, issues)).empty() &&
+              kast::parseShader(text, source, error) && !compileShader(source, kast::ShaderStage::Fragment, bytecode, error),
+          "a Custom Expression using an undeclared name fails to compile");
+    const std::string mapped = kast::mapGraphErrors(text, error);
+    check(mapped.starts_with("node 7: line ") && contains(mapped, "undeclared identifier 'undefinedThing'"),
+          std::format("its shaderc error names the Custom Expression's node: {}", mapped).c_str());
+}
+
+// The Shader Graph panels' edit API (ShaderGraphDoc): every canvas and Graph Inspector edit is one step that undo turns
+// back into the exact JSON before it (and redo into the JSON after); refused edits change nothing; the file follows
+// Save and disk changes; "New Shader Graph" compiles.
+void checkShaderGraphEdits()
+{
+    std::string error;
+    const std::filesystem::path dir = testRoot() / "kast_graph_edit";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path file = dir / "edit.kshadergraph";
+    writeFile(file, R"({"version": 1,
+        "params": [{"name": "speed", "type": "float", "default": 2.0}, {"name": "pattern", "type": "texture2D"}],
+        "nodes": [{"id": 1, "type": "output_fragment", "position": [600.0, 0.0]},
+                  {"id": 2, "type": "uv", "position": [0.0, 0.0]},
+                  {"id": 3, "type": "time", "position": [0.0, 100.0]},
+                  {"id": 4, "type": "param", "position": [0.0, 200.0], "settings": {"param": "speed"}},
+                  {"id": 5, "type": "multiply", "position": [200.0, 100.0]},
+                  {"id": 6, "type": "param", "position": [0.0, 300.0], "settings": {"param": "pattern"}},
+                  {"id": 7, "type": "constant_float", "position": [200.0, 300.0], "settings": {"value": 0.5}},
+                  {"id": 8, "type": "sample_texture", "position": [400.0, 200.0]}],
+        "links": [{"from": [3, "out"], "to": [5, "a"]}, {"from": [4, "out"], "to": [5, "b"]},
+                  {"from": [5, "out"], "to": [1, "ROUGHNESS"]}, {"from": [6, "out"], "to": [8, "texture"]},
+                  {"from": [8, "rgb"], "to": [1, "ALBEDO"]}]})");
+    ShaderGraphDoc doc;
+    check(doc.open(file, error) && !doc.dirty() && !doc.history().canUndo(), std::format("a graph opens ({})", error).c_str());
+    const auto text = [&] { return kast::shaderGraphText(doc.graph()); };
+    const auto node = [&](int id) { return std::ranges::find(doc.graph().nodes, id, &kast::GraphNode::id); };
+    const auto linked = [&](kast::GraphPin from, kast::GraphPin to) {
+        return std::ranges::any_of(doc.graph().links, [&](const kast::GraphLink& l) { return l.from == from && l.to == to; });
+    };
+    // Runs edit (true if it did something), then checks it was one step that undo and redo replay exactly.
+    const auto step = [&](const char* what, const std::function<bool()>& edit) {
+        const std::string before = text();
+        const size_t steps = doc.history().size();
+        const bool done = edit();
+        const std::string after = text();
+        kast::ShaderGraph reread;
+        check(done && after != before && doc.history().size() == steps + 1 && doc.dirty() &&
+                  kast::parseShaderGraph(after, reread, error) && kast::shaderGraphText(reread) == after,
+              std::format("{}: one step, and the graph still parses ({})", what, error).c_str());
+        doc.undo();
+        check(text() == before, std::format("{}: undo restores the exact JSON before it", what).c_str());
+        doc.redo();
+        check(text() == after, std::format("{}: redo restores the exact JSON after it", what).c_str());
+    };
+    // A refused edit: false + its message, nothing changed, no step.
+    const auto refused = [&](const char* what, const std::function<bool()>& edit, const std::string& message) {
+        const std::string before = text();
+        const size_t steps = doc.history().size();
+        error.clear();
+        check(!edit() && text() == before && doc.history().size() == steps && contains(error, message),
+              std::format("{} is refused: '{}'", what, error).c_str());
+    };
+
+    int added = 0;
+    step("add", [&] { return (added = doc.addNode("add", {300.0f, 400.0f})) == 9; });
+    check(node(added)->position == std::array{300.0f, 400.0f} && node(added)->settings.empty(), "add: at its position");
+    step("add a Param node with its setting", [&] { return doc.addNode("param", {0.0f, 400.0f}, {{"param", "speed"}}) == 10; });
+    check(doc.addNode("blur", {0.0f, 0.0f}, {}, &error) == 0 && contains(error, "unknown node type"), "an unknown type adds nothing");
+    step("link", [&] { return doc.link({2, "out"}, {added, "a"}, error); });
+    check(linked({2, "out"}, {added, "a"}), "link: there");
+    step("relink replaces the input's link", [&] { return doc.link({7, "out"}, {added, "a"}, error); });
+    check(linked({7, "out"}, {added, "a"}) && !linked({2, "out"}, {added, "a"}), "relink: the old link went");
+    refused("a texture into a number", [&] { return doc.link({6, "out"}, {added, "b"}, error); }, "texture2D can't go into");
+    refused("a number into a texture", [&] { return doc.link({7, "out"}, {8, "texture"}, error); }, "can't go into a texture2D");
+    refused("pins that don't exist", [&] { return doc.link({1, "ALBEDO"}, {5, "a"}, error); }, "no such pins");
+    step("link into a later node", [&] { return doc.link({added, "out"}, {5, "a"}, error); });
+    refused("a link closing a cycle", [&] { return doc.link({5, "out"}, {added, "b"}, error); }, "cycle");
+    step("unlink", [&] { return doc.unlink({5, "a"}); });
+    check(!doc.unlink({5, "a"}), "unlinking a free input does nothing");
+    step("move", [&] { return doc.move({{added, {320.0f, 420.0f}}, {7, {210.0f, 310.0f}}}); });
+    check(node(added)->position == std::array{320.0f, 420.0f} && node(7)->position == std::array{210.0f, 310.0f},
+          "move: both nodes where they went");
+    step("a drag is one step", [&] {
+        doc.beginGesture("Move");
+        for (float x = 0.0f; x < 5.0f; x += 1.0f)
+            doc.move({{added, {320.0f + x, 420.0f}}});
+        doc.endGesture();
+        return node(added)->position[0] == 324.0f;
+    });
+    step("a setting edit from activation to release is one step", [&] {
+        doc.beginGesture("Edit value");
+        const bool ok = doc.setSetting(7, "value", 0.6, error) && doc.setSetting(7, "value", 0.75, error);
+        doc.endGesture();
+        return ok && node(7)->settings.at("value") == 0.75;
+    });
+    step("add a Swizzle", [&] { return doc.addNode("swizzle", {0.0f, 500.0f}) == 11; });
+    step("a string setting", [&] { return doc.setSetting(11, "mask", "zyx", error); });
+    refused("a bad swizzle mask", [&] { return doc.setSetting(11, "mask", "xq", error); }, "mask: must be 1 to 4");
+    refused("an unknown setting", [&] { return doc.setSetting(7, "colour", 1.0, error); }, "no setting 'colour'");
+    step("a constant input", [&] { return doc.setInput(added, "b", {0.25f, 0.5f, 1.0f}, error); });
+    refused("a constant too wide", [&] { return doc.setInput(added, "b", {1, 2, 3, 4, 5}, error); }, "nodes[");
+    step("add a Custom Expression", [&] {
+        return doc.addNode(kast::kCustomExpression, {0.0f, 600.0f},
+                           {{"inputs", "float x"}, {"outputs", "float y"}, {"code", "y = x * 2.0;"}}) == 12;
+    });
+    step("link it", [&] { return doc.link({7, "out"}, {12, "x"}, error); });
+    step("a Custom Expression's pins: links to pins it lost go", [&] { return doc.setSetting(12, "inputs", "vec3 z", error); });
+    check(!linked({7, "out"}, {12, "x"}), "its old input's link went");
+    refused("a malformed Custom Expression pin list", [&] { return doc.setSetting(12, "inputs", "vec5 a", error); }, "inputs:");
+    std::vector<int> pasted;
+    const std::string clip = doc.copy({3, 4, 5});
+    step("paste: fresh ids, the links between them kept, top-left at the cursor", [&] {
+        pasted = doc.paste(clip, {1000.0f, 1000.0f}, error);
+        return pasted == std::vector{13, 14, 15};
+    });
+    check(linked({14, "out"}, {15, "b"}) && !linked({15, "out"}, {1, "ROUGHNESS"}) &&
+              node(13)->position == std::array{1000.0f, 1000.0f} && node(15)->position == std::array{1200.0f, 1000.0f} &&
+              node(14)->settings.at("param") == "speed",
+          "paste: internal links on the new ids, links out of the copy dropped, positions offset");
+    check(doc.paste("not a graph", {0.0f, 0.0f}, error).empty() && contains(error, "no shader graph nodes"),
+          "pasting text that isn't graph nodes adds nothing");
+    step("delete: the node and its links", [&] { return doc.remove({5}); });
+    check(node(5) == doc.graph().nodes.end() &&
+              std::ranges::none_of(doc.graph().links, [](const kast::GraphLink& l) { return l.from.node == 5 || l.to.node == 5; }),
+          "delete: no node 5 or links to it");
+    step("add a param", [&] { return doc.addParam(kast::ShaderParamType::Color) == 2 && doc.graph().params[2].name == "param"; });
+    kast::ShaderParam renamed = doc.graph().params[0];
+    renamed.name = "rate";
+    step("rename a param: its Param nodes follow", [&] { return doc.setParam(0, renamed, error); });
+    check(node(4)->settings.at("param") == "rate" && node(14)->settings.at("param") == "rate", "rename: Param nodes renamed");
+    renamed.name = "pattern";
+    refused("a param named like another", [&] { return doc.setParam(0, renamed, error); }, "already is a param");
+    renamed.name = "2fast";
+    refused("a param name that isn't an identifier", [&] { return doc.setParam(0, renamed, error); }, "letters, digits");
+    step("link the float Param", [&] { return doc.link({4, "out"}, {added, "a"}, error); });
+    kast::ShaderParam texture = doc.graph().params[0];
+    texture.type = kast::ShaderParamType::Texture2D;
+    step("retype a param: links its type can't make go", [&] { return doc.setParam(0, texture, error); });
+    check(!linked({4, "out"}, {added, "a"}), "retype: the float link from the now texture Param went");
+    step("remove a param", [&] { return doc.removeParam(2); });
+    step("add a comment", [&] { return doc.addComment({"Scroll", {-20.0f, -40.0f, 400.0f, 300.0f}}) == 0; });
+    step("resize a comment", [&] { return doc.setComment(0, {"Scroll UV", {-20.0f, -40.0f, 500.0f, 320.0f}}); });
+    step("move a comment with its nodes", [&] { return doc.move({{2, {10.0f, 0.0f}}}, {{0, {-10.0f, -40.0f, 500.0f, 320.0f}}}); });
+    step("delete a comment", [&] { return doc.remove({}, {}, {0}); });
+
+    // File: Save clears the dirty flag and writes the graph; disk changes reload when clean, else are a conflict.
+    check(doc.dirty() && doc.save(error) && !doc.dirty(), std::format("Save ({})", error).c_str());
+    std::string saved;
+    check(kast::readFile(file, saved) && saved == text(), "Save writes the graph's JSON");
+    doc.undo();
+    check(doc.dirty(), "undo past the save point: dirty");
+    doc.redo();
+    check(!doc.dirty(), "redo back to it: clean");
+    check(doc.poll() == ShaderGraphDoc::DiskChange::None, "an unchanged file: nothing to do");
+    kast::ShaderGraph changed;
+    kast::parseShaderGraph(saved, changed, error);
+    changed.nodes.erase(changed.nodes.begin()); // node 1, removed by another program
+    std::erase_if(changed.links, [](const kast::GraphLink& l) { return l.to.node == 1 || l.from.node == 1; });
+    rewrite(file, kast::shaderGraphText(changed));
+    check(doc.poll() == ShaderGraphDoc::DiskChange::Reloaded && node(1) == doc.graph().nodes.end() &&
+              !doc.history().canUndo() && !doc.dirty(),
+          "changed on disk while clean: reloaded, history cleared");
+    doc.addNode("uv", {0.0f, 0.0f});
+    rewrite(file, saved);
+    check(doc.poll() == ShaderGraphDoc::DiskChange::Conflict && doc.dirty() && node(1) == doc.graph().nodes.end(),
+          "changed on disk while dirty: a conflict, the edits kept");
+    check(doc.poll() == ShaderGraphDoc::DiskChange::None, "the conflict is reported once per change");
+    check(doc.open(file, error) && !doc.dirty() && node(1) != doc.graph().nodes.end() && !doc.history().canUndo(),
+          "Reload: the file's graph, history cleared");
+
+    // "New Shader Graph": the starter generates with no issue, parses and compiles.
+    std::filesystem::path created;
+    std::string kshader;
+    std::vector<std::string> warnings;
+    kast::ShaderSource source;
+    std::vector<uint8_t> bytecode;
+    const bool compiled = writeNewShaderGraph(dir, created, error) && created.filename() == "new_shader_graph.kshadergraph" &&
+                          kast::readFile(created, kshader) &&
+                          kast::shaderFileText(created.string(), kshader, error, &warnings) && warnings.empty() &&
+                          kast::parseShader(kshader, source, error) && source.params.size() == 1 &&
+                          source.params[0].name == "tint" &&
+                          compileShader(source, kast::ShaderStage::Fragment, bytecode, error) && !bytecode.empty();
+    check(compiled, std::format("New Shader Graph writes a graph that compiles, without warnings ({}{})", error,
+                                warnings.empty() ? "" : warnings[0]).c_str());
+    std::filesystem::path second;
+    check(writeNewShaderGraph(dir, second, error) && second.filename() == "new_shader_graph_2.kshadergraph",
+          "a second New Shader Graph gets the next free name");
     removeTree(dir);
 }
 
@@ -7015,6 +7816,49 @@ end })");
     std::string text;
     check(registry.view<kast::MaterialInstance>().empty() && kast::readFile(dir / "materials/p.mat", text) && text == mat,
           "Stop resets the params; the .mat is untouched");
+
+    // The same for a .kshadergraph's params.
+    writeFile(dir / "shaders/g.kshadergraph", R"({"version": 1, "params": [{"name": "amount", "type": "float", "default": 0.5},
+        {"name": "tint", "type": "color", "default": [1, 1, 1, 1]}],
+        "nodes": [{"id": 1, "type": "output_fragment"}, {"id": 2, "type": "param", "settings": {"param": "amount"}},
+                  {"id": 3, "type": "param", "settings": {"param": "tint"}}, {"id": 4, "type": "swizzle", "settings": {"mask": "rgb"}}],
+        "links": [{"from": [2, "out"], "to": [1, "ROUGHNESS"]}, {"from": [3, "out"], "to": [4, "v"]},
+                  {"from": [4, "out"], "to": [1, "ALBEDO"]}]})");
+    const std::string graphMat = R"({"version": 3, "shader": "shaders/g.kshadergraph", "params": {"amount": 0.75}})";
+    writeFile(dir / "materials/g.mat", graphMat);
+    writeFile(dir / "scripts/graph_params.lua", R"(local done = false
+return { update = function(dt)
+    if done then return end
+    done = true
+    local e
+    for id in kast.query("MeshRenderer") do e = id end
+    assert(kast.getMaterialProperty(e, "amount") == 0.75, "get a graph's float param from the .mat")
+    assert(kast.getMaterialProperty(e, "tint")[2] == 1, "get a graph param's default")
+    kast.setMaterialProperty(e, "amount", 0.25)
+    kast.setMaterialProperty(e, "tint", {0, 0, 1, 1})
+    assert(kast.getMaterialProperty(e, "amount") == 0.25 and kast.getMaterialProperty(e, "tint")[3] == 1,
+           "set a graph's params")
+    local ok, err = pcall(function() kast.setMaterialProperty(e, "amount", {1, 2}) end)
+    assert(not ok and string.find(err, "param 'amount' is a float", 1, true), "a graph param's type is checked")
+end })");
+    Document graphDoc;
+    graphDoc.path = (dir / "graph_params.scene").string();
+    graphDoc.project = kast::Project{.root = dir, .name = "Params"};
+    entt::registry& graphRegistry = graphDoc.scene.registry();
+    graphRegistry.emplace<kast::MeshRenderer>(graphDoc.scene.create("G"), kast::Primitive::Cube, "materials/g.mat");
+    graphDoc.scene.systems = {"scripts/graph_params.lua"};
+    kast::shaders().setRoot({});
+    startPlay(graphDoc);
+    updatePlay(graphDoc, 0.1f);
+    checkOk(graphDoc.lua, 0, "kast.get/setMaterialProperty on .kshadergraph params: Lua asserts pass");
+    const auto* graphInstance = graphRegistry.try_get<kast::MaterialInstance>(named(graphDoc.scene, "G"));
+    check(graphInstance && graphInstance->material.params.at("amount").numbers == std::vector<float>{0.25f} &&
+              graphInstance->material.params.at("tint").numbers == std::vector<float>{0, 0, 1, 1},
+          "the instance holds the Lua graph param values");
+    stopPlay(graphDoc);
+    check(graphRegistry.view<kast::MaterialInstance>().empty() && kast::readFile(dir / "materials/g.mat", text) &&
+              text == graphMat,
+          "Stop resets the graph params; the .mat is untouched");
 
     // Inspector edits: each a step that saves the .mat; undo / redo save the version before / after.
     UndoStack history;
@@ -10893,6 +11737,8 @@ int main(int argc, char** argv)
     kast::Audio::setDefaultOutput(kast::Audio::Output::Offline); // no sound from the checks; render() pulls the mix
     if (argc >= 3 && std::string_view(argv[1]) == "--probe-png")
         return probePng(argc, argv);
+    if ((argc == 5 || argc == 6) && std::string_view(argv[1]) == "--diff-png")
+        return diffPng(argc, argv);
     if (argc == 2 && std::string_view(argv[1]) == "--bench-physics")
         return benchPhysics();
     if (argc == 2 && std::string_view(argv[1]) == "--undo") { // only the undo / redo checks

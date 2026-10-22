@@ -52,7 +52,7 @@ struct Material {
     float alphaCutoff = 0.5f; // 0..1, mask only
     CullMode cullMode = CullMode::Back;
     bool unlit = false; // base color + emissive only: no lights, shadows or ambient (still fogged, still casts)
-    std::string shader; // project-relative .kshader whose fragment() runs in the mesh shader; empty = the built-in one
+    std::string shader; // project-relative .kshader (or .kshadergraph) run in the mesh shader; empty = the built-in one
     std::map<std::string, ShaderParamValue> params; // the shader's param values by name; missing ones: its defaults
 };
 

@@ -1,6 +1,7 @@
 #include "assets.h"
 
 #include "build.h"
+#include "shader_graph_doc.h"
 
 #include <files.h>
 #include <log.h>
@@ -260,6 +261,15 @@ void fragment()
 //     VERTEX += NORMAL * 0.05 * sin(TIME * pulse_speed + VERTEX.y * 4.0);
 // }
 )", error);
+}
+
+bool writeNewShaderGraph(const fs::path& dir, fs::path& file, std::string& error)
+{
+    std::string name = "new_shader_graph.kshadergraph";
+    for (int n = 2; assetNameTaken(dir, fromUtf8(name)); ++n)
+        name = std::format("new_shader_graph_{}.kshadergraph", n);
+    file = dir / fromUtf8(name); // ponytail: free when checked, not locked until written
+    return writeTextFile(file, kast::shaderGraphText(starterShaderGraph()), error);
 }
 
 std::vector<std::string> remapMaterialPaths(const fs::path& root, const std::string& from, const std::string& to)
