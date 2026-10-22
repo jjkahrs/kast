@@ -57,6 +57,13 @@ GameServer::GameServer(asio::io_context& io, const Config& cfg, const world::Map
       tickTimer_(io), tickPeriod_(Millis(1000 / cfg.tickHz)), windowTicks_(std::make_unique<TickStats>()),
       totalTicks_(std::make_unique<TickStats>()), windowLag_(std::make_unique<TickStats>()),
       totalLag_(std::make_unique<TickStats>()), shutdownTimer_(io) {
+    if (!cfg.adminSecret.empty()) {
+        net::SessionLimits adminLimits = limits_;
+        adminLimits.simLatency = adminLimits.simJitter = Millis(0); // the lag simulator is for game clients
+        adminPort_ = std::make_unique<AdminPort>(
+            io, tls, adminLimits, AdminPort::Options{cfg.adminHost, cfg.adminPort, cfg.adminSecret},
+            [this] { return admin_online(); }, [this](const proto::AdminKick& k) { return admin_kick(k); });
+    }
     if (cfg.chatLinkHost.empty()) return;
     // The dev setup's chat service presents this server's own certificate (they share TLS_DEV_CERT_DIR).
     const std::string ownCert = cfg.tlsCertFile.empty() ? cfg.tlsDevCertDir + "/server.crt" : cfg.tlsCertFile;
@@ -81,6 +88,8 @@ void GameServer::start() {
     acceptor_.listen();
     log::info("listening", {{"host", cfg_.host}, {"port", cfg_.port}, {"realm", cfg_.realmId}, {"tickHz", cfg_.tickHz}});
     accept();
+    if (adminPort_) adminPort_->start();
+    else log::info("admin port off: WORLD_ADMIN_SECRET is not set");
     if (chatLink_) chatLink_->start();
     nextTick_ = SteadyClock::now();
     windowStart_ = nextTick_;
@@ -101,6 +110,7 @@ void GameServer::accept() {
                 session->start(proto::Code::server_full);
             } else {
                 clients_[id].session = session;
+                clients_[id].connectedAt = std::chrono::system_clock::now();
                 session->start();
             }
         }
@@ -316,6 +326,34 @@ void GameServer::report_maps() {
     }
 }
 
+std::vector<proto::AdminOnlineEntry> GameServer::admin_online() const {
+    std::vector<proto::AdminOnlineEntry> out;
+    for (const auto& [id, c] : clients_) {
+        if ((c.phase != Phase::lobby && c.phase != Phase::world) || c.session->closing()) continue;
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(c.connectedAt.time_since_epoch()).count();
+        if (c.phase == Phase::world)
+            out.push_back({c.accountId, c.charId, c.charName, world_.map_of(c.entity), id, static_cast<uint64_t>(ms)});
+        else
+            out.push_back({c.accountId, 0, "", 0, id, static_cast<uint64_t>(ms)});
+    }
+    return out;
+}
+
+// Like the duplicate-login kick: the character leaves the world (its save is queued), then the session is told why.
+uint32_t GameServer::admin_kick(const proto::AdminKick& k) {
+    std::vector<std::shared_ptr<net::Session>> kicked;
+    for (auto& [id, c] : clients_) {
+        if (c.phase != Phase::lobby && c.phase != Phase::world) continue;
+        if (c.session->closing()) continue;
+        if (k.accountId ? c.accountId != k.accountId : (c.phase != Phase::world || c.charId != k.charId)) continue;
+        log::info("kicked by an admin", {{"session", id}, {"account", c.accountId}, {"char", c.charId}});
+        leave_world(c);
+        kicked.push_back(c.session);
+    }
+    for (auto& s : kicked) s->disconnect(proto::Code::kicked);
+    return static_cast<uint32_t>(kicked.size());
+}
+
 void GameServer::on_closed(net::Session& s) {
     auto it = clients_.find(s.id());
     if (it == clients_.end()) return;
@@ -386,6 +424,7 @@ void GameServer::shutdown(std::function<void()> onDone) {
     acceptor_.close(ec);
     tickTimer_.cancel();
     if (chatLink_) chatLink_->stop();
+    if (adminPort_) adminPort_->stop();
     log_tick_stats("tick stats total", *totalTicks_, *totalLag_);
 
     world_.shutdown_scripts(); // onLeave changes are part of the saves below

@@ -29,6 +29,11 @@ services:
       CHAT_LINK_HOST: chat
       CHAT_LINK_PORT: 7779
       CHAT_LINK_SECRET: ${CHAT_LINK_SECRET:?set CHAT_LINK_SECRET in .env}
+      # Admin port for the admin service (docs/services/world/security.html#admin-port): on the compose network only,
+      # never published below. WORLD_ADMIN_SECRET unset or empty turns it off.
+      WORLD_ADMIN_HOST: 0.0.0.0
+      WORLD_ADMIN_PORT: 7780
+      WORLD_ADMIN_SECRET: ${WORLD_ADMIN_SECRET-}
     ports:
       - "${WORLD_HOST_PORT:-7777}:7777"
     volumes:
@@ -184,7 +189,9 @@ services:
     profiles: ["tools"]
     entrypoint: ["./kast_bot", "--auth-url", "http://auth:3000", "--mailpit-url", "http://mailpit:8025",
                  "--host", "world", "--port", "7777", "--ca", "/certs/server.crt", "--map-root", "/app/maps",
-                 "--chat-host", "chat", "--chat-port", "7778", "--chat-link-port", "7779"]
+                 "--chat-host", "chat", "--chat-port", "7778", "--chat-link-port", "7779", "--admin-port", "7780"]
+    environment:
+      WORLD_ADMIN_SECRET: ${WORLD_ADMIN_SECRET-} # admin scenarios
     volumes:
       - world-certs:/certs:ro
       - ../../tests/project/maps:/app/maps:ro # terrain scenario: the world's maps, for ground heights

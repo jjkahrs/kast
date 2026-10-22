@@ -144,7 +144,7 @@
 <li><strong>Connection limit:</strong> a connection beyond <code>MAX_CONNECTIONS</code> completes TLS, then gets <code>Disconnect{server_full}</code>.</li>
 </ul>
 <h2 id="messages">Messages</h2>
-<p>C = client to server, S = server to client, L = the internal link between a world server and the chat service.
+<p>C = client to server, S = server to client, L = the internal link between a world server and the chat service, A = the world server's <a href="#admin">admin port</a> (<code>LinkHello</code> / <code>LinkOk</code> open it too).
 "(chat)": a message of the <a href="../chat/protocol.html">chat service</a>'s own connection, never sent to or by the world server. "Payload" lists fields in wire order.</p>
 <table>
 <thead>
@@ -419,6 +419,30 @@
 <td>MuteState</td>
 <td>L</td>
 <td><code>str name, u64 untilMs</code> (Unix ms; 0: not muted)</td>
+</tr>
+<tr>
+<td><code>0x0300</code></td>
+<td>AdminOnlineReq</td>
+<td>A</td>
+<td>(empty): who is online (<a href="#admin">admin port</a>)</td>
+</tr>
+<tr>
+<td><code>0x0301</code></td>
+<td>AdminOnline</td>
+<td>A</td>
+<td><code>u8 more, u16 count</code>, then <code>count</code> &times; (<code>u64 accountId, u64 charId, str name, u16 map, u32 sessionId, u64 connectedAtMs</code>); <code>more</code> 1: another chunk follows</td>
+</tr>
+<tr>
+<td><code>0x0302</code></td>
+<td>AdminKick</td>
+<td>A</td>
+<td><code>u64 accountId, u64 charId, str reason</code>; exactly one id non-zero</td>
+</tr>
+<tr>
+<td><code>0x0303</code></td>
+<td>AdminKicked</td>
+<td>A</td>
+<td><code>u32 kicked</code>: sessions disconnected</td>
 </tr>
 </tbody>
 </table>
@@ -716,8 +740,34 @@ that sends one gets <code>Disconnect{unexpected_message}</code>.</p>
 <td>D</td>
 <td>Chat service: the account has no character in a world (after <code>CHAT_BIND_TIMEOUT_MS</code>), or its character left</td>
 </tr>
+<tr>
+<td>27</td>
+<td><code>kicked</code></td>
+<td>D</td>
+<td>An admin kicked this session through the <a href="#admin">admin port</a>; the character was saved first</td>
+</tr>
 </tbody>
 </table>
+<h2 id="admin">Admin port</h2>
+<p>An internal TLS listener for the admin service (<code>WORLD_ADMIN_HOST</code>:<code>WORLD_ADMIN_PORT</code>, default <code>127.0.0.1:7780</code>), on only when <code>WORLD_ADMIN_SECRET</code> is set (<a href="configuration.html">configuration</a>, <a href="security.html#admin-port">security</a>). Same TLS context and certificate as the game port, same <a href="#frame">frames</a> and field types; messages marked A in the <a href="#messages">table</a>.</p>
+<pre><code>admin tool                               world server
+  |---- TCP connect + TLS ------------------&gt;|   handshake deadline (HANDSHAKE_TIMEOUT_MS)
+  |---- LinkHello{protocolVersion, secret} -&gt;|   wrong version -&gt; Disconnect{protocol_mismatch}
+  |                                          |   wrong secret  -&gt; logged, Disconnect{invalid_token}
+  |&lt;--- LinkOk -------------------------------|   deadline cleared
+  |---- AdminOnlineReq ----------------------&gt;|
+  |&lt;--- AdminOnline{more=1, ...} -------------|   chunks of up to 1000 entries
+  |&lt;--- AdminOnline{more=0, ...} -------------|   last (or only, possibly empty) chunk
+  |---- AdminKick{accountId | charId, reason}&gt;|
+  |&lt;--- AdminKicked{kicked} ------------------|
+</code></pre>
+<ul>
+<li><strong>Hello:</strong> the first message must be <code>LinkHello</code> (the chat link's hello, <code>0x0200</code>) with <code>protocolVersion</code> = the current version (8) and <code>secret</code> = <code>WORLD_ADMIN_SECRET</code>. Anything else first gets <code>Disconnect{unexpected_message}</code>.</li>
+<li><strong>Requests:</strong> after <code>LinkOk</code>, any number of <code>AdminOnlineReq</code> and <code>AdminKick</code>, answered in order on the same connection. Any other message gets <code>Disconnect{unexpected_message}</code>; a bad payload <code>Disconnect{malformed}</code>.</li>
+<li><strong>Online list:</strong> every authenticated session. One in the lobby has <code>charId</code> 0, an empty name and map 0. <code>connectedAtMs</code> is when the TCP connection was accepted (Unix ms).</li>
+<li><strong>Kick:</strong> exactly one of <code>accountId</code> / <code>charId</code> is non-zero (both or neither: <code>malformed</code>). By account: every session of that account, lobby or world. By character: the session that has it in the world. Each one leaves the world as on a <a href="#handshake">duplicate login</a> (its save is queued), then gets <code>Disconnect{kicked}</code>. <code>kicked</code> counts them; 0 when nobody matched. The reason is logged, not sent to the player.</li>
+<li><strong>Heartbeat and limits:</strong> as for game clients: the server pings every <code>PING_INTERVAL_MS</code> and closes a connection idle for <code>IDLE_TIMEOUT_MS</code>; at most 32 admin connections (then <code>server_full</code>). One connection per request is fine.</li>
+</ul>
 </main>
 </div>
 </body>

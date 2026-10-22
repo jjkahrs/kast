@@ -55,6 +55,7 @@ add_library(world_core STATIC
   server/lua/runtime.cpp
   server/lua/sandbox.cpp
   server/lua/state_machines.cpp
+  server/app/admin_port.cpp
   server/app/chat_link.cpp
   server/app/game_server.cpp
 )

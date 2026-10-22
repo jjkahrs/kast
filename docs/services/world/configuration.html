@@ -268,6 +268,16 @@
 <td>Reconnect backoff of the link (doubling). The world runs normally while the link is down</td>
 </tr>
 <tr>
+<td><code>WORLD_ADMIN_SECRET</code></td>
+<td>(empty)</td>
+<td>Turns on the <a href="protocol.html#admin">admin port</a> (online list, kick) for the admin service: shared secret, at least 16 characters, the same as the admin service's. Unset or empty: no admin listener, and <code>admin port off: WORLD_ADMIN_SECRET is not set</code> is logged at startup. Never logged (<a href="security.html#admin-port">security</a>)</td>
+</tr>
+<tr>
+<td><code>WORLD_ADMIN_HOST</code> / <code>WORLD_ADMIN_PORT</code></td>
+<td><code>127.0.0.1</code> / <code>7780</code></td>
+<td>Bind address and port of the admin listener (TLS, the server's own certificate). The default only takes local connections; the compose stack sets <code>0.0.0.0</code> so the admin service reaches it on the compose network, and does not publish the port. Never expose it publicly</td>
+</tr>
+<tr>
 <td><code>SIM_LATENCY_MS</code> / <code>SIM_JITTER_MS</code></td>
 <td><code>0</code> / <code>0</code></td>
 <td>Testing only: the lag simulator holds every message both ways latency &plusmn; jitter ms, in order (0 = off); logged as a warning at startup</td>

@@ -69,6 +69,17 @@
 <li><strong>Mutes:</strong> the chat service decides them (GM / admin role from their JWT); the world only applies them to say, yell and emote. A link (re)connect replaces the whole list.</li>
 <li><strong>Failure:</strong> the world runs as before without the link: proximity chat keeps working, mutes already received stay until they end.</li>
 </ul>
+<h2 id="admin-port">Admin port</h2>
+<p>The admin service asks each world server who is online and kicks sessions through its <a href="protocol.html#admin">admin port</a> (<code>WORLD_ADMIN_*</code>, <a href="configuration.html">configuration</a>):</p>
+<ul>
+<li><strong>Off unless configured:</strong> without <code>WORLD_ADMIN_SECRET</code> nothing listens, and the start logs <code>admin port off: WORLD_ADMIN_SECRET is not set</code>.</li>
+<li><strong>Internal only:</strong> it binds <code>WORLD_ADMIN_HOST</code>, <code>127.0.0.1</code> by default. The compose stack binds <code>0.0.0.0</code> inside the container and does not publish the port, so only containers on the compose network reach it. Never expose it publicly.</li>
+<li><strong>TLS:</strong> the server's own certificate and TLS context, as for game clients. The dev certificate names <code>localhost</code>, <code>world</code>, <code>chat</code> and <code>127.0.0.1</code>; the admin service trusts it as a CA file.</li>
+<li><strong>Shared secret:</strong> the first message must be <code>LinkHello</code> carrying <code>WORLD_ADMIN_SECRET</code> (16+ characters). It is compared in constant time (<code>CRYPTO_memcmp</code>, after a length check). A wrong secret is logged as <code>admin port refused: wrong secret</code> (session and remote address, never the secret) and the connection is closed with <code>Disconnect{invalid_token}</code>. Anything else before the hello: <code>Disconnect{unexpected_message}</code>.</li>
+<li><strong>Limits:</strong> at most 32 admin connections at once (more get <code>server_full</code>), and the game clients' frame size, handshake deadline, idle timeout and message rate.</li>
+<li><strong>Kicks:</strong> logged with the account, character, reason and admin address. A kicked character leaves the world exactly as on a duplicate login, so it is saved; the client gets <code>Disconnect{kicked}</code>. The reason text stays in the world's log.</li>
+<li><strong>Thread safety:</strong> the listener runs on the io thread with the game loop, so the online list and kicks never race the tick.</li>
+</ul>
 <h2 id="client-events">Client events</h2>
 <p><code>ClientEvent</code> (<code>kast.world.send</code> on the client) is the only way a client talks to the server's Lua systems. The rules are in the <a href="protocol.html#client-events">protocol</a>.</p>
 <ul>

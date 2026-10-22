@@ -1,7 +1,8 @@
 // Glues the pieces together on the io thread: accepts sessions, walks each through
 // Hello -> Auth -> lobby (character requests) -> world, runs the fixed-rate tick and the graceful shutdown. Tells the
 // chat service (ChatLink, when CHAT_LINK_HOST is set) who is in the world and on which map, and each client where the
-// chat service is (ChatServer after EnterWorldOk, when CHAT_PUBLIC_HOST is set).
+// chat service is (ChatServer after EnterWorldOk, when CHAT_PUBLIC_HOST is set). Answers the admin port (AdminPort,
+// when WORLD_ADMIN_SECRET is set): who is online, and kicks.
 #pragma once
 #include "../auth/token_service.h"
 #include "../core/config.h"
@@ -9,6 +10,7 @@
 #include "../db/db_worker.h"
 #include "../net/session.h"
 #include "../world/world.h"
+#include "admin_port.h"
 #include "chat_link.h"
 
 #include <asio.hpp>
@@ -45,6 +47,7 @@ private:
         uint64_t charId = 0;     // in the world
         std::string charName;    // in the world
         uint16_t reportedMap = 0; // the map the chat link last heard of
+        SysTime connectedAt{};
     };
 
     void accept();
@@ -61,6 +64,8 @@ private:
     void leave_world(Client& c);
     std::vector<proto::CharOnline> chat_snapshot() const; // every character in the world, for the chat link
     void report_maps();                                   // map changes since the last tick, to the chat link
+    std::vector<proto::AdminOnlineEntry> admin_online() const; // every authenticated session, for the admin port
+    uint32_t admin_kick(const proto::AdminKick& k);
 
     void schedule_tick();
     void tick();
@@ -76,6 +81,7 @@ private:
     asio::ip::tcp::acceptor acceptor_;
     world::World world_;
     std::unique_ptr<ChatLink> chatLink_; // null without CHAT_LINK_HOST
+    std::unique_ptr<AdminPort> adminPort_; // null without WORLD_ADMIN_SECRET
 
     uint32_t nextSessionId_ = 1;
     std::unordered_map<uint32_t, Client> clients_;

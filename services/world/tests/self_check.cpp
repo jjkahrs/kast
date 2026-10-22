@@ -146,6 +146,28 @@ void checkCodecRoundTrip() {
               std::string(chat_notice_name(ChatNoticeCode::you_unmuted)) == "you_unmuted",
           "chat opcode, code and notice names");
 
+    // admin port (docs/services/world/protocol.html#admin)
+    roundtrip(AdminOnlineReq{}, "AdminOnlineReq");
+    roundtrip(AdminOnline{}, "AdminOnline empty");
+    roundtrip(AdminOnline{true, {{7, 9, "Alice", 2, 3, 1700000000123ull}, {8, 0, "", 0, 4, 1}}}, "AdminOnline");
+    roundtrip(AdminKick{7, 0, "spamming"}, "AdminKick by account");
+    roundtrip(AdminKick{0, 9, ""}, "AdminKick by character");
+    roundtrip(AdminKicked{2}, "AdminKicked");
+    check(encode(Message{AdminKicked{0x01020304}}) == std::vector<uint8_t>{4, 0, 0x03, 0x03, 4, 3, 2, 1}, "AdminKicked bytes");
+    Message adminOut;
+    std::vector<uint8_t> kickNone(18, 0), kickBoth(18, 0);
+    kickBoth[0] = kickBoth[8] = 1;
+    check(decode_payload(Opcode::AdminKick, kickNone, adminOut) == DecodeStatus::malformed &&
+              decode_payload(Opcode::AdminKick, kickBoth, adminOut) == DecodeStatus::malformed,
+          "AdminKick with neither or both ids is malformed");
+    check(decode_payload(Opcode::AdminOnline, std::vector<uint8_t>{2, 0, 0}, adminOut) == DecodeStatus::malformed,
+          "AdminOnline more 2 is malformed");
+    AdminOnline full;
+    full.entries.assign(AdminOnline::kMaxEntries, {~0ull, ~0ull, std::string(16, 'W'), 0xFFFF, ~0u, ~0ull});
+    check(encode(Message{full}).size() - kHeaderSize <= kMaxPayloadBytes, "a full AdminOnline chunk fits one frame");
+    check(std::string(opcode_name(Opcode::AdminKick)) == "AdminKick" && std::string(code_name(Code::kicked)) == "kicked",
+          "admin opcode and kicked code names");
+
     // exact byte layout: u16 len, u16 opcode, payload, little-endian
     const auto f = encode(Message{Hello{0x0102}});
     check(f == std::vector<uint8_t>{2, 0, 1, 0, 0x02, 0x01}, "Hello bytes little-endian");
@@ -523,6 +545,24 @@ void checkConfig() {
               linked.config.chatLinkHost == "chat",
           "CHAT_YELL_RADIUS / CHAT_PUBLIC_HOST / CHAT_LINK_HOST + a 16-character secret read");
     for (const char* name : {"CHAT_YELL_RADIUS", "CHAT_PUBLIC_HOST", "CHAT_LINK_HOST", "CHAT_LINK_SECRET"}) env.erase(name);
+
+    check(ok.config.adminSecret.empty() && ok.config.adminPort == 7780 && ok.config.adminHost == "127.0.0.1",
+          "admin port defaults: off (no WORLD_ADMIN_SECRET), 7780, loopback only");
+    env["WORLD_ADMIN_SECRET"] = "";
+    check(load_config(lookup).errors.empty() && load_config(lookup).config.adminSecret.empty(),
+          "WORLD_ADMIN_SECRET empty: admin port off, not an error");
+    env["WORLD_ADMIN_SECRET"] = "too-short";
+    const auto shortAdmin = load_config(lookup);
+    check(shortAdmin.errors.size() == 1 && shortAdmin.errors[0].starts_with("WORLD_ADMIN_SECRET"),
+          "WORLD_ADMIN_SECRET under 16 characters refused");
+    env["WORLD_ADMIN_SECRET"] = "0123456789abcdef";
+    env["WORLD_ADMIN_HOST"] = "0.0.0.0";
+    env["WORLD_ADMIN_PORT"] = "9000";
+    const auto admin = load_config(lookup);
+    check(admin.errors.empty() && admin.config.adminSecret == "0123456789abcdef" && admin.config.adminHost == "0.0.0.0" &&
+              admin.config.adminPort == 9000,
+          "WORLD_ADMIN_SECRET / WORLD_ADMIN_HOST / WORLD_ADMIN_PORT read");
+    for (const char* name : {"WORLD_ADMIN_SECRET", "WORLD_ADMIN_HOST", "WORLD_ADMIN_PORT"}) env.erase(name);
 
     env.erase("DB_HOST");
     env["REALM_ID"] = "abc";

@@ -1,7 +1,8 @@
 // Every wire message: opcode, struct and payload layout (see docs/services/world/protocol.html, and
 // docs/services/chat/protocol.html for the chat service's). C = client->server, S = server->client; the chat service
 // speaks the same frames (Hello, Auth, Ping/Pong, AuthOk, Disconnect, then the Chat* messages), and L = the internal
-// link between a world server (client end) and the chat service.
+// link between a world server (client end) and the chat service. A = the world server's admin port (an admin tool is
+// the client end).
 #pragma once
 #include "wire.h"
 
@@ -63,6 +64,10 @@ enum class Opcode : uint16_t {
     MapChanged = 0x0203,      // L world -> chat
     CharOffline = 0x0204,     // L world -> chat
     MuteState = 0x0205,       // L chat -> world
+    AdminOnlineReq = 0x0300,  // A admin -> world
+    AdminOnline = 0x0301,     // A world -> admin
+    AdminKick = 0x0302,       // A admin -> world
+    AdminKicked = 0x0303,     // A world -> admin
 };
 
 // Reason codes carried by Disconnect and CharError.
@@ -89,6 +94,7 @@ enum class Code : uint16_t {
     already_in_world = 24,
     options_invalid = 25,
     no_character = 26, // chat service: the account has no character in a world (yet)
+    kicked = 27,       // an admin kicked this session (world admin port)
 };
 
 const char* code_name(Code c);
@@ -686,11 +692,86 @@ struct MuteState {
     bool operator==(const MuteState&) const = default;
 };
 
+// --- admin port: an admin tool -> world server (WORLD_ADMIN_*), never from a game client ---
+// Opens with LinkHello{secret = WORLD_ADMIN_SECRET}, answered LinkOk (or Disconnect{invalid_token / protocol_mismatch});
+// then any number of requests, each answered in order.
+
+struct AdminOnlineReq {
+    static constexpr Opcode op = Opcode::AdminOnlineReq;
+    void write(Writer&) const {}
+    void read(Reader&) {}
+    bool operator==(const AdminOnlineReq&) const = default;
+};
+
+// An authenticated session: in the lobby (charId 0, name empty, map 0) or in the world.
+struct AdminOnlineEntry {
+    uint64_t accountId = 0;
+    uint64_t charId = 0;
+    std::string name;
+    uint16_t map = 0;
+    uint32_t sessionId = 0;
+    uint64_t connectedAtMs = 0; // Unix ms, wall clock
+    bool operator==(const AdminOnlineEntry&) const = default;
+};
+
+// The answer to AdminOnlineReq, in chunks of at most kMaxEntries: more 1 = another AdminOnline follows.
+struct AdminOnline {
+    static constexpr Opcode op = Opcode::AdminOnline;
+    static constexpr size_t kMaxEntries = 1000; // 1000 x <= 48 bytes stays under the 64 KB frame
+    bool more = false;
+    std::vector<AdminOnlineEntry> entries;
+    void write(Writer& w) const {
+        w.u8(more ? 1 : 0);
+        w.u16(static_cast<uint16_t>(entries.size()));
+        for (const auto& e : entries) {
+            w.u64(e.accountId); w.u64(e.charId); w.str(e.name); w.u16(e.map); w.u32(e.sessionId); w.u64(e.connectedAtMs);
+        }
+    }
+    void read(Reader& r) {
+        const uint8_t v = r.u8();
+        if (v > 1) r.fail();
+        more = v == 1;
+        entries.clear();
+        for (uint16_t n = r.u16(); n > 0 && r.ok(); --n) {
+            AdminOnlineEntry e;
+            e.accountId = r.u64(); e.charId = r.u64(); e.name = r.str(); e.map = r.u16(); e.sessionId = r.u32();
+            e.connectedAtMs = r.u64();
+            entries.push_back(std::move(e));
+        }
+    }
+    bool operator==(const AdminOnline&) const = default;
+};
+
+// Kicks every session of accountId, or the session playing charId: exactly one of them non-zero, else malformed.
+// Each gets Disconnect{kicked} after its character left the world (saved, as on a duplicate login).
+struct AdminKick {
+    static constexpr Opcode op = Opcode::AdminKick;
+    uint64_t accountId = 0;
+    uint64_t charId = 0;
+    std::string reason; // logged by the world server; not sent to the client
+    void write(Writer& w) const { w.u64(accountId); w.u64(charId); w.str(reason); }
+    void read(Reader& r) {
+        accountId = r.u64();
+        charId = r.u64();
+        reason = r.str();
+        if ((accountId == 0) == (charId == 0)) r.fail();
+    }
+    bool operator==(const AdminKick&) const = default;
+};
+
+struct AdminKicked {
+    static constexpr Opcode op = Opcode::AdminKicked;
+    uint32_t kicked = 0; // sessions disconnected (0: nobody matched)
+    void write(Writer& w) const { w.u32(kicked); }
+    void read(Reader& r) { kicked = r.u32(); }
+    bool operator==(const AdminKicked&) const = default;
+};
+
 using Message = std::variant<Hello, Auth, Ping, Pong, CharListReq, CharCreate, CharDelete, EnterWorld, Move, Say, ClientEvent, Interact,
                              AuthOk, Disconnect, CharList, CharCreated, CharDeleted, EnterWorldOk, CharError, Spawn,
                              Despawn, EntityMove, Correction, ChatMsg, ComponentUpdate,
                              ComponentRemove, ServerEvent, MapChange, Reply, ChatServer, ChatSend, ChatJoin, ChatLeave,
                              ChatIgnore, ChatMute, ChatLine, ChatChannel, ChatNotice, LinkHello, LinkOk, CharOnline,
-                             MapChanged, CharOffline, MuteState>;
+                             MapChanged, CharOffline, MuteState, AdminOnlineReq, AdminOnline, AdminKick, AdminKicked>;
 
 } // namespace kast::proto

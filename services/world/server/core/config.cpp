@@ -84,6 +84,11 @@ ConfigResult load_config(const EnvLookup& env) {
     if (c.chatLinkRetryMinMs > c.chatLinkRetryMaxMs) l.errors.push_back("CHAT_LINK_RETRY_MIN_MS: must be <= CHAT_LINK_RETRY_MAX_MS");
     if (!c.chatLinkHost.empty() && c.chatLinkSecret.size() < 16)
         l.errors.push_back("CHAT_LINK_SECRET: at least 16 characters when CHAT_LINK_HOST is set");
+    l.str("WORLD_ADMIN_HOST", c.adminHost);
+    l.num("WORLD_ADMIN_PORT", c.adminPort, 1, 65535);
+    l.str("WORLD_ADMIN_SECRET", c.adminSecret);
+    if (!c.adminSecret.empty() && c.adminSecret.size() < 16)
+        l.errors.push_back("WORLD_ADMIN_SECRET: at least 16 characters (or unset: no admin port)");
 
     l.num("SAVE_INTERVAL_MS", c.saveIntervalMs, 100, u32max);
     l.num("SAVE_RETRY_MIN_MS", c.saveRetryMinMs, 10, u32max);
