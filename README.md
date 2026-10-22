@@ -128,6 +128,19 @@ docker compose logs world         # "migration applied", "listening", "chat link
 docker compose logs chat          # "listening", "world link up"
 ```
 
+**Create accounts** with the user CLI. It runs in the `auth` container, so it works from `services/auth` or
+`services/world` while that stack is up. Accounts are created pre-verified, and the role is `player`, `gm` or `admin`.
+Details in [Auth Server setup](docs/services/auth/setup.html#commands).
+
+```sh
+docker compose exec auth node dist/user-cli.js create you@example.com admin   # prompts for the password (hidden)
+docker compose exec auth node dist/user-cli.js set-role you@example.com gm    # change an existing account's role
+```
+
+Without `--password`, `create` prompts for the password, which keeps it out of shell history. Passwords are 10-128
+characters. `create` fails if the email is already taken; use `set-role` to change that account instead. From a host
+checkout with `npm ci` done, `npm run user -- ...` in `services/auth` does the same against `DB_*` in `.env`.
+
 **Admin app** (in the same world stack; details in [Admin App setup](docs/services/admin/setup.html)): set
 `ADMIN_DB_PASSWORD`, `ADMIN_WORLD_DB_PASSWORD`, `WORLD_ADMIN_SECRET`, `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` in
 `services/world/.env` (see `.env.example`), then `docker compose up -d --build` also builds and starts `admin`. Open
