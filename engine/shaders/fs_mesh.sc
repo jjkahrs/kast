@@ -1,16 +1,16 @@
 $input v_normal, v_tangent, v_worldPos, v_texcoord0, v_color0
 
 // The mesh fragment template: Kast's built-in shader as is, and every .kshader's fragment() at the //@user line
-// (shader.cpp generateShader; see docs/engine/shaders.html).
+// (shader.cpp generateShader; see docs/engine/shaders.html). With KAST_SHADOW it is the .kshader's shadow pass shader.
 
 #include <bgfx_shader.sh>
+#include <mesh.sh>
 
 #define MAX_POINT_LIGHTS 8 // kMaxPointLights in renderer.h
 #define MAX_CASCADES 4     // kMaxShadowCascades in scene.h
 #define CSM_TEXEL (1.0 / 4096.0)        // one texel of the cascade atlas: 2x2 kCascadeSize in shadow.h
 #define POINT_SHADOW_SIZE 1024.0        // kPointShadowSize in shadow.h
 #define POINT_SHADOW_NEAR 0.05          // kPointShadowNear in shadow.h
-#define PI 3.14159265
 
 SAMPLER2D(s_baseColor, 0);         // sRGB, sampled as linear; white if the material has none
 SAMPLER2D(s_metallicRoughness, 1); // linear, glTF packing: G = roughness, B = metallic; white if none
@@ -23,13 +23,7 @@ SAMPLER2D(s_normal, 7);            // linear tangent-space normal, glTF / OpenGL
 SAMPLER2D(s_occlusion, 8);         // linear, R = ambient occlusion; white if none
 SAMPLER2D(s_emissive, 9);          // sRGB, sampled as linear, times u_emissive; white if none
 
-uniform vec4 u_baseColor;  // linear RGBA, times the base color texture
-uniform vec4 u_emissive;   // rgb: linear, added after lighting
-uniform vec4 u_material;   // x: metallic, y: roughness, z: alpha cutoff (-1 = none), w: 0 opaque, 1 blend, 2 additive
 uniform vec4 u_materialExt; // x: normal scale, y: occlusion strength, z: 1 if a normal texture is bound, w: 1 if unlit
-uniform vec4 u_uvTransform; // xy: scale, zw: offset; every texture of the material samples uv * scale + offset
-uniform vec4 u_time;        // x: seconds, wrapping every kShaderTimePeriod (shader_clock.h)
-uniform vec4 u_cameraPos;  // xyz: world position of the eye
 uniform vec4 u_lightDir;   // xyz: world direction the light travels; w: 1 if the scene has a light, else 0
 uniform vec4 u_lightColor; // rgb: light color * intensity
 uniform vec4 u_ambient;    // rgb: scene ambient color * intensity
@@ -159,8 +153,8 @@ struct KastFragment {
     float ao;            // ambient occlusion: darkens ambient light only
 };
 
-// Built-ins: fragment() inputs and outputs (fields of its kast_f), uniforms and texture helpers. The names are reserved:
-// a .kshader param may not take one (kBuiltinNames in shader.cpp lists them).
+// Built-ins: fragment() inputs and outputs (fields of its kast_f) and texture helpers; mesh.sh has those of every stage.
+// The names are reserved: a .kshader param may not take one (shaderBuiltinNames in shader.cpp lists them).
 #define UV kast_f.uv
 #define COLOR kast_f.color
 #define NORMAL kast_f.normal
@@ -176,14 +170,6 @@ struct KastFragment {
 #define NORMAL_MAP kast_f.normalMap
 #define NORMAL_MAP_DEPTH kast_f.normalMapDepth
 #define AO kast_f.ao
-#define TIME (u_time.x)
-#define CAMERA_POSITION (u_cameraPos.xyz)
-#define MATERIAL_BASE_COLOR (u_baseColor)
-#define MATERIAL_METALLIC (u_material.x)
-#define MATERIAL_ROUGHNESS (u_material.y)
-#define MATERIAL_EMISSION (u_emissive.rgb)
-#define MATERIAL_ALPHA_CUTOFF (u_material.z)
-#define MATERIAL_UV_TRANSFORM (u_uvTransform)
 vec4 sampleBaseColor(vec2 uv) { return texture2D(s_baseColor, uv); }
 vec4 sampleMetallicRoughness(vec2 uv) { return texture2D(s_metallicRoughness, uv); }
 vec4 sampleNormal(vec2 uv) { return texture2D(s_normal, uv); }
@@ -220,6 +206,11 @@ void main()
 
     if (f.alpha < u_material.z)
         discard;
+#ifdef KAST_SHADOW
+    // The .kshader's shadow pass (fs_shadow.sc for the built-in material): depth only, cut out as the surface is.
+    gl_FragColor = vec4_splat(0.0);
+    return;
+#endif
     float alpha = u_material.w > 0.5 ? f.alpha : 1.0;
     if (u_materialExt.w > 0.5) { // unlit
         gl_FragColor = vec4(fogged(f.albedo + f.emission, v_worldPos), alpha);

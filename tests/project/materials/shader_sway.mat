@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "baseColor": [0.35, 0.8, 0.4, 1],
+  "roughness": 0.6,
+  "shader": "shaders/sway.kshader",
+  "params": { "sway": 0.5 }
+}

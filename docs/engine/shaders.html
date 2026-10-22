@@ -47,11 +47,14 @@ player advances it every frame. It wraps to 0 every <strong>3600 seconds</strong
 <code>engine/shader_clock.h</code>) so it keeps sub-millisecond float precision. The built-in material doesn't read it; a
 <code>.kshader</code> reads it as <code>TIME</code>.</p>
 <h2 id="user-shaders">User shaders (.kshader)</h2>
-<p>A <code>.kshader</code> file holds a <code>fragment()</code> function in the bgfx <code>.sc</code> GLSL dialect plus declared params. A material
+<p>A <code>.kshader</code> file holds a <code>fragment()</code> function, optionally a <code>vertex()</code> function, in the bgfx
+<code>.sc</code> GLSL dialect, plus declared params. A material
 uses it through its <code>"shader"</code> field (see <a href="materials.html#materials">Materials</a>). Kast injects the file into its mesh
-shader <strong>template</strong>, <code>engine/shaders/fs_mesh.sc</code>, at its <code>//@user</code> line: the built-in mesh shader <em>is</em> that
-template compiled as is (with an empty default <code>fragment()</code>), so built-in and user shaders share all of the
-lighting, shadow, fog and alpha code. <code>main()</code> first fills every built-in with what the built-in material computes
+shader <strong>templates</strong>, <code>engine/shaders/fs_mesh.sc</code> and <code>vs_mesh.sc</code> / <code>vs_mesh_skinned.sc</code> /
+<code>vs_mesh_instanced.sc</code> (with <code>mesh.sh</code>, the uniforms and built-ins they share), at their <code>//@user</code> line: the
+built-in mesh shaders <em>are</em> those templates compiled as is (with empty default <code>fragment()</code> and
+<code>vertex()</code>), so built-in and user shaders share all of the transform, skinning, instancing, lighting, shadow, fog
+and alpha code. <code>main()</code> first fills every built-in with what the built-in material computes
 (base color times its texture, metallic / roughness times theirs, emissive, the normal map, AO), calls
 <code>fragment()</code>, then discards below the alpha cutoff (mask), lights the result (Cook-Torrance, shadows, ambient),
 adds <code>EMISSION</code> and fogs. A <code>fragment()</code> that writes nothing renders exactly as the material without a shader.</p>
@@ -116,16 +119,55 @@ functions; pass what a helper needs as arguments. Spaces: world unless noted.</p
 </table>
 <p>A shader that mentions <code>NORMAL</code> or <code>NORMAL_MAP</code> always gets the normal-map step (which also renormalizes
 <code>NORMAL</code>); otherwise it runs only when the material has a normal texture, as in the built-in material. Unlit
-materials output <code>ALBEDO + EMISSION</code>. Also reserved, for later stages: <code>VERTEX</code>, <code>INSTANCE_ID</code>,
-<code>MODEL_MATRIX</code>, <code>WORLD_MATRIX</code>, <code>VIEW_MATRIX</code>, <code>PROJECTION_MATRIX</code>, <code>LIGHT_DIRECTION</code>,
+materials output <code>ALBEDO + EMISSION</code>. Also reserved: the <a href="#kshader-vertex">vertex() built-ins</a> and, for later stages, <code>LIGHT_DIRECTION</code>,
 <code>LIGHT_COLOR</code>, <code>ATTENUATION</code>, <code>VIEW</code>, <code>DIFFUSE_LIGHT</code>, <code>SPECULAR_LIGHT</code>, <code>SCREEN_TEXTURE</code>,
-<code>SCREEN_UV</code>, <code>DEPTH_TEXTURE</code>, <code>PI</code>, <code>vertex</code>, <code>light</code>.</p>
+<code>SCREEN_UV</code>, <code>DEPTH_TEXTURE</code>, <code>vertex</code>, <code>light</code>.</p>
+<h3 id="kshader-vertex">vertex()</h3>
+<p>Optional. It runs per vertex before the template transforms the vertex to the world, so it moves the mesh in
+<strong>object space</strong>; skinned meshes run it after skinning (in the model's space), instanced ones get each instance's
+model matrix. <code>main()</code> fills the built-ins with the mesh's vertex, so a <code>vertex()</code> that writes nothing changes
+nothing. The shadow passes run the same vertex shaders, so <strong>shadows follow the displacement</strong>.</p>
+<pre><code>// shaders/sway.kshader (tests/project/shader_vertex.scene)
+param float sway = 0.4 range(0, 1);
+param float speed = 1.5 range(0, 8);
+
+void vertex()
+{
+    vec3 origin = mul(MODEL_MATRIX, vec4(0.0, 0.0, 0.0, 1.0)).xyz; // the object's world position
+    float h = saturate(VERTEX.y + 0.5);
+    VERTEX.x += sway * h * h * sin(TIME * speed + origin.x * 1.7 + float(INSTANCE_ID));
+}
+
+void fragment() {}</code></pre>
+<table>
+<tr><th>Name</th><th>Type</th><th>In / out</th><th>Meaning</th></tr>
+<tr><td><code>VERTEX</code></td><td>vec3</td><td>in / out</td><td>object-space position (skinned: after skinning)</td></tr>
+<tr><td><code>NORMAL</code></td><td>vec3</td><td>in / out</td><td>object-space normal, as the mesh stores it (the template normalizes it per fragment)</td></tr>
+<tr><td><code>UV</code></td><td>vec2</td><td>in / out</td><td>UV0 as the mesh stores it; <code>fragment()</code>'s <code>UV</code> is this times <code>uvScale</code> plus <code>uvOffset</code></td></tr>
+<tr><td><code>COLOR</code></td><td>vec4</td><td>in / out</td><td>vertex color, white if the mesh has none; <code>fragment()</code> reads what this writes</td></tr>
+<tr><td><code>MODEL_MATRIX</code>, <code>WORLD_MATRIX</code></td><td>mat4</td><td>in</td><td>object to world (the same matrix; instanced: the instance's). Writes are ignored</td></tr>
+<tr><td><code>INSTANCE_ID</code></td><td>int</td><td>in</td><td>the instance's index in its instanced draw; 0 when the mesh is drawn alone</td></tr>
+<tr><td><code>VIEW_MATRIX</code>, <code>PROJECTION_MATRIX</code></td><td>mat4</td><td>in</td><td>the pass's (in shadow passes, the light's); also in <code>fragment()</code></td></tr>
+<tr><td><code>TIME</code>, <code>CAMERA_POSITION</code>, <code>MATERIAL_*</code>, <code>PI</code>, params</td><td></td><td>in</td><td>as in <code>fragment()</code>; texture params need <code>texture2DLod(name, uv, 0.0)</code> here (no derivatives per vertex)</td></tr>
+</table>
+<p><strong>World space</strong>: read world positions with <code>mul(MODEL_MATRIX, vec4(VERTEX, 1.0))</code> (wind phases, noise
+lookups); write offsets in object space. For an unscaled, unrotated mesh the two are the same.</p>
+<p><strong>Stages</strong>: a <code>.kshader</code> compiles into <code>fs_mesh</code> (main pass), its shadow variant (<code>fs_mesh</code> with
+<code>KAST_SHADOW</code>: it runs <code>fragment()</code>, discards below the cutoff and stops, so <code>ALPHA</code> cutouts and <code>discard</code>
+written in <code>fragment()</code> also cut the shadow, on mask materials as in the main pass) and, if it has a <code>vertex()</code>,
+the three vertex templates. The shadow passes reuse the main pass's vertex shaders, so 2 or 5 compiles make 6 programs
+(main and shadow for single, skinned and instanced draws). Without <code>vertex()</code> the built-in vertex shaders are used.
+Each stage compiles only its own function: the other one is blanked (line numbers kept). Code outside both functions
+(helpers, <code>#define</code>s) is compiled into every stage, so it may only use built-ins every stage has
+(<code>TIME</code>, <code>CAMERA_POSITION</code>, <code>VIEW_MATRIX</code>, <code>PROJECTION_MATRIX</code>, <code>MATERIAL_*</code>, <code>PI</code>, params).</p>
+<p><strong>Culling</strong>: draws are culled by the mesh's undisplaced bounds; a <code>vertex()</code> that moves geometry far
+outside them can pop out at the edge of the view or a shadow cascade.</p>
 <h3 id="kshader-compile">Compiling and errors</h3>
 <p>The editor compiles a <code>.kshader</code> the first time a rendered material uses it, and again when the file changes, with
 the same <code>shaderc</code> and flags as the build (CMake copies <code>shaderc.exe</code> next to <code>kast_editor.exe</code>, with
-<code>kshader/include/</code> (bgfx's <code>bgfx_shader.sh</code>, <code>bgfx_compute.sh</code>) and <code>kshader/mesh/</code> (the template and its
-<code>varying.def.sc</code>) beside it). Each compile is logged (<code>Compiled shader 'shaders/stripes.kshader'</code>); both editor
-views share it. For now it compiles on the render thread, pausing the editor for the compile (about 0.1 s). The player
+<code>kshader/include/</code> (bgfx's <code>bgfx_shader.sh</code>, <code>bgfx_compute.sh</code>) and <code>kshader/mesh/</code> (the templates,
+<code>mesh.sh</code> and <code>varying.def.sc</code>) beside it). Each compile is logged (<code>Compiled shader 'shaders/stripes.kshader'</code>); both editor
+views share it. For now it compiles on the render thread, pausing the editor for the compile (about 0.1 s per stage). The player
 does not compile shaders.</p>
 <p>Errors render every material using the shader magenta (the <code>errorMaterial</code>) and log one error per load, with the
 line in the <code>.kshader</code>: Kast puts a <code>#pragma kast_line &lt;n&gt;</code> marker before each of its lines, and maps the line of
@@ -140,7 +182,10 @@ within shaderc's listing (the lines around its first error) map to <code>.kshade
 <code>generated line &lt;n&gt;</code>. Preprocessor errors (an unterminated <code>#if</code>) are logged as shaderc prints them.</p>
 <p>Samples: <code>tests/project/shader_showcase.scene</code> (<code>shaders/showcase.kshader</code>: params, a texture param, <code>TIME</code>,
 vertex colors on <code>models/vertex_colors.gltf</code>) and <code>tests/project/shader_errors.scene</code> (a GLSL error, a bad param
-line, a missing shader, a wrong-typed value).</p>
+line, a missing shader, a wrong-typed value), <code>tests/project/shader_vertex.scene</code> (<code>shaders/sway.kshader</code>:
+<code>vertex()</code> on a cutout cube, an instanced batch and a skinned model) and
+<code>tests/project/shader_vertex_offset.scene</code> (must match <code>shader_vertex_offset_reference.scene</code> exactly: lifted
+meshes and their shadows, and a <code>fragment()</code> cutout with no shadow).</p>
 </main>
 </div>
 </body>

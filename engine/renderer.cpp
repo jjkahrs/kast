@@ -164,6 +164,14 @@ const bgfx::Memory* copyOf(const std::vector<T>& data)
     return bgfx::copy(data.data(), static_cast<uint32_t>(data.size() * sizeof(T)));
 }
 
+// transpose(inverse(world)): u_normalMatrix (vs_mesh.sc).
+void normalMatrix(const Mat4& world, float* out)
+{
+    float inverse[16];
+    bx::mtxInverse(inverse, world.data());
+    bx::mtxTranspose(out, inverse);
+}
+
 bgfx::ProgramHandle makeProgram(const uint8_t* vs, uint32_t vsSize, const uint8_t* fs, uint32_t fsSize)
 {
     return bgfx::createProgram(bgfx::createShader(bgfx::makeRef(vs, vsSize)), bgfx::createShader(bgfx::makeRef(fs, fsSize)),
@@ -761,19 +769,36 @@ const Renderer::UserShader* Renderer::userShader(const std::string& path)
         return nullptr;
     UserShader& shader = userShaders_[path];
     shader.source = compiled;
-    shader.fragment =
-        bgfx::createShader(bgfx::copy(compiled->fragment.data(), static_cast<uint32_t>(compiled->fragment.size())));
-    shader.mesh = bgfx::createProgram(meshVertex_, shader.fragment);
-    shader.skinned = bgfx::createProgram(skinnedVertex_, shader.fragment);
-    shader.instanced = bgfx::createProgram(instancedVertex_, shader.fragment);
+    // A stage it has no bytecode for (no vertex()) takes the built-in shader.
+    const auto make = [&](ShaderStage stage, bgfx::ShaderHandle builtin) {
+        const std::vector<uint8_t>& bytecode = compiled->stage(stage);
+        if (bytecode.empty())
+            return builtin;
+        shader.shaders.push_back(
+            bgfx::createShader(bgfx::copy(bytecode.data(), static_cast<uint32_t>(bytecode.size()))));
+        return shader.shaders.back();
+    };
+    const bgfx::ShaderHandle fragment = make(ShaderStage::Fragment, BGFX_INVALID_HANDLE);
+    const bgfx::ShaderHandle shadow = make(ShaderStage::Shadow, BGFX_INVALID_HANDLE);
+    const bgfx::ShaderHandle vertex = make(ShaderStage::Vertex, meshVertex_);
+    const bgfx::ShaderHandle skinned = make(ShaderStage::SkinnedVertex, skinnedVertex_);
+    const bgfx::ShaderHandle instanced = make(ShaderStage::InstancedVertex, instancedVertex_);
+    shader.mesh = bgfx::createProgram(vertex, fragment);
+    shader.skinned = bgfx::createProgram(skinned, fragment);
+    shader.instanced = bgfx::createProgram(instanced, fragment);
+    shader.shadowMesh = bgfx::createProgram(vertex, shadow);
+    shader.shadowSkinned = bgfx::createProgram(skinned, shadow);
+    shader.shadowInstanced = bgfx::createProgram(instanced, shadow);
     return &shader;
 }
 
 void Renderer::destroy(UserShader& shader)
 {
-    for (bgfx::ProgramHandle program : {shader.mesh, shader.skinned, shader.instanced})
+    for (bgfx::ProgramHandle program : {shader.mesh, shader.skinned, shader.instanced, shader.shadowMesh,
+                                        shader.shadowSkinned, shader.shadowInstanced})
         bgfx::destroy(program);
-    bgfx::destroy(shader.fragment);
+    for (bgfx::ShaderHandle handle : shader.shaders)
+        bgfx::destroy(handle);
 }
 
 void Renderer::resolveShaders(std::vector<DrawItem>& draws)
@@ -863,18 +888,25 @@ bool Renderer::instanced(const std::vector<const DrawItem*>& batch, bgfx::Instan
 }
 
 void Renderer::submitShadowCasters(const std::vector<const DrawItem*>& batch, const std::vector<std::vector<Mat4>>& boneSets,
-                                   bgfx::ViewId view)
+                                   const bx::Vec3& eye, bgfx::ViewId view)
 {
     // The batch shares its material, buffers and skinning (BatchKey).
     const DrawItem& first = *batch.front();
     const Material& material = *first.material;
+    const UserShader* shader = first.shader;
     const float params[4] = {0.0f, 0.0f, material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f, 0.0f};
     const float uvTransform[4] = {material.uvScale[0], material.uvScale[1], material.uvOffset[0], material.uvOffset[1]};
+    const float cameraPos[4] = {eye.x, eye.y, eye.z, 1.0f};
     const auto setMaterial = [&] {
-        bgfx::setUniform(baseColor_, material.baseColor.data());
-        bgfx::setUniform(materialParams_, params);
-        bgfx::setUniform(uvTransform_, uvTransform);
-        bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
+        if (shader) { // its vertex() and fragment() run here too: all that fs_mesh.sc reads before its shadow cut
+            setMaterialState(first);
+            bgfx::setUniform(cameraPos_, cameraPos);
+        } else {
+            bgfx::setUniform(baseColor_, material.baseColor.data());
+            bgfx::setUniform(materialParams_, params);
+            bgfx::setUniform(uvTransform_, uvTransform);
+            bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
+        }
         bgfx::setVertexBuffer(0, first.vertices);
         bgfx::setIndexBuffer(first.indices);
         bgfx::setState(kShadowState);
@@ -883,17 +915,25 @@ void Renderer::submitShadowCasters(const std::vector<const DrawItem*>& batch, co
     if (instanced(batch, instances)) {
         setMaterial();
         bgfx::setInstanceDataBuffer(&instances);
-        bgfx::submit(view, shadowInstancedProgram_);
+        bgfx::submit(view, shader ? shader->shadowInstanced : shadowInstancedProgram_);
         return;
     }
     for (const DrawItem* item : batch) {
         setMaterial();
         bgfx::setTransform(item->world.data());
+        if (shader) {
+            float normal[16];
+            normalMatrix(item->world, normal);
+            bgfx::setUniform(normalMatrix_, normal);
+        }
         if (item->bones >= 0) {
             const std::vector<Mat4>& bones = boneSets[static_cast<size_t>(item->bones)];
             bgfx::setUniform(bones_, bones.data(), static_cast<uint16_t>(bones.size()));
         }
-        bgfx::submit(view, item->bones >= 0 ? shadowSkinnedProgram_ : shadowProgram_);
+        if (shader)
+            bgfx::submit(view, item->bones >= 0 ? shader->shadowSkinned : shader->shadowMesh);
+        else
+            bgfx::submit(view, item->bones >= 0 ? shadowSkinnedProgram_ : shadowProgram_);
     }
 }
 
@@ -916,6 +956,9 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
         for (size_t i : indices)
             batches.back().push_back(casters[i]);
     }
+    float cameraWorld[16];
+    bx::mtxInverse(cameraWorld, viewMtx);
+    const bx::Vec3 eye{cameraWorld[12], cameraWorld[13], cameraWorld[14]};
     std::vector<const DrawItem*> inView;
     const auto submitCasters = [&](const Frustum& frustum, const auto& keep, bgfx::ViewId view) {
         for (const std::vector<const DrawItem*>& batch : batches) {
@@ -924,13 +967,10 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
                 if (keep(*item) && !culled(*item, frustum))
                     inView.push_back(item);
             if (!inView.empty())
-                submitShadowCasters(inView, boneSets, view);
+                submitShadowCasters(inView, boneSets, eye, view);
         }
     };
     const bool homogeneousDepth = bgfx::getCaps()->homogeneousDepth;
-    float cameraWorld[16];
-    bx::mtxInverse(cameraWorld, viewMtx);
-    const bx::Vec3 eye{cameraWorld[12], cameraWorld[13], cameraWorld[14]};
 
     frame.sun = sun && sun->castShadows;
     if (frame.sun) {
@@ -1026,6 +1066,52 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
         }
     }
     return frame;
+}
+
+void Renderer::setMaterialState(const DrawItem& item)
+{
+    const Material& material = *item.material;
+    const bx::Vec3 radiance = emissiveRadiance(material);
+    const float emissive[4] = {radiance.x, radiance.y, radiance.z, 0.0f};
+    const bool blend = material.alphaMode == AlphaMode::Blend;
+    const bool additive = material.alphaMode == AlphaMode::Additive;
+    // z: fragments with alpha below it are discarded (-1 = none); w: 1 outputs alpha (blend), 2 also fogs toward
+    // black (additive), 0 outputs 1.
+    const float params[4] = {material.metallic, material.roughness,
+                             material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f,
+                             additive ? 2.0f : blend ? 1.0f : 0.0f};
+    const bgfx::TextureHandle normalMap = texture(material.normalTexture, false, flatNormal_);
+    const float materialExt[4] = {material.normalScale, material.occlusionStrength,
+                                  normalMap.idx != flatNormal_.idx ? 1.0f : 0.0f, material.unlit ? 1.0f : 0.0f};
+    const float uvTransform[4] = {material.uvScale[0], material.uvScale[1], material.uvOffset[0], material.uvOffset[1]};
+    const float time[4] = {timeSeconds_, 0.0f, 0.0f, 0.0f};
+
+    bgfx::setUniform(baseColor_, material.baseColor.data());
+    bgfx::setUniform(emissive_, emissive);
+    bgfx::setUniform(materialParams_, params);
+    bgfx::setUniform(materialExt_, materialExt);
+    bgfx::setUniform(uvTransform_, uvTransform);
+    bgfx::setUniform(time_, time);
+    bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
+    bgfx::setTexture(1, metallicRoughnessSampler_, texture(material.metallicRoughnessTexture, false));
+    bgfx::setTexture(7, normalSampler_, normalMap);
+    bgfx::setTexture(8, occlusionSampler_, texture(material.occlusionTexture, false));
+    bgfx::setTexture(9, emissiveSampler_, texture(material.emissiveTexture, true));
+    if (item.shader) {
+        const ShaderSource& source = item.shader->source->source;
+        const auto values = shaderParamValues(material, source);
+        bgfx::setUniform(kastParams_, values.data(), kMaxShaderParams);
+        for (const ShaderParam& param : source.params) {
+            if (param.type != ShaderParamType::Texture2D)
+                continue;
+            const bgfx::TextureHandle fallback = param.texture == TextureDefault::Black    ? black_
+                                                 : param.texture == TextureDefault::Normal ? flatNormal_
+                                                                                           : white_;
+            bgfx::setTexture(static_cast<uint8_t>(kFirstShaderTextureStage + param.slot),
+                             shaderTextureSamplers_[static_cast<size_t>(param.slot)],
+                             texture(shaderParamTexture(material, param), param.srgb, fallback));
+        }
+    }
 }
 
 void Renderer::render(const Scene& scene, const std::filesystem::path& projectRoot, bgfx::ViewId view,
@@ -1129,27 +1215,10 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             pointShadow[slot][2] = light.range;
         }
         const float shadowParams[4] = {item.receiveShadows ? 1.0f : 0.0f, shadows.sun ? 1.0f : 0.0f, 0.0f, 0.0f};
-        const bx::Vec3 radiance = emissiveRadiance(material);
-        const float emissive[4] = {radiance.x, radiance.y, radiance.z, 0.0f};
         const bool blend = material.alphaMode == AlphaMode::Blend;
         const bool additive = material.alphaMode == AlphaMode::Additive;
-        // z: fragments with alpha below it are discarded (-1 = none); w: 1 outputs alpha (blend), 2 also fogs toward
-        // black (additive), 0 outputs 1.
-        const float params[4] = {material.metallic, material.roughness,
-                                 material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f,
-                                 additive ? 2.0f : blend ? 1.0f : 0.0f};
-        const bgfx::TextureHandle normalMap = texture(material.normalTexture, false, flatNormal_);
-        const float materialExt[4] = {material.normalScale, material.occlusionStrength,
-                                      normalMap.idx != flatNormal_.idx ? 1.0f : 0.0f, material.unlit ? 1.0f : 0.0f};
-        const float uvTransform[4] = {material.uvScale[0], material.uvScale[1], material.uvOffset[0], material.uvOffset[1]};
-        const float time[4] = {timeSeconds_, 0.0f, 0.0f, 0.0f};
 
-        bgfx::setUniform(baseColor_, material.baseColor.data());
-        bgfx::setUniform(emissive_, emissive);
-        bgfx::setUniform(materialParams_, params);
-        bgfx::setUniform(materialExt_, materialExt);
-        bgfx::setUniform(uvTransform_, uvTransform);
-        bgfx::setUniform(time_, time);
+        setMaterialState(item);
         bgfx::setUniform(cameraPos_, cameraPos);
         bgfx::setUniform(fogColor_, fogColor);
         bgfx::setUniform(fogParams_, fogParams);
@@ -1169,38 +1238,16 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         for (size_t cube = 0; cube < kMaxShadowedPointLights; ++cube)
             bgfx::setTexture(static_cast<uint8_t>(3 + cube), pointShadowSamplers_[cube],
                              cube < shadows.pointLights.size() ? cubes_[cube] : noShadowCube_);
-        bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
-        bgfx::setTexture(1, metallicRoughnessSampler_, texture(material.metallicRoughnessTexture, false));
-        bgfx::setTexture(7, normalSampler_, normalMap);
-        bgfx::setTexture(8, occlusionSampler_, texture(material.occlusionTexture, false));
-        bgfx::setTexture(9, emissiveSampler_, texture(material.emissiveTexture, true));
-        if (item.shader) {
-            const ShaderSource& source = item.shader->source->source;
-            const auto values = shaderParamValues(material, source);
-            bgfx::setUniform(kastParams_, values.data(), kMaxShaderParams);
-            for (const ShaderParam& param : source.params) {
-                if (param.type != ShaderParamType::Texture2D)
-                    continue;
-                const bgfx::TextureHandle fallback = param.texture == TextureDefault::Black    ? black_
-                                                     : param.texture == TextureDefault::Normal ? flatNormal_
-                                                                                               : white_;
-                bgfx::setTexture(static_cast<uint8_t>(kFirstShaderTextureStage + param.slot),
-                                 shaderTextureSamplers_[static_cast<size_t>(param.slot)],
-                                 texture(shaderParamTexture(material, param), param.srgb, fallback));
-            }
-        }
         bgfx::setVertexBuffer(0, item.vertices);
         bgfx::setIndexBuffer(item.indices);
         bgfx::setState((additive ? kAdditiveState : blend ? kBlendState : kState) | cullState(material.cullMode, item.mirrored));
     };
     const auto submit = [&](const DrawItem& item, const std::vector<size_t>& nearest) {
-        float inverse[16];
-        float normalMatrix[16];
-        bx::mtxInverse(inverse, item.world.data());
-        bx::mtxTranspose(normalMatrix, inverse);
+        float normal[16];
+        normalMatrix(item.world, normal);
         setDrawState(item, nearest);
         bgfx::setTransform(item.world.data());
-        bgfx::setUniform(normalMatrix_, normalMatrix);
+        bgfx::setUniform(normalMatrix_, normal);
         if (item.bones >= 0) {
             const std::vector<Mat4>& bones = boneSets[static_cast<size_t>(item.bones)];
             bgfx::setUniform(bones_, bones.data(), static_cast<uint16_t>(bones.size()));

@@ -1,0 +1,24 @@
+// vertex() with fragment() (shader_vertex.scene): leans each mesh over time and tints it by height; on alphaMode mask
+// materials it also cuts stripes. The shadow passes run both, so shadows lean and are cut the same way.
+param float sway = 0.4 range(0, 1);     // how far the top leans, per unit of height
+param float speed = 1.5 range(0, 8);
+param float base = -0.5;                // object-space height where the lean starts
+param float height = 1.0 range(0.1, 4); // object-space height it grows over
+param float stripes = 0.0 range(0, 12); // > 0: cut this many gaps along V (mask materials)
+param color top = color(1.0, 0.75, 0.2);
+
+void vertex()
+{
+    // A phase per instance and per world position, so copies don't move in step.
+    vec3 origin = mul(MODEL_MATRIX, vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    float h = saturate((VERTEX.y - base) / height);
+    VERTEX.x += sway * height * h * h * sin(TIME * speed + origin.x * 1.7 + float(INSTANCE_ID));
+    COLOR.rgb *= mix(vec3(1.0, 1.0, 1.0), top.rgb, h);
+}
+
+void fragment()
+{
+    ALBEDO *= COLOR.rgb;
+    if (stripes > 0.0)
+        ALPHA = step(0.4, fract(UV.y * stripes));
+}

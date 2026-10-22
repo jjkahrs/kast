@@ -38,18 +38,18 @@ std::string u8(const std::filesystem::path& path)
 bool compileShader(const kast::ShaderSource& source, kast::ShaderStage stage, std::vector<uint8_t>& bytecode,
                    std::string& error)
 {
-    (void)stage; // ponytail: fragment only, the one stage a .kshader has so far
     const std::filesystem::path tools = toolDir();
     const std::filesystem::path shaderc = tools / "shaderc.exe";
     const std::filesystem::path mesh = tools / "kshader" / "mesh";
+    const std::string_view templateName = kast::shaderTemplate(stage);
     std::string templateText;
-    if (!std::filesystem::exists(shaderc) || !readBytes(mesh / "fs_mesh.sc", templateText) || templateText.empty()) {
-        error = std::format("shaderc.exe or kshader/mesh/fs_mesh.sc is missing next to the editor ({})", u8(tools));
+    if (!std::filesystem::exists(shaderc) || !readBytes(mesh / templateName, templateText) || templateText.empty()) {
+        error = std::format("shaderc.exe or kshader/mesh/{} is missing next to the editor ({})", templateName, u8(tools));
         return false;
     }
-    const std::string generated = kast::generateShader(templateText, source);
+    const std::string generated = kast::generateShader(templateText, source, stage);
     if (generated.empty()) {
-        error = "the mesh template kshader/mesh/fs_mesh.sc has no //@user line";
+        error = std::format("the mesh template kshader/mesh/{} has no //@user line", templateName);
         return false;
     }
 
@@ -65,8 +65,9 @@ bool compileShader(const kast::ShaderSource& source, kast::ShaderStage stage, st
         return false;
     }
     // As CMakeLists.txt compiles the built-in shaders. SDL quotes each argument.
-    const std::string args[] = {u8(shaderc), "-f", u8(in), "-o", u8(out), "--type", "fragment", "--platform", "windows",
-                                "-p", "s_5_0", "-i", u8(tools / "kshader" / "include"), "--varyingdef",
+    const std::string args[] = {u8(shaderc), "-f", u8(in), "-o", u8(out), "--type",
+                                kast::isVertexStage(stage) ? "vertex" : "fragment", "--platform", "windows", "-p", "s_5_0",
+                                "-i", u8(tools / "kshader" / "include"), "-i", u8(mesh), "--varyingdef",
                                 u8(mesh / "varying.def.sc")};
     std::vector<const char*> argv;
     for (const std::string& arg : args)

@@ -13,8 +13,8 @@
 #include <unordered_map>
 #include <vector>
 
-// User shaders: .kshader files (bgfx .sc GLSL, see docs/engine/shaders.html) whose fragment() Kast injects into its mesh
-// shader template (engine/shaders/fs_mesh.sc, at its "//@user" line). GPU-free: parsing, code generation, compile error
+// User shaders: .kshader files (bgfx .sc GLSL, see docs/engine/shaders.html) whose fragment() and vertex() Kast injects
+// into its mesh shader templates (engine/shaders/fs_mesh.sc and vs_mesh*.sc, at their "//@user" line). GPU-free: parsing, code generation, compile error
 // mapping and the library of compiled bytecode. Compiling (shaderc) is a ShaderCompiler the host provides: the editor's
 // runs shaderc.exe (editor/shader_compiler.h); the player has none. The renderer owns the programs.
 namespace kast {
@@ -47,7 +47,8 @@ struct ShaderParam {
 struct ShaderSource {
     std::vector<ShaderParam> params;
     std::string code;          // the file with its param lines blanked (line numbers unchanged), '\n' line ends
-    bool customNormal = false; // mentions NORMAL or NORMAL_MAP: the template always applies the normal map
+    bool customNormal = false; // mentions NORMAL or NORMAL_MAP outside vertex(): the template always applies the normal map
+    bool hasVertex = false;    // has a vertex(): compiled into the vertex templates too
 };
 
 // Number of floats a numeric param holds (1..4); 0 for texture2D.
@@ -68,16 +69,27 @@ std::string shaderParamTexture(const Material& material, const ShaderParam& para
 bool checkShaderParams(const Material& material, const ShaderSource& source, std::string& error,
                        std::vector<std::string>& unknown);
 
-// templateText (a mesh template, '\n' or "\r\n" line ends) with source's param declarations and code at its "//@user"
-// line, its fragment() given the template's signature, and a "#pragma kast_line <n>" marker before each line of the
-// .kshader so compile errors map back to it (mapShaderErrors). Empty if the template has no "//@user" line.
-std::string generateShader(std::string_view templateText, const ShaderSource& source);
+// What a .kshader compiles into. Shadow: fs_mesh with KAST_SHADOW, the shadow passes' fragment shader, so fragment()'s
+// ALPHA and discard cut shadows out too. The shadow passes share the vertex stages with the main pass.
+enum class ShaderStage { Fragment, Shadow, Vertex, SkinnedVertex, InstancedVertex };
+constexpr size_t kShaderStageCount = 5;
+bool isVertexStage(ShaderStage stage);
+// The template stage compiles from, as engine/shaders names it ("fs_mesh.sc", "vs_mesh_skinned.sc", ...).
+std::string_view shaderTemplate(ShaderStage stage);
+// The stages source compiles into: Fragment and Shadow, and the vertex stages if it has a vertex() (else its draws use
+// the built-in vertex shaders, which are the same templates without user code).
+std::vector<ShaderStage> shaderStages(const ShaderSource& source);
+
+// templateText (stage's mesh template, '\n' or "\r\n" line ends) with source's param declarations and code at its
+// "//@user" line, and a "#pragma kast_line <n>" marker before each line of the .kshader so compile errors map back to it
+// (mapShaderErrors). The stage's function (fragment() or vertex()) gets the template's signature; the other one is
+// blanked, keeping line numbers. Empty if the template has no "//@user" line.
+std::string generateShader(std::string_view templateText, const ShaderSource& source, ShaderStage stage);
 // shaderc's output for a failed compile of generateShader's text, as "line <n>: error X3004: ..." lines with .kshader
 // line numbers (n from the marker before the error's line in shaderc's listing). Errors outside the listing or in the
 // template say "generated line <n>"; preprocessor errors are kept as they are.
 std::string mapShaderErrors(std::string_view shadercOutput);
 
-enum class ShaderStage { Fragment }; // the templates a .kshader compiles into
 // Compiles a parsed .kshader for one stage to bytecode; false + error (line numbers in the .kshader).
 using ShaderCompiler =
     std::function<bool(const ShaderSource& source, ShaderStage stage, std::vector<uint8_t>& bytecode, std::string& error)>;
@@ -85,7 +97,8 @@ using ShaderCompiler =
 // A .kshader that compiled.
 struct CompiledShader {
     ShaderSource source;
-    std::vector<uint8_t> fragment; // fs_mesh with its fragment()
+    std::array<std::vector<uint8_t>, kShaderStageCount> bytecode; // by ShaderStage; empty for stages not in shaderStages()
+    const std::vector<uint8_t>& stage(ShaderStage s) const { return bytecode[static_cast<size_t>(s)]; }
 };
 
 // .kshader files by project-relative path, each parsed and compiled once and again when its file's modification time

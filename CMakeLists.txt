@@ -63,12 +63,14 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
   endif()
   set(src "${CMAKE_CURRENT_SOURCE_DIR}/${path}.sc")
   set(out "${KAST_SHADER_OUT}/${shader}.bin.h")
+  file(GLOB headers "${CMAKE_CURRENT_SOURCE_DIR}/${dir}/*.sh") # e.g. engine/shaders/mesh.sh, included from the dir
   add_custom_command(
     OUTPUT "${out}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${KAST_SHADER_OUT}"
     COMMAND "${KAST_SHADERC}" -f "${src}" -o "${out}" --bin2c ${shader} --type ${type}
-            --platform windows -p s_5_0 -i "${KAST_SHADER_INCLUDE}" --varyingdef "${varying}"
-    DEPENDS "${src}" "${varying}"
+            --platform windows -p s_5_0 -i "${KAST_SHADER_INCLUDE}" -i "${CMAKE_CURRENT_SOURCE_DIR}/${dir}"
+            --varyingdef "${varying}"
+    DEPENDS "${src}" "${varying}" ${headers}
     COMMENT "shaderc ${shader}.sc"
     VERBATIM)
   if(dir MATCHES "^engine/")
@@ -85,6 +87,10 @@ foreach(pair "${KAST_SHADERC}|shaderc.exe"
              "${KAST_SHADER_INCLUDE}/bgfx_shader.sh|kshader/include/bgfx_shader.sh"
              "${KAST_SHADER_INCLUDE}/bgfx_compute.sh|kshader/include/bgfx_compute.sh"
              "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/fs_mesh.sc|kshader/mesh/fs_mesh.sc"
+             "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/vs_mesh.sc|kshader/mesh/vs_mesh.sc"
+             "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/vs_mesh_skinned.sc|kshader/mesh/vs_mesh_skinned.sc"
+             "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/vs_mesh_instanced.sc|kshader/mesh/vs_mesh_instanced.sc"
+             "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/mesh.sh|kshader/mesh/mesh.sh"
              "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/varying.def.sc|kshader/mesh/varying.def.sc")
   string(REPLACE "|" ";" pair "${pair}")
   list(GET pair 0 from)
@@ -1056,6 +1062,23 @@ kast_shader_shot(showcase "${KAST_SHADER_TEST_PROJECT}" shader_showcase.scene
   "-DFORBID_OUTPUT=\\[error\\]|magenta")
 kast_shader_shot(showcase_builtin "${KAST_SHADER_TEST_PROJECT}" shader_showcase_builtin.scene)
 kast_shader_compare(shader_showcase_differs showcase_builtin showcase OFF)
+# - shader_vertex_offset: lift.kshader's vertex() raising a cube and an instanced batch of spheres, and a mask material
+#   whose fragment() cuts every pixel, must render exactly as the plain meshes placed higher and a fully transparent
+#   cutout (shader_vertex_offset_reference.scene): shadows follow vertex() and fragment()'s ALPHA.
+# - shader_vertex: sway.kshader's vertex() on a cutout primitive, an instanced batch and a skinned model must compile
+#   and differ from a copy without its shader materials.
+kast_shader_shot(vertex_offset "${KAST_SHADER_TEST_PROJECT}" shader_vertex_offset.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/lift.kshader'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]|magenta")
+kast_shader_shot(vertex_offset_reference "${KAST_SHADER_TEST_PROJECT}" shader_vertex_offset_reference.scene)
+kast_shader_compare(shader_vertex_offset_same vertex_offset_reference vertex_offset ON)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/shader_vertex.scene")
+file(READ "${KAST_TEST_PROJECT}/shader_vertex.scene" shader_scene)
+string(REGEX REPLACE "materials/shader_[a-z_]+\\.mat" "" shader_scene "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_vertex_builtin.scene" "${shader_scene}")
+kast_shader_shot(vertex "${KAST_SHADER_TEST_PROJECT}" shader_vertex.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/sway.kshader'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]|magenta")
+kast_shader_shot(vertex_builtin "${KAST_SHADER_TEST_PROJECT}" shader_vertex_builtin.scene)
+kast_shader_compare(shader_vertex_differs vertex_builtin vertex OFF)
 add_test(NAME project_startup
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/project_startup.png"
           "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")

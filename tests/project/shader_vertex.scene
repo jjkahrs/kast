@@ -1,0 +1,292 @@
+{
+  "version": 5,
+  "lighting": {
+    "ambientColor": [
+      0.7,
+      0.8,
+      1
+    ],
+    "ambientIntensity": 0.3
+  },
+  "editor": {
+    "camera": {
+      "pivot": [
+        0,
+        0.8,
+        0
+      ],
+      "yaw": 0,
+      "pitch": -35,
+      "distance": 6.5
+    }
+  },
+  "entities": [
+    {
+      "id": 1,
+      "name": "Sun",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            6,
+            0
+          ],
+          "rotation": [
+            -0.408218,
+            -0.23457,
+            -0.109382,
+            0.875426
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "DirectionalLight": {
+          "color": [
+            1,
+            0.95,
+            0.9
+          ],
+          "intensity": 1.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            12,
+            1,
+            8
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "plane",
+          "material": ""
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Cutout Cube",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -3.2,
+            0.75,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1.5,
+            1.5,
+            1.5
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/shader_sway_cutout.mat"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Grass 1",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -1.4,
+            0.75,
+            -0.6
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            0.3,
+            1.5,
+            0.3
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/shader_sway.mat"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Grass 2",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -0.7,
+            0.75,
+            0.20000000000000007
+          ],
+          "rotation": [
+            0,
+            0.38,
+            0,
+            0.925
+          ],
+          "scale": [
+            0.3,
+            1.5,
+            0.3
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/shader_sway.mat"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Grass 3",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            0.75,
+            -0.6
+          ],
+          "rotation": [
+            0,
+            0.0,
+            0,
+            1
+          ],
+          "scale": [
+            0.3,
+            1.5,
+            0.3
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/shader_sway.mat"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Grass 4",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.6999999999999997,
+            0.75,
+            0.20000000000000007
+          ],
+          "rotation": [
+            0,
+            0.2,
+            0,
+            0.98
+          ],
+          "scale": [
+            0.3,
+            1.5,
+            0.3
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/shader_sway.mat"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Grass 5",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            1.4,
+            0.75,
+            -0.6
+          ],
+          "rotation": [
+            0,
+            0.6,
+            0,
+            0.8
+          ],
+          "scale": [
+            0.3,
+            1.5,
+            0.3
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/shader_sway.mat"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Character",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            2.6,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ModelRenderer": {
+          "model": "models/female-128-anim.glb",
+          "materials": [
+            "materials/shader_sway_character.mat"
+          ]
+        }
+      }
+    }
+  ]
+}

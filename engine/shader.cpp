@@ -243,6 +243,34 @@ const std::regex& fragmentSignature()
     return re;
 }
 
+const std::regex& vertexSignature()
+{
+    static const std::regex re(R"(\bvoid\s+vertex\s*\(\s*(void\s*)?\))");
+    return re;
+}
+
+// code with the function signature matches (in stripped, code without comments) blanked from its signature to its
+// closing brace, newlines kept. Unchanged without one, or if its braces don't close (the compiler then says so).
+std::string blankFunction(std::string code, const std::string& stripped, const std::regex& signature)
+{
+    std::smatch match;
+    if (!std::regex_search(stripped, match, signature))
+        return code;
+    const auto start = static_cast<size_t>(match.position(0));
+    size_t i = stripped.find('{', start + static_cast<size_t>(match.length(0)));
+    for (int depth = 0; i < stripped.size(); ++i) {
+        depth += stripped[i] == '{' ? 1 : stripped[i] == '}' ? -1 : 0;
+        if (depth == 0)
+            break;
+    }
+    if (i >= stripped.size())
+        return code;
+    for (size_t k = start; k <= i; ++k)
+        if (code[k] != '\n')
+            code[k] = ' ';
+    return code;
+}
+
 // The lines of text, without their '\n' or "\r\n" (none after a last '\n').
 std::vector<std::string_view> splitLines(std::string_view text)
 {
@@ -291,14 +319,14 @@ int componentCount(ShaderParamType type)
 
 const std::vector<std::string>& shaderBuiltinNames()
 {
-    // The template's (fs_mesh.sc), plus those of later stages and inputs, kept now so a param can't take them later.
+    // The templates' (fs_mesh.sc, mesh.sh), plus those of later stages, kept now so a param can't take them later.
     static const std::vector<std::string> names = {
         "UV", "COLOR", "NORMAL", "TANGENT", "WORLD_POSITION", "VIEW_POSITION", "FRAG_COORD", "ALBEDO", "ALPHA",
         "METALLIC", "ROUGHNESS", "EMISSION", "NORMAL_MAP", "NORMAL_MAP_DEPTH", "AO", "TIME", "CAMERA_POSITION",
         "MATERIAL_BASE_COLOR", "MATERIAL_METALLIC", "MATERIAL_ROUGHNESS", "MATERIAL_EMISSION", "MATERIAL_ALPHA_CUTOFF",
         "MATERIAL_UV_TRANSFORM", "sampleBaseColor", "sampleMetallicRoughness", "sampleNormal", "sampleOcclusion",
         "sampleEmissive", "fragment", "vertex", "light",
-        // vertex() and light() built-ins, SCREEN_TEXTURE / DEPTH_TEXTURE
+        // vertex() (mesh.sh) and light() built-ins, SCREEN_TEXTURE / DEPTH_TEXTURE
         "VERTEX", "INSTANCE_ID", "MODEL_MATRIX", "WORLD_MATRIX", "VIEW_MATRIX", "PROJECTION_MATRIX", "LIGHT_DIRECTION",
         "LIGHT_COLOR", "ATTENUATION", "VIEW", "DIFFUSE_LIGHT", "SPECULAR_LIGHT", "SCREEN_TEXTURE", "SCREEN_UV",
         "DEPTH_TEXTURE", "PI"};
@@ -358,7 +386,8 @@ bool parseShader(std::string_view text, ShaderSource& out, std::string& error)
         return false;
     }
     static const std::regex normal(R"(\bNORMAL(_MAP)?\b)");
-    source.customNormal = std::regex_search(stripped, normal);
+    source.customNormal = std::regex_search(blankFunction(stripped, stripped, vertexSignature()), normal);
+    source.hasVertex = std::regex_search(stripped, vertexSignature());
     out = std::move(source);
     return true;
 }
@@ -414,8 +443,38 @@ bool checkShaderParams(const Material& material, const ShaderSource& source, std
     return true;
 }
 
-std::string generateShader(std::string_view templateText, const ShaderSource& source)
+bool isVertexStage(ShaderStage stage)
 {
+    return stage != ShaderStage::Fragment && stage != ShaderStage::Shadow;
+}
+
+std::string_view shaderTemplate(ShaderStage stage)
+{
+    switch (stage) {
+    case ShaderStage::Fragment:
+    case ShaderStage::Shadow:
+        return "fs_mesh.sc";
+    case ShaderStage::Vertex:
+        return "vs_mesh.sc";
+    case ShaderStage::SkinnedVertex:
+        return "vs_mesh_skinned.sc";
+    case ShaderStage::InstancedVertex:
+        break;
+    }
+    return "vs_mesh_instanced.sc";
+}
+
+std::vector<ShaderStage> shaderStages(const ShaderSource& source)
+{
+    std::vector<ShaderStage> stages = {ShaderStage::Fragment, ShaderStage::Shadow};
+    if (source.hasVertex)
+        stages.insert(stages.end(), {ShaderStage::Vertex, ShaderStage::SkinnedVertex, ShaderStage::InstancedVertex});
+    return stages;
+}
+
+std::string generateShader(std::string_view templateText, const ShaderSource& source, ShaderStage stage)
+{
+    const bool vertex = isVertexStage(stage);
     std::string out;
     bool injected = false;
     for (std::string_view line : splitLines(templateText)) {
@@ -425,8 +484,13 @@ std::string generateShader(std::string_view templateText, const ShaderSource& so
         }
         injected = true;
         out += "#pragma warning(disable: 3568) // \"unknown pragma\": the kast_line markers\n";
-        out += "#define KAST_FRAGMENT\n";
-        if (source.customNormal)
+        if (vertex && source.hasVertex)
+            out += "#define KAST_VERTEX\n";
+        if (!vertex)
+            out += "#define KAST_FRAGMENT\n";
+        if (stage == ShaderStage::Shadow)
+            out += "#define KAST_SHADOW\n";
+        if (!vertex && source.customNormal)
             out += "#define KAST_CUSTOM_NORMAL\n";
         if (std::ranges::any_of(source.params, [](const ShaderParam& p) { return p.type != ShaderParamType::Texture2D; }))
             out += std::format("uniform vec4 u_kastParams[{}];\n", kMaxShaderParams);
@@ -440,13 +504,14 @@ std::string generateShader(std::string_view templateText, const ShaderSource& so
                                    kSwizzles[componentCount(param.type)]);
             }
         }
-        // fragment() gets the template's signature; a marker before each line (not inside a macro continued with '\').
-        std::string code = source.code;
+        // The stage's function gets the template's signature, the other is blanked; a marker before each line (not
+        // inside a macro continued with '\').
+        const std::string stripped = stripComments(source.code);
+        std::string code = blankFunction(source.code, stripped, vertex ? fragmentSignature() : vertexSignature());
         std::smatch match;
-        const std::string stripped = stripComments(code);
-        if (std::regex_search(stripped, match, fragmentSignature()))
+        if (std::regex_search(stripped, match, vertex ? vertexSignature() : fragmentSignature()))
             code.replace(static_cast<size_t>(match.position(0)), static_cast<size_t>(match.length(0)),
-                         "void fragment(inout KastFragment kast_f)");
+                         vertex ? "void vertex(inout KastVertex kast_v)" : "void fragment(inout KastFragment kast_f)");
         int number = 0;
         bool continued = false;
         for (std::string_view user : splitLines(code)) {
@@ -540,7 +605,9 @@ void ShaderLibrary::load(const std::string& path, Entry& entry)
     else if (file && !compiler_)
         error = "no shader compiler here (shaderc runs in the editor)";
     else if (file && parseShader(text, shader->source, error) &&
-             compiler_(shader->source, ShaderStage::Fragment, shader->fragment, error))
+             std::ranges::all_of(shaderStages(shader->source), [&](ShaderStage stage) {
+                 return compiler_(shader->source, stage, shader->bytecode[static_cast<size_t>(stage)], error);
+             }))
         entry.shader = std::move(shader);
     if (entry.shader)
         log::info(std::format("Compiled shader '{}'", path));

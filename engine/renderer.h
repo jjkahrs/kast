@@ -137,12 +137,15 @@ private:
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
     };
-    // A .kshader's programs: its fs_mesh with each built-in mesh vertex shader. Rebuilt when the library hands out a
-    // different (recompiled) shader.
+    // A .kshader's programs: its fs_mesh (main pass) and its shadow fragment shader (shadow passes), each with its mesh
+    // vertex shaders (the built-in ones if it has no vertex()). Rebuilt when the library hands out a different
+    // (recompiled) shader.
     struct UserShader {
         std::shared_ptr<const CompiledShader> source;
-        bgfx::ShaderHandle fragment = BGFX_INVALID_HANDLE;
+        std::vector<bgfx::ShaderHandle> shaders; // the ones made from its bytecode (not the built-in vertex shaders)
         bgfx::ProgramHandle mesh = BGFX_INVALID_HANDLE, skinned = BGFX_INVALID_HANDLE, instanced = BGFX_INVALID_HANDLE;
+        bgfx::ProgramHandle shadowMesh = BGFX_INVALID_HANDLE, shadowSkinned = BGFX_INVALID_HANDLE,
+                            shadowInstanced = BGFX_INVALID_HANDLE;
     };
     // GPU copy of a Model, rebuilt when the library hands out a different (reloaded) one.
     struct GpuModel {
@@ -202,10 +205,15 @@ private:
     ShadowFrame renderShadows(const DirectionalLight* sun, const bx::Vec3& sunDir, const std::vector<DrawItem>& draws,
                               const std::vector<std::vector<Mat4>>& boneSets, const std::vector<PointLightSample>& pointLights,
                               const float* viewMtx, const float* projMtx, bgfx::ViewId shadowViews);
-    // Draws one batch (see batchDraws) into a shadow view: instanced if it can be, else one by one.
+    // Draws one batch (see batchDraws) into a shadow view: instanced if it can be, else one by one. eye: the camera's
+    // world position (CAMERA_POSITION for .kshader casters).
     void submitShadowCasters(const std::vector<const DrawItem*>& batch, const std::vector<std::vector<Mat4>>& boneSets,
-                             bgfx::ViewId view);
+                             const bx::Vec3& eye, bgfx::ViewId view);
+    // The uniforms and textures of item's material (and its .kshader's params) and u_time, as fs_mesh.sc reads them.
+    void setMaterialState(const DrawItem& item);
     // Culling is on and item is outside frustum (posed draws never are: their bounds are the bind pose's).
+    // ponytail: by the undisplaced bounds; a .kshader vertex() moving geometry outside them can pop at the frustum's edge.
+    // Pad the bounds per material (a .kshader "cull margin") if that shows.
     bool culled(const DrawItem& item, const Frustum& frustum) const
     {
         return culling_ && !item.posed && !intersects(frustum, item.bounds);

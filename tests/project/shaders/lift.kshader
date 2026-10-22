@@ -1,0 +1,10 @@
+// vertex() moving each mesh up by lift (shader_vertex_offset.scene): it must look exactly like the plain mesh placed
+// that much higher, shadow included.
+param float lift = 1.0;
+
+void vertex()
+{
+    VERTEX.y += lift;
+}
+
+void fragment() {}

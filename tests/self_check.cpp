@@ -2974,7 +2974,7 @@ void checkBuildSettings()
                                        "physics.scene",
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                       "shader_errors.scene", "shader_showcase.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
+                                       "shader_errors.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                        "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "ui_effects.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
@@ -2998,7 +2998,7 @@ void checkBuildSettings()
                                                           "particles_texture.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                                          "shader_errors.scene", "shader_showcase.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
+                                                          "shader_errors.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                                           "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "ui_effects.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
@@ -6055,22 +6055,27 @@ void checkShaders()
         check(contains(materialError(text), expected), std::format(".mat {} is rejected: {}", text, expected).c_str());
 
     // Generated code: params and markers at the template's //@user line; the template's built-ins are all reserved.
-    std::string templateText = readText(std::filesystem::path(KAST_SOURCE_DIR) / "engine/shaders/fs_mesh.sc");
-    check(contains(templateText, "\n//@user"), "fs_mesh.sc has the //@user line");
+    const std::filesystem::path shaderDir = std::filesystem::path(KAST_SOURCE_DIR) / "engine/shaders";
+    std::string templateText = readText(shaderDir / "fs_mesh.sc");
     std::smatch match;
     const std::regex define(R"(#define (\w+) )");
     bool reserved = true;
-    for (auto it = std::sregex_iterator(templateText.begin(), templateText.end(), define); it != std::sregex_iterator(); ++it)
-        if (const std::string name = (*it)[1].str(); !name.starts_with("MAX_") && !name.starts_with("CSM_") &&
-                                                      !name.starts_with("POINT_SHADOW_") &&
-                                                      std::ranges::find(kast::shaderBuiltinNames(), name) ==
-                                                          kast::shaderBuiltinNames().end()) {
-            reserved = false;
-            kast::log::error(std::format("fs_mesh.sc's #define {} is not in shaderBuiltinNames()", name));
-        }
-    check(reserved, "every built-in the template defines is a reserved param name");
+    for (const char* file : {"fs_mesh.sc", "vs_mesh.sc", "vs_mesh_skinned.sc", "vs_mesh_instanced.sc", "mesh.sh"}) {
+        const std::string text = readText(shaderDir / file);
+        check(std::string_view(file) == "mesh.sh" || contains(text, "\n//@user"),
+              std::format("{} has the //@user line", file).c_str());
+        for (auto it = std::sregex_iterator(text.begin(), text.end(), define); it != std::sregex_iterator(); ++it)
+            if (const std::string name = (*it)[1].str(); !name.starts_with("MAX_") && !name.starts_with("CSM_") &&
+                                                          !name.starts_with("POINT_SHADOW_") &&
+                                                          std::ranges::find(kast::shaderBuiltinNames(), name) ==
+                                                              kast::shaderBuiltinNames().end()) {
+                reserved = false;
+                kast::log::error(std::format("{}'s #define {} is not in shaderBuiltinNames()", file, name));
+            }
+    }
+    check(reserved, "every built-in the templates define is a reserved param name");
     check(kast::parseShader(valid, source, error), "parse again");
-    const std::string generated = kast::generateShader(templateText, source);
+    const std::string generated = kast::generateShader(templateText, source, kast::ShaderStage::Fragment);
     check(contains(generated, "#define KAST_FRAGMENT\n") && contains(generated, "uniform vec4 u_kastParams[16];\n") &&
               contains(generated, "#define speed (u_kastParams[0].x)\n") &&
               contains(generated, "#define scroll (u_kastParams[2].xy)\n") &&
@@ -6080,9 +6085,9 @@ void checkShaders()
               contains(generated, "#pragma kast_line 12\nvoid fragment(inout KastFragment kast_f)\n") &&
               contains(generated, "#pragma kast_line 14\n    ALBEDO *= tint * speed;\n") && !contains(generated, "\n//@user"),
           "generated fs_mesh: params as uniforms / samplers, markers before each .kshader line, the template signature");
-    check(kast::generateShader("void main() {}\n", source).empty(), "a template without //@user generates nothing");
+    check(kast::generateShader("void main() {}\n", source, kast::ShaderStage::Fragment).empty(), "a template without //@user generates nothing");
     check(kast::parseShader("#define LONG(x) \\\n    (x)\nvoid fragment() {}\n", source, error) &&
-              contains(kast::generateShader(templateText, source), "#pragma kast_line 1\n#define LONG(x) \\\n    (x)\n#pragma kast_line 3\n"),
+              contains(kast::generateShader(templateText, source, kast::ShaderStage::Fragment), "#pragma kast_line 1\n#define LONG(x) \\\n    (x)\n#pragma kast_line 3\n"),
           "no marker inside a macro continued with a backslash");
 
     // shaderc's listing to .kshader lines: the marker nearest above the error's line.
@@ -6122,6 +6127,61 @@ void checkShaders()
               !compileShader(source, kast::ShaderStage::Fragment, bytecode, error) && contains(error, "line 4: error X3000"),
           std::format("a missing ';' is reported where the compiler sees it (the next line): {}", error).c_str());
 
+    // vertex(): each stage gets its own function with the template's signature and the other one blanked (lines kept);
+    // the vertex templates define KAST_VERTEX only for a .kshader with a vertex(), the shadow stage KAST_SHADOW.
+    const std::string withVertex = "param float lift = 1.0;\n"
+                                   "param texture2D noise = black;\n"
+                                   "float wave(float x) { return sin(x + TIME) * MATERIAL_ROUGHNESS; } // every stage\n"
+                                   "void vertex()\n"
+                                   "{\n"
+                                   "    VERTEX.y += lift * wave(VERTEX.x) * texture2DLod(noise, UV, 0.0).r; // { a brace\n"
+                                   "    NORMAL = normalize(NORMAL);\n"
+                                   "}\n"
+                                   "void fragment()\n"
+                                   "{\n"
+                                   "    if (UV.x > 0.5) { ALBEDO = vec3(1.0, 0.0, 0.0); }\n"
+                                   "}\n";
+    check(kast::parseShader(withVertex, source, error) && source.hasVertex && !source.customNormal,
+          "vertex() is found; NORMAL inside it doesn't make the fragment stage apply the normal map");
+    check(kast::shaderStages(source).size() == kast::kShaderStageCount, "a .kshader with vertex() compiles every stage");
+    const std::string vertexTemplate = readText(shaderDir / "vs_mesh.sc");
+    const std::string vs = kast::generateShader(vertexTemplate, source, kast::ShaderStage::Vertex);
+    const std::string fs = kast::generateShader(templateText, source, kast::ShaderStage::Fragment);
+    const std::string shadowFs = kast::generateShader(templateText, source, kast::ShaderStage::Shadow);
+    check(contains(vs, "#define KAST_VERTEX\n") && !contains(vs, "KAST_FRAGMENT") &&
+              contains(vs, "#pragma kast_line 4\nvoid vertex(inout KastVertex kast_v)\n") &&
+              contains(vs, "#pragma kast_line 11\n" + std::string(53, ' ') + "\n") && !contains(vs, "ALBEDO = vec3"),
+          "generated vs_mesh: vertex() with the template signature, fragment() blanked line for line");
+    check(contains(fs, "#define KAST_FRAGMENT\n") && !contains(fs, "#define KAST_VERTEX") &&
+              !contains(fs, "#define KAST_SHADOW") && !contains(fs, "VERTEX.y") &&
+              contains(fs, "#pragma kast_line 9\nvoid fragment(inout KastFragment kast_f)\n"),
+          "generated fs_mesh: fragment() with the template signature, vertex() blanked");
+    check(contains(shadowFs, "#define KAST_FRAGMENT\n#define KAST_SHADOW\n"), "the shadow stage is fs_mesh with KAST_SHADOW");
+    check(kast::parseShader("void fragment() {}\n", source, error) && !source.hasVertex &&
+              kast::shaderStages(source) ==
+                  std::vector<kast::ShaderStage>{kast::ShaderStage::Fragment, kast::ShaderStage::Shadow} &&
+              !contains(kast::generateShader(vertexTemplate, source, kast::ShaderStage::Vertex), "#define KAST_VERTEX"),
+          "without vertex(): fragment and shadow stages only");
+    for (const kast::ShaderStage stage : {kast::ShaderStage::Fragment, kast::ShaderStage::Shadow, kast::ShaderStage::Vertex,
+                                          kast::ShaderStage::SkinnedVertex, kast::ShaderStage::InstancedVertex})
+        check(kast::parseShader(withVertex, source, error) && compileShader(source, stage, bytecode, error) &&
+                  !bytecode.empty(),
+              std::format("a .kshader with vertex() compiles for {} ({})", kast::shaderTemplate(stage), error).c_str());
+    const std::string vertexBroken = "param float lift = 1.0;\n"
+                                     "void vertex()\n"
+                                     "{\n"
+                                     "    VERTEX.y += lift * INSTANCE_ID;\n"
+                                     "    VERTEX.x += ALBEDO.x;\n"
+                                     "}\n"
+                                     "void fragment() {}\n";
+    check(kast::parseShader(vertexBroken, source, error) &&
+              compileShader(source, kast::ShaderStage::Fragment, bytecode, error) &&
+              !compileShader(source, kast::ShaderStage::InstancedVertex, bytecode, error) &&
+              contains(error, "line 5: error X3004: undeclared identifier 'ALBEDO'"),
+          std::format("an error in vertex() is reported at its .kshader line (and fragment() alone still compiles): {}",
+                      error)
+              .c_str());
+
     // The library: compiles once per change, null (logged once, with the line) when broken or missing.
     const std::filesystem::path dir = testRoot() / "kast_shader_check";
     removeTree(dir);
@@ -6136,8 +6196,11 @@ void checkShaders()
     library.setRoot(dir);
     library.setCompiler(compileShader);
     const auto good = library.get("shaders/good.kshader");
-    check(good && !good->fragment.empty() && good->source.params.size() == 1 && library.get("shaders/good.kshader") == good,
-          "a .kshader compiles once and is shared");
+    check(good && !good->stage(kast::ShaderStage::Fragment).empty() && !good->stage(kast::ShaderStage::Shadow).empty() &&
+              good->stage(kast::ShaderStage::Vertex).empty() && good->source.params.size() == 1 &&
+              library.get("shaders/good.kshader") == good,
+          "a .kshader compiles once (fragment and shadow stages; no vertex() takes the built-in vertex shaders) and is "
+          "shared");
     check(!library.get("shaders/bad.kshader") && !library.get("shaders/none.kshader"), "broken and missing: null");
     for (int i = 0; i < 3; ++i)
         library.reloadChanged();

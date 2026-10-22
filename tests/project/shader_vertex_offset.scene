@@ -1,0 +1,232 @@
+{
+  "version": 5,
+  "lighting": {
+    "ambientColor": [
+      0.7,
+      0.8,
+      1
+    ],
+    "ambientIntensity": 0.3
+  },
+  "editor": {
+    "camera": {
+      "pivot": [
+        0,
+        0.8,
+        0
+      ],
+      "yaw": 0,
+      "pitch": -25,
+      "distance": 9
+    }
+  },
+  "entities": [
+    {
+      "id": 1,
+      "name": "Sun",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            6,
+            0
+          ],
+          "rotation": [
+            -0.408218,
+            -0.23457,
+            -0.109382,
+            0.875426
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "DirectionalLight": {
+          "color": [
+            1,
+            0.95,
+            0.9
+          ],
+          "intensity": 1.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            12,
+            1,
+            8
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "plane",
+          "material": ""
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Lifted Cube",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -2.5,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/shader_lift.mat"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Lifted Sphere 1",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "sphere",
+          "material": "materials/shader_lift.mat"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Lifted Sphere 2",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            1.2,
+            0,
+            0.6
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "sphere",
+          "material": "materials/shader_lift.mat"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Lifted Sphere 3",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            2.4,
+            0,
+            -0.4
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "sphere",
+          "material": "materials/shader_lift.mat"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Hidden",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -0.8,
+            1.5,
+            1.5
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/shader_hidden.mat"
+        }
+      }
+    }
+  ]
+}
