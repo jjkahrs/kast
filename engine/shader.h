@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -68,6 +69,13 @@ std::string shaderParamTexture(const Material& material, const ShaderParam& para
 // names go to unknown.
 bool checkShaderParams(const Material& material, const ShaderSource& source, std::string& error,
                        std::vector<std::string>& unknown);
+// A param's value as JSON, as a .mat stores it (the material's value, else the declared default; a texture2D without
+// one: ""). nullopt if source declares no param name.
+std::optional<nlohmann::ordered_json> shaderParamField(const Material& material, const ShaderSource& source,
+                                                       std::string_view name);
+// Sets the material's value for param name, checked against its declaration. False + error leaves material unchanged.
+bool setShaderParamField(Material& material, const ShaderSource& source, std::string_view name,
+                         const nlohmann::ordered_json& value, std::string& error);
 
 // What a .kshader compiles into. Shadow: fs_mesh with KAST_SHADOW, the shadow passes' fragment shader, so fragment()'s
 // ALPHA and discard cut shadows out too. The shadow passes share the vertex stages with the main pass.
@@ -101,32 +109,74 @@ struct CompiledShader {
     const std::vector<uint8_t>& stage(ShaderStage s) const { return bytecode[static_cast<size_t>(s)]; }
 };
 
+// The bytecode cache's key for one stage of a .kshader: a hash of its text, the stage and version (what else the
+// bytecode depends on: the templates, shaderc). 16 hex digits.
+std::string shaderCacheKey(std::string_view text, ShaderStage stage, std::string_view version);
+
 // .kshader files by project-relative path, each parsed and compiled once and again when its file's modification time
 // changes. One global library, so the editor's renderers share each compile.
-// ponytail: compiles on the calling (render) thread, blocking it for each compile.
+// Async (the editor): compiles run on worker threads; get() keeps handing out the last good shader while a recompile
+// runs and after it fails. Otherwise each compile runs inside the call that needs it (screenshots, tests).
+// With a cache version, each stage's bytecode is kept in <root>/.kast/shader_cache/<shaderCacheKey>.bin (a dot-folder:
+// never shipped), so unchanged shaders are not recompiled on the next start.
 class ShaderLibrary {
 public:
+    enum class State { None, Compiling, Compiled, Failed };
+    struct Status {
+        State state = State::None;  // None: no path or no root
+        std::string error;          // the last compile's (Failed), with .kshader line numbers
+        std::shared_ptr<const ShaderSource> declaration; // the file as last parsed (null if it didn't): its params
+        bool hasShader = false;     // a good compile renders (Compiling / Failed may still have the last good one)
+    };
+
     // Forgets every cached shader if root differs from the last call's.
     void setRoot(const std::filesystem::path& root);
-    void setCompiler(ShaderCompiler compiler) { compiler_ = std::move(compiler); }
-    // nullptr if path is empty, there is no root, the file is missing or doesn't parse or compile: logged once per load
-    // as an error naming the file and its line.
+    // version: the bytecode cache's (shaderCacheKey); empty = no cache.
+    void setCompiler(ShaderCompiler compiler, std::string version = {});
+    void setAsync(bool async) { async_ = async; }
+    // nullptr if path is empty, there is no root, it is still compiling for the first time, or the file is missing or
+    // doesn't parse or compile (each failure logged once per load as an error naming the file and its line).
     std::shared_ptr<const CompiledShader> get(const std::string& path);
-    // Reloads shaders whose file changed (or appeared / disappeared) since loaded.
+    // Starts loading path, as get() does, if it isn't yet.
+    Status status(const std::string& path);
+    // Takes in finished compiles, and reloads shaders whose file changed (or appeared / disappeared) since loaded.
     void reloadChanged();
+    // Blocks until no compile runs, and takes them in.
+    void wait();
 
 private:
+    struct Result {
+        std::shared_ptr<const CompiledShader> shader; // null: failed
+        std::string error;
+        double seconds = 0.0;
+        bool cached = false; // every stage came from the cache
+    };
     struct Entry {
-        std::shared_ptr<const CompiledShader> shader;
+        std::shared_ptr<const CompiledShader> shader; // the last good compile
         std::optional<std::filesystem::file_time_type> mtime;
+        std::shared_ptr<const ShaderSource> declaration;
+        std::string error;
+        std::future<Result> pending;
+        bool loaded = false; // a compile finished before (good or not): the next good one is a reload
     };
     void load(const std::string& path, Entry& entry);
+    void finish(const std::string& path, Entry& entry);
+    Entry& entry(const std::string& path); // loading it if it is new
 
     std::filesystem::path root_;
     ShaderCompiler compiler_;
+    std::string version_;
+    bool async_ = false;
     std::unordered_map<std::string, Entry> entries_;
 };
 
 ShaderLibrary& shaders();
+
+// What kast.get/setMaterialProperty and the Inspector edit: a material field (materialField / setMaterialField), else
+// a param its .kshader declares (as shaders() last parsed it). Built-in field names win; parseShader rejects params
+// named like them. nullopt / false + error ("unknown field ...") for a name that is neither.
+std::optional<nlohmann::ordered_json> materialProperty(const Material& material, std::string_view name);
+bool setMaterialProperty(Material& material, std::string_view name, const nlohmann::ordered_json& value,
+                         std::string& error);
 
 } // namespace kast

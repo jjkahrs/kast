@@ -218,7 +218,51 @@ bool writeNewMaterial(const fs::path& dir, fs::path& file, std::string& error)
     return saveMaterial(file, kast::Material{}, error);
 }
 
-std::vector<std::string> remapMaterialTextures(const fs::path& root, const std::string& from, const std::string& to)
+void pushMaterialStep(UndoStack& history, const fs::path& file, std::string name, const kast::Material& before,
+                      const kast::Material& after)
+{
+    if (kast::materialToJson(before) == kast::materialToJson(after))
+        return;
+    const auto save = [file](const kast::Material& material) {
+        return [file, material] {
+            if (std::string error; !saveMaterial(file, material, error))
+                kast::log::error(std::format("Cannot save material '{}': {}", utf8(file), error));
+        };
+    };
+    history.push({std::move(name), save(before), save(after)});
+}
+
+bool writeNewShader(const fs::path& dir, fs::path& file, std::string& error)
+{
+    std::string name = "new_shader.kshader";
+    for (int n = 2; assetNameTaken(dir, fromUtf8(name)); ++n)
+        name = std::format("new_shader_{}.kshader", n);
+    file = dir / fromUtf8(name); // ponytail: free when checked, not locked until written
+    return writeTextFile(file, R"(// A Kast shader (docs/engine/shaders.html). Use it from a material: pick it as the Inspector's Shader.
+// Code is bgfx .sc GLSL; fragment() and vertex() read and write the UPPERCASE built-ins.
+
+// Params: one per line, edited per material in the Inspector (and by kast.setMaterialProperty in Lua).
+//   param <float|vec2|vec3|vec4|color|texture2D> <name> [= <default>] [range(<min>, <max>)] [srgb];
+param color tint = color(1.0, 1.0, 1.0);
+param float pulse_speed = 2.0 range(0, 10);
+param texture2D detail = white srgb;
+
+// Runs per pixel. Writing nothing looks exactly like the built-in material.
+void fragment()
+{
+    ALBEDO *= tint.rgb * texture2D(detail, UV).rgb;
+    EMISSION += tint.rgb * (0.25 + 0.25 * sin(TIME * pulse_speed));
+}
+
+// Runs per vertex, in object space (it also moves the shadows). Uncomment to wobble the mesh.
+// void vertex()
+// {
+//     VERTEX += NORMAL * 0.05 * sin(TIME * pulse_speed + VERTEX.y * 4.0);
+// }
+)", error);
+}
+
+std::vector<std::string> remapMaterialPaths(const fs::path& root, const std::string& from, const std::string& to)
 {
     std::vector<std::string> changed;
     for (const fs::path& file : kast::listFiles(root)) {
@@ -226,15 +270,23 @@ std::vector<std::string> remapMaterialTextures(const fs::path& root, const std::
         std::string error;
         if (file.extension() != ".mat" || !kast::loadMaterial(file, material, error))
             continue; // an invalid .mat is left alone: it renders as an error anyway
-        std::vector<std::string> paths = {material.baseColorTexture, material.metallicRoughnessTexture};
+        std::vector<std::string*> fields = {&material.baseColorTexture, &material.metallicRoughnessTexture,
+                                            &material.normalTexture,    &material.occlusionTexture,
+                                            &material.emissiveTexture,  &material.shader};
+        for (auto& [name, value] : material.params)
+            if (value.numbers.empty())
+                fields.push_back(&value.texture);
+        std::vector<std::string> paths;
+        for (const std::string* field : fields)
+            paths.push_back(*field);
         if (!remapProjectPaths(paths, from, to))
             continue;
-        material.baseColorTexture = paths[0];
-        material.metallicRoughnessTexture = paths[1];
+        for (size_t i = 0; i < fields.size(); ++i)
+            *fields[i] = paths[i];
         if (saveMaterial(file, material, error))
             changed.push_back(kast::toProjectPath(root, file).value_or(utf8(file)));
         else
-            kast::log::error(std::format("Cannot update the texture paths in '{}': {}", utf8(file), error));
+            kast::log::error(std::format("Cannot update the paths in '{}': {}", utf8(file), error));
     }
     return changed;
 }

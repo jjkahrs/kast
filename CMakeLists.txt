@@ -1079,6 +1079,66 @@ kast_shader_shot(vertex "${KAST_SHADER_TEST_PROJECT}" shader_vertex.scene
   "-DEXPECT_OUTPUT=Compiled shader 'shaders/sway.kshader'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]|magenta")
 kast_shader_shot(vertex_builtin "${KAST_SHADER_TEST_PROJECT}" shader_vertex_builtin.scene)
 kast_shader_compare(shader_vertex_differs vertex_builtin vertex OFF)
+# Editor workflow (phase 3), in a fresh copy of the test project (the shader cache and new files land in it):
+# - shader_cache_first / _second: the second start loads showcase.kshader from <project>/.kast/shader_cache.
+# - shader_new: Assets > Create > Shader writes a starter that compiles (the Inspector shows it).
+# - shader_inspector_params: the Inspector's Shader section for params.kshader (one param of every type);
+#   shader_inspector_broken: a material whose .kshader fails shows the error at its line.
+# - shader_material_edit: Inspector edits of params (--material-set) save the .mat; undo / redo save it back
+#   (shader_material_undo: two edits then Undo; shader_material_redo: an edit, Undo, Redo).
+# - shader_hot_reload: cmake/shader_hot_reload_test.ps1 (a .kshader saved while the editor runs shows within 2 s; a
+#   broken save keeps the last good shader on screen and shows the error).
+set(KAST_SHADER_EDITOR_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/shader_editor_project")
+add_test(NAME shader_editor_project_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${KAST_SHADER_EDITOR_PROJECT}")
+add_test(NAME shader_editor_project_copy
+  COMMAND "${CMAKE_COMMAND}" -E copy_directory "${KAST_TEST_PROJECT}" "${KAST_SHADER_EDITOR_PROJECT}")
+set_tests_properties(shader_editor_project_clean PROPERTIES FIXTURES_SETUP shader_editor_clean)
+set_tests_properties(shader_editor_project_copy PROPERTIES FIXTURES_REQUIRED shader_editor_clean
+                     FIXTURES_SETUP shader_editor_copy)
+kast_shader_shot(cache_first "${KAST_SHADER_EDITOR_PROJECT}" shader_showcase.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/showcase.kshader' in [0-9.]+ s" -DEXPECT_COUNT=1)
+kast_shader_shot(cache_second "${KAST_SHADER_EDITOR_PROJECT}" shader_showcase.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/showcase.kshader' \\(cache hit\\)" -DEXPECT_COUNT=1
+  "-DFORBID_OUTPUT=Compiled shader 'shaders/showcase.kshader' in")
+set_tests_properties(shader_cache_first_screenshot PROPERTIES FIXTURES_REQUIRED shader_editor_copy
+                     FIXTURES_SETUP shader_cache_filled)
+set_tests_properties(shader_cache_second_screenshot PROPERTIES FIXTURES_REQUIRED shader_cache_filled)
+kast_shader_compare(shader_cache_same cache_first cache_second ON)
+add_test(NAME shader_new_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/shader_new.png"
+          "-DEXTRA_ARGS=--project ${KAST_SHADER_EDITOR_PROJECT} --assets-create shader:shaders --size 1600x900"
+          "-DFOCUS_PANEL=Assets" "-DMUST_EXIST=${KAST_SHADER_EDITOR_PROJECT}/shaders/new_shader.kshader"
+          "-DEXPECT_OUTPUT=Created shader 'shaders/new_shader.kshader'.*Compiled shader 'shaders/new_shader.kshader'"
+          "-DFORBID_OUTPUT=\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(shader_new_screenshot PROPERTIES FIXTURES_REQUIRED shader_editor_copy)
+kast_shader_shot(inspector_params "${KAST_SHADER_TEST_PROJECT}" shader_showcase.scene
+  "-DEXTRA_ARGS=--scene ${KAST_SHADER_TEST_PROJECT}/shader_showcase.scene --size 1600x900 --assets-select materials/shader_params.mat"
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/params.kshader'" "-DFORBID_OUTPUT=Shader 'shaders/params.kshader'")
+kast_shader_shot(inspector_broken "${KAST_SHADER_TEST_PROJECT}" shader_errors.scene
+  "-DEXTRA_ARGS=--scene ${KAST_SHADER_TEST_PROJECT}/shader_errors.scene --size 1600x900 --assets-select materials/shader_broken.mat")
+# Undo: amount 0.2 stays, the offset edit after it is undone. Redo: the scale edit is undone, then redone.
+kast_shader_shot(material_undo "${KAST_SHADER_EDITOR_PROJECT}" shader_showcase.scene
+  "-DEXTRA_ARGS=--scene ${KAST_SHADER_EDITOR_PROJECT}/shader_showcase.scene --size 1600x900 --assets-select materials/shader_params.mat --material-set amount=0.2 --material-set offset=[1,1] --material-undo 1"
+  "-DEXPECT_OUTPUT=--material-set amount = 0.2.*--material-set offset = \\[1,1\\]" "-DFORBID_OUTPUT=\\[error\\]")
+set_tests_properties(shader_material_undo_screenshot PROPERTIES FIXTURES_REQUIRED shader_editor_copy
+                     FIXTURES_SETUP shader_material_undone)
+add_test(NAME shader_material_undo_written
+  COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_SHADER_EDITOR_PROJECT}/materials/shader_params.mat")
+set_tests_properties(shader_material_undo_written PROPERTIES FIXTURES_REQUIRED shader_material_undone
+  PASS_REGULAR_EXPRESSION "\"amount\": 0.2,.*\"tint\"" FAIL_REGULAR_EXPRESSION "offset")
+kast_shader_shot(material_redo "${KAST_SHADER_EDITOR_PROJECT}" shader_showcase.scene
+  "-DEXTRA_ARGS=--scene ${KAST_SHADER_EDITOR_PROJECT}/shader_showcase.scene --size 1600x900 --assets-select materials/shader_params.mat --material-set scale=5 --material-undo 1 --material-redo 1"
+  "-DFORBID_OUTPUT=\\[error\\]")
+set_tests_properties(shader_material_redo_screenshot PROPERTIES FIXTURES_REQUIRED shader_material_undone
+                     FIXTURES_SETUP shader_material_redone)
+add_test(NAME shader_material_redo_written
+  COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_SHADER_EDITOR_PROJECT}/materials/shader_params.mat")
+set_tests_properties(shader_material_redo_written PROPERTIES FIXTURES_REQUIRED shader_material_redone
+  PASS_REGULAR_EXPRESSION "\"amount\": 0.2,.*\"scale\": 5[.0]*,.*\"tint\"")
+add_test(NAME shader_hot_reload
+  COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File "${CMAKE_CURRENT_SOURCE_DIR}/cmake/shader_hot_reload_test.ps1"
+          -Editor "$<TARGET_FILE:kast_editor>" -Project "${KAST_TEST_PROJECT}" -Out "${CMAKE_CURRENT_BINARY_DIR}/shader_hot_reload")
+set_tests_properties(shader_hot_reload PROPERTIES PASS_REGULAR_EXPRESSION "\nOK" TIMEOUT 300)
 add_test(NAME project_startup
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/project_startup.png"
           "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")

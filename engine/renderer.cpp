@@ -803,14 +803,16 @@ void Renderer::destroy(UserShader& shader)
 
 void Renderer::resolveShaders(std::vector<DrawItem>& draws)
 {
-    std::map<const Material*, std::pair<const Material*, const UserShader*>> resolved; // once per distinct material
+    // Once per distinct material; a null material: its shader is still compiling for the first time, so it isn't drawn.
+    std::map<const Material*, std::pair<const Material*, const UserShader*>> resolved;
     for (DrawItem& item : draws) {
         if (item.material->shader.empty())
             continue;
         auto [it, added] = resolved.try_emplace(item.material, item.material, nullptr);
         if (added) {
             const Material& material = *item.material;
-            const UserShader* shader = userShader(material.shader); // null: the library logged why
+            const UserShader* shader = userShader(material.shader); // null: the library logged why, or compiling
+            const bool compiling = !shader && shaders().status(material.shader).state == ShaderLibrary::State::Compiling;
             std::string error;
             std::vector<std::string> unknown;
             if (shader && !checkShaderParams(material, shader->source->source, error, unknown)) {
@@ -820,11 +822,12 @@ void Renderer::resolveShaders(std::vector<DrawItem>& draws)
             for (const std::string& name : unknown)
                 warnOnce(std::format("Shader '{}' declares no param '{}'; ignoring the material's value", material.shader,
                                      name));
-            it->second = {shader ? &material : &errorMaterial(), shader};
+            it->second = {compiling ? nullptr : shader ? &material : &errorMaterial(), shader};
         }
         item.material = it->second.first;
         item.shader = it->second.second;
     }
+    std::erase_if(draws, [](const DrawItem& item) { return !item.material; });
 }
 
 void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const ModelRenderer& renderer, const float* world,

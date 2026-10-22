@@ -57,6 +57,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -5721,6 +5722,8 @@ void checkPostProcessing()
 
 void checkMaterialVersion2();
 void checkShaders();
+void checkShaderLibraryAsync();
+void checkShaderParamEditing();
 
 std::string materialError(const std::string& text)
 {
@@ -6217,6 +6220,7 @@ void checkShaders()
     library.reloadChanged();
     check(library.get("shaders/bad.kshader") != nullptr, "a fixed .kshader compiles");
     removeTree(dir);
+    checkShaderLibraryAsync();
 
     // COLOR0: glTF COLOR_0 imports (RGBA8, R in the low byte); models without it and primitives are white.
     const auto model = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/vertex_colors.gltf", error);
@@ -6318,6 +6322,104 @@ void checkMaterialFeatureImport()
 }
 
 // u_time's clock: fixed steps add up exactly, paused Play holds it, it wraps at kShaderTimePeriod.
+// The editor's library: compiles on worker threads (the frame loop never waits), keeps the last good shader through a
+// recompile and a broken edit, and caches bytecode by source + version so a restart doesn't recompile.
+void checkShaderLibraryAsync()
+{
+    using namespace std::chrono_literals;
+    const std::filesystem::path dir = testRoot() / "kast_shader_async";
+    removeTree(dir);
+    std::filesystem::create_directories(dir / "shaders");
+    const std::filesystem::path file = dir / "shaders/a.kshader";
+    writeFile(file, "param float k = 1.0;\nvoid fragment() { ALBEDO *= k; }\n");
+    std::atomic<int> compiles = 0;
+    std::atomic<bool> release = false;
+    // A stand-in for shaderc: holds each compile until released; "BROKEN" in the code fails like an undeclared name.
+    const kast::ShaderCompiler slow = [&](const kast::ShaderSource& source, kast::ShaderStage stage,
+                                          std::vector<uint8_t>& bytecode, std::string& error) {
+        while (!release)
+            std::this_thread::sleep_for(1ms);
+        ++compiles;
+        if (contains(source.code, "BROKEN")) {
+            error = "line 3: error X3004: undeclared identifier 'BROKEN'";
+            return false;
+        }
+        bytecode = {1, 2, static_cast<uint8_t>(stage)};
+        return true;
+    };
+    kast::ShaderLibrary library;
+    library.setRoot(dir);
+    library.setCompiler(slow, "v1");
+    library.setAsync(true);
+    const auto start = std::chrono::steady_clock::now();
+    const auto first = library.get("shaders/a.kshader");
+    int frames = 0;
+    for (; frames < 50; ++frames) // a frame loop: the library is polled once a frame
+        library.reloadChanged();
+    const auto status = library.status("shaders/a.kshader");
+    check(!first && status.state == kast::ShaderLibrary::State::Compiling && !status.hasShader && status.declaration &&
+              status.declaration->params.size() == 1 && compiles == 0 && std::chrono::steady_clock::now() - start < 1s,
+          "async: 50 frames run while the first compile is held, get() is null and the params are already known");
+    release = true;
+    for (frames = 0; !library.get("shaders/a.kshader") && frames < 5000; ++frames) {
+        library.reloadChanged();
+        std::this_thread::sleep_for(1ms);
+    }
+    const auto good = library.get("shaders/a.kshader");
+    check(good && compiles == 2 && good->stage(kast::ShaderStage::Shadow) == std::vector<uint8_t>{1, 2, 1} &&
+              library.status("shaders/a.kshader").state == kast::ShaderLibrary::State::Compiled &&
+              countLogged("Compiled shader 'shaders/a.kshader' in ") == 1,
+          "async: the compile finishes on its own thread and a later frame takes it in");
+    check(std::filesystem::exists(dir / ".kast/shader_cache" /
+                                  (kast::shaderCacheKey("param float k = 1.0;\nvoid fragment() { ALBEDO *= k; }\n",
+                                                        kast::ShaderStage::Fragment, "v1") +
+                                   ".bin")),
+          "the bytecode is cached in the project's .kast/shader_cache (a dot-folder: not shipped)");
+
+    // A broken edit: the last good shader renders while it compiles and after it fails; the error has the line.
+    release = false;
+    rewrite(file, "void fragment()\n{\n    ALBEDO = BROKEN;\n}\n");
+    library.reloadChanged();
+    check(library.get("shaders/a.kshader") == good &&
+              library.status("shaders/a.kshader").state == kast::ShaderLibrary::State::Compiling,
+          "a recompile keeps handing out the last good shader");
+    release = true;
+    library.wait();
+    const auto broken = library.status("shaders/a.kshader");
+    check(library.get("shaders/a.kshader") == good && broken.state == kast::ShaderLibrary::State::Failed &&
+              broken.hasShader && broken.error == "line 3: error X3004: undeclared identifier 'BROKEN'" &&
+              countLogged("[error] Shader 'shaders/a.kshader': line 3: error X3004: undeclared identifier 'BROKEN'; the "
+                          "last good version keeps rendering") == 1,
+          "a broken edit keeps the last good shader and reports the error with its line");
+    rewrite(file, "void fragment() { ALBEDO = vec3(0.0, 0.0, 1.0); }\n");
+    library.reloadChanged();
+    library.wait();
+    const auto fixed = library.get("shaders/a.kshader");
+    check(fixed && fixed != good && library.status("shaders/a.kshader").state == kast::ShaderLibrary::State::Compiled &&
+              countLogged("Recompiled shader 'shaders/a.kshader' in ") == 1,
+          "the fixed edit replaces it (logged as a recompile)");
+
+    // A restart: same source and version, no compile.
+    compiles = 0;
+    kast::ShaderLibrary restarted;
+    restarted.setRoot(dir);
+    restarted.setCompiler(slow, "v1");
+    const auto cached = restarted.get("shaders/a.kshader");
+    check(cached && compiles == 0 && cached->stage(kast::ShaderStage::Fragment) == fixed->stage(kast::ShaderStage::Fragment) &&
+              countLogged("Compiled shader 'shaders/a.kshader' (cache hit)") == 1,
+          "a restart loads unchanged shaders from the cache (logged as a cache hit)");
+    kast::ShaderLibrary newTools;
+    newTools.setRoot(dir);
+    newTools.setCompiler(slow, "v2");
+    check(newTools.get("shaders/a.kshader") && compiles == 2, "another version (templates, shaderc) misses the cache");
+    check(kast::shaderCacheKey("a", kast::ShaderStage::Fragment, "v") != kast::shaderCacheKey("a", kast::ShaderStage::Shadow, "v") &&
+              kast::shaderCacheKey("a", kast::ShaderStage::Fragment, "v") != kast::shaderCacheKey("b", kast::ShaderStage::Fragment, "v") &&
+              kast::shaderCacheKey("ab", kast::ShaderStage::Fragment, "") != kast::shaderCacheKey("a", kast::ShaderStage::Fragment, "b") &&
+              kast::shaderCacheKey("a", kast::ShaderStage::Fragment, "v").size() == 16,
+          "cache keys differ by text, stage and version");
+    removeTree(dir);
+}
+
 void checkShaderClock()
 {
     kast::ShaderClock clock;
@@ -6404,14 +6506,14 @@ void checkMaterialLibrary()
 
     // Renaming / moving a texture rewrites the .mat files pointing at it.
     std::filesystem::create_directories(dir / "textures");
-    const std::vector<std::string> changed = remapMaterialTextures(dir, "textures", "art");
+    const std::vector<std::string> changed = remapMaterialPaths(dir, "textures", "art");
     check(changed == std::vector<std::string>{"materials/saved.mat"} &&
               kast::loadMaterial(dir / "materials/saved.mat", loaded, error) && loaded.baseColorTexture == "art/a.png",
           "moving a texture folder remaps .mat texture paths");
-    check(remapMaterialTextures(dir, "art/a.png", "art/b.png").size() == 1 &&
+    check(remapMaterialPaths(dir, "art/a.png", "art/b.png").size() == 1 &&
               kast::loadMaterial(dir / "materials/saved.mat", loaded, error) && loaded.baseColorTexture == "art/b.png",
           "renaming a texture remaps .mat texture paths");
-    check(remapMaterialTextures(dir, "art/other.png", "art/c.png").empty(), "unrelated renames change no .mat");
+    check(remapMaterialPaths(dir, "art/other.png", "art/c.png").empty(), "unrelated renames change no .mat");
 
     // Renaming / moving a .mat (or its folder) rewrites the open scene's MeshRenderers pointing at it.
     Document doc;
@@ -6586,6 +6688,138 @@ end })");
               std::filesystem::last_write_time(dir / "materials/shared.mat") == fileTime,
           "material edits from Lua never reach the .mat file");
     check(before == kast::materialToJson(kast::defaultMaterial()).dump(), "the default material is never edited");
+}
+
+// kast.get/setMaterialProperty on .kshader params, the Inspector's undo steps, New Shader and asset renames.
+void checkShaderParamEditing()
+{
+    const std::filesystem::path dir = luaTestDir();
+    std::filesystem::create_directories(dir / "shaders");
+    std::filesystem::create_directories(dir / "materials");
+    std::string params;
+    check(kast::readFile(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "shaders/params.kshader", params),
+          "tests/project/shaders/params.kshader reads");
+    writeFile(dir / "shaders/params.kshader", params);
+    const std::string mat = R"({"version": 3, "roughness": 0.3, "shader": "shaders/params.kshader",
+                                "params": {"amount": 0.75, "tint": [1, 0.5, 0, 1]}})";
+    writeFile(dir / "materials/p.mat", mat);
+    kast::shaders().setRoot(dir);
+    kast::shaders().setCompiler(compileShader);
+
+    // The GPU-free functions under it.
+    kast::Material m;
+    std::string error;
+    check(kast::loadMaterial(dir / "materials/p.mat", m, error), "p.mat loads");
+    check(kast::materialProperty(m, "amount") == nlohmann::ordered_json(0.75) &&
+              kast::materialProperty(m, "scale") == nlohmann::ordered_json(2.0) &&
+              kast::materialProperty(m, "offset") == nlohmann::ordered_json::parse("[0.25, -0.5]") &&
+              kast::materialProperty(m, "tint") == nlohmann::ordered_json::parse("[1, 0.5, 0, 1]") &&
+              kast::materialProperty(m, "mask") == nlohmann::ordered_json("") &&
+              kast::materialProperty(m, "roughness") == nlohmann::ordered_json(0.3) && !kast::materialProperty(m, "nope"),
+          "materialProperty: built-in fields, then the .kshader's params (the .mat's value, else the default)");
+    check(kast::setMaterialProperty(m, "tint3", nlohmann::ordered_json::parse("[0, 1, 0]"), error) &&
+              m.params["tint3"].numbers == std::vector<float>{0, 1, 0} &&
+              kast::setMaterialProperty(m, "mask", "textures/noise.png", error) && m.params["mask"].texture == "textures/noise.png",
+          "setMaterialProperty sets params");
+    check(!kast::setMaterialProperty(m, "tint3", 1.0, error) &&
+              error == "param 'tint3' is a vec3: its value must be an array of 3 numbers" &&
+              m.params["tint3"].numbers == std::vector<float>{0, 1, 0},
+          "a wrong-typed param value is an error and changes nothing");
+    check(!kast::setMaterialProperty(m, "nope", 1.0, error) && error == "unknown field \"nope\"",
+          "a name that is neither a field nor a param is an unknown field");
+
+    // Lua in Play: params read and write through the MaterialInstance; Stop resets them.
+    writeFile(dir / "scripts/params.lua", R"(local function fails(part, fn)
+    local ok, err = pcall(fn)
+    assert(not ok, "expected an error mentioning " .. part)
+    assert(string.find(err, part, 1, true), "error '" .. tostring(err) .. "' does not mention " .. part)
+end
+local done = false
+return { update = function(dt)
+    if done then return end
+    done = true
+    local e
+    for id in kast.query("MeshRenderer") do e = id end
+    assert(kast.getMaterialProperty(e, "amount") == 0.75, "get a float param from the .mat")
+    assert(kast.getMaterialProperty(e, "scale") == 2, "get a param's default")
+    local tint = kast.getMaterialProperty(e, "tint")
+    assert(#tint == 4 and tint[1] == 1 and tint[2] == 0.5, "get a color param")
+    assert(kast.getMaterialProperty(e, "roughness") == 0.3, "built-in fields still read")
+    kast.setMaterialProperty(e, "amount", 0.25)
+    kast.setMaterialProperty(e, "offset", {x = 1, y = 2})
+    kast.setMaterialProperty(e, "tint", {0, 0, 1})
+    kast.setMaterialProperty(e, "mask", "textures/noise.png")
+    assert(kast.getMaterialProperty(e, "amount") == 0.25, "set a float param")
+    local offset = kast.getMaterialProperty(e, "offset")
+    assert(offset[1] == 1 and offset[2] == 2, "set a vec2 param")
+    assert(kast.getMaterialProperty(e, "mask") == "textures/noise.png", "set a texture param")
+    fails("param 'amount' is a float: its value must be a number", function() kast.setMaterialProperty(e, "amount", {1, 2}) end)
+    fails('unknown material property "glow"', function() kast.getMaterialProperty(e, "glow") end)
+    fails('unknown field "glow"', function() kast.setMaterialProperty(e, "glow", 1) end)
+end })");
+    Document doc;
+    doc.path = (dir / "params.scene").string();
+    doc.project = kast::Project{.root = dir, .name = "Params"};
+    entt::registry& registry = doc.scene.registry();
+    registry.emplace<kast::MeshRenderer>(doc.scene.create("P"), kast::Primitive::Cube, "materials/p.mat");
+    doc.scene.systems = {"scripts/params.lua"};
+    startPlay(doc);
+    updatePlay(doc, 0.1f);
+    checkOk(doc.lua, 0, "kast.get/setMaterialProperty on shader params: Lua asserts pass");
+    const auto* instance = registry.try_get<kast::MaterialInstance>(named(doc.scene, "P"));
+    check(instance && instance->material.params.at("amount").numbers == std::vector<float>{0.25f} &&
+              instance->material.params.at("tint").numbers == std::vector<float>{0, 0, 1},
+          "the instance holds the Lua param values");
+    stopPlay(doc);
+    std::string text;
+    check(registry.view<kast::MaterialInstance>().empty() && kast::readFile(dir / "materials/p.mat", text) && text == mat,
+          "Stop resets the params; the .mat is untouched");
+
+    // Inspector edits: each a step that saves the .mat; undo / redo save the version before / after.
+    UndoStack history;
+    kast::Material before, after;
+    check(kast::loadMaterial(dir / "materials/p.mat", before, error), "p.mat loads again");
+    after = before;
+    check(kast::setMaterialProperty(after, "amount", 0.1, error) && saveMaterial(dir / "materials/p.mat", after, error),
+          "an Inspector edit saves");
+    pushMaterialStep(history, dir / "materials/p.mat", "Edit p.mat", before, after);
+    pushMaterialStep(history, dir / "materials/p.mat", "Edit p.mat", after, after);
+    kast::Material read;
+    history.undo();
+    check(history.size() == 1 && kast::loadMaterial(dir / "materials/p.mat", read, error) &&
+              read.params.at("amount").numbers == std::vector<float>{0.75f},
+          "undo saves the material as it was (an edit that changed nothing is no step)");
+    history.redo();
+    check(kast::loadMaterial(dir / "materials/p.mat", read, error) && read.params.at("amount").numbers == std::vector<float>{0.1f},
+          "redo saves the edit again");
+
+    // New Shader: a starter that parses and compiles, with a commented-out vertex().
+    std::filesystem::path created;
+    kast::ShaderSource source;
+    check(writeNewShader(dir / "shaders", created, error) && created.filename() == "new_shader.kshader" &&
+              kast::readFile(created, text) && kast::parseShader(text, source, error) && source.params.size() == 3 &&
+              !source.hasVertex && contains(text, "// void vertex()"),
+          "Create > Shader writes a starter with params, fragment() and a commented-out vertex()");
+    std::vector<uint8_t> bytecode;
+    check(compileShader(source, kast::ShaderStage::Fragment, bytecode, error) &&
+              compileShader(source, kast::ShaderStage::Shadow, bytecode, error),
+          std::format("the starter compiles: {}", error).c_str());
+    check(writeNewShader(dir / "shaders", created, error) && created.filename() == "new_shader_2.kshader",
+          "Create > Shader picks a free name");
+
+    // Renames: a .mat's shader path and texture params follow, as its textures do.
+    const std::vector<std::string> changed = remapMaterialPaths(dir, "shaders/params.kshader", "shaders/renamed.kshader");
+    check(changed == std::vector<std::string>{"materials/p.mat"} && kast::loadMaterial(dir / "materials/p.mat", read, error) &&
+              read.shader == "shaders/renamed.kshader",
+          "renaming a .kshader remaps the .mat's shader");
+    writeFile(dir / "materials/p.mat", R"({"version": 3, "shader": "shaders/params.kshader", "normalTexture": "textures/n.png",
+                                           "params": {"mask": "textures/noise.png", "amount": 1}})");
+    check(remapMaterialPaths(dir, "textures", "art").size() == 1 && kast::loadMaterial(dir / "materials/p.mat", read, error) &&
+              read.params.at("mask").texture == "art/noise.png" && read.normalTexture == "art/n.png" &&
+              read.params.at("amount").numbers == std::vector<float>{1.0f},
+          "moving a texture folder remaps texture params and every texture field");
+    kast::shaders().setRoot({});
+    removeTree(dir);
 }
 
 // --- Models and animation ---
@@ -10446,6 +10680,8 @@ int main(int argc, char** argv)
     if (argc == 2 && std::string_view(argv[1]) == "--shaders") { // only the material and .kshader checks
         checkMaterialFiles();
         checkShaders();
+        checkLuaMaterials();
+        checkShaderParamEditing();
         checkMaterialFeatureImport();
         checkPrimitiveTangents();
         removeTree(testRoot());
@@ -10485,6 +10721,7 @@ int main(int argc, char** argv)
     checkTextureDecode();
     checkMaterialScenes();
     checkLuaMaterials();
+    checkShaderParamEditing();
     checkCameras();
     checkStatsOverlay();
     checkInput();

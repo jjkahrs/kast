@@ -155,8 +155,12 @@
 <td>Open that Assets entry's context menu (<code>/</code> = the panel background) with its Create submenu open, for screenshots.</td>
 </tr>
 <tr>
-<td><code>--assets-create system\|fsm\|gui:&lt;folder&gt;</code></td>
-<td>Run Assets &gt; Create &gt; Lua System / State Machine / GUI in that project folder (empty = the root) after the first 10 frames, as the menu does (the new file's rename starts).</td>
+<td><code>--assets-create system\|fsm\|gui\|material\|shader:&lt;folder&gt;</code></td>
+<td>Run Assets &gt; Create &gt; Lua System / State Machine / GUI / Material / Shader in that project folder (empty = the root) after the first 10 frames, as the menu does (the new file's rename starts).</td>
+</tr>
+<tr>
+<td><code>--material-set &lt;field&gt;=&lt;json&gt;</code> (repeatable), <code>--material-undo N</code>, <code>--material-redo N</code></td>
+<td>With <code>--assets-select</code> of a <code>.mat</code>: set that field or <code>.kshader</code> param as an Inspector edit does (saved, one undo step each, in order), then Undo N times, then Redo N times, at frame 11. For tests of the material Inspector's undo.</td>
 </tr>
 <tr>
 <td><code>--open-gui &lt;file.rml&gt;</code></td>

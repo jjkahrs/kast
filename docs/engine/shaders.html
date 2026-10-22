@@ -166,9 +166,22 @@ outside them can pop out at the edge of the view or a shadow cascade.</p>
 <p>The editor compiles a <code>.kshader</code> the first time a rendered material uses it, and again when the file changes, with
 the same <code>shaderc</code> and flags as the build (CMake copies <code>shaderc.exe</code> next to <code>kast_editor.exe</code>, with
 <code>kshader/include/</code> (bgfx's <code>bgfx_shader.sh</code>, <code>bgfx_compute.sh</code>) and <code>kshader/mesh/</code> (the templates,
-<code>mesh.sh</code> and <code>varying.def.sc</code>) beside it). Each compile is logged (<code>Compiled shader 'shaders/stripes.kshader'</code>); both editor
-views share it. For now it compiles on the render thread, pausing the editor for the compile (about 0.1 s per stage). The player
-does not compile shaders.</p>
+<code>mesh.sh</code> and <code>varying.def.sc</code>) beside it). Each compile is logged (<code>Compiled shader 'shaders/stripes.kshader' in 0.15 s</code>); both editor
+views share it. The player does not compile shaders.</p>
+<ul>
+<li><strong>Worker threads.</strong> shaderc runs on a worker thread; frames never wait for it. Until a shader's first compile
+finishes, meshes using it are not drawn (no magenta flash). Editor runs with <code>--screenshot</code> (and no
+<code>--screenshot-on-log</code>) compile each shader when it is first drawn instead, so a screenshot is the same every run.</li>
+<li><strong>Hot reload.</strong> Saving the <code>.kshader</code> (a new modification time, checked every frame) recompiles it
+(<code>Recompiled shader '...'</code>); the previous program keeps rendering until the new one is ready, typically well under a
+second after the save (the <code>shader_hot_reload</code> test measures it and fails above 2 s). A broken save keeps the last good
+program rendering; the error goes to the log (<code>...; the last good version keeps rendering</code>) and the Inspector.</li>
+<li><strong>Compile cache.</strong> Each stage's bytecode is stored in <code>&lt;project&gt;/.kast/shader_cache/&lt;key&gt;.bin</code>,
+the key a hash of the <code>.kshader</code> text, the stage and the template version (the files under <code>kshader/</code> and
+<code>shaderc.exe</code>'s size and time). An unchanged shader is not recompiled on the next editor start
+(<code>Compiled shader '...' (cache hit)</code>); changing the templates or shaderc misses the cache. The folder is a dot-folder,
+so it never ships in <code>game.pak</code>; it is never pruned (delete it to clear it).</li>
+</ul>
 <p>Errors render every material using the shader magenta (the <code>errorMaterial</code>) and log one error per load, with the
 line in the <code>.kshader</code>: Kast puts a <code>#pragma kast_line &lt;n&gt;</code> marker before each of its lines, and maps the line of
 shaderc's error back to the nearest marker. Examples:</p>
@@ -180,6 +193,26 @@ shaderc's error back to the nearest marker. Examples:</p>
 <p>A missing <code>;</code> is reported on the line where the compiler sees the next token, as in any C compiler. Only errors
 within shaderc's listing (the lines around its first error) map to <code>.kshader</code> lines; others say
 <code>generated line &lt;n&gt;</code>. Preprocessor errors (an unterminated <code>#if</code>) are logged as shaderc prints them.</p>
+<h3 id="kshader-editor">In the editor and Lua</h3>
+<ul>
+<li><strong>Assets &gt; Create &gt; Shader</strong> writes <code>new_shader.kshader</code>: a commented starter with three params, a
+<code>fragment()</code> and a commented-out <code>vertex()</code>. Double-click a <code>.kshader</code> to open it in the external editor
+(File &gt; Preferences).</li>
+<li><strong>Inspector, selected <code>.kshader</code>:</strong> its compile status (Compiling, Compiled, or the full error with
+<code>.kshader</code> line numbers) and its params.</li>
+<li><strong>Inspector, selected <code>.mat</code>:</strong> a <em>Shader</em> section: a picker of the project's <code>.kshader</code>
+files (None = the built-in shader), the same status, and one widget per param: a slider for a float with <code>range()</code>, a
+drag field for other floats and <code>vec2</code>/<code>vec3</code>/<code>vec4</code>, a color picker for <code>color</code> and a texture
+picker for <code>texture2D</code> (Default = its declared default). A widget shows the material's value, else the param's default.
+Values the shader no longer declares are listed as ignored. Every edit saves the <code>.mat</code> and is an undo step
+(Edit &gt; Undo / Ctrl+Z with the Inspector focused; one step per drag).</li>
+<li><strong>Lua:</strong> <code>kast.getMaterialProperty(id, name)</code> and <code>kast.setMaterialProperty(id, name, value)</code>
+also take the params of the material's <code>.kshader</code>, through the same per-entity material instance as built-in fields
+(gone on Stop): a number, <code>{x, y[, z, w]}</code> or an array, and a texture path for a <code>texture2D</code>. Reading a param the
+material doesn't set gives its default. Built-in field names win (params can't take them).</li>
+<li>Renaming or moving a <code>.kshader</code> or a texture in the Assets panel rewrites the <code>.mat</code> files using it: the
+<code>shader</code> path, every texture field and <code>texture2D</code> param values.</li>
+</ul>
 <p>Samples: <code>tests/project/shader_showcase.scene</code> (<code>shaders/showcase.kshader</code>: params, a texture param, <code>TIME</code>,
 vertex colors on <code>models/vertex_colors.gltf</code>) and <code>tests/project/shader_errors.scene</code> (a GLSL error, a bad param
 line, a missing shader, a wrong-typed value), <code>tests/project/shader_vertex.scene</code> (<code>shaders/sway.kshader</code>:

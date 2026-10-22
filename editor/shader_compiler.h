@@ -11,3 +11,6 @@
 // CMakeLists.txt). Never linked into the player.
 bool compileShader(const kast::ShaderSource& source, kast::ShaderStage stage, std::vector<uint8_t>& bytecode,
                    std::string& error);
+// The shader cache's version (ShaderLibrary::setCompiler): a hash of what the bytecode depends on besides the .kshader,
+// the templates and includes under kshader/ and shaderc.exe (its size and time), so rebuilding either misses the cache.
+std::string shaderToolsVersion();

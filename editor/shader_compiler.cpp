@@ -105,3 +105,19 @@ bool compileShader(const kast::ShaderSource& source, kast::ShaderStage stage, st
     bytecode.assign(bytes.begin(), bytes.end());
     return true;
 }
+
+std::string shaderToolsVersion()
+{
+    const std::filesystem::path tools = toolDir();
+    std::string all;
+    for (const std::filesystem::path& file : kast::listFiles(tools / "kshader")) {
+        std::string bytes;
+        readBytes(file, bytes);
+        all += std::format("{}:{}:", u8(file.filename()), bytes.size()) + bytes; // length-prefixed: unambiguous
+    }
+    std::error_code ec;
+    const std::filesystem::path shaderc = tools / "shaderc.exe";
+    all += std::format("{} {}", std::filesystem::file_size(shaderc, ec),
+                       std::filesystem::last_write_time(shaderc, ec).time_since_epoch().count());
+    return std::format("{:016x}", std::hash<std::string>{}(all));
+}

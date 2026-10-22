@@ -1,0 +1,13 @@
+// One param of every type, for the Inspector's widgets and Lua (self_check.cpp, CMakeLists.txt shader_params_*).
+param float amount = 0.5 range(0, 1);
+param float scale = 2.0;
+param vec2 offset = vec2(0.25, -0.5);
+param vec3 tint3 = vec3(1.0, 0.5, 0.25);
+param vec4 mixer = vec4(1.0, 1.0, 1.0, 0.0);
+param color tint = color(0.2, 0.6, 1.0);
+param texture2D mask = black;
+
+void fragment()
+{
+    ALBEDO = ALBEDO * tint.rgb * tint3 * amount * scale + mixer.rgb * mixer.a + texture2D(mask, UV + offset).rgb;
+}

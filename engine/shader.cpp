@@ -7,7 +7,10 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <chrono>
 #include <format>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <regex>
 
@@ -443,6 +446,43 @@ bool checkShaderParams(const Material& material, const ShaderSource& source, std
     return true;
 }
 
+std::optional<nlohmann::ordered_json> shaderParamField(const Material& material, const ShaderSource& source,
+                                                       std::string_view name)
+{
+    const auto param = std::ranges::find(source.params, name, &ShaderParam::name);
+    if (param == source.params.end())
+        return std::nullopt;
+    const std::string key(name);
+    Material values; // just this param, so materialField writes it as a .mat would
+    if (const auto it = material.params.find(key); it != material.params.end()) {
+        values.params[key] = it->second;
+    } else if (param->type != ShaderParamType::Texture2D) {
+        const int count = param->type == ShaderParamType::Color ? 4 : componentCount(param->type);
+        values.params[key].numbers.assign(param->value.begin(), param->value.begin() + count);
+    } else {
+        values.params[key] = {};
+    }
+    return (*materialField(values, "params"))[key];
+}
+
+bool setShaderParamField(Material& material, const ShaderSource& source, std::string_view name,
+                         const nlohmann::ordered_json& value, std::string& error)
+{
+    const std::string key(name);
+    if (std::ranges::find(source.params, name, &ShaderParam::name) == source.params.end()) {
+        error = std::format("the shader declares no param \"{}\"", name);
+        return false;
+    }
+    Material parsed; // the value alone: its shape, then its type against the declaration
+    nlohmann::ordered_json params = nlohmann::ordered_json::object();
+    params[key] = value;
+    std::vector<std::string> unknown;
+    if (!setMaterialField(parsed, "params", params, error) || !checkShaderParams(parsed, source, error, unknown))
+        return false;
+    material.params[key] = parsed.params[key];
+    return true;
+}
+
 bool isVertexStage(ShaderStage stage)
 {
     return stage != ShaderStage::Fragment && stage != ShaderStage::Shadow;
@@ -567,58 +607,172 @@ std::string mapShaderErrors(std::string_view shadercOutput)
     return out;
 }
 
+std::string shaderCacheKey(std::string_view text, ShaderStage stage, std::string_view version)
+{
+    uint64_t hash = 14695981039346656037ull; // FNV-1a
+    const auto add = [&](std::string_view bytes) {
+        for (const char c : bytes)
+            hash = (hash ^ static_cast<unsigned char>(c)) * 1099511628211ull;
+        hash = (hash ^ 0xffu) * 1099511628211ull; // separator: ("ab", "c") and ("a", "bc") differ
+    };
+    add(version);
+    add(std::to_string(static_cast<int>(stage)));
+    add(text);
+    return std::format("{:016x}", hash);
+}
+
 void ShaderLibrary::setRoot(const std::filesystem::path& root)
 {
     if (root != root_) {
         root_ = root;
-        entries_.clear();
+        entries_.clear(); // ponytail: waits for running compiles (std::async futures); only on a project switch
     }
+}
+
+void ShaderLibrary::setCompiler(ShaderCompiler compiler, std::string version)
+{
+    compiler_ = std::move(compiler);
+    version_ = std::move(version);
+}
+
+ShaderLibrary::Entry& ShaderLibrary::entry(const std::string& path)
+{
+    auto [it, added] = entries_.try_emplace(path);
+    if (added)
+        load(path, it->second);
+    return it->second;
 }
 
 std::shared_ptr<const CompiledShader> ShaderLibrary::get(const std::string& path)
 {
     if (path.empty() || root_.empty())
         return nullptr;
-    auto [it, added] = entries_.try_emplace(path);
-    if (added)
-        load(path, it->second);
-    return it->second.shader;
+    return entry(path).shader;
+}
+
+ShaderLibrary::Status ShaderLibrary::status(const std::string& path)
+{
+    if (path.empty() || root_.empty())
+        return {};
+    const Entry& e = entry(path);
+    const State state = e.pending.valid() ? State::Compiling : e.error.empty() ? State::Compiled : State::Failed;
+    return {.state = state, .error = e.error, .declaration = e.declaration, .hasShader = e.shader != nullptr};
 }
 
 void ShaderLibrary::reloadChanged()
 {
     // ponytail: one stat per cached shader per call (per frame), as for materials.
-    for (auto& [path, entry] : entries_)
+    for (auto& [path, entry] : entries_) {
+        if (entry.pending.valid()) {
+            if (entry.pending.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+                continue; // the next call looks again; a change saved meanwhile reloads after it
+            finish(path, entry);
+        }
         if (modifiedTime(root_ / path) != entry.mtime)
             load(path, entry);
+    }
+}
+
+void ShaderLibrary::wait()
+{
+    for (auto& [path, entry] : entries_)
+        if (entry.pending.valid())
+            finish(path, entry);
 }
 
 void ShaderLibrary::load(const std::string& path, Entry& entry)
 {
-    entry.shader = nullptr;
     std::string error, text;
     const std::optional<std::filesystem::path> file = resolveProjectPath(root_, path, error);
     entry.mtime = file ? modifiedTime(*file) : std::nullopt;
-    auto shader = std::make_shared<CompiledShader>();
+    auto source = std::make_shared<ShaderSource>();
+    entry.declaration = nullptr;
     if (file && !readFile(*file, text))
         error = "cannot read the file";
-    else if (file && !compiler_)
+    else if (file && parseShader(text, *source, error))
+        entry.declaration = source;
+    if (entry.declaration && !compiler_)
         error = "no shader compiler here (shaderc runs in the editor)";
-    else if (file && parseShader(text, shader->source, error) &&
-             std::ranges::all_of(shaderStages(shader->source), [&](ShaderStage stage) {
-                 return compiler_(shader->source, stage, shader->bytecode[static_cast<size_t>(stage)], error);
-             }))
-        entry.shader = std::move(shader);
-    if (entry.shader)
-        log::info(std::format("Compiled shader '{}'", path));
-    else
-        log::error(std::format("Shader '{}': {}; rendering it magenta", path, error));
+    if (!error.empty()) {
+        entry.pending = std::async(std::launch::deferred, [error] { return Result{.error = error}; });
+        finish(path, entry);
+        return;
+    }
+    // The compile works on copies: the entry may be reloaded, or the library's root change, while it runs.
+    const auto compile = [source = *source, text = std::move(text), compiler = compiler_, version = version_,
+                          cache = root_ / ".kast" / "shader_cache"] {
+        const auto start = std::chrono::steady_clock::now();
+        auto shader = std::make_shared<CompiledShader>();
+        shader->source = source;
+        Result result{.cached = true};
+        for (const ShaderStage stage : shaderStages(source)) {
+            std::vector<uint8_t>& bytecode = shader->bytecode[static_cast<size_t>(stage)];
+            const std::filesystem::path file =
+                version.empty() ? std::filesystem::path() : cache / (shaderCacheKey(text, stage, version) + ".bin");
+            if (!file.empty()) {
+                std::ifstream in(file, std::ios::binary);
+                bytecode.assign(std::istreambuf_iterator<char>(in), {});
+                if (!bytecode.empty())
+                    continue;
+            }
+            result.cached = false;
+            if (!compiler(source, stage, bytecode, result.error))
+                return result;
+            if (file.empty())
+                continue;
+            // ponytail: the cache is never pruned; stale keys stay until the folder is deleted.
+            std::error_code ec;
+            std::filesystem::create_directories(cache, ec);
+            writeFileAtomic(file, std::string_view(reinterpret_cast<const char*>(bytecode.data()), bytecode.size()));
+        }
+        result.shader = std::move(shader);
+        result.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        return result;
+    };
+    entry.pending = std::async(async_ ? std::launch::async : std::launch::deferred, compile);
+    if (!async_)
+        finish(path, entry);
+}
+
+void ShaderLibrary::finish(const std::string& path, Entry& entry)
+{
+    Result result = entry.pending.get();
+    const bool reload = entry.loaded;
+    entry.loaded = true;
+    entry.error = result.error;
+    if (result.shader) {
+        entry.shader = std::move(result.shader);
+        log::info(std::format("{} shader '{}' {}", reload ? "Recompiled" : "Compiled", path,
+                              result.cached ? "(cache hit)" : std::format("in {:.2f} s", result.seconds)));
+    } else {
+        log::error(std::format("Shader '{}': {}; {}", path, result.error,
+                               entry.shader ? "the last good version keeps rendering" : "rendering it magenta"));
+    }
 }
 
 ShaderLibrary& shaders()
 {
     static ShaderLibrary library;
     return library;
+}
+
+std::optional<nlohmann::ordered_json> materialProperty(const Material& material, std::string_view name)
+{
+    if (std::optional<nlohmann::ordered_json> field = materialField(material, name))
+        return field;
+    const std::shared_ptr<const ShaderSource> source = shaders().status(material.shader).declaration;
+    return source ? shaderParamField(material, *source, name) : std::nullopt;
+}
+
+bool setMaterialProperty(Material& material, std::string_view name, const nlohmann::ordered_json& value,
+                         std::string& error)
+{
+    if (!materialField(material, name)) {
+        const std::shared_ptr<const ShaderSource> source = shaders().status(material.shader).declaration;
+        if (source && std::ranges::find(source->params, name, &ShaderParam::name) != source->params.end())
+            return setShaderParamField(material, *source, name, value, error);
+    }
+    return setMaterialField(material, name, value, error);
 }
 
 } // namespace kast

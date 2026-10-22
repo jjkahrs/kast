@@ -50,3 +50,6 @@ coverage/
 .env
 !.env.example
 services/auth/keys/
+
+# Editor shader bytecode cache (project-local, never shipped)
+.kast/shader_cache/

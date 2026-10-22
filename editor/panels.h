@@ -36,18 +36,23 @@ public:
     // Opens the Assets context menu of the entry at path ("" = the panel background) with its Create submenu open, for
     // screenshots. The entry must be listed at the top level or inside an open folder.
     void openAssetMenu(std::string path) { assetMenuRequest_ = std::move(path); }
-    enum class AssetCreate { System, StateMachine, Gui, Material };
-    // Runs Assets Create > Lua System, State Machine, GUI or Material in folder ("" = the project root), as the menu
-    // does.
+    enum class AssetCreate { System, StateMachine, Gui, Material, Shader };
+    // Runs Assets Create > Lua System, State Machine, GUI, Material or Shader in folder ("" = the project root), as the
+    // menu does.
     void requestAssetCreate(AssetCreate what, std::string folder)
     {
         constexpr AssetEdit::Op ops[] = {AssetEdit::Op::NewSystem, AssetEdit::Op::NewStateMachine, AssetEdit::Op::NewGui,
-                                         AssetEdit::Op::NewMaterial};
+                                         AssetEdit::Op::NewMaterial, AssetEdit::Op::NewShader};
         assetEdit_ = {ops[static_cast<int>(what)], std::move(folder)};
     }
-    // Selects the Assets entry at path (project-relative), as a click does: a .mat also shows in the Inspector until an
-    // entity is selected. Opens the entry's folder.
+    // Selects the Assets entry at path (project-relative), as a click does: a .mat or .kshader also shows in the
+    // Inspector until an entity is selected. Opens the entry's folder.
     void selectAsset(const std::string& path);
+    // The Inspector's material edits (each saved to its .mat), while it shows a material; else null.
+    UndoStack* materialHistory() { return hasMaterial() ? &materialHistory_ : nullptr; }
+    // Sets one field or .kshader param (kast::setMaterialProperty) of the material in the Inspector as its widgets do:
+    // saved, one undo step. False + error if none is shown or the value is invalid. --material-set.
+    bool editMaterial(const std::string& field, const nlohmann::ordered_json& value, std::string& error);
     // Opens the Assets "Delete Asset" confirmation for path (project-relative), as Delete does.
     void openAssetDelete(const Document& doc, const std::string& path) { requestAssetDelete(doc, path); }
     // Opens the selected entity's Inspector context menu of field ("Component.field") with its Apply submenu, for
@@ -95,7 +100,7 @@ private:
     // Assets panel file operations, deferred like Edit and applied at the end of drawAssets. Paths are
     // project-relative; "" is the project root.
     struct AssetEdit {
-        enum class Op { None, NewFolder, NewSystem, NewStateMachine, NewGui, NewMaterial, NewPrefab, Rename, Move, Delete } op = Op::None;
+        enum class Op { None, NewFolder, NewSystem, NewStateMachine, NewGui, NewMaterial, NewShader, NewPrefab, Rename, Move, Delete } op = Op::None;
         std::string path;   // the entry acted on (NewFolder and New*: the folder to create in)
         std::string target; // Rename: the new name; Move: the destination folder
         entt::entity entity = entt::null; // NewPrefab: the entity dropped from the Hierarchy
@@ -145,8 +150,12 @@ private:
     // Play/Pause and a time scrub on the Animator's runtime state: poses the model, never saved, never dirties.
     void drawAnimatorPreview(Document& doc, entt::entity entity);
     void drawParticlePreview(Document& doc, entt::entity entity);
-    // The Inspector for the .mat in inspectedMaterial_: every edit saves the file (the renderers reload it).
+    // The Inspector for the .mat in inspectedAsset_: every edit saves the file (the renderers reload it) and is an undo
+    // step on materialHistory_. Its Shader section picks the .kshader, shows its compile status and its params.
     void drawMaterialInspector(Document& doc);
+    // The Inspector for the .kshader in inspectedAsset_: compile status (errors with .kshader line numbers) and params.
+    void drawShaderInspector(Document& doc);
+    bool hasMaterial() const; // the Inspector shows a .mat
     // Generated Inspector widgets for a component field's JSON value (built-in or Lua); true if they changed it.
     bool drawField(entt::entity entity, const kast::ComponentType& type, const kast::FieldDesc& field,
                    nlohmann::ordered_json& value);
@@ -209,9 +218,9 @@ private:
     kast::AudioHandle previewHandle_ = 0; // the playing preview; stale once it ends
     std::map<std::string, std::string> clipErrors_; // AudioSource clips checked since the last Assets scan: why each can't play ("" = ok)
 
-    // The Inspector shows inspectedMaterial_ (a project-relative .mat, set by selecting it in Assets) instead of the
+    // The Inspector shows inspectedAsset_ (a project-relative .mat or .kshader, set by selecting it in Assets) instead of the
     // selected entity until another entity is selected.
-    std::string inspectedMaterial_;
+    std::string inspectedAsset_;
     entt::entity inspectedEntity_ = entt::null; // doc.selected when last drawn
     struct {
         std::string path; // what value / error were loaded from
@@ -219,4 +228,6 @@ private:
         kast::Material value;
         std::string error; // why it can't be edited; empty when value is valid
     } material_;
+    UndoStack materialHistory_; // every material's Inspector edits: each step saves its .mat
+    std::optional<kast::Material> materialBefore_; // the material before the edit gesture in progress
 };
