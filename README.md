@@ -114,6 +114,7 @@ cd services/auth
 cp .env.example .env        # dev defaults; change the passwords
 docker compose up -d --build
 curl -s localhost:3000/health   # {"status":"ok","db":"ok"}
+docker compose exec auth node dist/user-cli.js create you@example.com admin   # add an account with a role; prompts for password
 ```
 
 **World server and chat service** (world + chat + auth built from `../auth` + MySQL + Mailpit; details in

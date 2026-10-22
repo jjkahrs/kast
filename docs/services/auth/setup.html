@@ -80,6 +80,14 @@ npm run dev          # tsx, reads .env
 <td>Apply pending migrations to <code>DB_NAME</code>. In the container: <code>docker compose exec auth node dist/migrate-cli.js</code></td>
 </tr>
 <tr>
+<td><code>npm run user -- create &lt;email&gt; &lt;role&gt; [--password &lt;pw&gt;]</code></td>
+<td>Create a pre-verified account with role <code>player</code>, <code>gm</code> or <code>admin</code>. Without <code>--password</code> it prompts with hidden input, which keeps the password out of shell history. Fails if the email is taken. In the container: <code>docker compose exec auth node dist/user-cli.js create ...</code></td>
+</tr>
+<tr>
+<td><code>npm run user -- set-role &lt;email&gt; &lt;role&gt;</code></td>
+<td>Change the role of an existing account</td>
+</tr>
+<tr>
 <td><code>npm run dev</code></td>
 <td>Run the server from source</td>
 </tr>

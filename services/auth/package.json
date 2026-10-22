@@ -13,6 +13,7 @@
     "start": "node dist/server.js",
     "dev": "node --env-file-if-exists=.env --import tsx src/server.ts",
     "migrate": "node --env-file-if-exists=.env --import tsx src/migrate-cli.ts",
+    "user": "node --env-file-if-exists=.env --import tsx src/user-cli.ts",
     "test": "vitest run"
   },
   "dependencies": {
