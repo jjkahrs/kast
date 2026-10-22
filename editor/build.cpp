@@ -1,18 +1,21 @@
 #include "build.h"
 
 #include "assets.h"
+#include "shader_compiler.h"
 
 #include <files.h>
 #include <log.h>
 #include <pak.h>
 #include <scene.h>
 #include <scene_io.h>
+#include <shader.h>
 
 #include <SDL3/SDL.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <format>
+#include <map>
 
 namespace {
 
@@ -115,6 +118,38 @@ bool sceneLoads(const std::filesystem::path& root, const std::string& scene, std
     return kast::loadScene(file->string(), loaded, error, nullptr, root);
 }
 
+// Compiles every .kshader among paths (game.pak's) into bytecode entries at kast::shaderPakPath, which the player loads
+// instead of compiling. Every shipped one, not only those materials name: Lua can switch a material's shader. False +
+// error naming the first file that fails and its line.
+bool compileShipped(const std::filesystem::path& root, const std::vector<std::string>& paths,
+                    std::map<std::string, std::string>& bytecode, std::string& error)
+{
+    const std::string version = shaderToolsVersion();
+    for (const std::string& path : paths) {
+        if (!path.ends_with(".kshader"))
+            continue;
+        std::string text, reason;
+        kast::ShaderSource source;
+        kast::CompiledShader compiled;
+        bool cached = false;
+        if (!kast::readFile(root / fromUtf8(path), text))
+            reason = "cannot read the file";
+        else if (kast::parseShader(text, source, reason))
+            kast::compileShaderStages(source, text, compileShader, version, root / kEditorDir / "shader_cache", compiled,
+                                      cached, reason);
+        if (!reason.empty()) {
+            error = std::format("Build failed: shader '{}': {}", path, reason);
+            return false;
+        }
+        for (const kast::ShaderStage stage : kast::shaderStages(source)) {
+            const std::vector<uint8_t>& code = compiled.stage(stage);
+            bytecode[kast::shaderPakPath(text, stage)] = std::string(code.begin(), code.end());
+        }
+        kast::log::info(std::format("Compiled shader '{}' for game.pak{}", path, cached ? " (cache hit)" : ""));
+    }
+    return true;
+}
+
 } // namespace
 
 bool checkStartScene(const kast::Project& project, std::string& error)
@@ -211,13 +246,18 @@ bool buildGame(const kast::Project& project, const std::filesystem::path& outDir
         }
     }
 
+    const std::vector<std::string> contents = pakContents(project.root, out);
+    std::map<std::string, std::string> bytecode;
+    if (!compileShipped(project.root, contents, bytecode, error))
+        return false;
+
     std::error_code ec;
     std::filesystem::create_directories(out, ec);
     if (ec) {
         error = std::format("Build failed: cannot create '{}': {}", utf8(out), ec.message());
         return false;
     }
-    if (!kast::writePak(project.root, pakContents(project.root, out), out / kGamePakName, error)) {
+    if (!kast::writePak(project.root, contents, out / kGamePakName, error, bytecode)) {
         error = "Build failed: " + error;
         return false;
     }

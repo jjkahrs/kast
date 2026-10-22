@@ -5722,6 +5722,7 @@ void checkPostProcessing()
 
 void checkMaterialVersion2();
 void checkShaders();
+void checkShaderBuild();
 void checkShaderLibraryAsync();
 void checkShaderParamEditing();
 
@@ -6193,8 +6194,10 @@ void checkShaders()
     writeFile(dir / "shaders/bad.kshader", "void fragment()\n{\n    ALBEDO = missingName;\n}\n");
     kast::ShaderLibrary library;
     library.setRoot(dir);
-    check(!library.get("shaders/good.kshader"), "no compiler: no shader");
-    check(countLogged("Shader 'shaders/good.kshader': no shader compiler here") == 1, "no compiler is logged");
+    check(!library.get("shaders/good.kshader"), "no compiler and no game.pak bytecode: no shader");
+    check(countLogged("Shader 'shaders/good.kshader': no compiled bytecode for it (the editor's Build compiles it into "
+                      "game.pak") == 1,
+          "missing precompiled bytecode is logged");
     library.setRoot(testRoot()); // forget
     library.setRoot(dir);
     library.setCompiler(compileShader);
@@ -6221,6 +6224,7 @@ void checkShaders()
     check(library.get("shaders/bad.kshader") != nullptr, "a fixed .kshader compiles");
     removeTree(dir);
     checkShaderLibraryAsync();
+    checkShaderBuild();
 
     // COLOR0: glTF COLOR_0 imports (RGBA8, R in the low byte); models without it and primitives are white.
     const auto model = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/vertex_colors.gltf", error);
@@ -6243,6 +6247,78 @@ void checkShaders()
         for (const kast::MeshVertex& v : kast::primitiveMesh(primitive).vertices)
             white = white && v.color == 0xffffffff;
     check(white, "models without vertex colors and the primitives are white");
+}
+
+// Build (phase 4): every shipped .kshader compiles into game.pak at shaderPakPath; the player's library (no compiler)
+// loads exactly that bytecode; a broken .kshader fails the Build naming the file and line, writing nothing.
+void checkShaderBuild()
+{
+    const std::filesystem::path dir = looseTestDir("kast_shader_build_check");
+    const std::filesystem::path root = dir / "game";
+    const std::string sway = "param float amount = 0.5;\nvoid vertex() { VERTEX.x += amount; }\n"
+                             "void fragment() { ALBEDO = vec3_splat(amount); }\n";
+    std::filesystem::create_directories(root / "shaders");
+    std::filesystem::create_directories(root / ".wip");
+    writeFile(root / "project.kast", "x");
+    writeFile(root / "shaders/sway.kshader", sway);
+    writeFile(root / "shaders/plain.kshader", "void fragment() {}\n");
+    writeFile(root / ".wip/broken.kshader", "void fragment() { ALBEDO = nope; }\n"); // not shipped: not compiled
+    saveTestScene(root / "a.scene", "Thing", {});
+    kast::Project project{.root = root, .name = "Shaders", .startScene = "a.scene"};
+    const std::filesystem::path playerDir = std::filesystem::path(SDL_GetBasePath());
+    std::filesystem::path exe;
+    std::string error;
+    const bool built = buildGame(project, dir / "out", playerDir, exe, error);
+    check(built, std::format("Build compiles shaders: {}", error).c_str());
+    kast::Pak pak;
+    check(pak.open(dir / "out" / kGamePakName, error), "the shader build's game.pak opens");
+    kast::ShaderSource source;
+    check(kast::parseShader(sway, source, error), "sway parses");
+    bool same = true;
+    size_t stages = 0;
+    for (const kast::ShaderStage stage : kast::shaderStages(source)) {
+        std::vector<uint8_t> bytecode;
+        const std::optional<std::string_view> packed = pak.find(kast::shaderPakPath(sway, stage));
+        same = same && packed && compileShader(source, stage, bytecode, error) &&
+               *packed == std::string_view(reinterpret_cast<const char*>(bytecode.data()), bytecode.size());
+        ++stages;
+    }
+    check(stages == kast::kShaderStageCount && same, "game.pak holds every stage's bytecode of a shader with vertex()");
+    check(pak.list(".kshader_bytecode").size() == kast::kShaderStageCount + 2,
+          "game.pak holds bytecode only for shipped shaders (sway: 5 stages, plain: 2)");
+    check(pak.find("shaders/sway.kshader").has_value() && !pak.find(".wip/broken.kshader"),
+          "the .kshader sources ship too (their params), dot-folders don't");
+
+    // The player's path: no compiler, bytecode read from the pak's entries (here unpacked to disk).
+    const std::filesystem::path unpacked = dir / "unpacked";
+    for (const std::string& path : pak.list("")) {
+        std::filesystem::create_directories((unpacked / path).parent_path());
+        writeFile(unpacked / path, std::string(*pak.find(path)));
+    }
+    kast::ShaderLibrary player;
+    player.setRoot(unpacked);
+    const auto loaded = player.get("shaders/sway.kshader");
+    same = loaded != nullptr;
+    for (const kast::ShaderStage stage : kast::shaderStages(source))
+        same = same && loaded->stage(stage) == std::vector<uint8_t>(pak.find(kast::shaderPakPath(sway, stage))->begin(),
+                                                                    pak.find(kast::shaderPakPath(sway, stage))->end());
+    check(same && loaded->source.params.size() == 1 && countLogged("Loaded shader 'shaders/sway.kshader' (precompiled)") == 1,
+          "without a compiler the library loads game.pak's bytecode");
+    rewrite(unpacked / "shaders/plain.kshader", "void fragment() { ALBEDO = vec3(0.0); }\n");
+    check(!player.get("shaders/plain.kshader"), "a .kshader whose text differs from the built one has no bytecode");
+
+    for (const auto& [file, text, line] :
+         {std::tuple{"shaders/broken.kshader", "void fragment()\n{\n    ALBEDO = missingName;\n}\n",
+                     "line 3: error X3004: undeclared identifier 'missingName'"},
+          std::tuple{"shaders/broken.kshader", "param float a = 1.0;\nparam vec5 b;\nvoid fragment() {}\n",
+                     "line 2: unknown param type 'vec5'"}}) {
+        writeFile(root / file, text);
+        const bool failed = !buildGame(project, dir / "bad", playerDir, exe, error);
+        check(failed && contains(error, std::format("Build failed: shader '{}': {}", file, line)) &&
+                  !std::filesystem::exists(dir / "bad"),
+              std::format("a broken .kshader fails the Build with its file and line, writing nothing: {}", error).c_str());
+    }
+    removeTree(dir);
 }
 
 // Built-in primitive and terrain tangents: unit length, perpendicular to the normal, handedness +-1, along texture u.

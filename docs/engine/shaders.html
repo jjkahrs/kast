@@ -167,7 +167,8 @@ outside them can pop out at the edge of the view or a shadow cascade.</p>
 the same <code>shaderc</code> and flags as the build (CMake copies <code>shaderc.exe</code> next to <code>kast_editor.exe</code>, with
 <code>kshader/include/</code> (bgfx's <code>bgfx_shader.sh</code>, <code>bgfx_compute.sh</code>) and <code>kshader/mesh/</code> (the templates,
 <code>mesh.sh</code> and <code>varying.def.sc</code>) beside it). Each compile is logged (<code>Compiled shader 'shaders/stripes.kshader' in 0.15 s</code>); both editor
-views share it. The player does not compile shaders.</p>
+views share it. The player does not compile shaders: the editor's <a href="../editor/build.html#build-shaders">Build</a>
+compiles every shipped <code>.kshader</code> into <code>game.pak</code>, and the player loads that bytecode.</p>
 <ul>
 <li><strong>Worker threads.</strong> shaderc runs on a worker thread; frames never wait for it. Until a shader's first compile
 finishes, meshes using it are not drawn (no magenta flash). Editor runs with <code>--screenshot</code> (and no

@@ -40,7 +40,8 @@ Build Settings instead (after the unsaved-changes prompt, before any folder dial
 build, run it again. Headless <code>--build</code> fails instead (exit 1), its error pointing at Build &gt; Build Settings.</p>
 <p>Before writing anything, Build checks that <code>startScene</code> is set, inside the project and loads, that the Online Services
 settings pass the modal's checks (nothing extra while disabled), that the output folder
-isn't the project folder itself, and that <code>kast_player.exe</code> and its DLLs are next to the editor. Then it writes, into
+isn't the project folder itself, and that <code>kast_player.exe</code> and its DLLs are next to the editor. It then compiles
+every <code>.kshader</code> that ships (see <a href="#build-shaders">Shaders</a>). Then it writes, into
 the output folder (created if needed, overwriting only these files):</p>
 <pre><code>&lt;Name&gt;.exe   copy of kast_player.exe
 game.pak     the project's files
@@ -56,13 +57,23 @@ nothing is left: <code>Switch Test</code> -&gt; <code>Switch Test.exe</code>, <c
 and the output folder if it is inside the project. It is uncompressed: a <code>KPAK</code> magic and format version, an index of
 (project-relative <code>/</code> path, offset, size) entries, then the raw bytes. The exact byte layout is in <code>engine/pak.h</code>. The
 player checks the magic, the version and that every entry lies inside the file.</p>
+<p id="build-shaders"><strong>Shaders.</strong> Build compiles <strong>every <code>.kshader</code> that ships in <code>game.pak</code></strong>, not only the
+ones materials name (Lua can switch a material's <code>shader</code>, and a broken file anywhere is caught before players see
+magenta), with the editor's <code>shaderc</code>, into every stage it needs (<a href="../engine/shaders.html#kshader-compile">the
+compile cache</a> skips unchanged ones). Each stage's bytecode goes into <code>game.pak</code> as
+<code>.kshader_bytecode/&lt;key&gt;.bin</code> (the key a hash of the <code>.kshader</code> text and the stage; a dot-folder, so no project
+file can collide with it). The <code>.kshader</code> sources ship too: the player reads their param declarations. The player never
+compiles: it loads that bytecode (<code>Loaded shader 'shaders/x.kshader' (precompiled)</code>) and has no <code>shaderc</code>. A
+shader that fails to compile or parse fails the Build, naming the file and the line, and writes nothing:</p>
+<pre><code>Build failed: shader 'shaders/broken.kshader': line 7: error X3004: undeclared identifier 'undeclaredThing'</code></pre>
+<p>Move a work-in-progress <code>.kshader</code> into a dot-folder (e.g. <code>.wip/</code>) to leave it out of the Build.</p>
 <p><strong>The game</strong> (<code>kast_player.exe</code> under its new name) opens the <code>game.pak</code> next to it, loads <code>project.kast</code> and its Lua
 components from it, titles its window with the project name and plays <code>startScene</code> as editor Play mode does (C++
 systems, Lua systems, Lua components, <code>kast.loadScene</code>), rendering through the scene's Main Camera. It has no console
 window and doesn't hot reload. Its scene's <a href="../engine/game-gui.html#game-gui">game GUIs</a> show over the scene and take mouse and keyboard
 input. Flags (for tests): <code>--frames N</code> and <code>--screenshot out.png</code>, as in the editor, <code>--gui-click &lt;id&gt;</code> (click that
 GUI element on frame 10), <code>--sim-key frame,key</code> (repeatable: push a press of that SDL key on that frame, e.g. <code>30,F3</code> for the
-<a href="controls.html#stats-overlay">stats overlay</a>), <code>--size WxH</code> (window size, default 1280x720), <code>--window-pos X,Y</code> (window position, as in the editor; also <code>KAST_WINDOW_POS</code>), <code>--no-audio-device</code> (silent null audio backend), <code>--gpu-stats</code> (log the average GPU time of
+<a href="controls.html#stats-overlay">stats overlay</a>), <code>--size WxH</code> (window size, default 1280x720), <code>--window-pos X,Y</code> (window position, as in the editor; also <code>KAST_WINDOW_POS</code>), <code>--fixed-dt S</code> (each frame advances S seconds, as in the editor, so screenshots of moving or <code>TIME</code>-driven scenes repeat), <code>--no-audio-device</code> (silent null audio backend), <code>--gpu-stats</code> (log the average GPU time of
 the frame's views, after 10 warmup frames, on exit), and <code>--no-instancing</code> and <code>--no-culling</code> (turn off
 <a href="../engine/instancing-and-culling.html#instancing-and-culling">instancing and culling</a>, as in the editor). A missing
 or corrupt <code>game.pak</code>, an invalid <code>project.kast</code>, Online Services enabled with a CA file missing from <code>game.pak</code> or

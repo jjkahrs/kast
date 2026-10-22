@@ -126,13 +126,15 @@ std::vector<std::string> Pak::list(const std::string& dir) const
 }
 
 bool writePak(const std::filesystem::path& root, const std::vector<std::string>& paths, const std::filesystem::path& out,
-              std::string& error)
+              std::string& error, const std::map<std::string, std::string>& generated)
 {
     std::string header(kMagic, sizeof(kMagic));
     put(header, kPakVersion);
-    put(header, static_cast<uint32_t>(paths.size()));
+    put(header, static_cast<uint32_t>(paths.size() + generated.size()));
     size_t indexSize = header.size();
     for (const std::string& path : paths)
+        indexSize += sizeof(uint32_t) + path.size() + 2 * sizeof(uint64_t);
+    for (const auto& [path, bytes] : generated)
         indexSize += sizeof(uint32_t) + path.size() + 2 * sizeof(uint64_t);
     std::string readError;
     // Offsets are known only once each file is read, so the index is a placeholder that is filled in last. Only the
@@ -141,19 +143,24 @@ bool writePak(const std::filesystem::path& root, const std::vector<std::string>&
         file << header << std::string(indexSize - header.size(), '\0');
         std::string index;
         uint64_t offset = indexSize;
-        for (const std::string& path : paths) {
-            std::string bytes;
-            if (!readFile(root / path, bytes)) {
-                readError = std::format("Cannot read '{}'", (root / path).string());
-                return false;
-            }
+        const auto add = [&](const std::string& path, const std::string& bytes) {
             put(index, static_cast<uint32_t>(path.size()));
             index += path;
             put(index, offset);
             put(index, static_cast<uint64_t>(bytes.size()));
             file << bytes;
             offset += bytes.size();
+        };
+        for (const std::string& path : paths) {
+            std::string bytes;
+            if (!readFile(root / path, bytes)) {
+                readError = std::format("Cannot read '{}'", (root / path).string());
+                return false;
+            }
+            add(path, bytes);
         }
+        for (const auto& [path, bytes] : generated)
+            add(path, bytes);
         file.seekp(static_cast<std::streamoff>(header.size()));
         file << index;
         return true;

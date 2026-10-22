@@ -112,6 +112,15 @@ struct CompiledShader {
 // The bytecode cache's key for one stage of a .kshader: a hash of its text, the stage and version (what else the
 // bytecode depends on: the templates, shaderc). 16 hex digits.
 std::string shaderCacheKey(std::string_view text, ShaderStage stage, std::string_view version);
+// Compiles every stage in shaderStages(source) into out.bytecode (text: the .kshader file source was parsed from), each
+// through the cache in cacheDir when version is set. False + error (the first failing stage's) otherwise; cached:
+// every stage came from the cache.
+bool compileShaderStages(const ShaderSource& source, std::string_view text, const ShaderCompiler& compiler,
+                         std::string_view version, const std::filesystem::path& cacheDir, CompiledShader& out,
+                         bool& cached, std::string& error);
+// Where game.pak keeps one stage's bytecode of a .kshader with this text (project-relative). The editor's Build writes
+// these entries; the player, which has no compiler, reads them. A dot-folder, so no project file ships there.
+std::string shaderPakPath(std::string_view text, ShaderStage stage);
 
 // .kshader files by project-relative path, each parsed and compiled once and again when its file's modification time
 // changes. One global library, so the editor's renderers share each compile.
@@ -119,6 +128,7 @@ std::string shaderCacheKey(std::string_view text, ShaderStage stage, std::string
 // runs and after it fails. Otherwise each compile runs inside the call that needs it (screenshots, tests).
 // With a cache version, each stage's bytecode is kept in <root>/.kast/shader_cache/<shaderCacheKey>.bin (a dot-folder:
 // never shipped), so unchanged shaders are not recompiled on the next start.
+// Without a compiler (the player) each stage's bytecode is read from shaderPakPath instead: game.pak's, never compiled.
 class ShaderLibrary {
 public:
     enum class State { None, Compiling, Compiled, Failed };
@@ -150,6 +160,7 @@ private:
         std::string error;
         double seconds = 0.0;
         bool cached = false; // every stage came from the cache
+        bool precompiled = false; // read from shaderPakPath (no compiler)
     };
     struct Entry {
         std::shared_ptr<const CompiledShader> shader; // the last good compile

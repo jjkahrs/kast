@@ -1110,7 +1110,9 @@ add_test(NAME shader_new_screenshot
           "-DFOCUS_PANEL=Assets" "-DMUST_EXIST=${KAST_SHADER_EDITOR_PROJECT}/shaders/new_shader.kshader"
           "-DEXPECT_OUTPUT=Created shader 'shaders/new_shader.kshader'.*Compiled shader 'shaders/new_shader.kshader'"
           "-DFORBID_OUTPUT=\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
-set_tests_properties(shader_new_screenshot PROPERTIES FIXTURES_REQUIRED shader_editor_copy)
+# Every editor run in the shared copy waits for cache_first (it must compile, not hit the cache) and holds a lock, so
+# parallel ctest runs don't race on its files.
+set_tests_properties(shader_new_screenshot PROPERTIES FIXTURES_REQUIRED "shader_editor_copy;shader_cache_filled")
 kast_shader_shot(inspector_params "${KAST_SHADER_TEST_PROJECT}" shader_showcase.scene
   "-DEXTRA_ARGS=--scene ${KAST_SHADER_TEST_PROJECT}/shader_showcase.scene --size 1600x900 --assets-select materials/shader_params.mat"
   "-DEXPECT_OUTPUT=Compiled shader 'shaders/params.kshader'" "-DFORBID_OUTPUT=Shader 'shaders/params.kshader'")
@@ -1120,7 +1122,7 @@ kast_shader_shot(inspector_broken "${KAST_SHADER_TEST_PROJECT}" shader_errors.sc
 kast_shader_shot(material_undo "${KAST_SHADER_EDITOR_PROJECT}" shader_showcase.scene
   "-DEXTRA_ARGS=--scene ${KAST_SHADER_EDITOR_PROJECT}/shader_showcase.scene --size 1600x900 --assets-select materials/shader_params.mat --material-set amount=0.2 --material-set offset=[1,1] --material-undo 1"
   "-DEXPECT_OUTPUT=--material-set amount = 0.2.*--material-set offset = \\[1,1\\]" "-DFORBID_OUTPUT=\\[error\\]")
-set_tests_properties(shader_material_undo_screenshot PROPERTIES FIXTURES_REQUIRED shader_editor_copy
+set_tests_properties(shader_material_undo_screenshot PROPERTIES FIXTURES_REQUIRED "shader_editor_copy;shader_cache_filled"
                      FIXTURES_SETUP shader_material_undone)
 add_test(NAME shader_material_undo_written
   COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_SHADER_EDITOR_PROJECT}/materials/shader_params.mat")
@@ -1131,6 +1133,9 @@ kast_shader_shot(material_redo "${KAST_SHADER_EDITOR_PROJECT}" shader_showcase.s
   "-DFORBID_OUTPUT=\\[error\\]")
 set_tests_properties(shader_material_redo_screenshot PROPERTIES FIXTURES_REQUIRED shader_material_undone
                      FIXTURES_SETUP shader_material_redone)
+set_tests_properties(shader_cache_first_screenshot shader_cache_second_screenshot shader_new_screenshot
+                     shader_material_undo_screenshot shader_material_redo_screenshot
+                     PROPERTIES RESOURCE_LOCK shader_editor_project)
 add_test(NAME shader_material_redo_written
   COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_SHADER_EDITOR_PROJECT}/materials/shader_params.mat")
 set_tests_properties(shader_material_redo_written PROPERTIES FIXTURES_REQUIRED shader_material_redone
@@ -1395,7 +1400,8 @@ kast_model_shot(models_missing "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/models
 kast_model_shot(models_lua "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/models_lua.scene --play"
                 "-DEXPECT_OUTPUT=clips: 178, first Angry.*unknown clip: false [^\n]*has no clip \"No_Such_Clip\".*bad entity: false invalid entity id 999999.*no animator: false entity [0-9]+ needs an \"Animator\" and a \"ModelRenderer\".*state: Angry [0-9.]+ true, speed 1.5")
 kast_model_shot(models_inspector_preview "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/models_anim.scene --select 3 --size 1600x900")
-# Build: --build packages configure-time copies of tests/project (tests never write into them) into
+# Build: --build packages configure-time copies of tests/project (tests never change their content; Build fills their
+# .kast/shader_cache) into
 # build/<preset>/game_out/<name>/, then the built player runs from a copy of that folder. Each copy gets its own
 # project.kast; the "systems": [] variants show that only the Lua code (run from game.pak) changes the shot.
 set(KAST_GAME_OUT "${CMAKE_CURRENT_BINARY_DIR}/game_out")
@@ -1411,6 +1417,8 @@ function(kast_game_project name project_name start_scene empty_systems)
   file(WRITE "${dir}/project.kast"
        "{\n  \"version\": 1,\n  \"name\": \"${project_name}\",\n  \"startScene\": \"${start_scene}\"${machines}\n}\n")
   file(WRITE "${dir}/.kast/editor.json" "{\n  \"buildFolder\": \"C:/elsewhere\"\n}\n") # must stay out of game.pak
+  # Build compiles every shipped .kshader and fails on a broken one: drop the deliberately broken test shaders.
+  file(REMOVE "${dir}/shaders/broken.kshader" "${dir}/shaders/bad_param.kshader")
   if(empty_systems)
     file(READ "${dir}/${start_scene}" scene)
     string(REGEX REPLACE "\"systems\": \\[[^]]*\\]" "\"systems\": []" scene "${scene}")
@@ -1598,6 +1606,64 @@ foreach(pak missing corrupt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
   set_tests_properties(player_${pak}_pak PROPERTIES FIXTURES_REQUIRED game_switch_built TIMEOUT 90)
 endforeach()
+# Shaders in the player: Build compiles every shipped .kshader into game.pak (kast::shaderPakPath) and the player loads
+# that bytecode ("Loaded shader ... (precompiled)"; player_test.cmake fails if a shaderc.exe is next to it). The vertex
+# scenes have no Main Camera (editor views), so their game copies get one at their editor camera's view. Each game
+# runs at --fixed-dt 0.016 like the editor's shader shots. player_shader_offset_same: lift.kshader's vertex() and
+# hidden.kshader's cutout render exactly as the plain meshes placed higher (as shader_vertex_offset_same in the editor).
+# build_game_broken_shader: a broken .kshader fails the Build naming the file and line, writing nothing.
+foreach(game "shader_showcase|shader_showcase.scene|showcase"
+             "shader_vertex|shader_vertex.scene|sway|0, 4.5285, 5.3245|-0.300706, 0, 0, 0.953717"
+             "shader_offset|shader_vertex_offset.scene|lift|0, 4.6036, 8.1568|-0.216440, 0, 0, 0.976296"
+             "shader_offset_ref|shader_vertex_offset_reference.scene|-|0, 4.6036, 8.1568|-0.216440, 0, 0, 0.976296")
+  string(REPLACE "|" ";" game "${game}")
+  list(GET game 0 name)
+  list(GET game 1 scene)
+  list(GET game 2 shader)
+  list(LENGTH game fields)
+  kast_game_project(${name} "Shader Test" ${scene} FALSE "")
+  if(fields GREATER 3)
+    list(GET game 3 position)
+    list(GET game 4 rotation)
+    set(scene_file "${CMAKE_CURRENT_BINARY_DIR}/game_projects/${name}/${scene}")
+    file(READ "${scene_file}" scene_text)
+    string(REGEX REPLACE "}[\r\n]+  \\][\r\n]+}[\r\n]*$"
+           "},\n    {\"id\": 900, \"name\": \"Main Camera\", \"parent\": null, \"components\": {\"Transform\": {\"position\": [${position}], \"rotation\": [${rotation}], \"scale\": [1, 1, 1]}, \"Camera\": {\"verticalFovDegrees\": 60, \"nearPlane\": 0.1, \"farPlane\": 1000}}}\n  ]\n}\n"
+           camera_scene "${scene_text}")
+    if(camera_scene STREQUAL scene_text)
+      message(FATAL_ERROR "Shader game ${name}: no entity list end found in ${scene}")
+    endif()
+    file(WRITE "${scene_file}" "${camera_scene}")
+  endif()
+  set(expect "Window title: Shader Test")
+  if(NOT shader STREQUAL "-")
+    set(expect "Loaded shader 'shaders/${shader}\\.kshader' \\(precompiled\\)")
+  endif()
+  add_test(NAME build_game_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/${name}"
+            "-DOUT=${KAST_GAME_OUT}/${name}" "-DEXE=Shader Test.exe" -DEXPECT=0
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+  add_test(NAME player_${name}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/${name}" "-DEXE=Shader Test.exe"
+            "-DWORK_DIR=${KAST_GAME_OUT}/${name}.run" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_${name}.png"
+            "-DEXTRA_ARGS=--fixed-dt 0.016" -DEXPECT=0 "-DEXPECT_OUTPUT=${expect}" "-DFORBID_OUTPUT=\\[error\\]|magenta"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+  set_tests_properties(build_game_${name} PROPERTIES FIXTURES_SETUP game_${name}_built)
+  set_tests_properties(player_${name}_screenshot PROPERTIES FIXTURES_REQUIRED game_${name}_built
+                       FIXTURES_SETUP player_${name}_shot TIMEOUT 90)
+endforeach()
+add_test(NAME player_shader_offset_same
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_shader_offset_ref.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_shader_offset.png" -DSAME=ON
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(player_shader_offset_same PROPERTIES FIXTURES_REQUIRED "player_shader_offset_shot;player_shader_offset_ref_shot")
+kast_game_project(broken_shader "Broken Shader" shader_showcase.scene FALSE "")
+file(COPY "${KAST_TEST_PROJECT}/shaders/broken.kshader" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/game_projects/broken_shader/shaders")
+add_test(NAME build_game_broken_shader
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/broken_shader"
+          "-DOUT=${KAST_GAME_OUT}/broken_shader" -DEXPECT=1
+          "-DEXPECT_OUTPUT=Build failed: shader 'shaders/broken.kshader': line 7: error X3004: undeclared identifier 'undeclaredThing'"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
 # A game in a non-ASCII folder still finds its game.pak (UTF-8 paths, cmake/utf8.manifest).
 add_test(NAME player_non_ascii_folder
   COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/switch" "-DEXE=Switch Test.exe"

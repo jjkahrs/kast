@@ -621,6 +621,39 @@ std::string shaderCacheKey(std::string_view text, ShaderStage stage, std::string
     return std::format("{:016x}", hash);
 }
 
+bool compileShaderStages(const ShaderSource& source, std::string_view text, const ShaderCompiler& compiler,
+                         std::string_view version, const std::filesystem::path& cacheDir, CompiledShader& out,
+                         bool& cached, std::string& error)
+{
+    cached = true;
+    for (const ShaderStage stage : shaderStages(source)) {
+        std::vector<uint8_t>& bytecode = out.bytecode[static_cast<size_t>(stage)];
+        const std::filesystem::path file =
+            version.empty() ? std::filesystem::path() : cacheDir / (shaderCacheKey(text, stage, version) + ".bin");
+        if (!file.empty()) {
+            std::ifstream in(file, std::ios::binary);
+            bytecode.assign(std::istreambuf_iterator<char>(in), {});
+            if (!bytecode.empty())
+                continue;
+        }
+        cached = false;
+        if (!compiler(source, stage, bytecode, error))
+            return false;
+        if (file.empty())
+            continue;
+        // ponytail: the cache is never pruned; stale keys stay until the folder is deleted.
+        std::error_code ec;
+        std::filesystem::create_directories(cacheDir, ec);
+        writeFileAtomic(file, std::string_view(reinterpret_cast<const char*>(bytecode.data()), bytecode.size()));
+    }
+    return true;
+}
+
+std::string shaderPakPath(std::string_view text, ShaderStage stage)
+{
+    return ".kshader_bytecode/" + shaderCacheKey(text, stage, "game.pak") + ".bin";
+}
+
 void ShaderLibrary::setRoot(const std::filesystem::path& root)
 {
     if (root != root_) {
@@ -691,8 +724,25 @@ void ShaderLibrary::load(const std::string& path, Entry& entry)
         error = "cannot read the file";
     else if (file && parseShader(text, *source, error))
         entry.declaration = source;
-    if (entry.declaration && !compiler_)
-        error = "no shader compiler here (shaderc runs in the editor)";
+    if (entry.declaration && !compiler_) { // the player: game.pak's bytecode
+        auto shader = std::make_shared<CompiledShader>();
+        shader->source = *source;
+        for (const ShaderStage stage : shaderStages(*source)) {
+            std::string bytes;
+            if (!readFile(root_ / shaderPakPath(text, stage), bytes)) {
+                error = "no compiled bytecode for it (the editor's Build compiles it into game.pak; shaderc runs only "
+                        "in the editor)";
+                break;
+            }
+            shader->bytecode[static_cast<size_t>(stage)].assign(bytes.begin(), bytes.end());
+        }
+        if (error.empty()) {
+            entry.pending = std::async(std::launch::deferred,
+                                       [shader] { return Result{.shader = shader, .precompiled = true}; });
+            finish(path, entry);
+            return;
+        }
+    }
     if (!error.empty()) {
         entry.pending = std::async(std::launch::deferred, [error] { return Result{.error = error}; });
         finish(path, entry);
@@ -704,27 +754,9 @@ void ShaderLibrary::load(const std::string& path, Entry& entry)
         const auto start = std::chrono::steady_clock::now();
         auto shader = std::make_shared<CompiledShader>();
         shader->source = source;
-        Result result{.cached = true};
-        for (const ShaderStage stage : shaderStages(source)) {
-            std::vector<uint8_t>& bytecode = shader->bytecode[static_cast<size_t>(stage)];
-            const std::filesystem::path file =
-                version.empty() ? std::filesystem::path() : cache / (shaderCacheKey(text, stage, version) + ".bin");
-            if (!file.empty()) {
-                std::ifstream in(file, std::ios::binary);
-                bytecode.assign(std::istreambuf_iterator<char>(in), {});
-                if (!bytecode.empty())
-                    continue;
-            }
-            result.cached = false;
-            if (!compiler(source, stage, bytecode, result.error))
-                return result;
-            if (file.empty())
-                continue;
-            // ponytail: the cache is never pruned; stale keys stay until the folder is deleted.
-            std::error_code ec;
-            std::filesystem::create_directories(cache, ec);
-            writeFileAtomic(file, std::string_view(reinterpret_cast<const char*>(bytecode.data()), bytecode.size()));
-        }
+        Result result;
+        if (!compileShaderStages(source, text, compiler, version, cache, *shader, result.cached, result.error))
+            return result;
         result.shader = std::move(shader);
         result.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         return result;
@@ -742,8 +774,11 @@ void ShaderLibrary::finish(const std::string& path, Entry& entry)
     entry.error = result.error;
     if (result.shader) {
         entry.shader = std::move(result.shader);
-        log::info(std::format("{} shader '{}' {}", reload ? "Recompiled" : "Compiled", path,
-                              result.cached ? "(cache hit)" : std::format("in {:.2f} s", result.seconds)));
+        if (result.precompiled)
+            log::info(std::format("Loaded shader '{}' (precompiled)", path));
+        else
+            log::info(std::format("{} shader '{}' {}", reload ? "Recompiled" : "Compiled", path,
+                                  result.cached ? "(cache hit)" : std::format("in {:.2f} s", result.seconds)));
     } else {
         log::error(std::format("Shader '{}': {}; {}", path, result.error,
                                entry.shader ? "the last good version keeps rendering" : "rendering it magenta"));
