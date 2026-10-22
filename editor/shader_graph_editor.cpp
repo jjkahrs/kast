@@ -6,6 +6,7 @@
 
 #include <app.h>
 #include <log.h>
+#include <shader.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -19,6 +20,8 @@
 #include <charconv>
 #include <cmath>
 #include <format>
+#include <iterator>
+#include <ranges>
 #include <set>
 
 namespace ed = ax::NodeEditor;
@@ -174,6 +177,7 @@ void ShaderGraphEditor::shutdown()
     if (canvas_)
         ed::DestroyEditor(canvas_);
     canvas_ = nullptr;
+    preview_.shutdown();
 }
 
 void ShaderGraphEditor::open(const std::filesystem::path& file)
@@ -289,6 +293,108 @@ void ShaderGraphEditor::saveShortcut()
         save();
 }
 
+// --- Live update ---
+
+void ShaderGraphEditor::update(const std::filesystem::path& root)
+{
+    std::string path;
+    if (doc_.isOpen() && !root.empty()) {
+        const std::filesystem::path relative = doc_.file().lexically_normal().lexically_relative(root.lexically_normal());
+        if (!relative.empty() && *relative.begin() != "..")
+            path = utf8(relative);
+    }
+    if (path != livePath_) { // another graph, or none: the last one's file is what renders again
+        if (!livePath_.empty())
+            kast::shaders().setOverride(livePath_, std::nullopt);
+        livePath_ = path;
+        liveRevision_ = doc_.revision();
+        editedAt_.reset();
+        compiling_.reset();
+        liveError_ = "?";
+        std::vector<kast::GraphIssue> issues;
+        liveKey_ = kast::generateKShader(doc_.graph(), issues); // what the file generates: nothing to hand over yet
+        warnings_.clear();
+        std::ranges::copy_if(issues, std::back_inserter(warnings_), &kast::GraphIssue::warning);
+    }
+    if (livePath_.empty()) {
+        issues_.clear();
+        return;
+    }
+    kast::shaders().setRoot(root);
+    const Clock::time_point now = Clock::now();
+    if (doc_.revision() != liveRevision_) {
+        liveRevision_ = doc_.revision();
+        editedAt_ = now;
+    }
+    if (editedAt_ && std::chrono::duration<double>(now - *editedAt_).count() >= kLiveDelay)
+        applyLive();
+    if (compiling_) {
+        ++compilingFrames_;
+        kast::shaders().reloadChanged(); // takes the compile in even while no view renders
+    }
+    const kast::ShaderLibrary::Status status = kast::shaders().status(livePath_);
+    if (compiling_ && status.state != kast::ShaderLibrary::State::Compiling) {
+        const double seconds = std::chrono::duration<double>(now - *compiling_).count();
+        if (status.state == kast::ShaderLibrary::State::Compiled)
+            kast::log::info(std::format("Shader Graph: '{}' live-updated {:.2f} s after the edit ({} frames drawn while it "
+                                        "compiled)", livePath_, seconds, compilingFrames_));
+        else
+            kast::log::info(std::format("Shader Graph: '{}' live-update failed {:.2f} s after the edit; {}", livePath_,
+                                        seconds, status.hasShader ? "the last good version keeps rendering"
+                                                                  : "it renders magenta"));
+        compiling_.reset();
+    }
+    if (status.state == kast::ShaderLibrary::State::Compiling || status.error == liveError_)
+        return;
+    // The library's errors ("node 5: ..." lines, validation's and shaderc's mapped ones) on their nodes, then warnings.
+    liveError_ = status.error;
+    issues_.clear();
+    for (const auto part : std::views::split(std::string_view(liveError_), '\n')) {
+        std::string_view line(part.begin(), part.end());
+        int node = 0;
+        if (line.starts_with("node ")) {
+            const auto [end, ec] = std::from_chars(line.data() + 5, line.data() + line.size(), node);
+            if (ec == std::errc{} && std::string_view(end, line.data() + line.size()).starts_with(": "))
+                line = std::string_view(end + 2, line.data() + line.size());
+            else
+                node = 0;
+        }
+        if (!line.empty())
+            issues_.push_back({node, std::string(line)});
+    }
+    issues_.insert(issues_.end(), warnings_.begin(), warnings_.end());
+}
+
+void ShaderGraphEditor::applyLive()
+{
+    const Clock::time_point editedAt = *std::exchange(editedAt_, std::nullopt);
+    std::vector<kast::GraphIssue> issues;
+    std::string key = kast::generateKShader(doc_.graph(), issues);
+    warnings_.clear();
+    std::ranges::copy_if(issues, std::back_inserter(warnings_), &kast::GraphIssue::warning);
+    liveError_ = "?"; // the warnings may differ: the issues are made again
+    if (key.empty())  // errors: the graph itself, so a different error reaches the library
+        key = kast::shaderGraphText(doc_.graph());
+    if (key == liveKey_) // a move, a comment: the same code
+        return;
+    liveKey_ = std::move(key);
+    kast::shaders().setOverride(livePath_, kast::shaderGraphText(doc_.graph()));
+    compiling_ = editedAt;
+    compilingFrames_ = 0;
+}
+
+void ShaderGraphEditor::drawIssues(int node) const
+{
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetFontSize() * 30.0f); // the Inspector's width or less
+    for (const kast::GraphIssue& issue : issues_)
+        if (issue.node == node) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImColor(issue.warning ? kHighlight : kRefusedColor).Value);
+            ImGui::TextWrapped("%s: %s", issue.warning ? "Warning" : "Error", issue.message.c_str());
+            ImGui::PopStyleColor();
+        }
+    ImGui::PopTextWrapPos();
+}
+
 // --- Canvas ---
 
 void ShaderGraphEditor::drawCanvas()
@@ -316,6 +422,23 @@ void ShaderGraphEditor::drawCanvas()
         navigateIn_ = 2;
     }
     resetCanvas_ = false;
+    // The summary line, above the canvas.
+    const size_t errors = static_cast<size_t>(std::ranges::count_if(issues_, [](const kast::GraphIssue& i) { return !i.warning; }));
+    const kast::ShaderLibrary::Status status = livePath_.empty() ? kast::ShaderLibrary::Status{} : kast::shaders().status(livePath_);
+    std::string summary = status.state == kast::ShaderLibrary::State::Compiling ? "Compiling..."
+                          : errors ? (status.hasShader ? "Errors: the last good version renders" : "Errors: renders magenta")
+                                   : "Compiled";
+    if (!issues_.empty()) {
+        const kast::GraphIssue& first = errors ? *std::ranges::find(issues_, false, &kast::GraphIssue::warning) : issues_[0];
+        summary += std::format(" - {} error{}, {} warning{} - {}{}", errors, errors == 1 ? "" : "s", issues_.size() - errors,
+                               issues_.size() - errors == 1 ? "" : "s", first.node ? std::format("node {}: ", first.node) : "",
+                               first.message);
+    }
+    if (livePath_.empty())
+        summary = "Not in the project: no live preview";
+    ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 8.0f, ImGui::GetCursorPosY() + 2.0f));
+    ImGui::TextColored(ImColor(errors ? kRefusedColor : !issues_.empty() ? kHighlight : kFieldHighlight), "%s",
+                       summary.c_str());
     const ImVec2 center(ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x * 0.5f,
                         ImGui::GetCursorScreenPos().y + ImGui::GetContentRegionAvail().y * 0.5f);
     ed::SetCurrentEditor(canvas_);
@@ -340,6 +463,13 @@ void ShaderGraphEditor::drawCanvas()
     viewCenter_ = {std::round(view.x), std::round(view.y)};
     drawComments();
     drawNodes();
+    // Before this frame's edits: nodes a paste or the add menu makes exist on the canvas only once drawn (next frame).
+    if (pendingSelect_) {
+        ed::ClearSelection();
+        for (int id : *pendingSelect_)
+            ed::SelectNode(id, true);
+        pendingSelect_.reset();
+    }
     const kast::ShaderGraph& graph = doc_.graph();
     for (const GraphLink& link : graph.links) {
         const GraphNode* to = findNode(graph, link.to.node);
@@ -360,12 +490,6 @@ void ShaderGraphEditor::drawCanvas()
     handleCreate();
     handleDelete();
     handleShortcuts();
-    if (pendingSelect_) {
-        ed::ClearSelection();
-        for (int id : *pendingSelect_)
-            ed::SelectNode(id, true);
-        pendingSelect_.reset();
-    }
     // Right-click or Space on the canvas: the add menu at the cursor.
     ed::Suspend();
     if (ed::ShowBackgroundContextMenu() ||
@@ -437,6 +561,13 @@ void ShaderGraphEditor::drawNodes()
             heading += ": " + node.settings.at("param").get<std::string>();
         else if (node.type == "swizzle")
             heading += " ." + node.settings.at("mask").get<std::string>();
+        // Errors outline the node red, warnings #ffcc00 (an error wins).
+        const auto issue = std::ranges::find_if(issues_, [&](const kast::GraphIssue& i) { return i.node == node.id; });
+        const bool error = std::ranges::any_of(issues_, [&](const kast::GraphIssue& i) { return i.node == node.id && !i.warning; });
+        if (issue != issues_.end()) {
+            ed::PushStyleColor(ed::StyleColor_NodeBorder, ImColor(error ? kRefusedColor : kHighlight));
+            ed::PushStyleVar(ed::StyleVar_NodeBorderWidth, 3.0f);
+        }
         ed::BeginNode(node.id);
         ImGui::PushID(node.id);
         ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32_BLACK);
@@ -486,6 +617,17 @@ void ShaderGraphEditor::drawNodes()
         }
         ImGui::PopID();
         ed::EndNode();
+        if (issue != issues_.end()) {
+            ed::PopStyleVar();
+            ed::PopStyleColor();
+            if (ed::GetHoveredNode() == ed::NodeId(node.id)) {
+                ed::Suspend();
+                ImGui::BeginTooltip();
+                drawIssues(node.id);
+                ImGui::EndTooltip();
+                ed::Resume();
+            }
+        }
         // The header strip, under the title.
         const ImVec2 min = ed::GetNodePosition(node.id);
         const ImVec2 size = ed::GetNodeSize(node.id);
@@ -549,7 +691,10 @@ void ShaderGraphEditor::handleCreate()
                     tooltip(check.message, kHighlight);
                 if (ed::AcceptNewItem(ImColor(check.warning ? kHighlight : pinColor(PinType::Float)), 2.0f)) {
                     std::string error;
-                    if (!doc_.link(start->first, end->first, error))
+                    if (doc_.link(start->first, end->first, error))
+                        kast::log::info(std::format("Shader Graph: linked {}.{} to {}.{}", start->first.node,
+                                                    start->first.pin, end->first.node, end->first.pin));
+                    else
                         kast::log::warn(std::format("Shader Graph: can't link: {}", error));
                 }
             }
@@ -587,8 +732,11 @@ void ShaderGraphEditor::handleDelete()
             }
     }
     ed::EndDelete();
-    if (!nodes.empty() || !links.empty() || !comments.empty())
+    if (!nodes.empty() || !links.empty() || !comments.empty()) {
         doc_.remove(nodes, links, comments);
+        kast::log::info(std::format("Shader Graph: deleted {} nodes, {} links, {} frames", nodes.size(), links.size(),
+                                    comments.size()));
+    }
 }
 
 void ShaderGraphEditor::handleShortcuts()
@@ -598,8 +746,10 @@ void ShaderGraphEditor::handleShortcuts()
         return;
     }
     const bool cut = ed::AcceptCut();
-    if (cut || ed::AcceptCopy())
+    if (cut || ed::AcceptCopy()) {
         ImGui::SetClipboardText(doc_.copy(selection_).c_str());
+        kast::log::info(std::format("Shader Graph: copied {} nodes", selection_.size()));
+    }
     if (cut)
         doc_.remove(selection_);
     const bool duplicate = ed::AcceptDuplicate();
@@ -607,10 +757,12 @@ void ShaderGraphEditor::handleShortcuts()
         const std::string text = duplicate ? doc_.copy(selection_) : std::string(ImGui::GetClipboardText() ? ImGui::GetClipboardText() : "");
         std::string error;
         const std::vector<int> pasted = doc_.paste(text, mouse_, error);
-        if (pasted.empty())
+        if (pasted.empty()) {
             kast::log::warn(std::format("Shader Graph: can't paste: {}", error));
-        else
+        } else {
             pendingSelect_ = pasted;
+            kast::log::info(std::format("Shader Graph: pasted {} nodes at {:.0f},{:.0f}", pasted.size(), mouse_[0], mouse_[1]));
+        }
     }
     ed::EndShortcut();
 }
@@ -683,6 +835,10 @@ void ShaderGraphEditor::drawAddMenu()
     if (std::exchange(addMenuRequested_, false)) {
         addEntries_ = addEntries();
         ImGui::OpenPopup("Add Node");
+        kast::log::info(std::format("Shader Graph: add menu, {} entries{}", addEntries_.size(),
+                                    addFrom_ ? std::format(" that link {} {}.{}", addFromInput_ ? "into" : "from",
+                                                           addFrom_->node, addFrom_->pin)
+                                             : std::string()));
     }
     if (addMenuAtCenter_ && !ImGui::IsPopupOpen("Add Node"))
         addMenuAtCenter_ = false;
@@ -832,6 +988,7 @@ void ShaderGraphEditor::drawNodeInspector(const GraphNode& node)
         return;
     ImGui::Text("%.*s", static_cast<int>(base->title.size()), base->title.data());
     ImGui::TextDisabled("node %d (%s) - %s", node.id, node.type.c_str(), stageList(base->stages).c_str());
+    drawIssues(node.id);
     const auto key = [&](std::string_view what) { return std::format("{}.{}", node.id, what); };
     // A number field: one step from activation to release.
     const auto numbers = [&](const char* label, std::vector<float> values, bool color, const std::string& step, auto set) {
@@ -1005,6 +1162,37 @@ void ShaderGraphEditor::drawParams()
     }
 }
 
+// --- Shader Preview ---
+
+void ShaderGraphEditor::drawPreview(float time)
+{
+    if (focusStep_ == 3)
+        ImGui::SetNextWindowFocus();
+    if (ImGui::Begin(title("Shader Preview", kPreviewWindow).c_str()) && !livePath_.empty()) {
+        int mesh = static_cast<int>(preview_.mesh);
+        for (const auto& [value, label] : {std::pair{kast::Primitive::Sphere, "Sphere"}, {kast::Primitive::Cube, "Cube"},
+                                           {kast::Primitive::Plane, "Plane"}}) {
+            if (value != kast::Primitive::Sphere)
+                ImGui::SameLine();
+            ImGui::RadioButton(label, &mesh, static_cast<int>(value));
+        }
+        preview_.mesh = static_cast<kast::Primitive>(mesh);
+        if (ImGui::Button("View generated code"))
+            codeRequested_ = true;
+        const kast::ShaderLibrary::Status status = kast::shaders().status(livePath_);
+        if (status.state == kast::ShaderLibrary::State::Compiling)
+            ImGui::TextDisabled("Compiling...");
+        else if (status.state == kast::ShaderLibrary::State::Failed)
+            ImGui::TextColored(kErrorColor, status.hasShader ? "Errors: the last good version renders" : "Errors: renders magenta");
+        else
+            ImGui::TextDisabled(doc_.dirty() ? "Unsaved edits shown. Drag to orbit." : "Drag to orbit.");
+        preview_.draw(livePath_, time);
+    } else if (livePath_.empty()) {
+        ImGui::TextDisabled(doc_.isOpen() ? "The graph isn't in the project: no preview." : "No shader graph open.");
+    }
+    ImGui::End();
+}
+
 // --- Modals ---
 
 void ShaderGraphEditor::drawModals()
@@ -1012,6 +1200,25 @@ void ShaderGraphEditor::drawModals()
     if (focusStep_ > 0)
         --focusStep_;
     const std::string name = utf8(doc_.file().filename());
+    if (std::exchange(codeRequested_, false))
+        ImGui::OpenPopup("Generated code");
+    ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 44.0f, ImGui::GetFontSize() * 34.0f), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Generated code")) {
+        // Exactly what the library compiles (ShaderLibrary::text): unsaved edits too, once handed over.
+        std::string code = livePath_.empty() ? std::string() : kast::shaders().text(livePath_);
+        ImGui::TextDisabled("%s, as the library compiles it (read-only)", livePath_.c_str());
+        if (code.empty())
+            ImGui::TextColored(kErrorColor, "No code: the graph has errors (see the canvas).");
+        ImGui::InputTextMultiline("##code", &code, ImVec2(-FLT_MIN, -ImGui::GetFrameHeightWithSpacing()),
+                                  ImGuiInputTextFlags_ReadOnly);
+        if (ImGui::Button("Copy to clipboard"))
+            ImGui::SetClipboardText(code.c_str());
+        ImGui::SameLine();
+        if (ImGui::Button("Close"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
     if (std::exchange(openPromptRequested_, false))
         ImGui::OpenPopup("Unsaved shader graph changes##open");
     if (ImGui::BeginPopupModal("Unsaved shader graph changes##open", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {

@@ -164,6 +164,12 @@ public:
     Status status(const std::string& path);
     // Takes in finished compiles, and reloads shaders whose file changed (or appeared / disappeared) since loaded.
     void reloadChanged();
+    // Until cleared (nullopt), path's file reads as text instead of what is on disk (the Shader Graph's unsaved graph,
+    // so materials using it update before a save): a new text reloads it as a changed file does (after a compile still
+    // running), and the disk's changes are ignored. Clearing it reloads the file from disk.
+    void setOverride(const std::string& path, std::optional<std::string> text);
+    // The .kshader text path's last load compiles (a graph's generated text); empty if loading failed before that.
+    const std::string& text(const std::string& path);
     // Blocks until no compile runs, and takes them in.
     void wait();
 
@@ -182,6 +188,9 @@ private:
         std::string error;
         std::future<Result> pending;
         bool loaded = false; // a compile finished before (good or not): the next good one is a reload
+        std::optional<std::string> override; // setOverride's text, read instead of the file
+        bool stale = false; // the override changed while a compile ran: load again once it is in
+        std::string text;   // the .kshader text of the last load
     };
     void load(const std::string& path, Entry& entry);
     void finish(const std::string& path, Entry& entry);

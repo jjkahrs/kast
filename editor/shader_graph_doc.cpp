@@ -61,6 +61,7 @@ bool ShaderGraphDoc::open(const std::filesystem::path& file, std::string& error)
         return false;
     file_ = file;
     graph_ = std::move(graph);
+    ++revision_;
     gesture_.reset();
     history_.clear(true);
     rememberFileTime();
@@ -71,6 +72,7 @@ void ShaderGraphDoc::close()
 {
     file_.clear();
     graph_ = {};
+    ++revision_;
     gesture_.reset();
     history_.clear(true);
 }
@@ -119,12 +121,14 @@ void ShaderGraphDoc::undo()
 {
     endGesture();
     history_.undo();
+    ++revision_;
 }
 
 void ShaderGraphDoc::redo()
 {
     endGesture();
     history_.redo();
+    ++revision_;
 }
 
 void ShaderGraphDoc::beginGesture(std::string name)
@@ -157,6 +161,7 @@ bool ShaderGraphDoc::apply(std::string name, ShaderGraph trial, std::string& err
     if (!kast::shaderGraphFromJson(kast::shaderGraphToJson(trial), checked, error))
         return false;
     ShaderGraph before = std::exchange(graph_, std::move(checked));
+    ++revision_;
     commit(std::move(name), std::move(before));
     return true;
 }

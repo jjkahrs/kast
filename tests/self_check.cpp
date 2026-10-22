@@ -6813,6 +6813,46 @@ void checkShaderGraphs()
     check(changed && changed != shader && countLogged("Recompiled shader 'shaders/demo.kshadergraph'") == 1,
           "an edited graph recompiles");
 
+    // Live update (the Shader Graph's unsaved edits): an override is read instead of the file until cleared; text() is
+    // exactly what compiles; a broken override keeps the last good shader; clearing goes back to the file.
+    const auto generated = [](const std::string& graphText) {
+        kast::ShaderGraph graph;
+        std::string why;
+        std::vector<kast::GraphIssue> issues;
+        return kast::parseShaderGraph(graphText, graph, why) ? kast::generateKShader(graph, issues) : std::string();
+    };
+    const std::string badGraph = R"({"version": 1, "nodes": [{"id": 1, "type": "output_fragment"}, {"id": 5, "type": "uv"},
+        {"id": 6, "type": "light_direction"}], "links": [{"from": [6, "out"], "to": [1, "EMISSION"]}]})";
+    library.setOverride("shaders/demo.kshadergraph", demoText);
+    const auto live = library.get("shaders/demo.kshadergraph");
+    std::string onDisk;
+    check(live && live != changed && library.text("shaders/demo.kshadergraph") == generated(demoText) &&
+              !generated(demoText).empty() && kast::readFile(dir / "shaders/demo.kshadergraph", onDisk) && onDisk == edited,
+          "an override compiles instead of the file (text() is its generated code); the file is untouched");
+    library.reloadChanged();
+    check(library.get("shaders/demo.kshadergraph") == live, "while overridden, the unchanged file doesn't reload it");
+    library.setOverride("shaders/demo.kshadergraph", badGraph);
+    const kast::ShaderLibrary::Status broken = library.status("shaders/demo.kshadergraph");
+    check(library.get("shaders/demo.kshadergraph") == live && broken.state == kast::ShaderLibrary::State::Failed &&
+              broken.hasShader && contains(broken.error, "node 6: ") && library.text("shaders/demo.kshadergraph").empty(),
+          std::format("a broken override fails on its node and keeps the last good shader ({})", broken.error).c_str());
+    library.setOverride("shaders/demo.kshadergraph", std::nullopt);
+    check(library.get("shaders/demo.kshadergraph") != live &&
+              library.text("shaders/demo.kshadergraph") == generated(edited) &&
+              library.status("shaders/demo.kshadergraph").state == kast::ShaderLibrary::State::Compiled,
+          "clearing the override reloads the file on disk");
+    // Async (the editor): the compile runs on the worker; an override set meanwhile waits for it, then loads.
+    library.setAsync(true);
+    library.setOverride("shaders/demo.kshadergraph", demoText);
+    const bool compiling = library.status("shaders/demo.kshadergraph").state == kast::ShaderLibrary::State::Compiling;
+    library.setOverride("shaders/demo.kshadergraph", badGraph); // must not wait for the running compile
+    library.wait();
+    check(compiling && library.status("shaders/demo.kshadergraph").state == kast::ShaderLibrary::State::Failed &&
+              contains(library.status("shaders/demo.kshadergraph").error, "node 6: ") &&
+              library.get("shaders/demo.kshadergraph") != nullptr,
+          "async: an override compiles on the worker; one set while it runs loads after it");
+    library.setAsync(false);
+
     // Materials name graphs; their params are material properties (the Inspector's and Lua's path).
     kast::shaders().setRoot(dir);
     kast::shaders().setCompiler(compileShader);
@@ -7745,6 +7785,49 @@ end })");
     std::string text;
     check(registry.view<kast::MaterialInstance>().empty() && kast::readFile(dir / "materials/p.mat", text) && text == mat,
           "Stop resets the params; the .mat is untouched");
+
+    // The same for a .kshadergraph's params.
+    writeFile(dir / "shaders/g.kshadergraph", R"({"version": 1, "params": [{"name": "amount", "type": "float", "default": 0.5},
+        {"name": "tint", "type": "color", "default": [1, 1, 1, 1]}],
+        "nodes": [{"id": 1, "type": "output_fragment"}, {"id": 2, "type": "param", "settings": {"param": "amount"}},
+                  {"id": 3, "type": "param", "settings": {"param": "tint"}}, {"id": 4, "type": "swizzle", "settings": {"mask": "rgb"}}],
+        "links": [{"from": [2, "out"], "to": [1, "ROUGHNESS"]}, {"from": [3, "out"], "to": [4, "v"]},
+                  {"from": [4, "out"], "to": [1, "ALBEDO"]}]})");
+    const std::string graphMat = R"({"version": 3, "shader": "shaders/g.kshadergraph", "params": {"amount": 0.75}})";
+    writeFile(dir / "materials/g.mat", graphMat);
+    writeFile(dir / "scripts/graph_params.lua", R"(local done = false
+return { update = function(dt)
+    if done then return end
+    done = true
+    local e
+    for id in kast.query("MeshRenderer") do e = id end
+    assert(kast.getMaterialProperty(e, "amount") == 0.75, "get a graph's float param from the .mat")
+    assert(kast.getMaterialProperty(e, "tint")[2] == 1, "get a graph param's default")
+    kast.setMaterialProperty(e, "amount", 0.25)
+    kast.setMaterialProperty(e, "tint", {0, 0, 1, 1})
+    assert(kast.getMaterialProperty(e, "amount") == 0.25 and kast.getMaterialProperty(e, "tint")[3] == 1,
+           "set a graph's params")
+    local ok, err = pcall(function() kast.setMaterialProperty(e, "amount", {1, 2}) end)
+    assert(not ok and string.find(err, "param 'amount' is a float", 1, true), "a graph param's type is checked")
+end })");
+    Document graphDoc;
+    graphDoc.path = (dir / "graph_params.scene").string();
+    graphDoc.project = kast::Project{.root = dir, .name = "Params"};
+    entt::registry& graphRegistry = graphDoc.scene.registry();
+    graphRegistry.emplace<kast::MeshRenderer>(graphDoc.scene.create("G"), kast::Primitive::Cube, "materials/g.mat");
+    graphDoc.scene.systems = {"scripts/graph_params.lua"};
+    kast::shaders().setRoot({});
+    startPlay(graphDoc);
+    updatePlay(graphDoc, 0.1f);
+    checkOk(graphDoc.lua, 0, "kast.get/setMaterialProperty on .kshadergraph params: Lua asserts pass");
+    const auto* graphInstance = graphRegistry.try_get<kast::MaterialInstance>(named(graphDoc.scene, "G"));
+    check(graphInstance && graphInstance->material.params.at("amount").numbers == std::vector<float>{0.25f} &&
+              graphInstance->material.params.at("tint").numbers == std::vector<float>{0, 0, 1, 1},
+          "the instance holds the Lua graph param values");
+    stopPlay(graphDoc);
+    check(graphRegistry.view<kast::MaterialInstance>().empty() && kast::readFile(dir / "materials/g.mat", text) &&
+              text == graphMat,
+          "Stop resets the graph params; the .mat is untouched");
 
     // Inspector edits: each a step that saves the .mat; undo / redo save the version before / after.
     UndoStack history;

@@ -58,8 +58,9 @@ constexpr bgfx::ViewId kSceneView = 1; // then its overlays
 constexpr bgfx::ViewId kGameView = kSceneView + kViewportViews + 1;
 constexpr bgfx::ViewId kGameGuiView = kGameView + kViewportViews; // the game GUIs (kast::gui::kViews), over the Game view's scene
 constexpr bgfx::ViewId kGuiPreviewView = kGameGuiView + kast::gui::kViews; // the GUI Builder's preview
+constexpr bgfx::ViewId kShaderPreviewView = kGuiPreviewView + kast::gui::kViews; // the Shader Graph's preview
 constexpr bgfx::ViewId kImGuiView = 255; // last, so the UI draws over everything
-static_assert(kGuiPreviewView + kast::gui::kViews <= kImGuiView, "the GUI views must end before ImGui's");
+static_assert(kShaderPreviewView + ShaderPreview::kViews <= kImGuiView, "the preview views must end before ImGui's");
 constexpr uint32_t kBackbufferClearColor = 0x202020ff;
 // --add-component-popup, --open-menu, --open-build-settings, --open-online-settings, --open-preferences, --focus-panel and --assets-* wait this long: focus changes while the first frames dock the windows close
 // popups.
@@ -74,7 +75,8 @@ constexpr const char* kUsage =
     "[--gui-add Panel|Text|Button] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
-    "[--graph-save] [--graph-add-menu N.pin|/] [--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy]] [--sim-key frame,key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
+    "[--graph-save] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-view-code] "
+    "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
     "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [zone edits] | "
@@ -90,15 +92,18 @@ struct SimMouse {
     float wheel = 0.0f; // notches, + = away from the user
     float sx = 0.0f;    // where the press goes, from the Game image's center (",sx,sy" after wheel)
     float sy = 0.0f;
+    int hold = 1;       // frames the button stays down after the move (",hold" after sy): a drag that waits there
     bool shift = false; // "left+shift": Shift reads as held from the press until after the release
 };
 
-// --sim-key: one key press on the Game panel (down, its typed character, up two frames later), for tests of game keys.
+// --sim-key: one key press on the Game panel, or the focused panel (down, its typed character, up two frames later),
+// for tests of game keys and the Shader Graph canvas' shortcuts.
 struct SimKey {
     int frame = 0;
     SDL_Scancode scancode = SDL_SCANCODE_UNKNOWN;
     SDL_Keycode key = SDLK_UNKNOWN;
     std::string text; // what typing it inserts into a focused text field ("b"); empty for keys that type nothing
+    bool ctrl = false; // "ctrl+C": Ctrl reads as held with the key down
 };
 
 struct Options {
@@ -197,8 +202,8 @@ bool parsePositive(std::string_view text, T& out)
 }
 
 // --sim-mouse's events for this frame, handled from the next one: the cursor moves to the Game image's center and
-// (offset by sx, sy) presses (and turns the wheel), then moves by dx, dy, then releases there (so a GUI sees a drag
-// and drop).
+// (offset by sx, sy) presses (and turns the wheel), then moves by dx, dy, then releases there hold frames later (so a
+// GUI sees a drag and drop, and the Shader Graph canvas a drag that waits over a pin).
 void pushSimMouse(const SimMouse& sim, int frame, ImVec2 center, SDL_WindowID window)
 {
     const bool moved = frame > sim.frame;
@@ -219,6 +224,7 @@ void pushSimMouse(const SimMouse& sim, int frame, ImVec2 center, SDL_WindowID wi
         SDL_PushEvent(&event);
     };
     if (frame == sim.frame) {
+        kast::log::info(std::format("--sim-mouse: press at {:.0f},{:.0f}", x, y));
         push(SDL_EVENT_MOUSE_MOTION);
         if (sim.button)
             push(SDL_EVENT_MOUSE_BUTTON_DOWN);
@@ -226,10 +232,10 @@ void pushSimMouse(const SimMouse& sim, int frame, ImVec2 center, SDL_WindowID wi
             push(SDL_EVENT_MOUSE_WHEEL);
     } else if (frame == sim.frame + 1 || (!sim.button && frame > sim.frame)) { // no button: a hover, held there
         push(SDL_EVENT_MOUSE_MOTION, frame == sim.frame + 1 ? sim.dx : 0.0f, frame == sim.frame + 1 ? sim.dy : 0.0f);
-    } else if (sim.button && frame == sim.frame + 2) {
+    } else if (sim.button && frame == sim.frame + 1 + sim.hold) {
         push(SDL_EVENT_MOUSE_BUTTON_UP);
     }
-    if (sim.shift && (frame == sim.frame || frame == sim.frame + 3))
+    if (sim.shift && (frame == sim.frame || frame == sim.frame + 2 + sim.hold))
         SDL_SetModState(frame == sim.frame ? SDL_KMOD_LSHIFT : SDL_KMOD_NONE);
 }
 
@@ -254,12 +260,13 @@ bool parseSimMouse(std::string_view text, std::optional<SimMouse>& out)
         sim.shift = true;
         button.remove_suffix(6);
     }
-    const bool ok = (parts.size() == 5 || (parts.size() == 7 && number(parts[5], sim.sx) && number(parts[6], sim.sy))) &&
+    const bool ok = (parts.size() == 5 || ((parts.size() == 7 || parts.size() == 8) && number(parts[5], sim.sx) &&
+                                           number(parts[6], sim.sy) && (parts.size() == 7 || parsePositive(parts[7], sim.hold)))) &&
                     parsePositive(parts[0], sim.frame) && (button == "none" || button == "left" || button == "right") &&
                     number(parts[2], sim.dx) && number(parts[3], sim.dy) && number(parts[4], sim.wheel);
     if (!ok) {
         kast::log::error(
-            std::format("Invalid --sim-mouse '{}', expected frame,none|left|right[+shift],dx,dy,wheel[,sx,sy]", text));
+            std::format("Invalid --sim-mouse '{}', expected frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]", text));
         return false;
     }
     sim.button = button == "left" ? SDL_BUTTON_LEFT : button == "right" ? SDL_BUTTON_RIGHT : 0;
@@ -275,7 +282,8 @@ void pushSimKey(const SimKey& sim, int frame, SDL_WindowID window)
     const bool down = frame == sim.frame;
     SDL_Event event{};
     event.key = {.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP, .windowID = window, .scancode = sim.scancode,
-                 .key = sim.key, .down = down};
+                 .key = sim.key, .mod = static_cast<SDL_Keymod>(down && sim.ctrl ? SDL_KMOD_LCTRL : SDL_KMOD_NONE),
+                 .down = down};
     SDL_PushEvent(&event);
     if (down && !sim.text.empty()) {
         SDL_Event text{};
@@ -284,19 +292,25 @@ void pushSimKey(const SimKey& sim, int frame, SDL_WindowID window)
     }
 }
 
-// "frame,key" with a positive frame and an SDL key name ("B", "Escape"); logs why not.
+// "frame,key" with a positive frame and an SDL key name ("B", "Escape"), "ctrl+" before it for a Ctrl shortcut; logs
+// why not.
 bool parseSimKey(std::string_view text, std::vector<SimKey>& out)
 {
     const size_t comma = text.find(',');
     SimKey sim;
-    if (comma != std::string_view::npos && parsePositive(text.substr(0, comma), sim.frame))
-        sim.scancode = SDL_GetScancodeFromName(std::string(text.substr(comma + 1)).c_str());
+    if (comma != std::string_view::npos && parsePositive(text.substr(0, comma), sim.frame)) {
+        std::string_view name = text.substr(comma + 1);
+        sim.ctrl = name.starts_with("ctrl+");
+        if (sim.ctrl)
+            name.remove_prefix(5);
+        sim.scancode = SDL_GetScancodeFromName(std::string(name).c_str());
+    }
     if (sim.scancode == SDL_SCANCODE_UNKNOWN) {
-        kast::log::error(std::format("Invalid --sim-key '{}', expected frame,key (an SDL key name such as B)", text));
+        kast::log::error(std::format("Invalid --sim-key '{}', expected frame,[ctrl+]key (an SDL key name such as B)", text));
         return false;
     }
     sim.key = SDL_GetKeyFromScancode(sim.scancode, SDL_KMOD_NONE, false);
-    if (sim.key >= ' ' && sim.key < 0x7f)
+    if (sim.key >= ' ' && sim.key < 0x7f && !sim.ctrl)
         sim.text = std::string(1, static_cast<char>(sim.key));
     out.push_back(std::move(sim));
     return true;
@@ -424,8 +438,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
             }
             for (int n = 0; n < count; ++n)
                 options.graphSteps.emplace_back(arg, "");
-        } else if (arg == "--graph-save") {
+        } else if (arg == "--graph-save" || arg == "--graph-view-code") {
             options.graphSteps.emplace_back(arg, "");
+        } else if (arg == "--graph-preview" && hasValue) {
+            options.graphSteps.emplace_back(arg, argv[++i]);
         } else if (arg == "--gui-select" && hasValue) {
             options.guiSelect = argv[++i];
         } else if (arg == "--gui-click" && hasValue) {
@@ -645,8 +661,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
         kast::log::error("--gui-click requires --play");
         return std::nullopt;
     }
-    if (!options.simKeys.empty() && !options.play) {
-        kast::log::error("--sim-key requires --play");
+    if (!options.simKeys.empty() && !options.play && options.openGraph.empty()) {
+        kast::log::error("--sim-key requires --play or --open-graph");
         return std::nullopt;
     }
     if (!options.simOnLog.empty() && !options.simMouse && options.simKeys.empty()) {
@@ -699,6 +715,7 @@ void buildDefaultLayout(ImGuiID dockspace)
     ImGui::DockBuilderDockWindow(GuiBuilder::kPreviewWindow, center);
     ImGui::DockBuilderDockWindow(ShaderGraphEditor::kCanvasWindow, center);
     ImGui::DockBuilderDockWindow(ShaderGraphEditor::kInspectorWindow, right);
+    ImGui::DockBuilderDockWindow(ShaderGraphEditor::kPreviewWindow, left);
     ImGui::DockBuilderFinish(dockspace);
 }
 
@@ -892,18 +909,21 @@ void drawGuiBuilder(GuiBuilder& builder)
 }
 
 // The Shader Graph panels, docked beside their scene counterparts in layouts saved before they existed: Shader Graph by
-// Scene, Graph Inspector by Inspector.
-void drawShaderGraph(ShaderGraphEditor& graphs)
+// Scene, Graph Inspector by Inspector, Shader Preview by Hierarchy. time: the preview's TIME.
+void drawShaderGraph(ShaderGraphEditor& graphs, float time)
 {
     for (const auto& [existing, window] : {std::pair{"Scene", ShaderGraphEditor::kCanvasWindow},
-                                           std::pair{"Inspector", ShaderGraphEditor::kInspectorWindow}}) {
+                                           std::pair{"Inspector", ShaderGraphEditor::kInspectorWindow},
+                                           std::pair{"Hierarchy", ShaderGraphEditor::kPreviewWindow}}) {
         if (const ImGuiWindowSettings* settings = ImGui::FindWindowSettingsByID(ImHashStr(existing));
             settings && !ImGui::FindWindowSettingsByID(ImHashStr(window)))
             ImGui::SetNextWindowDockID(settings->DockId, ImGuiCond_FirstUseEver);
         if (window == ShaderGraphEditor::kCanvasWindow)
             graphs.drawCanvas();
-        else
+        else if (window == ShaderGraphEditor::kInspectorWindow)
             graphs.drawInspector();
+        else
+            graphs.drawPreview(time);
     }
     graphs.drawModals();
 }
@@ -1022,6 +1042,17 @@ bool runGraphStep(ShaderGraphEditor& graphs, const std::filesystem::path& projec
     } else if (flag == "--graph-save") {
         error = "the write failed";
         ok = graphs.save();
+    } else if (flag == "--graph-view-code") {
+        graphs.showGeneratedCode();
+        ok = true;
+    } else if (flag == "--graph-preview") {
+        error = "expected sphere, cube or plane";
+        constexpr std::pair<std::string_view, kast::Primitive> kMeshes[] = {
+            {"sphere", kast::Primitive::Sphere}, {"cube", kast::Primitive::Cube}, {"plane", kast::Primitive::Plane}};
+        const auto mesh = std::ranges::find(kMeshes, std::string_view(value), &std::pair<std::string_view, kast::Primitive>::first);
+        ok = mesh != std::end(kMeshes);
+        if (ok)
+            graphs.preview().mesh = mesh->second;
     }
     if (!ok)
         kast::log::error(std::format("{} {}: {}", flag, value, error));
@@ -1360,7 +1391,7 @@ int main(int argc, char** argv)
     // An active Zone tab tool gets the Scene view's left mouse instead of picking and the gizmo.
     viewport.input = [&](const SceneViewport::Input& input) { return showZone() && zonePanel.sceneInput(zone, input); };
     GuiBuilder guiBuilder(kGuiPreviewView);
-    ShaderGraphEditor graphs;
+    ShaderGraphEditor graphs(kShaderPreviewView);
     UiScale uiScale(options->uiScale);
     FrameLimit frames(options->frames, options->screenshot);
     if (options->screenshotOnLog)
@@ -1493,7 +1524,8 @@ int main(int argc, char** argv)
             files.openBuildSettings();
         if (options->openOnlineSettings && frames.frame() == kAddComponentPopupFrame)
             files.openOnlineSettings();
-        if (!options->focusPanel.empty() && frames.frame() == kAddComponentPopupFrame) {
+        // With --open-graph: after the graph panels took the focus (Shader Preview, Graph Inspector, canvas).
+        if (!options->focusPanel.empty() && frames.frame() == kAddComponentPopupFrame + (options->openGraph.empty() ? 0 : 3)) {
             // Applied when that window is submitted below. Builder panels go by their "###" id.
             const std::string id = "###" + options->focusPanel;
             ImGui::SetWindowFocus(ImGui::FindWindowByName(id.c_str()) ? id.c_str() : options->focusPanel.c_str());
@@ -1564,6 +1596,8 @@ int main(int argc, char** argv)
             for (int i = 0; history && i < options->materialRedo; ++i)
                 history->redo();
         }
+        // Before the views render: a graph edit handed to the library shows in this frame's Scene and Game.
+        graphs.update(doc.project ? doc.project->root : std::filesystem::path());
         panels.drawHierarchy(doc, files);
         // Before the views render: Inspector edits (a material saved to disk) show in this frame's Scene and Game.
         panels.drawInspector(doc);
@@ -1615,7 +1649,7 @@ int main(int argc, char** argv)
         panels.drawNetwork(doc, showNetwork);
         onlinePanel.draw(doc, online, files, options->worldAddress, showOnline);
         drawGuiBuilder(guiBuilder);
-        drawShaderGraph(graphs);
+        drawShaderGraph(graphs, doc.shaderClock.seconds());
         drawConsole(); // submitted after Assets, Events and State Machines so Console is the front tab on first run
         drawPreferences(externalEditor, online, preferencesDraft, composeDraft, openPreferences);
         externalEditor.poll();

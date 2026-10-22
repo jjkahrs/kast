@@ -35,6 +35,8 @@ public:
     bool isOpen() const { return !file_.empty(); }
     bool dirty() const { return isOpen() && !history_.atSavePoint(); }
     const kast::ShaderGraph& graph() const { return graph_; }
+    // Changes whenever the graph does (an edit, a gesture's frame, undo / redo, open, reload, close).
+    unsigned revision() const { return revision_; }
     const UndoStack& history() const { return history_; }
     void undo();
     void redo();
@@ -93,6 +95,7 @@ private:
     std::filesystem::path file_;
     std::filesystem::file_time_type fileTime_{};
     kast::ShaderGraph graph_;
+    unsigned revision_ = 0;
     UndoStack history_;
     struct Gesture {
         std::string name;

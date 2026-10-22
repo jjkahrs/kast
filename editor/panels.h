@@ -154,7 +154,8 @@ private:
     // The Inspector for the .mat in inspectedAsset_: every edit saves the file (the renderers reload it) and is an undo
     // step on materialHistory_. Its Shader section picks the .kshader, shows its compile status and its params.
     void drawMaterialInspector(Document& doc);
-    // The Inspector for the .kshader in inspectedAsset_: compile status (errors with .kshader line numbers) and params.
+    // The Inspector for the .kshader or .kshadergraph in inspectedAsset_: compile status (errors with .kshader line
+    // numbers, a graph's on its nodes) and params; a graph also gets "Open in Shader Graph".
     void drawShaderInspector(Document& doc);
     bool hasMaterial() const; // the Inspector shows a .mat
     // Generated Inspector widgets for a component field's JSON value (built-in or Lua); true if they changed it.
@@ -219,9 +220,10 @@ private:
     kast::AudioHandle previewHandle_ = 0; // the playing preview; stale once it ends
     std::map<std::string, std::string> clipErrors_; // AudioSource clips checked since the last Assets scan: why each can't play ("" = ok)
 
-    // The Inspector shows inspectedAsset_ (a project-relative .mat or .kshader, set by selecting it in Assets) instead of the
+    // The Inspector shows inspectedAsset_ (a project-relative .mat, .kshader or .kshadergraph, set by selecting it in Assets) instead of the
     // selected entity until another entity is selected.
     std::string inspectedAsset_;
+    std::string openGraph_; // a .kshadergraph the Inspector's "Open in Shader Graph" asked for (drawAssets opens it)
     entt::entity inspectedEntity_ = entt::null; // doc.selected when last drawn
     struct {
         std::string path; // what value / error were loaded from

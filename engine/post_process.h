@@ -26,7 +26,7 @@ bx::Vec3 sceneClearColor(const ScenePostProcessing& post, uint32_t background);
 // The HDR scene target and the post chain that turns it into the displayed image. Draw the scene into sceneView()
 // after begin(), then apply(). Uses kViews consecutive bgfx views from first: the scene, the scene's blended draws
 // (Renderer::render's view + 1, into target()), then bright pass, 4 downsamples, 4 upsamples (bloom), final (exposure,
-// tonemap, grading, vignette, sRGB encode) and FXAA.
+// tonemap, grading, vignette, sRGB encode) and FXAA. Without bloom, final and FXAA move up to first + 2 and + 3.
 class PostProcess {
 public:
     static constexpr bgfx::ViewId kViews = 13;

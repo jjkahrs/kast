@@ -772,16 +772,40 @@ void ShaderLibrary::reloadChanged()
                 continue; // the next call looks again; a change saved meanwhile reloads after it
             finish(path, entry);
         }
-        if (modifiedTime(root_ / path) != entry.mtime)
+        if (entry.stale || (!entry.override && modifiedTime(root_ / path) != entry.mtime))
             load(path, entry);
     }
+}
+
+void ShaderLibrary::setOverride(const std::string& path, std::optional<std::string> text)
+{
+    if (path.empty() || root_.empty())
+        return;
+    auto [it, added] = entries_.try_emplace(path);
+    Entry& e = it->second;
+    if (!added && e.override == text)
+        return;
+    e.override = std::move(text);
+    if (e.pending.valid())
+        e.stale = true; // replacing the future would wait for the compile; reloadChanged loads it once it is in
+    else
+        load(path, e);
+}
+
+const std::string& ShaderLibrary::text(const std::string& path)
+{
+    static const std::string none;
+    return path.empty() || root_.empty() ? none : entry(path).text;
 }
 
 void ShaderLibrary::wait()
 {
     for (auto& [path, entry] : entries_)
-        if (entry.pending.valid())
+        while (entry.pending.valid()) {
             finish(path, entry);
+            if (entry.stale)
+                load(path, entry);
+        }
 }
 
 void ShaderLibrary::load(const std::string& path, Entry& entry)
@@ -789,13 +813,19 @@ void ShaderLibrary::load(const std::string& path, Entry& entry)
     std::string error, text;
     const std::optional<std::filesystem::path> file = resolveProjectPath(root_, path, error);
     entry.mtime = file ? modifiedTime(*file) : std::nullopt;
+    entry.stale = false;
+    entry.text.clear();
     auto source = std::make_shared<ShaderSource>();
     entry.declaration = nullptr;
     std::vector<std::string> warnings;
-    if (file && !readFile(*file, text))
+    if (file && entry.override)
+        text = *entry.override;
+    else if (file && !readFile(*file, text))
         error = "cannot read the file";
-    else if (file && shaderFileText(path, text, error, &warnings) && parseShader(text, *source, error))
+    if (file && error.empty() && shaderFileText(path, text, error, &warnings) && parseShader(text, *source, error)) {
         entry.declaration = source;
+        entry.text = text;
+    }
     for (const std::string& warning : warnings)
         log::warn(std::format("Shader '{}': {}", path, warning));
     if (entry.declaration && !compiler_) { // the player: game.pak's bytecode

@@ -1,8 +1,10 @@
 #pragma once
 
 #include "shader_graph_doc.h"
+#include "shader_preview.h"
 
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -22,6 +24,14 @@ struct EditorContext;
 //   Comment frames: titled, resized from their edges; dragging one moves the nodes inside it.
 // - Graph Inspector: the selected node's settings and constant inputs, or a selected frame's title; with nothing
 //   selected, the graph's params (add, remove, rename, retype, defaults).
+// - Shader Preview: the graph, unsaved edits included, on a sphere, cube or plane (ShaderPreview); "View generated code"
+//   shows the .kshader text the library compiles.
+// Live update: 0.3 s after the last edit the graph goes to ShaderLibrary as an override of its file (setOverride), which
+// compiles it on its worker while frames keep drawing; every material using the graph (Scene, Game, preview) then
+// renders it, the last good version until a compile succeeds. Saving writes the file; opening another graph (or the
+// file going away) drops the override, back to the file on disk. Errors and warnings (validation, and shaderc's mapped
+// to nodes) outline their node, red or #ffcc00, with the message as its tooltip and in the Graph Inspector; a summary
+// line sits on the canvas, and the library logs them.
 // Edits mark the graph dirty ("*" in the titles) and are steps on its own undo history, cleared on open and reload; a
 // drag, or an Inspector field from activation to release, is one step. Save or Ctrl+S (a graph panel focused) writes
 // the file. A file changed on disk reloads when clean, else Reload / Keep mine is asked. Opening another graph or
@@ -31,12 +41,23 @@ public:
     // Window names (stable ids; the visible title adds the file name and dirty marker).
     static constexpr const char* kCanvasWindow = "###Shader Graph";
     static constexpr const char* kInspectorWindow = "###Graph Inspector";
+    static constexpr const char* kPreviewWindow = "###Shader Preview";
+    static constexpr double kLiveDelay = 0.3; // seconds after the last edit until the graph recompiles
+
+    // The Shader Preview renders on views previewView .. previewView + ShaderPreview::kViews - 1.
+    explicit ShaderGraphEditor(bgfx::ViewId previewView) : preview_(previewView) {}
 
     void shutdown(); // before ImGui's context goes
 
     // Opens file (after the unsaved-changes prompt if dirty) and brings the panels to the front.
     void open(const std::filesystem::path& file);
-    void focusPanels() { focusStep_ = 2; } // one panel a frame: Graph Inspector, then the canvas
+    // One panel a frame: Shader Preview, Graph Inspector, then the canvas, which then zooms to fit the graph (at its
+    // docked size: framed while still hidden it would fit the wrong size).
+    void focusPanels()
+    {
+        focusStep_ = 3;
+        navigateIn_ = 3;
+    }
     // The open graph's model: the --graph-* flags edit it as the panels do.
     ShaderGraphDoc& doc() { return doc_; }
     const UndoStack& history() const { return doc_.history(); }
@@ -62,8 +83,15 @@ public:
     // The canvas position at the center of its panel (where --graph-add and the CLI-opened add menu put nodes).
     std::array<float, 2> viewCenter() const { return viewCenter_; }
 
+    // Live update, once a frame before the views render: the debounced recompile, its result, the node errors. root:
+    // the project's (the library's paths are relative to it); a graph outside it isn't previewed.
+    void update(const std::filesystem::path& root);
+    ShaderPreview& preview() { return preview_; }
+    void showGeneratedCode() { codeRequested_ = true; } // the "View generated code" window
+
     void drawCanvas();
     void drawInspector();
+    void drawPreview(float time); // time: TIME for the preview
     void drawModals();
 
 private:
@@ -98,8 +126,23 @@ private:
     std::optional<std::string> textField(const char* label, const std::string& key, const std::string& value,
                                          bool multiline = false);
     void showFieldError(const std::string& key, bool ok, const std::string& error);
+    void applyLive(); // hands the graph to the library if its generated code changed
+    void drawIssues(int node) const; // the node's errors and warnings, one line each
 
     ShaderGraphDoc doc_;
+    ShaderPreview preview_;
+    // Live update.
+    using Clock = std::chrono::steady_clock;
+    std::string livePath_;
+    unsigned liveRevision_ = 0;
+    std::optional<Clock::time_point> editedAt_; // the last edit not yet handed to the library
+    std::string liveKey_;                         // what was last handed: its generated code (or JSON, if it has errors)
+    std::optional<Clock::time_point> compiling_;  // handed over at the edit at this time, compile not yet in
+    int compilingFrames_ = 0;
+    std::string liveError_;                       // the library's error the issues were made from
+    std::vector<kast::GraphIssue> warnings_;      // the graph's warnings
+    std::vector<kast::GraphIssue> issues_;        // warnings_ and the library's errors, by node (0: the graph)
+    bool codeRequested_ = false;
     ax::NodeEditor::EditorContext* canvas_ = nullptr;
     bool resetCanvas_ = false; // a graph was opened: a fresh canvas (pan, zoom, node ids)
     int navigateIn_ = 0;       // frames until the canvas frames the whole graph

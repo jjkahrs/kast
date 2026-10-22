@@ -199,7 +199,9 @@ void PostProcess::apply(const ScenePostProcessing& post, bool effects, bgfx::Fra
         }
     }
 
-    view = first_ + 2 + 2 * kBloomLevels - 1; // final, then FXAA, whether or not bloom ran
+    // Final, then FXAA: after the bloom views, else right after the scene's (so a host with effects off uses only
+    // first .. first + 3: the Shader Preview).
+    view = bloom ? first_ + 2 + 2 * kBloomLevels - 1 : first_ + 2;
     const auto& tone = post.tonemapping;
     const auto& grading = post.colorGrading;
     const auto& vignette = post.vignette;

@@ -459,7 +459,7 @@ void Panels::drawInspector(Document& doc)
             inspectedAsset_.clear();
     }
     if (ImGui::Begin("Inspector")) {
-        if (hasExtension(inspectedAsset_, ".kshader")) {
+        if (hasExtension(inspectedAsset_, ".kshader") || hasExtension(inspectedAsset_, kast::kShaderGraphExtension)) {
             drawShaderInspector(doc);
         } else if (!inspectedAsset_.empty()) {
             drawMaterialInspector(doc);
@@ -1071,7 +1071,10 @@ bool Panels::drawUIDocumentComponent(Document& doc, entt::entity entity)
 void Panels::selectAsset(const std::string& path)
 {
     assetSelected_ = path;
-    inspectedAsset_ = hasExtension(path, ".mat") || hasExtension(path, ".kshader") ? path : "";
+    inspectedAsset_ = hasExtension(path, ".mat") || hasExtension(path, ".kshader") ||
+                              hasExtension(path, kast::kShaderGraphExtension)
+                          ? path
+                          : "";
     if (const size_t slash = path.rfind('/'); slash != std::string::npos)
         assetExpand_ = path.substr(0, slash); // its folder (one level), so the entry shows
     assetScrollTo_ = true;
@@ -1337,9 +1340,10 @@ void Panels::drawMaterialInspector(Document& doc)
     ImGui::SetItemTooltip("Base color + emissive only: ignores lights, shadows and ambient (still fogged, still casts)");
     ImGui::SeparatorText("Shader");
     std::vector<std::string> shaderFiles;
-    collectFiles(assets_, {".kshader"}, shaderFiles);
+    collectFiles(assets_, {".kshader", kast::kShaderGraphExtension}, shaderFiles);
     changed = drawFilePicker("Shader", shaderFiles, "None (built-in)", m.shader) || changed;
-    ImGui::SetItemTooltip("A .kshader whose fragment() / vertex() run in the mesh shader (Assets > Create > Shader)");
+    ImGui::SetItemTooltip("A .kshader whose fragment() / vertex() run in the mesh shader (Assets > Create > Shader), or a "
+                          ".kshadergraph (Assets > Create > Shader Graph)");
     if (!m.shader.empty()) {
         const kast::ShaderLibrary::Status status = kast::shaders().status(m.shader);
         drawShaderStatus(status);
@@ -1406,9 +1410,15 @@ void Panels::drawShaderInspector(Document& doc)
         ImGui::TextDisabled(status.declaration->hasVertex ? "Has vertex(): also moves shadows" : "No vertex()");
     }
     ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("Edit it in the external editor (double-click in Assets); saving recompiles it.");
-    ImGui::PopStyleColor();
+    if (hasExtension(inspectedAsset_, kast::kShaderGraphExtension)) {
+        if (ImGui::Button("Open in Shader Graph"))
+            openGraph_ = inspectedAsset_; // drawAssets opens it: it has the Shader Graph panels
+        ImGui::TextDisabled("Or double-click it in Assets.");
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("Edit it in the external editor (double-click in Assets); saving recompiles it.");
+        ImGui::PopStyleColor();
+    }
     endCard();
 }
 
@@ -2031,6 +2041,8 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, Shad
 {
     if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
         refreshAssets(doc);
+    if (!openGraph_.empty()) // the Inspector's "Open in Shader Graph"
+        graphs.open(assetsRoot_ / fromUtf8(std::exchange(openGraph_, {})));
     if (ImGui::Begin("Assets")) {
         if (!doc.project) {
             ImGui::TextDisabled("No project: open a project to browse its assets");
