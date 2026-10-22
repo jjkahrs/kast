@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <set>
@@ -1975,6 +1976,127 @@ asio::awaitable<void> chat_down(Ctx& x) {
     b->close();
 }
 
+// --- 39-40: the admin port (docs/services/world/protocol.html#admin) ---
+
+std::string admin_secret() {
+#ifdef _MSC_VER
+    char* buf = nullptr;
+    size_t len = 0;
+    if (_dupenv_s(&buf, &len, "WORLD_ADMIN_SECRET") != 0 || !buf) return "";
+    std::string s(buf);
+    std::free(buf);
+    return s;
+#else
+    const char* s = std::getenv("WORLD_ADMIN_SECRET");
+    return s ? s : "";
+#endif
+}
+
+// Connects to the admin port and says hello with secret; the client, or nullptr if the connection failed.
+asio::awaitable<std::shared_ptr<WorldClient>> admin_connect(Ctx& x, const std::string& secret) {
+    auto c = std::make_shared<WorldClient>(co_await asio::this_coro::executor, x.tls);
+    if (!co_await c->connect(x.o.host, x.o.adminPort)) co_return nullptr;
+    c->send(proto::LinkHello{proto::kProtocolVersion, secret});
+    co_return c;
+}
+
+asio::awaitable<std::vector<proto::AdminOnlineEntry>> admin_online(WorldClient& admin) {
+    std::vector<proto::AdminOnlineEntry> all;
+    admin.send(proto::AdminOnlineReq{});
+    for (;;) {
+        auto chunk = co_await admin.wait_for<proto::AdminOnline>(Millis(5000));
+        if (!chunk) co_return all;
+        all.insert(all.end(), chunk->entries.begin(), chunk->entries.end());
+        if (!chunk->more) co_return all;
+    }
+}
+
+asio::awaitable<std::optional<uint32_t>> admin_kick(WorldClient& admin, const proto::AdminKick& k) {
+    admin.send(k);
+    auto r = co_await admin.wait_for<proto::AdminKicked>(Millis(5000));
+    co_return r ? std::optional(r->kicked) : std::nullopt;
+}
+
+// 39: wrong secret refused; the online list shows a bot in the world and one in the lobby; kick by character
+// disconnects it with kicked and its position is saved; kick by account reaches a lobby session.
+asio::awaitable<void> admin_port(Ctx& x) {
+    const std::string secret = admin_secret();
+    x.check.expect(secret.size() >= 16, "WORLD_ADMIN_SECRET is set for the bot");
+
+    {
+        auto bad = co_await admin_connect(x, "wrong-secret-0123456789");
+        x.check.expect(bad != nullptr, "admin port: TLS connect");
+        if (!bad) co_return;
+        co_await bad->wait_closed(Millis(5000));
+        x.check.expect(bad->disconnectReason == Code::invalid_token, "admin port: wrong secret -> invalid_token");
+    }
+    {
+        auto c = std::make_shared<WorldClient>(co_await asio::this_coro::executor, x.tls);
+        co_await c->connect(x.o.host, x.o.adminPort);
+        c->send(proto::AdminOnlineReq{});
+        co_await c->wait_closed(Millis(5000));
+        x.check.expect(c->disconnectReason == Code::unexpected_message, "admin port: request before hello -> unexpected_message");
+    }
+
+    proto::EnterWorldOk e1;
+    auto player = co_await x.enter("s39", e1);
+    if (!player) co_return;
+    const auto p = co_await walk(*player, e1.pos, 6, -11);
+    co_await sleep_for(Millis(500));
+    auto lobby = co_await x.login(x.token("s39b"), "s39b (lobby)");
+    if (!lobby) co_return;
+
+    auto admin = co_await admin_connect(x, secret);
+    const bool up = admin && co_await admin->wait_for<proto::LinkOk>(Millis(5000));
+    x.check.expect(up, "admin port: right secret -> LinkOk");
+    if (!up) co_return;
+
+    const uint64_t acc = player->authOk->accountId;
+    auto online = co_await admin_online(*admin);
+    auto mine = std::find_if(online.begin(), online.end(), [&](const auto& e) { return e.accountId == acc; });
+    const bool listed = mine != online.end() && mine->charId != 0 && !mine->name.empty() &&
+                        mine->map == e1.map && mine->sessionId != 0 && mine->connectedAtMs > 1700000000000ull;
+    x.check.expect(listed, "online list has the bot in the world (account " + std::to_string(acc) + ", " +
+                               std::to_string(online.size()) + " entries)");
+    if (!listed) co_return;
+    std::printf("  online: account %llu char %llu %s map %u session %u\n", static_cast<unsigned long long>(mine->accountId),
+                static_cast<unsigned long long>(mine->charId), mine->name.c_str(), mine->map, mine->sessionId);
+    const uint64_t lobbyAcc = lobby->authOk->accountId;
+    x.check.expect(std::any_of(online.begin(), online.end(),
+                               [&](const auto& e) { return e.accountId == lobbyAcc && e.charId == 0 && e.name.empty(); }),
+                   "online list has the lobby session with no character");
+
+    const uint64_t charId = mine->charId;
+    const auto kicked = co_await admin_kick(*admin, {0, charId, "integration test"});
+    x.check.expect(kicked == 1u, "kick by character -> kicked 1");
+    co_await player->wait_closed(Millis(5000));
+    x.check.expect(player->disconnectReason == Code::kicked, "the kicked client gets Disconnect{kicked}");
+    online = co_await admin_online(*admin);
+    x.check.expect(std::none_of(online.begin(), online.end(), [&](const auto& e) { return e.accountId == acc; }),
+                   "the kicked account is no longer online");
+    x.check.expect(co_await admin_kick(*admin, {0, charId, "again"}) == 0u, "kicking an offline character -> kicked 0");
+
+    x.check.expect(co_await admin_kick(*admin, {lobbyAcc, 0, "lobby"}) == 1u, "kick by account reaches a lobby session");
+    co_await lobby->wait_closed(Millis(5000));
+    x.check.expect(lobby->disconnectReason == Code::kicked, "the lobby session gets Disconnect{kicked}");
+    admin->close();
+
+    co_await sleep_for(Millis(500));
+    proto::EnterWorldOk e2;
+    auto again = co_await x.enter("s39", e2);
+    x.check.expect(again && same_pos(e2.pos, p), "the kicked character was saved: " + fmt(p) + " (got " + fmt(e2.pos) + ")");
+    if (again) again->close();
+}
+
+// 40: with WORLD_ADMIN_SECRET unset the admin port is closed and the world still serves players.
+asio::awaitable<void> admin_off(Ctx& x) {
+    auto c = std::make_shared<WorldClient>(co_await asio::this_coro::executor, x.tls);
+    x.check.expect(!co_await c->connect(x.o.host, x.o.adminPort), "admin port: nothing listening");
+    proto::EnterWorldOk e;
+    auto player = co_await x.enter("s40", e);
+    if (player) player->close();
+}
+
 } // namespace
 
 int run_scenario(const Options& o) {
@@ -1996,7 +2118,7 @@ int run_scenario(const Options& o) {
         {"yell", yell},                 {"chat-whisper", chat_whisper}, {"chat-channels", chat_channels},
         {"chat-zone", chat_zone},       {"chat-ignore", chat_ignore},   {"chat-mute-setup", chat_mute_setup},
         {"chat-mute", chat_mute},       {"chat-limits", chat_limits},   {"chat-auth", chat_auth},
-        {"chat-down", chat_down},
+        {"chat-down", chat_down},       {"admin", admin_port},          {"admin-off", admin_off},
     };
     auto it = all.find(o.scenario);
     if (it == all.end()) {

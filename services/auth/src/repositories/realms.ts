@@ -7,6 +7,9 @@ export interface RealmInput {
   name: string;
   host: string;
   port: number;
+  /** Internal world admin endpoint; both set or both null. Admin-only, never shown to players. */
+  adminHost: string | null;
+  adminPort: number | null;
   region: string;
   status: (typeof REALM_STATUSES)[number];
   sortOrder: number;
@@ -16,12 +19,14 @@ export interface Realm extends RealmInput {
   id: number;
 }
 
-const COLUMNS = 'id, name, host, port, region, status, sort_order';
+const COLUMNS = 'id, name, host, port, admin_host, admin_port, region, status, sort_order';
 const toRealm = (r: RowDataPacket): Realm => ({
   id: r.id,
   name: r.name,
   host: r.host,
   port: r.port,
+  adminHost: r.admin_host,
+  adminPort: r.admin_port,
   region: r.region,
   status: r.status,
   sortOrder: r.sort_order,
@@ -39,9 +44,9 @@ export async function findRealm(db: Db, id: number): Promise<Realm | undefined> 
 
 export async function insertRealm(db: Db, r: RealmInput, now: Date): Promise<number> {
   const [res] = await db.query<ResultSetHeader>(
-    `INSERT INTO realms (name, host, port, region, status, sort_order, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [r.name, r.host, r.port, r.region, r.status, r.sortOrder, now, now],
+    `INSERT INTO realms (name, host, port, admin_host, admin_port, region, status, sort_order, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [r.name, r.host, r.port, r.adminHost, r.adminPort, r.region, r.status, r.sortOrder, now, now],
   );
   return res.insertId;
 }
@@ -49,9 +54,9 @@ export async function insertRealm(db: Db, r: RealmInput, now: Date): Promise<num
 /** Returns false when no realm has this id. */
 export async function updateRealm(db: Db, id: number, r: RealmInput, now: Date): Promise<boolean> {
   const [res] = await db.query<ResultSetHeader>(
-    `UPDATE realms SET name = ?, host = ?, port = ?, region = ?, status = ?, sort_order = ?, updated_at = ?
-      WHERE id = ?`,
-    [r.name, r.host, r.port, r.region, r.status, r.sortOrder, now, id],
+    `UPDATE realms SET name = ?, host = ?, port = ?, admin_host = ?, admin_port = ?, region = ?, status = ?,
+      sort_order = ?, updated_at = ? WHERE id = ?`,
+    [r.name, r.host, r.port, r.adminHost, r.adminPort, r.region, r.status, r.sortOrder, now, id],
   );
   return res.affectedRows > 0;
 }

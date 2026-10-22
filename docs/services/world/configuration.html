@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="../../style.css">
 </head>
 <body>
-<header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="../auth/index.html">Auth Server</a><a href="index.html">World Server</a><a href="../chat/index.html">Chat Server</a><a href="../../development/tests.html">Development</a></nav></header>
+<header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="../auth/index.html">Auth Server</a><a href="index.html">World Server</a><a href="../chat/index.html">Chat Server</a><a href="../admin/index.html">Admin App</a><a href="../../development/tests.html">Development</a></nav></header>
 <div class="layout">
 <nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html" class="active">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
 <main>
@@ -266,6 +266,16 @@
 <td><code>CHAT_LINK_RETRY_MIN_MS</code> / <code>CHAT_LINK_RETRY_MAX_MS</code></td>
 <td><code>500</code> / <code>30000</code></td>
 <td>Reconnect backoff of the link (doubling). The world runs normally while the link is down</td>
+</tr>
+<tr>
+<td><code>WORLD_ADMIN_SECRET</code></td>
+<td>(empty)</td>
+<td>Turns on the <a href="protocol.html#admin">admin port</a> (online list, kick) for the admin service: shared secret, at least 16 characters, the same as the admin service's. Unset or empty: no admin listener, and <code>admin port off: WORLD_ADMIN_SECRET is not set</code> is logged at startup. Never logged (<a href="security.html#admin-port">security</a>)</td>
+</tr>
+<tr>
+<td><code>WORLD_ADMIN_HOST</code> / <code>WORLD_ADMIN_PORT</code></td>
+<td><code>127.0.0.1</code> / <code>7780</code></td>
+<td>Bind address and port of the admin listener (TLS, the server's own certificate). The default only takes local connections; the compose stack sets <code>0.0.0.0</code> so the admin service reaches it on the compose network, and does not publish the port. Never expose it publicly</td>
 </tr>
 <tr>
 <td><code>SIM_LATENCY_MS</code> / <code>SIM_JITTER_MS</code></td>

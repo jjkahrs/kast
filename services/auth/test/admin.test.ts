@@ -26,9 +26,23 @@ const asAdmin = () => {
 };
 const tryLogin = () => ctx.api().post('/v1/auth/login').send({ email: PLAYER, password: 'correct horse battery' });
 
-const ADMIN_ROUTES: Array<[method: 'get' | 'post' | 'put' | 'delete', path: string]> = [
+type Route = [method: 'get' | 'post' | 'put' | 'delete', path: string];
+
+// Open to GMs (on player targets only), tested in admin-accounts.test.ts.
+const STAFF_ROUTES: Route[] = [
+  ['get', '/v1/admin/accounts'],
+  ['get', '/v1/admin/accounts/1'],
   ['post', '/v1/admin/accounts/1/ban'],
   ['delete', '/v1/admin/accounts/1/ban'],
+];
+
+const ADMIN_ROUTES: Route[] = [
+  ['post', '/v1/admin/accounts'],
+  ['delete', '/v1/admin/accounts/1'],
+  ['post', '/v1/admin/accounts/1/verify-email'],
+  ['post', '/v1/admin/accounts/1/password-reset'],
+  ['post', '/v1/admin/accounts/1/unlock'],
+  ['post', '/v1/admin/accounts/1/revoke-sessions'],
   ['put', '/v1/admin/accounts/1/role'],
   ['get', '/v1/admin/realms'],
   ['post', '/v1/admin/realms'],
@@ -38,8 +52,13 @@ const ADMIN_ROUTES: Array<[method: 'get' | 'post' | 'put' | 'delete', path: stri
 ];
 
 describe('admin authorization', () => {
-  it.each(ADMIN_ROUTES)('%s %s → 401 without a token', async (method, path) => {
+  it.each([...STAFF_ROUTES, ...ADMIN_ROUTES])('%s %s → 401 without a token', async (method, path) => {
     expectError(await ctx.api()[method](path), 401, 'unauthorized');
+  });
+
+  it.each(STAFF_ROUTES)('%s %s → 403 for player', async (method, path) => {
+    const { accessToken } = await login(ctx, PLAYER);
+    expectError(await ctx.api()[method](path).set(bearer(accessToken)).send({}), 403, 'forbidden');
   });
 
   it.each(ADMIN_ROUTES)('%s %s → 403 for player and gm', async (method, path) => {
@@ -127,7 +146,16 @@ describe('roles', () => {
 });
 
 describe('realms', () => {
-  const realm = { name: 'Emberfall', host: 'eu1.kast.example', port: 7000, region: 'eu-west', status: 'online', sortOrder: 2 };
+  const realm = {
+    name: 'Emberfall',
+    host: 'eu1.kast.example',
+    port: 7000,
+    adminHost: null,
+    adminPort: null,
+    region: 'eu-west',
+    status: 'online',
+    sortOrder: 2,
+  };
 
   it('supports full CRUD for admins', async () => {
     const created = await asAdmin().post('/v1/admin/realms', realm);
@@ -172,5 +200,37 @@ describe('realms', () => {
     const res = await ctx.api().get('/v1/realms').set(bearer(accessToken));
     expect(res.status).toBe(200);
     expect(res.body.realms.map((r: { name: string }) => r.name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+  });
+
+  it('admin realm CRUD reads and writes adminHost/adminPort; the public list hides them', async () => {
+    const withAdmin = { ...realm, adminHost: 'world', adminPort: 7780 };
+    const created = await asAdmin().post('/v1/admin/realms', withAdmin);
+    expect(created.status).toBe(201);
+    expect(created.body).toEqual({ id: expect.any(Number), ...withAdmin });
+    expect((await asAdmin().get(`/v1/admin/realms/${created.body.id}`)).body).toEqual(created.body);
+    expect((await asAdmin().get('/v1/admin/realms')).body.realms).toEqual([created.body]);
+
+    const cleared = await asAdmin().put(`/v1/admin/realms/${created.body.id}`, realm);
+    expect(cleared.body).toMatchObject({ adminHost: null, adminPort: null });
+    await asAdmin().put(`/v1/admin/realms/${created.body.id}`, withAdmin);
+
+    const { accessToken } = await login(ctx, PLAYER);
+    const [pub] = (await ctx.api().get('/v1/realms').set(bearer(accessToken))).body.realms;
+    expect(pub).toEqual({ id: created.body.id, name: 'Emberfall', host: 'eu1.kast.example', port: 7000, region: 'eu-west', status: 'online', sortOrder: 2 });
+    expect(pub).not.toHaveProperty('adminHost');
+    expect(pub).not.toHaveProperty('adminPort');
+  });
+
+  it('rejects an admin endpoint that is half set or invalid', async () => {
+    for (const bad of [
+      { adminHost: 'world' },
+      { adminPort: 7780 },
+      { adminHost: 'world', adminPort: 0 },
+      { adminHost: 'world', adminPort: 70000 },
+      { adminHost: '', adminPort: 7780 },
+      { adminHost: 'world', adminPort: '7780' },
+    ]) {
+      expectError(await asAdmin().post('/v1/admin/realms', { ...realm, ...bad }), 400, 'validation_error');
+    }
   });
 });

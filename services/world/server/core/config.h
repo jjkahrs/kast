@@ -68,6 +68,10 @@ struct Config {
     std::string chatLinkSecret;
     std::string chatLinkCaFile; // empty: trust this server's own TLS certificate (the dev setup shares it)
     uint32_t chatLinkRetryMinMs = 500, chatLinkRetryMaxMs = 30000;
+    // admin port (online list, kick) for the admin service; empty secret: off
+    std::string adminHost = "127.0.0.1";
+    uint16_t adminPort = 7780;
+    std::string adminSecret;
     // persistence / ops
     uint32_t saveIntervalMs = 60000;
     uint32_t saveRetryMinMs = 500;

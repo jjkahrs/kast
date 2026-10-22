@@ -1,4 +1,5 @@
-# World test stack: world + chat (../chat) + real auth (built from ../auth, unmodified) + one MySQL 8.4 + Mailpit.
+# World test stack: world + chat (../chat) + real auth (built from ../auth, unmodified) + admin app (../admin) + one
+# MySQL 8.4 + Mailpit.
 # Requires .env (cp .env.example .env). Host ports differ from the auth stack so both can run side by side.
 name: kast-world
 
@@ -29,6 +30,11 @@ services:
       CHAT_LINK_HOST: chat
       CHAT_LINK_PORT: 7779
       CHAT_LINK_SECRET: ${CHAT_LINK_SECRET:?set CHAT_LINK_SECRET in .env}
+      # Admin port for the admin service (docs/services/world/security.html#admin-port): on the compose network only,
+      # never published below. WORLD_ADMIN_SECRET unset or empty turns it off.
+      WORLD_ADMIN_HOST: 0.0.0.0
+      WORLD_ADMIN_PORT: 7780
+      WORLD_ADMIN_SECRET: ${WORLD_ADMIN_SECRET-}
     ports:
       - "${WORLD_HOST_PORT:-7777}:7777"
     volumes:
@@ -114,6 +120,64 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Admin web app + API (docs/services/admin): accounts, characters, realms, online/kick, audit log.
+  # http://localhost:3200, published on the host's loopback only. Sign in with the SEED_ADMIN_* account.
+  admin:
+    build: ../admin
+    image: kast-admin:dev
+    environment:
+      PORT: 3200
+      COOKIE_SECURE: "false" # plain http on localhost; keep the default (true) behind HTTPS
+      AUTH_URL: http://auth:3000
+      JWT_ISSUER: ${JWT_ISSUER:-kast-auth}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-kast}
+      DB_HOST: mysql
+      DB_PORT: 3306
+      ADMIN_DB_USER: ${ADMIN_DB_USER:-kast_admin}
+      ADMIN_DB_PASSWORD: ${ADMIN_DB_PASSWORD:?set ADMIN_DB_PASSWORD in .env}
+      ADMIN_DB_NAME: ${ADMIN_DB_NAME:-kast_admin}
+      WORLD_DB_USER: ${ADMIN_WORLD_DB_USER:-kast_world_admin}
+      WORLD_DB_PASSWORD: ${ADMIN_WORLD_DB_PASSWORD:?set ADMIN_WORLD_DB_PASSWORD in .env}
+      WORLD_DB_NAME: ${DB_NAME:?set DB_NAME in .env}
+      # The world's; empty fails the admin service's config check (integration.sh empties it to test the port off).
+      WORLD_ADMIN_SECRET: ${WORLD_ADMIN_SECRET-}
+      WORLD_ADMIN_CA_FILE: /certs/server.crt
+    ports:
+      - "127.0.0.1:${ADMIN_HOST_PORT:-3200}:3200"
+    volumes:
+      - world-certs:/certs:ro # the world's self-signed dev certificate is its own CA
+    depends_on:
+      admin-db-init:
+        condition: service_completed_successfully
+      auth:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # The admin service's databases/users and the local realm's admin endpoint (docker/admin-db-init.sh). Waits for
+  # world (its migrations make the characters table the grant names) and auth (realms).
+  admin-db-init:
+    image: mysql:8.4
+    entrypoint: ["sh", "/init/admin-db-init.sh"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      ADMIN_DB_NAME: ${ADMIN_DB_NAME:-kast_admin}
+      ADMIN_DB_USER: ${ADMIN_DB_USER:-kast_admin}
+      ADMIN_DB_PASSWORD: ${ADMIN_DB_PASSWORD:?set ADMIN_DB_PASSWORD in .env}
+      ADMIN_WORLD_DB_USER: ${ADMIN_WORLD_DB_USER:-kast_world_admin}
+      ADMIN_WORLD_DB_PASSWORD: ${ADMIN_WORLD_DB_PASSWORD:?set ADMIN_WORLD_DB_PASSWORD in .env}
+      WORLD_DB_NAME: ${DB_NAME:?set DB_NAME in .env}
+      AUTH_DB_NAME: ${AUTH_DB_NAME:-kast_auth}
+      REALM_ID: ${REALM_ID:-1}
+      WORLD_HOST_PORT: ${WORLD_HOST_PORT:-7777}
+    volumes:
+      - ./docker/admin-db-init.sh:/init/admin-db-init.sh:ro
+    depends_on:
+      world:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+    restart: "no"
+
   auth:
     build: ../auth
     environment:
@@ -133,6 +197,9 @@ services:
       JWT_ISSUER: ${JWT_ISSUER:-kast-auth}
       JWT_AUDIENCE: ${JWT_AUDIENCE:-kast}
       KEYS_DIR: /app/keys
+      # The first admin (for the admin app), created pre-verified on start; both or neither.
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL-}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD-}
     ports:
       - "${AUTH_HOST_PORT:-3100}:3000"
     volumes:
@@ -184,7 +251,9 @@ services:
     profiles: ["tools"]
     entrypoint: ["./kast_bot", "--auth-url", "http://auth:3000", "--mailpit-url", "http://mailpit:8025",
                  "--host", "world", "--port", "7777", "--ca", "/certs/server.crt", "--map-root", "/app/maps",
-                 "--chat-host", "chat", "--chat-port", "7778", "--chat-link-port", "7779"]
+                 "--chat-host", "chat", "--chat-port", "7778", "--chat-link-port", "7779", "--admin-port", "7780"]
+    environment:
+      WORLD_ADMIN_SECRET: ${WORLD_ADMIN_SECRET-} # admin scenarios
     volumes:
       - world-certs:/certs:ro
       - ../../tests/project/maps:/app/maps:ro # terrain scenario: the world's maps, for ground heights

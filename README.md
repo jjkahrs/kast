@@ -7,11 +7,12 @@ Kast is a C++20 game engine for building MMORPGs. `engine/` is the reusable runt
 scene, renderer, scene files); `editor/` is the Unity-style editor (`kast_editor`) built on it with Dear ImGui docking
 and ImGuizmo. `services/` holds the game services: the authentication server (`services/auth`, accounts, sessions and
 the realm list), the world server (`services/world`) and the chat service (`services/chat`: whispers, channels, zone
-chat, GM mutes; one per realm). `samples/starter-mmo` is a complete online game project.
+chat, GM mutes; one per realm). `services/admin` is the admin web app (React SPA + Node API) admins and GMs use to
+manage accounts, bans, characters, realms and online players. `samples/starter-mmo` is a complete online game project.
 
 Documentation is HTML under [`docs/`](docs/index.html): [Editor](docs/editor/index.html),
 [Engine](docs/engine/index.html), [Auth Server](docs/services/auth/index.html),
-[World Server](docs/services/world/index.html), [Chat Server](docs/services/chat/index.html), [Development](docs/development/tests.html) (tests, source layout).
+[World Server](docs/services/world/index.html), [Chat Server](docs/services/chat/index.html), [Admin App](docs/services/admin/index.html), [Development](docs/development/tests.html) (tests, source layout).
 Zone maps are built in the editor's Zone tab ([Zone Builder](docs/editor/zone-builder.html)). Tools document
 themselves in their own folders: [Map Bake](services/world/tools/mapbake/README.md).
 
@@ -121,10 +122,23 @@ curl -s localhost:3000/health   # {"status":"ok","db":"ok"}
 ```sh
 cd services/world
 cp .env.example .env              # dev defaults; change the passwords and CHAT_LINK_SECRET (16+ characters)
-docker compose up -d --build      # world (7777) + chat (7778) + auth (3100) + MySQL 8.4 + Mailpit
+docker compose up -d --build      # world (7777) + chat (7778) + auth (3100) + admin (3200) + MySQL 8.4 + Mailpit
 docker compose ps                 # all healthy
 docker compose logs world         # "migration applied", "listening", "chat link: up"
 docker compose logs chat          # "listening", "world link up"
+```
+
+**Admin app** (in the same world stack; details in [Admin App setup](docs/services/admin/setup.html)): set
+`ADMIN_DB_PASSWORD`, `ADMIN_WORLD_DB_PASSWORD`, `WORLD_ADMIN_SECRET`, `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` in
+`services/world/.env` (see `.env.example`), then `docker compose up -d --build` also builds and starts `admin`. Open
+http://localhost:3200 and sign in with the seed admin. To build it outside Docker:
+
+```sh
+cd services/admin
+npm ci
+npm run build       # API -> dist/, SPA -> web/dist/
+npm start           # serves both on :3200 (configure .env from .env.example first)
+npm run dev         # development: Vite on :5173, proxying /api to `npm run dev:api` on :3200
 ```
 
 The chat service also builds on its own on Windows: `cd services/chat && cmake --preset debug && cmake --build --preset

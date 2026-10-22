@@ -71,6 +71,10 @@ const char* opcode_name(Opcode op) {
     case Opcode::MapChanged: return "MapChanged";
     case Opcode::CharOffline: return "CharOffline";
     case Opcode::MuteState: return "MuteState";
+    case Opcode::AdminOnlineReq: return "AdminOnlineReq";
+    case Opcode::AdminOnline: return "AdminOnline";
+    case Opcode::AdminKick: return "AdminKick";
+    case Opcode::AdminKicked: return "AdminKicked";
     }
     return "unknown";
 }
@@ -99,6 +103,7 @@ const char* code_name(Code c) {
     case Code::already_in_world: return "already_in_world";
     case Code::options_invalid: return "options_invalid";
     case Code::no_character: return "no_character";
+    case Code::kicked: return "kicked";
     }
     return "unknown";
 }

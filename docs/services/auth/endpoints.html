@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="../../style.css">
 </head>
 <body>
-<header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="index.html">Auth Server</a><a href="../world/index.html">World Server</a><a href="../chat/index.html">Chat Server</a><a href="../../development/tests.html">Development</a></nav></header>
+<header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="index.html">Auth Server</a><a href="../world/index.html">World Server</a><a href="../chat/index.html">Chat Server</a><a href="../admin/index.html">Admin App</a><a href="../../development/tests.html">Development</a></nav></header>
 <div class="layout">
 <nav class="side"><h2>Auth Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="endpoints.html" class="active">Endpoints</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="token-verification.html">Token verification</a></li></ul></nav>
 <main>
@@ -92,19 +92,67 @@
 <td>GET</td>
 <td><code>/v1/realms</code></td>
 <td>bearer</td>
-<td>Realms ordered by <code>sortOrder</code></td>
+<td>Realms ordered by <code>sortOrder</code>. Never includes <code>adminHost</code>/<code>adminPort</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/v1/admin/accounts</code></td>
+<td>admin, gm</td>
+<td>Search, ordered by id. Query: <code>q</code> (email substring, or exact id when all digits), <code>role</code>, <code>banned</code>, <code>verified</code>, <code>locked</code> (<code>true</code>/<code>false</code>), <code>limit</code> (1–100, default 50), <code>offset</code>. → <code>{accounts, total, limit, offset}</code>; each account has <code>failedLoginCount</code>, <code>lockedUntil</code> and <code>activeBan</code>. GMs only get <code>player</code> accounts</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/v1/admin/accounts</code></td>
+<td>admin</td>
+<td><code>{email, password, role?}</code> → 201. Created already verified; <code>role</code> defaults to <code>player</code>. 409 <code>email_taken</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/v1/admin/accounts/:id</code></td>
+<td>admin, gm</td>
+<td>Account plus <code>bans</code> (full history, newest first, with <code>liftedAt</code>/<code>liftedBy</code>). GMs: player accounts only</td>
+</tr>
+<tr>
+<td>DELETE</td>
+<td><code>/v1/admin/accounts/:id</code></td>
+<td>admin</td>
+<td>Hard delete → 204. Bans, sessions and email tokens go with it. Self-delete → 400 <code>cannot_modify_self</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/v1/admin/accounts/:id/verify-email</code></td>
+<td>admin</td>
+<td>Mark the email verified → 204</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/v1/admin/accounts/:id/password-reset</code></td>
+<td>admin</td>
+<td>Send the normal "forgot password" email → 204</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/v1/admin/accounts/:id/unlock</code></td>
+<td>admin</td>
+<td>Clear <code>failedLoginCount</code> and <code>lockedUntil</code> → 204</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/v1/admin/accounts/:id/revoke-sessions</code></td>
+<td>admin</td>
+<td>Revoke every refresh token → 204</td>
 </tr>
 <tr>
 <td>POST</td>
 <td><code>/v1/admin/accounts/:id/ban</code></td>
-<td>admin</td>
-<td><code>{reason, expiresAt?}</code> → 201. Replaces the active ban and revokes sessions</td>
+<td>admin, gm</td>
+<td><code>{reason, expiresAt?}</code> → 201. Replaces the active ban and revokes sessions. GMs: player accounts only</td>
 </tr>
 <tr>
 <td>DELETE</td>
 <td><code>/v1/admin/accounts/:id/ban</code></td>
-<td>admin</td>
-<td>Lift the ban → 204</td>
+<td>admin, gm</td>
+<td>Lift the ban → 204. GMs: player accounts only</td>
 </tr>
 <tr>
 <td>PUT</td>
@@ -116,7 +164,7 @@
 <td>GET, POST</td>
 <td><code>/v1/admin/realms</code></td>
 <td>admin</td>
-<td>List / create</td>
+<td>List / create. Body adds optional <code>adminHost</code> + <code>adminPort</code> (the world server's internal admin endpoint; set both or neither)</td>
 </tr>
 <tr>
 <td>GET, PUT, DELETE</td>
@@ -126,6 +174,8 @@
 </tr>
 </tbody>
 </table>
+<h2 id="roles">Roles</h2>
+<p>Everything under <code>/v1/admin</code> needs an access token with role <code>admin</code>, except four routes that also accept <code>gm</code>: list accounts, account detail, ban and unban. A GM may use them only on accounts whose role is <code>player</code>; any other target gives 403 <code>forbidden</code>, and the account list only ever returns players to a GM. Access tokens already issued keep working until they expire (at most 15 minutes) after a ban, delete, role change or session revoke.</p>
 <h2 id="errors">Errors</h2>
 <p>Every error has this shape: <code>{"error":{"code":"snake_case","message":"…","details":…}}</code>. <code>details</code> is present only for <code>validation_error</code> (a list of <code>{path,message}</code>), <code>account_banned</code> (<code>{reason,expiresAt}</code>) and <code>account_locked</code> (<code>{lockedUntil}</code>). Responses never include stack traces or SQL.</p>
 <table>
@@ -154,7 +204,7 @@
 </tr>
 <tr>
 <td>409</td>
-<td><code>realm_name_taken</code></td>
+<td><code>realm_name_taken</code>, <code>email_taken</code></td>
 </tr>
 <tr>
 <td>413</td>

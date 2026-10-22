@@ -20,6 +20,7 @@ void usage() {
         "  --host HOST --port N  world server (default localhost 7777)\n"
         "  --ca FILE             certificate/CA the server must present (world and chat)\n"
         "  --chat-host HOST --chat-port N --chat-link-port N  chat service (default localhost 7778 7779)\n"
+        "  --admin-port N        the world server's admin port (default 7780; secret from WORLD_ADMIN_SECRET)\n"
         "  --run-id ID           namespaces bot accounts (default run)\n"
         "  --count N             load: bot sessions (default 1)\n"
         "  --behaviour B         load: idle | wander | chat | speedhack | malformed (default wander)\n"
@@ -37,7 +38,8 @@ void usage() {
         "           portal respawn terrain navmesh client-events client-event-rate\n"
         "           combat-bat combat-rules (these two need the starter-mmo override and --char-option class=warrior)\n"
         "           yell chat-whisper chat-channels chat-zone chat-ignore chat-mute-setup chat-mute chat-limits\n"
-        "           chat-auth chat-down (the chat ones need the chat service; see tests/integration.sh)\n");
+        "           chat-auth chat-down (the chat ones need the chat service; see tests/integration.sh)\n"
+        "           admin admin-off (the world's admin port on / off)\n");
 }
 
 } // namespace
@@ -62,6 +64,7 @@ int main(int argc, char** argv) {
         else if (a == "--chat-host") o.chatHost = val();
         else if (a == "--chat-port") o.chatPort = static_cast<uint16_t>(std::stoi(val()));
         else if (a == "--chat-link-port") o.chatLinkPort = static_cast<uint16_t>(std::stoi(val()));
+        else if (a == "--admin-port") o.adminPort = static_cast<uint16_t>(std::stoi(val()));
         else if (a == "--run-id") o.runId = val();
         else if (a == "--mode") o.mode = val();
         else if (a == "--scenario") o.scenario = val();

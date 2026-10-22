@@ -27,11 +27,37 @@ export const banBody = z.object({
 
 export const roleBody = z.object({ role: z.enum(ROLES) });
 
-export const realmBody = z.object({
-  name: z.string().trim().min(1).max(64),
-  host: z.string().trim().min(1).max(255),
-  port: z.number().int().min(1).max(65535),
-  region: z.string().trim().min(1).max(32),
-  status: z.enum(REALM_STATUSES).default('offline'),
-  sortOrder: z.number().int().min(-2_147_483_648).max(2_147_483_647).default(0),
+const port = z.number().int().min(1).max(65535);
+
+export const realmBody = z
+  .object({
+    name: z.string().trim().min(1).max(64),
+    host: z.string().trim().min(1).max(255),
+    port,
+    adminHost: z.string().trim().min(1).max(255).nullish().default(null),
+    adminPort: port.nullish().default(null),
+    region: z.string().trim().min(1).max(32),
+    status: z.enum(REALM_STATUSES).default('offline'),
+    sortOrder: z.number().int().min(-2_147_483_648).max(2_147_483_647).default(0),
+  })
+  .refine((r) => (r.adminHost === null) === (r.adminPort === null), {
+    path: ['adminPort'],
+    message: 'adminHost and adminPort must be set together',
+  });
+
+const queryFlag = z
+  .enum(['true', 'false'])
+  .transform((v) => v === 'true')
+  .optional();
+
+export const accountQuery = z.object({
+  q: z.string().trim().max(254).optional(),
+  role: z.enum(ROLES).optional(),
+  banned: queryFlag,
+  verified: queryFlag,
+  locked: queryFlag,
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
 });
+
+export const createAccountBody = z.object({ email, password: newPassword, role: z.enum(ROLES).default('player') });

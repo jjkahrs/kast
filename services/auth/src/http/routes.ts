@@ -10,7 +10,7 @@ import type { TokenService } from '../services/tokens.js';
 import { adminHandlers } from './handlers/admin.js';
 import { authHandlers } from './handlers/auth.js';
 import { realmHandlers } from './handlers/realms.js';
-import { noStore, rateLimit, requireAdmin, requireAuth } from './middleware.js';
+import { noStore, rateLimit, requireAdmin, requireAuth, requireRole } from './middleware.js';
 
 export interface RouteDeps {
   pool: Pool;
@@ -57,12 +57,24 @@ export function buildRoutes(deps: RouteDeps): Router {
   v1.post('/auth/reset-password', auth.resetPassword);
 
   v1.get('/me', authenticated, auth.me);
-  v1.get('/realms', authenticated, realms.list);
+  v1.get('/realms', authenticated, realms.listPublic);
 
   const adminRouter = Router();
-  adminRouter.use(authenticated, requireAdmin);
-  adminRouter.post('/accounts/:id/ban', admin.ban);
-  adminRouter.delete('/accounts/:id/ban', admin.unban);
+  adminRouter.use(authenticated);
+  // GMs may view accounts and ban/unban; the admin service limits them to player targets.
+  const staff = requireRole('admin', 'gm');
+  adminRouter.get('/accounts', staff, admin.list);
+  adminRouter.get('/accounts/:id', staff, admin.get);
+  adminRouter.post('/accounts/:id/ban', staff, admin.ban);
+  adminRouter.delete('/accounts/:id/ban', staff, admin.unban);
+  // Everything below is admin-only.
+  adminRouter.use(requireAdmin);
+  adminRouter.post('/accounts', admin.create);
+  adminRouter.delete('/accounts/:id', admin.remove);
+  adminRouter.post('/accounts/:id/verify-email', admin.verifyEmail);
+  adminRouter.post('/accounts/:id/password-reset', admin.passwordReset);
+  adminRouter.post('/accounts/:id/unlock', admin.unlock);
+  adminRouter.post('/accounts/:id/revoke-sessions', admin.revokeSessions);
   adminRouter.put('/accounts/:id/role', admin.setRole);
   adminRouter.get('/realms', realms.list);
   adminRouter.post('/realms', realms.create);

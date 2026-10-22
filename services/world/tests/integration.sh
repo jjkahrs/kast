@@ -3,6 +3,7 @@
 # Prints PASS/FAIL per scenario and exits non-zero if any failed.
 # Scenarios 10-13, 34 and 37 stop/restart containers, so run this against a test stack only.
 # --starter-mmo runs only scenarios 23-24 and 28 (samples/starter-mmo combat), against the stack with the sample's override.
+# --admin runs only scenarios 39-40 (the admin port; WORLD_ADMIN_SECRET in .env).
 set -u
 cd "$(dirname "$0")/.."
 export MSYS_NO_PATHCONV=1 # Git Bash on Windows: keep container paths as written
@@ -95,6 +96,34 @@ summary() {
     printf '%s\n' "${RESULTS[@]}"
     exit $FAILED
 }
+
+# 39-40: the world's admin port (docs/services/world/protocol.html#admin). 40 recreates the world container without
+# WORLD_ADMIN_SECRET, then again with the one from .env.
+admin_scenarios() {
+    scenario "39 admin port: wrong secret refused, online list, kick by character / account, kicked character saved" --scenario admin
+    local name="40 admin port off (WORLD_ADMIN_SECRET empty): logged, nothing listening, the world still serves players"
+    local log="$LOGDIR/40.log" ok=0
+    echo "--- $name"
+    export WORLD_ADMIN_SECRET= # the bot's `compose run` must see the same world config, or it recreates the world
+    docker compose up -d world >/dev/null 2>&1
+    wait_healthy world || ok=1
+    WORLD=$(docker compose ps -q world)
+    if docker logs "$WORLD" 2>&1 | grep '"admin port off' | tee "$log" | sed 's/^/  log: /' | grep -q .; then :; else ok=1; fi
+    bot --scenario admin-off 2>&1 | tee -a "$log" | grep -v -E '^ *(Container|Network) '
+    [ "${PIPESTATUS[0]}" -eq 0 ] || ok=1
+    unset WORLD_ADMIN_SECRET
+    docker compose up -d world >/dev/null 2>&1
+    wait_healthy world || ok=1
+    WORLD=$(docker compose ps -q world)
+    docker logs "$WORLD" 2>&1 | grep -q '"admin port listening"' || ok=1
+    record "$name" $ok "see $log"
+}
+
+# --admin: only the admin port scenarios.
+if [ "${1:-}" = "--admin" ]; then
+    admin_scenarios
+    summary
+fi
 
 # --starter-mmo: only the samples/starter-mmo combat scenarios, against the stack started with the sample's override
 # (docker compose -f docker-compose.yml -f ../../samples/starter-mmo/docker-compose.override.yml up -d --build).
@@ -288,4 +317,5 @@ else
     record "$name" 0 ""
 fi
 
+admin_scenarios
 summary
