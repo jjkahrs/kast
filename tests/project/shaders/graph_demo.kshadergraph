@@ -1,0 +1,262 @@
+{
+  "version": 1,
+  "params": [
+    {
+      "name": "tint",
+      "type": "vec3",
+      "default": [
+        1.0,
+        0.6,
+        0.3
+      ]
+    },
+    {
+      "name": "speed",
+      "type": "float",
+      "default": 0.5,
+      "range": [
+        0.0,
+        4.0
+      ]
+    },
+    {
+      "name": "pattern",
+      "type": "texture2D",
+      "default": "white",
+      "srgb": true
+    }
+  ],
+  "nodes": [
+    {
+      "id": 1,
+      "type": "output_fragment",
+      "position": [
+        760.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 2,
+      "type": "uv",
+      "position": [
+        0.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 3,
+      "type": "time",
+      "position": [
+        0.0,
+        100.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 4,
+      "type": "param",
+      "position": [
+        0.0,
+        180.0
+      ],
+      "settings": {
+        "param": "speed"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 5,
+      "type": "multiply",
+      "position": [
+        180.0,
+        120.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 6,
+      "type": "add",
+      "position": [
+        340.0,
+        40.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 7,
+      "type": "param",
+      "position": [
+        340.0,
+        -80.0
+      ],
+      "settings": {
+        "param": "pattern"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 8,
+      "type": "sample_texture",
+      "position": [
+        500.0,
+        -20.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 9,
+      "type": "param",
+      "position": [
+        500.0,
+        160.0
+      ],
+      "settings": {
+        "param": "tint"
+      },
+      "inputs": {}
+    },
+    {
+      "id": 10,
+      "type": "multiply",
+      "position": [
+        640.0,
+        40.0
+      ],
+      "settings": {},
+      "inputs": {}
+    },
+    {
+      "id": 11,
+      "type": "constant_float",
+      "position": [
+        500.0,
+        260.0
+      ],
+      "settings": {
+        "value": 0.3
+      },
+      "inputs": {}
+    }
+  ],
+  "links": [
+    {
+      "from": [
+        3,
+        "out"
+      ],
+      "to": [
+        5,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        4,
+        "out"
+      ],
+      "to": [
+        5,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        2,
+        "out"
+      ],
+      "to": [
+        6,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        5,
+        "out"
+      ],
+      "to": [
+        6,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        7,
+        "out"
+      ],
+      "to": [
+        8,
+        "texture"
+      ]
+    },
+    {
+      "from": [
+        6,
+        "out"
+      ],
+      "to": [
+        8,
+        "uv"
+      ]
+    },
+    {
+      "from": [
+        8,
+        "rgb"
+      ],
+      "to": [
+        10,
+        "a"
+      ]
+    },
+    {
+      "from": [
+        9,
+        "out"
+      ],
+      "to": [
+        10,
+        "b"
+      ]
+    },
+    {
+      "from": [
+        10,
+        "out"
+      ],
+      "to": [
+        1,
+        "ALBEDO"
+      ]
+    },
+    {
+      "from": [
+        11,
+        "out"
+      ],
+      "to": [
+        1,
+        "ROUGHNESS"
+      ]
+    }
+  ],
+  "comments": [
+    {
+      "title": "Scrolling UV",
+      "rect": [
+        -20.0,
+        -40.0,
+        520.0,
+        300.0
+      ]
+    }
+  ]
+}

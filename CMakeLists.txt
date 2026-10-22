@@ -142,7 +142,7 @@ target_link_libraries(kast_map PUBLIC nlohmann_json::nlohmann_json)
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/undo.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/prefab.cpp engine/components.cpp
-  engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shadow.cpp engine/frustum.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
+  engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
@@ -1139,6 +1139,41 @@ kast_shader_shot(custom_play_f60 "${KAST_SHADER_TEST_PROJECT}" custom_shaders.sc
 kast_shader_shot(custom_play_no_systems "${KAST_SHADER_TEST_PROJECT}" custom_shaders_no_systems.scene PLAY)
 kast_shader_compare(shader_custom_play_animates custom_play_f60 custom_play OFF)
 kast_shader_compare(shader_custom_play_lua_differs custom_play_no_systems custom_play OFF)
+# Shader graphs (.kshadergraph, docs/engine/shader-graph.html), phase 1:
+# - shader_graph_empty_*: materials.scene and material_features.scene in a copy whose every .mat (without a shader of its
+#   own) uses shaders/empty.kshadergraph (an unconnected Fragment Output) must match the built-in shots
+#   (kast_self_check --diff-png, mean at most 1/255).
+# - shader_graph_demo: shader_graph_demo.scene (graph_demo.kshadergraph: params, a texture param, UV, TIME, Add,
+#   Multiply, Sample Texture, a constant) compiles, nothing renders magenta, and differs from a copy without it.
+set(KAST_EMPTY_GRAPH_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/shader_graph_empty/project")
+file(REMOVE_RECURSE "${KAST_EMPTY_GRAPH_PROJECT}")
+file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${KAST_EMPTY_GRAPH_PROJECT}")
+foreach(mat ${empty_shader_mats})
+  file(READ "${mat}" mat_text)
+  if(NOT mat_text MATCHES "\"shader\"")
+    string(REGEX REPLACE "(\"version\": [0-9]+)" "\\1, \"shader\": \"shaders/empty.kshadergraph\"" mat_text "${mat_text}")
+    get_filename_component(mat_name "${mat}" NAME)
+    file(WRITE "${KAST_EMPTY_GRAPH_PROJECT}/materials/${mat_name}" "${mat_text}")
+  endif()
+endforeach()
+foreach(scene materials material_features)
+  kast_shader_shot(graph_empty_${scene} "${KAST_EMPTY_GRAPH_PROJECT}" ${scene}.scene
+                   "-DEXPECT_OUTPUT=Compiled shader 'shaders/empty.kshadergraph'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]")
+  add_test(NAME shader_graph_empty_${scene}_diff
+    COMMAND kast_self_check --diff-png "${CMAKE_CURRENT_BINARY_DIR}/shader_builtin_${scene}.png"
+            "${CMAKE_CURRENT_BINARY_DIR}/shader_graph_empty_${scene}.png" 0.00392)
+  set_tests_properties(shader_graph_empty_${scene}_diff PROPERTIES
+                       FIXTURES_REQUIRED "shader_builtin_${scene}_shot;shader_graph_empty_${scene}_shot")
+endforeach()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/shader_graph_demo.scene")
+file(READ "${KAST_TEST_PROJECT}/shader_graph_demo.scene" shader_scene)
+string(REGEX REPLACE "materials/shader_graph_demo\\.mat" "" shader_scene "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_graph_demo_builtin.scene" "${shader_scene}")
+kast_shader_shot(graph_demo "${KAST_SHADER_TEST_PROJECT}" shader_graph_demo.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/graph_demo.kshadergraph'" -DEXPECT_COUNT=1
+  "-DFORBID_OUTPUT=\\[error\\]|\\[warn\\]|magenta")
+kast_shader_shot(graph_demo_builtin "${KAST_SHADER_TEST_PROJECT}" shader_graph_demo_builtin.scene)
+kast_shader_compare(shader_graph_demo_differs graph_demo_builtin graph_demo OFF)
 # Editor workflow (phase 3), in a fresh copy of the test project (the shader cache and new files land in it):
 # - shader_cache_first / _second: the second start loads showcase.kshader from <project>/.kast/shader_cache.
 # - shader_new: Assets > Create > Shader writes a starter that compiles (the Inspector shows it).
@@ -1666,7 +1701,8 @@ foreach(pak missing corrupt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
   set_tests_properties(player_${pak}_pak PROPERTIES FIXTURES_REQUIRED game_switch_built TIMEOUT 90)
 endforeach()
-# Shaders in the player: Build compiles every shipped .kshader into game.pak (kast::shaderPakPath) and the player loads
+# Shaders in the player: Build compiles every shipped .kshader and .kshadergraph into game.pak (kast::shaderPakPath; a
+# graph's keyed by its generated text, which the player generates again from the shipped graph) and the player loads
 # that bytecode ("Loaded shader ... (precompiled)"; player_test.cmake fails if a shaderc.exe is next to it). The vertex
 # scenes have no Main Camera (editor views), so their game copies get one at their editor camera's view. Each game
 # runs at --fixed-dt 0.016 like the editor's shader shots. player_shader_offset_same: lift.kshader's vertex() and
@@ -1680,7 +1716,8 @@ foreach(game "shader_showcase|shader_showcase.scene|showcase"
              "shader_screen|shader_screen.scene|screen_water"
              "shader_screen_identity|shader_screen_identity.scene|screen_identity"
              "shader_screen_identity_ref|shader_screen_identity.scene|-"
-             "custom_shaders|custom_shaders.scene|dissolve")
+             "custom_shaders|custom_shaders.scene|dissolve"
+             "shader_graph_demo|shader_graph_demo.scene|graph_demo.kshadergraph")
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
   list(GET game 1 scene)
@@ -1703,6 +1740,9 @@ foreach(game "shader_showcase|shader_showcase.scene|showcase"
   set(expect "Window title: Shader Test")
   if(NOT shader STREQUAL "-")
     set(expect "Loaded shader 'shaders/${shader}\\.kshader' \\(precompiled\\)")
+    if(shader MATCHES "\\.kshadergraph$") # the player generates a graph's .kshader text from the shipped file
+      set(expect "Loaded shader 'shaders/${shader}' \\(precompiled\\)")
+    endif()
   endif()
   add_test(NAME build_game_${name}
     COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/${name}"

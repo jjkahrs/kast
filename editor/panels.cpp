@@ -952,12 +952,6 @@ void drawShaderStatus(const kast::ShaderLibrary::Status& status)
     }
 }
 
-const char* shaderParamTypeName(kast::ShaderParamType type)
-{
-    constexpr const char* kNames[] = {"float", "vec2", "vec3", "vec4", "color", "texture2D"}; // ShaderParamType order
-    return kNames[static_cast<int>(type)];
-}
-
 // One widget per param the material's .kshader declares, showing the material's value or the default: a slider for a
 // ranged float, drag fields for numbers and vectors, a color picker, a texture picker. True if one changed m.params.
 bool drawShaderParams(const kast::ShaderSource& source, kast::Material& m, const std::vector<std::string>& textures)
@@ -1004,7 +998,8 @@ bool drawShaderParams(const kast::ShaderSource& source, kast::Material& m, const
                 changed = true;
             }
         }
-        ImGui::SetItemTooltip("%s param (line %d of the .kshader)", shaderParamTypeName(param.type), param.line);
+        ImGui::SetItemTooltip("%s param (line %d of the .kshader)", kast::shaderParamTypeName(param.type).data(),
+                              param.line);
         ImGui::PopID();
     }
     for (const auto& [name, value] : m.params)
@@ -1407,7 +1402,7 @@ void Panels::drawShaderInspector(Document& doc)
         if (status.declaration->params.empty())
             ImGui::TextDisabled("None");
         for (const kast::ShaderParam& param : status.declaration->params)
-            ImGui::BulletText("%s %s (line %d)", shaderParamTypeName(param.type), param.name.c_str(), param.line);
+            ImGui::BulletText("%s %s (line %d)", kast::shaderParamTypeName(param.type).data(), param.name.c_str(), param.line);
         ImGui::TextDisabled(status.declaration->hasVertex ? "Has vertex(): also moves shadows" : "No vertex()");
     }
     ImGui::Spacing();

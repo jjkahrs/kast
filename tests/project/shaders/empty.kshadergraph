@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "params": [],
+  "nodes": [
+    {
+      "id": 1,
+      "type": "output_fragment",
+      "position": [
+        0.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    }
+  ],
+  "links": [],
+  "comments": []
+}

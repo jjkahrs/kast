@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shader graphs - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html" class="active">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li></ul></nav>
+<main>
+<h1 id="shader-graph">Shader graphs</h1>
+<p>A <strong>shader graph</strong> (<code>.kshadergraph</code>) builds a mesh surface shader from connected nodes instead of code,
+like Unity's Shader Graph. Kast turns the graph into the text of a <a href="shaders.html#user-shaders"><code>.kshader</code></a>,
+and from there everything is the <code>.kshader</code> path: the compile cache, hot reload, the material Inspector's param
+widgets, Lua <code>kast.getMaterialProperty</code> / <code>setMaterialProperty</code>, Build and the player. A material uses one the
+same way: <code>"shader": "shaders/my_surface.kshadergraph"</code> in its <code>.mat</code>.</p>
+<p>The graph model, its file format and the code generation are engine code (<code>engine/shader_graph.h</code>) and need no GPU
+or window.</p>
+
+<h2 id="graph-format">The .kshadergraph file</h2>
+<p>Strict JSON, version <code>1</code>. Every key is checked: an unknown key, a wrong type or an out-of-range value is an
+error naming its JSON path (<code>nodes[2].inputs.b: must be a finite number or an array of 2 to 4 finite numbers</code>), and a
+graph that fails to load renders its materials magenta, like a broken <code>.kshader</code>. Missing optional fields get their
+defaults. Kast writes the keys in a fixed order with every field present, so loading and saving a saved graph gives the same
+bytes.</p>
+<pre><code>{
+  "version": 1,                     // required: 1
+  "params": [                       // the .kshader's params, in order (one "param" line each)
+    {"name": "tint", "type": "vec3", "default": [1.0, 0.6, 0.3]},
+    {"name": "speed", "type": "float", "default": 0.5, "range": [0.0, 4.0]},
+    {"name": "pattern", "type": "texture2D", "default": "white", "srgb": true}
+  ],
+  "nodes": [
+    {"id": 1,                       // required: a whole number &gt; 0, unique
+     "type": "output_fragment",     // required: a node type id (below)
+     "position": [760.0, 0.0],      // on the canvas; [0, 0]
+     "settings": {},                // per node type, e.g. {"param": "tint"}, {"value": [1.0, 0.5, 0.0]}
+     "inputs": {}}                  // constants for unlinked number inputs, e.g. {"b": 0.5} or {"b": [0.0, 1.0]}
+  ],
+  "links": [                        // an output into an input; at most one link per input
+    {"from": [10, "out"], "to": [1, "ALBEDO"]}
+  ],
+  "comments": [                     // comment frames on the canvas: x, y, width, height
+    {"title": "Scrolling UV", "rect": [-20.0, -40.0, 520.0, 300.0]}
+  ]
+}</code></pre>
+<ul>
+<li><strong>params</strong>: <code>name</code> and <code>type</code> (<code>float</code>, <code>vec2</code>, <code>vec3</code>, <code>vec4</code>, <code>color</code>,
+  <code>texture2D</code>) are required. <code>default</code>: a number (float), an array of N numbers (vecN; 3 or 4 for a color, alpha
+  1), or <code>"white"</code>, <code>"black"</code> or <code>"normal"</code> (texture2D). <code>range</code> [min, max] is only for floats,
+  <code>srgb</code> only for textures. Names and limits are the <code>.kshader</code> rules (at most 16 number params and 4
+  textures; not a built-in's name).</li>
+<li><strong>links</strong> must name existing nodes and pins (an output, then an input), and may not form a cycle
+  (<code>node 4: the links form a cycle</code>).</li>
+</ul>
+<p>The smallest graph, <code>tests/project/shaders/empty.kshadergraph</code>, is a Fragment Output with nothing linked. It
+renders exactly as the built-in material:</p>
+<pre><code>{
+  "version": 1,
+  "params": [],
+  "nodes": [
+    {
+      "id": 1,
+      "type": "output_fragment",
+      "position": [
+        0.0,
+        0.0
+      ],
+      "settings": {},
+      "inputs": {}
+    }
+  ],
+  "links": [],
+  "comments": []
+}
+</code></pre>
+<p><code>tests/project/shaders/graph_demo.kshadergraph</code> (on the meshes of <code>shader_graph_demo.scene</code>) scrolls a texture
+param along UV over time and tints it.</p>
+
+<h2 id="graph-nodes">Node types</h2>
+<table>
+<tr><th>Type id</th><th>Title</th><th>Inputs</th><th>Outputs</th><th>Settings</th><th>Stages</th></tr>
+<tr><td><code>output_vertex</code></td><td>Vertex Output</td><td>VERTEX vec3, NORMAL vec3, UV vec2, COLOR vec4</td><td></td><td></td><td>vertex()</td></tr>
+<tr><td><code>output_fragment</code></td><td>Fragment Output</td><td>ALBEDO vec3, ALPHA, METALLIC, ROUGHNESS float, EMISSION vec3,
+  NORMAL_MAP vec3, NORMAL_MAP_DEPTH, AO float</td><td></td><td></td><td>fragment()</td></tr>
+<tr><td><code>output_light</code></td><td>Light Output</td><td>DIFFUSE_LIGHT vec3, SPECULAR_LIGHT vec3 (added per light)</td><td></td><td></td><td>light()</td></tr>
+<tr><td><code>constant_float</code>, <code>constant_vec2</code>, <code>constant_vec3</code>, <code>constant_vec4</code>, <code>constant_color</code></td>
+  <td>Float, Vector 2, 3, 4, Color</td><td></td><td>out: float to vec4 (a color is a vec4)</td><td><code>value</code>: 1 to 4 numbers</td><td>all</td></tr>
+<tr><td><code>param</code></td><td>Param</td><td></td><td>out: the param's type (color: vec4)</td><td><code>param</code>: its name</td><td>all</td></tr>
+<tr><td><code>uv</code></td><td>UV</td><td></td><td>out vec2</td><td></td><td>vertex(), fragment()</td></tr>
+<tr><td><code>time</code></td><td>Time</td><td></td><td>out float (TIME)</td><td></td><td>all</td></tr>
+<tr><td><code>add</code></td><td>Add</td><td>a, b: dynamic (unlinked: 0)</td><td>out = a + b</td><td></td><td>all</td></tr>
+<tr><td><code>multiply</code></td><td>Multiply</td><td>a, b: dynamic (unlinked: 1)</td><td>out = a * b</td><td></td><td>all</td></tr>
+<tr><td><code>sample_texture</code></td><td>Sample Texture</td><td>texture: texture2D (required), uv vec2 (unlinked: UV)</td>
+  <td>rgba vec4, rgb vec3, r, g, b, a float</td><td></td><td>fragment()</td></tr>
+</table>
+<p>This is the first node set; the full library (math, texture and UV, effects, Custom Expression) follows with the
+editor's Shader Graph panels.</p>
+
+<h2 id="graph-types">Types and links</h2>
+<ul>
+<li>Pins are <code>float</code>, <code>vec2</code>, <code>vec3</code>, <code>vec4</code> or <code>texture2D</code>. Math node pins are
+  <strong>dynamic</strong>: the node takes the widest type among those inputs (linked outputs' types, constants' sizes;
+  unlinked: float), and its output is that type.</li>
+<li>A float into a vector pin is splatted (<code>vec3_splat(x)</code>); a narrower vector into a wider one is padded with zeros;
+  a wider vector into a narrower pin is truncated (<code>(x).xyz</code>) with a <strong>warning</strong> on the receiving node
+  (logged: <code>[warn] Shader '...': node 1: input 'ALBEDO': vec4 truncated to vec3</code>).</li>
+<li><code>canLink</code> refuses a texture into a number pin, a number into a texture pin, missing pins and any link that would
+  close a cycle; it allows a truncating link with that warning.</li>
+</ul>
+
+<h2 id="graph-codegen">Code generation</h2>
+<p><code>generateKShader</code> writes the params as <code>param</code> lines, then <code>fragment()</code>, then <code>vertex()</code> and
+<code>light()</code> only when their output node has a linked input. Each function holds the nodes upstream of its output node,
+in topological order (the lowest id first among the nodes that are ready), each after a <code>// @node &lt;id&gt;</code> line, with
+one temp variable per output (<code>n&lt;id&gt;_&lt;pin&gt;</code>). Unlinked output pins are not written, so they keep what the
+built-in material computes. A node feeding two stages is emitted in each. The text depends only on the graph, not on the
+order of its nodes or links, which matters because the compile cache and <code>game.pak</code> key the bytecode by it. The
+demo graph generates:</p>
+<pre><code>param vec3 tint = vec3(1, 0.6, 0.3);
+param float speed = 0.5 range(0, 4);
+param texture2D pattern = white srgb;
+
+void fragment()
+{
+    // @node 2
+    vec2 n2_out = UV;
+    ...
+    // @node 6
+    vec2 n6_out = n2_out + vec2_splat(n5_out);
+    // @node 7
+    // @node 8
+    vec4 n8_rgba = texture2D(pattern, n6_out);
+    vec3 n8_rgb = n8_rgba.rgb;
+    ...
+    // @node 10
+    vec3 n10_out = n8_rgb * n9_out;
+    // @node 11
+    float n11_out = 0.3;
+    // @node 1
+    ALBEDO = n10_out;
+    ROUGHNESS = n11_out;
+}</code></pre>
+
+<h2 id="graph-errors">Errors</h2>
+<p>Validation errors name the node they are on and stop code generation (the material renders magenta, or keeps its last
+good version):</p>
+<pre><code>[error] Shader 'shaders/x.kshadergraph': node 5: UV is not available in light() (only in vertex(), fragment()); rendering it magenta
+[error] Shader 'shaders/x.kshadergraph': node 2: input 'texture' needs a link; rendering it magenta
+[error] Shader 'shaders/x.kshadergraph': node 8: param 'ALBEDO' has the name of a built-in; rendering it magenta
+[error] Shader 'shaders/x.kshadergraph': node 3: a second Fragment Output: a graph has at most one; rendering it magenta
+[error] Shader 'shaders/x.kshadergraph': links[0].to: must be [node id, "pin"]; rendering it magenta</code></pre>
+<p>Each node type may only run in some stages (UV is not a light() input, Sample Texture is fragment-only); a node is
+checked against the stages of the outputs it reaches. A param error is put on the first Param node using that param
+(<code>node 0</code> is the graph itself, e.g. a fifth texture param no node uses). shaderc's errors, which come back with
+<code>.kshader</code> line numbers, are mapped to the node whose <code>// @node</code> block holds the line:
+<code>node 10: line 28: error X3004: undeclared identifier '...'</code>.</p>
+
+<h2 id="graph-player">Build and the player</h2>
+<p>Build compiles every shipped <code>.kshadergraph</code>, as it does every shipped <code>.kshader</code>, into <code>game.pak</code>
+bytecode entries keyed by the <em>generated</em> text (<code>shaderPakPath</code>), and fails on an error with the file and node
+(<code>Build failed: shader 'shaders/x.kshadergraph': node 5: ...</code>). The graph file ships in <code>game.pak</code> too. The
+player has no compiler: it reads the shipped graph, generates the same text with the same engine code (deterministic and
+GPU-free) and loads the bytecode stored under it (<code>Loaded shader '...' (precompiled)</code>). So Build stores nothing extra
+for graphs, and a graph changed after Build has no bytecode, exactly like a changed <code>.kshader</code>.</p>
+</main>
+</div>
+</body>
+</html>

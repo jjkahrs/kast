@@ -3,6 +3,7 @@
 #include "files.h"
 #include "log.h"
 #include "project.h"
+#include "shader_graph.h"
 
 #include <algorithm>
 #include <cctype>
@@ -174,7 +175,7 @@ bool parseParam(const std::vector<std::string>& tokens, ShaderParam& param, std:
                 return false;
             }
             if (values.size() == 1)
-                values.assign(static_cast<size_t>(count), values[0]);
+                values.assign(static_cast<size_t>(count), float(values[0])); // a copy: assign() may not take its own element
             std::ranges::copy(values, param.value.begin()); // color(r, g, b): alpha stays 1
         }
     }
@@ -323,6 +324,17 @@ std::string_view trim(std::string_view s)
 }
 
 } // namespace
+
+std::string_view shaderParamTypeName(ShaderParamType type)
+{
+    return typeName(type);
+}
+
+std::optional<ShaderParamType> shaderParamTypeFromName(std::string_view name)
+{
+    const auto it = std::ranges::find(kTypes, name, &std::pair<ShaderParamType, std::string_view>::second);
+    return it == kTypes.end() ? std::nullopt : std::optional(it->first);
+}
 
 int componentCount(ShaderParamType type)
 {
@@ -768,10 +780,13 @@ void ShaderLibrary::load(const std::string& path, Entry& entry)
     entry.mtime = file ? modifiedTime(*file) : std::nullopt;
     auto source = std::make_shared<ShaderSource>();
     entry.declaration = nullptr;
+    std::vector<std::string> warnings;
     if (file && !readFile(*file, text))
         error = "cannot read the file";
-    else if (file && parseShader(text, *source, error))
+    else if (file && shaderFileText(path, text, error, &warnings) && parseShader(text, *source, error))
         entry.declaration = source;
+    for (const std::string& warning : warnings)
+        log::warn(std::format("Shader '{}': {}", path, warning));
     if (entry.declaration && !compiler_) { // the player: game.pak's bytecode
         auto shader = std::make_shared<CompiledShader>();
         shader->source = *source;
@@ -798,13 +813,16 @@ void ShaderLibrary::load(const std::string& path, Entry& entry)
     }
     // The compile works on copies: the entry may be reloaded, or the library's root change, while it runs.
     const auto compile = [source = *source, text = std::move(text), compiler = compiler_, version = version_,
-                          cache = root_ / ".kast" / "shader_cache"] {
+                          cache = root_ / ".kast" / "shader_cache", graph = isShaderGraphPath(path)] {
         const auto start = std::chrono::steady_clock::now();
         auto shader = std::make_shared<CompiledShader>();
         shader->source = source;
         Result result;
-        if (!compileShaderStages(source, text, compiler, version, cache, *shader, result.cached, result.error))
+        if (!compileShaderStages(source, text, compiler, version, cache, *shader, result.cached, result.error)) {
+            if (graph) // .kshader lines to the graph's nodes
+                result.error = mapGraphErrors(text, result.error);
             return result;
+        }
         result.shader = std::move(shader);
         result.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         return result;

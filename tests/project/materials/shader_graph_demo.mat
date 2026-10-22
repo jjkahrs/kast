@@ -1,0 +1,11 @@
+{
+  "version": 3,
+  "baseColor": [1, 1, 1, 1],
+  "roughness": 0.4,
+  "shader": "shaders/graph_demo.kshadergraph",
+  "params": {
+    "tint": [1, 0.8, 0.5],
+    "speed": 1,
+    "pattern": "textures/checker.png"
+  }
+}

@@ -9,6 +9,7 @@
 #include <scene.h>
 #include <scene_io.h>
 #include <shader.h>
+#include <shader_graph.h>
 
 #include <SDL3/SDL.h>
 #include <nlohmann/json.hpp>
@@ -118,16 +119,17 @@ bool sceneLoads(const std::filesystem::path& root, const std::string& scene, std
     return kast::loadScene(file->string(), loaded, error, nullptr, root);
 }
 
-// Compiles every .kshader among paths (game.pak's) into bytecode entries at kast::shaderPakPath, which the player loads
-// instead of compiling. Every shipped one, not only those materials name: Lua can switch a material's shader. False +
-// error naming the first file that fails and its line.
+// Compiles every .kshader and .kshadergraph among paths (game.pak's) into bytecode entries at kast::shaderPakPath, which
+// the player loads instead of compiling (a graph's keyed by its generated text, which the player generates again from
+// the shipped graph). Every shipped one, not only those materials name: Lua can switch a material's shader. False +
+// error naming the first file that fails and its line (a graph's: its node).
 bool compileShipped(const std::filesystem::path& root, const std::vector<std::string>& paths,
                     std::map<std::string, std::string>& bytecode, std::string& error)
 {
     const std::string version = shaderToolsVersion();
     std::map<std::string, kast::ShaderSource> sources; // by path
     for (const std::string& path : paths) {
-        if (!path.ends_with(".kshader"))
+        if (!path.ends_with(".kshader") && !kast::isShaderGraphPath(path))
             continue;
         std::string text, reason;
         kast::ShaderSource source;
@@ -135,9 +137,11 @@ bool compileShipped(const std::filesystem::path& root, const std::vector<std::st
         bool cached = false;
         if (!kast::readFile(root / fromUtf8(path), text))
             reason = "cannot read the file";
-        else if (kast::parseShader(text, source, reason))
-            kast::compileShaderStages(source, text, compileShader, version, root / kEditorDir / "shader_cache", compiled,
-                                      cached, reason);
+        else if (kast::shaderFileText(path, text, reason) && kast::parseShader(text, source, reason) &&
+                 !kast::compileShaderStages(source, text, compileShader, version, root / kEditorDir / "shader_cache",
+                                            compiled, cached, reason) &&
+                 kast::isShaderGraphPath(path))
+            reason = kast::mapGraphErrors(text, reason);
         if (!reason.empty()) {
             error = std::format("Build failed: shader '{}': {}", path, reason);
             return false;
