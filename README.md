@@ -21,7 +21,7 @@ themselves in their own folders: [Map Bake](services/world/tools/mapbake/README.
 - CMake 3.25+ and Ninja on `PATH`
 - vcpkg checkout with `VCPKG_ROOT` set (e.g. `C:/vcpkg`)
 
-Dependencies (`sdl3`, `bgfx`, `imgui[docking-experimental,sdl3-binding]`, `imguizmo`, `entt`, `nlohmann-json`, `luajit`, `sol2`) install automatically from `vcpkg.json`
+Dependencies (`sdl3`, `bgfx`, `imgui[docking-experimental,sdl3-binding]`, `imguizmo`, `imgui-node-editor` (the editor's Shader Graph canvas), `entt`, `nlohmann-json`, `luajit`, `sol2`) install automatically from `vcpkg.json`
 on first configure. The first configure builds bgfx's shader tools (glslang, SPIRV-Tools, ...) and takes several minutes.
 
 `CMakePresets.json` sets `VCPKG_VISUAL_STUDIO_PATH` to `C:/Program Files/Microsoft Visual Studio/2022/Community`

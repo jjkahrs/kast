@@ -13,6 +13,7 @@
 #include "gui_undo.h" // GUI Builder undo steps; links editor/gui_undo.cpp
 #include "recent_projects.h" // Project Manager list; links editor/recent_projects.cpp
 #include "shader_compiler.h" // shaderc for .kshader files; links editor/shader_compiler.cpp
+#include "shader_graph_doc.h" // the Shader Graph panels' edit model; links editor/shader_graph_doc.cpp
 #include "stats_toggle.h" // the Game panel's F3 rule; header only
 
 #include <components.h>
@@ -5764,6 +5765,7 @@ void checkShaderBuild();
 void checkShaderLibraryAsync();
 void checkShaderGraphs();
 void checkShaderGraphNodes();
+void checkShaderGraphEdits();
 void checkShaderParamEditing();
 void checkSceneCopies();
 
@@ -6339,6 +6341,7 @@ void checkShaders()
     checkShaderBuild();
     checkShaderGraphs();
     checkShaderGraphNodes();
+    checkShaderGraphEdits();
 
     // COLOR0: glTF COLOR_0 imports (RGBA8, R in the low byte); models without it and primitives are white.
     const auto model = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/vertex_colors.gltf", error);
@@ -7030,6 +7033,186 @@ void checkShaderGraphNodes()
     const std::string mapped = kast::mapGraphErrors(text, error);
     check(mapped.starts_with("node 7: line ") && contains(mapped, "undeclared identifier 'undefinedThing'"),
           std::format("its shaderc error names the Custom Expression's node: {}", mapped).c_str());
+}
+
+// The Shader Graph panels' edit API (ShaderGraphDoc): every canvas and Graph Inspector edit is one step that undo turns
+// back into the exact JSON before it (and redo into the JSON after); refused edits change nothing; the file follows
+// Save and disk changes; "New Shader Graph" compiles.
+void checkShaderGraphEdits()
+{
+    std::string error;
+    const std::filesystem::path dir = testRoot() / "kast_graph_edit";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path file = dir / "edit.kshadergraph";
+    writeFile(file, R"({"version": 1,
+        "params": [{"name": "speed", "type": "float", "default": 2.0}, {"name": "pattern", "type": "texture2D"}],
+        "nodes": [{"id": 1, "type": "output_fragment", "position": [600.0, 0.0]},
+                  {"id": 2, "type": "uv", "position": [0.0, 0.0]},
+                  {"id": 3, "type": "time", "position": [0.0, 100.0]},
+                  {"id": 4, "type": "param", "position": [0.0, 200.0], "settings": {"param": "speed"}},
+                  {"id": 5, "type": "multiply", "position": [200.0, 100.0]},
+                  {"id": 6, "type": "param", "position": [0.0, 300.0], "settings": {"param": "pattern"}},
+                  {"id": 7, "type": "constant_float", "position": [200.0, 300.0], "settings": {"value": 0.5}},
+                  {"id": 8, "type": "sample_texture", "position": [400.0, 200.0]}],
+        "links": [{"from": [3, "out"], "to": [5, "a"]}, {"from": [4, "out"], "to": [5, "b"]},
+                  {"from": [5, "out"], "to": [1, "ROUGHNESS"]}, {"from": [6, "out"], "to": [8, "texture"]},
+                  {"from": [8, "rgb"], "to": [1, "ALBEDO"]}]})");
+    ShaderGraphDoc doc;
+    check(doc.open(file, error) && !doc.dirty() && !doc.history().canUndo(), std::format("a graph opens ({})", error).c_str());
+    const auto text = [&] { return kast::shaderGraphText(doc.graph()); };
+    const auto node = [&](int id) { return std::ranges::find(doc.graph().nodes, id, &kast::GraphNode::id); };
+    const auto linked = [&](kast::GraphPin from, kast::GraphPin to) {
+        return std::ranges::any_of(doc.graph().links, [&](const kast::GraphLink& l) { return l.from == from && l.to == to; });
+    };
+    // Runs edit (true if it did something), then checks it was one step that undo and redo replay exactly.
+    const auto step = [&](const char* what, const std::function<bool()>& edit) {
+        const std::string before = text();
+        const size_t steps = doc.history().size();
+        const bool done = edit();
+        const std::string after = text();
+        kast::ShaderGraph reread;
+        check(done && after != before && doc.history().size() == steps + 1 && doc.dirty() &&
+                  kast::parseShaderGraph(after, reread, error) && kast::shaderGraphText(reread) == after,
+              std::format("{}: one step, and the graph still parses ({})", what, error).c_str());
+        doc.undo();
+        check(text() == before, std::format("{}: undo restores the exact JSON before it", what).c_str());
+        doc.redo();
+        check(text() == after, std::format("{}: redo restores the exact JSON after it", what).c_str());
+    };
+    // A refused edit: false + its message, nothing changed, no step.
+    const auto refused = [&](const char* what, const std::function<bool()>& edit, const std::string& message) {
+        const std::string before = text();
+        const size_t steps = doc.history().size();
+        error.clear();
+        check(!edit() && text() == before && doc.history().size() == steps && contains(error, message),
+              std::format("{} is refused: '{}'", what, error).c_str());
+    };
+
+    int added = 0;
+    step("add", [&] { return (added = doc.addNode("add", {300.0f, 400.0f})) == 9; });
+    check(node(added)->position == std::array{300.0f, 400.0f} && node(added)->settings.empty(), "add: at its position");
+    step("add a Param node with its setting", [&] { return doc.addNode("param", {0.0f, 400.0f}, {{"param", "speed"}}) == 10; });
+    check(doc.addNode("blur", {0.0f, 0.0f}, {}, &error) == 0 && contains(error, "unknown node type"), "an unknown type adds nothing");
+    step("link", [&] { return doc.link({2, "out"}, {added, "a"}, error); });
+    check(linked({2, "out"}, {added, "a"}), "link: there");
+    step("relink replaces the input's link", [&] { return doc.link({7, "out"}, {added, "a"}, error); });
+    check(linked({7, "out"}, {added, "a"}) && !linked({2, "out"}, {added, "a"}), "relink: the old link went");
+    refused("a texture into a number", [&] { return doc.link({6, "out"}, {added, "b"}, error); }, "texture2D can't go into");
+    refused("a number into a texture", [&] { return doc.link({7, "out"}, {8, "texture"}, error); }, "can't go into a texture2D");
+    refused("pins that don't exist", [&] { return doc.link({1, "ALBEDO"}, {5, "a"}, error); }, "no such pins");
+    step("link into a later node", [&] { return doc.link({added, "out"}, {5, "a"}, error); });
+    refused("a link closing a cycle", [&] { return doc.link({5, "out"}, {added, "b"}, error); }, "cycle");
+    step("unlink", [&] { return doc.unlink({5, "a"}); });
+    check(!doc.unlink({5, "a"}), "unlinking a free input does nothing");
+    step("move", [&] { return doc.move({{added, {320.0f, 420.0f}}, {7, {210.0f, 310.0f}}}); });
+    check(node(added)->position == std::array{320.0f, 420.0f} && node(7)->position == std::array{210.0f, 310.0f},
+          "move: both nodes where they went");
+    step("a drag is one step", [&] {
+        doc.beginGesture("Move");
+        for (float x = 0.0f; x < 5.0f; x += 1.0f)
+            doc.move({{added, {320.0f + x, 420.0f}}});
+        doc.endGesture();
+        return node(added)->position[0] == 324.0f;
+    });
+    step("a setting edit from activation to release is one step", [&] {
+        doc.beginGesture("Edit value");
+        const bool ok = doc.setSetting(7, "value", 0.6, error) && doc.setSetting(7, "value", 0.75, error);
+        doc.endGesture();
+        return ok && node(7)->settings.at("value") == 0.75;
+    });
+    step("add a Swizzle", [&] { return doc.addNode("swizzle", {0.0f, 500.0f}) == 11; });
+    step("a string setting", [&] { return doc.setSetting(11, "mask", "zyx", error); });
+    refused("a bad swizzle mask", [&] { return doc.setSetting(11, "mask", "xq", error); }, "mask: must be 1 to 4");
+    refused("an unknown setting", [&] { return doc.setSetting(7, "colour", 1.0, error); }, "no setting 'colour'");
+    step("a constant input", [&] { return doc.setInput(added, "b", {0.25f, 0.5f, 1.0f}, error); });
+    refused("a constant too wide", [&] { return doc.setInput(added, "b", {1, 2, 3, 4, 5}, error); }, "nodes[");
+    step("add a Custom Expression", [&] {
+        return doc.addNode(kast::kCustomExpression, {0.0f, 600.0f},
+                           {{"inputs", "float x"}, {"outputs", "float y"}, {"code", "y = x * 2.0;"}}) == 12;
+    });
+    step("link it", [&] { return doc.link({7, "out"}, {12, "x"}, error); });
+    step("a Custom Expression's pins: links to pins it lost go", [&] { return doc.setSetting(12, "inputs", "vec3 z", error); });
+    check(!linked({7, "out"}, {12, "x"}), "its old input's link went");
+    refused("a malformed Custom Expression pin list", [&] { return doc.setSetting(12, "inputs", "vec5 a", error); }, "inputs:");
+    std::vector<int> pasted;
+    const std::string clip = doc.copy({3, 4, 5});
+    step("paste: fresh ids, the links between them kept, top-left at the cursor", [&] {
+        pasted = doc.paste(clip, {1000.0f, 1000.0f}, error);
+        return pasted == std::vector{13, 14, 15};
+    });
+    check(linked({14, "out"}, {15, "b"}) && !linked({15, "out"}, {1, "ROUGHNESS"}) &&
+              node(13)->position == std::array{1000.0f, 1000.0f} && node(15)->position == std::array{1200.0f, 1000.0f} &&
+              node(14)->settings.at("param") == "speed",
+          "paste: internal links on the new ids, links out of the copy dropped, positions offset");
+    check(doc.paste("not a graph", {0.0f, 0.0f}, error).empty() && contains(error, "no shader graph nodes"),
+          "pasting text that isn't graph nodes adds nothing");
+    step("delete: the node and its links", [&] { return doc.remove({5}); });
+    check(node(5) == doc.graph().nodes.end() &&
+              std::ranges::none_of(doc.graph().links, [](const kast::GraphLink& l) { return l.from.node == 5 || l.to.node == 5; }),
+          "delete: no node 5 or links to it");
+    step("add a param", [&] { return doc.addParam(kast::ShaderParamType::Color) == 2 && doc.graph().params[2].name == "param"; });
+    kast::ShaderParam renamed = doc.graph().params[0];
+    renamed.name = "rate";
+    step("rename a param: its Param nodes follow", [&] { return doc.setParam(0, renamed, error); });
+    check(node(4)->settings.at("param") == "rate" && node(14)->settings.at("param") == "rate", "rename: Param nodes renamed");
+    renamed.name = "pattern";
+    refused("a param named like another", [&] { return doc.setParam(0, renamed, error); }, "already is a param");
+    renamed.name = "2fast";
+    refused("a param name that isn't an identifier", [&] { return doc.setParam(0, renamed, error); }, "letters, digits");
+    step("link the float Param", [&] { return doc.link({4, "out"}, {added, "a"}, error); });
+    kast::ShaderParam texture = doc.graph().params[0];
+    texture.type = kast::ShaderParamType::Texture2D;
+    step("retype a param: links its type can't make go", [&] { return doc.setParam(0, texture, error); });
+    check(!linked({4, "out"}, {added, "a"}), "retype: the float link from the now texture Param went");
+    step("remove a param", [&] { return doc.removeParam(2); });
+    step("add a comment", [&] { return doc.addComment({"Scroll", {-20.0f, -40.0f, 400.0f, 300.0f}}) == 0; });
+    step("resize a comment", [&] { return doc.setComment(0, {"Scroll UV", {-20.0f, -40.0f, 500.0f, 320.0f}}); });
+    step("move a comment with its nodes", [&] { return doc.move({{2, {10.0f, 0.0f}}}, {{0, {-10.0f, -40.0f, 500.0f, 320.0f}}}); });
+    step("delete a comment", [&] { return doc.remove({}, {}, {0}); });
+
+    // File: Save clears the dirty flag and writes the graph; disk changes reload when clean, else are a conflict.
+    check(doc.dirty() && doc.save(error) && !doc.dirty(), std::format("Save ({})", error).c_str());
+    std::string saved;
+    check(kast::readFile(file, saved) && saved == text(), "Save writes the graph's JSON");
+    doc.undo();
+    check(doc.dirty(), "undo past the save point: dirty");
+    doc.redo();
+    check(!doc.dirty(), "redo back to it: clean");
+    check(doc.poll() == ShaderGraphDoc::DiskChange::None, "an unchanged file: nothing to do");
+    kast::ShaderGraph changed;
+    kast::parseShaderGraph(saved, changed, error);
+    changed.nodes.erase(changed.nodes.begin()); // node 1, removed by another program
+    std::erase_if(changed.links, [](const kast::GraphLink& l) { return l.to.node == 1 || l.from.node == 1; });
+    rewrite(file, kast::shaderGraphText(changed));
+    check(doc.poll() == ShaderGraphDoc::DiskChange::Reloaded && node(1) == doc.graph().nodes.end() &&
+              !doc.history().canUndo() && !doc.dirty(),
+          "changed on disk while clean: reloaded, history cleared");
+    doc.addNode("uv", {0.0f, 0.0f});
+    rewrite(file, saved);
+    check(doc.poll() == ShaderGraphDoc::DiskChange::Conflict && doc.dirty() && node(1) == doc.graph().nodes.end(),
+          "changed on disk while dirty: a conflict, the edits kept");
+    check(doc.poll() == ShaderGraphDoc::DiskChange::None, "the conflict is reported once per change");
+    check(doc.open(file, error) && !doc.dirty() && node(1) != doc.graph().nodes.end() && !doc.history().canUndo(),
+          "Reload: the file's graph, history cleared");
+
+    // "New Shader Graph": the starter generates with no issue, parses and compiles.
+    std::filesystem::path created;
+    std::string kshader;
+    std::vector<std::string> warnings;
+    kast::ShaderSource source;
+    std::vector<uint8_t> bytecode;
+    const bool compiled = writeNewShaderGraph(dir, created, error) && created.filename() == "new_shader_graph.kshadergraph" &&
+                          kast::readFile(created, kshader) &&
+                          kast::shaderFileText(created.string(), kshader, error, &warnings) && warnings.empty() &&
+                          kast::parseShader(kshader, source, error) && source.params.size() == 1 &&
+                          source.params[0].name == "tint" &&
+                          compileShader(source, kast::ShaderStage::Fragment, bytecode, error) && !bytecode.empty();
+    check(compiled, std::format("New Shader Graph writes a graph that compiles, without warnings ({}{})", error,
+                                warnings.empty() ? "" : warnings[0]).c_str());
+    std::filesystem::path second;
+    check(writeNewShaderGraph(dir, second, error) && second.filename() == "new_shader_graph_2.kshadergraph",
+          "a second New Shader Graph gets the next free name");
+    removeTree(dir);
 }
 
 // Built-in primitive and terrain tangents: unit length, perpendicular to the normal, handedness +-1, along texture u.

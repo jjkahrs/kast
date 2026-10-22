@@ -2027,7 +2027,7 @@ void Panels::refreshAssets(const Document& doc)
         assetRenaming_.clear();
 }
 
-void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ExternalEditor& editor)
+void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ExternalEditor& editor)
 {
     if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
         refreshAssets(doc);
@@ -2039,7 +2039,7 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, Exte
                                   : !files.idle()                ? "Close the open dialog first"
                                                                  : nullptr;
             for (const AssetEntry& entry : assets_)
-                drawAssetNode(doc, files, gui, editor, entry, blocker);
+                drawAssetNode(doc, files, gui, graphs, editor, entry, blocker);
 
             // The rest of the panel: click clears selection, drop moves to the root, right-click creates at the root.
             ImVec2 rest = ImGui::GetContentRegionAvail();
@@ -2114,10 +2114,10 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, Exte
         }
     }
     ImGui::End();
-    applyAssetEdit(doc, gui);
+    applyAssetEdit(doc, gui, graphs);
 }
 
-void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ExternalEditor& editor,
+void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ExternalEditor& editor,
                            const AssetEntry& entry, const char* blocker)
 {
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
@@ -2147,6 +2147,9 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
     if (!entry.folder && hasExtension(entry.name, ".rml") && ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
         gui.open(assetsRoot_ / fromUtf8(entry.path));
+    if (!entry.folder && hasExtension(entry.name, kast::kShaderGraphExtension) && ImGui::IsItemHovered() &&
+        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        graphs.open(assetsRoot_ / fromUtf8(entry.path));
     if (!entry.folder && isTextAsset(entry.name) && !hasExtension(entry.name, ".rml") && ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) // .rml: the GUI Builder above; its menu opens it here
         editor.open(assetsRoot_ / fromUtf8(entry.path));
@@ -2199,7 +2202,7 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
 
     if (open && entry.folder) {
         for (const AssetEntry& child : entry.children)
-            drawAssetNode(doc, files, gui, editor, child, blocker);
+            drawAssetNode(doc, files, gui, graphs, editor, child, blocker);
         ImGui::TreePop();
     }
     ImGui::PopID();
@@ -2252,6 +2255,9 @@ void Panels::drawAssetCreateMenu(const std::string& folder, const char* blocker)
     if (ImGui::MenuItem("Shader", nullptr, false, !blocker))
         assetEdit_ = {AssetEdit::Op::NewShader, folder};
     disabledTooltip(blocker);
+    if (ImGui::MenuItem("Shader Graph", nullptr, false, !blocker))
+        assetEdit_ = {AssetEdit::Op::NewShaderGraph, folder};
+    disabledTooltip(blocker);
     ImGui::EndMenu();
 }
 
@@ -2302,7 +2308,7 @@ void Panels::assetsFailed(std::string error)
     assetsErrorRequested_ = true;
 }
 
-void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui)
+void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs)
 {
     const AssetEdit edit = std::exchange(assetEdit_, AssetEdit{});
     if (edit.op == AssetEdit::Op::None || !doc.project || doc.play != PlayState::Stopped)
@@ -2399,6 +2405,21 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui)
         }
         break;
     }
+    case AssetEdit::Op::NewShaderGraph: {
+        const std::filesystem::path dir = edit.path.empty() ? root : source;
+        std::filesystem::path file;
+        if (writeNewShaderGraph(dir, file, error)) {
+            const std::string name = utf8(file.filename());
+            assetExpand_ = edit.path;
+            selected = joinAsset(edit.path, name);
+            kast::log::info(std::format("Created shader graph '{}'", selected));
+            refreshAssets(doc);
+            selectAsset(selected);
+            startAssetRename(selected, name);
+            return;
+        }
+        break;
+    }
     case AssetEdit::Op::NewPrefab: {
         std::string path;
         if (createPrefabFrom(doc, edit.entity, edit.path, path, error)) {
@@ -2449,6 +2470,7 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui)
                                         edit.path, selected));
             assetSelected_ = selected;
             gui.remap(source, dest);
+            graphs.remap(source, dest);
             if (scenePath)
                 doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
             remapScenePaths(doc, edit.path, selected); // systems, MeshRenderer materials, models, overrides, prefabs

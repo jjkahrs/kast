@@ -8,6 +8,7 @@ find_package(SDL3 CONFIG REQUIRED)
 find_package(bgfx CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(imguizmo CONFIG REQUIRED)
+find_package(unofficial-imgui-node-editor CONFIG REQUIRED) # the Shader Graph canvas: editor only
 find_package(EnTT CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(sol2 CONFIG REQUIRED)
@@ -172,7 +173,7 @@ target_link_libraries(kast_player PRIVATE kast_engine SDL3::SDL3)
 add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
-  editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/external_editor.cpp editor/editor_settings.cpp
+  editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/shader_graph_doc.cpp editor/shader_graph_editor.cpp editor/external_editor.cpp editor/editor_settings.cpp
   editor/shader_compiler.cpp editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp editor/zone_cli.cpp
   editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
@@ -180,7 +181,8 @@ target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENE
 # The Online panel's default compose folder: services/world of this source tree, if it is still there at run time.
 target_compile_definitions(kast_editor PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_editor PRIVATE kast_engine kast_zone SDL3::SDL3 imgui::imgui imguizmo::imguizmo pugixml::pugixml shell32) # shell32: Recycle Bin
+target_link_libraries(kast_editor PRIVATE kast_engine kast_zone SDL3::SDL3 imgui::imgui imguizmo::imguizmo
+                      unofficial::imgui-node-editor::imgui-node-editor pugixml::pugixml shell32) # shell32: Recycle Bin
 add_dependencies(kast_editor kast_player kast_shader_tools) # Build copies kast_player.exe from next to kast_editor.exe
 
 # --- zone: the zone (map) document, file and terrain editing logic (engine/zone), no window. Its own library, not
@@ -202,8 +204,8 @@ target_include_directories(kast_zone_self_check SYSTEM PRIVATE "${Stb_INCLUDE_DI
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
 add_executable(kast_self_check tests/self_check.cpp tests/net_self_check.cpp tests/net_test_util.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp
-  editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/external_editor.cpp editor/editor_settings.cpp
-  editor/shader_compiler.cpp editor/online.cpp "${KAST_MANIFEST}")
+  editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/shader_graph_doc.cpp editor/external_editor.cpp
+  editor/editor_settings.cpp editor/shader_compiler.cpp editor/online.cpp "${KAST_MANIFEST}")
 target_include_directories(kast_self_check PRIVATE editor)
 add_dependencies(kast_self_check kast_shader_tools) # the .kshader checks compile with them
 target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project"
@@ -2428,6 +2430,9 @@ include(cmake/starter_mmo_tests.cmake)
 
 # GPU particles: screenshots read back at known pixels, and kast_self_check --particles.
 include(cmake/particle_tests.cmake)
+
+# Shader Graph panels: --open-graph / --graph-* screenshots, Save, Assets > Create > Shader Graph, reload on disk change.
+include(cmake/shader_graph_tests.cmake)
 
 # Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.
 get_property(kast_tests DIRECTORY PROPERTY TESTS)

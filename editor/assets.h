@@ -62,6 +62,9 @@ void pushMaterialStep(UndoStack& history, const std::filesystem::path& file, std
 // Creates "new_shader.kshader" (else "new_shader_2.kshader", ...) in dir: a commented starter with params, a
 // fragment() and a commented-out vertex(). file is where.
 bool writeNewShader(const std::filesystem::path& dir, std::filesystem::path& file, std::string& error);
+// Creates "new_shader_graph.kshadergraph" (else "new_shader_graph_2.kshadergraph", ...) in dir: starterShaderGraph(), a
+// Color param into a Fragment Output's ALBEDO. file is where.
+bool writeNewShaderGraph(const std::filesystem::path& dir, std::filesystem::path& file, std::string& error);
 // Rewrites the paths of every valid .mat under root that point at from or inside it (project-relative, as
 // remapProjectPaths): its textures, texture2D param values and .kshader. Returns the .mat files changed
 // (project-relative); a file that can't be written is logged.

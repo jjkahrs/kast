@@ -10,6 +10,7 @@
 #include "panels.h"
 #include "recent_projects.h"
 #include "shader_compiler.h"
+#include "shader_graph_editor.h"
 #include "ui_common.h"
 #include "viewport.h"
 #include "zone_cli.h"
@@ -68,9 +69,12 @@ constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--screenshot-on-log frames,text] [--size WxH] [--window-pos X,Y] [--ui-scale F] [--projects-file list.json] "
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
-    "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader:folder] [--assets-select path] [--material-set field=json] [--material-undo N] [--material-redo N] "
+    "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-select path] [--material-set field=json] [--material-undo N] [--material-redo N] "
     "[--focus-panel Window] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
-    "[--gui-add Panel|Text|Button] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] [--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy]] [--sim-key frame,key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
+    "[--gui-add Panel|Text|Button] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] "
+    "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
+    "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
+    "[--graph-save] [--graph-add-menu N.pin|/] [--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy]] [--sim-key frame,key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
     "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [zone edits] | "
@@ -147,6 +151,10 @@ struct Options {
     int guiUndo = 0, guiRedo = 0;  // then GUI Undo N times, then Redo N times
     bool guiSave = false;          // then save the GUI as its Save button does
     std::string guiClick;           // with --play: click the game GUI element with this id (frame kAddComponentPopupFrame)
+    std::string openGraph;          // open this .kshadergraph in the Shader Graph panels (relative: to the project, else the cwd)
+    // --graph-* edits of it (and later --open-graph), flag and value in command-line order, run as the panels do them
+    // (runGraphStep) once the canvas is laid out.
+    std::vector<std::pair<std::string, std::string>> graphSteps;
     std::optional<SimMouse> simMouse; // push these SDL mouse events on the Game panel (--play) or Scene view (the cursor lock isn't applied)
     std::vector<SimKey> simKeys;      // with --play: these key presses
     std::string simOnLog;             // --sim-on-log: simMouse's and simKeys' frames count from the first log line with this
@@ -321,14 +329,15 @@ bool parseGuiKind(std::string_view label, std::optional<GuiKind>& out)
     return false;
 }
 
-// "system:<folder>", "fsm:<folder>", "gui:<folder>" or "material:<folder>".
+// "system:<folder>", "fsm:<folder>", "gui:<folder>", "material:<folder>", "shader:<folder>" or "shadergraph:<folder>".
 bool parseAssetCreate(std::string_view value, std::optional<std::pair<Panels::AssetCreate, std::string>>& out)
 {
     constexpr std::pair<std::string_view, Panels::AssetCreate> kinds[] = {{"system:", Panels::AssetCreate::System},
                                                                           {"fsm:", Panels::AssetCreate::StateMachine},
                                                                           {"gui:", Panels::AssetCreate::Gui},
                                                                           {"material:", Panels::AssetCreate::Material},
-                                                                          {"shader:", Panels::AssetCreate::Shader}};
+                                                                          {"shader:", Panels::AssetCreate::Shader},
+                                                                          {"shadergraph:", Panels::AssetCreate::ShaderGraph}};
     for (const auto& [prefix, kind] : kinds)
         if (value.starts_with(prefix)) {
             out.emplace(kind, std::string(value.substr(prefix.size())));
@@ -400,6 +409,23 @@ std::optional<Options> parseArgs(int argc, char** argv)
             ++i;
         } else if (arg == "--open-gui" && hasValue) {
             options.openGui = argv[++i];
+        } else if (arg == "--open-graph" && hasValue && options.openGraph.empty()) {
+            options.openGraph = argv[++i];
+        } else if ((arg == "--open-graph" || arg == "--graph-add" || arg == "--graph-link" || arg == "--graph-unlink" ||
+                    arg == "--graph-select" || arg == "--graph-delete" || arg == "--graph-set" || arg == "--graph-comment" ||
+                    arg == "--graph-paste" || arg == "--graph-add-menu") &&
+                   hasValue) {
+            options.graphSteps.emplace_back(arg, argv[++i]);
+        } else if ((arg == "--graph-undo" || arg == "--graph-redo") && hasValue) {
+            int count = 0;
+            if (!parsePositive(argv[++i], count)) {
+                kast::log::error(std::format("Invalid {} '{}', expected a positive count", arg, argv[i]));
+                return std::nullopt;
+            }
+            for (int n = 0; n < count; ++n)
+                options.graphSteps.emplace_back(arg, "");
+        } else if (arg == "--graph-save") {
+            options.graphSteps.emplace_back(arg, "");
         } else if (arg == "--gui-select" && hasValue) {
             options.guiSelect = argv[++i];
         } else if (arg == "--gui-click" && hasValue) {
@@ -584,6 +610,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
                              options.guiAdd || options.guiSave || !options.guiClick.empty() || options.openPreferences ||
+                             !options.openGraph.empty() ||
                              !options.openExternal.empty() || !options.dropModel.empty() || options.logFps ||
                              !options.prefabSteps.empty() || !options.assetsDelete.empty() || !options.inspectorApplyMenu.empty() ||
                              options.prefabBackPrompt ||
@@ -596,7 +623,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
                          "--assets-menu, "
                          "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
-                         "--gui-click, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
+                         "--gui-click, --open-graph, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
                          "steps, --scene-undo, --scene-redo, --assets-delete, --inspector-apply-menu, --file-save and the zone flags require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
@@ -608,6 +635,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
     if ((!options.guiSelect.empty() || options.guiPick || options.guiAdd || options.guiUndo || options.guiRedo ||
          options.guiSave) && options.openGui.empty()) {
         kast::log::error("--gui-select, --gui-pick, --gui-add, --gui-undo, --gui-redo and --gui-save require --open-gui <file.rml>");
+        return std::nullopt;
+    }
+    if (!options.graphSteps.empty() && options.openGraph.empty()) {
+        kast::log::error("--graph-* flags require --open-graph <file.kshadergraph>");
         return std::nullopt;
     }
     if (!options.guiClick.empty() && !options.play) {
@@ -666,6 +697,8 @@ void buildDefaultLayout(ImGuiID dockspace)
     ImGui::DockBuilderDockWindow(GuiBuilder::kInspectorWindow, right);
     ImGui::DockBuilderDockWindow(GuiBuilder::kStyleWindow, bottom);
     ImGui::DockBuilderDockWindow(GuiBuilder::kPreviewWindow, center);
+    ImGui::DockBuilderDockWindow(ShaderGraphEditor::kCanvasWindow, center);
+    ImGui::DockBuilderDockWindow(ShaderGraphEditor::kInspectorWindow, right);
     ImGui::DockBuilderFinish(dockspace);
 }
 
@@ -680,11 +713,16 @@ std::string focusedWindow()
 }
 
 // The document Edit > Undo / Redo and the shortcuts act on, by the focused window (menus and popups: the one before).
-// The GUI Builder's panels edit the open GUI, the Zone tab the open map, the Inspector showing a material that .mat;
+// The GUI Builder's panels edit the open GUI, the Shader Graph panels the open graph, the Zone tab the open map, the Inspector showing a material that .mat;
 // every other window edits the scene (or the open prefab).
-UndoTarget focusedUndoTarget(const std::string& window, Document& doc, GuiBuilder& guiBuilder, ZoneSession& zone,
-                             Panels& panels)
+UndoTarget focusedUndoTarget(const std::string& window, Document& doc, GuiBuilder& guiBuilder, ShaderGraphEditor& graphs,
+                             ZoneSession& zone, Panels& panels)
 {
+    if (window.ends_with(ShaderGraphEditor::kCanvasWindow) || window.ends_with(ShaderGraphEditor::kInspectorWindow))
+        return {.history = &graphs.history(),
+                .undo = [&graphs] { graphs.undo(); },
+                .redo = [&graphs] { graphs.redo(); },
+                .blocked = doc.play != PlayState::Stopped};
     if (UndoStack* materials = panels.materialHistory(); materials && window == "Inspector")
         return {.history = materials, .undo = [materials] { materials->undo(); }, .redo = [materials] { materials->redo(); }};
     constexpr const char* kGuiWindows[] = {GuiBuilder::kHierarchyWindow, GuiBuilder::kInspectorWindow,
@@ -851,6 +889,143 @@ void drawGuiBuilder(GuiBuilder& builder)
     dockBeside("Scene", GuiBuilder::kPreviewWindow);
     builder.drawPreview();
     builder.drawModals();
+}
+
+// The Shader Graph panels, docked beside their scene counterparts in layouts saved before they existed: Shader Graph by
+// Scene, Graph Inspector by Inspector.
+void drawShaderGraph(ShaderGraphEditor& graphs)
+{
+    for (const auto& [existing, window] : {std::pair{"Scene", ShaderGraphEditor::kCanvasWindow},
+                                           std::pair{"Inspector", ShaderGraphEditor::kInspectorWindow}}) {
+        if (const ImGuiWindowSettings* settings = ImGui::FindWindowSettingsByID(ImHashStr(existing));
+            settings && !ImGui::FindWindowSettingsByID(ImHashStr(window)))
+            ImGui::SetNextWindowDockID(settings->DockId, ImGuiCond_FirstUseEver);
+        if (window == ShaderGraphEditor::kCanvasWindow)
+            graphs.drawCanvas();
+        else
+            graphs.drawInspector();
+    }
+    graphs.drawModals();
+}
+
+// "N.pin" (a graph node id and one of its pins); nullopt if it doesn't parse.
+std::optional<kast::GraphPin> parseGraphPin(std::string_view text)
+{
+    const size_t dot = text.find('.');
+    kast::GraphPin pin;
+    if (dot == std::string_view::npos || dot + 1 == text.size() || !parsePositive(text.substr(0, dot), pin.node))
+        return std::nullopt;
+    pin.pin = std::string(text.substr(dot + 1));
+    return pin;
+}
+
+// Comma-separated numbers ("1,2.5,3"); false if any doesn't parse.
+bool parseNumbers(std::string_view text, std::vector<float>& out)
+{
+    for (const auto part : std::views::split(text, ',')) {
+        const std::string_view value(part.begin(), part.end());
+        float number = 0.0f;
+        const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), number);
+        if (ec != std::errc{} || ptr != value.data() + value.size())
+            return false;
+        out.push_back(number);
+    }
+    return true;
+}
+
+// One --open-graph / --graph-* step, as the Shader Graph panels do it. selected: the --graph-select nodes (--graph-paste
+// copies them). Logs what it did, or why not (false).
+bool runGraphStep(ShaderGraphEditor& graphs, const std::filesystem::path& project, const std::string& flag,
+                  const std::string& value, std::vector<int>& selected)
+{
+    ShaderGraphDoc& doc = graphs.doc();
+    std::string error = "expected " + std::string(flag == "--graph-add"       ? "type[,x,y]"
+                                                  : flag == "--graph-link"    ? "N.pin,M.pin"
+                                                  : flag == "--graph-set"     ? "N.setting=json"
+                                                  : flag == "--graph-comment" ? "title,x,y,w,h"
+                                                  : flag == "--graph-paste"   ? "x,y"
+                                                                              : "a value");
+    bool ok = false;
+    const size_t comma = value.find(',');
+    if (flag == "--open-graph") {
+        std::filesystem::path file = std::filesystem::path(reinterpret_cast<const char8_t*>(value.c_str()));
+        graphs.open(std::filesystem::absolute(file.is_relative() && !project.empty() ? project / file : file).lexically_normal());
+        return true;
+    } else if (flag == "--graph-add") {
+        std::vector<float> at;
+        if (comma == std::string::npos || (parseNumbers(std::string_view(value).substr(comma + 1), at) && at.size() == 2)) {
+            const std::array<float, 2> position = at.empty() ? graphs.viewCenter() : std::array{at[0], at[1]};
+            const int id = doc.addNode(value.substr(0, comma), position, {}, &error);
+            if ((ok = id != 0))
+                kast::log::info(std::format("--graph-add {}: node {}", value, id));
+        }
+    } else if (flag == "--graph-link") {
+        const auto from = parseGraphPin(std::string_view(value).substr(0, comma));
+        const auto to = comma == std::string::npos ? std::nullopt : parseGraphPin(std::string_view(value).substr(comma + 1));
+        if (from && to && !(ok = doc.link(*from, *to, error))) {
+            graphs.showRefusedLink(*from, *to, error); // the red link and why, as a refused drag shows them
+            kast::log::warn(std::format("--graph-link {} refused: {}", value, error));
+            return true;
+        }
+    } else if (flag == "--graph-unlink") {
+        const auto to = parseGraphPin(value);
+        error = "no link into that input";
+        ok = to && doc.unlink(*to);
+    } else if (flag == "--graph-select" || flag == "--graph-delete") {
+        std::vector<float> ids;
+        error = "expected N[,M...]";
+        if ((ok = parseNumbers(value, ids))) {
+            selected.clear();
+            for (float id : ids)
+                selected.push_back(static_cast<int>(id));
+            if (flag == "--graph-select")
+                graphs.select(selected);
+            else
+                ok = doc.remove(selected);
+        }
+    } else if (flag == "--graph-set") {
+        const size_t dot = value.find('.'), equals = value.find('=');
+        int node = 0;
+        const nlohmann::ordered_json json = equals == std::string::npos ? nlohmann::ordered_json()
+                                            : nlohmann::ordered_json::parse(value.substr(equals + 1), nullptr, false);
+        if (dot < equals && equals != std::string::npos && parsePositive(std::string_view(value).substr(0, dot), node) &&
+            !json.is_discarded())
+            ok = doc.setSetting(node, value.substr(dot + 1, equals - dot - 1), json, error);
+    } else if (flag == "--graph-comment") {
+        std::vector<float> rect;
+        if (comma != std::string::npos && parseNumbers(std::string_view(value).substr(comma + 1), rect) && rect.size() == 4) {
+            doc.addComment({value.substr(0, comma), {rect[0], rect[1], rect[2], rect[3]}});
+            ok = true;
+        }
+    } else if (flag == "--graph-paste") {
+        std::vector<float> at;
+        if (parseNumbers(value, at) && at.size() == 2) {
+            const std::vector<int> pasted = doc.paste(doc.copy(selected), {at[0], at[1]}, error);
+            if ((ok = !pasted.empty())) {
+                graphs.select(pasted);
+                std::string ids;
+                for (int id : pasted)
+                    ids += (ids.empty() ? "" : ",") + std::to_string(id);
+                kast::log::info(std::format("--graph-paste {}: nodes {}", value, ids));
+            }
+        }
+    } else if (flag == "--graph-add-menu") {
+        const auto pin = value == "/" ? std::nullopt : parseGraphPin(value);
+        error = "expected N.pin or /";
+        if ((ok = value == "/" || pin))
+            graphs.openAddMenu(pin);
+    } else if (flag == "--graph-undo" || flag == "--graph-redo") {
+        error = "nothing to " + flag.substr(8);
+        ok = flag == "--graph-undo" ? graphs.history().canUndo() : graphs.history().canRedo();
+        if (ok)
+            flag == "--graph-undo" ? graphs.undo() : graphs.redo();
+    } else if (flag == "--graph-save") {
+        error = "the write failed";
+        ok = graphs.save();
+    }
+    if (!ok)
+        kast::log::error(std::format("{} {}: {}", flag, value, error));
+    return ok;
 }
 
 // "ID[:Component[.field] | :#local][@hop]" (--prefab-revert / --prefab-apply): whole-instance, deleted-child, component
@@ -1185,6 +1360,7 @@ int main(int argc, char** argv)
     // An active Zone tab tool gets the Scene view's left mouse instead of picking and the gizmo.
     viewport.input = [&](const SceneViewport::Input& input) { return showZone() && zonePanel.sceneInput(zone, input); };
     GuiBuilder guiBuilder(kGuiPreviewView);
+    ShaderGraphEditor graphs;
     UiScale uiScale(options->uiScale);
     FrameLimit frames(options->frames, options->screenshot);
     if (options->screenshotOnLog)
@@ -1240,6 +1416,11 @@ int main(int argc, char** argv)
             if (!options->guiSelect.empty() && !guiBuilder.selectById(options->guiSelect))
                 kast::log::error(std::format("--gui-select {}: no element with that id", options->guiSelect));
         }
+        if (!options->openGraph.empty()) {
+            std::vector<int> none;
+            runGraphStep(graphs, doc.project ? doc.project->root : std::filesystem::path(), "--open-graph",
+                         options->openGraph, none);
+        }
         if (options->guiPreviewSize)
             guiBuilder.setPreviewSize(options->guiPreviewSize->first, options->guiPreviewSize->second);
         files.setWindow(window);
@@ -1282,16 +1463,18 @@ int main(int argc, char** argv)
             panels.refreshAssets(doc);
             game.gui().reloadChanged(); // Play-mode GUI hot reload
             guiBuilder.poll();
+            graphs.poll();
         }
 
         bool openPreferences = options->openPreferences && frames.frame() == kAddComponentPopupFrame;
         if (std::string window = focusedWindow(); !window.empty())
             undoWindow = std::move(window);
-        const UndoTarget undo = focusedUndoTarget(undoWindow, doc, guiBuilder, zone, panels);
+        const UndoTarget undo = focusedUndoTarget(undoWindow, doc, guiBuilder, graphs, zone, panels);
         undoShortcuts(undo, files);
         // With --open-gui or --focus-panel: after the panel took the focus (which closes menus) and the --gui-* edits.
         const int openMenuFrame =
-            kAddComponentPopupFrame + (options->openGui.empty() && options->focusPanel.empty() ? 0 : 10);
+            kAddComponentPopupFrame +
+            (options->openGui.empty() && options->openGraph.empty() && options->focusPanel.empty() ? 0 : 10);
         drawMenuBar(files, doc, undo, frames.frame() == openMenuFrame ? options->openMenu : std::string(),
                     openPreferences, showLighting, showPostProcessing, showPhysics, showMixer, showNetwork, showOnline);
         const ImGuiID dockspace = ImGui::GetID("MainDockSpace");
@@ -1329,6 +1512,15 @@ int main(int argc, char** argv)
             files.save();
         if (!options->openGui.empty() && frames.frame() == kAddComponentPopupFrame)
             guiBuilder.focusPanels(); // again: the first frames' docking undid the focus open() asked for
+        if (!options->openGraph.empty() && frames.frame() == kAddComponentPopupFrame)
+            graphs.focusPanels(); // again: the first frames' docking undid the focus open() asked for
+        if (frames.frame() == kAddComponentPopupFrame + 7) { // the canvas is laid out (its center, the add menu)
+            std::vector<int> selected;
+            for (const auto& [flag, value] : options->graphSteps)
+                runGraphStep(graphs, doc.project ? doc.project->root : std::filesystem::path(), flag, value, selected);
+            if (!options->graphSteps.empty())
+                graphs.frameAll(); // the screenshot shows what they added
+        }
         if (options->guiPick && frames.frame() == kAddComponentPopupFrame + 6) { // the preview has been laid out
             const auto [x, y] = *options->guiPick;
             if (guiBuilder.pick(static_cast<float>(x), static_cast<float>(y)))
@@ -1405,7 +1597,7 @@ int main(int argc, char** argv)
             systems && !ImGui::FindWindowSettingsByID(ImHashStr("Components")))
             ImGui::SetNextWindowDockID(systems->DockId, ImGuiCond_FirstUseEver);
         panels.drawComponents(doc);
-        panels.drawAssets(doc, files, guiBuilder, externalEditor);
+        panels.drawAssets(doc, files, guiBuilder, graphs, externalEditor);
         // Layouts saved before the Events panel existed: dock it as a tab beside Console.
         if (const ImGuiWindowSettings* console = ImGui::FindWindowSettingsByID(ImHashStr("Console"));
             console && !ImGui::FindWindowSettingsByID(ImHashStr("Events")))
@@ -1423,12 +1615,14 @@ int main(int argc, char** argv)
         panels.drawNetwork(doc, showNetwork);
         onlinePanel.draw(doc, online, files, options->worldAddress, showOnline);
         drawGuiBuilder(guiBuilder);
+        drawShaderGraph(graphs);
         drawConsole(); // submitted after Assets, Events and State Machines so Console is the front tab on first run
         drawPreferences(externalEditor, online, preferencesDraft, composeDraft, openPreferences);
         externalEditor.poll();
         if (!ImGui::IsAnyItemActive() && !ImGuizmo::IsUsing()) {
             endSceneGesture(doc); // the field, drag or gizmo let go: its undo step is complete
             guiBuilder.endGesture();
+            graphs.endGesture(); // a drag on the canvas, or an Inspector field
         }
         files.update();
         if (game.hasInput(doc))
@@ -1470,10 +1664,11 @@ int main(int argc, char** argv)
     hooks.screenshotSaved = [&](const char*, bool saved) { frames.onScreenshotSaved(saved); };
     hooks.quitRequested = [&] {
         // A --frames run has no one to answer "Unsaved changes" (e.g. after --new-component): it always quits.
-        return (guiBuilder.onQuitRequested() && files.onQuitRequested()) || options->frames != 0;
+        return (graphs.onQuitRequested() && guiBuilder.onQuitRequested() && files.onQuitRequested()) || options->frames != 0;
     };
     hooks.shutdown = [&] {
         guiBuilder.shutdown();
+        graphs.shutdown();
         game.shutdown();
         kast::gui::shutdown();
         viewport.shutdown();

@@ -8,6 +8,7 @@
     { "name": "bgfx", "host": true, "features": ["tools"] },
     { "name": "imgui", "features": ["docking-experimental", "sdl3-binding"] },
     "imguizmo",
+    "imgui-node-editor",
     "entt",
     "nlohmann-json",
     "luajit",
