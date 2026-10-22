@@ -477,6 +477,8 @@ void Renderer::init()
     kastParams_ = bgfx::createUniform("u_kastParams", bgfx::UniformType::Vec4, kMaxShaderParams);
     for (size_t i = 0; i < kMaxShaderTextures; ++i)
         shaderTextureSamplers_[i] = bgfx::createUniform(std::format("s_kastTexture{}", i).c_str(), bgfx::UniformType::Sampler);
+    screenSampler_ = bgfx::createUniform("s_kastScreen", bgfx::UniformType::Sampler);
+    depthSampler_ = bgfx::createUniform("s_kastDepth", bgfx::UniformType::Sampler);
     if (bgfx::getCaps()->limits.maxTextureSamplers < kMaxTextureSamplers)
         log::error(std::format("This GPU takes {} textures per draw; .kshader texture2D params need {}",
                                bgfx::getCaps()->limits.maxTextureSamplers, kMaxTextureSamplers));
@@ -524,7 +526,8 @@ void Renderer::shutdown()
                                         pointColor_, emissive_, materialParams_, materialExt_, uvTransform_, time_,
                                         cameraPos_, fogColor_, fogParams_, baseColorSampler_, metallicRoughnessSampler_,
                                         normalSampler_, occlusionSampler_, emissiveSampler_, csmMtx_, csmSplits_,
-                                        csmBias_, shadowParams_, pointShadow_, csmSampler_, kastParams_})
+                                        csmBias_, shadowParams_, pointShadow_, csmSampler_, kastParams_, screenSampler_,
+                                        depthSampler_})
         bgfx::destroy(uniform);
     for (bgfx::UniformHandle uniform : pointShadowSamplers_)
         bgfx::destroy(uniform);
@@ -552,6 +555,7 @@ void Renderer::shutdown()
     bgfx::destroy(white_);
     bgfx::destroy(flatNormal_);
     bgfx::destroy(black_);
+    destroyCopies();
     sky_.shutdown();
     particles_.shutdown();
 }
@@ -815,7 +819,8 @@ void Renderer::resolveShaders(std::vector<DrawItem>& draws)
             const bool compiling = !shader && shaders().status(material.shader).state == ShaderLibrary::State::Compiling;
             std::string error;
             std::vector<std::string> unknown;
-            if (shader && !checkShaderParams(material, shader->source->source, error, unknown)) {
+            if (shader && (!checkShaderParams(material, shader->source->source, error, unknown) ||
+                           !checkShaderAlphaMode(material, shader->source->source, error))) {
                 warnOnce(std::format("Shader '{}': {}; rendering the material magenta", material.shader, error));
                 shader = nullptr;
             }
@@ -1117,6 +1122,45 @@ void Renderer::setMaterialState(const DrawItem& item)
     }
 }
 
+void Renderer::setTarget(bgfx::FrameBufferHandle target, uint16_t width, uint16_t height)
+{
+    target_ = target;
+    targetWidth_ = width;
+    targetHeight_ = height;
+}
+
+void Renderer::copyScene(bgfx::ViewId view, bgfx::FrameBufferHandle target, bool screen, bool depth)
+{
+    if (copyWidth_ != targetWidth_ || copyHeight_ != targetHeight_) {
+        destroyCopies();
+        copyWidth_ = targetWidth_;
+        copyHeight_ = targetHeight_;
+    }
+    if (screen) {
+        if (!bgfx::isValid(screenCopy_))
+            screenCopy_ = bgfx::createTexture2D(copyWidth_, copyHeight_, false, 1, bgfx::TextureFormat::RGBA16F,
+                                                BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_UVW_CLAMP);
+        bgfx::blit(view, screenCopy_, 0, 0, bgfx::getTexture(target, 0));
+        ++copies_.screen;
+    }
+    if (depth) {
+        if (!bgfx::isValid(depthCopy_)) // D3D11 copies depth whole: the target's format and size
+            depthCopy_ = bgfx::createTexture2D(copyWidth_, copyHeight_, false, 1, bgfx::TextureFormat::D24S8,
+                                               BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
+        bgfx::blit(view, depthCopy_, 0, 0, bgfx::getTexture(target, 1));
+        ++copies_.depth;
+    }
+}
+
+void Renderer::destroyCopies()
+{
+    for (bgfx::TextureHandle* copy : {&screenCopy_, &depthCopy_}) {
+        if (bgfx::isValid(*copy))
+            bgfx::destroy(*copy);
+        *copy = BGFX_INVALID_HANDLE;
+    }
+}
+
 void Renderer::render(const Scene& scene, const std::filesystem::path& projectRoot, bgfx::ViewId view,
                       const float* viewMtx, const float* projMtx, bgfx::ViewId shadowViews, const Scene* extra)
 {
@@ -1128,6 +1172,10 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     bx::mtxInverse(cameraWorld, viewMtx);
     const bx::Vec3 eye{cameraWorld[12], cameraWorld[13], cameraWorld[14]};
     const float cameraPos[4] = {eye.x, eye.y, eye.z, 1.0f};
+    const bgfx::FrameBufferHandle target = std::exchange(target_, BGFX_INVALID_HANDLE); // for this render() only
+    // Blended draws go to blendView: the copies blit at its start, after view's opaque meshes and sky.
+    const bgfx::ViewId blendView = bgfx::isValid(target) ? static_cast<bgfx::ViewId>(view + 1) : view;
+    bool screenCopied = false, depthCopied = false;
 
     float lightDir[4] = {0.0f, -1.0f, 0.0f, 0.0f};
     float lightColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -1237,6 +1285,10 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             bgfx::setUniform(csmSplits_, shadows.csmSplits);
             bgfx::setUniform(csmBias_, shadows.csmBias, kMaxShadowCascades);
         }
+        if (item.shader && item.shader->source->source.screenTexture)
+            bgfx::setTexture(kScreenTextureStage, screenSampler_, screenCopied ? screenCopy_ : black_);
+        if (item.shader && item.shader->source->source.depthTexture)
+            bgfx::setTexture(kDepthTextureStage, depthSampler_, depthCopied ? depthCopy_ : white_);
         bgfx::setTexture(2, csmSampler_, shadows.sun ? csm_ : noShadow2D_);
         for (size_t cube = 0; cube < kMaxShadowedPointLights; ++cube)
             bgfx::setTexture(static_cast<uint8_t>(3 + cube), pointShadowSamplers_[cube],
@@ -1245,7 +1297,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         bgfx::setIndexBuffer(item.indices);
         bgfx::setState((additive ? kAdditiveState : blend ? kBlendState : kState) | cullState(material.cullMode, item.mirrored));
     };
-    const auto submit = [&](const DrawItem& item, const std::vector<size_t>& nearest) {
+    const auto submit = [&](bgfx::ViewId to, const DrawItem& item, const std::vector<size_t>& nearest) {
         float normal[16];
         normalMatrix(item.world, normal);
         setDrawState(item, nearest);
@@ -1256,9 +1308,9 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             bgfx::setUniform(bones_, bones.data(), static_cast<uint16_t>(bones.size()));
         }
         if (item.shader)
-            bgfx::submit(view, item.bones >= 0 ? item.shader->skinned : item.shader->mesh);
+            bgfx::submit(to, item.bones >= 0 ? item.shader->skinned : item.shader->mesh);
         else
-            bgfx::submit(view, item.bones >= 0 ? skinnedProgram_ : meshProgram_);
+            bgfx::submit(to, item.bones >= 0 ? skinnedProgram_ : meshProgram_);
     };
 
     // Opaque and mask meshes in the view now, batched; blended ones after, one by one far to near by world-space
@@ -1299,17 +1351,31 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             continue;
         }
         for (size_t i : indices)
-            submit(*opaque[i], opaqueLights[i]);
+            submit(view, *opaque[i], opaqueLights[i]);
     }
     sky_.draw(scene.sky, root_, view, viewMtx, projMtx); // behind the opaque meshes, under the blended ones
+    if (blendView != view) {
+        bgfx::setViewName(blendView, "Scene blended");
+        bgfx::setViewFrameBuffer(blendView, target);
+        bgfx::setViewRect(blendView, 0, 0, targetWidth_, targetHeight_);
+        bgfx::setViewClear(blendView, BGFX_CLEAR_NONE);
+        bgfx::setViewTransform(blendView, viewMtx, projMtx);
+        bgfx::setViewMode(blendView, bgfx::ViewMode::Sequential);
+        // Copied only for a blended .kshader in view that samples them (opaque and mask ones may not: resolveShaders).
+        for (const DrawItem* item : blended) {
+            screenCopied = screenCopied || (item->shader && item->shader->source->source.screenTexture);
+            depthCopied = depthCopied || (item->shader && item->shader->source->source.depthTexture);
+        }
+        copyScene(blendView, target, screenCopied, depthCopied);
+    }
     for (size_t i : backToFront(centers, eye)) {
         if (i < blended.size()) {
-            submit(*blended[i], nearestPointLights(pointLights, blended[i]->bounds));
+            submit(blendView, *blended[i], nearestPointLights(pointLights, blended[i]->bounds));
             continue;
         }
         const ParticleRenderer::Draw& emitter = particles[i - blended.size()];
         const bgfx::TextureHandle image = texture(emitter.emitter->texture, true); // white_: none or failed to load
-        particles_.draw(emitter, view, image, image.idx != white_.idx, fogColor, fogParams, cameraPos);
+        particles_.draw(emitter, blendView, image, image.idx != white_.idx, fogColor, fogParams, cameraPos);
     }
 }
 

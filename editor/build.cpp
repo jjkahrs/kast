@@ -125,6 +125,7 @@ bool compileShipped(const std::filesystem::path& root, const std::vector<std::st
                     std::map<std::string, std::string>& bytecode, std::string& error)
 {
     const std::string version = shaderToolsVersion();
+    std::map<std::string, kast::ShaderSource> sources; // by path
     for (const std::string& path : paths) {
         if (!path.ends_with(".kshader"))
             continue;
@@ -146,6 +147,19 @@ bool compileShipped(const std::filesystem::path& root, const std::vector<std::st
             bytecode[kast::shaderPakPath(text, stage)] = std::string(code.begin(), code.end());
         }
         kast::log::info(std::format("Compiled shader '{}' for game.pak{}", path, cached ? " (cache hit)" : ""));
+        sources[path] = std::move(source);
+    }
+    // A material its shader can't serve (SCREEN_TEXTURE / DEPTH_TEXTURE when opaque or mask) would render magenta.
+    for (const std::string& path : paths) {
+        kast::Material material;
+        std::string reason;
+        if (!path.ends_with(".mat") || !kast::loadMaterial(root / fromUtf8(path), material, reason))
+            continue; // a broken .mat is the renderer's to report, as before
+        const auto it = sources.find(material.shader);
+        if (it != sources.end() && !kast::checkShaderAlphaMode(material, it->second, reason)) {
+            error = std::format("Build failed: material '{}': {}", path, reason);
+            return false;
+        }
     }
     return true;
 }

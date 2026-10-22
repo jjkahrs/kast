@@ -1,0 +1,4 @@
+{
+  "version": 3,
+  "shader": "shaders/light_pbr.kshader"
+}

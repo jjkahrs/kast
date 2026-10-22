@@ -22,6 +22,9 @@ SAMPLERCUBESHADOW(s_pointShadow3, 6);
 SAMPLER2D(s_normal, 7);            // linear tangent-space normal, glTF / OpenGL (+Y green); flat (0.5, 0.5, 1) if none
 SAMPLER2D(s_occlusion, 8);         // linear, R = ambient occlusion; white if none
 SAMPLER2D(s_emissive, 9);          // sRGB, sampled as linear, times u_emissive; white if none
+// Stages 10..13: a .kshader's texture2D params (shader.cpp generateShader).
+SAMPLER2D(s_kastScreen, 14); // SCREEN_TEXTURE: the opaque scene's HDR linear color (Renderer::render copies it)
+SAMPLER2D(s_kastDepth, 15);  // DEPTH_TEXTURE: the opaque scene's depth (D3D 0..1); linearDepth() makes it meters
 
 uniform vec4 u_materialExt; // x: normal scale, y: occlusion strength, z: 1 if a normal texture is bound, w: 1 if unlit
 uniform vec4 u_lightDir;   // xyz: world direction the light travels; w: 1 if the scene has a light, else 0
@@ -151,6 +154,22 @@ struct KastFragment {
     vec3 normalMap;      // tangent-space normal as stored in a texture (0..1, flat = 0.5, 0.5, 1)
     float normalMapDepth; // scales the normal map's XY (the material's normalScale)
     float ao;            // ambient occlusion: darkens ambient light only
+    vec2 screenUv;       // FRAG_COORD.xy over the view's size: (0, 0) top-left, where SCREEN_TEXTURE and DEPTH_TEXTURE sample
+};
+
+// What light() reads and writes, once per light. Its parameter is named kast_f too, so NORMAL, ALBEDO, METALLIC and
+// ROUGHNESS mean these fields inside light() (and KastFragment's in fragment()).
+struct KastLight {
+    vec3 lightDirection; // world, unit: from the surface toward the light
+    vec3 lightColor;     // color * intensity
+    float attenuation;   // distance falloff (point lights) times shadow: 0..1
+    vec3 normal;         // world, unit: after fragment() and the normal map
+    vec3 view;           // world, unit: from the surface toward the camera
+    vec3 albedo;
+    float metallic;      // 0..1
+    float roughness;     // 0.04..1
+    vec3 diffuse;        // accumulated over the lights, from 0; the color is diffuse + specular, then ambient and fog
+    vec3 specular;
 };
 
 // Built-ins: fragment() inputs and outputs (fields of its kast_f) and texture helpers; mesh.sh has those of every stage.
@@ -170,11 +189,26 @@ struct KastFragment {
 #define NORMAL_MAP kast_f.normalMap
 #define NORMAL_MAP_DEPTH kast_f.normalMapDepth
 #define AO kast_f.ao
+#define SCREEN_UV kast_f.screenUv
+#define SCREEN_TEXTURE s_kastScreen
+#define DEPTH_TEXTURE s_kastDepth
+#define LIGHT_DIRECTION kast_f.lightDirection
+#define LIGHT_COLOR kast_f.lightColor
+#define ATTENUATION kast_f.attenuation
+#define VIEW kast_f.view
+#define DIFFUSE_LIGHT kast_f.diffuse
+#define SPECULAR_LIGHT kast_f.specular
 vec4 sampleBaseColor(vec2 uv) { return texture2D(s_baseColor, uv); }
 vec4 sampleMetallicRoughness(vec2 uv) { return texture2D(s_metallicRoughness, uv); }
 vec4 sampleNormal(vec2 uv) { return texture2D(s_normal, uv); }
 vec4 sampleOcclusion(vec2 uv) { return texture2D(s_occlusion, uv); }
 vec4 sampleEmissive(vec2 uv) { return texture2D(s_emissive, uv); }
+// A DEPTH_TEXTURE value as the view depth in meters (positive, along the camera's forward), as -VIEW_POSITION.z.
+float linearDepth(float depth)
+{
+    vec4 p = mul(u_invProj, vec4(0.0, 0.0, depth, 1.0));
+    return -p.z / p.w;
+}
 
 //@user
 #ifndef KAST_FRAGMENT
@@ -202,6 +236,7 @@ void main()
     f.normalMapDepth = u_materialExt.x; // glTF normalTexture.scale
     // Ambient occlusion darkens ambient light only: ao = 1 + strength * (R - 1).
     f.ao = 1.0 + u_materialExt.y * (texture2D(s_occlusion, f.uv).r - 1.0);
+    f.screenUv = (gl_FragCoord.xy - u_viewRect.xy) * u_viewTexel.xy;
     fragment(f);
 
     if (f.alpha < u_material.z)
@@ -241,6 +276,38 @@ void main()
     vec3 v = normalize(u_cameraPos.xyz - v_worldPos);
 
     bool receive = u_shadowParams.x > 0.5;
+#ifdef KAST_LIGHT
+    // The .kshader's light() instead of shade(): once for the directional light, once per point light reaching the
+    // mesh (unused slots are black), accumulating DIFFUSE_LIGHT and SPECULAR_LIGHT.
+    KastLight l;
+    l.normal = n;
+    l.view = v;
+    l.albedo = albedo;
+    l.metallic = metallic;
+    l.roughness = roughness;
+    l.diffuse = vec3_splat(0.0);
+    l.specular = vec3_splat(0.0);
+    if (u_lightDir.w > 0.5) {
+        l.lightDirection = -u_lightDir.xyz;
+        l.lightColor = u_lightColor.rgb;
+        l.attenuation = receive && dot(u_lightColor.rgb, u_lightColor.rgb) > 0.0 ? csmShadow(v_worldPos, n) : 1.0;
+        light(l);
+    }
+    for (int i = 0; i < MAX_POINT_LIGHTS; ++i) {
+        if (dot(u_pointColor[i].rgb, u_pointColor[i].rgb) <= 0.0)
+            continue;
+        vec3 toLight = u_pointPosRange[i].xyz - v_worldPos;
+        float d = length(toLight);
+        float attenuation = falloff(d, u_pointPosRange[i].w);
+        if (receive && u_pointShadow[i].x >= 0.0 && attenuation > 0.0)
+            attenuation *= pointShadow(u_pointShadow[i], -toLight, n);
+        l.lightDirection = toLight / max(d, 1e-4);
+        l.lightColor = u_pointColor[i].rgb;
+        l.attenuation = attenuation;
+        light(l);
+    }
+    vec3 color = l.diffuse + l.specular;
+#else
     vec3 sun = u_lightColor.rgb * u_lightDir.w;
     if (receive && dot(sun, sun) > 0.0)
         sun *= csmShadow(v_worldPos, n);
@@ -253,6 +320,7 @@ void main()
             light *= pointShadow(u_pointShadow[i], -toLight, n);
         color += shade(n, v, toLight / max(d, 1e-4), light, albedo, f0, metallic, roughness);
     }
+#endif
 
     // Ambient, no IBL: diffuse ambient plus a flat specular term weighted by the roughness-aware Schlick Fresnel
     // F = F0 + (max(1 - roughness, F0) - F0) * (1 - N.V)^5, so metals (no diffuse) still show ambient.

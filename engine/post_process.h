@@ -24,11 +24,12 @@ float srgbToLinear(float c);
 bx::Vec3 sceneClearColor(const ScenePostProcessing& post, uint32_t background);
 
 // The HDR scene target and the post chain that turns it into the displayed image. Draw the scene into sceneView()
-// after begin(), then apply(). Uses kViews consecutive bgfx views from first: the scene, then bright pass, 4
-// downsamples, 4 upsamples (bloom), final (exposure, tonemap, grading, vignette, sRGB encode) and FXAA.
+// after begin(), then apply(). Uses kViews consecutive bgfx views from first: the scene, the scene's blended draws
+// (Renderer::render's view + 1, into target()), then bright pass, 4 downsamples, 4 upsamples (bloom), final (exposure,
+// tonemap, grading, vignette, sRGB encode) and FXAA.
 class PostProcess {
 public:
-    static constexpr bgfx::ViewId kViews = 12;
+    static constexpr bgfx::ViewId kViews = 13;
 
     explicit PostProcess(bgfx::ViewId first) : first_(first) {}
     void init();
@@ -38,6 +39,10 @@ public:
     void begin(uint16_t width, uint16_t height, const bx::Vec3& clearColor);
     bgfx::ViewId sceneView() const { return first_; }
     bool valid() const { return bgfx::isValid(scene_); }
+    // The scene target (RGBA16F color, D24S8 depth) and its size: Renderer::setTarget.
+    bgfx::FrameBufferHandle target() const { return scene_; }
+    uint16_t width() const { return width_; }
+    uint16_t height() const { return height_; }
     // The scene's depth: attach it to output to depth-test editor overlays drawn after apply().
     bgfx::TextureHandle depth() const { return depth_; }
     // Runs the chain into output (invalid = backbuffer), same size as begin(). effects = false skips every effect

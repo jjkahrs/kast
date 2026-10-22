@@ -1,0 +1,13 @@
+// light() cel shading (shader_light.scene): each light's N.L in hard bands instead of Cook-Torrance's smooth falloff,
+// plus a hard-edged highlight. Ambient and fog still apply after it.
+param float bands = 3.0 range(1, 8);
+
+void fragment() {}
+
+void light()
+{
+    float lit = saturate(dot(NORMAL, LIGHT_DIRECTION)) * ATTENUATION;
+    DIFFUSE_LIGHT += ALBEDO * LIGHT_COLOR * (ceil(lit * bands) / bands);
+    vec3 halfway = normalize(LIGHT_DIRECTION + VIEW);
+    SPECULAR_LIGHT += LIGHT_COLOR * step(0.97, dot(NORMAL, halfway)) * step(0.01, lit);
+}

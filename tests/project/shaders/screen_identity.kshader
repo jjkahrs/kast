@@ -1,0 +1,10 @@
+// SCREEN_TEXTURE and DEPTH_TEXTURE must hand back the opaque scene behind exactly (shader_screen_identity_same): an
+// unlit blend plane showing SCREEN_TEXTURE at SCREEN_UV looks as if it weren't there. What is behind it is always
+// farther than its surface, so a wrong linearDepth() shows magenta.
+void fragment()
+{
+    ALBEDO = texture2D(SCREEN_TEXTURE, SCREEN_UV).rgb;
+    if (linearDepth(texture2D(DEPTH_TEXTURE, SCREEN_UV).r) < -VIEW_POSITION.z - 0.01)
+        ALBEDO = vec3(1.0, 0.0, 1.0);
+    ALPHA = 1.0;
+}

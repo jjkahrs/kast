@@ -14,19 +14,21 @@
 #include <unordered_map>
 #include <vector>
 
-// User shaders: .kshader files (bgfx .sc GLSL, see docs/engine/shaders.html) whose fragment() and vertex() Kast injects
-// into its mesh shader templates (engine/shaders/fs_mesh.sc and vs_mesh*.sc, at their "//@user" line). GPU-free: parsing, code generation, compile error
+// User shaders: .kshader files (bgfx .sc GLSL, see docs/engine/shaders.html) whose fragment(), vertex() and light() Kast
+// injects into its mesh shader templates (engine/shaders/fs_mesh.sc and vs_mesh*.sc, at their "//@user" line). GPU-free: parsing, code generation, compile error
 // mapping and the library of compiled bytecode. Compiling (shaderc) is a ShaderCompiler the host provides: the editor's
 // runs shaderc.exe (editor/shader_compiler.h); the player has none. The renderer owns the programs.
 namespace kast {
 
 constexpr int kMaxShaderParams = 16;  // float / vec / color params: one u_kastParams vec4 each
 // Sampler stages per draw: bgfx's D3D11 limit (caps limits.maxTextureSamplers, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT).
-// The mesh shader takes 0..9 (material textures, shadow maps); texture2D params take 10..13; 14 and 15 are kept for
-// SCREEN_TEXTURE and DEPTH_TEXTURE.
+// The mesh shader takes 0..9 (material textures, shadow maps); texture2D params take 10..13; 14 and 15 are
+// SCREEN_TEXTURE and DEPTH_TEXTURE (s_kastScreen, s_kastDepth in fs_mesh.sc).
 constexpr int kMaxTextureSamplers = 16;
 constexpr uint8_t kFirstShaderTextureStage = 10;
 constexpr int kMaxShaderTextures = 4;
+constexpr uint8_t kScreenTextureStage = 14;
+constexpr uint8_t kDepthTextureStage = 15;
 
 enum class ShaderParamType { Float, Vec2, Vec3, Vec4, Color, Texture2D };
 // What a texture2D param samples when its material gives no texture: 1x1 white, opaque black or a flat normal.
@@ -50,6 +52,9 @@ struct ShaderSource {
     std::string code;          // the file with its param lines blanked (line numbers unchanged), '\n' line ends
     bool customNormal = false; // mentions NORMAL or NORMAL_MAP outside vertex(): the template always applies the normal map
     bool hasVertex = false;    // has a vertex(): compiled into the vertex templates too
+    bool hasLight = false;     // has a light(): it replaces the built-in Cook-Torrance per light
+    bool screenTexture = false; // mentions SCREEN_TEXTURE: its draws need the opaque scene's color copied
+    bool depthTexture = false;  // mentions DEPTH_TEXTURE: its draws need the opaque scene's depth copied
 };
 
 // Number of floats a numeric param holds (1..4); 0 for texture2D.
@@ -59,6 +64,9 @@ const std::vector<std::string>& shaderBuiltinNames();
 // False + error ("line 3: ...") if a param line is malformed, a name is reserved or repeated, there are too many
 // params or textures, or there is no void fragment().
 bool parseShader(std::string_view text, ShaderSource& out, std::string& error);
+// False + error if material can't use source: SCREEN_TEXTURE and DEPTH_TEXTURE are copies of the opaque scene, so only
+// blend and additive materials (drawn after it) may sample them.
+bool checkShaderAlphaMode(const Material& material, const ShaderSource& source, std::string& error);
 
 // The values the u_kastParams uniform gets: each numeric param's material value, else its default.
 std::array<std::array<float, 4>, kMaxShaderParams> shaderParamValues(const Material& material, const ShaderSource& source);
@@ -90,8 +98,8 @@ std::vector<ShaderStage> shaderStages(const ShaderSource& source);
 
 // templateText (stage's mesh template, '\n' or "\r\n" line ends) with source's param declarations and code at its
 // "//@user" line, and a "#pragma kast_line <n>" marker before each line of the .kshader so compile errors map back to it
-// (mapShaderErrors). The stage's function (fragment() or vertex()) gets the template's signature; the other one is
-// blanked, keeping line numbers. Empty if the template has no "//@user" line.
+// (mapShaderErrors). The stage's functions (fragment() and light(), or vertex()) get the template's signatures; the
+// others are blanked, keeping line numbers. Empty if the template has no "//@user" line.
 std::string generateShader(std::string_view templateText, const ShaderSource& source, ShaderStage stage);
 // shaderc's output for a failed compile of generateShader's text, as "line <n>: error X3004: ..." lines with .kshader
 // line numbers (n from the marker before the error's line in shaderc's listing). Errors outside the listing or in the

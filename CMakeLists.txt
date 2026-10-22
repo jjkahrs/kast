@@ -1079,6 +1079,38 @@ kast_shader_shot(vertex "${KAST_SHADER_TEST_PROJECT}" shader_vertex.scene
   "-DEXPECT_OUTPUT=Compiled shader 'shaders/sway.kshader'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]|magenta")
 kast_shader_shot(vertex_builtin "${KAST_SHADER_TEST_PROJECT}" shader_vertex_builtin.scene)
 kast_shader_compare(shader_vertex_differs vertex_builtin vertex OFF)
+# light(), SCREEN_TEXTURE and DEPTH_TEXTURE (phase 5):
+# - shader_light: light_bands.kshader's light() bands under a shadowing sun, a point light and fog; differs from a copy
+#   without its shader materials. shader_light_pbr_same: light_pbr.kshader's light(), calling the template's own shade()
+#   with its inputs, must render exactly as the built-in shader (a copy whose sphere has no material).
+# - shader_screen: screen_water.kshader's refraction (SCREEN_TEXTURE) and foam (DEPTH_TEXTURE), moving with TIME.
+# - shader_screen_identity_same: an unlit blend plane showing SCREEN_TEXTURE at SCREEN_UV (magenta where linearDepth()
+#   of DEPTH_TEXTURE puts the scene in front of it) must render exactly as a fully transparent plane.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/shader_light.scene"
+             "${KAST_TEST_PROJECT}/shader_screen_identity.scene")
+file(READ "${KAST_TEST_PROJECT}/shader_light.scene" shader_scene)
+string(REGEX REPLACE "materials/shader_light_pbr\\.mat" "" light_reference "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_light_reference.scene" "${light_reference}")
+string(REGEX REPLACE "materials/shader_[a-z_]+\\.mat" "" shader_scene "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_light_builtin.scene" "${shader_scene}")
+file(READ "${KAST_TEST_PROJECT}/shader_screen_identity.scene" shader_scene)
+string(REGEX REPLACE "materials/shader_screen_identity\\.mat" "materials/screen_clear.mat" shader_scene "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_screen_identity_reference.scene" "${shader_scene}")
+kast_shader_shot(light "${KAST_SHADER_TEST_PROJECT}" shader_light.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/light_bands.kshader'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]|magenta")
+kast_shader_shot(light_reference "${KAST_SHADER_TEST_PROJECT}" shader_light_reference.scene
+  "-DFORBID_OUTPUT=\\[error\\]|magenta|light_pbr")
+kast_shader_shot(light_builtin "${KAST_SHADER_TEST_PROJECT}" shader_light_builtin.scene)
+kast_shader_compare(shader_light_pbr_same light_reference light ON)
+kast_shader_compare(shader_light_differs light_builtin light OFF)
+kast_shader_shot(screen "${KAST_SHADER_TEST_PROJECT}" shader_screen.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/screen_water.kshader'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]|magenta")
+kast_shader_shot(screen_f60 "${KAST_SHADER_TEST_PROJECT}" shader_screen.scene -DFRAMES=60)
+kast_shader_compare(shader_screen_animates screen_f60 screen OFF)
+kast_shader_shot(screen_identity "${KAST_SHADER_TEST_PROJECT}" shader_screen_identity.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shaders/screen_identity.kshader'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]|magenta")
+kast_shader_shot(screen_identity_reference "${KAST_SHADER_TEST_PROJECT}" shader_screen_identity_reference.scene)
+kast_shader_compare(shader_screen_identity_same screen_identity_reference screen_identity ON)
 # Editor workflow (phase 3), in a fresh copy of the test project (the shader cache and new files land in it):
 # - shader_cache_first / _second: the second start loads showcase.kshader from <project>/.kast/shader_cache.
 # - shader_new: Assets > Create > Shader writes a starter that compiles (the Inspector shows it).
@@ -1615,7 +1647,11 @@ endforeach()
 foreach(game "shader_showcase|shader_showcase.scene|showcase"
              "shader_vertex|shader_vertex.scene|sway|0, 4.5285, 5.3245|-0.300706, 0, 0, 0.953717"
              "shader_offset|shader_vertex_offset.scene|lift|0, 4.6036, 8.1568|-0.216440, 0, 0, 0.976296"
-             "shader_offset_ref|shader_vertex_offset_reference.scene|-|0, 4.6036, 8.1568|-0.216440, 0, 0, 0.976296")
+             "shader_offset_ref|shader_vertex_offset_reference.scene|-|0, 4.6036, 8.1568|-0.216440, 0, 0, 0.976296"
+             "shader_light|shader_light.scene|light_bands"
+             "shader_screen|shader_screen.scene|screen_water"
+             "shader_screen_identity|shader_screen_identity.scene|screen_identity"
+             "shader_screen_identity_ref|shader_screen_identity.scene|-")
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
   list(GET game 1 scene)
@@ -1657,6 +1693,17 @@ add_test(NAME player_shader_offset_same
           "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_shader_offset.png" -DSAME=ON
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
 set_tests_properties(player_shader_offset_same PROPERTIES FIXTURES_REQUIRED "player_shader_offset_shot;player_shader_offset_ref_shot")
+# player_shader_screen_identity_same: SCREEN_TEXTURE / DEPTH_TEXTURE in the player (as shader_screen_identity_same);
+# the reference game's plane is the fully transparent screen_clear.mat.
+file(READ "${CMAKE_CURRENT_BINARY_DIR}/game_projects/shader_screen_identity_ref/shader_screen_identity.scene" scene_text)
+string(REPLACE "materials/shader_screen_identity.mat" "materials/screen_clear.mat" scene_text "${scene_text}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/game_projects/shader_screen_identity_ref/shader_screen_identity.scene" "${scene_text}")
+add_test(NAME player_shader_screen_identity_same
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_shader_screen_identity_ref.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_shader_screen_identity.png" -DSAME=ON
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(player_shader_screen_identity_same PROPERTIES
+                     FIXTURES_REQUIRED "player_shader_screen_identity_shot;player_shader_screen_identity_ref_shot")
 kast_game_project(broken_shader "Broken Shader" shader_showcase.scene FALSE "")
 file(COPY "${KAST_TEST_PROJECT}/shaders/broken.kshader" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/game_projects/broken_shader/shaders")
 add_test(NAME build_game_broken_shader

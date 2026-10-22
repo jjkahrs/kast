@@ -271,6 +271,7 @@ int main(int argc, char** argv)
             float view[16], proj[16];
             kast::cameraMatrices(scene, camera, static_cast<float>(width) / static_cast<float>(height),
                                  bgfx::getCaps()->homogeneousDepth, view, proj);
+            renderer.setTarget(post.target(), post.width(), post.height());
             renderer.render(scene, project.root, post.sceneView(), view, proj, kShadowViews);
         }
         if (kast::gui::wantsReadableTarget() && width > 0 && height > 0 &&

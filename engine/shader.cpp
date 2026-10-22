@@ -13,6 +13,7 @@
 #include <iterator>
 #include <map>
 #include <regex>
+#include <tuple>
 
 namespace kast {
 namespace {
@@ -252,6 +253,27 @@ const std::regex& vertexSignature()
     return re;
 }
 
+const std::regex& lightSignature()
+{
+    static const std::regex re(R"(\bvoid\s+light\s*\(\s*(void\s*)?\))");
+    return re;
+}
+
+// code with the first match of each signature (searched in stripped, code without comments) replaced by its
+// replacement; last first, so the earlier matches' offsets still hold.
+std::string replaceSignatures(std::string code, const std::string& stripped,
+                              const std::vector<std::pair<const std::regex*, std::string>>& replacements)
+{
+    std::vector<std::tuple<size_t, size_t, const std::string*>> found; // position, length, replacement
+    for (const auto& [signature, replacement] : replacements)
+        if (std::smatch match; std::regex_search(stripped, match, *signature))
+            found.emplace_back(match.position(0), match.length(0), &replacement);
+    std::ranges::sort(found, std::greater{});
+    for (const auto& [position, length, replacement] : found)
+        code.replace(position, length, *replacement);
+    return code;
+}
+
 // code with the function signature matches (in stripped, code without comments) blanked from its signature to its
 // closing brace, newlines kept. Unchanged without one, or if its braces don't close (the compiler then says so).
 std::string blankFunction(std::string code, const std::string& stripped, const std::regex& signature)
@@ -328,7 +350,7 @@ const std::vector<std::string>& shaderBuiltinNames()
         "METALLIC", "ROUGHNESS", "EMISSION", "NORMAL_MAP", "NORMAL_MAP_DEPTH", "AO", "TIME", "CAMERA_POSITION",
         "MATERIAL_BASE_COLOR", "MATERIAL_METALLIC", "MATERIAL_ROUGHNESS", "MATERIAL_EMISSION", "MATERIAL_ALPHA_CUTOFF",
         "MATERIAL_UV_TRANSFORM", "sampleBaseColor", "sampleMetallicRoughness", "sampleNormal", "sampleOcclusion",
-        "sampleEmissive", "fragment", "vertex", "light",
+        "sampleEmissive", "linearDepth", "fragment", "vertex", "light",
         // vertex() (mesh.sh) and light() built-ins, SCREEN_TEXTURE / DEPTH_TEXTURE
         "VERTEX", "INSTANCE_ID", "MODEL_MATRIX", "WORLD_MATRIX", "VIEW_MATRIX", "PROJECTION_MATRIX", "LIGHT_DIRECTION",
         "LIGHT_COLOR", "ATTENUATION", "VIEW", "DIFFUSE_LIGHT", "SPECULAR_LIGHT", "SCREEN_TEXTURE", "SCREEN_UV",
@@ -389,10 +411,29 @@ bool parseShader(std::string_view text, ShaderSource& out, std::string& error)
         return false;
     }
     static const std::regex normal(R"(\bNORMAL(_MAP)?\b)");
-    source.customNormal = std::regex_search(blankFunction(stripped, stripped, vertexSignature()), normal);
+    static const std::regex screen(R"(\bSCREEN_TEXTURE\b)");
+    static const std::regex depth(R"(\bDEPTH_TEXTURE\b)");
+    const std::string fragmentOnly =
+        blankFunction(blankFunction(stripped, stripped, vertexSignature()), stripped, lightSignature());
+    source.customNormal = std::regex_search(fragmentOnly, normal);
     source.hasVertex = std::regex_search(stripped, vertexSignature());
+    source.hasLight = std::regex_search(stripped, lightSignature());
+    source.screenTexture = std::regex_search(stripped, screen);
+    source.depthTexture = std::regex_search(stripped, depth);
     out = std::move(source);
     return true;
+}
+
+bool checkShaderAlphaMode(const Material& material, const ShaderSource& source, std::string& error)
+{
+    if (!(source.screenTexture || source.depthTexture) || material.alphaMode == AlphaMode::Blend ||
+        material.alphaMode == AlphaMode::Additive)
+        return true;
+    error = std::format("{} is only for blend and additive materials (drawn after the opaque scene it copies); this "
+                        "material's alphaMode is {}",
+                        source.screenTexture ? "SCREEN_TEXTURE" : "DEPTH_TEXTURE",
+                        material.alphaMode == AlphaMode::Mask ? "mask" : "opaque");
+    return false;
 }
 
 std::array<std::array<float, 4>, kMaxShaderParams> shaderParamValues(const Material& material, const ShaderSource& source)
@@ -528,6 +569,8 @@ std::string generateShader(std::string_view templateText, const ShaderSource& so
             out += "#define KAST_VERTEX\n";
         if (!vertex)
             out += "#define KAST_FRAGMENT\n";
+        if (!vertex && source.hasLight)
+            out += "#define KAST_LIGHT\n";
         if (stage == ShaderStage::Shadow)
             out += "#define KAST_SHADOW\n";
         if (!vertex && source.customNormal)
@@ -544,14 +587,19 @@ std::string generateShader(std::string_view templateText, const ShaderSource& so
                                    kSwizzles[componentCount(param.type)]);
             }
         }
-        // The stage's function gets the template's signature, the other is blanked; a marker before each line (not
-        // inside a macro continued with '\').
+        // The stage's functions get the template's signatures, the others are blanked; a marker before each line (not
+        // inside a macro continued with '\'). Blanking finds functions by their .kshader signatures in stripped.
         const std::string stripped = stripComments(source.code);
-        std::string code = blankFunction(source.code, stripped, vertex ? fragmentSignature() : vertexSignature());
-        std::smatch match;
-        if (std::regex_search(stripped, match, vertex ? vertexSignature() : fragmentSignature()))
-            code.replace(static_cast<size_t>(match.position(0)), static_cast<size_t>(match.length(0)),
-                         vertex ? "void vertex(inout KastVertex kast_v)" : "void fragment(inout KastFragment kast_f)");
+        std::string code;
+        if (vertex) {
+            code = blankFunction(blankFunction(source.code, stripped, fragmentSignature()), stripped, lightSignature());
+            code = replaceSignatures(code, stripped, {{&vertexSignature(), "void vertex(inout KastVertex kast_v)"}});
+        } else {
+            code = blankFunction(source.code, stripped, vertexSignature());
+            code = replaceSignatures(code, stripped,
+                                     {{&fragmentSignature(), "void fragment(inout KastFragment kast_f)"},
+                                      {&lightSignature(), "void light(inout KastLight kast_f)"}});
+        }
         int number = 0;
         bool continued = false;
         for (std::string_view user : splitLines(code)) {

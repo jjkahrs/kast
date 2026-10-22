@@ -47,7 +47,7 @@ player advances it every frame. It wraps to 0 every <strong>3600 seconds</strong
 <code>engine/shader_clock.h</code>) so it keeps sub-millisecond float precision. The built-in material doesn't read it; a
 <code>.kshader</code> reads it as <code>TIME</code>.</p>
 <h2 id="user-shaders">User shaders (.kshader)</h2>
-<p>A <code>.kshader</code> file holds a <code>fragment()</code> function, optionally a <code>vertex()</code> function, in the bgfx
+<p>A <code>.kshader</code> file holds a <code>fragment()</code> function, optionally <code>vertex()</code> and <code>light()</code> functions, in the bgfx
 <code>.sc</code> GLSL dialect, plus declared params. A material
 uses it through its <code>"shader"</code> field (see <a href="materials.html#materials">Materials</a>). Kast injects the file into its mesh
 shader <strong>templates</strong>, <code>engine/shaders/fs_mesh.sc</code> and <code>vs_mesh.sc</code> / <code>vs_mesh_skinned.sc</code> /
@@ -56,7 +56,7 @@ built-in mesh shaders <em>are</em> those templates compiled as is (with empty de
 <code>vertex()</code>), so built-in and user shaders share all of the transform, skinning, instancing, lighting, shadow, fog
 and alpha code. <code>main()</code> first fills every built-in with what the built-in material computes
 (base color times its texture, metallic / roughness times theirs, emissive, the normal map, AO), calls
-<code>fragment()</code>, then discards below the alpha cutoff (mask), lights the result (Cook-Torrance, shadows, ambient),
+<code>fragment()</code>, then discards below the alpha cutoff (mask), lights the result (Cook-Torrance or <code>light()</code>, shadows, ambient),
 adds <code>EMISSION</code> and fogs. A <code>fragment()</code> that writes nothing renders exactly as the material without a shader.</p>
 <pre><code>// shaders/stripes.kshader
 param color tint = color(1.0, 0.6, 0.3);
@@ -86,7 +86,7 @@ keyword or type name, and not start with <code>u_</code>, <code>s_</code>, <code
 Param lines are taken out of the code before it compiles (line numbers stay), so <code>param</code> can't start a code line.</p>
 <p><strong>Texture limit</strong>: a draw has <strong>16 sampler stages</strong> (D3D11's per-stage slot count, bgfx's
 <code>maxTextureSamplers</code>; the renderer logs an error at start if a GPU reports fewer). The mesh shader uses stages 0–9
-(material textures and shadow maps) and keeps 14 and 15 for <code>SCREEN_TEXTURE</code> / <code>DEPTH_TEXTURE</code>, so
+(material textures and shadow maps) and 14 and 15 for <code>SCREEN_TEXTURE</code> / <code>DEPTH_TEXTURE</code>, so
 <code>texture2D</code> params take stages <strong>10–13: at most 4</strong> per shader. A 5th is a parse error:
 <code>line 5: too many texture2D params: at most 4 (sampler stages 10..13; ...)</code>.</p>
 <h3 id="kshader-builtins">fragment() built-ins</h3>
@@ -116,12 +116,13 @@ functions; pass what a helper needs as arguments. Spaces: world unless noted.</p
 <tr><td><code>MATERIAL_ALPHA_CUTOFF</code></td><td>float</td><td>in</td><td>the mask cutoff; -1 unless <code>alphaMode</code> is mask</td></tr>
 <tr><td><code>MATERIAL_UV_TRANSFORM</code></td><td>vec4</td><td>in</td><td>xy <code>uvScale</code>, zw <code>uvOffset</code></td></tr>
 <tr><td><code>sampleBaseColor(uv)</code>, <code>sampleMetallicRoughness(uv)</code>, <code>sampleNormal(uv)</code>, <code>sampleOcclusion(uv)</code>, <code>sampleEmissive(uv)</code></td><td>vec4</td><td>functions</td><td>the material's textures at any UV (white / flat when it has none)</td></tr>
+<tr><td><code>SCREEN_UV</code></td><td>vec2</td><td>in</td><td><code>FRAG_COORD.xy</code> over the view's size: 0–1, (0, 0) top-left; where <code>SCREEN_TEXTURE</code> / <code>DEPTH_TEXTURE</code> line up with this pixel</td></tr>
+<tr><td><code>SCREEN_TEXTURE</code>, <code>DEPTH_TEXTURE</code>, <code>linearDepth(depth)</code></td><td>sampler2D, function</td><td>in</td><td>the opaque scene behind (blend and additive materials only): see <a href="#kshader-screen">SCREEN_TEXTURE and DEPTH_TEXTURE</a></td></tr>
 </table>
 <p>A shader that mentions <code>NORMAL</code> or <code>NORMAL_MAP</code> always gets the normal-map step (which also renormalizes
 <code>NORMAL</code>); otherwise it runs only when the material has a normal texture, as in the built-in material. Unlit
-materials output <code>ALBEDO + EMISSION</code>. Also reserved: the <a href="#kshader-vertex">vertex() built-ins</a> and, for later stages, <code>LIGHT_DIRECTION</code>,
-<code>LIGHT_COLOR</code>, <code>ATTENUATION</code>, <code>VIEW</code>, <code>DIFFUSE_LIGHT</code>, <code>SPECULAR_LIGHT</code>, <code>SCREEN_TEXTURE</code>,
-<code>SCREEN_UV</code>, <code>DEPTH_TEXTURE</code>, <code>vertex</code>, <code>light</code>.</p>
+materials output <code>ALBEDO + EMISSION</code> and never call <code>light()</code>. Also reserved: the
+<a href="#kshader-vertex">vertex()</a> and <a href="#kshader-light">light()</a> built-ins, <code>vertex</code>, <code>light</code>.</p>
 <h3 id="kshader-vertex">vertex()</h3>
 <p>Optional. It runs per vertex before the template transforms the vertex to the world, so it moves the mesh in
 <strong>object space</strong>; skinned meshes run it after skinning (in the model's space), instanced ones get each instance's
@@ -162,6 +163,74 @@ Each stage compiles only its own function: the other one is blanked (line number
 (<code>TIME</code>, <code>CAMERA_POSITION</code>, <code>VIEW_MATRIX</code>, <code>PROJECTION_MATRIX</code>, <code>MATERIAL_*</code>, <code>PI</code>, params).</p>
 <p><strong>Culling</strong>: draws are culled by the mesh's undisplaced bounds; a <code>vertex()</code> that moves geometry far
 outside them can pop out at the edge of the view or a shadow cascade.</p>
+<h3 id="kshader-light">light()</h3>
+<p>Optional. With a <code>light()</code> the template calls it instead of its Cook-Torrance <code>shade()</code>: once for the
+scene's directional light (if it has one) and once per point light reaching the mesh (up to 8). Each call adds to
+<code>DIFFUSE_LIGHT</code> and <code>SPECULAR_LIGHT</code>, which start at black; their sum is the direct light. Ambient light (times
+<code>AO</code>), <code>EMISSION</code> and fog are then added as without a <code>light()</code>. Kast does not multiply
+<code>DIFFUSE_LIGHT</code> by <code>ALBEDO</code> afterwards: multiply it yourself, as below.</p>
+<pre><code>// shaders/light_bands.kshader (tests/project/shader_light.scene): cel bands
+param float bands = 3.0 range(1, 8);
+
+void fragment() {}
+
+void light()
+{
+    float lit = saturate(dot(NORMAL, LIGHT_DIRECTION)) * ATTENUATION;
+    DIFFUSE_LIGHT += ALBEDO * LIGHT_COLOR * (ceil(lit * bands) / bands);
+    vec3 halfway = normalize(LIGHT_DIRECTION + VIEW);
+    SPECULAR_LIGHT += LIGHT_COLOR * step(0.97, dot(NORMAL, halfway)) * step(0.01, lit);
+}</code></pre>
+<table>
+<tr><th>Name</th><th>Type</th><th>In / out</th><th>Meaning</th></tr>
+<tr><td><code>LIGHT_DIRECTION</code></td><td>vec3</td><td>in</td><td>world, unit: from the surface toward the light</td></tr>
+<tr><td><code>LIGHT_COLOR</code></td><td>vec3</td><td>in</td><td>the light's color times its intensity (linear)</td></tr>
+<tr><td><code>ATTENUATION</code></td><td>float</td><td>in</td><td>0–1: the point light's distance falloff times the shadow (directional light: the shadow); 1 when the mesh doesn't receive shadows</td></tr>
+<tr><td><code>NORMAL</code></td><td>vec3</td><td>in</td><td>world, unit: after <code>fragment()</code> and the normal map</td></tr>
+<tr><td><code>VIEW</code></td><td>vec3</td><td>in</td><td>world, unit: from the surface toward the camera</td></tr>
+<tr><td><code>ALBEDO</code>, <code>METALLIC</code>, <code>ROUGHNESS</code></td><td>vec3, float</td><td>in</td><td>what <code>fragment()</code> left, metallic clamped to 0–1 and roughness to 0.04–1</td></tr>
+<tr><td><code>DIFFUSE_LIGHT</code>, <code>SPECULAR_LIGHT</code></td><td>vec3</td><td>in / out</td><td>the sums so far; add this light's part</td></tr>
+<tr><td><code>TIME</code>, <code>CAMERA_POSITION</code>, <code>MATERIAL_*</code>, <code>PI</code>, params</td><td></td><td>in</td><td>as in <code>fragment()</code></td></tr>
+</table>
+<p>The other <code>fragment()</code> built-ins (<code>UV</code>, <code>COLOR</code>, <code>WORLD_POSITION</code>, ...) don't exist in
+<code>light()</code> (a compile error at their line). The template's own <code>shade(n, v, l, light, albedo, f0, metallic, roughness)</code>
+is callable, so <code>DIFFUSE_LIGHT += shade(NORMAL, VIEW, LIGHT_DIRECTION, LIGHT_COLOR * ATTENUATION, ALBEDO,
+mix(vec3_splat(0.04), ALBEDO, METALLIC), METALLIC, ROUGHNESS);</code> renders exactly as the built-in lighting
+(<code>shader_light_pbr_same</code> checks it). <code>light()</code> compiles only into the fragment stages.</p>
+<h3 id="kshader-screen">SCREEN_TEXTURE and DEPTH_TEXTURE</h3>
+<p><code>SCREEN_TEXTURE</code> is the scene's color as the opaque and mask meshes and the sky left it (linear HDR, fogged, before
+post-processing); <code>DEPTH_TEXTURE</code> is their depth (D3D 0–1, 1 = the far plane).
+Sample both at <code>SCREEN_UV</code> (plus an offset for refraction). <code>linearDepth(d)</code> turns a depth value into meters in
+front of the camera, comparable with <code>-VIEW_POSITION.z</code>, the fragment's own:</p>
+<pre><code>// shaders/screen_water.kshader (tests/project/shader_screen.scene): a blend, unlit material
+param float strength = 0.015;
+param float foam_depth = 0.3;
+param color tint = color(0.55, 0.8, 1.0);
+
+void fragment()
+{
+    vec2 wave = vec2(sin(UV.y * 60.0 + TIME * 3.0), cos(UV.x * 60.0 + TIME * 3.0)) * strength;
+    float behind = linearDepth(texture2D(DEPTH_TEXTURE, SCREEN_UV).r) + VIEW_POSITION.z; // meters past the surface
+    ALBEDO = texture2D(SCREEN_TEXTURE, SCREEN_UV + wave).rgb * tint.rgb;
+    ALBEDO = mix(ALBEDO, vec3_splat(1.0), 1.0 - saturate(behind / foam_depth));
+    ALPHA = 1.0;
+}</code></pre>
+<ul>
+<li><strong>Blend and additive materials only.</strong> They are copies of the opaque scene, made after it and before the
+blended draws, so an opaque or mask material can't sample them, as in Godot. Such a material renders magenta with a
+warning (<code>[warn] Shader 'shaders/water.kshader': SCREEN_TEXTURE is only for blend and additive materials (drawn after the
+opaque scene it copies); this material's alphaMode is opaque; rendering the material magenta</code>), the Inspector shows the
+same, and the <a href="../editor/build.html#build-shaders">Build</a> fails on a shipped one. Blended meshes never cast shadows,
+so shadow passes never sample them.</li>
+<li><strong>Only when used.</strong> The renderer copies the color (an RGBA16F blit) and / or the depth (a D24S8 blit) of
+the scene target once per frame, only on frames where a blended draw in view samples it. Other blended surfaces
+(glass, particles) are not in the copy, so they don't show through each other's refraction.</li>
+<li><strong>Where.</strong> Opaque meshes and the sky draw in the scene view; blended meshes and particles in the view after it
+(<code>Renderer::render</code>'s view + 1, the same target); the copies happen at that view's start. Without a target (a
+renderer drawing elsewhere), <code>SCREEN_TEXTURE</code> samples black and <code>DEPTH_TEXTURE</code> the far plane.</li>
+<li>Use them inside <code>fragment()</code>: helper functions outside it compile into the vertex stages too, which
+don't have them.</li>
+</ul>
 <h3 id="kshader-compile">Compiling and errors</h3>
 <p>The editor compiles a <code>.kshader</code> the first time a rendered material uses it, and again when the file changes, with
 the same <code>shaderc</code> and flags as the build (CMake copies <code>shaderc.exe</code> next to <code>kast_editor.exe</code>, with

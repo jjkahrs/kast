@@ -2975,7 +2975,7 @@ void checkBuildSettings()
                                        "physics.scene",
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                       "shader_errors.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
+                                       "shader_errors.scene", "shader_light.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                        "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "ui_effects.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
@@ -2999,7 +2999,7 @@ void checkBuildSettings()
                                                           "particles_texture.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                                          "shader_errors.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
+                                                          "shader_errors.scene", "shader_light.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                                           "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "ui_effects.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
@@ -5725,6 +5725,7 @@ void checkShaders();
 void checkShaderBuild();
 void checkShaderLibraryAsync();
 void checkShaderParamEditing();
+void checkSceneCopies();
 
 std::string materialError(const std::string& text)
 {
@@ -6186,6 +6187,77 @@ void checkShaders()
                       error)
               .c_str());
 
+    // light(), SCREEN_TEXTURE, DEPTH_TEXTURE (phase 5): light() takes the template's signature in the fragment stages
+    // (KAST_LIGHT) wherever it sits, the vertex stages blank it; NORMAL inside it doesn't force the normal map.
+    const std::string withLight = "param float bands = 3.0;\n"
+                                  "void light()\n"
+                                  "{\n"
+                                  "    DIFFUSE_LIGHT += ALBEDO * LIGHT_COLOR * ATTENUATION * ceil(saturate(dot(NORMAL, "
+                                  "LIGHT_DIRECTION)) * bands) / bands;\n"
+                                  "    SPECULAR_LIGHT += LIGHT_COLOR * step(0.9, dot(reflect(-LIGHT_DIRECTION, NORMAL), VIEW));\n"
+                                  "}\n"
+                                  "void vertex() { VERTEX.y += bands; }\n"
+                                  "void fragment()\n"
+                                  "{\n"
+                                  "    vec3 behind = texture2D(SCREEN_TEXTURE, SCREEN_UV).rgb;\n"
+                                  "    ALBEDO = mix(behind, ALBEDO, saturate(linearDepth(texture2D(DEPTH_TEXTURE, "
+                                  "SCREEN_UV).r) + VIEW_POSITION.z));\n"
+                                  "}\n";
+    check(kast::parseShader(withLight, source, error) && source.hasLight && source.hasVertex && !source.customNormal &&
+              source.screenTexture && source.depthTexture,
+          "light(), SCREEN_TEXTURE and DEPTH_TEXTURE are found; NORMAL inside light() keeps the built-in normal map rule");
+    const std::string lightFs = kast::generateShader(templateText, source, kast::ShaderStage::Fragment);
+    const std::string lightVs = kast::generateShader(vertexTemplate, source, kast::ShaderStage::Vertex);
+    check(contains(lightFs, "#define KAST_FRAGMENT\n#define KAST_LIGHT\n") &&
+              contains(lightFs, "#pragma kast_line 2\nvoid light(inout KastLight kast_f)\n") &&
+              contains(lightFs, "#pragma kast_line 8\nvoid fragment(inout KastFragment kast_f)\n") &&
+              !contains(lightFs, "VERTEX.y"),
+          "generated fs_mesh: light() and fragment() with the template signatures (light() first), vertex() blanked");
+    check(!contains(lightVs, "KAST_LIGHT") && !contains(lightVs, "LIGHT_COLOR") && !contains(lightVs, "SCREEN_TEXTURE") &&
+              contains(lightVs, "#pragma kast_line 7\nvoid vertex(inout KastVertex kast_v)"),
+          "generated vs_mesh: light() and fragment() blanked");
+    check(kast::parseShader("void fragment() {}\n", source, error) && !source.hasLight && !source.screenTexture &&
+              !source.depthTexture && !contains(kast::generateShader(templateText, source, kast::ShaderStage::Fragment),
+                                                "#define KAST_LIGHT"),
+          "without light(): no KAST_LIGHT, the built-in Cook-Torrance");
+    check(kast::parseShader(withLight, source, error), "parse the light() shader again");
+    for (const kast::ShaderStage stage : {kast::ShaderStage::Fragment, kast::ShaderStage::Shadow, kast::ShaderStage::Vertex,
+                                          kast::ShaderStage::SkinnedVertex, kast::ShaderStage::InstancedVertex})
+        check(compileShader(source, stage, bytecode, error) && !bytecode.empty(),
+              std::format("a .kshader with light(), vertex(), SCREEN_TEXTURE and DEPTH_TEXTURE compiles for {} ({})",
+                          kast::shaderTemplate(stage), error)
+                  .c_str());
+    check(kast::parseShader("void fragment() {}\nvoid light()\n{\n    DIFFUSE_LIGHT += UV.x;\n}\n", source, error) &&
+              !compileShader(source, kast::ShaderStage::Fragment, bytecode, error) && contains(error, "line 4: error"),
+          std::format("an error in light() (UV is fragment()'s) is reported at its .kshader line: {}", error).c_str());
+    // SCREEN_TEXTURE / DEPTH_TEXTURE copy the opaque scene: only blend and additive materials may sample them.
+    kast::ShaderSource screenOnly, depthOnly, neither;
+    check(kast::parseShader("void fragment() { ALBEDO = texture2D(SCREEN_TEXTURE, SCREEN_UV).rgb; }\n", screenOnly, error) &&
+              kast::parseShader("void fragment() { ALPHA = texture2D(DEPTH_TEXTURE, SCREEN_UV).r; }\n", depthOnly, error) &&
+              kast::parseShader("void fragment() { ALBEDO = vec3_splat(SCREEN_UV.x); }\n", neither, error) &&
+              screenOnly.screenTexture && !screenOnly.depthTexture && depthOnly.depthTexture && !depthOnly.screenTexture &&
+              !neither.screenTexture && !neither.depthTexture,
+          "SCREEN_TEXTURE and DEPTH_TEXTURE are found separately; SCREEN_UV alone is neither");
+    kast::Material modes;
+    std::string why;
+    modes.alphaMode = kast::AlphaMode::Opaque;
+    check(!kast::checkShaderAlphaMode(modes, screenOnly, why) &&
+              why == "SCREEN_TEXTURE is only for blend and additive materials (drawn after the opaque scene it copies); "
+                     "this material's alphaMode is opaque",
+          std::format("an opaque material sampling SCREEN_TEXTURE is rejected: {}", why).c_str());
+    modes.alphaMode = kast::AlphaMode::Mask;
+    check(!kast::checkShaderAlphaMode(modes, depthOnly, why) &&
+              contains(why, "DEPTH_TEXTURE is only for blend and additive materials") && contains(why, "alphaMode is mask"),
+          std::format("a mask material sampling DEPTH_TEXTURE is rejected: {}", why).c_str());
+    bool allowed = kast::checkShaderAlphaMode(modes, neither, why);
+    for (const kast::AlphaMode mode : {kast::AlphaMode::Blend, kast::AlphaMode::Additive}) {
+        modes.alphaMode = mode;
+        allowed = allowed && kast::checkShaderAlphaMode(modes, screenOnly, why) &&
+                  kast::checkShaderAlphaMode(modes, depthOnly, why);
+    }
+    check(allowed, "blend and additive materials may sample them; any material may use a shader that doesn't");
+    checkSceneCopies();
+
     // The library: compiles once per change, null (logged once, with the line) when broken or missing.
     const std::filesystem::path dir = testRoot() / "kast_shader_check";
     removeTree(dir);
@@ -6247,6 +6319,86 @@ void checkShaders()
         for (const kast::MeshVertex& v : kast::primitiveMesh(primitive).vertices)
             white = white && v.color == 0xffffffff;
     check(white, "models without vertex colors and the primitives are white");
+}
+
+// SCREEN_TEXTURE / DEPTH_TEXTURE: Renderer::render copies the opaque scene's color / depth only on frames a blended
+// .kshader in view samples them (headless bgfx, real shaderc), and draws an opaque material that does magenta.
+void checkSceneCopies()
+{
+    const std::filesystem::path dir = looseTestDir("kast_scene_copy_check");
+    std::filesystem::create_directories(dir / "shaders");
+    std::filesystem::create_directories(dir / "materials");
+    writeFile(dir / "shaders/screen.kshader", "void fragment() { ALBEDO = texture2D(SCREEN_TEXTURE, SCREEN_UV).rgb; }\n");
+    writeFile(dir / "shaders/depth.kshader",
+              "void fragment() { ALPHA = saturate(linearDepth(texture2D(DEPTH_TEXTURE, SCREEN_UV).r)); }\n");
+    writeFile(dir / "shaders/both.kshader", "void fragment() { ALBEDO = texture2D(SCREEN_TEXTURE, SCREEN_UV).rgb * "
+                                            "texture2D(DEPTH_TEXTURE, SCREEN_UV).r; }\n");
+    for (const char* name : {"screen", "depth", "both"})
+        writeFile(dir / std::format("materials/{}.mat", name),
+                  std::format(R"({{"version": 3, "alphaMode": "blend", "shader": "shaders/{}.kshader"}})", name));
+    writeFile(dir / "materials/screen_opaque.mat", R"({"version": 3, "shader": "shaders/screen.kshader"})");
+    writeFile(dir / "materials/glass.mat", R"({"version": 3, "alphaMode": "blend"})");
+    kast::shaders().setRoot(dir);
+    kast::shaders().setCompiler(compileShader);
+    kast::shaders().setAsync(false);
+
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    if (!bgfx::init(init)) {
+        check(false, "scene copies: headless bgfx starts");
+        return;
+    }
+    {
+        kast::Renderer renderer;
+        renderer.init();
+        constexpr uint16_t kSize = 64;
+        const bgfx::TextureHandle attachments[] = {
+            bgfx::createTexture2D(kSize, kSize, false, 1, bgfx::TextureFormat::RGBA16F, BGFX_TEXTURE_RT),
+            bgfx::createTexture2D(kSize, kSize, false, 1, bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT)};
+        const bgfx::FrameBufferHandle target = bgfx::createFrameBuffer(2, attachments, true);
+        kast::Scene scene;
+        const entt::entity plane = scene.create("Water");
+        auto& mesh = scene.registry().emplace<kast::MeshRenderer>(plane);
+        mesh.primitive = kast::Primitive::Plane;
+        float view[16], proj[16];
+        bx::mtxLookAt(view, {0.0f, 3.0f, 3.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, bx::Handedness::Right);
+        bx::mtxProj(proj, 60.0f, 1.0f, 0.1f, 100.0f, false, bx::Handedness::Right);
+        // Copies made by one frame drawing plane with material at position, with or without a target.
+        const auto frame = [&](const char* material, float x, bool withTarget) {
+            mesh.material = std::format("materials/{}.mat", material);
+            scene.registry().get<kast::Transform>(plane).position = {x, 0.0f, 0.0f};
+            const kast::Renderer::SceneCopies before = renderer.sceneCopies();
+            if (withTarget)
+                renderer.setTarget(target, kSize, kSize);
+            renderer.render(scene, dir, kast::Renderer::kShadowViews, view, proj, 0);
+            bgfx::frame();
+            const kast::Renderer::SceneCopies& after = renderer.sceneCopies();
+            return std::pair{after.screen - before.screen, after.depth - before.depth};
+        };
+        using Copies = std::pair<uint64_t, uint64_t>;
+        check(frame("glass", 0.0f, true) == Copies{0, 0}, "scene copies: none for a blended material without a .kshader");
+        check(frame("screen", 0.0f, true) == Copies{1, 0} && frame("screen", 0.0f, true) == Copies{1, 0},
+              "scene copies: SCREEN_TEXTURE in view copies the color once per frame, not the depth");
+        check(frame("depth", 0.0f, true) == Copies{0, 1}, "scene copies: DEPTH_TEXTURE copies only the depth");
+        check(frame("both", 0.0f, true) == Copies{1, 1}, "scene copies: both");
+        check(frame("both", 500.0f, true) == Copies{0, 0}, "scene copies: none while the material is out of view");
+        check(frame("both", 0.0f, false) == Copies{0, 0}, "scene copies: none without a target (black / far plane instead)");
+        check(frame("both", 0.0f, true) == Copies{1, 1}, "scene copies: the target is set for one render() at a time");
+        const auto warned = countLogged("SCREEN_TEXTURE is only for blend and additive materials");
+        check(frame("screen_opaque", 0.0f, true) == Copies{0, 0} &&
+                  countLogged("Shader 'shaders/screen.kshader': SCREEN_TEXTURE is only for blend and additive materials "
+                              "(drawn after the opaque scene it copies); this material's alphaMode is opaque; rendering "
+                              "the material magenta") == 1 &&
+                  countLogged("SCREEN_TEXTURE is only for blend and additive materials") == warned + 1,
+              "scene copies: an opaque material sampling SCREEN_TEXTURE draws magenta (one warning), copying nothing");
+        kast::log::info(std::format("scene copies over the check: {} color, {} depth", renderer.sceneCopies().screen,
+                                    renderer.sceneCopies().depth));
+        bgfx::destroy(target);
+        renderer.shutdown();
+    }
+    bgfx::shutdown();
+    kast::shaders().setRoot(testRoot()); // forget
+    removeTree(dir);
 }
 
 // Build (phase 4): every shipped .kshader compiles into game.pak at shaderPakPath; the player's library (no compiler)
@@ -6318,6 +6470,18 @@ void checkShaderBuild()
                   !std::filesystem::exists(dir / "bad"),
               std::format("a broken .kshader fails the Build with its file and line, writing nothing: {}", error).c_str());
     }
+    std::filesystem::remove(root / "shaders/broken.kshader");
+    std::filesystem::create_directories(root / "materials");
+    writeFile(root / "shaders/screen.kshader", "void fragment() { ALBEDO = texture2D(SCREEN_TEXTURE, SCREEN_UV).rgb; }\n");
+    writeFile(root / "materials/water.mat", R"({"version": 3, "alphaMode": "mask", "shader": "shaders/screen.kshader"})");
+    check(!buildGame(project, dir / "bad", playerDir, exe, error) &&
+              contains(error, "Build failed: material 'materials/water.mat': SCREEN_TEXTURE is only for blend and additive "
+                              "materials") &&
+              !std::filesystem::exists(dir / "bad"),
+          std::format("a mask material sampling SCREEN_TEXTURE fails the Build: {}", error).c_str());
+    writeFile(root / "materials/water.mat", R"({"version": 3, "alphaMode": "blend", "shader": "shaders/screen.kshader"})");
+    check(buildGame(project, dir / "good", playerDir, exe, error),
+          std::format("as a blend material it builds: {}", error).c_str());
     removeTree(dir);
 }
 

@@ -88,7 +88,9 @@ void buildMips(MipImage& image, bool srgb);
 // with their materials (PBR metallic-roughness, see fs_mesh.sc) lit by its ambient, its
 // first DirectionalLight and up to kMaxPointLights PointLights each, fogged by its postProcessing.fog, as linear HDR
 // color (for PostProcess). Opaque and mask meshes first, then its sky (sky.h), then blended ones and particle emitters
-// (particles.h, simulated on the GPU here) far to near.
+// (particles.h, simulated on the GPU here) far to near. Blended draws whose .kshader samples SCREEN_TEXTURE or
+// DEPTH_TEXTURE see a copy of the target's color or depth as the opaque meshes and the sky left it, made only on frames
+// such a draw is in view.
 // Shadows: cascaded shadow maps for that DirectionalLight and cube shadow maps for the kMaxShadowedPointLights
 // castShadows PointLights nearest the eye, rendered in kShadowViews views before the scene's (see shadow.h).
 // renderOverlays draws the editor's: a ground grid, axis lines, a short frustum preview per Camera, the range of the
@@ -105,7 +107,8 @@ public:
     void init();
     void shutdown();
     // Materials and textures load from projectRoot (empty = none: every material path renders as an error). Files
-    // changed on disk since loaded reload first. shadowViews: the first of kShadowViews views, all before view.
+    // changed on disk since loaded reload first. shadowViews: the first of kShadowViews views, all before view. With a
+    // target (setTarget) the blended draws go to view + 1, after the SCREEN_TEXTURE / DEPTH_TEXTURE copies.
     // extra: another scene whose meshes, models and terrain draw too, lit by scene's lights, sky and fog (the editor's
     // open zone over the edited scene).
     void render(const Scene& scene, const std::filesystem::path& projectRoot, bgfx::ViewId view, const float* viewMtx,
@@ -119,6 +122,15 @@ public:
     // saved yet (Zone Builder, Create texture & material).
     void setPreview(const std::string& materialPath, const Material& material, const std::string& texturePath,
                     MipImage image);
+    // What the next render() draws into with view (PostProcess::target(): RGBA16F color, D24S8 depth) and its size, so
+    // it can copy them for SCREEN_TEXTURE / DEPTH_TEXTURE. Set before each render(); without one (the default) blended
+    // draws stay in view and those sample black and the far plane.
+    void setTarget(bgfx::FrameBufferHandle target, uint16_t width, uint16_t height);
+    // Frames whose opaque scene color / depth was copied for SCREEN_TEXTURE / DEPTH_TEXTURE, since init.
+    struct SceneCopies {
+        uint64_t screen = 0, depth = 0;
+    };
+    const SceneCopies& sceneCopies() const { return copies_; }
     // u_time.x for this frame's mesh draws (ShaderClock::seconds).
     void setTime(float seconds) { timeSeconds_ = seconds; }
     // Both on by default. Instancing off: every draw is its own submit. Culling off: every draw goes to every pass.
@@ -211,6 +223,12 @@ private:
                              const bx::Vec3& eye, bgfx::ViewId view);
     // The uniforms and textures of item's material (and its .kshader's params) and u_time, as fs_mesh.sc reads them.
     void setMaterialState(const DrawItem& item);
+    // Blits the target's color (screen) and depth into screenCopy_ / depthCopy_ at the start of view, before its draws
+    // (creating them, or remaking them for a new size, first).
+    // ponytail: one copy per frame, of the opaque scene: blended surfaces don't see each other through SCREEN_TEXTURE;
+    // copy again before such a draw (as Godot's BackBufferCopy) if layered refraction is ever needed.
+    void copyScene(bgfx::ViewId view, bgfx::FrameBufferHandle target, bool screen, bool depth);
+    void destroyCopies();
     // Culling is on and item is outside frustum (posed draws never are: their bounds are the bind pose's).
     // ponytail: by the undisplaced bounds; a .kshader vertex() moving geometry outside them can pop at the frustum's edge.
     // Pad the bounds per material (a .kshader "cull margin") if that shows.
@@ -295,6 +313,15 @@ private:
     bgfx::TextureHandle white_ = BGFX_INVALID_HANDLE; // 1x1: stands in for no texture and failed loads
     bgfx::TextureHandle flatNormal_ = BGFX_INVALID_HANDLE; // 1x1 (0.5, 0.5, 1): stands in for no normal texture
     bgfx::TextureHandle black_ = BGFX_INVALID_HANDLE;      // 1x1 opaque black: a texture2D param's "black" default
+    // SCREEN_TEXTURE / DEPTH_TEXTURE (s_kastScreen, s_kastDepth): copies of the target, created on first use.
+    bgfx::UniformHandle screenSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle depthSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::FrameBufferHandle target_ = BGFX_INVALID_HANDLE; // setTarget, for one render()
+    uint16_t targetWidth_ = 0, targetHeight_ = 0;
+    bgfx::TextureHandle screenCopy_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle depthCopy_ = BGFX_INVALID_HANDLE;
+    uint16_t copyWidth_ = 0, copyHeight_ = 0;
+    SceneCopies copies_;
 
     std::filesystem::path root_;
     MaterialLibrary materials_;

@@ -56,6 +56,7 @@ void GameViewport::draw(Document& doc)
             if (camera != entt::null) { // else just the clear, under any GUI
                 float view[16], proj[16];
                 kast::cameraMatrices(doc.scene, camera, size.x / size.y, bgfx::getCaps()->homogeneousDepth, view, proj);
+                renderer_.setTarget(post_.target(), post_.width(), post_.height());
                 renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), post_.sceneView(),
                                  view, proj, shadowViews_);
             }

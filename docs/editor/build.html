@@ -66,6 +66,9 @@ file can collide with it). The <code>.kshader</code> sources ship too: the playe
 compiles: it loads that bytecode (<code>Loaded shader 'shaders/x.kshader' (precompiled)</code>) and has no <code>shaderc</code>. A
 shader that fails to compile or parse fails the Build, naming the file and the line, and writes nothing:</p>
 <pre><code>Build failed: shader 'shaders/broken.kshader': line 7: error X3004: undeclared identifier 'undeclaredThing'</code></pre>
+<p>A shipped <code>.mat</code> whose <code>alphaMode</code> is opaque or mask and whose shader samples <code>SCREEN_TEXTURE</code> or
+<code>DEPTH_TEXTURE</code> (<a href="../engine/shaders.html#kshader-screen">blend and additive only</a>) fails the Build too:</p>
+<pre><code>Build failed: material 'materials/water.mat': SCREEN_TEXTURE is only for blend and additive materials (drawn after the opaque scene it copies); this material's alphaMode is mask</code></pre>
 <p>Move a work-in-progress <code>.kshader</code> into a dot-folder (e.g. <code>.wip/</code>) to leave it out of the Build.</p>
 <p><strong>The game</strong> (<code>kast_player.exe</code> under its new name) opens the <code>game.pak</code> next to it, loads <code>project.kast</code> and its Lua
 components from it, titles its window with the project name and plays <code>startScene</code> as editor Play mode does (C++

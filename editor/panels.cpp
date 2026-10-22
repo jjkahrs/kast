@@ -1348,6 +1348,11 @@ void Panels::drawMaterialInspector(Document& doc)
     if (!m.shader.empty()) {
         const kast::ShaderLibrary::Status status = kast::shaders().status(m.shader);
         drawShaderStatus(status);
+        if (std::string error; status.declaration && !kast::checkShaderAlphaMode(m, *status.declaration, error)) {
+            ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+            ImGui::TextWrapped("Renders magenta: %s", error.c_str());
+            ImGui::PopStyleColor();
+        }
         if (status.declaration)
             changed = drawShaderParams(*status.declaration, m, textures) || changed;
     }
