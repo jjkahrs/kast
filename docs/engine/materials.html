@@ -16,42 +16,92 @@
 project, referenced by <code>MeshRenderer.material</code> (project-relative). Every field but <code>version</code> is optional (default in
 brackets); unknown keys and invalid values make the file invalid.</p>
 <pre><code class="language-json">{
-  &quot;version&quot;: 1,
+  &quot;version&quot;: 2,
   &quot;baseColor&quot;: [0.8, 0.8, 0.8, 1],
   &quot;baseColorTexture&quot;: &quot;textures/checker.png&quot;,
   &quot;metallic&quot;: 0,
   &quot;roughness&quot;: 0.5,
   &quot;metallicRoughnessTexture&quot;: &quot;&quot;,
+  &quot;normalTexture&quot;: &quot;textures/normal_bumps.png&quot;,
+  &quot;normalScale&quot;: 1,
+  &quot;occlusionTexture&quot;: &quot;&quot;,
+  &quot;occlusionStrength&quot;: 1,
   &quot;emissiveEnabled&quot;: false,
   &quot;emissive&quot;: [0, 0, 0],
   &quot;emissiveIntensity&quot;: 1,
+  &quot;emissiveTexture&quot;: &quot;&quot;,
+  &quot;uvScale&quot;: [1, 1],
+  &quot;uvOffset&quot;: [0, 0],
   &quot;alphaMode&quot;: &quot;opaque&quot;,
-  &quot;alphaCutoff&quot;: 0.5
+  &quot;alphaCutoff&quot;: 0.5,
+  &quot;cullMode&quot;: &quot;back&quot;,
+  &quot;unlit&quot;: false
 }
 </code></pre>
+<p><strong>Versions</strong>: files are version 2. Version 1 files (no fields after <code>alphaCutoff</code>) still load, with the defaults
+below for every newer field; saving any material (the Inspector, Create &gt; Material) writes version 2 with every field,
+in the order above. Other versions are invalid (<code>"version" must be 1 or 2</code>).</p>
 <ul>
 <li><code>baseColor</code> linear RGBA 0–1 [0.8 grey, alpha 1], times <code>baseColorTexture</code> (sRGB; project-relative, empty = none).</li>
 <li><code>metallic</code>, <code>roughness</code> 0–1 [0, 0.5], times <code>metallicRoughnessTexture</code> (linear, glTF packing: G = roughness,
   B = metallic).</li>
+<li><code>normalTexture</code> [none] (linear, tangent space, glTF / OpenGL convention: +X right, <strong>+Y green = up</strong> in the image;
+  DirectX-style maps need their green channel inverted first) bends the shading normal; <code>normalScale</code> (any finite number
+  [1]) scales the sampled normal's X and Y, as glTF's <code>normalTexture.scale</code>. Without one (or if it fails to load) the
+  normal is flat: the mesh shades exactly as without normal mapping. Tangents come from the mesh (see
+  <a href="shaders.html#shaders">Shaders</a>).</li>
+<li><code>occlusionTexture</code> [none] (linear, <strong>R channel</strong>) with <code>occlusionStrength</code> 0–1 [1]:
+  <code>ao = 1 + strength * (R - 1)</code> multiplies the <strong>ambient light only</strong> (both ambient terms); direct light from the
+  directional and point lights is unchanged. The same file can also be the <code>metallicRoughnessTexture</code> (a packed ORM
+  texture: R = occlusion, G = roughness, B = metallic).</li>
 <li><code>emissiveEnabled</code> [false]: when on, <code>emissive</code> (linear RGB 0–1 [black]) times <code>emissiveIntensity</code> (≥ 0 [1]) is added
   after lighting (shows without lights); an intensity that lifts it above the bloom <code>threshold</code> glows. Older files with
-  only <code>emissive</code> load with emission on if it is non-black, and channels above 1 move into the intensity.</li>
+  only <code>emissive</code> load with emission on if it is non-black, and channels above 1 move into the intensity.
+  <code>emissiveTexture</code> [none = white] (sRGB) multiplies the emissive color and intensity (glTF semantics); it does nothing
+  while <code>emissiveEnabled</code> is off.</li>
+<li><code>uvScale</code> (2 finite numbers [1, 1]) and <code>uvOffset</code> ([0, 0]): every texture of the material (base color,
+  metallic-roughness, normal, occlusion, emissive, and the alpha-mask cutout in the shadow maps) samples
+  <code>uv * uvScale + uvOffset</code>; textures repeat, so <code>[4, 4]</code> tiles them 4 times. One transform for all textures (no
+  rotation, no per-texture transform).</li>
 <li><code>alphaMode</code> [<code>opaque</code>]: <code>mask</code> discards pixels whose alpha is below <code>alphaCutoff</code> [0.5]; <code>blend</code> draws after every
   opaque mesh, far to near by the mesh's world-space center (no per-triangle sorting), alpha-blended, depth-tested but
-  not depth-written.</li>
+  not depth-written. <code>additive</code> draws in the same far-to-near pass (sorted together with blended meshes and particle
+  emitters) and adds <code>color * alpha</code> to what is behind it (it can only brighten), depth-tested, not depth-written; fog
+  fades it toward black rather than toward the fog color, as additive particles do. Blended and additive meshes never
+  cast shadows.</li>
+<li><code>cullMode</code> [<code>back</code>]: which triangle faces are not drawn: <code>back</code>, <code>front</code> or <code>none</code> (both sides drawn).
+  Front faces wind counter-clockwise (as glTF and the built-in primitives); a mirroring transform (negative scale)
+  swaps the winding, and the renderer swaps the culled side with it. Shadow maps always draw both faces, so shadows
+  look the same in every mode.</li>
+<li><code>unlit</code> [false]: the output is <code>baseColor * baseColorTexture + emissive</code> (emissive with its texture, when enabled):
+  no directional or point lights, no shadows received, no ambient. Mask, blend and additive still apply, fog still
+  applies, and the mesh still casts shadows when its renderer's <code>castShadows</code> is on.</li>
+<li><strong>Back-face culling (new in version 2)</strong>: version 1 rendered every mesh double-sided. Now every material
+  culls back faces by default: <code>.mat</code> files without <code>cullMode</code> (all version 1 files), the default material of a
+  MeshRenderer with no material, and model materials (except glTF <code>doubleSided</code> ones). Open meshes meant to be seen
+  from both sides (planes seen from below, foliage cards, single-sided walls) need <code>"cullMode": "none"</code>. A closed
+  translucent (<code>blend</code>) mesh now shows only its front surface, not its inside, and terrain seen from underground is
+  invisible. In this repository <code>samples/starter-mmo/materials/grass_material.mat</code> (the grass blade model) was
+  migrated to <code>none</code>.</li>
 <li>Shading: Cook-Torrance (GGX distribution, Smith / Schlick-GGX geometry, Schlick Fresnel, F0 = mix(0.04, baseColor,
   metallic)) for the first <code>DirectionalLight</code> and up to 8 <code>PointLight</code>s per mesh; ambient adds a diffuse term and a flat
   specular term (roughness-aware Fresnel), so metals are not black with ambient light only. Direct light is scaled by
   the <a href="coordinates-and-scenes.html#coordinates-and-scenes">shadow maps</a> (the directional term by its cascade, each shadowed point light by its
   cube) unless the mesh's <code>receiveShadows</code> is off. No image-based lighting. The shader outputs linear HDR color
   (formulas in <code>engine/shaders/fs_mesh.sc</code>); the <a href="post-processing.html#post-processing-and-fog">post chain</a> tonemaps and encodes it to sRGB.</li>
-<li>Textures: PNG and JPG (stb_image), mipmapped at load (sRGB-correct filtering for base color), shared by path.</li>
+<li>Textures: PNG and JPG (stb_image), mipmapped at load (sRGB-correct filtering for base color and emissive), shared by
+  path.</li>
 <li>Fallbacks (the scene always loads): a missing or invalid <code>.mat</code> renders unlit magenta; a missing or undecodable
-  texture renders as white. Each is logged once per path, with the reason.</li>
+  texture renders as white, except a normal texture, which renders flat. Each is logged once per path, with the reason.</li>
+<li><strong>glTF import</strong> (<a href="models-animation.html#models-animation">models</a>): <code>normalTexture</code> and its <code>scale</code>,
+  <code>occlusionTexture</code> and its <code>strength</code>, <code>emissiveTexture</code>, <code>doubleSided</code> (true: <code>cullMode</code> none; false
+  or absent: back) and <code>KHR_materials_unlit</code> (<code>unlit</code>) map onto these fields, besides base color, metallic-roughness,
+  emissive and alpha mode. A model's material without these gets the defaults.</li>
 <li><strong>Editor</strong>: Assets &gt; Create &gt; Material writes <code>new_material.mat</code> (default material) into the folder and starts a
   rename. Selecting a <code>.mat</code> in Assets shows it in the Inspector (until an entity is selected): color pickers, sliders
-  (clamped), the alpha mode and texture combos (the project's <code>.png</code> / <code>.jpg</code>); every edit saves the file and the views
-  show it the same frame. The MeshRenderer Inspector picks a material from the project's <code>.mat</code> files or None
+  (clamped), drags for the normal scale and UV scale / offset, the alpha mode (with Additive) and cull mode combos, the
+  Unlit checkbox and texture combos for base color, metallic-roughness, normal, AO and emissive (the project's
+  <code>.png</code> / <code>.jpg</code>); every edit saves the file and the views show it the same frame. The MeshRenderer Inspector picks a material from the project's <code>.mat</code> files or None
   (default). Renaming or moving a <code>.mat</code> or texture (or a folder holding them) in Assets rewrites the open scene's
   <code>MeshRenderer.material</code> paths and the texture paths inside every valid <code>.mat</code>; deleting one leaves the references to
   fall back. <code>.mat</code> and texture files changed on disk (e.g. in an external editor; double-click opens a <code>.mat</code> there)
@@ -60,13 +110,21 @@ brackets); unknown keys and invalid values make the file invalid.</p>
   <code>kast.setMaterialProperty(id, name, value)</code> changes one field for that entity only: the first call copies its material
   into a per-entity instance (Unity's <code>renderer.material</code>); other entities using the same <code>.mat</code> are unaffected.
   <code>kast.getMaterialProperty(id, name)</code> reads the instance, else the <code>.mat</code>. Values are checked like <code>.mat</code> fields
-  (invalid raises); colors are <code>{r, g, b[, a]}</code> or <code>{x =, y =, z =[, w =]}</code> and come back as arrays. Instances are
+  (invalid raises); colors are <code>{r, g, b[, a]}</code> or <code>{x =, y =, z =[, w =]}</code> and come back as arrays, as do
+  <code>uvScale</code> / <code>uvOffset</code> (<code>{x, y}</code>); <code>cullMode</code> and <code>alphaMode</code> are strings, <code>unlit</code> a boolean. Every
+  field above works, e.g. <code>kast.setMaterialProperty(e, "uvOffset", {0.5, 0})</code>. Instances are
   never saved: Stop discards them, and <code>kast.set</code> to another material drops the entity's instance.</li>
 <li><strong>Built game</strong>: <code>.mat</code> and texture files ship in <code>game.pak</code> like every other project file; the player renders them
   the same way.</li>
 <li><strong>Sample</strong>: <code>tests/project/materials.scene</code> (gold and red plastic spheres at roughness 0.1 / 0.5 / 0.9, PNG and JPG
   textured cubes, a metallic-roughness textured sphere, an emissive sphere, a mask cutout, two overlapping blended
-  planes, a broken and a missing <code>.mat</code>, a missing texture) with its <code>materials/*.mat</code> and <code>textures/*</code>.</li>
+  planes, a broken and a missing <code>.mat</code>, a missing texture) with its <code>materials/*.mat</code> and <code>textures/*</code>.
+  <code>tests/project/material_features.scene</code> shows the version 2 fields, one labeled entity each: normal-mapped cubes
+  (two drawn instanced), sphere and skinned character next to a flat cube, AO and packed ORM cubes, emissive texture on
+  and off, 4x4 tiled and offset textures, back / front / none cull planes seen from below (with their three identical
+  shadows), unlit and lit spheres, additive spheres in front of a cube and in fog, and a blended one in fog
+  (<code>materials/mf_*.mat</code>, <code>textures/normal_bumps.png</code>, <code>ao_grid.png</code>, <code>orm.png</code>, <code>emissive_stripes.png</code>,
+  <code>models/material_features.gltf</code> for the glTF import check).</li>
 </ul>
 </main>
 </div>

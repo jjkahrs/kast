@@ -31,7 +31,8 @@ struct Trs {
 struct ModelVertex {
     float x, y, z;
     float nx, ny, nz;
-    float u, v; // (0, 0) is the image's top-left
+    float tx, ty, tz, tw; // tangent along texture u; bitangent (image up) = cross(normal, tangent) * tw, as MeshVertex
+    float u, v;           // (0, 0) is the image's top-left
     // ponytail: joint indices as floats; Uint8 needs uint shader inputs on DX11. 12 bytes per vertex if it matters.
     float joints[kMaxBoneWeights];
     float weights[kMaxBoneWeights]; // sum to 1 on skinned meshes, all 0 otherwise

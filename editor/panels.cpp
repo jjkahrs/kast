@@ -1213,13 +1213,29 @@ void Panels::drawMaterialInspector(Document& doc)
     changed = ImGui::SliderFloat("Roughness", &m.roughness, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp) || changed;
     changed = drawFilePicker("MR Texture", textures, "None", m.metallicRoughnessTexture) || changed;
     ImGui::SetItemTooltip("Metallic-roughness texture, glTF packing: G = roughness, B = metallic (times the sliders)");
+    changed = drawFilePicker("Normal Texture", textures, "None", m.normalTexture) || changed;
+    ImGui::SetItemTooltip("Tangent-space normal map, glTF / OpenGL convention (+Y green); None = flat");
+    ImGui::BeginDisabled(m.normalTexture.empty());
+    changed = ImGui::DragFloat("Normal Scale", &m.normalScale, 0.01f, -FLT_MAX, FLT_MAX, "%.2f") || changed;
+    ImGui::SetItemTooltip("Scales the normal map's X and Y (bumpiness); 1 = as authored");
+    ImGui::EndDisabled();
+    changed = drawFilePicker("AO Texture", textures, "None", m.occlusionTexture) || changed;
+    ImGui::SetItemTooltip("Ambient occlusion from the R channel; darkens ambient light only (may be the MR texture: ORM)");
+    ImGui::BeginDisabled(m.occlusionTexture.empty());
+    changed = ImGui::SliderFloat("AO Strength", &m.occlusionStrength, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp) || changed;
+    ImGui::EndDisabled();
     changed = ImGui::Checkbox("Emissive", &m.emissiveEnabled) || changed;
     ImGui::BeginDisabled(!m.emissiveEnabled);
     changed = ImGui::ColorEdit3("Emissive Color", &m.emissive.x) || changed;
     changed = ImGui::DragFloat("Intensity", &m.emissiveIntensity, 0.05f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp) || changed;
     ImGui::SetItemTooltip("Multiplies the color; above the bloom threshold (default 1) it glows");
+    changed = drawFilePicker("Emissive Texture", textures, "None", m.emissiveTexture) || changed;
+    ImGui::SetItemTooltip("Multiplies the emissive color and intensity (sRGB); None = white");
     ImGui::EndDisabled();
-    constexpr const char* kModeLabels[] = {"Opaque", "Mask", "Blend"}; // AlphaMode order
+    changed = ImGui::DragFloat2("UV Scale", m.uvScale.data(), 0.01f, -FLT_MAX, FLT_MAX, "%.2f") || changed;
+    ImGui::SetItemTooltip("Every texture samples uv * scale + offset: 4, 4 tiles them 4 times");
+    changed = ImGui::DragFloat2("UV Offset", m.uvOffset.data(), 0.01f, -FLT_MAX, FLT_MAX, "%.2f") || changed;
+    constexpr const char* kModeLabels[] = {"Opaque", "Mask", "Blend", "Additive"}; // AlphaMode order
     int mode = static_cast<int>(m.alphaMode);
     if (ImGui::Combo("Alpha Mode", &mode, kModeLabels, IM_ARRAYSIZE(kModeLabels))) {
         m.alphaMode = static_cast<kast::AlphaMode>(mode);
@@ -1228,6 +1244,15 @@ void Panels::drawMaterialInspector(Document& doc)
     ImGui::BeginDisabled(m.alphaMode != kast::AlphaMode::Mask);
     changed = ImGui::SliderFloat("Alpha Cutoff", &m.alphaCutoff, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp) || changed;
     ImGui::EndDisabled();
+    constexpr const char* kCullLabels[] = {"None (both faces)", "Back", "Front"}; // CullMode order
+    int cull = static_cast<int>(m.cullMode);
+    if (ImGui::Combo("Cull Mode", &cull, kCullLabels, IM_ARRAYSIZE(kCullLabels))) {
+        m.cullMode = static_cast<kast::CullMode>(cull);
+        changed = true;
+    }
+    ImGui::SetItemTooltip("Faces not drawn; None for open meshes seen from both sides. Shadows always use both faces");
+    changed = ImGui::Checkbox("Unlit", &m.unlit) || changed;
+    ImGui::SetItemTooltip("Base color + emissive only: ignores lights, shadows and ambient (still fogged, still casts)");
     ImGui::PopItemWidth();
     endCard();
     if (!changed)

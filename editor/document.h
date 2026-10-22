@@ -8,6 +8,7 @@
 #include <lua_systems.h>
 #include <project.h>
 #include <scene.h>
+#include <shader_clock.h>
 
 #include <nlohmann/json.hpp>
 
@@ -34,6 +35,7 @@ struct Document {
     bool dirty = false;
 
     PlayState play = PlayState::Stopped;
+    kast::ShaderClock shaderClock; // u_time of the Scene and Game views: updatePlay advances it, except while paused
     nlohmann::ordered_json playSnapshot; // the scene as it was when Play started, restored on Stop
     bool playSnapshotDirty = false;
     kast::Input input; // fed by the Game panel while it is focused and playing
@@ -85,6 +87,7 @@ void startPlay(Document& doc); // also resumes when paused
 void togglePause(Document& doc);
 void stopPlay(Document& doc);
 // Ticks the C++ systems, then the Lua systems, while playing; in Edit mode only poses animated models (preview).
+// Advances doc.shaderClock by dt unless Play is paused.
 void updatePlay(Document& doc, float dt);
 
 // doc.path relative to the active project ('/' separators); empty if unsaved or there is no project.

@@ -1,0 +1,190 @@
+{
+ "asset": {
+  "version": "2.0"
+ },
+ "extensionsUsed": [
+  "KHR_materials_unlit"
+ ],
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0,
+    1
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "mesh": 0,
+   "name": "Featured"
+  },
+  {
+   "mesh": 1,
+   "name": "Plain",
+   "translation": [
+    2,
+    0,
+    0
+   ]
+  }
+ ],
+ "meshes": [
+  {
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 0
+    }
+   ]
+  },
+  {
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 1
+    }
+   ]
+  }
+ ],
+ "materials": [
+  {
+   "name": "Featured",
+   "doubleSided": true,
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     1,
+     1,
+     1,
+     1
+    ]
+   },
+   "normalTexture": {
+    "index": 0,
+    "scale": 0.5
+   },
+   "occlusionTexture": {
+    "index": 1,
+    "strength": 0.25
+   },
+   "emissiveTexture": {
+    "index": 2
+   },
+   "emissiveFactor": [
+    1,
+    1,
+    1
+   ],
+   "extensions": {
+    "KHR_materials_unlit": {}
+   }
+  },
+  {
+   "name": "Plain",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.5,
+     0.5,
+     0.5,
+     1
+    ]
+   }
+  }
+ ],
+ "textures": [
+  {
+   "source": 0
+  },
+  {
+   "source": 1
+  },
+  {
+   "source": 2
+  }
+ ],
+ "images": [
+  {
+   "uri": "../textures/normal_bumps.png"
+  },
+  {
+   "uri": "../textures/ao_grid.png"
+  },
+  {
+   "uri": "../textures/emissive_stripes.png"
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 140,
+   "uri": "data:application/octet-stream;base64,AAAAvwAAAAAAAAC/AAAAPwAAAAAAAAC/AAAAPwAAAAAAAAA/AAAAvwAAAAAAAAA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAIAAQAAAAMAAgA="
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 48
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 48,
+   "byteLength": 48
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 96,
+   "byteLength": 32
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 128,
+   "byteLength": 12
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -0.5,
+    0,
+    -0.5
+   ],
+   "max": [
+    0.5,
+    0,
+    0.5
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5123,
+   "count": 6,
+   "type": "SCALAR"
+  }
+ ]
+}

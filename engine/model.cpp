@@ -16,6 +16,7 @@
 #include <cctype>
 #include <cfloat>
 #include <charconv>
+#include <cmath>
 #include <cstring>
 #include <format>
 
@@ -230,6 +231,45 @@ struct Loader {
         return joints.empty() ? it->second.front() : joints.front();
     }
 
+    // Tangents from CalcTangentSpace (along texture u), made perpendicular to the normal. The handedness comes from the
+    // triangles' own UVs rather than Assimp's bitangents: those point along +v of the flipped (top-left) UVs when
+    // Assimp computes them but follow the file when a glTF has TANGENTs. Image up (the normal map's +Y) is -v here.
+    // Vertices without a usable tangent (no UVs, degenerate UVs) get any unit vector perpendicular to the normal.
+    static void addTangents(const aiMesh& source, std::vector<ModelVertex>& vertices, const std::vector<uint32_t>& indices)
+    {
+        std::vector<bx::Vec3> down(vertices.size(), {0.0f, 0.0f, 0.0f}); // per vertex: sum of d(position)/dv
+        for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+            const ModelVertex& a = vertices[indices[i]];
+            const ModelVertex& b = vertices[indices[i + 1]];
+            const ModelVertex& c = vertices[indices[i + 2]];
+            const bx::Vec3 e1{b.x - a.x, b.y - a.y, b.z - a.z}, e2{c.x - a.x, c.y - a.y, c.z - a.z};
+            const float du1 = b.u - a.u, dv1 = b.v - a.v, du2 = c.u - a.u, dv2 = c.v - a.v;
+            const float det = du1 * dv2 - du2 * dv1;
+            if (std::fabs(det) < 1e-12f)
+                continue;
+            const bx::Vec3 dpdv = bx::mul(bx::sub(bx::mul(e2, du1), bx::mul(e1, du2)), 1.0f / det);
+            for (size_t k = 0; k < 3; ++k)
+                down[indices[i + k]] = bx::add(down[indices[i + k]], dpdv);
+        }
+        for (size_t v = 0; v < vertices.size(); ++v) {
+            ModelVertex& out = vertices[v];
+            const bx::Vec3 n{out.nx, out.ny, out.nz};
+            bx::Vec3 t{0.0f, 0.0f, 0.0f};
+            if (source.mTangents)
+                t = toVec3(source.mTangents[v]);
+            t = bx::sub(t, bx::mul(n, bx::dot(n, t)));
+            if (!(bx::length(t) > 1e-6f)) { // also NaN: Assimp marks tangents it can't compute with qNaN
+                const bx::Vec3 axis = std::fabs(n.x) < 0.9f ? bx::Vec3{1.0f, 0.0f, 0.0f} : bx::Vec3{0.0f, 1.0f, 0.0f};
+                t = bx::sub(axis, bx::mul(n, bx::dot(n, axis)));
+            }
+            t = bx::normalize(t);
+            out.tx = t.x;
+            out.ty = t.y;
+            out.tz = t.z;
+            out.tw = bx::dot(bx::cross(n, t), down[v]) > 0.0f ? -1.0f : 1.0f;
+        }
+    }
+
     void addMesh(const aiMesh& source, int node)
     {
         if (!(source.mPrimitiveTypes & aiPrimitiveType_TRIANGLE))
@@ -259,6 +299,7 @@ struct Loader {
                 mesh.indices.insert(mesh.indices.end(), source.mFaces[f].mIndices, source.mFaces[f].mIndices + 3);
         if (mesh.indices.empty()) // nothing to draw, and bgfx can't make an empty buffer
             return;
+        addTangents(source, mesh.vertices, mesh.indices);
         Mat4 identity;
         bx::mtxIdentity(identity.data());
         for (unsigned b = 0; b < source.mNumBones; ++b) {
@@ -371,6 +412,33 @@ struct Loader {
             if (m.baseColorTexture.empty())
                 m.baseColorTexture = texture(source, aiTextureType_DIFFUSE);
             m.metallicRoughnessTexture = texture(source, aiTextureType_GLTF_METALLIC_ROUGHNESS);
+            m.normalTexture = texture(source, aiTextureType_NORMALS);
+            if (!m.normalTexture.empty()) {
+                source.Get(AI_MATKEY_GLTF_TEXTURE_SCALE(aiTextureType_NORMALS, 0), m.normalScale);
+                if (!std::isfinite(m.normalScale))
+                    m.normalScale = 1.0f;
+            }
+            // glTF occlusion comes in as Assimp's lightmap slot (its strength with it); other formats may say AO.
+            for (const aiTextureType type : {aiTextureType_LIGHTMAP, aiTextureType_AMBIENT_OCCLUSION}) {
+                m.occlusionTexture = texture(source, type);
+                if (m.occlusionTexture.empty())
+                    continue;
+                // Assimp 6's glTF importer stores the strength as "$tex.file.strength", not under its own
+                // AI_MATKEY_GLTF_TEXTURE_STRENGTH ("$tex.strength"): read either.
+                if (source.Get(_AI_MATKEY_TEXTURE_BASE ".strength", type, 0, m.occlusionStrength) != AI_SUCCESS)
+                    source.Get(AI_MATKEY_GLTF_TEXTURE_STRENGTH(type, 0), m.occlusionStrength);
+                m.occlusionStrength = bx::clamp(m.occlusionStrength, 0.0f, 1.0f);
+                break;
+            }
+            m.emissiveTexture = texture(source, aiTextureType_EMISSIVE);
+            // bool reads: glTF stores these as 1-byte bools (an int read would over-read them).
+            bool twoSided = false; // glTF doubleSided (FBX / OBJ exporters rarely say)
+            if (source.Get(AI_MATKEY_TWOSIDED, twoSided) == AI_SUCCESS && twoSided)
+                m.cullMode = CullMode::None;
+            // KHR_materials_unlit. Not AI_MATKEY_SHADING_MODEL == aiShadingMode_Unlit: OBJ's "illum 0" maps there too.
+            // ponytail: Assimp keeps this key "for backwards compatibility"; the glTF import check fails if it goes.
+            bool unlit = false;
+            m.unlit = source.Get("$mat.gltf.unlit", 0, 0, unlit) == AI_SUCCESS && unlit;
             model.materials.push_back(std::move(slot));
         }
         // Slots are the materials meshes use, in file order: Assimp adds an unused "DefaultMaterial" to many files.
@@ -497,7 +565,8 @@ std::shared_ptr<const Model> convert(const aiScene* scene, Assimp::Importer& imp
 }
 
 constexpr unsigned kImportFlags = aiProcess_Triangulate | aiProcess_JoinIdenticalVertices | aiProcess_GenSmoothNormals |
-                                  aiProcess_LimitBoneWeights | aiProcess_FlipUVs | aiProcess_SortByPType;
+                                  aiProcess_CalcTangentSpace | aiProcess_LimitBoneWeights | aiProcess_FlipUVs |
+                                  aiProcess_SortByPType;
 
 void configure(Assimp::Importer& importer)
 {

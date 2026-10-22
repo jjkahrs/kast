@@ -934,6 +934,18 @@ add_test(NAME mesh_renderer_material_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
           "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/mesh_renderer_material.png"
           "-DEXTRA_ARGS=--scene ${KAST_MATERIALS} --select 3" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# Material features (normal / AO / emissive textures, UV tiling, cull modes, unlit, additive): every texture loads, and
+# the Inspector shows the version 2 fields of a .mat.
+add_test(NAME material_features_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/material_features.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/material_features.scene --size 1600x900 --fixed-dt 0.016"
+          "-DFOCUS_PANEL=Game" "-DFORBID_OUTPUT=Texture '|Material '" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME material_features_inspector_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/material_features_inspector.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/material_features.scene --size 1600x1000 --select 8 --assets-select materials/mf_tiled.mat"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME materials_roundtrip
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_MATERIALS}"
           "-DOUT_DIR=${KAST_MATERIALS_PROJECT}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
@@ -950,7 +962,7 @@ add_test(NAME assets_create_material_screenshot
 add_test(NAME assets_create_material_written
   COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_NEW_MATERIAL_PROJECT}/materials/new_material.mat")
 set_tests_properties(assets_create_material_written PROPERTIES PASS_REGULAR_EXPRESSION
-  "\"version\": 1,.*\"baseColor\": \\[.*0.8.*\"metallic\": 0[.0]*,.*\"roughness\": 0.5,.*\"alphaMode\": \"opaque\"")
+  "\"version\": 2,.*\"baseColor\": \\[.*0.8.*\"metallic\": 0[.0]*,.*\"roughness\": 0.5,.*\"alphaMode\": \"opaque\".*\"cullMode\": \"back\",.*\"unlit\": false")
 set_tests_properties(new_material_project_clean PROPERTIES FIXTURES_SETUP new_material_clean)
 set_tests_properties(new_material_project_copy PROPERTIES FIXTURES_REQUIRED new_material_clean
                      FIXTURES_SETUP new_material_copy)

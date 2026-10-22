@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "baseColor": [
+    0.85,
+    0.85,
+    0.85,
+    1
+  ],
+  "roughness": 0.45,
+  "normalTexture": "textures/normal_bumps.png"
+}

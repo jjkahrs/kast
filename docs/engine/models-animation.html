@@ -25,7 +25,10 @@ animation clips through an <code>Animator</code>. Loading uses Assimp at runtime
 <li><strong>What loads</strong>: meshes (one submesh per material slot; positions, normals, UV0, up to 4 joint weights per vertex,
   renormalized), the node hierarchy, skins (bind poses), animation clips (name, duration, per-node translation /
   rotation / scale keys) and embedded materials mapped onto <a href="materials.html#materials"><code>.mat</code> fields</a>: base color factor and texture,
-  metallic, roughness, metallic-roughness texture, emissive, alpha mode and cutoff (OBJ <code>Kd</code> / <code>d</code>). Embedded GLB
+  metallic, roughness, metallic-roughness texture, emissive, alpha mode and cutoff (OBJ <code>Kd</code> / <code>d</code>), and from glTF the
+  normal texture and scale, occlusion texture and strength, emissive texture, <code>doubleSided</code> (cull mode none, else back)
+  and <code>KHR_materials_unlit</code> (see <a href="materials.html#materials">Materials</a>). Tangents are generated for normal
+  mapping (<a href="shaders.html#mesh-vertices">Shaders</a>). Embedded GLB
   images decode like other textures (PNG/JPG). A mesh on a node without a skin renders at that node's transform.</li>
 <li><strong>Caching</strong>: each model loads once per project-relative path and is shared by every entity using it; a changed file
   reloads within a frame (modification time, as <code>.mat</code> files; not in the built game).</li>

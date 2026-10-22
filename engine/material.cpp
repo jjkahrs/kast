@@ -15,8 +15,26 @@ namespace {
 
 using Json = nlohmann::ordered_json;
 
-constexpr std::array<std::pair<AlphaMode, const char*>, 3> kAlphaModes = {
-    {{AlphaMode::Opaque, "opaque"}, {AlphaMode::Mask, "mask"}, {AlphaMode::Blend, "blend"}}};
+constexpr std::array<std::pair<AlphaMode, const char*>, 4> kAlphaModes = {
+    {{AlphaMode::Opaque, "opaque"}, {AlphaMode::Mask, "mask"}, {AlphaMode::Blend, "blend"}, {AlphaMode::Additive, "additive"}}};
+constexpr std::array<std::pair<CullMode, const char*>, 3> kCullModes = {
+    {{CullMode::None, "none"}, {CullMode::Back, "back"}, {CullMode::Front, "front"}}};
+
+// The enum value named by json in names. False + error otherwise.
+template <typename Enum, size_t N>
+bool enumName(const Json& json, const std::array<std::pair<Enum, const char*>, N>& names, Enum& out)
+{
+    const auto it = std::ranges::find_if(names, [&](const auto& n) { return json.is_string() && json.get<std::string>() == n.second; });
+    if (it != names.end())
+        out = it->first;
+    return it != names.end();
+}
+
+template <typename Enum, size_t N>
+const char* nameOf(Enum value, const std::array<std::pair<Enum, const char*>, N>& names)
+{
+    return std::ranges::find(names, value, &std::pair<Enum, const char*>::first)->second;
+}
 
 // N numbers, each in 0..1. False + error naming the field otherwise.
 template <size_t N>
@@ -40,6 +58,37 @@ bool unitNumber(std::string_view name, const Json& json, float& out, std::string
         return false;
     }
     out = json.get<float>();
+    return true;
+}
+
+bool finiteNumber(std::string_view name, const Json& json, float& out, std::string& error)
+{
+    if (!json.is_number() || !std::isfinite(json.get<double>())) {
+        error = std::format("\"{}\" must be a finite number", name);
+        return false;
+    }
+    out = json.get<float>();
+    return true;
+}
+
+bool finitePair(std::string_view name, const Json& json, std::array<float, 2>& out, std::string& error)
+{
+    const bool ok = json.is_array() && json.size() == 2 &&
+                    std::ranges::all_of(json, [](const Json& v) { return v.is_number() && std::isfinite(v.get<double>()); });
+    if (ok)
+        out = {json[0].get<float>(), json[1].get<float>()};
+    else
+        error = std::format("\"{}\" must be an array of 2 finite numbers", name);
+    return ok;
+}
+
+bool flag(std::string_view name, const Json& json, bool& out, std::string& error)
+{
+    if (!json.is_boolean()) {
+        error = std::format("\"{}\" must be true or false", name);
+        return false;
+    }
+    out = json.get<bool>();
     return true;
 }
 
@@ -110,9 +159,10 @@ const Material& errorMaterial()
 
 const std::vector<std::string>& materialFieldNames()
 {
-    static const std::vector<std::string> names = {"baseColor", "baseColorTexture", "metallic", "roughness",
-                                                   "metallicRoughnessTexture", "emissiveEnabled", "emissive", "emissiveIntensity",
-                                                   "alphaMode", "alphaCutoff"};
+    static const std::vector<std::string> names = {
+        "baseColor", "baseColorTexture", "metallic", "roughness", "metallicRoughnessTexture", "normalTexture", "normalScale",
+        "occlusionTexture", "occlusionStrength", "emissiveEnabled", "emissive", "emissiveIntensity", "emissiveTexture",
+        "uvScale", "uvOffset", "alphaMode", "alphaCutoff", "cullMode", "unlit"};
     return names;
 }
 
@@ -130,12 +180,16 @@ bool setMaterialField(Material& material, std::string_view name, const Json& val
         ok = unitNumber(name, value, m.roughness, error);
     } else if (name == "metallicRoughnessTexture") {
         ok = texturePath(name, value, m.metallicRoughnessTexture, error);
+    } else if (name == "normalTexture") {
+        ok = texturePath(name, value, m.normalTexture, error);
+    } else if (name == "normalScale") {
+        ok = finiteNumber(name, value, m.normalScale, error);
+    } else if (name == "occlusionTexture") {
+        ok = texturePath(name, value, m.occlusionTexture, error);
+    } else if (name == "occlusionStrength") {
+        ok = unitNumber(name, value, m.occlusionStrength, error);
     } else if (name == "emissiveEnabled") {
-        ok = value.is_boolean();
-        if (ok)
-            m.emissiveEnabled = value.get<bool>();
-        else
-            error = "\"emissiveEnabled\" must be true or false";
+        ok = flag(name, value, m.emissiveEnabled, error);
     } else if (name == "emissive") {
         std::array<float, 3> v{};
         ok = unitArray(name, value, v, error);
@@ -146,17 +200,24 @@ bool setMaterialField(Material& material, std::string_view name, const Json& val
             m.emissiveIntensity = value.get<float>();
         else
             error = "\"emissiveIntensity\" must be a number >= 0";
+    } else if (name == "emissiveTexture") {
+        ok = texturePath(name, value, m.emissiveTexture, error);
+    } else if (name == "uvScale") {
+        ok = finitePair(name, value, m.uvScale, error);
+    } else if (name == "uvOffset") {
+        ok = finitePair(name, value, m.uvOffset, error);
     } else if (name == "alphaMode") {
-        const auto it = std::ranges::find_if(kAlphaModes, [&](const auto& mode) {
-            return value.is_string() && value.get<std::string>() == mode.second;
-        });
-        ok = it != kAlphaModes.end();
-        if (ok)
-            m.alphaMode = it->first;
-        else
-            error = "\"alphaMode\" must be \"opaque\", \"mask\" or \"blend\"";
+        ok = enumName(value, kAlphaModes, m.alphaMode);
+        if (!ok)
+            error = "\"alphaMode\" must be \"opaque\", \"mask\", \"blend\" or \"additive\"";
     } else if (name == "alphaCutoff") {
         ok = unitNumber(name, value, m.alphaCutoff, error);
+    } else if (name == "cullMode") {
+        ok = enumName(value, kCullModes, m.cullMode);
+        if (!ok)
+            error = "\"cullMode\" must be \"none\", \"back\" or \"front\"";
+    } else if (name == "unlit") {
+        ok = flag(name, value, m.unlit, error);
     } else {
         error = std::format("unknown field \"{}\"", name);
     }
@@ -177,16 +238,34 @@ std::optional<Json> materialField(const Material& m, std::string_view name)
         return jsonNumber(m.roughness);
     if (name == "metallicRoughnessTexture")
         return m.metallicRoughnessTexture;
+    if (name == "normalTexture")
+        return m.normalTexture;
+    if (name == "normalScale")
+        return jsonNumber(m.normalScale);
+    if (name == "occlusionTexture")
+        return m.occlusionTexture;
+    if (name == "occlusionStrength")
+        return jsonNumber(m.occlusionStrength);
     if (name == "emissiveEnabled")
         return m.emissiveEnabled;
     if (name == "emissive")
         return numbers({m.emissive.x, m.emissive.y, m.emissive.z});
     if (name == "emissiveIntensity")
         return jsonNumber(m.emissiveIntensity);
+    if (name == "emissiveTexture")
+        return m.emissiveTexture;
+    if (name == "uvScale")
+        return numbers({m.uvScale[0], m.uvScale[1]});
+    if (name == "uvOffset")
+        return numbers({m.uvOffset[0], m.uvOffset[1]});
     if (name == "alphaMode")
-        return std::ranges::find(kAlphaModes, m.alphaMode, &std::pair<AlphaMode, const char*>::first)->second;
+        return nameOf(m.alphaMode, kAlphaModes);
     if (name == "alphaCutoff")
         return jsonNumber(m.alphaCutoff);
+    if (name == "cullMode")
+        return nameOf(m.cullMode, kCullModes);
+    if (name == "unlit")
+        return m.unlit;
     return std::nullopt;
 }
 
@@ -196,8 +275,9 @@ bool materialFromJson(const Json& json, Material& out, std::string& error)
         error = "must be a JSON object";
         return false;
     }
-    if (!json.contains("version") || json["version"] != kMaterialFileVersion) {
-        error = std::format("\"version\" must be {}", kMaterialFileVersion);
+    // Version 2 only added fields: a version 1 file is a version 2 file with those at their defaults.
+    if (!json.contains("version") || (json["version"] != 1 && json["version"] != kMaterialFileVersion)) {
+        error = std::format("\"version\" must be 1 or {}", kMaterialFileVersion);
         return false;
     }
     Material material;

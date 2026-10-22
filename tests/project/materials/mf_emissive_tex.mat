@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "baseColor": [
+    0.15,
+    0.15,
+    0.15,
+    1
+  ],
+  "emissiveEnabled": true,
+  "emissive": [
+    1,
+    1,
+    1
+  ],
+  "emissiveIntensity": 1.5,
+  "emissiveTexture": "textures/emissive_stripes.png"
+}

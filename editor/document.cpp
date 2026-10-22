@@ -300,6 +300,8 @@ void stopPlay(Document& doc)
 
 void updatePlay(Document& doc, float dt)
 {
+    if (doc.play != PlayState::Paused)
+        doc.shaderClock.advance(dt);
     if (doc.play == PlayState::Stopped) {
         // Edit mode previews animation (playOnStart clips, the Inspector's Play/Pause and scrub) and particles.
         // AnimatorState and ParticleEmitterState are never saved and don't dirty the scene.
