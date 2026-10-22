@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "baseColor": [
+    1,
+    1,
+    1,
+    1
+  ],
+  "baseColorTexture": "textures/checker.png",
+  "normalTexture": "textures/normal_bumps.png",
+  "uvScale": [
+    4,
+    4
+  ]
+}

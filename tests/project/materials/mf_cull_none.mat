@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "baseColor": [
+    0.2,
+    0.35,
+    0.95,
+    1
+  ],
+  "cullMode": "none"
+}

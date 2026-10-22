@@ -21,6 +21,28 @@ from <code>u_model</code>), <code>vs_mesh_skinned</code> / <code>vs_shadow_skinn
 <code>vs_shadow_instanced</code> (model matrix per instance in <code>i_data0..3</code>, see
 <a href="instancing-and-culling.html#instancing-and-culling">Instancing and culling</a>). The single and instanced variants transform the
 same way (model, then <code>u_viewProj</code>), so a mesh covers the same pixels either way.</p>
+<h2 id="mesh-vertices">Mesh vertices and tangents</h2>
+<p>Every mesh vertex layout (primitives and terrain: position, normal, tangent, UV0; models: the same plus joint indices
+and weights) has a <code>vec4</code> <strong>tangent</strong> (<code>a_tangent</code>, <code>TANGENT</code>): xyz points along increasing texture u, and w (±1)
+is the handedness, so the bitangent <code>cross(normal, tangent.xyz) * w</code> points toward the image's top (decreasing v,
+the normal map's +Y). Sources: the built-in cube, plane and sphere compute them exactly; terrain uses world +X made
+perpendicular to each vertex normal (w = 1); models get Assimp's tangents (<code>aiProcess_CalcTangentSpace</code>) made
+perpendicular to the normal, with w from the triangles' UVs; vertices without UVs get any unit vector perpendicular
+to the normal. <code>vs_mesh</code> and <code>vs_mesh_instanced</code> carry the tangent by the model matrix (not the normal matrix) and
+<code>vs_mesh_skinned</code> skins it like the normal first; a mirroring model matrix flips w. <code>fs_mesh</code> makes the
+interpolated tangent perpendicular to the normal again (Gram-Schmidt) before applying the normal map. The shadow
+shaders read only the position and UV of the same buffers, so their output is unchanged.</p>
+<h2 id="mesh-uniforms">Mesh material inputs</h2>
+<p><code>fs_mesh</code> samplers: <code>s_baseColor</code> (stage 0), <code>s_metallicRoughness</code> (1), the shadow maps (2–6), <code>s_normal</code> (7),
+<code>s_occlusion</code> (8), <code>s_emissive</code> (9). Uniforms besides the lights: <code>u_baseColor</code>, <code>u_emissive</code>, <code>u_material</code>
+(metallic, roughness, alpha cutoff, output mode 0 opaque / 1 blend / 2 additive), <code>u_materialExt</code> (normal scale,
+occlusion strength, normal map bound, unlit), <code>u_uvTransform</code> (UV scale xy, offset zw; also read by <code>fs_shadow</code> for
+mask cutouts).</p>
+<p><strong><code>u_time</code></strong> (<code>vec4</code>, x = seconds) is set for every mesh draw. In the editor it advances by each frame's delta in edit
+mode and in Play (by exactly <code>--fixed-dt</code> per frame when that option is given) and holds while Play is paused; the
+player advances it every frame. It wraps to 0 every <strong>3600 seconds</strong> (<code>kShaderTimePeriod</code> in
+<code>engine/shader_clock.h</code>) so it keeps sub-millisecond float precision. No material feature reads it yet; the shader
+compiler drops it from <code>fs_mesh</code> until one does.</p>
 </main>
 </div>
 </body>

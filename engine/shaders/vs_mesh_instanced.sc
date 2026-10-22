@@ -1,5 +1,5 @@
-$input a_position, a_normal, a_texcoord0, i_data0, i_data1, i_data2, i_data3
-$output v_normal, v_worldPos, v_texcoord0
+$input a_position, a_normal, a_tangent, a_texcoord0, i_data0, i_data1, i_data2, i_data3
+$output v_normal, v_tangent, v_worldPos, v_texcoord0
 
 #include <bgfx_shader.sh>
 
@@ -15,7 +15,9 @@ void main()
     vec3 c1 = i_data1.xyz;
     vec3 c2 = i_data2.xyz;
     vec3 r0 = cross(c1, c2);
-    v_normal = (r0 * a_normal.x + cross(c2, c0) * a_normal.y + cross(c0, c1) * a_normal.z) / dot(c0, r0);
+    float det = dot(c0, r0);
+    v_normal = (r0 * a_normal.x + cross(c2, c0) * a_normal.y + cross(c0, c1) * a_normal.z) / det;
+    v_tangent = vec4(mul(model, vec4(a_tangent.xyz, 0.0)).xyz, a_tangent.w * (det < 0.0 ? -1.0 : 1.0)); // as vs_mesh.sc
     v_worldPos = worldPos.xyz;
     v_texcoord0 = a_texcoord0;
 }

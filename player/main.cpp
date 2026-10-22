@@ -203,6 +203,7 @@ int main(int argc, char** argv)
     int readableHeight = 0;
     SDL_Window* window = nullptr;
     uint64_t lastTicks = 0;
+    kast::ShaderClock shaderClock; // u_time
     int frame = 0;
     bool screenshotRequested = false;
     bool screenshotSaved = false;
@@ -242,6 +243,8 @@ int main(int argc, char** argv)
         const uint64_t ticks = SDL_GetTicksNS();
         const double dt = static_cast<double>(ticks - lastTicks) * 1e-9;
         stats.frame(dt, lua.world().rttMs());
+        shaderClock.advance(dt);
+        renderer.setTime(shaderClock.seconds());
         if (kast::tickPlay(scene, lua, static_cast<float>(dt)))
             gui.clear(); // kast.loadScene: the new scene's GUIs load below
         gui.sync(scene, project.root, lua.bus());

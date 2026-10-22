@@ -1,4 +1,4 @@
-$input v_normal, v_worldPos, v_texcoord0
+$input v_normal, v_tangent, v_worldPos, v_texcoord0
 
 #include <bgfx_shader.sh>
 
@@ -16,10 +16,16 @@ SAMPLERCUBESHADOW(s_pointShadow0, 3); // shadowed point light cubes: depth of ea
 SAMPLERCUBESHADOW(s_pointShadow1, 4);
 SAMPLERCUBESHADOW(s_pointShadow2, 5);
 SAMPLERCUBESHADOW(s_pointShadow3, 6);
+SAMPLER2D(s_normal, 7);            // linear tangent-space normal, glTF / OpenGL (+Y green); flat (0.5, 0.5, 1) if none
+SAMPLER2D(s_occlusion, 8);         // linear, R = ambient occlusion; white if none
+SAMPLER2D(s_emissive, 9);          // sRGB, sampled as linear, times u_emissive; white if none
 
 uniform vec4 u_baseColor;  // linear RGBA, times the base color texture
 uniform vec4 u_emissive;   // rgb: linear, added after lighting
-uniform vec4 u_material;   // x: metallic, y: roughness, z: alpha cutoff (-1 = none), w: 1 to output alpha (blend)
+uniform vec4 u_material;   // x: metallic, y: roughness, z: alpha cutoff (-1 = none), w: 0 opaque, 1 blend, 2 additive
+uniform vec4 u_materialExt; // x: normal scale, y: occlusion strength, z: 1 if a normal texture is bound, w: 1 if unlit
+uniform vec4 u_uvTransform; // xy: scale, zw: offset; every texture of the material samples uv * scale + offset
+uniform vec4 u_time;        // x: seconds, wrapping every kShaderTimePeriod (shader_clock.h); no material uses it yet
 uniform vec4 u_cameraPos;  // xyz: world position of the eye
 uniform vec4 u_lightDir;   // xyz: world direction the light travels; w: 1 if the scene has a light, else 0
 uniform vec4 u_lightColor; // rgb: light color * intensity
@@ -119,18 +125,47 @@ vec3 shade(vec3 n, vec3 v, vec3 l, vec3 light, vec3 albedo, vec3 f0, float metal
     return (kd * albedo + PI * specular) * light * nl;
 }
 
+// Fog, as fogFactor in post_process.cpp: 1 - exp(-(density * max(d - start, 0))^2). Alpha-blended surfaces fade to the
+// fog color; additive ones (u_material.w 2) fade toward black, as additive particles do (adding fog would brighten).
+vec3 fogged(vec3 color, vec3 worldPos)
+{
+    if (u_fogColor.w < 0.5)
+        return color;
+    float fd = u_fogParams.x * max(length(u_cameraPos.xyz - worldPos) - u_fogParams.y, 0.0);
+    float fog = 1.0 - exp(-fd * fd);
+    return u_material.w > 1.5 ? color * (1.0 - fog) : mix(color, u_fogColor.rgb, fog);
+}
+
 void main()
 {
-    vec4 base = u_baseColor * texture2D(s_baseColor, v_texcoord0);
+    vec2 uv = v_texcoord0 * u_uvTransform.xy + u_uvTransform.zw;
+    vec4 base = u_baseColor * texture2D(s_baseColor, uv);
     if (base.a < u_material.z)
         discard;
-    vec4 mr = texture2D(s_metallicRoughness, v_texcoord0);
+    vec3 emissive = u_emissive.rgb * texture2D(s_emissive, uv).rgb;
+    float alpha = u_material.w > 0.5 ? base.a : 1.0;
+    if (u_materialExt.w > 0.5) { // unlit
+        gl_FragColor = vec4(fogged(base.rgb + emissive, v_worldPos), alpha);
+        return;
+    }
+    vec4 mr = texture2D(s_metallicRoughness, uv);
     float metallic = saturate(u_material.x * mr.b);
     float roughness = clamp(u_material.y * mr.g, 0.04, 1.0); // a 0 roughness highlight is infinitely thin: floored
     vec3 albedo = base.rgb;
     vec3 f0 = mix(vec3_splat(0.04), albedo, metallic);
 
     vec3 n = normalize(v_normal);
+    if (u_materialExt.z > 0.5) {
+        // Gram-Schmidt: the interpolated tangent made perpendicular to n again; bitangent = cross(n, t) * handedness.
+        vec3 t = v_tangent.xyz - n * dot(n, v_tangent.xyz);
+        if (dot(t, t) > 1e-12) {
+            t = normalize(t);
+            vec3 b = cross(n, t) * (v_tangent.w < 0.0 ? -1.0 : 1.0);
+            vec3 tn = texture2D(s_normal, uv).xyz * 2.0 - 1.0;
+            tn.xy *= u_materialExt.x; // glTF normalTexture.scale
+            n = normalize(t * tn.x + b * tn.y + n * tn.z);
+        }
+    }
     vec3 v = normalize(u_cameraPos.xyz - v_worldPos);
 
     bool receive = u_shadowParams.x > 0.5;
@@ -151,15 +186,12 @@ void main()
     // F = F0 + (max(1 - roughness, F0) - F0) * (1 - N.V)^5, so metals (no diffuse) still show ambient.
     float nv = max(dot(n, v), 0.0);
     vec3 fAmbient = f0 + (max(vec3_splat(1.0 - roughness), f0) - f0) * pow(saturate(1.0 - nv), 5.0);
-    color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo + fAmbient) * u_ambient.rgb;
+    // Ambient occlusion darkens ambient light only: ao = 1 + strength * (R - 1).
+    float ao = 1.0 + u_materialExt.y * (texture2D(s_occlusion, uv).r - 1.0);
+    color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo + fAmbient) * u_ambient.rgb * ao;
 
-    color += u_emissive.rgb;
+    color += emissive;
 
-    // Exponential-squared distance fog, as fogFactor in post_process.cpp: 1 - exp(-(density * max(d - start, 0))^2).
-    if (u_fogColor.w > 0.5) {
-        float fd = u_fogParams.x * max(length(u_cameraPos.xyz - v_worldPos) - u_fogParams.y, 0.0);
-        color = mix(color, u_fogColor.rgb, 1.0 - exp(-fd * fd));
-    }
     // Linear HDR: the post chain (post_process.h) tonemaps and encodes to sRGB.
-    gl_FragColor = vec4(color, u_material.w > 0.5 ? base.a : 1.0);
+    gl_FragColor = vec4(fogged(color, v_worldPos), alpha);
 }

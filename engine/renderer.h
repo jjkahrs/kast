@@ -5,6 +5,7 @@
 #include "model.h"
 #include "particles.h"
 #include "scene.h"
+#include "shader_clock.h"
 #include "shadow.h"
 #include "sky.h"
 
@@ -26,6 +27,29 @@ namespace kast {
 // ponytail: forward shading with a fixed uniform array per draw; clustered lighting if scenes need more per mesh.
 constexpr size_t kMaxPointLights = 8; // MAX_POINT_LIGHTS in fs_mesh.sc
 constexpr size_t kMaxShadowedPointLights = 4; // s_pointShadow0..3 in fs_mesh.sc
+
+// A primitive or terrain vertex (meshLayout_). Tangent: xyz along texture u, w the handedness: the bitangent (image up,
+// the normal map's +Y) is cross(normal, tangent) * w.
+struct MeshVertex {
+    float x, y, z;
+    float nx, ny, nz;
+    float tx, ty, tz, tw;
+    float u, v; // (0, 0) is the image's top-left
+};
+
+struct MeshData {
+    std::vector<MeshVertex> vertices;
+    std::vector<uint16_t> indices;
+};
+
+// The built-in mesh of a MeshRenderer primitive (1 m across, centered), as the renderer draws it.
+MeshData primitiveMesh(Primitive primitive);
+
+// The tangent of a terrain vertex with this normal: world +X (texture u) made perpendicular to it. w is 1 (image up is -Z).
+inline bx::Vec3 terrainTangent(const bx::Vec3& normal)
+{
+    return bx::normalize(bx::sub(bx::Vec3{1.0f, 0.0f, 0.0f}, bx::mul(normal, normal.x)));
+}
 
 // A PointLight in world space, as the renderer uses it.
 struct PointLightSample {
@@ -93,6 +117,8 @@ public:
     // saved yet (Zone Builder, Create texture & material).
     void setPreview(const std::string& materialPath, const Material& material, const std::string& texturePath,
                     MipImage image);
+    // u_time.x for this frame's mesh draws (ShaderClock::seconds).
+    void setTime(float seconds) { timeSeconds_ = seconds; }
     // Both on by default. Instancing off: every draw is its own submit. Culling off: every draw goes to every pass.
     // Either way the output is the same, so off is a reference (--no-instancing, --no-culling).
     void setInstancing(bool on) { instancing_ = on; }
@@ -124,6 +150,7 @@ private:
         bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
         int bones = -1; // index into the frame's bone sets; -1 = not skinned
         bool posed = false; // animated: bounds are the bind pose's, so the draw is never culled
+        bool mirrored = false; // world matrix has a negative determinant: front faces wind the other way
         bool castShadows = true;
         bool receiveShadows = true;
     };
@@ -142,6 +169,7 @@ private:
 
     void setProjectRoot(const std::filesystem::path& root);
     bgfx::TextureHandle texture(const std::string& path, bool srgb); // white_ for none or a failed load
+    bgfx::TextureHandle texture(const std::string& path, bool srgb, bgfx::TextureHandle fallback); // fallback instead
     void loadTexture(const std::string& path, bool srgb, Texture& texture);
     void clearTextures();
     const GpuModel* gpuModel(const std::string& path); // null if the model fails to load
@@ -207,11 +235,18 @@ private:
     bgfx::UniformHandle pointColor_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle emissive_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialParams_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle materialExt_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle uvTransform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle time_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle cameraPos_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle fogColor_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle fogParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle baseColorSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle metallicRoughnessSampler_ = BGFX_INVALID_HANDLE;
+    // Material texture stages 7..9 (s_normal, s_occlusion, s_emissive in fs_mesh.sc): after the shadow samplers on 2..6.
+    bgfx::UniformHandle normalSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle occlusionSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle emissiveSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle csmMtx_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle csmSplits_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle csmBias_ = BGFX_INVALID_HANDLE;
@@ -229,6 +264,7 @@ private:
     bgfx::TextureHandle noShadow2D_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle noShadowCube_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle white_ = BGFX_INVALID_HANDLE; // 1x1: stands in for no texture and failed loads
+    bgfx::TextureHandle flatNormal_ = BGFX_INVALID_HANDLE; // 1x1 (0.5, 0.5, 1): stands in for no normal texture
 
     std::filesystem::path root_;
     MaterialLibrary materials_;
@@ -239,6 +275,7 @@ private:
     bgfx::TextureHandle previewTexture_ = BGFX_INVALID_HANDLE;
     SkyRenderer sky_;
     ParticleRenderer particles_;
+    float timeSeconds_ = 0.0f; // setTime
     bool instancing_ = true;
     bool culling_ = true;
 };

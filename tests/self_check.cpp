@@ -2961,8 +2961,8 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"audio.scene", "events.scene", "fsm.scene", "health.scene", "materials.scene",
-                                       "missing_component.scene", "models.scene",
+              std::vector<std::string>{"audio.scene", "events.scene", "fsm.scene", "health.scene", "material_features.scene",
+                                       "materials.scene", "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
                                        "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene",
                                        "particles_blend.scene", "particles_fog.scene", "particles_hdr.scene",
@@ -2984,7 +2984,7 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
     check(projectScenes(root) == std::vector<std::string>{"audio.scene", "broken.scene", "events.scene", "fsm.scene",
-                                                          "health.scene", "levels/c.scene", "materials.scene",
+                                                          "health.scene", "levels/c.scene", "material_features.scene", "materials.scene",
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
                                                           "models_material.scene", "models_missing.scene", "net_a.scene",
@@ -5715,6 +5715,8 @@ void checkPostProcessing()
 
 // --- Materials ---
 
+void checkMaterialVersion2();
+
 std::string materialError(const std::string& text)
 {
     kast::Material material;
@@ -5751,8 +5753,9 @@ void checkMaterialFiles()
           "missing .mat fields get their defaults");
 
     const std::pair<const char*, const char*> bad[] = {
-        {R"({"metallic": 0})", "\"version\" must be 1"},
-        {R"({"version": 2})", "\"version\" must be 1"},
+        {R"({"metallic": 0})", "\"version\" must be 1 or 2"},
+        {R"({"version": 3})", "\"version\" must be 1 or 2"},
+        {R"({"version": 0})", "\"version\" must be 1 or 2"},
         {R"([1, 2])", "must be a JSON object"},
         {R"({"version": 1, "shininess": 3})", "unknown field \"shininess\""},
         {R"({"version": 1, "metallic": 1.5})", "\"metallic\" must be a number between 0 and 1"},
@@ -5766,7 +5769,21 @@ void checkMaterialFiles()
         {R"({"version": 1, "emissiveEnabled": true, "emissive": [0, 2, 0]})", "\"emissive\" must be an array of 3 numbers between 0 and 1"},
         {R"({"version": 1, "emissiveEnabled": 1})", "\"emissiveEnabled\" must be true or false"},
         {R"({"version": 1, "emissiveIntensity": -1})", "\"emissiveIntensity\" must be a number >= 0"},
-        {R"({"version": 1, "alphaMode": "additive"})", "\"alphaMode\" must be \"opaque\", \"mask\" or \"blend\""},
+        {R"({"version": 1, "alphaMode": "glow"})", "\"alphaMode\" must be \"opaque\", \"mask\", \"blend\" or \"additive\""},
+        {R"({"version": 2, "alphaMode": 2})", "\"alphaMode\" must be \"opaque\", \"mask\", \"blend\" or \"additive\""},
+        {R"({"version": 2, "cullMode": "both"})", "\"cullMode\" must be \"none\", \"back\" or \"front\""},
+        {R"({"version": 2, "cullMode": true})", "\"cullMode\" must be \"none\", \"back\" or \"front\""},
+        {R"({"version": 2, "occlusionStrength": 1.5})", "\"occlusionStrength\" must be a number between 0 and 1"},
+        {R"({"version": 2, "occlusionStrength": -0.1})", "\"occlusionStrength\" must be a number between 0 and 1"},
+        {R"({"version": 2, "normalScale": "big"})", "\"normalScale\" must be a finite number"},
+        {R"({"version": 2, "uvScale": [4]})", "\"uvScale\" must be an array of 2 finite numbers"},
+        {R"({"version": 2, "uvScale": [4, "x"]})", "\"uvScale\" must be an array of 2 finite numbers"},
+        {R"({"version": 2, "uvOffset": [0, 0, 0]})", "\"uvOffset\" must be an array of 2 finite numbers"},
+        {R"({"version": 2, "uvOffset": 0.5})", "\"uvOffset\" must be an array of 2 finite numbers"},
+        {R"({"version": 2, "unlit": "yes"})", "\"unlit\" must be true or false"},
+        {R"({"version": 2, "normalTexture": 1})", "\"normalTexture\" must be a string"},
+        {R"({"version": 2, "occlusionTexture": null})", "\"occlusionTexture\" must be a string"},
+        {R"({"version": 2, "emissiveTexture": ["a.png"]})", "\"emissiveTexture\" must be a string"},
         {R"({"version": 1, "baseColorTexture": 7})", "\"baseColorTexture\" must be a string"},
     };
     for (const auto& [text, expected] : bad)
@@ -5788,6 +5805,189 @@ void checkMaterialFiles()
           "a rejected field leaves the material unchanged");
     check(kast::materialField(field, "alphaMode") == nlohmann::ordered_json("opaque") && !kast::materialField(field, "nope"),
           "materialField by name");
+    checkMaterialVersion2();
+}
+
+// Version 2 fields: normal / occlusion / emissive textures, UV transform, cull mode, unlit, additive.
+void checkMaterialVersion2()
+{
+    using Json = nlohmann::ordered_json;
+    check(kast::kMaterialFileVersion == 2, "material files are version 2");
+    check(kast::materialFieldNames() ==
+              std::vector<std::string>{"baseColor", "baseColorTexture", "metallic", "roughness", "metallicRoughnessTexture",
+                                       "normalTexture", "normalScale", "occlusionTexture", "occlusionStrength",
+                                       "emissiveEnabled", "emissive", "emissiveIntensity", "emissiveTexture", "uvScale",
+                                       "uvOffset", "alphaMode", "alphaCutoff", "cullMode", "unlit"},
+          "material field names in file order");
+
+    kast::Material m;
+    std::string error;
+    const Json full = Json::parse(R"({"version": 2, "baseColor": [0.1, 0.2, 0.3, 0.4], "baseColorTexture": "textures/a.png",
+        "metallic": 0.5, "roughness": 0.25, "metallicRoughnessTexture": "textures/orm.png", "normalTexture": "textures/n.png",
+        "normalScale": -1.5, "occlusionTexture": "textures/orm.png", "occlusionStrength": 0.75, "emissiveEnabled": true,
+        "emissive": [1, 0.5, 0], "emissiveIntensity": 3, "emissiveTexture": "textures/e.png", "uvScale": [4, -2],
+        "uvOffset": [0.25, 10.5], "alphaMode": "additive", "alphaCutoff": 0.5, "cullMode": "front", "unlit": true})");
+    check(kast::materialFromJson(full, m, error), "a version 2 .mat with every field parses");
+    check(m.normalTexture == "textures/n.png" && m.normalScale == -1.5f && m.occlusionTexture == "textures/orm.png" &&
+              m.occlusionStrength == 0.75f && m.emissiveTexture == "textures/e.png" &&
+              m.uvScale == std::array<float, 2>{4.0f, -2.0f} && m.uvOffset == std::array<float, 2>{0.25f, 10.5f} &&
+              m.alphaMode == kast::AlphaMode::Additive && m.cullMode == kast::CullMode::Front && m.unlit,
+          "version 2 field values (a packed ORM texture can be both occlusion and metallic-roughness)");
+    check(kast::materialToJson(m) == full, "a version 2 .mat round-trips exactly (every field, file order)");
+    kast::Material back;
+    check(kast::materialFromJson(kast::materialToJson(m), back, error) && kast::materialToJson(back) == full,
+          "version 2 parse of the written file");
+    for (const char* mode : {"none", "back", "front"})
+        check(kast::setMaterialField(m, "cullMode", mode, error) && kast::materialField(m, "cullMode") == Json(mode),
+              std::format("cullMode \"{}\" sets and reads back", mode).c_str());
+    for (const char* mode : {"opaque", "mask", "blend", "additive"})
+        check(kast::setMaterialField(m, "alphaMode", mode, error) && kast::materialField(m, "alphaMode") == Json(mode),
+              std::format("alphaMode \"{}\" sets and reads back", mode).c_str());
+
+    // Version 1 files load with every version 2 default (cull back included) and save as version 2.
+    check(kast::materialFromJson(Json::parse(R"({"version": 1, "metallic": 1})"), m, error), "a version 1 .mat still loads");
+    check(m.metallic == 1.0f && m.normalTexture.empty() && m.normalScale == 1.0f && m.occlusionTexture.empty() &&
+              m.occlusionStrength == 1.0f && m.emissiveTexture.empty() && m.uvScale == std::array<float, 2>{1.0f, 1.0f} &&
+              m.uvOffset == std::array<float, 2>{0.0f, 0.0f} && m.cullMode == kast::CullMode::Back && !m.unlit,
+          "version 1: the new fields get their defaults");
+    const Json saved = kast::materialToJson(m);
+    check(saved["version"] == 2 && saved.size() == kast::materialFieldNames().size() + 1 && saved["cullMode"] == "back",
+          "saving a version 1 material writes version 2 with every field");
+    check(kast::defaultMaterial().cullMode == kast::CullMode::Back && !kast::defaultMaterial().unlit,
+          "the default material culls back faces, like a .mat without cullMode");
+    for (const std::filesystem::path& file : std::filesystem::directory_iterator(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "materials")) {
+        if (file.filename() == "broken.mat")
+            continue;
+        check(kast::loadMaterial(file, m, error), std::format("{} loads ({})", file.filename().string(), error).c_str());
+    }
+
+    // setMaterialField / materialField (what kast.set/getMaterialProperty use) for each new field.
+    const std::pair<const char*, Json> fields[] = {
+        {"normalTexture", "t/n.png"}, {"normalScale", 2.5}, {"occlusionTexture", "t/ao.png"}, {"occlusionStrength", 0.5},
+        {"emissiveTexture", "t/e.png"}, {"uvScale", Json::array({2, 3})}, {"uvOffset", Json::array({-1, 0.5})},
+        {"cullMode", "none"}, {"unlit", true}, {"alphaMode", "additive"}};
+    kast::Material f;
+    for (const auto& [name, value] : fields)
+        check(kast::setMaterialField(f, name, value, error) && kast::materialField(f, name) == value,
+              std::format("setMaterialField / materialField \"{}\"", name).c_str());
+    check(!kast::setMaterialField(f, "uvScale", Json::array({1, "x"}), error) && f.uvScale == std::array<float, 2>{2.0f, 3.0f},
+          "a rejected uvScale leaves the material unchanged");
+    const double inf = std::numeric_limits<double>::infinity(); // JSON text can't spell it; Lua and C++ can pass it
+    check(!kast::setMaterialField(f, "uvScale", Json::array({inf, 1}), error) &&
+              contains(error, "\"uvScale\" must be an array of 2 finite numbers"),
+          "a non-finite uvScale is rejected");
+    check(!kast::setMaterialField(f, "uvOffset", Json::array({0, std::nan("")}), error) &&
+              contains(error, "\"uvOffset\" must be an array of 2 finite numbers"),
+          "a NaN uvOffset is rejected");
+    check(!kast::setMaterialField(f, "normalScale", -inf, error) && contains(error, "\"normalScale\" must be a finite number"),
+          "a non-finite normalScale is rejected");
+}
+
+// Built-in primitive and terrain tangents: unit length, perpendicular to the normal, handedness +-1, along texture u.
+void checkPrimitiveTangents()
+{
+    for (const kast::Primitive primitive : {kast::Primitive::Cube, kast::Primitive::Plane, kast::Primitive::Sphere}) {
+        const kast::MeshData mesh = kast::primitiveMesh(primitive);
+        bool ok = !mesh.vertices.empty();
+        for (const kast::MeshVertex& v : mesh.vertices) {
+            const bx::Vec3 n{v.nx, v.ny, v.nz}, t{v.tx, v.ty, v.tz};
+            ok = ok && near(bx::length(t), 1.0f, 1e-4f) && near(bx::dot(n, t), 0.0f, 1e-4f) && (v.tw == 1.0f || v.tw == -1.0f);
+        }
+        // Per triangle: the tangent points along +u, the bitangent cross(n, t) * w along -v (image up).
+        for (size_t i = 0; ok && i + 2 < mesh.indices.size(); i += 3) {
+            const kast::MeshVertex& a = mesh.vertices[mesh.indices[i]];
+            const kast::MeshVertex& b = mesh.vertices[mesh.indices[i + 1]];
+            const kast::MeshVertex& c = mesh.vertices[mesh.indices[i + 2]];
+            const bx::Vec3 e1{b.x - a.x, b.y - a.y, b.z - a.z}, e2{c.x - a.x, c.y - a.y, c.z - a.z};
+            const float du1 = b.u - a.u, dv1 = b.v - a.v, du2 = c.u - a.u, dv2 = c.v - a.v;
+            const float det = du1 * dv2 - du2 * dv1;
+            if (std::fabs(det) < 1e-8f || bx::length(bx::cross(e1, e2)) < 1e-8f)
+                continue; // the sphere's pole triangles (two corners at the pole)
+            const bx::Vec3 dpdu = bx::mul(bx::sub(bx::mul(e1, dv2), bx::mul(e2, dv1)), 1.0f / det);
+            const bx::Vec3 dpdv = bx::mul(bx::sub(bx::mul(e2, du1), bx::mul(e1, du2)), 1.0f / det);
+            const bx::Vec3 n{a.nx, a.ny, a.nz}, t{a.tx, a.ty, a.tz};
+            ok = bx::dot(t, dpdu) > 0.0f && bx::dot(bx::mul(bx::cross(n, t), a.tw), dpdv) < 0.0f;
+            // Front faces wind counter-clockwise: the geometric normal agrees with the vertex normal.
+            ok = ok && bx::dot(bx::cross(e1, e2), n) > 0.0f;
+        }
+        check(ok, std::format("primitive {} tangents: unit, perpendicular, along u with image-up bitangent, CCW fronts",
+                              static_cast<int>(primitive)).c_str());
+    }
+    bool terrain = true;
+    for (const bx::Vec3 n : {bx::Vec3{0, 1, 0}, bx::normalize(bx::Vec3{0.5f, 1, 0}), bx::normalize(bx::Vec3{-0.3f, 1, 0.8f})}) {
+        const bx::Vec3 t = kast::terrainTangent(n);
+        terrain = terrain && near(bx::length(t), 1.0f) && near(bx::dot(t, n), 0.0f) && t.x > 0.0f &&
+                  bx::cross(n, t).z < 0.0f; // bitangent (w 1) toward -Z, image up for v = +Z
+    }
+    check(terrain, "terrain tangents: unit, perpendicular, along +X with image up toward -Z");
+}
+
+// glTF material mapping (models/material_features.gltf): normal (with scale), occlusion (with strength) and emissive
+// textures, doubleSided, KHR_materials_unlit; and the generated model tangents.
+void checkMaterialFeatureImport()
+{
+    std::string error;
+    const auto model = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/material_features.gltf", error);
+    check(model && model->materials.size() == 2, std::format("material_features.gltf loads with 2 materials ({})", error).c_str());
+    if (!model || model->materials.size() != 2)
+        return;
+    const kast::Material& a = model->materials[0].material;
+    const kast::Material& b = model->materials[1].material;
+    check(model->materials[0].name == "Featured" && a.normalTexture == "textures/normal_bumps.png" && near(a.normalScale, 0.5f),
+          "glTF normalTexture and its scale");
+    check(a.occlusionTexture == "textures/ao_grid.png" && near(a.occlusionStrength, 0.25f), "glTF occlusionTexture and its strength");
+    check(a.emissiveTexture == "textures/emissive_stripes.png" && a.emissiveEnabled, "glTF emissiveTexture");
+    check(a.cullMode == kast::CullMode::None && b.cullMode == kast::CullMode::Back, "glTF doubleSided: cull none; absent: back");
+    check(a.unlit && !b.unlit, "glTF KHR_materials_unlit: unlit");
+    check(b.normalTexture.empty() && b.occlusionTexture.empty() && b.emissiveTexture.empty() && b.normalScale == 1.0f &&
+              b.occlusionStrength == 1.0f,
+          "a glTF material without them gets the defaults");
+    bool tangents = !model->meshes.empty();
+    for (const kast::ModelMesh& mesh : model->meshes)
+        for (const kast::ModelVertex& v : mesh.vertices) // u along +X, v along +Z: image up is -Z
+            tangents = tangents && near(v.tx, 1.0f) && near(v.ty, 0.0f) && near(v.tz, 0.0f) && v.tw == 1.0f &&
+                       bx::cross(bx::Vec3{v.nx, v.ny, v.nz}, bx::Vec3{v.tx, v.ty, v.tz}).z * v.tw < 0.0f;
+    check(tangents, "model tangents run along texture u with the bitangent toward image up");
+
+    // Meshes without UVs still get unit tangents perpendicular to the normal.
+    const auto obj = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/cube.obj", error);
+    bool perpendicular = obj != nullptr;
+    for (const kast::ModelMesh& mesh : obj ? obj->meshes : std::vector<kast::ModelMesh>{})
+        for (const kast::ModelVertex& v : mesh.vertices)
+            perpendicular = perpendicular && near(bx::length(bx::Vec3{v.tx, v.ty, v.tz}), 1.0f, 1e-3f) &&
+                            near(v.nx * v.tx + v.ny * v.ty + v.nz * v.tz, 0.0f, 1e-3f) && (v.tw == 1.0f || v.tw == -1.0f);
+    check(perpendicular, "model tangents are unit and perpendicular to the normal (cube.obj)");
+}
+
+// u_time's clock: fixed steps add up exactly, paused Play holds it, it wraps at kShaderTimePeriod.
+void checkShaderClock()
+{
+    kast::ShaderClock clock;
+    check(clock.seconds() == 0.0f, "u_time starts at 0");
+    for (int i = 0; i < 60; ++i)
+        clock.advance(0.25);
+    check(clock.seconds() == 15.0f, "60 steps of 0.25 s: exactly 15 s");
+    kast::ShaderClock wrap;
+    wrap.advance(kast::kShaderTimePeriod - 1.0);
+    wrap.advance(1.5);
+    check(near(wrap.seconds(), 0.5f), "u_time wraps at kShaderTimePeriod");
+    check(kast::kShaderTimePeriod == 3600.0, "the documented wrap period is 3600 s");
+
+    // The editor: advances in edit mode and Play by the frame's dt, holds while paused.
+    Document doc;
+    updatePlay(doc, 0.125f);
+    check(doc.shaderClock.seconds() == 0.125f, "u_time advances in edit mode");
+    startPlay(doc);
+    updatePlay(doc, 0.125f);
+    check(doc.shaderClock.seconds() == 0.25f, "u_time advances in Play by exactly dt (--fixed-dt)");
+    togglePause(doc);
+    updatePlay(doc, 0.125f);
+    updatePlay(doc, 0.125f);
+    check(doc.play == PlayState::Paused && doc.shaderClock.seconds() == 0.25f, "u_time holds while Play is paused");
+    togglePause(doc);
+    updatePlay(doc, 0.125f);
+    check(doc.shaderClock.seconds() == 0.375f, "u_time resumes with Play");
+    stopPlay(doc);
 }
 
 void checkMaterialLibrary()
@@ -5962,6 +6162,29 @@ return { update = function(dt)
     fails('"alphaMode" must be', function() kast.setMaterialProperty(a, "alphaMode", "glow") end)
     fails('"roughness" must be a number', function() kast.setMaterialProperty(a, "roughness", "smooth") end)
     fails('unknown field "shine"', function() kast.setMaterialProperty(a, "shine", 1) end)
+    kast.setMaterialProperty(a, "normalTexture", "textures/n.png")
+    kast.setMaterialProperty(a, "normalScale", 0.5)
+    kast.setMaterialProperty(a, "occlusionTexture", "textures/ao.png")
+    kast.setMaterialProperty(a, "occlusionStrength", 0.25)
+    kast.setMaterialProperty(a, "emissiveTexture", "textures/e.png")
+    kast.setMaterialProperty(a, "uvScale", {4, 4})
+    kast.setMaterialProperty(a, "uvOffset", {0.5, -1})
+    kast.setMaterialProperty(a, "cullMode", "none")
+    kast.setMaterialProperty(a, "unlit", true)
+    assert(kast.getMaterialProperty(a, "normalTexture") == "textures/n.png" and kast.getMaterialProperty(a, "normalScale") == 0.5,
+           "get/set normal map")
+    assert(kast.getMaterialProperty(a, "occlusionTexture") == "textures/ao.png" and
+           kast.getMaterialProperty(a, "occlusionStrength") == 0.25, "get/set occlusion")
+    assert(kast.getMaterialProperty(a, "emissiveTexture") == "textures/e.png", "get/set emissive texture")
+    local uvScale, uvOffset = kast.getMaterialProperty(a, "uvScale"), kast.getMaterialProperty(a, "uvOffset")
+    assert(#uvScale == 2 and uvScale[1] == 4 and uvScale[2] == 4 and uvOffset[1] == 0.5 and uvOffset[2] == -1, "get/set UV transform")
+    assert(kast.getMaterialProperty(a, "cullMode") == "none" and kast.getMaterialProperty(a, "unlit") == true, "get/set cull and unlit")
+    assert(kast.getMaterialProperty(b, "cullMode") == "back" and kast.getMaterialProperty(b, "unlit") == false, "defaults: back, lit")
+    fails('"cullMode" must be "none", "back" or "front"', function() kast.setMaterialProperty(a, "cullMode", "both") end)
+    fails('"occlusionStrength" must be a number between 0 and 1', function() kast.setMaterialProperty(a, "occlusionStrength", 2) end)
+    fails('"uvScale" must be an array of 2 finite numbers', function() kast.setMaterialProperty(a, "uvScale", {1}) end)
+    fails('"unlit" must be true or false', function() kast.setMaterialProperty(a, "unlit", 1) end)
+    kast.setMaterialProperty(a, "unlit", false)
     fails('unknown material property "shine"', function() kast.getMaterialProperty(a, "shine") end)
     fails('has no "MeshRenderer"', function() kast.setMaterialProperty(kast.create("Bare"), "metallic", 1) end)
     assert(kast.getMaterialProperty(a, "metallic") == 0.75, "rejected sets leave the instance unchanged")
@@ -5991,6 +6214,7 @@ end })");
     checkOk(doc.lua, 0, "kast.get/setMaterialProperty asserts in Lua pass");
     const auto* instance = registry.try_get<kast::MaterialInstance>(named(doc.scene, "A"));
     check(instance && instance->material.baseColor[0] == 1.0f && instance->material.alphaMode == kast::AlphaMode::Blend &&
+              instance->material.uvScale == std::array<float, 2>{4.0f, 4.0f} && instance->material.cullMode == kast::CullMode::None &&
               near(kast::emissiveRadiance(instance->material), {0, 3, 0}),
           "the instance holds the per-entity values");
     check(!registry.all_of<kast::MaterialInstance>(named(doc.scene, "B")), "B has no instance");
@@ -9886,6 +10110,9 @@ int main(int argc, char** argv)
     checkPostProcessing();
     checkSky();
     checkMaterialFiles();
+    checkPrimitiveTangents();
+    checkMaterialFeatureImport();
+    checkShaderClock();
     checkMaterialLibrary();
     checkTextureDecode();
     checkMaterialScenes();

@@ -53,10 +53,14 @@ constexpr int kRangeCircleSegments = 48;
 constexpr uint32_t kParticleShapeColor = 0xff00aaff; // ABGR: the editor's orange
 constexpr int kSphereStacks = 16;
 constexpr int kSphereSlices = 32;
+// No culling here: a mesh draw adds its material's cullMode (cullState), lines draw as they are.
 constexpr uint64_t kState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS |
-                            BGFX_STATE_MSAA; // no back-face culling: an open plane stays visible from below
+                            BGFX_STATE_MSAA;
 // Blended meshes test depth but don't write it, so blended meshes behind them still draw.
 constexpr uint64_t kBlendState = (kState & ~BGFX_STATE_WRITE_Z) | BGFX_STATE_BLEND_ALPHA;
+// Additive meshes likewise, adding src * alpha to what is behind them (as additive particles do).
+constexpr uint64_t kAdditiveState =
+    (kState & ~BGFX_STATE_WRITE_Z) | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_ONE);
 // Shadow casters: depth only, both faces (open planes cast too).
 constexpr uint64_t kShadowState = BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS;
 constexpr uint64_t kShadowMapFlags = BGFX_TEXTURE_RT | BGFX_SAMPLER_COMPARE_LEQUAL | BGFX_SAMPLER_UVW_CLAMP;
@@ -65,30 +69,22 @@ constexpr uint16_t kCsmAtlasSize = 2 * kCascadeSize; // 2x2 cascades
 constexpr bx::Vec3 kCubeFaceForward[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
 constexpr bx::Vec3 kCubeFaceUp[6] = {{0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}};
 
-struct MeshVertex {
-    float x, y, z;
-    float nx, ny, nz;
-    float u, v; // (0, 0) is the image's top-left
-};
-
 struct LineVertex {
     float x, y, z;
     uint32_t abgr;
 };
 
-struct MeshData {
-    std::vector<MeshVertex> vertices;
-    std::vector<uint16_t> indices;
-};
-
-// Quad centered at center, spanning +-u and +-v, facing normal = u x v (counter-clockwise from the front).
+// Quad centered at center, spanning +-u and +-v, facing normal = u x v (counter-clockwise from the front). Texture u
+// runs along +u and v along -v (image up is +v), so the tangent is u and the bitangent cross(normal, u) = v: w = 1.
 void addQuad(MeshData& mesh, bx::Vec3 center, bx::Vec3 u, bx::Vec3 v, bx::Vec3 normal)
 {
     const auto base = static_cast<uint16_t>(mesh.vertices.size());
     const float corners[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+    const bx::Vec3 t = bx::normalize(u);
     for (const auto& c : corners) {
         const bx::Vec3 p = bx::add(center, bx::add(bx::mul(u, c[0]), bx::mul(v, c[1])));
-        mesh.vertices.push_back({p.x, p.y, p.z, normal.x, normal.y, normal.z, c[0] * 0.5f + 0.5f, 0.5f - c[1] * 0.5f});
+        mesh.vertices.push_back({p.x, p.y, p.z, normal.x, normal.y, normal.z, t.x, t.y, t.z, 1.0f, c[0] * 0.5f + 0.5f,
+                                 0.5f - c[1] * 0.5f});
     }
     for (int i : {0, 1, 2, 0, 2, 3})
         mesh.indices.push_back(static_cast<uint16_t>(base + i));
@@ -122,7 +118,9 @@ MeshData makeSphere()
         for (int slice = 0; slice <= kSphereSlices; ++slice) {
             const float theta = 2.0f * bx::kPi * static_cast<float>(slice) / kSphereSlices;
             const bx::Vec3 n{std::sin(phi) * std::sin(theta), std::cos(phi), std::sin(phi) * std::cos(theta)};
-            mesh.vertices.push_back({n.x * 0.5f, n.y * 0.5f, n.z * 0.5f, n.x, n.y, n.z,
+            // Tangent: d/dtheta (texture u), defined at the poles too; image up (-v) is north, cross(n, t): w = 1.
+            const bx::Vec3 t{std::cos(theta), 0.0f, -std::sin(theta)};
+            mesh.vertices.push_back({n.x * 0.5f, n.y * 0.5f, n.z * 0.5f, n.x, n.y, n.z, t.x, t.y, t.z, 1.0f,
                                      static_cast<float>(slice) / kSphereSlices, static_cast<float>(stack) / kSphereStacks});
         }
     }
@@ -214,6 +212,7 @@ struct BatchKey {
     uint16_t vertices = 0, indices = 0;
     const Material* material = nullptr;
     bool skinned = false, castShadows = false, receiveShadows = false;
+    bool mirrored = false; // culls the other winding (cullState)
     std::vector<size_t> pointLights;
     auto operator<=>(const BatchKey&) const = default;
 };
@@ -222,7 +221,7 @@ template <typename Item> // Renderer::DrawItem
 BatchKey batchKey(const Item& item, std::vector<size_t> pointLights)
 {
     return {item.vertices.idx, item.indices.idx, item.material, item.bones >= 0, item.castShadows, item.receiveShadows,
-            std::move(pointLights)};
+            item.mirrored, std::move(pointLights)};
 }
 
 // Indices 0..count-1 grouped by keyOf(index): groups in order of first appearance, indices in order within each.
@@ -278,7 +277,42 @@ std::string textureFile(const std::string& path)
     return model.empty() ? path : model;
 }
 
+// The cull flag for a material's cullMode. Front faces wind counter-clockwise (addQuad, glTF), so with a view that
+// keeps winding they reach the screen counter-clockwise: back = cull clockwise. A mirroring world matrix (negative
+// determinant) reverses the winding, so the flags swap.
+uint64_t cullState(CullMode mode, bool mirrored)
+{
+    if (mode == CullMode::None)
+        return 0;
+    return (mode == CullMode::Back) != mirrored ? BGFX_STATE_CULL_CW : BGFX_STATE_CULL_CCW;
+}
+
+bool isMirrored(const Mat4& world)
+{
+    const bx::Vec3 x{world[0], world[1], world[2]}, y{world[4], world[5], world[6]}, z{world[8], world[9], world[10]};
+    return bx::dot(bx::cross(x, y), z) < 0.0f;
+}
+
+// Blended and additive meshes: drawn after the opaque ones, far to near, and never into the shadow maps.
+bool isTransparent(const Material& material)
+{
+    return material.alphaMode == AlphaMode::Blend || material.alphaMode == AlphaMode::Additive;
+}
+
 } // namespace
+
+MeshData primitiveMesh(Primitive primitive)
+{
+    switch (primitive) {
+    case Primitive::Cube:
+        return makeCube();
+    case Primitive::Plane:
+        return makePlane();
+    case Primitive::Sphere:
+        break;
+    }
+    return makeSphere();
+}
 
 std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb)
 {
@@ -361,12 +395,14 @@ void Renderer::init()
     meshLayout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Tangent, 4, bgfx::AttribType::Float)
         .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
         .end();
-    const MeshData data[3] = {makeCube(), makePlane(), makeSphere()}; // Primitive order
+    static_assert(sizeof(MeshVertex) == 12 * sizeof(float), "MeshVertex must match meshLayout_");
     for (size_t i = 0; i < meshes_.size(); ++i) {
-        meshes_[i].vertices = bgfx::createVertexBuffer(copyOf(data[i].vertices), meshLayout_);
-        meshes_[i].indices = bgfx::createIndexBuffer(copyOf(data[i].indices));
+        const MeshData data = primitiveMesh(static_cast<Primitive>(i));
+        meshes_[i].vertices = bgfx::createVertexBuffer(copyOf(data.vertices), meshLayout_);
+        meshes_[i].indices = bgfx::createIndexBuffer(copyOf(data.indices));
     }
     std::vector<uint32_t> terrainIndices;
     terrainIndices.reserve(size_t(map::kTileSamples - 1) * (map::kTileSamples - 1) * 6);
@@ -376,11 +412,12 @@ void Renderer::init()
     modelLayout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Tangent, 4, bgfx::AttribType::Float)
         .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Indices, 4, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Weight, 4, bgfx::AttribType::Float)
         .end();
-    static_assert(sizeof(ModelVertex) == 16 * sizeof(float), "ModelVertex must match modelLayout_");
+    static_assert(sizeof(ModelVertex) == 20 * sizeof(float), "ModelVertex must match modelLayout_");
 
     lineLayout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
@@ -405,11 +442,17 @@ void Renderer::init()
     pointColor_ = bgfx::createUniform("u_pointColor", bgfx::UniformType::Vec4, kMaxPointLights);
     emissive_ = bgfx::createUniform("u_emissive", bgfx::UniformType::Vec4);
     materialParams_ = bgfx::createUniform("u_material", bgfx::UniformType::Vec4);
+    materialExt_ = bgfx::createUniform("u_materialExt", bgfx::UniformType::Vec4);
+    uvTransform_ = bgfx::createUniform("u_uvTransform", bgfx::UniformType::Vec4);
+    time_ = bgfx::createUniform("u_time", bgfx::UniformType::Vec4);
     cameraPos_ = bgfx::createUniform("u_cameraPos", bgfx::UniformType::Vec4);
     fogColor_ = bgfx::createUniform("u_fogColor", bgfx::UniformType::Vec4);
     fogParams_ = bgfx::createUniform("u_fogParams", bgfx::UniformType::Vec4);
     baseColorSampler_ = bgfx::createUniform("s_baseColor", bgfx::UniformType::Sampler);
     metallicRoughnessSampler_ = bgfx::createUniform("s_metallicRoughness", bgfx::UniformType::Sampler);
+    normalSampler_ = bgfx::createUniform("s_normal", bgfx::UniformType::Sampler);
+    occlusionSampler_ = bgfx::createUniform("s_occlusion", bgfx::UniformType::Sampler);
+    emissiveSampler_ = bgfx::createUniform("s_emissive", bgfx::UniformType::Sampler);
     csmMtx_ = bgfx::createUniform("u_csmMtx", bgfx::UniformType::Mat4, kMaxShadowCascades);
     csmSplits_ = bgfx::createUniform("u_csmSplits", bgfx::UniformType::Vec4);
     csmBias_ = bgfx::createUniform("u_csmBias", bgfx::UniformType::Vec4, kMaxShadowCascades);
@@ -426,6 +469,9 @@ void Renderer::init()
     const uint32_t white = 0xffffffff;
     white_ = bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
                                    bgfx::copy(&white, sizeof(white)));
+    const uint32_t flat = 0xffff8080; // ABGR: (0.5, 0.5, 1), the tangent-space normal (0, 0, 1)
+    flatNormal_ = bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
+                                        bgfx::copy(&flat, sizeof(flat)));
     sky_.init();
     particles_.init(bgfx::getCaps()->supported);
 }
@@ -447,9 +493,10 @@ void Renderer::shutdown()
     bgfx::destroy(shadowSkinnedProgram_);
     bgfx::destroy(shadowInstancedProgram_);
     for (bgfx::UniformHandle uniform : {normalMatrix_, bones_, baseColor_, lightDir_, lightColor_, ambient_, pointPosRange_,
-                                        pointColor_, emissive_, materialParams_, cameraPos_, fogColor_, fogParams_,
-                                        baseColorSampler_, metallicRoughnessSampler_, csmMtx_, csmSplits_, csmBias_,
-                                        shadowParams_, pointShadow_, csmSampler_})
+                                        pointColor_, emissive_, materialParams_, materialExt_, uvTransform_, time_,
+                                        cameraPos_, fogColor_, fogParams_, baseColorSampler_, metallicRoughnessSampler_,
+                                        normalSampler_, occlusionSampler_, emissiveSampler_, csmMtx_, csmSplits_,
+                                        csmBias_, shadowParams_, pointShadow_, csmSampler_})
         bgfx::destroy(uniform);
     for (bgfx::UniformHandle uniform : pointShadowSamplers_)
         bgfx::destroy(uniform);
@@ -473,6 +520,7 @@ void Renderer::shutdown()
         bgfx::destroy(previewTexture_);
     previewTexture_ = BGFX_INVALID_HANDLE;
     bgfx::destroy(white_);
+    bgfx::destroy(flatNormal_);
     sky_.shutdown();
     particles_.shutdown();
 }
@@ -513,7 +561,8 @@ void Renderer::addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws)
                 for (int u = 0; u < n; ++u) {
                     const float y = map::sample_height(data.heights[size_t(v) * n + size_t(u)], info);
                     const auto normal = map::normal_at(data.heights, info, u, v);
-                    vertices.push_back({float(u), y, float(v), normal[0], normal[1], normal[2],
+                    const bx::Vec3 t = terrainTangent({normal[0], normal[1], normal[2]});
+                    vertices.push_back({float(u), y, float(v), normal[0], normal[1], normal[2], t.x, t.y, t.z, 1.0f,
                                         float(uvOrigin[0] + u) * uvScale[0], float(uvOrigin[1] + v) * uvScale[1]});
                     lo = std::min(lo, y);
                     hi = std::max(hi, y);
@@ -570,16 +619,18 @@ void Renderer::setProjectRoot(const std::filesystem::path& root)
             loadTexture(key.first, key.second, texture);
 }
 
-bgfx::TextureHandle Renderer::texture(const std::string& path, bool srgb)
+bgfx::TextureHandle Renderer::texture(const std::string& path, bool srgb) { return texture(path, srgb, white_); }
+
+bgfx::TextureHandle Renderer::texture(const std::string& path, bool srgb, bgfx::TextureHandle fallback)
 {
     if (path.empty())
-        return white_;
+        return fallback;
     if (srgb && path == previewTexturePath_ && bgfx::isValid(previewTexture_))
         return previewTexture_;
     auto [it, added] = textures_.try_emplace({path, srgb});
     if (added)
         loadTexture(path, srgb, it->second);
-    return bgfx::isValid(it->second.handle) ? it->second.handle : white_;
+    return bgfx::isValid(it->second.handle) ? it->second.handle : fallback;
 }
 
 void Renderer::loadTexture(const std::string& path, bool srgb, Texture& texture)
@@ -712,6 +763,7 @@ void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const Mode
             const std::vector<Mat4>& at = mesh.joints.empty() ? globals : gpu->bindGlobals;
             bx::mtxMul(item.world.data(), at[static_cast<size_t>(mesh.node)].data(), world);
         }
+        item.mirrored = isMirrored(item.world); // ponytail: skinned meshes by their entity matrix; mirrored joints aren't seen
         draws.push_back(item);
     }
 }
@@ -737,9 +789,11 @@ void Renderer::submitShadowCasters(const std::vector<const DrawItem*>& batch, co
     const DrawItem& first = *batch.front();
     const Material& material = *first.material;
     const float params[4] = {0.0f, 0.0f, material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f, 0.0f};
+    const float uvTransform[4] = {material.uvScale[0], material.uvScale[1], material.uvOffset[0], material.uvOffset[1]};
     const auto setMaterial = [&] {
         bgfx::setUniform(baseColor_, material.baseColor.data());
         bgfx::setUniform(materialParams_, params);
+        bgfx::setUniform(uvTransform_, uvTransform);
         bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
         bgfx::setVertexBuffer(0, first.vertices);
         bgfx::setIndexBuffer(first.indices);
@@ -770,9 +824,9 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
                                               const float* projMtx, bgfx::ViewId shadowViews)
 {
     ShadowFrame frame;
-    std::vector<const DrawItem*> casters; // blended materials never cast
+    std::vector<const DrawItem*> casters; // blended and additive materials never cast
     for (const DrawItem& item : draws)
-        if (item.castShadows && item.material->alphaMode != AlphaMode::Blend)
+        if (item.castShadows && !isTransparent(*item.material))
             casters.push_back(&item);
     // Batched once; each view then draws the casters of each batch inside its frustum (and that keep accepts).
     std::vector<std::vector<const DrawItem*>> batches;
@@ -949,6 +1003,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             const Mesh& gpu = meshes_[static_cast<size_t>(mesh.primitive)];
             DrawItem item;
             item.world = worldOf(entity);
+            item.mirrored = isMirrored(item.world);
             item.bounds = transformBounds(primitiveBounds(mesh.primitive), item.world.data());
             item.material = instance ? &instance->material : &materials_.get(mesh.material);
             item.vertices = gpu.vertices;
@@ -996,13 +1051,24 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         const bx::Vec3 radiance = emissiveRadiance(material);
         const float emissive[4] = {radiance.x, radiance.y, radiance.z, 0.0f};
         const bool blend = material.alphaMode == AlphaMode::Blend;
-        // z: fragments with alpha below it are discarded (-1 = none); w: 1 outputs alpha (blend), 0 outputs 1.
+        const bool additive = material.alphaMode == AlphaMode::Additive;
+        // z: fragments with alpha below it are discarded (-1 = none); w: 1 outputs alpha (blend), 2 also fogs toward
+        // black (additive), 0 outputs 1.
         const float params[4] = {material.metallic, material.roughness,
-                                 material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f, blend ? 1.0f : 0.0f};
+                                 material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f,
+                                 additive ? 2.0f : blend ? 1.0f : 0.0f};
+        const bgfx::TextureHandle normalMap = texture(material.normalTexture, false, flatNormal_);
+        const float materialExt[4] = {material.normalScale, material.occlusionStrength,
+                                      normalMap.idx != flatNormal_.idx ? 1.0f : 0.0f, material.unlit ? 1.0f : 0.0f};
+        const float uvTransform[4] = {material.uvScale[0], material.uvScale[1], material.uvOffset[0], material.uvOffset[1]};
+        const float time[4] = {timeSeconds_, 0.0f, 0.0f, 0.0f};
 
         bgfx::setUniform(baseColor_, material.baseColor.data());
         bgfx::setUniform(emissive_, emissive);
         bgfx::setUniform(materialParams_, params);
+        bgfx::setUniform(materialExt_, materialExt);
+        bgfx::setUniform(uvTransform_, uvTransform);
+        bgfx::setUniform(time_, time);
         bgfx::setUniform(cameraPos_, cameraPos);
         bgfx::setUniform(fogColor_, fogColor);
         bgfx::setUniform(fogParams_, fogParams);
@@ -1024,9 +1090,12 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
                              cube < shadows.pointLights.size() ? cubes_[cube] : noShadowCube_);
         bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
         bgfx::setTexture(1, metallicRoughnessSampler_, texture(material.metallicRoughnessTexture, false));
+        bgfx::setTexture(7, normalSampler_, normalMap);
+        bgfx::setTexture(8, occlusionSampler_, texture(material.occlusionTexture, false));
+        bgfx::setTexture(9, emissiveSampler_, texture(material.emissiveTexture, true));
         bgfx::setVertexBuffer(0, item.vertices);
         bgfx::setIndexBuffer(item.indices);
-        bgfx::setState(blend ? kBlendState : kState);
+        bgfx::setState((additive ? kAdditiveState : blend ? kBlendState : kState) | cullState(material.cullMode, item.mirrored));
     };
     const auto submit = [&](const DrawItem& item, const std::vector<size_t>& nearest) {
         float inverse[16];
@@ -1055,7 +1124,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     for (const DrawItem& item : draws) {
         if (culled(item, frustum))
             continue;
-        if (item.material->alphaMode != AlphaMode::Blend) {
+        if (!isTransparent(*item.material)) {
             opaque.push_back(&item);
             opaqueLights.push_back(nearestPointLights(pointLights, item.bounds));
             continue;

@@ -1243,6 +1243,8 @@ int main(int argc, char** argv)
             startPlay(doc);
         }
         updatePlay(doc, options->fixedDt > 0.0f ? options->fixedDt : ImGui::GetIO().DeltaTime);
+        for (kast::Renderer* renderer : {&viewport.renderer(), &game.renderer()})
+            renderer->setTime(doc.shaderClock.seconds());
         if (game.hasInput(doc)) // otherwise ImGui's backend turns text input on and off for its own fields
             kast::gui::syncTextInput(mainWindow, game.gui().focusedField().has_value());
         componentPollSeconds += ImGui::GetIO().DeltaTime;
