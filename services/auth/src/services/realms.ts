@@ -23,6 +23,11 @@ async function uniqueName<T>(write: () => Promise<T>): Promise<T> {
   }
 }
 
+/** What players see: the world admin endpoint is internal. */
+export type PublicRealm = Omit<Realm, 'adminHost' | 'adminPort'>;
+
+const toPublicRealm = ({ adminHost: _host, adminPort: _port, ...realm }: Realm): PublicRealm => realm;
+
 export type RealmService = ReturnType<typeof createRealmService>;
 
 export function createRealmService(deps: { pool: Pool; clock: Clock }) {
@@ -30,6 +35,8 @@ export function createRealmService(deps: { pool: Pool; clock: Clock }) {
 
   return {
     list: (): Promise<Realm[]> => listRealms(pool),
+
+    listPublic: async (): Promise<PublicRealm[]> => (await listRealms(pool)).map(toPublicRealm),
 
     async get(id: number): Promise<Realm> {
       const realm = await findRealm(pool, id);

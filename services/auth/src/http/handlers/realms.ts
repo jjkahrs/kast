@@ -9,6 +9,10 @@ export function realmHandlers(realms: RealmService) {
       res.json({ realms: await realms.list() });
     },
 
+    async listPublic(_req: Request, res: Response) {
+      res.json({ realms: await realms.listPublic() });
+    },
+
     async get(req: Request, res: Response) {
       res.json(await realms.get(parse(idParams, req.params).id));
     },

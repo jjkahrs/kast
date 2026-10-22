@@ -27,6 +27,7 @@ export interface AppDeps {
 export function createApp(deps: AppDeps): Express {
   const { config, pool, clock, mailer, keys, log } = deps;
   const tokens = createTokenService({ config, clock, keys });
+  const auth = createAuthService({ pool, clock, mailer, config, tokens, log });
 
   const app = express();
   app.set('trust proxy', parseTrustProxy(config.TRUST_PROXY));
@@ -38,8 +39,8 @@ export function createApp(deps: AppDeps): Express {
       keys,
       tokens,
       limiter: createRateLimiter({ pool, clock }),
-      auth: createAuthService({ pool, clock, mailer, config, tokens, log }),
-      admin: createAdminService({ pool, clock }),
+      auth,
+      admin: createAdminService({ pool, clock, auth }),
       realms: createRealmService({ pool, clock }),
     }),
   );

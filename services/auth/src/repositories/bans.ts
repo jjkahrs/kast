@@ -10,7 +10,23 @@ export interface Ban {
   createdAt: Date;
 }
 
+export interface BanRecord extends Ban {
+  liftedAt: Date | null;
+  liftedBy: number | null;
+}
+
 const ACTIVE = 'account_id = ? AND lifted_at IS NULL AND (expires_at IS NULL OR expires_at > ?)';
+
+const toBanRecord = (r: RowDataPacket): BanRecord => ({
+  id: r.id,
+  accountId: r.account_id,
+  reason: r.reason,
+  expiresAt: r.expires_at,
+  bannedBy: r.banned_by,
+  createdAt: r.created_at,
+  liftedAt: r.lifted_at,
+  liftedBy: r.lifted_by,
+});
 
 export async function findActiveBan(db: Db, accountId: number, now: Date): Promise<Ban | undefined> {
   const [rows] = await db.query<RowDataPacket[]>(
@@ -29,6 +45,28 @@ export async function findActiveBan(db: Db, accountId: number, now: Date): Promi
       createdAt: r.created_at,
     }
   );
+}
+
+/** Every ban the account ever had, newest first. */
+export async function listBans(db: Db, accountId: number): Promise<BanRecord[]> {
+  const [rows] = await db.query<RowDataPacket[]>(
+    'SELECT * FROM bans WHERE account_id = ? ORDER BY created_at DESC, id DESC',
+    [accountId],
+  );
+  return rows.map(toBanRecord);
+}
+
+/** The newest active ban of each listed account that has one. */
+export async function findActiveBans(db: Db, accountIds: number[], now: Date): Promise<Map<number, Ban>> {
+  const bans = new Map<number, Ban>();
+  if (!accountIds.length) return bans;
+  const [rows] = await db.query<RowDataPacket[]>(
+    `SELECT * FROM bans WHERE account_id IN (?) AND lifted_at IS NULL AND (expires_at IS NULL OR expires_at > ?)
+      ORDER BY created_at DESC, id DESC`,
+    [accountIds, now],
+  );
+  for (const r of rows) if (!bans.has(r.account_id)) bans.set(r.account_id, toBanRecord(r));
+  return bans;
 }
 
 export async function liftActiveBans(db: Db, accountId: number, liftedBy: number, now: Date): Promise<void> {

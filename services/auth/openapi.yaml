@@ -21,7 +21,7 @@ info:
     `unauthorized` (401), `invalid_credentials` (401), `invalid_refresh_token` (401),
     `email_not_verified` (403), `account_banned` (403), `forbidden` (403),
     `not_found` (404), `account_not_found` (404), `realm_not_found` (404),
-    `realm_name_taken` (409), `payload_too_large` (413), `account_locked` (423),
+    `realm_name_taken` (409), `email_taken` (409), `payload_too_large` (413), `account_locked` (423),
     `rate_limited` (429), `internal_error` (500), `db_unavailable` (503).
   license:
     name: Proprietary
@@ -40,7 +40,9 @@ tags:
   - name: realms
     description: World server list for players
   - name: admin
-    description: Admin-only account moderation and realm management (role=admin)
+    description: |
+      Account moderation and realm management. Admin-only, except that GMs (role=gm) may list and
+      view accounts and ban/unban, and only on accounts whose role is `player`.
 
 paths:
   /health:
@@ -286,10 +288,182 @@ paths:
     get:
       tags: [realms]
       operationId: listRealms
-      summary: All realms ordered by sortOrder
+      summary: All realms ordered by sortOrder (without the internal admin endpoint)
       responses:
-        '200': { $ref: '#/components/responses/RealmList' }
+        '200': { $ref: '#/components/responses/PublicRealmList' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/admin/accounts:
+    get:
+      tags: [admin]
+      operationId: listAccounts
+      summary: Search accounts, ordered by id (admin, or GM for player accounts only)
+      description: |
+        GMs only ever get `player` accounts; a GM asking for `role=gm` or `role=admin` gets 403.
+      parameters:
+        - name: q
+          in: query
+          description: Email substring (case-insensitive), or an exact id when all digits
+          schema: { type: string, maxLength: 254 }
+        - name: role
+          in: query
+          schema: { $ref: '#/components/schemas/Role' }
+        - name: banned
+          in: query
+          description: Has an active ban
+          schema: { type: string, enum: ['true', 'false'] }
+        - name: verified
+          in: query
+          description: Email verified
+          schema: { type: string, enum: ['true', 'false'] }
+        - name: locked
+          in: query
+          description: Locked out by failed logins right now
+          schema: { type: string, enum: ['true', 'false'] }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: One page of accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accounts, total, limit, offset]
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/AdminAccount' }
+                  total: { type: integer, description: Accounts matching the filter across all pages }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [admin]
+      operationId: createAccount
+      summary: Create an account that is already email-verified (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { $ref: '#/components/schemas/Email' }
+                password: { $ref: '#/components/schemas/Password' }
+                role:
+                  allOf: [{ $ref: '#/components/schemas/Role' }]
+                  default: player
+      responses:
+        '201':
+          description: Created account
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminAccount' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: '`email_taken`'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /v1/admin/accounts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [admin]
+      operationId: getAccount
+      summary: Account detail with full ban history (admin, or GM for a player account)
+      responses:
+        '200':
+          description: Account
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountDetail' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/AccountNotFound' }
+    delete:
+      tags: [admin]
+      operationId: deleteAccount
+      summary: Hard-delete an account with its bans, sessions and email tokens (admin only)
+      description: Access tokens already issued stay valid until they expire.
+      responses:
+        '204': { description: Deleted }
+        '400':
+          description: '`validation_error`, or `cannot_modify_self` when deleting yourself'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/AccountNotFound' }
+
+  /v1/admin/accounts/{id}/verify-email:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [admin]
+      operationId: verifyAccountEmail
+      summary: Mark the email verified (admin only; idempotent)
+      responses:
+        '204': { description: Verified }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/AccountNotFound' }
+
+  /v1/admin/accounts/{id}/password-reset:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [admin]
+      operationId: sendAccountPasswordReset
+      summary: Email the account the normal password reset link (admin only)
+      responses:
+        '204': { description: Reset email queued }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/AccountNotFound' }
+
+  /v1/admin/accounts/{id}/unlock:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [admin]
+      operationId: unlockAccount
+      summary: Clear the failed-login count and lockout (admin only)
+      responses:
+        '204': { description: Unlocked }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/AccountNotFound' }
+
+  /v1/admin/accounts/{id}/revoke-sessions:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [admin]
+      operationId: revokeAccountSessions
+      summary: Revoke every refresh token; access tokens already issued live until they expire (admin only)
+      responses:
+        '204': { description: Revoked }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/AccountNotFound' }
 
   /v1/admin/accounts/{id}/ban:
     parameters:
@@ -297,7 +471,7 @@ paths:
     post:
       tags: [admin]
       operationId: banAccount
-      summary: Ban an account (replaces any active ban) and revoke all its refresh tokens
+      summary: Ban an account (replaces any active ban) and revoke all its refresh tokens (admin, or GM for a player)
       requestBody:
         required: true
         content:
@@ -328,7 +502,7 @@ paths:
     delete:
       tags: [admin]
       operationId: unbanAccount
-      summary: Lift any active ban (idempotent)
+      summary: Lift any active ban (idempotent; admin, or GM for a player)
       responses:
         '204': { description: No active ban remains }
         '400': { $ref: '#/components/responses/ValidationError' }
@@ -342,7 +516,7 @@ paths:
     put:
       tags: [admin]
       operationId: setAccountRole
-      summary: Change an account's role; applies to the next issued access token
+      summary: Change an account's role; applies to the next issued access token (admin only)
       requestBody:
         required: true
         content:
@@ -576,8 +750,40 @@ components:
         accountId: { type: integer }
         reason: { type: string }
         expiresAt: { type: [string, 'null'], format: date-time }
-        bannedBy: { type: [integer, 'null'] }
+        bannedBy: { type: [integer, 'null'], description: null once the banning account is deleted }
         createdAt: { type: string, format: date-time }
+    BanHistory:
+      allOf:
+        - $ref: '#/components/schemas/Ban'
+        - type: object
+          required: [liftedAt, liftedBy]
+          properties:
+            liftedAt: { type: [string, 'null'], format: date-time }
+            liftedBy: { type: [integer, 'null'] }
+    AdminAccount:
+      allOf:
+        - $ref: '#/components/schemas/Account'
+        - type: object
+          required: [emailVerifiedAt, failedLoginCount, lockedUntil, activeBan]
+          properties:
+            emailVerifiedAt: { type: [string, 'null'], format: date-time }
+            failedLoginCount: { type: integer }
+            lockedUntil: { type: [string, 'null'], format: date-time, description: Locked while in the future }
+            activeBan:
+              description: The newest ban that is neither lifted nor expired
+              oneOf:
+                - $ref: '#/components/schemas/Ban'
+                - type: 'null'
+    AccountDetail:
+      allOf:
+        - $ref: '#/components/schemas/AdminAccount'
+        - type: object
+          required: [bans]
+          properties:
+            bans:
+              type: array
+              description: Every ban, newest first
+              items: { $ref: '#/components/schemas/BanHistory' }
     RealmInput:
       type: object
       required: [name, host, port, region]
@@ -585,6 +791,13 @@ components:
         name: { type: string, minLength: 1, maxLength: 64, description: Unique }
         host: { type: string, minLength: 1, maxLength: 255 }
         port: { type: integer, minimum: 1, maximum: 65535 }
+        adminHost:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 255
+          default: null
+          description: Internal world admin endpoint host. Set together with adminPort, or neither.
+        adminPort: { type: [integer, 'null'], minimum: 1, maximum: 65535, default: null }
         region: { type: string, minLength: 1, maxLength: 32 }
         status: { type: string, enum: [online, offline, maintenance], default: offline }
         sortOrder: { type: integer, default: 0 }
@@ -592,9 +805,21 @@ components:
       allOf:
         - $ref: '#/components/schemas/RealmInput'
         - type: object
-          required: [id, status, sortOrder]
+          required: [id, adminHost, adminPort, status, sortOrder]
           properties:
             id: { type: integer }
+    PublicRealm:
+      description: A realm as players see it; never includes adminHost/adminPort.
+      type: object
+      required: [id, name, host, port, region, status, sortOrder]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        host: { type: string }
+        port: { type: integer }
+        region: { type: string }
+        status: { type: string, enum: [online, offline, maintenance] }
+        sortOrder: { type: integer }
     Jwks:
       type: object
       required: [keys]
@@ -647,6 +872,17 @@ components:
               realms:
                 type: array
                 items: { $ref: '#/components/schemas/Realm' }
+    PublicRealmList:
+      description: Realms ordered by sortOrder, then id
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [realms]
+            properties:
+              realms:
+                type: array
+                items: { $ref: '#/components/schemas/PublicRealm' }
     Realm:
       description: Realm
       content:
@@ -663,7 +899,7 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     Forbidden:
-      description: '`forbidden`: the token role is not admin'
+      description: '`forbidden`: the token role may not call this, or a GM targeted a non-player account'
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }

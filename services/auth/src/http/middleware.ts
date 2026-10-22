@@ -2,6 +2,7 @@ import type { ErrorRequestHandler, RequestHandler, Response } from 'express';
 import type { z } from 'zod';
 import { AppError, forbidden, unauthorized } from '../errors.js';
 import type { Logger } from '../logger.js';
+import type { Role } from '../repositories/accounts.js';
 import type { RateLimiter, RateLimitRule } from '../services/rateLimiter.js';
 import type { AuthContext, TokenService } from '../services/tokens.js';
 
@@ -31,10 +32,15 @@ export function requireAuth(tokens: TokenService): RequestHandler {
 /** The caller set by requireAuth. */
 export const authOf = (res: Response): AuthContext => res.locals.auth as AuthContext;
 
-export const requireAdmin: RequestHandler = (_req, res, next) => {
-  if (authOf(res).role !== 'admin') throw forbidden();
-  next();
-};
+/** Lets through only callers whose token role is one of roles. Runs after requireAuth. */
+export function requireRole(...roles: Role[]): RequestHandler {
+  return (_req, res, next) => {
+    if (!roles.includes(authOf(res).role)) throw forbidden();
+    next();
+  };
+}
+
+export const requireAdmin = requireRole('admin');
 
 export function rateLimit(limiter: RateLimiter, rule: RateLimitRule): RequestHandler {
   return async (req, res, next) => {
