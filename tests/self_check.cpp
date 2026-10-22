@@ -6565,8 +6565,12 @@ void checkShaderGraphs()
     for (const char* name : {"shaders/graph_demo.kshadergraph", "shaders/empty.kshadergraph"}) {
         std::string text;
         kast::ShaderGraph graph;
-        check(kast::readFile(std::filesystem::path(KAST_TEST_PROJECT_DIR) / name, text) &&
-                  kast::parseShaderGraph(text, graph, error) && kast::shaderGraphText(graph) == text,
+        const bool read = kast::readFile(std::filesystem::path(KAST_TEST_PROJECT_DIR) / name, text);
+        std::erase(text, '\r'); // a Windows git checkout may have made the line ends CRLF; Kast writes '\n'
+        kast::ShaderGraph reloaded;
+        check(read && kast::parseShaderGraph(text, graph, error) && kast::shaderGraphText(graph) == text &&
+                  kast::parseShaderGraph(kast::shaderGraphText(graph), reloaded, error) &&
+                  kast::shaderGraphText(reloaded) == text,
               std::format("{} round-trips byte for byte ({})", name, error).c_str());
     }
     const auto parse = [&](const std::string& json, kast::ShaderGraph& graph) {
