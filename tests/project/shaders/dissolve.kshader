@@ -1,0 +1,16 @@
+// Sample 3 (custom_shaders.scene): dissolve. Pixels whose noise value is below threshold are cut (ALPHA 0 on an
+// alphaMode mask material), with a glowing band just above it. The shadow pass runs fragment() too, so the shadow is
+// cut the same way. scripts/dissolve_driver.lua animates threshold in Play.
+param texture2D noise = white;                 // grayscale noise, linear
+param float threshold = 0.35 range(0, 1);      // 0 = whole, 1 = gone
+param float edge_width = 0.08 range(0, 0.3);   // noise units the glowing band covers
+param color edge_color = color(1.0, 0.35, 0.05);
+param float edge_intensity = 6.0 range(0, 20); // HDR multiplier for the band
+
+void fragment()
+{
+    float n = texture2D(noise, UV).r;
+    ALPHA = step(threshold, n) * ALPHA;
+    float edge = 1.0 - smoothstep(0.0, edge_width, n - threshold);
+    EMISSION += edge_color.rgb * edge_intensity * edge;
+}

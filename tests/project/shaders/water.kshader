@@ -1,0 +1,50 @@
+// Sample 4 (custom_shaders.scene): water for an alphaMode blend, unlit material on a finely tessellated mesh
+// (models/water_grid.gltf). vertex() raises waves; fragment() refracts the scene behind (SCREEN_TEXTURE), tints by the
+// water's depth and draws foam where geometry is close behind the surface (DEPTH_TEXTURE), with a fresnel sky tint.
+param float wave_height = 0.06 range(0, 0.5);  // meters, per wave train
+param float wave_length = 2.5 range(0.2, 10);  // meters
+param float wave_speed = 1.5 range(0, 6);      // radians per second
+param float refraction = 0.03 range(0, 0.2);   // SCREEN_UV offset per unit of normal tilt
+param float depth_fade = 1.5 range(0.1, 10);   // meters of water until it is fully deep_color
+param float foam_depth = 0.25 range(0, 2);     // meters behind the surface that still foam
+param color shallow_color = color(0.6, 0.9, 0.95);
+param color deep_color = color(0.03, 0.15, 0.3);
+param color sky_color = color(0.55, 0.7, 0.9);
+param float fresnel_power = 5.0 range(0.5, 10);
+
+// Two wave trains crossing; returns the height (x) and its slope along world X (y) and Z (z). Helpers outside the
+// stage functions compile into every stage, so they may use TIME and params but not stage built-ins.
+vec3 waves(vec2 xz)
+{
+    float k = 2.0 * PI / wave_length;
+    float a = (xz.x + 0.3 * xz.y) * k + TIME * wave_speed;
+    float b = (xz.y - 0.5 * xz.x) * k * 1.4 - TIME * wave_speed * 1.2;
+    float height = wave_height * (sin(a) + 0.6 * sin(b));
+    float dx = wave_height * k * (cos(a) - 0.6 * 0.5 * 1.4 * cos(b));
+    float dz = wave_height * k * (0.3 * cos(a) + 0.6 * 1.4 * cos(b));
+    return vec3(height, dx, dz);
+}
+
+void vertex()
+{
+    vec3 world = mul(MODEL_MATRIX, vec4(VERTEX, 1.0)).xyz;
+    VERTEX.y += waves(world.xz).x; // the mesh is unrotated with y scale 1, so world and object height agree
+}
+
+void fragment()
+{
+    vec3 w = waves(WORLD_POSITION.xz);
+    vec3 n = normalize(vec3(-w.y, 1.0, -w.z));
+    vec3 v = normalize(CAMERA_POSITION - WORLD_POSITION);
+    float fresnel = pow(1.0 - saturate(dot(n, v)), fresnel_power);
+
+    // Meters of scene behind the surface: the opaque depth there minus the surface's own distance.
+    float behind = linearDepth(texture2D(DEPTH_TEXTURE, SCREEN_UV).r) + VIEW_POSITION.z;
+    vec3 refracted = texture2D(SCREEN_TEXTURE, SCREEN_UV + n.xz * refraction).rgb;
+    vec3 water = mix(refracted * shallow_color.rgb, deep_color.rgb, saturate(behind / depth_fade));
+    water = mix(water, sky_color.rgb, fresnel);
+    float foam = saturate(1.0 - behind / foam_depth);
+    foam = smoothstep(0.35, 0.6, foam + 0.25 * foam * sin(WORLD_POSITION.x * 9.0 + WORLD_POSITION.z * 5.0 + TIME * 2.0));
+    ALBEDO = mix(water, vec3_splat(1.0), foam);
+    ALPHA = 1.0;
+}

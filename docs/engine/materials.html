@@ -86,17 +86,22 @@ Create &gt; Material) writes version 3 with every field, in the order above. Oth
   translucent (<code>blend</code>) mesh now shows only its front surface, not its inside, and terrain seen from underground is
   invisible. In this repository <code>samples/starter-mmo/materials/grass_material.mat</code> (the grass blade model) was
   migrated to <code>none</code>.</li>
-<li><code>shader</code> [empty = the built-in shader] (new in version 3): a project-relative <code>.kshader</code> file whose
-  <code>fragment()</code> runs inside the mesh shader (see <a href="shaders.html#user-shaders">User shaders</a>). Every field above still
-  applies to such a material: its values are what <code>fragment()</code> starts from, and alpha mode, cull mode, unlit and the
-  textures work as without a shader. A missing <code>.kshader</code>, or one that doesn't parse or compile, renders the material
-  magenta, with one error in the log naming the file and line.</li>
+<li><code>shader</code> [empty = the built-in shader] (new in version 3): a project-relative <code>.kshader</code> file, a
+  <a href="shaders.html#user-shaders">user shader</a> whose <code>fragment()</code> (and optional <code>vertex()</code> and
+  <code>light()</code>) run inside the mesh shader. Every field above still applies to such a material: its values are what
+  <code>fragment()</code> starts from, and alpha mode, cull mode, unlit and the textures work as without a shader (render modes
+  live here, not in the shader, so one shader serves opaque, mask and blend materials). A shader that samples
+  <code>SCREEN_TEXTURE</code> or <code>DEPTH_TEXTURE</code> needs <code>alphaMode</code> blend or additive
+  (<a href="shaders.html#kshader-screen">why</a>). A missing <code>.kshader</code>, or one that doesn't parse or compile, renders the
+  material magenta, with one error in the log naming the file and line. In the editor, pick it in the Inspector's Shader
+  section (<a href="../editor/shaders.html#shaders-assign">Shaders in the editor</a>).</li>
 <li><code>params</code> [{}] (new in version 3): values for the shader's declared params, by name. A number for a
   <code>float</code>, an array of 2, 3 or 4 numbers for a <code>vec2</code>, <code>vec3</code> or <code>vec4</code> (3 or 4 for a <code>color</code>), a
   project-relative texture path for a <code>texture2D</code> (empty: its declared default). Params the material doesn't list use
   the shader's defaults. A value of the wrong type for its param renders the material magenta (logged once); a value for
   a param the shader doesn't declare (the shader may have changed since the <code>.mat</code> was saved) is ignored with a
-  warning. In the file, the object must hold only numbers, arrays of 2 to 4 numbers or strings.</li>
+  warning. In the file, the object must hold only numbers, arrays of 2 to 4 numbers or strings. The Inspector shows one
+  widget per param and saves edits here; Lua's <code>kast.setMaterialProperty</code> sets them per entity in Play.</li>
 <li>Shading: Cook-Torrance (GGX distribution, Smith / Schlick-GGX geometry, Schlick Fresnel, F0 = mix(0.04, baseColor,
   metallic)) for the first <code>DirectionalLight</code> and up to 8 <code>PointLight</code>s per mesh; ambient adds a diffuse term and a flat
   specular term (roughness-aware Fresnel), so metals are not black with ambient light only. Direct light is scaled by
@@ -130,6 +135,18 @@ Create &gt; Material) writes version 3 with every field, in the order above. Oth
   never saved: Stop discards them, and <code>kast.set</code> to another material drops the entity's instance.</li>
 <li><strong>Built game</strong>: <code>.mat</code> and texture files ship in <code>game.pak</code> like every other project file; the player renders them
   the same way.</li>
+<li><strong>Shader sample</strong>: <code>tests/project/custom_shaders.scene</code>, materials <code>materials/shader_pulse.mat</code>,
+  <code>shader_wind.mat</code>, <code>shader_dissolve.mat</code> (mask), <code>shader_water.mat</code> (blend, unlit) and
+  <code>shader_toon.mat</code> (see <a href="shaders.html#kshader-samples">Samples</a>), e.g.
+<pre><code class="language-json">{
+  "version": 3,
+  "baseColor": [0.55, 0.3, 0.85, 1],
+  "roughness": 0.4,
+  "alphaMode": "mask",
+  "cullMode": "none",
+  "shader": "shaders/dissolve.kshader",
+  "params": { "noise": "textures/noise.png", "threshold": 0.35 }
+}</code></pre></li>
 <li><strong>Sample</strong>: <code>tests/project/materials.scene</code> (gold and red plastic spheres at roughness 0.1 / 0.5 / 0.9, PNG and JPG
   textured cubes, a metallic-roughness textured sphere, an emissive sphere, a mask cutout, two overlapping blended
   planes, a broken and a missing <code>.mat</code>, a missing texture) with its <code>materials/*.mat</code> and <code>textures/*</code>.

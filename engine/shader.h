@@ -149,6 +149,7 @@ public:
 
     // Forgets every cached shader if root differs from the last call's.
     void setRoot(const std::filesystem::path& root);
+    const std::filesystem::path& root() const { return root_; }
     // version: the bytecode cache's (shaderCacheKey); empty = no cache.
     void setCompiler(ShaderCompiler compiler, std::string version = {});
     void setAsync(bool async) { async_ = async; }

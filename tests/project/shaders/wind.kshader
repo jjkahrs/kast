@@ -1,0 +1,30 @@
+// Sample 2 (custom_shaders.scene): wind sway for foliage. vertex() bends each mesh along a wind direction, more toward
+// its top; the phase comes from the mesh's world position, so a field of instanced copies moves as a wave. The shadow
+// passes run the same vertex(), so the shadows sway too.
+param float strength = 0.3 range(0, 1);     // meters the top moves
+param float speed = 2.0 range(0, 8);        // radians per second
+param float wave = 0.8 range(0, 4);         // phase change per meter along the wind
+param vec2 direction = vec2(1.0, 0.35);     // world XZ
+param float base = -0.5;                    // object-space height where bending starts (primitive cube: its bottom)
+param float height = 1.0 range(0.1, 4);     // object-space height it bends over
+param color tip = color(0.9, 1.0, 0.45);    // vertex color at the top
+
+void vertex()
+{
+    vec3 root = mul(MODEL_MATRIX, vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    vec2 dir = normalize(direction);
+    float h = saturate((VERTEX.y - base) / height);
+    float phase = TIME * speed - dot(root.xz, dir) * wave;
+    float bend = strength * h * h * (sin(phase) + 0.35 * sin(phase * 2.7 + 1.3));
+    // The offset is in world meters; divide by the mesh's scale to write it in object space (unrotated meshes).
+    float sx = length(mul(MODEL_MATRIX, vec4(1.0, 0.0, 0.0, 0.0)).xyz);
+    float sz = length(mul(MODEL_MATRIX, vec4(0.0, 0.0, 1.0, 0.0)).xyz);
+    VERTEX.x += dir.x * bend / sx;
+    VERTEX.z += dir.y * bend / sz;
+    COLOR.rgb *= mix(vec3_splat(1.0), tip.rgb, h);
+}
+
+void fragment()
+{
+    ALBEDO *= COLOR.rgb;
+}

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shaders - Kast Editor</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html" class="active">Shaders</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
+<main>
+<h1 id="editor-shaders">Shaders in the editor</h1>
+<p>A user shader (<code>.kshader</code>) changes how the meshes of a material are drawn: their color per pixel, their shape per
+vertex, how lights shade them. This page is the workflow; the language, every built-in and the samples are in the engine's
+<a href="../engine/shaders.html#shaders">Shaders</a> reference. You edit <code>.kshader</code> files in your own text editor; Kast
+compiles them in the background and shows the result live.</p>
+
+<h2 id="shaders-create">1. Create a shader</h2>
+<p>In the <strong>Assets</strong> panel, open the folder you want (e.g. <code>shaders/</code>) and choose <strong>Create &gt; Shader</strong>.
+Kast writes <code>new_shader.kshader</code> (<code>new_shader_2.kshader</code>, ... if taken) and logs
+<code>Created shader 'shaders/new_shader.kshader'</code>. The starter compiles as is and is commented throughout: three params (a
+color, a ranged float and a texture), a <code>fragment()</code> that uses them, and a commented-out <code>vertex()</code> to start
+from.</p>
+<p><strong>Double-click</strong> a <code>.kshader</code> to open it in the external editor (the command is set in
+<strong>File &gt; Preferences</strong>, as for Lua scripts). Renaming or moving it in the Assets panel updates every
+<code>.mat</code> that uses it.</p>
+
+<h2 id="shaders-assign">2. Use it from a material</h2>
+<p>Select a <code>.mat</code> in the Assets panel. The Inspector's <strong>Shader</strong> section has a picker listing the project's
+<code>.kshader</code> files; <em>None</em> is the built-in shader. Every mesh using that material (a MeshRenderer's
+<code>material</code>, a ModelRenderer's <code>materials</code>) draws with the shader from then on. The material's other fields
+(base color, textures, alpha mode, cull mode, unlit, UV scale and offset) still apply: they are what the shader starts
+from. Under the picker the section shows:</p>
+<ul>
+<li>the <strong>status</strong>: <em>Compiling...</em>, a green <em>Compiled</em>, or in red <em>Compile failed: renders magenta</em>
+(never compiled) / <em>Compile failed: the last good version renders</em>, followed by the full error with the line in your
+<code>.kshader</code>;</li>
+<li>a red line if the material and shader don't fit together, e.g. <em>Renders magenta: SCREEN_TEXTURE is only for blend and
+additive materials ...</em> (set the material's alpha mode to blend);</li>
+<li><strong>one widget per param</strong>, in declaration order:
+<table>
+<tr><th>Param</th><th>Widget</th></tr>
+<tr><td><code>float</code> with <code>range(min, max)</code></td><td>slider over that range</td></tr>
+<tr><td><code>float</code> without range, <code>vec2</code>, <code>vec3</code>, <code>vec4</code></td><td>drag fields</td></tr>
+<tr><td><code>color</code></td><td>color picker (linear values)</td></tr>
+<tr><td><code>texture2D</code></td><td>texture picker of the project's images; <em>Default (white)</em> etc. is the declared default</td></tr>
+</table></li>
+<li>values the material still holds for params the shader no longer declares, marked <em>not a param of the shader
+(ignored)</em>.</li>
+</ul>
+<p>A widget shows the material's value, else the param's default. Every edit saves the <code>.mat</code> at once and is an undo step
+(one per drag): <strong>Edit &gt; Undo</strong> / <strong>Ctrl+Z</strong> and Redo with the Inspector focused restore and save the
+previous values. A param the material never set uses the
+<code>.kshader</code>'s default, so changing that default changes every such material.</p>
+<p>Selecting the <code>.kshader</code> itself shows its status and error, its params with their line numbers, and whether it has a
+<code>vertex()</code>.</p>
+
+<h2 id="shaders-edit">3. Edit, save, see it</h2>
+<ul>
+<li><strong>Hot reload</strong>: every save of the <code>.kshader</code> recompiles it in the background; the Scene and Game views
+show the new version typically within a quarter of a second, while the editor keeps running at full speed. The log says
+<code>Recompiled shader 'shaders/x.kshader' in 0.14 s</code>.</li>
+<li><strong>Mistakes are safe</strong>: if a save doesn't compile, the last good version keeps rendering, and the error (with your
+file's line number) appears in the Inspector and the log (<code>...; the last good version keeps rendering</code>). Fix and save
+again. A shader that has never compiled renders magenta instead.</li>
+<li><strong>Animated shaders</strong> (<code>TIME</code>) move in the Scene view in edit mode as well as in Play.</li>
+<li><strong>Fast restarts</strong>: compiled shaders are cached in <code>&lt;project&gt;/.kast/shader_cache/</code>, so reopening the
+project doesn't recompile unchanged files (<code>Compiled shader '...' (cache hit)</code>). Delete the folder to clear it; it never
+ships.</li>
+</ul>
+
+<h2 id="shaders-play">4. Drive it from Lua in Play</h2>
+<p>Scripts set params per entity, as they set material fields:
+<code>kast.setMaterialProperty(entity, "threshold", 0.5)</code>, <code>kast.getMaterialProperty(entity, "threshold")</code>. The entity
+gets its own copy of the material, so others using the same <code>.mat</code> don't change; Stop discards the copies and the
+<code>.mat</code> file is never touched. See <a href="../engine/shaders.html#kshader-editor">the Lua details</a> and the dissolve
+sample's <code>scripts/dissolve_driver.lua</code>.</p>
+
+<h2 id="shaders-build">5. Build</h2>
+<p><a href="build.html#build-shaders">Build</a> compiles every <code>.kshader</code> that ships into <code>game.pak</code> and fails,
+naming the file and line, if one doesn't compile or a shipped material misuses one. The built game never compiles shaders.
+Keep unfinished shaders in a dot-folder such as <code>.wip/</code> to leave them out.</p>
+
+<h2 id="shaders-try">Try it</h2>
+<p>Open <code>tests/project</code> and its <code>custom_shaders.scene</code>: scrolling emissive lines, wind-swept grass and a
+character, a dissolving sphere, water with refraction and foam, and toon shading. Press Play to watch the sphere dissolve
+and re-form. Select <code>materials/shader_water.mat</code> and drag its params, or open <code>shaders/toon.kshader</code>, change
+<code>bands</code> to 2.0 and save.</p>
+<p>For tests and screenshots without a mouse the same actions have flags: <code>--assets-create shader:&lt;folder&gt;</code>,
+<code>--material-set &lt;field&gt;=&lt;json&gt;</code>, <code>--material-undo N</code>, <code>--material-redo N</code> (see
+<a href="command-line.html">Command line</a>).</p>
+</main>
+</div>
+</body>
+</html>

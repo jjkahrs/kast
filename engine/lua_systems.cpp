@@ -474,6 +474,10 @@ ComponentType LuaSystems::State::componentType(lua_State* L, const std::string& 
 
 const Material& LuaSystems::State::material(lua_State* L, entt::entity e)
 {
+    // A shader's params are known once the library has a root, which the renderer gives it on its first frame; a
+    // system's first update can run before that (Play's first frame), so give it the project root here.
+    if (shaders().root().empty() && projectRoot)
+        shaders().setRoot(*projectRoot);
     if (const auto* instance = scene.registry().try_get<MaterialInstance>(e))
         return instance->material;
     const auto* mesh = scene.registry().try_get<MeshRenderer>(e);

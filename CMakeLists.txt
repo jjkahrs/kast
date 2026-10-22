@@ -1021,11 +1021,17 @@ foreach(mat ${empty_shader_mats})
     file(WRITE "${KAST_EMPTY_SHADER_PROJECT}/materials/${mat_name}" "${mat_text}")
   endif()
 endforeach()
-# kast_shader_shot(<name> <project> <scene> [smoke_test.cmake -D...]): shader_<name>.png, fixture shader_<name>_shot.
+# kast_shader_shot(<name> <project> <scene> [PLAY] [smoke_test.cmake -D...]): shader_<name>.png, fixture
+# shader_<name>_shot. PLAY shoots the Game view in Play (Lua systems run) instead of the Scene view.
 function(kast_shader_shot name project scene)
+  set(play "")
+  if(PLAY IN_LIST ARGN)
+    list(REMOVE_ITEM ARGN PLAY)
+    set(play " --play")
+  endif()
   add_test(NAME shader_${name}_screenshot
     COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/shader_${name}.png"
-            "-DEXTRA_ARGS=--scene ${project}/${scene} --size 1600x900 --fixed-dt 0.016" -DFOCUS_PANEL=Assets ${ARGN}
+            "-DEXTRA_ARGS=--scene ${project}/${scene} --size 1600x900 --fixed-dt 0.016${play}" -DFOCUS_PANEL=Assets ${ARGN}
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
   set_tests_properties(shader_${name}_screenshot PROPERTIES FIXTURES_SETUP shader_${name}_shot)
 endfunction()
@@ -1111,6 +1117,28 @@ kast_shader_shot(screen_identity "${KAST_SHADER_TEST_PROJECT}" shader_screen_ide
   "-DEXPECT_OUTPUT=Compiled shader 'shaders/screen_identity.kshader'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]|magenta")
 kast_shader_shot(screen_identity_reference "${KAST_SHADER_TEST_PROJECT}" shader_screen_identity_reference.scene)
 kast_shader_compare(shader_screen_identity_same screen_identity_reference screen_identity ON)
+# The samples (phase 6): custom_shaders.scene, all five tests/project/shaders samples (pulse, wind, dissolve, water,
+# toon) under a shadowing sun, a point light and fog, wind also on a skinned model.
+# - shader_custom: every sample compiles, nothing renders magenta; shader_custom_animates: TIME moves them (frame 60
+#   against 120).
+# - shader_custom_play: in Play, scripts/dissolve_driver.lua animates the dissolve's threshold param (Lua
+#   kast.setMaterialProperty on a .kshader param from the first frame); shader_custom_play_lua_differs: a copy without
+#   the script differs at the same frame.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/custom_shaders.scene")
+file(READ "${KAST_TEST_PROJECT}/custom_shaders.scene" shader_scene)
+string(REPLACE "\"scripts/dissolve_driver.lua\"" "" shader_scene "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/custom_shaders_no_systems.scene" "${shader_scene}")
+set(custom_shaders_compiled "Compiled shader 'shaders/(pulse|wind|dissolve|water|toon)\\.kshader'")
+kast_shader_shot(custom "${KAST_SHADER_TEST_PROJECT}" custom_shaders.scene
+  "-DEXPECT_OUTPUT=${custom_shaders_compiled}" -DEXPECT_COUNT=5 "-DFORBID_OUTPUT=\\[error\\]|\\[warn\\]|magenta")
+kast_shader_shot(custom_f60 "${KAST_SHADER_TEST_PROJECT}" custom_shaders.scene -DFRAMES=60)
+kast_shader_compare(shader_custom_animates custom_f60 custom OFF)
+kast_shader_shot(custom_play "${KAST_SHADER_TEST_PROJECT}" custom_shaders.scene PLAY
+  "-DEXPECT_OUTPUT=${custom_shaders_compiled}" -DEXPECT_COUNT=5 "-DFORBID_OUTPUT=\\[error\\]|\\[warn\\]|magenta")
+kast_shader_shot(custom_play_f60 "${KAST_SHADER_TEST_PROJECT}" custom_shaders.scene PLAY -DFRAMES=60)
+kast_shader_shot(custom_play_no_systems "${KAST_SHADER_TEST_PROJECT}" custom_shaders_no_systems.scene PLAY)
+kast_shader_compare(shader_custom_play_animates custom_play_f60 custom_play OFF)
+kast_shader_compare(shader_custom_play_lua_differs custom_play_no_systems custom_play OFF)
 # Editor workflow (phase 3), in a fresh copy of the test project (the shader cache and new files land in it):
 # - shader_cache_first / _second: the second start loads showcase.kshader from <project>/.kast/shader_cache.
 # - shader_new: Assets > Create > Shader writes a starter that compiles (the Inspector shows it).
@@ -1651,7 +1679,8 @@ foreach(game "shader_showcase|shader_showcase.scene|showcase"
              "shader_light|shader_light.scene|light_bands"
              "shader_screen|shader_screen.scene|screen_water"
              "shader_screen_identity|shader_screen_identity.scene|screen_identity"
-             "shader_screen_identity_ref|shader_screen_identity.scene|-")
+             "shader_screen_identity_ref|shader_screen_identity.scene|-"
+             "custom_shaders|custom_shaders.scene|dissolve")
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
   list(GET game 1 scene)
@@ -1704,6 +1733,21 @@ add_test(NAME player_shader_screen_identity_same
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
 set_tests_properties(player_shader_screen_identity_same PROPERTIES
                      FIXTURES_REQUIRED "player_shader_screen_identity_shot;player_shader_screen_identity_ref_shot")
+# player_custom_shaders_animates: the samples in the player move between frames 60 and 120 (TIME, and the dissolve
+# driven by scripts/dissolve_driver.lua as in the editor's Play).
+add_test(NAME player_custom_shaders_f60_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/custom_shaders" "-DEXE=Shader Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/custom_shaders_f60.run" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_custom_shaders_f60.png"
+          "-DEXTRA_ARGS=--fixed-dt 0.016 --frames 60" -DEXPECT=0 "-DFORBID_OUTPUT=\\[error\\]|magenta"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_custom_shaders_f60_screenshot PROPERTIES FIXTURES_REQUIRED game_custom_shaders_built
+                     FIXTURES_SETUP player_custom_shaders_f60_shot TIMEOUT 90)
+add_test(NAME player_custom_shaders_animates
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_custom_shaders_f60.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_custom_shaders.png" -DSAME=OFF
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(player_custom_shaders_animates PROPERTIES
+                     FIXTURES_REQUIRED "player_custom_shaders_shot;player_custom_shaders_f60_shot")
 kast_game_project(broken_shader "Broken Shader" shader_showcase.scene FALSE "")
 file(COPY "${KAST_TEST_PROJECT}/shaders/broken.kshader" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/game_projects/broken_shader/shaders")
 add_test(NAME build_game_broken_shader

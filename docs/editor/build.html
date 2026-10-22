@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html" class="active">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html" class="active">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
 <main>
 <h1 id="build">Build</h1>
 <p><strong>Build</strong> menu (enabled when a project is open and Play is stopped):</p>
@@ -69,7 +69,8 @@ shader that fails to compile or parse fails the Build, naming the file and the l
 <p>A shipped <code>.mat</code> whose <code>alphaMode</code> is opaque or mask and whose shader samples <code>SCREEN_TEXTURE</code> or
 <code>DEPTH_TEXTURE</code> (<a href="../engine/shaders.html#kshader-screen">blend and additive only</a>) fails the Build too:</p>
 <pre><code>Build failed: material 'materials/water.mat': SCREEN_TEXTURE is only for blend and additive materials (drawn after the opaque scene it copies); this material's alphaMode is mask</code></pre>
-<p>Move a work-in-progress <code>.kshader</code> into a dot-folder (e.g. <code>.wip/</code>) to leave it out of the Build.</p>
+<p>Move a work-in-progress <code>.kshader</code> into a dot-folder (e.g. <code>.wip/</code>) to leave it out of the Build. Writing and
+testing shaders in the editor: <a href="shaders.html#editor-shaders">Shaders</a>.</p>
 <p><strong>The game</strong> (<code>kast_player.exe</code> under its new name) opens the <code>game.pak</code> next to it, loads <code>project.kast</code> and its Lua
 components from it, titles its window with the project name and plays <code>startScene</code> as editor Play mode does (C++
 systems, Lua systems, Lua components, <code>kast.loadScene</code>), rendering through the scene's Main Camera. It has no console

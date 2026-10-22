@@ -2966,7 +2966,7 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"audio.scene", "events.scene", "fsm.scene", "health.scene", "material_features.scene",
+              std::vector<std::string>{"audio.scene", "custom_shaders.scene", "events.scene", "fsm.scene", "health.scene", "material_features.scene",
                                        "materials.scene", "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
                                        "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene",
@@ -2988,7 +2988,7 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / ".dot.scene");
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
-    check(projectScenes(root) == std::vector<std::string>{"audio.scene", "broken.scene", "events.scene", "fsm.scene",
+    check(projectScenes(root) == std::vector<std::string>{"audio.scene", "broken.scene", "custom_shaders.scene", "events.scene", "fsm.scene",
                                                           "health.scene", "levels/c.scene", "material_features.scene", "materials.scene",
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
@@ -7003,6 +7003,7 @@ end })");
     entt::registry& registry = doc.scene.registry();
     registry.emplace<kast::MeshRenderer>(doc.scene.create("P"), kast::Primitive::Cube, "materials/p.mat");
     doc.scene.systems = {"scripts/params.lua"};
+    kast::shaders().setRoot({}); // as on Play's first frame before any render: Lua gives the library its root
     startPlay(doc);
     updatePlay(doc, 0.1f);
     checkOk(doc.lua, 0, "kast.get/setMaterialProperty on shader params: Lua asserts pass");
