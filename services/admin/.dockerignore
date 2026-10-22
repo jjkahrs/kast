@@ -5,3 +5,5 @@ keys
 .env
 test
 *.log
+web/dist
+screenshots
