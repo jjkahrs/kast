@@ -37,7 +37,8 @@ describe('realms', () => {
     expectError(await admin.post('/api/realms', { ...realm, name: 'Alpha' }), 409, 'realm_name_taken');
     expectError(await admin.post('/api/realms', { ...realm, port: 0 }), 400, 'validation_error');
     expect((await admin.delete(`/api/realms/${id}`)).status).toBe(204);
-    expectError(await gm.get(`/api/realms/${id}/online`), 404, 'realm_not_found');
+    expectError(await gm.get(`/api/realms/${id}/online`), 503, 'realm_unreachable'); // gone from the GM copy
+    expectError(await admin.get(`/api/realms/${id}/online`), 404, 'realm_not_found');
 
     expect((await ctx.auditRows()).map((r) => `${r.action}:${r.result}:${r.target_id}`)).toEqual([
       `realm.create:ok:${id}`,
@@ -85,5 +86,40 @@ describe('realms', () => {
     expectError(await admin.get(`/api/realms/${down}/online`), 503, 'realm_unreachable');
     expectError(await admin.post(`/api/realms/${down}/kick`, { accountId: 1, reason: 'x' }), 503, 'realm_unreachable');
     expectError(await admin.get('/api/realms/999/online'), 404, 'realm_not_found');
+  });
+
+  it('no response a GM can reach carries a realm admin endpoint', async () => {
+    const down = await ctx.addRealm('Down', 1);
+    const unknown = 999;
+    await ctx.login(ADMIN);
+    goOnline(ctx, ctx.ids.player, 11, 'Aragorn');
+    const charId = await ctx.addCharacter({ accountId: ctx.ids.player, name: 'Aragorn' });
+    const downChar = await ctx.addCharacter({ accountId: ctx.ids.otherPlayer, name: 'Boromir', realmId: down });
+    const gm = await ctx.login(GM);
+    const responses = [
+      await gm.get('/api/session'),
+      await gm.get('/api/realms'),
+      await gm.get(`/api/realms/${ctx.realmId}/online`),
+      await gm.get(`/api/realms/${down}/online`),
+      await gm.get(`/api/realms/${unknown}/online`),
+      await gm.get(`/api/realms/${ctx.realmId}`),
+      await gm.post(`/api/realms/${ctx.realmId}/kick`, { characterId: 11, reason: 'x' }),
+      await gm.post(`/api/realms/${down}/kick`, { accountId: 1, reason: 'x' }),
+      await gm.get('/api/characters'),
+      await gm.get(`/api/characters/${charId}`),
+      await gm.put(`/api/characters/${charId}/name`, { name: 'Strider' }),
+      await gm.put(`/api/characters/${downChar}/name`, { name: 'Faramir' }),
+      await gm.put(`/api/characters/${downChar}/name`, { name: 'Faramir', force: true }),
+      await gm.post(`/api/accounts/${ctx.ids.player}/ban`, { reason: 'x' }),
+      await gm.get(`/api/accounts/${ctx.ids.player}`),
+      await gm.get('/api/accounts'),
+      await gm.get('/api/audit'),
+      await gm.post('/api/realms', { name: 'X', host: 'h', port: 1, region: 'r', adminHost: '127.0.0.1', adminPort: 9 }),
+    ];
+    for (const res of responses) {
+      const text = JSON.stringify(res.body) + JSON.stringify(res.headers);
+      expect(text, `response ${responses.indexOf(res)}`).not.toMatch(/adminHost|adminPort|admin_host|admin_port|127\.0\.0\.1/);
+      expect(text, `response ${responses.indexOf(res)}`).not.toContain(`:${ctx.world.port}`);
+    }
   });
 });

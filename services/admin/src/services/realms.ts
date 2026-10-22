@@ -39,6 +39,8 @@ export function createRealmService(deps: { auth: AuthClient; world: WorldAdminCl
 
   async function endpoint(ctx: SessionContext, realmId: number): Promise<{ host: string; port: number }> {
     const realm = (await endpoints(ctx)).find((r) => r.id === realmId);
+    // GMs read the copy, which may lag auth: a realm missing from it is unreachable to them, not unknown.
+    if (!realm && ctx.caller.role !== 'admin') throw realmUnreachable('The realm is not known to the admin service yet');
     if (!realm) throw new AppError(404, 'realm_not_found', 'Realm not found');
     if (!realm.adminHost || !realm.adminPort) throw realmUnreachable('The realm has no admin endpoint configured');
     return { host: realm.adminHost, port: realm.adminPort };
