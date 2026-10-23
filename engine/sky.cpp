@@ -78,13 +78,36 @@ void SkyRenderer::unload()
     error_.clear();
 }
 
-void SkyRenderer::load(const std::array<std::string, 6>& faces, const std::filesystem::path& root)
+void SkyRenderer::loadCube(const std::string& path, const std::filesystem::path& root)
+{
+    std::string why = "no project";
+    std::optional<std::filesystem::path> file;
+    if (!root.empty())
+        file = resolveProjectPath(root, path, why);
+    std::string bytes;
+    if (file && !readFile(*file, bytes))
+        why = "cannot read the file";
+    else if (file && !isGpuImage(bytes, path))
+        why = "not a KTX or DDS file";
+    else if (file)
+        cube_ = createGpuTexture(bytes, true, true, BGFX_SAMPLER_UVW_CLAMP, why);
+    if (!bgfx::isValid(cube_)) {
+        error_ = std::format("'{}': {}", path, why);
+        warnOnce(std::format("Sky cubemap: {}; using the procedural sky", error_));
+    }
+}
+
+void SkyRenderer::load(const SceneSky& sky, const std::filesystem::path& root)
 {
     const LoadTimer timer(assetLoadStats().textures, assetLoadStats().textureSeconds);
     unload();
     loaded_ = true;
-    faces_ = faces;
+    faces_ = sky.faces;
+    cubeFile_ = sky.cube;
     root_ = root;
+    if (!sky.cube.empty())
+        return loadCube(sky.cube, root);
+    const std::array<std::string, 6>& faces = sky.faces;
     const auto fail = [&](const std::string& why) {
         error_ = why;
         warnOnce(std::format("Sky cubemap: {}; using the procedural sky", why));
@@ -125,8 +148,8 @@ void SkyRenderer::draw(const SceneSky& sky, const std::filesystem::path& project
         unload(); // a scene or mode switch frees the cube
     if (sky.mode == SkyMode::Off)
         return;
-    if (sky.mode == SkyMode::Cubemap && (!loaded_ || faces_ != sky.faces || root_ != projectRoot))
-        load(sky.faces, projectRoot);
+    if (sky.mode == SkyMode::Cubemap && (!loaded_ || faces_ != sky.faces || cubeFile_ != sky.cube || root_ != projectRoot))
+        load(sky, projectRoot);
 
     float rotation[16], viewProj[16], inverse[16];
     std::copy_n(viewMtx, 16, rotation);

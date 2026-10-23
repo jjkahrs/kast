@@ -2969,7 +2969,7 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"audio.scene", "custom_shaders.scene", "events.scene", "fsm.scene", "health.scene", "material_features.scene",
+              std::vector<std::string>{"audio.scene", "custom_shaders.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "material_features.scene",
                                        "materials.scene", "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
                                        "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene",
@@ -2992,7 +2992,7 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
     check(projectScenes(root) == std::vector<std::string>{"audio.scene", "broken.scene", "custom_shaders.scene", "events.scene", "fsm.scene",
-                                                          "health.scene", "levels/c.scene", "material_features.scene", "materials.scene",
+                                                          "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "levels/c.scene", "material_features.scene", "materials.scene",
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
                                                           "models_material.scene", "models_missing.scene", "net_a.scene",
@@ -5167,6 +5167,11 @@ void checkSky()
               near(loaded.sky.bottom, {0.7f, 0.8f, 0.9f}) && loaded.sky.faces == scene.sky.faces,
           "sky round trip");
     check(kast::sceneToJson(loaded) == json, "sky saves back identically");
+    check(!json["sky"].contains("cube"), "no cube file: no \"cube\" key (older scenes save unchanged)");
+    scene.sky.cube = "s/sky.ktx";
+    check(kast::sceneFromJson(kast::sceneToJson(scene), loaded, error) && loaded.sky.cube == "s/sky.ktx" &&
+              loaded.sky.faces == scene.sky.faces,
+          "sky cube file round trip");
     json.erase("sky");
     check(kast::sceneFromJson(json, loaded, error) && loaded.sky.mode == kast::SkyMode::Off &&
               near(loaded.sky.top, kast::SceneSky{}.top) && loaded.sky.faces == kast::SceneSky{}.faces,
@@ -5223,6 +5228,11 @@ return { update = function(dt)
     s = kast.sky.get()
     assert(s.mode == "cubemap" and s.faces.nz == "sky/nz.png" and s.faces.px == "" and s.top.x == 0.5 and
            s.horizon.x == 1, "partial set keeps the other fields and faces")
+    kast.sky.set({cube = "sky/storm.ktx"})
+    assert(kast.sky.get().cube == "sky/storm.ktx" and kast.sky.get().faces.nz == "sky/nz.png", "cube file set")
+    kast.sky.set({cube = ""})
+    assert(kast.sky.get().cube == nil, "cube file cleared")
+    fails('"cube" must be a string', function() kast.sky.set({cube = 3}) end)
     fails('"mode" must be', function() kast.sky.set({top = {x = 0, y = 0, z = 0}, mode = "night"}) end)
     fails('unknown field "sun"', function() kast.sky.set({sun = 1}) end)
     fails('"horizon" must be an array of 3 numbers between 0 and 1',
@@ -7593,6 +7603,47 @@ void checkTextureDecode()
           "row 0 is the image's top (blue marker cell at the top-left)");
     check(kast::decodeImage(jpg, false).has_value(), "JPG decodes");
     check(!kast::decodeImage("not an image", true) && !kast::decodeImage("", false), "undecodable bytes: nullopt");
+}
+
+// Authored KTX / DDS (tests/project/textures/gpu, sky_test/cube.*, made with texturec): parsed as stored, broken or
+// mismatched ones rejected with why. createGpuTexture's GPU format check is covered by the ktx_* screenshot tests.
+void checkGpuImages()
+{
+    const std::filesystem::path dir = std::filesystem::path(KAST_TEST_PROJECT_DIR) / "textures";
+    const auto parse = [&](const char* file, bool cube, std::string& error) {
+        std::string bytes;
+        check(kast::readFile(dir / file, bytes), std::format("{} present", file).c_str());
+        check(kast::isGpuImage(bytes), std::format("{} is a KTX / DDS by its magic", file).c_str());
+        return kast::parseGpuImage(bytes, cube, error);
+    };
+    using Format = bgfx::TextureFormat;
+    const struct {
+        const char* file;
+        Format::Enum format;
+    } kTwoD[] = {{"gpu/checker_bc1.ktx", Format::BC1}, {"gpu/checker_bc3.dds", Format::BC3},
+                 {"gpu/checker_bc7.ktx", Format::BC7}, {"gpu/checker_rgba8.dds", Format::RGBA8},
+                 {"gpu/checker_etc1.ktx", Format::ETC1}};
+    for (const auto& [file, format] : kTwoD) {
+        std::string error;
+        const std::optional<kast::GpuImageInfo> info = parse(file, false, error);
+        check(info && info->format == format && info->width == 64 && info->height == 64 && info->mips == 7 && !info->cube,
+              std::format("{}: 64x64, 7 mips, stored format kept ({})", file, error).c_str());
+        check(!parse(file, true, error) && error == "a 2D texture, not a cubemap", std::format("{}: not a cube", file).c_str());
+    }
+    for (const char* file : {"sky_test/cube.ktx", "sky_test/cube.dds"}) {
+        std::string error;
+        const std::optional<kast::GpuImageInfo> info = parse(file, true, error);
+        check(info && info->cube && info->width == 16 && info->mips == 5, std::format("{}: 16x16 cube, 5 mips ({})", file, error).c_str());
+        check(!parse(file, false, error) && error == "a cubemap, not a 2D texture", std::format("{}: not 2D", file).c_str());
+    }
+    std::string error;
+    check(!parse("gpu/truncated.dds", false, error) && error == "the file is truncated", "truncated DDS rejected");
+    check(!parse("gpu/corrupt.ktx", false, error) && error == "not a valid KTX or DDS file", "corrupt KTX rejected");
+    check(!kast::parseGpuImage("", false, error) && !kast::parseGpuImage("DDS ", false, error), "empty / header-only rejected");
+    std::string png;
+    check(kast::readFile(dir / "checker.png", png) && !kast::isGpuImage(png, "textures/checker.png"),
+          "a PNG is not a KTX / DDS");
+    check(kast::isGpuImage("junk", "a/b.KTX") && kast::isGpuImage("junk", "b.dds"), "by extension too, any case");
 }
 
 void checkMaterialScenes()
@@ -12028,6 +12079,7 @@ int main(int argc, char** argv)
     checkShaderClock();
     checkMaterialLibrary();
     checkTextureDecode();
+    checkGpuImages();
     checkMaterialScenes();
     checkLuaMaterials();
     checkShaderParamEditing();

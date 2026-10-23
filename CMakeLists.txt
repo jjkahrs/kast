@@ -932,6 +932,64 @@ file(REMOVE_RECURSE "${KAST_MATERIALS_PROJECT}")
 file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${KAST_MATERIALS_PROJECT}")
 string(REGEX REPLACE "(\"DirectionalLight\": {[^}]*\"intensity\": )[0-9.]+" "\\10" materials_ambient "${materials_scene}")
 file(WRITE "${KAST_MATERIALS_PROJECT}/materials_ambient.scene" "${materials_ambient}")
+# Authored KTX / DDS (docs/engine/materials.html, docs/engine/skybox.html): tests/project/gpu_textures.scene draws
+# cubes textured by textures/gpu/checker_{bc1.ktx, bc3.dds, bc7.ktx, rgba8.dds} (texturec from checker.png, stored
+# format and mips kept) under the cube sky textures/sky_test/cube.ktx (the sky_test faces as one RGBA8 cube); it must
+# match a copy using checker.png and the six PNG faces (only BC block artifacts differ). gpu_textures_bad.scene uses an
+# ETC1 texture (no D3D11 support), a corrupt KTX, a truncated DDS and a 2D KTX as the sky cube: each warns once and draws
+# exactly as a missing PNG texture / face does (a copy using those). The Lighting panel shows the Cube file picker; the
+# Inspector lists a .ktx in the material's texture picker. The built game "gpu_textures" in KAST_GAMES ships them as-is.
+set(KAST_GPU_TEXTURES "${KAST_TEST_PROJECT}/gpu_textures.scene")
+set(KAST_GPU_TEXTURES_BAD "${KAST_TEST_PROJECT}/gpu_textures_bad.scene")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_GPU_TEXTURES}" "${KAST_GPU_TEXTURES_BAD}")
+file(READ "${KAST_GPU_TEXTURES}" gpu_scene)
+string(REGEX REPLACE "materials/gpu_[a-z0-9]+\\.mat" "materials/checker.mat" gpu_png "${gpu_scene}")
+string(REGEX REPLACE ",[ \r\n]*\"cube\": \"[^\"]*\"" "" gpu_png "${gpu_png}")
+file(WRITE "${KAST_MATERIALS_PROJECT}/gpu_textures_png.scene" "${gpu_png}")
+file(READ "${KAST_GPU_TEXTURES_BAD}" gpu_bad_scene)
+string(REGEX REPLACE "materials/gpu_[a-z0-9]+\\.mat" "materials/gpu_missing.mat" gpu_missing "${gpu_bad_scene}")
+string(REGEX REPLACE ",[ \r\n]*\"cube\": \"[^\"]*\"" "" gpu_missing "${gpu_missing}")
+string(REPLACE "sky_test/px.png" "sky_test/missing.png" gpu_missing "${gpu_missing}")
+file(WRITE "${KAST_MATERIALS_PROJECT}/gpu_textures_missing.scene" "${gpu_missing}")
+foreach(shot "gpu_textures|${KAST_GPU_TEXTURES}" "gpu_textures_png|${KAST_MATERIALS_PROJECT}/gpu_textures_png.scene"
+             "gpu_textures_bad|${KAST_GPU_TEXTURES_BAD}" "gpu_textures_missing|${KAST_MATERIALS_PROJECT}/gpu_textures_missing.scene")
+  string(REPLACE "|" ";" shot "${shot}")
+  list(GET shot 0 name)
+  list(GET shot 1 scene)
+  set(check "")
+  if(name STREQUAL "gpu_textures")
+    set(check "-DFORBID_OUTPUT=Texture '|Sky cubemap")
+  elseif(name STREQUAL "gpu_textures_bad")
+    set(check "-DEXPECT_OUTPUT=(Texture 'textures/gpu/truncated.dds': the file is truncated|Texture 'textures/gpu/corrupt.ktx': not a valid KTX or DDS file|Texture 'textures/gpu/checker_etc1.ktx': this GPU has no ETC1|Sky cubemap: 'textures/gpu/checker_bc1.ktx': a 2D texture, not a cubemap)"
+              -DEXPECT_COUNT=4)
+  endif()
+  add_test(NAME ${name}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/${name}.png"
+            "-DEXTRA_ARGS=--scene ${scene} --size 1600x900" ${check} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+  set_tests_properties(${name}_screenshot PROPERTIES FIXTURES_SETUP ${name}_shot)
+endforeach()
+# Mean |difference| per channel over the Scene view (the logs below it differ): BC1 / BC3 / BC7 blocks against the PNG;
+# none at all for the fallbacks.
+foreach(pair "gpu_textures|gpu_textures_png|1" "gpu_textures_bad|gpu_textures_missing|0")
+  string(REPLACE "|" ";" pair "${pair}")
+  list(GET pair 0 a)
+  list(GET pair 1 b)
+  list(GET pair 2 limit)
+  add_test(NAME ${a}_matches_${b}
+    COMMAND kast_self_check --diff-png "${CMAKE_CURRENT_BINARY_DIR}/${a}.png" "${CMAKE_CURRENT_BINARY_DIR}/${b}.png" ${limit}
+            330,80,940,540)
+  set_tests_properties(${a}_matches_${b} PROPERTIES FIXTURES_REQUIRED "${a}_shot;${b}_shot")
+endforeach()
+add_test(NAME gpu_textures_sky_panel_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gpu_textures_sky_panel.png"
+          "-DEXTRA_ARGS=--scene ${KAST_GPU_TEXTURES} --size 1600x900" -DFOCUS_PANEL=Lighting
+          "-DFORBID_OUTPUT=Sky cubemap" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME gpu_textures_picker_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gpu_textures_picker.png"
+          "-DEXTRA_ARGS=--scene ${KAST_GPU_TEXTURES} --size 1600x900 --assets-select materials/gpu_bc7.mat"
+          "-DFORBID_OUTPUT=Texture '" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME materials_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/materials.png"
           "-DEXTRA_ARGS=--scene ${KAST_MATERIALS} --size 1600x900" "-DFOCUS_PANEL=Game"
@@ -1547,7 +1605,9 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "sky|Sky Test|sky_procedural.scene|FALSE" "sky_off|Sky Test|sky_off.scene|FALSE"
                "sky_moved|Sky Test|sky_moved.scene|FALSE" "sky_cube|Sky Test|sky_cubemap.scene|FALSE"
                "sky_cube_back|Sky Test|sky_cubemap_back.scene|FALSE" "sky_fallback|Sky Test|sky_missing_face.scene|FALSE"
-               "particles|Particles Test|particles_shapes.scene|FALSE")
+               "particles|Particles Test|particles_shapes.scene|FALSE"
+               "gpu_textures|GPU Textures Test|gpu_textures.scene|FALSE"
+               "sky_cube_ktx|Sky Test|sky_cubemap_ktx.scene|FALSE" "sky_cube_dds|Sky Test|sky_cubemap_dds.scene|FALSE")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
@@ -1590,6 +1650,13 @@ set_tests_properties(player_lights_f3_differs PROPERTIES FIXTURES_REQUIRED "play
 # cube at the fog color while the sky stays unfogged, sky off clearing to the fog color as before skies, every cube
 # face's color and marker corner from two corners of the cube, and a missing face's procedural fallback.
 file(COPY_FILE "${CMAKE_CURRENT_BINARY_DIR}/sky_off.scene" "${CMAKE_CURRENT_BINARY_DIR}/game_projects/sky_off/sky_off.scene")
+# sky_cubemap.scene with the sky_test faces as one cube file (texturec --strip; RGBA8 .ktx, BC7 .dds): the same probes
+# as sky_cube must pass, so the cube's sides face the same way as the six faces. The faces stay set but unused.
+file(READ "${KAST_TEST_PROJECT}/sky_cubemap.scene" sky_cube_scene)
+foreach(ext ktx dds)
+  string(REPLACE "\"faces\":" "\"cube\": \"textures/sky_test/cube.${ext}\",\n    \"faces\":" sky_cube_file "${sky_cube_scene}")
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/game_projects/sky_cube_${ext}/sky_cubemap_${ext}.scene" "${sky_cube_file}")
+endforeach()
 file(COPY_FILE "${CMAKE_CURRENT_BINARY_DIR}/sky_moved.scene" "${CMAKE_CURRENT_BINARY_DIR}/game_projects/sky_moved/sky_moved.scene")
 set(KAST_SKY_GRADIENT 0.5004,0.4201,204,0,169,6 0.5004,0.0299,115,0,235,6 0.5004,0.9701,115,235,0,6
                       0.1004,0.2507,183,0,192,6 0.9004,0.7507,183,192,0,6 0.5004,0.3007,168,0,205,6 0.2004,0.6007,208,164,0,6)
@@ -1606,6 +1673,16 @@ kast_sky_probe(sky_fallback ${KAST_SKY_GRADIENT})
 kast_sky_probe(sky_cube 0.1520,0.2448,255,255,255,12 0.4801,0.5204,255,0,0,12 0.3011,0.7041,255,0,0,12
                0.7983,0.0918,255,255,255,12 0.5000,0.4592,0,255,0,12 0.5000,0.0918,0,255,0,12
                0.5199,0.5204,255,255,255,12 0.8480,0.2448,0,0,255,12 0.6989,0.7041,0,0,255,12)
+foreach(ext ktx dds)
+  kast_sky_probe(sky_cube_${ext} 0.1520,0.2448,255,255,255,12 0.4801,0.5204,255,0,0,12 0.3011,0.7041,255,0,0,12
+                 0.7983,0.0918,255,255,255,12 0.5000,0.4592,0,255,0,12 0.5000,0.0918,0,255,0,12
+                 0.5199,0.5204,255,255,255,12 0.8480,0.2448,0,0,255,12 0.6989,0.7041,0,0,255,12)
+endforeach()
+add_test(NAME game_gpu_textures_pak
+  COMMAND "${CMAKE_COMMAND}" "-DPAK=${KAST_GAME_OUT}/gpu_textures/game.pak"
+          "-DMUST_CONTAIN=textures/gpu/checker_bc1.ktx;textures/gpu/checker_bc3.dds;textures/gpu/checker_bc7.ktx;textures/gpu/checker_rgba8.dds;textures/sky_test/cube.ktx;textures/sky_test/cube.dds"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/pak_check.cmake")
+set_tests_properties(game_gpu_textures_pak PROPERTIES FIXTURES_REQUIRED game_gpu_textures_built)
 kast_sky_probe(sky_cube_back 0.4122,0.2669,255,255,255,12 0.6885,0.1982,0,255,255,12 0.4220,0.6595,0,255,255,12
                0.5287,0.4747,0,255,255,12 0.3731,0.1025,255,255,255,12 0.7035,0.8928,255,255,255,12
                0.3963,0.7789,255,0,255,12 0.3355,0.2171,0,0,255,12 0.8640,0.0378,255,255,255,12

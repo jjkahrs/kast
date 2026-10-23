@@ -86,6 +86,9 @@ files. Each one logs <code>Cooked model 'models/hero.glb' for game.pak</code>, w
 it. The player loads cooked models only and ships without Assimp. A model Assimp can't import fails the Build, naming the
 file, and writes nothing:</p>
 <pre><code>Build failed: model 'models/corrupt.glb': ...</code></pre>
+<p id="build-ktx"><strong>KTX / DDS.</strong> Authored <code>.ktx</code> and <code>.dds</code> textures (2D and cube,
+<a href="../engine/materials.html#ktx-dds">materials</a>, <a href="../engine/skybox.html#cube-file">skybox</a>) ship in
+<code>game.pak</code> as-is: Build never recompresses them.</p>
 <p>Move a work-in-progress <code>.kshader</code> or model into a dot-folder (e.g. <code>.wip/</code>) to leave it out of the Build. Writing and
 testing shaders in the editor: <a href="shaders.html#editor-shaders">Shaders</a>.</p>
 <p><strong>The game</strong> (<code>kast_player.exe</code> under its new name) opens the <code>game.pak</code> next to it, loads <code>project.kast</code> and its Lua

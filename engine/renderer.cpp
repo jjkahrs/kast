@@ -12,6 +12,7 @@
 #include "vs_shadow_skinned.bin.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <climits>
 #include <cmath>
@@ -27,6 +28,9 @@
 #include "physics.h"
 #include "project.h"
 #include "terrain.h"
+
+#include <bimg/bimg.h>
+#include <bx/error.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
@@ -347,6 +351,73 @@ std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb)
     stbi_image_free(pixels);
     buildMips(image, srgb);
     return image;
+}
+
+bool isGpuImage(std::string_view bytes, std::string_view path)
+{
+    const auto extension = [&](std::string_view e) {
+        return path.size() >= e.size() && std::ranges::equal(path.substr(path.size() - e.size()), e, [](char a, char b) {
+                   return std::tolower(static_cast<unsigned char>(a)) == b;
+               });
+    };
+    return bytes.starts_with("DDS ") || bytes.starts_with("\xABKTX") || extension(".ktx") || extension(".dds");
+}
+
+std::optional<GpuImageInfo> parseGpuImage(std::string_view bytes, bool cube, std::string& error)
+{
+    bimg::ImageContainer image{};
+    bx::Error err;
+    if (bytes.size() > UINT32_MAX || !bimg::imageParse(image, bytes.data(), static_cast<uint32_t>(bytes.size()), &err) ||
+        image.m_format >= bimg::TextureFormat::Count) {
+        error = "not a valid KTX or DDS file";
+        return std::nullopt;
+    }
+    // Only the header was read: the mips it promises must all be in the file (bimg asserts in debug builds otherwise).
+    // KTX prefixes each mip with its u32 size; padding is not counted, so this is a lower bound.
+    const bimg::ImageBlockInfo& block = bimg::getBlockInfo(image.m_format);
+    uint64_t need = 0;
+    for (uint32_t mip = 0; mip < image.m_numMips; ++mip) {
+        const uint64_t w = std::max<uint64_t>(image.m_width >> mip, 1), h = std::max<uint64_t>(image.m_height >> mip, 1);
+        const uint64_t blocks = std::max<uint64_t>((w + block.blockWidth - 1) / block.blockWidth, block.minBlockX) *
+                                std::max<uint64_t>((h + block.blockHeight - 1) / block.blockHeight, block.minBlockY);
+        need += blocks * block.blockSize * (image.m_cubeMap ? 6 : 1) * std::max<uint32_t>(image.m_numLayers, 1) +
+                (image.m_ktx ? 4 : 0);
+    }
+    if (image.m_numMips == 0 || image.m_width == 0 || image.m_height == 0 || image.m_offset + need > bytes.size()) {
+        error = "the file is truncated";
+        return std::nullopt;
+    }
+    if (image.m_depth > 1 || image.m_numLayers > 1) {
+        error = "3D and array textures are not supported";
+        return std::nullopt;
+    }
+    if (image.m_cubeMap != cube) {
+        error = cube ? "a 2D texture, not a cubemap" : "a cubemap, not a 2D texture";
+        return std::nullopt;
+    }
+    if (image.m_width > 16384 || image.m_height > 16384) {
+        error = std::format("{}x{} is too large", image.m_width, image.m_height);
+        return std::nullopt;
+    }
+    return GpuImageInfo{static_cast<bgfx::TextureFormat::Enum>(image.m_format), static_cast<uint16_t>(image.m_width),
+                        static_cast<uint16_t>(image.m_height), image.m_numMips, image.m_cubeMap};
+}
+
+bgfx::TextureHandle createGpuTexture(std::string_view bytes, bool srgb, bool cube, uint64_t flags, std::string& error)
+{
+    const std::optional<GpuImageInfo> info = parseGpuImage(bytes, cube, error);
+    if (!info)
+        return BGFX_INVALID_HANDLE;
+    const uint32_t need = cube ? (srgb ? BGFX_CAPS_FORMAT_TEXTURE_CUBE_SRGB : BGFX_CAPS_FORMAT_TEXTURE_CUBE)
+                               : (srgb ? BGFX_CAPS_FORMAT_TEXTURE_2D_SRGB : BGFX_CAPS_FORMAT_TEXTURE_2D);
+    if (!(bgfx::getCaps()->formats[info->format] & need)) {
+        error = std::format("this GPU has no {}{} textures", bimg::getName(static_cast<bimg::TextureFormat::Enum>(info->format)),
+                            srgb ? " sRGB" : "");
+        return BGFX_INVALID_HANDLE;
+    }
+    // bgfx parses the KTX / DDS itself and uploads each side's mips as stored.
+    return bgfx::createTexture(bgfx::copy(bytes.data(), static_cast<uint32_t>(bytes.size())),
+                               flags | (srgb ? BGFX_TEXTURE_SRGB : BGFX_TEXTURE_NONE));
 }
 
 void buildMips(MipImage& image, bool srgb)
@@ -690,25 +761,29 @@ void Renderer::loadTexture(const std::string& path, bool srgb, Texture& texture)
         root_.empty() ? std::nullopt : resolveProjectPath(root_, textureFile(path), error);
     texture.mtime = file ? modifiedTime(*file) : std::nullopt;
     std::string bytes;
-    std::optional<MipImage> image;
+    bool read = false;
     if (!embeddedTextureModel(path).empty()) { // embedded in a model
         const std::optional<std::string_view> embedded = models().embeddedTexture(path);
         if (embedded)
             bytes = *embedded;
         else
             error = "no such embedded image";
-        if (embedded && !(image = decodeImage(bytes, srgb)))
-            error = std::format("cannot decode it as PNG or JPG ({})", stbi_failure_reason());
+        read = embedded.has_value();
     } else if (file && !readFile(*file, bytes)) {
         error = "cannot read the file";
-    } else if (file && !(image = decodeImage(bytes, srgb))) {
-        error = std::format("cannot decode it as PNG or JPG ({})", stbi_failure_reason());
+    } else {
+        read = file.has_value();
     }
-    if (!image) {
+    if (read && isGpuImage(bytes, path)) {
+        texture.handle = createGpuTexture(bytes, srgb, false, BGFX_TEXTURE_NONE, error);
+    } else if (read) {
+        if (const std::optional<MipImage> image = decodeImage(bytes, srgb))
+            texture.handle = createTexture(*image, srgb);
+        else
+            error = std::format("cannot decode it as PNG or JPG ({})", stbi_failure_reason());
+    }
+    if (!bgfx::isValid(texture.handle))
         warnOnce(std::format("Texture '{}': {}; drawing without it", path, error));
-        return;
-    }
-    texture.handle = createTexture(*image, srgb);
 }
 
 void Renderer::setPreview(const std::string& materialPath, const Material& material, const std::string& texturePath,

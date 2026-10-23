@@ -81,6 +81,23 @@ struct MipImage {
 };
 // Decodes PNG or JPG bytes and builds the mips (filtered in linear space if srgb). nullopt if it can't be decoded.
 std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb);
+// An authored KTX / DDS texture as stored: its GPU format (BCn or uncompressed), size and its own mips.
+struct GpuImageInfo {
+    bgfx::TextureFormat::Enum format = bgfx::TextureFormat::Unknown;
+    uint16_t width = 0, height = 0;
+    uint8_t mips = 0;
+    bool cube = false;
+};
+// True if the bytes are a KTX or DDS file (by their magic, so embedded model images count too), or the path ends in
+// .ktx / .dds (so a corrupt one still reports as such). Those load with createGpuTexture, the rest with decodeImage.
+bool isGpuImage(std::string_view bytes, std::string_view path = {});
+// Reads a KTX / DDS header (bimg::imageParse) and checks the data is all there. nullopt and why if it's corrupt,
+// truncated, or a 2D texture where a cube is wanted (cube) or the reverse.
+std::optional<GpuImageInfo> parseGpuImage(std::string_view bytes, bool cube, std::string& error);
+// A texture in the file's stored format with its own mips (srgb: sampled as sRGB, BGFX_TEXTURE_SRGB). Invalid and why
+// if parseGpuImage fails or this GPU lacks the format natively (bgfx's CPU emulation is refused: it would decode to
+// RGBA8 and lose the point of compression).
+bgfx::TextureHandle createGpuTexture(std::string_view bytes, bool srgb, bool cube, uint64_t flags, std::string& error);
 // "Asset loads: N models in X ms, M textures in Y ms; textureMemoryUsed Z MiB" (assetLoadStats, bgfx::getStats).
 std::string assetLoadSummary();
 // Appends the mips below level 0 (image.rgba holds just width x height RGBA8) and sets levels.

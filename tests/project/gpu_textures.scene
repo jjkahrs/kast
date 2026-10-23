@@ -1,0 +1,72 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Directional Light",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 4, 0], "rotation": [-0.408218, -0.23457, -0.109382, 0.875426], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.95, 0.9], "intensity": 1.1 }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 1.6, 4.2], "rotation": [-0.130526, 0, 0, 0.991445], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    },
+    {
+      "id": 3,
+      "name": "BC1 (KTX)",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-2.4, 0.5, 0], "rotation": [0, 0.258819, 0, 0.965926], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/gpu_bc1.mat" }
+      }
+    },
+    {
+      "id": 4,
+      "name": "BC3 (DDS)",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-0.8, 0.5, 0], "rotation": [0, 0.258819, 0, 0.965926], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/gpu_bc3.mat" }
+      }
+    },
+    {
+      "id": 5,
+      "name": "BC7 (KTX)",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0.8, 0.5, 0], "rotation": [0, 0.258819, 0, 0.965926], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/gpu_bc7.mat" }
+      }
+    },
+    {
+      "id": 6,
+      "name": "RGBA8 (DDS)",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [2.4, 0.5, 0], "rotation": [0, 0.258819, 0, 0.965926], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/gpu_rgba8.mat" }
+      }
+    }
+  ],
+  "systems": [],
+  "lighting": { "ambientColor": [1, 1, 1], "ambientIntensity": 0.2 },
+  "sky": {
+    "mode": "cubemap",
+    "top": [0, 0, 1],
+    "horizon": [1, 0, 0],
+    "bottom": [0, 1, 0],
+    "faces": { "px": "textures/sky_test/px.png", "nx": "textures/sky_test/nx.png", "py": "textures/sky_test/py.png", "ny": "textures/sky_test/ny.png", "pz": "textures/sky_test/pz.png", "nz": "textures/sky_test/nz.png" },
+    "cube": "textures/sky_test/cube.ktx"
+  },
+  "editor": {
+    "camera": { "pivot": [0, 0.6, 0], "yaw": 0, "pitch": -12, "distance": 4.6 }
+  }
+}

@@ -114,6 +114,9 @@ struct SceneSky {
     // Cubemap: project-relative PNG/JPG images, square and all the same size, looking along +X, -X, +Y, -Y, +Z, -Z
     // (kSkyFaceNames). A face that fails to load shows the procedural sky instead.
     std::array<std::string, 6> faces;
+    // Cubemap: a project-relative cube .ktx / .dds (sides +X, -X, +Y, -Y, +Z, -Z as bgfx stores them; Kast's +Z view
+    // samples the -Z side, see docs/engine/skybox.html). Set, it is used instead of faces. Saved only when set.
+    std::string cube;
 };
 
 enum class Tonemap { None, Aces }; // None: clamp to 0..1 (the look before post-processing)

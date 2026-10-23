@@ -111,6 +111,16 @@ Create &gt; Material) writes version 3 with every field, in the order above. Oth
   (formulas in <code>engine/shaders/fs_mesh.sc</code>); the <a href="post-processing.html#post-processing-and-fog">post chain</a> tonemaps and encodes it to sRGB.</li>
 <li>Textures: PNG and JPG (stb_image), mipmapped at load (sRGB-correct filtering for base color and emissive), shared by
   path.</li>
+<li id="ktx-dds">Authored <strong>KTX and DDS</strong> textures (e.g. made with bgfx's <code>texturec</code>: <code>texturec -f in.png -o out.ktx -t BC7 -m</code>)
+  load as stored: their GPU format (BC1-BC7, RGBA8 and the other uncompressed formats bgfx knows) and their own mips,
+  with no decoding or recompression. They work anywhere a texture path does (material slots, <code>.kshader</code> and shader
+  graph params, particles) and are listed in the texture pickers. A file is read as KTX / DDS by its header or its
+  <code>.ktx</code> / <code>.dds</code> extension. The slot still decides sRGB: base color and emissive sample it as sRGB. A corrupt or
+  truncated file, a cubemap, a 3D or array texture, or a format this GPU lacks natively (e.g. ETC1 / ASTC on D3D11;
+  bgfx's CPU emulation is refused) falls back like an undecodable PNG, with one warning:
+  <code>Texture 'textures/rock.ktx': this GPU has no ETC1 sRGB textures; drawing without it</code>. Build ships them as-is.
+  Samples: <code>tests/project/gpu_textures.scene</code> (<code>textures/gpu/</code>: BC1 .ktx, BC3 .dds, BC7 .ktx, RGBA8 .dds) and
+  <code>gpu_textures_bad.scene</code> (ETC1, corrupt, truncated).</li>
 <li>Fallbacks (the scene always loads): a missing or invalid <code>.mat</code> renders unlit magenta; a missing or undecodable
   texture renders as white, except a normal texture, which renders flat. Each is logged once per path, with the reason.</li>
 <li><strong>glTF import</strong> (<a href="models-animation.html#models-animation">models</a>): <code>normalTexture</code> and its <code>scale</code>,
