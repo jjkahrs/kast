@@ -6,23 +6,20 @@
 --   /join name       join General, Trade or LFG              /leave name  leave one
 --   /ignore name     hide name's whispers and channel lines  /unignore name
 --   /mute name min   GM: mute name for min minutes           /unmute name
--- The log keeps the last LINES lines, each coloured by kind: say/yell/emote (world.chat), whispers, channel and zone
+-- The log keeps the last HISTORY lines (model "chat", key "lines" in ui/chat.rml: the box shows the newest that fit), each
+-- coloured by kind: say/yell/emote (world.chat), whispers, channel and zone
 -- lines from the chat service (kast.chat, chat.message), its notices and errors, other scripts' "chat.local" {text}
 -- lines (the combat log, scripts/combat.lua) and the server's welcome / player.arrived events (systems/events.lua).
 -- A system line says when the chat service is unavailable and when it is back.
-local LINES = 10
+local HISTORY = 100 -- ponytail: no scroll-back in the box, so older lines aren't kept
 local lines = {}
 local enterWasDown = false
 local unavailable = false -- the last chat.status said so
 
 local function add(text, kind)
     lines[#lines + 1] = {text = text, kind = kind or "say"}
-    if #lines > LINES then table.remove(lines, 1) end
-    for i = 1, LINES do
-        local line = lines[i]
-        kast.gui.setText("chat_line_" .. i, line and line.text or "")
-        kast.gui.setAttribute("chat_line_" .. i, "class", "chat_line chat_" .. (line and line.kind or "say"))
-    end
+    if #lines > HISTORY then table.remove(lines, 1) end
+    kast.gui.set("chat", "lines", lines)
 end
 
 local function system(text) add(text, "system") end

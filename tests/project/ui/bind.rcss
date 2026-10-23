@@ -1,0 +1,115 @@
+body {
+    width: 100%;
+    height: 100%;
+    font-family: Roboto;
+    font-size: 14px;
+    color: #f0f0f0;
+}
+
+div, p {
+    display: block;
+}
+
+#bind_panel, #form_panel, #clone_list {
+    position: absolute;
+    padding: 6px;
+    background-color: #313131;
+}
+
+#bind_panel {
+    left: 1%;
+    top: 1%;
+    width: 64%;
+}
+
+#bind_title {
+    font-size: 18px;
+    color: #ffcc00;
+}
+
+/* Rows wrap: 50 fit on screen. */
+.bind_row {
+    display: inline-block;
+    width: 112px;
+    margin: 2px;
+    padding: 2px;
+    background-color: #000000;
+    drag: clone;
+}
+
+.bind_tag {
+    margin-right: 4px;
+    color: #a0d8ff;
+}
+
+button {
+    display: inline-block;
+    padding: 1px 6px;
+    background-color: #ffaa00;
+    color: #000000;
+}
+
+#form_panel {
+    right: 1%;
+    top: 1%;
+    width: 30%;
+}
+
+input, select {
+    display: block;
+    margin: 4px 0;
+    height: 22px;
+    background-color: #454545;
+}
+
+input[type="text"], select {
+    width: 100%;
+}
+
+input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    background-color: #818181;
+}
+
+input[type="checkbox"]:checked {
+    background-color: #ffaa00;
+}
+
+input[type="range"] {
+    width: 100%;
+    height: 14px;
+}
+
+input[type="range"] slidertrack {
+    background-color: #818181;
+}
+
+input[type="range"] sliderbar {
+    width: 12px;
+    background-color: #ffaa00;
+}
+
+select selectbox {
+    background-color: #454545;
+}
+
+/* The clone list sits bottom centre, below 50 rows. */
+#clone_list {
+    left: 50%;
+    bottom: 2%;
+    width: 220px;
+    margin-left: -110px;
+}
+
+.clone_row {
+    height: 32px;
+    margin-bottom: 2px;
+    background-color: #000000;
+    drag: clone;
+}
+
+.clone_name {
+    display: inline-block;
+    width: 120px;
+}

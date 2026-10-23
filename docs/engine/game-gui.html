@@ -137,6 +137,31 @@ loaded documents by <code>id</code>, topmost document first (<code>engine/gui_ac
 <td>string or <code>nil</code></td>
 <td>The id of the element under the mouse, or of its nearest ancestor with one (an icon inside a slot reports the slot); <code>nil</code> over no element or only a <code>&lt;body&gt;</code>. Poll it each update for tooltips.</td>
 </tr>
+<tr>
+<td><code>kast.gui.set(model, key, value)</code></td>
+<td>—</td>
+<td>Replaces the top-level variable <code>key</code> of the <a href="#data-binding">data model</a> <code>model</code>: a string, number, boolean, <code>nil</code> (unset), an array or a table of string keys, nested. The views bound to it update.</td>
+</tr>
+<tr>
+<td><code>kast.gui.get(model, key)</code></td>
+<td>the value or <code>nil</code></td>
+<td>The variable as it is now, edits through two-way bound fields included; a fresh Lua copy. <code>nil</code> if unset.</td>
+</tr>
+<tr>
+<td><code>kast.gui.clone(templateId, parentId, newId)</code></td>
+<td>boolean</td>
+<td>Deep-copies <code>templateId</code> (from <code>parentId</code>'s document) under <code>parentId</code> as <code>newId</code>, shown. See <a href="#runtime-elements">runtime elements</a>.</td>
+</tr>
+<tr>
+<td><code>kast.gui.create(parentId, tag, newId[, attrs])</code></td>
+<td>boolean</td>
+<td>Appends a new <code>&lt;tag id="newId"&gt;</code> to <code>parentId</code>, with <code>attrs</code> (a table of string attributes, e.g. <code>{class = "row"}</code>).</td>
+</tr>
+<tr>
+<td><code>kast.gui.remove(id)</code></td>
+<td>boolean</td>
+<td>Removes the element (and its children) from the topmost document holding it.</td>
+</tr>
 </tbody>
 </table>
 <p>Writes (<code>setText</code>, <code>setVisible</code>, <code>setAttribute</code>) are kept and applied again to every document that loads later, so a system's <code>init</code> (which runs before the
@@ -157,6 +182,77 @@ document reloads; fix a broken file and it shows again. Not in the built game.</
 <p><strong>Sample</strong>: <code>tests/project/ui.scene</code> has a <em>Main Menu</em> entity with a <code>UIDocument</code> for <code>ui/main_menu.rml</code>
 (+ <code>main_menu.rcss</code>: a panel with a title, a subtitle holding an unknown <code>&lt;span&gt;</code>, and Start / Quit buttons publishing
 <code>menu.start</code> / <code>menu.quit</code>); <code>scripts/ui_menu.lua</code> logs both events.</p>
+<h2 id="data-binding">Data binding</h2>
+<p>RmlUi's <a href="https://mikke89.github.io/RmlUiDoc/pages/data_bindings.html">data bindings</a> work without any C++: an element with
+<code>data-model="name"</code> opens a model, and inside it <code>{{expression}}</code> in text, <code>data-for</code>, <code>data-if</code>,
+<code>data-visible</code>, <code>data-value</code>, <code>data-checked</code>, <code>data-attr-*</code>, <code>data-class-*</code>, <code>data-style-*</code>,
+<code>data-rml</code>, <code>data-alias-*</code> and <code>data-event-*</code> read its variables. Lua fills them with <code>kast.gui.set</code>:</p>
+<pre><code class="language-html">&lt;div id=&quot;quests&quot; data-model=&quot;quest_log&quot;&gt;
+    &lt;p&gt;{{title}} ({{count}}) &lt;span data-if=&quot;full&quot;&gt;full&lt;/span&gt;&lt;/p&gt;
+    &lt;button class=&quot;row&quot; data-for=&quot;row : rows&quot; data-attr-id=&quot;'row_' + it_index&quot;
+            data-class-selected=&quot;row.selected&quot; data-event=&quot;quest.pick&quot;&gt;
+        {{row.title}} &lt;span data-for=&quot;goal : row.goals&quot;&gt;{{goal}}&lt;/span&gt;
+    &lt;/button&gt;
+    &lt;input type=&quot;text&quot; id=&quot;filter&quot; data-value=&quot;filter&quot;/&gt;
+&lt;/div&gt;
+</code></pre>
+<pre><code class="language-lua">kast.gui.set(&quot;quest_log&quot;, &quot;title&quot;, &quot;Quests&quot;)
+kast.gui.set(&quot;quest_log&quot;, &quot;rows&quot;, {{title = &quot;Bat Trouble&quot;, goals = {&quot;Bats 2/3&quot;}, selected = true}, ...}) -- as many as there are
+kast.subscribe(&quot;quest.pick&quot;, function(e) kast.log(e.id) end)                                 -- &quot;row_0&quot;, &quot;row_1&quot;, ...
+local filter = kast.gui.get(&quot;quest_log&quot;, &quot;filter&quot;)                                           -- what the player typed
+</code></pre>
+<ul>
+<li><strong>Models are made for you</strong> (<code>engine/gui_models.h</code>). Before a document loads, the engine reads its <code>.rml</code> for
+<code>data-model</code> names and the top-level variables its bindings read (<code>rows</code> in <code>row.title</code> / <code>data-for="row : rows"</code>;
+not <code>data-for</code> / <code>data-alias</code> names, members, <code>| transforms</code>, <code>callbacks()</code>, literals or RmlUi's reserved
+<code>it</code>, <code>it_index</code>, <code>ev</code>, <code>size</code>, ...). It creates each model on the scene's GUI context and binds each variable, so
+the document loads with no RmlUi warning (one would reject it). An unset variable reads as empty (<code>""</code>, false, no rows).
+Models belong to the context, not a document: two documents naming one model share it.</li>
+<li><strong>Values</strong> are plain data (<code>GuiValue</code>, JSON in C++): strings, numbers, booleans, arrays (a Lua sequence
+<code>{a, b}</code>; <code>data-for</code> repeats over it, <code>rows.size</code> is its length) and tables of string keys (<code>row.title</code>), nested
+up to 32 deep. An empty Lua table is an empty table (no rows). <code>set</code> replaces one top-level key whole; send the whole list
+again after a change. Numbers show without trailing zeros (<code>3</code>, <code>2.5</code>).</li>
+<li><strong>Two-way</strong>: <code>data-value</code> on a text <code>&lt;input&gt;</code>, a <code>range</code> or a <code>&lt;select&gt;</code>, and <code>data-checked</code> on a
+checkbox, write the player's edits into the model; <code>kast.gui.get</code> reads them. A checkbox gives a boolean; text a string,
+kept a number when the variable held one and the text is a number (a range).</li>
+<li><strong>Persistence</strong>: values are kept until the scene switches (<code>kast.loadScene</code>) or Play starts again, like the
+other writes. A document that loads later, or hot reloads, shows the current values. A name stays bound for the session:
+a hot reload that turns a bound variable name into a <code>data-for</code> / <code>data-alias</code> name gets RmlUi's "shadowed"
+warning until Play restarts.</li>
+<li><strong>Events</strong>: <code>data-event</code> buttons and <code>data-drag</code> elements inside <code>data-for</code> rows publish as usual; give each
+row an id with <code>data-attr-id</code> (e.g. <code>'row_' + it_index</code>, 0-based) to tell them apart. RmlUi's own
+<code>data-event-click="..."</code> runs model expressions; kast's <code>data-event="name"</code> (no suffix) is unaffected.</li>
+<li><strong>Errors</strong>: a model or key that isn't a string, a key that isn't a variable name (a letter, then letters, digits and
+<code>_</code>; not reserved) and a value that isn't plain data (a function, a cycle, mixed keys) raise at the calling line. Values are
+never logged.</li>
+<li>The GUI Builder's preview creates the same models, empty: <code>data-for</code> rows and <code>{{...}}</code> show no data there.</li>
+</ul>
+<h3 id="runtime-elements">Runtime elements: clone, create, remove</h3>
+<p>For elements outside a model (or when a list is easier by hand), <code>kast.gui.clone</code> copies a template, typically hidden
+in the <code>.rml</code> with <code>style="display: none"</code>; the copy gets <code>newId</code>, loses its inline <code>display</code> (shown), and its
+descendants' ids that start with <code>"&lt;templateId&gt;_"</code> are renamed to start with <code>"&lt;newId&gt;_"</code>, so the copy's parts can be
+written:</p>
+<pre><code class="language-html">&lt;div id=&quot;list&quot;&gt;
+    &lt;div id=&quot;tpl&quot; class=&quot;row&quot; style=&quot;display: none&quot;&gt;&lt;p id=&quot;tpl_name&quot;&gt;&lt;/p&gt;&lt;button id=&quot;tpl_pick&quot; data-event=&quot;row.pick&quot;&gt;Pick&lt;/button&gt;&lt;/div&gt;
+&lt;/div&gt;
+</code></pre>
+<pre><code class="language-lua">if kast.gui.clone(&quot;tpl&quot;, &quot;list&quot;, &quot;row_7&quot;) then kast.gui.setText(&quot;row_7_name&quot;, &quot;Seventh&quot;) end -- row.pick: id &quot;row_7_pick&quot;
+kast.gui.create(&quot;list&quot;, &quot;p&quot;, &quot;note_1&quot;, {class = &quot;note&quot;})
+kast.gui.remove(&quot;row_7&quot;)
+</code></pre>
+<ul>
+<li><strong>Live only</strong>: created and cloned elements (and removals) are not kept. They are gone when their document reloads
+(hot reload, Play start, a scene switch); model values are not. Do it again after a reload if needed.</li>
+<li><strong>false, not an error</strong>: a missing template, parent or id, an empty tag or <code>newId</code>, or a <code>newId</code> already in that
+document returns <code>false</code> and logs a warning saying which (<code>kast.gui.clone('tpl', 'list', 'row_7'): the new id is taken in
+that GUI</code>). <code>remove</code> also refuses (false, logged) a row a <code>data-for</code> made, or anything inside one: RmlUi owns those,
+change the model instead (the check is by position: an element just before a <code>data-for</code> one of the same tag counts too).
+Arguments of the wrong type raise like the other functions.</li>
+<li>Clicks and drags work on them as on authored elements.</li>
+</ul>
+<p><strong>Sample and tests</strong>: <code>tests/project/ui_bind.scene</code> shows <code>ui/bind.rml</code> (two models: a bound list with nested tags and
+Pick buttons, two-way inputs echoed below; a clone template), driven by <code>scripts/ui_bind.lua</code>; <code>ctest -R ui_bind</code>,
+<code>player_bind_click</code> and self_check's <code>checkGuiDataModels</code>. The starter-mmo chat and quest log are bound lists.</p>
 <h2 id="effects">Effects: glow, filters and gradients</h2>
 <p>RmlUi's CSS effects draw in Play (the Game view), the GUI Builder preview and the built player alike
 (<code>engine/gui_render.cpp</code>, <code>engine/gui_effects.cpp</code>, shaders <code>engine/shaders/gui/fs_gui_matrix.sc</code>,

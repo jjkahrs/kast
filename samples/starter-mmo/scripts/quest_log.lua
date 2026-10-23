@@ -1,14 +1,16 @@
 -- The quest log (ui/quest_log.rml), client side. The server (systems/quests.lua) owns the quests:
 --   L (or the "quest_log.toggle" event) opens and closes it; not while typing in a GUI text field. Opening it asks
 --   kast.world.send("quest.log", {}) once; the server's "quest.log" {quests} gives each active quest's title, text,
---   objectives and rewards. The rows (up to MAX_ROWS, the server's cap) show each active quest of the replicated Quests
---   (components/quests.lua) with its objectives' progress ("Bats slain: 2/3"), updated as Quests changes; a change of
---   which quests are active asks again, once. Clicking a row shows its text and rewards; Abandon sends
---   "quest.abandon" {quest}.
+--   objectives and rewards. The rows (model "quest_log", key "rows" in ui/quest_log.rml, one per quest) show each active
+--   quest of the replicated Quests (components/quests.lua) with its objectives' progress ("Bats slain: 2/3"), updated as
+--   Quests changes; a change of which quests are active asks again, once. Clicking a row (qlog_row_<0-based index>)
+--   shows its text and rewards; Abandon sends "quest.abandon" {quest}.
 -- Opening or closing publishes "quest_log.visibility" {open}. "quest.abandoned" becomes a chat box line.
 --
 -- Bandwidth: one ClientEvent when it opens, per Abandon, and when the active quests change while it is open.
-local MAX_ROWS, MAX_OBJECTIVES, MAX_REWARDS = 20, 4, 3 -- ui/quest_log.rml's rows; components/quests.lua's stride
+-- The server's cap on active quests (systems/quests.lua), shown in the title; components/quests.lua's stride; the reward
+-- slots of ui/quest_log.rml.
+local LOG_SIZE, MAX_OBJECTIVES, MAX_REWARDS = 20, 4, 3
 
 local me
 local open = false
@@ -17,6 +19,7 @@ local mine = {active = {}, progress = {}} -- the replicated Quests
 local info = {}        -- quest id -> the server's description (quest.log)
 local askedFor         -- the active quests (joined) when quest.log was last asked for
 local selected         -- quest id shown below the rows
+local rowIds = {}      -- quest id of each row, as last drawn
 
 local function log(text) kast.publish("chat.local", {text = text}) end
 
@@ -49,23 +52,21 @@ local function draw()
         if info[id] then shown[#shown + 1] = {id = id, index = i} end
     end
     if not selected or not info[selected] then selected = shown[1] and shown[1].id end
-    kast.gui.setText("qlog_count", string.format("(%d/%d)", #mine.active, MAX_ROWS))
+    kast.gui.setText("qlog_count", string.format("(%d/%d)", #mine.active, LOG_SIZE))
     kast.gui.setVisible("qlog_empty", #mine.active == 0)
-    for row = 1, MAX_ROWS do
-        local s = shown[row]
-        kast.gui.setVisible("qlog_row_" .. row, s ~= nil)
-        if s then
-            local q = info[s.id]
-            local lines = {}
-            for j, o in ipairs(q.objectives) do
-                local n = mine.progress[(s.index - 1) * MAX_OBJECTIVES + j] or 0
-                lines[#lines + 1] = string.format("%s: %d/%d", o.label, n, o.count)
-            end
-            kast.gui.setText("qlog_row_" .. row .. "_title", q.title)
-            kast.gui.setText("qlog_row_" .. row .. "_progress", table.concat(lines, ", "))
-            kast.gui.setAttribute("qlog_row_" .. row, "class", s.id == selected and "qlog_row selected" or "qlog_row")
+    local rows = {}
+    rowIds = {}
+    for row, s in ipairs(shown) do
+        local q = info[s.id]
+        local lines = {}
+        for j, o in ipairs(q.objectives) do
+            local n = mine.progress[(s.index - 1) * MAX_OBJECTIVES + j] or 0
+            lines[#lines + 1] = string.format("%s: %d/%d", o.label, n, o.count)
         end
+        rows[row] = {title = q.title, progress = table.concat(lines, ", "), selected = s.id == selected}
+        rowIds[row] = s.id
     end
+    kast.gui.set("quest_log", "rows", rows)
     kast.gui.setVisible("qlog_detail", selected ~= nil)
     if not selected then return end
     kast.gui.setText("qlog_title", info[selected].title)
@@ -106,13 +107,8 @@ return {
         end)
         kast.subscribe("quest_log.toggle", function() setOpen(not open) end)
         kast.subscribe("quest.log_select", function(e)
-            local row, n = tonumber(string.match(e.id or "", "^qlog_row_(%d+)$")), 0
-            for _, id in ipairs(mine.active) do
-                if info[id] then
-                    n = n + 1
-                    if n == row then selected = id end
-                end
-            end
+            local row = tonumber(string.match(e.id or "", "^qlog_row_(%d+)$"))
+            selected = row and rowIds[row + 1] or selected
             draw()
         end)
         kast.subscribe("quest.log_abandon", function()

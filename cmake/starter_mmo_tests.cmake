@@ -74,6 +74,11 @@ set_tests_properties(starter_mmo_pak_server_only PROPERTIES FIXTURES_REQUIRED st
 add_test(NAME starter_mmo_hit_sparks
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSAMPLE=${KAST_STARTER}" "-DOUT=${KAST_STARTER_OUT}/hit_sparks"
           "-DSCREENSHOT=${KAST_STARTER_OUT}/starter_mmo_hit_sparks.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_hit_sparks.cmake")
+# Chat and quest log lists (bound with data-for, no slot cap): offline, a test-only driver fakes 15 chat lines and 25
+# quests (cmake/starter_mmo_lists.cmake).
+add_test(NAME starter_mmo_lists
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSAMPLE=${KAST_STARTER}" "-DOUT=${KAST_STARTER_OUT}/lists"
+          "-DSCREENSHOT=${KAST_STARTER_OUT}/starter_mmo_lists.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_lists.cmake")
 
 # Live. RUN_SERIAL: they change which content the shared compose stack serves.
 set(live_args "-DWORLD_DIR=${KAST_WORLD_DIR}" "-DSAMPLE=${KAST_STARTER}" "-DSTATE=${KAST_STARTER_STATE}")

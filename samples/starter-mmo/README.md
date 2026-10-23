@@ -309,7 +309,9 @@ of the client project, in dot-folders or elsewhere.
   `starter_mmo_hit_sparks` plays the Meadow offline with a test-only driver (`cmake/starter_mmo_hit_driver.lua`) that
   publishes the server's `combat.hit`: 24 sparks, their entity destroyed once none is alive, then a second burst
   (`starter_mmo_hit_sparks.png`). `starter_mmo_pak_server_only` checks the built `game.pak` holds nothing from `.server/` (no quest
-  definitions or quest text) but does hold `scripts/quest.lua`.
+  definitions or quest text) but does hold `scripts/quest.lua`. `starter_mmo_lists` plays it offline with
+  `cmake/starter_mmo_lists_driver.lua` (test only): 15 chat lines and 25 quests in the bound (`data-for`) chat and quest
+  log, no row cap (`starter_mmo_lists.png`).
 - **Live**, against the compose stack, with a test account in the environment only:
 
   ```sh

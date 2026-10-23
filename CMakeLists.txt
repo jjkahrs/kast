@@ -150,7 +150,7 @@ add_library(kast_engine STATIC
   engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
-  engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
+  engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
   engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
@@ -1597,7 +1597,7 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "health|Health Test|health.scene|FALSE" "health_no_systems|Health Test|health.scene|TRUE"
                "events|Events Test|events.scene|FALSE" "events_no_systems|Events Test|events.scene|TRUE"
                "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow"
-               "ui|UI Test|ui.scene|FALSE" "effects|Effects Test|ui_effects.scene|FALSE"
+               "ui|UI Test|ui.scene|FALSE" "effects|Effects Test|ui_effects.scene|FALSE" "bind|Bind Test|ui_bind.scene|FALSE"
                "lights|Lights Test|point_lights.scene|FALSE"
                "materials|Materials Test|materials.scene|FALSE" "post|Post Test|post_processing.scene|FALSE"
                "models|Models Test|models_anim.scene|FALSE" "shadows|Shadows Test|shadows.scene|FALSE"
@@ -2536,6 +2536,47 @@ add_test(NAME ui_drag_shift
           "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui_drag.scene --play --sim-mouse 60,left+shift,260,0,0" -DFRAMES=120
           "-DEXPECT_OUTPUT=Drag drop: source onto 'target' in 'ui/drag.rml' shift=true"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# Data binding and runtime elements (ui_bind.scene: ui/bind.rml driven by scripts/ui_bind.lua; the C++ side, hot reload
+# included, is self_check's checkGuiDataModels). No RmlUi warning anywhere: the auto-made models satisfy every binding.
+# - ui_bind_list_screenshot: 50 bound rows (nested tags, {{title}} / {{count}} / data-if), two clones and a created row,
+#   shot on BIND50; ui_bind_list_shrunk_screenshot: the same after a later set of 3 rows and one clone removed (BIND3).
+# - ui_bind_inputs: real typing ("hi"), a click on the checkbox, Right twice on the range (5 -> 7) and Down on the select
+#   (red -> green) come back through kast.gui.get.
+# - ui_bind_row_click / ui_bind_clone_click: a data-event button in a data-for row (data-attr-id) and in a clone
+#   (renamed from clone_template_pick) publish bind.pick with their own ids.
+set(bind_args "--scene ${KAST_TEST_PROJECT}/ui_bind.scene --play --size 1600x1000")
+set(bind_forbid "\\[warn\\] RmlUi|\\[error\\]|Lua error")
+add_test(NAME ui_bind_list_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_bind_list.png"
+          "-DEXTRA_ARGS=${bind_args} --screenshot-on-log 2,BIND50" -DFRAMES=120
+          "-DEXPECT_OUTPUT=bind: made true true true true, BIND50" "-DFORBID_OUTPUT=${bind_forbid}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME ui_bind_list_shrunk_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_bind_list_shrunk.png"
+          "-DEXTRA_ARGS=${bind_args}" -DFRAMES=90
+          "-DEXPECT_OUTPUT=bind: removed clone_2 true, BIND3" "-DFORBID_OUTPUT=${bind_forbid}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME ui_bind_list_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/ui_bind_list.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/ui_bind_list_shrunk.png"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(ui_bind_list_screenshot PROPERTIES FIXTURES_SETUP ui_bind_list_shot)
+set_tests_properties(ui_bind_list_shrunk_screenshot PROPERTIES FIXTURES_SETUP ui_bind_shrunk_shot)
+set_tests_properties(ui_bind_list_differs PROPERTIES FIXTURES_REQUIRED "ui_bind_list_shot;ui_bind_shrunk_shot")
+add_test(NAME ui_bind_inputs
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_bind_inputs.png"
+          "-DEXTRA_ARGS=${bind_args} --gui-click form_agree --sim-on-log KEYS --sim-key 5,H --sim-key 10,I --sim-key 50,Right --sim-key 55,Right --sim-key 80,Down"
+          -DFRAMES=130 "-DEXPECT_OUTPUT=bind: two-way name=hi agree=true volume=7 color=green" "-DFORBID_OUTPUT=${bind_forbid}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME ui_bind_row_click
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_bind_row_click.png"
+          "-DEXTRA_ARGS=${bind_args} --gui-click pick_41" -DFRAMES=30
+          "-DEXPECT_OUTPUT=bind: picked pick_41 in ui/bind.rml" "-DFORBID_OUTPUT=${bind_forbid}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME ui_bind_clone_click
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_bind_clone_click.png"
+          "-DEXTRA_ARGS=${bind_args} --gui-click clone_2_pick" -DFRAMES=30
+          "-DEXPECT_OUTPUT=bind: picked clone_2_pick in ui/bind.rml" "-DFORBID_OUTPUT=${bind_forbid}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 # The built game (game_projects/ui, startScene ui.scene, see KAST_GAMES) loads the GUI from game.pak; a click there
 # reaches Lua too.
 add_test(NAME player_ui_click
@@ -2544,6 +2585,14 @@ add_test(NAME player_ui_click
           -DEXPECT=0 "-DEXPECT_OUTPUT=Menu start clicked: start_button in ui/main_menu.rml"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
 set_tests_properties(player_ui_click PROPERTIES FIXTURES_REQUIRED game_ui_built TIMEOUT 90)
+# The built game "bind" (ui_bind.scene from game.pak): the data models load without an RmlUi warning in the player too,
+# and a click on a data-for row's button reaches Lua.
+add_test(NAME player_bind_click
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/bind" "-DEXE=Bind Test.exe" "-DWORK_DIR=${KAST_GAME_OUT}/bind_click.run"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_bind_click.png" "-DEXTRA_ARGS=--gui-click pick_41"
+          -DEXPECT=0 "-DEXPECT_OUTPUT=bind: made true true true true, BIND50.*bind: picked pick_41 in ui/bind.rml"
+          "-DFORBID_OUTPUT=${bind_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_bind_click PROPERTIES FIXTURES_REQUIRED game_bind_built TIMEOUT 90)
 
 # Builder: main_menu.rml open with start_button selected (tree, Inspector, Style, Preview with the outline), and the same
 # GUI in health_project with a different .rcss (wider panel, red buttons) must render differently. --gui-pick clicks the
@@ -2639,6 +2688,24 @@ set_tests_properties(gui_builder_saved_file PROPERTIES PASS_REGULAR_EXPRESSION
   "<!-- The game's main menu.*<span class=\"accent\">awaits</span>.*title=\"Begin a new game\".*<button>Button</button>")
 set_tests_properties(gui_builder_save PROPERTIES FIXTURES_REQUIRED new_gui_copy FIXTURES_SETUP gui_saved)
 set_tests_properties(gui_builder_saved_file PROPERTIES FIXTURES_REQUIRED gui_saved)
+
+# Data binding in the builder: ui/bind.rml (data-model, data-for, two-way inputs) previews with no RmlUi warning (empty
+# models, rows not shown); on the new_gui_project copy the Inspector's data-for of row_template is edited
+# (--gui-set-attr, one step as typing it does), undone, redone and saved.
+add_test(NAME gui_builder_bind_preview_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_bind_preview.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --open-gui ui/bind.rml --size 1600x1000 --gui-select row_template"
+          "-DFORBID_OUTPUT=${bind_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME gui_builder_bind_edit
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_bind_edit.png"
+          "-DEXTRA_ARGS=--project ${KAST_NEW_GUI_PROJECT} --open-gui ui/bind.rml --size 1600x1000 --gui-select row_template --gui-set-attr data-for=row:shown --gui-undo 1 --gui-redo 1 --gui-save"
+          "-DEXPECT_OUTPUT=--gui-set-attr data-for=.row:shown. on 'row_template'.*Undo Edit Panel data-for.*Redo Edit Panel data-for.*Saved GUI"
+          "-DFORBID_OUTPUT=${bind_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME gui_builder_bind_saved_file COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_NEW_GUI_PROJECT}/ui/bind.rml")
+set_tests_properties(gui_builder_bind_saved_file PROPERTIES PASS_REGULAR_EXPRESSION
+  "id=\"row_template\" class=\"bind_row\" data-for=\"row:shown\" data-attr-id=")
+set_tests_properties(gui_builder_bind_edit PROPERTIES FIXTURES_REQUIRED new_gui_copy FIXTURES_SETUP gui_bind_saved)
+set_tests_properties(gui_builder_bind_saved_file PROPERTIES FIXTURES_REQUIRED gui_bind_saved)
 
 # Crash dialogs: --crash makes the editor fail on purpose; with KAST_NO_CRASH_DIALOGS=1 it must exit, not wait on a
 # "Debug Error!" dialog. Debug builds also report the failed assert on stderr (release compiles assert() out).

@@ -128,6 +128,16 @@ const char* guiKindLabel(GuiKind kind)
     }
 }
 
+bool guiBindingAttribute(std::string_view name)
+{
+    static constexpr std::string_view kNames[] = {"data-model", "data-for", "data-if", "data-visible",
+                                                  "data-value", "data-checked", "data-rml", "data-text"};
+    static constexpr std::string_view kPrefixes[] = {"data-attr-", "data-attrif-", "data-class-",
+                                                     "data-style-", "data-event-", "data-alias-"};
+    return std::ranges::find(kNames, name) != std::end(kNames) ||
+           std::ranges::any_of(kPrefixes, [&](std::string_view p) { return name.size() > p.size() && name.starts_with(p); });
+}
+
 GuiKind guiKind(pugi::xml_node node)
 {
     for (GuiKind kind : kGuiCreatableKinds)

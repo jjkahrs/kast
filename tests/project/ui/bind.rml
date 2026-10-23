@@ -1,0 +1,39 @@
+<rml>
+    <head>
+        <title>Bind</title>
+        <link type="text/rcss" href="bind.rcss"/>
+    </head>
+    <body>
+        <!-- Data binding and runtime elements (ctest ui_bind_*, scripts/ui_bind.lua; self_check's checkGuiDataModels).
+             Model "binds": scalars in the title, a bound list whose rows nest a list of tags, each row's Pick button
+             publishing bind.pick with the row's id. Model "form": two-way inputs, echoed below them. No model: the
+             clone list, whose hidden template kast.gui.clone copies (its _name / _pick children renamed). -->
+        <div id="bind_panel" data-model="binds">
+            <p id="bind_title">{{title}} ({{count}}) <span data-if="open">open</span></p>
+            <div id="bind_rows">
+                <div id="row_template" class="bind_row" data-for="row : rows" data-attr-id="'row_' + it_index" data-drag="bind.row">
+                    <p class="bind_name">{{row.name}}</p>
+                    <span class="bind_tag" data-for="tag : row.tags">{{tag}}</span>
+                    <button class="bind_pick" data-event="bind.pick" data-attr-id="'pick_' + it_index">Pick</button>
+                </div>
+            </div>
+        </div>
+        <div id="form_panel" data-model="form">
+            <input type="text" id="form_name" data-value="name"/>
+            <input type="checkbox" id="form_agree" data-checked="agree"/>
+            <input type="range" id="form_volume" min="0" max="10" step="1" data-value="volume"/>
+            <select id="form_color" data-value="color">
+                <option value="red">Red</option>
+                <option value="green">Green</option>
+                <option value="blue">Blue</option>
+            </select>
+            <p id="form_echo">{{name}} | {{agree ? 'yes' : 'no'}} | {{volume}} | {{color}}</p>
+        </div>
+        <div id="clone_list">
+            <div id="clone_template" class="clone_row" data-drag="bind.clone" style="display: none">
+                <p id="clone_template_name" class="clone_name">template</p>
+                <button id="clone_template_pick" data-event="bind.pick">Pick</button>
+            </div>
+        </div>
+    </body>
+</rml>

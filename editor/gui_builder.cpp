@@ -203,6 +203,21 @@ void GuiBuilder::endGesture()
     rcssCommitted_ = rcssText_;
 }
 
+bool GuiBuilder::setAttribute(const std::string& name, const std::string& value)
+{
+    if (!selected_ || selected_ == doc_.body())
+        return false;
+    endGesture();
+    GuiElementCopy before = copyGuiElement(selected_);
+    GuiDoc::setAttribute(selected_, name.c_str(), value);
+    if (record(std::format("Edit {} {}", guiKindLabel(guiKind(selected_)), name), std::move(before),
+               copyGuiElement(selected_))) {
+        inspectorNode_ = {}; // refill the Inspector's fields
+        markRmlDirty();
+    }
+    return true;
+}
+
 void GuiBuilder::undo()
 {
     endGesture();
@@ -488,27 +503,32 @@ void GuiBuilder::drawInspector()
                 inspectorBuffer_[1] = GuiDoc::attribute(selected_, "class");
                 inspectorBuffer_[2] = GuiDoc::text(selected_);
                 inspectorBuffer_[3] = GuiDoc::attribute(selected_, "data-event");
+                bindingBuffers_.clear();
+                for (pugi::xml_attribute attribute : selected_.attributes())
+                    if (guiBindingAttribute(attribute.name()))
+                        bindingBuffers_[attribute.name()] = attribute.value();
             }
             ImGui::Text("%s  <%s>", guiKindLabel(kind), selected_.name());
+            // One step per field edit: the element is copied before its first change, recorded when it lets go.
+            const auto field = [&](const char* label, std::string& buffer, auto set) {
+                const bool changed = ImGui::InputText(label, &buffer);
+                if (ImGui::IsItemActive() && !gesture_)
+                    gesture_ = Gesture{std::format("Edit {} {}", guiKindLabel(kind), label), selected_,
+                                       copyGuiElement(selected_)};
+                if (changed) {
+                    set(buffer);
+                    markRmlDirty();
+                }
+                if (ImGui::IsItemDeactivated())
+                    endGesture();
+            };
+            const auto attribute = [&](const char* name) {
+                return [this, name](const std::string& value) { GuiDoc::setAttribute(selected_, name, value); };
+            };
             if (kind == GuiKind::Unknown) {
-                ImGui::TextDisabled("Not editable in the builder; kept as written. It can be moved or deleted.");
+                ImGui::TextDisabled("Not editable in the builder (but for its data binding); kept as written. It can be "
+                                    "moved or deleted.");
             } else {
-                // One step per field edit: the element is copied before its first change, recorded when it lets go.
-                const auto field = [&](const char* label, std::string& buffer, auto set) {
-                    const bool changed = ImGui::InputText(label, &buffer);
-                    if (ImGui::IsItemActive() && !gesture_)
-                        gesture_ = Gesture{std::format("Edit {} {}", guiKindLabel(kind), label), selected_,
-                                           copyGuiElement(selected_)};
-                    if (changed) {
-                        set(buffer);
-                        markRmlDirty();
-                    }
-                    if (ImGui::IsItemDeactivated())
-                        endGesture();
-                };
-                const auto attribute = [&](const char* name) {
-                    return [this, name](const std::string& value) { GuiDoc::setAttribute(selected_, name, value); };
-                };
                 field("id", inspectorBuffer_[0], attribute("id"));
                 field("class", inspectorBuffer_[1], attribute("class"));
                 if (kind == GuiKind::Text || kind == GuiKind::Button) {
@@ -523,16 +543,29 @@ void GuiBuilder::drawInspector()
                     ImGui::TextDisabled("Clicks publish this event on the event bus (empty: none).");
                 }
             }
+            // RmlUi data binding, on any element: the ones it has (emptied: removed from the file), and one to add.
+            ImGui::Separator();
+            ImGui::TextDisabled("Data binding (data-model, data-for, data-if, data-value, data-attr-*, ...):");
+            for (auto& [name, buffer] : bindingBuffers_)
+                field(name.c_str(), buffer, attribute(name.c_str()));
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.6f);
+            ImGui::InputTextWithHint("##binding", "data-for, data-class-active, ...", &newBinding_);
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!guiBindingAttribute(newBinding_) || bindingBuffers_.contains(newBinding_));
+            if (ImGui::Button("Add binding"))
+                bindingBuffers_[std::exchange(newBinding_, {})]; // written once it has a value
+            ImGui::EndDisabled();
             bool header = false;
-            for (pugi::xml_attribute attribute : selected_.attributes()) {
-                const std::string_view name = attribute.name();
-                if (kind != GuiKind::Unknown && (name == "id" || name == "class" || name == "data-event"))
+            for (pugi::xml_attribute other : selected_.attributes()) {
+                const std::string_view name = other.name();
+                if (guiBindingAttribute(name) ||
+                    (kind != GuiKind::Unknown && (name == "id" || name == "class" || name == "data-event")))
                     continue;
                 if (!std::exchange(header, true)) {
                     ImGui::Separator();
                     ImGui::TextDisabled("Other attributes (kept as written):");
                 }
-                ImGui::BulletText("%s = \"%s\"", attribute.name(), attribute.value());
+                ImGui::BulletText("%s = \"%s\"", other.name(), other.value());
             }
         }
     } else if (rml_.empty()) {
@@ -589,7 +622,10 @@ void GuiBuilder::rebuildPreview()
         return;
     // ponytail: the source URL is just the file name (RmlUi's URL parser rejects "C:/..."); fine while previews load
     // no relative resources (images, @import).
-    previewDoc_ = context->LoadDocumentFromMemory(doc_.previewRml(goodRcss_, previewNodes_), utf8(rml_.filename()));
+    const std::string rml = doc_.previewRml(goodRcss_, previewNodes_);
+    previewModels_.clear(context); // fresh: a name the last version bound would shadow an alias this one declares
+    previewModels_.prepare(*context, rml); // templates as authored: data-for rows and {{...}} show no data
+    previewDoc_ = context->LoadDocumentFromMemory(rml, utf8(rml_.filename()));
     if (!previewDoc_)
         return;
     previewDoc_->Show();

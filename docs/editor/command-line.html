@@ -183,6 +183,10 @@
 <td>With <code>--open-gui</code>: add that element as the GUI Hierarchy's <strong>+</strong> buttons do (into the selected Panel, else <code>&lt;body&gt;</code>), after 17 frames.</td>
 </tr>
 <tr>
+<td><code>--gui-set-attr &lt;name&gt;=&lt;value&gt;</code></td>
+<td>With <code>--open-gui</code>: set (empty: remove) that attribute of the selection (<code>--gui-select</code>) as one GUI Inspector edit step, as typing it does, after 17 frames; logs <code>--gui-set-attr name="value" on '&lt;id&gt;'</code>. The value can't hold spaces (the test scripts split arguments on them).</td>
+</tr>
+<tr>
 <td><code>--gui-undo &lt;N&gt;</code>, <code>--gui-redo &lt;N&gt;</code></td>
 <td>With <code>--open-gui</code>: <strong>Edit &gt; Undo</strong> on the open GUI N times, then <strong>Redo</strong> N times, after 18 frames (after <code>--gui-add</code>). Each logs <code>Undo &lt;step&gt;</code> / <code>Redo &lt;step&gt;</code>. With <code>--open-gui</code>, <code>--open-menu</code> opens its menu after 20 frames.</td>
 </tr>

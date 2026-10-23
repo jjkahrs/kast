@@ -336,10 +336,10 @@ sol::object fieldJsonToLua(sol::state_view lua, const FieldDesc& field, const Js
     return table;
 }
 
-bool luaToJson(const sol::object& value, nlohmann::json& out, std::string& error)
+bool luaToJson(const sol::object& value, nlohmann::json& out, std::string& error, const std::string& label)
 {
     std::vector<const void*> path;
-    return payloadToJson(value, "payload", path, out, error);
+    return payloadToJson(value, label, path, out, error);
 }
 
 sol::object jsonToLua(sol::state_view lua, const nlohmann::json& value)

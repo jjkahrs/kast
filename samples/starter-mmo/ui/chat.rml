@@ -5,18 +5,10 @@
     </head>
     <body>
         <div id="chat">
-            <!-- scripts/chat.lua fills the lines (text and a chat_* class each), oldest first -->
-            <div id="chat_log">
-                <p id="chat_line_1" class="chat_line"></p>
-                <p id="chat_line_2" class="chat_line"></p>
-                <p id="chat_line_3" class="chat_line"></p>
-                <p id="chat_line_4" class="chat_line"></p>
-                <p id="chat_line_5" class="chat_line"></p>
-                <p id="chat_line_6" class="chat_line"></p>
-                <p id="chat_line_7" class="chat_line"></p>
-                <p id="chat_line_8" class="chat_line"></p>
-                <p id="chat_line_9" class="chat_line"></p>
-                <p id="chat_line_10" class="chat_line"></p>
+            <!-- scripts/chat.lua's lines (model "chat", key "lines": {text, kind} each), oldest first; the newest that fit
+                 show -->
+            <div id="chat_log" data-model="chat">
+                <p class="chat_line" data-for="line : lines" data-attr-class="'chat_line chat_' + line.kind">{{line.text}}</p>
             </div>
             <div id="chat_row">
                 <!-- tab-index inline: Tab is the target key (scripts/combat.lua); RmlUi's own inline tab-index on inputs
