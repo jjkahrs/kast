@@ -46,7 +46,7 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
              engine/shaders/vs_mesh_instanced engine/shaders/vs_shadow engine/shaders/vs_shadow_skinned
              engine/shaders/vs_shadow_instanced engine/shaders/fs_shadow
              engine/shaders/fs_line engine/shaders/vs_sky engine/shaders/fs_sky
-             engine/shaders/cs_particle_sim engine/shaders/vs_particle engine/shaders/fs_particle
+             engine/shaders/cs_particle_sim engine/shaders/vs_particle engine/shaders/fs_particle engine/shaders/cs_ibl
              engine/shaders/gui/vs_gui engine/shaders/gui/fs_gui engine/shaders/gui/fs_gui_matrix
              engine/shaders/gui/fs_gui_blur engine/shaders/gui/fs_gui_gradient
              engine/shaders/post/vs_post engine/shaders/post/fs_post_bright engine/shaders/post/fs_post_down
@@ -152,7 +152,7 @@ add_library(kast_engine STATIC
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
-  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
+  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/ibl.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
@@ -2988,6 +2988,9 @@ include(cmake/particle_tests.cmake)
 # Shader Graph panels: --open-graph / --graph-* screenshots, Save, Assets > Create > Shader Graph, reload on disk change;
 # the graph samples (shader_graphs.scene) against the hand-written ones, in the editor and the player.
 include(cmake/shader_graph_tests.cmake)
+
+# Image-based lighting from the sky and reflection probes: scenes, variants, bake, player.
+include(cmake/ibl_tests.cmake)
 
 # Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.
 get_property(kast_tests DIRECTORY PROPERTY TESTS)

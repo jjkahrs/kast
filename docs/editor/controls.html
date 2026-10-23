@@ -143,6 +143,17 @@ particles and plays the cycle from the start (even with Play On Start off), <str
 continues the simulation, and <strong>N alive</strong> is the live count, the same CPU estimate as <code>kast.particles.alive</code>
 (<a href="../engine/particles.html#alive">Alive count</a>). These work in edit mode and during Play, are not undo steps and never
 mark the scene dirty. Field edits are ordinary undoable edits and show in the preview at once.</p>
+<p id="reflection-probes"><strong>Reflection probes</strong> (<a href="../engine/ibl-reflection-probes.html#probes">ReflectionProbe</a>):
+<strong>GameObject &gt; Reflection Probe</strong> (also in the Hierarchy's Create menu) creates an entity named "Reflection Probe"
+with a default probe (a 10 x 4 x 10 m box, resolution 128, not baked), selected, as one undo step. The selected probe's
+box shows as yellow (#ffcc00) lines in the Scene view, axis-aligned around its position (rotation and scale don't apply
+to it). Its Inspector section: <strong>Box Size</strong> (floored at 0.01 m per axis), a <strong>Resolution</strong> combo (64, 128,
+256), <strong>Intensity</strong>, <strong>Priority</strong>, <strong>Baked Path</strong>, then a <strong>Bake</strong> row: the status (<em>Not baked</em>,
+<em>Baked</em>, or in red why its files can't be used, e.g. <em>cannot read the file</em> or <em>baked at 64, but its resolution
+is 128 (bake it again)</em>) and the <strong>Bake</strong> button, which renders the probe's cube from the scene, writes
+<code>&lt;scene-name&gt;_probes/&lt;entity id&gt;.ktx</code> and <code>.json</code> next to the scene, sets Baked Path and marks the scene dirty
+(not an undo step). Bake is disabled during Play and until the scene is saved in a project (the tooltip says why);
+<strong>Window &gt; Lighting</strong>'s <strong>Bake All Probes</strong> bakes every probe of the scene.</p>
 <p><strong>Play mode</strong> (the Play / Pause / Stop icon buttons at the right of the Scene / Game tab bar, whichever tab is shown, or of the Scene title bar while it floats; hidden when the bar is too narrow. Or Ctrl+P): Play snapshots the scene in memory and runs the systems
 (e.g. <code>Rotator</code>) every frame; Pause holds them, Play or Pause again resumes; Stop restores the snapshot exactly (scene,
 unsaved-changes flag, selection by id; the editor camera stays where it is). Play (from stopped, including <code>--play</code>)

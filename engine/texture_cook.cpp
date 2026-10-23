@@ -5,10 +5,15 @@
 #include "shader.h"
 
 #include <bimg/bimg.h>
+#include <bx/allocator.h>
 #include <bx/error.h>
 #include <bx/readerwriter.h>
 
 #include <stb_image.h>
+#include <stb_image_resize2.h>
+#define STB_IMAGE_WRITE_STATIC
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
 
 #include <algorithm>
 #include <chrono>
@@ -75,7 +80,88 @@ bool hasAlpha(std::string_view image)
     return alpha;
 }
 
+constexpr std::string_view kOrmPrefix = "orm:";
+
+struct Rgba8 {
+    int width = 0, height = 0;
+    std::vector<uint8_t> pixels;
+};
+
+// PNG / JPG (stb) or the first mip of a 2D KTX / DDS (bimg) as RGBA8, values as stored.
+std::optional<Rgba8> decodeRgba8(std::string_view bytes)
+{
+    Rgba8 image;
+    if (isGpuImage(bytes)) {
+        bimg::ImageContainer container{};
+        bimg::ImageMip mip;
+        bx::Error err;
+        if (bytes.size() > UINT32_MAX ||
+            !bimg::imageParse(container, bytes.data(), static_cast<uint32_t>(bytes.size()), &err) ||
+            container.m_format >= bimg::TextureFormat::Count ||
+            !bimg::imageGetRawData(container, 0, 0, bytes.data(), static_cast<uint32_t>(bytes.size()), mip))
+            return std::nullopt;
+        image.width = static_cast<int>(mip.m_width);
+        image.height = static_cast<int>(mip.m_height);
+        image.pixels.resize(static_cast<size_t>(image.width) * image.height * 4);
+        bx::DefaultAllocator allocator;
+        bimg::imageDecodeToRgba8(&allocator, image.pixels.data(), mip.m_data, mip.m_width, mip.m_height,
+                                 mip.m_width * 4, mip.m_format);
+        return image;
+    }
+    int channels = 0;
+    stbi_uc* pixels = stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(bytes.data()),
+                                            static_cast<int>(std::min<size_t>(bytes.size(), INT32_MAX)), &image.width,
+                                            &image.height, &channels, 4);
+    if (!pixels)
+        return std::nullopt;
+    image.pixels.assign(pixels, pixels + static_cast<size_t>(image.width) * image.height * 4);
+    stbi_image_free(pixels);
+    return image;
+}
+
 } // namespace
+
+std::string ormTexturePath(const Material& material)
+{
+    const std::string& mr = material.metallicRoughnessTexture;
+    const std::string& ao = material.occlusionTexture;
+    return mr.empty() || ao.empty() || mr == ao ? std::string() : std::format("{}{}|{}", kOrmPrefix, mr, ao);
+}
+
+std::optional<std::pair<std::string, std::string>> ormSources(std::string_view path)
+{
+    const size_t bar = path.find('|');
+    if (!path.starts_with(kOrmPrefix) || bar == std::string_view::npos)
+        return std::nullopt;
+    return std::pair{std::string(path.substr(kOrmPrefix.size(), bar - kOrmPrefix.size())), std::string(path.substr(bar + 1))};
+}
+
+std::optional<std::string> ormImage(std::string_view metallicRoughness, std::string_view occlusion, std::string& error)
+{
+    std::optional<Rgba8> mr = decodeRgba8(metallicRoughness);
+    const std::optional<Rgba8> ao = decodeRgba8(occlusion);
+    if (!mr || !ao) {
+        error = std::format("cannot decode its {} image", mr ? "occlusion" : "metallic-roughness");
+        return std::nullopt;
+    }
+    std::vector<uint8_t> resized;
+    const std::vector<uint8_t>* occlusionPixels = &ao->pixels;
+    if (ao->width != mr->width || ao->height != mr->height) {
+        resized.resize(mr->pixels.size());
+        stbir_resize_uint8_linear(ao->pixels.data(), ao->width, ao->height, 0, resized.data(), mr->width, mr->height, 0,
+                                  STBIR_RGBA);
+        occlusionPixels = &resized;
+    }
+    for (size_t i = 0; i < mr->pixels.size(); i += 4)
+        mr->pixels[i] = (*occlusionPixels)[i];
+    std::string png;
+    stbi_write_png_to_func([](void* context, void* data, int size) {
+        static_cast<std::string*>(context)->append(static_cast<const char*>(data), static_cast<size_t>(size));
+    }, &png, mr->width, mr->height, 4, mr->pixels.data(), mr->width * 4);
+    if (png.empty())
+        error = "cannot encode it as PNG";
+    return png.empty() ? std::nullopt : std::optional(std::move(png));
+}
 
 std::string_view usageName(TextureUsage usage)
 {
@@ -111,6 +197,7 @@ std::vector<std::pair<std::string, TextureUsage>> materialTextures(const Materia
     add(material.normalTexture, TextureUsage::Normal);
     add(material.occlusionTexture, TextureUsage::Linear);
     add(material.emissiveTexture, TextureUsage::Color);
+    add(ormTexturePath(material), TextureUsage::Linear);
     for (const auto& [name, value] : material.params) {
         bool srgb = true;
         if (shader)
@@ -167,6 +254,8 @@ std::string cubeKtx(std::string_view sides, uint16_t size)
 
 std::string texturePakPath(const std::string& path, TextureUsage usage)
 {
+    if (ormSources(path))
+        return std::format(".kast_orm/{:016x}.ktx", fnv1a(14695981039346656037ull, path));
     return std::format("{}.{}.ktx", path, usageName(usage));
 }
 

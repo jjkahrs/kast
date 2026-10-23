@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ibl.h"
 #include "scene.h"
 #include "texture_cook.h"
 
@@ -22,6 +23,8 @@ bx::Vec3 proceduralSkyColor(const SceneSky& sky, float dirY);
 std::string skyFacesError(const std::array<MipImage, 6>& faces);
 // Six decoded faces that make a cube (skyFacesError empty) as the RGBA8 cube KTX the sky cooks from (cubeKtx).
 std::string skyCubeKtx(const std::array<MipImage, 6>& faces);
+// Six decoded faces that make a cube (sRGB) projected for the sky's diffuse light (ibl.h).
+Sh9 skyFacesSh9(const std::array<MipImage, 6>& faces);
 
 // Draws a SceneSky behind everything else in a view (Renderer::render calls it between opaque and blended meshes):
 // a full-screen triangle at the far plane, depth-tested so it only fills pixels no mesh covered. Uses the camera's
@@ -34,15 +37,24 @@ class SkyRenderer {
 public:
     void init();
     void shutdown();
-    // Faces load from projectRoot (empty: none, so a cubemap falls back).
-    void draw(const SceneSky& sky, const std::filesystem::path& projectRoot, bgfx::ViewId view, const float* viewMtx,
-              const float* projMtx);
+    // Loads (or frees) what sky needs, once per change; faces load from projectRoot (empty: none, so a cubemap falls
+    // back). Before draw, and before cube() is read.
+    void update(const SceneSky& sky, const std::filesystem::path& projectRoot);
+    void draw(const SceneSky& sky, bgfx::ViewId view, const float* viewMtx, const float* projMtx);
     // Why the last cubemap drawn fell back to the procedural sky ("" = it didn't, or no cubemap was drawn).
     const std::string& error() const { return error_; }
+    // The cubemap sky's cube (invalid: not a cubemap, or it fell back), its size, its radiance projected (ibl.h), and a
+    // number that changes whenever the cube does (a cook swapping in, a reload).
+    bgfx::TextureHandle cube() const { return cube_; }
+    uint16_t cubeSize() const { return cubeSize_; }
+    const Sh9& cubeSh() const { return sh_; }
+    uint64_t cubeVersion() const { return version_; }
 
 private:
     void load(const SceneSky& sky, const std::filesystem::path& root);
     void loadCube(const std::string& path, const std::filesystem::path& root);
+    // cube_ was just made from ktx (a cube file, or the cooked one): its size and radiance.
+    void keepCube(std::string_view ktx);
     // If the cook of the faces is in: its cube replaces cube_ (true), or it failed (warned once; cube_ stays).
     bool takeCooked();
     void unload();
@@ -52,6 +64,9 @@ private:
     bgfx::UniformHandle invViewProj_ = BGFX_INVALID_HANDLE, top_ = BGFX_INVALID_HANDLE, horizon_ = BGFX_INVALID_HANDLE,
                         bottom_ = BGFX_INVALID_HANDLE, sampler_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle cube_ = BGFX_INVALID_HANDLE; // invalid: not loaded, or failed (error_)
+    uint16_t cubeSize_ = 0;
+    Sh9 sh_{};
+    uint64_t version_ = 0;
     bool loaded_ = false;                            // faces_ / cubeFile_ / root_ say what cube_ (or error_) is for
     std::array<std::string, 6> faces_;
     std::string cubeFile_;

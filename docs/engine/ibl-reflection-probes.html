@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image-based lighting - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html" class="active">Image-based lighting</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li></ul></nav>
+<main>
+<h1 id="ibl">Image-based lighting and reflection probes</h1>
+<p>A mesh's <strong>ambient</strong> light (everything that isn't a directional, point, spot or area light) can come from an
+<em>environment</em>: the scene's <a href="skybox.html">sky</a>, or a <strong>reflection probe</strong> the editor baked from the scene
+around it. Diffuse ambient is the environment's irradiance (soft light from every side: blue from above under a blue sky),
+specular ambient is the environment reflected, sharp on smooth surfaces and blurred on rough ones. The Scene view, the
+Game view and the built game all render it the same way (<code>engine/ibl.h</code>, <code>engine/shaders/fs_mesh.sc</code>).</p>
+
+<h2 id="sky">Sky lighting</h2>
+<ul>
+<li><strong>Sky off</strong>: the flat ambient as before IBL: <code>ambientColor * ambientIntensity</code> for diffuse and a flat,
+  Fresnel-weighted specular term. Scenes without a sky (and without baked probes) render pixel for pixel as before.</li>
+<li><strong>Sky on</strong> (procedural or cubemap): the sky replaces the flat ambient. <code>ambientIntensity</code> scales it
+  (0 removes it) and <code>ambientColor</code> tints it: the default 0.2 lights with a fifth of the sky's own brightness; 1
+  lights with the sky as it is drawn. A cubemap that falls back to the procedural gradient (a bad face, a corrupt cube
+  file) lights with the gradient too.</li>
+<li>The environment is rebuilt only when the sky changes (mode, colors, faces or cube file, also from Lua with
+  <code>kast.sky.set</code>): the Lighting panel's edits light the scene in the same frame. A scene or project switch frees it.</li>
+</ul>
+<p>How it is built: the sky is drawn into a 128 x 128 cube (RGBA16F) on the GPU, which is box-filtered into a mip chain and
+<strong>GGX-prefiltered</strong> (split-sum, Karis 2013; filtered importance sampling, 128 samples per texel) into a cube whose level
+<em>i</em> is roughness <em>i</em> / 5 (levels 128 down to 4 x 4 are roughness 0 .. 1; the smaller ones repeat roughness 1). All of
+it runs as compute passes (<code>engine/shaders/cs_ibl.sc</code>) at the start of the frame's scene view; a GPU without compute
+shaders keeps the flat ambient and warns once. The diffuse part is <strong>order-2 spherical harmonics</strong> (9 RGB
+coefficients) computed on the CPU from the sky's colors (procedural) or its face images / cube file (cubemap), passed as
+shader constants: no texture stage.</p>
+<p>Shading (both the built-in material and every <code>.kshader</code> / shader graph, in the ambient term after the lights):</p>
+<pre><code>diffuse  = (1 - F) * (1 - metallic) * albedo * SH(n)           // irradiance / pi
+specular = prefiltered(R, roughness) * (F0 * brdf.x + brdf.y)  // split sum
+ambient  = (diffuse + specular) * AO</code></pre>
+<p><code>F</code> is the roughness-aware Schlick Fresnel the flat ambient uses, <code>R</code> the reflection of the view about the
+normal, and <code>brdf</code> Karis' analytic fit of the split-sum's BRDF integral ("Physically Based Shading on Mobile",
+clamped to 0..1): no lookup texture. The sky's environment is tinted by the ambient color and intensity; a probe's by its
+<code>intensity</code>.</p>
+
+<h2 id="probes">Reflection probes</h2>
+<p>A <code>ReflectionProbe</code> component (<strong>GameObject &gt; Reflection Probe</strong>) marks an axis-aligned box. Meshes
+inside it take their ambient from the probe's baked cube instead of the sky: a chrome ball in a red-and-green room
+reflects the walls, not the sky.</p>
+<table>
+<tr><th>Field</th><th>Default</th><th>Rule</th><th>Meaning</th></tr>
+<tr><td><code>boxSize</code></td><td>[10, 4, 10]</td><td>&gt; 0 on every axis (Inspector floor 0.01)</td><td>meters; the box is centered on the entity's
+  world position, axis-aligned (its rotation and scale are ignored). It is both where the probe applies and the shape its
+  reflections are projected onto</td></tr>
+<tr><td><code>resolution</code></td><td>128</td><td>64, 128 or 256 (a combo in the Inspector)</td><td>texels per cube face of the bake</td></tr>
+<tr><td><code>intensity</code></td><td>1</td><td>&gt;= 0</td><td>multiplies the probe's diffuse and specular light</td></tr>
+<tr><td><code>priority</code></td><td>0</td><td>any integer</td><td>where boxes overlap the higher one wins</td></tr>
+<tr><td><code>bakedPath</code></td><td>""</td><td>project-relative</td><td>the baked <code>.ktx</code>, written by Bake; empty = not baked</td></tr>
+</table>
+<pre><code class="language-json">"ReflectionProbe": { "boxSize": [8.4, 4.4, 8.4], "resolution": 64, "intensity": 1, "priority": 0,
+                     "bakedPath": "reflection_probe_probes/10.ktx" }</code></pre>
+<p>Values the file can't hold fail the scene load, naming the rule (<code>"resolution" must be 64, 128 or 256</code>,
+<code>"boxSize" must be &gt; 0 on every axis</code>, <code>"intensity" must be &gt;= 0</code>); Lua's <code>kast.set</code> raises with the
+same message and leaves the probe unchanged. Saved, loaded and round-tripped like every component.</p>
+
+<h3 id="selection">Which probe a mesh uses</h3>
+<p>Exactly one environment per mesh draw, chosen by the center of its world bounds: of the probes whose box contains that
+point (edges included), the highest <code>priority</code>; among equal priorities the probe whose box center is nearest; then
+the first in the scene. A mesh in no box uses the sky's environment (or the flat ambient with the sky off). Probes don't
+blend: a mesh crossing a box edge switches as its center crosses it.</p>
+
+<h3 id="box-projection">Box projection</h3>
+<p>A plain cube reflection looks as if the room were infinitely far away. Probes are <strong>box-projected</strong> (parallax
+corrected): the reflection ray from the shaded point is followed to where it leaves the probe's box, and the cube is
+sampled in the direction from the probe's center (where it was baked) to that point. A sphere near the left wall
+therefore sees that wall large and close. Fit the box to the room's walls for the best result. From outside the box
+(a pixel of a large mesh whose center is inside) the plain direction is used.</p>
+
+<h3 id="bake">Bake</h3>
+<p>In the editor only (edit mode, a scene saved in a project): the probe's Inspector section has <strong>Bake</strong>, and
+<strong>Window &gt; Lighting</strong> has <strong>Bake All Probes</strong> (<code>--bake-probes</code> on the command line). For each
+probe the Scene view's renderer draws the six cube faces at the probe's position at its resolution, with the scene's
+current lighting, meshes, models and terrain and its sky; particles, gizmos and editor overlays are left out, and probes
+don't light the bake (one bounce: the meshes in it are lit by the sky). The faces are prefiltered as the sky is
+(<em>envMips</em>: 64 &rarr; 5 levels, 128 &rarr; 6, 256 &rarr; 7, then roughness 1 down to 1 x 1), read back, and written next to
+the scene:</p>
+<pre><code>&lt;scene-dir&gt;/&lt;scene-name&gt;_probes/&lt;entity id&gt;.ktx    the prefiltered cube: RGBA16F, full mip chain
+&lt;scene-dir&gt;/&lt;scene-name&gt;_probes/&lt;entity id&gt;.json   its spherical harmonics</code></pre>
+<p>The entity id is the scene's persistent entity id (<code>"id"</code> in the scene file), so a probe keeps its files across
+saves and renames. Bake sets <code>bakedPath</code> and marks the scene dirty (not an undo step); re-baking overwrites the files
+and every view reloads them. The bake takes a few frames, during which the window doesn't redraw.</p>
+<p>The SH sidecar (JSON, not KTX metadata: readable, and written atomically beside the cube):</p>
+<pre><code class="language-json">{ "version": 1, "size": 64, "sh": [[0.49, 0.48, 0.56], [0.18, 0.10, -0.10], ...] }</code></pre>
+<p><code>sh</code> holds the 9 RGB coefficients of the radiance convolved with the clamped cosine and divided by pi, in Kast's
+world axes: irradiance / pi at unit normal <em>n</em> = c0 + c1 y + c2 z + c3 x + c4 xy + c5 yz + c6 (3z&sup2; - 1) + c7 xz
++ c8 (x&sup2; - y&sup2;). Cube sides are in bgfx's order (+X, -X, +Y, -Y, +Z, -Z) with Kast's +Z on the cube's -Z side, as for
+<a href="skybox.html#cube-file">sky cube files</a>.</p>
+<p><a href="../editor/build.html">Build</a> ships the <code>.ktx</code> and <code>.json</code> in <code>game.pak</code> as they are; the player
+loads them like the editor.</p>
+
+<h3 id="fallbacks">When a probe can't be used</h3>
+<p>Not baked, a missing or unreadable <code>.ktx</code> or <code>.json</code>, a corrupt file, or a bake of another resolution than the
+probe's (<code>baked at 64, but its resolution is 128 (bake it again)</code>): the engine warns once, naming the probe
+(<code>Reflection probe 'Room Probe': 'room_probes/10.ktx': cannot read the file; meshes in its box are lit as outside
+it</code>), and its meshes use the sky's environment (or the flat ambient) exactly as if the probe weren't there. The scene
+still loads, nothing is baked automatically, and the probe's Inspector shows the reason in red (or <em>Not baked</em> /
+<em>Baked</em>).</p>
+
+<h2 id="sampler-stage">Texture stages</h2>
+<p>The mesh shader already used all 16 Direct3D 11 sampler stages. The environment cube (<code>s_env</code>) takes stage 8,
+which held the occlusion texture: <strong>occlusion now shares the metallic-roughness texture</strong> (stage 1) in glTF's ORM
+layout, R = occlusion, G = roughness, B = metallic (this choice was approved by the user over dropping a shadow cube or a
+<code>.kshader</code> texture param). A material whose occlusion and metallic-roughness are the same image (an ORM texture)
+samples it as is; one with only one of them samples that one (the other's channels read 1); one with two different
+images gets them packed into one on the CPU when it loads (occlusion's R resampled to the metallic-roughness image's size
+if they differ), cooked like any texture, and Build ships the packed one. <code>occlusionStrength</code> works as before, and
+<code>.kshader</code>'s <code>sampleOcclusion(uv).r</code> and <code>sampleMetallicRoughness(uv)</code> still return the occlusion and the
+metallic-roughness (G, B). Materials with at most one of those images render pixel for pixel as before.</p>
+
+<h2 id="lua">Lua</h2>
+<p><code>ReflectionProbe</code> is a regular component: <code>kast.get(e, "ReflectionProbe")</code> and
+<code>kast.set(e, "ReflectionProbe", {intensity = 0.5, priority = 2})</code> (validated as the scene file is). There is no Lua
+bake: probes are baked in the editor. The sky's lighting follows <code>kast.sky.set</code>.</p>
+
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Baked only: probes don't update while the game runs (no realtime capture, no screen-space reflections).</li>
+<li>One probe per mesh, no blending between probes, no probe arrays; diffuse is per probe, not a light-probe grid.</li>
+<li>The bake is one bounce: probes don't see each other's reflections.</li>
+<li>Bake has no undo; re-bake or clear <code>bakedPath</code> instead.</li>
+</ul>
+</main>
+</div>
+</body>
+</html>

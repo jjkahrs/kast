@@ -5,6 +5,7 @@
 #include <animation.h>
 #include <components.h>
 #include <files.h> // recycleFile
+#include <ibl.h>
 #include <log.h>
 #include <lua_components.h>
 #include <material.h>
@@ -359,7 +360,11 @@ bool Panels::drawValue(entt::entity entity, const std::string& key, const kast::
         float v[3] = {value[0].get<float>(), value[1].get<float>(), value[2].get<float>()};
         // A color allowed past 1 (e.g. an HDR particle color) edits as floats without the 0..1 clamp.
         const ImGuiColorEditFlags hdr = field.max && *field.max > 1.0 ? ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float : 0;
-        if (!(field.color ? ImGui::ColorEdit3(label, v, hdr) : ImGui::DragFloat3(label, v, 0.05f)))
+        // A floor (e.g. a ReflectionProbe's box size) clamps every axis.
+        if (!(field.color ? ImGui::ColorEdit3(label, v, hdr)
+                          : ImGui::DragFloat3(label, v, 0.05f, field.min ? static_cast<float>(*field.min) : 0.0f,
+                                              field.min ? FLT_MAX : 0.0f, "%.3f",
+                                              field.min ? ImGuiSliderFlags_AlwaysClamp : ImGuiSliderFlags_None)))
             return false;
         value = Json::array({kast::jsonNumber(v[0]), kast::jsonNumber(v[1]), kast::jsonNumber(v[2])});
         return true;
@@ -526,6 +531,7 @@ void Panels::drawInspector(Document& doc)
                         const bool animator = type.meta() && type.meta() == entt::resolve<kast::Animator>();
                         const bool sound = type.meta() && type.meta() == entt::resolve<kast::AudioSource>();
                         const bool particles = type.meta() && type.meta() == entt::resolve<kast::ParticleEmitter>();
+                        const bool probe = type.meta() && type.meta() == entt::resolve<kast::ReflectionProbe>();
                         const auto drawOne = [&](const kast::FieldDesc& field, Json& value) {
                             if (mesh && field.name == "material")
                                 return drawMaterialPicker(doc, value);
@@ -537,6 +543,20 @@ void Panels::drawInspector(Document& doc)
                                 return drawClipPicker(doc, entity, value);
                             if (sound && field.name == "clip")
                                 return drawSoundPicker(doc, value);
+                            if (probe && field.name == "resolution") { // only kast::kProbeResolutions
+                                const std::string current = std::to_string(value.get<int>());
+                                bool picked = false;
+                                if (ImGui::BeginCombo(field.displayName.c_str(), current.c_str())) {
+                                    for (const uint16_t resolution : kast::kProbeResolutions)
+                                        if (ImGui::Selectable(std::to_string(resolution).c_str(), value == resolution) &&
+                                            value != resolution) {
+                                            value = resolution;
+                                            picked = true;
+                                        }
+                                    ImGui::EndCombo();
+                                }
+                                return picked;
+                            }
                             return drawField(entity, type, field, value);
                         };
                         if (particles) // on top: the emitter has many fields
@@ -560,6 +580,8 @@ void Panels::drawInspector(Document& doc)
                             drawAnimatorPreview(doc, entity);
                         if (sound)
                             drawAudioPreview(doc, entity);
+                        if (probe)
+                            drawProbeBake(doc, entity);
                     }
                 }
                 endCard();
@@ -1245,6 +1267,50 @@ void Panels::drawAnimatorPreview(Document& doc, entt::entity entity)
     }
 }
 
+namespace {
+
+// Why probes can't bake now (Panels::drawProbeBake, Bake All Probes; SceneViewport::bakeProbes checks the same), or null.
+const char* probeBakeBlocker(const Document& doc)
+{
+    if (doc.play != PlayState::Stopped)
+        return "Stop Play to bake";
+    if (!doc.project || doc.path.empty())
+        return "Save the scene in a project to bake: the bake goes next to it";
+    return nullptr;
+}
+
+} // namespace
+
+void Panels::drawProbeBake(Document& doc, entt::entity entity)
+{
+    ImGui::SeparatorText("Bake");
+    const std::string status = probeStatus ? probeStatus(doc.scene.registry().get<kast::ReflectionProbe>(entity)) : "";
+    if (status == "Not baked") {
+        ImGui::TextDisabled("Not baked");
+    } else if (status == "Baked") {
+        ImGui::TextUnformatted("Baked");
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+        ImGui::TextWrapped("%s", status.c_str());
+        ImGui::PopStyleColor();
+    }
+    const char* blocked = probeBakeBlocker(doc);
+    ImGui::BeginDisabled(blocked != nullptr);
+    if (ImGui::Button("Bake", ImVec2(-FLT_MIN, 0.0f)))
+        bakeRequests_.push_back(entity);
+    ImGui::EndDisabled();
+    disabledTooltip(blocked);
+}
+
+void Panels::requestBakeAll(const Document& doc)
+{
+    const auto probes = doc.scene.registry().view<const kast::ReflectionProbe>();
+    doc.scene.forEachDepthFirst([&](entt::entity entity) {
+        if (probes.contains(entity))
+            bakeRequests_.push_back(entity);
+    });
+}
+
 // Runtime only, like the Animator preview: ParticleEmitterState is never saved, undone or marked dirty.
 void Panels::drawParticlePreview(Document& doc, entt::entity entity)
 {
@@ -1688,6 +1754,17 @@ void Panels::drawLighting(Document& doc, bool& open, const std::string& skyError
         ImGui::PopID();
         if (changed)
             settingsChanged(doc, "Edit Lighting", before);
+
+        ImGui::SeparatorText("Reflection Probes");
+        const size_t probes = doc.scene.registry().view<const kast::ReflectionProbe>().size();
+        ImGui::Text("%zu in the scene", probes);
+        const char* blocked = probes == 0 ? "The scene has no Reflection Probe (GameObject > Reflection Probe)"
+                                          : probeBakeBlocker(doc);
+        ImGui::BeginDisabled(blocked != nullptr);
+        if (ImGui::Button("Bake All Probes", ImVec2(-FLT_MIN, 0.0f)))
+            requestBakeAll(doc);
+        ImGui::EndDisabled();
+        disabledTooltip(blocked);
     }
     ImGui::End();
 }

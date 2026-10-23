@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html" class="active">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li></ul></nav>
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html" class="active">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li></ul></nav>
 <main>
 <h1 id="shaders">Shaders</h1>
 <p>Every mesh in Kast (primitives, models, terrain) is drawn by one built-in physically based shader: base color, metallic
@@ -66,7 +66,10 @@ pixel:</p>
 <li>Unlit materials stop here and output <code>ALBEDO + EMISSION</code>.</li>
 <li>Applies the normal map to <code>NORMAL</code>.</li>
 <li>Lights it: the built-in Cook-Torrance, or your <code>light()</code> once per light. Shadows are included either way.</li>
-<li>Adds ambient light times <code>AO</code>, then <code>EMISSION</code>, then fog.</li>
+<li>Adds ambient light times <code>AO</code>, then <code>EMISSION</code>, then fog. The ambient is the flat ambient color with the sky
+  off, or <a href="ibl-reflection-probes.html">image-based lighting</a> (the sky's, or a baked reflection probe's: diffuse
+  from its spherical harmonics, specular from its prefiltered cube at <code>ROUGHNESS</code>) with the sky on or inside a
+  probe's box, for every <code>.kshader</code> as for the built-in material, whether or not it has a <code>light()</code>.</li>
 </ol>
 <p>So a <code>fragment()</code> that writes nothing renders exactly like the material without a shader (a test checks this pixel for
 pixel). Your <code>vertex()</code> runs per vertex before the template moves the vertex to the world, in every pass that draws
@@ -142,7 +145,9 @@ Unless noted, positions and directions are in <strong>world space</strong> (Y up
 <tr><td><code>MATERIAL_ALPHA_CUTOFF</code></td><td>float</td><td>in</td><td></td><td>the mask cutoff; -1 unless <code>alphaMode</code> is mask</td></tr>
 <tr><td><code>MATERIAL_UV_TRANSFORM</code></td><td>vec4</td><td>in</td><td></td><td>xy <code>uvScale</code>, zw <code>uvOffset</code></td></tr>
 <tr><td><code>VIEW_MATRIX</code>, <code>PROJECTION_MATRIX</code></td><td>mat4</td><td>in</td><td></td><td>the pass's view and projection</td></tr>
-<tr><td><code>sampleBaseColor(uv)</code>, <code>sampleMetallicRoughness(uv)</code>, <code>sampleNormal(uv)</code>, <code>sampleOcclusion(uv)</code>, <code>sampleEmissive(uv)</code></td><td>vec4</td><td>functions</td><td></td><td>the material's own textures at any UV (white / flat when it has none); <code>sampleNormal</code> (and <code>NORMAL_MAP</code>) has Z rebuilt from X and Y, as the normal texture is <a href="materials.html#texture-compression">compressed</a> to BC5, which keeps only X and Y</td></tr>
+<tr><td><code>sampleBaseColor(uv)</code>, <code>sampleMetallicRoughness(uv)</code>, <code>sampleNormal(uv)</code>, <code>sampleOcclusion(uv)</code>, <code>sampleEmissive(uv)</code></td><td>vec4</td><td>functions</td><td></td><td>the material's own textures at any UV (white / flat when it has none; <code>sampleOcclusion(uv).r</code> is the occlusion and
+  <code>sampleMetallicRoughness(uv)</code>'s G, B the roughness and metallic, also when the material's two images were packed
+  into one, see <a href="ibl-reflection-probes.html#sampler-stage">Texture stages</a>); <code>sampleNormal</code> (and <code>NORMAL_MAP</code>) has Z rebuilt from X and Y, as the normal texture is <a href="materials.html#texture-compression">compressed</a> to BC5, which keeps only X and Y</td></tr>
 <tr><td><code>SCREEN_TEXTURE</code>, <code>DEPTH_TEXTURE</code>, <code>linearDepth(d)</code></td><td>sampler2D, function</td><td>in</td><td>screen</td><td>the opaque scene behind this surface; blend and additive materials only (see <a href="#kshader-screen">below</a>)</td></tr>
 <tr><td><code>PI</code></td><td>float</td><td>in</td><td></td><td>3.14159...</td></tr>
 </table>
@@ -269,7 +274,8 @@ renderer logs an error at start if a GPU reports fewer). The mesh shader uses:</
 <tr><th>Stages</th><th>Used for</th></tr>
 <tr><td>0, 1</td><td>base color, metallic-roughness texture</td></tr>
 <tr><td>2–6</td><td>shadow maps (the atlas of directional cascades and spot / area light tiles, point light cubes)</td></tr>
-<tr><td>7, 8, 9</td><td>normal, occlusion, emissive texture</td></tr>
+<tr><td>7, 8, 9</td><td>normal texture, environment cube (<a href="ibl-reflection-probes.html#sampler-stage">image-based lighting</a>;
+  the occlusion texture shares stage 1, packed as glTF's ORM), emissive texture</td></tr>
 <tr><td><strong>10–13</strong></td><td>your <code>texture2D</code> params, in declaration order</td></tr>
 <tr><td>14, 15</td><td><code>SCREEN_TEXTURE</code>, <code>DEPTH_TEXTURE</code></td></tr>
 </table>
@@ -448,10 +454,12 @@ shaders read only the position and UV of the same buffers, so their output is un
 shaders pass it on as <code>v_color0</code>; the built-in material ignores it, a <code>.kshader</code> reads it as <code>COLOR</code>.</p>
 <h3 id="mesh-uniforms">Mesh material inputs</h3>
 <p><code>fs_mesh</code> samplers: <code>s_baseColor</code> (stage 0), <code>s_metallicRoughness</code> (1), the shadow maps (2–6), <code>s_normal</code> (7),
-<code>s_occlusion</code> (8), <code>s_emissive</code> (9), <code>.kshader</code> texture params (10–13), <code>s_kastScreen</code> / <code>s_kastDepth</code>
+<code>s_env</code> (8, the environment cube), <code>s_emissive</code> (9), <code>.kshader</code> texture params (10–13), <code>s_kastScreen</code> / <code>s_kastDepth</code>
 (14, 15). Uniforms besides the lights: <code>u_baseColor</code>, <code>u_emissive</code>, <code>u_material</code>
 (metallic, roughness, alpha cutoff, output mode 0 opaque / 1 blend / 2 additive), <code>u_materialExt</code> (normal scale,
-occlusion strength, normal map bound, unlit), <code>u_uvTransform</code> (UV scale xy, offset zw; also read by <code>fs_shadow</code> for
+occlusion strength, normal map bound, unlit), <code>u_materialOrm</code> (whether <code>s_metallicRoughness</code> holds the
+metallic-roughness texture, x, and the occlusion, y), <code>u_envSh[9]</code>, <code>u_envSpecular</code>, <code>u_envBox[2]</code> (the
+environment: spherical harmonics, specular tint and roughness 1 mip, probe box), <code>u_uvTransform</code> (UV scale xy, offset zw; also read by <code>fs_shadow</code> for
 mask cutouts), <code>u_kastParams[16]</code> (<code>.kshader</code> numeric params).</p>
 <p><strong><code>u_time</code></strong> (<code>vec4</code>, x = seconds) is set for every mesh draw. In the editor it advances by each frame's delta in edit
 mode and in Play (by exactly <code>--fixed-dt</code> per frame when that option is given) and holds while Play is paused; the

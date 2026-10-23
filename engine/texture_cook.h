@@ -10,6 +10,7 @@
 #include <functional>
 #include <future>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -39,9 +40,19 @@ bgfx::TextureFormat::Enum cookedFormat(TextureUsage usage, uint32_t width, uint3
 // Bumped when cooked output changes (formats, texturec flags): every cache entry misses.
 constexpr int kTextureCookVersion = 2;
 
-// The textures a material samples, with each one's usage (empty slots left out). shader: its .kshader as parsed, for
+// The textures a material samples, with each one's usage (empty slots left out; an ORM pair also as its ormTexturePath). shader: its .kshader as parsed, for
 // its texture2D params' sRGB flags (null: params count as Color).
 std::vector<std::pair<std::string, TextureUsage>> materialTextures(const Material& material, const ShaderSource* shader);
+
+// A material whose occlusion and metallic-roughness textures are different images samples them packed into one
+// (fs_mesh.sc s_metallicRoughness, glTF's ORM layout: R occlusion, G roughness, B metallic). ormTexturePath names that
+// texture, "orm:<metallicRoughness>|<occlusion>" (texture paths hold no '|'); "" when the material has at most one of
+// them, or both are the same image (sampled as it is). ormSources splits the name back (nullopt for any other path).
+std::string ormTexturePath(const Material& material);
+std::optional<std::pair<std::string, std::string>> ormSources(std::string_view path);
+// The packed image as a PNG: metallicRoughness's pixels with occlusion's R (resampled to its size if they differ) as
+// R. Each is PNG, JPG, KTX or DDS bytes (a KTX / DDS: its first mip). nullopt + error if one can't be decoded.
+std::optional<std::string> ormImage(std::string_view metallicRoughness, std::string_view occlusion, std::string& error);
 
 // Cooks image (PNG / JPG bytes, or an RGBA8 cube KTX from cubeKtx) into a KTX of format with mips: the editor's runs
 // texturec. False + error (texturec's output) if it fails.
@@ -56,8 +67,8 @@ bool cookTexture(std::string_view image, TextureUsage usage, const TextureCooker
 // An RGBA8 cube of size x size sides (sides: their pixels, one after another in bgfx's side order +X, -X, +Y, -Y, +Z,
 // -Z) as a KTX without mips: the sky's cooker input.
 std::string cubeKtx(std::string_view sides, uint16_t size);
-// Where game.pak keeps texture path (a project file or "<model>#<i>") cooked for usage ("<path>.<usage>.ktx"), and the
-// cube cooked from sky faces. The editor's Build writes these; the player, which never cooks, reads them.
+// Where game.pak keeps texture path (a project file or "<model>#<i>") cooked for usage ("<path>.<usage>.ktx"; an ORM
+// pair's: ".kast_orm/<hash>.ktx"), and the cube cooked from sky faces. The editor's Build writes these; the player, which never cooks, reads them.
 std::string texturePakPath(const std::string& path, TextureUsage usage);
 std::string skyPakPath(const std::array<std::string, 6>& faces);
 

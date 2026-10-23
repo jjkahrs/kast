@@ -22,7 +22,9 @@ static const float LIGHT_AREA = 2.0;
 static const float LIGHT_AREA_TWO_SIDED = 3.0;
 
 SAMPLER2D(s_baseColor, 0);         // sRGB, sampled as linear; white if the material has none
-SAMPLER2D(s_metallicRoughness, 1); // linear, glTF packing: G = roughness, B = metallic; white if none
+// Linear, glTF's ORM packing: R = occlusion, G = roughness, B = metallic (u_materialOrm says which it holds; renderer.cpp
+// setMaterialState packs separate occlusion and metallic-roughness images into one); white if none.
+SAMPLER2D(s_metallicRoughness, 1);
 // The shadow atlas, 2x4 tiles (shadow.h): directional light cascades (cascade i at column i % 2, row i / 2), then spot /
 // area light tiles (u_csmMtx index i, 4..7, at column i % 2, row i / 2).
 SAMPLER2DSHADOW(s_csm, 2);
@@ -31,16 +33,29 @@ SAMPLERCUBESHADOW(s_pointShadow1, 4);
 SAMPLERCUBESHADOW(s_pointShadow2, 5);
 SAMPLERCUBESHADOW(s_pointShadow3, 6);
 SAMPLER2D(s_normal, 7);            // linear tangent-space normal, glTF / OpenGL (+Y green); flat (0.5, 0.5, 1) if none
-SAMPLER2D(s_occlusion, 8);         // linear, R = ambient occlusion; white if none
+// The environment the ambient comes from (ibl.h): a GGX-prefiltered cube, mip i of roughness i / u_envSpecular.w,
+// sampled with Kast's world z flipped (as fs_sky.sc); black if none. Stage 8 was the occlusion texture's until it moved
+// into s_metallicRoughness's R: every stage is taken (D3D11's 16).
+SAMPLERCUBE(s_env, 8);
 SAMPLER2D(s_emissive, 9);          // sRGB, sampled as linear, times u_emissive; white if none
 // Stages 10..13: a .kshader's texture2D params (shader.cpp generateShader).
 SAMPLER2D(s_kastScreen, 14); // SCREEN_TEXTURE: the opaque scene's HDR linear color (Renderer::render copies it)
 SAMPLER2D(s_kastDepth, 15);  // DEPTH_TEXTURE: the opaque scene's depth (D3D 0..1); linearDepth() makes it meters
 
 uniform vec4 u_materialExt; // x: normal scale, y: occlusion strength, z: 1 if a normal texture is bound, w: 1 if unlit
+// x: 1 if s_metallicRoughness holds the metallic-roughness texture (G, B; else they read 1), y: 1 if it holds the
+// occlusion texture (R; else it reads 1)
+uniform vec4 u_materialOrm;
 uniform vec4 u_lightDir;   // xyz: world direction the light travels; w: 1 if the scene has a light, else 0
 uniform vec4 u_lightColor; // rgb: light color * intensity
-uniform vec4 u_ambient;    // rgb: scene ambient color * intensity
+uniform vec4 u_ambient;    // rgb: scene ambient color * intensity: the flat ambient (no environment)
+// The environment (renderer.cpp setDrawState): the sky's (tinted by the ambient color * intensity) or a probe's (times its
+// intensity). u_envSh: its spherical harmonics, already tinted (ibl.h Sh9); u_envSpecular: rgb: the specular tint, w:
+// s_env's roughness 1 mip (0: no environment, the flat u_ambient instead); u_envBox: [0] xyz: the probe's center, w: 1 if
+// box-projected; [1] xyz: half its box size.
+uniform vec4 u_envSh[9];
+uniform vec4 u_envSpecular;
+uniform vec4 u_envBox[2];
 // The local light slots (Renderer::render setDrawState), nearest the mesh first. Unused slots: black, range 1.
 uniform vec4 u_localPosRange[MAX_LOCAL_LIGHTS]; // xyz: world position (area: the rect's center); w: range
 uniform vec4 u_localColor[MAX_LOCAL_LIGHTS];    // rgb: color * intensity; w: type: 0 point, LIGHT_SPOT, LIGHT_AREA(_TWO_SIDED)
@@ -333,6 +348,35 @@ vec3 shade(vec3 n, vec3 v, vec3 l, vec3 light, vec3 albedo, vec3 f0, float metal
     return (kd * albedo + PI * specular) * light * nl;
 }
 
+// The environment's diffuse light at unit normal n: irradiance / pi from its spherical harmonics (shIrradiance in ibl.h).
+vec3 kastSh9(vec3 n)
+{
+    vec3 e = u_envSh[0].rgb + u_envSh[1].rgb * n.y + u_envSh[2].rgb * n.z + u_envSh[3].rgb * n.x
+           + u_envSh[4].rgb * (n.x * n.y) + u_envSh[5].rgb * (n.y * n.z) + u_envSh[6].rgb * (3.0 * n.z * n.z - 1.0)
+           + u_envSh[7].rgb * (n.x * n.z) + u_envSh[8].rgb * (n.x * n.x - n.y * n.y);
+    return max(e, vec3_splat(0.0));
+}
+
+// The split-sum's GGX BRDF integral, Karis' analytic fit (envBrdf in ibl.h): specular reflectance = F0 * x + y.
+vec2 kastEnvBrdf(float roughness, float nv)
+{
+    vec4 r = roughness * vec4(-1.0, -0.0275, -0.572, 0.022) + vec4(1.0, 0.0425, 1.04, -0.04);
+    float a004 = min(r.x * r.x, exp2(-9.28 * nv)) * r.x + r.y;
+    return saturate(vec2(-1.04, 1.04) * a004 + r.zw); // the fit strays a little past 0..1 at its extremes
+}
+
+// Where reflection ray r from p samples the environment (boxProjectedDirection in ibl.h): box-projected, the direction
+// from the probe's center to where r leaves its box (r itself from outside the box); the sky's, r.
+vec3 kastEnvDirection(vec3 r, vec3 p)
+{
+    vec3 lo = u_envBox[0].xyz - u_envBox[1].xyz;
+    vec3 hi = u_envBox[0].xyz + u_envBox[1].xyz;
+    if (u_envBox[0].w < 0.5 || any(lessThan(p, lo)) || any(greaterThan(p, hi)))
+        return r;
+    vec3 t = abs(mix(lo, hi, step(vec3_splat(0.0), r)) - p) / max(abs(r), vec3_splat(1e-5));
+    return p + r * min(min(t.x, t.y), t.z) - u_envBox[0].xyz;
+}
+
 // Fog, as fogFactor in post_process.cpp: 1 - exp(-(density * max(d - start, 0))^2). Alpha-blended surfaces fade to the
 // fog color; additive ones (u_material.w 2) fade toward black, as additive particles do (adding fog would brighten).
 vec3 fogged(vec3 color, vec3 worldPos)
@@ -407,7 +451,8 @@ struct KastLight {
 #define DIFFUSE_LIGHT kast_f.diffuse
 #define SPECULAR_LIGHT kast_f.specular
 vec4 sampleBaseColor(vec2 uv) { return texture2D(s_baseColor, uv); }
-vec4 sampleMetallicRoughness(vec2 uv) { return texture2D(s_metallicRoughness, uv); }
+// G = roughness, B = metallic (R: the occlusion if packed with it); white without a metallic-roughness texture.
+vec4 sampleMetallicRoughness(vec2 uv) { return u_materialOrm.x > 0.5 ? texture2D(s_metallicRoughness, uv) : vec4_splat(1.0); }
 // A tangent-space normal as stored (0..1) with Z rebuilt from X and Y: BC5 normal maps (cooked PNG / JPG) keep only X and Y
 // and read Z as 0. The same for full ones, which are unit length too.
 vec3 unpackNormalMap(vec4 stored)
@@ -416,7 +461,8 @@ vec3 unpackNormalMap(vec4 stored)
     return vec3(stored.xy, sqrt(saturate(1.0 - dot(xy, xy))) * 0.5 + 0.5);
 }
 vec4 sampleNormal(vec2 uv) { return vec4(unpackNormalMap(texture2D(s_normal, uv)), 1.0); }
-vec4 sampleOcclusion(vec2 uv) { return texture2D(s_occlusion, uv); }
+// R = ambient occlusion (the other channels: whatever its image holds); white without an occlusion texture.
+vec4 sampleOcclusion(vec2 uv) { return u_materialOrm.y > 0.5 ? texture2D(s_metallicRoughness, uv) : vec4_splat(1.0); }
 vec4 sampleEmissive(vec2 uv) { return texture2D(s_emissive, uv); }
 // A DEPTH_TEXTURE value as the view depth in meters (positive, along the camera's forward), as -VIEW_POSITION.z.
 float linearDepth(float depth)
@@ -435,7 +481,7 @@ void main()
     KastFragment f;
     f.uv = v_texcoord0 * u_uvTransform.xy + u_uvTransform.zw;
     vec4 base = u_baseColor * texture2D(s_baseColor, f.uv);
-    vec4 mr = texture2D(s_metallicRoughness, f.uv);
+    vec4 mr = sampleMetallicRoughness(f.uv);
     f.color = v_color0;
     f.normal = normalize(v_normal);
     f.tangent = v_tangent;
@@ -450,7 +496,7 @@ void main()
     f.normalMap = unpackNormalMap(texture2D(s_normal, f.uv));
     f.normalMapDepth = u_materialExt.x; // glTF normalTexture.scale
     // Ambient occlusion darkens ambient light only: ao = 1 + strength * (R - 1).
-    f.ao = 1.0 + u_materialExt.y * (texture2D(s_occlusion, f.uv).r - 1.0);
+    f.ao = 1.0 + u_materialExt.y * (sampleOcclusion(f.uv).r - 1.0);
     f.screenUv = (gl_FragCoord.xy - u_viewRect.xy) * u_viewTexel.xy;
     fragment(f);
 
@@ -565,11 +611,21 @@ void main()
     }
 #endif
 
-    // Ambient, no IBL: diffuse ambient plus a flat specular term weighted by the roughness-aware Schlick Fresnel
-    // F = F0 + (max(1 - roughness, F0) - F0) * (1 - N.V)^5, so metals (no diffuse) still show ambient.
+    // Ambient, weighted by the roughness-aware Schlick Fresnel F = F0 + (max(1 - roughness, F0) - F0) * (1 - N.V)^5, so
+    // metals (no diffuse) still show it. With an environment (image-based lighting, ibl.h): its irradiance for the
+    // diffuse, and the split sum for the specular, the prefiltered cube at the roughness's mip along the reflection
+    // times the GGX BRDF's integral. Without: the flat ambient color for both.
     float nv = max(dot(n, v), 0.0);
     vec3 fAmbient = f0 + (max(vec3_splat(1.0 - roughness), f0) - f0) * pow(saturate(1.0 - nv), 5.0);
-    color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo + fAmbient) * u_ambient.rgb * f.ao;
+    if (u_envSpecular.w > 0.0) {
+        vec3 r = kastEnvDirection(reflect(-v, n), v_worldPos);
+        vec3 prefiltered = textureCubeLod(s_env, vec3(r.x, r.y, -r.z), roughness * u_envSpecular.w).rgb;
+        vec2 brdf = kastEnvBrdf(roughness, nv);
+        color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo * kastSh9(n)
+                  + prefiltered * u_envSpecular.rgb * (f0 * brdf.x + brdf.y)) * f.ao;
+    } else {
+        color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo + fAmbient) * u_ambient.rgb * f.ao;
+    }
 
     color += f.emission;
 

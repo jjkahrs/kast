@@ -1,0 +1,57 @@
+# Reflection probe Bake from the command line (kast_editor --bake-probes --file-save: Window > Lighting's Bake All
+# Probes, then File > Save) on a copy of a project (the source is never written) whose baked files were deleted. Every
+# probe of SCENE must get <scene-dir>/<scene-name>_probes/<entity id>.ktx and .json, the saved scene must name them, and
+# a second run that only loads them must render the same Scene view (kast_self_check --diff-png, exactly).
+# Usage: cmake -DEDITOR=<kast_editor> -DSELF_CHECK=<kast_self_check> -DPROJECT=<dir> -DSCENE=<project-relative .scene>
+#              -DOUT_DIR=<dir> -P probe_bake_test.cmake
+set(copy "${OUT_DIR}/project")
+file(REMOVE_RECURSE "${OUT_DIR}")
+file(MAKE_DIRECTORY "${OUT_DIR}")
+file(COPY "${PROJECT}/" DESTINATION "${copy}")
+get_filename_component(stem "${SCENE}" NAME_WE)
+file(REMOVE_RECURSE "${copy}/${stem}_probes")
+foreach(run baked loaded)
+  set(bake "")
+  if(run STREQUAL "baked")
+    set(bake --bake-probes --file-save)
+  endif()
+  execute_process(COMMAND "${EDITOR}" --frames 60 --screenshot "${OUT_DIR}/${run}.png" --projects-file "${OUT_DIR}/projects.json"
+                          --settings-file "${OUT_DIR}/editor_settings.json" --project "${copy}" --scene "${copy}/${SCENE}"
+                          --size 1600x900 --fixed-dt 0.016 ${bake}
+                  WORKING_DIRECTORY "${OUT_DIR}" RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE out)
+  message("${out}")
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "kast_editor (${run}) exited with ${result}")
+  endif()
+  if(run STREQUAL "baked")
+    string(REGEX MATCHALL "Baked reflection probe '[^']*' \\([0-9]+ x [0-9]+\\) to '([^']*)'" baked "${out}")
+    if(NOT baked OR NOT out MATCHES "Saved scene")
+      message(FATAL_ERROR "no probe baked, or the scene not saved")
+    endif()
+  elseif(out MATCHES "Reflection probe '")
+    message(FATAL_ERROR "the second run warned about a probe")
+  endif()
+endforeach()
+file(READ "${copy}/${SCENE}" saved)
+file(GLOB ktx "${copy}/${stem}_probes/*.ktx")
+foreach(file IN LISTS ktx)
+  get_filename_component(id "${file}" NAME_WE)
+  if(NOT EXISTS "${copy}/${stem}_probes/${id}.json")
+    message(FATAL_ERROR "${id}.ktx has no ${id}.json")
+  endif()
+  if(NOT saved MATCHES "\"bakedPath\": \"${stem}_probes/${id}.ktx\"")
+    message(FATAL_ERROR "the saved scene does not name ${stem}_probes/${id}.ktx")
+  endif()
+endforeach()
+list(LENGTH ktx count)
+list(LENGTH baked expected)
+if(NOT count EQUAL expected)
+  message(FATAL_ERROR "${count} .ktx files for ${expected} probes")
+endif()
+execute_process(COMMAND "${SELF_CHECK}" --diff-png "${OUT_DIR}/baked.png" "${OUT_DIR}/loaded.png" 0 322,76,955,551
+                RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE out)
+message("${out}")
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "the reloaded probes render differently")
+endif()
+message(STATUS "OK: ${count} probes baked, saved and reloaded")

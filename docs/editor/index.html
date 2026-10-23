@@ -21,7 +21,11 @@ dirty (<code>*</code> in the title).</p>
   and <strong>Sky</strong>: a <strong>Mode</strong> combo (Off, Procedural, Cubemap), the <strong>Top</strong>, <strong>Horizon</strong> and
   <strong>Bottom</strong> colors (shown for Procedural and Cubemap: they are the cubemap's fallback) and, for Cubemap, a
   picker per face (<strong>+X (px)</strong> .. <strong>-Z (nz)</strong>) listing the project's PNG and JPG files. When a face
-  can't be used the panel says why in red and the views show the gradient (<a href="../engine/skybox.html">Skybox</a>).</li>
+  can't be used the panel says why in red and the views show the gradient (<a href="../engine/skybox.html">Skybox</a>).
+  With a sky on, the sky also lights the meshes (<a href="../engine/ibl-reflection-probes.html">Image-based lighting</a>).
+  Then <strong>Reflection Probes</strong>: how many the scene has and <strong>Bake All Probes</strong>, which bakes each one as its
+  Inspector's Bake does (<a href="controls.html#reflection-probes">Reflection probes</a>; disabled during Play, without probes,
+  or until the scene is saved in a project).</li>
 <li><strong>Post Processing</strong>: the post effects and fog (<a href="../engine/post-processing.html">Post-processing and fog</a>).</li>
 <li><strong>Physics</strong>: gravity (<a href="../engine/physics.html">Physics</a>).</li>
 </ul>
