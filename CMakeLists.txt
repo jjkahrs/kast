@@ -82,9 +82,13 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
 endforeach()
 
 # --- shader tools: .kshader files compile in the editor at run time (editor/shader_compiler.cpp) with this shaderc,
-# next to the editor, plus bgfx's shader headers and the mesh templates in kshader/ beside it. The player gets none. ---
+# next to the editor, plus bgfx's shader headers and the mesh templates in kshader/ beside it. Images are compressed
+# with texturec (editor/texture_cooker.cpp, with the DLLs it loads) next to it too. The player gets none. ---
+find_program(KAST_TEXTUREC texturec PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/bgfx" NO_DEFAULT_PATH REQUIRED)
 set(KAST_SHADER_TOOLS)
-foreach(pair "${KAST_SHADERC}|shaderc.exe"
+get_filename_component(KAST_BGFX_TOOLS "${KAST_TEXTUREC}" DIRECTORY)
+foreach(pair "${KAST_SHADERC}|shaderc.exe" "${KAST_TEXTUREC}|texturec.exe" "${KAST_BGFX_TOOLS}/miniz.dll|miniz.dll"
+             "${KAST_BGFX_TOOLS}/squish.dll|squish.dll"
              "${KAST_SHADER_INCLUDE}/bgfx_shader.sh|kshader/include/bgfx_shader.sh"
              "${KAST_SHADER_INCLUDE}/bgfx_compute.sh|kshader/include/bgfx_compute.sh"
              "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/fs_mesh.sc|kshader/mesh/fs_mesh.sc"
@@ -147,7 +151,7 @@ add_library(kast_engine STATIC
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
-  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/particles.cpp ${KAST_ENGINE_SHADERS})
+  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
@@ -180,7 +184,7 @@ add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
   editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/shader_graph_doc.cpp editor/shader_graph_editor.cpp editor/shader_preview.cpp editor/external_editor.cpp editor/editor_settings.cpp
-  editor/shader_compiler.cpp editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp editor/zone_cli.cpp
+  editor/shader_compiler.cpp editor/texture_cooker.cpp editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp editor/zone_cli.cpp
   editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
@@ -211,7 +215,7 @@ target_include_directories(kast_zone_self_check SYSTEM PRIVATE "${Stb_INCLUDE_DI
 # Also builds the editor Document (Play mode) so it can be checked without a window.
 add_executable(kast_self_check tests/self_check.cpp tests/net_self_check.cpp tests/net_test_util.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp
   editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/shader_graph_doc.cpp editor/external_editor.cpp
-  editor/editor_settings.cpp editor/shader_compiler.cpp editor/online.cpp "${KAST_MANIFEST}")
+  editor/editor_settings.cpp editor/shader_compiler.cpp editor/texture_cooker.cpp editor/online.cpp "${KAST_MANIFEST}")
 target_include_directories(kast_self_check PRIVATE editor)
 add_dependencies(kast_self_check kast_shader_tools) # the .kshader checks compile with them
 target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project"
@@ -1850,7 +1854,7 @@ kast_game_project(model_cache "Model Cache" models.scene FALSE "")
 add_test(NAME editor_model_cache_clear
   COMMAND "${CMAKE_COMMAND}" -E rm -rf "${CMAKE_CURRENT_BINARY_DIR}/game_projects/model_cache/.kast/model_cache")
 set_tests_properties(editor_model_cache_clear PROPERTIES FIXTURES_SETUP editor_model_cache_clean RESOURCE_LOCK model_cache_project)
-foreach(run "cold|Loaded model 'models/female-128-anim.glb' \\(imported in|cache hit"
+foreach(run "cold|Loaded model 'models/female-128-anim.glb' \\(imported in|glb' \\(cache hit"
             "warm|Loaded model 'models/female-128-anim.glb' \\(cache hit\\)|imported in")
   string(REPLACE "|" ";" run "${run}")
   list(GET run 0 name)
@@ -1865,6 +1869,86 @@ set_tests_properties(editor_model_cache_cold PROPERTIES FIXTURES_REQUIRED editor
                      FIXTURES_SETUP editor_model_cache_cold_run RESOURCE_LOCK model_cache_project)
 set_tests_properties(editor_model_cache_warm PROPERTIES FIXTURES_REQUIRED editor_model_cache_cold_run
                      RESOURCE_LOCK model_cache_project)
+# Textures: Build compresses every shipped PNG / JPG a material, model, particle, .kshader param or sky samples into
+# game.pak as <path>.<usage>.ktx (kast::texturePakPath: BC3 color / linear, BC5 normal) and each sky's faces into one
+# cube (.kast_sky/), through the project's .kast/texture_cache ("Cooked texture ... (cache hit)" on the second Build),
+# and leaves those source images out; GUI images (ui/drag.rml's checker.png) and terrain heightmaps still ship as files.
+# The player loads the cooked ones ("(cooked)"), with no texturec.exe next to it (player_test.cmake checks).
+# build_game_corrupt_texture: an image texturec can't read fails the Build naming it. editor_texture_cache_cold / _warm:
+# the editor cooks a project's textures once, then reads its cache; editor_texture_cache_async: without --screenshot's
+# synchronous cooks, the editor draws the RGBA8 images and swaps each cooked one in while frames keep running.
+kast_game_project(texture_cook "Texture Cook" material_features.scene FALSE "")
+add_test(NAME texture_cook_clear_cache
+  COMMAND "${CMAKE_COMMAND}" -E rm -rf "${CMAKE_CURRENT_BINARY_DIR}/game_projects/texture_cook/.kast/texture_cache")
+foreach(run "cold|Cooked texture 'textures/normal_bumps.png' as normal for game.pak|Cooked texture 'textures/normal_bumps.png' as normal for game.pak (cache hit)"
+            "warm|Cooked texture 'textures/normal_bumps.png' as normal for game.pak (cache hit)|-")
+  string(REPLACE "|" ";" run "${run}")
+  list(GET run 0 name)
+  list(GET run 1 expect)
+  list(GET run 2 forbid)
+  set(forbid_arg "")
+  if(NOT forbid STREQUAL "-")
+    set(forbid_arg "-DFORBID_OUTPUT=${forbid}")
+  endif()
+  add_test(NAME build_game_texture_cook_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/texture_cook"
+            "-DOUT=${KAST_GAME_OUT}/texture_cook_${name}" "-DEXE=Texture Cook.exe" -DEXPECT=0 "-DEXPECT_OUTPUT=${expect}" ${forbid_arg}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+endforeach()
+set_tests_properties(texture_cook_clear_cache PROPERTIES FIXTURES_SETUP texture_cook_clean RESOURCE_LOCK texture_cook_project)
+set_tests_properties(build_game_texture_cook_cold PROPERTIES FIXTURES_REQUIRED texture_cook_clean
+                     FIXTURES_SETUP texture_cook_cold_built RESOURCE_LOCK texture_cook_project)
+set_tests_properties(build_game_texture_cook_warm PROPERTIES FIXTURES_REQUIRED texture_cook_cold_built
+                     FIXTURES_SETUP texture_cook_built RESOURCE_LOCK texture_cook_project)
+add_test(NAME game_texture_cook_pak
+  COMMAND "${CMAKE_COMMAND}" "-DPAK=${KAST_GAME_OUT}/texture_cook_warm/game.pak"
+          "-DMUST_CONTAIN=textures/normal_bumps.png.normal.ktx;textures/checker.png.color.ktx;textures/orm.png.linear.ktx;textures/ao_grid.png.linear.ktx;textures/emissive_stripes.png.color.ktx;textures/noise.png.linear.ktx;models/kenney/skaterMaleA.png.color.ktx;textures/checker.png;maps/hills/heights/0_0.png;textures/gpu/checker_bc7.ktx"
+          "-DFORBID_REGEX=^textures/(normal_bumps|orm|ao_grid|emissive_stripes|noise|mr|bricks|cutout)\\.(png|jpg)$"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/pak_check.cmake")
+set_tests_properties(game_texture_cook_pak PROPERTIES FIXTURES_REQUIRED texture_cook_built)
+add_test(NAME player_texture_cook_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/texture_cook_warm" "-DEXE=Texture Cook.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/texture_cook.run" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_texture_cook.png"
+          -DEXPECT=0 "-DEXPECT_OUTPUT=Loaded texture 'textures/normal_bumps.png' as normal \\(cooked\\)"
+          "-DFORBID_OUTPUT=\\[error\\]|magenta" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_texture_cook_screenshot PROPERTIES FIXTURES_REQUIRED texture_cook_built TIMEOUT 90)
+kast_game_project(corrupt_texture "Corrupt Texture" material_features.scene FALSE "")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/game_projects/corrupt_texture/textures/corrupt.png" "this is not an image")
+add_test(NAME build_game_corrupt_texture
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/corrupt_texture"
+          "-DOUT=${KAST_GAME_OUT}/corrupt_texture" -DEXPECT=1 "-DEXPECT_OUTPUT=Build failed: texture 'textures/corrupt.png':"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+kast_game_project(texture_cache "Texture Cache" material_features.scene FALSE "")
+add_test(NAME editor_texture_cache_clear
+  COMMAND "${CMAKE_COMMAND}" -E rm -rf "${CMAKE_CURRENT_BINARY_DIR}/game_projects/texture_cache/.kast/texture_cache")
+set_tests_properties(editor_texture_cache_clear PROPERTIES FIXTURES_SETUP editor_texture_cache_clean RESOURCE_LOCK texture_cache_project)
+set(KAST_TEXTURE_CACHE_ARGS "--project ${CMAKE_CURRENT_BINARY_DIR}/game_projects/texture_cache --scene ${CMAKE_CURRENT_BINARY_DIR}/game_projects/texture_cache/material_features.scene --size 1600x900")
+foreach(run "cold|Loaded texture 'textures/normal_bumps.png' as normal \\(cooked in|cannot compress"
+            "warm|Loaded texture 'textures/normal_bumps.png' as normal \\(cache hit\\)|cooked in")
+  string(REPLACE "|" ";" run "${run}")
+  list(GET run 0 name)
+  list(GET run 1 expect)
+  list(GET run 2 forbid)
+  add_test(NAME editor_texture_cache_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/editor_texture_cache_${name}.png"
+            "-DEXTRA_ARGS=${KAST_TEXTURE_CACHE_ARGS}" "-DEXPECT_OUTPUT=${expect}" "-DFORBID_OUTPUT=${forbid}|cannot compress"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endforeach()
+add_test(NAME editor_texture_cache_async_clear
+  COMMAND "${CMAKE_COMMAND}" -E rm -rf "${CMAKE_CURRENT_BINARY_DIR}/game_projects/texture_cache/.kast/texture_cache")
+add_test(NAME editor_texture_cache_async
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/editor_texture_cache_async.png"
+          "-DEXTRA_ARGS=${KAST_TEXTURE_CACHE_ARGS} --screenshot-on-log 10,(cooked" -DFRAMES=600
+          "-DEXPECT_OUTPUT=Loaded texture '[^']+' as [a-z]+ \\(cooked in" "-DFORBID_OUTPUT=as [a-z]+ \\(cache hit|cannot compress"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(editor_texture_cache_cold PROPERTIES FIXTURES_REQUIRED editor_texture_cache_clean
+                     FIXTURES_SETUP editor_texture_cache_cold_run RESOURCE_LOCK texture_cache_project)
+set_tests_properties(editor_texture_cache_warm PROPERTIES FIXTURES_REQUIRED editor_texture_cache_cold_run
+                     FIXTURES_SETUP editor_texture_cache_warm_run RESOURCE_LOCK texture_cache_project)
+set_tests_properties(editor_texture_cache_async_clear PROPERTIES FIXTURES_REQUIRED editor_texture_cache_warm_run
+                     FIXTURES_SETUP editor_texture_cache_async_clean RESOURCE_LOCK texture_cache_project)
+set_tests_properties(editor_texture_cache_async PROPERTIES FIXTURES_REQUIRED editor_texture_cache_async_clean
+                     RESOURCE_LOCK texture_cache_project)
 # Shaders in the player: Build compiles every shipped .kshader and .kshadergraph into game.pak (kast::shaderPakPath; a
 # graph's keyed by its generated text, which the player generates again from the shipped graph) and the player loads
 # that bytecode ("Loaded shader ... (precompiled)"; player_test.cmake fails if a shaderc.exe is next to it). The vertex

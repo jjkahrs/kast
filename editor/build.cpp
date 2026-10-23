@@ -3,15 +3,19 @@
 #include "assets.h"
 #include "model_importer.h"
 #include "shader_compiler.h"
+#include "texture_cooker.h"
 
 #include <files.h>
 #include <log.h>
 #include <model.h>
 #include <pak.h>
+#include <renderer.h>
 #include <scene.h>
 #include <scene_io.h>
 #include <shader.h>
 #include <shader_graph.h>
+#include <sky.h>
+#include <texture_cook.h>
 
 #include <SDL3/SDL.h>
 #include <nlohmann/json.hpp>
@@ -24,6 +28,7 @@
 namespace {
 
 using Json = nlohmann::ordered_json;
+using TextureUsages = std::map<std::string, std::set<kast::TextureUsage>>; // by texture path
 
 constexpr std::string_view kInvalidFileChars = R"(<>:"/\|?*)";
 constexpr const char* kEditorDir = ".kast";
@@ -125,12 +130,12 @@ bool sceneLoads(const std::filesystem::path& root, const std::string& scene, std
 // Compiles every .kshader and .kshadergraph among paths (game.pak's) into bytecode entries at kast::shaderPakPath, which
 // the player loads instead of compiling (a graph's keyed by its generated text, which the player generates again from
 // the shipped graph). Every shipped one, not only those materials name: Lua can switch a material's shader. False +
-// error naming the first file that fails and its line (a graph's: its node).
+// error naming the first file that fails and its line (a graph's: its node). sources: each one as parsed, by path.
 bool compileShipped(const std::filesystem::path& root, const std::vector<std::string>& paths,
-                    std::map<std::string, std::string>& bytecode, std::string& error)
+                    std::map<std::string, std::string>& bytecode, std::map<std::string, kast::ShaderSource>& sources,
+                    std::string& error)
 {
     const std::string version = shaderToolsVersion();
-    std::map<std::string, kast::ShaderSource> sources; // by path
     for (const std::string& path : paths) {
         if (!path.ends_with(".kshader") && !kast::isShaderGraphPath(path))
             continue;
@@ -174,9 +179,11 @@ bool compileShipped(const std::filesystem::path& root, const std::vector<std::st
 // Cooks every model file among paths (game.pak's) into a .kmodel entry at kast::modelPakPath, through the editor's model
 // cache, and takes the model files and the sidecars they import from (.bin, .mtl) out of paths: the player loads only
 // cooked models (it has no Assimp). Every shipped one, not only those scenes name: Lua can load a model by path. False +
-// error naming the first file that fails.
+// error naming the first file that fails. Adds the usages of the textures their materials sample to usages, and their
+// embedded images ("<model>#<i>") to embedded.
 bool cookShippedModels(const std::filesystem::path& root, std::vector<std::string>& paths,
-                       std::map<std::string, std::string>& cooked, std::string& error)
+                       std::map<std::string, std::string>& cooked, TextureUsages& usages,
+                       std::map<std::string, std::string>& embedded, std::string& error)
 {
     const std::string version = modelImporterVersion();
     std::set<std::string> sources;
@@ -189,12 +196,160 @@ bool cookShippedModels(const std::filesystem::path& root, std::vector<std::strin
             error = std::format("Build failed: model '{}': {}", path, reason);
             return false;
         }
+        for (const kast::ModelMaterial& material : model.model->materials)
+            for (const auto& [texture, usage] : kast::materialTextures(material.material, nullptr))
+                usages[texture].insert(usage);
+        for (size_t i = 0; i < model.model->textures.size(); ++i)
+            embedded[std::format("{}#{}", path, i)] = model.model->textures[i];
         cooked[kast::modelPakPath(path)] = std::move(model.bytes);
         sources.insert(path);
         sources.insert(model.sidecars.begin(), model.sidecars.end());
         kast::log::info(std::format("Cooked model '{}' for game.pak{}", path, model.cached ? " (cache hit)" : ""));
     }
     std::erase_if(paths, [&](const std::string& path) { return sources.contains(path); });
+    return true;
+}
+
+bool isImageFile(const std::string& path)
+{
+    const std::string extension = upper(std::filesystem::path(fromUtf8(path)).extension().string());
+    return extension == ".PNG" || extension == ".JPG" || extension == ".JPEG";
+}
+
+// Adds what a scene or prefab's JSON samples: particle textures ("texture") as Color, and each sky's six faces.
+void sceneTextures(const Json& json, TextureUsages& usages, std::set<std::array<std::string, 6>>& skies)
+{
+    if (json.is_array())
+        for (const Json& item : json)
+            sceneTextures(item, usages, skies);
+    if (!json.is_object())
+        return;
+    for (const auto& [key, value] : json.items()) {
+        if (key == "texture" && value.is_string()) {
+            usages[value.get<std::string>()].insert(kast::TextureUsage::Color);
+        } else if (key == "faces" && value.is_object()) {
+            std::array<std::string, 6> faces;
+            for (size_t i = 0; i < faces.size(); ++i)
+                if (value.contains(kast::kSkyFaceNames[i]) && value[kast::kSkyFaceNames[i]].is_string())
+                    faces[i] = value[kast::kSkyFaceNames[i]].get<std::string>();
+            skies.insert(faces);
+        }
+        sceneTextures(value, usages, skies);
+    }
+}
+
+// Compresses every image among paths (game.pak's PNG / JPG files, and the images embedded in its models) that a
+// material, model, particle, .kshader / graph param or sky can sample into KTX entries at kast::texturePakPath, through
+// the editor's texture cache, one per usage it is sampled with (materialTextures; a scene's or prefab's particles: Color);
+// an image nothing names (Lua may use it) as Color. Each sky's six faces become one cube at kast::skyPakPath. Takes an
+// image out of paths unless the GUI (an .rml / .rcss) or Lua names it, or nothing does, or it is a terrain heightmap
+// (maps/<map>/heights/) or a face of a sky that can't be cooked: RmlUi, terrain and the player's sky fallback read
+// source images. False + error naming the first image that fails.
+// ponytail: an image counts as named by .rml / .rcss / .lua text when its file name appears in it (over-inclusive: a
+// same-named image elsewhere ships its source too); parse the documents' and scripts' paths if pak size matters.
+bool cookShippedTextures(const std::filesystem::path& root, std::vector<std::string>& paths,
+                         const std::map<std::string, kast::ShaderSource>& sources, TextureUsages usages,
+                         const std::map<std::string, std::string>& embedded, std::map<std::string, std::string>& cooked,
+                         std::string& error)
+{
+    std::set<std::array<std::string, 6>> skies;
+    std::string guiText, luaText;
+    for (const std::string& path : paths) {
+        const std::filesystem::path file = root / fromUtf8(path);
+        std::string text;
+        if (path.ends_with(".mat")) {
+            kast::Material material;
+            if (std::string ignored; kast::loadMaterial(file, material, ignored)) {
+                const auto shader = sources.find(material.shader);
+                for (const auto& [texture, usage] :
+                     kast::materialTextures(material, shader == sources.end() ? nullptr : &shader->second))
+                    usages[texture].insert(usage);
+            }
+        } else if ((path.ends_with(".scene") || path.ends_with(".prefab")) && kast::readFile(file, text)) {
+            sceneTextures(Json::parse(text, nullptr, false), usages, skies);
+        } else if ((path.ends_with(".rml") || path.ends_with(".rcss")) && kast::readFile(file, text)) {
+            guiText += text;
+        } else if (path.ends_with(".lua") && kast::readFile(file, text)) {
+            luaText += text;
+        }
+    }
+
+    const std::string version = texturecVersion();
+    const std::filesystem::path cacheDir = root / kEditorDir / "texture_cache";
+    const auto cook = [&](const std::string& path, const std::string& bytes, kast::TextureUsage usage) {
+        std::string ktx, reason;
+        bool cached = false;
+        if (kast::isGpuImage(bytes)) { // an embedded KTX / DDS ships as stored
+            ktx = bytes;
+        } else if (!kast::cookTexture(bytes, usage, cookTextureWithTexturec, version, cacheDir, ktx, cached, reason)) {
+            error = std::format("Build failed: texture '{}': {}", path, reason);
+            return false;
+        }
+        cooked[kast::texturePakPath(path, usage)] = std::move(ktx);
+        kast::log::info(std::format("Cooked texture '{}' as {} for game.pak{}", path, kast::usageName(usage),
+                                    cached ? " (cache hit)" : ""));
+        return true;
+    };
+    // Each sky's six faces become one cube. A sky whose faces don't make one (one missing, unreadable, or a different
+    // size) gets none, and its faces ship as files: the player reads them to say why, and draws the procedural sky, as
+    // the editor does.
+    std::set<std::string> skyFaces, brokenSkyFaces;
+    for (const auto& faces : skies) {
+        std::array<kast::MipImage, 6> images;
+        bool decoded = true;
+        for (size_t i = 0; i < faces.size() && decoded; ++i) {
+            std::string bytes, ignored;
+            const std::optional<std::filesystem::path> file = kast::resolveProjectPath(root, faces[i], ignored);
+            std::optional<kast::MipImage> image;
+            decoded = file && kast::readFile(*file, bytes) && (image = kast::decodeImage(bytes, true));
+            if (decoded)
+                images[i] = std::move(*image);
+        }
+        if (!decoded || !kast::skyFacesError(images).empty()) {
+            brokenSkyFaces.insert(faces.begin(), faces.end());
+            continue;
+        }
+        std::string ktx, reason;
+        bool cached = false;
+        if (!kast::cookTexture(kast::skyCubeKtx(images), kast::TextureUsage::Color, cookTextureWithTexturec, version,
+                               cacheDir, ktx, cached, reason)) {
+            error = std::format("Build failed: sky cube of '{}': {}", faces[0], reason);
+            return false;
+        }
+        cooked[kast::skyPakPath(faces)] = std::move(ktx);
+        skyFaces.insert(faces.begin(), faces.end());
+        kast::log::info(std::format("Cooked sky cube of '{}' for game.pak{}", faces[0], cached ? " (cache hit)" : ""));
+    }
+    std::set<std::string> cookedOnly;
+    for (const std::string& path : paths) {
+        if (!isImageFile(path))
+            continue;
+        const std::string name = path.substr(path.rfind('/') + 1);
+        const bool heightmap = std::filesystem::path(fromUtf8(path)).parent_path().filename() == "heights";
+        const bool gui = heightmap || brokenSkyFaces.contains(path) || guiText.find(name) != std::string::npos;
+        const bool lua = luaText.find(name) != std::string::npos;
+        const auto used = usages.find(path);
+        const bool named = used != usages.end() || skyFaces.contains(path);
+        std::set<kast::TextureUsage> cookAs = used == usages.end() ? std::set<kast::TextureUsage>{} : used->second;
+        if (!named && !(gui && !lua))
+            cookAs.insert(kast::TextureUsage::Color);
+        std::string bytes;
+        if (!cookAs.empty() && !kast::readFile(root / fromUtf8(path), bytes)) {
+            error = std::format("Build failed: texture '{}': cannot read the file", path);
+            return false;
+        }
+        for (const kast::TextureUsage usage : cookAs)
+            if (!cook(path, bytes, usage))
+                return false;
+        if (named && !gui && !lua)
+            cookedOnly.insert(path);
+    }
+    for (const auto& [path, bytes] : embedded)
+        if (const auto used = usages.find(path); used != usages.end())
+            for (const kast::TextureUsage usage : used->second)
+                if (!cook(path, bytes, usage))
+                    return false;
+    std::erase_if(paths, [&](const std::string& path) { return cookedOnly.contains(path); });
     return true;
 }
 
@@ -295,9 +450,13 @@ bool buildGame(const kast::Project& project, const std::filesystem::path& outDir
     }
 
     std::vector<std::string> contents = pakContents(project.root, out);
-    std::map<std::string, std::string> generated; // shader bytecode and cooked models
-    if (!compileShipped(project.root, contents, generated, error) ||
-        !cookShippedModels(project.root, contents, generated, error))
+    std::map<std::string, std::string> generated; // shader bytecode, cooked models and textures
+    std::map<std::string, kast::ShaderSource> shaders;
+    TextureUsages usages;
+    std::map<std::string, std::string> embedded;
+    if (!compileShipped(project.root, contents, generated, shaders, error) ||
+        !cookShippedModels(project.root, contents, generated, usages, embedded, error) ||
+        !cookShippedTextures(project.root, contents, shaders, usages, embedded, generated, error))
         return false;
 
     std::error_code ec;

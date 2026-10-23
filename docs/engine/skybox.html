@@ -29,7 +29,13 @@ skies: the view clears to its background color, or to the fog color while fog is
   engine logs one warning naming the face and why (<code>Sky cubemap: face nx 'sky/nx.png': cannot read the file; using the
   procedural sky</code>), draws the procedural gradient instead and the Lighting panel shows the reason in red. A scene with
   bad faces still loads. Faces load once per set of paths (and project); editing a face image on disk needs the path
-  changed, or the scene reopened, to show.<br>
+  changed, or the scene reopened, to show. The six faces are
+  <a href="materials.html#texture-compression">compressed</a> into one BC3 sRGB cube with mips (RGBA8 if the size isn't a
+  multiple of 4), cached like other textures (<code>Loaded sky cube (cooked in 0.02 s)</code>, then <code>(cache hit)</code>); the
+  editor draws the uncompressed cube until that is done. Build puts the compressed cube in <code>game.pak</code> instead of
+  the face images (<a href="../editor/build.html#build-textures">Build</a>), and the player loads that one. A sky set
+  only from Lua (<code>kast.sky.set</code>) with faces no shipped scene or prefab uses has no compressed cube in the
+  built game: the player logs it and draws the procedural sky.<br>
   Or one <strong>cube file</strong> (<code>"cube"</code>, the Lighting panel's <em>Cube file</em> picker): a cubemap <code>.ktx</code> or
   <code>.dds</code>, used as stored (BCn or uncompressed, its own mips) instead of the six faces, which are then ignored (and
   hidden in the panel). A corrupt file, a 2D texture or a format the GPU lacks falls back to the procedural sky the same

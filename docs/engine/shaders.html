@@ -142,7 +142,7 @@ Unless noted, positions and directions are in <strong>world space</strong> (Y up
 <tr><td><code>MATERIAL_ALPHA_CUTOFF</code></td><td>float</td><td>in</td><td></td><td>the mask cutoff; -1 unless <code>alphaMode</code> is mask</td></tr>
 <tr><td><code>MATERIAL_UV_TRANSFORM</code></td><td>vec4</td><td>in</td><td></td><td>xy <code>uvScale</code>, zw <code>uvOffset</code></td></tr>
 <tr><td><code>VIEW_MATRIX</code>, <code>PROJECTION_MATRIX</code></td><td>mat4</td><td>in</td><td></td><td>the pass's view and projection</td></tr>
-<tr><td><code>sampleBaseColor(uv)</code>, <code>sampleMetallicRoughness(uv)</code>, <code>sampleNormal(uv)</code>, <code>sampleOcclusion(uv)</code>, <code>sampleEmissive(uv)</code></td><td>vec4</td><td>functions</td><td></td><td>the material's own textures at any UV (white / flat when it has none)</td></tr>
+<tr><td><code>sampleBaseColor(uv)</code>, <code>sampleMetallicRoughness(uv)</code>, <code>sampleNormal(uv)</code>, <code>sampleOcclusion(uv)</code>, <code>sampleEmissive(uv)</code></td><td>vec4</td><td>functions</td><td></td><td>the material's own textures at any UV (white / flat when it has none); <code>sampleNormal</code> (and <code>NORMAL_MAP</code>) has Z rebuilt from X and Y, as the normal texture is <a href="materials.html#texture-compression">compressed</a> to BC5, which keeps only X and Y</td></tr>
 <tr><td><code>SCREEN_TEXTURE</code>, <code>DEPTH_TEXTURE</code>, <code>linearDepth(d)</code></td><td>sampler2D, function</td><td>in</td><td>screen</td><td>the opaque scene behind this surface; blend and additive materials only (see <a href="#kshader-screen">below</a>)</td></tr>
 <tr><td><code>PI</code></td><td>float</td><td>in</td><td></td><td>3.14159...</td></tr>
 </table>

@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <cstdint>
@@ -330,7 +331,7 @@ std::string assetLoadSummary()
 {
     const AssetLoadStats& s = assetLoadStats();
     const bgfx::Stats* stats = bgfx::getStats();
-    return std::format("Asset loads: {} models in {:.1f} ms, {} textures in {:.1f} ms; textureMemoryUsed {:.1f} MiB",
+    return std::format("Asset loads: {} models in {:.1f} ms, {} textures in {:.1f} ms; textureMemoryUsed {:.2f} MiB",
                        s.models, s.modelSeconds * 1000.0, s.textures, s.textureSeconds * 1000.0,
                        stats ? static_cast<double>(stats->textureMemoryUsed) / (1024.0 * 1024.0) : 0.0);
 }
@@ -731,35 +732,95 @@ void Renderer::setProjectRoot(const std::filesystem::path& root)
     shaders().setRoot(root);
     shaders().reloadChanged();
     // ponytail: one stat per texture per frame, as for materials; watch the folder if projects grow to thousands.
-    for (auto& [key, texture] : textures_)
-        if (!root_.empty() && modifiedTime(root_ / textureFile(key.first)) != texture.mtime)
+    for (auto& [key, texture] : textures_) {
+        if (!root_.empty() && modifiedTime(root_ / textureFile(key.first)) != texture.mtime) {
             loadTexture(key.first, key.second, texture);
+        } else if (texture.cooking.valid() &&
+                   texture.cooking.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            // The cook started on a cache miss is in: its BCn texture replaces the RGBA8 one drawn meanwhile.
+            const bgfx::TextureHandle cooked = cookedTexture(key.first, key.second, texture.cooking.get());
+            texture.cooking = {};
+            if (bgfx::isValid(cooked)) {
+                if (bgfx::isValid(texture.handle))
+                    bgfx::destroy(texture.handle);
+                texture.handle = cooked;
+            }
+        }
+    }
 }
 
-bgfx::TextureHandle Renderer::texture(const std::string& path, bool srgb) { return texture(path, srgb, white_); }
+bgfx::TextureHandle Renderer::texture(const std::string& path, TextureUsage usage) { return texture(path, usage, white_); }
 
-bgfx::TextureHandle Renderer::texture(const std::string& path, bool srgb, bgfx::TextureHandle fallback)
+bgfx::TextureHandle Renderer::texture(const std::string& path, TextureUsage usage, bgfx::TextureHandle fallback)
 {
     if (path.empty())
         return fallback;
-    if (srgb && path == previewTexturePath_ && bgfx::isValid(previewTexture_))
+    if (usage == TextureUsage::Color && path == previewTexturePath_ && bgfx::isValid(previewTexture_))
         return previewTexture_;
-    auto [it, added] = textures_.try_emplace({path, srgb});
+    auto [it, added] = textures_.try_emplace({path, usage});
     if (added)
-        loadTexture(path, srgb, it->second);
+        loadTexture(path, usage, it->second);
     return bgfx::isValid(it->second.handle) ? it->second.handle : fallback;
 }
 
-void Renderer::loadTexture(const std::string& path, bool srgb, Texture& texture)
+bgfx::TextureHandle Renderer::cookedTexture(const std::string& path, TextureUsage usage, const CookedTexture& cooked)
+{
+    std::string error = cooked.error;
+    bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
+    if (!cooked.ktx.empty())
+        handle = createGpuTexture(cooked.ktx, isSrgb(usage), false, BGFX_TEXTURE_NONE, error);
+    if (!bgfx::isValid(handle))
+        warnOnce(std::format("Texture '{}': cannot compress it ({}); drawing it uncompressed", path, error));
+    else
+        log::info(std::format("Loaded texture '{}' as {} {}", path, usageName(usage),
+                              cooked.cached ? "(cache hit)" : std::format("(cooked in {:.2f} s)", cooked.seconds)));
+    return handle;
+}
+
+bgfx::TextureHandle Renderer::pakTexture(const std::string& path, TextureUsage usage)
+{
+    // The asked-for usage first; then another's (ponytail: Lua can sample an image as no material does, so Build
+    // didn't cook that usage; the other cook's mips or sRGB filtering are slightly off, which beats nothing).
+    std::vector<TextureUsage> order{usage};
+    for (const TextureUsage other : kTextureUsages)
+        if (other != usage)
+            order.push_back(other);
+    for (const TextureUsage use : order) {
+        std::string ktx, error;
+        const std::optional<std::filesystem::path> file = resolveProjectPath(root_, texturePakPath(path, use), error);
+        if (!file || !readFile(*file, ktx))
+            continue;
+        const bgfx::TextureHandle handle = createGpuTexture(ktx, isSrgb(usage), false, BGFX_TEXTURE_NONE, error);
+        if (bgfx::isValid(handle))
+            log::info(std::format("Loaded texture '{}' as {} (cooked)", path, usageName(use)));
+        else
+            log::error(std::format("Texture '{}': cooked texture '{}': {}; drawing without it", path,
+                                   texturePakPath(path, use), error));
+        return handle;
+    }
+    // Logged once: the entry keeps its (pak: unchanging) modification time, so it isn't loaded again.
+    log::error(std::format("Texture '{}': game.pak has no cooked texture for it ('{}'; the editor's Build cooks the "
+                           "images that materials, models, particles and skies use); drawing without it",
+                           path, texturePakPath(path, usage)));
+    return BGFX_INVALID_HANDLE;
+}
+
+void Renderer::loadTexture(const std::string& path, TextureUsage usage, Texture& texture)
 {
     const LoadTimer timer(assetLoadStats().textures, assetLoadStats().textureSeconds);
     if (bgfx::isValid(texture.handle))
         bgfx::destroy(texture.handle);
     texture.handle = BGFX_INVALID_HANDLE;
+    texture.cooking = {};
+    const bool srgb = isSrgb(usage);
     std::string error = "no project";
     const std::optional<std::filesystem::path> file =
         root_.empty() ? std::nullopt : resolveProjectPath(root_, textureFile(path), error);
     texture.mtime = file ? modifiedTime(*file) : std::nullopt;
+    if (pakMounted() && !root_.empty() && !isGpuImage({}, path)) { // the player: Build cooked it (KTX / DDS ship as is)
+        texture.handle = pakTexture(path, usage);
+        return;
+    }
     std::string bytes;
     bool read = false;
     if (!embeddedTextureModel(path).empty()) { // embedded in a model
@@ -777,6 +838,13 @@ void Renderer::loadTexture(const std::string& path, bool srgb, Texture& texture)
     if (read && isGpuImage(bytes, path)) {
         texture.handle = createGpuTexture(bytes, srgb, false, BGFX_TEXTURE_NONE, error);
     } else if (read) {
+        if (textureCooks().enabled()) { // the editor: a hit (or a cook not async) is ready now, a miss cooks meanwhile
+            std::shared_future<CookedTexture> cook = textureCooks().cook(root_, bytes, usage);
+            if (cook.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+                texture.cooking = std::move(cook);
+            else if (bgfx::isValid(texture.handle = cookedTexture(path, usage, cook.get())))
+                return;
+        }
         if (const std::optional<MipImage> image = decodeImage(bytes, srgb))
             texture.handle = createTexture(*image, srgb);
         else
@@ -998,7 +1066,7 @@ void Renderer::submitShadowCasters(const std::vector<const DrawItem*>& batch, co
             bgfx::setUniform(baseColor_, material.baseColor.data());
             bgfx::setUniform(materialParams_, params);
             bgfx::setUniform(uvTransform_, uvTransform);
-            bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
+            bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, TextureUsage::Color));
         }
         bgfx::setVertexBuffer(0, first.vertices);
         bgfx::setIndexBuffer(first.indices);
@@ -1173,7 +1241,7 @@ void Renderer::setMaterialState(const DrawItem& item)
     const float params[4] = {material.metallic, material.roughness,
                              material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f,
                              additive ? 2.0f : blend ? 1.0f : 0.0f};
-    const bgfx::TextureHandle normalMap = texture(material.normalTexture, false, flatNormal_);
+    const bgfx::TextureHandle normalMap = texture(material.normalTexture, TextureUsage::Normal, flatNormal_);
     const float materialExt[4] = {material.normalScale, material.occlusionStrength,
                                   normalMap.idx != flatNormal_.idx ? 1.0f : 0.0f, material.unlit ? 1.0f : 0.0f};
     const float uvTransform[4] = {material.uvScale[0], material.uvScale[1], material.uvOffset[0], material.uvOffset[1]};
@@ -1185,11 +1253,11 @@ void Renderer::setMaterialState(const DrawItem& item)
     bgfx::setUniform(materialExt_, materialExt);
     bgfx::setUniform(uvTransform_, uvTransform);
     bgfx::setUniform(time_, time);
-    bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
-    bgfx::setTexture(1, metallicRoughnessSampler_, texture(material.metallicRoughnessTexture, false));
+    bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, TextureUsage::Color));
+    bgfx::setTexture(1, metallicRoughnessSampler_, texture(material.metallicRoughnessTexture, TextureUsage::Linear));
     bgfx::setTexture(7, normalSampler_, normalMap);
-    bgfx::setTexture(8, occlusionSampler_, texture(material.occlusionTexture, false));
-    bgfx::setTexture(9, emissiveSampler_, texture(material.emissiveTexture, true));
+    bgfx::setTexture(8, occlusionSampler_, texture(material.occlusionTexture, TextureUsage::Linear));
+    bgfx::setTexture(9, emissiveSampler_, texture(material.emissiveTexture, TextureUsage::Color));
     if (item.shader) {
         const ShaderSource& source = item.shader->source->source;
         const auto values = shaderParamValues(material, source);
@@ -1202,7 +1270,7 @@ void Renderer::setMaterialState(const DrawItem& item)
                                                                                            : white_;
             bgfx::setTexture(static_cast<uint8_t>(kFirstShaderTextureStage + param.slot),
                              shaderTextureSamplers_[static_cast<size_t>(param.slot)],
-                             texture(shaderParamTexture(material, param), param.srgb, fallback));
+                             texture(shaderParamTexture(material, param), colorUsage(param.srgb), fallback));
         }
     }
 }
@@ -1459,7 +1527,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             continue;
         }
         const ParticleRenderer::Draw& emitter = particles[i - blended.size()];
-        const bgfx::TextureHandle image = texture(emitter.emitter->texture, true); // white_: none or failed to load
+        const bgfx::TextureHandle image = texture(emitter.emitter->texture, TextureUsage::Color); // white_: none or failed to load
         particles_.draw(emitter, blendView, image, image.idx != white_.idx, fogColor, fogParams, cameraPos);
     }
 }

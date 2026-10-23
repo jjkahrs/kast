@@ -1,7 +1,7 @@
 # Runs a built game (a copy of GAME_DIR, in WORK_DIR) for 120 frames and checks its exit code is EXPECT (0 or 1).
 # PAK=missing deletes game.pak first, PAK=corrupt overwrites it. SCREENSHOT also writes a PNG (must be non-empty).
 # EXPECT_OUTPUT is a regex the game's log must match, FORBID_OUTPUT one it must not. The built game must not hold a
-# shaderc.exe or an Assimp DLL: the player only loads precompiled shaders and cooked models. EXTRA_ARGS are passed on to the game (e.g. --gui-click id). A hang
+# shaderc.exe, a texturec.exe or an Assimp DLL: the player only loads precompiled shaders, cooked models and textures. EXTRA_ARGS are passed on to the game (e.g. --gui-click id). A hang
 # fails after 60 s instead of blocking the run. WRAPPER (a list) runs the game through another program, e.g.
 # kast_net_test_server <args> -- (its servers are up while the game runs).
 # Usage: cmake -DGAME_DIR=<dir> -DEXE=<name.exe> -DWORK_DIR=<dir> -DEXPECT=0|1 [-DSCREENSHOT=<png>]
@@ -9,9 +9,11 @@
 #              -P player_test.cmake
 file(REMOVE_RECURSE "${WORK_DIR}")
 file(COPY "${GAME_DIR}/" DESTINATION "${WORK_DIR}")
-if(EXISTS "${WORK_DIR}/shaderc.exe")
-  message(FATAL_ERROR "The built game holds shaderc.exe: ${WORK_DIR}")
-endif()
+foreach(tool shaderc texturec)
+  if(EXISTS "${WORK_DIR}/${tool}.exe")
+    message(FATAL_ERROR "The built game holds ${tool}.exe: ${WORK_DIR}")
+  endif()
+endforeach()
 file(GLOB assimp "${WORK_DIR}/assimp*.dll")
 if(assimp)
   message(FATAL_ERROR "The built game holds Assimp: ${assimp}")

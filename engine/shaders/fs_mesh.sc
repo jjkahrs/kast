@@ -200,7 +200,14 @@ struct KastLight {
 #define SPECULAR_LIGHT kast_f.specular
 vec4 sampleBaseColor(vec2 uv) { return texture2D(s_baseColor, uv); }
 vec4 sampleMetallicRoughness(vec2 uv) { return texture2D(s_metallicRoughness, uv); }
-vec4 sampleNormal(vec2 uv) { return texture2D(s_normal, uv); }
+// A tangent-space normal as stored (0..1) with Z rebuilt from X and Y: BC5 normal maps (cooked PNG / JPG) keep only X and Y
+// and read Z as 0. The same for full ones, which are unit length too.
+vec3 unpackNormalMap(vec4 stored)
+{
+    vec2 xy = stored.xy * 2.0 - 1.0;
+    return vec3(stored.xy, sqrt(saturate(1.0 - dot(xy, xy))) * 0.5 + 0.5);
+}
+vec4 sampleNormal(vec2 uv) { return vec4(unpackNormalMap(texture2D(s_normal, uv)), 1.0); }
 vec4 sampleOcclusion(vec2 uv) { return texture2D(s_occlusion, uv); }
 vec4 sampleEmissive(vec2 uv) { return texture2D(s_emissive, uv); }
 // A DEPTH_TEXTURE value as the view depth in meters (positive, along the camera's forward), as -VIEW_POSITION.z.
@@ -232,7 +239,7 @@ void main()
     f.metallic = u_material.x * mr.b;
     f.roughness = u_material.y * mr.g;
     f.emission = u_emissive.rgb * texture2D(s_emissive, f.uv).rgb;
-    f.normalMap = texture2D(s_normal, f.uv).xyz;
+    f.normalMap = unpackNormalMap(texture2D(s_normal, f.uv));
     f.normalMapDepth = u_materialExt.x; // glTF normalTexture.scale
     // Ambient occlusion darkens ambient light only: ao = 1 + strength * (R - 1).
     f.ao = 1.0 + u_materialExt.y * (texture2D(s_occlusion, f.uv).r - 1.0);

@@ -31,7 +31,9 @@ animation clips through an <code>Animator</code>. The editor imports each model 
   normal texture and scale, occlusion texture and strength, emissive texture, <code>doubleSided</code> (cull mode none, else back)
   and <code>KHR_materials_unlit</code> (see <a href="materials.html#materials">Materials</a>). Tangents are generated for normal
   mapping (<a href="shaders.html#mesh-vertices">Shaders</a>). Embedded GLB
-  images decode like other textures (PNG/JPG). A mesh on a node without a skin renders at that node's transform.</li>
+  images (<code>"&lt;model&gt;#&lt;i&gt;"</code>) load like other textures (PNG/JPG), and are
+  <a href="materials.html#texture-compression">compressed</a> by the usage of the slot that names them, in the editor's
+  texture cache and by Build (<code>models/hero.glb#0.color.ktx</code> in <code>game.pak</code>). A mesh on a node without a skin renders at that node's transform.</li>
 <li><strong>Caching</strong>: each model loads once per project-relative path and is shared by every entity using it; a changed file
   or sidecar (<code>.bin</code>, <code>.mtl</code>) reloads within a frame (modification time, as <code>.mat</code> files; not in the built game).</li>
 <li id="model-cache"><strong>Import cache</strong> (editor): a model is imported once and kept as

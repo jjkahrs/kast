@@ -110,6 +110,8 @@ void mountPak(Pak pak, const std::filesystem::path& root)
     mounted() = Mount{std::move(pak), std::filesystem::absolute(root).lexically_normal()};
 }
 
+bool pakMounted() { return mounted().has_value(); }
+
 bool recycleFile(const std::filesystem::path& target, std::string& error)
 {
     const std::u8string u8name = target.filename().u8string();

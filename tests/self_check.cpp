@@ -15,6 +15,7 @@
 #include "recent_projects.h" // Project Manager list; links editor/recent_projects.cpp
 #include "shader_compiler.h" // shaderc for .kshader files; links editor/shader_compiler.cpp
 #include "shader_graph_doc.h" // the Shader Graph panels' edit model; links editor/shader_graph_doc.cpp
+#include "texture_cooker.h" // texturec for PNG / JPG compression; links editor/texture_cooker.cpp
 #include "stats_toggle.h" // the Game panel's F3 rule; header only
 
 #include <components.h>
@@ -55,6 +56,7 @@
 #include <stats_overlay.h>
 #include <systems.h>
 #include <terrain.h>
+#include <texture_cook.h>
 
 #include <RmlUi/Core.h>
 #include <SDL3/SDL.h>
@@ -7646,6 +7648,150 @@ void checkGpuImages()
     check(kast::isGpuImage("junk", "a/b.KTX") && kast::isGpuImage("junk", "b.dds"), "by extension too, any case");
 }
 
+// Texture compression: usage picks the format (per material slot), texturec cooks through the cache keyed by the image,
+// usage and version, a sky's faces cook to one cube, and the editor's TextureCooks runs misses on a worker.
+void checkTextureCooks()
+{
+    using Format = bgfx::TextureFormat;
+    using kast::TextureUsage;
+    check(kast::cookedFormat(TextureUsage::Color, 64, 32) == Format::BC3 &&
+              kast::cookedFormat(TextureUsage::Linear, 64, 32) == Format::BC3 &&
+              kast::cookedFormat(TextureUsage::Normal, 64, 32) == Format::BC5,
+          "usage formats: color and linear BC3, normal BC5");
+    check(kast::cookedFormat(TextureUsage::Color, 6, 8) == Format::RGBA8 &&
+              kast::cookedFormat(TextureUsage::Normal, 8, 30) == Format::RGBA8,
+          "a side not a multiple of 4 stays RGBA8 (D3D11 takes BCn in whole blocks)");
+    check(kast::isSrgb(TextureUsage::Color) && !kast::isSrgb(TextureUsage::Linear) && !kast::isSrgb(TextureUsage::Normal) &&
+              kast::colorUsage(true) == TextureUsage::Color && kast::colorUsage(false) == TextureUsage::Linear,
+          "only color is sampled as sRGB; params and particles pick by their sRGB flag");
+
+    kast::Material material;
+    material.baseColorTexture = "base.png";
+    material.metallicRoughnessTexture = "mr.png";
+    material.normalTexture = "normal.png";
+    material.occlusionTexture = "ao.png";
+    material.emissiveTexture = "glow.png";
+    material.params["albedo"].texture = "param_srgb.png";
+    material.params["mask"].texture = "param_linear.png";
+    material.params["speed"].numbers = {1.0f};
+    kast::ShaderSource shader;
+    shader.params.push_back({.name = "albedo", .type = kast::ShaderParamType::Texture2D, .srgb = true});
+    shader.params.push_back({.name = "mask", .type = kast::ShaderParamType::Texture2D, .srgb = false});
+    using Uses = std::vector<std::pair<std::string, TextureUsage>>;
+    check(kast::materialTextures(material, &shader) ==
+              Uses{{"base.png", TextureUsage::Color}, {"mr.png", TextureUsage::Linear}, {"normal.png", TextureUsage::Normal},
+                   {"ao.png", TextureUsage::Linear}, {"glow.png", TextureUsage::Color},
+                   {"param_srgb.png", TextureUsage::Color}, {"param_linear.png", TextureUsage::Linear}},
+          "material slots: base color and emissive color, metallic-roughness and occlusion linear, normal normal, "
+          "params by their sRGB flag");
+    check(kast::materialTextures(material, nullptr).back() == std::pair<std::string, TextureUsage>{"param_linear.png", TextureUsage::Color},
+          "params of an unknown shader count as color");
+    check(kast::materialTextures(kast::Material{}, nullptr).empty(), "no textures, no usages");
+    check(kast::texturePakPath("textures/a.png", TextureUsage::Normal) == "textures/a.png.normal.ktx" &&
+              kast::texturePakPath("models/m.glb#0", TextureUsage::Color) == "models/m.glb#0.color.ktx",
+          "pak paths: <path>.<usage>.ktx");
+    check(kast::skyPakPath({"a", "b", "c", "d", "e", "f"}).starts_with(".kast_sky/") &&
+              kast::skyPakPath({"a", "b", "c", "d", "e", "f"}) != kast::skyPakPath({"a", "b", "c", "d", "f", "e"}),
+          "sky pak path: by its faces, in a dot-folder");
+
+    // texturec (next to this program, as next to the editor): each usage's format with its mips, through the cache.
+    const std::filesystem::path textures = std::filesystem::path(KAST_TEST_PROJECT_DIR) / "textures";
+    const std::filesystem::path cache = std::filesystem::temp_directory_path() / std::format("kast_texture_cache_{}", _getpid());
+    std::filesystem::remove_all(cache);
+    std::string png;
+    check(kast::readFile(textures / "checker.png", png), "checker.png present");
+    check(kast::textureCacheKey(png, TextureUsage::Color, "v1") != kast::textureCacheKey(png, TextureUsage::Linear, "v1") &&
+              kast::textureCacheKey(png, TextureUsage::Color, "v1") != kast::textureCacheKey(png, TextureUsage::Color, "v2") &&
+              kast::textureCacheKey(png, TextureUsage::Color, "v1") != kast::textureCacheKey(png + " ", TextureUsage::Color, "v1"),
+          "cache key: image, usage and version each change it");
+    for (const auto [usage, format] : {std::pair{TextureUsage::Color, Format::BC3}, std::pair{TextureUsage::Linear, Format::BC3},
+                                       std::pair{TextureUsage::Normal, Format::BC5}}) {
+        std::string ktx, error;
+        bool cached = true;
+        check(kast::cookTexture(png, usage, cookTextureWithTexturec, "v1", cache, ktx, cached, error) && !cached,
+              std::format("texturec cooks checker.png as {} ({})", kast::usageName(usage), error).c_str());
+        const std::optional<kast::GpuImageInfo> info = kast::parseGpuImage(ktx, false, error);
+        check(info && info->format == format && info->width == 64 && info->height == 64 && info->mips == 7,
+              std::format("{}: format {}, 64x64 with 7 mips ({})", kast::usageName(usage), static_cast<int>(format), error)
+                  .c_str());
+        std::string again;
+        check(kast::cookTexture(png, usage, cookTextureWithTexturec, "v1", cache, again, cached, error) && cached &&
+                  again == ktx,
+              std::format("{}: the second cook is a cache hit", kast::usageName(usage)).c_str());
+        check(kast::cookTexture(png, usage, cookTextureWithTexturec, "v2", cache, again, cached, error) && !cached,
+              std::format("{}: a new cooker version misses the cache", kast::usageName(usage)).c_str());
+    }
+    std::string ktx, error;
+    bool cached = false;
+    writeFile(cache / (kast::textureCacheKey(png, TextureUsage::Color, "v1") + ".ktx"), "half a KTX");
+    check(kast::cookTexture(png, TextureUsage::Color, cookTextureWithTexturec, "v1", cache, ktx, cached, error) && !cached &&
+              kast::parseGpuImage(ktx, false, error),
+          "a corrupt cache entry (a cut-short write) is cooked again");
+    check(!kast::cookTexture("not an image", TextureUsage::Color, cookTextureWithTexturec, "v1", cache, ktx, cached, error) &&
+              error == "cannot read it as a PNG or JPG image",
+          "a file that is no image fails before texturec");
+    check(!kast::cookTexture(png.substr(0, 60), TextureUsage::Color, cookTextureWithTexturec, "v1", cache, ktx, cached, error) &&
+              error.starts_with("texturec failed"),
+          std::format("a truncated PNG: texturec rejects it ({})", error).c_str());
+
+    // A sky's six faces: one BC3 cube with its mips.
+    std::array<kast::MipImage, 6> faces;
+    for (size_t i = 0; i < faces.size(); ++i) {
+        std::string bytes;
+        kast::readFile(textures / "sky_test" / std::format("{}.png", kast::kSkyFaceNames[i]), bytes);
+        faces[i] = kast::decodeImage(bytes, true).value_or(kast::MipImage{});
+    }
+    check(kast::skyFacesError(faces).empty(), "sky_test faces make a cube");
+    const std::string cubeIn = kast::skyCubeKtx(faces);
+    std::optional<kast::GpuImageInfo> info = kast::parseGpuImage(cubeIn, true, error);
+    check(info && info->format == Format::RGBA8 && info->width == 16 && info->mips == 1, "sky input: an RGBA8 cube KTX");
+    check(kast::cookTexture(cubeIn, TextureUsage::Color, cookTextureWithTexturec, "v1", cache, ktx, cached, error),
+          std::format("texturec cooks the sky cube ({})", error).c_str());
+    info = kast::parseGpuImage(ktx, true, error);
+    check(info && info->cube && info->format == Format::BC3 && info->width == 16 && info->mips == 5,
+          std::format("sky cube: BC3, 16x16, 5 mips ({})", error).c_str());
+
+    // TextureCooks: a miss cooks on a worker (one cook per key, however many ask), a hit or a non-async cook is ready
+    // at once, and a failed cook comes back empty with the cooker's error.
+    std::atomic<int> runs = 0;
+    std::atomic<bool> release = false;
+    std::string stored; // what the fake cooker "cooks": a valid KTX, so the cache takes it
+    check(kast::readFile(textures / "gpu/checker_bc1.ktx", stored), "checker_bc1.ktx present");
+    kast::TextureCooks& cooks = kast::textureCooks();
+    cooks.setCooker([&](std::string_view, TextureUsage usage, Format::Enum, std::string& out, std::string& why) {
+        ++runs;
+        while (!release)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        if (usage == TextureUsage::Normal) {
+            why = "no normals today";
+            return false;
+        }
+        out = stored;
+        return true;
+    }, "worker");
+    cooks.setAsync(true);
+    const std::filesystem::path root = cache / "project";
+    auto first = cooks.cook(root, png, TextureUsage::Color);
+    auto second = cooks.cook(root, png, TextureUsage::Color);
+    check(first.wait_for(std::chrono::seconds(0)) != std::future_status::ready, "async miss: not ready at once (the caller draws RGBA8)");
+    release = true;
+    check(first.get().ktx == stored && !first.get().cached && second.get().ktx == stored && runs == 1,
+          "async miss: cooked once on a worker for both callers");
+    auto hit = cooks.cook(root, png, TextureUsage::Color);
+    check(hit.wait_for(std::chrono::seconds(0)) == std::future_status::ready && hit.get().cached && runs == 1 &&
+              std::filesystem::exists(root / ".kast/texture_cache" / (kast::textureCacheKey(png, TextureUsage::Color, "worker") + ".ktx")),
+          "async hit: ready at once from <root>/.kast/texture_cache");
+    auto failed = cooks.cook(root, png, TextureUsage::Normal);
+    check(failed.get().ktx.empty() && failed.get().error == "no normals today", "a failed cook: empty, with the error");
+    cooks.setAsync(false);
+    auto sync = cooks.cook(root, png, TextureUsage::Linear);
+    check(sync.wait_for(std::chrono::seconds(0)) == std::future_status::ready && sync.get().ktx == stored,
+          "not async: the cook runs inside the call");
+    cooks.setCooker({}, {});
+    check(!cooks.enabled(), "no cooker: textures load uncompressed");
+    std::filesystem::remove_all(cache);
+}
+
 void checkMaterialScenes()
 {
     // A scene saved before materials: MeshRenderer "color" is dropped with a warning, the scene loads.
@@ -12048,6 +12194,13 @@ int main(int argc, char** argv)
         kast::log::info(g_failures == 0 ? "All shader checks passed" : std::format("{} shader check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--textures") { // only the texture decode, KTX / DDS and cook checks
+        checkTextureDecode();
+        checkGpuImages();
+        checkTextureCooks();
+        kast::log::info(g_failures == 0 ? "All texture checks passed" : std::format("{} texture check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--net") // only the networking checks
         return netSelfCheck() == 0 ? 0 : 1;
     if (argc == 4 && std::string_view(argv[1]) == "--live-auth") // against a running services/world stack
@@ -12080,6 +12233,7 @@ int main(int argc, char** argv)
     checkMaterialLibrary();
     checkTextureDecode();
     checkGpuImages();
+    checkTextureCooks();
     checkMaterialScenes();
     checkLuaMaterials();
     checkShaderParamEditing();

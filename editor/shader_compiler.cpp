@@ -10,15 +10,41 @@
 #include <iterator>
 #include <process.h> // _getpid
 
-namespace {
-
-// The folder of this program (UTF-8 from SDL), where CMake puts shaderc.exe and kshader/.
 std::filesystem::path toolDir()
 {
     const char* base = SDL_GetBasePath();
     const std::string text = base ? base : "";
     return std::filesystem::path(std::u8string(text.begin(), text.end()));
 }
+
+bool runTool(const std::vector<std::string>& args, std::string& output, int& code, std::string& error)
+{
+    std::vector<const char*> argv;
+    for (const std::string& arg : args)
+        argv.push_back(arg.c_str());
+    argv.push_back(nullptr);
+    const SDL_PropertiesID props = SDL_CreateProperties();
+    SDL_SetPointerProperty(props, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, argv.data());
+    SDL_SetNumberProperty(props, SDL_PROP_PROCESS_CREATE_STDIN_NUMBER, SDL_PROCESS_STDIO_NULL);
+    SDL_SetNumberProperty(props, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP);
+    SDL_SetBooleanProperty(props, SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
+    SDL_SetBooleanProperty(props, SDL_PROP_PROCESS_CREATE_BACKGROUND_BOOLEAN, true); // no console window
+    SDL_Process* process = SDL_CreateProcessWithProperties(props);
+    SDL_DestroyProperties(props);
+    if (!process) {
+        error = std::format("cannot start '{}': {}", args.at(0), SDL_GetError());
+        return false;
+    }
+    size_t size = 0;
+    code = -1;
+    void* text = SDL_ReadProcess(process, &size, &code); // waits for it to exit
+    output = text ? std::string(static_cast<const char*>(text), size) : "";
+    SDL_free(text);
+    SDL_DestroyProcess(process);
+    return true;
+}
+
+namespace {
 
 bool readBytes(const std::filesystem::path& file, std::string& out)
 {
@@ -65,33 +91,15 @@ bool compileShader(const kast::ShaderSource& source, kast::ShaderStage stage, st
         return false;
     }
     // As CMakeLists.txt compiles the built-in shaders. SDL quotes each argument.
-    const std::string args[] = {u8(shaderc), "-f", u8(in), "-o", u8(out), "--type",
-                                kast::isVertexStage(stage) ? "vertex" : "fragment", "--platform", "windows", "-p", "s_5_0",
-                                "-i", u8(tools / "kshader" / "include"), "-i", u8(mesh), "--varyingdef",
-                                u8(mesh / "varying.def.sc")};
-    std::vector<const char*> argv;
-    for (const std::string& arg : args)
-        argv.push_back(arg.c_str());
-    argv.push_back(nullptr);
-    const SDL_PropertiesID props = SDL_CreateProperties();
-    SDL_SetPointerProperty(props, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, argv.data());
-    SDL_SetNumberProperty(props, SDL_PROP_PROCESS_CREATE_STDIN_NUMBER, SDL_PROCESS_STDIO_NULL);
-    SDL_SetNumberProperty(props, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP);
-    SDL_SetBooleanProperty(props, SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
-    SDL_SetBooleanProperty(props, SDL_PROP_PROCESS_CREATE_BACKGROUND_BOOLEAN, true); // no console window
-    SDL_Process* process = SDL_CreateProcessWithProperties(props);
-    SDL_DestroyProperties(props);
-    if (!process) {
-        error = std::format("cannot start shaderc: {}", SDL_GetError());
+    std::string text;
+    int code = -1;
+    if (!runTool({u8(shaderc), "-f", u8(in), "-o", u8(out), "--type", kast::isVertexStage(stage) ? "vertex" : "fragment",
+                  "--platform", "windows", "-p", "s_5_0", "-i", u8(tools / "kshader" / "include"), "-i", u8(mesh),
+                  "--varyingdef", u8(mesh / "varying.def.sc")},
+                 text, code, error)) {
         std::filesystem::remove(in, ec);
         return false;
     }
-    size_t size = 0;
-    int code = -1;
-    void* output = SDL_ReadProcess(process, &size, &code); // waits for it to exit
-    const std::string text = output ? std::string(static_cast<const char*>(output), size) : "";
-    SDL_free(output);
-    SDL_DestroyProcess(process);
     std::string bytes;
     const bool ok = code == 0 && readBytes(out, bytes) && !bytes.empty();
     std::filesystem::remove(in, ec);

@@ -58,5 +58,7 @@ private:
 
 // From now on, files are read only from pak, as if it were extracted at root (an absolute directory).
 void mountPak(Pak pak, const std::filesystem::path& root);
+// A pak is mounted: this is the player, which reads only what Build cooked.
+bool pakMounted();
 
 } // namespace kast
