@@ -1,0 +1,37 @@
+<rml>
+    <head>
+        <title>Lists</title>
+        <link type="text/rcss" href="lists.rcss"/>
+    </head>
+    <body>
+        <!-- Lists (ctest ui_lists_*, player_lists_*, scripts/ui_lists.lua; self_check's checkGuiLists). lists.rcss only
+             places the panels: the lists wear the engine's default style. A List Box of authored rows (Mage selected
+             from the start; one row without data-value: its value is its index), a List Box whose rows a data-for
+             makes from model "lists" (lines), and a Virtual List over lists.items (100,000 rows from the script),
+             keyed by id. The two lists the script appends to follow new rows (data-follow). -->
+        <div id="static_panel" class="panel" data-model="lists">
+            <p class="heading">List Box</p>
+            <div class="listbox" id="classes" data-event="lists.classes">
+                <div class="row" id="class_warrior" data-value="warrior">Warrior</div>
+                <div class="row selected" id="class_mage" data-value="mage">Mage</div>
+                <div class="row" id="class_rogue" data-value="rogue">Rogue</div>
+                <div class="row" id="class_priest" data-value="priest">Priest</div>
+                <div class="row" id="class_hunter" data-value="hunter">Hunter</div>
+                <div class="row" id="class_druid" data-value="druid">Druid</div>
+                <div class="row" id="class_bard" data-value="bard">Bard</div>
+                <div class="row" id="class_none">No value (an index)</div>
+            </div>
+            <p class="heading">data-for List Box</p>
+            <div class="listbox" id="log" data-event="lists.log" data-follow="">
+                <div class="row" data-for="line : lines" data-attr-id="'line_' + line.id" data-attr-data-value="line.id">{{line.text}}</div>
+            </div>
+        </div>
+        <div id="virtual_panel" class="panel" data-model="lists">
+            <p class="heading">Virtual List</p>
+            <div class="virtuallist" id="big" data-row-height="24" data-key="id" data-event="lists.big" data-follow="">
+                <div class="row" data-for="item : items" data-attr-id="'big_' + item.id">{{item.name}}</div>
+            </div>
+            <p id="count">{{total}} rows</p>
+        </div>
+    </body>
+</rml>

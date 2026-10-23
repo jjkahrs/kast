@@ -21,13 +21,13 @@ nothing changed, if either new name is taken); moves and renames of the open fil
 four panels come to the front.</p>
 <ul>
 <li><strong>GUI Hierarchy</strong> (tab beside Hierarchy): the elements under <strong>Body</strong>. <strong>+ Panel / + Text / + Button</strong> and the
-  <a href="#form-widgets">form widgets</a> <strong>+ Toggle / + Slider / + Dropdown / + Spinbox / + Progress</strong> add into the
-  selected Panel, else into Body (the buttons wrap to the panel's width); <strong>Delete</strong>, <strong>Up</strong>, <strong>Down</strong> act on the
+  <a href="#form-widgets">form widgets</a> <strong>+ Toggle / + Slider / + Dropdown / + Spinbox / + Progress</strong> and the
+  <a href="#lists">lists</a> <strong>+ List Box / + Virtual List</strong> add into the selected Panel, else into Body (the buttons wrap to the panel's width); <strong>Delete</strong>, <strong>Up</strong>, <strong>Down</strong> act on the
   selection; the right-click menu has the same (<strong>Add Toggle</strong>, ...). Drag an element onto a Panel or Body to move it
   there (into itself or its own children is refused). Unknown elements are greyed and labelled <code>&lt;tag&gt;</code>.</li>
 <li><strong>GUI Inspector</strong> (tab beside Inspector): the selection's <code>id</code> and <code>class</code>, its text (Text and Button holding only
-  text; one with child elements says so), <code>data-event</code> for a Button and the input widgets, and a widget's
-  <a href="#form-widgets">properties and options</a>. Then, on any element (Unknown ones too),
+  text; one with child elements says so), <code>data-event</code> for a Button, the input widgets and the lists, and a widget's
+  <a href="#form-widgets">properties and options</a> or a list's <a href="#lists">properties and rows</a>. Then, on any element (Unknown ones too),
   <strong>Data binding</strong>: one field per RmlUi <a href="../engine/game-gui.html#data-binding">binding attribute</a> it has
   (<code>data-model</code>, <code>data-for</code>, <code>data-if</code>, <code>data-visible</code>, <code>data-value</code>, <code>data-checked</code>,
   <code>data-rml</code>, <code>data-text</code>, <code>data-attr-*</code>, <code>data-attrif-*</code>, <code>data-class-*</code>, <code>data-style-*</code>,
@@ -42,7 +42,8 @@ four panels come to the front.</p>
   <strong>Panel size</strong>, scaled to fit. Click selects the deepest element under the cursor (Body if none); the selection has a
   yellow outline, drawn by the editor, never saved. A document with <code>data-model</code> previews as authored, with no live
   data: its models are created empty (no RmlUi warning), so <code>data-for</code> rows don't show and <code>{{...}}</code> is empty;
-  select a row template in the GUI Hierarchy.</li>
+  select a row template in the GUI Hierarchy. A Virtual List is the exception: it shows 20 placeholder rows made from its
+  template (see <a href="#lists">Lists</a>).</li>
 </ul>
 <h2 id="form-widgets">Form widgets</h2>
 <p>Elements are recognised by their markup (<a href="../engine/game-gui.html#form-widgets">Game GUI: Form widgets</a>), so
@@ -99,6 +100,45 @@ titles. <strong>Save</strong> (GUI Hierarchy, GUI Style) or <strong>Ctrl+S</stro
 first, then the scene's own prompt if it is dirty. When the open files change on disk (the 0.5 s poll), a clean
 builder reloads them (keeping the selection by <code>id</code> and, if the new sheet is broken, the last good style); with
 unsaved changes it asks <strong>Reload</strong> / <strong>Keep mine</strong>. A deleted <code>.rml</code> closes a clean builder.</p>
+<h2 id="lists">Lists</h2>
+<p>A <code>&lt;div class="listbox"&gt;</code> is a <strong>List Box</strong>, and a <code>&lt;div class="virtuallist"&gt;</code> holding exactly one element
+that has a <code>data-for</code> (its row template) a <strong>Virtual List</strong> (any other <code>virtuallist</code> is a Panel); see
+<a href="../engine/game-gui.html#lists">Game GUI: Lists</a>. Each is one node in the tree (its rows aren't listed; a click on a
+row in the preview selects the list), drawn with the default style in the preview.</p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Added as</th>
+<th>Inspector fields</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>List Box</td>
+<td><code>&lt;div class="listbox"&gt;</code> with rows <code>&lt;div class="row" data-value="row1"&gt;Row 1&lt;/div&gt;</code> .. <code>row3</code>, none selected</td>
+<td><strong>data-event</strong>, <strong>follow</strong> (a checkbox: <code>data-follow=""</code>), <strong>Rows</strong>: one line per row (children with class
+<code>row</code>) with the selected radio button (<code>class="row selected"</code>; clicking the selected one selects none), its value
+(<code>data-value</code>; empty: removed, the row's value is then its index) and label (its text) fields, up / down and <strong>X</strong>;
+<strong>Add row</strong> appends <code>rowN</code> / "Row N". A <code>data-for</code> row template is listed too (its label is its
+<code>{{...}}</code> text); its bindings are kept and edited in the <code>.rml</code>.</td>
+</tr>
+<tr>
+<td>Virtual List</td>
+<td><code>&lt;div class="virtuallist" data-model="list" data-row-height="24"&gt;&lt;div class="row" data-for="item : items"&gt;{{item.name}}&lt;/div&gt;&lt;/div&gt;</code></td>
+<td><strong>data-event</strong>, <strong>model</strong> (its own <code>data-model</code>; empty when an ancestor's is used), <strong>source</strong> (the array its
+template's <code>data-for</code> names; the <code>item</code> alias is kept), <strong>key</strong> (<code>data-key</code>), <strong>row-height</strong>
+(<code>data-row-height</code>), <strong>follow</strong>, and <strong>template</strong>: the row template's text with its bindings
+(<code>{{item.name}} x{{item.count}}</code>; only for a template holding just text). Other bindings of the template are kept and
+edited in the <code>.rml</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>The preview shows a Virtual List with <strong>20 placeholder rows</strong> made from its template at its row height, each
+<code>{{a.b}}</code> read as <code>b &lt;n&gt;</code> (<code>name 1</code>, <code>name 2</code>, ...); the file is unchanged. Edits are undo steps, mark the GUI
+dirty, update the preview at once and are saved, as for the form widgets; <code>--gui-add ListBox</code> / <code>VirtualList</code> and
+<code>--gui-set-prop row-height=30</code> (or <code>follow=true</code>, <code>source=loot</code>, ...) do the same from the
+<a href="command-line.html">command line</a>.</p>
 </main>
 </div>
 </body>

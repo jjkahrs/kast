@@ -4,6 +4,7 @@
 #include "gui.h"
 #include "gui_access.h"
 #include "gui_events.h"
+#include "gui_lists.h"
 #include "gui_models.h"
 #include "gui_widgets.h"
 #include "scene.h"
@@ -23,7 +24,7 @@ class ElementDocument;
 
 // A scene's game GUIs in Play mode (editor Game view and kast_player): one RmlUi document per UIDocument component,
 // stacked in entity creation order (PersistentId), shown while visible, each over the default widget style. Clicks,
-// drags and widget changes publish on the bus (gui_events.h, gui_widgets.h). A missing or broken .rml/.rcss logs an error
+// drags, widget changes and list selections publish on the bus (gui_events.h, gui_widgets.h, gui_lists.h). A missing or broken .rml/.rcss logs an error
 // naming the file and that document shows nothing; Play goes on.
 namespace kast {
 
@@ -36,7 +37,8 @@ public:
     ~SceneGui() override { clear(); }
 
     // Loads, unloads, shows and hides documents so they match scene's UIDocuments (paths relative to projectRoot;
-    // empty = no project). Button clicks publish on bus (gui_events.h), which must outlive the loaded documents.
+    // empty = no project), then updates their lists (ListListener::update): call it once a frame before rendering.
+    // Button clicks publish on bus (gui_events.h), which must outlive the loaded documents.
     void sync(const Scene& scene, const std::filesystem::path& projectRoot, EventBus& bus);
     // Unloads every document (Stop, kast.loadScene switch).
     void clear();
@@ -49,6 +51,8 @@ public:
     // kast.gui.* (gui_access.h).
     std::optional<GuiValue> value(const std::string& id) override;
     void setValue(const std::string& id, GuiValue value) override;
+    void scrollTo(const std::string& id, int index) override;
+    void scrollToEnd(const std::string& id) override;
     void setText(const std::string& id, std::string_view text) override;
     void setVisible(const std::string& id, bool visible) override;
     void setAttribute(const std::string& id, const std::string& name, std::string_view value) override;
@@ -81,6 +85,7 @@ private:
         std::unique_ptr<ButtonClickListener> listener;
         std::unique_ptr<DragListener> dragListener;
         std::unique_ptr<WidgetListener> widgetListener;
+        std::unique_ptr<ListListener> listListener;
         std::vector<std::pair<std::filesystem::path, std::filesystem::file_time_type>> files; // .rml, linked .rcss
     };
 
@@ -88,8 +93,9 @@ private:
     void unload(Entry& entry);
     void restack();
     std::string documentPath(const Rml::Element& document) const;
-    void apply(Rml::ElementDocument& document, const std::string& id, const Written& written);
-    bool applyValue(Rml::Element& element, const std::string& id, const GuiValue& value); // false: logged
+    void apply(Entry& entry, Rml::ElementDocument& document, const std::string& id, const Written& written);
+    bool applyValue(Entry& entry, Rml::Element& element, const std::string& id, const GuiValue& value); // false: logged
+    void scroll(const std::string& id, int index, const char* function); // scrollTo, scrollToEnd
     Rml::ElementDocument* documentWith(const std::string& id) const; // the topmost loaded one holding id
 
     GuiModels models_; // before context_: the context's models point into it

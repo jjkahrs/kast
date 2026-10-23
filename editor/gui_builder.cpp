@@ -529,14 +529,15 @@ void GuiBuilder::drawInspector()
                 inspectorBuffer_[3] = GuiDoc::attribute(element, "data-event");
                 bindingBuffers_.clear();
                 for (pugi::xml_attribute attribute : element.attributes())
-                    if (guiBindingAttribute(attribute.name()))
-                        bindingBuffers_[attribute.name()] = attribute.value();
+                    if (guiBindingAttribute(attribute.name()) && !GuiDoc::widgetAttribute(selected_, attribute.name()))
+                        bindingBuffers_[attribute.name()] = attribute.value(); // a Virtual List's data-model is a property
                 widgetBuffers_.clear();
                 for (const std::string& name : GuiDoc::widgetProperties(selected_))
                     widgetBuffers_.emplace_back(name, GuiDoc::widgetProperty(selected_, name));
                 optionBuffers_.clear();
-                for (pugi::xml_node option : GuiDoc::options(selected_))
-                    optionBuffers_.emplace_back(GuiDoc::attribute(option, "value"), GuiDoc::text(option));
+                const bool rows = kind == GuiKind::ListBox;
+                for (pugi::xml_node option : rows ? GuiDoc::rows(selected_) : GuiDoc::options(selected_))
+                    optionBuffers_.emplace_back(GuiDoc::attribute(option, rows ? "data-value" : "value"), GuiDoc::text(option));
             }
             ImGui::Text("%s  <%s>", guiKindLabel(kind), selected_.name());
             // One step per field edit: the element is copied before its first change, recorded when it lets go.
@@ -557,7 +558,7 @@ void GuiBuilder::drawInspector()
                 return [element, name](const std::string& value) { GuiDoc::setAttribute(element, name, value); };
             };
             const bool input = kind == GuiKind::Toggle || kind == GuiKind::Slider || kind == GuiKind::Dropdown ||
-                               kind == GuiKind::Spinbox;
+                               kind == GuiKind::Spinbox || kind == GuiKind::ListBox || kind == GuiKind::VirtualList;
             if (kind == GuiKind::Unknown) {
                 ImGui::TextDisabled("Not editable in the builder (but for its data binding); kept as written. It can be "
                                     "moved or deleted.");
@@ -574,15 +575,20 @@ void GuiBuilder::drawInspector()
                 if (kind == GuiKind::Button || input) {
                     field("data-event", inspectorBuffer_[3], attribute("data-event"));
                     ImGui::TextDisabled(kind == GuiKind::Button ? "Clicks publish this event on the event bus (empty: none)."
-                                                                : "Value changes publish this event (empty: none).");
+                                        : kind == GuiKind::ListBox || kind == GuiKind::VirtualList
+                                            ? "Selection changes publish this event (empty: none)."
+                                            : "Value changes publish this event (empty: none).");
                 }
-                // Widget properties: a toggle's checked state is a checkbox (one step a click), the others text fields.
+                // Widget properties: a toggle's checked state and a list's follow are checkboxes (one step a click), the
+                // others text fields.
                 for (auto& [name, buffer] : widgetBuffers_) {
-                    if (name == "checked") {
+                    if (name == "checked" || name == "follow") {
                         bool checked = buffer == "true";
-                        if (ImGui::Checkbox("checked", &checked))
-                            editStep(std::format("Edit {} checked", guiKindLabel(kind)),
-                                     [&] { GuiDoc::setWidgetProperty(selected_, "checked", checked ? "true" : "false"); });
+                        if (ImGui::Checkbox(name.c_str(), &checked))
+                            editStep(std::format("Edit {} {}", guiKindLabel(kind), name),
+                                     [&] { GuiDoc::setWidgetProperty(selected_, name, checked ? "true" : "false"); });
+                        if (name == "follow")
+                            ImGui::TextDisabled("Rows added while it shows its end keep it there.");
                     } else {
                         field(name.c_str(), buffer,
                               [this, &name](const std::string& value) { GuiDoc::setWidgetProperty(selected_, name, value); });
@@ -590,8 +596,12 @@ void GuiBuilder::drawInspector()
                     if (!inspectorNode_)
                         break; // a step refilled the buffers
                 }
-                if (kind == GuiKind::Dropdown && inspectorNode_)
+                if ((kind == GuiKind::Dropdown || kind == GuiKind::ListBox) && inspectorNode_)
                     drawOptions();
+                if (kind == GuiKind::VirtualList)
+                    ImGui::TextDisabled("Rows: the template, once per item of the data model's source array; row-height "
+                                        "pixels each; key: the item field that is its value. The preview shows %d "
+                                        "placeholder rows.", kGuiPreviewRows);
             }
             // RmlUi data binding, on any element: the ones it has (emptied: removed from the file), and one to add.
             ImGui::Separator();
@@ -626,18 +636,29 @@ void GuiBuilder::drawInspector()
 
 void GuiBuilder::drawOptions()
 {
-    const std::vector<pugi::xml_node> options = GuiDoc::options(selected_);
+    // A Dropdown's options or a List Box's rows: the same editor, over option value="" / selected="" or row
+    // data-value="" / class "selected" (a List Box may have no row selected: its radio button toggles).
+    const bool rows = guiKind(selected_) == GuiKind::ListBox;
+    const std::string what = rows ? "List Box row" : "Dropdown option";
+    const char* valueAttribute = rows ? "data-value" : "value";
+    const std::vector<pugi::xml_node> options = rows ? GuiDoc::rows(selected_) : GuiDoc::options(selected_);
     if (options.size() != optionBuffers_.size()) {
         inspectorNode_ = {}; // changed under the buffers (undo): refill next frame
         return;
     }
     ImGui::Separator();
-    ImGui::TextDisabled("Options (selected, value, label):");
+    ImGui::TextDisabled(rows ? "Rows (selected, value, label):" : "Options (selected, value, label):");
     for (size_t i = 0; i < options.size(); ++i) {
         const pugi::xml_node option = options[i];
         ImGui::PushID(static_cast<int>(i));
-        if (ImGui::RadioButton("##selected", static_cast<bool>(option.attribute("selected"))) && !option.attribute("selected"))
-            editStep("Select Dropdown option", [&] { GuiDoc::selectOption(selected_, option); });
+        const bool chosen = rows ? GuiDoc::rowSelected(option) : static_cast<bool>(option.attribute("selected"));
+        if (ImGui::RadioButton("##selected", chosen) && (rows || !chosen))
+            editStep("Select " + what, [&] {
+                if (rows)
+                    GuiDoc::selectRow(selected_, chosen ? pugi::xml_node() : option);
+                else
+                    GuiDoc::selectOption(selected_, option);
+            });
         // Two text fields share what the radio button and the three buttons (each a frame high and wide) leave.
         const float width = (ImGui::GetContentRegionAvail().x - 4.0f * ImGui::GetFrameHeight() -
                              5.0f * ImGui::GetStyle().ItemSpacing.x) * 0.5f;
@@ -647,7 +668,7 @@ void GuiBuilder::drawOptions()
             ImGui::SetNextItemWidth(width);
             const bool changed = ImGui::InputText(name, &buffer);
             if (ImGui::IsItemActive() && !gesture_)
-                gesture_ = Gesture{"Edit Dropdown option", selected_, copyGuiElement(selected_)};
+                gesture_ = Gesture{"Edit " + what, selected_, copyGuiElement(selected_)};
             if (changed) {
                 set(buffer);
                 markRmlDirty();
@@ -656,24 +677,29 @@ void GuiBuilder::drawOptions()
                 endGesture();
         };
         if (inspectorNode_)
-            edit("##value", value, [option](const std::string& text) { GuiDoc::setAttribute(option, "value", text); });
+            edit("##value", value, [option, valueAttribute](const std::string& text) { GuiDoc::setAttribute(option, valueAttribute, text); });
         if (inspectorNode_)
             edit("##label", label, [option](const std::string& text) { GuiDoc::setText(option, text); });
         ImGui::SameLine();
         if (ImGui::ArrowButton("##up", ImGuiDir_Up) && inspectorNode_)
-            editStep("Move Dropdown option Up", [&] { doc_.move(option, -1); });
+            editStep("Move " + what + " Up", [&] { doc_.move(option, -1); });
         ImGui::SameLine();
         if (ImGui::ArrowButton("##down", ImGuiDir_Down) && inspectorNode_)
-            editStep("Move Dropdown option Down", [&] { doc_.move(option, 1); });
+            editStep("Move " + what + " Down", [&] { doc_.move(option, 1); });
         ImGui::SameLine();
         if (ImGui::Button("X") && inspectorNode_)
-            editStep("Remove Dropdown option", [&] { selected_.remove_child(option); });
+            editStep("Remove " + what, [&] { selected_.remove_child(option); });
         ImGui::PopID();
         if (!inspectorNode_)
             return; // a step changed the options: refill next frame
     }
-    if (ImGui::Button("Add option"))
-        editStep("Add Dropdown option", [this] { GuiDoc::addOption(selected_); });
+    if (ImGui::Button(rows ? "Add row" : "Add option"))
+        editStep("Add " + what, [this, rows] {
+            if (rows)
+                GuiDoc::addRow(selected_);
+            else
+                GuiDoc::addOption(selected_);
+        });
 }
 
 void GuiBuilder::drawStyle()

@@ -33,13 +33,19 @@ inline bool guiVariableName(std::string_view name)
 class GuiAccess {
 public:
     virtual ~GuiAccess() = default;
-    // The value of the form widget or text field with this id (gui_widgets.h): a bool (toggle, any checkbox), a number
-    // (slider, spinbox, progress) or a string (dropdown, text field); nullopt if no loaded document has one.
+    // The value of the form widget, list or text field with this id (gui_widgets.h, gui_lists.h): a bool (toggle, any
+    // checkbox), a number (slider, spinbox, progress), a string (dropdown, text field), a list's selected row's value
+    // or key (a string) or index (a number), null for a list without a selection; nullopt if no loaded document has one.
     virtual std::optional<GuiValue> value(const std::string& id) = 0;
     // Sets a widget's or text field's value as the player could (snapped and clamped; a dropdown's must be one of its
-    // options' values); a value of the wrong type, or an id that is no widget, logs a warning (never the value) and
-    // changes nothing. Publishes no change event. Kept like setText, unless no loaded widget took it.
+    // options' values) or selects a list's row (a string: by value or key, a number: by index, null: none); a value of
+    // the wrong type, no such row, or an id that is no widget, logs a warning (never the value) and changes nothing.
+    // Publishes no change event. Kept like setText, unless no loaded widget took it.
     virtual void setValue(const std::string& id, GuiValue value) = 0;
+    // Scrolls the List Box's or Virtual List's 0-based row index into view (scrollToEnd: to its last row) in the
+    // topmost document holding the id; no such list or row logs a warning and does nothing. Not kept across reloads.
+    virtual void scrollTo(const std::string& id, int index) = 0;
+    virtual void scrollToEnd(const std::string& id) = 0;
     // A text field's value, else the element's text (escaped; "\n" is a line break). Kept and applied again to every
     // document that loads later (Play start, hot reload) until reset().
     virtual void setText(const std::string& id, std::string_view text) = 0;

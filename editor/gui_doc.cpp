@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <sstream>
 
@@ -129,6 +131,85 @@ bool labelledToggle(pugi::xml_node node)
     return std::string_view(node.name()) == "label" && children.size() == 1 && isToggle(children[0]);
 }
 
+bool isVirtualList(pugi::xml_node node)
+{
+    const std::vector<pugi::xml_node> children = GuiDoc::elements(node);
+    return hasClass(node, "virtuallist") && children.size() == 1 && children[0].attribute("data-for");
+}
+
+pugi::xml_node rowTemplate(pugi::xml_node virtualList) { return GuiDoc::elements(virtualList)[0]; }
+
+// Sets or clears class token on node (the class attribute goes when it empties).
+void setClassToken(pugi::xml_node node, std::string_view token, bool on)
+{
+    std::istringstream classes(node.attribute("class").value());
+    std::string out;
+    for (std::string other; classes >> other;)
+        if (other != token)
+            out += (out.empty() ? "" : " ") + other;
+    if (on)
+        out += (out.empty() ? "" : " ") + std::string(token);
+    GuiDoc::setAttribute(node, "class", out);
+}
+
+// "item : items" -> {"item", "items"}; without a colon, no alias.
+std::pair<std::string, std::string> dataFor(std::string_view expression)
+{
+    const auto trim = [](std::string_view text) {
+        const size_t first = text.find_first_not_of(" \t");
+        const size_t last = text.find_last_not_of(" \t");
+        return first == std::string_view::npos ? std::string() : std::string(text.substr(first, last - first + 1));
+    };
+    const size_t colon = expression.find(':');
+    if (colon == std::string_view::npos)
+        return {"", trim(expression)};
+    return {trim(expression.substr(0, colon)), trim(expression.substr(colon + 1))};
+}
+
+// A Virtual List's template text as a placeholder row: every {{a.b}} read as "b <n>".
+std::string placeholderText(std::string_view text, int n)
+{
+    std::string out;
+    for (size_t at = 0;;) {
+        const size_t open = text.find("{{", at);
+        const size_t close = open == std::string_view::npos ? open : text.find("}}", open + 2);
+        if (close == std::string_view::npos) {
+            out += text.substr(at);
+            return out;
+        }
+        std::string_view binding = text.substr(open + 2, close - open - 2);
+        const size_t dot = binding.find_last_of('.');
+        binding = dot == std::string_view::npos ? binding : binding.substr(dot + 1);
+        while (!binding.empty() && binding.front() == ' ')
+            binding.remove_prefix(1);
+        while (!binding.empty() && binding.back() == ' ')
+            binding.remove_suffix(1);
+        out += std::string(text.substr(at, open - at)) + std::format("{} {}", binding, n);
+        at = close + 2;
+    }
+}
+
+// fn on node and every element under it.
+void forEachElement(pugi::xml_node node, const std::function<void(pugi::xml_node)>& fn)
+{
+    fn(node);
+    for (pugi::xml_node child : GuiDoc::elements(node))
+        forEachElement(child, fn);
+}
+
+// Every text under node as placeholder row n.
+void fillPlaceholders(pugi::xml_node node, int n)
+{
+    for (pugi::xml_node child : node.children()) {
+        if (child.type() == pugi::node_pcdata)
+            child.set_value(placeholderText(child.value(), n).c_str());
+        else if (child.type() == pugi::node_element)
+            fillPlaceholders(child, n);
+    }
+}
+
+bool isFlag(std::string_view property) { return property == "checked" || property == "follow"; }
+
 bool isSpinbox(pugi::xml_node node)
 {
     const std::vector<pugi::xml_node> children = GuiDoc::elements(node);
@@ -151,6 +232,12 @@ std::string_view kindMarkup(GuiKind kind)
         return R"(<div class="spinbox" data-min="0" data-max="10" data-step="1"><button>-</button>)"
                R"(<input type="text" value="0"/><button>+</button></div>)";
     case GuiKind::Progress: return R"(<progress value="0.5" max="1"/>)";
+    case GuiKind::ListBox:
+        return R"(<div class="listbox"><div class="row" data-value="row1">Row 1</div>)"
+               R"(<div class="row" data-value="row2">Row 2</div><div class="row" data-value="row3">Row 3</div></div>)";
+    case GuiKind::VirtualList:
+        return R"(<div class="virtuallist" data-model="list" data-row-height="24">)"
+               R"(<div class="row" data-for="item : items">{{item.name}}</div></div>)";
     default: return "";
     }
 }
@@ -190,6 +277,24 @@ std::pair<pugi::xml_node, const char*> propertyPlace(pugi::xml_node node, std::s
         if (name == "label" && labelledToggle(node))
             return {node, ""};
         break;
+    case GuiKind::ListBox:
+        if (name == "follow")
+            return {node, "data-follow"};
+        break;
+    case GuiKind::VirtualList:
+        if (name == "model")
+            return {node, "data-model"};
+        if (name == "key")
+            return {node, "data-key"};
+        if (name == "row-height")
+            return {node, "data-row-height"};
+        if (name == "follow")
+            return {node, "data-follow"};
+        if (name == "source")
+            return {rowTemplate(node), "data-for"};
+        if (name == "template")
+            return {rowTemplate(node), ""};
+        break;
     default:
         break;
     }
@@ -209,6 +314,8 @@ const char* guiKindLabel(GuiKind kind)
     case GuiKind::Dropdown: return "Dropdown";
     case GuiKind::Spinbox: return "Spinbox";
     case GuiKind::Progress: return "Progress";
+    case GuiKind::ListBox: return "List Box";
+    case GuiKind::VirtualList: return "Virtual List";
     default: return "Unknown";
     }
 }
@@ -227,7 +334,10 @@ GuiKind guiKind(pugi::xml_node node)
 {
     const std::string_view tag = node.name();
     if (tag == "div")
-        return isSpinbox(node) ? GuiKind::Spinbox : GuiKind::Panel;
+        return isSpinbox(node)                                            ? GuiKind::Spinbox
+               : isVirtualList(node)                                      ? GuiKind::VirtualList
+               : hasClass(node, "listbox") && !hasClass(node, "virtuallist") ? GuiKind::ListBox
+                                                                          : GuiKind::Panel;
     if (tag == "p")
         return GuiKind::Text;
     if (tag == "button")
@@ -357,7 +467,8 @@ void GuiDoc::setText(pugi::xml_node node, std::string_view text)
 bool GuiDoc::composite(pugi::xml_node node)
 {
     const GuiKind kind = guiKind(node);
-    return kind == GuiKind::Spinbox || kind == GuiKind::Dropdown || labelledToggle(node);
+    return kind == GuiKind::Spinbox || kind == GuiKind::Dropdown || kind == GuiKind::ListBox || kind == GuiKind::VirtualList ||
+           labelledToggle(node);
 }
 
 pugi::xml_node GuiDoc::widgetRoot(pugi::xml_node node)
@@ -378,6 +489,13 @@ std::vector<std::string> GuiDoc::widgetProperties(pugi::xml_node node)
     case GuiKind::Spinbox: return {"min", "max", "step", "value", "data-value"};
     case GuiKind::Progress: return {"value", "max"};
     case GuiKind::Toggle: return labelledToggle(node) ? std::vector<std::string>{"checked", "label"} : std::vector<std::string>{"checked"};
+    case GuiKind::ListBox: return {"follow"};
+    case GuiKind::VirtualList: { // a template holding other elements is edited in the .rml
+        std::vector<std::string> names{"model", "source", "key", "row-height", "follow"};
+        if (std::ranges::all_of(rowTemplate(node).children(), [](pugi::xml_node c) { return c.type() == pugi::node_pcdata; }))
+            names.push_back("template");
+        return names;
+    }
     default: return {};
     }
 }
@@ -387,8 +505,10 @@ std::string GuiDoc::widgetProperty(pugi::xml_node node, std::string_view name)
     const auto [element, attribute] = propertyPlace(node, name);
     if (!element)
         return {};
-    if (name == "checked")
-        return element.attribute("checked") ? "true" : "false";
+    if (isFlag(name))
+        return element.attribute(attribute) ? "true" : "false";
+    if (name == "source")
+        return dataFor(element.attribute("data-for").value()).second;
     return *attribute ? GuiDoc::attribute(element, attribute) : text(element);
 }
 
@@ -408,10 +528,15 @@ bool GuiDoc::setWidgetProperty(pugi::xml_node node, std::string_view name, std::
     auto [element, attribute] = propertyPlace(node, name);
     if (!element)
         return false;
-    if (name == "checked") {
-        element.remove_attribute("checked");
+    if (isFlag(name)) {
+        element.remove_attribute(attribute);
         if (value == "true")
-            element.append_attribute("checked"); // checked=""
+            element.append_attribute(attribute); // checked="", data-follow=""
+    } else if (name == "source") { // the alias stays: "item : <value>"
+        const std::string alias = dataFor(element.attribute("data-for").value()).first;
+        setAttribute(element, "data-for", alias.empty() || value.empty() ? std::string(value) : std::format("{} : {}", alias, value));
+    } else if (name == "template") {
+        setText(element, value);
     } else if (*attribute) {
         setAttribute(element, attribute, value);
     } else { // a Toggle's label: the <label>'s text, after its <input>
@@ -452,6 +577,36 @@ void GuiDoc::selectOption(pugi::xml_node select, pugi::xml_node option)
     option.append_attribute("selected"); // selected=""
 }
 
+std::vector<pugi::xml_node> GuiDoc::rows(pugi::xml_node listbox)
+{
+    std::vector<pugi::xml_node> out;
+    for (pugi::xml_node child : elements(listbox))
+        if (hasClass(child, "row"))
+            out.push_back(child);
+    return out;
+}
+
+pugi::xml_node GuiDoc::addRow(pugi::xml_node listbox)
+{
+    const size_t n = rows(listbox).size() + 1;
+    pugi::xml_node row = listbox.append_child("div");
+    row.append_attribute("class").set_value("row");
+    row.append_attribute("data-value").set_value(std::format("row{}", n).c_str());
+    setText(row, std::format("Row {}", n));
+    return row;
+}
+
+void GuiDoc::selectRow(pugi::xml_node listbox, pugi::xml_node row)
+{
+    for (pugi::xml_node other : rows(listbox))
+        if (other != row && rowSelected(other))
+            setClassToken(other, "selected", false);
+    if (row && !rowSelected(row))
+        setClassToken(row, "selected", true);
+}
+
+bool GuiDoc::rowSelected(pugi::xml_node row) { return hasClass(row, "selected"); }
+
 std::string GuiDoc::stylesheetHref() const
 {
     for (pugi::xml_node node : xml_.child("rml").child("head").children())
@@ -479,6 +634,34 @@ std::string GuiDoc::previewRml(std::string_view rcss, std::vector<pugi::xml_node
     preorder(copy.child("rml").child("body"), copied); // same shape, same order
     for (size_t i = 0; i < copied.size(); ++i)
         copied[i].append_attribute(kNodeAttribute).set_value(static_cast<unsigned long long>(i));
+    // A Virtual List's template has no data here: placeholder rows instead, at its row height, the first one the
+    // template itself (keeping its node index, so a click on it selects the list).
+    for (pugi::xml_node list : copied) {
+        if (guiKind(list) != GuiKind::VirtualList)
+            continue;
+        pugi::xml_node row = rowTemplate(list);
+        forEachElement(row, [](pugi::xml_node element) {
+            for (pugi::xml_attribute attribute = element.first_attribute(); attribute;) {
+                const pugi::xml_attribute next = attribute.next_attribute();
+                if (guiBindingAttribute(attribute.name()))
+                    element.remove_attribute(attribute);
+                attribute = next;
+            }
+        });
+        const std::string text = GuiDoc::attribute(list, "data-row-height");
+        float height = 0.0f;
+        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), height);
+        if (error != std::errc() || end != text.data() + text.size() || !(height > 0.0f && height < 1e6f))
+            height = 24.0f; // as the engine reads it (gui_lists.h)
+        const std::string style = GuiDoc::attribute(row, "style");
+        GuiDoc::setAttribute(row, "style", std::format("{}{}height: {}px;", style, style.empty() || style.ends_with(';') ? "" : ";", height));
+        for (int n = kGuiPreviewRows; n >= 2; --n) {
+            pugi::xml_node placeholder = list.insert_copy_after(row, row);
+            forEachElement(placeholder, [](pugi::xml_node element) { element.remove_attribute(kNodeAttribute); });
+            fillPlaceholders(placeholder, n);
+        }
+        fillPlaceholders(row, 1);
+    }
     pugi::xml_node head = copy.child("rml").child("head");
     for (pugi::xml_node node = head.first_child(); node;) {
         const pugi::xml_node next = node.next_sibling();

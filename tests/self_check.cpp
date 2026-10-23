@@ -46,6 +46,7 @@
 #include <renderer.h>
 #include <scene.h>
 #include <gui_models.h>
+#include <gui_lists.h>
 #include <gui_widgets.h>
 #include <scene_gui.h>
 #include <scene_io.h>
@@ -1181,6 +1182,8 @@ public:
         history.push_back(std::format("value {}={}", id, value.dump()));
         values[id] = std::move(value);
     }
+    void scrollTo(const std::string& id, int index) override { history.push_back(std::format("scrollTo {} {}", id, index)); }
+    void scrollToEnd(const std::string& id) override { history.push_back("scrollToEnd " + id); }
     void setText(const std::string& id, std::string_view text) override
     {
         texts[id] = std::string(text);
@@ -1391,8 +1394,20 @@ return {
         kast.gui.setValue("sound", false)
         kast.gui.setValue("quality", "high")
         assert(kast.gui.value("volume") == 150 and kast.gui.value("sound") == false, "setValue reaches the GUI")
-        fails("kast.gui.setValue: value must be a boolean, number or string, got nil", function() kast.gui.setValue("x") end)
-        fails("kast.gui.setValue: value must be a boolean, number or string, got", function() kast.gui.setValue("x", {}) end)
+        -- lists: a row's value / key (a string), index (a number) or nil; scrolling
+        kast.gui.setValue("big", "50000")
+        assert(kast.gui.value("big") == "50000", "setValue selects a list row by key")
+        kast.gui.setValue("big", nil)
+        assert(kast.gui.value("big") == nil, "setValue(nil) clears a list's selection; value is nil")
+        kast.gui.scrollTo("big", 49999)
+        kast.gui.scrollToEnd("big")
+        kast.gui.scrollTo("big", -1) -- a whole number: passed on, the GUI logs that it has no such row
+        fails("kast.gui.setValue: value must be a boolean, number, string or nil, got", function() kast.gui.setValue("x", {}) end)
+        fails("kast.gui.scrollTo: index must be a whole number, got 1.5", function() kast.gui.scrollTo("big", 1.5) end)
+        fails("kast.gui.scrollTo: index must be a whole number, got", function() kast.gui.scrollTo("big", "middle") end)
+        fails("kast.gui.scrollTo: index must be a whole number, got nil", function() kast.gui.scrollTo("big") end)
+        fails("kast.gui.scrollTo: id must be a string, got 3", function() kast.gui.scrollTo(3, 1) end)
+        fails("kast.gui.scrollToEnd: id must be a string, got nil", function() kast.gui.scrollToEnd() end)
         fails("kast.gui.setValue: id must be a string, got 1", function() kast.gui.setValue(1, 2) end)
         fails("kast.gui.set: model must be a string, got 1", function() kast.gui.set(1, "k", 1) end)
         fails("kast.gui.set: key must be a letter then letters, digits or _ (not an RmlUi reserved name), got 'it'",
@@ -1443,8 +1458,9 @@ return {
                                                   "clone nope list row_10", "create list p line_1 class=chat_line",
                                                   "create missing p line_2", "remove row_1", "remove row_2",
                                                   "value volume=150.0", "value sound=false", R"(value quality="high")",
-                                                  "visible hud=true"},
-          "setText / setVisible / setAttribute reach the GUI with their arguments, in call order");
+                                                  R"(value big="50000")", "value big=null", "scrollTo big 49999",
+                                                  "scrollToEnd big", "scrollTo big -1", "visible hud=true"},
+          "setText / setVisible / setAttribute / setValue / scrollTo / scrollToEnd reach the GUI with their arguments, in call order");
     check(gui.resets == 2 && gui.texts.empty() && gui.visible_ == std::map<std::string, bool>{{"hud", true}} &&
               gui.models.empty(),
           "a kast.loadScene switch resets the GUI (writes and model values) before the new scene's inits");
@@ -3114,7 +3130,7 @@ void checkBuildSettings()
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene",
                                        "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_widgets.scene",
+                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_widgets.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
 
@@ -3138,7 +3154,7 @@ void checkBuildSettings()
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene",
                                                           "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_widgets.scene",
+                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_widgets.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
@@ -5568,6 +5584,376 @@ void checkGuiWidgets()
                   "a cloned spinbox and a created slider are styled and publish with their own ids");
         }
         check(kast::gui::problemCount() == problems, "no RmlUi warning through the whole widgets run");
+        gui.reset();
+    }
+    kast::gui::shutdown();
+    bgfx::shutdown();
+}
+
+// The list math (gui_lists.h, no RmlUi): the virtual window for a scroll position, scrolling a row into view, the keys,
+// row keys and following a selection through a replaced source.
+void checkGuiListMath()
+{
+    using kast::GuiRowRange;
+    check(kast::guiVisibleRows(0.0f, 480.0f, 24.0f, 100000) == GuiRowRange{0, 24} &&
+              kast::guiVisibleRows(1200000.0f, 480.0f, 24.0f, 100000) == GuiRowRange{49996, 28} &&
+              kast::guiVisibleRows(1200010.0f, 480.0f, 24.0f, 100000) == GuiRowRange{49996, 29} &&
+              kast::guiVisibleRows(2400000.0f - 480.0f, 480.0f, 24.0f, 100000) == GuiRowRange{99976, 24},
+          "visible rows: the rows in view plus 4 above and below, cut at either end");
+    check(kast::guiVisibleRows(0.0f, 480.0f, 24.0f, 5) == GuiRowRange{0, 5} && kast::guiVisibleRows(50.0f, 0.0f, 24.0f, 0) == GuiRowRange{} &&
+              kast::guiVisibleRows(0.0f, 480.0f, 0.0f, 10) == GuiRowRange{} &&
+              kast::guiVisibleRows(1e9f, 480.0f, 24.0f, 100) == GuiRowRange{96, 4} &&
+              kast::guiVisibleRows(-50.0f, 100.0f, 10.0f, 100, 0) == GuiRowRange{0, 10},
+          "visible rows: fewer rows than the view, none, no row height, scrolled past the end, above the top");
+    check(kast::guiScrollIntoView(100.0f, 200.0f, 50.0f, 24.0f) == 50.0f && kast::guiScrollIntoView(100.0f, 200.0f, 290.0f, 24.0f) == 114.0f &&
+              kast::guiScrollIntoView(100.0f, 200.0f, 150.0f, 24.0f) == 100.0f && kast::guiScrollIntoView(0.0f, 20.0f, 40.0f, 30.0f) == 40.0f,
+          "scroll into view: up to a row above, down to one below, not at all for one in view, a tall row's top");
+    using kast::GuiListKey;
+    const auto move = [](GuiListKey key, int selected) { return kast::guiListMove(key, selected, 100, 10); };
+    check(move(GuiListKey::Down, 5) == 6 && move(GuiListKey::Up, 5) == 4 && move(GuiListKey::Up, 0) == 0 &&
+              move(GuiListKey::Down, 99) == 99 && move(GuiListKey::PageDown, 95) == 99 && move(GuiListKey::PageUp, 5) == 0 &&
+              move(GuiListKey::PageDown, 5) == 15 && move(GuiListKey::Home, 50) == 0 && move(GuiListKey::End, 50) == 99,
+          "keys: Up / Down a row, PageUp / PageDown a page, Home / End, clamped to the rows");
+    check(move(GuiListKey::Down, -1) == 0 && move(GuiListKey::Up, -1) == 99 && move(GuiListKey::End, -1) == 99 &&
+              move(GuiListKey::PageDown, -1) == 0 && kast::guiListMove(GuiListKey::Down, -1, 0, 10) == -1 &&
+              kast::guiListMove(GuiListKey::PageDown, 0, 3, 0) == 1,
+          "keys without a selection: Up / End to the last row, the others to the first; no rows: none; a page is >= 1 row");
+    const kast::GuiValue item = {{"id", 42}, {"code", "ab"}, {"ratio", 2.5}, {"on", true}};
+    check(kast::guiRowKey(item, "id") == "42" && kast::guiRowKey(item, "code") == "ab" && kast::guiRowKey(item, "ratio") == "2.5" &&
+              !kast::guiRowKey(item, "on") && !kast::guiRowKey(item, "missing") && !kast::guiRowKey(kast::GuiValue("x"), "id"),
+          "row keys: strings, whole numbers without decimals, other numbers; none for a bool, a missing field, a non-object");
+    const auto rows = [](std::initializer_list<int> ids) {
+        kast::GuiValue list = kast::GuiValue::array();
+        for (int id : ids)
+            list.push_back({{"id", id}});
+        return list;
+    };
+    check(kast::guiTrackRow(rows({1, 2, 3, 4}), "id", 2, "3") == 2 && kast::guiTrackRow(rows({0, 1, 2, 3, 4}), "id", 2, "3") == 3 &&
+              kast::guiTrackRow(rows({1, 2, 4}), "id", 2, "3") == -1 && kast::guiTrackRow(rows({3, 1}), "id", 1, "3") == 0,
+          "selection by key: kept where it was, moved with its item, cleared when its item is gone");
+    check(kast::guiTrackRow(rows({1, 2, 3}), "", 2, std::nullopt) == 2 && kast::guiTrackRow(rows({1, 2}), "", 2, std::nullopt) == -1 &&
+              kast::guiTrackRow(kast::GuiValue("no"), "", 0, std::nullopt) == -1,
+          "selection by index: kept while the index exists, else cleared");
+}
+
+// Lists through SceneGui, headless like checkGuiWidgets: tests/project/ui/lists.rml loads with no RmlUi warning and
+// wears the default list style; a Virtual List of 100,000 rows keeps about its visible rows plus the buffer as
+// elements, sizes its scroll range to rows * row height and shows the right items wherever it is scrolled (scrollTo,
+// the wheel, the scrollbar, keys); selection by click and keys publishes {id, document, value}, setValue and data
+// binding don't; the selection follows its key through source updates, survives row recycling and clears when its
+// item goes; data-follow; value / setValue / scrollTo / scrollToEnd and their refusals; setValue kept across a hot
+// reload. Logs the frame time of scrolling the 100,000 rows.
+void checkGuiLists()
+{
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    check(bgfx::init(init) && kast::gui::init(), "headless bgfx and RmlUi start (lists)");
+    {
+        const std::filesystem::path root = projectTestDir("kast_gui_lists", "lists");
+        std::filesystem::create_directories(root / "ui");
+        const std::filesystem::path source = std::filesystem::path(KAST_SOURCE_DIR) / "tests/project/ui";
+        for (const char* file : {"lists.rml", "lists.rcss"})
+            std::filesystem::copy_file(source / file, root / "ui" / file);
+        kast::Scene scene;
+        scene.registry().emplace<kast::UIDocument>(scene.create("Lists"), kast::UIDocument{"ui/lists.rml", true});
+        kast::EventBus bus;
+        std::vector<std::string> events; // "name id value"
+        std::vector<kast::EventBus::Subscription> subscriptions;
+        for (const char* name : {"classes", "log", "big"})
+            subscriptions.push_back(bus.subscribe(std::format("lists.{}", name), [&events, name](const nlohmann::json& e) {
+                check(e["document"] == "ui/lists.rml" && e.size() == 3 && e["value"] == e["value"],
+                      "a list event's payload is {id, document, value}");
+                events.push_back(std::format("{} {} {}", name, e["id"].get<std::string>(), e["value"].dump()));
+            }));
+        const auto took = [&] { return std::exchange(events, {}); };
+        using Events = std::vector<std::string>;
+        const auto items = [](int first, int last, int skip = 0) { // {id = n, name = "Item n"} for n in first..last
+            kast::GuiValue list = kast::GuiValue::array();
+            for (int i = first; i <= last; ++i)
+                if (i != skip)
+                    list.push_back({{"id", i}, {"name", std::format("Item {}", i)}});
+            return list;
+        };
+        const auto lines = [](int count) {
+            kast::GuiValue list = kast::GuiValue::array();
+            for (int i = 1; i <= count; ++i)
+                list.push_back({{"id", i}, {"text", std::format("Line {}", i)}});
+            return list;
+        };
+
+        kast::SceneGui gui("lists_check");
+        gui.context().resize(1280, 720);
+        gui.setModelValue("lists", "items", items(1, 100000));
+        gui.setModelValue("lists", "lines", lines(3));
+        const uint64_t problems = kast::gui::problemCount();
+        Rml::Context* rml = gui.context().context();
+        const auto update = [&] { // as the Game view: sync (lists update) then render (data binding, layout)
+            gui.sync(scene, root, bus);
+            gui.context().render(0, BGFX_INVALID_HANDLE);
+            bgfx::frame();
+            bus.drain();
+        };
+        const auto settle = [&] { // scrolls and follows apply once laid out: a few frames
+            for (int i = 0; i < 4; ++i)
+                update();
+        };
+        const auto loadStart = std::chrono::steady_clock::now();
+        update();
+        const double loadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - loadStart).count();
+        settle();
+        Rml::ElementDocument* doc = rml->GetNumDocuments() == 1 ? rml->GetDocument(0) : nullptr;
+        check(doc && kast::gui::problemCount() == problems, "lists.rml loads without an RmlUi warning");
+        if (doc) {
+            const auto byId = [&](const char* id) { return doc->GetElementById(id); };
+            const auto color = [](Rml::Element* element) {
+                return element ? element->GetProperty<Rml::Colourb>("background-color") : Rml::Colourb(1, 2, 3, 4);
+            };
+            Rml::Element* big = byId("big");
+            // The live rows: big's children with class "row" but the template; row i shows item first + i + 1.
+            const auto liveRows = [&] {
+                std::vector<Rml::Element*> rows;
+                for (int i = 0; i < big->GetNumChildren(); ++i)
+                    if (big->GetChild(i)->IsClassSet("row") && !big->GetChild(i)->HasAttribute("data-for"))
+                        rows.push_back(big->GetChild(i));
+                return rows;
+            };
+            const auto first = [&] { return static_cast<int>(big->GetChild(0)->GetOffsetHeight() / 24.0f); }; // top spacer
+            const auto showsRight = [&] {
+                const std::vector<Rml::Element*> rows = liveRows();
+                bool right = !rows.empty();
+                for (size_t i = 0; i < rows.size() && right; ++i)
+                    right = rows[i]->GetInnerRML() == std::format("Item {}", first() + static_cast<int>(i) + 1) &&
+                            rows[i]->GetOffsetHeight() == 24.0f;
+                const float top = big->GetScrollTop();
+                return right && first() * 24.0f <= top && (first() + static_cast<int>(rows.size())) * 24.0f >= top + big->GetClientHeight();
+            };
+            const auto few = [&] { return liveRows().size() >= 20 && liveRows().size() <= 29; }; // 480 / 24 in view, + 4 + 4 + 1
+            const auto value = [&](const char* id) { return gui.value(id).value_or(kast::GuiValue("<none>")); };
+            const auto atEnd = [](Rml::Element* list) { return list->GetScrollTop() + list->GetClientHeight() >= list->GetScrollHeight() - 1.0f; };
+
+            kast::log::info(std::format("Virtual List of 100000 rows: {} live rows ({} elements in the list), loaded in "
+                                        "{:.1f} ms", liveRows().size(), big->GetNumChildren(), loadMs));
+            check(few() && big->GetNumChildren() == static_cast<int>(liveRows().size()) + 3 && showsRight(),
+                  "100,000 rows: only those in view and the buffer are elements (plus 2 spacers and the template)");
+            check(big->GetScrollHeight() == 2400000.0f && big->GetClientHeight() == 480.0f,
+                  "the scroll range is rows * row height (100,000 * 24)");
+            check(color(big) == Rml::Colourb(0x31, 0x31, 0x31) && color(byId("classes")) == Rml::Colourb(0x31, 0x31, 0x31) &&
+                      color(byId("class_mage")) == Rml::Colourb(0xff, 0xaa, 0x00) && color(byId("class_rogue")).alpha == 0 &&
+                      byId("class_rogue")->GetOffsetHeight() == 24.0f && byId("classes")->GetClientHeight() == 168.0f,
+                  "lists.rcss has no list rules: the default style colours the lists and the selected row, sizes the rows");
+            check(color(byId("static_panel")) == Rml::Colourb(0, 0, 0, 0xcc) && byId("count")->GetComputedValues().display() == Rml::Style::Display::Block,
+                  "elements that aren't lists keep the document's style");
+
+            check(value("classes") == "mage" && value("log") == nullptr && value("big") == nullptr && !gui.value("static_panel"),
+                  "value: the authored selected row's data-value; nil without a selection; nothing for a panel");
+
+            // Scrolling the Virtual List: scrollTo, the wheel, the scrollbar; the right items every time, few elements.
+            gui.scrollTo("big", 49999);
+            settle();
+            check(showsRight() && few() && byId("big_50000") && big->GetScrollTop() > 1199000.0f && big->GetScrollTop() <= 1199976.0f,
+                  "scrollTo the middle: item 50000 in view, the rows around it made");
+            const auto mouse = [&](SDL_EventType type, float x, float y, float wheel = 0.0f) {
+                SDL_Event event{};
+                event.type = type;
+                if (type == SDL_EVENT_MOUSE_MOTION) {
+                    event.motion.x = x;
+                    event.motion.y = y;
+                } else if (type == SDL_EVENT_MOUSE_WHEEL) {
+                    event.wheel.y = wheel;
+                } else {
+                    event.button.button = SDL_BUTTON_LEFT;
+                    event.button.x = x;
+                    event.button.y = y;
+                }
+                gui.context().onEvent(event);
+                update();
+            };
+            const Rml::Vector2f at = big->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const float scrolled = big->GetScrollTop();
+            mouse(SDL_EVENT_MOUSE_MOTION, at.x + 100.0f, at.y + 200.0f);
+            mouse(SDL_EVENT_MOUSE_WHEEL, 0.0f, 0.0f, -3.0f); // towards the user: down
+            for (int i = 0; i < 30; ++i) // RmlUi may scroll smoothly over frames
+                update();
+            check(big->GetScrollTop() > scrolled && showsRight() && few(), "the wheel scrolls the Virtual List; the rows follow");
+            // The scrollbar: its bar is where scrollTop / range puts it on the track; dragged 100 px down.
+            const float barY = at.y + 1.0f + big->GetScrollTop() / big->GetScrollHeight() * big->GetClientHeight();
+            const float barX = at.x + big->GetOffsetWidth() - 6.0f;
+            const float before = big->GetScrollTop();
+            mouse(SDL_EVENT_MOUSE_MOTION, barX, barY + 10.0f);
+            mouse(SDL_EVENT_MOUSE_BUTTON_DOWN, barX, barY + 10.0f);
+            for (int step = 1; step <= 5; ++step)
+                mouse(SDL_EVENT_MOUSE_MOTION, barX, barY + 10.0f + 20.0f * step);
+            mouse(SDL_EVENT_MOUSE_BUTTON_UP, barX, barY + 110.0f);
+            settle();
+            check(big->GetScrollTop() > before + 100000.0f && showsRight() && few(),
+                  "dragging the scrollbar scrolls the Virtual List far; the rows follow");
+            gui.scrollToEnd("big");
+            settle();
+            check(atEnd(big) && byId("big_100000") && showsRight() && few(), "scrollToEnd: the last item in view");
+
+            // Frame time while scrolling the 100,000 rows: 2,000 px a frame from the top.
+            big->SetScrollTop(0.0f);
+            settle();
+            const auto scrollStart = std::chrono::steady_clock::now();
+            constexpr int kFrames = 120;
+            size_t most = 0;
+            bool right = true;
+            for (int i = 1; i <= kFrames; ++i) {
+                big->SetScrollTop(2000.0f * static_cast<float>(i));
+                update();
+                most = std::max(most, liveRows().size());
+                right = right && showsRight();
+            }
+            const double frameMs =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - scrollStart).count() / kFrames;
+            kast::log::info(std::format("Virtual List of 100000 rows: {:.2f} ms a frame (SceneGui::sync + render, Noop "
+                                        "renderer) scrolling 2000 px a frame, at most {} live rows", frameMs, most));
+            check(right && most <= 29, "scrolling 2,000 px a frame: every frame shows the right items with <= 29 rows");
+
+            // Selection: clicks and keys publish; the selected row is marked and scrolled into view.
+            gui.scrollTo("big", 49999);
+            settle();
+            byId("big_50003")->Click();
+            update();
+            check(took() == Events{R"(big big "50003")"} && value("big") == "50003" && byId("big_50003")->IsClassSet("selected") &&
+                      color(byId("big_50003")) == Rml::Colourb(0xff, 0xaa, 0x00) && rml->GetFocusElement() == big,
+                  "clicking a virtual row selects it (its key, a string), publishes, focuses the list");
+            const auto key = [&](SDL_Keycode code) {
+                SDL_Event event{};
+                event.type = SDL_EVENT_KEY_DOWN;
+                event.key.key = code;
+                gui.context().onEvent(event);
+                event.type = SDL_EVENT_KEY_UP;
+                gui.context().onEvent(event);
+                update();
+                update();
+            };
+            const auto selectedShown = [&](const char* id) {
+                Rml::Element* row = byId(id);
+                return row && row->IsClassSet("selected") && row->GetOffsetTop() - big->GetClientTop() >= big->GetScrollTop() - 0.5f &&
+                       row->GetOffsetTop() - big->GetClientTop() + 24.0f <= big->GetScrollTop() + big->GetClientHeight() + 0.5f;
+            };
+            key(SDLK_DOWN);
+            check(took() == Events{R"(big big "50004")"} && selectedShown("big_50004"), "Down: the next row");
+            key(SDLK_END);
+            check(took() == Events{R"(big big "100000")"} && selectedShown("big_100000") && atEnd(big), "End: the last row, in view");
+            key(SDLK_HOME);
+            check(took() == Events{R"(big big "1")"} && selectedShown("big_1") && big->GetScrollTop() == 0.0f, "Home: the first row, in view");
+            key(SDLK_PAGEDOWN);
+            check(took() == Events{R"(big big "21")"} && selectedShown("big_21"), "PageDown: a page (20 rows) on, in view");
+            key(SDLK_PAGEUP);
+            key(SDLK_UP);
+            check(took() == Events{R"(big big "1")"} && selectedShown("big_1"), "PageUp back to the first; Up at the first stays");
+            check(std::ranges::count_if(liveRows(), [](Rml::Element* row) { return row->IsClassSet("selected"); }) == 1,
+                  "one row is marked selected");
+
+            // List Boxes: authored rows and data-for rows.
+            byId("class_priest")->Click();
+            update();
+            key(SDLK_DOWN);
+            key(SDLK_END);
+            check(took() == Events{R"(classes classes "priest")", R"(classes classes "hunter")", "classes classes 7.0"} &&
+                      value("classes") == 7.0 && byId("class_none")->IsClassSet("selected") && !byId("class_hunter")->IsClassSet("selected") &&
+                      atEnd(byId("classes")),
+                  "a List Box: click, Down, End publish data-values, a row without one its index; End scrolls it to the end");
+            key(SDLK_HOME);
+            check(took() == Events{R"(classes classes "warrior")"} && byId("classes")->GetScrollTop() == 0.0f, "Home scrolls back up");
+            byId("line_2")->Click();
+            update();
+            check(took() == Events{R"(log log "2")"} && value("log") == "2", "a data-for row (data-attr-data-value) is selectable");
+
+            // setValue: by value / key, index, nil; refusals logged without the value; nothing published.
+            gui.setValue("big", "70000");
+            gui.setValue("classes", 2.0);
+            gui.setValue("log", nullptr);
+            update();
+            check(value("big") == "70000" && value("classes") == "rogue" && value("log") == nullptr && took().empty(),
+                  "setValue selects by key, by index and clears with nil, publishing nothing");
+            gui.setValue("big", "kastvalue-nope");
+            gui.setValue("big", 100000.0);
+            gui.setValue("big", 2.5);
+            gui.setValue("classes", true);
+            update();
+            check(value("big") == "70000" && value("classes") == "rogue" &&
+                      logged("kast.gui.setValue('big'): the list has no row with that value: unchanged") &&
+                      logged("kast.gui.setValue('big'): the list has no row at that index: unchanged") &&
+                      logged("kast.gui.setValue('classes'): a list takes a string, a number or nil: unchanged") &&
+                      !logged("kastvalue-nope") && took().empty(),
+                  "setValue with no such row or the wrong type logs (never the value) and changes nothing");
+            gui.scrollTo("big", 100000);
+            gui.scrollTo("static_panel", 0);
+            gui.scrollTo("nowhere", 0);
+            gui.scrollTo("classes", -1);
+            check(logged("kast.gui.scrollTo('big', 100000): the list has no row at that index: unchanged") &&
+                      logged("kast.gui.scrollTo('static_panel', 0): it is not a list: unchanged") &&
+                      logged("kast.gui.scrollTo('nowhere', 0): no loaded GUI has it") &&
+                      logged("kast.gui.scrollTo('classes', -1): the list has no row at that index: unchanged"),
+                  "scrollTo past the rows, on no list or an unknown id logs and does nothing");
+
+            // The selection through recycling and source updates (data binding: nothing published).
+            gui.scrollTo("big", 69999);
+            settle();
+            check(selectedShown("big_70000"), "a row selected by setValue is marked once scrolled to");
+            gui.scrollTo("big", 10);
+            settle();
+            check(std::ranges::none_of(liveRows(), [](Rml::Element* row) { return row->IsClassSet("selected"); }),
+                  "recycled rows far from the selection aren't marked");
+            gui.scrollTo("big", 69999);
+            settle();
+            check(selectedShown("big_70000") && value("big") == "70000", "scrolled back: the selection is still marked");
+            gui.setModelValue("lists", "items", items(11, 100000)); // the first 10 items removed
+            settle();
+            check(value("big") == "70000" && selectedShown("big_70000") && byId("big_70000")->GetInnerRML() == "Item 70000" &&
+                      big->GetScrollHeight() == 99990.0f * 24.0f,
+                  "items removed before the selection: it follows its key; the range shrinks");
+            gui.setModelValue("lists", "items", items(1, 100000, 70000)); // the selected item removed
+            settle();
+            check(value("big") == nullptr && std::ranges::none_of(liveRows(), [](Rml::Element* row) { return row->IsClassSet("selected"); }) &&
+                      took().empty(),
+                  "the selected item removed: no selection, nothing published");
+            gui.setModelValue("lists", "items", items(1, 100000));
+            settle();
+
+            // data-follow: appended rows keep a list at the end there; scrolled up, it stays put.
+            gui.scrollToEnd("big");
+            settle();
+            gui.setModelValue("lists", "items", items(1, 100001));
+            settle();
+            check(atEnd(big) && byId("big_100001") && showsRight() && few(), "data-follow: appended to a list at its end, it follows");
+            gui.scrollTo("big", 100);
+            settle();
+            const float up = big->GetScrollTop();
+            gui.setModelValue("lists", "items", items(1, 100002));
+            settle();
+            check(big->GetScrollTop() == up && !atEnd(big), "data-follow: scrolled up, an append doesn't move it");
+            Rml::Element* log = byId("log");
+            gui.setModelValue("lists", "lines", lines(20));
+            settle();
+            check(log->GetScrollHeight() > log->GetClientHeight() && atEnd(log) && byId("line_20"),
+                  "data-follow on a data-for List Box: new lines keep it at the end");
+            log->SetScrollTop(0.0f);
+            update();
+            gui.setModelValue("lists", "lines", lines(25));
+            settle();
+            check(log->GetScrollTop() == 0.0f, "scrolled up, new lines leave it there");
+            check(byId("classes")->HasAttribute("data-follow") == false, "classes doesn't follow (no data-follow)");
+
+            // Hot reload: setValue's selections come back.
+            gui.setValue("big", "123");
+            gui.setValue("classes", "druid");
+            const std::filesystem::path rmlFile = root / "ui/lists.rml";
+            std::filesystem::last_write_time(rmlFile, std::filesystem::last_write_time(rmlFile) + std::chrono::seconds(5));
+            gui.reloadChanged();
+            settle();
+            doc = rml->GetNumDocuments() == 1 ? rml->GetDocument(0) : nullptr;
+            check(doc && value("big") == "123" && value("classes") == "druid" && took().empty(),
+                  "after a hot reload: setValue's selections again, unpublished");
+            if (doc) {
+                big = doc->GetElementById("big");
+                check(few() && big->GetScrollHeight() == 100002.0f * 24.0f, "after a hot reload: still windowed");
+            }
+        }
+        check(kast::gui::problemCount() == problems, "no RmlUi warning through the whole lists run");
         gui.reset();
     }
     kast::gui::shutdown();
@@ -12917,6 +13303,125 @@ void checkGuiUndoRedo(GuiDoc& doc, UndoStack& history, const char* what, Fn&& ed
     check(doc.serialize() == after, (name + ": redo restores the exact post state").c_str());
 }
 
+// GUI Builder lists (gui_doc.h): List Box and Virtual List by markup (tests/project/ui/lists.rml), composites; created
+// with their defaults; properties (follow, model, source, key, row-height, template); the rows editor; the preview's
+// placeholder rows; unrelated content round-tripping; property and row edits undone and redone through gui_undo.
+void checkGuiDocLists()
+{
+    std::string error;
+    GuiDoc doc;
+    check(doc.parse(readText(std::filesystem::path(KAST_SOURCE_DIR) / "tests/project/ui/lists.rml"), error), "GuiDoc parses lists.rml");
+    const pugi::xml_node classes = guiNode(doc, "classes");
+    const pugi::xml_node log = guiNode(doc, "log");
+    const pugi::xml_node big = guiNode(doc, "big");
+    check(guiKind(classes) == GuiKind::ListBox && guiKind(log) == GuiKind::ListBox && guiKind(big) == GuiKind::VirtualList &&
+              GuiDoc::composite(classes) && GuiDoc::composite(big) && GuiDoc::widgetRoot(guiNode(doc, "class_rogue")) == classes &&
+              GuiDoc::widgetRoot(GuiDoc::elements(big)[0]) == big && guiKindLabel(GuiKind::ListBox) == std::string("List Box") &&
+              guiKindLabel(GuiKind::VirtualList) == std::string("Virtual List"),
+          "lists.rml: two List Boxes and a Virtual List by markup, each one node (a row selects its list)");
+    const std::string saved = doc.serialize();
+    GuiDoc again;
+    check(again.parse(saved, error) && again.serialize() == saved &&
+              contains(saved, R"(<div class="row" data-for="line : lines" data-attr-id="'line_' + line.id" data-attr-data-value="line.id">{{line.text}}</div>)") &&
+              contains(saved, R"(<div class="row selected" id="class_mage" data-value="mage">Mage</div>)") &&
+              contains(saved, "<!-- Lists (ctest ui_lists_*"),
+          "lists.rml round-trips with its rows, data-for template and comment unchanged");
+    GuiDoc shapes;
+    check(shapes.parse(R"(<rml><head/><body><div class="virtuallist" id="v0"/><div class="virtuallist" id="v2"><div data-for="a : b"/><p/></div>
+        <div class="virtuallist" id="v1"><div class="row"/></div><div class="listbox wide" id="lb"/></body></rml>)", error),
+          "GuiDoc parses the list shape sample");
+    check(guiKind(guiNode(shapes, "v0")) == GuiKind::Panel && guiKind(guiNode(shapes, "v2")) == GuiKind::Panel &&
+              guiKind(guiNode(shapes, "v1")) == GuiKind::Panel && guiKind(guiNode(shapes, "lb")) == GuiKind::ListBox,
+          "a virtuallist without exactly one data-for template is a Panel; class listbox among others is a List Box");
+
+    const auto properties = [](pugi::xml_node node) {
+        std::string out;
+        for (const std::string& name : GuiDoc::widgetProperties(node))
+            out += std::format("{}={} ", name, GuiDoc::widgetProperty(node, name));
+        return out;
+    };
+    check(properties(big) == "model= source=items key=id row-height=24 follow=true template={{item.name}} " &&
+              properties(classes) == "follow=false " && properties(log) == "follow=true ",
+          "list properties read off the markup (big's data-model is its panel's)");
+    pugi::xml_node listBox = doc.add(GuiKind::ListBox, doc.body());
+    const pugi::xml_node virtualList = doc.add(GuiKind::VirtualList, doc.body());
+    check(guiKind(listBox) == GuiKind::ListBox && GuiDoc::rows(listBox).size() == 3 && !GuiDoc::rowSelected(GuiDoc::rows(listBox)[0]) &&
+              GuiDoc::attribute(GuiDoc::rows(listBox)[2], "data-value") == "row3" && GuiDoc::text(GuiDoc::rows(listBox)[2]) == "Row 3",
+          "add List Box: three rows row1..row3, none selected");
+    check(guiKind(virtualList) == GuiKind::VirtualList &&
+              properties(virtualList) == "model=list source=items key= row-height=24 follow=false template={{item.name}} ",
+          "add Virtual List: model list, source items, row height 24, an {{item.name}} template");
+    check(GuiDoc::setWidgetProperty(virtualList, "source", "loot") && GuiDoc::setWidgetProperty(virtualList, "key", "uid") &&
+              GuiDoc::setWidgetProperty(virtualList, "row-height", "30") && GuiDoc::setWidgetProperty(virtualList, "follow", "true") &&
+              GuiDoc::setWidgetProperty(virtualList, "model", "bag") &&
+              GuiDoc::setWidgetProperty(virtualList, "template", "{{item.name}} x{{item.count}}") &&
+              contains(doc.serialize(), R"(<div class="virtuallist" data-model="bag" data-row-height="30" data-key="uid" data-follow="">)") &&
+              contains(doc.serialize(), R"(<div class="row" data-for="item : loot">{{item.name}} x{{item.count}}</div>)") &&
+              guiKind(virtualList) == GuiKind::VirtualList,
+          "virtual list properties: source keeps the alias, follow is data-follow=\"\", template the row's text");
+    check(GuiDoc::setWidgetProperty(virtualList, "follow", "false") && !virtualList.attribute("data-follow") &&
+              GuiDoc::setWidgetProperty(listBox, "follow", "true") && listBox.attribute("data-follow") &&
+              !GuiDoc::setWidgetProperty(listBox, "source", "x") && GuiDoc::widgetAttribute(virtualList, "data-model") &&
+              GuiDoc::widgetAttribute(virtualList, "data-row-height") && !GuiDoc::widgetAttribute(virtualList, "data-event"),
+          "follow toggles; a List Box has no source; widgetAttribute names the attributes properties stand for");
+
+    // Rows: add, select, deselect, move, edit, remove.
+    const pugi::xml_node fourth = GuiDoc::addRow(listBox);
+    check(GuiDoc::attribute(fourth, "data-value") == "row4" && GuiDoc::text(fourth) == "Row 4" && GuiDoc::rows(listBox).size() == 4,
+          "addRow: row4 / Row 4");
+    GuiDoc::selectRow(listBox, GuiDoc::rows(listBox)[1]);
+    GuiDoc::selectRow(listBox, fourth);
+    check(!GuiDoc::rowSelected(GuiDoc::rows(listBox)[1]) && GuiDoc::rowSelected(fourth) &&
+              GuiDoc::attribute(fourth, "class") == "row selected", "selectRow moves the selected class");
+    check(doc.move(fourth, -1) && GuiDoc::rows(listBox)[2] == fourth, "a row moves up");
+    GuiDoc::setAttribute(fourth, "data-value", "ultra");
+    GuiDoc::setText(fourth, "Ultra");
+    listBox.remove_child(GuiDoc::rows(listBox)[0]);
+    check(contains(doc.serialize(), R"(<div class="row selected" data-value="ultra">Ultra</div>)") &&
+              !contains(doc.serialize(), "Row 1") && GuiDoc::rows(listBox).size() == 3,
+          "row value, label and removal are saved");
+    GuiDoc::selectRow(listBox, pugi::xml_node());
+    check(std::ranges::none_of(GuiDoc::rows(listBox), GuiDoc::rowSelected) && GuiDoc::attribute(fourth, "class") == "row",
+          "selectRow(none) leaves no row selected");
+
+    // The preview: 20 placeholder rows from the template, its bindings dropped, the first keeping the node index.
+    std::vector<pugi::xml_node> nodes;
+    const std::string preview = doc.previewRml("", nodes);
+    const std::string bigIndex = std::to_string(std::ranges::find(nodes, GuiDoc::elements(big)[0]) - nodes.begin());
+    check(!contains(preview, "data-attr-id=\"'big_'") &&
+              contains(preview, std::format(R"(<div class="row" data-kast-node="{}" style="height: 24px;">name 1</div>)", bigIndex)) &&
+              contains(preview, R"(<div class="row" style="height: 24px;">name 20</div>)") && !contains(preview, "name 21") &&
+              contains(preview, R"(<div class="row" style="height: 30px;">name 2 xcount 2</div>)") && !contains(preview, "item : items"),
+          "preview: a Virtual List shows 20 placeholder rows of its template at its row height, no data-for or bindings");
+    check(!contains(doc.serialize(), "name 1") && contains(doc.serialize(), R"(data-for="item : items")"), "the preview changes no saved text");
+
+    GuiDoc reopened;
+    check(reopened.parse(doc.serialize(), error) && reopened.serialize() == doc.serialize() &&
+              guiKind(GuiDoc::elements(reopened.body()).back()) == GuiKind::VirtualList,
+          "a document with lists reopens identically, kinds kept");
+
+    // Undo / redo of list edits, as the Inspector records them (copy before, edit, copy after).
+    UndoStack history;
+    const pugi::xml_node root = doc.body().root();
+    const auto step = [&](const char* name, auto edit) {
+        const std::vector<pugi::xml_node> added = GuiDoc::elements(doc.body()); // ..., the List Box, the Virtual List
+        const pugi::xml_node node = added[added.size() - (std::string_view(name).starts_with("row ") ? 2 : 1)];
+        GuiElementCopy before = copyGuiElement(node);
+        edit(node);
+        pushGuiStep(history, root, name, std::move(before), copyGuiElement(node), [](pugi::xml_node) {});
+    };
+    checkGuiUndoRedo(doc, history, "virtual list row-height", [&] {
+        step("row-height", [](pugi::xml_node list) { GuiDoc::setWidgetProperty(list, "row-height", "40"); });
+    });
+    checkGuiUndoRedo(doc, history, "virtual list source", [&] {
+        step("source", [](pugi::xml_node list) { GuiDoc::setWidgetProperty(list, "source", "rows"); });
+    });
+    checkGuiUndoRedo(doc, history, "list box row added", [&] { step("row add", [](pugi::xml_node list) { GuiDoc::addRow(list); }); });
+    checkGuiUndoRedo(doc, history, "list box row selected", [&] {
+        step("row select", [](pugi::xml_node list) { GuiDoc::selectRow(list, GuiDoc::rows(list)[0]); });
+    });
+}
+
 void checkGuiUndo()
 {
     GuiDoc doc;
@@ -13374,8 +13879,17 @@ int main(int argc, char** argv)
         checkPrefabUndo();
         checkPrefabModeUndo();
         checkGuiUndo();
+        checkGuiDocLists();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All undo checks passed" : std::format("{} undo check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--lists") { // only the game GUI list checks
+        checkGuiListMath();
+        checkGuiLists();
+        checkGuiDocLists();
+        removeTree(testRoot());
+        kast::log::info(g_failures == 0 ? "All list checks passed" : std::format("{} list check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--gui") { // only the game GUI and GUI Builder checks
@@ -13386,7 +13900,10 @@ int main(int argc, char** argv)
         checkGuiClipboard();
         checkGuiDataModels();
         checkGuiWidgets();
+        checkGuiListMath();
+        checkGuiLists();
         checkGuiUndo();
+        checkGuiDocLists();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All GUI checks passed" : std::format("{} GUI check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
@@ -13480,6 +13997,7 @@ int main(int argc, char** argv)
     checkPrefabUndo();
     checkPrefabModeUndo();
     checkGuiUndo();
+    checkGuiDocLists();
     checkLuaInstantiate();
     checkLuaGui();
     checkGuiEffectCompile();
@@ -13536,6 +14054,8 @@ int main(int argc, char** argv)
     checkGuiClipboard();
     checkGuiDataModels();
     checkGuiWidgets();
+    checkGuiListMath();
+    checkGuiLists();
     checkExternalEditor();
     checkModelLoading();
     checkModelCache();

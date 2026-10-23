@@ -151,7 +151,7 @@ add_library(kast_engine STATIC
   engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
-  engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
+  engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/gui_lists.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
   engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/ibl.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
@@ -1723,7 +1723,7 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "events|Events Test|events.scene|FALSE" "events_no_systems|Events Test|events.scene|TRUE"
                "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow"
                "ui|UI Test|ui.scene|FALSE" "effects|Effects Test|ui_effects.scene|FALSE" "bind|Bind Test|ui_bind.scene|FALSE"
-               "widgets|Widgets Test|ui_widgets.scene|FALSE"
+               "widgets|Widgets Test|ui_widgets.scene|FALSE" "lists|Lists Test|ui_lists.scene|FALSE"
                "lights|Lights Test|point_lights.scene|FALSE"
                "materials|Materials Test|materials.scene|FALSE" "post|Post Test|post_processing.scene|FALSE"
                "models|Models Test|models_anim.scene|FALSE" "shadows|Shadows Test|shadows.scene|FALSE"
@@ -2799,6 +2799,93 @@ set_tests_properties(player_widgets_click PROPERTIES FIXTURES_REQUIRED game_widg
 add_test(NAME player_widgets_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/player_widgets.png" 0.1875,0.157,255,170,0,12 0.203,0.393,255,170,0,12 0.2563,0.3014,255,170,0,12)
 set_tests_properties(player_widgets_probe PROPERTIES FIXTURES_REQUIRED player_widgets_shot)
 
+# Lists (ui_lists.scene: ui/lists.rml driven by scripts/ui_lists.lua; the C++ side is self_check's checkGuiLists, which
+# also counts the Virtual List's live rows and times its scrolling). lists.rcss has no list rules: the engine's default
+# style draws them.
+# - ui_lists_screenshot: Play; the values read back (VALUES), setValue by value, key and index, its refusals logged
+#   without the value and bad argument types raising (SETVALUE, CLEARED), scrollTo's refusals (SCROLLTO); no event
+#   without input, no RmlUi warning. The shot shows the Virtual List scrolled down to item 50000, selected, at its bottom.
+#   ui_lists_probe reads the default style's #ffaa00 on the selected rows (Rogue, Item 50000) and #313131 on a list.
+# - ui_lists_restyled_screenshot: the same GUI in health_project, whose lists.rcss overrides the selected rows' colour
+#   (#3060ff): it differs, and ui_lists_restyled_probe reads the project's colour where the default's was.
+# - ui_lists_click / _click_virtual / _click_bound: a --gui-click on an authored row, a Virtual List row and a data-for
+#   row publish their values.
+# - ui_lists_keys: Down, End, Home, PageDown on the focused Virtual List.
+# - ui_lists_wheel: a wheel turn over the Virtual List scrolls it: the shot differs from ui_lists_screenshot.
+# - ui_lists_follow: scrollToEnd, then three appends it follows (the shot ends on Item 100003); ui_lists_follow_kept:
+#   scrolled back up, the fourth append leaves it there.
+set(lists_args "--scene ${KAST_TEST_PROJECT}/ui_lists.scene --play --size 1600x1000")
+set(lists_forbid "\\[warn\\] RmlUi|\\[error\\]|Lua error|paladin")
+add_test(NAME ui_lists_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_lists.png"
+          "-DEXTRA_ARGS=${lists_args}" -DFRAMES=60
+          "-DEXPECT_OUTPUT=lists: VALUES classes=mage.string. log=nil.nil. big=nil.nil..*kast.gui.setValue..classes..: the list has no row with that value: unchanged.*kast.gui.setValue..big..: the list has no row at that index: unchanged.*lists: SETVALUE classes=rogue.string. log=2.string. big=50000.string. 50000.string. raised=true true true true.*lists: CLEARED log=nil.nil..*kast.gui.scrollTo..big., 100000.: the list has no row at that index: unchanged.*kast.gui.scrollTo..nowhere., 1.: no loaded GUI has it.*lists: SCROLLTO"
+          "-DFORBID_OUTPUT=${lists_forbid}|lists: lists\\." -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(ui_lists_screenshot PROPERTIES FIXTURES_SETUP ui_lists_shot)
+add_test(NAME ui_lists_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/ui_lists.png" 0.28,0.168,255,170,0,12 0.6,0.6,255,170,0,12 0.62,0.4,49,49,49,12)
+set_tests_properties(ui_lists_probe PROPERTIES FIXTURES_REQUIRED ui_lists_shot)
+file(READ "${KAST_TEST_PROJECT}/ui/lists.rcss" lists_rcss)
+file(WRITE "${KAST_HEALTH_PROJECT}/ui/lists.rcss" "${lists_rcss}
+.listbox .row.selected, .virtuallist .row.selected { background-color: #3060ff; }
+")
+add_test(NAME ui_lists_restyled_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_lists_restyled.png"
+          "-DEXTRA_ARGS=--scene ${KAST_HEALTH_PROJECT}/ui_lists.scene --play --size 1600x1000" -DFRAMES=60
+          "-DFORBID_OUTPUT=${lists_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(ui_lists_restyled_screenshot PROPERTIES FIXTURES_SETUP ui_lists_restyled_shot)
+add_test(NAME ui_lists_restyled_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/ui_lists.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/ui_lists_restyled.png"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(ui_lists_restyled_differs PROPERTIES FIXTURES_REQUIRED "ui_lists_shot;ui_lists_restyled_shot")
+add_test(NAME ui_lists_restyled_probe
+  COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/ui_lists_restyled.png" 0.28,0.168,48,96,255,12 0.6,0.6,48,96,255,12)
+set_tests_properties(ui_lists_restyled_probe PROPERTIES FIXTURES_REQUIRED ui_lists_restyled_shot)
+foreach(click "click|class_hunter|lists.classes classes = hunter.string." "click_virtual|big_50003|lists.big big = 50003.string."
+              "click_bound|line_2|lists.log log = 2.string.")
+  string(REPLACE "|" ";" click "${click}")
+  list(GET click 0 name)
+  list(GET click 1 id)
+  list(GET click 2 expect)
+  add_test(NAME ui_lists_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_lists_${name}.png"
+            "-DEXTRA_ARGS=${lists_args} --gui-click ${id}" -DFRAMES=30
+            "-DEXPECT_OUTPUT=lists: ${expect} in ui/lists.rml" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=${lists_forbid}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endforeach()
+add_test(NAME ui_lists_keys
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_lists_keys.png"
+          "-DEXTRA_ARGS=${lists_args} --sim-on-log KEYS --sim-key 5,Down --sim-key 10,End --sim-key 15,Home --sim-key 20,PageDown"
+          -DFRAMES=60
+          "-DEXPECT_OUTPUT=lists.big big = 50001.string.*lists.big big = 100000.string.*lists.big big = 1.string.*lists.big big = 21.string."
+          "-DFORBID_OUTPUT=${lists_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME ui_lists_wheel_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_lists_wheel.png"
+          "-DEXTRA_ARGS=${lists_args} --sim-mouse 30,none,0,0,-5,70,10" -DFRAMES=60 "-DFORBID_OUTPUT=${lists_forbid}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(ui_lists_wheel_screenshot PROPERTIES FIXTURES_SETUP ui_lists_wheel_shot)
+add_test(NAME ui_lists_wheel_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/ui_lists.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/ui_lists_wheel.png"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(ui_lists_wheel_differs PROPERTIES FIXTURES_REQUIRED "ui_lists_shot;ui_lists_wheel_shot")
+add_test(NAME ui_lists_follow_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_lists_follow.png"
+          "-DEXTRA_ARGS=${lists_args}" -DFRAMES=210 "-DEXPECT_OUTPUT=lists: APPEND items=100003"
+          "-DFORBID_OUTPUT=${lists_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME ui_lists_follow_kept_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_lists_follow_kept.png"
+          "-DEXTRA_ARGS=${lists_args}" -DFRAMES=250 "-DEXPECT_OUTPUT=lists: APPEND items=100004.*lists: APPEND kept"
+          "-DFORBID_OUTPUT=${lists_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# The built game "lists" (ui_lists.scene from game.pak): the default list style is the player's own, the GUI loads with
+# no RmlUi warning, and a click on a row reaches Lua.
+add_test(NAME player_lists_click
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/lists" "-DEXE=Lists Test.exe" "-DWORK_DIR=${KAST_GAME_OUT}/lists_click.run"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_lists_click.png" "-DEXTRA_ARGS=--gui-click class_hunter"
+          -DEXPECT=0 "-DEXPECT_OUTPUT=lists: VALUES classes=mage.*lists: lists.classes classes = hunter.string. in ui/lists.rml"
+          "-DFORBID_OUTPUT=${lists_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_lists_click PROPERTIES FIXTURES_REQUIRED game_lists_built TIMEOUT 90)
+add_test(NAME player_lists_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/player_lists.png" 0.156,0.178,255,170,0,12 0.53,0.778,255,170,0,12 0.594,0.417,49,49,49,12)
+set_tests_properties(player_lists_probe PROPERTIES FIXTURES_REQUIRED player_lists_shot)
+
 # Builder: main_menu.rml open with start_button selected (tree, Inspector, Style, Preview with the outline), and the same
 # GUI in health_project with a different .rcss (wider panel, red buttons) must render differently. --gui-pick clicks the
 # preview (1280x720 preview pixels) on the Quit button, which selects it.
@@ -2947,6 +3034,45 @@ add_test(NAME gui_builder_widget_reopen_screenshot
           "-DFORBID_OUTPUT=${bind_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(gui_builder_widget_edit PROPERTIES FIXTURES_REQUIRED new_gui_copy FIXTURES_SETUP gui_widget_saved)
 set_tests_properties(gui_builder_widget_saved_file gui_builder_widget_reopen_screenshot PROPERTIES FIXTURES_REQUIRED gui_widget_saved)
+
+# Lists in the builder (ui/lists.rml, no list rules in its sheet: the preview wears the default style; the Virtual List
+# shows 20 placeholder rows made from its template): each list selected (one tree node; its Inspector fields, rows
+# editor and the preview outline), with no RmlUi warning; each kind added to main_menu.rml's #buttons Panel through the
+# Hierarchy's deferred add, undone and redone; on the new_gui_project copy, the Virtual List's row-height set as the
+# Inspector does, undone, redone, saved (the rest of the file unchanged), and the saved GUI reopened with it.
+foreach(list classes log big)
+  add_test(NAME gui_builder_list_${list}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+            "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_list_${list}.png"
+            "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --open-gui ui/lists.rml --size 1600x1000 --gui-select ${list}"
+            "-DFORBID_OUTPUT=${bind_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endforeach()
+foreach(kind "ListBox|List Box" "VirtualList|Virtual List")
+  string(REPLACE "|" ";" kind "${kind}")
+  list(GET kind 0 flag)
+  list(GET kind 1 label)
+  add_test(NAME gui_builder_add_${flag}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+            "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_add_${flag}.png"
+            "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} ${builder_args} --gui-select buttons --gui-add ${flag} --gui-undo 1 --gui-redo 1"
+            "-DEXPECT_OUTPUT=Undo Add ${label}.*Redo Add ${label}" "-DFORBID_OUTPUT=${bind_forbid}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endforeach()
+add_test(NAME gui_builder_list_edit
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_list_edit.png"
+          "-DEXTRA_ARGS=--project ${KAST_NEW_GUI_PROJECT} --open-gui ui/lists.rml --size 1600x1000 --gui-select big --gui-set-prop row-height=30 --gui-undo 1 --gui-redo 1 --gui-save"
+          "-DEXPECT_OUTPUT=--gui-set-prop row-height=.30. on 'big'.*Undo Edit Virtual List row-height.*Redo Edit Virtual List row-height.*Saved GUI"
+          "-DFORBID_OUTPUT=${bind_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME gui_builder_list_saved_file COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_NEW_GUI_PROJECT}/ui/lists.rml")
+set_tests_properties(gui_builder_list_saved_file PROPERTIES PASS_REGULAR_EXPRESSION
+  "<!-- Lists .*<div class=\"row selected\" id=\"class_mage\" data-value=\"mage\">Mage</div>.*data-for=\"line : lines\".*<div class=\"virtuallist\" id=\"big\" data-row-height=\"30\" data-key=\"id\" data-event=\"lists.big\" data-follow=\"\">.*data-for=\"item : items\" data-attr-id=\"'big_' [+] item.id\"")
+add_test(NAME gui_builder_list_reopen_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_list_reopen.png"
+          "-DEXTRA_ARGS=--project ${KAST_NEW_GUI_PROJECT} --open-gui ui/lists.rml --size 1600x1000 --gui-select big"
+          "-DFORBID_OUTPUT=${bind_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(gui_builder_list_edit PROPERTIES FIXTURES_REQUIRED new_gui_copy FIXTURES_SETUP gui_list_saved)
+set_tests_properties(gui_builder_list_saved_file gui_builder_list_reopen_screenshot PROPERTIES FIXTURES_REQUIRED gui_list_saved)
 
 # Crash dialogs: --crash makes the editor fail on purpose; with KAST_NO_CRASH_DIALOGS=1 it must exit, not wait on a
 # "Debug Error!" dialog. Debug builds also report the failed assert on stderr (release compiles assert() out).

@@ -21,6 +21,7 @@ namespace {
 constexpr Rml::EventId kWidgetEvents[] = {Rml::EventId::Change, Rml::EventId::Click, Rml::EventId::Keydown,
                                           Rml::EventId::Focus, Rml::EventId::Blur};
 bool capture(Rml::EventId id) { return id == Rml::EventId::Keydown || id == Rml::EventId::Focus || id == Rml::EventId::Blur; }
+constexpr Rml::EventId kListEvents[] = {Rml::EventId::Click, Rml::EventId::Keydown}; // what ListListener hears
 
 std::filesystem::file_time_type modified(const std::filesystem::path& file)
 {
@@ -107,6 +108,9 @@ void SceneGui::sync(const Scene& scene, const std::filesystem::path& projectRoot
     entries_ = std::move(next);
     if (changed)
         restack();
+    for (Entry& entry : entries_)
+        if (entry.document)
+            entry.listListener->update();
 }
 
 void SceneGui::clear()
@@ -148,9 +152,12 @@ bool SceneGui::click(const std::string& id)
 std::optional<GuiValue> SceneGui::value(const std::string& id)
 {
     for (auto it = entries_.rbegin(); it != entries_.rend(); ++it)
-        if (Rml::Element* element = it->document ? it->document->GetElementById(id) : nullptr)
+        if (Rml::Element* element = it->document ? it->document->GetElementById(id) : nullptr) {
+            if (std::optional<GuiValue> value = it->listListener->value(*element))
+                return value;
             if (std::optional<GuiValue> value = guiWidgetValue(*element))
                 return value;
+        }
     return std::nullopt;
 }
 
@@ -160,10 +167,28 @@ void SceneGui::setValue(const std::string& id, GuiValue value)
     for (Entry& entry : entries_)
         if (Rml::Element* element = entry.document ? entry.document->GetElementById(id) : nullptr) {
             found = true;
-            applied = applyValue(*element, id, value) || applied;
+            applied = applyValue(entry, *element, id, value) || applied;
         }
     if (applied || !found) // a value no loaded widget took isn't kept (it would only warn again)
         written_[id].value = std::move(value);
+}
+
+void SceneGui::scrollTo(const std::string& id, int index) { scroll(id, index, "scrollTo"); }
+
+void SceneGui::scrollToEnd(const std::string& id) { scroll(id, ListListener::kEnd, "scrollToEnd"); }
+
+void SceneGui::scroll(const std::string& id, int index, const char* function)
+{
+    const std::string call = index == ListListener::kEnd ? std::format("kast.gui.{}('{}')", function, id)
+                                                         : std::format("kast.gui.{}('{}', {})", function, id, index);
+    for (auto it = entries_.rbegin(); it != entries_.rend(); ++it)
+        if (Rml::Element* element = it->document ? it->document->GetElementById(id) : nullptr) {
+            std::string error;
+            if (!it->listListener->scrollTo(*element, index, error))
+                log::warn(std::format("{}: {}: unchanged", call, error));
+            return;
+        }
+    log::warn(std::format("{}: no loaded GUI has it", call));
 }
 
 void SceneGui::setText(const std::string& id, std::string_view text)
@@ -172,7 +197,7 @@ void SceneGui::setText(const std::string& id, std::string_view text)
     written.text = std::string(text);
     for (Entry& entry : entries_)
         if (entry.document)
-            apply(*entry.document, id, {.text = written.text});
+            apply(entry, *entry.document, id, {.text = written.text});
 }
 
 void SceneGui::setVisible(const std::string& id, bool visible)
@@ -180,7 +205,7 @@ void SceneGui::setVisible(const std::string& id, bool visible)
     written_[id].visible = visible;
     for (Entry& entry : entries_)
         if (entry.document)
-            apply(*entry.document, id, {.visible = visible});
+            apply(entry, *entry.document, id, {.visible = visible});
 }
 
 void SceneGui::setAttribute(const std::string& id, const std::string& name, std::string_view value)
@@ -188,7 +213,7 @@ void SceneGui::setAttribute(const std::string& id, const std::string& name, std:
     written_[id].attributes[name] = std::string(value);
     for (Entry& entry : entries_)
         if (entry.document)
-            apply(*entry.document, id, {.attributes = {{name, std::string(value)}}});
+            apply(entry, *entry.document, id, {.attributes = {{name, std::string(value)}}});
 }
 
 bool SceneGui::focus(const std::string& id)
@@ -321,7 +346,7 @@ Rml::ElementDocument* SceneGui::documentWith(const std::string& id) const
     return nullptr;
 }
 
-void SceneGui::apply(Rml::ElementDocument& document, const std::string& id, const Written& written)
+void SceneGui::apply(Entry& entry, Rml::ElementDocument& document, const std::string& id, const Written& written)
 {
     Rml::Element* element = document.GetElementById(id);
     if (!element)
@@ -341,14 +366,15 @@ void SceneGui::apply(Rml::ElementDocument& document, const std::string& id, cons
             element->SetProperty("display", "none");
     }
     if (written.value)
-        applyValue(*element, id, *written.value);
+        applyValue(entry, *element, id, *written.value);
 }
 
-bool SceneGui::applyValue(Rml::Element& element, const std::string& id, const GuiValue& value)
+bool SceneGui::applyValue(Entry& entry, Rml::Element& element, const std::string& id, const GuiValue& value)
 {
     std::string error;
     quiet_ = true;
-    const bool applied = setGuiWidgetValue(element, value, error);
+    const bool list = entry.listListener->value(element).has_value();
+    const bool applied = list ? entry.listListener->select(element, value, error) : setGuiWidgetValue(element, value, error);
     quiet_ = false;
     if (!applied)
         log::warn(std::format("kast.gui.setValue('{}'): {}: unchanged", id, error));
@@ -379,7 +405,15 @@ void SceneGui::load(Entry& entry, EventBus& bus)
     }
     const uint64_t problems = gui::problemCount();
     models_.prepare(*context, text);
+    // Its virtual lists' sources read as empty while it loads, until their row templates are over windows
+    // (ListListener::hold, attach).
+    entry.listListener = std::make_unique<ListListener>(bus, entry.path, models_);
+    context->AddEventListener("load", entry.listListener.get(), true);
     Rml::ElementDocument* document = context->LoadDocument(gui::toRmlPath(*file));
+    context->RemoveEventListener("load", entry.listListener.get(), true);
+    if (document)
+        entry.listListener->attach(*document);
+    models_.restore(context);
     if (!document || gui::problemCount() != problems) {
         log::error(std::format("UI document '{}' (or its style sheet) has errors, see above: not shown", entry.path));
         if (document)
@@ -395,8 +429,10 @@ void SceneGui::load(Entry& entry, EventBus& bus)
     entry.widgetListener = std::make_unique<WidgetListener>(bus, entry.path, quiet_);
     for (const Rml::EventId id : kWidgetEvents)
         document->AddEventListener(id, entry.widgetListener.get(), capture(id));
+    for (const Rml::EventId id : kListEvents)
+        document->AddEventListener(id, entry.listListener.get());
     for (const auto& [id, written] : written_) // what Lua wrote before this document loaded
-        apply(*document, id, written);
+        apply(entry, *document, id, written);
     if (entry.visible)
         document->Show();
     entry.document = document;
@@ -410,12 +446,15 @@ void SceneGui::unload(Entry& entry)
         entry.document->RemoveEventListener(Rml::EventId::Dragend, entry.dragListener.get());
         for (const Rml::EventId id : kWidgetEvents)
             entry.document->RemoveEventListener(id, entry.widgetListener.get(), capture(id));
+        for (const Rml::EventId id : kListEvents)
+            entry.document->RemoveEventListener(id, entry.listListener.get());
         entry.document->Close();
     }
     entry.document = nullptr;
     entry.listener.reset();
     entry.dragListener.reset();
     entry.widgetListener.reset();
+    entry.listListener.reset();
 }
 
 void SceneGui::restack()

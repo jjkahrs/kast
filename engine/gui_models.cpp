@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <format>
 #include <regex>
 
 namespace kast {
@@ -155,6 +156,51 @@ ValueDefinition& valueDefinition()
     return definition;
 }
 
+// What a row past a window's end reads as, members and all: empty. A data-for's rows outlive a shrink until it removes
+// them, and their views (at the same depth) may update first.
+class GoneRowDefinition final : public Rml::VariableDefinition {
+public:
+    GoneRowDefinition() : Rml::VariableDefinition(Rml::DataVariableType::Scalar) {}
+    bool Get(void*, Rml::Variant& variant) override
+    {
+        variant = Rml::Variant();
+        return true;
+    }
+    Rml::DataVariable Child(void*, const Rml::DataAddressEntry&) override { return Rml::DataVariable(this, nullptr); }
+};
+
+// A GuiWindow as an array: its rows are the source's own nodes, read through ValueDefinition (nothing is copied).
+class WindowDefinition final : public Rml::VariableDefinition {
+public:
+    WindowDefinition() : Rml::VariableDefinition(Rml::DataVariableType::Array) {}
+
+    int Size(void* ptr) override
+    {
+        const GuiWindow& window = *static_cast<const GuiWindow*>(ptr);
+        const int rows = window.source && window.source->is_array() ? static_cast<int>(window.source->size()) : 0;
+        return std::clamp(rows - window.first, 0, window.count);
+    }
+
+    Rml::DataVariable Child(void* ptr, const Rml::DataAddressEntry& address) override
+    {
+        const GuiWindow& window = *static_cast<const GuiWindow*>(ptr);
+        if (address.index >= 0 && address.index < Size(ptr))
+            return Rml::DataVariable(&valueDefinition(), &(*window.source)[static_cast<size_t>(window.first + address.index)]);
+        static GoneRowDefinition gone;
+        if (address.index >= 0)
+            return Rml::DataVariable(&gone, nullptr);
+        if (address.name == "size")
+            return Rml::MakeLiteralIntVariable(Size(ptr));
+        return {};
+    }
+};
+
+WindowDefinition& windowDefinition()
+{
+    static WindowDefinition definition;
+    return definition;
+}
+
 bool hasModel(Rml::Context& context, const std::string& model) { return context.GetDataModels().count(model) > 0; }
 
 } // namespace
@@ -226,10 +272,20 @@ void GuiModels::prepare(Rml::Context& context, std::string_view rml)
 void GuiModels::set(Rml::Context* context, const std::string& model, const std::string& key, GuiValue value)
 {
     values_[model][key] = std::move(value);
+    const auto windows = windows_.find(model);
+    if (windows != windows_.end())
+        for (auto& [name, window] : windows->second)
+            if (window.source == &values_[model][key])
+                ++window.version;
     if (!context || !hasModel(*context, model))
         return;
     bind(*context, model, key);
-    context->GetDataModel(model).GetModelHandle().DirtyVariable(key);
+    Rml::DataModelHandle handle = context->GetDataModel(model).GetModelHandle();
+    handle.DirtyVariable(key);
+    if (windows != windows_.end())
+        for (const auto& [name, window] : windows->second)
+            if (window.source == &values_[model][key])
+                handle.DirtyVariable(window.name);
 }
 
 std::optional<GuiValue> GuiModels::get(const std::string& model, const std::string& key) const
@@ -247,6 +303,45 @@ void GuiModels::clear(Rml::Context* context)
         for (const auto& [model, unused] : values_)
             context->RemoveDataModel(model);
     values_.clear();
+    windows_.clear();
+    held_.clear();
+}
+
+GuiWindow* GuiModels::window(Rml::Context& context, const std::string& model, const std::string& source)
+{
+    if (!hasModel(context, model))
+        return nullptr;
+    size_t count = 0;
+    for (const auto& [name, windows] : windows_)
+        count += windows.size();
+    const std::string name = std::format("kastlist{}", count + 1); // ponytail: a name a document's own variable could take too
+    GuiWindow& window = windows_[model][name];
+    window.name = name;
+    window.source = &values_[model][source];
+    context.GetDataModel(model).BindCustomDataVariable(name, Rml::DataVariable(&windowDefinition(), &window));
+    return &window;
+}
+
+void GuiModels::hold(const std::string& model, const std::string& key)
+{
+    if (!held_.contains({model, key}))
+        held_[{model, key}] = std::exchange(values_[model][key], GuiValue::array());
+}
+
+void GuiModels::restore(Rml::Context* context)
+{
+    for (auto& [name, value] : held_) {
+        values_[name.first][name.second] = std::move(value);
+        if (context && hasModel(*context, name.first))
+            context->GetDataModel(name.first).GetModelHandle().DirtyVariable(name.second);
+    }
+    held_.clear();
+}
+
+void GuiModels::dirty(Rml::Context& context, const std::string& model, const GuiWindow& window)
+{
+    if (hasModel(context, model))
+        context.GetDataModel(model).GetModelHandle().DirtyVariable(window.name);
 }
 
 void GuiModels::bind(Rml::Context& context, const std::string& model, const std::string& key)
