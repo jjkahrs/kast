@@ -1294,9 +1294,21 @@ void LuaSystems::State::bindGuiApi()
         case sol::type::boolean: gui->setValue(widget, value.as<bool>()); break;
         case sol::type::number: gui->setValue(widget, value.as<double>()); break;
         case sol::type::string: gui->setValue(widget, value.as<std::string>()); break;
+        case sol::type::lua_nil:
+        case sol::type::none: gui->setValue(widget, nullptr); break; // a list: no row selected
         default:
-            raise(L, std::format("kast.gui.setValue: value must be a boolean, number or string, got {}", toString(L, value)));
+            raise(L, std::format("kast.gui.setValue: value must be a boolean, number, string or nil, got {}", toString(L, value)));
         }
+    });
+    guiApi.set_function("scrollTo", [=, this](sol::this_state L, const sol::object& id, const sol::object& index) {
+        const std::string list = text(L, "scrollTo", "id", id);
+        const double row = index.get_type() == sol::type::number ? index.as<double>() : -1.0;
+        if (index.get_type() != sol::type::number || row != std::floor(row) || std::abs(row) > 2147483647.0)
+            raise(L, std::format("kast.gui.scrollTo: index must be a whole number, got {}", toString(L, index)));
+        gui->scrollTo(list, static_cast<int>(row)); // a negative one is out of range: logged there
+    });
+    guiApi.set_function("scrollToEnd", [=, this](sol::this_state L, const sol::object& id) {
+        gui->scrollToEnd(text(L, "scrollToEnd", "id", id));
     });
     guiApi.set_function("setText", [=, this](sol::this_state L, const sol::object& id, const sol::object& value) {
         gui->setText(text(L, "setText", "id", id), text(L, "setText", "text", value));

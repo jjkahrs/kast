@@ -19,13 +19,14 @@ class ElementDocument;
 } // namespace Rml
 
 // GUI Builder: four panels on one open .rml (gui_doc.h) and the .rcss it links.
-// - GUI Hierarchy: element tree; add Panel / Text / Button / Toggle / Slider / Dropdown / Spinbox / Progress (into the
-//   selected Panel, else <body>), delete, move up/down, drag-drop onto a Panel or <body> to reparent; Save. A
-//   composite widget (GuiDoc::composite) is one node: its insides are not listed.
-// - GUI Inspector: id, class, text (Text, Button) and data-event (Button and the input widgets) of the selection, its
-//   widget properties (GuiDoc::widgetProperties) and a Dropdown's options (add, remove, move, value, label, selected),
-//   and on any element its RmlUi data binding attributes (guiBindingAttribute): edited, emptied to remove, or added by
-//   name. Other attributes of Unknown elements are read-only.
+// - GUI Hierarchy: element tree; add Panel / Text / Button / Toggle / Slider / Dropdown / Spinbox / Progress / List Box /
+//   Virtual List (into the selected Panel, else <body>), delete, move up/down, drag-drop onto a Panel or <body> to
+//   reparent; Save. A composite widget (GuiDoc::composite) is one node: its insides are not listed.
+// - GUI Inspector: id, class, text (Text, Button) and data-event (Button, the input widgets and the lists) of the
+//   selection, its widget properties (GuiDoc::widgetProperties), a Dropdown's options and a List Box's rows (add,
+//   remove, move, value, label, selected), and on any element its RmlUi data binding attributes (guiBindingAttribute)
+//   but those edited as widget properties: edited, emptied to remove, or added by name. Other attributes of Unknown
+//   elements are read-only.
 // - GUI Style: the .rcss text, applied to the preview 0.3 s after the last keystroke. A sheet RmlUi logs problems for
 //   (in the Console) is not applied: the preview keeps the last good one.
 // - GUI Preview: the document rendered by RmlUi at a chosen resolution, scaled to fit; click selects the deepest
@@ -109,7 +110,7 @@ private:
     // One Inspector step on the selection: edit changes it between the before and after copies. False if it changed
     // nothing.
     bool editStep(const std::string& name, const std::function<void()>& edit);
-    void drawOptions(); // the selected Dropdown's options
+    void drawOptions(); // the selected Dropdown's options or List Box's rows
     void afterUndoRedo();
     void rememberFileTimes();
     std::string title(const char* name, const char* window) const;
@@ -146,7 +147,7 @@ private:
     std::map<std::string, std::string> bindingBuffers_; // inspectorNode_'s data binding attributes, by name
     std::string newBinding_;                            // the Inspector's "Add binding" name
     std::vector<std::pair<std::string, std::string>> widgetBuffers_; // inspectorNode_'s widget properties: name, text
-    std::vector<std::pair<std::string, std::string>> optionBuffers_; // inspectorNode_'s options: value, label
+    std::vector<std::pair<std::string, std::string>> optionBuffers_; // inspectorNode_'s options / rows: value, label
     pugi::xml_node inspectorNode_;
     UndoStack history_;
     struct Gesture {

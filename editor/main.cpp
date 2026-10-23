@@ -77,7 +77,7 @@ constexpr const char* kUsage =
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-select path] [--material-set field=json] [--material-undo N] [--material-redo N] "
     "[--focus-panel Window] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
-    "[--gui-add Panel|Text|Button|Toggle|Slider|Dropdown|Spinbox|Progress] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] "
+    "[--gui-add Panel|Text|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
     "[--graph-save] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-view-code] [--preview-model path] [--preview-clip name] "
@@ -345,13 +345,17 @@ bool parsePair(std::string_view text, char separator, std::optional<std::pair<in
 bool parseSize(std::string_view size, std::optional<std::pair<int, int>>& out) { return parsePair(size, 'x', out); }
 
 // "Panel", "Text", "Button", "Toggle", "Slider", "Dropdown", "Spinbox" or "Progress".
+// A kind's label, its spaces optional ("List Box", "ListBox").
 bool parseGuiKind(std::string_view label, std::optional<GuiKind>& out)
 {
-    for (GuiKind kind : kGuiCreatableKinds)
-        if (label == guiKindLabel(kind)) {
+    for (GuiKind kind : kGuiCreatableKinds) {
+        std::string joined = guiKindLabel(kind);
+        std::erase(joined, ' ');
+        if (label == guiKindLabel(kind) || label == joined) {
             out = kind;
             return true;
         }
+    }
     return false;
 }
 

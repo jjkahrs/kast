@@ -99,12 +99,17 @@ loaded documents by <code>id</code>, topmost document first (<code>engine/gui_ac
 <tr>
 <td><code>kast.gui.value(id)</code></td>
 <td>string, number, boolean or <code>nil</code></td>
-<td>The current text of the <code>&lt;input&gt;</code> / <code>&lt;textarea&gt;</code> with that id, or a <a href="#form-widgets">form widget</a>'s typed value; <code>nil</code> if no loaded document has one.</td>
+<td>The current text of the <code>&lt;input&gt;</code> / <code>&lt;textarea&gt;</code> with that id, a <a href="#form-widgets">form widget</a>'s typed value, or a <a href="#lists">list</a>'s selected row's value (<code>nil</code> if none is selected); <code>nil</code> if no loaded document has one.</td>
 </tr>
 <tr>
 <td><code>kast.gui.setValue(id, value)</code></td>
 <td>—</td>
-<td>Sets a <a href="#form-widgets">form widget</a>'s value (snapped and clamped like input) or a text field's text; publishes no change event.</td>
+<td>Sets a <a href="#form-widgets">form widget</a>'s value (snapped and clamped like input) or a text field's text, or selects a <a href="#lists">list</a>'s row (<code>nil</code>: none); publishes no change event.</td>
+</tr>
+<tr>
+<td><code>kast.gui.scrollTo(id, index)</code>, <code>kast.gui.scrollToEnd(id)</code></td>
+<td>—</td>
+<td>Scrolls a <a href="#lists">list</a>'s 0-based row <code>index</code> into view, or to its end. Not kept.</td>
 </tr>
 <tr>
 <td><code>kast.gui.setText(id, text)</code></td>
@@ -331,7 +336,8 @@ reads as a boolean). <code>kast.gui.setValue(id, value)</code> sets it as the pl
 clamped, a progress bar's clamped to <code>0..max</code>, a toggle takes a boolean, a dropdown the <code>value</code> of one of its options, a
 text field a string. A value of the wrong type, an option no dropdown has, or an id that is no widget logs a warning (never
 the value) and changes nothing. A value is kept like <code>setText</code> (Play start, hot reload), unless no loaded widget took it.
-A value that isn't a boolean, number or string raises.
+A value that isn't a boolean, number, string or <code>nil</code> raises (<code>nil</code>, which clears a
+<a href="#lists">list</a>'s selection, is the wrong type for a widget: logged).
 <pre><code class="language-lua">kast.gui.setValue(&quot;loading&quot;, done / total) -- drives a progress bar
 if kast.gui.value(&quot;sound&quot;) then ... end
 </code></pre></li>
@@ -345,6 +351,83 @@ ones.</li>
 <code>widgets.rcss</code>; a fractional spinbox; the same widgets bound to model <code>wbind</code> with toggles made by
 <code>data-for</code>), driven by <code>scripts/ui_widgets.lua</code>, which logs every change event and drives the progress bar with
 <code>setValue</code>; <code>ctest -R "ui_widgets|player_widgets|gui_builder_widget"</code> and self_check's <code>checkGuiWidgets</code>.</p>
+<h2 id="lists">Lists</h2>
+<p>Two vertical, single-select lists are plain RML markup too (<code>engine/gui_lists.h</code>, <code>.cpp</code>; added and edited in
+the <a href="../editor/gui-builder.html#lists">GUI Builder</a>), styled by the same default sheet:</p>
+<table>
+<thead>
+<tr>
+<th>List</th>
+<th>Markup</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>List Box</td>
+<td><code>&lt;div class="listbox" data-event="bag.pick"&gt;&lt;div class="row" data-value="sword"&gt;Sword&lt;/div&gt;&lt;div class="row selected" data-value="shield"&gt;Shield&lt;/div&gt;&lt;/div&gt;</code>: its rows are its children with class <code>row</code>, authored or made by a <code>data-for</code> row template (<code>&lt;div class="row" data-for="line : lines" data-attr-data-value="line.id"&gt;{{line.text}}&lt;/div&gt;</code>). <code>class="row selected"</code> selects a row from the start.</td>
+<td>the selected row's <code>data-value</code> (a string), else its 0-based index (a number)</td>
+</tr>
+<tr>
+<td>Virtual List</td>
+<td><code>&lt;div class="virtuallist" data-model="bag" data-row-height="24" data-key="id"&gt;&lt;div class="row" data-for="item : items"&gt;{{item.name}}&lt;/div&gt;&lt;/div&gt;</code>: exactly one child, its row template, whose <code>data-for</code> names a top-level array of the data model (<code>data-model</code> on the list or an ancestor), set with <code>kast.gui.set</code></td>
+<td>the selected item's <code>data-key</code> field as a string (a whole number without decimals: <code>"42"</code>), else its 0-based index</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Virtualization</strong>: a Virtual List makes elements only for the rows in view plus <strong>4</strong> above and 4 below
+(<code>kGuiListBuffer</code>; about 29 for a 480 px list of 24 px rows, whatever the array's length) and reuses them as it scrolls:
+its template's <code>data-for</code> runs over a window of the array that follows the scroll position, between two spacer
+elements that keep the scroll range at <em>rows * row height</em>, so the scrollbar is right. Rows are
+<code>data-row-height</code> pixels high (default and for a missing or bad value: <strong>24</strong>; no measuring), set by the engine on
+every row (<code>height</code>, <code>box-sizing: border-box</code>): give rows no vertical margin. Replacing the array
+(<code>kast.gui.set</code>: append, remove, replace) updates the list; nothing is copied per frame (self_check measures SceneGui + RmlUi
+while scrolling 100,000 rows 2,000 px a frame: about 0.2 ms a frame in a Release build, 3 ms in Debug).
+<strong>Limits</strong>: one fixed row height; the source is a top-level array of the model (not <code>a.b</code>); the template's
+index alias (<code>it_index</code>) counts from the first live row, not the first item, so number rows from an item field; a Virtual
+List must be in the document when it loads (one made by <code>kast.gui.clone</code> / <code>create</code> isn't virtualized); every
+<code>kast.gui.set</code> converts the whole Lua array (100,000 rows: a noticeable hitch), so append in batches. A virtual list
+without a data model or a <code>data-for</code> template logs <code>UI document '...': virtual list '...' needs a data model and one
+row template ...</code> and renders as written.</li>
+<li><strong>Selection</strong>: one row at a time. A click selects a row and gives the list keyboard focus (its rows take none:
+<code>focus: none</code>); with the list focused, Up / Down move a row, PageUp / PageDown a page (rows that fit in view), Home / End
+to the first / last row (with no selection Up and End start from the last row, the others from the first), and the
+selected row is scrolled into view. The selected row has class <code>selected</code>. A Virtual List keeps its selection by
+key while rows are recycled and when the array is replaced (by index without a <code>data-key</code>); when the selected item is
+gone the selection clears. A List Box's selection is the <code>selected</code> class on the row element (a <code>data-for</code>
+row keeps it by position).</li>
+<li><strong>Change events</strong>: with <code>data-event="name"</code> on the list, every selection change the player makes (click or
+key) publishes <code>name</code>, publisher <code>UI</code>, with <code>{"id", "document", "value"}</code> (<code>value</code> as above,
+<code>nil</code> if none). <code>kast.gui.setValue</code> and data binding (an array update that moves or clears the selection) publish
+nothing.</li>
+<li><strong>Follow</strong>: <code>data-follow=""</code> on a list keeps it at its end while rows are added, if it was at its end before
+(a chat or combat log); once the player scrolls up it stays put until scrolled back down.</li>
+<li><strong>Lua</strong>: <code>kast.gui.value(id)</code> is the selected row's value or <code>nil</code>. <code>kast.gui.setValue(id, v)</code>
+selects by value or key (a string), by index (a number) or clears (<code>nil</code>); no such row logs <code>kast.gui.setValue('id'):
+the list has no row with that value: unchanged</code> (never the value) and changes nothing; it is kept across hot reloads like
+other <code>setValue</code>s. <code>kast.gui.scrollTo(id, index)</code> scrolls a 0-based row into view (once laid out: on the next frame
+for a List Box), <code>kast.gui.scrollToEnd(id)</code> to the end. An index that isn't a whole number or an id that isn't a string
+raises; an unknown id or an index out of range logs and does nothing. A List Box's index counts the rows it has now: rows a
+<code>kast.gui.set</code> of this frame adds appear next frame.
+<pre><code class="language-lua">kast.gui.set(&quot;bag&quot;, &quot;items&quot;, items)            -- {{id = 1, name = &quot;Sword&quot;}, ...}
+kast.subscribe(&quot;bag.pick&quot;, function(e) kast.log(&quot;picked &quot; .. tostring(e.value)) end) -- e.value is the key, &quot;1&quot;
+kast.gui.setValue(&quot;bag_list&quot;, &quot;1&quot;)                -- by key; a number selects by index
+kast.gui.scrollTo(&quot;bag_list&quot;, #items - 1)
+</code></pre></li>
+<li><strong>Default style and overriding it</strong>: <code>.listbox</code> / <code>.virtuallist</code> get a <code>#313131</code> card 240 x 168 px with a
+<code>#454545</code> border (<code>#ffcc00</code> while focused) and <code>overflow-y: auto</code>; <code>.row</code>s inside them are 24 px, padded,
+<code>#454545</code> on hover and <code>#ffaa00</code> with black text when <code>.selected</code>; their vertical scrollbar is a 10 px black track
+with a <code>#818181</code> bar (<code>#ffcc00</code> hovered, <code>#ff9900</code> dragged). Every selector starts with <code>.listbox</code> or
+<code>.virtuallist</code> (e.g. <code>.listbox scrollbarvertical sliderbar</code>), so other scroll containers keep their look; override
+with rules of the same or higher specificity, e.g. <code>.listbox .row.selected { background-color: #3060ff; }</code> or
+<code>#log { height: 300px; }</code>.</li>
+</ul>
+<p><strong>Sample and tests</strong>: <code>tests/project/ui_lists.scene</code> shows <code>ui/lists.rml</code> (a List Box of authored rows, a
+List Box made by <code>data-for</code>, a Virtual List of 100,000 rows; <code>lists.rcss</code> styles no list), driven by
+<code>scripts/ui_lists.lua</code>, which logs the change events, reads <code>value</code>, calls <code>setValue</code>, <code>scrollTo</code> and
+<code>scrollToEnd</code> and appends rows the lists follow; <code>ctest -R "ui_lists|player_lists|gui_builder_list"</code> and self_check's
+<code>checkGuiListMath</code>, <code>checkGuiLists</code> and <code>checkGuiDocLists</code> (<code>kast_self_check --lists</code>).</p>
 <h2 id="effects">Effects: glow, filters and gradients</h2>
 <p>RmlUi's CSS effects draw in Play (the Game view), the GUI Builder preview and the built player alike
 (<code>engine/gui_render.cpp</code>, <code>engine/gui_effects.cpp</code>, shaders <code>engine/shaders/gui/fs_gui_matrix.sc</code>,

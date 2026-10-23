@@ -165,6 +165,55 @@ progress fill {
     border-radius: 6px;
     background-color: #ffaa00;
 }
+
+/* List Box and Virtual List (gui_lists.h): rows on a card, the selected one #ffaa00, a slim scrollbar; the list takes the
+   focus (its rows don't), outlined while it has it. Scoped to the lists: other scroll containers keep their look. */
+.listbox, .virtuallist {
+    display: block;
+    width: 240px;
+    height: 168px;
+    overflow-y: auto;
+    border: 1px #454545;
+    border-radius: 3px;
+    background-color: #313131;
+    color: #ffffff;
+    text-align: left;
+}
+.listbox:focus, .virtuallist:focus {
+    border-color: #ffcc00;
+}
+.listbox .row, .virtuallist .row {
+    display: block;
+    height: 24px;
+    padding: 0 8px;
+    line-height: 24px;
+    white-space: nowrap;
+    focus: none;
+}
+.listbox .row:hover, .virtuallist .row:hover {
+    background-color: #454545;
+}
+.listbox .row.selected, .virtuallist .row.selected {
+    background-color: #ffaa00;
+    color: #000000;
+}
+.listbox scrollbarvertical, .virtuallist scrollbarvertical {
+    width: 10px;
+}
+.listbox scrollbarvertical slidertrack, .virtuallist scrollbarvertical slidertrack {
+    background-color: #000000;
+}
+.listbox scrollbarvertical sliderbar, .virtuallist scrollbarvertical sliderbar {
+    min-height: 20px;
+    border-radius: 5px;
+    background-color: #818181;
+}
+.listbox scrollbarvertical sliderbar:hover, .virtuallist scrollbarvertical sliderbar:hover {
+    background-color: #ffcc00;
+}
+.listbox scrollbarvertical sliderbar:active, .virtuallist scrollbarvertical sliderbar:active {
+    background-color: #ff9900;
+}
 )";
 
 namespace {
