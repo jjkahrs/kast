@@ -51,5 +51,6 @@ coverage/
 !.env.example
 services/auth/keys/
 
-# Editor shader bytecode cache (project-local, never shipped)
+# Editor shader bytecode and model import caches (project-local, never shipped)
 .kast/shader_cache/
+**/.kast/model_cache/

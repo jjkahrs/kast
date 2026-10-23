@@ -160,8 +160,14 @@ set_source_files_properties(engine/network.cpp PROPERTIES COMPILE_DEFINITIONS "_
 set_source_files_properties(engine/lua_systems.cpp PROPERTIES COMPILE_OPTIONS /bigobj) # sol2 templates
 target_link_libraries(kast_engine
   PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json RmlUi::RmlUi kast_map
-  PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 assimp::assimp Jolt::Jolt "${LUAJIT_LIBRARY}" kast_protocol
+  PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 Jolt::Jolt "${LUAJIT_LIBRARY}" kast_protocol
           Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto crypt32 shell32) # shell32: recycleFile
+
+# --- model import: the Assimp importer (editor/model_importer.h) the editor injects into kast::models(); only the editor
+# and the tests link it, so the shipped kast_player has no Assimp and loads the models Build cooked into game.pak ---
+add_library(kast_model_import STATIC editor/model_importer.cpp)
+target_compile_options(kast_model_import PRIVATE ${KAST_COMPILE_OPTIONS})
+target_link_libraries(kast_model_import PUBLIC kast_engine PRIVATE assimp::assimp)
 
 # --- player: the prebuilt game client the editor's Build menu copies; engine only, no ImGui ---
 # A Windows-subsystem app (no console window); SDL_main.h supplies WinMain.
@@ -181,7 +187,7 @@ target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENE
 # The Online panel's default compose folder: services/world of this source tree, if it is still there at run time.
 target_compile_definitions(kast_editor PRIVATE KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(kast_editor PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_editor PRIVATE kast_engine kast_zone SDL3::SDL3 imgui::imgui imguizmo::imguizmo
+target_link_libraries(kast_editor PRIVATE kast_engine kast_model_import kast_zone SDL3::SDL3 imgui::imgui imguizmo::imguizmo
                       unofficial::imgui-node-editor::imgui-node-editor pugixml::pugixml shell32) # shell32: Recycle Bin
 add_dependencies(kast_editor kast_player kast_shader_tools) # Build copies kast_player.exe from next to kast_editor.exe
 
@@ -211,7 +217,7 @@ add_dependencies(kast_self_check kast_shader_tools) # the .kshader checks compil
 target_compile_definitions(kast_self_check PRIVATE KAST_TEST_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/project"
                            KAST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(kast_self_check PRIVATE ${KAST_COMPILE_OPTIONS} /bigobj) # one big file of checks
-target_link_libraries(kast_self_check PRIVATE kast_engine kast_protocol SDL3::SDL3 imgui::imgui pugixml::pugixml shell32
+target_link_libraries(kast_self_check PRIVATE kast_engine kast_model_import kast_protocol SDL3::SDL3 imgui::imgui pugixml::pugixml shell32
                       Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto) # Boost, OpenSSL: the loopback net servers
 set_source_files_properties(tests/net_self_check.cpp tests/net_test_util.cpp tests/net_test_server.cpp
                             PROPERTIES COMPILE_DEFINITIONS "_WIN32_WINNT=0x0A00" COMPILE_OPTIONS /bigobj)
@@ -1516,6 +1522,8 @@ function(kast_game_project name project_name start_scene empty_systems)
   file(WRITE "${dir}/.kast/editor.json" "{\n  \"buildFolder\": \"C:/elsewhere\"\n}\n") # must stay out of game.pak
   # Build compiles every shipped .kshader and fails on a broken one: drop the deliberately broken test shaders.
   file(REMOVE "${dir}/shaders/broken.kshader" "${dir}/shaders/bad_param.kshader")
+  # Build cooks every shipped model and fails on one it can't import: drop the deliberately corrupt test model.
+  file(REMOVE "${dir}/models/corrupt.glb")
   if(empty_systems)
     file(READ "${dir}/${start_scene}" scene)
     string(REGEX REPLACE "\"systems\": \\[[^]]*\\]" "\"systems\": []" scene "${scene}")
@@ -1703,6 +1711,83 @@ foreach(pak missing corrupt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
   set_tests_properties(player_${pak}_pak PROPERTIES FIXTURES_REQUIRED game_switch_built TIMEOUT 90)
 endforeach()
+# Models in the player: Build cooks every shipped model file into game.pak (<path>.kmodel, kast::modelPakPath) in place
+# of the model files and their .bin / .mtl sidecars, through the project's .kast/model_cache ("Cooked model ... (cache
+# hit)" on the second Build); the player loads them by their source path ("(cooked)") with no Assimp next to it
+# (player_test.cmake checks). player_model_not_cooked: a model game.pak has no cooked entry for (models_missing.scene's)
+# is one clear error, and the game keeps running. build_game_corrupt_model: a model Assimp can't read fails the Build
+# naming it. editor_model_cache_cold / _warm: the editor imports a project's models once, then reads its cache.
+kast_game_project(model_cook "Model Cook" models.scene FALSE "")
+add_test(NAME model_cook_clear_cache
+  COMMAND "${CMAKE_COMMAND}" -E rm -rf "${CMAKE_CURRENT_BINARY_DIR}/game_projects/model_cook/.kast/model_cache")
+foreach(run "cold|Cooked model 'models/female-128-anim.glb' for game.pak|Cooked model 'models/female-128-anim.glb' for game.pak (cache hit)"
+            "warm|Cooked model 'models/female-128-anim.glb' for game.pak (cache hit)|-")
+  string(REPLACE "|" ";" run "${run}")
+  list(GET run 0 name)
+  list(GET run 1 expect)
+  list(GET run 2 forbid)
+  set(forbid_arg "")
+  if(NOT forbid STREQUAL "-")
+    set(forbid_arg "-DFORBID_OUTPUT=${forbid}")
+  endif()
+  add_test(NAME build_game_model_cook_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/model_cook"
+            "-DOUT=${KAST_GAME_OUT}/model_cook_${name}" "-DEXE=Model Cook.exe" -DEXPECT=0 "-DEXPECT_OUTPUT=${expect}" ${forbid_arg}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+endforeach()
+set_tests_properties(model_cook_clear_cache PROPERTIES FIXTURES_SETUP model_cook_clean RESOURCE_LOCK model_cook_project)
+set_tests_properties(build_game_model_cook_cold PROPERTIES FIXTURES_REQUIRED model_cook_clean
+                     FIXTURES_SETUP model_cook_cold_built RESOURCE_LOCK model_cook_project)
+set_tests_properties(build_game_model_cook_warm PROPERTIES FIXTURES_REQUIRED model_cook_cold_built
+                     FIXTURES_SETUP model_cook_built RESOURCE_LOCK model_cook_project)
+add_test(NAME game_model_cook_pak
+  COMMAND "${CMAKE_COMMAND}" "-DPAK=${KAST_GAME_OUT}/model_cook_warm/game.pak"
+          "-DMUST_CONTAIN=models/female-128-anim.glb.kmodel;models/cube.obj.kmodel;models/cube.gltf.kmodel;models/kenney/characterMedium.fbx.kmodel;models.scene"
+          "-DFORBID_REGEX=^[^.].*\\.(glb|gltf|fbx|obj|bin|mtl)$" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/pak_check.cmake")
+set_tests_properties(game_model_cook_pak PROPERTIES FIXTURES_REQUIRED model_cook_built)
+add_test(NAME player_model_cook_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/model_cook_warm" "-DEXE=Model Cook.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/model_cook.run" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_model_cook.png"
+          -DEXPECT=0 "-DEXPECT_OUTPUT=Loaded model 'models/female-128-anim.glb' \\(cooked\\)"
+          "-DFORBID_OUTPUT=\\[error\\]|magenta" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_model_cook_screenshot PROPERTIES FIXTURES_REQUIRED model_cook_built TIMEOUT 90)
+kast_game_project(model_not_cooked "Model Not Cooked" models_missing.scene FALSE "")
+add_test(NAME build_game_model_not_cooked
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/model_not_cooked"
+          "-DOUT=${KAST_GAME_OUT}/model_not_cooked" "-DEXE=Model Not Cooked.exe" -DEXPECT=0
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+set_tests_properties(build_game_model_not_cooked PROPERTIES FIXTURES_SETUP game_model_not_cooked_built)
+add_test(NAME player_model_not_cooked
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/model_not_cooked" "-DEXE=Model Not Cooked.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/model_not_cooked.run" -DEXPECT=0
+          "-DEXPECT_OUTPUT=Model 'models/does_not_exist.glb': game.pak has no cooked model for it"
+          "-DFORBID_OUTPUT=no cooked model for it.*no cooked model for it" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_model_not_cooked PROPERTIES FIXTURES_REQUIRED game_model_not_cooked_built TIMEOUT 90)
+kast_game_project(corrupt_model "Corrupt Model" models.scene FALSE "")
+file(COPY "${KAST_TEST_PROJECT}/models/corrupt.glb" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/game_projects/corrupt_model/models")
+add_test(NAME build_game_corrupt_model
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/corrupt_model"
+          "-DOUT=${KAST_GAME_OUT}/corrupt_model" -DEXPECT=1 "-DEXPECT_OUTPUT=Build failed: model 'models/corrupt.glb':"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+kast_game_project(model_cache "Model Cache" models.scene FALSE "")
+add_test(NAME editor_model_cache_clear
+  COMMAND "${CMAKE_COMMAND}" -E rm -rf "${CMAKE_CURRENT_BINARY_DIR}/game_projects/model_cache/.kast/model_cache")
+set_tests_properties(editor_model_cache_clear PROPERTIES FIXTURES_SETUP editor_model_cache_clean RESOURCE_LOCK model_cache_project)
+foreach(run "cold|Loaded model 'models/female-128-anim.glb' \\(imported in|cache hit"
+            "warm|Loaded model 'models/female-128-anim.glb' \\(cache hit\\)|imported in")
+  string(REPLACE "|" ";" run "${run}")
+  list(GET run 0 name)
+  list(GET run 1 expect)
+  list(GET run 2 forbid)
+  add_test(NAME editor_model_cache_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/editor_model_cache_${name}.png"
+            "-DEXTRA_ARGS=--project ${CMAKE_CURRENT_BINARY_DIR}/game_projects/model_cache --scene ${CMAKE_CURRENT_BINARY_DIR}/game_projects/model_cache/models.scene --size 1600x900"
+            "-DEXPECT_OUTPUT=${expect}" "-DFORBID_OUTPUT=${forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endforeach()
+set_tests_properties(editor_model_cache_cold PROPERTIES FIXTURES_REQUIRED editor_model_cache_clean
+                     FIXTURES_SETUP editor_model_cache_cold_run RESOURCE_LOCK model_cache_project)
+set_tests_properties(editor_model_cache_warm PROPERTIES FIXTURES_REQUIRED editor_model_cache_cold_run
+                     RESOURCE_LOCK model_cache_project)
 # Shaders in the player: Build compiles every shipped .kshader and .kshadergraph into game.pak (kast::shaderPakPath; a
 # graph's keyed by its generated text, which the player generates again from the shipped graph) and the player loads
 # that bytecode ("Loaded shader ... (precompiled)"; player_test.cmake fails if a shaderc.exe is next to it). The vertex

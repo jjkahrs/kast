@@ -41,7 +41,8 @@ build, run it again. Headless <code>--build</code> fails instead (exit 1), its e
 <p>Before writing anything, Build checks that <code>startScene</code> is set, inside the project and loads, that the Online Services
 settings pass the modal's checks (nothing extra while disabled), that the output folder
 isn't the project folder itself, and that <code>kast_player.exe</code> and its DLLs are next to the editor. It then compiles
-every <code>.kshader</code> that ships (see <a href="#build-shaders">Shaders</a>). Then it writes, into
+every <code>.kshader</code> that ships (see <a href="#build-shaders">Shaders</a>) and cooks every model file (see
+<a href="#build-models">Models</a>). Then it writes, into
 the output folder (created if needed, overwriting only these files):</p>
 <pre><code>&lt;Name&gt;.exe   copy of kast_player.exe
 game.pak     the project's files
@@ -54,7 +55,8 @@ rmlui.dll    game GUI, with FreeType and its libraries: freetype.dll, zlib1.dll,
 spaces and trailing dots removed, <code>_</code> appended to a reserved device name (<code>CON</code>, <code>NUL</code>, <code>COM1</code>, ...) and <code>Game</code> if
 nothing is left: <code>Switch Test</code> -&gt; <code>Switch Test.exe</code>, <code>My: Game?</code> -&gt; <code>My_ Game_.exe</code>.</p>
 <p><strong>game.pak</strong> holds every file under the project folder except dotfiles, anything in a dot-directory (<code>.kast/</code>, <code>.git/</code>)
-and the output folder if it is inside the project. It is uncompressed: a <code>KPAK</code> magic and format version, an index of
+and the output folder if it is inside the project, with models and their sidecars replaced by cooked <code>.kmodel</code> entries
+(see <a href="#build-models">Models</a>), plus the shaders' bytecode. It is uncompressed: a <code>KPAK</code> magic and format version, an index of
 (project-relative <code>/</code> path, offset, size) entries, then the raw bytes. The exact byte layout is in <code>engine/pak.h</code>. The
 player checks the magic, the version and that every entry lies inside the file.</p>
 <p id="build-shaders"><strong>Shaders.</strong> Build compiles <strong>every <code>.kshader</code> that ships in <code>game.pak</code></strong>, not only the
@@ -75,7 +77,16 @@ the node:</p>
 <p>A shipped <code>.mat</code> whose <code>alphaMode</code> is opaque or mask and whose shader samples <code>SCREEN_TEXTURE</code> or
 <code>DEPTH_TEXTURE</code> (<a href="../engine/shaders.html#kshader-screen">blend and additive only</a>) fails the Build too:</p>
 <pre><code>Build failed: material 'materials/water.mat': SCREEN_TEXTURE is only for blend and additive materials (drawn after the opaque scene it copies); this material's alphaMode is mask</code></pre>
-<p>Move a work-in-progress <code>.kshader</code> into a dot-folder (e.g. <code>.wip/</code>) to leave it out of the Build. Writing and
+<p id="build-models"><strong>Models.</strong> Build cooks <strong>every model file that ships</strong> (<code>.glb</code>, <code>.gltf</code>,
+<code>.fbx</code>, <code>.obj</code>; not only those scenes name, since Lua can load a model by path) into the binary <code>.kmodel</code>
+format through the editor's <a href="../engine/models-animation.html#model-cache">model import cache</a>
+(<code>.kast/model_cache/</code>), and puts it in <code>game.pak</code> as <code>&lt;path&gt;.kmodel</code> in place of the model file and the
+sidecars it imports from (a glTF's external <code>.bin</code> buffers, an OBJ's <code>.mtl</code>). Images a model uses still ship as
+files. Each one logs <code>Cooked model 'models/hero.glb' for game.pak</code>, with <code>(cache hit)</code> when the cache already held
+it. The player loads cooked models only and ships without Assimp. A model Assimp can't import fails the Build, naming the
+file, and writes nothing:</p>
+<pre><code>Build failed: model 'models/corrupt.glb': ...</code></pre>
+<p>Move a work-in-progress <code>.kshader</code> or model into a dot-folder (e.g. <code>.wip/</code>) to leave it out of the Build. Writing and
 testing shaders in the editor: <a href="shaders.html#editor-shaders">Shaders</a>.</p>
 <p><strong>The game</strong> (<code>kast_player.exe</code> under its new name) opens the <code>game.pak</code> next to it, loads <code>project.kast</code> and its Lua
 components from it, titles its window with the project name and plays <code>startScene</code> as editor Play mode does (C++

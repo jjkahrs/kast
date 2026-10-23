@@ -1,10 +1,12 @@
 #include "build.h"
 
 #include "assets.h"
+#include "model_importer.h"
 #include "shader_compiler.h"
 
 #include <files.h>
 #include <log.h>
+#include <model.h>
 #include <pak.h>
 #include <scene.h>
 #include <scene_io.h>
@@ -17,6 +19,7 @@
 #include <algorithm>
 #include <format>
 #include <map>
+#include <set>
 
 namespace {
 
@@ -168,6 +171,33 @@ bool compileShipped(const std::filesystem::path& root, const std::vector<std::st
     return true;
 }
 
+// Cooks every model file among paths (game.pak's) into a .kmodel entry at kast::modelPakPath, through the editor's model
+// cache, and takes the model files and the sidecars they import from (.bin, .mtl) out of paths: the player loads only
+// cooked models (it has no Assimp). Every shipped one, not only those scenes name: Lua can load a model by path. False +
+// error naming the first file that fails.
+bool cookShippedModels(const std::filesystem::path& root, std::vector<std::string>& paths,
+                       std::map<std::string, std::string>& cooked, std::string& error)
+{
+    const std::string version = modelImporterVersion();
+    std::set<std::string> sources;
+    for (const std::string& path : paths) {
+        if (!kast::isModelFile(path))
+            continue;
+        kast::CookedModel model;
+        std::string reason;
+        if (!kast::cookModel(root, path, importModel, version, root / kEditorDir / "model_cache", model, reason)) {
+            error = std::format("Build failed: model '{}': {}", path, reason);
+            return false;
+        }
+        cooked[kast::modelPakPath(path)] = std::move(model.bytes);
+        sources.insert(path);
+        sources.insert(model.sidecars.begin(), model.sidecars.end());
+        kast::log::info(std::format("Cooked model '{}' for game.pak{}", path, model.cached ? " (cache hit)" : ""));
+    }
+    std::erase_if(paths, [&](const std::string& path) { return sources.contains(path); });
+    return true;
+}
+
 } // namespace
 
 bool checkStartScene(const kast::Project& project, std::string& error)
@@ -264,9 +294,10 @@ bool buildGame(const kast::Project& project, const std::filesystem::path& outDir
         }
     }
 
-    const std::vector<std::string> contents = pakContents(project.root, out);
-    std::map<std::string, std::string> bytecode;
-    if (!compileShipped(project.root, contents, bytecode, error))
+    std::vector<std::string> contents = pakContents(project.root, out);
+    std::map<std::string, std::string> generated; // shader bytecode and cooked models
+    if (!compileShipped(project.root, contents, generated, error) ||
+        !cookShippedModels(project.root, contents, generated, error))
         return false;
 
     std::error_code ec;
@@ -275,7 +306,7 @@ bool buildGame(const kast::Project& project, const std::filesystem::path& outDir
         error = std::format("Build failed: cannot create '{}': {}", utf8(out), ec.message());
         return false;
     }
-    if (!kast::writePak(project.root, contents, out / kGamePakName, error, bytecode)) {
+    if (!kast::writePak(project.root, contents, out / kGamePakName, error, generated)) {
         error = "Build failed: " + error;
         return false;
     }

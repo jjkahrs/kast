@@ -11,6 +11,7 @@
 #include "external_editor.h" // external editor command; links editor/external_editor.cpp
 #include "gui_doc.h"  // GUI Builder document model; links editor/gui_doc.cpp
 #include "gui_undo.h" // GUI Builder undo steps; links editor/gui_undo.cpp
+#include "model_importer.h" // Assimp; links kast_model_import
 #include "recent_projects.h" // Project Manager list; links editor/recent_projects.cpp
 #include "shader_compiler.h" // shaderc for .kshader files; links editor/shader_compiler.cpp
 #include "shader_graph_doc.h" // the Shader Graph panels' edit model; links editor/shader_graph_doc.cpp
@@ -6367,7 +6368,7 @@ void checkShaders()
     checkShaderGraphEdits();
 
     // COLOR0: glTF COLOR_0 imports (RGBA8, R in the low byte); models without it and primitives are white.
-    const auto model = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/vertex_colors.gltf", error);
+    const auto model = importModel(KAST_TEST_PROJECT_DIR, "models/vertex_colors.gltf", error);
     std::vector<uint32_t> colors;
     for (const kast::ModelMesh& mesh : model ? model->meshes : std::vector<kast::ModelMesh>{})
         for (const kast::ModelVertex& v : mesh.vertices)
@@ -6378,7 +6379,7 @@ void checkShaders()
         read += std::format(" {:08x}", c);
     check(colors == std::vector<uint32_t>{0x80ffffff, 0xff0000ff, 0xff00ff00, 0xffff0000},
           std::format("vertex_colors.gltf's COLOR_0 reads back as red, green, blue, half-transparent white:{}", read).c_str());
-    const auto plain = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/cube.gltf", error);
+    const auto plain = importModel(KAST_TEST_PROJECT_DIR, "models/cube.gltf", error);
     bool white = plain && !plain->meshes.empty();
     for (const kast::ModelMesh& mesh : plain ? plain->meshes : std::vector<kast::ModelMesh>{})
         for (const kast::ModelVertex& v : mesh.vertices)
@@ -7330,7 +7331,7 @@ void checkPrimitiveTangents()
 void checkMaterialFeatureImport()
 {
     std::string error;
-    const auto model = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/material_features.gltf", error);
+    const auto model = importModel(KAST_TEST_PROJECT_DIR, "models/material_features.gltf", error);
     check(model && model->materials.size() == 2, std::format("material_features.gltf loads with 2 materials ({})", error).c_str());
     if (!model || model->materials.size() != 2)
         return;
@@ -7353,7 +7354,7 @@ void checkMaterialFeatureImport()
     check(tangents, "model tangents run along texture u with the bitangent toward image up");
 
     // Meshes without UVs still get unit tangents perpendicular to the normal.
-    const auto obj = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/cube.obj", error);
+    const auto obj = importModel(KAST_TEST_PROJECT_DIR, "models/cube.obj", error);
     bool perpendicular = obj != nullptr;
     for (const kast::ModelMesh& mesh : obj ? obj->meshes : std::vector<kast::ModelMesh>{})
         for (const kast::ModelVertex& v : mesh.vertices)
@@ -8027,7 +8028,7 @@ void checkModelLoading()
     const std::filesystem::path tests = KAST_TEST_PROJECT_DIR;
     std::string error;
 
-    const auto character = kast::loadModel(tests, "models/female-128-anim.glb", error);
+    const auto character = importModel(tests, "models/female-128-anim.glb", error);
     check(character != nullptr, "female-128-anim.glb loads");
     if (character) {
         logModel("models/female-128-anim.glb", *character);
@@ -8063,9 +8064,9 @@ void checkModelLoading()
         check(weightsOk, "skinned vertex weights sum to 1");
     }
 
-    const auto obj = kast::loadModel(tests, "models/cube.obj", error);
+    const auto obj = importModel(tests, "models/cube.obj", error);
     check(obj != nullptr, "cube.obj loads");
-    const auto gltf = kast::loadModel(tests, "models/cube.gltf", error);
+    const auto gltf = importModel(tests, "models/cube.gltf", error);
     check(gltf != nullptr, "cube.gltf loads");
     if (obj && gltf) {
         logModel("cube.obj", *obj);
@@ -8081,7 +8082,7 @@ void checkModelLoading()
     }
 
     // Kenney's character (CC0): skinned, Blender FBX export; its clips ship as separate animation-only files.
-    const auto fbx = kast::loadModel(tests, "models/kenney/characterMedium.fbx", error);
+    const auto fbx = importModel(tests, "models/kenney/characterMedium.fbx", error);
     check(fbx != nullptr, "characterMedium.fbx loads");
     if (fbx) {
         logModel("characterMedium.fbx", *fbx);
@@ -8095,22 +8096,22 @@ void checkModelLoading()
             check(!clip.name.empty() && clip.duration > 0.0f, "FBX clips are named and have a duration");
     }
 
-    check(kast::loadModel(tests, "models/does_not_exist.glb", error) == nullptr && !error.empty(),
+    check(importModel(tests, "models/does_not_exist.glb", error) == nullptr && !error.empty(),
           "a missing model is an error");
     error.clear();
-    check(kast::loadModel(tests, "models/corrupt.glb", error) == nullptr && !error.empty(), "a corrupt model is an error");
+    check(importModel(tests, "models/corrupt.glb", error) == nullptr && !error.empty(), "a corrupt model is an error");
     kast::log::info(std::format("corrupt.glb: {}", error));
     error.clear();
-    check(kast::loadModelFromMemory("garbage", "glb", error) == nullptr && !error.empty(), "garbage bytes are an error");
+    check(importModelFromMemory("garbage", "glb", error) == nullptr && !error.empty(), "garbage bytes are an error");
 
-    const auto ok = kast::loadModelFromMemory(skinnedGlb(128), "glb", error);
+    const auto ok = importModelFromMemory(skinnedGlb(128), "glb", error);
     check(ok && !ok->overBoneLimit && ok->meshes.size() == 1 && ok->meshes[0].joints.size() == 128,
           "128 joints are within the limit");
-    const auto big = kast::loadModelFromMemory(skinnedGlb(130), "glb", error);
+    const auto big = importModelFromMemory(skinnedGlb(130), "glb", error);
     check(big && big->overBoneLimit, "a model with more than 128 joints is over the limit");
 
     // A skinned vertex without weights stays where the mesh node puts it (not collapsed to the origin).
-    const auto unweighted = kast::loadModelFromMemory(skinnedGlb(3, true), "glb", error);
+    const auto unweighted = importModelFromMemory(skinnedGlb(3, true), "glb", error);
     bool unweightedKept = unweighted && unweighted->meshes.size() == 1;
     if (unweightedKept) {
         const kast::ModelMesh& mesh = unweighted->meshes[0];
@@ -8134,7 +8135,7 @@ void checkModelLoading()
     check(unweightedKept, "an unweighted skinned vertex keeps its mesh-node position (and stays in the bounds)");
 
     // Two nodes named "Joint1": the bone and the clip bind to the one in the skeleton, not the decoy that comes first.
-    const auto decoy = kast::loadModelFromMemory(skinnedGlb(3, false, true), "glb", error);
+    const auto decoy = importModelFromMemory(skinnedGlb(3, false, true), "glb", error);
     const auto isRealJoint1 = [&decoy](int node) {
         return node > 0 && decoy->nodes[static_cast<size_t>(node)].name == "Joint1" &&
                decoy->nodes[static_cast<size_t>(decoy->nodes[static_cast<size_t>(node)].parent)].name == "Joint0";
@@ -8146,7 +8147,7 @@ void checkModelLoading()
               isRealJoint1(decoy->clips[0].channels[0].node),
           "a clip channel binds to the skeleton's node when another node has its name");
     // Assimp's PopulateArmatureData asserts (aborts in a debug Assimp) when every ancestor of a bone is a bone.
-    const auto rootJoint = kast::loadModelFromMemory(skinnedGlb(3, false, false, true), "glb", error);
+    const auto rootJoint = importModelFromMemory(skinnedGlb(3, false, false, true), "glb", error);
     check(rootJoint && rootJoint->meshes.size() == 1 && rootJoint->meshes[0].joints.size() == 3,
           "a skinned glTF whose one root node is a joint loads");
 
@@ -8227,6 +8228,226 @@ void checkAnimationSampling()
     kast::skinMatrices(mesh, globals, bones);
     check(near(bx::mul(bx::Vec3{2.0f, 0.0f, 0.0f}, bones[0].data()), {2.0f, 1.0f, 0.0f}),
           "skin matrix = inverse bind, then joint");
+}
+
+// Every field of two models, exactly (floats bit for bit).
+bool sameModel(const kast::Model& a, const kast::Model& b)
+{
+    const auto same = [](const auto& x, const auto& y) {
+        return x.size() == y.size() && (x.empty() || std::memcmp(x.data(), y.data(), x.size() * sizeof(x[0])) == 0);
+    };
+    const auto sameTrs = [](const kast::Trs& x, const kast::Trs& y) { return std::memcmp(&x, &y, sizeof x) == 0; };
+    bool ok = a.nodes.size() == b.nodes.size() && a.meshes.size() == b.meshes.size() && a.clips.size() == b.clips.size() &&
+              a.materials.size() == b.materials.size() && a.textures == b.textures &&
+              std::memcmp(&a.bounds, &b.bounds, sizeof a.bounds) == 0 && a.overBoneLimit == b.overBoneLimit;
+    for (size_t i = 0; ok && i < a.nodes.size(); ++i)
+        ok = a.nodes[i].name == b.nodes[i].name && a.nodes[i].parent == b.nodes[i].parent &&
+             sameTrs(a.nodes[i].bind, b.nodes[i].bind);
+    for (size_t i = 0; ok && i < a.meshes.size(); ++i) {
+        const kast::ModelMesh &x = a.meshes[i], &y = b.meshes[i];
+        ok = same(x.vertices, y.vertices) && same(x.indices, y.indices) && x.material == y.material && x.node == y.node &&
+             same(x.joints, y.joints) && same(x.inverseBinds, y.inverseBinds);
+    }
+    for (size_t i = 0; ok && i < a.clips.size(); ++i) {
+        const kast::Clip &x = a.clips[i], &y = b.clips[i];
+        ok = x.name == y.name && x.duration == y.duration && x.channels.size() == y.channels.size();
+        for (size_t c = 0; ok && c < x.channels.size(); ++c)
+            ok = x.channels[c].node == y.channels[c].node && same(x.channels[c].translation, y.channels[c].translation) &&
+                 same(x.channels[c].rotation, y.channels[c].rotation) && same(x.channels[c].scale, y.channels[c].scale);
+    }
+    for (size_t i = 0; ok && i < a.materials.size(); ++i)
+        ok = a.materials[i].name == b.materials[i].name &&
+             kast::materialToJson(a.materials[i].material) == kast::materialToJson(b.materials[i].material);
+    return ok;
+}
+
+// A one-triangle .gltf whose buffer is the external tri.bin (positions, then uint16 indices).
+constexpr const char* kTriangleGltf = R"({"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}],
+  "nodes": [{"name": "Tri", "mesh": 0}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1, "material": 0}]}],
+  "materials": [{"name": "Mat", "pbrMetallicRoughness": {"baseColorFactor": [1, 0, 0, 1]}}],
+  "buffers": [{"uri": "tri.bin", "byteLength": 42}],
+  "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36}, {"buffer": 0, "byteOffset": 36, "byteLength": 6}],
+  "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]},
+                {"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"}]})";
+
+std::string triangleBin(float x1)
+{
+    const float positions[9] = {0.0f, 0.0f, 0.0f, x1, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+    const uint16_t indices[3] = {0, 1, 2};
+    std::string bytes(reinterpret_cast<const char*>(positions), sizeof positions);
+    return bytes.append(reinterpret_cast<const char*>(indices), sizeof indices);
+}
+
+size_t logCount(const std::string& part)
+{
+    return static_cast<size_t>(
+        std::ranges::count_if(kast::log::lines(), [&](const std::string& line) { return contains(line, part); }));
+}
+
+// .kmodel: the binary model format (round trip, corrupt files), the editor's model cache (hits never call the importer;
+// edits to the file or a sidecar and new importer versions miss), the player's cooked-only library and Build's cook.
+void checkModelCache()
+{
+    const std::filesystem::path tests = KAST_TEST_PROJECT_DIR;
+    const std::filesystem::path dir = looseTestDir("kast_model_cache");
+    std::filesystem::create_directories(dir / "models");
+    writeFile(dir / "models/tri.gltf", kTriangleGltf);
+    writeFile(dir / "models/tri.bin", triangleBin(1.0f));
+    for (const char* file : {"models/cube.obj", "models/cube.mtl"})
+        std::filesystem::copy_file(tests / file, dir / file);
+    std::string error;
+
+    // Round trip: Assimp's model and the same model read back from .kmodel are equal.
+    for (const auto& [root, path] : {std::pair{tests, "models/female-128-anim.glb"}, std::pair{dir, "models/cube.obj"},
+                                     std::pair{dir, "models/tri.gltf"}}) {
+        const auto imported = importModel(root, path, error);
+        const auto read = imported ? kast::readModel(kast::writeModel(*imported), error) : nullptr;
+        check(imported && read && sameModel(*imported, *read), ".kmodel round trip keeps every field of the model");
+        if (!read)
+            kast::log::error(std::format("  {}: {}", path, error));
+    }
+    const auto overLimit = importModelFromMemory(skinnedGlb(130), "glb", error);
+    const auto overLimitRead = overLimit ? kast::readModel(kast::writeModel(*overLimit), error) : nullptr;
+    check(overLimitRead && overLimitRead->overBoneLimit && sameModel(*overLimit, *overLimitRead),
+          ".kmodel keeps overBoneLimit");
+
+    // Corrupt .kmodel files are errors, never crashes.
+    const auto cube = importModel(dir, "models/cube.obj", error);
+    const std::string bytes = cube ? kast::writeModel(*cube) : "";
+    check(!kast::readModel("garbage", error) && contains(error, "not a .kmodel"), "garbage is not a .kmodel");
+    check(!kast::readModel(bytes.substr(0, bytes.size() / 2), error) && contains(error, "cut short"),
+          "a truncated .kmodel is an error");
+    check(!kast::readModel(bytes + "x", error) && contains(error, "past the end"), "trailing bytes are an error");
+    std::string newer = bytes;
+    newer[4] = static_cast<char>(kast::kModelFormatVersion + 1);
+    check(!kast::readModel(newer, error) && contains(error, "version"), "another .kmodel version is an error");
+    if (cube) {
+        kast::Model broken = *cube;
+        broken.meshes[0].indices[0] = 100000;
+        check(!kast::readModel(kast::writeModel(broken), error) && contains(error, "bad indices"),
+              "an out-of-range index is an error");
+    }
+
+    // Sidecars: the files an import reads besides the model file.
+    check(kast::modelSidecars("models/cube.obj", readText(dir / "models/cube.obj")) == std::vector<std::string>{"models/cube.mtl"},
+          "an .obj's sidecar is its mtllib");
+    check(kast::modelSidecars("models/tri.gltf", kTriangleGltf) == std::vector<std::string>{"models/tri.bin"},
+          "a .gltf's sidecar is its external buffer");
+    check(kast::modelSidecars("a/m.gltf", R"({"buffers": [{"uri": "../bufs/x%20y.bin"}, {"uri": "data:,"}]})") ==
+              std::vector<std::string>{"bufs/x y.bin"},
+          "glTF buffer URIs are decoded and relative to the model; data: URIs are no sidecar");
+    check(kast::modelSidecars("models/female-128-anim.glb", readText(tests / "models/female-128-anim.glb")).empty(),
+          "a .glb with its buffer inside has no sidecar");
+    check(kast::modelSidecars("m.obj", "v 0 0 0\n  mtllib  my mats.mtl \r\nmtllibx no.mtl\n") ==
+              std::vector<std::string>{"my mats.mtl"},
+          "an mtllib name is the rest of its line");
+
+    // The key: everything the cooked model depends on.
+    const std::string key = kast::modelCacheKey("m.obj", "obj", {std::string("mtl")}, "v1");
+    check(key.size() == 16 && key == kast::modelCacheKey("m.obj", "obj", {std::string("mtl")}, "v1"), "the key is stable");
+    for (const std::string& other : {kast::modelCacheKey("m.obj", "obj", {std::string("mtl")}, "v2"),
+                                     kast::modelCacheKey("n.obj", "obj", {std::string("mtl")}, "v1"),
+                                     kast::modelCacheKey("m.obj", "obj!", {std::string("mtl")}, "v1"),
+                                     kast::modelCacheKey("m.obj", "obj", {std::string("mtl!")}, "v1"),
+                                     kast::modelCacheKey("m.obj", "obj", {std::nullopt}, "v1"),
+                                     kast::modelCacheKey("m.obj", "obj", {}, "v1")})
+        check(other != key, "the key changes with the version, path, file bytes and sidecar bytes");
+
+    // The editor's library through the cache: a second load (a restart) is a hit and doesn't call the importer.
+    int imports = 0;
+    const kast::ModelImporter counting = [&imports](const std::filesystem::path& root, const std::string& path,
+                                                    std::string& reason) {
+        ++imports;
+        return importModel(root, path, reason);
+    };
+    const auto cacheFiles = [&] { return kast::listFiles(dir / ".kast/model_cache").size(); };
+    kast::ModelLibrary first;
+    first.setRoot(dir);
+    first.setImporter(counting, "v1");
+    const auto tri = first.get("models/tri.gltf");
+    check(tri && imports == 1 && cacheFiles() == 1, "a cache miss imports and writes <root>/.kast/model_cache/<key>.kmodel");
+    kast::ModelLibrary restarted;
+    restarted.setRoot(dir);
+    restarted.setImporter(counting, "v1");
+    const auto hit = restarted.get("models/tri.gltf");
+    check(hit && imports == 1 && tri && sameModel(*tri, *hit) && logCount("Loaded model 'models/tri.gltf' (cache hit)") >= 1,
+          "a cache hit reads the .kmodel without calling the importer");
+    restarted.reloadChanged();
+    check(imports == 1, "nothing changed: nothing reloads");
+    rewrite(dir / "models/tri.bin", triangleBin(0.5f));
+    restarted.reloadChanged();
+    const auto edited = restarted.get("models/tri.gltf");
+    check(imports == 2 && edited && near(edited->bounds.max.x, 0.5f) && cacheFiles() == 2,
+          "editing a sidecar (.bin) reloads the model and misses the cache");
+    rewrite(dir / "models/tri.gltf", std::string(kTriangleGltf) + "\n");
+    restarted.reloadChanged();
+    check(imports == 3 && restarted.get("models/tri.gltf") != edited, "editing the model file reloads it and misses the cache");
+    check(restarted.get("models/cube.obj") && imports == 4, "the .obj imports once");
+    rewrite(dir / "models/cube.mtl", readText(dir / "models/cube.mtl") + "\n");
+    restarted.reloadChanged();
+    check(imports == 5, "editing an .obj's .mtl reloads it");
+    kast::ModelLibrary newImporter;
+    newImporter.setRoot(dir);
+    newImporter.setImporter(counting, "v2");
+    check(newImporter.get("models/tri.gltf") && imports == 6, "a new importer version misses the cache");
+    kast::ModelLibrary uncached;
+    uncached.setRoot(dir);
+    uncached.setImporter(counting);
+    uncached.get("models/tri.gltf");
+    uncached.get("models/tri.gltf");
+    check(imports == 7, "without a version there is no cache: one import per load");
+    for (const std::filesystem::path& file : kast::listFiles(dir / ".kast/model_cache"))
+        writeFile(file, "corrupt");
+    kast::ModelLibrary corruptCache;
+    corruptCache.setRoot(dir);
+    corruptCache.setImporter(counting, "v1");
+    check(corruptCache.get("models/tri.gltf") && imports == 8, "a corrupt cache file is imported again");
+    check(corruptCache.get("models/missing.glb") == nullptr && imports == 8, "a missing model never reaches the importer");
+
+    // The player: no importer, only cooked models (modelPakPath), a clear error once for one that isn't.
+    const std::filesystem::path game = looseTestDir("kast_model_player");
+    std::filesystem::create_directories(game / "models");
+    if (cube)
+        writeFile(game / kast::modelPakPath("models/cube.obj"), kast::writeModel(*cube));
+    std::filesystem::copy_file(dir / "models/tri.gltf", game / "models/raw.gltf");
+    kast::ModelLibrary player;
+    player.setRoot(game);
+    const auto cooked = player.get("models/cube.obj");
+    check(cooked && cube && sameModel(*cooked, *cube) && logCount("Loaded model 'models/cube.obj' (cooked)") == 1,
+          "the player loads a cooked model by its source path");
+    for (int i = 0; i < 3; ++i) {
+        check(player.get("models/raw.gltf") == nullptr, "the player never imports a raw model");
+        player.reloadChanged();
+    }
+    check(logCount("Model 'models/raw.gltf': game.pak has no cooked model for it") == 1,
+          "a model with no cooked entry is one clear error");
+
+    // Build: every model cooked in place of the model files and their sidecars; a corrupt one fails naming it.
+    const std::filesystem::path source = looseTestDir("kast_model_build");
+    for (const char* file : {"models/tri.gltf", "models/tri.bin", "models/cube.obj", "models/cube.mtl"}) {
+        std::filesystem::create_directories((source / file).parent_path());
+        std::filesystem::copy_file(dir / file, source / file);
+    }
+    saveTestScene(source / "a.scene", "Thing", {});
+    kast::Project project{.root = source, .name = "Models", .startScene = "a.scene"};
+    const std::filesystem::path playerDir = std::filesystem::path(SDL_GetBasePath());
+    std::filesystem::path exe;
+    kast::Pak pak;
+    check(buildGame(project, source.parent_path() / "kast_model_build_out", playerDir, exe, error) &&
+              pak.open(source.parent_path() / "kast_model_build_out" / kGamePakName, error) &&
+              pak.list("") == std::vector<std::string>{"a.scene", "models/cube.obj.kmodel", "models/tri.gltf.kmodel"} &&
+              logCount("Cooked model 'models/tri.gltf' for game.pak") >= 1,
+          "Build ships cooked models in place of the model files and their sidecars");
+    const size_t hits = logCount("Cooked model 'models/tri.gltf' for game.pak (cache hit)");
+    check(buildGame(project, source.parent_path() / "kast_model_build_out", playerDir, exe, error) &&
+              logCount("Cooked model 'models/tri.gltf' for game.pak (cache hit)") == hits + 1,
+          "a second Build cooks from the cache");
+    std::filesystem::copy_file(tests / "models/corrupt.glb", source / "models/corrupt.glb");
+    check(!buildGame(project, source.parent_path() / "kast_model_build_bad", playerDir, exe, error) &&
+              contains(error, "Build failed: model 'models/corrupt.glb'") &&
+              !std::filesystem::exists(source.parent_path() / "kast_model_build_bad"),
+          "Build fails naming a model that can't be imported, writing nothing");
 }
 
 void checkAnimatorSystem()
@@ -11735,6 +11956,7 @@ int main(int argc, char** argv)
 {
     kast::disableCrashDialogsIfRequested();
     kast::Audio::setDefaultOutput(kast::Audio::Output::Offline); // no sound from the checks; render() pulls the mix
+    kast::models().setImporter(importModel); // as the editor, without the cache (no files in tests/project/.kast)
     if (argc >= 3 && std::string_view(argv[1]) == "--probe-png")
         return probePng(argc, argv);
     if ((argc == 5 || argc == 6) && std::string_view(argv[1]) == "--diff-png")
@@ -11884,6 +12106,7 @@ int main(int argc, char** argv)
     checkGuiClipboard();
     checkExternalEditor();
     checkModelLoading();
+    checkModelCache();
     checkAnimationSampling();
     checkAnimatorSystem();
     checkModelEditor();

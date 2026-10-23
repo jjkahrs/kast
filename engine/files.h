@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <iosfwd>
@@ -27,6 +28,33 @@ std::vector<std::filesystem::path> listFiles(const std::filesystem::path& dir);
 // Sends target to the Recycle Bin, without a prompt unless Windows can't recycle it (it then asks before deleting it
 // for good). False + error if that fails or is cancelled.
 bool recycleFile(const std::filesystem::path& target, std::string& error);
+
+// Models and textures loaded since start and the time spent loading them (read, decode/import, GPU upload), for
+// load-time measurements: the editor and player log assetLoadSummary (renderer.h) on exit.
+struct AssetLoadStats {
+    int models = 0;
+    double modelSeconds = 0.0;
+    int textures = 0; // a sky cube counts once
+    double textureSeconds = 0.0;
+};
+AssetLoadStats& assetLoadStats();
+// Adds one to count and the time from construction to destruction to seconds.
+class LoadTimer {
+public:
+    LoadTimer(int& count, double& seconds) : count_(count), seconds_(seconds) {}
+    ~LoadTimer()
+    {
+        ++count_;
+        seconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - start_).count();
+    }
+    LoadTimer(const LoadTimer&) = delete;
+    LoadTimer& operator=(const LoadTimer&) = delete;
+
+private:
+    int& count_;
+    double& seconds_;
+    std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
+};
 
 // From now on, files are read only from pak, as if it were extracted at root (an absolute directory).
 void mountPak(Pak pak, const std::filesystem::path& root);

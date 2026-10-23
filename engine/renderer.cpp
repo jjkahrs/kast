@@ -322,6 +322,15 @@ MeshData primitiveMesh(Primitive primitive)
     return makeSphere();
 }
 
+std::string assetLoadSummary()
+{
+    const AssetLoadStats& s = assetLoadStats();
+    const bgfx::Stats* stats = bgfx::getStats();
+    return std::format("Asset loads: {} models in {:.1f} ms, {} textures in {:.1f} ms; textureMemoryUsed {:.1f} MiB",
+                       s.models, s.modelSeconds * 1000.0, s.textures, s.textureSeconds * 1000.0,
+                       stats ? static_cast<double>(stats->textureMemoryUsed) / (1024.0 * 1024.0) : 0.0);
+}
+
 std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb)
 {
     int width = 0, height = 0, channels = 0;
@@ -672,6 +681,7 @@ bgfx::TextureHandle Renderer::texture(const std::string& path, bool srgb, bgfx::
 
 void Renderer::loadTexture(const std::string& path, bool srgb, Texture& texture)
 {
+    const LoadTimer timer(assetLoadStats().textures, assetLoadStats().textureSeconds);
     if (bgfx::isValid(texture.handle))
         bgfx::destroy(texture.handle);
     texture.handle = BGFX_INVALID_HANDLE;

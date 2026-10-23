@@ -42,11 +42,13 @@ bool readFile(const std::filesystem::path& file, std::string& out)
     std::error_code ec;
     if (!std::filesystem::is_regular_file(file, ec))
         return false;
+    const uintmax_t size = std::filesystem::file_size(file, ec);
     std::ifstream in(file, std::ios::binary);
-    if (!in)
+    if (ec || !in)
         return false;
-    out.assign(std::istreambuf_iterator<char>(in), {});
-    return !in.bad();
+    out.resize(static_cast<size_t>(size)); // one read: models are megabytes, too many to copy char by char
+    in.read(out.data(), static_cast<std::streamsize>(size));
+    return static_cast<uintmax_t>(in.gcount()) == size;
 }
 
 bool writeFileAtomic(const std::filesystem::path& file, std::string_view bytes)
@@ -95,6 +97,12 @@ std::vector<std::filesystem::path> listFiles(const std::filesystem::path& dir)
             files.push_back(it->path());
     std::ranges::sort(files);
     return files;
+}
+
+AssetLoadStats& assetLoadStats()
+{
+    static AssetLoadStats stats;
+    return stats;
 }
 
 void mountPak(Pak pak, const std::filesystem::path& root)

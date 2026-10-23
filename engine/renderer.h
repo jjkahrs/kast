@@ -81,6 +81,8 @@ struct MipImage {
 };
 // Decodes PNG or JPG bytes and builds the mips (filtered in linear space if srgb). nullopt if it can't be decoded.
 std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb);
+// "Asset loads: N models in X ms, M textures in Y ms; textureMemoryUsed Z MiB" (assetLoadStats, bgfx::getStats).
+std::string assetLoadSummary();
 // Appends the mips below level 0 (image.rgba holds just width x height RGBA8) and sets levels.
 void buildMips(MipImage& image, bool srgb);
 

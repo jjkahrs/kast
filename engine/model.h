@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -13,9 +14,32 @@
 #include <unordered_map>
 #include <vector>
 
-// Models: glTF/GLB, FBX and OBJ files loaded at runtime through Assimp into GPU-free data (meshes, node hierarchy,
-// skins, animation clips, embedded materials). Normalized on load to meters and Y-up (see docs/engine/models-animation.html).
+// Models: glTF/GLB, FBX and OBJ files as GPU-free data (meshes, node hierarchy, skins, animation clips, embedded
+// materials), normalized to meters and Y-up (see docs/engine/models-animation.html). The engine reads only the binary
+// .kmodel format below; the Assimp importer is the editor's (editor/model_importer.h, injected with
+// ModelLibrary::setImporter), so the player links no Assimp and loads the models Build cooked into game.pak.
+//
+// .kmodel byte layout (all integers and floats little-endian, floats IEEE 754, no padding):
+//   0   char[4]  magic "KMDL"
+//   4   u32      format version (kModelFormatVersion)
+//   8   u32      flags: bit 0 = overBoneLimit
+//   12  f32[6]   bounds: min xyz, max xyz
+//   36  sections, back to back. A "string" is u32 length L + L bytes (UTF-8 text or raw bytes); a "count" is a u32.
+//   nodes:     count N, then per node: string name, i32 parent, f32[3] translation, f32[4] rotation (x y z w),
+//              f32[3] scale
+//   meshes:    count N, then per mesh: u32 material, i32 node,
+//              count V + V vertices of 84 bytes (ModelVertex in field order: f32 x y z, nx ny nz, tx ty tz tw, u v,
+//              joints[4], weights[4], then u32 color),
+//              count I + u32[I] indices, count J + i32[J] joints + J x f32[16] inverse binds
+//   clips:     count N, then per clip: string name, f32 duration, count C, then per channel: i32 node,
+//              count + {f32 time, f32[3]} translation keys, count + {f32 time, f32[4]} rotation keys,
+//              count + {f32 time, f32[3]} scale keys
+//   materials: count N, then per slot: string name, string material JSON (materialToJson, as in a .mat file)
+//   textures:  count N, then per embedded image: string bytes (a PNG/JPG file; empty for one that isn't)
+//   end of file: bytes past the textures are an error
 namespace kast {
+
+constexpr uint32_t kModelFormatVersion = 1;
 
 constexpr size_t kMaxBones = 128; // MAX_BONES in vs_mesh_skinned.sc: joints per skinned mesh
 constexpr size_t kMaxBoneWeights = 4;
@@ -99,24 +123,57 @@ bool isModelFile(const std::filesystem::path& file);
 // isn't one, so an ordinary texture file may contain '#'.
 std::string embeddedTextureModel(const std::string& path);
 
-// Loads <root>/<path> (disk or mounted pak; sidecar .bin/.mtl/image files resolve next to it). External texture paths
-// become project-relative, embedded ones "<path>#<i>". nullptr + error if it can't be read or parsed.
-std::shared_ptr<const Model> loadModel(const std::filesystem::path& root, const std::string& path, std::string& error);
-// The same from bytes; hint is the format's extension without the dot (e.g. "gltf"). Embedded textures are "#<i>".
-std::shared_ptr<const Model> loadModelFromMemory(std::string_view bytes, const char* hint, std::string& error);
+// model as .kmodel bytes.
+std::string writeModel(const Model& model);
+// .kmodel bytes as a model; nullptr + error if they are not a valid .kmodel of kModelFormatVersion.
+std::shared_ptr<const Model> readModel(std::string_view bytes, std::string& error);
 
-// Models by project-relative path, each loaded once, shared by every entity using it, and reloaded when its file's
-// modification time changes (disk only: under a pak nothing changes). A file that fails to load gives nullptr and one
-// warning. One global library: the renderer, the Animator system, Lua and the editor all read the same models.
+// Imports <root>/<path> (a model file; disk or mounted pak) into a Model: the editor's Assimp importer
+// (editor/model_importer.h). External texture paths become project-relative, embedded ones "<path>#<i>". nullptr +
+// error if it can't be read or parsed.
+using ModelImporter =
+    std::function<std::shared_ptr<const Model>(const std::filesystem::path& root, const std::string& path, std::string& error)>;
+
+// The project-relative files besides path (a model file holding bytes) that importing it reads: a .gltf's or .glb's
+// external buffers (a "uri" that isn't a data: URI), an .obj's mtllib files. Not images: the renderer loads those.
+std::vector<std::string> modelSidecars(const std::string& path, std::string_view bytes);
+// The model cache's key: a hash of version (the importer's), kModelFormatVersion, path (embedded texture references
+// and external texture paths depend on it), the file's bytes and each sidecar's (nullopt: missing). 16 hex digits.
+std::string modelCacheKey(const std::string& path, std::string_view bytes,
+                          const std::vector<std::optional<std::string>>& sidecars, std::string_view version);
+
+// A model imported through the cache.
+struct CookedModel {
+    std::shared_ptr<const Model> model;
+    std::string bytes;                 // model as .kmodel (writeModel)
+    std::vector<std::string> sidecars; // modelSidecars: the other files it is imported from
+    bool cached = false;               // read from the cache: the importer didn't run
+};
+// Imports <root>/<path> with importer, through <cacheDir>/<modelCacheKey>.kmodel when version is set: a hit reads that
+// file, a miss imports and writes it. False + error (the importer's) on failure.
+bool cookModel(const std::filesystem::path& root, const std::string& path, const ModelImporter& importer,
+               std::string_view version, const std::filesystem::path& cacheDir, CookedModel& out, std::string& error);
+// Where game.pak keeps model file path cooked ("<path>.kmodel"). The editor's Build writes these entries in place of the
+// model files and their sidecars; the player, which has no importer, reads them.
+std::string modelPakPath(const std::string& path);
+
+// Models by project-relative path, each loaded once, shared by every entity using it, and reloaded when its file's or a
+// sidecar's modification time changes (disk only: under a pak nothing changes). A file that fails to load gives nullptr
+// and one warning. One global library: the renderer, the Animator system, Lua and the editor all read the same models.
+// With an importer (the editor) models import through it; with a cache version too, through the cache in
+// <root>/.kast/model_cache (a dot-folder: never shipped), so an unchanged model is not imported again on the next start.
+// Without one (the player) each model is read from modelPakPath instead: game.pak's, never imported.
 // ponytail: global like the component registry; the editor works on one project at a time.
 class ModelLibrary {
 public:
     // Forgets every cached model if root differs from the last call's.
     void setRoot(const std::filesystem::path& root);
     const std::filesystem::path& root() const { return root_; }
+    // version: the model cache's (modelCacheKey); empty = no cache. Forgets every cached model.
+    void setImporter(ModelImporter importer, std::string version = {});
     // nullptr if path is empty, there is no root, or it fails to load (warns once per path).
     std::shared_ptr<const Model> get(const std::string& path);
-    // Reloads models whose file changed (or appeared / disappeared) since loaded.
+    // Reloads models whose file or sidecars changed (or appeared / disappeared) since loaded.
     void reloadChanged();
     // The bytes of an embedded texture reference "<model path>#<i>"; nullopt if there is no such texture.
     std::optional<std::string_view> embeddedTexture(const std::string& reference);
@@ -124,11 +181,14 @@ public:
 private:
     struct Entry {
         std::shared_ptr<const Model> model;
-        std::optional<std::filesystem::file_time_type> mtime;
+        // The model file's and its sidecars' (project-relative) modification times when loaded.
+        std::vector<std::pair<std::string, std::optional<std::filesystem::file_time_type>>> mtimes;
     };
     void load(const std::string& path, Entry& entry);
 
     std::filesystem::path root_;
+    ModelImporter importer_;
+    std::string version_;
     std::unordered_map<std::string, Entry> entries_;
 };
 

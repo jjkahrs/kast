@@ -80,6 +80,7 @@ void SkyRenderer::unload()
 
 void SkyRenderer::load(const std::array<std::string, 6>& faces, const std::filesystem::path& root)
 {
+    const LoadTimer timer(assetLoadStats().textures, assetLoadStats().textureSeconds);
     unload();
     loaded_ = true;
     faces_ = faces;

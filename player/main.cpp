@@ -335,6 +335,7 @@ int main(int argc, char** argv)
     hooks.shutdown = [&] {
         if (options->gpuStats && gpuFrames > 0)
             kast::log::info(std::format("GPU frame time: {:.3f} ms average over {} frames", gpuMs / gpuFrames, gpuFrames));
+        kast::log::info(kast::assetLoadSummary());
         lua.stop();
         gui.clear();
         gui.context().release();
