@@ -18,6 +18,7 @@ Kast is a game engine focused on making it easy to build MMORPGs.
 * Create a branch to do work in
 * Test all changes and prove they work and fufill the stated goals and acceptance criteria
 * Take before and after screenshots to confirm that changes were made and done correctly
+* Ask which of these test domains should be run and exclude the others: Editor, Auth, Admin, World, starter-mmo
 
 # Coding Standards
 * Follow clean code principles
