@@ -43,10 +43,11 @@ std::string nodeLabel(pugi::xml_node node)
 {
     const GuiKind kind = guiKind(node);
     std::string label = kind == GuiKind::Unknown ? std::format("<{}>", node.name()) : guiKindLabel(kind);
-    if (const std::string id = GuiDoc::attribute(node, "id"); !id.empty())
+    if (const std::string id = GuiDoc::attribute(GuiDoc::widgetElement(node), "id"); !id.empty())
         label += " #" + id;
-    if (GuiDoc::hasEditableText(node)) {
-        std::string text = GuiDoc::text(node);
+    const bool labelled = kind == GuiKind::Toggle && GuiDoc::widgetElement(node) != node;
+    if (GuiDoc::hasEditableText(node) || labelled) {
+        std::string text = labelled ? GuiDoc::widgetProperty(node, "label") : GuiDoc::text(node);
         if (text.size() > 24)
             text = text.substr(0, 24) + "...";
         label += std::format(" \"{}\"", text);
@@ -207,14 +208,30 @@ bool GuiBuilder::setAttribute(const std::string& name, const std::string& value)
 {
     if (!selected_ || selected_ == doc_.body())
         return false;
+    editStep(std::format("Edit {} {}", guiKindLabel(guiKind(selected_)), name),
+             [&] { GuiDoc::setAttribute(GuiDoc::widgetElement(selected_), name.c_str(), value); });
+    return true;
+}
+
+bool GuiBuilder::setWidgetProperty(const std::string& name, const std::string& value)
+{
+    const std::vector<std::string> names = selected_ ? GuiDoc::widgetProperties(selected_) : std::vector<std::string>();
+    if (std::ranges::find(names, name) == names.end())
+        return false;
+    editStep(std::format("Edit {} {}", guiKindLabel(guiKind(selected_)), name),
+             [&] { GuiDoc::setWidgetProperty(selected_, name, value); });
+    return true;
+}
+
+bool GuiBuilder::editStep(const std::string& name, const std::function<void()>& edit)
+{
     endGesture();
     GuiElementCopy before = copyGuiElement(selected_);
-    GuiDoc::setAttribute(selected_, name.c_str(), value);
-    if (record(std::format("Edit {} {}", guiKindLabel(guiKind(selected_)), name), std::move(before),
-               copyGuiElement(selected_))) {
-        inspectorNode_ = {}; // refill the Inspector's fields
-        markRmlDirty();
-    }
+    edit();
+    if (!record(name, std::move(before), copyGuiElement(selected_)))
+        return false;
+    inspectorNode_ = {}; // refill the Inspector's fields
+    markRmlDirty();
     return true;
 }
 
@@ -257,7 +274,7 @@ bool GuiBuilder::selectById(const std::string& id)
     const auto it = std::ranges::find_if(nodes, [&](pugi::xml_node node) { return GuiDoc::attribute(node, "id") == id; });
     if (it == nodes.end())
         return false;
-    selected_ = *it;
+    selected_ = GuiDoc::widgetRoot(*it);
     return true;
 }
 
@@ -269,8 +286,9 @@ bool GuiBuilder::pick(float x, float y)
     for (Rml::Element* element = preview_.context()->GetElementAtPoint({x, y}); element && index < 0;
          element = element->GetParentNode())
         index = element->GetAttribute<int>("data-kast-node", -1);
-    selected_ = index >= 0 && static_cast<size_t>(index) < previewNodes_.size() ? previewNodes_[static_cast<size_t>(index)]
-                                                                                : doc_.body();
+    selected_ = index >= 0 && static_cast<size_t>(index) < previewNodes_.size()
+                    ? GuiDoc::widgetRoot(previewNodes_[static_cast<size_t>(index)])
+                    : doc_.body();
     return true;
 }
 
@@ -357,9 +375,13 @@ void GuiBuilder::drawHierarchy()
         saveShortcut();
         if (ImGui::Button("Save"))
             save();
-        for (GuiKind kind : kGuiCreatableKinds) {
-            ImGui::SameLine();
-            if (ImGui::Button(std::format("+ {}", guiKindLabel(kind)).c_str()))
+        for (GuiKind kind : kGuiCreatableKinds) { // wrapped to the panel's width
+            const std::string label = std::format("+ {}", guiKindLabel(kind));
+            const float width = ImGui::CalcTextSize(label.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+            if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + width <=
+                ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x)
+                ImGui::SameLine();
+            if (ImGui::Button(label.c_str()))
                 edit_ = {Edit::Op::Add, addParent(), {}, kind};
         }
         const bool movable = selected_ && selected_ != doc_.body();
@@ -385,7 +407,7 @@ void GuiBuilder::drawHierarchy()
 void GuiBuilder::drawNode(pugi::xml_node node)
 {
     const bool body = node == doc_.body();
-    const std::vector<pugi::xml_node> children = GuiDoc::elements(node);
+    const std::vector<pugi::xml_node> children = GuiDoc::composite(node) ? std::vector<pugi::xml_node>() : GuiDoc::elements(node);
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen |
                                ImGuiTreeNodeFlags_SpanAvailWidth;
     if (children.empty())
@@ -497,23 +519,32 @@ void GuiBuilder::drawInspector()
             ImGui::TextDisabled("Body: the document root. Add elements to it from the GUI Hierarchy.");
         } else {
             const GuiKind kind = guiKind(selected_);
+            // A labelled Toggle's id, class, data-event and bindings are its <input>'s.
+            const pugi::xml_node element = GuiDoc::widgetElement(selected_);
             if (inspectorNode_ != selected_) {
                 inspectorNode_ = selected_;
-                inspectorBuffer_[0] = GuiDoc::attribute(selected_, "id");
-                inspectorBuffer_[1] = GuiDoc::attribute(selected_, "class");
+                inspectorBuffer_[0] = GuiDoc::attribute(element, "id");
+                inspectorBuffer_[1] = GuiDoc::attribute(element, "class");
                 inspectorBuffer_[2] = GuiDoc::text(selected_);
-                inspectorBuffer_[3] = GuiDoc::attribute(selected_, "data-event");
+                inspectorBuffer_[3] = GuiDoc::attribute(element, "data-event");
                 bindingBuffers_.clear();
-                for (pugi::xml_attribute attribute : selected_.attributes())
+                for (pugi::xml_attribute attribute : element.attributes())
                     if (guiBindingAttribute(attribute.name()))
                         bindingBuffers_[attribute.name()] = attribute.value();
+                widgetBuffers_.clear();
+                for (const std::string& name : GuiDoc::widgetProperties(selected_))
+                    widgetBuffers_.emplace_back(name, GuiDoc::widgetProperty(selected_, name));
+                optionBuffers_.clear();
+                for (pugi::xml_node option : GuiDoc::options(selected_))
+                    optionBuffers_.emplace_back(GuiDoc::attribute(option, "value"), GuiDoc::text(option));
             }
             ImGui::Text("%s  <%s>", guiKindLabel(kind), selected_.name());
             // One step per field edit: the element is copied before its first change, recorded when it lets go.
             const auto field = [&](const char* label, std::string& buffer, auto set) {
                 const bool changed = ImGui::InputText(label, &buffer);
+                const std::string_view name = std::string_view(label).substr(0, std::string_view(label).find("##"));
                 if (ImGui::IsItemActive() && !gesture_)
-                    gesture_ = Gesture{std::format("Edit {} {}", guiKindLabel(kind), label), selected_,
+                    gesture_ = Gesture{std::format("Edit {} {}", guiKindLabel(kind), name), selected_,
                                        copyGuiElement(selected_)};
                 if (changed) {
                     set(buffer);
@@ -523,8 +554,10 @@ void GuiBuilder::drawInspector()
                     endGesture();
             };
             const auto attribute = [&](const char* name) {
-                return [this, name](const std::string& value) { GuiDoc::setAttribute(selected_, name, value); };
+                return [element, name](const std::string& value) { GuiDoc::setAttribute(element, name, value); };
             };
+            const bool input = kind == GuiKind::Toggle || kind == GuiKind::Slider || kind == GuiKind::Dropdown ||
+                               kind == GuiKind::Spinbox;
             if (kind == GuiKind::Unknown) {
                 ImGui::TextDisabled("Not editable in the builder (but for its data binding); kept as written. It can be "
                                     "moved or deleted.");
@@ -538,10 +571,27 @@ void GuiBuilder::drawInspector()
                     else
                         ImGui::TextDisabled("text: holds other elements; edit it in the .rml");
                 }
-                if (kind == GuiKind::Button) {
+                if (kind == GuiKind::Button || input) {
                     field("data-event", inspectorBuffer_[3], attribute("data-event"));
-                    ImGui::TextDisabled("Clicks publish this event on the event bus (empty: none).");
+                    ImGui::TextDisabled(kind == GuiKind::Button ? "Clicks publish this event on the event bus (empty: none)."
+                                                                : "Value changes publish this event (empty: none).");
                 }
+                // Widget properties: a toggle's checked state is a checkbox (one step a click), the others text fields.
+                for (auto& [name, buffer] : widgetBuffers_) {
+                    if (name == "checked") {
+                        bool checked = buffer == "true";
+                        if (ImGui::Checkbox("checked", &checked))
+                            editStep(std::format("Edit {} checked", guiKindLabel(kind)),
+                                     [&] { GuiDoc::setWidgetProperty(selected_, "checked", checked ? "true" : "false"); });
+                    } else {
+                        field(name.c_str(), buffer,
+                              [this, &name](const std::string& value) { GuiDoc::setWidgetProperty(selected_, name, value); });
+                    }
+                    if (!inspectorNode_)
+                        break; // a step refilled the buffers
+                }
+                if (kind == GuiKind::Dropdown && inspectorNode_)
+                    drawOptions();
             }
             // RmlUi data binding, on any element: the ones it has (emptied: removed from the file), and one to add.
             ImGui::Separator();
@@ -556,9 +606,9 @@ void GuiBuilder::drawInspector()
                 bindingBuffers_[std::exchange(newBinding_, {})]; // written once it has a value
             ImGui::EndDisabled();
             bool header = false;
-            for (pugi::xml_attribute other : selected_.attributes()) {
+            for (pugi::xml_attribute other : element.attributes()) {
                 const std::string_view name = other.name();
-                if (guiBindingAttribute(name) ||
+                if (guiBindingAttribute(name) || GuiDoc::widgetAttribute(selected_, name) ||
                     (kind != GuiKind::Unknown && (name == "id" || name == "class" || name == "data-event")))
                     continue;
                 if (!std::exchange(header, true)) {
@@ -572,6 +622,58 @@ void GuiBuilder::drawInspector()
         ImGui::TextDisabled("No GUI open.");
     }
     ImGui::End();
+}
+
+void GuiBuilder::drawOptions()
+{
+    const std::vector<pugi::xml_node> options = GuiDoc::options(selected_);
+    if (options.size() != optionBuffers_.size()) {
+        inspectorNode_ = {}; // changed under the buffers (undo): refill next frame
+        return;
+    }
+    ImGui::Separator();
+    ImGui::TextDisabled("Options (selected, value, label):");
+    for (size_t i = 0; i < options.size(); ++i) {
+        const pugi::xml_node option = options[i];
+        ImGui::PushID(static_cast<int>(i));
+        if (ImGui::RadioButton("##selected", static_cast<bool>(option.attribute("selected"))) && !option.attribute("selected"))
+            editStep("Select Dropdown option", [&] { GuiDoc::selectOption(selected_, option); });
+        // Two text fields share what the radio button and the three buttons (each a frame high and wide) leave.
+        const float width = (ImGui::GetContentRegionAvail().x - 4.0f * ImGui::GetFrameHeight() -
+                             5.0f * ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        auto& [value, label] = optionBuffers_[i];
+        const auto edit = [&](const char* name, std::string& buffer, auto set) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(width);
+            const bool changed = ImGui::InputText(name, &buffer);
+            if (ImGui::IsItemActive() && !gesture_)
+                gesture_ = Gesture{"Edit Dropdown option", selected_, copyGuiElement(selected_)};
+            if (changed) {
+                set(buffer);
+                markRmlDirty();
+            }
+            if (ImGui::IsItemDeactivated())
+                endGesture();
+        };
+        if (inspectorNode_)
+            edit("##value", value, [option](const std::string& text) { GuiDoc::setAttribute(option, "value", text); });
+        if (inspectorNode_)
+            edit("##label", label, [option](const std::string& text) { GuiDoc::setText(option, text); });
+        ImGui::SameLine();
+        if (ImGui::ArrowButton("##up", ImGuiDir_Up) && inspectorNode_)
+            editStep("Move Dropdown option Up", [&] { doc_.move(option, -1); });
+        ImGui::SameLine();
+        if (ImGui::ArrowButton("##down", ImGuiDir_Down) && inspectorNode_)
+            editStep("Move Dropdown option Down", [&] { doc_.move(option, 1); });
+        ImGui::SameLine();
+        if (ImGui::Button("X") && inspectorNode_)
+            editStep("Remove Dropdown option", [&] { selected_.remove_child(option); });
+        ImGui::PopID();
+        if (!inspectorNode_)
+            return; // a step changed the options: refill next frame
+    }
+    if (ImGui::Button("Add option"))
+        editStep("Add Dropdown option", [this] { GuiDoc::addOption(selected_); });
 }
 
 void GuiBuilder::drawStyle()
@@ -628,6 +730,7 @@ void GuiBuilder::rebuildPreview()
     previewDoc_ = context->LoadDocumentFromMemory(rml, utf8(rml_.filename()));
     if (!previewDoc_)
         return;
+    kast::gui::addWidgetStyle(*previewDoc_);
     previewDoc_->Show();
     previewElements_.assign(previewNodes_.size(), nullptr);
     collectElements(previewDoc_, previewElements_);

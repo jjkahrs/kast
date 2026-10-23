@@ -1,0 +1,78 @@
+<rml>
+    <head>
+        <title>Widgets</title>
+        <link type="text/rcss" href="widgets.rcss"/>
+    </head>
+    <body>
+        <!-- Form widgets (ctest ui_widgets_*, player_widgets_*, scripts/ui_widgets.lua; self_check's checkGuiWidgets).
+             widgets.rcss only lays the rows out: the widgets themselves wear the engine's default style. Each input
+             widget's data-event publishes its changes; the progress bar is driven by kast.gui.setValue. Model "wbind":
+             the same widgets two-way bound (the spinbox through its inner input), toggles made by data-for, and an
+             echo of the bound values. -->
+        <div id="widgets_panel">
+            <p class="heading">Form widgets</p>
+            <div class="row">
+                <p class="name">Toggle</p>
+                <label><input type="checkbox" class="toggle" id="sound" data-event="widgets.sound" checked=""/>Sound</label>
+            </div>
+            <div class="row">
+                <p class="name">Slider</p>
+                <input type="range" id="volume" min="0" max="100" step="1" value="20" data-event="widgets.volume"/>
+            </div>
+            <div class="row">
+                <p class="name">Dropdown</p>
+                <select id="quality" data-event="widgets.quality">
+                    <option value="low">Low</option>
+                    <option value="medium" selected="">Medium</option>
+                    <option value="high">High</option>
+                </select>
+            </div>
+            <div class="row">
+                <p class="name">Spinbox</p>
+                <div class="spinbox" id="count" data-min="0" data-max="10" data-step="1" data-event="widgets.count">
+                    <button id="count_dec">-</button>
+                    <input type="text" id="count_input" value="3"/>
+                    <button id="count_inc">+</button>
+                </div>
+            </div>
+            <div class="row">
+                <p class="name">Spinbox 0.25</p>
+                <div class="spinbox" id="scale" data-min="0" data-max="2" data-step="0.25" data-event="widgets.scale">
+                    <button id="scale_dec">-</button>
+                    <input type="text" id="scale_input" value="1.00"/>
+                    <button id="scale_inc">+</button>
+                </div>
+            </div>
+            <div class="row">
+                <p class="name">Progress</p>
+                <progress id="loading" value="0.25" max="1"/>
+            </div>
+            <div id="made_row" class="row">
+                <p class="name">Made</p>
+            </div>
+        </div>
+        <div id="bound_panel" data-model="wbind">
+            <p class="heading">Bound</p>
+            <div class="row">
+                <p class="name">Level</p>
+                <input type="range" id="level" min="0" max="100" step="5" data-value="level" data-event="widgets.level"/>
+            </div>
+            <div class="row">
+                <p class="name">Amount</p>
+                <div class="spinbox" id="amount" data-min="0" data-max="20" data-step="2" data-event="widgets.amount">
+                    <button id="amount_dec">-</button>
+                    <input type="text" id="amount_input" data-value="amount"/>
+                    <button id="amount_inc">+</button>
+                </div>
+            </div>
+            <div class="row">
+                <p class="name">Loaded</p>
+                <progress id="loaded" max="1" data-attr-value="loaded"/>
+            </div>
+            <div class="row" data-for="option : options">
+                <label><input type="checkbox" class="toggle" data-checked="option.on" data-event="widgets.option" data-attr-id="'option_' + it_index"/>{{option.name}}</label>
+            </div>
+            <p id="bound_echo">{{level}} | {{amount}} | {{loaded}}</p>
+        </div>
+    </body>
+</rml>

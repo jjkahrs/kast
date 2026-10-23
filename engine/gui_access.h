@@ -33,8 +33,13 @@ inline bool guiVariableName(std::string_view name)
 class GuiAccess {
 public:
     virtual ~GuiAccess() = default;
-    // The value of the text field (<input>, <textarea>) with this id; nullopt if no loaded document has one.
-    virtual std::optional<std::string> value(const std::string& id) = 0;
+    // The value of the form widget or text field with this id (gui_widgets.h): a bool (toggle, any checkbox), a number
+    // (slider, spinbox, progress) or a string (dropdown, text field); nullopt if no loaded document has one.
+    virtual std::optional<GuiValue> value(const std::string& id) = 0;
+    // Sets a widget's or text field's value as the player could (snapped and clamped; a dropdown's must be one of its
+    // options' values); a value of the wrong type, or an id that is no widget, logs a warning (never the value) and
+    // changes nothing. Publishes no change event. Kept like setText, unless no loaded widget took it.
+    virtual void setValue(const std::string& id, GuiValue value) = 0;
     // A text field's value, else the element's text (escaped; "\n" is a line break). Kept and applied again to every
     // document that loads later (Play start, hot reload) until reset().
     virtual void setText(const std::string& id, std::string_view text) = 0;

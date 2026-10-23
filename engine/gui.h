@@ -12,6 +12,7 @@ struct SDL_Window;
 
 namespace Rml {
 class Context;
+class ElementDocument;
 }
 
 // Game GUI on RmlUi (HTML/CSS-like .rml documents styled by .rcss sheets). RmlUi reads files through kast::readFile
@@ -49,6 +50,12 @@ std::filesystem::path fromRmlPath(std::string_view path);
 // While an element is dragged: its document's source URL, so the drag clone RmlUi builds outside any document still
 // finds the images its paths name relative to that document. Empty when no drag runs (gui_events.h sets it).
 void setDragDocument(std::string sourceUrl);
+// Puts the engine's default form widget style (gui_widgets.h) under document's own sheets, which override it. Call once
+// a document has loaded (SceneGui, the GUI Builder preview); elements added to it later are styled too.
+void addWidgetStyle(Rml::ElementDocument& document);
+// True while a GuiContext::render updates its documents (data binding writes its views then): a widget change seen
+// then is the game's doing, not the player's.
+bool updating();
 
 } // namespace kast::gui
 

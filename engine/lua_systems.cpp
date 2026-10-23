@@ -1285,8 +1285,18 @@ void LuaSystems::State::bindGuiApi()
     };
     guiApi = lua.create_table();
     guiApi.set_function("value", [=, this](sol::this_state L, const sol::object& id) -> sol::object {
-        const std::optional<std::string> value = gui->value(text(L, "value", "id", id));
-        return value ? sol::make_object(lua, *value) : sol::object(sol::lua_nil);
+        const std::optional<GuiValue> value = gui->value(text(L, "value", "id", id));
+        return value ? jsonToLua(lua, *value) : sol::object(sol::lua_nil);
+    });
+    guiApi.set_function("setValue", [=, this](sol::this_state L, const sol::object& id, const sol::object& value) {
+        const std::string widget = text(L, "setValue", "id", id);
+        switch (value.get_type()) {
+        case sol::type::boolean: gui->setValue(widget, value.as<bool>()); break;
+        case sol::type::number: gui->setValue(widget, value.as<double>()); break;
+        case sol::type::string: gui->setValue(widget, value.as<std::string>()); break;
+        default:
+            raise(L, std::format("kast.gui.setValue: value must be a boolean, number or string, got {}", toString(L, value)));
+        }
     });
     guiApi.set_function("setText", [=, this](sol::this_state L, const sol::object& id, const sol::object& value) {
         gui->setText(text(L, "setText", "id", id), text(L, "setText", "text", value));

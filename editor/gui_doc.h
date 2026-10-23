@@ -8,18 +8,23 @@
 #include <vector>
 
 // GUI Builder document model, no UI: an .rml file as an element tree under <body> that the builder edits and saves.
-// Panel = <div>, Text = <p>, Button = <button> (data-event = the event its click publishes, see gui_events.h). Any other
-// element is Unknown: listed, movable and deletable, never created or edited. Everything the builder doesn't edit
-// (other elements, attributes, comments, <head>) is kept; saving normalizes whitespace and indentation only.
+// Panel = <div>, Text = <p>, Button = <button> (data-event = the event its click publishes, see gui_events.h), and the
+// form widgets by their markup (gui_widgets.h; data-event = the event their changes publish): Toggle = <input
+// type="checkbox" class="toggle"/>, alone or as the only element in a <label> holding its text; Slider = <input
+// type="range"/>; Dropdown = <select>; Spinbox = <div class="spinbox"> holding exactly <button>, <input>, <button>;
+// Progress = <progress>. A labelled Toggle, a Dropdown and a Spinbox are composites: one element in the tree, their
+// insides edited as widget properties and options. Any other element is Unknown: listed, movable and deletable, never
+// created or edited. Everything the builder doesn't edit (other elements, attributes, comments, <head>) is kept;
+// saving normalizes whitespace and indentation only.
 
-enum class GuiKind { Panel, Text, Button, Unknown };
+enum class GuiKind { Panel, Text, Button, Toggle, Slider, Dropdown, Spinbox, Progress, Unknown };
 // An RmlUi data binding attribute the GUI Inspector edits (docs/editor/gui-builder.html): data-model, data-for, data-if,
 // data-visible, data-value, data-checked, data-rml, data-text, or data-attr-*, data-attrif-*, data-class-*,
 // data-style-*, data-event-*, data-alias-* with a name after the prefix. Not kast's own data-event / data-drag.
 bool guiBindingAttribute(std::string_view name);
-constexpr GuiKind kGuiCreatableKinds[] = {GuiKind::Panel, GuiKind::Text, GuiKind::Button};
-const char* guiKindTag(GuiKind kind);   // "div", "p", "button"; "" for Unknown
-const char* guiKindLabel(GuiKind kind); // "Panel", "Text", "Button", "Unknown"
+constexpr GuiKind kGuiCreatableKinds[] = {GuiKind::Panel,  GuiKind::Text,     GuiKind::Button,  GuiKind::Toggle,
+                                           GuiKind::Slider, GuiKind::Dropdown, GuiKind::Spinbox, GuiKind::Progress};
+const char* guiKindLabel(GuiKind kind); // "Panel", "Text", "Button", "Toggle", ..., "Unknown"
 GuiKind guiKind(pugi::xml_node node);
 
 class GuiDoc {
@@ -31,7 +36,9 @@ public:
 
     // Element children of parent, in order (text and comments skipped).
     static std::vector<pugi::xml_node> elements(pugi::xml_node parent);
-    // Appends a new element of kind (not Unknown) to parent: Text and Button get placeholder text. Returns it.
+    // Appends a new element of kind (not Unknown) to parent: Text and Button get placeholder text, a Toggle a <label>
+    // ("Toggle"), a Slider 0..100 step 1 value 50, a Dropdown three options (the first selected), a Spinbox 0..10 step
+    // 1 value 0, a Progress value 0.5 max 1. Returns it.
     pugi::xml_node add(GuiKind kind, pugi::xml_node parent);
     // Removes node and its subtree; false for <body> or a node outside it.
     bool remove(pugi::xml_node node);
@@ -46,6 +53,29 @@ public:
     static bool hasEditableText(pugi::xml_node node);
     static std::string text(pugi::xml_node node);
     static void setText(pugi::xml_node node, std::string_view text);
+
+    // A labelled Toggle, a Dropdown or a Spinbox: its children are the widget's insides, not tree nodes.
+    static bool composite(pugi::xml_node node);
+    // node, or the outermost composite holding it (what a click on an inside selects).
+    static pugi::xml_node widgetRoot(pugi::xml_node node);
+    // The element holding node's id, class, data-event and bindings: a labelled Toggle's <input>, else node.
+    static pugi::xml_node widgetElement(pugi::xml_node node);
+    // The widget properties the Inspector edits on node, by name: Slider min, max, step, value; Spinbox min, max, step
+    // (its data-min, data-max, data-step), value and data-value (its <input>'s); Progress value, max; Toggle checked
+    // ("true" / "false") and, if labelled, label. Empty for other kinds.
+    static std::vector<std::string> widgetProperties(pugi::xml_node node);
+    static std::string widgetProperty(pugi::xml_node node, std::string_view name); // "" if node has no such property
+    // True if this attribute of widgetElement(node) is edited as one of its widget properties, or is the <input> type
+    // that makes it a Slider or Toggle (the Inspector doesn't list it with the other attributes).
+    static bool widgetAttribute(pugi::xml_node node, std::string_view attribute);
+    // Empty removes an attribute property. False if node has no such property.
+    static bool setWidgetProperty(pugi::xml_node node, std::string_view name, std::string_view value);
+    // A Dropdown's <option> elements, in order. An option's value is its value attribute, its label its text.
+    static std::vector<pugi::xml_node> options(pugi::xml_node select);
+    // Appends <option value="optionN">Option N</option> (N = the option count after it) to select. Returns it.
+    static pugi::xml_node addOption(pugi::xml_node select);
+    // Makes option the selected one (selected="" on it, removed from the others).
+    static void selectOption(pugi::xml_node select, pugi::xml_node option);
 
     // href of the first <link type="text/rcss">; empty if none.
     std::string stylesheetHref() const;

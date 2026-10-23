@@ -179,8 +179,12 @@
 <td>With <code>--open-gui</code>: click the GUI Preview at (X, Y) in preview pixels after 16 frames, as the mouse does, and log <code>--gui-pick X,Y selected '&lt;id&gt;'</code>.</td>
 </tr>
 <tr>
-<td><code>--gui-add Panel\|Text\|Button</code></td>
+<td><code>--gui-add Panel\|Text\|Button\|Toggle\|Slider\|Dropdown\|Spinbox\|Progress</code></td>
 <td>With <code>--open-gui</code>: add that element as the GUI Hierarchy's <strong>+</strong> buttons do (into the selected Panel, else <code>&lt;body&gt;</code>), after 17 frames.</td>
+</tr>
+<tr>
+<td><code>--gui-set-prop &lt;name&gt;=&lt;value&gt;</code></td>
+<td>With <code>--open-gui</code>: set a <a href="gui-builder.html#form-widgets">widget property</a> of the selection (<code>min</code>, <code>max</code>, <code>step</code>, <code>value</code>, <code>data-value</code>, <code>checked</code> = <code>true</code> / <code>false</code>, <code>label</code>) as one GUI Inspector edit step, after 17 frames; logs <code>--gui-set-prop name="value" on '&lt;id&gt;'</code>, or an error if the selection has no such property.</td>
 </tr>
 <tr>
 <td><code>--gui-set-attr &lt;name&gt;=&lt;value&gt;</code></td>

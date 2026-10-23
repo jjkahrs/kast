@@ -16,6 +16,12 @@
 namespace kast {
 namespace {
 
+// What WidgetListener hears. Focus and blur don't bubble, and a text field stops the keys it uses: those are heard on
+// the way down (capture).
+constexpr Rml::EventId kWidgetEvents[] = {Rml::EventId::Change, Rml::EventId::Click, Rml::EventId::Keydown,
+                                          Rml::EventId::Focus, Rml::EventId::Blur};
+bool capture(Rml::EventId id) { return id == Rml::EventId::Keydown || id == Rml::EventId::Focus || id == Rml::EventId::Blur; }
+
 std::filesystem::file_time_type modified(const std::filesystem::path& file)
 {
     std::error_code ec;
@@ -139,13 +145,25 @@ bool SceneGui::click(const std::string& id)
     return false;
 }
 
-std::optional<std::string> SceneGui::value(const std::string& id)
+std::optional<GuiValue> SceneGui::value(const std::string& id)
 {
     for (auto it = entries_.rbegin(); it != entries_.rend(); ++it)
-        if (it->document)
-            if (auto* control = dynamic_cast<Rml::ElementFormControl*>(it->document->GetElementById(id)))
-                return control->GetValue();
+        if (Rml::Element* element = it->document ? it->document->GetElementById(id) : nullptr)
+            if (std::optional<GuiValue> value = guiWidgetValue(*element))
+                return value;
     return std::nullopt;
+}
+
+void SceneGui::setValue(const std::string& id, GuiValue value)
+{
+    bool found = false, applied = false;
+    for (Entry& entry : entries_)
+        if (Rml::Element* element = entry.document ? entry.document->GetElementById(id) : nullptr) {
+            found = true;
+            applied = applyValue(*element, id, value) || applied;
+        }
+    if (applied || !found) // a value no loaded widget took isn't kept (it would only warn again)
+        written_[id].value = std::move(value);
 }
 
 void SceneGui::setText(const std::string& id, std::string_view text)
@@ -322,6 +340,19 @@ void SceneGui::apply(Rml::ElementDocument& document, const std::string& id, cons
         else
             element->SetProperty("display", "none");
     }
+    if (written.value)
+        applyValue(*element, id, *written.value);
+}
+
+bool SceneGui::applyValue(Rml::Element& element, const std::string& id, const GuiValue& value)
+{
+    std::string error;
+    quiet_ = true;
+    const bool applied = setGuiWidgetValue(element, value, error);
+    quiet_ = false;
+    if (!applied)
+        log::warn(std::format("kast.gui.setValue('{}'): {}: unchanged", id, error));
+    return applied;
 }
 
 void SceneGui::load(Entry& entry, EventBus& bus)
@@ -355,11 +386,15 @@ void SceneGui::load(Entry& entry, EventBus& bus)
             document->Close();
         return;
     }
+    gui::addWidgetStyle(*document);
     entry.listener = std::make_unique<ButtonClickListener>(bus, entry.path);
     document->AddEventListener(Rml::EventId::Click, entry.listener.get());
     entry.dragListener = std::make_unique<DragListener>(bus, entry.path, [this](const Rml::Element& d) { return documentPath(d); });
     document->AddEventListener(Rml::EventId::Dragstart, entry.dragListener.get());
     document->AddEventListener(Rml::EventId::Dragend, entry.dragListener.get());
+    entry.widgetListener = std::make_unique<WidgetListener>(bus, entry.path, quiet_);
+    for (const Rml::EventId id : kWidgetEvents)
+        document->AddEventListener(id, entry.widgetListener.get(), capture(id));
     for (const auto& [id, written] : written_) // what Lua wrote before this document loaded
         apply(*document, id, written);
     if (entry.visible)
@@ -373,11 +408,14 @@ void SceneGui::unload(Entry& entry)
         entry.document->RemoveEventListener(Rml::EventId::Click, entry.listener.get());
         entry.document->RemoveEventListener(Rml::EventId::Dragstart, entry.dragListener.get());
         entry.document->RemoveEventListener(Rml::EventId::Dragend, entry.dragListener.get());
+        for (const Rml::EventId id : kWidgetEvents)
+            entry.document->RemoveEventListener(id, entry.widgetListener.get(), capture(id));
         entry.document->Close();
     }
     entry.document = nullptr;
     entry.listener.reset();
     entry.dragListener.reset();
+    entry.widgetListener.reset();
 }
 
 void SceneGui::restack()
