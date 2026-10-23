@@ -55,7 +55,7 @@ Create &gt; Material) writes version 3 with every field, in the order above. Oth
   <a href="shaders.html#shaders">Shaders</a>).</li>
 <li><code>occlusionTexture</code> [none] (linear, <strong>R channel</strong>) with <code>occlusionStrength</code> 0–1 [1]:
   <code>ao = 1 + strength * (R - 1)</code> multiplies the <strong>ambient light only</strong> (both ambient terms); direct light from the
-  directional and point lights is unchanged. The same file can also be the <code>metallicRoughnessTexture</code> (a packed ORM
+  directional, point, spot and area lights is unchanged. The same file can also be the <code>metallicRoughnessTexture</code> (a packed ORM
   texture: R = occlusion, G = roughness, B = metallic).</li>
 <li><code>emissiveEnabled</code> [false]: when on, <code>emissive</code> (linear RGB 0–1 [black]) times <code>emissiveIntensity</code> (≥ 0 [1]) is added
   after lighting (shows without lights); an intensity that lifts it above the bloom <code>threshold</code> glows. Older files with
@@ -77,7 +77,7 @@ Create &gt; Material) writes version 3 with every field, in the order above. Oth
   swaps the winding, and the renderer swaps the culled side with it. Shadow maps always draw both faces, so shadows
   look the same in every mode.</li>
 <li><code>unlit</code> [false]: the output is <code>baseColor * baseColorTexture + emissive</code> (emissive with its texture, when enabled):
-  no directional or point lights, no shadows received, no ambient. Mask, blend and additive still apply, fog still
+  no directional, point, spot or area lights, no shadows received, no ambient. Mask, blend and additive still apply, fog still
   applies, and the mesh still casts shadows when its renderer's <code>castShadows</code> is on.</li>
 <li><strong>Back-face culling (new in version 2)</strong>: version 1 rendered every mesh double-sided. Now every material
   culls back faces by default: <code>.mat</code> files without <code>cullMode</code> (all version 1 files), the default material of a

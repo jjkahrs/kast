@@ -43,20 +43,53 @@ const char* validateCamera(const entt::meta_any& component)
     return nullptr;
 }
 
-constexpr double kMinPointLightRange = 0.01; // Inspector floor in meters; files and kast.set only need > 0
+constexpr double kMinLightRange = 0.01; // Inspector floor in meters (range, width, height); files and kast.set only need > 0
+// Spot angle Inspector floor and ceiling in degrees; files and kast.set only need 0 < inner <= outer < 90.
+constexpr double kMinSpotAngle = 0.1;
+constexpr double kMaxSpotAngle = 89.9;
+
+// The fields point, spot and area lights share.
+const char* validateLocalLight(const bx::Vec3& color, float intensity, float range, float bias)
+{
+    for (float channel : {color.x, color.y, color.z})
+        if (!(channel >= 0.0f && channel <= 1.0f))
+            return "\"color\" channels must be between 0 and 1";
+    if (!(intensity >= 0.0f))
+        return "\"intensity\" must be >= 0";
+    if (!(range > 0.0f))
+        return "\"range\" must be > 0";
+    if (!(bias >= 0.0f))
+        return "\"bias\" must be >= 0";
+    return nullptr;
+}
 
 const char* validatePointLight(const entt::meta_any& component)
 {
     const auto& light = component.cast<const PointLight&>();
-    for (float channel : {light.color.x, light.color.y, light.color.z})
-        if (!(channel >= 0.0f && channel <= 1.0f))
-            return "\"color\" channels must be between 0 and 1";
-    if (!(light.intensity >= 0.0f))
-        return "\"intensity\" must be >= 0";
-    if (!(light.range > 0.0f))
-        return "\"range\" must be > 0";
-    if (!(light.bias >= 0.0f))
-        return "\"bias\" must be >= 0";
+    return validateLocalLight(light.color, light.intensity, light.range, light.bias);
+}
+
+const char* validateSpotLight(const entt::meta_any& component)
+{
+    const auto& light = component.cast<const SpotLight&>();
+    if (const char* error = validateLocalLight(light.color, light.intensity, light.range, light.bias))
+        return error;
+    if (!(light.innerAngle > 0.0f))
+        return "\"innerAngle\" must be > 0";
+    if (!(light.outerAngle < 90.0f))
+        return "\"outerAngle\" must be < 90";
+    if (!(light.innerAngle <= light.outerAngle))
+        return "\"innerAngle\" must be <= \"outerAngle\"";
+    return nullptr;
+}
+
+const char* validateAreaLight(const entt::meta_any& component)
+{
+    const auto& light = component.cast<const AreaLight&>();
+    if (const char* error = validateLocalLight(light.color, light.intensity, light.range, light.bias))
+        return error;
+    if (!(light.width > 0.0f && light.height > 0.0f))
+        return "\"width\" and \"height\" must be > 0";
     return nullptr;
 }
 
@@ -247,9 +280,28 @@ void registerBuiltins()
     registerComponent<PointLight>("PointLight", {"Point Light", true, validatePointLight})
         .data<&PointLight::color>("color").custom<FieldInfo>("Color", true)
         .data<&PointLight::intensity>("intensity").custom<FieldInfo>("Intensity", false, 0.0)
-        .data<&PointLight::range>("range").custom<FieldInfo>("Range", false, kMinPointLightRange)
+        .data<&PointLight::range>("range").custom<FieldInfo>("Range", false, kMinLightRange)
         .data<&PointLight::castShadows>("castShadows").custom<FieldInfo>(FieldInfo{.displayName = "Cast Shadows", .optional = true})
         .data<&PointLight::bias>("bias").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Bias", .min = 0.0, .optional = true});
+
+    registerComponent<SpotLight>("SpotLight", {"Spot Light", true, validateSpotLight})
+        .data<&SpotLight::color>("color").custom<FieldInfo>("Color", true)
+        .data<&SpotLight::intensity>("intensity").custom<FieldInfo>("Intensity", false, 0.0)
+        .data<&SpotLight::range>("range").custom<FieldInfo>("Range", false, kMinLightRange)
+        .data<&SpotLight::innerAngle>("innerAngle").custom<FieldInfo>("Inner Angle", false, kMinSpotAngle, kMaxSpotAngle)
+        .data<&SpotLight::outerAngle>("outerAngle").custom<FieldInfo>("Outer Angle", false, kMinSpotAngle, kMaxSpotAngle)
+        .data<&SpotLight::castShadows>("castShadows").custom<FieldInfo>(FieldInfo{.displayName = "Cast Shadows", .optional = true})
+        .data<&SpotLight::bias>("bias").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Bias", .min = 0.0, .optional = true});
+
+    registerComponent<AreaLight>("AreaLight", {"Area Light", true, validateAreaLight})
+        .data<&AreaLight::color>("color").custom<FieldInfo>("Color", true)
+        .data<&AreaLight::intensity>("intensity").custom<FieldInfo>("Intensity", false, 0.0)
+        .data<&AreaLight::width>("width").custom<FieldInfo>("Width", false, kMinLightRange)
+        .data<&AreaLight::height>("height").custom<FieldInfo>("Height", false, kMinLightRange)
+        .data<&AreaLight::range>("range").custom<FieldInfo>("Range", false, kMinLightRange)
+        .data<&AreaLight::twoSided>("twoSided").custom<FieldInfo>(FieldInfo{.displayName = "Two Sided", .optional = true})
+        .data<&AreaLight::castShadows>("castShadows").custom<FieldInfo>(FieldInfo{.displayName = "Cast Shadows", .optional = true})
+        .data<&AreaLight::bias>("bias").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Bias", .min = 0.0, .optional = true});
 
     registerComponent<Camera>("Camera", {"Camera", true, validateCamera})
         .data<&Camera::verticalFovDegrees>("verticalFovDegrees").custom<FieldInfo>("Vertical FOV")

@@ -1,0 +1,81 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, -3], "rotation": [0, 0, 0, 1], "scale": [30, 1, 30] },
+        "MeshRenderer": { "primitive": "plane", "material": "" }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Pillar",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-3.5, 1, -0.8], "rotation": [0, 0, 0, 1], "scale": [0.5, 2, 0.5] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Pillar",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-1.7, 1, 0.8], "rotation": [0, 0, 0, 1], "scale": [0.5, 2, 0.5] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Spot",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-2.6, 4.5, 0], "rotation": [-0.707107, 0, 0, 0.707107], "scale": [1, 1, 1] },
+        "SpotLight": { "color": [1, 0.85, 0.6], "intensity": 14, "range": 9, "innerAngle": 30, "outerAngle": 45, "castShadows": true }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Pillar",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [2.6, 0.75, -0.6], "rotation": [0, 0.382683, 0, 0.92388], "scale": [0.6, 1.5, 0.6] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Sphere",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [3.6, 0.5, 0.8], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "sphere", "material": "" }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Area Panel",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [3, 3.2, 0], "rotation": [-0.707107, 0, 0, 0.707107], "scale": [1, 1, 1] },
+        "AreaLight": { "color": [0.6, 0.8, 1], "intensity": 14, "width": 1, "height": 0.5, "range": 9, "castShadows": true }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 5, 8], "rotation": [-0.258819, 0, 0, 0.965926], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    }
+  ],
+  "lighting": { "ambientColor": [0.6, 0.7, 1], "ambientIntensity": 0.05 },
+  "editor": {
+    "camera": { "pivot": [0, 0.5, 0], "yaw": 0, "pitch": -35, "distance": 11 }
+  }
+}

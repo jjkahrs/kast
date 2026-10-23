@@ -52,7 +52,7 @@ constexpr uint32_t kAxisZ = 0xffe03030;
 constexpr uint32_t kFrustumColor = 0xffe0e0e0;
 constexpr float kFrustumPreviewDistance = 2.0f; // meters: a short preview, not the far plane
 constexpr float kFrustumPreviewAspect = 16.0f / 9.0f; // ponytail: fixed; pass the Game panel's aspect if it matters
-constexpr uint32_t kPointLightRangeColor = 0xff40d0f0;
+constexpr uint32_t kLightGizmoColor = 0xff40d0f0;
 constexpr uint32_t kColliderColor = 0xff40ff60; // ABGR: green
 constexpr int kRangeCircleSegments = 48;
 constexpr uint32_t kParticleShapeColor = 0xff00aaff; // ABGR: the editor's orange
@@ -69,7 +69,6 @@ constexpr uint64_t kAdditiveState =
 // Shadow casters: depth only, both faces (open planes cast too).
 constexpr uint64_t kShadowState = BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS;
 constexpr uint64_t kShadowMapFlags = BGFX_TEXTURE_RT | BGFX_SAMPLER_COMPARE_LEQUAL | BGFX_SAMPLER_UVW_CLAMP;
-constexpr uint16_t kCsmAtlasSize = 2 * kCascadeSize; // 2x2 cascades
 // D3D cube face order (+X, -X, +Y, -Y, +Z, -Z): the direction each face looks and its up, for left-handed views.
 constexpr bx::Vec3 kCubeFaceForward[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
 constexpr bx::Vec3 kCubeFaceUp[6] = {{0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}};
@@ -219,22 +218,22 @@ Aabb transformBounds(const Aabb& local, const float* world)
     return result;
 }
 
-// What draws must share to be one instanced submit: buffers, material, shadow flags and, in the main pass, the point
+// What draws must share to be one instanced submit: buffers, material, shadow flags and, in the main pass, the local
 // lights that reach them (so each instance is lit as its own draw would be).
 struct BatchKey {
     uint16_t vertices = 0, indices = 0;
     const Material* material = nullptr;
     bool skinned = false, castShadows = false, receiveShadows = false;
     bool mirrored = false; // culls the other winding (cullState)
-    std::vector<size_t> pointLights;
+    std::vector<size_t> lights;
     auto operator<=>(const BatchKey&) const = default;
 };
 
 template <typename Item> // Renderer::DrawItem
-BatchKey batchKey(const Item& item, std::vector<size_t> pointLights)
+BatchKey batchKey(const Item& item, std::vector<size_t> lights)
 {
     return {item.vertices.idx, item.indices.idx, item.material, item.bones >= 0, item.castShadows, item.receiveShadows,
-            item.mirrored, std::move(pointLights)};
+            item.mirrored, std::move(lights)};
 }
 
 // Indices 0..count-1 grouped by keyOf(index): groups in order of first appearance, indices in order within each.
@@ -447,17 +446,38 @@ float pointLightFalloff(float distance, float range)
     return window * window / (distance * distance + 1.0f);
 }
 
-std::vector<size_t> nearestPointLights(const std::vector<PointLightSample>& lights, const Aabb& bounds)
+float spotConeFalloff(float cosAngle, float cosInner, float cosOuter)
+{
+    const float t = bx::clamp((cosAngle - cosOuter) / std::max(cosInner - cosOuter, 1e-4f), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+bool lightReaches(const LocalLightSample& light, const Aabb& bounds)
+{
+    const bx::Vec3 closest = bx::clamp(light.position, bounds.min, bounds.max);
+    if (bx::length(bx::sub(light.position, closest)) >= light.range)
+        return false;
+    if (light.type != LocalLightType::Spot)
+        return true;
+    // The box's bounding sphere against the outer cone (Wronski's cone / sphere test): its center's distance from the
+    // cone's surface, and whether it is behind the apex.
+    const bx::Vec3 center = bx::mul(bx::add(bounds.min, bounds.max), 0.5f);
+    const float radius = 0.5f * bx::length(bx::sub(bounds.max, bounds.min));
+    const bx::Vec3 toCenter = bx::sub(center, light.position);
+    const float along = bx::dot(toCenter, light.direction);
+    const float across = std::sqrt(std::max(bx::dot(toCenter, toCenter) - along * along, 0.0f));
+    const float sinOuter = std::sqrt(std::max(1.0f - light.cosOuter * light.cosOuter, 0.0f));
+    return light.cosOuter * across - along * sinOuter <= radius && along >= -radius;
+}
+
+std::vector<size_t> nearestLocalLights(const std::vector<LocalLightSample>& lights, const Aabb& bounds)
 {
     const bx::Vec3 center = bx::mul(bx::add(bounds.min, bounds.max), 0.5f);
     std::vector<std::pair<float, size_t>> reaching; // (squared distance to center, index)
-    for (size_t i = 0; i < lights.size(); ++i) {
-        const PointLightSample& light = lights[i];
-        const bx::Vec3 closest = bx::clamp(light.position, bounds.min, bounds.max);
-        if (bx::length(bx::sub(light.position, closest)) < light.range)
-            reaching.emplace_back(bx::distanceSq(light.position, center), i);
-    }
-    const size_t count = std::min(reaching.size(), kMaxPointLights);
+    for (size_t i = 0; i < lights.size(); ++i)
+        if (lightReaches(lights[i], bounds))
+            reaching.emplace_back(bx::distanceSq(lights[i].position, center), i);
+    const size_t count = std::min(reaching.size(), kMaxLocalLights);
     std::partial_sort(reaching.begin(), reaching.begin() + static_cast<ptrdiff_t>(count), reaching.end());
     std::vector<size_t> indices;
     for (size_t i = 0; i < count; ++i)
@@ -465,18 +485,71 @@ std::vector<size_t> nearestPointLights(const std::vector<PointLightSample>& ligh
     return indices;
 }
 
-std::vector<size_t> shadowedPointLights(const std::vector<PointLightSample>& lights, const bx::Vec3& eye)
+std::vector<size_t> shadowedLights(const std::vector<LocalLightSample>& lights, const bx::Vec3& eye, bool cubes)
 {
     std::vector<std::pair<float, size_t>> casting; // (squared distance to eye, index)
     for (size_t i = 0; i < lights.size(); ++i)
-        if (lights[i].castShadows)
+        if (lights[i].castShadows && (lights[i].type == LocalLightType::Point) == cubes)
             casting.emplace_back(bx::distanceSq(lights[i].position, eye), i);
-    const size_t count = std::min(casting.size(), kMaxShadowedPointLights);
+    const size_t count = std::min(casting.size(), cubes ? kMaxShadowedPointLights : kMaxShadowedLocalLights);
     std::partial_sort(casting.begin(), casting.begin() + static_cast<ptrdiff_t>(count), casting.end());
     std::vector<size_t> indices;
     for (size_t i = 0; i < count; ++i)
         indices.push_back(casting[i].second);
     return indices;
+}
+
+std::span<const float> ltcTable()
+{
+    static const float table[] = {
+#include "shaders/ltc_table.sh"
+    };
+    static_assert(std::size(table) == static_cast<size_t>(kLtcSize * kLtcSize * 8), "ltc_table.sh is LTC_SIZE^2 entries");
+    return table;
+}
+
+float rectFormFactor(const std::array<bx::Vec3, 4>& corners, const bx::Vec3& normal, bool twoSided)
+{
+    // The normal's frame (z along it), then fs_mesh.sc ltcIntegrate: each edge above the horizon integrated, edges
+    // crossing it cut there, the cut points joined along it.
+    const bx::Vec3 t1 = bx::normalize(bx::cross(std::abs(normal.y) < 0.99f ? bx::Vec3{0.0f, 1.0f, 0.0f}
+                                                                             : bx::Vec3{1.0f, 0.0f, 0.0f}, normal));
+    const bx::Vec3 t2 = bx::cross(normal, t1);
+    const auto edge = [](bx::Vec3 a, bx::Vec3 b) { // a, b not unit: the z of their edge's vector form factor * 2 pi
+        a = bx::normalize(a);
+        b = bx::normalize(b);
+        const float x = bx::clamp(bx::dot(a, b), -1.0f, 1.0f);
+        const float ratio = x > 0.99999f ? 1.0f : std::acos(x) / std::sqrt(std::max(1.0f - x * x, 1e-12f));
+        return bx::cross(a, b).z * ratio;
+    };
+    std::array<bx::Vec3, 4> local = corners;
+    for (bx::Vec3& c : local)
+        c = {bx::dot(t1, c), bx::dot(t2, c), bx::dot(normal, c)};
+    float sum = 0.0f;
+    bx::Vec3 exit{0.0f, 0.0f, 0.0f}, entry{0.0f, 0.0f, 0.0f};
+    bool clipped = false;
+    for (size_t i = 0; i < 4; ++i) {
+        const bx::Vec3 a = local[i], b = local[(i + 1) % 4];
+        if (a.z >= 0.0f && b.z >= 0.0f) {
+            sum += edge(a, b);
+            continue;
+        }
+        if (a.z < 0.0f && b.z < 0.0f)
+            continue;
+        const bx::Vec3 cut = bx::add(a, bx::mul(bx::sub(b, a), a.z / (a.z - b.z)));
+        clipped = true;
+        if (a.z >= 0.0f) {
+            sum += edge(a, cut);
+            exit = cut;
+        } else {
+            sum += edge(cut, b);
+            entry = cut;
+        }
+    }
+    if (clipped)
+        sum += edge(exit, entry);
+    sum /= 2.0f * bx::kPi;
+    return twoSided ? std::abs(sum) : std::max(sum, 0.0f);
 }
 
 void Renderer::init()
@@ -534,8 +607,9 @@ void Renderer::init()
     lightDir_ = bgfx::createUniform("u_lightDir", bgfx::UniformType::Vec4);
     lightColor_ = bgfx::createUniform("u_lightColor", bgfx::UniformType::Vec4);
     ambient_ = bgfx::createUniform("u_ambient", bgfx::UniformType::Vec4);
-    pointPosRange_ = bgfx::createUniform("u_pointPosRange", bgfx::UniformType::Vec4, kMaxPointLights);
-    pointColor_ = bgfx::createUniform("u_pointColor", bgfx::UniformType::Vec4, kMaxPointLights);
+    localPosRange_ = bgfx::createUniform("u_localPosRange", bgfx::UniformType::Vec4, kMaxLocalLights);
+    localColor_ = bgfx::createUniform("u_localColor", bgfx::UniformType::Vec4, kMaxLocalLights);
+    localAxis_ = bgfx::createUniform("u_localAxis", bgfx::UniformType::Vec4, kMaxLocalLights);
     emissive_ = bgfx::createUniform("u_emissive", bgfx::UniformType::Vec4);
     materialParams_ = bgfx::createUniform("u_material", bgfx::UniformType::Vec4);
     materialExt_ = bgfx::createUniform("u_materialExt", bgfx::UniformType::Vec4);
@@ -549,11 +623,11 @@ void Renderer::init()
     normalSampler_ = bgfx::createUniform("s_normal", bgfx::UniformType::Sampler);
     occlusionSampler_ = bgfx::createUniform("s_occlusion", bgfx::UniformType::Sampler);
     emissiveSampler_ = bgfx::createUniform("s_emissive", bgfx::UniformType::Sampler);
-    csmMtx_ = bgfx::createUniform("u_csmMtx", bgfx::UniformType::Mat4, kMaxShadowCascades);
+    csmMtx_ = bgfx::createUniform("u_csmMtx", bgfx::UniformType::Mat4, kMaxShadowCascades + kMaxShadowedLocalLights);
     csmSplits_ = bgfx::createUniform("u_csmSplits", bgfx::UniformType::Vec4);
     csmBias_ = bgfx::createUniform("u_csmBias", bgfx::UniformType::Vec4, kMaxShadowCascades);
     shadowParams_ = bgfx::createUniform("u_shadowParams", bgfx::UniformType::Vec4);
-    pointShadow_ = bgfx::createUniform("u_pointShadow", bgfx::UniformType::Vec4, kMaxPointLights);
+    localShadow_ = bgfx::createUniform("u_localShadow", bgfx::UniformType::Vec4, kMaxLocalLights);
     csmSampler_ = bgfx::createUniform("s_csm", bgfx::UniformType::Sampler);
     kastParams_ = bgfx::createUniform("u_kastParams", bgfx::UniformType::Vec4, kMaxShaderParams);
     for (size_t i = 0; i < kMaxShaderTextures; ++i)
@@ -603,11 +677,12 @@ void Renderer::shutdown()
     bgfx::destroy(shadowProgram_);
     bgfx::destroy(shadowSkinnedProgram_);
     bgfx::destroy(shadowInstancedProgram_);
-    for (bgfx::UniformHandle uniform : {normalMatrix_, bones_, baseColor_, lightDir_, lightColor_, ambient_, pointPosRange_,
-                                        pointColor_, emissive_, materialParams_, materialExt_, uvTransform_, time_,
-                                        cameraPos_, fogColor_, fogParams_, baseColorSampler_, metallicRoughnessSampler_,
-                                        normalSampler_, occlusionSampler_, emissiveSampler_, csmMtx_, csmSplits_,
-                                        csmBias_, shadowParams_, pointShadow_, csmSampler_, kastParams_, screenSampler_,
+    for (bgfx::UniformHandle uniform : {normalMatrix_, bones_, baseColor_, lightDir_, lightColor_, ambient_, localPosRange_,
+                                        localColor_, localAxis_, emissive_, materialParams_, materialExt_, uvTransform_,
+                                        time_, cameraPos_, fogColor_, fogParams_, baseColorSampler_,
+                                        metallicRoughnessSampler_, normalSampler_, occlusionSampler_, emissiveSampler_,
+                                        csmMtx_, csmSplits_,
+                                        csmBias_, shadowParams_, localShadow_, csmSampler_, kastParams_, screenSampler_,
                                         depthSampler_})
         bgfx::destroy(uniform);
     for (bgfx::UniformHandle uniform : pointShadowSamplers_)
@@ -1101,7 +1176,7 @@ void Renderer::submitShadowCasters(const std::vector<const DrawItem*>& batch, co
 Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const bx::Vec3& sunDir,
                                               const std::vector<DrawItem>& draws,
                                               const std::vector<std::vector<Mat4>>& boneSets,
-                                              const std::vector<PointLightSample>& pointLights, const float* viewMtx,
+                                              const std::vector<LocalLightSample>& lights, const float* viewMtx,
                                               const float* projMtx, bgfx::ViewId shadowViews)
 {
     ShadowFrame frame;
@@ -1131,14 +1206,51 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
                 submitShadowCasters(inView, boneSets, eye, view);
         }
     };
+    // Casters whose bounds are within the light's range of it.
+    const auto inRangeOf = [](const LocalLightSample& light) {
+        return [&light](const DrawItem& item) {
+            const bx::Vec3 closest = bx::clamp(light.position, item.bounds.min, item.bounds.max);
+            return bx::length(bx::sub(light.position, closest)) < light.range;
+        };
+    };
     const bool homogeneousDepth = bgfx::getCaps()->homogeneousDepth;
+    // One view into atlas tile (column, row) (see shadow.h), and its world to (atlas u, v (down), 0..1 depth) as out.
+    const auto atlasView = [&](bgfx::ViewId view, const char* name, int column, int row, const float* lightView,
+                               const float* lightProj, float* out, const auto& keep) {
+        bgfx::setViewName(view, name);
+        bgfx::setViewFrameBuffer(view, csmFrameBuffer_);
+        bgfx::setViewRect(view, static_cast<uint16_t>(column * kCascadeSize), static_cast<uint16_t>(row * kCascadeSize),
+                          kCascadeSize, kCascadeSize);
+        bgfx::setViewClear(view, BGFX_CLEAR_DEPTH, 0, 1.0f, 0);
+        bgfx::setViewTransform(view, lightView, lightProj);
+        bgfx::touch(view);
+        float viewProj[16];
+        bx::mtxMul(viewProj, lightView, lightProj);
+        submitCasters(frustumFromViewProj(viewProj, homogeneousDepth), keep, view);
+        // NDC to the tile: half a tile's share of the atlas each way from its center.
+        constexpr float kHalfU = 0.5f * kCascadeSize / kShadowAtlasWidth;
+        constexpr float kHalfV = 0.5f * kCascadeSize / kShadowAtlasHeight;
+        float tile[16];
+        bx::mtxIdentity(tile);
+        tile[0] = kHalfU;
+        tile[5] = -kHalfV;
+        tile[12] = kHalfU * static_cast<float>(1 + 2 * column);
+        tile[13] = kHalfV * static_cast<float>(1 + 2 * row);
+        if (homogeneousDepth) { // -1..1 to the 0..1 a depth texture holds
+            tile[10] = 0.5f;
+            tile[14] = 0.5f;
+        }
+        bx::mtxMul(out, viewProj, tile);
+    };
 
     frame.sun = sun && sun->castShadows;
+    frame.tileLights = shadowedLights(lights, eye, false);
+    if ((frame.sun || !frame.tileLights.empty()) && !bgfx::isValid(csm_)) {
+        csm_ = bgfx::createTexture2D(kShadowAtlasWidth, kShadowAtlasHeight, false, 1, bgfx::TextureFormat::D16,
+                                     kShadowMapFlags);
+        csmFrameBuffer_ = bgfx::createFrameBuffer(1, &csm_, false);
+    }
     if (frame.sun) {
-        if (!bgfx::isValid(csm_)) {
-            csm_ = bgfx::createTexture2D(kCsmAtlasSize, kCsmAtlasSize, false, 1, bgfx::TextureFormat::D16, kShadowMapFlags);
-            csmFrameBuffer_ = bgfx::createFrameBuffer(1, &csm_, false);
-        }
         // The camera's near and far planes, as view depths.
         float invProj[16];
         bx::mtxInverse(invProj, projMtx);
@@ -1161,38 +1273,32 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
                 continue;
             const Cascade cascade = fitCascade(frustumSliceCorners(viewMtx, projMtx, splits[i], splits[i + 1]), sunDir,
                                                casterNear, homogeneousDepth);
-            const auto x = static_cast<uint16_t>(c % 2 * kCascadeSize);
-            const auto y = static_cast<uint16_t>(c / 2 * kCascadeSize);
-            const auto view = static_cast<bgfx::ViewId>(shadowViews + c);
-            bgfx::setViewName(view, "Shadow cascade");
-            bgfx::setViewFrameBuffer(view, csmFrameBuffer_);
-            bgfx::setViewRect(view, x, y, kCascadeSize, kCascadeSize);
-            bgfx::setViewClear(view, BGFX_CLEAR_DEPTH, 0, 1.0f, 0);
-            bgfx::setViewTransform(view, cascade.view.data(), cascade.proj.data());
-            bgfx::touch(view);
-            float viewProj[16];
-            bx::mtxMul(viewProj, cascade.view.data(), cascade.proj.data());
             // The ortho volume reaches back to the nearest caster (fitCascade), so casters between the light and the
             // camera's slice stay in it.
-            submitCasters(frustumFromViewProj(viewProj, homogeneousDepth), [](const DrawItem&) { return true; }, view);
-            // NDC to this cascade's quarter of the atlas (v down), depth unchanged.
-            float tile[16];
-            bx::mtxIdentity(tile);
-            tile[0] = 0.25f;
-            tile[5] = -0.25f;
-            tile[12] = 0.25f + 0.5f * static_cast<float>(c % 2);
-            tile[13] = 0.25f + 0.5f * static_cast<float>(c / 2);
-            if (homogeneousDepth) { // -1..1 to the 0..1 a depth texture holds
-                tile[10] = 0.5f;
-                tile[14] = 0.5f;
-            }
-            bx::mtxMul(frame.csmMtx[i], viewProj, tile);
+            atlasView(static_cast<bgfx::ViewId>(shadowViews + c), "Shadow cascade", c % 2, c / 2, cascade.view.data(),
+                      cascade.proj.data(), frame.csmMtx[i], [](const DrawItem&) { return true; });
             frame.csmBias[i][0] = sun->normalBias * cascade.texelSize;
             frame.csmBias[i][1] = sun->bias / cascade.depthRange;
         }
     }
 
-    frame.pointLights = shadowedPointLights(pointLights, eye);
+    // Spot and area lights: a perspective view from the light (the rect's center) along its direction, as wide as the
+    // spot's outer cone or kAreaShadowFovDegrees, out to its range.
+    for (size_t t = 0; t < frame.tileLights.size(); ++t) {
+        const LocalLightSample& light = lights[frame.tileLights[t]];
+        const bx::Vec3 up = std::abs(light.direction.y) > 0.99f ? bx::Vec3{0.0f, 0.0f, 1.0f} : bx::Vec3{0.0f, 1.0f, 0.0f};
+        const float fov = light.type == LocalLightType::Spot ? 2.0f * bx::toDeg(std::acos(light.cosOuter))
+                                                             : kAreaShadowFovDegrees;
+        float lightView[16], lightProj[16];
+        bx::mtxLookAt(lightView, light.position, bx::add(light.position, light.direction), up, bx::Handedness::Right);
+        bx::mtxProj(lightProj, fov, 1.0f, kPointShadowNear, light.range, homogeneousDepth, bx::Handedness::Right);
+        const auto tile = static_cast<int>(t);
+        atlasView(static_cast<bgfx::ViewId>(shadowViews + kMaxShadowCascades + kMaxShadowedPointLights * 6 + t),
+                  "Shadow spot / area tile", tile % 2, 2 + tile / 2, lightView, lightProj,
+                  frame.csmMtx[kMaxShadowCascades + t], inRangeOf(light));
+    }
+
+    frame.pointLights = shadowedLights(lights, eye, true);
     for (size_t cube = 0; cube < frame.pointLights.size(); ++cube) {
         if (!bgfx::isValid(cubes_[cube])) {
             cubes_[cube] = bgfx::createTextureCube(kPointShadowSize, false, 1, bgfx::TextureFormat::D32F, kShadowMapFlags);
@@ -1202,11 +1308,8 @@ Renderer::ShadowFrame Renderer::renderShadows(const DirectionalLight* sun, const
                 cubeFrameBuffers_[cube][face] = bgfx::createFrameBuffer(1, &attachment, false);
             }
         }
-        const PointLightSample& light = pointLights[frame.pointLights[cube]];
-        const auto inRange = [&](const DrawItem& item) {
-            const bx::Vec3 closest = bx::clamp(light.position, item.bounds.min, item.bounds.max);
-            return bx::length(bx::sub(light.position, closest)) < light.range;
-        };
+        const LocalLightSample& light = lights[frame.pointLights[cube]];
+        const auto inRange = inRangeOf(light);
         // ponytail: D3D 0..1 depth assumed (fs_mesh.sc pointShadow), as for the DX11-only shaders.
         float proj[16];
         bx::mtxProj(proj, 90.0f, 1.0f, kPointShadowNear, light.range, false, bx::Handedness::Left);
@@ -1355,12 +1458,41 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     const float fogColor[4] = {fog.color.x, fog.color.y, fog.color.z, fog.enabled ? 1.0f : 0.0f};
     const float fogParams[4] = {fog.density, fog.start, 0.0f, 0.0f};
 
-    std::vector<PointLightSample> pointLights;
+    // Point, then spot, then area lights (scale ignored: only the world matrix's position and axis directions count).
+    std::vector<LocalLightSample> localLights;
     for (auto [entity, light] : registry.view<PointLight>().each()) {
         float world[16];
         scene.worldMatrix(entity, world);
-        pointLights.push_back({{world[12], world[13], world[14]}, light.range, bx::mul(light.color, light.intensity),
+        localLights.push_back({{world[12], world[13], world[14]}, light.range, bx::mul(light.color, light.intensity),
                                light.castShadows, light.bias});
+    }
+    for (auto [entity, light] : registry.view<SpotLight>().each()) {
+        float world[16];
+        scene.worldMatrix(entity, world);
+        localLights.push_back({.position = {world[12], world[13], world[14]},
+                               .range = light.range,
+                               .color = bx::mul(light.color, light.intensity),
+                               .castShadows = light.castShadows,
+                               .bias = light.bias,
+                               .type = LocalLightType::Spot,
+                               .direction = bx::normalize(transformDir({0.0f, 0.0f, -1.0f}, world)),
+                               .cosInner = std::cos(bx::toRad(light.innerAngle)),
+                               .cosOuter = std::cos(bx::toRad(light.outerAngle))});
+    }
+    for (auto [entity, light] : registry.view<AreaLight>().each()) {
+        float world[16];
+        scene.worldMatrix(entity, world);
+        localLights.push_back(
+            {.position = {world[12], world[13], world[14]},
+             .range = light.range,
+             .color = bx::mul(light.color, light.intensity),
+             .castShadows = light.castShadows,
+             .bias = light.bias,
+             .type = LocalLightType::Area,
+             .direction = bx::normalize(transformDir({0.0f, 0.0f, -1.0f}, world)),
+             .halfWidth = bx::mul(bx::normalize(transformDir({1.0f, 0.0f, 0.0f}, world)), 0.5f * light.width),
+             .halfHeight = bx::mul(bx::normalize(transformDir({0.0f, 1.0f, 0.0f}, world)), 0.5f * light.height),
+             .twoSided = light.twoSided});
     }
 
     std::vector<DrawItem> draws;
@@ -1393,30 +1525,52 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     resolveShaders(draws);
 
     const ShadowFrame shadows = renderShadows(sun, {lightDir[0], lightDir[1], lightDir[2]}, draws, boneSets,
-                                              pointLights, viewMtx, projMtx, shadowViews);
-    std::vector<int> cubeOf(pointLights.size(), -1); // point light index to its shadow cube
+                                              localLights, viewMtx, projMtx, shadowViews);
+    // Local light index to its shadow: a point light's cube 0..3, a spot / area light's u_csmMtx tile, -1 none.
+    std::vector<float> shadowOf(localLights.size(), -1.0f);
     for (size_t cube = 0; cube < shadows.pointLights.size(); ++cube)
-        cubeOf[shadows.pointLights[cube]] = static_cast<int>(cube);
+        shadowOf[shadows.pointLights[cube]] = static_cast<float>(cube);
+    for (size_t tile = 0; tile < shadows.tileLights.size(); ++tile)
+        shadowOf[shadows.tileLights[tile]] = static_cast<float>(kMaxShadowCascades + tile);
+    const bool atlas = shadows.sun || !shadows.tileLights.empty();
 
-    // Everything a mesh draw sets but its transform: material, lights (nearest: nearestPointLights), shadows, buffers.
+    // Everything a mesh draw sets but its transform: material, lights (nearest: nearestLocalLights), shadows, buffers.
     const auto setDrawState = [&](const DrawItem& item, const std::vector<size_t>& nearest) {
         const Material& material = *item.material;
-        // Unused slots: black, range 1, so they add nothing.
-        float pointPosRange[kMaxPointLights][4] = {};
-        float pointColor[kMaxPointLights][4] = {};
-        float pointShadow[kMaxPointLights][4] = {}; // x: cube (-1: none), y: bias, z: range
-        for (auto& slot : pointPosRange)
+        // Unused slots: black, range 1, so they add nothing. Packed as fs_mesh.sc's u_local* comments say.
+        float localPosRange[kMaxLocalLights][4] = {};
+        float localColor[kMaxLocalLights][4] = {};
+        float localAxis[kMaxLocalLights][4] = {};
+        float localShadow[kMaxLocalLights][4] = {};
+        for (auto& slot : localPosRange)
             slot[3] = 1.0f;
-        for (auto& slot : pointShadow)
+        for (auto& slot : localShadow)
             slot[0] = -1.0f;
         for (size_t slot = 0; slot < nearest.size(); ++slot) {
-            const PointLightSample& light = pointLights[nearest[slot]];
-            std::memcpy(pointPosRange[slot], &light.position, sizeof(bx::Vec3));
-            pointPosRange[slot][3] = light.range;
-            std::memcpy(pointColor[slot], &light.color, sizeof(bx::Vec3));
-            pointShadow[slot][0] = static_cast<float>(cubeOf[nearest[slot]]);
-            pointShadow[slot][1] = light.bias;
-            pointShadow[slot][2] = light.range;
+            const LocalLightSample& light = localLights[nearest[slot]];
+            std::memcpy(localPosRange[slot], &light.position, sizeof(bx::Vec3));
+            localPosRange[slot][3] = light.range;
+            std::memcpy(localColor[slot], &light.color, sizeof(bx::Vec3));
+            localShadow[slot][0] = shadowOf[nearest[slot]];
+            localShadow[slot][1] = light.bias;
+            switch (light.type) {
+            case LocalLightType::Point:
+                localShadow[slot][2] = light.range;
+                break;
+            case LocalLightType::Spot:
+                localColor[slot][3] = 1.0f;
+                std::memcpy(localAxis[slot], &light.direction, sizeof(bx::Vec3));
+                localShadow[slot][2] = light.cosInner;
+                localShadow[slot][3] = light.cosOuter;
+                break;
+            case LocalLightType::Area:
+                localColor[slot][3] = light.twoSided ? 3.0f : 2.0f;
+                std::memcpy(localAxis[slot], &light.halfWidth, sizeof(bx::Vec3));
+                localAxis[slot][3] = light.halfHeight.z;
+                localShadow[slot][2] = light.halfHeight.x;
+                localShadow[slot][3] = light.halfHeight.y;
+                break;
+            }
         }
         const float shadowParams[4] = {item.receiveShadows ? 1.0f : 0.0f, shadows.sun ? 1.0f : 0.0f, 0.0f, 0.0f};
         const bool blend = material.alphaMode == AlphaMode::Blend;
@@ -1429,12 +1583,14 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         bgfx::setUniform(lightDir_, lightDir);
         bgfx::setUniform(lightColor_, lightColor);
         bgfx::setUniform(ambient_, ambient);
-        bgfx::setUniform(pointPosRange_, pointPosRange, kMaxPointLights);
-        bgfx::setUniform(pointColor_, pointColor, kMaxPointLights);
-        bgfx::setUniform(pointShadow_, pointShadow, kMaxPointLights);
+        bgfx::setUniform(localPosRange_, localPosRange, kMaxLocalLights);
+        bgfx::setUniform(localColor_, localColor, kMaxLocalLights);
+        bgfx::setUniform(localAxis_, localAxis, kMaxLocalLights);
+        bgfx::setUniform(localShadow_, localShadow, kMaxLocalLights);
         bgfx::setUniform(shadowParams_, shadowParams);
+        if (atlas)
+            bgfx::setUniform(csmMtx_, shadows.csmMtx, kMaxShadowCascades + kMaxShadowedLocalLights);
         if (shadows.sun) {
-            bgfx::setUniform(csmMtx_, shadows.csmMtx, kMaxShadowCascades);
             bgfx::setUniform(csmSplits_, shadows.csmSplits);
             bgfx::setUniform(csmBias_, shadows.csmBias, kMaxShadowCascades);
         }
@@ -1442,7 +1598,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             bgfx::setTexture(kScreenTextureStage, screenSampler_, screenCopied ? screenCopy_ : black_);
         if (item.shader && item.shader->source->source.depthTexture)
             bgfx::setTexture(kDepthTextureStage, depthSampler_, depthCopied ? depthCopy_ : white_);
-        bgfx::setTexture(2, csmSampler_, shadows.sun ? csm_ : noShadow2D_);
+        bgfx::setTexture(2, csmSampler_, atlas ? csm_ : noShadow2D_);
         for (size_t cube = 0; cube < kMaxShadowedPointLights; ++cube)
             bgfx::setTexture(static_cast<uint8_t>(3 + cube), pointShadowSamplers_[cube],
                              cube < shadows.pointLights.size() ? cubes_[cube] : noShadowCube_);
@@ -1480,7 +1636,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             continue;
         if (!isTransparent(*item.material)) {
             opaque.push_back(&item);
-            opaqueLights.push_back(nearestPointLights(pointLights, item.bounds));
+            opaqueLights.push_back(nearestLocalLights(localLights, item.bounds));
             continue;
         }
         blended.push_back(&item);
@@ -1523,7 +1679,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     }
     for (size_t i : backToFront(centers, eye)) {
         if (i < blended.size()) {
-            submit(blendView, *blended[i], nearestPointLights(pointLights, blended[i]->bounds));
+            submit(blendView, *blended[i], nearestLocalLights(localLights, blended[i]->bounds));
             continue;
         }
         const ParticleRenderer::Draw& emitter = particles[i - blended.size()];
@@ -1540,7 +1696,7 @@ void Renderer::renderOverlays(const Scene& scene, bgfx::ViewId view, const float
     // a separate HDR pass if that matters.
     drawGrid(view);
     drawCameraFrustums(scene, view);
-    drawPointLightRange(scene, view, selected);
+    drawLightGizmo(scene, view, selected);
     drawColliderWireframe(scene, view, selected);
     drawParticleShape(scene, view, selected);
 }
@@ -1580,28 +1736,67 @@ void Renderer::drawCameraFrustums(const Scene& scene, bgfx::ViewId view)
     submitLines(lines, lineLayout_, lineProgram_, view);
 }
 
-// Three axis-aligned circles of radius range around the selected PointLight (world position; scale ignored).
-void Renderer::drawPointLightRange(const Scene& scene, bgfx::ViewId view, entt::entity selected)
+// The selected light's gizmo, at its world position along its world axes (scale ignored): a PointLight's range as
+// three axis-aligned circles; a SpotLight's outer cone out to its range (four edge lines and the end ring) and the
+// ring of its inner angle there; an AreaLight's rect, an arrow the way it shines and a circle of its range around it.
+void Renderer::drawLightGizmo(const Scene& scene, bgfx::ViewId view, entt::entity selected)
 {
-    const auto* light = scene.valid(selected) ? scene.registry().try_get<PointLight>(selected) : nullptr;
-    if (!light)
+    if (!scene.valid(selected))
+        return;
+    const entt::registry& registry = scene.registry();
+    const auto* point = registry.try_get<PointLight>(selected);
+    const auto* spot = registry.try_get<SpotLight>(selected);
+    const auto* area = registry.try_get<AreaLight>(selected);
+    if (!point && !spot && !area)
         return;
     float world[16];
     scene.worldMatrix(selected, world);
     const bx::Vec3 center{world[12], world[13], world[14]};
+    const bx::Vec3 x = bx::normalize(transformDir({1.0f, 0.0f, 0.0f}, world));
+    const bx::Vec3 y = bx::normalize(transformDir({0.0f, 1.0f, 0.0f}, world));
+    const bx::Vec3 forward = bx::normalize(transformDir({0.0f, 0.0f, -1.0f}, world)); // the way spot / area lights shine
     std::vector<LineVertex> lines;
-    for (int axis = 0; axis < 3; ++axis) {
-        const auto point = [&](int segment) {
+    const auto line = [&](const bx::Vec3& a, const bx::Vec3& b) {
+        lines.push_back({a.x, a.y, a.z, kLightGizmoColor});
+        lines.push_back({b.x, b.y, b.z, kLightGizmoColor});
+    };
+    // Around c in the plane of unit axes a and b.
+    const auto circle = [&](const bx::Vec3& c, const bx::Vec3& a, const bx::Vec3& b, float radius) {
+        const auto at = [&](int segment) {
             const float angle = 2.0f * bx::kPi * static_cast<float>(segment) / kRangeCircleSegments;
-            float offset[3] = {};
-            offset[(axis + 1) % 3] = std::cos(angle) * light->range;
-            offset[(axis + 2) % 3] = std::sin(angle) * light->range;
-            return LineVertex{center.x + offset[0], center.y + offset[1], center.z + offset[2], kPointLightRangeColor};
+            return bx::add(c, bx::add(bx::mul(a, std::cos(angle) * radius), bx::mul(b, std::sin(angle) * radius)));
         };
-        for (int segment = 0; segment < kRangeCircleSegments; ++segment) {
-            lines.push_back(point(segment));
-            lines.push_back(point(segment + 1));
-        }
+        for (int segment = 0; segment < kRangeCircleSegments; ++segment)
+            line(at(segment), at(segment + 1));
+    };
+    if (point) {
+        const bx::Vec3 axes[3] = {{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
+        for (int axis = 0; axis < 3; ++axis)
+            circle(center, axes[(axis + 1) % 3], axes[(axis + 2) % 3], point->range);
+    }
+    if (spot) {
+        for (const float angle : {spot->innerAngle, spot->outerAngle})
+            circle(bx::add(center, bx::mul(forward, spot->range * std::cos(bx::toRad(angle)))), x, y,
+                   spot->range * std::sin(bx::toRad(angle)));
+        const bx::Vec3 end = bx::add(center, bx::mul(forward, spot->range * std::cos(bx::toRad(spot->outerAngle))));
+        const float radius = spot->range * std::sin(bx::toRad(spot->outerAngle));
+        for (const bx::Vec3& side : {x, y, bx::mul(x, -1.0f), bx::mul(y, -1.0f)})
+            line(center, bx::add(end, bx::mul(side, radius)));
+    }
+    if (area) {
+        const bx::Vec3 halfWidth = bx::mul(x, 0.5f * area->width), halfHeight = bx::mul(y, 0.5f * area->height);
+        const bx::Vec3 corners[4] = {
+            bx::sub(bx::sub(center, halfWidth), halfHeight), bx::sub(bx::add(center, halfWidth), halfHeight),
+            bx::add(bx::add(center, halfWidth), halfHeight), bx::add(bx::sub(center, halfWidth), halfHeight)};
+        for (int i = 0; i < 4; ++i)
+            line(corners[i], corners[(i + 1) % 4]);
+        const float arrow = 0.5f * std::max(area->width, area->height) + 0.25f;
+        const bx::Vec3 tip = bx::add(center, bx::mul(forward, arrow));
+        const bx::Vec3 back = bx::sub(tip, bx::mul(forward, 0.25f * arrow));
+        line(center, tip);
+        line(tip, bx::add(back, bx::mul(x, 0.15f * arrow)));
+        line(tip, bx::sub(back, bx::mul(x, 0.15f * arrow)));
+        circle(center, x, y, area->range);
     }
     submitLines(lines, lineLayout_, lineProgram_, view);
 }

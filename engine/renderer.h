@@ -19,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -27,8 +28,10 @@
 namespace kast {
 
 // ponytail: forward shading with a fixed uniform array per draw; clustered lighting if scenes need more per mesh.
-constexpr size_t kMaxPointLights = 8; // MAX_POINT_LIGHTS in fs_mesh.sc
+constexpr size_t kMaxLocalLights = 8; // MAX_LOCAL_LIGHTS in fs_mesh.sc: point, spot and area lights per draw
 constexpr size_t kMaxShadowedPointLights = 4; // s_pointShadow0..3 in fs_mesh.sc
+constexpr size_t kMaxShadowedLocalLights = 4; // spot / area tiles of s_csm (atlas tiles 4..7) in fs_mesh.sc
+constexpr int kLtcSize = 16; // LTC_SIZE in fs_mesh.sc: entries per axis of the area light table
 
 // A primitive or terrain vertex (meshLayout_). Tangent: xyz along texture u, w the handedness: the bitangent (image up,
 // the normal map's +Y) is cross(normal, tangent) * w.
@@ -54,25 +57,51 @@ inline bx::Vec3 terrainTangent(const bx::Vec3& normal)
     return bx::normalize(bx::sub(bx::Vec3{1.0f, 0.0f, 0.0f}, bx::mul(normal, normal.x)));
 }
 
-// A PointLight in world space, as the renderer uses it.
-struct PointLightSample {
-    bx::Vec3 position;
-    float range;
-    bx::Vec3 color; // color * intensity
+enum class LocalLightType { Point, Spot, Area };
+
+// A PointLight, SpotLight or AreaLight in world space, as the renderer uses it.
+struct LocalLightSample {
+    bx::Vec3 position{0.0f, 0.0f, 0.0f}; // area: the rect's center
+    float range = 1.0f;
+    bx::Vec3 color{0.0f, 0.0f, 0.0f}; // color * intensity
     bool castShadows = false;
     float bias = 0.0f;
+    LocalLightType type = LocalLightType::Point;
+    bx::Vec3 direction{0.0f, 0.0f, -1.0f};  // spot, area: unit, the way it shines (the entity's world -Z)
+    bx::Vec3 halfWidth{0.5f, 0.0f, 0.0f};   // area: from the center to the rect's +X edge
+    bx::Vec3 halfHeight{0.0f, 0.5f, 0.0f};  // area: from the center to its +Y edge
+    float cosInner = 1.0f, cosOuter = 0.0f; // spot: cosines of its half-angles
+    bool twoSided = false;                  // area
 };
 
 // Windowed inverse square (Unreal / Frostbite style): saturate(1 - (d/r)^4)^2 / (d^2 + 1). Largest at the light, falls
-// smoothly to exactly 0 at distance >= range. fs_mesh.sc evaluates the same formula per pixel.
+// smoothly to exactly 0 at distance >= range. fs_mesh.sc evaluates the same formula per pixel (spot lights too).
 float pointLightFalloff(float distance, float range);
 
-// Indices of the lights (at most kMaxPointLights) whose range reaches the world-space box, nearest to its center
-// first; ties keep list order, the rest are dropped.
-std::vector<size_t> nearestPointLights(const std::vector<PointLightSample>& lights, const Aabb& bounds);
+// A spot light's cone edge: smoothstep from cosOuter (0, at and outside the outer angle) to cosInner (1, inside the
+// inner angle), by the cosine of the angle off its direction. fs_mesh.sc spotCone is the same.
+float spotConeFalloff(float cosAngle, float cosInner, float cosOuter);
 
-// Indices of the castShadows lights (at most kMaxShadowedPointLights) nearest eye, nearest first; ties keep list order.
-std::vector<size_t> shadowedPointLights(const std::vector<PointLightSample>& lights, const bx::Vec3& eye);
+// True if light can light some of the world-space box: point and area lights by their range sphere, spot lights by
+// that and their outer cone.
+bool lightReaches(const LocalLightSample& light, const Aabb& bounds);
+
+// Indices of the lights of any type (at most kMaxLocalLights) that reach the world-space box, nearest to its center
+// first; ties keep list order, the rest are dropped.
+std::vector<size_t> nearestLocalLights(const std::vector<LocalLightSample>& lights, const Aabb& bounds);
+
+// Indices of the castShadows lights (at most 4) nearest eye, nearest first; ties keep list order. cubes: point lights
+// (kMaxShadowedPointLights cube maps), else spot and area lights (kMaxShadowedLocalLights atlas tiles).
+std::vector<size_t> shadowedLights(const std::vector<LocalLightSample>& lights, const bx::Vec3& eye, bool cubes);
+
+// The area light table fs_mesh.sc shades with (engine/shaders/ltc_table.sh, written by tools/ltc_fit): kLtcSize^2
+// entries of 8 floats, row by sqrt(1 - N.V), column by roughness.
+std::span<const float> ltcTable();
+
+// The form factor (0..1, as fs_mesh.sc ltcIntegrate with the identity transform) of a polygon from a surface point
+// with unit normal n: corners relative to the point, clockwise as seen from the side that lights, clipped to the
+// surface's horizon. Seen from behind it is 0, or as from the front if twoSided.
+float rectFormFactor(const std::array<bx::Vec3, 4>& corners, const bx::Vec3& normal, bool twoSided);
 
 // An RGBA8 image with its full mip chain, level 0 first, each level half the last (at least 1) down to 1x1.
 struct MipImage {
@@ -105,24 +134,27 @@ std::string assetLoadSummary();
 void buildMips(MipImage& image, bool srgb);
 
 // Draws a Scene's MeshRenderers and ModelRenderers (posed by their AnimatorState, else in bind pose; skinned on the GPU)
-// with their materials (PBR metallic-roughness, see fs_mesh.sc) lit by its ambient, its
-// first DirectionalLight and up to kMaxPointLights PointLights each, fogged by its postProcessing.fog, as linear HDR
-// color (for PostProcess). Opaque and mask meshes first, then its sky (sky.h), then blended ones and particle emitters
-// (particles.h, simulated on the GPU here) far to near. Blended draws whose .kshader samples SCREEN_TEXTURE or
+// with their materials (PBR metallic-roughness, see fs_mesh.sc) lit by its ambient, its first DirectionalLight and the
+// kMaxLocalLights nearest point, spot and area lights each (nearestLocalLights), fogged by its postProcessing.fog, as
+// linear HDR color (for PostProcess). Opaque and mask meshes first, then its sky (sky.h), then blended ones and particle
+// emitters (particles.h, simulated on the GPU here) far to near. Blended draws whose .kshader samples SCREEN_TEXTURE or
 // DEPTH_TEXTURE see a copy of the target's color or depth as the opaque meshes and the sky left it, made only on frames
 // such a draw is in view.
-// Shadows: cascaded shadow maps for that DirectionalLight and cube shadow maps for the kMaxShadowedPointLights
-// castShadows PointLights nearest the eye, rendered in kShadowViews views before the scene's (see shadow.h).
+// Shadows: cascaded shadow maps for that DirectionalLight, cube shadow maps for the kMaxShadowedPointLights castShadows
+// PointLights nearest the eye and perspective atlas tiles for the kMaxShadowedLocalLights castShadows SpotLights and
+// AreaLights nearest it, rendered in kShadowViews views before the scene's (see shadow.h).
 // renderOverlays draws the editor's: a ground grid, axis lines, a short frustum preview per Camera, the range of the
-// selected PointLight, the selected entity's collider and its ParticleEmitter's shape.
-// Every pass culls its draws to its view frustum (main camera, each cascade, each cube face), and draws that share
-// buffers, material, shadow flags and (main pass) point lights, unskinned and not blended, are drawn as one GPU-instanced
+// selected PointLight (cone of a SpotLight, rect of an AreaLight), the selected entity's collider and its
+// ParticleEmitter's shape.
+// Every pass culls its draws to its view frustum (main camera, each cascade, each cube face, each tile), and draws that
+// share buffers, material, shadow flags and (main pass) lights, unskinned and not blended, are drawn as one GPU-instanced
 // submit (see docs/engine/instancing-and-culling.html).
 // The caller owns the views' framebuffers, rects and clears; these set the view transform and mode and submit.
 class Renderer {
 public:
-    // The cascades, then 6 cube faces per shadowed point light.
-    static constexpr bgfx::ViewId kShadowViews = kMaxShadowCascades + kMaxShadowedPointLights * 6;
+    // The cascades, then 6 cube faces per shadowed point light, then one per shadowed spot / area light.
+    static constexpr bgfx::ViewId kShadowViews =
+        kMaxShadowCascades + kMaxShadowedPointLights * 6 + kMaxShadowedLocalLights;
 
     void init();
     void shutdown();
@@ -188,7 +220,7 @@ private:
     // One mesh to submit: the transform, buffers and material, plus its bone matrices when skinned.
     struct DrawItem {
         Mat4 world{};
-        Aabb bounds{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}}; // world space, for culling, point lights and blend sorting
+        Aabb bounds{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}}; // world space, for culling, local lights and blend sorting
         const Material* material = nullptr;
         const UserShader* shader = nullptr; // the material's .kshader; null: the built-in mesh shader
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
@@ -201,11 +233,13 @@ private:
     };
     // Per-frame shadow state the scene draws sample.
     struct ShadowFrame {
-        float csmMtx[kMaxShadowCascades][16] = {}; // world to (atlas u, v, depth) per cascade
+        // World to (atlas u, v, depth) per cascade, then (projective) per spot / area light tile: u_csmMtx.
+        float csmMtx[kMaxShadowCascades + kMaxShadowedLocalLights][16] = {};
         float csmSplits[4] = {};                   // far view depth of each cascade (unused: the last)
         float csmBias[kMaxShadowCascades][4] = {}; // x: normal offset meters, y: depth bias
         bool sun = false;                          // the DirectionalLight casts shadows
-        std::vector<size_t> pointLights;           // shadowed, by cube index: indices into the frame's point lights
+        std::vector<size_t> pointLights;           // shadowed, by cube index: indices into the frame's lights
+        std::vector<size_t> tileLights;            // shadowed spot / area lights, by tile: indices into the frame's lights
     };
     struct Texture {
         bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; // invalid: failed to load, white_ draws instead
@@ -242,7 +276,7 @@ private:
     // Renders the shadow maps for this frame's casters into views from shadowViews (creating the maps on first use).
     // sun: the scene's DirectionalLight (null: none), shining along sunDir.
     ShadowFrame renderShadows(const DirectionalLight* sun, const bx::Vec3& sunDir, const std::vector<DrawItem>& draws,
-                              const std::vector<std::vector<Mat4>>& boneSets, const std::vector<PointLightSample>& pointLights,
+                              const std::vector<std::vector<Mat4>>& boneSets, const std::vector<LocalLightSample>& lights,
                               const float* viewMtx, const float* projMtx, bgfx::ViewId shadowViews);
     // Draws one batch (see batchDraws) into a shadow view: instanced if it can be, else one by one. eye: the camera's
     // world position (CAMERA_POSITION for .kshader casters).
@@ -267,7 +301,8 @@ private:
     bool instanced(const std::vector<const DrawItem*>& batch, bgfx::InstanceDataBuffer& instances) const;
     void drawGrid(bgfx::ViewId view);
     void drawCameraFrustums(const Scene& scene, bgfx::ViewId view);
-    void drawPointLightRange(const Scene& scene, bgfx::ViewId view, entt::entity selected);
+    // The selected light's gizmo: a PointLight's range, a SpotLight's cone, an AreaLight's rect, facing and range.
+    void drawLightGizmo(const Scene& scene, bgfx::ViewId view, entt::entity selected);
     void drawColliderWireframe(const Scene& scene, bgfx::ViewId view, entt::entity selected);
     void drawParticleShape(const Scene& scene, bgfx::ViewId view, entt::entity selected);
 
@@ -303,8 +338,9 @@ private:
     bgfx::UniformHandle lightDir_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightColor_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle ambient_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle pointPosRange_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle pointColor_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle localPosRange_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle localColor_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle localAxis_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle emissive_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialExt_ = BGFX_INVALID_HANDLE;
@@ -323,13 +359,13 @@ private:
     bgfx::UniformHandle csmSplits_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle csmBias_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowParams_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle pointShadow_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle localShadow_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle csmSampler_ = BGFX_INVALID_HANDLE;
     std::array<bgfx::UniformHandle, kMaxShadowedPointLights> pointShadowSamplers_;
     bgfx::UniformHandle kastParams_ = BGFX_INVALID_HANDLE; // u_kastParams: a .kshader's numeric params
     std::array<bgfx::UniformHandle, kMaxShaderTextures> shaderTextureSamplers_; // s_kastTexture0.., its texture2D params
-    // Created on first use: a 2x2 atlas of kCascadeSize cascades, and per shadowed point light a cube with a frame
-    // buffer per face.
+    // Created on first use: a 2x4 atlas of kCascadeSize tiles (2x2 cascades, then 2x2 spot / area light tiles), and per
+    // shadowed point light a cube with a frame buffer per face.
     bgfx::TextureHandle csm_ = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle csmFrameBuffer_ = BGFX_INVALID_HANDLE;
     std::array<bgfx::TextureHandle, kMaxShadowedPointLights> cubes_;

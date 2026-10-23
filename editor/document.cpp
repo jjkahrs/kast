@@ -135,6 +135,8 @@ const char* objectKindLabel(ObjectKind kind)
     case ObjectKind::Model: return "Model";
     case ObjectKind::DirectionalLight: return "Directional Light";
     case ObjectKind::PointLight: return "Point Light";
+    case ObjectKind::SpotLight: return "Spot Light";
+    case ObjectKind::AreaLight: return "Area Light";
     case ObjectKind::Camera: return "Camera";
     case ObjectKind::ParticleSystem: return "Particle System";
     }
@@ -161,6 +163,14 @@ entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent)
         scene.registry().get<kast::Transform>(entity).rotation = kast::quatFromEulerDeg(kNewLightEuler);
         break;
     case ObjectKind::PointLight: scene.registry().emplace<kast::PointLight>(entity); break;
+    case ObjectKind::SpotLight:
+        scene.registry().emplace<kast::SpotLight>(entity);
+        scene.registry().get<kast::Transform>(entity).rotation = kast::quatFromEulerDeg(kNewLightEuler);
+        break;
+    case ObjectKind::AreaLight:
+        scene.registry().emplace<kast::AreaLight>(entity);
+        scene.registry().get<kast::Transform>(entity).rotation = kast::quatFromEulerDeg(kNewLightEuler);
+        break;
     case ObjectKind::Camera: scene.registry().emplace<kast::Camera>(entity); break;
     case ObjectKind::ParticleSystem: scene.registry().emplace<kast::ParticleEmitter>(entity); break;
     case ObjectKind::Empty: break;

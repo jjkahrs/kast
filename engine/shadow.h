@@ -10,9 +10,16 @@
 // Shadow map math for the Renderer, GPU-free so self_check can test it. See docs/engine/coordinates-and-scenes.html (Lighting).
 namespace kast {
 
-constexpr uint16_t kCascadeSize = 2048;   // texels per side of one directional light cascade
+// The shadow atlas: 2 x 4 tiles of kCascadeSize, the directional light's cascades in rows 0..1 (cascade i at column
+// i % 2, row i / 2), then the spot / area light tiles in rows 2..3 (tile i at column i % 2, row 2 + i / 2).
+constexpr uint16_t kCascadeSize = 2048;   // texels per side of one atlas tile: a cascade, or a spot / area light's map
+constexpr uint16_t kShadowAtlasWidth = 2 * kCascadeSize;  // CSM_TEXEL in fs_mesh.sc
+constexpr uint16_t kShadowAtlasHeight = 4 * kCascadeSize;
 constexpr uint16_t kPointShadowSize = 1024; // texels per side of one point light cube face
-constexpr float kPointShadowNear = 0.05f;  // meters; casters closer to a point light than this don't shadow
+constexpr float kPointShadowNear = 0.05f;  // meters; casters closer to a point, spot or area light than this don't shadow
+// ponytail: an area light's map is one perspective view from its center (AREA_SHADOW_TAN in fs_mesh.sc): an
+// approximation, its shadows don't soften with the rect's size. Several samples over the rect if that matters.
+constexpr float kAreaShadowFovDegrees = 120.0f;
 // cascadeSplits mixes logarithmic (lambda = 1, tight near the eye) and uniform (0) cascade splits by this.
 constexpr float kCascadeSplitLambda = 0.75f;
 

@@ -1,0 +1,81 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [12, 1, 12] },
+        "MeshRenderer": { "primitive": "plane", "material": "" }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Cube",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-1.5, 0.5, -0.5], "rotation": [0, 0.173648, 0, 0.984808], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Sphere",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [1.5, 0.75, -0.5], "rotation": [0, 0, 0, 1], "scale": [1.5, 1.5, 1.5] },
+        "MeshRenderer": { "primitive": "sphere", "material": "" }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Warm Spot",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-1.5, 3.5, 0.5], "rotation": [-0.707107, 0, 0, 0.707107], "scale": [1, 1, 1] },
+        "SpotLight": { "color": [1, 0.75, 0.4], "intensity": 8, "range": 7, "innerAngle": 15, "outerAngle": 30 }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Cool Spot",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [2.2, 2.5, 2.5], "rotation": [-0.5, 0, 0, 0.866025], "scale": [1, 1, 1] },
+        "SpotLight": { "color": [0.4, 0.7, 1], "intensity": 10, "range": 8, "innerAngle": 8, "outerAngle": 20 }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Pillar",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 1, -3], "rotation": [0, 0, 0, 1], "scale": [1, 2, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Short Spot",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 4, -3], "rotation": [-0.707107, 0, 0, 0.707107], "scale": [1, 1, 1] },
+        "SpotLight": { "color": [0.6, 1, 0.5], "intensity": 6, "range": 3.5, "innerAngle": 25, "outerAngle": 40 }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 2.5, 6], "rotation": [-0.173648, 0, 0, 0.984808], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    }
+  ],
+  "lighting": { "ambientColor": [0.6, 0.7, 1], "ambientIntensity": 0.05 },
+  "editor": {
+    "camera": { "pivot": [0, 0.75, -0.5], "yaw": 20, "pitch": -25, "distance": 10 }
+  }
+}
