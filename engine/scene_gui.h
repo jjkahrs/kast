@@ -4,6 +4,7 @@
 #include "gui.h"
 #include "gui_access.h"
 #include "gui_events.h"
+#include "gui_models.h"
 #include "scene.h"
 
 #include <filesystem>
@@ -52,6 +53,12 @@ public:
     std::optional<std::string> focusedField() override;
     bool mouseOver() override;
     std::optional<std::string> hovered() override;
+    void setModelValue(const std::string& model, const std::string& key, GuiValue value) override;
+    std::optional<GuiValue> modelValue(const std::string& model, const std::string& key) override;
+    bool cloneElement(const std::string& templateId, const std::string& parentId, const std::string& newId) override;
+    bool createElement(const std::string& parentId, const std::string& tag, const std::string& newId,
+                       const std::map<std::string, std::string>& attributes) override;
+    bool removeElement(const std::string& id) override;
     void reset() override;
 
 private:
@@ -77,7 +84,9 @@ private:
     void restack();
     std::string documentPath(const Rml::Element& document) const;
     void apply(Rml::ElementDocument& document, const std::string& id, const Written& written);
+    Rml::ElementDocument* documentWith(const std::string& id) const; // the topmost loaded one holding id
 
+    GuiModels models_; // before context_: the context's models point into it
     GuiContext context_;
     std::map<std::string, Written> written_;
     std::filesystem::path root_;

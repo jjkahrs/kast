@@ -1309,6 +1309,51 @@ void LuaSystems::State::bindGuiApi()
         return id ? sol::make_object(lua, *id) : sol::object(sol::lua_nil);
     });
     guiApi.set_function("mouseOver", [this] { return gui->mouseOver(); });
+    // Data models (data-model="name" in an .rml): key is a top-level variable, value plain data (luaToJson).
+    const auto key = [=](lua_State* L, const char* function, const sol::object& value) {
+        std::string name = text(L, function, "key", value);
+        if (!guiVariableName(name))
+            raise(L, std::format("kast.gui.{}: key must be a letter then letters, digits or _ (not an RmlUi reserved "
+                                 "name), got '{}'", function, name));
+        return name;
+    };
+    guiApi.set_function("set", [=, this](sol::this_state L, const sol::object& model, const sol::object& name,
+                                         const sol::object& value) {
+        const std::string m = text(L, "set", "model", model);
+        const std::string k = key(L, "set", name);
+        GuiValue json;
+        std::string error;
+        if (!luaToJson(value, json, error, "value"))
+            raise(L, "kast.gui.set: " + error);
+        gui->setModelValue(m, k, std::move(json));
+    });
+    guiApi.set_function("get", [=, this](sol::this_state L, const sol::object& model, const sol::object& name) {
+        const std::optional<GuiValue> value = gui->modelValue(text(L, "get", "model", model), key(L, "get", name));
+        return value ? jsonToLua(lua, *value) : sol::object(sol::lua_nil);
+    });
+    // Live elements (gone when their document reloads); a missing id or a taken new id logs and returns false.
+    guiApi.set_function("clone", [=, this](sol::this_state L, const sol::object& templateId, const sol::object& parentId,
+                                           const sol::object& newId) {
+        return gui->cloneElement(text(L, "clone", "templateId", templateId), text(L, "clone", "parentId", parentId),
+                                 text(L, "clone", "newId", newId));
+    });
+    guiApi.set_function("create", [=, this](sol::this_state L, const sol::object& parentId, const sol::object& tag,
+                                            const sol::object& newId, const sol::object& attrs) {
+        const std::string parent = text(L, "create", "parentId", parentId);
+        const std::string t = text(L, "create", "tag", tag);
+        const std::string id = text(L, "create", "newId", newId);
+        std::map<std::string, std::string> attributes;
+        if (attrs.get_type() == sol::type::table) {
+            for (const auto& [name, value] : attrs.as<sol::table>())
+                attributes[text(L, "create", "attribute names", name)] = text(L, "create", "attribute values", value);
+        } else if (attrs.get_type() != sol::type::lua_nil && attrs.get_type() != sol::type::none) {
+            raise(L, std::format("kast.gui.create: attrs must be a table or nil, got {}", toString(L, attrs)));
+        }
+        return gui->createElement(parent, t, id, attributes);
+    });
+    guiApi.set_function("remove", [=, this](sol::this_state L, const sol::object& id) {
+        return gui->removeElement(text(L, "remove", "id", id));
+    });
     guiApi.set_function("hovered", [this]() -> sol::object {
         const std::optional<std::string> id = gui->hovered();
         return id ? sol::make_object(lua, *id) : sol::object(sol::lua_nil);

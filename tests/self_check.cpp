@@ -45,6 +45,7 @@
 #include <particles.h>
 #include <renderer.h>
 #include <scene.h>
+#include <gui_models.h>
 #include <scene_gui.h>
 #include <scene_io.h>
 #include <shader.h>
@@ -1150,16 +1151,49 @@ public:
     std::optional<std::string> focusedField() override { return focused; }
     bool mouseOver() override { return over; }
     std::optional<std::string> hovered() override { return hoveredId; }
+    void setModelValue(const std::string& model, const std::string& key, kast::GuiValue value) override
+    {
+        history.push_back(std::format("set {}.{}={}", model, key, value.dump()));
+        models[model][key] = std::move(value);
+    }
+    std::optional<kast::GuiValue> modelValue(const std::string& model, const std::string& key) override
+    {
+        const auto found = models.find(model);
+        if (found == models.end() || !found->second.contains(key))
+            return std::nullopt;
+        return found->second[key];
+    }
+    bool cloneElement(const std::string& templateId, const std::string& parentId, const std::string& newId) override
+    {
+        history.push_back(std::format("clone {} {} {}", templateId, parentId, newId));
+        return templateId == "row_template";
+    }
+    bool createElement(const std::string& parentId, const std::string& tag, const std::string& newId,
+                       const std::map<std::string, std::string>& attributes) override
+    {
+        std::string line = std::format("create {} {} {}", parentId, tag, newId);
+        for (const auto& [name, value] : attributes)
+            line += std::format(" {}={}", name, value);
+        history.push_back(line);
+        return parentId == "list";
+    }
+    bool removeElement(const std::string& id) override
+    {
+        history.push_back("remove " + id);
+        return id == "row_1";
+    }
     void reset() override
     {
         ++resets;
         texts.clear();
         visible_.clear();
+        models.clear();
     }
 
     std::map<std::string, std::string> values;
     std::map<std::string, std::string> texts;
     std::map<std::string, bool> visible_;
+    std::map<std::string, std::map<std::string, kast::GuiValue>> models;
     std::vector<std::string> history; // every write, kept across reset()
     std::optional<std::string> focused;
     bool over = false;
@@ -1281,6 +1315,36 @@ return {
         fails("kast.gui.setText: text must be a string, got nil", function() kast.gui.setText("x") end)
         fails("kast.gui.setVisible: visible must be a boolean, got 1", function() kast.gui.setVisible("x", 1) end)
         fails("kast is read-only", function() kast.gui.value = nil end)
+        -- data models: values Lua <-> C++ (nested arrays and tables, scalars)
+        kast.gui.set("hud", "rows", {{name = "a", tags = {"x", "y"}, level = 2.5}, {name = "b", tags = {}}})
+        local rows = kast.gui.get("hud", "rows")
+        assert(#rows == 2 and rows[1].name == "a" and rows[1].tags[2] == "y" and rows[1].level == 2.5 and
+               next(rows[2].tags) == nil, "get returns the nested value")
+        kast.gui.set("hud", "title", "Quests")
+        kast.gui.set("hud", "count", 3)
+        kast.gui.set("hud", "open", false)
+        assert(kast.gui.get("hud", "title") == "Quests" and kast.gui.get("hud", "count") == 3 and
+               kast.gui.get("hud", "open") == false, "scalars round-trip")
+        kast.gui.set("hud", "title", nil)
+        assert(kast.gui.get("hud", "title") == nil and kast.gui.get("hud", "nothing") == nil and
+               kast.gui.get("nomodel", "rows") == nil, "unset is nil")
+        assert(kast.gui.clone("row_template", "list", "row_9") == true and kast.gui.clone("nope", "list", "row_10") == false,
+               "clone returns the GUI's answer")
+        assert(kast.gui.create("list", "p", "line_1", {class = "chat_line"}) == true and
+               kast.gui.create("missing", "p", "line_2") == false, "create returns the GUI's answer")
+        assert(kast.gui.remove("row_1") == true and kast.gui.remove("row_2") == false, "remove returns the GUI's answer")
+        fails("kast.gui.set: model must be a string, got 1", function() kast.gui.set(1, "k", 1) end)
+        fails("kast.gui.set: key must be a letter then letters, digits or _ (not an RmlUi reserved name), got 'it'",
+              function() kast.gui.set("m", "it", 1) end)
+        fails("kast.gui.set: key must be a string, got nil", function() kast.gui.set("m") end)
+        fails("kast.gui.set: value.f: a function can't be", function() kast.gui.set("m", "k", {f = function() end}) end)
+        fails("kast.gui.set: value: table keys must be exactly 1..n", function() kast.gui.set("m", "k", {1, x = 2}) end)
+        fails("kast.gui.get: key must be a string, got nil", function() kast.gui.get("m") end)
+        fails("kast.gui.clone: newId must be a string, got nil", function() kast.gui.clone("a", "b") end)
+        fails("kast.gui.create: tag must be a string, got 3", function() kast.gui.create("list", 3, "x") end)
+        fails("kast.gui.create: attrs must be a table or nil, got 5", function() kast.gui.create("list", "p", "x", 5) end)
+        fails("kast.gui.create: attribute values must be a string, got 1", function() kast.gui.create("list", "p", "x", {a = 1}) end)
+        fails("kast.gui.remove: id must be a string, got false", function() kast.gui.remove(false) end)
         kast.loadScene("next.scene")
     end,
 })");
@@ -1311,10 +1375,16 @@ return {
     check(gui.history == std::vector<std::string>{"text status=written in init", "text password=", "text log=a\nb",
                                                   "visible realm_2=false", "attribute icon_3.src=../textures/icons/wing.png",
                                                   "focus chat_input", "focus nope",
+                                                  R"(set hud.rows=[{"level":2.5,"name":"a","tags":["x","y"]},{"name":"b","tags":{}}])",
+                                                  R"(set hud.title="Quests")", "set hud.count=3", "set hud.open=false",
+                                                  "set hud.title=null", "clone row_template list row_9",
+                                                  "clone nope list row_10", "create list p line_1 class=chat_line",
+                                                  "create missing p line_2", "remove row_1", "remove row_2",
                                                   "visible hud=true"},
           "setText / setVisible / setAttribute reach the GUI with their arguments, in call order");
-    check(gui.resets == 2 && gui.texts.empty() && gui.visible_ == std::map<std::string, bool>{{"hud", true}},
-          "a kast.loadScene switch resets the GUI before the new scene's inits");
+    check(gui.resets == 2 && gui.texts.empty() && gui.visible_ == std::map<std::string, bool>{{"hud", true}} &&
+              gui.models.empty(),
+          "a kast.loadScene switch resets the GUI (writes and model values) before the new scene's inits");
     check(!input.buttonsDown[0] && !input.cursorLocked, "a kast.loadScene switch releases buttons and the cursor lock");
     gui.focused.reset();
     gui.over = false;
@@ -2981,7 +3051,7 @@ void checkBuildSettings()
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
                                        "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                       "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "ui_effects.scene",
+                                       "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
 
@@ -3005,7 +3075,7 @@ void checkBuildSettings()
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
                                                           "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                                          "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_drag.scene", "ui_effects.scene",
+                                                          "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
@@ -4832,6 +4902,221 @@ void checkGuiClipboard()
     SDL_SetClipboardText(saved ? saved : "");
     SDL_free(saved);
     SDL_QuitSubSystem(SDL_INIT_VIDEO);
+}
+
+// guiBindingNames: what a document's bindings read, so its models can be made before it loads.
+void checkGuiBindingNames()
+{
+    const kast::GuiBindingNames names = kast::guiBindingNames(R"rml(<body><div data-model="m" data-if="open &amp;&amp; !hidden">
+        <!-- {{commented}} <p data-value="commentedToo"/> -->
+        <p data-for="row, i : rows" data-attr-id="'r' + i" data-class-sel="row.id == picked">{{ row.name | upper }} {{title}}</p>
+        <button data-event="kast.event" data-event-click="count = count + 1; reset(ev.x)" data-alias-who="people[0]">{{who.name}}</button>
+        <div data-model='other' data-drag="bag" data-style-color="it_index > 2 ? tint : 'red'" data-kast-node="3">{{size}}</div>
+        <p data-for="tags">{{it}} {{2.5}}</p></div></body>)rml");
+    check(names.models == std::set<std::string>{"m", "other"}, "guiBindingNames finds every data-model");
+    check(names.variables == std::set<std::string>{"count", "hidden", "open", "people", "picked", "rows", "tags", "tint", "title"},
+          "guiBindingNames: top-level names only (no aliases, members, transforms, callbacks, literals, reserved or comments)");
+    check(kast::guiBindingNames("<body><p>{{title}}</p></body>").models.empty(), "no data-model: no models");
+    check(kast::guiVariableName("rows") && kast::guiVariableName("Row_2") && !kast::guiVariableName("2rows") &&
+              !kast::guiVariableName("_x") && !kast::guiVariableName("IT") && !kast::guiVariableName("a b") &&
+              !kast::guiVariableName(""),
+          "guiVariableName: a letter, then letters, digits and _, not reserved");
+}
+
+// RmlUi data binding and runtime elements through SceneGui, headless like checkGuiClipboard: tests/project/ui/bind.rml
+// (two models, nested data-for, two-way inputs, data-event buttons in rows, a clone template) loads with no RmlUi
+// warning; set / get, two-way edits from real input events, clicks and drags on data-for rows, clones and created
+// elements; a hot reload keeps the model values and drops the live elements; reset forgets both.
+void checkGuiDataModels()
+{
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    check(bgfx::init(init) && kast::gui::init(), "headless bgfx and RmlUi start (data models)");
+    {
+        const std::filesystem::path root = projectTestDir("kast_gui_bind", "bind");
+        std::filesystem::create_directories(root / "ui");
+        const std::filesystem::path source = std::filesystem::path(KAST_SOURCE_DIR) / "tests/project/ui";
+        for (const char* file : {"bind.rml", "bind.rcss"})
+            std::filesystem::copy_file(source / file, root / "ui" / file);
+        kast::Scene scene;
+        scene.registry().emplace<kast::UIDocument>(scene.create("Bind"), kast::UIDocument{"ui/bind.rml", true});
+        kast::EventBus bus;
+        std::vector<std::string> events; // "name id"
+        std::vector<kast::EventBus::Subscription> subscriptions;
+        for (const char* name : {"bind.pick", "bind.row.start", "bind.clone.start", "bind.made.start"})
+            subscriptions.push_back(bus.subscribe(name, [&events, name](const nlohmann::json& payload) {
+                events.push_back(std::format("{} {}", name, payload["id"].get<std::string>()));
+            }));
+        const auto rows = [](int count) {
+            kast::GuiValue list = kast::GuiValue::array();
+            for (int i = 0; i < count; ++i)
+                list.push_back({{"name", std::format("Row {}", i)},
+                                {"tags", i % 2 ? kast::GuiValue{"odd", "x"} : kast::GuiValue::array({"even"})}});
+            return list;
+        };
+
+        kast::SceneGui gui("bind_check");
+        gui.context().resize(1280, 720);
+        gui.setModelValue("binds", "rows", rows(50)); // before the document loads: shown once it does
+        gui.setModelValue("binds", "title", "Quests");
+        gui.setModelValue("binds", "count", 7);
+        gui.setModelValue("binds", "open", true);
+        gui.setModelValue("form", "name", "");
+        gui.setModelValue("form", "agree", false);
+        gui.setModelValue("form", "volume", 5);
+        gui.setModelValue("form", "color", "red");
+        const uint64_t problems = kast::gui::problemCount();
+        gui.sync(scene, root, bus);
+        Rml::Context* rml = gui.context().context();
+        const auto update = [&] {
+            rml->Update();
+            bus.drain();
+        };
+        update();
+        Rml::ElementDocument* doc = rml->GetNumDocuments() == 1 ? rml->GetDocument(0) : nullptr;
+        check(doc && kast::gui::problemCount() == problems,
+              "bind.rml (data-model, nested data-for, data-event rows) loads without an RmlUi warning");
+        if (doc) {
+            const auto byId = [&](const char* id) { return doc->GetElementById(id); };
+            const auto rowCount = [&] {
+                int count = 0;
+                for (int i = 0; i < byId("bind_rows")->GetNumChildren(); ++i)
+                    count += byId("bind_rows")->GetChild(i)->HasAttribute("data-for") ? 0 : 1;
+                return count;
+            };
+            const auto text = [](Rml::Element* element) { return element ? element->GetInnerRML() : std::string("<missing>"); };
+            check(rowCount() == 50 && byId("row_49") && byId("pick_49"), "50 rows set before the load render as 50 rows with ids");
+            Rml::Element* row1 = byId("row_1");
+            check(row1 && text(row1->GetChild(0)) == "Row 1" && text(row1->GetChild(1)) == "odd" && text(row1->GetChild(2)) == "x",
+                  "nested binding: {{row.name}} and a data-for over row.tags");
+            check(text(byId("bind_title")).starts_with("Quests (7) ") && byId("bind_title")->GetChild(1)->IsVisible(),
+                  "string, number and bool scalars bind ({{title}}, {{count}}, data-if)");
+            gui.setModelValue("binds", "rows", rows(3));
+            gui.setModelValue("binds", "open", false);
+            update();
+            check(rowCount() == 3 && byId("row_2") && !byId("row_3"), "a later set of 3 rows renders 3");
+            check(!byId("bind_title")->GetChild(1)->IsVisible(), "data-if follows a bool set to false");
+            const std::optional<kast::GuiValue> got = gui.modelValue("binds", "rows");
+            check(got && got->size() == 3 && (*got)[1]["tags"][0] == "odd", "modelValue returns the nested value");
+            check(!gui.modelValue("binds", "nothing") && !gui.modelValue("nomodel", "rows"), "modelValue of an unset key is nullopt");
+
+            // Two-way: real input events through GuiContext::onEvent, as the Game view sends them.
+            const auto key = [&](SDL_Keycode code) {
+                SDL_Event event{};
+                event.type = SDL_EVENT_KEY_DOWN;
+                event.key.key = code;
+                gui.context().onEvent(event);
+                event.type = SDL_EVENT_KEY_UP;
+                gui.context().onEvent(event);
+                update();
+            };
+            check(byId("form_name")->Focus(), "the bound text field takes focus");
+            SDL_Event typed{};
+            typed.type = SDL_EVENT_TEXT_INPUT;
+            typed.text.text = "hi";
+            gui.context().onEvent(typed);
+            update();
+            byId("form_agree")->Click();
+            update();
+            check(byId("form_volume")->Focus(), "the bound range takes focus");
+            key(SDLK_RIGHT);
+            check(byId("form_color")->Focus(), "the bound select takes focus");
+            key(SDLK_DOWN);
+            check(gui.modelValue("form", "name") == kast::GuiValue("hi"), "typing in a data-value text field reaches the model");
+            check(gui.modelValue("form", "agree") == kast::GuiValue(true), "toggling a data-checked checkbox reaches the model");
+            check(gui.modelValue("form", "volume") == kast::GuiValue(6.0), "moving a data-value range reaches the model (a number)");
+            check(gui.modelValue("form", "color") == kast::GuiValue("green"), "changing a data-value select reaches the model");
+            check(text(byId("form_echo")) == "hi | yes | 6 | green", "views reading the two-way values follow them");
+
+            // Mouse clicks and drags on elements data-for, clone and create made.
+            const auto centre = [&](Rml::Element* element, float dx) {
+                const Rml::Vector2f at = element->GetAbsoluteOffset(Rml::BoxArea::Border) +
+                                         element->GetBox().GetSize(Rml::BoxArea::Border) * 0.5f;
+                return Rml::Vector2f(at.x + dx, at.y);
+            };
+            const auto mouse = [&](SDL_EventType type, Rml::Vector2f at) {
+                SDL_Event event{};
+                event.type = type;
+                if (type == SDL_EVENT_MOUSE_MOTION) {
+                    event.motion.x = at.x;
+                    event.motion.y = at.y;
+                } else {
+                    event.button.button = SDL_BUTTON_LEFT;
+                    event.button.x = at.x;
+                    event.button.y = at.y;
+                }
+                gui.context().onEvent(event);
+                update();
+            };
+            const auto click = [&](Rml::Element* element) {
+                const Rml::Vector2f at = centre(element, 0.0f);
+                mouse(SDL_EVENT_MOUSE_MOTION, at);
+                mouse(SDL_EVENT_MOUSE_BUTTON_DOWN, at);
+                mouse(SDL_EVENT_MOUSE_BUTTON_UP, at);
+            };
+            const auto drag = [&](Rml::Element* element, float dx) { // dx: off the centre, onto the element's own box
+                const Rml::Vector2f at = centre(element, dx);
+                const Rml::Vector2f to(at.x + 40.0f, at.y + 40.0f);
+                mouse(SDL_EVENT_MOUSE_MOTION, at);
+                mouse(SDL_EVENT_MOUSE_BUTTON_DOWN, at);
+                mouse(SDL_EVENT_MOUSE_MOTION, Rml::Vector2f(at.x + 20.0f, at.y + 20.0f));
+                mouse(SDL_EVENT_MOUSE_MOTION, to);
+                mouse(SDL_EVENT_MOUSE_BUTTON_UP, to);
+            };
+            click(byId("pick_2"));
+            drag(byId("row_0"), 50.0f);
+
+            check(gui.cloneElement("clone_template", "clone_list", "clone_1"), "clone copies the template");
+            update();
+            Rml::Element* clone = byId("clone_1");
+            check(clone && clone->IsVisible() && byId("clone_1_name") && byId("clone_1_pick") && byId("clone_template_name"),
+                  "the clone is shown, its _name / _pick children renamed, the template kept");
+            check(!gui.cloneElement("clone_template", "clone_list", "clone_1") && logged("the new id is taken in that GUI"),
+                  "a clone onto a taken id returns false and logs");
+            check(!gui.cloneElement("nope", "clone_list", "clone_2") && logged("the parent's GUI has no such template"),
+                  "a clone of a missing template returns false and logs");
+            check(!gui.cloneElement("clone_template", "nope", "clone_2") && logged("no loaded GUI has the parent"),
+                  "a clone under a missing parent returns false and logs");
+            check(gui.createElement("clone_list", "div", "made_1", {{"class", "clone_row"}, {"data-drag", "bind.made"}}),
+                  "create appends a new element");
+            update();
+            check(byId("made_1") && byId("made_1")->GetClassNames() == "clone_row" &&
+                      byId("made_1")->GetParentNode() == byId("clone_list"),
+                  "the created element has its id, attributes and parent");
+            check(!gui.createElement("nope", "div", "made_2", {}) && !gui.createElement("clone_list", "div", "made_1", {}) &&
+                      !gui.createElement("clone_list", "", "made_2", {}),
+                  "create under a missing parent, onto a taken id or without a tag returns false");
+            click(byId("clone_1_pick"));
+            drag(clone, 90.0f);
+            drag(byId("made_1"), 0.0f);
+            check(events == std::vector<std::string>{"bind.pick pick_2", "bind.row.start row_0", "bind.pick clone_1_pick",
+                                                     "bind.clone.start clone_1", "bind.made.start made_1"},
+                  "data-event and data-drag work on data-for rows, clones and created elements");
+
+            check(!gui.removeElement("row_1") && logged("it is (inside) a data-for row: change the model instead"),
+                  "remove refuses a data-for row (RmlUi owns it)");
+            check(!gui.removeElement("nope") && logged("kast.gui.remove('nope'): no loaded GUI has it"),
+                  "remove of a missing id is false");
+            check(gui.removeElement("made_1") && !byId("made_1"), "remove takes an element out");
+
+            // Hot reload: the model values come back, the live clone doesn't.
+            const std::filesystem::path rmlFile = root / "ui/bind.rml";
+            std::filesystem::last_write_time(rmlFile, std::filesystem::last_write_time(rmlFile) + std::chrono::seconds(5));
+            gui.reloadChanged();
+            update();
+            doc = rml->GetNumDocuments() == 1 ? rml->GetDocument(0) : nullptr;
+            check(doc && rowCount() == 3 && !byId("clone_1") && byId("clone_template"),
+                  "after a reload: the model's 3 rows again, the clone gone");
+            auto* name = doc ? dynamic_cast<Rml::ElementFormControl*>(byId("form_name")) : nullptr;
+            check(name && name->GetValue() == "hi" && gui.modelValue("form", "agree") == kast::GuiValue(true),
+                  "after a reload: two-way values kept and shown");
+        }
+        check(kast::gui::problemCount() == problems, "no RmlUi warning through the whole run");
+        gui.reset();
+        check(!gui.modelValue("form", "name") && rml->GetDataModels().empty(), "reset forgets the values and the models");
+    }
+    kast::gui::shutdown();
+    bgfx::shutdown();
 }
 
 void checkGui()
@@ -12349,7 +12634,9 @@ int main(int argc, char** argv)
     checkStateMachineEditor();
     checkAssets();
     checkGui();
+    checkGuiBindingNames();
     checkGuiClipboard();
+    checkGuiDataModels();
     checkExternalEditor();
     checkModelLoading();
     checkModelCache();

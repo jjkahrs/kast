@@ -205,10 +205,102 @@ std::optional<std::string> SceneGui::hovered()
     return id.empty() ? std::nullopt : std::optional(id);
 }
 
+void SceneGui::setModelValue(const std::string& model, const std::string& key, GuiValue value)
+{
+    models_.set(gui::ready() ? context_.context() : nullptr, model, key, std::move(value));
+}
+
+std::optional<GuiValue> SceneGui::modelValue(const std::string& model, const std::string& key)
+{
+    return models_.get(model, key);
+}
+
+bool SceneGui::cloneElement(const std::string& templateId, const std::string& parentId, const std::string& newId)
+{
+    Rml::ElementDocument* document = documentWith(parentId);
+    Rml::Element* source = document ? document->GetElementById(templateId) : nullptr;
+    if (!document || !source || newId.empty() || document->GetElementById(newId)) {
+        log::warn(std::format("kast.gui.clone('{}', '{}', '{}'): {}", templateId, parentId, newId,
+                              !document  ? "no loaded GUI has the parent"
+                              : !source  ? "the parent's GUI has no such template"
+                              : newId.empty() ? "the new id is empty"
+                                         : "the new id is taken in that GUI"));
+        return false;
+    }
+    Rml::ElementPtr copy = source->Clone();
+    copy->SetId(newId);
+    copy->RemoveProperty("display");
+    const std::string prefix = templateId + "_";
+    const auto rename = [&](auto&& self, Rml::Element& element) -> void {
+        for (int i = 0; i < element.GetNumChildren(); ++i) {
+            Rml::Element& child = *element.GetChild(i);
+            if (child.GetId().starts_with(prefix))
+                child.SetId(newId + "_" + child.GetId().substr(prefix.size()));
+            self(self, child);
+        }
+    };
+    rename(rename, *copy);
+    document->GetElementById(parentId)->AppendChild(std::move(copy));
+    return true;
+}
+
+bool SceneGui::createElement(const std::string& parentId, const std::string& tag, const std::string& newId,
+                             const std::map<std::string, std::string>& attributes)
+{
+    Rml::ElementDocument* document = documentWith(parentId);
+    if (!document || tag.empty() || newId.empty() || document->GetElementById(newId)) {
+        log::warn(std::format("kast.gui.create('{}', '{}', '{}'): {}", parentId, tag, newId,
+                              !document      ? "no loaded GUI has the parent"
+                              : tag.empty()  ? "the tag is empty"
+                              : newId.empty() ? "the new id is empty"
+                                             : "the new id is taken in that GUI"));
+        return false;
+    }
+    Rml::ElementPtr element = document->CreateElement(tag);
+    for (const auto& [name, value] : attributes)
+        element->SetAttribute(name, value);
+    element->SetId(newId);
+    document->GetElementById(parentId)->AppendChild(std::move(element));
+    return true;
+}
+
+bool SceneGui::removeElement(const std::string& id)
+{
+    Rml::ElementDocument* document = documentWith(id);
+    Rml::Element* element = document ? document->GetElementById(id) : nullptr;
+    // ponytail: "made by data-for" is read off the DOM (RmlUi inserts the rows before the hidden data-for template,
+    // same tag); an authored element of that tag just before a data-for one is refused too.
+    const auto madeByFor = [](Rml::Element* e) {
+        for (; e && e != e->GetOwnerDocument(); e = e->GetParentNode())
+            for (Rml::Element* next = e->GetNextSibling(); next; next = next->GetNextSibling())
+                if (next->HasAttribute("data-for") && next->GetTagName() == e->GetTagName())
+                    return true;
+        return false;
+    };
+    if (!element || element == document || madeByFor(element)) {
+        log::warn(std::format("kast.gui.remove('{}'): {}", id,
+                              !element              ? "no loaded GUI has it"
+                              : element == document ? "a document's <body> can't be removed"
+                                                    : "it is (inside) a data-for row: change the model instead"));
+        return false;
+    }
+    element->GetParentNode()->RemoveChild(element);
+    return true;
+}
+
 void SceneGui::reset()
 {
     clear();
     written_.clear();
+    models_.clear(gui::ready() ? context_.context() : nullptr);
+}
+
+Rml::ElementDocument* SceneGui::documentWith(const std::string& id) const
+{
+    for (auto it = entries_.rbegin(); it != entries_.rend(); ++it)
+        if (it->document && it->document->GetElementById(id))
+            return it->document;
+    return nullptr;
 }
 
 void SceneGui::apply(Rml::ElementDocument& document, const std::string& id, const Written& written)
@@ -255,6 +347,7 @@ void SceneGui::load(Entry& entry, EventBus& bus)
         return;
     }
     const uint64_t problems = gui::problemCount();
+    models_.prepare(*context, text);
     Rml::ElementDocument* document = context->LoadDocument(gui::toRmlPath(*file));
     if (!document || gui::problemCount() != problems) {
         log::error(std::format("UI document '{}' (or its style sheet) has errors, see above: not shown", entry.path));
