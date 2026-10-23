@@ -27,6 +27,7 @@
 #include "frustum.h"
 #include "log.h"
 #include "physics.h"
+#include "post_process.h"
 #include "project.h"
 #include "terrain.h"
 
@@ -56,6 +57,7 @@ constexpr uint32_t kLightGizmoColor = 0xff40d0f0;
 constexpr uint32_t kColliderColor = 0xff40ff60; // ABGR: green
 constexpr int kRangeCircleSegments = 48;
 constexpr uint32_t kParticleShapeColor = 0xff00aaff; // ABGR: the editor's orange
+constexpr uint32_t kProbeBoxColor = 0xff00ccff;      // ABGR: the editor's highlight yellow
 constexpr int kSphereStacks = 16;
 constexpr int kSphereSlices = 32;
 // No culling here: a mesh draw adds its material's cullMode (cullState), lines draw as they are.
@@ -72,11 +74,18 @@ constexpr uint64_t kShadowMapFlags = BGFX_TEXTURE_RT | BGFX_SAMPLER_COMPARE_LEQU
 // D3D cube face order (+X, -X, +Y, -Y, +Z, -Z): the direction each face looks and its up, for left-handed views.
 constexpr bx::Vec3 kCubeFaceForward[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
 constexpr bx::Vec3 kCubeFaceUp[6] = {{0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}};
+// A probe's faces for right-handed views of Kast's world, in bgfx's side order (+X, -X, +Y, -Y, +Z, -Z of the cube,
+// whose -Z is Kast's +Z: ibl.h): each face's image as that side's texels lie, unmirrored, so winding and culling hold.
+constexpr bx::Vec3 kProbeFaceForward[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, -1}, {0, 0, 1}};
+constexpr bx::Vec3 kProbeFaceUp[6] = {{0, 1, 0}, {0, 1, 0}, {0, 0, 1}, {0, 0, -1}, {0, 1, 0}, {0, 1, 0}};
+constexpr float kProbeNear = 0.05f; // meters: a probe's faces' near and far planes
+constexpr float kProbeFar = 1000.0f;
 
 struct LineVertex {
     float x, y, z;
     uint32_t abgr;
 };
+
 
 // Quad centered at center, spanning +-u and +-v, facing normal = u x v (counter-clockwise from the front). Texture u
 // runs along +u and v along -v (image up is +v), so the tangent is u and the bitangent cross(normal, u) = v: w = 1.
@@ -219,21 +228,23 @@ Aabb transformBounds(const Aabb& local, const float* world)
 }
 
 // What draws must share to be one instanced submit: buffers, material, shadow flags and, in the main pass, the local
-// lights that reach them (so each instance is lit as its own draw would be).
+// lights that reach them and the environment they take their ambient from (so each instance is lit as its own draw
+// would be).
 struct BatchKey {
     uint16_t vertices = 0, indices = 0;
     const Material* material = nullptr;
     bool skinned = false, castShadows = false, receiveShadows = false;
     bool mirrored = false; // culls the other winding (cullState)
     std::vector<size_t> lights;
+    size_t environment = 0;
     auto operator<=>(const BatchKey&) const = default;
 };
 
 template <typename Item> // Renderer::DrawItem
-BatchKey batchKey(const Item& item, std::vector<size_t> lights)
+BatchKey batchKey(const Item& item, std::vector<size_t> lights, size_t environment = 0)
 {
     return {item.vertices.idx, item.indices.idx, item.material, item.bones >= 0, item.castShadows, item.receiveShadows,
-            item.mirrored, std::move(lights)};
+            item.mirrored, std::move(lights), environment};
 }
 
 // Indices 0..count-1 grouped by keyOf(index): groups in order of first appearance, indices in order within each.
@@ -282,9 +293,12 @@ private:
     std::vector<bool> done_;
 };
 
-// The file a texture path reads: a model's embedded image "<model>#<i>" comes from the model file.
+// The file a texture path reads: a model's embedded image "<model>#<i>" comes from the model file; an ORM pair's
+// (ormSources) is its metallic-roughness image's. ponytail: so editing only its occlusion image doesn't reload the pair.
 std::string textureFile(const std::string& path)
 {
+    if (const auto orm = ormSources(path))
+        return textureFile(orm->first);
     const std::string model = embeddedTextureModel(path);
     return model.empty() ? path : model;
 }
@@ -621,7 +635,11 @@ void Renderer::init()
     baseColorSampler_ = bgfx::createUniform("s_baseColor", bgfx::UniformType::Sampler);
     metallicRoughnessSampler_ = bgfx::createUniform("s_metallicRoughness", bgfx::UniformType::Sampler);
     normalSampler_ = bgfx::createUniform("s_normal", bgfx::UniformType::Sampler);
-    occlusionSampler_ = bgfx::createUniform("s_occlusion", bgfx::UniformType::Sampler);
+    envSampler_ = bgfx::createUniform("s_env", bgfx::UniformType::Sampler);
+    materialOrm_ = bgfx::createUniform("u_materialOrm", bgfx::UniformType::Vec4);
+    envSh_ = bgfx::createUniform("u_envSh", bgfx::UniformType::Vec4, 9);
+    envSpecular_ = bgfx::createUniform("u_envSpecular", bgfx::UniformType::Vec4);
+    envBox_ = bgfx::createUniform("u_envBox", bgfx::UniformType::Vec4, 2);
     emissiveSampler_ = bgfx::createUniform("s_emissive", bgfx::UniformType::Sampler);
     csmMtx_ = bgfx::createUniform("u_csmMtx", bgfx::UniformType::Mat4, kMaxShadowCascades + kMaxShadowedLocalLights);
     csmSplits_ = bgfx::createUniform("u_csmSplits", bgfx::UniformType::Vec4);
@@ -652,7 +670,11 @@ void Renderer::init()
                                         bgfx::copy(&flat, sizeof(flat)));
     const uint32_t black = 0xff000000;
     black_ = bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE, bgfx::copy(&black, sizeof(black)));
+    const uint32_t blackSides[6] = {black, black, black, black, black, black};
+    blackCube_ = bgfx::createTextureCube(1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
+                                         bgfx::copy(blackSides, sizeof(blackSides)));
     sky_.init();
+    envFilter_.init();
     particles_.init(bgfx::getCaps()->supported);
 }
 
@@ -680,8 +702,8 @@ void Renderer::shutdown()
     for (bgfx::UniformHandle uniform : {normalMatrix_, bones_, baseColor_, lightDir_, lightColor_, ambient_, localPosRange_,
                                         localColor_, localAxis_, emissive_, materialParams_, materialExt_, uvTransform_,
                                         time_, cameraPos_, fogColor_, fogParams_, baseColorSampler_,
-                                        metallicRoughnessSampler_, normalSampler_, occlusionSampler_, emissiveSampler_,
-                                        csmMtx_, csmSplits_,
+                                        metallicRoughnessSampler_, normalSampler_, envSampler_, emissiveSampler_,
+                                        materialOrm_, envSh_, envSpecular_, envBox_, csmMtx_, csmSplits_,
                                         csmBias_, shadowParams_, localShadow_, csmSampler_, kastParams_, screenSampler_,
                                         depthSampler_})
         bgfx::destroy(uniform);
@@ -711,7 +733,14 @@ void Renderer::shutdown()
     bgfx::destroy(white_);
     bgfx::destroy(flatNormal_);
     bgfx::destroy(black_);
+    bgfx::destroy(blackCube_);
     destroyCopies();
+    clearProbes();
+    if (bgfx::isValid(skyEnv_))
+        bgfx::destroy(skyEnv_);
+    skyEnv_ = BGFX_INVALID_HANDLE;
+    skyEnvKey_.reset();
+    envFilter_.shutdown();
     sky_.shutdown();
     particles_.shutdown();
 }
@@ -799,6 +828,7 @@ void Renderer::setProjectRoot(const std::filesystem::path& root)
         root_ = root;
         clearTextures();
         clearModels();
+        clearProbes();
     }
     materials_.setRoot(root);
     materials_.reloadChanged();
@@ -896,19 +926,35 @@ void Renderer::loadTexture(const std::string& path, TextureUsage usage, Texture&
         texture.handle = pakTexture(path, usage);
         return;
     }
+    // An image's bytes: a project file's, or embedded in a model.
+    const auto readImage = [&](const std::string& image, std::string& out) {
+        if (!embeddedTextureModel(image).empty()) {
+            const std::optional<std::string_view> embedded = models().embeddedTexture(image);
+            if (embedded)
+                out = *embedded;
+            else
+                error = "no such embedded image";
+            return embedded.has_value();
+        }
+        const std::optional<std::filesystem::path> at =
+            root_.empty() ? std::nullopt : resolveProjectPath(root_, image, error);
+        const bool ok = at && readFile(*at, out);
+        if (at && !ok)
+            error = "cannot read the file";
+        return ok;
+    };
     std::string bytes;
     bool read = false;
-    if (!embeddedTextureModel(path).empty()) { // embedded in a model
-        const std::optional<std::string_view> embedded = models().embeddedTexture(path);
-        if (embedded)
-            bytes = *embedded;
-        else
-            error = "no such embedded image";
-        read = embedded.has_value();
-    } else if (file && !readFile(*file, bytes)) {
-        error = "cannot read the file";
+    if (const auto orm = ormSources(path)) { // two images packed into one (ormImage), cooked as one
+        std::string occlusion;
+        std::optional<std::string> packed;
+        if (!readImage(orm->first, bytes) || !readImage(orm->second, occlusion))
+            error = std::format("'{}': {}", bytes.empty() ? orm->first : orm->second, error);
+        else if ((packed = ormImage(bytes, occlusion, error)))
+            bytes = std::move(*packed);
+        read = packed.has_value();
     } else {
-        read = file.has_value();
+        read = readImage(path, bytes);
     }
     if (read && isGpuImage(bytes, path)) {
         texture.handle = createGpuTexture(bytes, srgb, false, BGFX_TEXTURE_NONE, error);
@@ -1357,9 +1403,18 @@ void Renderer::setMaterialState(const DrawItem& item)
     bgfx::setUniform(uvTransform_, uvTransform);
     bgfx::setUniform(time_, time);
     bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, TextureUsage::Color));
-    bgfx::setTexture(1, metallicRoughnessSampler_, texture(material.metallicRoughnessTexture, TextureUsage::Linear));
+    // Stage 1 holds metallic-roughness (G, B) and occlusion (R), u_materialOrm says which: one image with both, either
+    // alone, or the two packed into one (a pair that fails to pack: the metallic-roughness image, without occlusion).
+    const std::string& mr = material.metallicRoughnessTexture;
+    const std::string& ao = material.occlusionTexture;
+    bgfx::TextureHandle orm = texture(ormTexturePath(material), TextureUsage::Linear, BGFX_INVALID_HANDLE);
+    const bool occlusion = !ao.empty() && (bgfx::isValid(orm) || mr.empty() || mr == ao);
+    if (!bgfx::isValid(orm))
+        orm = texture(mr.empty() ? ao : mr, TextureUsage::Linear);
+    const float ormChannels[4] = {mr.empty() ? 0.0f : 1.0f, occlusion ? 1.0f : 0.0f, 0.0f, 0.0f};
+    bgfx::setUniform(materialOrm_, ormChannels);
+    bgfx::setTexture(1, metallicRoughnessSampler_, orm);
     bgfx::setTexture(7, normalSampler_, normalMap);
-    bgfx::setTexture(8, occlusionSampler_, texture(material.occlusionTexture, TextureUsage::Linear));
     bgfx::setTexture(9, emissiveSampler_, texture(material.emissiveTexture, TextureUsage::Color));
     if (item.shader) {
         const ShaderSource& source = item.shader->source->source;
@@ -1376,6 +1431,143 @@ void Renderer::setMaterialState(const DrawItem& item)
                              texture(shaderParamTexture(material, param), colorUsage(param.srgb), fallback));
         }
     }
+}
+
+void Renderer::updateSkyEnvironment(const SceneSky& sky, bgfx::ViewId view)
+{
+    const bool cube = sky.mode == SkyMode::Cubemap && bgfx::isValid(sky_.cube()); // else the gradient (a fallback too)
+    const SkyEnvKey key{sky.mode, cube, cube ? sky_.cubeVersion() : 0,
+                        {sky.top.x, sky.top.y, sky.top.z, sky.horizon.x, sky.horizon.y, sky.horizon.z, sky.bottom.x,
+                         sky.bottom.y, sky.bottom.z}};
+    if (skyEnvKey_ == key)
+        return;
+    skyEnvKey_ = key;
+    if (bgfx::isValid(skyEnv_))
+        bgfx::destroy(skyEnv_);
+    skyEnv_ = BGFX_INVALID_HANDLE;
+    if (sky.mode == SkyMode::Off)
+        return;
+    skyEnv_ = envFilter_.sky(view, sky, cube ? sky_.cube() : bgfx::TextureHandle{bgfx::kInvalidHandle}, sky_.cubeSize());
+    skySh_ = cube ? sky_.cubeSh() : proceduralSkySh9(sky);
+    if (!envFilter_.supported())
+        warnOnce("Sky lighting: the GPU has no compute shader support; meshes get the flat ambient");
+}
+
+const Renderer::ProbeFile& Renderer::probeFile(const ReflectionProbe& probe)
+{
+    std::string error = "no project";
+    const std::optional<std::filesystem::path> ktx =
+        root_.empty() ? std::nullopt : resolveProjectPath(root_, probe.bakedPath, error);
+    const auto ktxTime = ktx ? modifiedTime(*ktx) : std::nullopt;
+    const auto jsonTime = ktx ? modifiedTime(probeShPath(*ktx)) : std::nullopt;
+    auto [it, added] = probeFiles_.try_emplace({probe.bakedPath, probe.resolution});
+    ProbeFile& file = it->second;
+    if (!added && file.ktxTime == ktxTime && file.jsonTime == jsonTime) // a re-bake rewrites both
+        return file;
+    const LoadTimer timer(assetLoadStats().textures, assetLoadStats().textureSeconds);
+    if (bgfx::isValid(file.cube))
+        bgfx::destroy(file.cube);
+    file = {.ktxTime = ktxTime, .jsonTime = jsonTime};
+    std::string bytes, json;
+    if (ktx && !readFile(*ktx, bytes))
+        error = "cannot read the file";
+    else if (ktx && !readFile(probeShPath(*ktx), json))
+        error = "cannot read its .json (spherical harmonics)";
+    else if (ktx && checkBakedProbe(bytes, json, static_cast<uint16_t>(probe.resolution), file.sh, error))
+        file.cube = createGpuTexture(bytes, false, true, BGFX_SAMPLER_UVW_CLAMP, error);
+    if (!bgfx::isValid(file.cube))
+        file.error = error;
+    else
+        log::info(std::format("Loaded reflection probe '{}'", probe.bakedPath));
+    return file;
+}
+
+void Renderer::clearProbes()
+{
+    for (auto& [key, file] : probeFiles_)
+        if (bgfx::isValid(file.cube))
+            bgfx::destroy(file.cube);
+    probeFiles_.clear();
+}
+
+std::string Renderer::probeStatus(const ReflectionProbe& probe)
+{
+    if (probe.bakedPath.empty())
+        return "Not baked";
+    const ProbeFile& file = probeFile(probe);
+    return file.error.empty() ? "Baked" : file.error;
+}
+
+bool Renderer::bakeProbe(const Scene& scene, const Scene* extra, const std::filesystem::path& projectRoot,
+                         const bx::Vec3& center, uint16_t size, bgfx::ViewId firstView, BakedProbe& out,
+                         std::string& error)
+{
+    if (!envFilter_.supported()) {
+        error = "the GPU has no compute shader support";
+        return false;
+    }
+    // The six faces, one frame each (a face is a whole render(): its own shadow maps in the views before sceneView).
+    const auto sceneView = static_cast<bgfx::ViewId>(firstView + kShadowViews);
+    const bgfx::TextureHandle color =
+        bgfx::createTextureCube(size, false, 1, bgfx::TextureFormat::RGBA16F, BGFX_TEXTURE_RT | BGFX_SAMPLER_UVW_CLAMP);
+    const bgfx::TextureHandle depth =
+        bgfx::createTexture2D(size, size, false, 1, bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT_WRITE_ONLY);
+    const bx::Vec3 background = sceneClearColor(scene.postProcessing, 0x000000ff); // fog, else black
+    const auto palette = static_cast<uint8_t>(sceneView % 16); // PostProcess::begin's entry for this view
+    bgfx::setPaletteColor(palette, background.x, background.y, background.z, 1.0f);
+    float proj[16];
+    bx::mtxProj(proj, 90.0f, 1.0f, kProbeNear, kProbeFar, bgfx::getCaps()->homogeneousDepth, bx::Handedness::Right);
+    capture_ = true;
+    for (uint16_t face = 0; face < 6; ++face) {
+        bgfx::Attachment attachments[2];
+        attachments[0].init(color, bgfx::Access::Write, face);
+        attachments[1].init(depth);
+        const bgfx::FrameBufferHandle frameBuffer = bgfx::createFrameBuffer(2, attachments, false);
+        bgfx::setViewName(sceneView, "Probe bake");
+        bgfx::setViewFrameBuffer(sceneView, frameBuffer);
+        bgfx::setViewRect(sceneView, 0, 0, size, size);
+        bgfx::setViewClear(sceneView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 1.0f, 0, palette);
+        bgfx::touch(sceneView);
+        float viewMtx[16];
+        bx::mtxLookAt(viewMtx, center, bx::add(center, kProbeFaceForward[face]), kProbeFaceUp[face], bx::Handedness::Right);
+        render(scene, projectRoot, sceneView, viewMtx, proj, firstView, extra);
+        bgfx::frame();
+        bgfx::destroy(frameBuffer);
+    }
+    capture_ = false;
+
+    // Prefiltered (compute, in firstView), then each level's six sides blitted below one another into a read-back
+    // texture (in the view after) and read back.
+    for (bgfx::ViewId view = firstView; view <= sceneView; ++view)
+        bgfx::resetView(view); // the faces' and shadow maps' settings: the next frame sets what it uses
+    bgfx::setViewMode(firstView, bgfx::ViewMode::Sequential);
+    const bgfx::TextureHandle env = envFilter_.prefilter(firstView, color, size);
+    const auto blitView = static_cast<bgfx::ViewId>(firstView + 1);
+    bgfx::touch(blitView);
+    uint8_t levels = 1;
+    for (uint16_t s = size; s > 1; s /= 2)
+        ++levels;
+    std::vector<bgfx::TextureHandle> readback(levels);
+    std::vector<std::vector<uint16_t>> halves(levels); // RGBA16F
+    uint32_t ready = 0;
+    for (uint8_t level = 0; level < levels; ++level) {
+        const auto s = static_cast<uint16_t>(size >> level);
+        readback[level] = bgfx::createTexture2D(s, static_cast<uint16_t>(s * 6), false, 1, bgfx::TextureFormat::RGBA16F,
+                                                BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
+        for (uint16_t side = 0; side < 6; ++side)
+            bgfx::blit(blitView, readback[level], 0, 0, static_cast<uint16_t>(side * s), 0, env, level, 0, 0, side, s, s);
+        halves[level].resize(static_cast<size_t>(s) * s * 6 * 4);
+        ready = std::max(ready, bgfx::readTexture(readback[level], halves[level].data()));
+    }
+    while (bgfx::frame() < ready) {
+    }
+    for (bgfx::TextureHandle texture : readback)
+        bgfx::destroy(texture);
+    for (bgfx::TextureHandle texture : {env, color, depth})
+        bgfx::destroy(texture);
+
+    out = makeBakedProbe(size, halves);
+    return true;
 }
 
 void Renderer::setTarget(bgfx::FrameBufferHandle target, uint16_t width, uint16_t height)
@@ -1458,6 +1650,46 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     const float fogColor[4] = {fog.color.x, fog.color.y, fog.color.z, fog.enabled ? 1.0f : 0.0f};
     const float fogParams[4] = {fog.density, fog.start, 0.0f, 0.0f};
 
+    // Environments: [0] outside every probe (the sky's, tinted by the ambient; none with the sky off), then one per baked
+    // probe. probeEnvironment: per box, its index in environments (0 if it can't be used: unbaked, missing, corrupt).
+    sky_.update(scene.sky, root_);
+    updateSkyEnvironment(scene.sky, view);
+    std::vector<Environment> environments(1);
+    const bx::Vec3 ambientTint{ambient[0], ambient[1], ambient[2]};
+    if (bgfx::isValid(skyEnv_))
+        environments[0] = {skyEnv_, static_cast<float>(envMips(kSkyEnvSize) - 1), scaleSh9(skySh_, ambientTint), ambientTint};
+    std::vector<ProbeBox> probeBoxes;
+    std::vector<size_t> probeEnvironment;
+    for (auto [entity, probe] : registry.view<ReflectionProbe>().each()) {
+        if (capture_)
+            break; // one bounce: a bake sees no probes
+        float world[16];
+        scene.worldMatrix(entity, world);
+        const ProbeBox box{{world[12], world[13], world[14]}, bx::mul(probe.boxSize, 0.5f), probe.priority};
+        probeBoxes.push_back(box);
+        probeEnvironment.push_back(0);
+        const std::string& name = registry.get<Name>(entity).value;
+        if (probe.bakedPath.empty()) {
+            warnOnce(std::format("Reflection probe '{}': not baked; meshes in its box are lit as outside it", name));
+            continue;
+        }
+        const ProbeFile& file = probeFile(probe);
+        if (!file.error.empty()) {
+            warnOnce(std::format("Reflection probe '{}': '{}': {}; meshes in its box are lit as outside it", name,
+                                 probe.bakedPath, file.error));
+            continue;
+        }
+        const bx::Vec3 tint{probe.intensity, probe.intensity, probe.intensity};
+        environments.push_back({file.cube, static_cast<float>(envMips(static_cast<uint16_t>(probe.resolution)) - 1),
+                                scaleSh9(file.sh, tint), tint, true, box.center, box.halfSize});
+        probeEnvironment.back() = environments.size() - 1;
+    }
+    // The environment of a draw: its probe's (by its bounds' center), else environments[0].
+    const auto environmentOf = [&](const DrawItem& item) -> size_t {
+        const std::optional<size_t> probe = selectProbe(probeBoxes, bx::mul(bx::add(item.bounds.min, item.bounds.max), 0.5f));
+        return probe ? probeEnvironment[*probe] : 0;
+    };
+
     // Point, then spot, then area lights (scale ignored: only the world matrix's position and axis directions count).
     std::vector<LocalLightSample> localLights;
     for (auto [entity, light] : registry.view<PointLight>().each()) {
@@ -1534,8 +1766,9 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         shadowOf[shadows.tileLights[tile]] = static_cast<float>(kMaxShadowCascades + tile);
     const bool atlas = shadows.sun || !shadows.tileLights.empty();
 
-    // Everything a mesh draw sets but its transform: material, lights (nearest: nearestLocalLights), shadows, buffers.
-    const auto setDrawState = [&](const DrawItem& item, const std::vector<size_t>& nearest) {
+    // Everything a mesh draw sets but its transform: material, lights (nearest: nearestLocalLights), environment (an
+    // index in environments), shadows, buffers.
+    const auto setDrawState = [&](const DrawItem& item, const std::vector<size_t>& nearest, size_t environment) {
         const Material& material = *item.material;
         // Unused slots: black, range 1, so they add nothing. Packed as fs_mesh.sc's u_local* comments say.
         float localPosRange[kMaxLocalLights][4] = {};
@@ -1573,6 +1806,15 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             }
         }
         const float shadowParams[4] = {item.receiveShadows ? 1.0f : 0.0f, shadows.sun ? 1.0f : 0.0f, 0.0f, 0.0f};
+        // Packed as fs_mesh.sc's u_env* comments say; no cube: u_envSpecular.w 0, the flat ambient.
+        const Environment& env = environments[environment];
+        const bool lit = bgfx::isValid(env.cube);
+        float envSh[9][4] = {};
+        for (size_t i = 0; i < 9; ++i)
+            std::memcpy(envSh[i], &env.sh[i * 3], 3 * sizeof(float));
+        const float envSpecular[4] = {env.specular.x, env.specular.y, env.specular.z, lit ? env.maxLod : 0.0f};
+        const float envBox[2][4] = {{env.center.x, env.center.y, env.center.z, env.box ? 1.0f : 0.0f},
+                                    {env.halfSize.x, env.halfSize.y, env.halfSize.z, 0.0f}};
         const bool blend = material.alphaMode == AlphaMode::Blend;
         const bool additive = material.alphaMode == AlphaMode::Additive;
 
@@ -1583,6 +1825,10 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         bgfx::setUniform(lightDir_, lightDir);
         bgfx::setUniform(lightColor_, lightColor);
         bgfx::setUniform(ambient_, ambient);
+        bgfx::setUniform(envSh_, envSh, 9);
+        bgfx::setUniform(envSpecular_, envSpecular);
+        bgfx::setUniform(envBox_, envBox, 2);
+        bgfx::setTexture(8, envSampler_, lit ? env.cube : blackCube_);
         bgfx::setUniform(localPosRange_, localPosRange, kMaxLocalLights);
         bgfx::setUniform(localColor_, localColor, kMaxLocalLights);
         bgfx::setUniform(localAxis_, localAxis, kMaxLocalLights);
@@ -1609,7 +1855,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     const auto submit = [&](bgfx::ViewId to, const DrawItem& item, const std::vector<size_t>& nearest) {
         float normal[16];
         normalMatrix(item.world, normal);
-        setDrawState(item, nearest);
+        setDrawState(item, nearest, environmentOf(item));
         bgfx::setTransform(item.world.data());
         bgfx::setUniform(normalMatrix_, normal);
         if (item.bones >= 0) {
@@ -1629,6 +1875,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     const Frustum frustum = frustumFromViewProj(viewProj, bgfx::getCaps()->homogeneousDepth);
     std::vector<const DrawItem*> opaque;
     std::vector<std::vector<size_t>> opaqueLights; // per opaque draw
+    std::vector<size_t> opaqueEnvironments;        // the same
     std::vector<const DrawItem*> blended;
     std::vector<bx::Vec3> centers;
     for (const DrawItem& item : draws) {
@@ -1637,24 +1884,26 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         if (!isTransparent(*item.material)) {
             opaque.push_back(&item);
             opaqueLights.push_back(nearestLocalLights(localLights, item.bounds));
+            opaqueEnvironments.push_back(environmentOf(item));
             continue;
         }
         blended.push_back(&item);
         centers.push_back(bx::mul(bx::add(item.bounds.min, item.bounds.max), 0.5f));
     }
     // Each emitter is one blended draw at its position, sorted with the blended meshes (its particles aren't sorted).
-    const std::vector<ParticleRenderer::Draw> particles = particles_.simulate(scene, view, culling_ ? &frustum : nullptr);
+    const std::vector<ParticleRenderer::Draw> particles =
+        capture_ ? std::vector<ParticleRenderer::Draw>() : particles_.simulate(scene, view, culling_ ? &frustum : nullptr);
     for (const ParticleRenderer::Draw& emitter : particles)
         centers.push_back(emitter.center);
     std::vector<const DrawItem*> batch;
     for (const std::vector<size_t>& indices :
-         batchDraws(opaque.size(), [&](size_t i) { return batchKey(*opaque[i], opaqueLights[i]); })) {
+         batchDraws(opaque.size(), [&](size_t i) { return batchKey(*opaque[i], opaqueLights[i], opaqueEnvironments[i]); })) {
         batch.clear();
         for (size_t i : indices)
             batch.push_back(opaque[i]);
         bgfx::InstanceDataBuffer instances;
         if (instanced(batch, instances)) {
-            setDrawState(*batch.front(), opaqueLights[indices.front()]);
+            setDrawState(*batch.front(), opaqueLights[indices.front()], opaqueEnvironments[indices.front()]);
             bgfx::setInstanceDataBuffer(&instances);
             bgfx::submit(view, batch.front()->shader ? batch.front()->shader->instanced : instancedProgram_);
             continue;
@@ -1662,7 +1911,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         for (size_t i : indices)
             submit(view, *opaque[i], opaqueLights[i]);
     }
-    sky_.draw(scene.sky, root_, view, viewMtx, projMtx); // behind the opaque meshes, under the blended ones
+    sky_.draw(scene.sky, view, viewMtx, projMtx); // behind the opaque meshes, under the blended ones
     if (blendView != view) {
         bgfx::setViewName(blendView, "Scene blended");
         bgfx::setViewFrameBuffer(blendView, target);
@@ -1697,6 +1946,7 @@ void Renderer::renderOverlays(const Scene& scene, bgfx::ViewId view, const float
     drawGrid(view);
     drawCameraFrustums(scene, view);
     drawLightGizmo(scene, view, selected);
+    drawProbeBox(scene, view, selected);
     drawColliderWireframe(scene, view, selected);
     drawParticleShape(scene, view, selected);
 }
@@ -1798,6 +2048,31 @@ void Renderer::drawLightGizmo(const Scene& scene, bgfx::ViewId view, entt::entit
         line(tip, bx::sub(back, bx::mul(x, 0.15f * arrow)));
         circle(center, x, y, area->range);
     }
+    submitLines(lines, lineLayout_, lineProgram_, view);
+}
+
+// The selected ReflectionProbe's box: axis-aligned around its world position (rotation and scale ignored, as for its
+// lighting).
+void Renderer::drawProbeBox(const Scene& scene, bgfx::ViewId view, entt::entity selected)
+{
+    const auto* probe = scene.valid(selected) ? scene.registry().try_get<ReflectionProbe>(selected) : nullptr;
+    if (!probe)
+        return;
+    float world[16];
+    scene.worldMatrix(selected, world);
+    const bx::Vec3 center{world[12], world[13], world[14]};
+    const bx::Vec3 half = bx::mul(probe->boxSize, 0.5f);
+    const auto corner = [&](int i) {
+        return bx::add(center, bx::Vec3{i & 1 ? half.x : -half.x, i & 2 ? half.y : -half.y, i & 4 ? half.z : -half.z});
+    };
+    std::vector<LineVertex> lines;
+    for (int i = 0; i < 8; ++i)
+        for (int axis : {1, 2, 4})
+            if (!(i & axis)) { // each edge once: from the corner without that axis bit to the one with it
+                const bx::Vec3 a = corner(i), b = corner(i | axis);
+                lines.push_back({a.x, a.y, a.z, kProbeBoxColor});
+                lines.push_back({b.x, b.y, b.z, kProbeBoxColor});
+            }
     submitLines(lines, lineLayout_, lineProgram_, view);
 }
 

@@ -349,6 +349,31 @@ bool cookShippedTextures(const std::filesystem::path& root, std::vector<std::str
             for (const kast::TextureUsage usage : used->second)
                 if (!cook(path, bytes, usage))
                     return false;
+    // ORM pairs (materialTextures): their two images packed into one (kast::ormImage), cooked as it. A pair with an image
+    // missing is skipped, as a missing texture is: the player reports it.
+    for (const auto& [path, used] : usages) {
+        const auto pair = kast::ormSources(path);
+        if (!pair)
+            continue;
+        std::string images[2], reason;
+        bool read = true;
+        for (size_t i = 0; i < 2 && read; ++i) {
+            const std::string& image = i == 0 ? pair->first : pair->second;
+            if (const auto it = embedded.find(image); it != embedded.end())
+                images[i] = it->second;
+            else
+                read = kast::readFile(root / fromUtf8(image), images[i]);
+        }
+        if (!read)
+            continue;
+        const std::optional<std::string> packed = kast::ormImage(images[0], images[1], reason);
+        if (!packed) {
+            error = std::format("Build failed: texture '{}': {}", path, reason);
+            return false;
+        }
+        if (!cook(path, *packed, kast::TextureUsage::Linear))
+            return false;
+    }
     std::erase_if(paths, [&](const std::string& path) { return cookedOnly.contains(path); });
     return true;
 }

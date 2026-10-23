@@ -1,6 +1,7 @@
 #pragma once
 
 #include "frustum.h"
+#include "ibl.h"
 #include "material.h"
 #include "model.h"
 #include "particles.h"
@@ -136,7 +137,9 @@ void buildMips(MipImage& image, bool srgb);
 // Draws a Scene's MeshRenderers and ModelRenderers (posed by their AnimatorState, else in bind pose; skinned on the GPU)
 // with their materials (PBR metallic-roughness, see fs_mesh.sc) lit by its ambient, its first DirectionalLight and the
 // kMaxLocalLights nearest point, spot and area lights each (nearestLocalLights), fogged by its postProcessing.fog, as
-// linear HDR color (for PostProcess). Opaque and mask meshes first, then its sky (sky.h), then blended ones and particle
+// linear HDR color (for PostProcess). The ambient (ibl.h): a mesh inside a baked ReflectionProbe's box takes it from
+// that probe (selectProbe); else, with a sky, from the sky's environment cube (built on the GPU when the sky changes,
+// in view before the meshes); else the flat ambient color. Opaque and mask meshes first, then its sky (sky.h), then blended ones and particle
 // emitters (particles.h, simulated on the GPU here) far to near. Blended draws whose .kshader samples SCREEN_TEXTURE or
 // DEPTH_TEXTURE see a copy of the target's color or depth as the opaque meshes and the sky left it, made only on frames
 // such a draw is in view.
@@ -144,8 +147,8 @@ void buildMips(MipImage& image, bool srgb);
 // PointLights nearest the eye and perspective atlas tiles for the kMaxShadowedLocalLights castShadows SpotLights and
 // AreaLights nearest it, rendered in kShadowViews views before the scene's (see shadow.h).
 // renderOverlays draws the editor's: a ground grid, axis lines, a short frustum preview per Camera, the range of the
-// selected PointLight (cone of a SpotLight, rect of an AreaLight), the selected entity's collider and its
-// ParticleEmitter's shape.
+// selected PointLight (cone of a SpotLight, rect of an AreaLight), the box of the selected ReflectionProbe, the selected
+// entity's collider and its ParticleEmitter's shape.
 // Every pass culls its draws to its view frustum (main camera, each cascade, each cube face, each tile), and draws that
 // share buffers, material, shadow flags and (main pass) lights, unskinned and not blended, are drawn as one GPU-instanced
 // submit (see docs/engine/instancing-and-culling.html).
@@ -191,6 +194,15 @@ public:
     void setCulling(bool on) { culling_ = on; }
     // Why the scene's cubemap sky last fell back to the procedural one ("" = it didn't): the Lighting panel shows it.
     const std::string& skyError() const { return sky_.error(); }
+    // A ReflectionProbe's bake as the renderer sees it: "Not baked", "Baked", or why its files can't be used (the
+    // Inspector shows it).
+    std::string probeStatus(const ReflectionProbe& probe);
+    // The editor's Bake: renders scene (and extra, as render() does) into the six faces of a size x size cube at center,
+    // without particles and without probes (one bounce: meshes are lit by the sky's environment), prefilters it and reads
+    // it back into out. Uses views firstView .. firstView + kShadowViews and runs bgfx::frame() itself (about ten
+    // times), so call it between frames, before anything of the next is submitted. False + error if it can't.
+    bool bakeProbe(const Scene& scene, const Scene* extra, const std::filesystem::path& projectRoot,
+                   const bx::Vec3& center, uint16_t size, bgfx::ViewId firstView, BakedProbe& out, std::string& error);
 
 private:
     struct Mesh {
@@ -241,6 +253,30 @@ private:
         std::vector<size_t> pointLights;           // shadowed, by cube index: indices into the frame's lights
         std::vector<size_t> tileLights;            // shadowed spot / area lights, by tile: indices into the frame's lights
     };
+    // Where a draw's ambient light comes from (fs_mesh.sc u_env*, s_env).
+    struct Environment {
+        bgfx::TextureHandle cube = BGFX_INVALID_HANDLE; // invalid: none, the flat ambient
+        float maxLod = 0.0f;                            // the roughness 1 level
+        Sh9 sh{};                                       // already times specular
+        bx::Vec3 specular{1.0f, 1.0f, 1.0f};            // tint: the scene's ambient for the sky, intensity for a probe
+        bool box = false;                               // a probe's: box-projected onto center +- halfSize
+        bx::Vec3 center{0.0f, 0.0f, 0.0f}, halfSize{0.0f, 0.0f, 0.0f};
+    };
+    // A baked probe's files, loaded once per (bakedPath, resolution) and again when either file changes on disk.
+    struct ProbeFile {
+        bgfx::TextureHandle cube = BGFX_INVALID_HANDLE; // invalid: error says why
+        Sh9 sh{};
+        std::string error;
+        std::optional<std::filesystem::file_time_type> ktxTime, jsonTime;
+    };
+    // What the sky's environment cube was built from.
+    struct SkyEnvKey {
+        SkyMode mode = SkyMode::Off;
+        bool cube = false; // the cubemap's cube (else the gradient)
+        uint64_t cubeVersion = 0;
+        std::array<float, 9> colors{};
+        bool operator==(const SkyEnvKey&) const = default;
+    };
     struct Texture {
         bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; // invalid: failed to load, white_ draws instead
         std::optional<std::filesystem::file_time_type> mtime;
@@ -258,6 +294,10 @@ private:
     // The player's: game.pak's cooked KTX of path (another usage's if usage has none); invalid + one error if none.
     bgfx::TextureHandle pakTexture(const std::string& path, TextureUsage usage);
     void clearTextures();
+    // Builds the sky's environment cube (skyEnv_, skySh_) in view when the sky changed since; frees it when it's off.
+    void updateSkyEnvironment(const SceneSky& sky, bgfx::ViewId view);
+    const ProbeFile& probeFile(const ReflectionProbe& probe); // probe.bakedPath is set
+    void clearProbes();
     const GpuModel* gpuModel(const std::string& path); // null if the model fails to load
     void clearModels();
     const UserShader* userShader(const std::string& path); // null if the .kshader fails to load or compile
@@ -303,6 +343,7 @@ private:
     void drawCameraFrustums(const Scene& scene, bgfx::ViewId view);
     // The selected light's gizmo: a PointLight's range, a SpotLight's cone, an AreaLight's rect, facing and range.
     void drawLightGizmo(const Scene& scene, bgfx::ViewId view, entt::entity selected);
+    void drawProbeBox(const Scene& scene, bgfx::ViewId view, entt::entity selected);
     void drawColliderWireframe(const Scene& scene, bgfx::ViewId view, entt::entity selected);
     void drawParticleShape(const Scene& scene, bgfx::ViewId view, entt::entity selected);
 
@@ -351,10 +392,15 @@ private:
     bgfx::UniformHandle fogParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle baseColorSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle metallicRoughnessSampler_ = BGFX_INVALID_HANDLE;
-    // Material texture stages 7..9 (s_normal, s_occlusion, s_emissive in fs_mesh.sc): after the shadow samplers on 2..6.
+    bgfx::UniformHandle materialOrm_ = BGFX_INVALID_HANDLE; // u_materialOrm: what s_metallicRoughness's channels hold
+    // Material texture stages 7 and 9 (s_normal, s_emissive in fs_mesh.sc): after the shadow samplers on 2..6. Stage 8 is
+    // the environment cube (s_env): occlusion shares s_metallicRoughness (stage 1, glTF's ORM packing).
     bgfx::UniformHandle normalSampler_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle occlusionSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle envSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle emissiveSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle envSh_ = BGFX_INVALID_HANDLE;       // u_envSh[9]
+    bgfx::UniformHandle envSpecular_ = BGFX_INVALID_HANDLE; // u_envSpecular
+    bgfx::UniformHandle envBox_ = BGFX_INVALID_HANDLE;      // u_envBox[2]
     bgfx::UniformHandle csmMtx_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle csmSplits_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle csmBias_ = BGFX_INVALID_HANDLE;
@@ -376,6 +422,7 @@ private:
     bgfx::TextureHandle white_ = BGFX_INVALID_HANDLE; // 1x1: stands in for no texture and failed loads
     bgfx::TextureHandle flatNormal_ = BGFX_INVALID_HANDLE; // 1x1 (0.5, 0.5, 1): stands in for no normal texture
     bgfx::TextureHandle black_ = BGFX_INVALID_HANDLE;      // 1x1 opaque black: a texture2D param's "black" default
+    bgfx::TextureHandle blackCube_ = BGFX_INVALID_HANDLE;  // 1x1 black cube: s_env without an environment
     // SCREEN_TEXTURE / DEPTH_TEXTURE (s_kastScreen, s_kastDepth): copies of the target, created on first use.
     bgfx::UniformHandle screenSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle depthSampler_ = BGFX_INVALID_HANDLE;
@@ -395,6 +442,12 @@ private:
     Material previewMaterial_;
     bgfx::TextureHandle previewTexture_ = BGFX_INVALID_HANDLE;
     SkyRenderer sky_;
+    EnvironmentFilter envFilter_;
+    bgfx::TextureHandle skyEnv_ = BGFX_INVALID_HANDLE; // the sky's prefiltered cube; invalid: sky off (or no compute)
+    Sh9 skySh_{};
+    std::optional<SkyEnvKey> skyEnvKey_; // what skyEnv_ is of; nullopt: nothing built yet
+    std::map<std::pair<std::string, int>, ProbeFile> probeFiles_; // by (bakedPath, resolution)
+    bool capture_ = false; // bakeProbe: no particles, no probes
     ParticleRenderer particles_;
     float timeSeconds_ = 0.0f; // setTime
     bool instancing_ = true;

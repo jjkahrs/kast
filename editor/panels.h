@@ -13,6 +13,7 @@
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <optional>
 #include <mutex>
@@ -70,9 +71,17 @@ public:
     void drawComponents(Document& doc);
     void drawStateMachines(Document& doc);
     void drawEvents(Document& doc);
-    // The scene's ambient light and sky (Window > Lighting); draws nothing while open is false. skyError: why the
-    // Scene view's cubemap sky fell back to the procedural one (Renderer::skyError), shown under the faces.
+    // The scene's ambient light, sky and Bake All Probes (Window > Lighting); draws nothing while open is false. skyError:
+    // why the Scene view's cubemap sky fell back to the procedural one (Renderer::skyError), shown under the faces.
     void drawLighting(Document& doc, bool& open, const std::string& skyError);
+    // A ReflectionProbe's bake as the host's renderer sees its files ("Not baked", "Baked" or why they can't be used:
+    // Renderer::probeStatus), shown in its Inspector section. Set by the host.
+    std::function<std::string(const kast::ReflectionProbe&)> probeStatus;
+    // The probes the Inspector's Bake or the Lighting panel's Bake All Probes asked for since the last call: the host
+    // bakes them between frames (SceneViewport::bakeProbes).
+    std::vector<entt::entity> takeBakeRequests() { return std::exchange(bakeRequests_, {}); }
+    // Every ReflectionProbe of the scene, as Bake All Probes asks (--bake-probes).
+    void requestBakeAll(const Document& doc);
     // The scene's post-processing and fog, a section per effect (Window > Post Processing); nothing while open is false.
     void drawPostProcessing(Document& doc, bool& open);
     // The scene's physics settings: gravity (Window > Physics); draws nothing while open is false.
@@ -153,6 +162,8 @@ private:
     // Play/Pause and a time scrub on the Animator's runtime state: poses the model, never saved, never dirties.
     void drawAnimatorPreview(Document& doc, entt::entity entity);
     void drawParticlePreview(Document& doc, entt::entity entity);
+    // A ReflectionProbe's Inspector section: its bake status and the Bake button.
+    void drawProbeBake(Document& doc, entt::entity entity);
     // The Inspector for the .mat in inspectedAsset_: every edit saves the file (the renderers reload it) and is an undo
     // step on materialHistory_. Its Shader section picks the .kshader, shows its compile status and its params.
     void drawMaterialInspector(Document& doc);
@@ -192,6 +203,7 @@ private:
     bool systemsErrorRequested_ = false;
 
     bool addComponentRequested_ = false;
+    std::vector<entt::entity> bakeRequests_; // takeBakeRequests
     bool newComponentRequested_ = false;
     std::string newComponentName_;
     std::string newComponentError_; // why the last Create failed (write or load); cleared when the name changes

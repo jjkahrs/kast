@@ -54,6 +54,7 @@
 #include <shadow.h>
 #include <sky.h>
 #include <frustum.h>
+#include <ibl.h>
 #include <state_machines.h>
 #include <stats_overlay.h>
 #include <systems.h>
@@ -334,8 +335,8 @@ std::vector<std::string> typeNames()
 void checkComponentRegistry()
 {
     check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "ModelRenderer", "Animator",
-                                                 "DirectionalLight", "PointLight", "SpotLight", "AreaLight", "Camera", "Rotator",
-                                                 "Collider", "Rigidbody", "CharacterController", "StateMachine", "UIDocument",
+                                                 "DirectionalLight", "PointLight", "SpotLight", "AreaLight", "ReflectionProbe", "Camera",
+                                                 "Rotator", "Collider", "Rigidbody", "CharacterController", "StateMachine", "UIDocument",
                                                  "AudioSource", "NetworkLocalPlayer", "NetworkReplication",
                                                  "NetworkEntity", "Terrain", "TerrainTile", "ParticleEmitter"},
           "built-in component types in registration order");
@@ -1058,6 +1059,15 @@ return { update = function(dt)
     assert(area.width == 2.5 and area.height == 0.5 and area.twoSided, "set AreaLight")
     fails('"width" and "height" must be > 0', function() kast.set(cam, "AreaLight", {height = 0}) end)
     fails('"bias" must be >= 0', function() kast.set(cam, "AreaLight", {bias = -1}) end)
+    local probe = kast.get(cam, "ReflectionProbe")
+    assert(probe.resolution == 128 and probe.intensity == 1 and probe.priority == 0 and probe.bakedPath == "" and
+           probe.boxSize.x == 10, "get ReflectionProbe defaults")
+    kast.set(cam, "ReflectionProbe", {resolution = 256, priority = 3, boxSize = {x = 2, y = 3, z = 4}})
+    probe = kast.get(cam, "ReflectionProbe")
+    assert(probe.resolution == 256 and probe.priority == 3 and probe.boxSize.z == 4, "set ReflectionProbe")
+    fails('"resolution" must be 64, 128 or 256', function() kast.set(cam, "ReflectionProbe", {resolution = 100}) end)
+    fails('"boxSize" must be > 0 on every axis', function() kast.set(cam, "ReflectionProbe", {boxSize = {x = 1, y = 0, z = 1}}) end)
+    fails('"intensity" must be >= 0', function() kast.set(cam, "ReflectionProbe", {intensity = -0.5}) end)
     fails('unknown key name "NotAKey"', function() kast.input.keyDown("NotAKey") end)
     fails('kast.input.mouseDown: unknown button thumb (left, middle, right, x1 or x2)', function() kast.input.mouseDown("thumb") end)
     fails("kast.input.mouseDown: unknown button 1", function() kast.input.mouseDown(1) end)
@@ -1110,6 +1120,7 @@ end })");
     registry.emplace<kast::PointLight>(cam);
     registry.emplace<kast::SpotLight>(cam);
     registry.emplace<kast::AreaLight>(cam);
+    registry.emplace<kast::ReflectionProbe>(cam);
     scene.systems = {"api.lua"};
     kast::Input input;
     input.keysDown[SDL_SCANCODE_W] = true;
@@ -1143,6 +1154,10 @@ end })");
     check(spotLight.innerAngle == 12.0f && spotLight.outerAngle == 24.0f && spotLight.castShadows &&
               areaLight.width == 2.5f && areaLight.height == 0.5f && areaLight.twoSided && areaLight.bias == 0.05f,
           "set wrote SpotLight and AreaLight; rejected sets left them unchanged");
+    const auto& reflectionProbe = registry.get<kast::ReflectionProbe>(cam);
+    check(reflectionProbe.resolution == 256 && reflectionProbe.priority == 3 && reflectionProbe.intensity == 1.0f &&
+              near(reflectionProbe.boxSize, {2.0f, 3.0f, 4.0f}),
+          "set wrote ReflectionProbe; rejected sets left it unchanged");
     check(named(scene, "Parent") == entt::null && named(scene, "Child") == entt::null, "destroy removes the subtree");
     const entt::entity late = named(scene, "Late");
     check(scene.valid(late) && registry.all_of<kast::MeshRenderer>(late) && scene.parent(late) == entt::null,
@@ -3089,15 +3104,15 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"area_lights.scene", "audio.scene", "custom_shaders.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "material_features.scene",
+              std::vector<std::string>{"area_lights.scene", "audio.scene", "custom_shaders.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "material_features.scene",
                                        "materials.scene", "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
-                                       "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene",
+                                       "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "orm_split.scene",
                                        "particles_blend.scene", "particles_fog.scene", "particles_hdr.scene",
                                        "particles_shapes.scene", "particles_space.scene", "particles_texture.scene",
                                        "physics.scene",
                                        "point_lights.scene",
-                                       "point_shadows.scene", "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
+                                       "point_shadows.scene", "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene",
                                        "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                        "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_widgets.scene",
                                        "zone_objects.scene"},
@@ -3112,16 +3127,16 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
     check(projectScenes(root) == std::vector<std::string>{"area_lights.scene", "audio.scene", "broken.scene", "custom_shaders.scene", "events.scene", "fsm.scene",
-                                                          "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "levels/c.scene", "material_features.scene", "materials.scene",
+                                                          "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "levels/c.scene", "material_features.scene", "materials.scene",
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
                                                           "models_material.scene", "models_missing.scene", "net_a.scene",
-                                                          "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene",
+                                                          "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "orm_split.scene",
                                                           "particles_blend.scene", "particles_fog.scene", "particles_hdr.scene",
                                                           "particles_shapes.scene", "particles_space.scene",
                                                           "particles_texture.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
-                                                          "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
+                                                          "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene",
                                                           "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                                           "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_widgets.scene",
                                                           "zone_objects.scene"},
@@ -6027,6 +6042,192 @@ void checkSpotAreaLights()
     }
 }
 
+// Image-based lighting (ibl.h): spherical harmonics of known environments, the analytic environment BRDF, box
+// projection, probe selection, ReflectionProbe validation / round trip, baked probe files and the ORM texture packing.
+void checkIbl()
+{
+    // A cube of radiance(direction) at size texels per side, as projectSh9 reads it.
+    const auto cube = [](uint16_t size, const auto& radiance) {
+        std::array<std::vector<float>, 6> sides;
+        for (int side = 0; side < 6; ++side)
+            for (uint16_t y = 0; y < size; ++y)
+                for (uint16_t x = 0; x < size; ++x) {
+                    const bx::Vec3 d = bx::normalize(
+                        kast::cubeTexelDirection(side, (x + 0.5f) / size * 2.0f - 1.0f, (y + 0.5f) / size * 2.0f - 1.0f));
+                    const bx::Vec3 c = radiance(d);
+                    sides[static_cast<size_t>(side)].insert(sides[static_cast<size_t>(side)].end(), {c.x, c.y, c.z});
+                }
+        return sides;
+    };
+    const bx::Vec3 normals[] = {{0, 1, 0}, {0, -1, 0}, {1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1},
+                                bx::normalize(bx::Vec3{1, 1, -1})};
+    const kast::Sh9 constant = kast::projectSh9(cube(16, [](const bx::Vec3&) { return bx::Vec3{0.3f, 0.5f, 0.7f}; }), 16);
+    bool flat = true;
+    for (const bx::Vec3& n : normals)
+        flat = flat && near(kast::shIrradiance(constant, n), {0.3f, 0.5f, 0.7f}, 1e-3f);
+    check(flat, "SH9 of a constant environment: the same irradiance / pi from every side");
+    // L = a + b y: irradiance / pi = a + 2/3 b n.y (only the linear band of y survives the cosine).
+    const kast::Sh9 gradient =
+        kast::projectSh9(cube(32, [](const bx::Vec3& d) { return bx::Vec3{0.5f + 0.4f * d.y, 0.5f, 0.5f - 0.4f * d.y}; }), 32);
+    bool linear = true;
+    for (const bx::Vec3& n : normals)
+        linear = linear && near(kast::shIrradiance(gradient, n),
+                                {0.5f + 0.4f * 2.0f / 3.0f * n.y, 0.5f, 0.5f - 0.4f * 2.0f / 3.0f * n.y}, 2e-3f);
+    check(linear, "SH9 of a vertical gradient: a + 2/3 b n.y");
+    check(near(kast::shIrradiance(kast::scaleSh9(constant, {2.0f, 0.0f, 1.0f}), {0, 1, 0}), {0.6f, 0.0f, 0.7f}, 1e-3f),
+          "scaleSh9 tints per channel");
+    kast::SceneSky sky;
+    sky.top = {0.0f, 0.0f, 1.0f};
+    sky.horizon = {0.0f, 0.0f, 0.0f};
+    sky.bottom = {0.0f, 1.0f, 0.0f};
+    const kast::Sh9 skySh = kast::proceduralSkySh9(sky);
+    const bx::Vec3 up = kast::shIrradiance(skySh, {0, 1, 0}), down = kast::shIrradiance(skySh, {0, -1, 0});
+    check(up.z > 0.2f && up.z > 4.0f * up.y && down.y > 0.2f && down.y > 4.0f * down.z,
+          "the procedural sky's diffuse: its top color from above, its bottom color from below");
+    // Cube sides: bgfx / D3D layout, the cube's +Z is Kast's -Z.
+    check(near(kast::cubeTexelDirection(0, 0, 0), {1, 0, 0}) && near(kast::cubeTexelDirection(2, 0, 0), {0, 1, 0}) &&
+              near(kast::cubeTexelDirection(4, 0, 0), {0, 0, -1}) && near(kast::cubeTexelDirection(5, 0, 0), {0, 0, 1}) &&
+              near(kast::cubeTexelDirection(0, 1, -1), {1, 1, 1}) && near(kast::cubeTexelDirection(2, 1, 1), {1, 1, -1}),
+          "cube texel directions: side centers and corners");
+
+    bool brdf = true;
+    for (float roughness = 0.0f; roughness <= 1.0f; roughness += 0.125f)
+        for (float nv = 0.0f; nv <= 1.0f; nv += 0.125f) {
+            const auto [scale, bias] = kast::envBrdf(roughness, nv);
+            brdf = brdf && std::isfinite(scale) && std::isfinite(bias) && scale >= 0.0f && bias >= 0.0f &&
+                   scale + bias <= 1.0f + 1e-3f;
+        }
+    check(brdf, "env BRDF: finite, F0 * x + y in 0..1 over roughness and N.V");
+    check(kast::envBrdf(0.0f, 1.0f)[0] > 0.95f && kast::envBrdf(1.0f, 0.5f)[0] < kast::envBrdf(0.0f, 0.5f)[0],
+          "env BRDF: a smooth surface head-on reflects F0; rough reflects less");
+
+    // A 4 x 2 x 2 box at the origin.
+    const bx::Vec3 center{0, 0, 0}, half{2, 1, 1};
+    check(near(kast::boxProjectedDirection({1, 0, 0}, {0, 0, 0}, center, half), {2, 0, 0}) &&
+              near(kast::boxProjectedDirection({1, 0, 0}, {1, 0.5f, 0}, center, half), {2, 0.5f, 0}) &&
+              near(kast::boxProjectedDirection({0, 1, 0}, {1, 0, 0}, center, half), {1, 1, 0}) &&
+              near(kast::boxProjectedDirection(bx::normalize(bx::Vec3{1, 1, 0}), {0, 0, 0}, center, half), {1, 1, 0}),
+          "box projection: from the box's center to where the ray leaves it");
+    check(near(kast::boxProjectedDirection({0, 0, -1}, {5, 0, 0}, center, half), {0, 0, -1}),
+          "box projection: a point outside the box keeps the ray");
+
+    // Selection: an overlapping room (priority 0) and alcove (priority 1); two equal-priority boxes picked by distance.
+    const std::vector<kast::ProbeBox> boxes = {{{0, 0, 0}, {5, 2, 5}, 0}, {{3, 0, 0}, {2, 2, 2}, 1},
+                                               {{20, 0, 0}, {3, 3, 3}, 0}, {{24, 0, 0}, {3, 3, 3}, 0}};
+    check(kast::selectProbe(boxes, {-3, 0, 0}) == 0u && kast::selectProbe(boxes, {3, 0, 0}) == 1u &&
+              kast::selectProbe(boxes, {5, 0, 0}) == 1u,
+          "probe selection: the containing box; overlapping, the higher priority (bounds inclusive)");
+    check(kast::selectProbe(boxes, {21, 0, 0}) == 2u && kast::selectProbe(boxes, {22.5f, 0, 0}) == 3u,
+          "probe selection: equal priorities, the nearest box center");
+    check(!kast::selectProbe(boxes, {10, 0, 0}) && !kast::selectProbe(boxes, {0, 5, 0}) && !kast::selectProbe({}, {0, 0, 0}),
+          "probe selection: none outside every box");
+    const std::vector<kast::ProbeBox> twins = {{{0, 0, 0}, {1, 1, 1}, 0}, {{0, 0, 0}, {2, 2, 2}, 0}};
+    check(kast::selectProbe(twins, {0.5f, 0, 0}) == 0u, "probe selection: a full tie keeps list order");
+
+    // Validation: every rule of validateReflectionProbe; the Inspector floors.
+    const entt::meta_type type = kast::findComponentType("ReflectionProbe");
+    const kast::ReflectionProbe defaults;
+    check(type && defaults.resolution == 128 && defaults.intensity == 1.0f && defaults.priority == 0 &&
+              defaults.bakedPath.empty(),
+          "ReflectionProbe registered with defaults 128, intensity 1, priority 0, not baked");
+    std::string error;
+    for (const auto& [text, valid] : std::initializer_list<std::pair<const char*, bool>>{
+             {R"({"boxSize": [0.01, 0.01, 0.01], "resolution": 64, "intensity": 0, "priority": -3, "bakedPath": ""})", true},
+             {R"({"boxSize": [10, 4, 10], "resolution": 256, "intensity": 2, "priority": 9, "bakedPath": "a_probes/1.ktx"})", true},
+             {R"({"boxSize": [10, 0, 10], "resolution": 128, "intensity": 1, "priority": 0, "bakedPath": ""})", false},
+             {R"({"boxSize": [-1, 4, 10], "resolution": 128, "intensity": 1, "priority": 0, "bakedPath": ""})", false},
+             {R"({"boxSize": [10, 4, 10], "resolution": 100, "intensity": 1, "priority": 0, "bakedPath": ""})", false},
+             {R"({"boxSize": [10, 4, 10], "resolution": 512, "intensity": 1, "priority": 0, "bakedPath": ""})", false},
+             {R"({"boxSize": [10, 4, 10], "resolution": 128, "intensity": -1, "priority": 0, "bakedPath": ""})", false}})
+        check(static_cast<bool>(kast::componentFromJson(type, nlohmann::ordered_json::parse(text), error)) == valid, text);
+    bool floors = false;
+    for (const kast::FieldDesc& field : kast::ComponentType(type).fields())
+        if (field.name == "boxSize")
+            floors = field.min && *field.min > 0.0;
+    check(floors, "the Inspector floors boxSize above 0");
+
+    // Round trip, every field off its default.
+    kast::Scene scene;
+    const entt::entity entity = scene.create("Probe");
+    scene.registry().emplace<kast::ReflectionProbe>(entity,
+                                                    kast::ReflectionProbe{{3.0f, 2.5f, 7.0f}, 256, 1.5f, -2, "x_probes/1.ktx"});
+    const nlohmann::ordered_json json = kast::sceneToJson(scene);
+    kast::Scene loaded;
+    check(kast::sceneFromJson(json, loaded, error), "reflection probe scene loads");
+    const auto& probe = loaded.registry().get<kast::ReflectionProbe>(loaded.children(entt::null).at(0));
+    check(near(probe.boxSize, {3.0f, 2.5f, 7.0f}) && probe.resolution == 256 && probe.intensity == 1.5f &&
+              probe.priority == -2 && probe.bakedPath == "x_probes/1.ktx" && kast::sceneToJson(loaded) == json,
+          "ReflectionProbe round trip");
+
+    // Baked files: the path next to the scene; a KTX + JSON written and read back; each way they can be unusable.
+    check(kast::bakedProbePath("levels/town.scene", 42) == "levels/town_probes/42.ktx" &&
+              kast::bakedProbePath("town.scene", 7) == "town_probes/7.ktx",
+          "baked probe path: <scene-dir>/<scene-name>_probes/<entity id>.ktx");
+    check(kast::envMips(64) == 5 && kast::envMips(128) == 6 && kast::envMips(256) == 7, "prefiltered levels down to 4 x 4");
+    std::vector<std::vector<uint16_t>> levels;
+    for (uint16_t s = 64; s >= 1; s /= 2)
+        levels.emplace_back(static_cast<size_t>(s) * s * 6 * 4, bx::halfFromFloat(0.25f));
+    const kast::BakedProbe baked = kast::makeBakedProbe(64, levels);
+    check(near(kast::shIrradiance(baked.sh, {0, 1, 0}), {0.25f, 0.25f, 0.25f}, 1e-3f),
+          "a baked probe's harmonics come from its level 0");
+    const std::filesystem::path dir = looseTestDir("kast_ibl_check");
+    const std::filesystem::path ktx = dir / "scene_probes" / "3.ktx";
+    check(kast::writeBakedProbe(ktx, baked, error) && std::filesystem::exists(kast::probeShPath(ktx)) &&
+              kast::probeShPath(ktx).filename() == "3.json",
+          "writeBakedProbe writes the .ktx and its .json, creating the folder");
+    std::string bytes, sidecar;
+    kast::Sh9 sh{};
+    check(kast::readFile(ktx, bytes) && kast::readFile(kast::probeShPath(ktx), sidecar) &&
+              kast::checkBakedProbe(bytes, sidecar, 64, sh, error) && sh == baked.sh,
+          "a baked probe reads back: an RGBA16F cube of its resolution, its harmonics as written");
+    check(!kast::checkBakedProbe(bytes, sidecar, 128, sh, error) &&
+              error.find("baked at 64, but its resolution is 128") != std::string::npos,
+          "a resolution mismatch is reported");
+    check(!kast::checkBakedProbe("", sidecar, 64, sh, error) && !kast::checkBakedProbe("KTX junk", sidecar, 64, sh, error),
+          "a missing or corrupt .ktx is reported");
+    check(!kast::checkBakedProbe(bytes, "{\"version\": 1}", 64, sh, error) && !kast::checkBakedProbe(bytes, "", 64, sh, error),
+          "a corrupt .json is reported");
+    uint16_t size = 0;
+    check(kast::parseProbeShJson(kast::probeShJson(64, baked.sh), size, sh, error) && size == 64 && sh == baked.sh,
+          "the .json round trip");
+
+    // ORM: separate occlusion and metallic-roughness images are one packed texture; one image (or one of them) is not.
+    kast::Material material;
+    material.metallicRoughnessTexture = "textures/orm.png";
+    material.occlusionTexture = "textures/orm_ao.png";
+    const std::string orm = kast::ormTexturePath(material);
+    check(orm == "orm:textures/orm.png|textures/orm_ao.png" &&
+              kast::ormSources(orm) == std::pair<std::string, std::string>{"textures/orm.png", "textures/orm_ao.png"} &&
+              !kast::ormSources("textures/orm.png"),
+          "ORM: a pair's texture path and back");
+    check(std::ranges::count(kast::materialTextures(material, nullptr),
+                             std::pair<std::string, kast::TextureUsage>{orm, kast::TextureUsage::Linear}) == 1,
+          "ORM: Build cooks the pair (materialTextures lists it)");
+    check(kast::texturePakPath(orm, kast::TextureUsage::Linear).starts_with(".kast_orm/"), "ORM: its game.pak entry");
+    material.occlusionTexture = material.metallicRoughnessTexture;
+    kast::Material occlusionOnly;
+    occlusionOnly.occlusionTexture = "textures/ao_grid.png";
+    check(kast::ormTexturePath(material).empty() && kast::ormTexturePath(occlusionOnly).empty() &&
+              kast::ormTexturePath(kast::Material()).empty(),
+          "ORM: no pair for one shared image, one image or none");
+    std::string mr, ao, small;
+    const std::filesystem::path textures = std::filesystem::path(KAST_TEST_PROJECT_DIR) / "textures";
+    check(kast::readFile(textures / "orm.png", mr) && kast::readFile(textures / "orm_ao.png", ao) &&
+              kast::readFile(textures / "sky_test" / "small.png", small),
+          "ORM: test images read");
+    const std::optional<std::string> packed = kast::ormImage(mr, ao, error);
+    const std::optional<kast::MipImage> a = kast::decodeImage(mr, false);
+    const std::optional<kast::MipImage> b = packed ? kast::decodeImage(*packed, false) : std::nullopt;
+    check(a && b && a->width == b->width && a->height == b->height &&
+              std::equal(a->rgba.begin(), a->rgba.begin() + a->width * a->height * 4, b->rgba.begin()),
+          "ORM: orm.png's metallic-roughness with its own R as occlusion packs back into orm.png's pixels");
+    const std::optional<std::string> resized = kast::ormImage(mr, small, error);
+    const std::optional<kast::MipImage> c = resized ? kast::decodeImage(*resized, false) : std::nullopt;
+    check(c && c->width == a->width && c->height == a->height && c->rgba[1] == a->rgba[1] && c->rgba[2] == a->rgba[2],
+          "ORM: an occlusion image of another size is resampled to the metallic-roughness image's");
+    check(!kast::ormImage(mr, "not an image", error) && !error.empty(), "ORM: an undecodable image is an error");
+}
+
 // --- Post-processing ---
 
 void checkFrustumCulling()
@@ -7105,6 +7306,13 @@ void checkShaders()
     check(kast::mapShaderErrors(listing) == "line 5: error X3004: undeclared identifier 'undefinedThing'\n"
                                             "generated line 900: error X3000: syntax error",
           std::format("shaderc errors map to .kshader lines: {}", kast::mapShaderErrors(listing)).c_str());
+    // Past line 999 shaderc prints three digits of each number (1001 as "100"): the listing is read by position.
+    const std::string longListing = "Code:\n---\n    999: #pragma   kast_line 7\n    100: c = 1.0;\n"
+                                    "    100: #pragma   kast_line 8\n\n>>> 100: c.x = undefinedThing;\n>>>   7:       ^\n\n"
+                                    "    100: #pragma   kast_line 9\n---\nError: D3DCompile failed 0x80004005 (1002,7-20): "
+                                    "error X3004: undeclared identifier 'undefinedThing'\n\nFailed to build shader.\n";
+    check(kast::mapShaderErrors(longListing) == "line 8: error X3004: undeclared identifier 'undefinedThing'",
+          std::format("shaderc errors past line 999 map too: {}", kast::mapShaderErrors(longListing)).c_str());
     check(kast::mapShaderErrors("cpp: \"(null)\", line 0: Error: Inside #ifdef block at end of input, depth = 1\n"
                                 "Failed to build shader.\n") ==
               "cpp: \"(null)\", line 0: Error: Inside #ifdef block at end of input, depth = 1",
@@ -8607,9 +8815,10 @@ void checkTextureCooks()
     check(kast::materialTextures(material, &shader) ==
               Uses{{"base.png", TextureUsage::Color}, {"mr.png", TextureUsage::Linear}, {"normal.png", TextureUsage::Normal},
                    {"ao.png", TextureUsage::Linear}, {"glow.png", TextureUsage::Color},
-                   {"param_srgb.png", TextureUsage::Color}, {"param_linear.png", TextureUsage::Linear}},
-          "material slots: base color and emissive color, metallic-roughness and occlusion linear, normal normal, "
-          "params by their sRGB flag");
+                   {"orm:mr.png|ao.png", TextureUsage::Linear}, {"param_srgb.png", TextureUsage::Color},
+                   {"param_linear.png", TextureUsage::Linear}},
+          "material slots: base color and emissive color, metallic-roughness and occlusion linear (and packed together), "
+          "normal normal, params by their sRGB flag");
     check(kast::materialTextures(material, nullptr).back() == std::pair<std::string, TextureUsage>{"param_linear.png", TextureUsage::Color},
           "params of an unknown shader count as color");
     check(kast::materialTextures(kast::Material{}, nullptr).empty(), "no textures, no usages");
@@ -13235,6 +13444,7 @@ int main(int argc, char** argv)
     checkPointLights();
     checkShadows();
     checkSpotAreaLights();
+    checkIbl();
     checkFrustumCulling();
     checkPostProcessing();
     checkSky();

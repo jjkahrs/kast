@@ -1,0 +1,451 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Floor",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            0.0,
+            -6.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            8.0,
+            1.0,
+            8.0
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "plane",
+          "material": "materials/mf_flat.mat",
+          "castShadows": true,
+          "receiveShadows": true
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Back Wall",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            2.0,
+            -10.1
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            8.0,
+            4.0,
+            0.2
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/ibl_wall_blue.mat",
+          "castShadows": true,
+          "receiveShadows": true
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Left Wall",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -4.1,
+            2.0,
+            -6.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            0.2,
+            4.0,
+            8.0
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/ibl_wall_red.mat",
+          "castShadows": true,
+          "receiveShadows": true
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Right Wall",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            4.1,
+            2.0,
+            -6.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            0.2,
+            4.0,
+            8.0
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/ibl_wall_green.mat",
+          "castShadows": true,
+          "receiveShadows": true
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Ceiling",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            4.1,
+            -6.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            8.0,
+            0.2,
+            8.0
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "materials/mf_flat.mat",
+          "castShadows": true,
+          "receiveShadows": true
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Lamp",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            3.5,
+            -6.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.95,
+            0.85
+          ],
+          "intensity": 4.0,
+          "range": 14.0,
+          "castShadows": false,
+          "bias": 0.05
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            2.2,
+            5.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Camera": {
+          "verticalFovDegrees": 60.0,
+          "nearPlane": 0.1,
+          "farPlane": 1000.0
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Chrome In Box",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -1.6,
+            1.1,
+            -6.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.6,
+            1.6,
+            1.6
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "sphere",
+          "material": "materials/ibl_chrome.mat",
+          "castShadows": true,
+          "receiveShadows": true
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Rough In Box",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            1.6,
+            1.1,
+            -6.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.6,
+            1.6,
+            1.6
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "sphere",
+          "material": "materials/ibl_rough_metal.mat",
+          "castShadows": true,
+          "receiveShadows": true
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Chrome Outside",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            6.2,
+            1.1,
+            -4.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.6,
+            1.6,
+            1.6
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "sphere",
+          "material": "materials/ibl_chrome.mat",
+          "castShadows": true,
+          "receiveShadows": true
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Room Probe",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            2.0,
+            -6.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "ReflectionProbe": {
+          "boxSize": [
+            8.4,
+            4.4,
+            8.4
+          ],
+          "resolution": 64,
+          "intensity": 1.0,
+          "priority": 0,
+          "bakedPath": "reflection_probe_probes/10.ktx"
+        }
+      }
+    }
+  ],
+  "systems": [],
+  "lighting": {
+    "ambientColor": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "ambientIntensity": 1.0
+  },
+  "postProcessing": {
+    "tonemapping": {
+      "enabled": false,
+      "exposure": 0.0,
+      "operator": "None"
+    },
+    "bloom": {
+      "enabled": false,
+      "threshold": 1.0,
+      "intensity": 0.5,
+      "radius": 0.5
+    },
+    "colorGrading": {
+      "enabled": false,
+      "contrast": 1.0,
+      "saturation": 1.0,
+      "colorFilter": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "temperature": 0.0
+    },
+    "vignette": {
+      "enabled": false,
+      "intensity": 0.3,
+      "smoothness": 0.5
+    },
+    "fxaa": {
+      "enabled": false
+    },
+    "fog": {
+      "enabled": false,
+      "color": [
+        0.5,
+        0.6,
+        0.7
+      ],
+      "density": 0.05,
+      "start": 0.0
+    }
+  },
+  "sky": {
+    "mode": "procedural",
+    "top": [
+      0.1,
+      0.3,
+      0.9
+    ],
+    "horizon": [
+      0.9,
+      0.85,
+      0.75
+    ],
+    "bottom": [
+      0.35,
+      0.22,
+      0.08
+    ],
+    "faces": {
+      "px": "",
+      "nx": "",
+      "py": "",
+      "ny": "",
+      "pz": "",
+      "nz": ""
+    }
+  },
+  "physics": {
+    "gravity": [
+      0.0,
+      -9.81,
+      0.0
+    ]
+  },
+  "editor": {
+    "camera": {
+      "pivot": [
+        0.0,
+        1.8,
+        -6.0
+      ],
+      "yaw": 0.0,
+      "pitch": -8.0,
+      "distance": 11.0
+    }
+  }
+}

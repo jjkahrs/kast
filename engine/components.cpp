@@ -1,5 +1,6 @@
 #include "components.h"
 
+#include "ibl.h"
 #include "particles.h"
 #include "scene_io.h"
 
@@ -90,6 +91,20 @@ const char* validateAreaLight(const entt::meta_any& component)
         return error;
     if (!(light.width > 0.0f && light.height > 0.0f))
         return "\"width\" and \"height\" must be > 0";
+    return nullptr;
+}
+
+constexpr double kMinProbeBox = 0.01; // Inspector floor in meters per axis; files and kast.set only need > 0
+
+const char* validateReflectionProbe(const entt::meta_any& component)
+{
+    const auto& probe = component.cast<const ReflectionProbe&>();
+    if (!(probe.boxSize.x > 0.0f && probe.boxSize.y > 0.0f && probe.boxSize.z > 0.0f))
+        return "\"boxSize\" must be > 0 on every axis";
+    if (std::ranges::find(kProbeResolutions, probe.resolution) == std::end(kProbeResolutions))
+        return "\"resolution\" must be 64, 128 or 256"; // kProbeResolutions
+    if (!(probe.intensity >= 0.0f))
+        return "\"intensity\" must be >= 0";
     return nullptr;
 }
 
@@ -302,6 +317,13 @@ void registerBuiltins()
         .data<&AreaLight::twoSided>("twoSided").custom<FieldInfo>(FieldInfo{.displayName = "Two Sided", .optional = true})
         .data<&AreaLight::castShadows>("castShadows").custom<FieldInfo>(FieldInfo{.displayName = "Cast Shadows", .optional = true})
         .data<&AreaLight::bias>("bias").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Bias", .min = 0.0, .optional = true});
+
+    registerComponent<ReflectionProbe>("ReflectionProbe", {"Reflection Probe", true, validateReflectionProbe})
+        .data<&ReflectionProbe::boxSize>("boxSize").custom<FieldInfo>(FieldInfo{.displayName = "Box Size", .min = kMinProbeBox})
+        .data<&ReflectionProbe::resolution>("resolution").custom<FieldInfo>("Resolution", false, 64.0, 256.0)
+        .data<&ReflectionProbe::intensity>("intensity").custom<FieldInfo>("Intensity", false, 0.0)
+        .data<&ReflectionProbe::priority>("priority").custom<FieldInfo>("Priority")
+        .data<&ReflectionProbe::bakedPath>("bakedPath").custom<FieldInfo>("Baked Path");
 
     registerComponent<Camera>("Camera", {"Camera", true, validateCamera})
         .data<&Camera::verticalFovDegrees>("verticalFovDegrees").custom<FieldInfo>("Vertical FOV")

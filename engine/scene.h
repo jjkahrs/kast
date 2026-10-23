@@ -123,7 +123,22 @@ struct AreaLight {
     float bias = 0.05f;       // >= 0, meters toward the light against shadow acne
 };
 
-// Per-scene light settings. The defaults match the renderer's former fixed 0.2 grey ambient.
+// A box-projected reflection probe (see ibl.h, docs/engine/ibl-reflection-probes.html): the editor's Bake renders the
+// scene around the entity's world position into a cube of resolution texels per side, saved to bakedPath. Meshes whose
+// world bounds' center is inside its box (boxSize meters, axis-aligned, centered on the entity; rotation and scale are
+// ignored) take their ambient light from it instead of the sky: specular from the cube, box-projected onto the box,
+// diffuse from its spherical harmonics, both times intensity. Where boxes overlap, the highest priority wins, then the
+// nearest box center.
+struct ReflectionProbe {
+    bx::Vec3 boxSize{10.0f, 4.0f, 10.0f}; // > 0 on every axis
+    int resolution = 128;                 // 64, 128 or 256
+    float intensity = 1.0f;               // >= 0
+    int priority = 0;
+    std::string bakedPath;                // project-relative .ktx written by Bake; empty = not baked
+};
+
+// Per-scene light settings. The defaults match the renderer's former fixed 0.2 grey ambient. Sky off, the ambient is
+// that flat color; sky on, image-based lighting from the sky (ibl.h) replaces it, scaled and tinted by these.
 struct SceneLighting {
     bx::Vec3 ambientColor{1.0f, 1.0f, 1.0f}; // linear RGB 0..1
     float ambientIntensity = 0.2f;           // >= 0
@@ -133,7 +148,8 @@ enum class SkyMode { Off, Procedural, Cubemap };
 constexpr const char* kSkyFaceNames[6] = {"px", "nx", "py", "ny", "pz", "nz"}; // SceneSky::faces order
 
 // Per-scene background drawn behind all geometry (see sky.h). Off: the view clears to its background (or fog) color, as
-// before skies. Background only: no effect on lighting.
+// before skies, and meshes get the flat ambient. Procedural or Cubemap: it also lights the meshes, as their ambient
+// (image-based lighting, ibl.h; SceneLighting scales it).
 struct SceneSky {
     SkyMode mode = SkyMode::Off;
     bx::Vec3 top{0.10f, 0.30f, 0.75f};     // linear RGB 0..1: looking straight up

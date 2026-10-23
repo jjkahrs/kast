@@ -171,11 +171,12 @@ bool setGlobalStateMachine(Document& doc, const std::string& name, bool global, 
 bool setBusDefault(Document& doc, kast::AudioBus bus, kast::BusMix level, std::string& error);
 
 enum class ObjectKind {
-    Empty, Cube, Plane, Sphere, Model, DirectionalLight, PointLight, SpotLight, AreaLight, Camera, ParticleSystem
+    Empty, Cube, Plane, Sphere, Model, DirectionalLight, PointLight, SpotLight, AreaLight, ReflectionProbe, Camera,
+    ParticleSystem
 };
 constexpr ObjectKind kObjectKinds[] = {ObjectKind::Empty, ObjectKind::Cube, ObjectKind::Plane, ObjectKind::Sphere,
                                        ObjectKind::Model, ObjectKind::DirectionalLight, ObjectKind::PointLight,
-                                       ObjectKind::SpotLight, ObjectKind::AreaLight,
+                                       ObjectKind::SpotLight, ObjectKind::AreaLight, ObjectKind::ReflectionProbe,
                                        ObjectKind::Camera, ObjectKind::ParticleSystem};
 const char* objectKindLabel(ObjectKind kind); // menu label, e.g. "Create Empty", "Cube"
 

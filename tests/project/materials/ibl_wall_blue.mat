@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "baseColor": [
+    0.15,
+    0.3,
+    0.85,
+    1
+  ],
+  "roughness": 0.8
+}

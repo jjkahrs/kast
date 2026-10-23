@@ -66,6 +66,10 @@ public:
     void draw(Document& doc);
     void setPostEffects(bool on) { postEffects_ = on; } // the toolbar's "Post" toggle
     kast::Renderer& renderer() { return renderer_; }     // --no-instancing, --no-culling
+    // Bakes each of probes (ReflectionProbe entities of doc.scene) with this view's renderer and views
+    // (Renderer::bakeProbe: call between frames), writes it to kast::bakedProbePath next to the scene, sets its
+    // bakedPath and marks the document dirty. Edit mode and a scene saved in the project only; failures are logged.
+    void bakeProbes(Document& doc, const std::vector<entt::entity>& probes);
     // Drawn with the document's scene, lit by it (Renderer::render's extra): the open zone in edit mode. Null: none.
     void setExtraScene(const kast::Scene* scene) { extraScene_ = scene; }
     // Called each frame the scene image shows, before the gizmo, with the view-projection and the image's rect (ImGui

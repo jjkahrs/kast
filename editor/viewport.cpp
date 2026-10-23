@@ -3,6 +3,7 @@
 #include "assets.h"
 #include "ui_common.h"
 
+#include <ibl.h>
 #include <log.h>
 #include <model.h>
 
@@ -313,6 +314,38 @@ void SceneViewport::draw(Document& doc)
     }
     ImGui::End();
     drawPlayControls(doc, window);
+}
+
+void SceneViewport::bakeProbes(Document& doc, const std::vector<entt::entity>& probes)
+{
+    const std::string scenePath = projectScenePath(doc);
+    if (doc.play != PlayState::Stopped || scenePath.empty()) {
+        kast::log::error("Reflection probes bake in edit mode, in a scene saved in the project");
+        return;
+    }
+    entt::registry& registry = doc.scene.registry();
+    for (const entt::entity entity : probes) {
+        auto* probe = doc.scene.valid(entity) ? registry.try_get<kast::ReflectionProbe>(entity) : nullptr;
+        if (!probe)
+            continue; // deleted since it was asked for
+        const std::string& name = registry.get<kast::Name>(entity).value;
+        float world[16];
+        doc.scene.worldMatrix(entity, world);
+        kast::BakedProbe baked;
+        const std::string path = kast::bakedProbePath(scenePath, registry.get<kast::PersistentId>(entity).value);
+        std::string error;
+        if (!renderer_.bakeProbe(doc.scene, extraScene_, doc.project->root, {world[12], world[13], world[14]},
+                                 static_cast<uint16_t>(probe->resolution), shadowViews_, baked, error) ||
+            !kast::writeBakedProbe(doc.project->root / std::filesystem::path(reinterpret_cast<const char8_t*>(path.c_str())),
+                                   baked, error)) {
+            kast::log::error(std::format("Reflection probe '{}': bake failed: {}", name, error));
+            continue;
+        }
+        probe->bakedPath = path;
+        markDirty(doc);
+        kast::log::info(std::format("Baked reflection probe '{}' ({} x {}) to '{}'", name, probe->resolution,
+                                    probe->resolution, path));
+    }
 }
 
 void SceneViewport::drawToolbar()

@@ -640,30 +640,41 @@ std::string generateShader(std::string_view templateText, const ShaderSource& so
 
 std::string mapShaderErrors(std::string_view shadercOutput)
 {
-    // The listing: "    362: code" and ">>> 366: code" (then ">>>   7:   ^", the column) around the first error.
-    static const std::regex listing(R"(^(>>>)?\s*(\d+): ?(.*)$)");
+    // The listing: "    362: code" and ">>> 366: code" (then ">>>   7:   ^", the column) around the first error. shaderc
+    // prints only three digits of a line number (1007 as "100"), so the listing is read by position: its ">>>" line is
+    // the first error's line.
+    static const std::regex listingLine(R"(^(>>>)?\s*(\d+): ?(.*)$)");
     static const std::regex marker(R"(^\s*#pragma\s+kast_line\s+(\d+)\s*$)");
     static const std::regex message(R"(\((\d+),\d+(?:-\d+)?\): error (\w+): (.*)$)");
-    std::map<int, std::string> code; // generated line -> text
+    std::vector<std::string> listing; // its code lines, in order
+    std::optional<size_t> arrow;      // the index of the first error's line in listing
+    std::optional<int> arrowLine;     // its generated line (the first error message's)
     std::vector<std::string> errors;
     bool afterArrow = false;
     for (std::string_view raw : splitLines(shadercOutput)) {
         const std::string line(raw);
         std::smatch m;
-        if (std::regex_match(line, m, listing)) {
-            const bool arrow = m[1].matched;
-            if (!(arrow && afterArrow)) // not the column line under the error's
-                code[std::stoi(m[2].str())] = m[3].str();
-            afterArrow = arrow;
+        if (std::regex_match(line, m, listingLine)) {
+            const bool isArrow = m[1].matched;
+            if (!(isArrow && afterArrow)) { // not the column line under the error's
+                if (isArrow)
+                    arrow = listing.size();
+                listing.push_back(m[3].str());
+            }
+            afterArrow = isArrow;
             continue;
         }
         afterArrow = false;
         if (std::regex_search(line, m, message)) {
             const int generated = std::stoi(m[1].str());
+            if (!arrowLine)
+                arrowLine = generated;
             std::optional<int> user;
-            for (int g = generated - 1; !user && code.contains(g); --g) // up the listing to the line's marker
-                if (std::smatch k; std::regex_match(code[g], k, marker))
-                    user = std::stoi(k[1].str());
+            if (arrow) // up the listing from the error's line to its marker
+                for (long long i = static_cast<long long>(*arrow) - (*arrowLine - generated) - 1;
+                     !user && i >= 0 && i < static_cast<long long>(listing.size()); --i)
+                    if (std::smatch k; std::regex_match(listing[static_cast<size_t>(i)], k, marker))
+                        user = std::stoi(k[1].str());
             errors.push_back(user ? std::format("line {}: error {}: {}", *user, m[2].str(), m[3].str())
                                   : std::format("generated line {}: error {}: {}", generated, m[2].str(), m[3].str()));
         } else if (line.starts_with("cpp:") && line.find("Error") != std::string::npos) {
