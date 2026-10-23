@@ -9,6 +9,7 @@
 #include "shader_clock.h"
 #include "shadow.h"
 #include "sky.h"
+#include "texture_cook.h"
 
 #include <bgfx/bgfx.h>
 
@@ -81,6 +82,25 @@ struct MipImage {
 };
 // Decodes PNG or JPG bytes and builds the mips (filtered in linear space if srgb). nullopt if it can't be decoded.
 std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb);
+// An authored KTX / DDS texture as stored: its GPU format (BCn or uncompressed), size and its own mips.
+struct GpuImageInfo {
+    bgfx::TextureFormat::Enum format = bgfx::TextureFormat::Unknown;
+    uint16_t width = 0, height = 0;
+    uint8_t mips = 0;
+    bool cube = false;
+};
+// True if the bytes are a KTX or DDS file (by their magic, so embedded model images count too), or the path ends in
+// .ktx / .dds (so a corrupt one still reports as such). Those load with createGpuTexture, the rest with decodeImage.
+bool isGpuImage(std::string_view bytes, std::string_view path = {});
+// Reads a KTX / DDS header (bimg::imageParse) and checks the data is all there. nullopt and why if it's corrupt,
+// truncated, or a 2D texture where a cube is wanted (cube) or the reverse.
+std::optional<GpuImageInfo> parseGpuImage(std::string_view bytes, bool cube, std::string& error);
+// A texture in the file's stored format with its own mips (srgb: sampled as sRGB, BGFX_TEXTURE_SRGB). Invalid and why
+// if parseGpuImage fails or this GPU lacks the format natively (bgfx's CPU emulation is refused: it would decode to
+// RGBA8 and lose the point of compression).
+bgfx::TextureHandle createGpuTexture(std::string_view bytes, bool srgb, bool cube, uint64_t flags, std::string& error);
+// "Asset loads: N models in X ms, M textures in Y ms; textureMemoryUsed Z MiB" (assetLoadStats, bgfx::getStats).
+std::string assetLoadSummary();
 // Appends the mips below level 0 (image.rgba holds just width x height RGBA8) and sets levels.
 void buildMips(MipImage& image, bool srgb);
 
@@ -190,12 +210,19 @@ private:
     struct Texture {
         bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; // invalid: failed to load, white_ draws instead
         std::optional<std::filesystem::file_time_type> mtime;
+        std::shared_future<CookedTexture> cooking; // valid: handle is the RGBA8 image until this cook is in
     };
 
     void setProjectRoot(const std::filesystem::path& root);
-    bgfx::TextureHandle texture(const std::string& path, bool srgb); // white_ for none or a failed load
-    bgfx::TextureHandle texture(const std::string& path, bool srgb, bgfx::TextureHandle fallback); // fallback instead
-    void loadTexture(const std::string& path, bool srgb, Texture& texture);
+    bgfx::TextureHandle texture(const std::string& path, TextureUsage usage); // white_ for none or a failed load
+    bgfx::TextureHandle texture(const std::string& path, TextureUsage usage, bgfx::TextureHandle fallback); // or fallback
+    // A PNG / JPG loads as its cooked KTX: from the editor's texture cache (TextureCooks; on a miss the RGBA8 image until
+    // the cook is in, see takeCooked), or game.pak's (the player). KTX / DDS files load as stored.
+    void loadTexture(const std::string& path, TextureUsage usage, Texture& texture);
+    // The GPU texture of a finished cook (invalid, warned once, if it failed: the RGBA8 image stays).
+    bgfx::TextureHandle cookedTexture(const std::string& path, TextureUsage usage, const CookedTexture& cooked);
+    // The player's: game.pak's cooked KTX of path (another usage's if usage has none); invalid + one error if none.
+    bgfx::TextureHandle pakTexture(const std::string& path, TextureUsage usage);
     void clearTextures();
     const GpuModel* gpuModel(const std::string& path); // null if the model fails to load
     void clearModels();
@@ -325,7 +352,7 @@ private:
 
     std::filesystem::path root_;
     MaterialLibrary materials_;
-    std::map<std::pair<std::string, bool>, Texture> textures_; // by (path, srgb)
+    std::map<std::pair<std::string, TextureUsage>, Texture> textures_; // by (path, usage)
     std::map<std::string, GpuModel> models_;                   // by project-relative path
     std::map<std::string, UserShader> userShaders_;            // by project-relative .kshader path
     std::string previewMaterialPath_, previewTexturePath_;      // setPreview

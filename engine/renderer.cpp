@@ -12,7 +12,9 @@
 #include "vs_shadow_skinned.bin.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <cstdint>
@@ -27,6 +29,9 @@
 #include "physics.h"
 #include "project.h"
 #include "terrain.h"
+
+#include <bimg/bimg.h>
+#include <bx/error.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
@@ -322,6 +327,15 @@ MeshData primitiveMesh(Primitive primitive)
     return makeSphere();
 }
 
+std::string assetLoadSummary()
+{
+    const AssetLoadStats& s = assetLoadStats();
+    const bgfx::Stats* stats = bgfx::getStats();
+    return std::format("Asset loads: {} models in {:.1f} ms, {} textures in {:.1f} ms; textureMemoryUsed {:.2f} MiB",
+                       s.models, s.modelSeconds * 1000.0, s.textures, s.textureSeconds * 1000.0,
+                       stats ? static_cast<double>(stats->textureMemoryUsed) / (1024.0 * 1024.0) : 0.0);
+}
+
 std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb)
 {
     int width = 0, height = 0, channels = 0;
@@ -338,6 +352,73 @@ std::optional<MipImage> decodeImage(std::string_view bytes, bool srgb)
     stbi_image_free(pixels);
     buildMips(image, srgb);
     return image;
+}
+
+bool isGpuImage(std::string_view bytes, std::string_view path)
+{
+    const auto extension = [&](std::string_view e) {
+        return path.size() >= e.size() && std::ranges::equal(path.substr(path.size() - e.size()), e, [](char a, char b) {
+                   return std::tolower(static_cast<unsigned char>(a)) == b;
+               });
+    };
+    return bytes.starts_with("DDS ") || bytes.starts_with("\xABKTX") || extension(".ktx") || extension(".dds");
+}
+
+std::optional<GpuImageInfo> parseGpuImage(std::string_view bytes, bool cube, std::string& error)
+{
+    bimg::ImageContainer image{};
+    bx::Error err;
+    if (bytes.size() > UINT32_MAX || !bimg::imageParse(image, bytes.data(), static_cast<uint32_t>(bytes.size()), &err) ||
+        image.m_format >= bimg::TextureFormat::Count) {
+        error = "not a valid KTX or DDS file";
+        return std::nullopt;
+    }
+    // Only the header was read: the mips it promises must all be in the file (bimg asserts in debug builds otherwise).
+    // KTX prefixes each mip with its u32 size; padding is not counted, so this is a lower bound.
+    const bimg::ImageBlockInfo& block = bimg::getBlockInfo(image.m_format);
+    uint64_t need = 0;
+    for (uint32_t mip = 0; mip < image.m_numMips; ++mip) {
+        const uint64_t w = std::max<uint64_t>(image.m_width >> mip, 1), h = std::max<uint64_t>(image.m_height >> mip, 1);
+        const uint64_t blocks = std::max<uint64_t>((w + block.blockWidth - 1) / block.blockWidth, block.minBlockX) *
+                                std::max<uint64_t>((h + block.blockHeight - 1) / block.blockHeight, block.minBlockY);
+        need += blocks * block.blockSize * (image.m_cubeMap ? 6 : 1) * std::max<uint32_t>(image.m_numLayers, 1) +
+                (image.m_ktx ? 4 : 0);
+    }
+    if (image.m_numMips == 0 || image.m_width == 0 || image.m_height == 0 || image.m_offset + need > bytes.size()) {
+        error = "the file is truncated";
+        return std::nullopt;
+    }
+    if (image.m_depth > 1 || image.m_numLayers > 1) {
+        error = "3D and array textures are not supported";
+        return std::nullopt;
+    }
+    if (image.m_cubeMap != cube) {
+        error = cube ? "a 2D texture, not a cubemap" : "a cubemap, not a 2D texture";
+        return std::nullopt;
+    }
+    if (image.m_width > 16384 || image.m_height > 16384) {
+        error = std::format("{}x{} is too large", image.m_width, image.m_height);
+        return std::nullopt;
+    }
+    return GpuImageInfo{static_cast<bgfx::TextureFormat::Enum>(image.m_format), static_cast<uint16_t>(image.m_width),
+                        static_cast<uint16_t>(image.m_height), image.m_numMips, image.m_cubeMap};
+}
+
+bgfx::TextureHandle createGpuTexture(std::string_view bytes, bool srgb, bool cube, uint64_t flags, std::string& error)
+{
+    const std::optional<GpuImageInfo> info = parseGpuImage(bytes, cube, error);
+    if (!info)
+        return BGFX_INVALID_HANDLE;
+    const uint32_t need = cube ? (srgb ? BGFX_CAPS_FORMAT_TEXTURE_CUBE_SRGB : BGFX_CAPS_FORMAT_TEXTURE_CUBE)
+                               : (srgb ? BGFX_CAPS_FORMAT_TEXTURE_2D_SRGB : BGFX_CAPS_FORMAT_TEXTURE_2D);
+    if (!(bgfx::getCaps()->formats[info->format] & need)) {
+        error = std::format("this GPU has no {}{} textures", bimg::getName(static_cast<bimg::TextureFormat::Enum>(info->format)),
+                            srgb ? " sRGB" : "");
+        return BGFX_INVALID_HANDLE;
+    }
+    // bgfx parses the KTX / DDS itself and uploads each side's mips as stored.
+    return bgfx::createTexture(bgfx::copy(bytes.data(), static_cast<uint32_t>(bytes.size())),
+                               flags | (srgb ? BGFX_TEXTURE_SRGB : BGFX_TEXTURE_NONE));
 }
 
 void buildMips(MipImage& image, bool srgb)
@@ -651,54 +732,126 @@ void Renderer::setProjectRoot(const std::filesystem::path& root)
     shaders().setRoot(root);
     shaders().reloadChanged();
     // ponytail: one stat per texture per frame, as for materials; watch the folder if projects grow to thousands.
-    for (auto& [key, texture] : textures_)
-        if (!root_.empty() && modifiedTime(root_ / textureFile(key.first)) != texture.mtime)
+    for (auto& [key, texture] : textures_) {
+        if (!root_.empty() && modifiedTime(root_ / textureFile(key.first)) != texture.mtime) {
             loadTexture(key.first, key.second, texture);
+        } else if (texture.cooking.valid() &&
+                   texture.cooking.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            // The cook started on a cache miss is in: its BCn texture replaces the RGBA8 one drawn meanwhile.
+            const bgfx::TextureHandle cooked = cookedTexture(key.first, key.second, texture.cooking.get());
+            texture.cooking = {};
+            if (bgfx::isValid(cooked)) {
+                if (bgfx::isValid(texture.handle))
+                    bgfx::destroy(texture.handle);
+                texture.handle = cooked;
+            }
+        }
+    }
 }
 
-bgfx::TextureHandle Renderer::texture(const std::string& path, bool srgb) { return texture(path, srgb, white_); }
+bgfx::TextureHandle Renderer::texture(const std::string& path, TextureUsage usage) { return texture(path, usage, white_); }
 
-bgfx::TextureHandle Renderer::texture(const std::string& path, bool srgb, bgfx::TextureHandle fallback)
+bgfx::TextureHandle Renderer::texture(const std::string& path, TextureUsage usage, bgfx::TextureHandle fallback)
 {
     if (path.empty())
         return fallback;
-    if (srgb && path == previewTexturePath_ && bgfx::isValid(previewTexture_))
+    if (usage == TextureUsage::Color && path == previewTexturePath_ && bgfx::isValid(previewTexture_))
         return previewTexture_;
-    auto [it, added] = textures_.try_emplace({path, srgb});
+    auto [it, added] = textures_.try_emplace({path, usage});
     if (added)
-        loadTexture(path, srgb, it->second);
+        loadTexture(path, usage, it->second);
     return bgfx::isValid(it->second.handle) ? it->second.handle : fallback;
 }
 
-void Renderer::loadTexture(const std::string& path, bool srgb, Texture& texture)
+bgfx::TextureHandle Renderer::cookedTexture(const std::string& path, TextureUsage usage, const CookedTexture& cooked)
 {
+    std::string error = cooked.error;
+    bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
+    if (!cooked.ktx.empty())
+        handle = createGpuTexture(cooked.ktx, isSrgb(usage), false, BGFX_TEXTURE_NONE, error);
+    if (!bgfx::isValid(handle))
+        warnOnce(std::format("Texture '{}': cannot compress it ({}); drawing it uncompressed", path, error));
+    else
+        log::info(std::format("Loaded texture '{}' as {} {}", path, usageName(usage),
+                              cooked.cached ? "(cache hit)" : std::format("(cooked in {:.2f} s)", cooked.seconds)));
+    return handle;
+}
+
+bgfx::TextureHandle Renderer::pakTexture(const std::string& path, TextureUsage usage)
+{
+    // The asked-for usage first; then another's (ponytail: Lua can sample an image as no material does, so Build
+    // didn't cook that usage; the other cook's mips or sRGB filtering are slightly off, which beats nothing).
+    std::vector<TextureUsage> order{usage};
+    for (const TextureUsage other : kTextureUsages)
+        if (other != usage)
+            order.push_back(other);
+    for (const TextureUsage use : order) {
+        std::string ktx, error;
+        const std::optional<std::filesystem::path> file = resolveProjectPath(root_, texturePakPath(path, use), error);
+        if (!file || !readFile(*file, ktx))
+            continue;
+        const bgfx::TextureHandle handle = createGpuTexture(ktx, isSrgb(usage), false, BGFX_TEXTURE_NONE, error);
+        if (bgfx::isValid(handle))
+            log::info(std::format("Loaded texture '{}' as {} (cooked)", path, usageName(use)));
+        else
+            log::error(std::format("Texture '{}': cooked texture '{}': {}; drawing without it", path,
+                                   texturePakPath(path, use), error));
+        return handle;
+    }
+    // Logged once: the entry keeps its (pak: unchanging) modification time, so it isn't loaded again.
+    log::error(std::format("Texture '{}': game.pak has no cooked texture for it ('{}'; the editor's Build cooks the "
+                           "images that materials, models, particles and skies use); drawing without it",
+                           path, texturePakPath(path, usage)));
+    return BGFX_INVALID_HANDLE;
+}
+
+void Renderer::loadTexture(const std::string& path, TextureUsage usage, Texture& texture)
+{
+    const LoadTimer timer(assetLoadStats().textures, assetLoadStats().textureSeconds);
     if (bgfx::isValid(texture.handle))
         bgfx::destroy(texture.handle);
     texture.handle = BGFX_INVALID_HANDLE;
+    texture.cooking = {};
+    const bool srgb = isSrgb(usage);
     std::string error = "no project";
     const std::optional<std::filesystem::path> file =
         root_.empty() ? std::nullopt : resolveProjectPath(root_, textureFile(path), error);
     texture.mtime = file ? modifiedTime(*file) : std::nullopt;
+    if (pakMounted() && !root_.empty() && !isGpuImage({}, path)) { // the player: Build cooked it (KTX / DDS ship as is)
+        texture.handle = pakTexture(path, usage);
+        return;
+    }
     std::string bytes;
-    std::optional<MipImage> image;
+    bool read = false;
     if (!embeddedTextureModel(path).empty()) { // embedded in a model
         const std::optional<std::string_view> embedded = models().embeddedTexture(path);
         if (embedded)
             bytes = *embedded;
         else
             error = "no such embedded image";
-        if (embedded && !(image = decodeImage(bytes, srgb)))
-            error = std::format("cannot decode it as PNG or JPG ({})", stbi_failure_reason());
+        read = embedded.has_value();
     } else if (file && !readFile(*file, bytes)) {
         error = "cannot read the file";
-    } else if (file && !(image = decodeImage(bytes, srgb))) {
-        error = std::format("cannot decode it as PNG or JPG ({})", stbi_failure_reason());
+    } else {
+        read = file.has_value();
     }
-    if (!image) {
+    if (read && isGpuImage(bytes, path)) {
+        texture.handle = createGpuTexture(bytes, srgb, false, BGFX_TEXTURE_NONE, error);
+    } else if (read) {
+        if (textureCooks().enabled()) { // the editor: a hit (or a cook not async) is ready now, a miss cooks meanwhile
+            std::shared_future<CookedTexture> cook = textureCooks().cook(root_, bytes, usage);
+            if (cook.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+                texture.cooking = std::move(cook);
+            else if (bgfx::isValid(texture.handle = cookedTexture(path, usage, cook.get())))
+                return;
+        }
+        if (const std::optional<MipImage> image = decodeImage(bytes, srgb))
+            texture.handle = createTexture(*image, srgb);
+        else
+            error = std::format("cannot decode it as PNG or JPG ({})", stbi_failure_reason());
+    }
+    if (!bgfx::isValid(texture.handle))
         warnOnce(std::format("Texture '{}': {}; drawing without it", path, error));
-        return;
-    }
-    texture.handle = createTexture(*image, srgb);
 }
 
 void Renderer::setPreview(const std::string& materialPath, const Material& material, const std::string& texturePath,
@@ -913,7 +1066,7 @@ void Renderer::submitShadowCasters(const std::vector<const DrawItem*>& batch, co
             bgfx::setUniform(baseColor_, material.baseColor.data());
             bgfx::setUniform(materialParams_, params);
             bgfx::setUniform(uvTransform_, uvTransform);
-            bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
+            bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, TextureUsage::Color));
         }
         bgfx::setVertexBuffer(0, first.vertices);
         bgfx::setIndexBuffer(first.indices);
@@ -1088,7 +1241,7 @@ void Renderer::setMaterialState(const DrawItem& item)
     const float params[4] = {material.metallic, material.roughness,
                              material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : -1.0f,
                              additive ? 2.0f : blend ? 1.0f : 0.0f};
-    const bgfx::TextureHandle normalMap = texture(material.normalTexture, false, flatNormal_);
+    const bgfx::TextureHandle normalMap = texture(material.normalTexture, TextureUsage::Normal, flatNormal_);
     const float materialExt[4] = {material.normalScale, material.occlusionStrength,
                                   normalMap.idx != flatNormal_.idx ? 1.0f : 0.0f, material.unlit ? 1.0f : 0.0f};
     const float uvTransform[4] = {material.uvScale[0], material.uvScale[1], material.uvOffset[0], material.uvOffset[1]};
@@ -1100,11 +1253,11 @@ void Renderer::setMaterialState(const DrawItem& item)
     bgfx::setUniform(materialExt_, materialExt);
     bgfx::setUniform(uvTransform_, uvTransform);
     bgfx::setUniform(time_, time);
-    bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, true));
-    bgfx::setTexture(1, metallicRoughnessSampler_, texture(material.metallicRoughnessTexture, false));
+    bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, TextureUsage::Color));
+    bgfx::setTexture(1, metallicRoughnessSampler_, texture(material.metallicRoughnessTexture, TextureUsage::Linear));
     bgfx::setTexture(7, normalSampler_, normalMap);
-    bgfx::setTexture(8, occlusionSampler_, texture(material.occlusionTexture, false));
-    bgfx::setTexture(9, emissiveSampler_, texture(material.emissiveTexture, true));
+    bgfx::setTexture(8, occlusionSampler_, texture(material.occlusionTexture, TextureUsage::Linear));
+    bgfx::setTexture(9, emissiveSampler_, texture(material.emissiveTexture, TextureUsage::Color));
     if (item.shader) {
         const ShaderSource& source = item.shader->source->source;
         const auto values = shaderParamValues(material, source);
@@ -1117,7 +1270,7 @@ void Renderer::setMaterialState(const DrawItem& item)
                                                                                            : white_;
             bgfx::setTexture(static_cast<uint8_t>(kFirstShaderTextureStage + param.slot),
                              shaderTextureSamplers_[static_cast<size_t>(param.slot)],
-                             texture(shaderParamTexture(material, param), param.srgb, fallback));
+                             texture(shaderParamTexture(material, param), colorUsage(param.srgb), fallback));
         }
     }
 }
@@ -1374,7 +1527,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             continue;
         }
         const ParticleRenderer::Draw& emitter = particles[i - blended.size()];
-        const bgfx::TextureHandle image = texture(emitter.emitter->texture, true); // white_: none or failed to load
+        const bgfx::TextureHandle image = texture(emitter.emitter->texture, TextureUsage::Color); // white_: none or failed to load
         particles_.draw(emitter, blendView, image, image.idx != white_.idx, fogColor, fogParams, cameraPos);
     }
 }

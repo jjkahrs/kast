@@ -5,12 +5,14 @@
 #include "game_view.h"
 #include "imgui_bgfx.h"
 #include "launcher.h"
+#include "model_importer.h"
 #include "online.h"
 #include "online_panel.h"
 #include "panels.h"
 #include "recent_projects.h"
 #include "shader_compiler.h"
 #include "shader_graph_editor.h"
+#include "texture_cooker.h"
 #include "ui_common.h"
 #include "viewport.h"
 #include "zone_cli.h"
@@ -25,6 +27,7 @@
 #include <gui.h>
 #include <log.h>
 #include <prefab.h>
+#include <renderer.h>
 #include <world_client.h>
 
 #include <SDL3/SDL.h>
@@ -1220,6 +1223,12 @@ int main(int argc, char** argv)
     // reload test, keep the worker threads).
     kast::shaders().setCompiler(compileShader, shaderToolsVersion());
     kast::shaders().setAsync(options->screenshot.empty() || options->screenshotOnLog);
+    // Models import with Assimp here (not in the player), once: <project>/.kast/model_cache holds the result.
+    kast::models().setImporter(importModel, modelImporterVersion());
+    // PNG / JPG textures compress with texturec here (not in the player) into <project>/.kast/texture_cache, on worker
+    // threads while the uncompressed image draws (a --screenshot run cooks each one when first drawn, as shaders).
+    kast::textureCooks().setCooker(cookTextureWithTexturec, texturecVersion());
+    kast::textureCooks().setAsync(options->screenshot.empty() || options->screenshotOnLog);
     if (!options->crash.empty()) {
         kast::log::info(std::format("--crash {}", options->crash));
         assert(options->crash != "assert");
@@ -1701,6 +1710,7 @@ int main(int argc, char** argv)
         return (graphs.onQuitRequested() && guiBuilder.onQuitRequested() && files.onQuitRequested()) || options->frames != 0;
     };
     hooks.shutdown = [&] {
+        kast::log::info(kast::assetLoadSummary());
         guiBuilder.shutdown();
         graphs.shutdown();
         game.shutdown();

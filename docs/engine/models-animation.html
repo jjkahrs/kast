@@ -13,10 +13,12 @@
 <main>
 <h1 id="models--animation">Models &amp; Animation</h1>
 <p>Model files placed anywhere in the project render through a <code>ModelRenderer</code>; skinned characters play skeletal
-animation clips through an <code>Animator</code>. Loading uses Assimp at runtime (no cooked format), straight from the source file.</p>
+animation clips through an <code>Animator</code>. The editor imports each model file with Assimp once, into a binary
+<code>.kmodel</code> it caches (see <a href="#model-cache">Import cache</a>); Build cooks every model into <code>game.pak</code> as
+<code>.kmodel</code>, and the built game reads only those (it has no Assimp).</p>
 <ul>
 <li><strong>Formats</strong>: glTF 2.0 (<code>.gltf</code> with its <code>.bin</code> and images, or <code>.glb</code>), FBX (<code>.fbx</code>) and OBJ (<code>.obj</code> with its <code>.mtl</code>).
-  Sidecar files resolve next to the model through the engine's file layer, so they also load from <code>game.pak</code>.</li>
+  Sidecar files (<code>.bin</code>, <code>.mtl</code>, images) resolve next to the model.</li>
 <li><strong>Units and axes</strong>: everything is normalized to meters and Y-up on load. glTF is meters / Y-up; OBJ has no unit and
   is taken as meters; FBX is converted from its <code>UnitScaleFactor</code> (centimeters per unit) and its up / front / coord
   axis metadata (e.g. Z-up files are turned Y-up). The same 1 m cube lines up as OBJ and glTF. Entity
@@ -29,9 +31,21 @@ animation clips through an <code>Animator</code>. Loading uses Assimp at runtime
   normal texture and scale, occlusion texture and strength, emissive texture, <code>doubleSided</code> (cull mode none, else back)
   and <code>KHR_materials_unlit</code> (see <a href="materials.html#materials">Materials</a>). Tangents are generated for normal
   mapping (<a href="shaders.html#mesh-vertices">Shaders</a>). Embedded GLB
-  images decode like other textures (PNG/JPG). A mesh on a node without a skin renders at that node's transform.</li>
+  images (<code>"&lt;model&gt;#&lt;i&gt;"</code>) load like other textures (PNG/JPG), and are
+  <a href="materials.html#texture-compression">compressed</a> by the usage of the slot that names them, in the editor's
+  texture cache and by Build (<code>models/hero.glb#0.color.ktx</code> in <code>game.pak</code>). A mesh on a node without a skin renders at that node's transform.</li>
 <li><strong>Caching</strong>: each model loads once per project-relative path and is shared by every entity using it; a changed file
-  reloads within a frame (modification time, as <code>.mat</code> files; not in the built game).</li>
+  or sidecar (<code>.bin</code>, <code>.mtl</code>) reloads within a frame (modification time, as <code>.mat</code> files; not in the built game).</li>
+<li id="model-cache"><strong>Import cache</strong> (editor): a model is imported once and kept as
+  <code>&lt;project&gt;/.kast/model_cache/&lt;key&gt;.kmodel</code> (a dot-folder: never shipped; safe to delete). The key is a hash of
+  the model's project-relative path, its bytes, the bytes of every sidecar it imports from (a <code>.gltf</code>'s or <code>.glb</code>'s
+  external buffers, an <code>.obj</code>'s <code>mtllib</code> files), the <code>.kmodel</code> format version and the importer version
+  (the Assimp version, its import flags and the importer's own revision). So an unchanged model loads from the cache on the
+  next start (<code>Loaded model 'models/hero.glb' (cache hit)</code>) without running Assimp, while editing the file or a sidecar,
+  upgrading Assimp or a new <code>.kmodel</code> version imports it again (<code>Loaded model 'models/hero.glb' (imported in 0.24 s)</code>).
+  The cache is never pruned. <code>.kmodel</code> is a versioned little-endian binary of everything the engine keeps of a model
+  (meshes with their vertices and indices, nodes, skins and inverse binds, clips, materials, embedded image bytes, bounds);
+  its byte layout is documented in <code>engine/model.h</code>.</li>
 <li>
 <p><strong><code>ModelRenderer</code></strong>: <code>model</code> (project-relative <code>.glb/.gltf/.fbx/.obj</code>; empty = renders nothing) and <code>materials</code>, the
   per-slot <code>.mat</code> overrides by slot index: a JSON array of strings, <code>""</code> (or no entry) = the model's embedded material.
@@ -103,8 +117,12 @@ Lua error naming the problem.</p>
   and warns once per path; an unknown <code>Animator.clip</code> (from the scene or the Inspector) shows the bind pose and warns
   once; over 128 bones, see above.</p>
 </li>
-<li><strong>Built game</strong>: model files and their sidecars ship in <code>game.pak</code> like every other project file (with the Assimp DLLs
-  next to the exe); the player renders and animates them the same way.</li>
+<li><strong>Built game</strong>: Build cooks every model file in the project into <code>game.pak</code> as
+  <code>&lt;path&gt;.kmodel</code> (e.g. <code>models/hero.glb.kmodel</code>) in place of the model file and its <code>.bin</code> /
+  <code>.mtl</code> sidecars (see <a href="../editor/build.html#build-models">Build</a>). Scenes, prefabs and Lua keep naming
+  <code>models/hero.glb</code>: the player maps that path to its cooked entry (<code>Loaded model 'models/hero.glb' (cooked)</code>) and
+  renders and animates it the same way. The player has no Assimp. A model with no cooked entry (e.g. a path no project file
+  has) logs one error, <code>Model 'models/x.glb': game.pak has no cooked model for it ...</code>, and renders a magenta cube.</li>
 <li><strong>Limits</strong>: 128 bones per skinned mesh, 4 weights per vertex, one UV set; no morph targets, no node (non-skinned)
   animation playback, no animation layers / blend trees / events / IK, no root-motion extraction, no LOD or instancing,
   embedded images only as PNG/JPG. Animations stored in separate animation-only files (e.g. Kenney's <code>run.fbx</code>) are not

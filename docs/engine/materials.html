@@ -109,8 +109,45 @@ Create &gt; Material) writes version 3 with every field, in the order above. Oth
   the <a href="coordinates-and-scenes.html#coordinates-and-scenes">shadow maps</a> (the directional term by its cascade, each shadowed point light by its
   cube) unless the mesh's <code>receiveShadows</code> is off. No image-based lighting. The shader outputs linear HDR color
   (formulas in <code>engine/shaders/fs_mesh.sc</code>); the <a href="post-processing.html#post-processing-and-fog">post chain</a> tonemaps and encodes it to sRGB.</li>
-<li>Textures: PNG and JPG (stb_image), mipmapped at load (sRGB-correct filtering for base color and emissive), shared by
-  path.</li>
+<li>Textures: PNG and JPG, shared by path and usage. What a slot samples a texture as (its <strong>usage</strong>) picks how
+  it is sampled and <a href="#texture-compression">compressed</a>: base color and emissive are <em>color</em> (sRGB);
+  metallic-roughness and occlusion are <em>linear</em>; the normal texture is <em>normal</em>; <code>.kshader</code> and shader graph
+  <code>texture2D</code> params are color if declared <code>srgb</code>, else linear; particle textures are color.</li>
+<li id="texture-compression"><strong>Texture compression.</strong> The editor compresses every PNG / JPG a slot samples
+  with bgfx's <code>texturec</code> (next to <code>kast_editor.exe</code>; never shipped) into a KTX with mips, by usage:
+  <table>
+  <tr><th>Usage</th><th>Format</th><th>Sampled as</th></tr>
+  <tr><td>color (base color, emissive, sky faces, sRGB params, particles)</td><td>BC1 opaque, BC3 with alpha</td><td>sRGB</td></tr>
+  <tr><td>linear (metallic-roughness, occlusion, linear params)</td><td>BC1 opaque, BC3 with alpha</td><td>linear</td></tr>
+  <tr><td>normal (normal texture)</td><td>BC5 (X, Y; the mesh shader rebuilds Z)</td><td>linear</td></tr>
+  </table>
+  An image whose width or height isn't a multiple of 4 stays RGBA8 (D3D11 takes BCn only in whole 4x4 blocks), with
+  <code>texturec</code>'s mips. An image is <em>opaque</em> when it has no alpha channel or every alpha is 255; one pixel below
+  255 (a cutout, a fade) keeps alpha with BC3. BC1 is an eighth of RGBA8's memory, BC3 and BC5 a quarter (the defaults Unity
+  and Godot use too). No BC7: <code>texturec</code>'s BC7 encoder takes about 30 s for a 256x256 image and minutes for
+  1024x1024, too slow for an editor cache and for Build.
+  The result is kept in <code>&lt;project&gt;/.kast/texture_cache/&lt;key&gt;.ktx</code> (key: a hash of the image bytes, the usage, the
+  cooker version and <code>texturec.exe</code>'s size and time; a dot-folder, never shipped, ignored by git), so each image is
+  compressed once. On a cache miss the editor draws the uncompressed RGBA8 image at once, compresses on a worker thread
+  and swaps the compressed texture in when it is done (<code>Loaded texture 'textures/rock.png' as color (cooked in 0.03 s)</code>);
+  a hit loads the KTX directly (<code>(cache hit)</code>). Saving the image again compresses it again. If <code>texturec</code> fails or
+  is missing, the editor warns once and keeps drawing the RGBA8 image:
+  <code>Texture 'textures/rock.png': cannot compress it (...); drawing it uncompressed</code>. A <code>--screenshot</code> run compresses
+  each texture when first drawn instead (so the shot is the same every run). Build ships the compressed textures
+  (<a href="../editor/build.html#build-textures">Build</a>), and the player only loads those. Normal maps: the mesh shader
+  rebuilds Z from X and Y for every normal texture (<code>NORMAL_MAP</code> and <code>sampleNormal()</code> in a <code>.kshader</code> get the
+  rebuilt Z too), so a full RGB normal map, which is unit length, looks the same.</li>
+<li id="ktx-dds">Authored <strong>KTX and DDS</strong> textures (e.g. made with bgfx's <code>texturec</code>: <code>texturec -f in.png -o out.ktx -t BC7 -m</code>)
+  load as stored: their GPU format (BC1-BC7, RGBA8 and the other uncompressed formats bgfx knows) and their own mips,
+  with no decoding or recompression. They work anywhere a texture path does (material slots, <code>.kshader</code> and shader
+  graph params, particles) and are listed in the texture pickers. A file is read as KTX / DDS by its header or its
+  <code>.ktx</code> / <code>.dds</code> extension. The slot still decides sRGB: base color and emissive sample it as sRGB. A corrupt or
+  truncated file, a cubemap, a 3D or array texture, or a format this GPU lacks natively (e.g. ETC1 / ASTC on D3D11;
+  bgfx's CPU emulation is refused) falls back like an undecodable PNG, with one warning:
+  <code>Texture 'textures/rock.ktx': this GPU has no ETC1 sRGB textures; drawing without it</code>. They are never compressed
+  again: Build ships them as-is.
+  Samples: <code>tests/project/gpu_textures.scene</code> (<code>textures/gpu/</code>: BC1 .ktx, BC3 .dds, BC7 .ktx, RGBA8 .dds) and
+  <code>gpu_textures_bad.scene</code> (ETC1, corrupt, truncated).</li>
 <li>Fallbacks (the scene always loads): a missing or invalid <code>.mat</code> renders unlit magenta; a missing or undecodable
   texture renders as white, except a normal texture, which renders flat. Each is logged once per path, with the reason.</li>
 <li><strong>glTF import</strong> (<a href="models-animation.html#models-animation">models</a>): <code>normalTexture</code> and its <code>scale</code>,

@@ -89,7 +89,8 @@ profiling; `release` for shipping.
 
 Output goes to `build/<preset>/`: `kast_editor.exe`, `kast_player.exe` (the game client Build copies) and
 `kast_self_check.exe`; runtime DLLs are copied next to them. The editor also gets `shaderc.exe` and a `kshader/` folder
-(bgfx shader headers and Kast's mesh shader templates) next to it, to compile [user shaders](docs/engine/shaders.html);
+(bgfx shader headers and Kast's mesh shader templates) next to it, to compile [user shaders](docs/engine/shaders.html),
+and `texturec.exe` (with `miniz.dll` and `squish.dll`) to [compress textures](docs/engine/materials.html#texture-compression);
 keep them beside `kast_editor.exe` if you copy it elsewhere. Built games don't need them.
 
 ## Start the editor

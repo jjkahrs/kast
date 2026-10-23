@@ -1288,7 +1288,7 @@ void Panels::drawMaterialInspector(Document& doc)
     }
 
     std::vector<std::string> textures;
-    collectFiles(assets_, {".png", ".jpg", ".jpeg"}, textures);
+    collectFiles(assets_, {".png", ".jpg", ".jpeg", ".ktx", ".dds"}, textures);
     kast::Material& m = material_.value;
     const kast::Material before = m; // an edit starting this frame undoes to it
     ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.5f); // leave room for the labels
@@ -1676,9 +1676,14 @@ void Panels::drawLighting(Document& doc, bool& open, const std::string& skyError
                 ImGui::TextWrapped("Cubemap: %s. Showing the procedural sky.", skyError.c_str());
                 ImGui::PopStyleColor();
             }
+            std::vector<std::string> cubes; // a cube .ktx / .dds replaces the six faces
+            collectFiles(assets_, {".ktx", ".dds"}, cubes);
+            changed = drawFilePicker("Cube file", cubes, "None (six faces)", sky.cube) || changed;
+            ImGui::SetItemTooltip("One cubemap .ktx or .dds (e.g. texturec --strip) instead of six face images");
             constexpr const char* kLabels[] = {"+X (px)", "-X (nx)", "+Y (py)", "-Y (ny)", "+Z (pz)", "-Z (nz)"};
-            for (size_t i = 0; i < sky.faces.size(); ++i)
-                changed = drawFilePicker(kLabels[i], textures, "None", sky.faces[i]) || changed;
+            if (sky.cube.empty())
+                for (size_t i = 0; i < sky.faces.size(); ++i)
+                    changed = drawFilePicker(kLabels[i], textures, "None", sky.faces[i]) || changed;
         }
         ImGui::PopID();
         if (changed)

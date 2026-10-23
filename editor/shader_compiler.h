@@ -3,6 +3,7 @@
 #include <shader.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -14,3 +15,8 @@ bool compileShader(const kast::ShaderSource& source, kast::ShaderStage stage, st
 // The shader cache's version (ShaderLibrary::setCompiler): a hash of what the bytecode depends on besides the .kshader,
 // the templates and includes under kshader/ and shaderc.exe (its size and time), so rebuilding either misses the cache.
 std::string shaderToolsVersion();
+// The folder of this program (UTF-8 from SDL), where CMake puts shaderc.exe, texturec.exe and kshader/.
+std::filesystem::path toolDir();
+// Runs args[0] with args (SDL quotes each; no console window) and waits for it to exit: what it printed (stdout and
+// stderr) in output, its exit code in code. False + error if it can't start.
+bool runTool(const std::vector<std::string>& args, std::string& output, int& code, std::string& error);

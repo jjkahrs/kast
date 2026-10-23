@@ -11,9 +11,11 @@
 #include "external_editor.h" // external editor command; links editor/external_editor.cpp
 #include "gui_doc.h"  // GUI Builder document model; links editor/gui_doc.cpp
 #include "gui_undo.h" // GUI Builder undo steps; links editor/gui_undo.cpp
+#include "model_importer.h" // Assimp; links kast_model_import
 #include "recent_projects.h" // Project Manager list; links editor/recent_projects.cpp
 #include "shader_compiler.h" // shaderc for .kshader files; links editor/shader_compiler.cpp
 #include "shader_graph_doc.h" // the Shader Graph panels' edit model; links editor/shader_graph_doc.cpp
+#include "texture_cooker.h" // texturec for PNG / JPG compression; links editor/texture_cooker.cpp
 #include "stats_toggle.h" // the Game panel's F3 rule; header only
 
 #include <components.h>
@@ -54,6 +56,7 @@
 #include <stats_overlay.h>
 #include <systems.h>
 #include <terrain.h>
+#include <texture_cook.h>
 
 #include <RmlUi/Core.h>
 #include <SDL3/SDL.h>
@@ -2968,7 +2971,7 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"audio.scene", "custom_shaders.scene", "events.scene", "fsm.scene", "health.scene", "material_features.scene",
+              std::vector<std::string>{"audio.scene", "custom_shaders.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "material_features.scene",
                                        "materials.scene", "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
                                        "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene",
@@ -2991,7 +2994,7 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
     check(projectScenes(root) == std::vector<std::string>{"audio.scene", "broken.scene", "custom_shaders.scene", "events.scene", "fsm.scene",
-                                                          "health.scene", "levels/c.scene", "material_features.scene", "materials.scene",
+                                                          "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "levels/c.scene", "material_features.scene", "materials.scene",
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
                                                           "models_material.scene", "models_missing.scene", "net_a.scene",
@@ -5166,6 +5169,11 @@ void checkSky()
               near(loaded.sky.bottom, {0.7f, 0.8f, 0.9f}) && loaded.sky.faces == scene.sky.faces,
           "sky round trip");
     check(kast::sceneToJson(loaded) == json, "sky saves back identically");
+    check(!json["sky"].contains("cube"), "no cube file: no \"cube\" key (older scenes save unchanged)");
+    scene.sky.cube = "s/sky.ktx";
+    check(kast::sceneFromJson(kast::sceneToJson(scene), loaded, error) && loaded.sky.cube == "s/sky.ktx" &&
+              loaded.sky.faces == scene.sky.faces,
+          "sky cube file round trip");
     json.erase("sky");
     check(kast::sceneFromJson(json, loaded, error) && loaded.sky.mode == kast::SkyMode::Off &&
               near(loaded.sky.top, kast::SceneSky{}.top) && loaded.sky.faces == kast::SceneSky{}.faces,
@@ -5222,6 +5230,11 @@ return { update = function(dt)
     s = kast.sky.get()
     assert(s.mode == "cubemap" and s.faces.nz == "sky/nz.png" and s.faces.px == "" and s.top.x == 0.5 and
            s.horizon.x == 1, "partial set keeps the other fields and faces")
+    kast.sky.set({cube = "sky/storm.ktx"})
+    assert(kast.sky.get().cube == "sky/storm.ktx" and kast.sky.get().faces.nz == "sky/nz.png", "cube file set")
+    kast.sky.set({cube = ""})
+    assert(kast.sky.get().cube == nil, "cube file cleared")
+    fails('"cube" must be a string', function() kast.sky.set({cube = 3}) end)
     fails('"mode" must be', function() kast.sky.set({top = {x = 0, y = 0, z = 0}, mode = "night"}) end)
     fails('unknown field "sun"', function() kast.sky.set({sun = 1}) end)
     fails('"horizon" must be an array of 3 numbers between 0 and 1',
@@ -6367,7 +6380,7 @@ void checkShaders()
     checkShaderGraphEdits();
 
     // COLOR0: glTF COLOR_0 imports (RGBA8, R in the low byte); models without it and primitives are white.
-    const auto model = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/vertex_colors.gltf", error);
+    const auto model = importModel(KAST_TEST_PROJECT_DIR, "models/vertex_colors.gltf", error);
     std::vector<uint32_t> colors;
     for (const kast::ModelMesh& mesh : model ? model->meshes : std::vector<kast::ModelMesh>{})
         for (const kast::ModelVertex& v : mesh.vertices)
@@ -6378,7 +6391,7 @@ void checkShaders()
         read += std::format(" {:08x}", c);
     check(colors == std::vector<uint32_t>{0x80ffffff, 0xff0000ff, 0xff00ff00, 0xffff0000},
           std::format("vertex_colors.gltf's COLOR_0 reads back as red, green, blue, half-transparent white:{}", read).c_str());
-    const auto plain = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/cube.gltf", error);
+    const auto plain = importModel(KAST_TEST_PROJECT_DIR, "models/cube.gltf", error);
     bool white = plain && !plain->meshes.empty();
     for (const kast::ModelMesh& mesh : plain ? plain->meshes : std::vector<kast::ModelMesh>{})
         for (const kast::ModelVertex& v : mesh.vertices)
@@ -7330,7 +7343,7 @@ void checkPrimitiveTangents()
 void checkMaterialFeatureImport()
 {
     std::string error;
-    const auto model = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/material_features.gltf", error);
+    const auto model = importModel(KAST_TEST_PROJECT_DIR, "models/material_features.gltf", error);
     check(model && model->materials.size() == 2, std::format("material_features.gltf loads with 2 materials ({})", error).c_str());
     if (!model || model->materials.size() != 2)
         return;
@@ -7353,7 +7366,7 @@ void checkMaterialFeatureImport()
     check(tangents, "model tangents run along texture u with the bitangent toward image up");
 
     // Meshes without UVs still get unit tangents perpendicular to the normal.
-    const auto obj = kast::loadModel(KAST_TEST_PROJECT_DIR, "models/cube.obj", error);
+    const auto obj = importModel(KAST_TEST_PROJECT_DIR, "models/cube.obj", error);
     bool perpendicular = obj != nullptr;
     for (const kast::ModelMesh& mesh : obj ? obj->meshes : std::vector<kast::ModelMesh>{})
         for (const kast::ModelVertex& v : mesh.vertices)
@@ -7592,6 +7605,204 @@ void checkTextureDecode()
           "row 0 is the image's top (blue marker cell at the top-left)");
     check(kast::decodeImage(jpg, false).has_value(), "JPG decodes");
     check(!kast::decodeImage("not an image", true) && !kast::decodeImage("", false), "undecodable bytes: nullopt");
+}
+
+// Authored KTX / DDS (tests/project/textures/gpu, sky_test/cube.*, made with texturec): parsed as stored, broken or
+// mismatched ones rejected with why. createGpuTexture's GPU format check is covered by the ktx_* screenshot tests.
+void checkGpuImages()
+{
+    const std::filesystem::path dir = std::filesystem::path(KAST_TEST_PROJECT_DIR) / "textures";
+    const auto parse = [&](const char* file, bool cube, std::string& error) {
+        std::string bytes;
+        check(kast::readFile(dir / file, bytes), std::format("{} present", file).c_str());
+        check(kast::isGpuImage(bytes), std::format("{} is a KTX / DDS by its magic", file).c_str());
+        return kast::parseGpuImage(bytes, cube, error);
+    };
+    using Format = bgfx::TextureFormat;
+    const struct {
+        const char* file;
+        Format::Enum format;
+    } kTwoD[] = {{"gpu/checker_bc1.ktx", Format::BC1}, {"gpu/checker_bc3.dds", Format::BC3},
+                 {"gpu/checker_bc7.ktx", Format::BC7}, {"gpu/checker_rgba8.dds", Format::RGBA8},
+                 {"gpu/checker_etc1.ktx", Format::ETC1}};
+    for (const auto& [file, format] : kTwoD) {
+        std::string error;
+        const std::optional<kast::GpuImageInfo> info = parse(file, false, error);
+        check(info && info->format == format && info->width == 64 && info->height == 64 && info->mips == 7 && !info->cube,
+              std::format("{}: 64x64, 7 mips, stored format kept ({})", file, error).c_str());
+        check(!parse(file, true, error) && error == "a 2D texture, not a cubemap", std::format("{}: not a cube", file).c_str());
+    }
+    for (const char* file : {"sky_test/cube.ktx", "sky_test/cube.dds"}) {
+        std::string error;
+        const std::optional<kast::GpuImageInfo> info = parse(file, true, error);
+        check(info && info->cube && info->width == 16 && info->mips == 5, std::format("{}: 16x16 cube, 5 mips ({})", file, error).c_str());
+        check(!parse(file, false, error) && error == "a cubemap, not a 2D texture", std::format("{}: not 2D", file).c_str());
+    }
+    std::string error;
+    check(!parse("gpu/truncated.dds", false, error) && error == "the file is truncated", "truncated DDS rejected");
+    check(!parse("gpu/corrupt.ktx", false, error) && error == "not a valid KTX or DDS file", "corrupt KTX rejected");
+    check(!kast::parseGpuImage("", false, error) && !kast::parseGpuImage("DDS ", false, error), "empty / header-only rejected");
+    std::string png;
+    check(kast::readFile(dir / "checker.png", png) && !kast::isGpuImage(png, "textures/checker.png"),
+          "a PNG is not a KTX / DDS");
+    check(kast::isGpuImage("junk", "a/b.KTX") && kast::isGpuImage("junk", "b.dds"), "by extension too, any case");
+}
+
+// Texture compression: usage picks the format (per material slot), texturec cooks through the cache keyed by the image,
+// usage and version, a sky's faces cook to one cube, and the editor's TextureCooks runs misses on a worker.
+void checkTextureCooks()
+{
+    using Format = bgfx::TextureFormat;
+    using kast::TextureUsage;
+    check(kast::cookedFormat(TextureUsage::Color, 64, 32, false) == Format::BC1 &&
+              kast::cookedFormat(TextureUsage::Linear, 64, 32, false) == Format::BC1 &&
+              kast::cookedFormat(TextureUsage::Color, 64, 32, true) == Format::BC3 &&
+              kast::cookedFormat(TextureUsage::Linear, 64, 32, true) == Format::BC3 &&
+              kast::cookedFormat(TextureUsage::Normal, 64, 32, false) == Format::BC5 &&
+              kast::cookedFormat(TextureUsage::Normal, 64, 32, true) == Format::BC5,
+          "usage formats: color and linear BC1 opaque / BC3 with alpha, normal BC5");
+    check(kast::cookedFormat(TextureUsage::Color, 6, 8, false) == Format::RGBA8 &&
+              kast::cookedFormat(TextureUsage::Normal, 8, 30, false) == Format::RGBA8,
+          "a side not a multiple of 4 stays RGBA8 (D3D11 takes BCn in whole blocks)");
+    check(kast::isSrgb(TextureUsage::Color) && !kast::isSrgb(TextureUsage::Linear) && !kast::isSrgb(TextureUsage::Normal) &&
+              kast::colorUsage(true) == TextureUsage::Color && kast::colorUsage(false) == TextureUsage::Linear,
+          "only color is sampled as sRGB; params and particles pick by their sRGB flag");
+
+    kast::Material material;
+    material.baseColorTexture = "base.png";
+    material.metallicRoughnessTexture = "mr.png";
+    material.normalTexture = "normal.png";
+    material.occlusionTexture = "ao.png";
+    material.emissiveTexture = "glow.png";
+    material.params["albedo"].texture = "param_srgb.png";
+    material.params["mask"].texture = "param_linear.png";
+    material.params["speed"].numbers = {1.0f};
+    kast::ShaderSource shader;
+    shader.params.push_back({.name = "albedo", .type = kast::ShaderParamType::Texture2D, .srgb = true});
+    shader.params.push_back({.name = "mask", .type = kast::ShaderParamType::Texture2D, .srgb = false});
+    using Uses = std::vector<std::pair<std::string, TextureUsage>>;
+    check(kast::materialTextures(material, &shader) ==
+              Uses{{"base.png", TextureUsage::Color}, {"mr.png", TextureUsage::Linear}, {"normal.png", TextureUsage::Normal},
+                   {"ao.png", TextureUsage::Linear}, {"glow.png", TextureUsage::Color},
+                   {"param_srgb.png", TextureUsage::Color}, {"param_linear.png", TextureUsage::Linear}},
+          "material slots: base color and emissive color, metallic-roughness and occlusion linear, normal normal, "
+          "params by their sRGB flag");
+    check(kast::materialTextures(material, nullptr).back() == std::pair<std::string, TextureUsage>{"param_linear.png", TextureUsage::Color},
+          "params of an unknown shader count as color");
+    check(kast::materialTextures(kast::Material{}, nullptr).empty(), "no textures, no usages");
+    check(kast::texturePakPath("textures/a.png", TextureUsage::Normal) == "textures/a.png.normal.ktx" &&
+              kast::texturePakPath("models/m.glb#0", TextureUsage::Color) == "models/m.glb#0.color.ktx",
+          "pak paths: <path>.<usage>.ktx");
+    check(kast::skyPakPath({"a", "b", "c", "d", "e", "f"}).starts_with(".kast_sky/") &&
+              kast::skyPakPath({"a", "b", "c", "d", "e", "f"}) != kast::skyPakPath({"a", "b", "c", "d", "f", "e"}),
+          "sky pak path: by its faces, in a dot-folder");
+
+    // texturec (next to this program, as next to the editor): each usage's format with its mips, through the cache.
+    const std::filesystem::path textures = std::filesystem::path(KAST_TEST_PROJECT_DIR) / "textures";
+    const std::filesystem::path cache = std::filesystem::temp_directory_path() / std::format("kast_texture_cache_{}", _getpid());
+    std::filesystem::remove_all(cache);
+    std::string png;
+    check(kast::readFile(textures / "checker.png", png), "checker.png present");
+    check(kast::textureCacheKey(png, TextureUsage::Color, "v1") != kast::textureCacheKey(png, TextureUsage::Linear, "v1") &&
+              kast::textureCacheKey(png, TextureUsage::Color, "v1") != kast::textureCacheKey(png, TextureUsage::Color, "v2") &&
+              kast::textureCacheKey(png, TextureUsage::Color, "v1") != kast::textureCacheKey(png + " ", TextureUsage::Color, "v1"),
+          "cache key: image, usage and version each change it");
+    for (const auto [usage, format] : {std::pair{TextureUsage::Color, Format::BC1}, std::pair{TextureUsage::Linear, Format::BC1},
+                                       std::pair{TextureUsage::Normal, Format::BC5}}) {
+        std::string ktx, error;
+        bool cached = true;
+        check(kast::cookTexture(png, usage, cookTextureWithTexturec, "v1", cache, ktx, cached, error) && !cached,
+              std::format("texturec cooks checker.png as {} ({})", kast::usageName(usage), error).c_str());
+        const std::optional<kast::GpuImageInfo> info = kast::parseGpuImage(ktx, false, error);
+        check(info && info->format == format && info->width == 64 && info->height == 64 && info->mips == 7,
+              std::format("{}: format {}, 64x64 with 7 mips ({})", kast::usageName(usage), static_cast<int>(format), error)
+                  .c_str());
+        std::string again;
+        check(kast::cookTexture(png, usage, cookTextureWithTexturec, "v1", cache, again, cached, error) && cached &&
+                  again == ktx,
+              std::format("{}: the second cook is a cache hit", kast::usageName(usage)).c_str());
+        check(kast::cookTexture(png, usage, cookTextureWithTexturec, "v2", cache, again, cached, error) && !cached,
+              std::format("{}: a new cooker version misses the cache", kast::usageName(usage)).c_str());
+    }
+    std::string ktx, error;
+    bool cached = false;
+    // An image with alpha below 255 (cutout.png, RGBA) keeps it: BC3; checker.png (RGB) above cooked to BC1.
+    std::string cutout;
+    check(kast::readFile(textures / "cutout.png", cutout), "cutout.png present");
+    for (const TextureUsage usage : {TextureUsage::Color, TextureUsage::Linear}) {
+        check(kast::cookTexture(cutout, usage, cookTextureWithTexturec, "v1", cache, ktx, cached, error),
+              std::format("texturec cooks cutout.png as {} ({})", kast::usageName(usage), error).c_str());
+        const std::optional<kast::GpuImageInfo> info = kast::parseGpuImage(ktx, false, error);
+        check(info && info->format == Format::BC3,
+              std::format("cutout.png ({}): alpha keeps BC3 ({})", kast::usageName(usage), error).c_str());
+    }
+    writeFile(cache / (kast::textureCacheKey(png, TextureUsage::Color, "v1") + ".ktx"), "half a KTX");
+    check(kast::cookTexture(png, TextureUsage::Color, cookTextureWithTexturec, "v1", cache, ktx, cached, error) && !cached &&
+              kast::parseGpuImage(ktx, false, error),
+          "a corrupt cache entry (a cut-short write) is cooked again");
+    check(!kast::cookTexture("not an image", TextureUsage::Color, cookTextureWithTexturec, "v1", cache, ktx, cached, error) &&
+              error == "cannot read it as a PNG or JPG image",
+          "a file that is no image fails before texturec");
+    check(!kast::cookTexture(png.substr(0, 60), TextureUsage::Color, cookTextureWithTexturec, "v1", cache, ktx, cached, error) &&
+              error.starts_with("texturec failed"),
+          std::format("a truncated PNG: texturec rejects it ({})", error).c_str());
+
+    // A sky's six faces: one BC1 cube with its mips (the sky ignores alpha).
+    std::array<kast::MipImage, 6> faces;
+    for (size_t i = 0; i < faces.size(); ++i) {
+        std::string bytes;
+        kast::readFile(textures / "sky_test" / std::format("{}.png", kast::kSkyFaceNames[i]), bytes);
+        faces[i] = kast::decodeImage(bytes, true).value_or(kast::MipImage{});
+    }
+    check(kast::skyFacesError(faces).empty(), "sky_test faces make a cube");
+    const std::string cubeIn = kast::skyCubeKtx(faces);
+    std::optional<kast::GpuImageInfo> info = kast::parseGpuImage(cubeIn, true, error);
+    check(info && info->format == Format::RGBA8 && info->width == 16 && info->mips == 1, "sky input: an RGBA8 cube KTX");
+    check(kast::cookTexture(cubeIn, TextureUsage::Color, cookTextureWithTexturec, "v1", cache, ktx, cached, error),
+          std::format("texturec cooks the sky cube ({})", error).c_str());
+    info = kast::parseGpuImage(ktx, true, error);
+    check(info && info->cube && info->format == Format::BC1 && info->width == 16 && info->mips == 5,
+          std::format("sky cube: BC1, 16x16, 5 mips ({})", error).c_str());
+
+    // TextureCooks: a miss cooks on a worker (one cook per key, however many ask), a hit or a non-async cook is ready
+    // at once, and a failed cook comes back empty with the cooker's error.
+    std::atomic<int> runs = 0;
+    std::atomic<bool> release = false;
+    std::string stored; // what the fake cooker "cooks": a valid KTX, so the cache takes it
+    check(kast::readFile(textures / "gpu/checker_bc1.ktx", stored), "checker_bc1.ktx present");
+    kast::TextureCooks& cooks = kast::textureCooks();
+    cooks.setCooker([&](std::string_view, TextureUsage usage, Format::Enum, std::string& out, std::string& why) {
+        ++runs;
+        while (!release)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        if (usage == TextureUsage::Normal) {
+            why = "no normals today";
+            return false;
+        }
+        out = stored;
+        return true;
+    }, "worker");
+    cooks.setAsync(true);
+    const std::filesystem::path root = cache / "project";
+    auto first = cooks.cook(root, png, TextureUsage::Color);
+    auto second = cooks.cook(root, png, TextureUsage::Color);
+    check(first.wait_for(std::chrono::seconds(0)) != std::future_status::ready, "async miss: not ready at once (the caller draws RGBA8)");
+    release = true;
+    check(first.get().ktx == stored && !first.get().cached && second.get().ktx == stored && runs == 1,
+          "async miss: cooked once on a worker for both callers");
+    auto hit = cooks.cook(root, png, TextureUsage::Color);
+    check(hit.wait_for(std::chrono::seconds(0)) == std::future_status::ready && hit.get().cached && runs == 1 &&
+              std::filesystem::exists(root / ".kast/texture_cache" / (kast::textureCacheKey(png, TextureUsage::Color, "worker") + ".ktx")),
+          "async hit: ready at once from <root>/.kast/texture_cache");
+    auto failed = cooks.cook(root, png, TextureUsage::Normal);
+    check(failed.get().ktx.empty() && failed.get().error == "no normals today", "a failed cook: empty, with the error");
+    cooks.setAsync(false);
+    auto sync = cooks.cook(root, png, TextureUsage::Linear);
+    check(sync.wait_for(std::chrono::seconds(0)) == std::future_status::ready && sync.get().ktx == stored,
+          "not async: the cook runs inside the call");
+    cooks.setCooker({}, {});
+    check(!cooks.enabled(), "no cooker: textures load uncompressed");
+    std::filesystem::remove_all(cache);
 }
 
 void checkMaterialScenes()
@@ -8027,7 +8238,7 @@ void checkModelLoading()
     const std::filesystem::path tests = KAST_TEST_PROJECT_DIR;
     std::string error;
 
-    const auto character = kast::loadModel(tests, "models/female-128-anim.glb", error);
+    const auto character = importModel(tests, "models/female-128-anim.glb", error);
     check(character != nullptr, "female-128-anim.glb loads");
     if (character) {
         logModel("models/female-128-anim.glb", *character);
@@ -8063,9 +8274,9 @@ void checkModelLoading()
         check(weightsOk, "skinned vertex weights sum to 1");
     }
 
-    const auto obj = kast::loadModel(tests, "models/cube.obj", error);
+    const auto obj = importModel(tests, "models/cube.obj", error);
     check(obj != nullptr, "cube.obj loads");
-    const auto gltf = kast::loadModel(tests, "models/cube.gltf", error);
+    const auto gltf = importModel(tests, "models/cube.gltf", error);
     check(gltf != nullptr, "cube.gltf loads");
     if (obj && gltf) {
         logModel("cube.obj", *obj);
@@ -8081,7 +8292,7 @@ void checkModelLoading()
     }
 
     // Kenney's character (CC0): skinned, Blender FBX export; its clips ship as separate animation-only files.
-    const auto fbx = kast::loadModel(tests, "models/kenney/characterMedium.fbx", error);
+    const auto fbx = importModel(tests, "models/kenney/characterMedium.fbx", error);
     check(fbx != nullptr, "characterMedium.fbx loads");
     if (fbx) {
         logModel("characterMedium.fbx", *fbx);
@@ -8095,22 +8306,22 @@ void checkModelLoading()
             check(!clip.name.empty() && clip.duration > 0.0f, "FBX clips are named and have a duration");
     }
 
-    check(kast::loadModel(tests, "models/does_not_exist.glb", error) == nullptr && !error.empty(),
+    check(importModel(tests, "models/does_not_exist.glb", error) == nullptr && !error.empty(),
           "a missing model is an error");
     error.clear();
-    check(kast::loadModel(tests, "models/corrupt.glb", error) == nullptr && !error.empty(), "a corrupt model is an error");
+    check(importModel(tests, "models/corrupt.glb", error) == nullptr && !error.empty(), "a corrupt model is an error");
     kast::log::info(std::format("corrupt.glb: {}", error));
     error.clear();
-    check(kast::loadModelFromMemory("garbage", "glb", error) == nullptr && !error.empty(), "garbage bytes are an error");
+    check(importModelFromMemory("garbage", "glb", error) == nullptr && !error.empty(), "garbage bytes are an error");
 
-    const auto ok = kast::loadModelFromMemory(skinnedGlb(128), "glb", error);
+    const auto ok = importModelFromMemory(skinnedGlb(128), "glb", error);
     check(ok && !ok->overBoneLimit && ok->meshes.size() == 1 && ok->meshes[0].joints.size() == 128,
           "128 joints are within the limit");
-    const auto big = kast::loadModelFromMemory(skinnedGlb(130), "glb", error);
+    const auto big = importModelFromMemory(skinnedGlb(130), "glb", error);
     check(big && big->overBoneLimit, "a model with more than 128 joints is over the limit");
 
     // A skinned vertex without weights stays where the mesh node puts it (not collapsed to the origin).
-    const auto unweighted = kast::loadModelFromMemory(skinnedGlb(3, true), "glb", error);
+    const auto unweighted = importModelFromMemory(skinnedGlb(3, true), "glb", error);
     bool unweightedKept = unweighted && unweighted->meshes.size() == 1;
     if (unweightedKept) {
         const kast::ModelMesh& mesh = unweighted->meshes[0];
@@ -8134,7 +8345,7 @@ void checkModelLoading()
     check(unweightedKept, "an unweighted skinned vertex keeps its mesh-node position (and stays in the bounds)");
 
     // Two nodes named "Joint1": the bone and the clip bind to the one in the skeleton, not the decoy that comes first.
-    const auto decoy = kast::loadModelFromMemory(skinnedGlb(3, false, true), "glb", error);
+    const auto decoy = importModelFromMemory(skinnedGlb(3, false, true), "glb", error);
     const auto isRealJoint1 = [&decoy](int node) {
         return node > 0 && decoy->nodes[static_cast<size_t>(node)].name == "Joint1" &&
                decoy->nodes[static_cast<size_t>(decoy->nodes[static_cast<size_t>(node)].parent)].name == "Joint0";
@@ -8146,7 +8357,7 @@ void checkModelLoading()
               isRealJoint1(decoy->clips[0].channels[0].node),
           "a clip channel binds to the skeleton's node when another node has its name");
     // Assimp's PopulateArmatureData asserts (aborts in a debug Assimp) when every ancestor of a bone is a bone.
-    const auto rootJoint = kast::loadModelFromMemory(skinnedGlb(3, false, false, true), "glb", error);
+    const auto rootJoint = importModelFromMemory(skinnedGlb(3, false, false, true), "glb", error);
     check(rootJoint && rootJoint->meshes.size() == 1 && rootJoint->meshes[0].joints.size() == 3,
           "a skinned glTF whose one root node is a joint loads");
 
@@ -8227,6 +8438,226 @@ void checkAnimationSampling()
     kast::skinMatrices(mesh, globals, bones);
     check(near(bx::mul(bx::Vec3{2.0f, 0.0f, 0.0f}, bones[0].data()), {2.0f, 1.0f, 0.0f}),
           "skin matrix = inverse bind, then joint");
+}
+
+// Every field of two models, exactly (floats bit for bit).
+bool sameModel(const kast::Model& a, const kast::Model& b)
+{
+    const auto same = [](const auto& x, const auto& y) {
+        return x.size() == y.size() && (x.empty() || std::memcmp(x.data(), y.data(), x.size() * sizeof(x[0])) == 0);
+    };
+    const auto sameTrs = [](const kast::Trs& x, const kast::Trs& y) { return std::memcmp(&x, &y, sizeof x) == 0; };
+    bool ok = a.nodes.size() == b.nodes.size() && a.meshes.size() == b.meshes.size() && a.clips.size() == b.clips.size() &&
+              a.materials.size() == b.materials.size() && a.textures == b.textures &&
+              std::memcmp(&a.bounds, &b.bounds, sizeof a.bounds) == 0 && a.overBoneLimit == b.overBoneLimit;
+    for (size_t i = 0; ok && i < a.nodes.size(); ++i)
+        ok = a.nodes[i].name == b.nodes[i].name && a.nodes[i].parent == b.nodes[i].parent &&
+             sameTrs(a.nodes[i].bind, b.nodes[i].bind);
+    for (size_t i = 0; ok && i < a.meshes.size(); ++i) {
+        const kast::ModelMesh &x = a.meshes[i], &y = b.meshes[i];
+        ok = same(x.vertices, y.vertices) && same(x.indices, y.indices) && x.material == y.material && x.node == y.node &&
+             same(x.joints, y.joints) && same(x.inverseBinds, y.inverseBinds);
+    }
+    for (size_t i = 0; ok && i < a.clips.size(); ++i) {
+        const kast::Clip &x = a.clips[i], &y = b.clips[i];
+        ok = x.name == y.name && x.duration == y.duration && x.channels.size() == y.channels.size();
+        for (size_t c = 0; ok && c < x.channels.size(); ++c)
+            ok = x.channels[c].node == y.channels[c].node && same(x.channels[c].translation, y.channels[c].translation) &&
+                 same(x.channels[c].rotation, y.channels[c].rotation) && same(x.channels[c].scale, y.channels[c].scale);
+    }
+    for (size_t i = 0; ok && i < a.materials.size(); ++i)
+        ok = a.materials[i].name == b.materials[i].name &&
+             kast::materialToJson(a.materials[i].material) == kast::materialToJson(b.materials[i].material);
+    return ok;
+}
+
+// A one-triangle .gltf whose buffer is the external tri.bin (positions, then uint16 indices).
+constexpr const char* kTriangleGltf = R"({"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}],
+  "nodes": [{"name": "Tri", "mesh": 0}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1, "material": 0}]}],
+  "materials": [{"name": "Mat", "pbrMetallicRoughness": {"baseColorFactor": [1, 0, 0, 1]}}],
+  "buffers": [{"uri": "tri.bin", "byteLength": 42}],
+  "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36}, {"buffer": 0, "byteOffset": 36, "byteLength": 6}],
+  "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]},
+                {"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"}]})";
+
+std::string triangleBin(float x1)
+{
+    const float positions[9] = {0.0f, 0.0f, 0.0f, x1, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+    const uint16_t indices[3] = {0, 1, 2};
+    std::string bytes(reinterpret_cast<const char*>(positions), sizeof positions);
+    return bytes.append(reinterpret_cast<const char*>(indices), sizeof indices);
+}
+
+size_t logCount(const std::string& part)
+{
+    return static_cast<size_t>(
+        std::ranges::count_if(kast::log::lines(), [&](const std::string& line) { return contains(line, part); }));
+}
+
+// .kmodel: the binary model format (round trip, corrupt files), the editor's model cache (hits never call the importer;
+// edits to the file or a sidecar and new importer versions miss), the player's cooked-only library and Build's cook.
+void checkModelCache()
+{
+    const std::filesystem::path tests = KAST_TEST_PROJECT_DIR;
+    const std::filesystem::path dir = looseTestDir("kast_model_cache");
+    std::filesystem::create_directories(dir / "models");
+    writeFile(dir / "models/tri.gltf", kTriangleGltf);
+    writeFile(dir / "models/tri.bin", triangleBin(1.0f));
+    for (const char* file : {"models/cube.obj", "models/cube.mtl"})
+        std::filesystem::copy_file(tests / file, dir / file);
+    std::string error;
+
+    // Round trip: Assimp's model and the same model read back from .kmodel are equal.
+    for (const auto& [root, path] : {std::pair{tests, "models/female-128-anim.glb"}, std::pair{dir, "models/cube.obj"},
+                                     std::pair{dir, "models/tri.gltf"}}) {
+        const auto imported = importModel(root, path, error);
+        const auto read = imported ? kast::readModel(kast::writeModel(*imported), error) : nullptr;
+        check(imported && read && sameModel(*imported, *read), ".kmodel round trip keeps every field of the model");
+        if (!read)
+            kast::log::error(std::format("  {}: {}", path, error));
+    }
+    const auto overLimit = importModelFromMemory(skinnedGlb(130), "glb", error);
+    const auto overLimitRead = overLimit ? kast::readModel(kast::writeModel(*overLimit), error) : nullptr;
+    check(overLimitRead && overLimitRead->overBoneLimit && sameModel(*overLimit, *overLimitRead),
+          ".kmodel keeps overBoneLimit");
+
+    // Corrupt .kmodel files are errors, never crashes.
+    const auto cube = importModel(dir, "models/cube.obj", error);
+    const std::string bytes = cube ? kast::writeModel(*cube) : "";
+    check(!kast::readModel("garbage", error) && contains(error, "not a .kmodel"), "garbage is not a .kmodel");
+    check(!kast::readModel(bytes.substr(0, bytes.size() / 2), error) && contains(error, "cut short"),
+          "a truncated .kmodel is an error");
+    check(!kast::readModel(bytes + "x", error) && contains(error, "past the end"), "trailing bytes are an error");
+    std::string newer = bytes;
+    newer[4] = static_cast<char>(kast::kModelFormatVersion + 1);
+    check(!kast::readModel(newer, error) && contains(error, "version"), "another .kmodel version is an error");
+    if (cube) {
+        kast::Model broken = *cube;
+        broken.meshes[0].indices[0] = 100000;
+        check(!kast::readModel(kast::writeModel(broken), error) && contains(error, "bad indices"),
+              "an out-of-range index is an error");
+    }
+
+    // Sidecars: the files an import reads besides the model file.
+    check(kast::modelSidecars("models/cube.obj", readText(dir / "models/cube.obj")) == std::vector<std::string>{"models/cube.mtl"},
+          "an .obj's sidecar is its mtllib");
+    check(kast::modelSidecars("models/tri.gltf", kTriangleGltf) == std::vector<std::string>{"models/tri.bin"},
+          "a .gltf's sidecar is its external buffer");
+    check(kast::modelSidecars("a/m.gltf", R"({"buffers": [{"uri": "../bufs/x%20y.bin"}, {"uri": "data:,"}]})") ==
+              std::vector<std::string>{"bufs/x y.bin"},
+          "glTF buffer URIs are decoded and relative to the model; data: URIs are no sidecar");
+    check(kast::modelSidecars("models/female-128-anim.glb", readText(tests / "models/female-128-anim.glb")).empty(),
+          "a .glb with its buffer inside has no sidecar");
+    check(kast::modelSidecars("m.obj", "v 0 0 0\n  mtllib  my mats.mtl \r\nmtllibx no.mtl\n") ==
+              std::vector<std::string>{"my mats.mtl"},
+          "an mtllib name is the rest of its line");
+
+    // The key: everything the cooked model depends on.
+    const std::string key = kast::modelCacheKey("m.obj", "obj", {std::string("mtl")}, "v1");
+    check(key.size() == 16 && key == kast::modelCacheKey("m.obj", "obj", {std::string("mtl")}, "v1"), "the key is stable");
+    for (const std::string& other : {kast::modelCacheKey("m.obj", "obj", {std::string("mtl")}, "v2"),
+                                     kast::modelCacheKey("n.obj", "obj", {std::string("mtl")}, "v1"),
+                                     kast::modelCacheKey("m.obj", "obj!", {std::string("mtl")}, "v1"),
+                                     kast::modelCacheKey("m.obj", "obj", {std::string("mtl!")}, "v1"),
+                                     kast::modelCacheKey("m.obj", "obj", {std::nullopt}, "v1"),
+                                     kast::modelCacheKey("m.obj", "obj", {}, "v1")})
+        check(other != key, "the key changes with the version, path, file bytes and sidecar bytes");
+
+    // The editor's library through the cache: a second load (a restart) is a hit and doesn't call the importer.
+    int imports = 0;
+    const kast::ModelImporter counting = [&imports](const std::filesystem::path& root, const std::string& path,
+                                                    std::string& reason) {
+        ++imports;
+        return importModel(root, path, reason);
+    };
+    const auto cacheFiles = [&] { return kast::listFiles(dir / ".kast/model_cache").size(); };
+    kast::ModelLibrary first;
+    first.setRoot(dir);
+    first.setImporter(counting, "v1");
+    const auto tri = first.get("models/tri.gltf");
+    check(tri && imports == 1 && cacheFiles() == 1, "a cache miss imports and writes <root>/.kast/model_cache/<key>.kmodel");
+    kast::ModelLibrary restarted;
+    restarted.setRoot(dir);
+    restarted.setImporter(counting, "v1");
+    const auto hit = restarted.get("models/tri.gltf");
+    check(hit && imports == 1 && tri && sameModel(*tri, *hit) && logCount("Loaded model 'models/tri.gltf' (cache hit)") >= 1,
+          "a cache hit reads the .kmodel without calling the importer");
+    restarted.reloadChanged();
+    check(imports == 1, "nothing changed: nothing reloads");
+    rewrite(dir / "models/tri.bin", triangleBin(0.5f));
+    restarted.reloadChanged();
+    const auto edited = restarted.get("models/tri.gltf");
+    check(imports == 2 && edited && near(edited->bounds.max.x, 0.5f) && cacheFiles() == 2,
+          "editing a sidecar (.bin) reloads the model and misses the cache");
+    rewrite(dir / "models/tri.gltf", std::string(kTriangleGltf) + "\n");
+    restarted.reloadChanged();
+    check(imports == 3 && restarted.get("models/tri.gltf") != edited, "editing the model file reloads it and misses the cache");
+    check(restarted.get("models/cube.obj") && imports == 4, "the .obj imports once");
+    rewrite(dir / "models/cube.mtl", readText(dir / "models/cube.mtl") + "\n");
+    restarted.reloadChanged();
+    check(imports == 5, "editing an .obj's .mtl reloads it");
+    kast::ModelLibrary newImporter;
+    newImporter.setRoot(dir);
+    newImporter.setImporter(counting, "v2");
+    check(newImporter.get("models/tri.gltf") && imports == 6, "a new importer version misses the cache");
+    kast::ModelLibrary uncached;
+    uncached.setRoot(dir);
+    uncached.setImporter(counting);
+    uncached.get("models/tri.gltf");
+    uncached.get("models/tri.gltf");
+    check(imports == 7, "without a version there is no cache: one import per load");
+    for (const std::filesystem::path& file : kast::listFiles(dir / ".kast/model_cache"))
+        writeFile(file, "corrupt");
+    kast::ModelLibrary corruptCache;
+    corruptCache.setRoot(dir);
+    corruptCache.setImporter(counting, "v1");
+    check(corruptCache.get("models/tri.gltf") && imports == 8, "a corrupt cache file is imported again");
+    check(corruptCache.get("models/missing.glb") == nullptr && imports == 8, "a missing model never reaches the importer");
+
+    // The player: no importer, only cooked models (modelPakPath), a clear error once for one that isn't.
+    const std::filesystem::path game = looseTestDir("kast_model_player");
+    std::filesystem::create_directories(game / "models");
+    if (cube)
+        writeFile(game / kast::modelPakPath("models/cube.obj"), kast::writeModel(*cube));
+    std::filesystem::copy_file(dir / "models/tri.gltf", game / "models/raw.gltf");
+    kast::ModelLibrary player;
+    player.setRoot(game);
+    const auto cooked = player.get("models/cube.obj");
+    check(cooked && cube && sameModel(*cooked, *cube) && logCount("Loaded model 'models/cube.obj' (cooked)") == 1,
+          "the player loads a cooked model by its source path");
+    for (int i = 0; i < 3; ++i) {
+        check(player.get("models/raw.gltf") == nullptr, "the player never imports a raw model");
+        player.reloadChanged();
+    }
+    check(logCount("Model 'models/raw.gltf': game.pak has no cooked model for it") == 1,
+          "a model with no cooked entry is one clear error");
+
+    // Build: every model cooked in place of the model files and their sidecars; a corrupt one fails naming it.
+    const std::filesystem::path source = looseTestDir("kast_model_build");
+    for (const char* file : {"models/tri.gltf", "models/tri.bin", "models/cube.obj", "models/cube.mtl"}) {
+        std::filesystem::create_directories((source / file).parent_path());
+        std::filesystem::copy_file(dir / file, source / file);
+    }
+    saveTestScene(source / "a.scene", "Thing", {});
+    kast::Project project{.root = source, .name = "Models", .startScene = "a.scene"};
+    const std::filesystem::path playerDir = std::filesystem::path(SDL_GetBasePath());
+    std::filesystem::path exe;
+    kast::Pak pak;
+    check(buildGame(project, source.parent_path() / "kast_model_build_out", playerDir, exe, error) &&
+              pak.open(source.parent_path() / "kast_model_build_out" / kGamePakName, error) &&
+              pak.list("") == std::vector<std::string>{"a.scene", "models/cube.obj.kmodel", "models/tri.gltf.kmodel"} &&
+              logCount("Cooked model 'models/tri.gltf' for game.pak") >= 1,
+          "Build ships cooked models in place of the model files and their sidecars");
+    const size_t hits = logCount("Cooked model 'models/tri.gltf' for game.pak (cache hit)");
+    check(buildGame(project, source.parent_path() / "kast_model_build_out", playerDir, exe, error) &&
+              logCount("Cooked model 'models/tri.gltf' for game.pak (cache hit)") == hits + 1,
+          "a second Build cooks from the cache");
+    std::filesystem::copy_file(tests / "models/corrupt.glb", source / "models/corrupt.glb");
+    check(!buildGame(project, source.parent_path() / "kast_model_build_bad", playerDir, exe, error) &&
+              contains(error, "Build failed: model 'models/corrupt.glb'") &&
+              !std::filesystem::exists(source.parent_path() / "kast_model_build_bad"),
+          "Build fails naming a model that can't be imported, writing nothing");
 }
 
 void checkAnimatorSystem()
@@ -11735,6 +12166,7 @@ int main(int argc, char** argv)
 {
     kast::disableCrashDialogsIfRequested();
     kast::Audio::setDefaultOutput(kast::Audio::Output::Offline); // no sound from the checks; render() pulls the mix
+    kast::models().setImporter(importModel); // as the editor, without the cache (no files in tests/project/.kast)
     if (argc >= 3 && std::string_view(argv[1]) == "--probe-png")
         return probePng(argc, argv);
     if ((argc == 5 || argc == 6) && std::string_view(argv[1]) == "--diff-png")
@@ -11775,6 +12207,13 @@ int main(int argc, char** argv)
         kast::log::info(g_failures == 0 ? "All shader checks passed" : std::format("{} shader check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--textures") { // only the texture decode, KTX / DDS and cook checks
+        checkTextureDecode();
+        checkGpuImages();
+        checkTextureCooks();
+        kast::log::info(g_failures == 0 ? "All texture checks passed" : std::format("{} texture check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--net") // only the networking checks
         return netSelfCheck() == 0 ? 0 : 1;
     if (argc == 4 && std::string_view(argv[1]) == "--live-auth") // against a running services/world stack
@@ -11806,6 +12245,8 @@ int main(int argc, char** argv)
     checkShaderClock();
     checkMaterialLibrary();
     checkTextureDecode();
+    checkGpuImages();
+    checkTextureCooks();
     checkMaterialScenes();
     checkLuaMaterials();
     checkShaderParamEditing();
@@ -11884,6 +12325,7 @@ int main(int argc, char** argv)
     checkGuiClipboard();
     checkExternalEditor();
     checkModelLoading();
+    checkModelCache();
     checkAnimationSampling();
     checkAnimatorSystem();
     checkModelEditor();

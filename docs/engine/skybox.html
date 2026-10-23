@@ -29,7 +29,18 @@ skies: the view clears to its background color, or to the fog color while fog is
   engine logs one warning naming the face and why (<code>Sky cubemap: face nx 'sky/nx.png': cannot read the file; using the
   procedural sky</code>), draws the procedural gradient instead and the Lighting panel shows the reason in red. A scene with
   bad faces still loads. Faces load once per set of paths (and project); editing a face image on disk needs the path
-  changed, or the scene reopened, to show.</li>
+  changed, or the scene reopened, to show. The six faces are
+  <a href="materials.html#texture-compression">compressed</a> into one BC1 sRGB cube with mips (the sky ignores alpha) (RGBA8 if the size isn't a
+  multiple of 4), cached like other textures (<code>Loaded sky cube (cooked in 0.02 s)</code>, then <code>(cache hit)</code>); the
+  editor draws the uncompressed cube until that is done. Build puts the compressed cube in <code>game.pak</code> instead of
+  the face images (<a href="../editor/build.html#build-textures">Build</a>), and the player loads that one. A sky set
+  only from Lua (<code>kast.sky.set</code>) with faces no shipped scene or prefab uses has no compressed cube in the
+  built game: the player logs it and draws the procedural sky.<br>
+  Or one <strong>cube file</strong> (<code>"cube"</code>, the Lighting panel's <em>Cube file</em> picker): a cubemap <code>.ktx</code> or
+  <code>.dds</code>, used as stored (BCn or uncompressed, its own mips) instead of the six faces, which are then ignored (and
+  hidden in the panel). A corrupt file, a 2D texture or a format the GPU lacks falls back to the procedural sky the same
+  way: <code>Sky cubemap: 'sky/storm.ktx': a 2D texture, not a cubemap; using the procedural sky</code>. See
+  <a href="#cube-file">Cube files</a> for which side is which.</li>
 </ul>
 <p>The sky is background only: it is drawn after the opaque meshes at the far plane (only where no mesh is), before the
 blended ones, uses the camera's rotation but never its position (walking never gets closer to it), is never fogged
@@ -42,9 +53,11 @@ stays <code>"lighting"</code>. Post-processing (tonemapping, bloom, grading) app
   "horizon": [0.62, 0.74, 0.86],
   "bottom": [0.3, 0.32, 0.28],
   "faces": {"px": "sky/px.png", "nx": "sky/nx.png", "py": "sky/py.png",
-            "ny": "sky/ny.png", "pz": "sky/pz.png", "nz": "sky/nz.png"}
+            "ny": "sky/ny.png", "pz": "sky/pz.png", "nz": "sky/nz.png"},
+  "cube": "sky/storm.ktx"
 }</code></pre>
-<p>Every field is optional (missing = default), and the editor always saves all of them. <code>mode</code> is <code>"off"</code>,
+<p>Every field is optional (missing = default), and the editor always saves all of them except <code>cube</code>, which is saved
+only when set (so scenes from before cube files load and save unchanged). <code>mode</code> is <code>"off"</code>,
 <code>"procedural"</code> or <code>"cubemap"</code>; colors are arrays of 3 numbers between 0 and 1; <code>faces</code> is an object whose keys are
 among <code>px nx py ny pz nz</code> and whose values are project-relative paths (empty = none). An unknown field, mode or face
 name, a mistyped value or a color out of range fails the scene load with a message (<code>sky: "mode" must be "off",
@@ -72,6 +85,14 @@ authored for D3D's left-handed convention (<code>posz</code> in front) works unc
 <code>py</code> green, <code>ny</code> magenta, <code>pz</code> blue, <code>nz</code> yellow), each with a white 4x4 marker in its top-left corner so a
 flip or rotation shows. <code>player_sky_cube_probe</code> and <code>player_sky_cube_back_probe</code> read every face's color and
 marker back from the built game.</p>
+<h3 id="cube-file">Cube files</h3>
+<p>A cube <code>.ktx</code> / <code>.dds</code> is uploaded as stored, so its sides are D3D's +X, -X, +Y, -Y, +Z, -Z, and the z flip above
+applies: its +Z side shows looking along Kast's -Z. To make one from six Kast faces, put them in a horizontal strip in the
+order <code>px nx py ny nz pz</code> (note <code>nz</code> before <code>pz</code>) and run
+<code>texturec -f strip.png -o sky.ktx --strip -t BC7 -m</code> (or <code>-t RGBA8</code>). A cube authored for D3D's left-handed
+convention needs no change. <code>tests/project/textures/sky_test/cube.ktx</code> (RGBA8) and <code>cube.dds</code> (BC7) are the test
+faces made that way; the built games <code>sky_cube_ktx</code> / <code>sky_cube_dds</code> must pass the same probes as the six faces
+(<code>player_sky_cube_ktx_probe</code>, <code>player_sky_cube_dds_probe</code>).</p>
 <h2 id="lua">Lua</h2>
 <p><code>kast.sky</code> reads and changes the running scene's sky. Changes are runtime only: they are never saved, and editor
 Play's Stop restores the scene's own sky, like every other change a system makes to the scene.</p>
@@ -79,7 +100,8 @@ Play's Stop restores the scene's own sky, like every other change a system makes
 <thead><tr><th>Function</th><th>Returns</th><th>Notes</th></tr></thead>
 <tbody>
 <tr><td><code>kast.sky.get()</code></td><td>table</td><td>A fresh copy, shaped like the scene file's block except colors:
-<code>{mode = "procedural", top = {x =, y =, z =}, horizon = {...}, bottom = {...}, faces = {px = "", ...}}</code>. Colors are
+<code>{mode = "procedural", top = {x =, y =, z =}, horizon = {...}, bottom = {...}, faces = {px = "", ...}}</code> (plus
+<code>cube</code> when one is set; <code>kast.sky.set({cube = "sky/storm.ktx"})</code> sets it, <code>""</code> clears it). Colors are
 <code>{x, y, z}</code> tables, as <code>kast.get</code> returns color fields.</td></tr>
 <tr><td><code>kast.sky.set(fields)</code></td><td>—</td><td>Partial: only the listed fields change, and only the listed faces
 (<code>kast.sky.set({mode = "cubemap", faces = {nz = "sky/storm.png"}})</code>). Colors as <code>{x =, y =, z =}</code> tables. All or
@@ -93,7 +115,8 @@ kast.sky.set({mode = "procedural", top = {x = 0.05, y = 0.08, z = 0.25}, horizon
 <ul>
 <li>No sun disc, clouds, stars or day/night cycle; no intensity, exposure or rotation controls; no sky-driven ambient or
   reflections.</li>
-<li>PNG and JPG faces only (no equirectangular, HDR, KTX or DDS); no hot reload of face images.</li>
+<li>PNG and JPG faces, or one KTX / DDS cube file (no equirectangular or HDR sources at runtime: convert them with
+  <code>texturec --equirect</code>); no hot reload of face images or cube files.</li>
 <li>One sky per scene, not per Camera. The editor's Scene and Game views each keep their own copy of a cubemap.</li>
 </ul>
 </main>

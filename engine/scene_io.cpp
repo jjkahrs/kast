@@ -294,6 +294,10 @@ SceneSky parseSky(const Json& json)
                     throw Invalid(std::format("sky.faces: \"{}\" must be a string", face));
                 sky.faces[it - std::begin(kSkyFaceNames)] = path.get<std::string>();
             }
+        } else if (key == "cube") {
+            if (!value.is_string())
+                throw Invalid("sky: \"cube\" must be a string");
+            sky.cube = value.get<std::string>();
         } else {
             throw Invalid(std::format("sky: unknown field \"{}\"", key));
         }
@@ -981,8 +985,11 @@ Json skyToJson(const SceneSky& sky)
     Json faces = Json::object();
     for (size_t i = 0; i < sky.faces.size(); ++i)
         faces[kSkyFaceNames[i]] = sky.faces[i];
-    return {{"mode", kModes[static_cast<int>(sky.mode)]}, {"top", color(sky.top)}, {"horizon", color(sky.horizon)},
-            {"bottom", color(sky.bottom)}, {"faces", std::move(faces)}};
+    Json json = {{"mode", kModes[static_cast<int>(sky.mode)]}, {"top", color(sky.top)}, {"horizon", color(sky.horizon)},
+                 {"bottom", color(sky.bottom)}, {"faces", std::move(faces)}};
+    if (!sky.cube.empty()) // older scenes stay byte-identical on save
+        json["cube"] = sky.cube;
+    return json;
 }
 
 bool skyFromJson(const Json& json, SceneSky& out, std::string& error)

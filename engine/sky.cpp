@@ -1,6 +1,7 @@
 #include "sky.h"
 
 #include "files.h"
+#include "log.h"
 #include "material.h"
 #include "project.h"
 #include "renderer.h"
@@ -11,6 +12,7 @@
 #include <bx/math.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <format>
 #include <optional>
@@ -45,6 +47,15 @@ std::string skyFacesError(const std::array<MipImage, 6>& faces)
     return {};
 }
 
+std::string skyCubeKtx(const std::array<MipImage, 6>& faces)
+{
+    const size_t level0 = static_cast<size_t>(faces[0].width) * faces[0].width * 4;
+    std::string sides;
+    for (size_t face : kFaceOfSide)
+        sides.append(reinterpret_cast<const char*>(faces[face].rgba.data()), level0);
+    return cubeKtx(sides, faces[0].width);
+}
+
 void SkyRenderer::init()
 {
     bgfx::VertexLayout layout;
@@ -76,18 +87,53 @@ void SkyRenderer::unload()
     cube_ = BGFX_INVALID_HANDLE;
     loaded_ = false;
     error_.clear();
+    cooking_ = {};
 }
 
-void SkyRenderer::load(const std::array<std::string, 6>& faces, const std::filesystem::path& root)
+void SkyRenderer::loadCube(const std::string& path, const std::filesystem::path& root)
 {
+    std::string why = "no project";
+    std::optional<std::filesystem::path> file;
+    if (!root.empty())
+        file = resolveProjectPath(root, path, why);
+    std::string bytes;
+    if (file && !readFile(*file, bytes))
+        why = "cannot read the file";
+    else if (file && !isGpuImage(bytes, path))
+        why = "not a KTX or DDS file";
+    else if (file)
+        cube_ = createGpuTexture(bytes, true, true, BGFX_SAMPLER_UVW_CLAMP, why);
+    if (!bgfx::isValid(cube_)) {
+        error_ = std::format("'{}': {}", path, why);
+        warnOnce(std::format("Sky cubemap: {}; using the procedural sky", error_));
+    }
+}
+
+void SkyRenderer::load(const SceneSky& sky, const std::filesystem::path& root)
+{
+    const LoadTimer timer(assetLoadStats().textures, assetLoadStats().textureSeconds);
     unload();
     loaded_ = true;
-    faces_ = faces;
+    faces_ = sky.faces;
+    cubeFile_ = sky.cube;
     root_ = root;
+    if (!sky.cube.empty())
+        return loadCube(sky.cube, root);
+    const std::array<std::string, 6>& faces = sky.faces;
     const auto fail = [&](const std::string& why) {
         error_ = why;
         warnOnce(std::format("Sky cubemap: {}; using the procedural sky", why));
     };
+    // The player: the cube Build cooked from the faces. Without one (faces that don't make a cube, or a sky set only
+    // from Lua), the faces below say why, from the files Build shipped (it ships a broken sky's faces).
+    std::string cooked, cookedError;
+    if (const std::optional<std::filesystem::path> file = resolveProjectPath(root, skyPakPath(faces), cookedError);
+        pakMounted() && !root.empty() && file && readFile(*file, cooked)) {
+        cube_ = createGpuTexture(cooked, true, true, BGFX_SAMPLER_UVW_CLAMP, cookedError);
+        if (!bgfx::isValid(cube_))
+            fail(std::format("cooked cube '{}': {}", skyPakPath(faces), cookedError));
+        return;
+    }
     std::array<MipImage, 6> images;
     for (size_t i = 0; i < faces.size(); ++i) {
         std::string why = "no project";
@@ -108,12 +154,39 @@ void SkyRenderer::load(const std::array<std::string, 6>& faces, const std::files
     }
     if (const std::string why = skyFacesError(images); !why.empty())
         return fail(why);
+    if (textureCooks().enabled()) { // the editor: a cache hit (or a cook not async) is ready now, a miss cooks meanwhile
+        cooking_ = textureCooks().cook(root, skyCubeKtx(images), TextureUsage::Color);
+        if (takeCooked())
+            return;
+    }
     std::vector<uint8_t> data; // per side, its mips (bgfx's cube layout)
     for (size_t face : kFaceOfSide)
         data.insert(data.end(), images[face].rgba.begin(), images[face].rgba.end());
     cube_ = bgfx::createTextureCube(images[0].width, images[0].levels > 1, 1, bgfx::TextureFormat::RGBA8,
                                     BGFX_TEXTURE_SRGB | BGFX_SAMPLER_UVW_CLAMP,
                                     bgfx::copy(data.data(), static_cast<uint32_t>(data.size())));
+}
+
+bool SkyRenderer::takeCooked()
+{
+    if (!cooking_.valid() || cooking_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+        return false;
+    const CookedTexture cooked = cooking_.get();
+    cooking_ = {};
+    std::string error = cooked.error;
+    bgfx::TextureHandle cube = BGFX_INVALID_HANDLE;
+    if (!cooked.ktx.empty())
+        cube = createGpuTexture(cooked.ktx, true, true, BGFX_SAMPLER_UVW_CLAMP, error);
+    if (!bgfx::isValid(cube)) {
+        warnOnce(std::format("Sky cubemap: cannot compress it ({}); drawing it uncompressed", error));
+        return false;
+    }
+    log::info(std::format("Loaded sky cube {}",
+                          cooked.cached ? "(cache hit)" : std::format("(cooked in {:.2f} s)", cooked.seconds)));
+    if (bgfx::isValid(cube_))
+        bgfx::destroy(cube_);
+    cube_ = cube;
+    return true;
 }
 
 // ponytail: each Renderer (Scene view, Game view) holds its own copy of the cube; share them if skies get big.
@@ -124,8 +197,9 @@ void SkyRenderer::draw(const SceneSky& sky, const std::filesystem::path& project
         unload(); // a scene or mode switch frees the cube
     if (sky.mode == SkyMode::Off)
         return;
-    if (sky.mode == SkyMode::Cubemap && (!loaded_ || faces_ != sky.faces || root_ != projectRoot))
-        load(sky.faces, projectRoot);
+    if (sky.mode == SkyMode::Cubemap && (!loaded_ || faces_ != sky.faces || cubeFile_ != sky.cube || root_ != projectRoot))
+        load(sky, projectRoot);
+    takeCooked();
 
     float rotation[16], viewProj[16], inverse[16];
     std::copy_n(viewMtx, 16, rotation);

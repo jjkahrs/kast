@@ -1,8 +1,9 @@
 # Headless Build: kast_editor [--project <dir>] --build <out> must exit with EXPECT (0 or 1).
 # On success <out> must hold EXE, game.pak and the player's DLLs, game.pak must leave out the project's .kast/ folder,
 # and project.kast must be unchanged. On failure <out> (created empty first) must get no exe and no game.pak.
-# EXPECT_OUTPUT: text the editor's output must contain.
+# EXPECT_OUTPUT: text the editor's output must contain; FORBID_OUTPUT: text it must not.
 # Usage: cmake -DEDITOR=<exe> -DOUT=<dir> -DEXPECT=0|1 [-DPROJECT=<dir>] [-DEXE=<name.exe>] [-DEXPECT_OUTPUT=<text>]
+#              [-DFORBID_OUTPUT=<text>]
 #              -P build_test.cmake
 file(REMOVE_RECURSE "${OUT}")
 set(args)
@@ -20,6 +21,12 @@ if(DEFINED EXPECT_OUTPUT)
   string(FIND "${output}" "${EXPECT_OUTPUT}" found)
   if(found EQUAL -1)
     message(FATAL_ERROR "Output lacks '${EXPECT_OUTPUT}'")
+  endif()
+endif()
+if(DEFINED FORBID_OUTPUT)
+  string(FIND "${output}" "${FORBID_OUTPUT}" found)
+  if(NOT found EQUAL -1)
+    message(FATAL_ERROR "Output has the forbidden '${FORBID_OUTPUT}'")
   endif()
 endif()
 if(NOT result EQUAL EXPECT)
