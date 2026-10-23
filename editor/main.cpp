@@ -6,6 +6,7 @@
 #include "imgui_bgfx.h"
 #include "launcher.h"
 #include "model_importer.h"
+#include "model_preview.h"
 #include "online.h"
 #include "online_panel.h"
 #include "panels.h"
@@ -62,8 +63,9 @@ constexpr bgfx::ViewId kGameView = kSceneView + kViewportViews + 1;
 constexpr bgfx::ViewId kGameGuiView = kGameView + kViewportViews; // the game GUIs (kast::gui::kViews), over the Game view's scene
 constexpr bgfx::ViewId kGuiPreviewView = kGameGuiView + kast::gui::kViews; // the GUI Builder's preview
 constexpr bgfx::ViewId kShaderPreviewView = kGuiPreviewView + kast::gui::kViews; // the Shader Graph's preview
+constexpr bgfx::ViewId kModelPreviewView = kShaderPreviewView + ShaderPreview::kViews; // the Model Preview
 constexpr bgfx::ViewId kImGuiView = 255; // last, so the UI draws over everything
-static_assert(kShaderPreviewView + ShaderPreview::kViews <= kImGuiView, "the preview views must end before ImGui's");
+static_assert(kModelPreviewView + ModelPreview::kViews <= kImGuiView, "the preview views must end before ImGui's");
 constexpr uint32_t kBackbufferClearColor = 0x202020ff;
 // --add-component-popup, --open-menu, --open-build-settings, --open-online-settings, --open-preferences, --focus-panel and --assets-* wait this long: focus changes while the first frames dock the windows close
 // popups.
@@ -78,7 +80,7 @@ constexpr const char* kUsage =
     "[--gui-add Panel|Text|Button] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
-    "[--graph-save] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-view-code] "
+    "[--graph-save] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-view-code] [--preview-model path] [--preview-clip name] "
     "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
@@ -163,6 +165,8 @@ struct Options {
     // --graph-* edits of it (and later --open-graph), flag and value in command-line order, run as the panels do them
     // (runGraphStep) once the canvas is laid out.
     std::vector<std::pair<std::string, std::string>> graphSteps;
+    std::string previewModel; // open this model (project-relative) in the Model Preview at startup
+    std::string previewClip;  // and play this clip of it instead of its default
     std::optional<SimMouse> simMouse; // push these SDL mouse events on the Game panel (--play) or Scene view (the cursor lock isn't applied)
     std::vector<SimKey> simKeys;      // with --play: these key presses
     std::string simOnLog;             // --sim-on-log: simMouse's and simKeys' frames count from the first log line with this
@@ -426,6 +430,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
             ++i;
         } else if (arg == "--open-gui" && hasValue) {
             options.openGui = argv[++i];
+        } else if (arg == "--preview-model" && hasValue) {
+            options.previewModel = argv[++i];
+        } else if (arg == "--preview-clip" && hasValue) {
+            options.previewClip = argv[++i];
         } else if (arg == "--open-graph" && hasValue && options.openGraph.empty()) {
             options.openGraph = argv[++i];
         } else if ((arg == "--open-graph" || arg == "--graph-add" || arg == "--graph-link" || arg == "--graph-unlink" ||
@@ -629,7 +637,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
                              options.guiAdd || options.guiSave || !options.guiClick.empty() || options.openPreferences ||
-                             !options.openGraph.empty() ||
+                             !options.openGraph.empty() || !options.previewModel.empty() ||
                              !options.openExternal.empty() || !options.dropModel.empty() || options.logFps ||
                              !options.prefabSteps.empty() || !options.assetsDelete.empty() || !options.inspectorApplyMenu.empty() ||
                              options.prefabBackPrompt ||
@@ -642,7 +650,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
                          "--assets-menu, "
                          "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
-                         "--gui-click, --open-graph, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
+                         "--gui-click, --open-graph, --preview-model, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
                          "steps, --scene-undo, --scene-redo, --assets-delete, --inspector-apply-menu, --file-save and the zone flags require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
@@ -658,6 +666,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     if (!options.graphSteps.empty() && options.openGraph.empty()) {
         kast::log::error("--graph-* flags require --open-graph <file.kshadergraph>");
+        return std::nullopt;
+    }
+    if (!options.previewClip.empty() && options.previewModel.empty()) {
+        kast::log::error("--preview-clip requires --preview-model <path>");
         return std::nullopt;
     }
     if (!options.guiClick.empty() && !options.play) {
@@ -719,6 +731,7 @@ void buildDefaultLayout(ImGuiID dockspace)
     ImGui::DockBuilderDockWindow(ShaderGraphEditor::kCanvasWindow, center);
     ImGui::DockBuilderDockWindow(ShaderGraphEditor::kInspectorWindow, right);
     ImGui::DockBuilderDockWindow(ShaderGraphEditor::kPreviewWindow, left);
+    ImGui::DockBuilderDockWindow(ModelPreview::kWindow, center);
     ImGui::DockBuilderFinish(dockspace);
 }
 
@@ -1401,6 +1414,7 @@ int main(int argc, char** argv)
     viewport.input = [&](const SceneViewport::Input& input) { return showZone() && zonePanel.sceneInput(zone, input); };
     GuiBuilder guiBuilder(kGuiPreviewView);
     ShaderGraphEditor graphs(kShaderPreviewView);
+    ModelPreview modelPreview(kModelPreviewView);
     UiScale uiScale(options->uiScale);
     FrameLimit frames(options->frames, options->screenshot);
     if (options->screenshotOnLog)
@@ -1460,6 +1474,10 @@ int main(int argc, char** argv)
             std::vector<int> none;
             runGraphStep(graphs, doc.project ? doc.project->root : std::filesystem::path(), "--open-graph",
                          options->openGraph, none);
+        }
+        if (!options->previewModel.empty()) {
+            modelPreview.open(options->previewModel);
+            modelPreview.selectClip(options->previewClip);
         }
         if (options->guiPreviewSize)
             guiBuilder.setPreviewSize(options->guiPreviewSize->first, options->guiPreviewSize->second);
@@ -1555,6 +1573,8 @@ int main(int argc, char** argv)
             guiBuilder.focusPanels(); // again: the first frames' docking undid the focus open() asked for
         if (!options->openGraph.empty() && frames.frame() == kAddComponentPopupFrame)
             graphs.focusPanels(); // again: the first frames' docking undid the focus open() asked for
+        if (!options->previewModel.empty() && frames.frame() == kAddComponentPopupFrame)
+            modelPreview.focus(); // the same
         if (frames.frame() == kAddComponentPopupFrame + 7) { // the canvas is laid out (its center, the add menu)
             std::vector<int> selected;
             for (const auto& [flag, value] : options->graphSteps)
@@ -1640,7 +1660,7 @@ int main(int argc, char** argv)
             systems && !ImGui::FindWindowSettingsByID(ImHashStr("Components")))
             ImGui::SetNextWindowDockID(systems->DockId, ImGuiCond_FirstUseEver);
         panels.drawComponents(doc);
-        panels.drawAssets(doc, files, guiBuilder, graphs, externalEditor);
+        panels.drawAssets(doc, files, guiBuilder, graphs, modelPreview, externalEditor);
         // Layouts saved before the Events panel existed: dock it as a tab beside Console.
         if (const ImGuiWindowSettings* console = ImGui::FindWindowSettingsByID(ImHashStr("Console"));
             console && !ImGui::FindWindowSettingsByID(ImHashStr("Events")))
@@ -1659,6 +1679,12 @@ int main(int argc, char** argv)
         onlinePanel.draw(doc, online, files, options->worldAddress, showOnline);
         drawGuiBuilder(guiBuilder);
         drawShaderGraph(graphs, doc.shaderClock.seconds());
+        // Layouts saved before the Model Preview existed: dock it as a tab beside Scene. Only when it draws, or the dock
+        // request would go to the next window.
+        if (const ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("Scene"));
+            modelPreview.isOpen() && scene && !ImGui::FindWindowSettingsByID(ImHashStr(ModelPreview::kWindow)))
+            ImGui::SetNextWindowDockID(scene->DockId, ImGuiCond_FirstUseEver);
+        modelPreview.draw(options->fixedDt > 0.0f ? options->fixedDt : ImGui::GetIO().DeltaTime);
         drawConsole(); // submitted after Assets, Events and State Machines so Console is the front tab on first run
         drawPreferences(externalEditor, online, preferencesDraft, composeDraft, openPreferences);
         externalEditor.poll();
@@ -1713,6 +1739,7 @@ int main(int argc, char** argv)
         kast::log::info(kast::assetLoadSummary());
         guiBuilder.shutdown();
         graphs.shutdown();
+        modelPreview.shutdown();
         game.shutdown();
         kast::gui::shutdown();
         viewport.shutdown();

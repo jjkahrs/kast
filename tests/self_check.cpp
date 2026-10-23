@@ -8272,6 +8272,22 @@ void checkModelLoading()
             for (const kast::ModelVertex& v : mesh.vertices)
                 weightsOk = weightsOk && near(v.weights[0] + v.weights[1] + v.weights[2] + v.weights[3], 1.0f, 1e-3f);
         check(weightsOk, "skinned vertex weights sum to 1");
+        // The Model Preview's readout.
+        const kast::ModelStats stats = kast::modelStats(*character);
+        size_t vertices = 0, indices = 0;
+        for (const kast::ModelMesh& mesh : character->meshes) {
+            vertices += mesh.vertices.size();
+            indices += mesh.indices.size();
+        }
+        check(stats.meshes == 2 && stats.vertices == vertices && stats.vertices > 0 && stats.triangles == indices / 3 &&
+                  stats.triangles > 0 && stats.nodes == character->nodes.size() && stats.clips == 178,
+              "modelStats counts the character's meshes, vertices, triangles, nodes and clips");
+        check(stats.bones == 66, "modelStats counts the 66 joints the two meshes share once");
+        check(near(stats.size, extent(character->bounds)), "modelStats gives the bounds size");
+        kast::log::info(std::format("female-128-anim.glb stats: {} meshes, {} vertices, {} triangles, {} nodes, {} bones, "
+                                    "{} clips, {:.2f} x {:.2f} x {:.2f} m",
+                                    stats.meshes, stats.vertices, stats.triangles, stats.nodes, stats.bones, stats.clips,
+                                    stats.size.x, stats.size.y, stats.size.z));
     }
 
     const auto obj = importModel(tests, "models/cube.obj", error);
@@ -8310,6 +8326,17 @@ void checkModelLoading()
           "a missing model is an error");
     error.clear();
     check(importModel(tests, "models/corrupt.glb", error) == nullptr && !error.empty(), "a corrupt model is an error");
+    { // The Model Preview's error path: the library gives nullptr (and warns) for a missing or corrupt model.
+        kast::ModelLibrary library;
+        library.setRoot(tests);
+        library.setImporter(importModel);
+        check(!library.get("models/does_not_exist.glb") && !library.get("models/corrupt.glb"),
+              "the model library gives no model for a missing or corrupt file");
+        const auto cube = library.get("models/cube.obj");
+        check(cube && cube->clips.empty() && kast::defaultClip(*cube).empty() && kast::modelStats(*cube).clips == 0 &&
+                  kast::modelStats(*cube).bones == 0 && kast::modelStats(*cube).triangles == 12,
+              "a static model has no clips, no default clip and no bones");
+    }
     kast::log::info(std::format("corrupt.glb: {}", error));
     error.clear();
     check(importModelFromMemory("garbage", "glb", error) == nullptr && !error.empty(), "garbage bytes are an error");

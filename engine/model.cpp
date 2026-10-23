@@ -231,6 +231,21 @@ bool isModelFile(const std::filesystem::path& file)
     return std::ranges::find(modelExtensions(), ext) != modelExtensions().end();
 }
 
+ModelStats modelStats(const Model& model)
+{
+    ModelStats stats{.meshes = model.meshes.size(), .nodes = model.nodes.size(), .clips = model.clips.size(),
+                     .size = bx::sub(model.bounds.max, model.bounds.min)};
+    std::vector<int> bones;
+    for (const ModelMesh& mesh : model.meshes) {
+        stats.vertices += mesh.vertices.size();
+        stats.triangles += mesh.indices.size() / 3;
+        bones.insert(bones.end(), mesh.joints.begin(), mesh.joints.end());
+    }
+    std::ranges::sort(bones);
+    stats.bones = static_cast<size_t>(std::ranges::distance(bones.begin(), std::ranges::unique(bones).begin()));
+    return stats;
+}
+
 std::string embeddedTextureModel(const std::string& path)
 {
     const size_t hash = path.rfind('#');

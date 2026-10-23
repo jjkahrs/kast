@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html" class="active">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="zone-builder.html">Zone Builder</a></li></ul></nav>
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html" class="active">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="zone-builder.html">Zone Builder</a></li><li><a href="model-preview.html">Model Preview</a></li></ul></nav>
 <main>
 <h1 id="run">Run</h1>
 <pre><code class="language-bat">build\release\kast_editor.exe
@@ -402,6 +402,26 @@ for. Example: <code>kast_editor --scene tests/project/shader_graph_demo.scene --
 the demo's meshes red in the Scene view without saving.</p>
 <p>Screenshots are compared with <code>kast_self_check --diff-png</code> and read with <code>--probe-png</code>; see
 <a href="../development/tests.html#image-checks">Tests: image checks</a>.</p>
+<h2 id="model-preview-flags">Model Preview</h2>
+<p>With <code>--project</code>; see <a href="model-preview.html">Model Preview</a>.</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--preview-model &lt;path&gt;</code></td>
+<td>Open the Model Preview panel on that model (project-relative, e.g. <code>models/cube.obj</code>) at startup, as double-clicking it in Assets does, and bring it to the front.</td>
+</tr>
+<tr>
+<td><code>--preview-clip &lt;name&gt;</code></td>
+<td>With <code>--preview-model</code>: play that clip instead of the default one. A name the model doesn't have logs <code>Model Preview: '&lt;path&gt;' has no clip '&lt;name&gt;'; playing '&lt;default&gt;'</code>.</td>
+</tr>
+</tbody>
+</table>
 <h2 id="zone">Zone edits</h2>
 <p>The <a href="zone-builder.html#zone-builder">Zone Builder</a>'s edits, for tests and scripts. They need a project
 (<code>--project &lt;dir&gt;</code> with a <code>project.kast</code>, or a <code>--scene</code> inside one) and run in command-line order before

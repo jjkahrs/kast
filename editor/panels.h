@@ -4,6 +4,7 @@
 #include "document.h"
 #include "external_editor.h"
 #include "gui_builder.h"
+#include "model_preview.h"
 #include "shader_graph_editor.h"
 
 #include <components.h>
@@ -84,9 +85,10 @@ public:
     void drawNetwork(const Document& doc, bool& open);
     // Rescans the project's files for the Assets panel (main's poll). drawAssets also rescans when the project changes.
     void refreshAssets(const Document& doc);
-    // Double-clicked .rml files open in gui, .kshadergraph files in graphs, .lua/.rcss/.json files in editor; renames
-    // and moves of their open files reach them.
-    void drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ExternalEditor& editor);
+    // Double-clicked .rml files open in gui, .kshadergraph files in graphs, models in preview, .lua/.rcss/.json files in
+    // editor; renames and moves of their open files reach them.
+    void drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
+                    ExternalEditor& editor);
 
 private:
     // Tree edits are deferred to the end of drawHierarchy so the child lists are not changed mid-iteration.
@@ -117,14 +119,14 @@ private:
     // Revert / Apply context menu. field empty: the whole component.
     void drawOverrideMenu(Document& doc, entt::entity entity, const std::string& component, const std::string& field,
                           bool overridden);
-    void drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ExternalEditor& editor,
-                       const AssetEntry& entry, const char* blocker);
+    void drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
+                       ExternalEditor& editor, const AssetEntry& entry, const char* blocker);
     void drawAssetItems(const Document& doc, ExternalEditor& editor, const AssetEntry& entry, const char* blocker);
     void drawAssetCreateMenu(const std::string& folder, const char* blocker); // folder: "" = root
     void openRequestedAssetMenu(const char* popup); // opens popup (the last item's context menu) for openAssetMenu
     void startAssetRename(const std::string& path, const std::string& name);
     void requestAssetDelete(const Document& doc, const std::string& path);
-    void applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs);
+    void applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview);
     void assetsFailed(std::string error); // logs it and shows the Assets Error modal
     void drawCreateItems(entt::entity parent);
     void applyEdit(Document& doc);
