@@ -227,9 +227,15 @@ button.power.cooling {
     border-radius: 6px;
 }
 
-/* scripts/chat.lua's lines, newest last; a long line wraps and the box grows upwards. Colours by kind, WoW-like. */
+/* scripts/chat.lua's lines, newest last; a long line wraps and the box grows upwards, to 20 lines' height; past that the
+   oldest lines leave at the top (flex-end keeps the newest at the bottom). Colours by kind, WoW-like. */
 #chat_log {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
     min-height: 170px;
+    max-height: 340px;
+    overflow: hidden;
 }
 
 .chat_line {
