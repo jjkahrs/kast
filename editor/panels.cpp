@@ -2042,7 +2042,8 @@ void Panels::refreshAssets(const Document& doc)
         assetRenaming_.clear();
 }
 
-void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ExternalEditor& editor)
+void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
+                        ExternalEditor& editor)
 {
     if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
         refreshAssets(doc);
@@ -2056,7 +2057,7 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, Shad
                                   : !files.idle()                ? "Close the open dialog first"
                                                                  : nullptr;
             for (const AssetEntry& entry : assets_)
-                drawAssetNode(doc, files, gui, graphs, editor, entry, blocker);
+                drawAssetNode(doc, files, gui, graphs, preview, editor, entry, blocker);
 
             // The rest of the panel: click clears selection, drop moves to the root, right-click creates at the root.
             ImVec2 rest = ImGui::GetContentRegionAvail();
@@ -2131,11 +2132,11 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, Shad
         }
     }
     ImGui::End();
-    applyAssetEdit(doc, gui, graphs);
+    applyAssetEdit(doc, gui, graphs, preview);
 }
 
-void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ExternalEditor& editor,
-                           const AssetEntry& entry, const char* blocker)
+void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
+                           ExternalEditor& editor, const AssetEntry& entry, const char* blocker)
 {
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
                                ImGuiTreeNodeFlags_SpanAvailWidth;
@@ -2167,6 +2168,9 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
     if (!entry.folder && hasExtension(entry.name, kast::kShaderGraphExtension) && ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
         graphs.open(assetsRoot_ / fromUtf8(entry.path));
+    if (!entry.folder && kast::isModelFile(fromUtf8(entry.name)) && ImGui::IsItemHovered() &&
+        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        preview.open(entry.path);
     if (!entry.folder && isTextAsset(entry.name) && !hasExtension(entry.name, ".rml") && ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) // .rml: the GUI Builder above; its menu opens it here
         editor.open(assetsRoot_ / fromUtf8(entry.path));
@@ -2219,7 +2223,7 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
 
     if (open && entry.folder) {
         for (const AssetEntry& child : entry.children)
-            drawAssetNode(doc, files, gui, graphs, editor, child, blocker);
+            drawAssetNode(doc, files, gui, graphs, preview, editor, child, blocker);
         ImGui::TreePop();
     }
     ImGui::PopID();
@@ -2325,7 +2329,7 @@ void Panels::assetsFailed(std::string error)
     assetsErrorRequested_ = true;
 }
 
-void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs)
+void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview)
 {
     const AssetEdit edit = std::exchange(assetEdit_, AssetEdit{});
     if (edit.op == AssetEdit::Op::None || !doc.project || doc.play != PlayState::Stopped)
@@ -2488,6 +2492,7 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& g
             assetSelected_ = selected;
             gui.remap(source, dest);
             graphs.remap(source, dest);
+            preview.remap(edit.path, selected);
             if (scenePath)
                 doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
             remapScenePaths(doc, edit.path, selected); // systems, MeshRenderer materials, models, overrides, prefabs

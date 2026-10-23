@@ -119,6 +119,18 @@ struct Model {
 // The extensions models load from: .glb, .gltf, .fbx, .obj.
 const std::vector<std::string>& modelExtensions();
 bool isModelFile(const std::filesystem::path& file);
+
+// What the editor's Model Preview reads out about a model.
+struct ModelStats {
+    size_t meshes = 0;
+    size_t vertices = 0;
+    size_t triangles = 0;
+    size_t nodes = 0;
+    size_t bones = 0; // distinct joint nodes across the skinned meshes
+    size_t clips = 0;
+    bx::Vec3 size{0.0f, 0.0f, 0.0f}; // of the bind-pose bounds, meters
+};
+ModelStats modelStats(const Model& model);
 // The model of an embedded texture reference "<model path>#<i>" (the last '#', before it a model file); "" if path
 // isn't one, so an ordinary texture file may contain '#'.
 std::string embeddedTextureModel(const std::string& path);
