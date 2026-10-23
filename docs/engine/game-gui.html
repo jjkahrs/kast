@@ -98,8 +98,13 @@ loaded documents by <code>id</code>, topmost document first (<code>engine/gui_ac
 <tbody>
 <tr>
 <td><code>kast.gui.value(id)</code></td>
-<td>string or <code>nil</code></td>
-<td>The current text of the <code>&lt;input&gt;</code> / <code>&lt;textarea&gt;</code> with that id; <code>nil</code> if no loaded document has one.</td>
+<td>string, number, boolean or <code>nil</code></td>
+<td>The current text of the <code>&lt;input&gt;</code> / <code>&lt;textarea&gt;</code> with that id, or a <a href="#form-widgets">form widget</a>'s typed value; <code>nil</code> if no loaded document has one.</td>
+</tr>
+<tr>
+<td><code>kast.gui.setValue(id, value)</code></td>
+<td>—</td>
+<td>Sets a <a href="#form-widgets">form widget</a>'s value (snapped and clamped like input) or a text field's text; publishes no change event.</td>
 </tr>
 <tr>
 <td><code>kast.gui.setText(id, text)</code></td>
@@ -164,7 +169,7 @@ loaded documents by <code>id</code>, topmost document first (<code>engine/gui_ac
 </tr>
 </tbody>
 </table>
-<p>Writes (<code>setText</code>, <code>setVisible</code>, <code>setAttribute</code>) are kept and applied again to every document that loads later, so a system's <code>init</code> (which runs before the
+<p>Writes (<code>setText</code>, <code>setVisible</code>, <code>setAttribute</code>, <code>setValue</code>) are kept and applied again to every document that loads later, so a system's <code>init</code> (which runs before the
 scene's documents load) and hot reloads see them; they are forgotten when the scene switches (<code>kast.loadScene</code>) and at
 each Play start. A write to an id no document has does nothing. Arguments that aren't strings (or, for
 <code>setVisible</code>, a boolean) raise at the calling line. Values and texts are never logged: a field may hold a password,
@@ -253,6 +258,93 @@ Arguments of the wrong type raise like the other functions.</li>
 <p><strong>Sample and tests</strong>: <code>tests/project/ui_bind.scene</code> shows <code>ui/bind.rml</code> (two models: a bound list with nested tags and
 Pick buttons, two-way inputs echoed below; a clone template), driven by <code>scripts/ui_bind.lua</code>; <code>ctest -R ui_bind</code>,
 <code>player_bind_click</code> and self_check's <code>checkGuiDataModels</code>. The starter-mmo chat and quest log are bound lists.</p>
+<h2 id="form-widgets">Form widgets</h2>
+<p>Five widgets are plain RML markup (the GUI Builder adds and edits them, see <a href="../editor/gui-builder.html">GUI Builder</a>).
+Each renders with the engine's <strong>default widget style</strong> (Kast palette) with no project RCSS, in Play, the GUI Builder
+preview and the built player (<code>engine/gui_widgets.h</code>, <code>.cpp</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Widget</th>
+<th>Markup</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Toggle</td>
+<td><code>&lt;input type="checkbox" class="toggle"/&gt;</code>; with a label: <code>&lt;label&gt;&lt;input type="checkbox" class="toggle"/&gt;Sound&lt;/label&gt;</code> (clicking the text toggles it too). <code>checked=""</code> starts it on.</td>
+<td>boolean</td>
+</tr>
+<tr>
+<td>Slider</td>
+<td><code>&lt;input type="range" min="0" max="100" step="1" value="50"/&gt;</code> (horizontal)</td>
+<td>number</td>
+</tr>
+<tr>
+<td>Dropdown</td>
+<td><code>&lt;select&gt;&lt;option value="low"&gt;Low&lt;/option&gt;&lt;option value="high" selected=""&gt;High&lt;/option&gt;&lt;/select&gt;</code></td>
+<td>string (the selected option's <code>value</code>)</td>
+</tr>
+<tr>
+<td>Spinbox</td>
+<td><code>&lt;div class="spinbox" data-min="0" data-max="10" data-step="1"&gt;&lt;button&gt;-&lt;/button&gt;&lt;input type="text" value="0"/&gt;&lt;button&gt;+&lt;/button&gt;&lt;/div&gt;</code>: exactly a button, a text input and a button</td>
+<td>number</td>
+</tr>
+<tr>
+<td>Progress</td>
+<td><code>&lt;progress value="0.5" max="1"/&gt;</code> (fills left to right)</td>
+<td>number in 0..max</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Default style and overriding it</strong>: the default sheet (<code>kGuiWidgetStyle</code>, compiled into the engine like the Roboto
+font, so a built game needs no file) is put <em>under</em> every game GUI document's own sheets. Your RCSS overrides it by the
+normal cascade: a rule at least as specific as the default's wins. The default selectors are <code>input.toggle</code>
+(<code>:hover</code>, <code>:checked</code>), <code>input[type="range"]</code> with <code>slidertrack</code>, <code>sliderprogress</code> and
+<code>sliderbar</code>, <code>select</code> with <code>selectvalue</code>, <code>selectarrow</code>, <code>selectbox</code> and <code>option</code>,
+<code>.spinbox</code> with <code>.spinbox button</code> and <code>.spinbox input</code>, and <code>progress</code> with <code>progress fill</code>. For
+example <code>progress fill { background-color: #3060ff; }</code> recolours every bar, and the default sizes (160 px wide controls)
+stay unless you set them. Nothing else is styled: text fields, buttons and checkboxes without <code>class="toggle"</code> look as
+before. A range input or <code>&lt;select&gt;</code> your sheet already styles keeps your properties and gains the default's
+others (the track's height, the arrow box).</li>
+<li><strong>Spinbox</strong> (driven by the engine, no script needed): the - and + buttons step by <code>data-step</code>; Up / Down step
+while its input has focus; typed text is checked on Enter and when the input loses focus: a number is snapped to
+<code>data-min + k * data-step</code> and clamped to <code>[data-min, data-max]</code> (a max off that grid clamps to the last step under
+it), anything else reverts to the last valid value. A fractional step shows its decimals (<code>data-step="0.25"</code>: "1.50").
+Missing <code>data-min</code> / <code>data-max</code> are unbounded; a missing or bad <code>data-step</code> is 1. Put the id, <code>data-event</code>
+and <code>data-min</code> / <code>data-max</code> / <code>data-step</code> on the <code>div</code>, the starting value and any <code>data-value</code>
+binding on its <code>&lt;input&gt;</code>.</li>
+<li><strong>Change events</strong>: give a toggle, slider, dropdown or spinbox <code>data-event="name"</code> (on the
+<code>&lt;input&gt;</code> / <code>&lt;select&gt;</code>; on a spinbox's <code>div</code>) and every change the player makes publishes <code>name</code>
+on the event bus, publisher <code>UI</code>, with <code>{"id", "document", "value"}</code>: the widget's id (<code>""</code> if none), its
+<code>.rml</code>, and the new value typed as above. A slider publishes at every step while it is dragged, as well as on clicks and
+arrow keys; a spinbox once per step or accepted entry (its - / + buttons publish no button event of their own); a
+progress bar never. Changes the game makes (<code>kast.gui.setValue</code>, a data model update moving a bound widget) publish
+nothing, so a handler that writes a value back can't loop.
+<pre><code class="language-lua">kast.subscribe(&quot;settings.volume&quot;, function(e) kast.log(&quot;volume &quot; .. e.value) end)          -- e.value is a number
+kast.subscribe(&quot;settings.sound&quot;, function(e) kast.log(e.id .. &quot; is &quot; .. tostring(e.value)) end)   -- a boolean
+</code></pre></li>
+<li><strong>Lua</strong>: <code>kast.gui.value(id)</code> returns the typed value (a spinbox's id is its <code>div</code>'s; a plain checkbox also
+reads as a boolean). <code>kast.gui.setValue(id, value)</code> sets it as the player could: a slider's and spinbox's number snapped and
+clamped, a progress bar's clamped to <code>0..max</code>, a toggle takes a boolean, a dropdown the <code>value</code> of one of its options, a
+text field a string. A value of the wrong type, an option no dropdown has, or an id that is no widget logs a warning (never
+the value) and changes nothing. A value is kept like <code>setText</code> (Play start, hot reload), unless no loaded widget took it.
+A value that isn't a boolean, number or string raises.
+<pre><code class="language-lua">kast.gui.setValue(&quot;loading&quot;, done / total) -- drives a progress bar
+if kast.gui.value(&quot;sound&quot;) then ... end
+</code></pre></li>
+<li><strong>Data binding</strong>: <code>data-checked</code> on a toggle, <code>data-value</code> on a slider, a dropdown and a spinbox's
+<code>&lt;input&gt;</code> are two-way (a spinbox writes its model when it accepts a value; a number variable stays a number), and
+<code>data-value</code> or <code>data-attr-value</code> on a progress bar sets it. Widgets inside <code>data-for</code> rows, and ones made by
+<code>kast.gui.clone</code> or <code>kast.gui.create</code> (a spinbox needs its three children), are styled and publish like authored
+ones.</li>
+</ul>
+<p><strong>Sample and tests</strong>: <code>tests/project/ui_widgets.scene</code> shows <code>ui/widgets.rml</code> (all five, unstyled by its
+<code>widgets.rcss</code>; a fractional spinbox; the same widgets bound to model <code>wbind</code> with toggles made by
+<code>data-for</code>), driven by <code>scripts/ui_widgets.lua</code>, which logs every change event and drives the progress bar with
+<code>setValue</code>; <code>ctest -R "ui_widgets|player_widgets|gui_builder_widget"</code> and self_check's <code>checkGuiWidgets</code>.</p>
 <h2 id="effects">Effects: glow, filters and gradients</h2>
 <p>RmlUi's CSS effects draw in Play (the Game view), the GUI Builder preview and the built player alike
 (<code>engine/gui_render.cpp</code>, <code>engine/gui_effects.cpp</code>, shaders <code>engine/shaders/gui/fs_gui_matrix.sc</code>,

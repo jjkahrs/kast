@@ -46,6 +46,7 @@
 #include <renderer.h>
 #include <scene.h>
 #include <gui_models.h>
+#include <gui_widgets.h>
 #include <scene_gui.h>
 #include <scene_io.h>
 #include <shader.h>
@@ -1155,10 +1156,15 @@ end })");
 // Stands in for SceneGui (which needs RmlUi and bgfx): records what kast.gui.* asks for.
 class FakeGui final : public kast::GuiAccess {
 public:
-    std::optional<std::string> value(const std::string& id) override
+    std::optional<kast::GuiValue> value(const std::string& id) override
     {
         const auto it = values.find(id);
         return it == values.end() ? std::nullopt : std::optional(it->second);
+    }
+    void setValue(const std::string& id, kast::GuiValue value) override
+    {
+        history.push_back(std::format("value {}={}", id, value.dump()));
+        values[id] = std::move(value);
     }
     void setText(const std::string& id, std::string_view text) override
     {
@@ -1221,7 +1227,7 @@ public:
         models.clear();
     }
 
-    std::map<std::string, std::string> values;
+    std::map<std::string, kast::GuiValue> values;
     std::map<std::string, std::string> texts;
     std::map<std::string, bool> visible_;
     std::map<std::string, std::map<std::string, kast::GuiValue>> models;
@@ -1364,6 +1370,15 @@ return {
         assert(kast.gui.create("list", "p", "line_1", {class = "chat_line"}) == true and
                kast.gui.create("missing", "p", "line_2") == false, "create returns the GUI's answer")
         assert(kast.gui.remove("row_1") == true and kast.gui.remove("row_2") == false, "remove returns the GUI's answer")
+        assert(kast.gui.value("sound") == true and kast.gui.value("volume") == 20 and kast.gui.value("quality") == "medium",
+               "value of a toggle, slider and dropdown: a boolean, a number, a string")
+        kast.gui.setValue("volume", 150)
+        kast.gui.setValue("sound", false)
+        kast.gui.setValue("quality", "high")
+        assert(kast.gui.value("volume") == 150 and kast.gui.value("sound") == false, "setValue reaches the GUI")
+        fails("kast.gui.setValue: value must be a boolean, number or string, got nil", function() kast.gui.setValue("x") end)
+        fails("kast.gui.setValue: value must be a boolean, number or string, got", function() kast.gui.setValue("x", {}) end)
+        fails("kast.gui.setValue: id must be a string, got 1", function() kast.gui.setValue(1, 2) end)
         fails("kast.gui.set: model must be a string, got 1", function() kast.gui.set(1, "k", 1) end)
         fails("kast.gui.set: key must be a letter then letters, digits or _ (not an RmlUi reserved name), got 'it'",
               function() kast.gui.set("m", "it", 1) end)
@@ -1390,7 +1405,8 @@ return {
     kast::Scene scene;
     scene.systems = {"gui.lua"};
     FakeGui gui;
-    gui.values = {{"email", "me@example.com"}, {"password", "gui-check-secret"}};
+    gui.values = {{"email", "me@example.com"}, {"password", "gui-check-secret"}, {"sound", true}, {"volume", 20.0},
+                  {"quality", "medium"}};
     gui.focused = "chat_input";
     gui.over = true;
     gui.hoveredId = "slot_3";
@@ -1411,6 +1427,7 @@ return {
                                                   "set hud.title=null", "clone row_template list row_9",
                                                   "clone nope list row_10", "create list p line_1 class=chat_line",
                                                   "create missing p line_2", "remove row_1", "remove row_2",
+                                                  "value volume=150.0", "value sound=false", R"(value quality="high")",
                                                   "visible hud=true"},
           "setText / setVisible / setAttribute reach the GUI with their arguments, in call order");
     check(gui.resets == 2 && gui.texts.empty() && gui.visible_ == std::map<std::string, bool>{{"hud", true}} &&
@@ -3082,7 +3099,7 @@ void checkBuildSettings()
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
                                        "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene",
+                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_widgets.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
 
@@ -3106,7 +3123,7 @@ void checkBuildSettings()
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
                                                           "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene",
+                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_widgets.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
@@ -4759,6 +4776,144 @@ void checkGuiDocEdits()
           "an edited document saves and reopens identically");
 }
 
+// Form widgets in the builder's model (gui_doc.h): kinds by markup shape, composites, widget properties, options.
+void checkGuiDocWidgets()
+{
+    std::string error;
+    const std::filesystem::path ui = std::filesystem::path(KAST_SOURCE_DIR) / "tests/project/ui";
+    GuiDoc bind;
+    check(bind.parse(readText(ui / "bind.rml"), error), "GuiDoc parses bind.rml");
+    check(guiKind(guiNode(bind, "form_volume")) == GuiKind::Slider && guiKind(guiNode(bind, "form_color")) == GuiKind::Dropdown &&
+              guiKind(guiNode(bind, "form_agree")) == GuiKind::Unknown && guiKind(guiNode(bind, "form_name")) == GuiKind::Unknown,
+          "bind.rml: its range is a Slider, its select a Dropdown, its plain checkbox and text field Unknown");
+    const std::string bindSaved = bind.serialize();
+    GuiDoc bindAgain;
+    check(bindAgain.parse(bindSaved, error) && bindAgain.serialize() == bindSaved &&
+              contains(bindSaved, R"(<option value="green">Green</option>)") &&
+              contains(bindSaved, R"(<input type="checkbox" id="form_agree" data-checked="agree" />)") &&
+              contains(bindSaved, R"(data-for="row : rows")"),
+          "bind.rml round-trips with its widgets and unrelated content unchanged");
+
+    GuiDoc doc;
+    check(doc.parse(readText(ui / "widgets.rml"), error), "GuiDoc parses widgets.rml");
+    const pugi::xml_node sound = guiNode(doc, "sound");
+    const pugi::xml_node label = sound.parent();
+    check(guiKind(sound) == GuiKind::Toggle && guiKind(label) == GuiKind::Toggle && GuiDoc::composite(label) &&
+              !GuiDoc::composite(sound) && GuiDoc::widgetElement(label) == sound && GuiDoc::widgetRoot(sound) == label,
+          "a labelled toggle: the <label> is the Toggle node, its <input> holds the id");
+    const pugi::xml_node count = guiNode(doc, "count");
+    check(guiKind(count) == GuiKind::Spinbox && GuiDoc::composite(count) && GuiDoc::widgetRoot(guiNode(doc, "count_inc")) == count &&
+              guiKind(guiNode(doc, "quality")) == GuiKind::Dropdown && GuiDoc::composite(guiNode(doc, "quality")) &&
+              guiKind(guiNode(doc, "loading")) == GuiKind::Progress && guiKind(guiNode(doc, "volume")) == GuiKind::Slider,
+          "widgets.rml: Spinbox, Dropdown, Progress and Slider by markup");
+    GuiDoc shapes;
+    check(shapes.parse(R"(<rml><head/><body><input type="checkbox" class="big toggle" id="t"/><input type="checkbox" id="c"/>
+        <div class="spinbox" id="s2"><button/><input/></div><label id="l"><input type="checkbox" class="toggle"/><input/></label>
+        </body></rml>)", error), "GuiDoc parses the shape sample");
+    check(guiKind(guiNode(shapes, "t")) == GuiKind::Toggle && guiKind(guiNode(shapes, "c")) == GuiKind::Unknown &&
+              guiKind(guiNode(shapes, "s2")) == GuiKind::Panel && guiKind(guiNode(shapes, "l")) == GuiKind::Unknown &&
+              GuiDoc::widgetProperties(guiNode(shapes, "t")) == std::vector<std::string>{"checked"},
+          "class toggle among others is a Toggle; a plain checkbox, a mis-shaped spinbox and a two-input label are not");
+
+    // Every kind is created with its defaults and its properties.
+    const pugi::xml_node body = doc.body();
+    const auto added = [&](GuiKind kind) { return doc.add(kind, body); };
+    const pugi::xml_node slider = added(GuiKind::Slider);
+    const pugi::xml_node spinbox = added(GuiKind::Spinbox);
+    const pugi::xml_node progress = added(GuiKind::Progress);
+    const pugi::xml_node toggle = added(GuiKind::Toggle);
+    pugi::xml_node dropdown = added(GuiKind::Dropdown);
+    const auto properties = [](pugi::xml_node node) {
+        std::string out;
+        for (const std::string& name : GuiDoc::widgetProperties(node))
+            out += std::format("{}={} ", name, GuiDoc::widgetProperty(node, name));
+        return out;
+    };
+    check(guiKind(slider) == GuiKind::Slider && properties(slider) == "min=0 max=100 step=1 value=50 ",
+          "add Slider: 0..100 step 1 value 50");
+    check(guiKind(spinbox) == GuiKind::Spinbox && properties(spinbox) == "min=0 max=10 step=1 value=0 data-value= ",
+          "add Spinbox: 0..10 step 1 value 0");
+    check(guiKind(progress) == GuiKind::Progress && properties(progress) == "value=0.5 max=1 ", "add Progress: 0.5 of 1");
+    check(guiKind(toggle) == GuiKind::Toggle && GuiDoc::composite(toggle) && properties(toggle) == "checked=false label=Toggle ",
+          "add Toggle: a labelled, unchecked switch");
+    check(guiKind(dropdown) == GuiKind::Dropdown && GuiDoc::options(dropdown).size() == 3 &&
+              GuiDoc::options(dropdown)[0].attribute("selected") && GuiDoc::text(GuiDoc::options(dropdown)[2]) == "Option 3",
+          "add Dropdown: three options, the first selected");
+
+    check(GuiDoc::setWidgetProperty(spinbox, "value", "4") && GuiDoc::setWidgetProperty(spinbox, "step", "0.5") &&
+              GuiDoc::setWidgetProperty(spinbox, "data-value", "amount") &&
+              GuiDoc::attribute(GuiDoc::elements(spinbox)[1], "value") == "4" && GuiDoc::attribute(spinbox, "data-step") == "0.5" &&
+              GuiDoc::attribute(GuiDoc::elements(spinbox)[1], "data-value") == "amount",
+          "spinbox properties: value and data-value on its <input>, step as data-step");
+    check(GuiDoc::setWidgetProperty(toggle, "checked", "true") && GuiDoc::setWidgetProperty(toggle, "label", "Music") &&
+              contains(doc.serialize(), R"(<input type="checkbox" class="toggle" checked="" />Music</label>)"),
+          "toggle properties: checked=\"\" on the <input>, the label after it");
+    check(GuiDoc::setWidgetProperty(toggle, "checked", "false") && !GuiDoc::widgetElement(toggle).attribute("checked") &&
+              GuiDoc::setWidgetProperty(progress, "max", "3") && GuiDoc::attribute(progress, "max") == "3" &&
+              GuiDoc::setWidgetProperty(slider, "min", "") && !slider.attribute("min") &&
+              !GuiDoc::setWidgetProperty(slider, "label", "x") && !GuiDoc::setWidgetProperty(guiNode(doc, "widgets_panel"), "value", "1"),
+          "unchecking removes checked; emptied attributes go; a property a kind lacks is refused");
+    check(GuiDoc::widgetAttribute(slider, "step") && GuiDoc::widgetAttribute(slider, "type") &&
+              GuiDoc::widgetAttribute(spinbox, "data-max") && !GuiDoc::widgetAttribute(spinbox, "class") &&
+              !GuiDoc::widgetAttribute(slider, "data-event"),
+          "widgetAttribute: the attributes properties stand for");
+
+    // Options: add, select, move, edit, remove.
+    const pugi::xml_node fourth = GuiDoc::addOption(dropdown);
+    check(GuiDoc::attribute(fourth, "value") == "option4" && GuiDoc::text(fourth) == "Option 4", "addOption: option4 / Option 4");
+    GuiDoc::selectOption(dropdown, fourth);
+    check(!GuiDoc::options(dropdown)[0].attribute("selected") && fourth.attribute("selected"), "selectOption moves the selection");
+    check(doc.move(fourth, -1) && GuiDoc::options(dropdown)[2] == fourth, "an option moves up");
+    GuiDoc::setAttribute(fourth, "value", "ultra");
+    GuiDoc::setText(fourth, "Ultra");
+    dropdown.remove_child(GuiDoc::options(dropdown)[0]);
+    check(contains(doc.serialize(), R"(<option value="option2">Option 2</option>)") &&
+              contains(doc.serialize(), R"(<option value="ultra" selected="">Ultra</option>)") &&
+              !contains(doc.serialize(), "Option 1") && GuiDoc::options(dropdown).size() == 3,
+          "option value, label and removal are saved");
+
+    // Save -> reopen keeps every widget and its kind.
+    GuiDoc reopened;
+    check(reopened.parse(doc.serialize(), error) && reopened.serialize() == doc.serialize(), "a widget document reopens identically");
+    std::vector<GuiKind> kinds;
+    for (pugi::xml_node node : GuiDoc::elements(reopened.body()))
+        kinds.push_back(guiKind(node));
+    check(std::ranges::count(kinds, GuiKind::Slider) == 1 && std::ranges::count(kinds, GuiKind::Spinbox) == 1 &&
+              std::ranges::count(kinds, GuiKind::Toggle) == 1 && std::ranges::count(kinds, GuiKind::Dropdown) == 1 &&
+              std::ranges::count(kinds, GuiKind::Progress) == 1,
+          "the reopened widgets keep their kinds");
+}
+
+// Spinbox value rules (gui_widgets.h): snapped to step from min, clamped, formatted to step's decimals.
+void checkGuiSpinbox()
+{
+    using kast::guiSpinboxStep;
+    using kast::guiSpinboxText;
+    using kast::guiSpinboxValue;
+    const kast::GuiSpinbox ten{0.0, 10.0, 1.0};
+    check(guiSpinboxValue(ten, "3") == 3.0 && guiSpinboxValue(ten, "3.6") == 4.0 && guiSpinboxValue(ten, " +7 ") == 7.0,
+          "spinbox: a number snaps to the nearest step (spaces and + allowed)");
+    check(guiSpinboxValue(ten, "-2") == 0.0 && guiSpinboxValue(ten, "12") == 10.0, "spinbox: clamped to min and max");
+    check(!guiSpinboxValue(ten, "abc") && !guiSpinboxValue(ten, "") && !guiSpinboxValue(ten, "3x") &&
+              !guiSpinboxValue(ten, "inf") && !guiSpinboxValue(ten, "nan"),
+          "spinbox: text that isn't a finite number has no value");
+    check(guiSpinboxStep(ten, 3.0, 1) == 4.0 && guiSpinboxStep(ten, 10.0, 1) == 10.0 && guiSpinboxStep(ten, 0.0, -1) == 0.0,
+          "spinbox: a step stops at max and min");
+    const kast::GuiSpinbox quarter{0.0, 2.0, 0.25};
+    check(guiSpinboxValue(quarter, "0.3") == 0.25 && guiSpinboxValue(quarter, "1.13") == 1.25 &&
+              guiSpinboxStep(quarter, 1.75, 1) == 2.0 && guiSpinboxText(quarter, 1.5) == "1.50" &&
+              guiSpinboxText(quarter, 1.0) == "1.00",
+          "spinbox: a fractional step snaps and shows its decimals");
+    check(guiSpinboxText(ten, 3.0) == "3" && guiSpinboxValue(kast::GuiSpinbox{0.0, 10.0, 3.0}, "10") == 9.0,
+          "spinbox: a whole step shows no decimals; a max off the step grid clamps to the last step under it");
+    const kast::GuiSpinbox tenth{0.0, 1.0, 0.1};
+    check(guiSpinboxStep(tenth, 0.2, 1) == 0.3 && guiSpinboxText(tenth, 0.1 + 0.2) == "0.3",
+          "spinbox: no float noise (0.2 + 0.1 is 0.3)");
+    check(guiSpinboxValue(kast::GuiSpinbox{}, "-2.4") == -2.0 && guiSpinboxText(kast::GuiSpinbox{-1.0, 1.0, 0.5}, -0.0) == "0.0" &&
+              guiSpinboxValue(kast::GuiSpinbox{0.0, 10.0, 0.0}, "2.4") == 2.0,
+          "spinbox: unbounded limits, no \"-0\", a zero step counts as 1");
+}
+
 void checkGuiFiles()
 {
     std::string error;
@@ -5150,10 +5305,266 @@ void checkGuiDataModels()
     bgfx::shutdown();
 }
 
+// Form widgets through SceneGui, headless like checkGuiDataModels: tests/project/ui/widgets.rml loads with no RmlUi
+// warning and wears the default widget style (a document's own rule overrides it); value / setValue (typed, snapped
+// and clamped, kept across a hot reload, publishing nothing); real input publishing change events with typed values
+// (a slider at every step of a drag, a spinbox's -/+, Up / Down, Enter and blur) but none from data binding; two-way
+// binding of every widget; widgets made by data-for, clone and create.
+void checkGuiWidgets()
+{
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    check(bgfx::init(init) && kast::gui::init(), "headless bgfx and RmlUi start (widgets)");
+    {
+        const std::filesystem::path root = projectTestDir("kast_gui_widgets", "widgets");
+        std::filesystem::create_directories(root / "ui");
+        const std::filesystem::path source = std::filesystem::path(KAST_SOURCE_DIR) / "tests/project/ui";
+        for (const char* file : {"widgets.rml", "widgets.rcss"})
+            std::filesystem::copy_file(source / file, root / "ui" / file);
+        kast::Scene scene;
+        scene.registry().emplace<kast::UIDocument>(scene.create("Widgets"), kast::UIDocument{"ui/widgets.rml", true});
+        kast::EventBus bus;
+        std::vector<std::string> events; // "name id value"
+        std::vector<kast::EventBus::Subscription> subscriptions;
+        for (const char* name : {"sound", "volume", "quality", "count", "scale", "level", "amount", "option", "made"})
+            subscriptions.push_back(bus.subscribe(std::format("widgets.{}", name), [&events, name](const nlohmann::json& e) {
+                check(e["document"] == "ui/widgets.rml" && e.size() == 3, "a change event's payload is {id, document, value}");
+                events.push_back(std::format("{} {} {}", name, e["id"].get<std::string>(), e["value"].dump()));
+            }));
+        const auto took = [&] { return std::exchange(events, {}); };
+        using Events = std::vector<std::string>;
+
+        kast::SceneGui gui("widgets_check");
+        gui.context().resize(1280, 720);
+        gui.setModelValue("wbind", "level", 40);
+        gui.setModelValue("wbind", "amount", 6);
+        gui.setModelValue("wbind", "loaded", 0.6);
+        gui.setModelValue("wbind", "options", kast::GuiValue::array({{{"name", "Music"}, {"on", true}},
+                                                                     {{"name", "Voices"}, {"on", false}}}));
+        const uint64_t problems = kast::gui::problemCount();
+        gui.sync(scene, root, bus);
+        Rml::Context* rml = gui.context().context();
+        const auto update = [&] { // as the Game view: data binding runs inside render
+            gui.context().render(0, BGFX_INVALID_HANDLE);
+            bgfx::frame();
+            bus.drain();
+        };
+        update();
+        Rml::ElementDocument* doc = rml->GetNumDocuments() == 1 ? rml->GetDocument(0) : nullptr;
+        check(doc && kast::gui::problemCount() == problems, "widgets.rml loads without an RmlUi warning");
+        if (doc) {
+            const auto byId = [&](const char* id) { return doc->GetElementById(id); };
+            const auto color = [](Rml::Element* element) {
+                return element ? element->GetProperty<Rml::Colourb>("background-color") : Rml::Colourb(1, 2, 3, 4);
+            };
+            const auto width = [](Rml::Element* element) { return element ? element->GetBox().GetSize().x : -1.0f; };
+            check(color(byId("loading")) == Rml::Colourb(0x45, 0x45, 0x45) && width(byId("loading")) == 160.0f &&
+                      color(byId("sound")) == Rml::Colourb(0xff, 0xaa, 0x00) && width(byId("volume")) == 160.0f &&
+                      color(byId("count_inc")) == Rml::Colourb(0xff, 0xaa, 0x00) && width(byId("quality")) == 160.0f,
+                  "widgets.rcss has no widget rules: the default style sizes and colours them");
+            check(color(byId("widgets_panel")) == Rml::Colourb(0x31, 0x31, 0x31) && byId("widgets_panel")->GetComputedValues().display() == Rml::Style::Display::Block,
+                  "elements that aren't widgets keep the document's style");
+            // A document's own rule of the same specificity wins; the rest of the default stays.
+            Rml::ElementDocument* own = rml->LoadDocumentFromMemory(
+                R"(<rml><head><style>progress { background-color: #3060ff; }</style></head><body><progress id="p"/></body></rml>)");
+            Rml::ElementDocument* bare = rml->LoadDocumentFromMemory(R"(<rml><body><progress id="p"/></body></rml>)");
+            check(own && bare, "the override documents load");
+            if (own && bare) {
+                kast::gui::addWidgetStyle(*own);
+                kast::gui::addWidgetStyle(*bare);
+                update();
+                check(color(own->GetElementById("p")) == Rml::Colourb(0x30, 0x60, 0xff) && width(own->GetElementById("p")) == 160.0f &&
+                          color(bare->GetElementById("p")) == Rml::Colourb(0x45, 0x45, 0x45),
+                      "a document's rule overrides the default style; a document without a sheet gets the default");
+                own->Close();
+                bare->Close();
+                update();
+            }
+
+            const auto value = [&](const char* id) { return gui.value(id).value_or(kast::GuiValue("<none>")); };
+            check(value("sound") == true && value("volume") == 20.0 && value("quality") == "medium" && value("count") == 3.0 &&
+                      value("scale") == 1.0 && value("loading") == 0.25 && value("count_input") == "3" && value("level") == 40.0 &&
+                      value("amount") == 6.0 && value("loaded") == 0.6 && value("option_0") == true && !gui.value("widgets_panel"),
+                  "value: a bool, numbers and a string by widget, the spinbox's text field its text, nothing for a panel");
+
+            gui.setValue("volume", 37.4);
+            gui.setValue("count", 7.4);
+            gui.setValue("scale", 0.3);
+            gui.setValue("quality", "high");
+            gui.setValue("sound", false);
+            gui.setValue("loading", 5.0);
+            update();
+            check(value("volume") == 37.0 && value("count") == 7.0 && value("scale") == 0.25 && value("count_input") == "7" &&
+                      value("quality") == "high" && value("sound") == false && value("loading") == 1.0,
+                  "setValue snaps and clamps like input (slider, spinbox, progress) and sets a toggle and a dropdown");
+            gui.setValue("quality", "ultra");
+            gui.setValue("volume", "loud");
+            gui.setValue("sound", 1.0);
+            gui.setValue("widgets_panel", 1.0);
+            update();
+            check(value("quality") == "high" && value("volume") == 37.0 && value("sound") == false &&
+                      logged("kast.gui.setValue('quality'): the dropdown has no option with that value: unchanged") &&
+                      logged("kast.gui.setValue('volume'): a slider takes a number: unchanged") &&
+                      logged("kast.gui.setValue('widgets_panel'): it is not a form widget or text field: unchanged") &&
+                      !logged("ultra") && !logged("loud"),
+                  "setValue with no such option or the wrong type logs (never the value) and changes nothing");
+            gui.setValue("volume", 150.0);
+            gui.setValue("quality", "high");
+            gui.setValue("loading", -1.0);
+            update();
+            check(value("volume") == 100.0 && value("loading") == 0.0, "setValue clamps to max and to 0");
+            check(took().empty(), "setValue publishes no change event");
+            gui.setModelValue("wbind", "level", 55);
+            gui.setModelValue("wbind", "options", kast::GuiValue::array({{{"name", "Music"}, {"on", false}},
+                                                                         {{"name", "Voices"}, {"on", false}}}));
+            update();
+            check(value("level") == 55.0 && value("option_0") == false && took().empty(),
+                  "a data model update moves bound widgets and publishes nothing");
+
+            // Hot reload: the setValue writes come back.
+            const std::filesystem::path rmlFile = root / "ui/widgets.rml";
+            std::filesystem::last_write_time(rmlFile, std::filesystem::last_write_time(rmlFile) + std::chrono::seconds(5));
+            gui.reloadChanged();
+            update();
+            doc = rml->GetNumDocuments() == 1 ? rml->GetDocument(0) : nullptr;
+            check(doc && value("volume") == 100.0 && value("count") == 7.0 && value("quality") == "high" &&
+                      value("sound") == false && value("scale") == 0.25 && took().empty(),
+                  "after a hot reload: setValue's values again, unpublished");
+            if (!doc)
+                return;
+            gui.setValue("volume", 20.0);
+            gui.setValue("count", 3.0);
+            gui.setValue("sound", true);
+            gui.setValue("scale", 1.0);
+            update();
+
+            // The player's input, through GuiContext::onEvent as the Game view sends it.
+            const auto key = [&](SDL_Keycode code) {
+                SDL_Event event{};
+                event.type = SDL_EVENT_KEY_DOWN;
+                event.key.key = code;
+                gui.context().onEvent(event);
+                event.type = SDL_EVENT_KEY_UP;
+                gui.context().onEvent(event);
+                update();
+            };
+            const auto mouse = [&](SDL_EventType type, float x, float y) {
+                SDL_Event event{};
+                event.type = type;
+                if (type == SDL_EVENT_MOUSE_MOTION) {
+                    event.motion.x = x;
+                    event.motion.y = y;
+                } else {
+                    event.button.button = SDL_BUTTON_LEFT;
+                    event.button.x = x;
+                    event.button.y = y;
+                }
+                gui.context().onEvent(event);
+                update();
+            };
+            const auto field = [&](const char* id) { return dynamic_cast<Rml::ElementFormControl*>(byId(id)); };
+            byId("sound")->Click();
+            update();
+            check(took() == Events{"sound sound false"} && value("sound") == false, "clicking a toggle publishes its bool");
+            check(byId("volume")->Focus(), "the slider takes focus");
+            key(SDLK_RIGHT);
+            check(took() == Events{"volume volume 21.0"}, "Right on a slider publishes its number");
+            // A drag: pressed on the track, then moved in steps; each step publishes before the button is released.
+            Rml::Element* volume = byId("volume");
+            const Rml::Vector2f at = volume->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const float y = at.y + volume->GetBox().GetSize(Rml::BoxArea::Border).y * 0.5f;
+            mouse(SDL_EVENT_MOUSE_MOTION, at.x + 60.0f, y);
+            mouse(SDL_EVENT_MOUSE_BUTTON_DOWN, at.x + 60.0f, y);
+            for (int step = 1; step <= 4; ++step)
+                mouse(SDL_EVENT_MOUSE_MOTION, at.x + 60.0f + 20.0f * step, y);
+            const Events dragged = took();
+            mouse(SDL_EVENT_MOUSE_BUTTON_UP, at.x + 140.0f, y);
+            check(dragged.size() >= 4 && std::ranges::all_of(dragged, [](const std::string& e) { return e.starts_with("volume volume "); }) &&
+                      took().empty() && value("volume").get<double>() > 50.0,
+                  "dragging a slider publishes at every step, before the release");
+            check(byId("quality")->Focus(), "the dropdown takes focus");
+            gui.setValue("quality", "medium");
+            key(SDLK_DOWN);
+            check(took() == Events{R"(quality quality "high")"}, "Down on a dropdown publishes its string");
+
+            // Spinbox: -/+, Up / Down, typed text checked on Enter and blur.
+            byId("count_inc")->Click();
+            update();
+            byId("count_dec")->Click();
+            byId("count_dec")->Click();
+            update();
+            check(took() == Events{"count count 4.0", "count count 3.0", "count count 2.0"} && value("count_input") == "2",
+                  "the spinbox's + and - step it and publish (no button events of their own)");
+            check(field("count_input")->Focus(), "the spinbox's input takes focus");
+            key(SDLK_UP);
+            key(SDLK_UP);
+            key(SDLK_DOWN);
+            check(took() == Events{"count count 3.0", "count count 4.0", "count count 3.0"}, "Up / Down step a focused spinbox");
+            field("count_input")->SetValue("abc");
+            field("count_input")->Blur();
+            update();
+            check(value("count_input") == "3" && took().empty(), "non-numeric text reverts on blur to the last valid value");
+            field("count_input")->Focus();
+            field("count_input")->SetValue("8.6");
+            key(SDLK_RETURN);
+            check(value("count_input") == "9" && took() == Events{"count count 9.0"}, "Enter snaps typed text and publishes it");
+            field("count_input")->SetValue("42");
+            field("count_input")->Blur();
+            update();
+            check(value("count_input") == "10" && took() == Events{"count count 10.0"}, "blur clamps typed text to max");
+            for (int i = 0; i < 2; ++i)
+                byId("scale_inc")->Click();
+            update();
+            check(took() == Events{"scale scale 1.25", "scale scale 1.5"} && value("scale") == 1.5 && value("scale_input") == "1.50",
+                  "a 0.25 step: fractional values, shown with two decimals");
+            check(std::ranges::all_of(bus.history(), [](const auto& e) { return e.name.starts_with("widgets.") && e.publisher == "UI"; }),
+                  "only widget change events were published (no button clicks, nothing from the progress bar)");
+
+            // Two-way binding: the player's changes reach the model, and publish.
+            check(byId("level")->Focus(), "the bound slider takes focus");
+            key(SDLK_RIGHT);
+            byId("amount_inc")->Click();
+            update();
+            byId("option_1")->Click();
+            update();
+            check(gui.modelValue("wbind", "level") == kast::GuiValue(60.0) && gui.modelValue("wbind", "amount") == kast::GuiValue(8.0) &&
+                      (*gui.modelValue("wbind", "options"))[1]["on"] == true,
+                  "a bound slider, spinbox (its input's data-value) and data-for toggle write their models");
+            check(took() == Events{"level level 60.0", "amount amount 8.0", "option option_1 true"},
+                  "bound widgets and data-for toggles publish too");
+            gui.setModelValue("wbind", "loaded", 0.3);
+            gui.setModelValue("wbind", "amount", 4);
+            update();
+            check(value("loaded") == 0.3 && value("amount") == 4.0 && took().empty(),
+                  "a progress bar and a spinbox follow their model (data-attr-value, data-value)");
+
+            // Widgets made by clone and create work like authored ones.
+            check(gui.cloneElement("count", "made_row", "count_copy") &&
+                      gui.createElement("made_row", "input", "made_range",
+                                        {{"type", "range"}, {"min", "0"}, {"max", "10"}, {"value", "5"}, {"data-event", "widgets.made"}}),
+                  "a spinbox is cloned and a slider created");
+            update();
+            byId("count_copy_dec")->Click();
+            update();
+            check(byId("made_range")->Focus(), "the created slider takes focus");
+            key(SDLK_LEFT);
+            check(took() == Events{"count count_copy 9.0", "made made_range 4.0"} && width(byId("made_range")) == 160.0f &&
+                      color(byId("count_copy_dec")) == Rml::Colourb(0xff, 0xaa, 0x00),
+                  "a cloned spinbox and a created slider are styled and publish with their own ids");
+        }
+        check(kast::gui::problemCount() == problems, "no RmlUi warning through the whole widgets run");
+        gui.reset();
+    }
+    kast::gui::shutdown();
+    bgfx::shutdown();
+}
+
 void checkGui()
 {
     checkGuiDocRoundTrip();
     checkGuiDocEdits();
+    checkGuiDocWidgets();
+    checkGuiSpinbox();
     checkGuiFiles();
     checkGuiStylesheetBounds();
     checkUIDocumentComponent();
@@ -12390,6 +12801,42 @@ void checkGuiUndo()
     check(!history.canRedo() && GuiDoc::attribute(guiNode(doc, "mixed"), "class") == "c",
           "gui undo: a new edit discards the redo branch");
 
+    // Widget edits, as the Inspector's widget fields and option buttons (GuiBuilder::editStep): one step each.
+    const auto addWidget = [&](GuiKind kind, const char* id) {
+        checkGuiUndoRedo(doc, history, guiKindLabel(kind), [&] {
+            const pugi::xml_node added = doc.add(kind, guiNode(doc, "panel"));
+            GuiDoc::setAttribute(GuiDoc::widgetElement(added), "id", id);
+            record("Add", std::nullopt, copyGuiElement(added));
+        });
+    };
+    const auto widgetEdit = [&](const char* what, const char* id, auto edit) {
+        checkGuiUndoRedo(doc, history, what, [&] {
+            const pugi::xml_node node = GuiDoc::widgetRoot(guiNode(doc, id));
+            GuiElementCopy before = copyGuiElement(node);
+            edit(node);
+            record(what, std::move(before), copyGuiElement(node));
+        });
+    };
+    addWidget(GuiKind::Spinbox, "spin");
+    widgetEdit("spinbox value", "spin", [](pugi::xml_node n) { GuiDoc::setWidgetProperty(n, "value", "7"); });
+    widgetEdit("spinbox max", "spin", [](pugi::xml_node n) { GuiDoc::setWidgetProperty(n, "max", "20"); });
+    addWidget(GuiKind::Dropdown, "drop");
+    widgetEdit("add option", "drop", [](pugi::xml_node n) { GuiDoc::addOption(n); });
+    widgetEdit("select option", "drop", [](pugi::xml_node n) { GuiDoc::selectOption(n, GuiDoc::options(n)[3]); });
+    widgetEdit("move option", "drop", [&](pugi::xml_node n) { doc.move(GuiDoc::options(n)[3], -1); });
+    widgetEdit("edit option", "drop", [](pugi::xml_node n) { GuiDoc::setText(GuiDoc::options(n)[0], "First"); });
+    widgetEdit("remove option", "drop", [](pugi::xml_node n) { n.remove_child(GuiDoc::options(n)[1]); });
+    addWidget(GuiKind::Toggle, "tog");
+    widgetEdit("toggle checked", "tog", [](pugi::xml_node n) { GuiDoc::setWidgetProperty(n, "checked", "true"); });
+    widgetEdit("toggle label", "tog", [](pugi::xml_node n) { GuiDoc::setWidgetProperty(n, "label", "Music"); });
+    const pugi::xml_node drop = guiNode(doc, "drop");
+    check(GuiDoc::widgetProperty(guiNode(doc, "spin"), "value") == "7" && GuiDoc::widgetProperty(guiNode(doc, "spin"), "max") == "20" &&
+              GuiDoc::options(drop).size() == 3 && GuiDoc::text(GuiDoc::options(drop)[0]) == "First" &&
+              GuiDoc::options(drop)[1].attribute("selected") && GuiDoc::attribute(GuiDoc::options(drop)[1], "value") == "option4" &&
+              GuiDoc::widgetProperty(GuiDoc::widgetRoot(guiNode(doc, "tog")), "label") == "Music" &&
+              GuiDoc::widgetProperty(GuiDoc::widgetRoot(guiNode(doc, "tog")), "checked") == "true",
+          "gui undo: the widget edits stand after their redos");
+
     history.clear(true);
     const std::string start = doc.serialize();
     for (int i = 1; i <= 101; ++i)
@@ -12722,6 +13169,19 @@ int main(int argc, char** argv)
         kast::log::info(g_failures == 0 ? "All undo checks passed" : std::format("{} undo check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--gui") { // only the game GUI and GUI Builder checks
+        checkLuaGui();
+        checkGuiEffectCompile();
+        checkGui();
+        checkGuiBindingNames();
+        checkGuiClipboard();
+        checkGuiDataModels();
+        checkGuiWidgets();
+        checkGuiUndo();
+        removeTree(testRoot());
+        kast::log::info(g_failures == 0 ? "All GUI checks passed" : std::format("{} GUI check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--particles") { // only the particle checks
         checkParticleJson();
         checkParticleClock();
@@ -12865,6 +13325,7 @@ int main(int argc, char** argv)
     checkGuiBindingNames();
     checkGuiClipboard();
     checkGuiDataModels();
+    checkGuiWidgets();
     checkExternalEditor();
     checkModelLoading();
     checkModelCache();

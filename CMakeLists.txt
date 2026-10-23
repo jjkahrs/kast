@@ -151,7 +151,7 @@ add_library(kast_engine STATIC
   engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
-  engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
+  engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
   engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
@@ -1723,6 +1723,7 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "events|Events Test|events.scene|FALSE" "events_no_systems|Events Test|events.scene|TRUE"
                "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow"
                "ui|UI Test|ui.scene|FALSE" "effects|Effects Test|ui_effects.scene|FALSE" "bind|Bind Test|ui_bind.scene|FALSE"
+               "widgets|Widgets Test|ui_widgets.scene|FALSE"
                "lights|Lights Test|point_lights.scene|FALSE"
                "materials|Materials Test|materials.scene|FALSE" "post|Post Test|post_processing.scene|FALSE"
                "models|Models Test|models_anim.scene|FALSE" "shadows|Shadows Test|shadows.scene|FALSE"
@@ -2729,6 +2730,75 @@ add_test(NAME player_bind_click
           "-DFORBID_OUTPUT=${bind_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
 set_tests_properties(player_bind_click PROPERTIES FIXTURES_REQUIRED game_bind_built TIMEOUT 90)
 
+# Form widgets (ui_widgets.scene: ui/widgets.rml driven by scripts/ui_widgets.lua; the C++ side is self_check's
+# checkGuiWidgets). widgets.rcss has no widget rules: the engine's default widget style draws them.
+# - ui_widgets_screenshot: Play; the values read back typed (VALUES), setValue snapping, clamping and validating without
+#   publishing (SETVALUE), the progress bar driven by setValue (PROGRESS), the bound values (BOUND); no RmlUi warning,
+#   no change event without input.
+#   ui_widgets_probe reads the default style's #ffaa00 on the toggle, the progress fill and a spinbox button.
+# - ui_widgets_restyled_screenshot: the same GUI in health_project, whose widgets.rcss overrides those colours (#3060ff):
+#   it differs, and ui_widgets_restyled_probe reads the project's colour where the default's was.
+# - ui_widgets_toggle / _spinbox: a --gui-click on the toggle and on the spinbox's + publish their change events.
+# - ui_widgets_keys: Up, Up, Down on the focused spinbox, Down on the dropdown, Right on the slider.
+# - ui_widgets_drag: a mouse drag on the slider publishes on the press and again during the drag.
+set(widgets_args "--scene ${KAST_TEST_PROJECT}/ui_widgets.scene --play --size 1600x1000")
+set(widgets_forbid "\\[warn\\] RmlUi|\\[error\\]|Lua error|widgets\\.loading")
+add_test(NAME ui_widgets_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_widgets.png"
+          "-DEXTRA_ARGS=${widgets_args}"
+          "-DEXPECT_OUTPUT=widgets: VALUES sound=true.boolean. volume=20.number. quality=medium.string. count=3.number. scale=1.number. loading=0.025.number. copy=3.number. made=5.number. true true.*widgets: SETVALUE volume=100.number. count=7.number. scale=0.25.number. quality=high.string. sound=false.boolean. loading=1.number. raised=true.*widgets: PROGRESS loading=0.75.number..*widgets: BOUND level=40.number. amount=6.number. loaded=0.6.number. music=true.boolean."
+          "-DFORBID_OUTPUT=${widgets_forbid}|widgets: widgets\\." -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(ui_widgets_screenshot PROPERTIES FIXTURES_SETUP ui_widgets_shot)
+add_test(NAME ui_widgets_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/ui_widgets.png" 0.335,0.152,255,170,0,12 0.35,0.322,255,170,0,12 0.39,0.256,255,170,0,12)
+set_tests_properties(ui_widgets_probe PROPERTIES FIXTURES_REQUIRED ui_widgets_shot)
+file(READ "${KAST_TEST_PROJECT}/ui/widgets.rcss" widgets_rcss)
+file(WRITE "${KAST_HEALTH_PROJECT}/ui/widgets.rcss" "${widgets_rcss}
+input.toggle:checked, progress fill, .spinbox button { background-color: #3060ff; }
+")
+add_test(NAME ui_widgets_restyled_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_widgets_restyled.png"
+          "-DEXTRA_ARGS=--scene ${KAST_HEALTH_PROJECT}/ui_widgets.scene --play --size 1600x1000"
+          "-DFORBID_OUTPUT=${widgets_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(ui_widgets_restyled_screenshot PROPERTIES FIXTURES_SETUP ui_widgets_restyled_shot)
+add_test(NAME ui_widgets_restyled_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/ui_widgets.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/ui_widgets_restyled.png"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(ui_widgets_restyled_differs PROPERTIES FIXTURES_REQUIRED "ui_widgets_shot;ui_widgets_restyled_shot")
+add_test(NAME ui_widgets_restyled_probe
+  COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/ui_widgets_restyled.png" 0.335,0.152,48,96,255,12 0.35,0.322,48,96,255,12 0.39,0.256,48,96,255,12)
+set_tests_properties(ui_widgets_restyled_probe PROPERTIES FIXTURES_REQUIRED ui_widgets_restyled_shot)
+add_test(NAME ui_widgets_toggle
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_widgets_toggle.png"
+          "-DEXTRA_ARGS=${widgets_args} --gui-click sound" -DFRAMES=30
+          "-DEXPECT_OUTPUT=widgets: widgets.sound sound = false.boolean. in ui/widgets.rml" "-DFORBID_OUTPUT=${widgets_forbid}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME ui_widgets_spinbox
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_widgets_spinbox.png"
+          "-DEXTRA_ARGS=${widgets_args} --gui-click count_inc" -DFRAMES=30
+          "-DEXPECT_OUTPUT=widgets: widgets.count count = 4.number. in ui/widgets.rml" -DEXPECT_COUNT=1
+          "-DFORBID_OUTPUT=${widgets_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME ui_widgets_keys
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_widgets_keys.png"
+          "-DEXTRA_ARGS=${widgets_args} --sim-on-log KEYS --sim-key 5,Up --sim-key 10,Up --sim-key 15,Down --sim-key 45,Down --sim-key 65,Right"
+          -DFRAMES=130
+          "-DEXPECT_OUTPUT=widgets.count count = 4.number.*widgets.count count = 5.number.*widgets.count count = 4.number.*widgets.quality quality = high.string.*widgets.volume volume = 21.number."
+          "-DFORBID_OUTPUT=${widgets_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME ui_widgets_drag
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_widgets_drag.png"
+          "-DEXTRA_ARGS=${widgets_args} --sim-mouse 80,left,60,0,0,-200,-185" -DFRAMES=110
+          "-DEXPECT_OUTPUT=widgets.volume volume = [0-9]+.number.*widgets.volume volume = [0-9]+.number." "-DFORBID_OUTPUT=${widgets_forbid}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# The built game "widgets" (ui_widgets.scene from game.pak): the default widget style is the player's own (no project
+# sheet styles the widgets), the GUI loads with no RmlUi warning, and the spinbox's + reaches Lua.
+add_test(NAME player_widgets_click
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/widgets" "-DEXE=Widgets Test.exe" "-DWORK_DIR=${KAST_GAME_OUT}/widgets_click.run"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_widgets_click.png" "-DEXTRA_ARGS=--gui-click count_inc"
+          -DEXPECT=0 "-DEXPECT_OUTPUT=widgets: VALUES sound=true.*widgets: widgets.count count = 4.number. in ui/widgets.rml"
+          "-DFORBID_OUTPUT=${widgets_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_widgets_click PROPERTIES FIXTURES_REQUIRED game_widgets_built TIMEOUT 90)
+add_test(NAME player_widgets_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/player_widgets.png" 0.1875,0.157,255,170,0,12 0.203,0.393,255,170,0,12 0.2563,0.3014,255,170,0,12)
+set_tests_properties(player_widgets_probe PROPERTIES FIXTURES_REQUIRED player_widgets_shot)
+
 # Builder: main_menu.rml open with start_button selected (tree, Inspector, Style, Preview with the outline), and the same
 # GUI in health_project with a different .rcss (wider panel, red buttons) must render differently. --gui-pick clicks the
 # preview (1280x720 preview pixels) on the Quit button, which selects it.
@@ -2841,6 +2911,42 @@ set_tests_properties(gui_builder_bind_saved_file PROPERTIES PASS_REGULAR_EXPRESS
   "id=\"row_template\" class=\"bind_row\" data-for=\"row:shown\" data-attr-id=")
 set_tests_properties(gui_builder_bind_edit PROPERTIES FIXTURES_REQUIRED new_gui_copy FIXTURES_SETUP gui_bind_saved)
 set_tests_properties(gui_builder_bind_saved_file PROPERTIES FIXTURES_REQUIRED gui_bind_saved)
+
+# Form widgets in the builder (ui/widgets.rml, no widget rules in its sheet: the preview wears the default widget
+# style): each kind selected (one tree node, its Inspector fields, the preview outline), with no RmlUi warning; each kind
+# added to main_menu.rml's #buttons Panel through the Hierarchy's deferred add, undone and redone; on the new_gui_project
+# copy, a widget property (the spinbox's value, kept on its <input>) set as the Inspector does, undone, redone, saved,
+# and the saved GUI reopened with it.
+foreach(widget sound volume quality count loading)
+  add_test(NAME gui_builder_widget_${widget}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+            "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_widget_${widget}.png"
+            "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --open-gui ui/widgets.rml --size 1600x1000 --gui-select ${widget}"
+            "-DFORBID_OUTPUT=${bind_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endforeach()
+foreach(kind Toggle Slider Dropdown Spinbox Progress)
+  add_test(NAME gui_builder_add_${kind}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+            "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_add_${kind}.png"
+            "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} ${builder_args} --gui-select buttons --gui-add ${kind} --gui-undo 1 --gui-redo 1"
+            "-DEXPECT_OUTPUT=Undo Add ${kind}.*Redo Add ${kind}" "-DFORBID_OUTPUT=${bind_forbid}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endforeach()
+add_test(NAME gui_builder_widget_edit
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_widget_edit.png"
+          "-DEXTRA_ARGS=--project ${KAST_NEW_GUI_PROJECT} --open-gui ui/widgets.rml --size 1600x1000 --gui-select count --gui-set-prop value=7 --gui-undo 1 --gui-redo 1 --gui-save"
+          "-DEXPECT_OUTPUT=--gui-set-prop value=.7. on 'count'.*Undo Edit Spinbox value.*Redo Edit Spinbox value.*Saved GUI"
+          "-DFORBID_OUTPUT=${bind_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME gui_builder_widget_saved_file COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_NEW_GUI_PROJECT}/ui/widgets.rml")
+set_tests_properties(gui_builder_widget_saved_file PROPERTIES PASS_REGULAR_EXPRESSION
+  "<!-- Form widgets.*<input type=\"text\" id=\"count_input\" value=\"7\" />.*data-attr-id=\"'option_' [+] it_index\"")
+add_test(NAME gui_builder_widget_reopen_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_widget_reopen.png"
+          "-DEXTRA_ARGS=--project ${KAST_NEW_GUI_PROJECT} --open-gui ui/widgets.rml --size 1600x1000 --gui-select count"
+          "-DFORBID_OUTPUT=${bind_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(gui_builder_widget_edit PROPERTIES FIXTURES_REQUIRED new_gui_copy FIXTURES_SETUP gui_widget_saved)
+set_tests_properties(gui_builder_widget_saved_file gui_builder_widget_reopen_screenshot PROPERTIES FIXTURES_REQUIRED gui_widget_saved)
 
 # Crash dialogs: --crash makes the editor fail on purpose; with KAST_NO_CRASH_DIALOGS=1 it must exit, not wait on a
 # "Debug Error!" dialog. Debug builds also report the failed assert on stderr (release compiles assert() out).

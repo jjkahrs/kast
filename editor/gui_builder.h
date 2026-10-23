@@ -8,6 +8,7 @@
 #include <gui_models.h>
 
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -18,15 +19,18 @@ class ElementDocument;
 } // namespace Rml
 
 // GUI Builder: four panels on one open .rml (gui_doc.h) and the .rcss it links.
-// - GUI Hierarchy: element tree; add Panel / Text / Button (into the selected Panel, else <body>), delete, move up/down,
-//   drag-drop onto a Panel or <body> to reparent; Save.
-// - GUI Inspector: id, class, text (Text, Button) and data-event (Button) of the selection, and on any element its RmlUi
-//   data binding attributes (guiBindingAttribute): edited, emptied to remove, or added by name. Other attributes of
-//   Unknown elements are read-only.
+// - GUI Hierarchy: element tree; add Panel / Text / Button / Toggle / Slider / Dropdown / Spinbox / Progress (into the
+//   selected Panel, else <body>), delete, move up/down, drag-drop onto a Panel or <body> to reparent; Save. A
+//   composite widget (GuiDoc::composite) is one node: its insides are not listed.
+// - GUI Inspector: id, class, text (Text, Button) and data-event (Button and the input widgets) of the selection, its
+//   widget properties (GuiDoc::widgetProperties) and a Dropdown's options (add, remove, move, value, label, selected),
+//   and on any element its RmlUi data binding attributes (guiBindingAttribute): edited, emptied to remove, or added by
+//   name. Other attributes of Unknown elements are read-only.
 // - GUI Style: the .rcss text, applied to the preview 0.3 s after the last keystroke. A sheet RmlUi logs problems for
 //   (in the Console) is not applied: the preview keeps the last good one.
 // - GUI Preview: the document rendered by RmlUi at a chosen resolution, scaled to fit; click selects the deepest
-//   element under the cursor; the selection is outlined (an overlay, not in the file).
+//   element under the cursor (a composite widget's inside selects the widget); the selection is outlined (an overlay,
+//   not in the file). It wears the engine's default widget style under the GUI's own sheet, as in Play.
 // Edits mark the GUI dirty ("*" in the titles) and are steps on its own undo history (gui_undo.h), cleared when a GUI is
 // opened or reloaded; an Inspector or Style text field is one step from activation to letting go. Save or Ctrl+S (a builder panel focused) writes both files. Files
 // changed on disk reload when clean, else Reload / Keep mine is asked. Opening another GUI or quitting while dirty asks
@@ -51,12 +55,15 @@ public:
     // Selects the deepest element at (x, y) in preview pixels, as a click there does (<body> if none). False if no
     // preview is laid out yet.
     bool pick(float x, float y);
-    std::string selectedId() const { return GuiDoc::attribute(selected_, "id"); } // "" if none or no id
+    std::string selectedId() const { return GuiDoc::attribute(GuiDoc::widgetElement(selected_), "id"); } // "" if none
     // Adds an element of kind as the GUI Hierarchy's + buttons do (applied when the panel next draws).
     void requestAdd(GuiKind kind) { edit_ = {Edit::Op::Add, addParent(), {}, kind}; }
     // Sets (empty: removes) an attribute of the selection as one Inspector edit step, as typing it in does. False if
     // nothing or only <body> is selected.
     bool setAttribute(const std::string& name, const std::string& value);
+    // Sets a widget property of the selection (GuiDoc::setWidgetProperty) as one Inspector edit step. False if the
+    // selection has no such property.
+    bool setWidgetProperty(const std::string& name, const std::string& value);
     // The open GUI's undo history (Edit > Undo / Redo while a builder panel is focused).
     const UndoStack& history() const { return history_; }
     // Undo / redo a step, then reselect the element it affected and set the dirty flag from the save point.
@@ -99,6 +106,10 @@ private:
     void markRmlDirty();
     // Records the step that turned before into after (see pushGuiStep); false if it changed nothing.
     bool record(std::string name, std::optional<GuiElementCopy> before, std::optional<GuiElementCopy> after);
+    // One Inspector step on the selection: edit changes it between the before and after copies. False if it changed
+    // nothing.
+    bool editStep(const std::string& name, const std::function<void()>& edit);
+    void drawOptions(); // the selected Dropdown's options
     void afterUndoRedo();
     void rememberFileTimes();
     std::string title(const char* name, const char* window) const;
@@ -134,6 +145,8 @@ private:
     std::string inspectorBuffer_[4]; // id, class, text, data-event of inspectorNode_
     std::map<std::string, std::string> bindingBuffers_; // inspectorNode_'s data binding attributes, by name
     std::string newBinding_;                            // the Inspector's "Add binding" name
+    std::vector<std::pair<std::string, std::string>> widgetBuffers_; // inspectorNode_'s widget properties: name, text
+    std::vector<std::pair<std::string, std::string>> optionBuffers_; // inspectorNode_'s options: value, label
     pugi::xml_node inspectorNode_;
     UndoStack history_;
     struct Gesture {

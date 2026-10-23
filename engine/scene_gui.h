@@ -5,6 +5,7 @@
 #include "gui_access.h"
 #include "gui_events.h"
 #include "gui_models.h"
+#include "gui_widgets.h"
 #include "scene.h"
 
 #include <filesystem>
@@ -16,12 +17,13 @@
 #include <vector>
 
 namespace Rml {
+class Element;
 class ElementDocument;
-}
+} // namespace Rml
 
 // A scene's game GUIs in Play mode (editor Game view and kast_player): one RmlUi document per UIDocument component,
-// stacked in entity creation order (PersistentId), shown while visible. Clicks and drags publish on the bus
-// (gui_events.h). A missing or broken .rml/.rcss logs an error
+// stacked in entity creation order (PersistentId), shown while visible, each over the default widget style. Clicks,
+// drags and widget changes publish on the bus (gui_events.h, gui_widgets.h). A missing or broken .rml/.rcss logs an error
 // naming the file and that document shows nothing; Play goes on.
 namespace kast {
 
@@ -45,7 +47,8 @@ public:
     GuiContext& context() { return context_; }
 
     // kast.gui.* (gui_access.h).
-    std::optional<std::string> value(const std::string& id) override;
+    std::optional<GuiValue> value(const std::string& id) override;
+    void setValue(const std::string& id, GuiValue value) override;
     void setText(const std::string& id, std::string_view text) override;
     void setVisible(const std::string& id, bool visible) override;
     void setAttribute(const std::string& id, const std::string& name, std::string_view value) override;
@@ -66,6 +69,7 @@ private:
         std::optional<std::string> text;
         std::optional<bool> visible;
         std::map<std::string, std::string> attributes;
+        std::optional<GuiValue> value;
     };
 
     struct Entry {
@@ -76,6 +80,7 @@ private:
         Rml::ElementDocument* document = nullptr; // null if it failed to load
         std::unique_ptr<ButtonClickListener> listener;
         std::unique_ptr<DragListener> dragListener;
+        std::unique_ptr<WidgetListener> widgetListener;
         std::vector<std::pair<std::filesystem::path, std::filesystem::file_time_type>> files; // .rml, linked .rcss
     };
 
@@ -84,6 +89,7 @@ private:
     void restack();
     std::string documentPath(const Rml::Element& document) const;
     void apply(Rml::ElementDocument& document, const std::string& id, const Written& written);
+    bool applyValue(Rml::Element& element, const std::string& id, const GuiValue& value); // false: logged
     Rml::ElementDocument* documentWith(const std::string& id) const; // the topmost loaded one holding id
 
     GuiModels models_; // before context_: the context's models point into it
@@ -91,6 +97,7 @@ private:
     std::map<std::string, Written> written_;
     std::filesystem::path root_;
     EventBus* bus_ = nullptr;
+    bool quiet_ = false; // while kast.gui writes a widget's value: its change event isn't the player's
     std::vector<Entry> entries_; // by id
 };
 

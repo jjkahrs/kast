@@ -4,6 +4,7 @@
 
 #include <project.h>
 
+#include <algorithm>
 #include <array>
 #include <format>
 #include <fstream>
@@ -106,17 +107,96 @@ std::string withName(std::string text, const std::string& name)
     return text;
 }
 
-} // namespace
+bool hasClass(pugi::xml_node node, std::string_view name)
+{
+    std::istringstream classes(node.attribute("class").value());
+    for (std::string token; classes >> token;)
+        if (token == name)
+            return true;
+    return false;
+}
 
-const char* guiKindTag(GuiKind kind)
+bool isToggle(pugi::xml_node node)
+{
+    return std::string_view(node.name()) == "input" && std::string_view(node.attribute("type").value()) == "checkbox" &&
+           hasClass(node, "toggle");
+}
+
+// A <label> whose only element is a Toggle: the Toggle's label is the <label>'s text.
+bool labelledToggle(pugi::xml_node node)
+{
+    const std::vector<pugi::xml_node> children = GuiDoc::elements(node);
+    return std::string_view(node.name()) == "label" && children.size() == 1 && isToggle(children[0]);
+}
+
+bool isSpinbox(pugi::xml_node node)
+{
+    const std::vector<pugi::xml_node> children = GuiDoc::elements(node);
+    return hasClass(node, "spinbox") && children.size() == 3 && std::string_view(children[0].name()) == "button" &&
+           std::string_view(children[1].name()) == "input" && std::string_view(children[2].name()) == "button";
+}
+
+std::string_view kindMarkup(GuiKind kind)
 {
     switch (kind) {
-    case GuiKind::Panel: return "div";
-    case GuiKind::Text: return "p";
-    case GuiKind::Button: return "button";
+    case GuiKind::Panel: return "<div/>";
+    case GuiKind::Text: return "<p>Text</p>";
+    case GuiKind::Button: return "<button>Button</button>";
+    case GuiKind::Toggle: return R"(<label><input type="checkbox" class="toggle"/>Toggle</label>)";
+    case GuiKind::Slider: return R"(<input type="range" min="0" max="100" step="1" value="50"/>)";
+    case GuiKind::Dropdown:
+        return R"(<select><option value="option1" selected="">Option 1</option><option value="option2">Option 2</option>)"
+               R"(<option value="option3">Option 3</option></select>)";
+    case GuiKind::Spinbox:
+        return R"(<div class="spinbox" data-min="0" data-max="10" data-step="1"><button>-</button>)"
+               R"(<input type="text" value="0"/><button>+</button></div>)";
+    case GuiKind::Progress: return R"(<progress value="0.5" max="1"/>)";
     default: return "";
     }
 }
+
+// Where a widget property lives: the element and its attribute ("" = the element's text); a null element if node has
+// no such property.
+std::pair<pugi::xml_node, const char*> propertyPlace(pugi::xml_node node, std::string_view name)
+{
+    const auto among = [&](std::initializer_list<const char*> names) -> const char* { // the literal name matches
+        const auto it = std::ranges::find_if(names, [&](const char* n) { return name == n; });
+        return it == names.end() ? nullptr : *it;
+    };
+    switch (guiKind(node)) {
+    case GuiKind::Slider:
+        if (const char* attribute = among({"min", "max", "step", "value"}))
+            return {node, attribute};
+        break;
+    case GuiKind::Spinbox:
+        if (name == "value")
+            return {GuiDoc::elements(node)[1], "value"};
+        if (name == "data-value")
+            return {GuiDoc::elements(node)[1], "data-value"};
+        if (name == "min")
+            return {node, "data-min"};
+        if (name == "max")
+            return {node, "data-max"};
+        if (name == "step")
+            return {node, "data-step"};
+        break;
+    case GuiKind::Progress:
+        if (const char* attribute = among({"value", "max"}))
+            return {node, attribute};
+        break;
+    case GuiKind::Toggle:
+        if (name == "checked")
+            return {GuiDoc::widgetElement(node), "checked"};
+        if (name == "label" && labelledToggle(node))
+            return {node, ""};
+        break;
+    default:
+        break;
+    }
+    return {};
+}
+
+} // namespace
 
 const char* guiKindLabel(GuiKind kind)
 {
@@ -124,6 +204,11 @@ const char* guiKindLabel(GuiKind kind)
     case GuiKind::Panel: return "Panel";
     case GuiKind::Text: return "Text";
     case GuiKind::Button: return "Button";
+    case GuiKind::Toggle: return "Toggle";
+    case GuiKind::Slider: return "Slider";
+    case GuiKind::Dropdown: return "Dropdown";
+    case GuiKind::Spinbox: return "Spinbox";
+    case GuiKind::Progress: return "Progress";
     default: return "Unknown";
     }
 }
@@ -140,9 +225,21 @@ bool guiBindingAttribute(std::string_view name)
 
 GuiKind guiKind(pugi::xml_node node)
 {
-    for (GuiKind kind : kGuiCreatableKinds)
-        if (std::string_view(node.name()) == guiKindTag(kind))
-            return kind;
+    const std::string_view tag = node.name();
+    if (tag == "div")
+        return isSpinbox(node) ? GuiKind::Spinbox : GuiKind::Panel;
+    if (tag == "p")
+        return GuiKind::Text;
+    if (tag == "button")
+        return GuiKind::Button;
+    if (tag == "select")
+        return GuiKind::Dropdown;
+    if (tag == "progress")
+        return GuiKind::Progress;
+    if (tag == "input" && std::string_view(node.attribute("type").value()) == "range")
+        return GuiKind::Slider;
+    if (isToggle(node) || labelledToggle(node))
+        return GuiKind::Toggle;
     return GuiKind::Unknown;
 }
 
@@ -182,10 +279,10 @@ pugi::xml_node GuiDoc::add(GuiKind kind, pugi::xml_node parent)
 {
     if (kind == GuiKind::Unknown || !isInside(parent, body()))
         return {};
-    pugi::xml_node node = parent.append_child(guiKindTag(kind));
-    if (kind != GuiKind::Panel)
-        setText(node, guiKindLabel(kind));
-    return node;
+    const std::string_view markup = kindMarkup(kind);
+    if (!parent.append_buffer(markup.data(), markup.size(), kParseOptions))
+        return {};
+    return parent.last_child();
 }
 
 bool GuiDoc::remove(pugi::xml_node node)
@@ -255,6 +352,104 @@ void GuiDoc::setText(pugi::xml_node node, std::string_view text)
         node.remove_child(node.first_child());
     if (!text.empty())
         node.append_child(pugi::node_pcdata).set_value(std::string(text).c_str());
+}
+
+bool GuiDoc::composite(pugi::xml_node node)
+{
+    const GuiKind kind = guiKind(node);
+    return kind == GuiKind::Spinbox || kind == GuiKind::Dropdown || labelledToggle(node);
+}
+
+pugi::xml_node GuiDoc::widgetRoot(pugi::xml_node node)
+{
+    pugi::xml_node root = node;
+    for (pugi::xml_node at = node.parent(); at; at = at.parent())
+        if (composite(at))
+            root = at;
+    return root;
+}
+
+pugi::xml_node GuiDoc::widgetElement(pugi::xml_node node) { return labelledToggle(node) ? elements(node)[0] : node; }
+
+std::vector<std::string> GuiDoc::widgetProperties(pugi::xml_node node)
+{
+    switch (guiKind(node)) {
+    case GuiKind::Slider: return {"min", "max", "step", "value"};
+    case GuiKind::Spinbox: return {"min", "max", "step", "value", "data-value"};
+    case GuiKind::Progress: return {"value", "max"};
+    case GuiKind::Toggle: return labelledToggle(node) ? std::vector<std::string>{"checked", "label"} : std::vector<std::string>{"checked"};
+    default: return {};
+    }
+}
+
+std::string GuiDoc::widgetProperty(pugi::xml_node node, std::string_view name)
+{
+    const auto [element, attribute] = propertyPlace(node, name);
+    if (!element)
+        return {};
+    if (name == "checked")
+        return element.attribute("checked") ? "true" : "false";
+    return *attribute ? GuiDoc::attribute(element, attribute) : text(element);
+}
+
+bool GuiDoc::widgetAttribute(pugi::xml_node node, std::string_view attribute)
+{
+    const GuiKind kind = guiKind(node);
+    if (attribute == "type" && (kind == GuiKind::Slider || kind == GuiKind::Toggle))
+        return true;
+    return std::ranges::any_of(widgetProperties(node), [&](const std::string& name) {
+        const auto [element, stored] = propertyPlace(node, name);
+        return element == widgetElement(node) && attribute == stored;
+    });
+}
+
+bool GuiDoc::setWidgetProperty(pugi::xml_node node, std::string_view name, std::string_view value)
+{
+    auto [element, attribute] = propertyPlace(node, name);
+    if (!element)
+        return false;
+    if (name == "checked") {
+        element.remove_attribute("checked");
+        if (value == "true")
+            element.append_attribute("checked"); // checked=""
+    } else if (*attribute) {
+        setAttribute(element, attribute, value);
+    } else { // a Toggle's label: the <label>'s text, after its <input>
+        for (pugi::xml_node child = element.first_child(); child;) {
+            const pugi::xml_node next = child.next_sibling();
+            if (child.type() == pugi::node_pcdata)
+                element.remove_child(child);
+            child = next;
+        }
+        if (!value.empty())
+            element.append_child(pugi::node_pcdata).set_value(std::string(value).c_str());
+    }
+    return true;
+}
+
+std::vector<pugi::xml_node> GuiDoc::options(pugi::xml_node select)
+{
+    std::vector<pugi::xml_node> out;
+    for (pugi::xml_node child : elements(select))
+        if (std::string_view(child.name()) == "option")
+            out.push_back(child);
+    return out;
+}
+
+pugi::xml_node GuiDoc::addOption(pugi::xml_node select)
+{
+    const size_t n = options(select).size() + 1;
+    pugi::xml_node option = select.append_child("option");
+    option.append_attribute("value").set_value(std::format("option{}", n).c_str());
+    setText(option, std::format("Option {}", n));
+    return option;
+}
+
+void GuiDoc::selectOption(pugi::xml_node select, pugi::xml_node option)
+{
+    for (pugi::xml_node other : options(select))
+        other.remove_attribute("selected");
+    option.append_attribute("selected"); // selected=""
 }
 
 std::string GuiDoc::stylesheetHref() const

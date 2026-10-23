@@ -20,12 +20,14 @@ nothing changed, if either new name is taken); moves and renames of the open fil
 <code>.rml</code> in Assets to open it (one GUI at a time; with unsaved builder changes, Save / Discard / Cancel first); its
 four panels come to the front.</p>
 <ul>
-<li><strong>GUI Hierarchy</strong> (tab beside Hierarchy): the elements under <strong>Body</strong>. <strong>+ Panel / + Text / + Button</strong> add into the
-  selected Panel, else into Body; <strong>Delete</strong>, <strong>Up</strong>, <strong>Down</strong> act on the selection; the right-click menu has the same.
-  Drag an element onto a Panel or Body to move it there (into itself or its own children is refused). Unknown elements
-  are greyed and labelled <code>&lt;tag&gt;</code>.</li>
+<li><strong>GUI Hierarchy</strong> (tab beside Hierarchy): the elements under <strong>Body</strong>. <strong>+ Panel / + Text / + Button</strong> and the
+  <a href="#form-widgets">form widgets</a> <strong>+ Toggle / + Slider / + Dropdown / + Spinbox / + Progress</strong> add into the
+  selected Panel, else into Body (the buttons wrap to the panel's width); <strong>Delete</strong>, <strong>Up</strong>, <strong>Down</strong> act on the
+  selection; the right-click menu has the same (<strong>Add Toggle</strong>, ...). Drag an element onto a Panel or Body to move it
+  there (into itself or its own children is refused). Unknown elements are greyed and labelled <code>&lt;tag&gt;</code>.</li>
 <li><strong>GUI Inspector</strong> (tab beside Inspector): the selection's <code>id</code> and <code>class</code>, its text (Text and Button holding only
-  text; one with child elements says so) and, for a Button, <code>data-event</code>. Then, on any element (Unknown ones too),
+  text; one with child elements says so), <code>data-event</code> for a Button and the input widgets, and a widget's
+  <a href="#form-widgets">properties and options</a>. Then, on any element (Unknown ones too),
   <strong>Data binding</strong>: one field per RmlUi <a href="../engine/game-gui.html#data-binding">binding attribute</a> it has
   (<code>data-model</code>, <code>data-for</code>, <code>data-if</code>, <code>data-visible</code>, <code>data-value</code>, <code>data-checked</code>,
   <code>data-rml</code>, <code>data-text</code>, <code>data-attr-*</code>, <code>data-attrif-*</code>, <code>data-class-*</code>, <code>data-style-*</code>,
@@ -42,6 +44,55 @@ four panels come to the front.</p>
   data: its models are created empty (no RmlUi warning), so <code>data-for</code> rows don't show and <code>{{...}}</code> is empty;
   select a row template in the GUI Hierarchy.</li>
 </ul>
+<h2 id="form-widgets">Form widgets</h2>
+<p>Elements are recognised by their markup (<a href="../engine/game-gui.html#form-widgets">Game GUI: Form widgets</a>), so
+hand-written controls are editable too: an <code>&lt;input type="range"&gt;</code> is a Slider, a <code>&lt;select&gt;</code> a Dropdown, an
+<code>&lt;input type="checkbox"&gt;</code> with class <code>toggle</code> a Toggle (a plain checkbox stays Unknown), a <code>&lt;progress&gt;</code> a Progress,
+and a <code>&lt;div class="spinbox"&gt;</code> holding exactly a button, an input and a button a Spinbox (otherwise it is a Panel). A
+Dropdown, a Spinbox and a Toggle inside its <code>&lt;label&gt;</code> are one node in the tree: their insides are not listed, a click on
+them in the preview selects the widget, and the Inspector edits them. The preview draws them with the engine's default
+widget style under the GUI's own sheet, as Play does.</p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Added as</th>
+<th>Inspector fields</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Toggle</td>
+<td><code>&lt;label&gt;&lt;input type="checkbox" class="toggle"/&gt;Toggle&lt;/label&gt;</code></td>
+<td><strong>checked</strong> (a checkbox: <code>checked=""</code> on the input), <strong>label</strong> (the label's text; only for a labelled toggle). id, class, data-event and bindings are the input's.</td>
+</tr>
+<tr>
+<td>Slider</td>
+<td><code>&lt;input type="range" min="0" max="100" step="1" value="50"/&gt;</code></td>
+<td><strong>min</strong>, <strong>max</strong>, <strong>step</strong>, <strong>value</strong></td>
+</tr>
+<tr>
+<td>Dropdown</td>
+<td><code>&lt;select&gt;</code> with options <code>option1</code>..<code>option3</code>, the first selected</td>
+<td><strong>Options</strong>: one row each with the selected radio button, its value and label fields, up / down and <strong>X</strong> (remove); <strong>Add option</strong> appends <code>optionN</code> / "Option N".</td>
+</tr>
+<tr>
+<td>Spinbox</td>
+<td><code>&lt;div class="spinbox" data-min="0" data-max="10" data-step="1"&gt;</code> with -, <code>&lt;input type="text" value="0"/&gt;</code>, +</td>
+<td><strong>min</strong>, <strong>max</strong>, <strong>step</strong> (the div's <code>data-min</code>, <code>data-max</code>, <code>data-step</code>), <strong>value</strong> and <strong>data-value</strong> (its input's: the starting value and the two-way binding)</td>
+</tr>
+<tr>
+<td>Progress</td>
+<td><code>&lt;progress value="0.5" max="1"/&gt;</code></td>
+<td><strong>value</strong>, <strong>max</strong></td>
+</tr>
+</tbody>
+</table>
+<p>A text field edit is one undo step from activation to letting go, a checkbox click or option button one step each; all
+mark the GUI dirty, update the preview at once and are written by <strong>Save</strong>. Emptying a min / max / step / value field
+removes that attribute. The attributes the fields stand for are not repeated under "Other attributes"; every other
+attribute and child is kept as written. <code>--gui-add Toggle</code> (or any kind) and <code>--gui-set-prop name=value</code> do the same from the
+<a href="command-line.html">command line</a>.</p>
 <p>Selection is shared by the three. Any edit marks the GUI dirty: <code>*</code> after the file name in the builder panels'
 titles. <strong>Save</strong> (GUI Hierarchy, GUI Style) or <strong>Ctrl+S</strong> while a builder panel is focused writes the <code>.rml</code> and
 <code>.rcss</code> (elsewhere Ctrl+S still saves the scene). Quitting with unsaved builder changes asks Save / Discard / Cancel

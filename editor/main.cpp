@@ -77,7 +77,7 @@ constexpr const char* kUsage =
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-select path] [--material-set field=json] [--material-undo N] [--material-redo N] "
     "[--focus-panel Window] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
-    "[--gui-add Panel|Text|Button] [--gui-set-attr name=value] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] "
+    "[--gui-add Panel|Text|Button|Toggle|Slider|Dropdown|Spinbox|Progress] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
     "[--graph-save] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-view-code] [--preview-model path] [--preview-clip name] "
@@ -160,6 +160,8 @@ struct Options {
     std::optional<GuiKind> guiAdd; // then add this element as the GUI Hierarchy's + buttons do
     std::optional<std::pair<std::string, std::string>> guiSetAttr; // then set this attribute of the selection, as the
                                                                    // GUI Inspector does (one step)
+    std::optional<std::pair<std::string, std::string>> guiSetProp; // then set this widget property of the selection, as
+                                                                   // the GUI Inspector does (one step)
     int guiUndo = 0, guiRedo = 0;  // then GUI Undo N times, then Redo N times
     bool guiSave = false;          // then save the GUI as its Save button does
     std::string guiClick;           // with --play: click the game GUI element with this id (frame kAddComponentPopupFrame)
@@ -341,7 +343,7 @@ bool parsePair(std::string_view text, char separator, std::optional<std::pair<in
 
 bool parseSize(std::string_view size, std::optional<std::pair<int, int>>& out) { return parsePair(size, 'x', out); }
 
-// "Panel", "Text" or "Button".
+// "Panel", "Text", "Button", "Toggle", "Slider", "Dropdown", "Spinbox" or "Progress".
 bool parseGuiKind(std::string_view label, std::optional<GuiKind>& out)
 {
     for (GuiKind kind : kGuiCreatableKinds)
@@ -477,6 +479,14 @@ std::optional<Options> parseArgs(int argc, char** argv)
                 return std::nullopt;
             }
             options.guiSetAttr.emplace(text.substr(0, equals), text.substr(equals + 1));
+        } else if (arg == "--gui-set-prop" && hasValue) {
+            const std::string text = argv[++i];
+            const size_t equals = text.find('=');
+            if (equals == 0 || equals == std::string::npos) {
+                kast::log::error(std::format("Invalid --gui-set-prop '{}', expected name=value", text));
+                return std::nullopt;
+            }
+            options.guiSetProp.emplace(text.substr(0, equals), text.substr(equals + 1));
         } else if (arg == "--gui-undo" && hasValue && parsePositive(argv[i + 1], options.guiUndo)) {
             ++i;
         } else if (arg == "--gui-redo" && hasValue && parsePositive(argv[i + 1], options.guiRedo)) {
@@ -646,7 +656,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.materialSets.empty() || options.materialUndo || options.materialRedo ||
                              !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
-                             options.guiAdd || options.guiSetAttr || options.guiSave || !options.guiClick.empty() || options.openPreferences ||
+                             options.guiAdd || options.guiSetAttr || options.guiSetProp || options.guiSave || !options.guiClick.empty() || options.openPreferences ||
                              !options.openGraph.empty() || !options.previewModel.empty() ||
                              !options.openExternal.empty() || !options.dropModel.empty() || options.logFps ||
                              !options.prefabSteps.empty() || !options.assetsDelete.empty() || !options.inspectorApplyMenu.empty() ||
@@ -669,10 +679,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
         kast::log::error("--save-scene requires --scene <file> or --project <dir>");
         return std::nullopt;
     }
-    if ((!options.guiSelect.empty() || options.guiPick || options.guiAdd || options.guiSetAttr || options.guiUndo ||
-         options.guiRedo || options.guiSave) && options.openGui.empty()) {
-        kast::log::error("--gui-select, --gui-pick, --gui-add, --gui-set-attr, --gui-undo, --gui-redo and --gui-save require "
-                         "--open-gui <file.rml>");
+    if ((!options.guiSelect.empty() || options.guiPick || options.guiAdd || options.guiSetAttr || options.guiSetProp ||
+         options.guiUndo || options.guiRedo || options.guiSave) && options.openGui.empty()) {
+        kast::log::error("--gui-select, --gui-pick, --gui-add, --gui-set-attr, --gui-set-prop, --gui-undo, --gui-redo and "
+                         "--gui-save require --open-gui <file.rml>");
         return std::nullopt;
     }
     if (!options.graphSteps.empty() && options.openGraph.empty()) {
@@ -1608,6 +1618,13 @@ int main(int argc, char** argv)
                 kast::log::info(std::format("--gui-set-attr {}=\"{}\" on '{}'", name, value, guiBuilder.selectedId()));
             else
                 kast::log::error("--gui-set-attr: no element selected (--gui-select)");
+        }
+        if (options->guiSetProp && frames.frame() == kAddComponentPopupFrame + 7) {
+            const auto& [name, value] = *options->guiSetProp;
+            if (guiBuilder.setWidgetProperty(name, value))
+                kast::log::info(std::format("--gui-set-prop {}=\"{}\" on '{}'", name, value, guiBuilder.selectedId()));
+            else
+                kast::log::error(std::format("--gui-set-prop: the selection has no widget property '{}'", name));
         }
         if (frames.frame() == kAddComponentPopupFrame + 8) { // after --gui-add's edit was applied
             for (int i = 0; i < options->guiUndo; ++i)

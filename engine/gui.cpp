@@ -2,6 +2,7 @@
 
 #include "files.h"
 #include "gui_render.h"
+#include "gui_widgets.h"
 #include "log.h"
 
 #include "roboto_regular.h"
@@ -109,8 +110,10 @@ struct Globals {
     System system;
     Files files;
     GuiRenderer renderer;
+    Rml::SharedPtr<Rml::StyleSheetContainer> widgetStyle; // kGuiWidgetStyle, parsed once; null if it failed
 };
 std::unique_ptr<Globals> g_globals;
+bool g_updating = false;
 
 } // namespace
 
@@ -131,6 +134,12 @@ bool init()
     if (!Rml::LoadFontFace({reinterpret_cast<const Rml::byte*>(kRobotoRegularTtf), sizeof(kRobotoRegularTtf)}, "Roboto",
                            Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Auto, true))
         log::error("RmlUi could not load the bundled Roboto font: GUI text will not show");
+    const uint64_t problems = globals->system.problems;
+    globals->widgetStyle = Rml::Factory::InstanceStyleSheetString(kGuiWidgetStyle);
+    if (!globals->widgetStyle || globals->system.problems != problems) {
+        log::error("RmlUi could not parse the default widget style: form widgets show unstyled");
+        globals->widgetStyle = nullptr;
+    }
     g_globals = std::move(globals);
     log::info("RmlUi initialized");
     return true;
@@ -164,6 +173,18 @@ void setDragDocument(std::string sourceUrl)
     if (g_globals)
         g_globals->system.dragDocument = std::move(sourceUrl);
 }
+
+void addWidgetStyle(Rml::ElementDocument& document)
+{
+    if (!g_globals || !g_globals->widgetStyle)
+        return;
+    // Combined after the default sheet, the document's rules win at equal specificity (RmlUi's merge order).
+    static const Rml::StyleSheetContainer none;
+    const Rml::StyleSheetContainer* own = document.GetStyleSheetContainer();
+    document.SetStyleSheetContainer(g_globals->widgetStyle->CombineStyleSheetContainer(own ? *own : none));
+}
+
+bool updating() { return g_updating; }
 
 std::string toRmlPath(const std::filesystem::path& file)
 {
@@ -279,7 +300,9 @@ void GuiContext::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer)
     if (!rml || !renderer)
         return;
     renderer->begin(view, frameBuffer, width_, height_);
+    gui::g_updating = true;
     rml->Update();
+    gui::g_updating = false;
     rml->Render();
 }
 
