@@ -25,14 +25,22 @@ four panels come to the front.</p>
   Drag an element onto a Panel or Body to move it there (into itself or its own children is refused). Unknown elements
   are greyed and labelled <code>&lt;tag&gt;</code>.</li>
 <li><strong>GUI Inspector</strong> (tab beside Inspector): the selection's <code>id</code> and <code>class</code>, its text (Text and Button holding only
-  text; one with child elements says so) and, for a Button, <code>data-event</code>. Other attributes are listed read-only.
-  Unknown elements are read-only. Edits apply as you type.</li>
+  text; one with child elements says so) and, for a Button, <code>data-event</code>. Then, on any element (Unknown ones too),
+  <strong>Data binding</strong>: one field per RmlUi <a href="../engine/game-gui.html#data-binding">binding attribute</a> it has
+  (<code>data-model</code>, <code>data-for</code>, <code>data-if</code>, <code>data-visible</code>, <code>data-value</code>, <code>data-checked</code>,
+  <code>data-rml</code>, <code>data-text</code>, <code>data-attr-*</code>, <code>data-attrif-*</code>, <code>data-class-*</code>, <code>data-style-*</code>,
+  <code>data-event-*</code>, <code>data-alias-*</code>); emptying one removes it from the file. Type a binding attribute's name and press
+  <strong>Add binding</strong> for a new one (written once it has a value). Other attributes are listed read-only; Unknown
+  elements' are. Edits apply as you type; each field edit is one undo step (Edit &gt; Undo / Redo while a builder panel is
+  focused) and is saved with <strong>Save</strong>.</li>
 <li><strong>GUI Style</strong> (tab beside Console): the <code>.rcss</code> text, applied to the preview 0.3 s after the last keystroke. A sheet
   RmlUi reports problems for (in the Console) is not applied: the preview keeps the last good style and the panel
   says so in red.</li>
 <li><strong>GUI Preview</strong> (tab beside Scene and Game): the document as RmlUi renders it at <strong>1280x720</strong>, <strong>1920x1080</strong> or the
   <strong>Panel size</strong>, scaled to fit. Click selects the deepest element under the cursor (Body if none); the selection has a
-  yellow outline, drawn by the editor, never saved.</li>
+  yellow outline, drawn by the editor, never saved. A document with <code>data-model</code> previews as authored, with no live
+  data: its models are created empty (no RmlUi warning), so <code>data-for</code> rows don't show and <code>{{...}}</code> is empty;
+  select a row template in the GUI Hierarchy.</li>
 </ul>
 <p>Selection is shared by the three. Any edit marks the GUI dirty: <code>*</code> after the file name in the builder panels'
 titles. <strong>Save</strong> (GUI Hierarchy, GUI Style) or <strong>Ctrl+S</strong> while a builder panel is focused writes the <code>.rml</code> and
