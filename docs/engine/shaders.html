@@ -13,7 +13,7 @@
 <main>
 <h1 id="shaders">Shaders</h1>
 <p>Every mesh in Kast (primitives, models, terrain) is drawn by one built-in physically based shader: base color, metallic
-and roughness, normal, occlusion and emissive maps, a directional light and up to 8 point lights with shadows, ambient
+and roughness, normal, occlusion and emissive maps, a directional light and up to 8 point, spot and area lights with shadows, ambient
 light and fog. A <a href="materials.html#materials">material</a> (<code>.mat</code>) only sets that shader's inputs.</p>
 <p>To change how a surface looks beyond those inputs, write a <strong>user shader</strong>: a <code>.kshader</code> file with a
 <code>fragment()</code> function (per pixel), and optionally <code>vertex()</code> (per vertex) and <code>light()</code> (per light), plus
@@ -190,7 +190,8 @@ out at the edge of the view or a shadow cascade. Keep displacements small relati
 
 <h2 id="kshader-light">light()</h2>
 <p>Optional. With a <code>light()</code>, the template calls it instead of its own Cook-Torrance lighting: once for the scene's
-directional light (if there is one) and once for each point light reaching the mesh (up to 8). Each call adds its share to
+directional light (if there is one) and once for each point, spot and area light reaching the mesh (up to 8 of them together,
+see <a href="coordinates-and-scenes.html">Coordinates and scenes</a>). Each call adds its share to
 <code>DIFFUSE_LIGHT</code> and <code>SPECULAR_LIGHT</code>, which start black; their sum is the direct light. Ambient light (times
 <code>AO</code>), <code>EMISSION</code> and fog are then added as without a <code>light()</code>. Kast does <strong>not</strong> multiply
 <code>DIFFUSE_LIGHT</code> by <code>ALBEDO</code> afterwards: do it yourself. Unlit materials never call <code>light()</code>.</p>
@@ -207,9 +208,9 @@ void light()
 }</code></pre>
 <table>
 <tr><th>Name</th><th>Type</th><th>In / out</th><th>Space</th><th>Meaning</th></tr>
-<tr><td><code>LIGHT_DIRECTION</code></td><td>vec3</td><td>in</td><td>world, unit</td><td>from the surface toward the light</td></tr>
+<tr><td><code>LIGHT_DIRECTION</code></td><td>vec3</td><td>in</td><td>world, unit</td><td>from the surface toward the light; an area light: toward its closest point on the rect</td></tr>
 <tr><td><code>LIGHT_COLOR</code></td><td>vec3</td><td>in</td><td>linear</td><td>the light's color times its intensity</td></tr>
-<tr><td><code>ATTENUATION</code></td><td>float</td><td>in</td><td>0–1</td><td>point lights: distance falloff times shadow; the directional light: its shadow. 1 when the mesh doesn't receive shadows</td></tr>
+<tr><td><code>ATTENUATION</code></td><td>float</td><td>in</td><td>0–1</td><td>point lights: distance falloff times shadow; spot lights: distance falloff times cone falloff times shadow; area lights: see below; the directional light: its shadow. Shadow factors are 1 when the mesh doesn't receive shadows</td></tr>
 <tr><td><code>NORMAL</code></td><td>vec3</td><td>in</td><td>world, unit</td><td>after <code>fragment()</code> and the normal map</td></tr>
 <tr><td><code>VIEW</code></td><td>vec3</td><td>in</td><td>world, unit</td><td>from the surface toward the camera</td></tr>
 <tr><td><code>ALBEDO</code>, <code>METALLIC</code>, <code>ROUGHNESS</code></td><td>vec3, float</td><td>in</td><td></td><td>what <code>fragment()</code> left; metallic clamped to 0–1, roughness to 0.04–1</td></tr>
@@ -219,7 +220,15 @@ void light()
 <p>The other <code>fragment()</code> built-ins (<code>UV</code>, <code>COLOR</code>, <code>WORLD_POSITION</code>, ...) don't exist in
 <code>light()</code>: using one is a compile error at its line. To reproduce the built-in lighting (and then change it), call the
 template's own function: <code>DIFFUSE_LIGHT += shade(NORMAL, VIEW, LIGHT_DIRECTION, LIGHT_COLOR * ATTENUATION, ALBEDO,
-mix(vec3_splat(0.04), ALBEDO, METALLIC), METALLIC, ROUGHNESS);</code> renders exactly as the material without a shader.</p>
+mix(vec3_splat(0.04), ALBEDO, METALLIC), METALLIC, ROUGHNESS);</code> renders exactly as the material without a shader
+under the directional and point lights (spot lights: the same, up to float rounding).</p>
+<p><strong>Area lights</strong> (an approximation): the built-in shader integrates the whole rect (Linearly Transformed
+Cosines), but <code>light()</code> gets one direction per light, so for an <code>AreaLight</code> <code>LIGHT_DIRECTION</code> points at the
+rect's point closest to the surface and <code>ATTENUATION</code> is the rect's diffuse form factor (what fraction of the
+surface's cosine-weighted view it fills) divided by <code>dot(NORMAL, LIGHT_DIRECTION)</code> there (capped at 1), times its range
+fade and shadow. A Lambert <code>light()</code> (<code>LIGHT_COLOR * ATTENUATION * N·L</code>) then gets about the built-in diffuse; a
+specular term computed from <code>LIGHT_DIRECTION</code> highlights that one point, not the rect's reflection. No new built-in
+names: spot and area lights use the same ones.</p>
 
 <h2 id="kshader-screen">SCREEN_TEXTURE and DEPTH_TEXTURE</h2>
 <p>For refraction, heat haze, soft intersections and shorelines a transparent surface needs to see what is behind it.
@@ -259,7 +268,7 @@ renderer logs an error at start if a GPU reports fewer). The mesh shader uses:</
 <table>
 <tr><th>Stages</th><th>Used for</th></tr>
 <tr><td>0, 1</td><td>base color, metallic-roughness texture</td></tr>
-<tr><td>2–6</td><td>shadow maps (directional cascades, point light cubes)</td></tr>
+<tr><td>2–6</td><td>shadow maps (the atlas of directional cascades and spot / area light tiles, point light cubes)</td></tr>
 <tr><td>7, 8, 9</td><td>normal, occlusion, emissive texture</td></tr>
 <tr><td><strong>10–13</strong></td><td>your <code>texture2D</code> params, in declaration order</td></tr>
 <tr><td>14, 15</td><td><code>SCREEN_TEXTURE</code>, <code>DEPTH_TEXTURE</code></td></tr>

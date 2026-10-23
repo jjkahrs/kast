@@ -96,6 +96,7 @@ foreach(pair "${KAST_SHADERC}|shaderc.exe" "${KAST_TEXTUREC}|texturec.exe" "${KA
              "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/vs_mesh_skinned.sc|kshader/mesh/vs_mesh_skinned.sc"
              "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/vs_mesh_instanced.sc|kshader/mesh/vs_mesh_instanced.sc"
              "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/mesh.sh|kshader/mesh/mesh.sh"
+             "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/ltc_table.sh|kshader/mesh/ltc_table.sh"
              "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/varying.def.sc|kshader/mesh/varying.def.sc")
   string(REPLACE "|" ";" pair "${pair}")
   list(GET pair 0 from)
@@ -211,6 +212,11 @@ target_compile_options(kast_zone_self_check PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_zone_self_check PRIVATE kast_zone)
 target_include_directories(kast_zone_self_check SYSTEM PRIVATE "${Stb_INCLUDE_DIR}") # stb_image_write: 8-bit PNGs to reject
 
+# --- LTC fit: the offline tool that writes engine/shaders/ltc_table.sh, the area light lookup table (tools/ltc_fit/README.md).
+# Built, never run by the build: the table is checked in. ---
+add_executable(kast_ltc_fit tools/ltc_fit/ltc_fit.cpp "${KAST_MANIFEST}")
+target_compile_options(kast_ltc_fit PRIVATE ${KAST_COMPILE_OPTIONS})
+
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
 add_executable(kast_self_check tests/self_check.cpp tests/net_self_check.cpp tests/net_test_util.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp
@@ -241,6 +247,9 @@ set(KAST_TEST_SCENES "${CMAKE_CURRENT_SOURCE_DIR}/tests/scenes")
 set(KAST_TEST_PROJECT "${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
 add_test(NAME engine_self_check COMMAND kast_self_check)
 add_test(NAME zone_self_check COMMAND kast_zone_self_check)
+# The checked-in area light table is what tools/ltc_fit fits (regenerate it after changing the fit or the BRDF).
+add_test(NAME ltc_table_up_to_date
+  COMMAND kast_ltc_fit --verify "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/ltc_table.sh")
 # kast.auth against the real auth service in the services/world compose stack (cd services/world && docker compose
 # up -d --build); skipped, not failed, when it isn't running.
 add_test(NAME auth_live COMMAND kast_self_check --live-auth http://localhost:3100 http://localhost:8026)
@@ -690,6 +699,107 @@ foreach(scene shadows point_shadows)
   add_test(NAME ${scene}_roundtrip
     COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_SHADOW_PROJECT}/${scene}.scene"
             "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${scene}_roundtrip" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
+endforeach()
+# Spot and area lights: tests/project/spot_lights.scene (three SpotLights: soft cones on the ground, a short-range one
+# that only reaches the pillar's top), area_lights.scene (a one-sided and a two-sided AreaLight panel, each with a
+# sphere in front and behind, a ceiling panel over a glossy floor, a point and a spot light by the center cube: the
+# light types share its 8 slots) and spot_area_shadows.scene (a castShadows spot and area light over pillars; the
+# built games "spot_area" and "spot_area_off" in KAST_GAMES run it in the player). Configure-time copies in the shadow
+# project change one thing: every SpotLight / AreaLight intensity 0, the two-sided panel one-sided, castShadows false.
+# Their Scene view and Play shots must differ from the unchanged scene's; so must the selected spot's and area light's
+# gizmos. Copies breaking each SpotLight / AreaLight validation rule must fail to load, naming it.
+set(KAST_SPOT_LIGHTS "${KAST_TEST_PROJECT}/spot_lights.scene")
+set(KAST_AREA_LIGHTS "${KAST_TEST_PROJECT}/area_lights.scene")
+set(KAST_SPOT_AREA_SHADOWS "${KAST_TEST_PROJECT}/spot_area_shadows.scene")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_SPOT_LIGHTS}" "${KAST_AREA_LIGHTS}"
+             "${KAST_SPOT_AREA_SHADOWS}")
+file(READ "${KAST_SPOT_LIGHTS}" spot_scene)
+file(READ "${KAST_AREA_LIGHTS}" area_scene)
+file(READ "${KAST_SPOT_AREA_SHADOWS}" spot_area_scene)
+set(spot_intensity "(\"SpotLight\": {[^}]*\"intensity\": )[0-9.]+")
+set(area_intensity "(\"AreaLight\": {[^}]*\"intensity\": )[0-9.]+")
+kast_shadow_variant(spot_lights_off "${spot_scene}" "${spot_intensity}" "\\10")
+kast_shadow_variant(area_lights_off "${area_scene}" "${area_intensity}" "\\10")
+kast_shadow_variant(area_lights_one_sided "${area_scene}" "\"twoSided\": true" "\"twoSided\": false")
+kast_shadow_variant(spot_area_shadows_off "${spot_area_scene}" "\"castShadows\": true" "\"castShadows\": false")
+string(REGEX REPLACE "${spot_intensity}" "\\10" spot_area_lights_off "${spot_area_scene}")
+kast_shadow_variant(spot_area_shadows_lights_off "${spot_area_lights_off}" "${area_intensity}" "\\10")
+# kind|base scene text|field|regex|replacement|error the load must log (. for the quotes)
+foreach(bad "spot|spot_scene|color|\\[1, 0.75, 0.4\\]|[1.5, 0.75, 0.4]|.color. channels must be between 0 and 1"
+            "spot|spot_scene|intensity|\"intensity\": 8,|\"intensity\": -1,|.intensity. must be >= 0"
+            "spot|spot_scene|range|\"range\": 7,|\"range\": 0,|.range. must be > 0"
+            "spot|spot_scene|inner_angle|\"innerAngle\": 15|\"innerAngle\": 0|.innerAngle. must be > 0"
+            "spot|spot_scene|outer_angle|\"outerAngle\": 30|\"outerAngle\": 90|.outerAngle. must be < 90"
+            "spot|spot_scene|inner_over_outer|\"innerAngle\": 15|\"innerAngle\": 35|.innerAngle. must be <= .outerAngle."
+            "spot|spot_scene|bias|\"outerAngle\": 30 }|\"outerAngle\": 30, \"bias\": -0.5 }|.bias. must be >= 0"
+            "area|area_scene|color|\\[1, 0.8, 0.5\\]|[1, 0.8, -0.5]|.color. channels must be between 0 and 1"
+            "area|area_scene|intensity|\"intensity\": 8,|\"intensity\": -1,|.intensity. must be >= 0"
+            "area|area_scene|width|\"width\": 1.6|\"width\": 0|.width. and .height. must be > 0"
+            "area|area_scene|height|\"height\": 0.8|\"height\": -1|.width. and .height. must be > 0"
+            "area|area_scene|range|\"height\": 0.8, \"range\": 8|\"height\": 0.8, \"range\": 0|.range. must be > 0"
+            "area|area_scene|bias|\"range\": 8 }|\"range\": 8, \"bias\": -1 }|.bias. must be >= 0")
+  string(REPLACE "|" ";" bad "${bad}")
+  list(GET bad 0 kind)
+  list(GET bad 1 base)
+  list(GET bad 2 field)
+  list(GET bad 3 regex)
+  list(GET bad 4 replacement)
+  list(GET bad 5 message)
+  kast_shadow_variant(${kind}_lights_bad_${field} "${${base}}" "${regex}" "${replacement}")
+  add_test(NAME ${kind}_lights_bad_${field}_rejected
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+            "-DSCENE=${KAST_SHADOW_PROJECT}/${kind}_lights_bad_${field}.scene" "-DEXPECT_OUTPUT=${message}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/load_fails_test.cmake")
+endforeach()
+foreach(scene spot_lights area_lights spot_area_shadows)
+  file(COPY_FILE "${KAST_TEST_PROJECT}/${scene}.scene" "${KAST_SHADOW_PROJECT}/${scene}.scene")
+  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${scene}_roundtrip")
+  add_test(NAME ${scene}_roundtrip
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_SHADOW_PROJECT}/${scene}.scene"
+            "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${scene}_roundtrip" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
+endforeach()
+# Scene view: shot|scene|extra editor flags. Gizmos: the Cool Spot's cone, the Two Sided Panel's rect.
+foreach(shot "spot_lights|spot_lights|" "spot_lights_off|spot_lights_off|" "spot_lights_gizmo|spot_lights|--select 5"
+             "area_lights|area_lights|" "area_lights_off|area_lights_off|" "area_lights_gizmo|area_lights|--select 7"
+             "spot_area_shadows|spot_area_shadows|" "spot_area_shadows_off|spot_area_shadows_off|")
+  string(REPLACE "|" ";" shot "${shot}")
+  list(GET shot 0 name)
+  list(GET shot 1 scene)
+  list(GET shot 2 flags)
+  add_test(NAME ${name}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/${name}.png"
+            "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/${scene}.scene ${flags}" "-DFORBID_OUTPUT=\\[error\\]"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+  set_tests_properties(${name}_screenshot PROPERTIES FIXTURES_SETUP ${name}_shot)
+endforeach()
+foreach(pair "spot_lights|spot_lights_off" "spot_lights|spot_lights_gizmo" "area_lights|area_lights_off"
+             "area_lights|area_lights_gizmo" "spot_area_shadows|spot_area_shadows_off")
+  string(REPLACE "|" ";" pair "${pair}")
+  list(GET pair 0 a)
+  list(GET pair 1 b)
+  add_test(NAME ${b}_differs
+    COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/${a}.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/${b}.png"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+  set_tests_properties(${b}_differs PROPERTIES FIXTURES_REQUIRED "${a}_shot;${b}_shot")
+endforeach()
+# Game view (Play) of each variant against its base: all must differ.
+foreach(shot spot_lights spot_lights_off area_lights area_lights_off area_lights_one_sided spot_area_shadows
+             spot_area_shadows_off)
+  add_test(NAME ${shot}_play_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/${shot}_play.png"
+            "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/${shot}.scene --play" -DFOCUS_PANEL=Assets
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+  set_tests_properties(${shot}_play_screenshot PROPERTIES FIXTURES_SETUP ${shot}_play_shot)
+endforeach()
+foreach(pair "spot_lights|spot_lights_off" "area_lights|area_lights_off" "area_lights|area_lights_one_sided"
+             "spot_area_shadows|spot_area_shadows_off")
+  string(REPLACE "|" ";" pair "${pair}")
+  list(GET pair 0 a)
+  list(GET pair 1 b)
+  add_test(NAME ${b}_play_differs
+    COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/${a}_play.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/${b}_play.png"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+  set_tests_properties(${b}_play_differs PROPERTIES FIXTURES_REQUIRED "${a}_play_shot;${b}_play_shot")
 endforeach()
 # Terrain: tests/project/terrain.scene (Terrain on map 3 "hills", 2x2 PNG16 tiles; a CharacterController dropped
 # above the ground; docs/engine/terrain.html). Play of it, of a copy without the Terrain component (the hills must show) and of
@@ -1179,6 +1289,21 @@ kast_shader_shot(light_reference "${KAST_SHADER_TEST_PROJECT}" shader_light_refe
 kast_shader_shot(light_builtin "${KAST_SHADER_TEST_PROJECT}" shader_light_builtin.scene)
 kast_shader_compare(shader_light_pbr_same light_reference light ON)
 kast_shader_compare(shader_light_differs light_builtin light OFF)
+# - shader_light_local: light() under a SpotLight and an AreaLight only (no sun), every mesh custom: light_bands.kshader,
+#   light_pbr.kshader (also the ground) and the toon Shader Graph's Light Output. It must differ from a copy whose spot
+#   and area intensities are 0, so light() runs for both.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/shader_light_local.scene")
+file(READ "${KAST_TEST_PROJECT}/shader_light_local.scene" shader_scene)
+string(REGEX REPLACE "(\"(Spot|Area)Light\": {[^}]*\"intensity\": )[0-9.]+" "\\10" shader_scene "${shader_scene}")
+file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_light_local_off.scene" "${shader_scene}")
+kast_shader_shot(light_local "${KAST_SHADER_TEST_PROJECT}" shader_light_local.scene
+  "-DEXPECT_OUTPUT=Compiled shader 'shader_graphs/toon.kshadergraph'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]|magenta")
+kast_shader_shot(light_local_off "${KAST_SHADER_TEST_PROJECT}" shader_light_local_off.scene "-DFORBID_OUTPUT=\\[error\\]|magenta")
+kast_shader_compare(shader_light_local_differs light_local_off light_local OFF)
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/shader_light_local_roundtrip")
+add_test(NAME shader_light_local_roundtrip
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCENE=${KAST_SHADER_TEST_PROJECT}/shader_light_local.scene"
+          "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/shader_light_local_roundtrip" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/roundtrip_test.cmake")
 kast_shader_shot(screen "${KAST_SHADER_TEST_PROJECT}" shader_screen.scene
   "-DEXPECT_OUTPUT=Compiled shader 'shaders/screen_water.kshader'" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]|magenta")
 kast_shader_shot(screen_f60 "${KAST_SHADER_TEST_PROJECT}" shader_screen.scene -DFRAMES=60)
@@ -1603,6 +1728,8 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "models|Models Test|models_anim.scene|FALSE" "shadows|Shadows Test|shadows.scene|FALSE"
                "shadows_off|Shadows Test|shadows_sun_off.scene|FALSE"
                "point_shadows|Point Shadows Test|point_shadows.scene|FALSE"
+               "spot_area|Spot Area Test|spot_area_shadows.scene|FALSE"
+               "spot_area_off|Spot Area Test|spot_area_shadows_lights_off.scene|FALSE"
                "physics|Physics Test|physics.scene|FALSE"
                "terrain|Terrain Test|terrain.scene|FALSE" "terrain_off|Terrain Test|terrain_off.scene|FALSE"
                "prefabs|Prefabs Test|prefabs.scene|FALSE" "zone_objects|Zone Objects Test|zone_objects.scene|FALSE"
@@ -1703,6 +1830,14 @@ add_test(NAME player_sky_fallback_warns
 set_tests_properties(player_sky_fallback_warns PROPERTIES FIXTURES_REQUIRED game_sky_fallback_built TIMEOUT 90)
 # The sun-shadow-off copy for the "shadows_off" game (configured above, under Shadows).
 file(COPY_FILE "${KAST_SHADOW_PROJECT}/shadows_sun_off.scene" "${CMAKE_CURRENT_BINARY_DIR}/game_projects/shadows_off/shadows_sun_off.scene")
+# The spot / area light-less copy for the "spot_area_off" game (configured above, under Spot and area lights): the
+# built player lights and shadows with both, so the two shots must differ.
+file(COPY_FILE "${KAST_SHADOW_PROJECT}/spot_area_shadows_lights_off.scene"
+     "${CMAKE_CURRENT_BINARY_DIR}/game_projects/spot_area_off/spot_area_shadows_lights_off.scene")
+add_test(NAME player_spot_area_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_spot_area_off.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_spot_area.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(player_spot_area_differs PROPERTIES FIXTURES_REQUIRED "player_spot_area_shot;player_spot_area_off_shot")
 # The terrain-less copy for the "terrain_off" game (configured above, under Terrain): the built player streams the
 # hills from game.pak, so the two shots must differ.
 file(COPY_FILE "${KAST_SHADOW_PROJECT}/terrain_off.scene" "${CMAKE_CURRENT_BINARY_DIR}/game_projects/terrain_off/terrain_off.scene")

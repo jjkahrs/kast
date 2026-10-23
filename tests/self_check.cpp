@@ -333,8 +333,8 @@ std::vector<std::string> typeNames()
 void checkComponentRegistry()
 {
     check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "ModelRenderer", "Animator",
-                                                 "DirectionalLight", "PointLight", "Camera", "Rotator", "Collider",
-                                                 "Rigidbody", "CharacterController", "StateMachine", "UIDocument",
+                                                 "DirectionalLight", "PointLight", "SpotLight", "AreaLight", "Camera", "Rotator",
+                                                 "Collider", "Rigidbody", "CharacterController", "StateMachine", "UIDocument",
                                                  "AudioSource", "NetworkLocalPlayer", "NetworkReplication",
                                                  "NetworkEntity", "Terrain", "TerrainTile", "ParticleEmitter"},
           "built-in component types in registration order");
@@ -485,6 +485,15 @@ void checkLoadValidation()
          file(entity(1, "null", R"(, "PointLight": {"color": [1,1,1], "intensity": -0.5, "range": 5})")), "intensity"},
         {"point light color > 1", file(entity(1, "null", R"(, "PointLight": {"color": [1,1.5,1], "intensity": 1, "range": 5})")),
          "color"},
+        {"spot light inner angle > outer",
+         file(entity(1, "null", R"(, "SpotLight": {"color": [1,1,1], "intensity": 1, "range": 5, "innerAngle": 50, "outerAngle": 40})")),
+         "\"innerAngle\" must be <= \"outerAngle\""},
+        {"spot light outer angle 90",
+         file(entity(1, "null", R"(, "SpotLight": {"color": [1,1,1], "intensity": 1, "range": 5, "innerAngle": 30, "outerAngle": 90})")),
+         "\"outerAngle\" must be < 90"},
+        {"area light width 0",
+         file(entity(1, "null", R"(, "AreaLight": {"color": [1,1,1], "intensity": 1, "width": 0, "height": 1, "range": 5})")),
+         "\"width\" and \"height\" must be > 0"},
         {"lighting not an object", R"({"version": 5, "entities": [], "lighting": 3})", "lighting"},
         {"lighting color out of range",
          R"({"version": 5, "entities": [], "lighting": {"ambientColor": [1,-0.1,1], "ambientIntensity": 0.2}})", "ambientColor"},
@@ -1033,6 +1042,21 @@ return { update = function(dt)
     fails('"range" must be > 0', function() kast.set(cam, "PointLight", {range = 0}) end)
     fails('"intensity" must be >= 0', function() kast.set(cam, "PointLight", {intensity = -1, range = 7}) end)
     fails('"color" channels must be between 0 and 1', function() kast.set(cam, "PointLight", {color = {x = 1.5, y = 0, z = 0}}) end)
+    local spot = kast.get(cam, "SpotLight")
+    assert(spot.innerAngle == 30 and spot.outerAngle == 45 and spot.range == 10 and not spot.castShadows, "get SpotLight defaults")
+    kast.set(cam, "SpotLight", {innerAngle = 12, outerAngle = 24, castShadows = true})
+    spot = kast.get(cam, "SpotLight")
+    assert(spot.innerAngle == 12 and spot.outerAngle == 24 and spot.castShadows, "set SpotLight")
+    fails('"innerAngle" must be <= "outerAngle"', function() kast.set(cam, "SpotLight", {innerAngle = 30}) end)
+    fails('"outerAngle" must be < 90', function() kast.set(cam, "SpotLight", {outerAngle = 90}) end)
+    fails('"innerAngle" must be > 0', function() kast.set(cam, "SpotLight", {innerAngle = 0}) end)
+    local area = kast.get(cam, "AreaLight")
+    assert(area.width == 1 and area.height == 1 and area.intensity == 5 and not area.twoSided, "get AreaLight defaults")
+    kast.set(cam, "AreaLight", {width = 2.5, height = 0.5, twoSided = true})
+    area = kast.get(cam, "AreaLight")
+    assert(area.width == 2.5 and area.height == 0.5 and area.twoSided, "set AreaLight")
+    fails('"width" and "height" must be > 0', function() kast.set(cam, "AreaLight", {height = 0}) end)
+    fails('"bias" must be >= 0', function() kast.set(cam, "AreaLight", {bias = -1}) end)
     fails('unknown key name "NotAKey"', function() kast.input.keyDown("NotAKey") end)
     fails('kast.input.mouseDown: unknown button thumb (left, middle, right, x1 or x2)', function() kast.input.mouseDown("thumb") end)
     fails("kast.input.mouseDown: unknown button 1", function() kast.input.mouseDown(1) end)
@@ -1083,6 +1107,8 @@ end })");
     const entt::entity cam = scene.create("Camera");
     registry.emplace<kast::Camera>(cam);
     registry.emplace<kast::PointLight>(cam);
+    registry.emplace<kast::SpotLight>(cam);
+    registry.emplace<kast::AreaLight>(cam);
     scene.systems = {"api.lua"};
     kast::Input input;
     input.keysDown[SDL_SCANCODE_W] = true;
@@ -1111,6 +1137,11 @@ end })");
     const auto& pointLight = registry.get<kast::PointLight>(cam);
     check(pointLight.intensity == 2.0f && pointLight.range == 3.5f && near(pointLight.color, {0.5f, 0.25f, 0.0f}),
           "set wrote PointLight; rejected sets left it unchanged");
+    const auto& spotLight = registry.get<kast::SpotLight>(cam);
+    const auto& areaLight = registry.get<kast::AreaLight>(cam);
+    check(spotLight.innerAngle == 12.0f && spotLight.outerAngle == 24.0f && spotLight.castShadows &&
+              areaLight.width == 2.5f && areaLight.height == 0.5f && areaLight.twoSided && areaLight.bias == 0.05f,
+          "set wrote SpotLight and AreaLight; rejected sets left them unchanged");
     check(named(scene, "Parent") == entt::null && named(scene, "Child") == entt::null, "destroy removes the subtree");
     const entt::entity late = named(scene, "Late");
     check(scene.valid(late) && registry.all_of<kast::MeshRenderer>(late) && scene.parent(late) == entt::null,
@@ -3041,7 +3072,7 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"audio.scene", "custom_shaders.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "material_features.scene",
+              std::vector<std::string>{"area_lights.scene", "audio.scene", "custom_shaders.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "material_features.scene",
                                        "materials.scene", "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
                                        "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene",
@@ -3050,8 +3081,8 @@ void checkBuildSettings()
                                        "physics.scene",
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                       "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                       "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene",
+                                       "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
+                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
 
@@ -3063,7 +3094,7 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / ".dot.scene");
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
-    check(projectScenes(root) == std::vector<std::string>{"audio.scene", "broken.scene", "custom_shaders.scene", "events.scene", "fsm.scene",
+    check(projectScenes(root) == std::vector<std::string>{"area_lights.scene", "audio.scene", "broken.scene", "custom_shaders.scene", "events.scene", "fsm.scene",
                                                           "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "levels/c.scene", "material_features.scene", "materials.scene",
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
@@ -3074,8 +3105,8 @@ void checkBuildSettings()
                                                           "particles_texture.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "scene_a.scene", "scene_b.scene",
-                                                          "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                                          "sky_missing_face.scene", "sky_procedural.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene",
+                                                          "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
+                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
@@ -5196,17 +5227,17 @@ void checkPointLights()
     check(decreasing, "falloff is positive and decreasing inside range");
 
     // Ten lights on the +X axis at 1..10 m from a unit box at the origin, listed far to near; every range reaches it.
-    std::vector<kast::PointLightSample> lights;
+    std::vector<kast::LocalLightSample> lights;
     for (int i = 10; i >= 1; --i)
         lights.push_back({{static_cast<float>(i), 0, 0}, 20.0f, {1, 1, 1}});
     const kast::Aabb box{{-0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, 0.5f}};
-    check(kast::nearestPointLights(lights, box) == std::vector<size_t>{9, 8, 7, 6, 5, 4, 3, 2},
+    check(kast::nearestLocalLights(lights, box) == std::vector<size_t>{9, 8, 7, 6, 5, 4, 3, 2},
           "nearest 8 of 10, nearest first");
     lights[9].range = 0.4f; // 1 m away, its range stops 0.1 m short of the box face
     lights[8].range = 1.6f; // 2 m away, reaches the face at 1.5 m
-    check(kast::nearestPointLights(lights, box) == std::vector<size_t>{8, 7, 6, 5, 4, 3, 2, 1},
+    check(kast::nearestLocalLights(lights, box) == std::vector<size_t>{8, 7, 6, 5, 4, 3, 2, 1},
           "lights whose range misses the box are skipped");
-    check(kast::nearestPointLights({}, box).empty(), "no lights");
+    check(kast::nearestLocalLights({}, box).empty(), "no lights");
 
     const entt::meta_type type = kast::findComponentType("PointLight");
     const kast::PointLight defaults;
@@ -5312,18 +5343,18 @@ void checkShadows()
     }
 
     // The 4 castShadows point lights nearest the eye, nearest first; ties keep list order.
-    std::vector<kast::PointLightSample> lights;
+    std::vector<kast::LocalLightSample> lights;
     for (int i = 0; i < 7; ++i) // at x = 7 .. 1, every other one casting
         lights.push_back({{static_cast<float>(7 - i), 0, 0}, 10.0f, {1, 1, 1}, i % 2 == 0, 0.05f});
     // Casting: indices 0 (x 7), 2 (x 5), 4 (x 3), 6 (x 1).
-    check(kast::shadowedPointLights(lights, {0, 0, 0}) == std::vector<size_t>{6, 4, 2, 0}, "4 casting lights, nearest first");
+    check(kast::shadowedLights(lights, {0, 0, 0}, true) == std::vector<size_t>{6, 4, 2, 0}, "4 casting lights, nearest first");
     lights.push_back({{-1, 0, 0}, 10.0f, {1, 1, 1}, true, 0.05f}); // ties with index 6, later in the list
-    check(kast::shadowedPointLights(lights, {0, 0, 0}) == std::vector<size_t>{6, 7, 4, 2},
+    check(kast::shadowedLights(lights, {0, 0, 0}, true) == std::vector<size_t>{6, 7, 4, 2},
           "only the 4 nearest casting lights shadow; ties keep list order");
-    check(kast::shadowedPointLights(lights, {8, 0, 0}) == std::vector<size_t>{0, 2, 4, 6}, "nearest to the eye");
+    check(kast::shadowedLights(lights, {8, 0, 0}, true) == std::vector<size_t>{0, 2, 4, 6}, "nearest to the eye");
     for (auto& light : lights)
         light.castShadows = false;
-    check(kast::shadowedPointLights(lights, {0, 0, 0}).empty(), "no casting lights, no shadows");
+    check(kast::shadowedLights(lights, {0, 0, 0}, true).empty(), "no casting lights, no shadows");
 
     // Defaults; scenes saved before shadows (fields missing) load with them.
     const kast::DirectionalLight sun;
@@ -5387,6 +5418,202 @@ void checkShadows()
     check(!d.castShadows && d.bias == 0.2f && d.normalBias == 3.0f && d.maxDistance == 50.0f && d.cascadeCount == 2 &&
               p.castShadows && p.bias == 0.1f && !m.castShadows && !m.receiveShadows,
           "shadow fields round trip");
+}
+
+// Spot and area lights (renderer.h): cone falloff, culling, the shared local light slots, the shadowed spot / area
+// selection, the LTC table and form factor, SpotLight / AreaLight validation and scene files.
+void checkSpotAreaLights()
+{
+    const float cosInner = std::cos(bx::toRad(20.0f)), cosOuter = std::cos(bx::toRad(35.0f));
+    check(kast::spotConeFalloff(1.0f, cosInner, cosOuter) == 1.0f &&
+              kast::spotConeFalloff(std::cos(bx::toRad(19.0f)), cosInner, cosOuter) == 1.0f,
+          "cone falloff is 1 inside the inner angle");
+    check(kast::spotConeFalloff(cosOuter, cosInner, cosOuter) == 0.0f &&
+              kast::spotConeFalloff(std::cos(bx::toRad(60.0f)), cosInner, cosOuter) == 0.0f &&
+              kast::spotConeFalloff(-1.0f, cosInner, cosOuter) == 0.0f,
+          "cone falloff is 0 at and outside the outer angle");
+    float previous = 1.0f;
+    bool decreasing = true;
+    for (float degrees = 20.5f; degrees < 35.0f; degrees += 0.5f) {
+        const float f = kast::spotConeFalloff(std::cos(bx::toRad(degrees)), cosInner, cosOuter);
+        decreasing = decreasing && f > 0.0f && f < previous;
+        previous = f;
+    }
+    check(decreasing, "cone falloff decreases between the inner and outer angles");
+    check(kast::spotConeFalloff(std::cos(bx::toRad(29.9f)), std::cos(bx::toRad(30.0f)), std::cos(bx::toRad(30.0f))) == 1.0f &&
+              kast::spotConeFalloff(std::cos(bx::toRad(30.1f)), std::cos(bx::toRad(30.0f)), std::cos(bx::toRad(30.0f))) == 0.0f,
+          "equal inner and outer angles: a hard edge");
+
+    // Culling: a spot 4 m above the origin shining down with a 30 degree outer cone and 6 m range.
+    const auto box = [](bx::Vec3 center, float half) {
+        return kast::Aabb{bx::sub(center, {half, half, half}), bx::add(center, {half, half, half})};
+    };
+    kast::LocalLightSample spot{.position = {0, 4, 0}, .range = 6.0f, .color = {1, 1, 1},
+                                .type = kast::LocalLightType::Spot, .direction = {0, -1, 0},
+                                .cosInner = std::cos(bx::toRad(20.0f)), .cosOuter = std::cos(bx::toRad(30.0f))};
+    check(kast::lightReaches(spot, box({0, 0, 0}, 0.5f)) && kast::lightReaches(spot, box({2, 0.5f, 0}, 0.5f)),
+          "spot reaches boxes inside its cone");
+    check(!kast::lightReaches(spot, box({4, 0, 0}, 0.5f)) && !kast::lightReaches(spot, box({0, 4, 3}, 0.5f)),
+          "spot misses boxes beside its cone (inside its range)");
+    check(!kast::lightReaches(spot, box({0, 6, 0}, 0.5f)), "spot misses boxes behind it");
+    check(!kast::lightReaches(spot, box({0, -3, 0}, 0.5f)), "spot misses boxes in its cone beyond its range");
+    check(kast::lightReaches(spot, box({0, 4, 0}, 0.5f)), "spot reaches a box around it");
+    kast::LocalLightSample area{.position = {0, 2, 0}, .range = 3.0f, .color = {1, 1, 1},
+                                .type = kast::LocalLightType::Area, .direction = {0, -1, 0}};
+    check(kast::lightReaches(area, box({0, 0, 0}, 0.5f)) && kast::lightReaches(area, box({0, 4, 0}, 0.5f)) &&
+              !kast::lightReaches(area, box({0, 6, 0}, 0.5f)) && !kast::lightReaches(area, box({4, 2, 0}, 0.5f)),
+          "area light culls by its range sphere only");
+
+    // One list of point, spot and area lights at 1..10 m along +X from a unit box (listed far to near, all reaching it)
+    // and a spot 1.5 m out shining away from it: the nearest 8 reaching ones, whatever their type.
+    std::vector<kast::LocalLightSample> lights;
+    for (int i = 10; i >= 1; --i) {
+        kast::LocalLightSample light{.position = {static_cast<float>(i), 0, 0}, .range = 20.0f, .color = {1, 1, 1}};
+        light.type = i % 3 == 0 ? kast::LocalLightType::Point : i % 3 == 1 ? kast::LocalLightType::Spot
+                                                                              : kast::LocalLightType::Area;
+        light.direction = {-1, 0, 0};
+        light.cosOuter = std::cos(bx::toRad(40.0f));
+        lights.push_back(light);
+    }
+    lights.push_back({.position = {1.5f, 0, 0}, .range = 20.0f, .color = {1, 1, 1}, .type = kast::LocalLightType::Spot,
+                      .direction = {1, 0, 0}, .cosOuter = std::cos(bx::toRad(40.0f))});
+    const kast::Aabb unit = box({0, 0, 0}, 0.5f);
+    check(kast::nearestLocalLights(lights, unit) == std::vector<size_t>{9, 8, 7, 6, 5, 4, 3, 2},
+          "point, spot and area lights share the 8 nearest slots; a spot shining away is skipped");
+    lights[7].range = 0.5f; // the point light 3 m away no longer reaches
+    check(kast::nearestLocalLights(lights, unit) == std::vector<size_t>{9, 8, 6, 5, 4, 3, 2, 1},
+          "a light out of range gives its slot to the next nearest");
+
+    // Shadow pools: castShadows point lights for the cubes, spot and area lights for the atlas tiles, each the 4 nearest
+    // the eye.
+    std::vector<kast::LocalLightSample> casters;
+    for (int i = 0; i < 6; ++i) // spot / area at x = 1..6
+        casters.push_back({.position = {static_cast<float>(i + 1), 0, 0}, .range = 10.0f, .color = {1, 1, 1},
+                           .castShadows = true,
+                           .type = i % 2 ? kast::LocalLightType::Area : kast::LocalLightType::Spot});
+    casters.push_back({.position = {0.5f, 0, 0}, .range = 10.0f, .color = {1, 1, 1}, .castShadows = true}); // point
+    casters.push_back({.position = {0.2f, 0, 0}, .range = 10.0f, .color = {1, 1, 1}, .castShadows = false,
+                       .type = kast::LocalLightType::Spot}); // not casting
+    check(kast::shadowedLights(casters, {0, 0, 0}, false) == std::vector<size_t>{0, 1, 2, 3},
+          "the 4 nearest castShadows spot / area lights get tiles");
+    check(kast::shadowedLights(casters, {7, 0, 0}, false) == std::vector<size_t>{5, 4, 3, 2}, "nearest to the eye");
+    check(kast::shadowedLights(casters, {0, 0, 0}, true) == std::vector<size_t>{6}, "point lights keep their own pool");
+
+    // The LTC table: its size, finite values, an isotropic clamped cosine-like lobe at roughness 1 and normal
+    // incidence, and albedos in 0..1.
+    const std::span<const float> table = kast::ltcTable();
+    bool finite = true, albedos = true;
+    for (size_t i = 0; i < table.size(); ++i) {
+        finite = finite && std::isfinite(table[i]);
+        if (i % 8 == 4)
+            albedos = albedos && table[i] + table[i + 1] > 0.0f && table[i] + table[i + 1] <= 1.0f;
+    }
+    check(table.size() == static_cast<size_t>(kast::kLtcSize * kast::kLtcSize * 8) && finite && albedos,
+          "LTC table: kLtcSize^2 entries of 8 finite floats, albedos in 0..1");
+    const float* rough = &table[static_cast<size_t>(kast::kLtcSize - 1) * 8]; // row 0 (N.V = 1), last column (roughness 1)
+    check(near(rough[0], 1.0f, 1e-3f) && near(rough[1], 0.0f, 1e-3f) && near(rough[2], 0.0f, 1e-3f) && rough[3] > 0.5f &&
+              rough[3] < 2.0f,
+          "LTC at roughness 1, normal incidence: isotropic, near the clamped cosine");
+
+    // Diffuse form factor of a 2 x 2 m square 1 m above, facing the point: 4 x the corner rectangle's
+    // 1/(2 pi) (X/sqrt(1+X^2) atan(Y/sqrt(1+X^2)) + Y/sqrt(1+Y^2) atan(X/sqrt(1+Y^2))), X = Y = 1.
+    const float corner = 2.0f * (1.0f / std::sqrt(2.0f)) * std::atan(1.0f / std::sqrt(2.0f)) / (2.0f * bx::kPi);
+    const std::array<bx::Vec3, 4> overhead = {bx::Vec3{-1, 1, 1}, bx::Vec3{1, 1, 1}, bx::Vec3{1, 1, -1}, bx::Vec3{-1, 1, -1}};
+    const bx::Vec3 up{0, 1, 0}, down{0, -1, 0};
+    check(near(kast::rectFormFactor(overhead, up, false), 4.0f * corner, 1e-3f),
+          "normal incidence form factor matches the analytic one");
+    check(kast::rectFormFactor(overhead, down, false) == 0.0f &&
+              near(kast::rectFormFactor(overhead, down, true), 0.0f, 1e-6f),
+          "a rect below the horizon gives nothing");
+    // The same rect seen from its back: one-sided 0, two-sided the same.
+    const std::array<bx::Vec3, 4> reversed = {overhead[3], overhead[2], overhead[1], overhead[0]};
+    check(kast::rectFormFactor(reversed, up, false) == 0.0f &&
+              near(kast::rectFormFactor(reversed, up, true), 4.0f * corner, 1e-3f),
+          "behind a one-sided rect: 0; two-sided: lit");
+    const std::array<bx::Vec3, 4> huge = {bx::Vec3{-1e3f, 1, 1e3f}, bx::Vec3{1e3f, 1, 1e3f}, bx::Vec3{1e3f, 1, -1e3f},
+                                          bx::Vec3{-1e3f, 1, -1e3f}};
+    check(near(kast::rectFormFactor(huge, up, false), 1.0f, 2e-3f), "a rect filling the hemisphere: form factor 1");
+    // A normal tilted so the horizon cuts the rect: the clipped integral against summing max(N.L, 0) / pi over it.
+    const bx::Vec3 tiltedNormal = bx::normalize(bx::Vec3{1, 0.2f, 0});
+    double numeric = 0.0;
+    constexpr int kSteps = 400;
+    for (int i = 0; i < kSteps; ++i)
+        for (int j = 0; j < kSteps; ++j) {
+            const bx::Vec3 p{-1.0f + 2.0f * (i + 0.5f) / kSteps, 1.0f, -1.0f + 2.0f * (j + 0.5f) / kSteps};
+            const float d2 = bx::dot(p, p);
+            const bx::Vec3 l = bx::mul(p, 1.0f / std::sqrt(d2));
+            numeric += std::max(bx::dot(l, tiltedNormal), 0.0f) * l.y / d2 * (4.0f / (kSteps * kSteps)) / bx::kPi;
+        }
+    check(near(kast::rectFormFactor(overhead, tiltedNormal, false), static_cast<float>(numeric), 2e-3f),
+          "a rect crossing the horizon is clipped to it");
+
+    // Validation: every rule of validateSpotLight / validateAreaLight.
+    const entt::meta_type spotType = kast::findComponentType("SpotLight");
+    const entt::meta_type areaType = kast::findComponentType("AreaLight");
+    const kast::SpotLight spotDefaults;
+    const kast::AreaLight areaDefaults;
+    check(spotType && areaType && spotDefaults.innerAngle == 30.0f && spotDefaults.outerAngle == 45.0f &&
+              !spotDefaults.castShadows && areaDefaults.width == 1.0f && areaDefaults.height == 1.0f &&
+              !areaDefaults.twoSided && !areaDefaults.castShadows,
+          "SpotLight / AreaLight registered with defaults 30 / 45 degrees, 1 x 1 m");
+    const std::tuple<entt::meta_type, const char*, bool> values[] = {
+        {spotType, R"({"color": [1, 0.5, 0], "intensity": 0, "range": 0.01, "innerAngle": 0.1, "outerAngle": 89.9})", true},
+        {spotType, R"({"color": [1, 1, 1], "intensity": 1, "range": 5, "innerAngle": 40, "outerAngle": 40})", true},
+        {spotType, R"({"color": [1.2, 1, 1], "intensity": 1, "range": 5, "innerAngle": 20, "outerAngle": 40})", false},
+        {spotType, R"({"color": [1, 1, 1], "intensity": -1, "range": 5, "innerAngle": 20, "outerAngle": 40})", false},
+        {spotType, R"({"color": [1, 1, 1], "intensity": 1, "range": 0, "innerAngle": 20, "outerAngle": 40})", false},
+        {spotType, R"({"color": [1, 1, 1], "intensity": 1, "range": 5, "innerAngle": 0, "outerAngle": 40})", false},
+        {spotType, R"({"color": [1, 1, 1], "intensity": 1, "range": 5, "innerAngle": 20, "outerAngle": 90})", false},
+        {spotType, R"({"color": [1, 1, 1], "intensity": 1, "range": 5, "innerAngle": 50, "outerAngle": 40})", false},
+        {spotType, R"({"color": [1, 1, 1], "intensity": 1, "range": 5, "innerAngle": 20, "outerAngle": 40, "bias": -0.1})", false},
+        {areaType, R"({"color": [0, 0, 0], "intensity": 0, "width": 0.01, "height": 0.01, "range": 0.01, "twoSided": true})", true},
+        {areaType, R"({"color": [1, -0.1, 1], "intensity": 1, "width": 1, "height": 1, "range": 5})", false},
+        {areaType, R"({"color": [1, 1, 1], "intensity": -1, "width": 1, "height": 1, "range": 5})", false},
+        {areaType, R"({"color": [1, 1, 1], "intensity": 1, "width": 0, "height": 1, "range": 5})", false},
+        {areaType, R"({"color": [1, 1, 1], "intensity": 1, "width": 1, "height": -1, "range": 5})", false},
+        {areaType, R"({"color": [1, 1, 1], "intensity": 1, "width": 1, "height": 1, "range": 0})", false},
+        {areaType, R"({"color": [1, 1, 1], "intensity": 1, "width": 1, "height": 1, "range": 5, "bias": -1})", false},
+    };
+    std::string error;
+    for (const auto& [type, text, valid] : values)
+        check(static_cast<bool>(kast::componentFromJson(type, nlohmann::ordered_json::parse(text), error)) == valid, text);
+
+    // Round trip, every field off its default.
+    kast::Scene scene;
+    const entt::entity lamp = scene.create("Lamps");
+    scene.registry().emplace<kast::SpotLight>(lamp, kast::SpotLight{{0.25f, 0.5f, 1.0f}, 3.5f, 7.0f, 12.5f, 33.0f, true, 0.2f});
+    scene.registry().emplace<kast::AreaLight>(lamp,
+                                              kast::AreaLight{{1.0f, 0.75f, 0.5f}, 2.0f, 2.5f, 0.75f, 6.0f, true, true, 0.3f});
+    const nlohmann::ordered_json json = kast::sceneToJson(scene);
+    kast::Scene loaded;
+    check(kast::sceneFromJson(json, loaded, error), "spot / area light scene loads");
+    const entt::entity e = loaded.children(entt::null).at(0);
+    const auto& s = loaded.registry().get<kast::SpotLight>(e);
+    const auto& a = loaded.registry().get<kast::AreaLight>(e);
+    check(near(s.color, {0.25f, 0.5f, 1.0f}) && s.intensity == 3.5f && s.range == 7.0f && s.innerAngle == 12.5f &&
+              s.outerAngle == 33.0f && s.castShadows && s.bias == 0.2f,
+          "SpotLight round trip");
+    check(near(a.color, {1.0f, 0.75f, 0.5f}) && a.intensity == 2.0f && a.width == 2.5f && a.height == 0.75f &&
+              a.range == 6.0f && a.twoSided && a.castShadows && a.bias == 0.3f,
+          "AreaLight round trip");
+    check(kast::sceneToJson(loaded) == json, "spot / area light scene: second save is identical");
+
+    // GameObject > Spot Light / Area Light: the component, tilted down like a new Directional Light.
+    Document doc;
+    resetToDefault(doc);
+    for (const auto& [kind, label] : {std::pair{ObjectKind::SpotLight, "Spot Light"}, {ObjectKind::AreaLight, "Area Light"}}) {
+        check(std::ranges::find(kObjectKinds, kind) != std::end(kObjectKinds) && std::string(objectKindLabel(kind)) == label,
+              std::format("the GameObject menu has {}", label).c_str());
+        const entt::entity created = createObject(doc, kind, entt::null);
+        const auto& registry = doc.scene.registry();
+        float rotation[16];
+        kast::mtxFromQuat(rotation, registry.get<kast::Transform>(created).rotation);
+        const bx::Vec3 forward = kast::transformDir({0.0f, 0.0f, -1.0f}, rotation);
+        check((kind == ObjectKind::SpotLight ? registry.all_of<kast::SpotLight>(created)
+                                             : registry.all_of<kast::AreaLight>(created)) &&
+                  registry.get<kast::Name>(created).value == label && doc.selected == created && forward.y < -0.5f,
+              std::format("Create {}: the component, selected, shining down", label).c_str());
+    }
 }
 
 // --- Post-processing ---
@@ -12547,6 +12774,7 @@ int main(int argc, char** argv)
     checkLoadValidation();
     checkPointLights();
     checkShadows();
+    checkSpotAreaLights();
     checkFrustumCulling();
     checkPostProcessing();
     checkSky();

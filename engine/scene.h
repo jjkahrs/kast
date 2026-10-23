@@ -95,6 +95,34 @@ struct PointLight {
     float bias = 0.05f;       // >= 0, meters toward the light against shadow acne
 };
 
+// Shines along the entity's world -Z axis in a cone: full inside innerAngle, fading smoothly to 0 at outerAngle
+// (half-angles in degrees, 0 < innerAngle <= outerAngle < 90), with a PointLight's falloff out to range meters (see
+// spotConeFalloff in renderer.h). Scale is ignored.
+struct SpotLight {
+    bx::Vec3 color{1.0f, 1.0f, 1.0f}; // linear RGB 0..1
+    float intensity = 1.0f;
+    float range = 10.0f;
+    float innerAngle = 30.0f;
+    float outerAngle = 45.0f;
+    bool castShadows = false; // a shadow atlas tile; only the kMaxShadowedLocalLights spot / area lights nearest the eye get one
+    float bias = 0.05f;       // >= 0, meters toward the light against shadow acne
+};
+
+// A width x height meter rectangle in the entity's XY plane, centered on it, emitting toward its world -Z (both ways if
+// twoSided), shaded with Linearly Transformed Cosines (see docs/engine/coordinates-and-scenes.html). color * intensity is
+// its radiance: a surface whose view it fills gets what a PointLight gives at 0 m. range: meters from its center it
+// reaches, fading out smoothly before. Scale is ignored.
+struct AreaLight {
+    bx::Vec3 color{1.0f, 1.0f, 1.0f}; // linear RGB 0..1
+    float intensity = 5.0f;
+    float width = 1.0f;
+    float height = 1.0f;
+    float range = 10.0f;
+    bool twoSided = false;
+    bool castShadows = false; // a shadow atlas tile, as SpotLight's
+    float bias = 0.05f;       // >= 0, meters toward the light against shadow acne
+};
+
 // Per-scene light settings. The defaults match the renderer's former fixed 0.2 grey ambient.
 struct SceneLighting {
     bx::Vec3 ambientColor{1.0f, 1.0f, 1.0f}; // linear RGB 0..1

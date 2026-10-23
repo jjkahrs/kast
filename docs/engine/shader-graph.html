@@ -89,7 +89,7 @@ param along UV over time and tints it. <code>tests/project/shader_graphs/</code>
 <tr><td><code>output_vertex</code></td><td>Vertex Output</td><td>VERTEX vec3, NORMAL vec3, UV vec2, COLOR vec4</td><td></td><td></td><td>vertex()</td></tr>
 <tr><td><code>output_fragment</code></td><td>Fragment Output</td><td>ALBEDO vec3, ALPHA, METALLIC, ROUGHNESS float, EMISSION vec3,
   NORMAL_MAP vec3, NORMAL_MAP_DEPTH, AO float</td><td></td><td></td><td>fragment()</td></tr>
-<tr><td><code>output_light</code></td><td>Light Output</td><td>DIFFUSE_LIGHT vec3, SPECULAR_LIGHT vec3 (added per light)</td><td></td><td></td><td>light()</td></tr>
+<tr><td><code>output_light</code></td><td>Light Output</td><td>DIFFUSE_LIGHT vec3, SPECULAR_LIGHT vec3 (added per light: the directional light and each point, spot and area light reaching the mesh)</td><td></td><td></td><td>light()</td></tr>
 <tr><td><code>constant_float</code>, <code>constant_vec2</code>, <code>constant_vec3</code>, <code>constant_vec4</code>, <code>constant_color</code></td>
   <td>Float, Vector 2, 3, 4, Color</td><td></td><td>out: float to vec4 (a color is a vec4)</td><td><code>value</code>: 1 to 4 numbers</td><td>all</td></tr>
 <tr><td><code>param</code></td><td>Param</td><td></td><td>out: the param's type (color: vec4)</td><td><code>param</code>: its name</td><td>all</td></tr>
@@ -125,7 +125,9 @@ inputs follows the <code>SCREEN_TEXTURE</code> / <code>DEPTH_TEXTURE</code> rule
 in topological order (the lowest id first among the nodes that are ready), each after a <code>// @node &lt;id&gt; &lt;type&gt;</code> line, with
 one temp variable per output (<code>n&lt;id&gt;_&lt;pin&gt;</code>; a texture output is the param's name itself). An output
 node's linked inputs are assigned to the built-ins (<code>ALBEDO = n10_out;</code>), the Light Output's added
-(<code>DIFFUSE_LIGHT += ...;</code>, once per light). Helper functions a node needs (Noise's) are written once, before
+(<code>DIFFUSE_LIGHT += ...;</code>, once per light: the template calls the graph's <code>light()</code> for the directional light and
+each point, spot and area light, as any <code>.kshader</code>'s; for an area light the Light Direction and Attenuation inputs are
+the approximation <a href="shaders.html#kshader-light">light()</a> describes). Helper functions a node needs (Noise's) are written once, before
 <code>fragment()</code>. A Custom Expression's code goes in a block of its own after its marker, its pins as locals
 (<a href="../editor/shader-graph.html#sg-custom">rules</a>). Unlinked output pins are not written, so they keep what the
 built-in material computes. A node feeding two stages is emitted in each. The text depends only on the graph, not on the

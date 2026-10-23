@@ -298,7 +298,7 @@ stack two shadows (<code>box-shadow: 0 0 6px 4px #ffcc00, 0 0 16px 6px #ffaa00</
 exactly as before, in one bgfx view, with no offscreen targets (<code>ctest -R ui_play</code> checks <code>main_menu.rml</code> creates none).
 The first effect creates the GUI's layers: RGBA8 render targets the size of the GUI (logged as
 <code>GUI layer framebuffer N created</code>) and one depth-stencil buffer, kept for later frames and recreated when the GUI resizes.
-Every change of render target uses another bgfx view, out of <code>gui::kViews</code> (80) per GUI each frame:</p>
+Every change of render target uses another bgfx view, out of <code>gui::kViews</code> (76) per GUI each frame:</p>
 <ul>
 <li>a blurred <code>box-shadow</code> about 9 views, but only on the frame it is drawn into its texture; it is cached after that
 until the element's size or shadow changes (a hover glow bakes each time the mouse arrives; animating a shadow re-bakes it
@@ -307,7 +307,7 @@ every frame);</li>
 <li>a colour filter or <code>opacity()</code> about 2 views every frame;</li>
 <li>a gradient decorator none: it draws in the element's own pass.</li>
 </ul>
-<p>Past the budget the engine logs <code>GUI effects need more than 80 bgfx views in a frame; some are not drawn</code> once, and the
+<p>Past the budget the engine logs <code>GUI effects need more than 76 bgfx views in a frame; some are not drawn</code> once, and the
 draws that needed more views are skipped that frame. <code>backdrop-filter</code> must read what is already drawn: in the built
 player, which draws to the window's backbuffer, the first frame that needs it draws without the effect, and from then on
 the player draws scene and GUI into a readable target and copies it to the window (one full-screen copy per frame).</p>

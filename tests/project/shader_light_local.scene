@@ -1,0 +1,72 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, -2], "rotation": [0, 0, 0, 1], "scale": [16, 1, 16] },
+        "MeshRenderer": { "primitive": "plane", "material": "materials/shader_light_pbr.mat" }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Toon Sphere",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-2.4, 1, 0], "rotation": [0, 0, 0, 1], "scale": [1.8, 1.8, 1.8] },
+        "MeshRenderer": { "primitive": "sphere", "material": "materials/shader_light_bands.mat" }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Graph Toon Sphere",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 1, -1.5], "rotation": [0, 0, 0, 1], "scale": [1.8, 1.8, 1.8] },
+        "MeshRenderer": { "primitive": "sphere", "material": "materials/graph_toon.mat" }
+      }
+    },
+    {
+      "id": 4,
+      "name": "PBR light() Sphere",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [2.4, 1, 0], "rotation": [0, 0, 0, 1], "scale": [1.8, 1.8, 1.8] },
+        "MeshRenderer": { "primitive": "sphere", "material": "materials/shader_light_pbr.mat" }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Spot",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-2.4, 4, 1.5], "rotation": [-0.608761, 0, 0, 0.793353], "scale": [1, 1, 1] },
+        "SpotLight": { "color": [1, 0.8, 0.5], "intensity": 8, "range": 9, "innerAngle": 20, "outerAngle": 35, "castShadows": true }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Area Panel",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [1.2, 1.5, 2.5], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "AreaLight": { "color": [0.4, 0.7, 1], "intensity": 6, "width": 2.5, "height": 1.2, "range": 9 }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 3.2, 7.5], "rotation": [-0.139173, 0, 0, 0.990268], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    }
+  ],
+  "lighting": { "ambientColor": [0.7, 0.8, 1], "ambientIntensity": 0.1 },
+  "editor": {
+    "camera": { "pivot": [0, 1, -0.5], "yaw": 0, "pitch": -15, "distance": 10 }
+  }
+}
