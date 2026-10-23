@@ -201,6 +201,8 @@ public:
     // without particles and without probes (one bounce: meshes are lit by the sky's environment), prefilters it and reads
     // it back into out. Uses views firstView .. firstView + kShadowViews and runs bgfx::frame() itself (about ten
     // times), so call it between frames, before anything of the next is submitted. False + error if it can't.
+    // ponytail: blocking (the window doesn't redraw meanwhile, ~10 frames a probe); spread the faces over frames on
+    // spare views if scenes bake many probes at once.
     bool bakeProbe(const Scene& scene, const Scene* extra, const std::filesystem::path& projectRoot,
                    const bx::Vec3& center, uint16_t size, bgfx::ViewId firstView, BakedProbe& out, std::string& error);
 
@@ -446,6 +448,8 @@ private:
     bgfx::TextureHandle skyEnv_ = BGFX_INVALID_HANDLE; // the sky's prefiltered cube; invalid: sky off (or no compute)
     Sh9 skySh_{};
     std::optional<SkyEnvKey> skyEnvKey_; // what skyEnv_ is of; nullopt: nothing built yet
+    // ponytail: per Renderer, as the sky's cube: the Scene and Game views each load a probe's cube; share them if
+    // scenes get many large probes.
     std::map<std::pair<std::string, int>, ProbeFile> probeFiles_; // by (bakedPath, resolution)
     bool capture_ = false; // bakeProbe: no particles, no probes
     ParticleRenderer particles_;

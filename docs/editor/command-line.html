@@ -143,6 +143,12 @@
 <td>The <code>kast_mapbake.exe</code> Bake Navmesh runs, for this run only (the Bake section's setting is not changed).</td>
 </tr>
 <tr>
+<td><code>--bake-probes</code></td>
+<td>Window &gt; Lighting's Bake All Probes after the first 8 frames (before <code>--file-save</code>'s), for tests: every
+<a href="../engine/ibl-reflection-probes.html#bake">ReflectionProbe</a> of the scene is baked next to it and its
+<code>bakedPath</code> set.</td>
+</tr>
+<tr>
 <td><code>--file-save</code></td>
 <td>File &gt; Save (as Ctrl+S: the scene, then a zone with unsaved edits) after the first 10 frames, for tests.</td>
 </tr>
@@ -326,7 +332,7 @@
 <p>Without <code>--project</code>, <code>--scene</code>, <code>--save-scene</code> or <code>--build</code>, <code>kast_editor</code> runs the Project Manager instead of the
 editor. Editor-only flags (<code>--select</code>, <code>--play</code>, <code>--select-network-entity</code>, <code>--add-component-popup</code>, <code>--new-component[-prompt]</code>,
 <code>--new-state-machine-prompt</code>, <code>--open-menu</code>, <code>--open-build-settings</code>, <code>--open-online-settings</code>, <code>--focus-panel</code>, <code>--zone-section</code>, <code>--zone-tool</code>, <code>--assets-*</code>, <code>--open-gui</code>,
-<code>--gui-*</code>, <code>--open-graph</code>, <code>--graph-*</code>, <code>--zone-select</code>, <code>--bake</code>, <code>--mapbake</code>, <code>--file-save</code>, the <a href="#zone">zone edits</a>) then are invalid arguments, as are Project Manager flags (<code>--launcher</code>, <code>--new-project</code>,
+<code>--gui-*</code>, <code>--open-graph</code>, <code>--graph-*</code>, <code>--zone-select</code>, <code>--bake</code>, <code>--mapbake</code>, <code>--file-save</code>, <code>--bake-probes</code>, the <a href="#zone">zone edits</a>) then are invalid arguments, as are Project Manager flags (<code>--launcher</code>, <code>--new-project</code>,
 <code>--launcher-open</code>, <code>--</code>) together with the editor's.</p>
 <h2 id="shader-graph-flags">Shader Graph</h2>
 <p>The <a href="shader-graph.html#shader-graph">Shader Graph</a> panels' edits, for tests and screenshots. They need a project

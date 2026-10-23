@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html" class="active">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li></ul></nav>
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html" class="active">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li></ul></nav>
 <main>
 <h1 id="coordinates-and-scenes">Coordinates and scenes</h1>
 <ul>
@@ -20,8 +20,11 @@
 <li>Built-in primitives fit the unit cube centered on the origin: <code>cube</code> (1 m), <code>plane</code> (1x1 m on XZ, facing +Y),
   <code>sphere</code> (0.5 m radius).</li>
 <li>Lighting (forward; shading model under <a href="materials.html#materials">Materials</a>): <code>ambient + directional + point, spot and area lights</code>.<ul>
-<li><strong>Ambient</strong>: per scene, <code>"lighting"</code> in the scene file, edited in <strong>Window &gt; Lighting</strong>. Default white at 0.2.</li>
-<li><strong>Sky</strong>: per scene, <code>"sky"</code> in the scene file, edited in the same panel. Background only: it lights nothing (<a href="skybox.html">Skybox</a>).</li>
+<li><strong>Ambient</strong>: per scene, <code>"lighting"</code> in the scene file, edited in <strong>Window &gt; Lighting</strong>. Default white at 0.2.
+  With the sky off it is a flat color; with the sky on, the sky's image-based lighting, scaled and tinted by it; inside a
+  baked <code>ReflectionProbe</code>'s box, the probe's (<a href="ibl-reflection-probes.html">Image-based lighting</a>).</li>
+<li><strong>Sky</strong>: per scene, <code>"sky"</code> in the scene file, edited in the same panel: the background, and the ambient
+  light while it is on (<a href="skybox.html">Skybox</a>).</li>
 <li><strong>Directional</strong>: the first <code>DirectionalLight</code> in hierarchy order; others are ignored.</li>
 <li><strong>Point</strong>: every <code>PointLight</code>, from its entity's world position, falling off smoothly to exactly 0 at <code>range</code>
   (<code>saturate(1 - (d/r)^4)^2 / (d^2 + 1)</code>). Selecting one in the Scene view shows its range.</li>
@@ -125,6 +128,10 @@ in registration order, floats in shortest round-trip form, so re-saving an uncha
 <li><code>AreaLight</code>: <code>color</code> (linear RGB 0–1), <code>intensity</code> (&gt;= 0; a new one gets 5), <code>width</code> and <code>height</code> (meters,
   &gt; 0; a new one is 1 x 1), <code>range</code> (meters, &gt; 0), <code>twoSided</code> [false], <code>castShadows</code> [false], <code>bias</code> [0.05,
   &gt;= 0].</li>
+<li><code>ReflectionProbe</code>: <code>boxSize</code> (meters, &gt; 0 on every axis; an axis-aligned box centered on the entity's world
+  position, rotation and scale ignored), <code>resolution</code> (64, 128 or 256), <code>intensity</code> (&gt;= 0), <code>priority</code>
+  (integer, higher wins where boxes overlap) and <code>bakedPath</code> (project-relative <code>.ktx</code> written by the editor's
+  Bake; empty = not baked). See <a href="ibl-reflection-probes.html#probes">Reflection probes</a>.</li>
 <li><code>Camera</code>: perspective camera looking down the entity's world -Z (scale ignored). <code>verticalFovDegrees</code> must be
   between 0 and 180 (exclusive), and <code>0 &lt; nearPlane &lt; farPlane</code>. The Inspector keeps the last valid value if an
   edit would break that.</li>
@@ -145,7 +152,7 @@ in registration order, floats in shortest round-trip form, so re-saving an uncha
 <li><code>editor</code> belongs to the editor (camera pivot, yaw/pitch in degrees, distance in meters); the engine keeps it as-is.</li>
 <li>Loading rejects invalid JSON, a <code>version</code> other than 5 (versions 1–4 are not migrated: a version 4 file, the last one before prefabs, fails with <em>unsupported "version" 4</em>), a <code>systems</code> that
   isn't an array of non-empty strings, a missing <code>Transform</code>, unknown, missing or mistyped fields of a built-in
-  component, unknown enum names, out-of-range <code>Camera</code>, <code>PointLight</code>, <code>SpotLight</code> or <code>AreaLight</code> values, a malformed <code>lighting</code> or <code>postProcessing</code>, duplicate ids, parents that don't exist, and parent
+  component, unknown enum names, out-of-range <code>Camera</code>, <code>PointLight</code>, <code>SpotLight</code>, <code>AreaLight</code> or <code>ReflectionProbe</code> values, a malformed <code>lighting</code> or <code>postProcessing</code>, duplicate ids, parents that don't exist, and parent
   cycles. It reports why and leaves the current scene untouched. Lua components are lenient (schema drift), and a
   component name that is neither built-in nor a valid Lua definition is kept verbatim with a Console warning (missing
   definitions); see <a href="lua-components.html#lua-components">Lua components</a>.</li>

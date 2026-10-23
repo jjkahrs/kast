@@ -2989,6 +2989,9 @@ include(cmake/particle_tests.cmake)
 # the graph samples (shader_graphs.scene) against the hand-written ones, in the editor and the player.
 include(cmake/shader_graph_tests.cmake)
 
+# Image-based lighting from the sky and reflection probes: scenes, variants, bake, player.
+include(cmake/ibl_tests.cmake)
+
 # Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.
 get_property(kast_tests DIRECTORY PROPERTY TESTS)
 set_property(TEST ${kast_tests} APPEND PROPERTY ENVIRONMENT KAST_NO_CRASH_DIALOGS=1)
