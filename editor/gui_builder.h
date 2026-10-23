@@ -5,8 +5,10 @@
 #include "viewport.h"
 
 #include <gui.h>
+#include <gui_models.h>
 
 #include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -18,7 +20,9 @@ class ElementDocument;
 // GUI Builder: four panels on one open .rml (gui_doc.h) and the .rcss it links.
 // - GUI Hierarchy: element tree; add Panel / Text / Button (into the selected Panel, else <body>), delete, move up/down,
 //   drag-drop onto a Panel or <body> to reparent; Save.
-// - GUI Inspector: id, class, text (Text, Button) and data-event (Button) of the selection; Unknown elements read-only.
+// - GUI Inspector: id, class, text (Text, Button) and data-event (Button) of the selection, and on any element its RmlUi
+//   data binding attributes (guiBindingAttribute): edited, emptied to remove, or added by name. Other attributes of
+//   Unknown elements are read-only.
 // - GUI Style: the .rcss text, applied to the preview 0.3 s after the last keystroke. A sheet RmlUi logs problems for
 //   (in the Console) is not applied: the preview keeps the last good one.
 // - GUI Preview: the document rendered by RmlUi at a chosen resolution, scaled to fit; click selects the deepest
@@ -50,6 +54,9 @@ public:
     std::string selectedId() const { return GuiDoc::attribute(selected_, "id"); } // "" if none or no id
     // Adds an element of kind as the GUI Hierarchy's + buttons do (applied when the panel next draws).
     void requestAdd(GuiKind kind) { edit_ = {Edit::Op::Add, addParent(), {}, kind}; }
+    // Sets (empty: removes) an attribute of the selection as one Inspector edit step, as typing it in does. False if
+    // nothing or only <body> is selected.
+    bool setAttribute(const std::string& name, const std::string& value);
     // The open GUI's undo history (Edit > Undo / Redo while a builder panel is focused).
     const UndoStack& history() const { return history_; }
     // Undo / redo a step, then reselect the element it affected and set the dirty flag from the save point.
@@ -103,6 +110,7 @@ private:
     void rebuildPreview();
 
     ViewTarget target_;
+    kast::GuiModels previewModels_; // empty models for the document's data-model names (before preview_: it points here)
     kast::GuiContext preview_{"gui-preview"};
     Rml::ElementDocument* previewDoc_ = nullptr;
     std::vector<pugi::xml_node> previewNodes_;    // data-kast-node index -> model element
@@ -124,6 +132,8 @@ private:
     pugi::xml_node selected_;
     Edit edit_;
     std::string inspectorBuffer_[4]; // id, class, text, data-event of inspectorNode_
+    std::map<std::string, std::string> bindingBuffers_; // inspectorNode_'s data binding attributes, by name
+    std::string newBinding_;                            // the Inspector's "Add binding" name
     pugi::xml_node inspectorNode_;
     UndoStack history_;
     struct Gesture {

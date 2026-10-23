@@ -13,6 +13,10 @@
 // (other elements, attributes, comments, <head>) is kept; saving normalizes whitespace and indentation only.
 
 enum class GuiKind { Panel, Text, Button, Unknown };
+// An RmlUi data binding attribute the GUI Inspector edits (docs/editor/gui-builder.html): data-model, data-for, data-if,
+// data-visible, data-value, data-checked, data-rml, data-text, or data-attr-*, data-attrif-*, data-class-*,
+// data-style-*, data-event-*, data-alias-* with a name after the prefix. Not kast's own data-event / data-drag.
+bool guiBindingAttribute(std::string_view name);
 constexpr GuiKind kGuiCreatableKinds[] = {GuiKind::Panel, GuiKind::Text, GuiKind::Button};
 const char* guiKindTag(GuiKind kind);   // "div", "p", "button"; "" for Unknown
 const char* guiKindLabel(GuiKind kind); // "Panel", "Text", "Button", "Unknown"
