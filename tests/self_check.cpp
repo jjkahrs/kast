@@ -7654,12 +7654,15 @@ void checkTextureCooks()
 {
     using Format = bgfx::TextureFormat;
     using kast::TextureUsage;
-    check(kast::cookedFormat(TextureUsage::Color, 64, 32) == Format::BC3 &&
-              kast::cookedFormat(TextureUsage::Linear, 64, 32) == Format::BC3 &&
-              kast::cookedFormat(TextureUsage::Normal, 64, 32) == Format::BC5,
-          "usage formats: color and linear BC3, normal BC5");
-    check(kast::cookedFormat(TextureUsage::Color, 6, 8) == Format::RGBA8 &&
-              kast::cookedFormat(TextureUsage::Normal, 8, 30) == Format::RGBA8,
+    check(kast::cookedFormat(TextureUsage::Color, 64, 32, false) == Format::BC1 &&
+              kast::cookedFormat(TextureUsage::Linear, 64, 32, false) == Format::BC1 &&
+              kast::cookedFormat(TextureUsage::Color, 64, 32, true) == Format::BC3 &&
+              kast::cookedFormat(TextureUsage::Linear, 64, 32, true) == Format::BC3 &&
+              kast::cookedFormat(TextureUsage::Normal, 64, 32, false) == Format::BC5 &&
+              kast::cookedFormat(TextureUsage::Normal, 64, 32, true) == Format::BC5,
+          "usage formats: color and linear BC1 opaque / BC3 with alpha, normal BC5");
+    check(kast::cookedFormat(TextureUsage::Color, 6, 8, false) == Format::RGBA8 &&
+              kast::cookedFormat(TextureUsage::Normal, 8, 30, false) == Format::RGBA8,
           "a side not a multiple of 4 stays RGBA8 (D3D11 takes BCn in whole blocks)");
     check(kast::isSrgb(TextureUsage::Color) && !kast::isSrgb(TextureUsage::Linear) && !kast::isSrgb(TextureUsage::Normal) &&
               kast::colorUsage(true) == TextureUsage::Color && kast::colorUsage(false) == TextureUsage::Linear,
@@ -7704,7 +7707,7 @@ void checkTextureCooks()
               kast::textureCacheKey(png, TextureUsage::Color, "v1") != kast::textureCacheKey(png, TextureUsage::Color, "v2") &&
               kast::textureCacheKey(png, TextureUsage::Color, "v1") != kast::textureCacheKey(png + " ", TextureUsage::Color, "v1"),
           "cache key: image, usage and version each change it");
-    for (const auto [usage, format] : {std::pair{TextureUsage::Color, Format::BC3}, std::pair{TextureUsage::Linear, Format::BC3},
+    for (const auto [usage, format] : {std::pair{TextureUsage::Color, Format::BC1}, std::pair{TextureUsage::Linear, Format::BC1},
                                        std::pair{TextureUsage::Normal, Format::BC5}}) {
         std::string ktx, error;
         bool cached = true;
@@ -7723,6 +7726,16 @@ void checkTextureCooks()
     }
     std::string ktx, error;
     bool cached = false;
+    // An image with alpha below 255 (cutout.png, RGBA) keeps it: BC3; checker.png (RGB) above cooked to BC1.
+    std::string cutout;
+    check(kast::readFile(textures / "cutout.png", cutout), "cutout.png present");
+    for (const TextureUsage usage : {TextureUsage::Color, TextureUsage::Linear}) {
+        check(kast::cookTexture(cutout, usage, cookTextureWithTexturec, "v1", cache, ktx, cached, error),
+              std::format("texturec cooks cutout.png as {} ({})", kast::usageName(usage), error).c_str());
+        const std::optional<kast::GpuImageInfo> info = kast::parseGpuImage(ktx, false, error);
+        check(info && info->format == Format::BC3,
+              std::format("cutout.png ({}): alpha keeps BC3 ({})", kast::usageName(usage), error).c_str());
+    }
     writeFile(cache / (kast::textureCacheKey(png, TextureUsage::Color, "v1") + ".ktx"), "half a KTX");
     check(kast::cookTexture(png, TextureUsage::Color, cookTextureWithTexturec, "v1", cache, ktx, cached, error) && !cached &&
               kast::parseGpuImage(ktx, false, error),
@@ -7734,7 +7747,7 @@ void checkTextureCooks()
               error.starts_with("texturec failed"),
           std::format("a truncated PNG: texturec rejects it ({})", error).c_str());
 
-    // A sky's six faces: one BC3 cube with its mips.
+    // A sky's six faces: one BC1 cube with its mips (the sky ignores alpha).
     std::array<kast::MipImage, 6> faces;
     for (size_t i = 0; i < faces.size(); ++i) {
         std::string bytes;
@@ -7748,8 +7761,8 @@ void checkTextureCooks()
     check(kast::cookTexture(cubeIn, TextureUsage::Color, cookTextureWithTexturec, "v1", cache, ktx, cached, error),
           std::format("texturec cooks the sky cube ({})", error).c_str());
     info = kast::parseGpuImage(ktx, true, error);
-    check(info && info->cube && info->format == Format::BC3 && info->width == 16 && info->mips == 5,
-          std::format("sky cube: BC3, 16x16, 5 mips ({})", error).c_str());
+    check(info && info->cube && info->format == Format::BC1 && info->width == 16 && info->mips == 5,
+          std::format("sky cube: BC1, 16x16, 5 mips ({})", error).c_str());
 
     // TextureCooks: a miss cooks on a worker (one cook per key, however many ask), a hit or a non-async cook is ready
     // at once, and a failed cook comes back empty with the cooker's error.

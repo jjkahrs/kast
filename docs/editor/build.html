@@ -91,7 +91,7 @@ file, and writes nothing:</p>
 and its <code>.kshader</code> / graph params), a model's material (its external and embedded images), a particle emitter or a
 sky (in a shipped scene or prefab) samples into KTX, through the editor's
 <a href="../engine/materials.html#texture-compression">texture cache</a> (<code>.kast/texture_cache/</code>), one per usage it is
-sampled with (BC3 color / linear, BC5 normal), and puts it in <code>game.pak</code> as <code>&lt;path&gt;.&lt;usage&gt;.ktx</code>
+sampled with (BC1 color / linear, BC3 when the image has alpha, BC5 normal), and puts it in <code>game.pak</code> as <code>&lt;path&gt;.&lt;usage&gt;.ktx</code>
 (<code>textures/rock.png.normal.ktx</code>; an embedded image <code>models/hero.glb#0.color.ktx</code>). Each sky's six faces become one
 compressed cube, <code>.kast_sky/&lt;hash of the face paths&gt;.ktx</code>; a sky whose faces don't make a cube gets none, and the
 player draws the procedural sky, as the editor does. An image nothing names (Lua may use it) is compressed as color.

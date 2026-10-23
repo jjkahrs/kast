@@ -1870,7 +1870,7 @@ set_tests_properties(editor_model_cache_cold PROPERTIES FIXTURES_REQUIRED editor
 set_tests_properties(editor_model_cache_warm PROPERTIES FIXTURES_REQUIRED editor_model_cache_cold_run
                      RESOURCE_LOCK model_cache_project)
 # Textures: Build compresses every shipped PNG / JPG a material, model, particle, .kshader param or sky samples into
-# game.pak as <path>.<usage>.ktx (kast::texturePakPath: BC3 color / linear, BC5 normal) and each sky's faces into one
+# game.pak as <path>.<usage>.ktx (kast::texturePakPath: BC1 color / linear, BC3 with alpha, BC5 normal) and each sky's faces into one
 # cube (.kast_sky/), through the project's .kast/texture_cache ("Cooked texture ... (cache hit)" on the second Build),
 # and leaves those source images out; GUI images (ui/drag.rml's checker.png) and terrain heightmaps still ship as files.
 # The player loads the cooked ones ("(cooked)"), with no texturec.exe next to it (player_test.cmake checks).

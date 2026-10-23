@@ -38,7 +38,10 @@ bool cookTextureWithTexturec(std::string_view image, kast::TextureUsage usage, b
         error = std::format("cannot write '{}'", u8(in));
         return false;
     }
-    const char* type = format == bgfx::TextureFormat::BC5 ? "BC5" : format == bgfx::TextureFormat::BC3 ? "BC3" : "RGBA8";
+    const char* type = format == bgfx::TextureFormat::BC5   ? "BC5"
+                       : format == bgfx::TextureFormat::BC3 ? "BC3"
+                       : format == bgfx::TextureFormat::BC1 ? "BC1"
+                                                            : "RGBA8";
     std::vector<std::string> args{u8(texturec), "-f", u8(in), "-o", u8(out), "-m", "-t", type};
     if (usage == kast::TextureUsage::Linear)
         args.emplace_back("--linear");

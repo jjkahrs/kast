@@ -54,6 +54,27 @@ std::optional<std::pair<uint32_t, uint32_t>> imageSize(std::string_view image)
     return std::pair{static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
 }
 
+// Whether a PNG / JPG has a pixel with alpha below 255. A KTX (the sky's cube input) counts as opaque: the sky ignores
+// alpha.
+bool hasAlpha(std::string_view image)
+{
+    int width = 0, height = 0, channels = 0;
+    const auto* bytes = reinterpret_cast<const stbi_uc*>(image.data());
+    const int size = static_cast<int>(std::min<size_t>(image.size(), INT32_MAX));
+    if (image.starts_with("«KTX") || !stbi_info_from_memory(bytes, size, &width, &height, &channels) ||
+        channels == 1 || channels == 3)
+        return false;
+    stbi_uc* pixels = stbi_load_from_memory(bytes, size, &width, &height, &channels, 4);
+    if (!pixels)
+        return false;
+    const size_t count = static_cast<size_t>(width) * height;
+    bool alpha = false;
+    for (size_t i = 0; i < count && !alpha; ++i)
+        alpha = pixels[i * 4 + 3] != 255;
+    stbi_image_free(pixels);
+    return alpha;
+}
+
 } // namespace
 
 std::string_view usageName(TextureUsage usage)
@@ -69,11 +90,13 @@ std::string_view usageName(TextureUsage usage)
     return "normal";
 }
 
-bgfx::TextureFormat::Enum cookedFormat(TextureUsage usage, uint32_t width, uint32_t height)
+bgfx::TextureFormat::Enum cookedFormat(TextureUsage usage, uint32_t width, uint32_t height, bool alpha)
 {
     if (width % 4 != 0 || height % 4 != 0)
         return bgfx::TextureFormat::RGBA8;
-    return usage == TextureUsage::Normal ? bgfx::TextureFormat::BC5 : bgfx::TextureFormat::BC3;
+    if (usage == TextureUsage::Normal)
+        return bgfx::TextureFormat::BC5;
+    return alpha ? bgfx::TextureFormat::BC3 : bgfx::TextureFormat::BC1;
 }
 
 std::vector<std::pair<std::string, TextureUsage>> materialTextures(const Material& material, const ShaderSource* shader)
@@ -124,7 +147,7 @@ bool cookTexture(std::string_view image, TextureUsage usage, const TextureCooker
         return false;
     }
     ktx.clear();
-    if (!cooker(image, usage, cookedFormat(usage, size->first, size->second), ktx, error))
+    if (!cooker(image, usage, cookedFormat(usage, size->first, size->second, hasAlpha(image)), ktx, error))
         return false;
     // ponytail: the cache is never pruned; stale keys stay until the folder is deleted (as the shader cache).
     std::error_code ec;

@@ -117,13 +117,15 @@ Create &gt; Material) writes version 3 with every field, in the order above. Oth
   with bgfx's <code>texturec</code> (next to <code>kast_editor.exe</code>; never shipped) into a KTX with mips, by usage:
   <table>
   <tr><th>Usage</th><th>Format</th><th>Sampled as</th></tr>
-  <tr><td>color (base color, emissive, sky faces, sRGB params, particles)</td><td>BC3</td><td>sRGB</td></tr>
-  <tr><td>linear (metallic-roughness, occlusion, linear params)</td><td>BC3</td><td>linear</td></tr>
+  <tr><td>color (base color, emissive, sky faces, sRGB params, particles)</td><td>BC1 opaque, BC3 with alpha</td><td>sRGB</td></tr>
+  <tr><td>linear (metallic-roughness, occlusion, linear params)</td><td>BC1 opaque, BC3 with alpha</td><td>linear</td></tr>
   <tr><td>normal (normal texture)</td><td>BC5 (X, Y; the mesh shader rebuilds Z)</td><td>linear</td></tr>
   </table>
   An image whose width or height isn't a multiple of 4 stays RGBA8 (D3D11 takes BCn only in whole 4x4 blocks), with
-  <code>texturec</code>'s mips. BC3 and BC5 are a quarter of RGBA8's memory. BC3 rather than BC7: <code>texturec</code>'s BC7
-  encoder takes about 30 s for a 256x256 image and minutes for 1024x1024, too slow for an editor cache and for Build.
+  <code>texturec</code>'s mips. An image is <em>opaque</em> when it has no alpha channel or every alpha is 255; one pixel below
+  255 (a cutout, a fade) keeps alpha with BC3. BC1 is an eighth of RGBA8's memory, BC3 and BC5 a quarter (the defaults Unity
+  and Godot use too). No BC7: <code>texturec</code>'s BC7 encoder takes about 30 s for a 256x256 image and minutes for
+  1024x1024, too slow for an editor cache and for Build.
   The result is kept in <code>&lt;project&gt;/.kast/texture_cache/&lt;key&gt;.ktx</code> (key: a hash of the image bytes, the usage, the
   cooker version and <code>texturec.exe</code>'s size and time; a dot-folder, never shipped, ignored by git), so each image is
   compressed once. On a cache miss the editor draws the uncompressed RGBA8 image at once, compresses on a worker thread

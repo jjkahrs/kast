@@ -30,7 +30,7 @@ skies: the view clears to its background color, or to the fog color while fog is
   procedural sky</code>), draws the procedural gradient instead and the Lighting panel shows the reason in red. A scene with
   bad faces still loads. Faces load once per set of paths (and project); editing a face image on disk needs the path
   changed, or the scene reopened, to show. The six faces are
-  <a href="materials.html#texture-compression">compressed</a> into one BC3 sRGB cube with mips (RGBA8 if the size isn't a
+  <a href="materials.html#texture-compression">compressed</a> into one BC1 sRGB cube with mips (the sky ignores alpha) (RGBA8 if the size isn't a
   multiple of 4), cached like other textures (<code>Loaded sky cube (cooked in 0.02 s)</code>, then <code>(cache hit)</code>); the
   editor draws the uncompressed cube until that is done. Build puts the compressed cube in <code>game.pak</code> instead of
   the face images (<a href="../editor/build.html#build-textures">Build</a>), and the player loads that one. A sky set

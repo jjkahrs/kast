@@ -30,13 +30,14 @@ constexpr TextureUsage kTextureUsages[] = {TextureUsage::Color, TextureUsage::Li
 constexpr TextureUsage colorUsage(bool srgb) { return srgb ? TextureUsage::Color : TextureUsage::Linear; }
 constexpr bool isSrgb(TextureUsage usage) { return usage == TextureUsage::Color; }
 std::string_view usageName(TextureUsage usage); // "color", "linear", "normal"
-// The format a width x height image of usage cooks to: BC5 for normals (X, Y; the mesh shader rebuilds Z), BC3 for the
-// rest. RGBA8 when a side isn't a multiple of 4 (D3D11 takes BCn only in whole blocks).
-// ponytail: BC3, not BC7: texturec's BC7 encoder (nvtt) takes ~30 s for 256x256 and minutes for 1024x1024. Switch
-// Color / Linear to BC7 here (and bump kTextureCookVersion) if a fast BC7 encoder reaches texturec.
-bgfx::TextureFormat::Enum cookedFormat(TextureUsage usage, uint32_t width, uint32_t height);
+// The format a width x height image of usage cooks to: BC5 for normals (X, Y; the mesh shader rebuilds Z); otherwise
+// BC1 when opaque, BC3 when alpha has a pixel below 255 (Unity's and Godot's defaults). RGBA8 when a side isn't a
+// multiple of 4 (D3D11 takes BCn only in whole blocks).
+// ponytail: no BC7: texturec's BC7 encoder (nvtt) takes ~30 s for 256x256 and minutes for 1024x1024. Add it as a
+// high-quality option here (and bump kTextureCookVersion) if a fast BC7 encoder reaches texturec.
+bgfx::TextureFormat::Enum cookedFormat(TextureUsage usage, uint32_t width, uint32_t height, bool alpha);
 // Bumped when cooked output changes (formats, texturec flags): every cache entry misses.
-constexpr int kTextureCookVersion = 1;
+constexpr int kTextureCookVersion = 2;
 
 // The textures a material samples, with each one's usage (empty slots left out). shader: its .kshader as parsed, for
 // its texture2D params' sRGB flags (null: params count as Color).
