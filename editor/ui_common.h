@@ -1,6 +1,7 @@
 #pragma once
 
 #include <imgui.h>
+#include <stats_overlay.h>
 
 #include <cstdint>
 #include <optional>
@@ -99,11 +100,13 @@ private:
 };
 
 // --log-fps: once a second, the frame rate (vsync caps it at the display's refresh rate) and what a frame costs below
-// that cap: the app's CPU time per frame (update, UI and submitting draws) and bgfx's last GPU frame time.
+// that cap: the app's CPU time per frame (update, UI and submitting draws) and bgfx's last GPU frame time; then a
+// renderer's last camera-pass counts and Hi-Z latency, if given.
 class FpsLog {
 public:
-    // frameStart: SDL_GetPerformanceCounter() at the start of the frame.
-    void endFrame(uint64_t frameStart);
+    // frameStart: SDL_GetPerformanceCounter() at the start of the frame. scene: the Scene view's Renderer::stats,
+    // hizLatency its occlusionLatency.
+    void endFrame(uint64_t frameStart, const kast::RenderStats* scene = nullptr, int hizLatency = 0);
 
 private:
     uint64_t windowStart_ = 0;

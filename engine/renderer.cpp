@@ -202,9 +202,18 @@ bgfx::TextureHandle createTexture(const MipImage& image, bool srgb)
                                  bgfx::copy(image.rgba.data(), static_cast<uint32_t>(image.rgba.size())));
 }
 
+// A draw's identity across frames (DrawItem::id): its scene, its entity (or terrain tile data) and which part of it.
+uint64_t drawId(const void* scene, uint64_t object, uint64_t part)
+{
+    uint64_t id = reinterpret_cast<uintptr_t>(scene) * 0x9e3779b97f4a7c15ull;
+    for (const uint64_t value : {object, part})
+        id ^= value + 0x9e3779b97f4a7c15ull + (id << 6) + (id >> 2);
+    return id | 1; // 0 is "none"
+}
+
 // Draws lines (vertex pairs) with this frame's transient buffer; skipped if it has no room left.
 void submitLines(const std::vector<LineVertex>& lines, const bgfx::VertexLayout& layout, bgfx::ProgramHandle program,
-                 bgfx::ViewId view)
+                 bgfx::ViewId view, uint64_t state = kState | BGFX_STATE_PT_LINES)
 {
     const auto count = static_cast<uint32_t>(lines.size());
     if (count == 0 || bgfx::getAvailTransientVertexBuffer(count, layout) < count)
@@ -213,7 +222,7 @@ void submitLines(const std::vector<LineVertex>& lines, const bgfx::VertexLayout&
     bgfx::allocTransientVertexBuffer(&buffer, count, layout);
     std::memcpy(buffer.data, lines.data(), count * sizeof(LineVertex));
     bgfx::setVertexBuffer(0, &buffer);
-    bgfx::setState(kState | BGFX_STATE_PT_LINES);
+    bgfx::setState(state);
     bgfx::submit(view, program);
 }
 
@@ -653,6 +662,7 @@ void Renderer::init()
         const MeshData data = primitiveMesh(static_cast<Primitive>(i));
         meshes_[i].vertices = bgfx::createVertexBuffer(copyOf(data.vertices), meshLayout_);
         meshes_[i].indices = bgfx::createIndexBuffer(copyOf(data.indices));
+        meshes_[i].triangles = static_cast<uint32_t>(data.indices.size() / 3);
     }
     for (int level = 0; level < kTerrainStrides; ++level)
         for (const bool skirts : {false, true}) {
@@ -762,6 +772,7 @@ void Renderer::init()
     sky_.init();
     envFilter_.init();
     particles_.init(bgfx::getCaps()->supported);
+    hiz_.init();
     voxelGi_->passes.init();
     sdfgi_->init();
     voxelGi_->params = bgfx::createUniform("u_voxelGi", bgfx::UniformType::Vec4, 4);
@@ -839,6 +850,7 @@ void Renderer::shutdown()
     envFilter_.shutdown();
     sky_.shutdown();
     particles_.shutdown();
+    hiz_.shutdown();
     voxelGi_->clear();
     for (bgfx::UniformHandle uniform : {voxelGi_->params, voxelGi_->cones, voxelGi_->sampler})
         bgfx::destroy(uniform);
@@ -983,16 +995,10 @@ void Renderer::addTerrainDraws(const Scene& scene, const float* viewMtx, const f
                 if (skirts)
                     item.bounds.min.y -= mesh.skirtDepth;
                 item.material = material;
-                if (terrainLodTint_) {
-                    static constexpr std::array<std::array<float, 3>, kTerrainStrides> kTints{
-                        {{0.2f, 1.0f, 0.2f}, {1.0f, 1.0f, 0.1f}, {1.0f, 0.5f, 0.0f}, {1.0f, 0.1f, 0.1f}}};
-                    Material& tinted = terrainTints_[{material, runLevel}];
-                    tinted = *material;
-                    tinted.baseColorTexture.clear();
-                    for (size_t c = 0; c < 3; ++c)
-                        tinted.baseColor[c] = kTints[size_t(runLevel)][c];
-                    item.material = &tinted;
-                }
+                item.lod = runLevel;
+                item.triangles = item.indexCount / 3;
+                item.id = drawId(&scene, reinterpret_cast<uintptr_t>(mesh.data.get()),
+                                 uint64_t(item.firstIndex) << 32 | item.indexCount);
                 draws.push_back(item);
             }
             runStart = chunk;
@@ -1326,7 +1332,7 @@ void Renderer::resolveShaders(std::vector<DrawItem>& draws)
 }
 
 int Renderer::pickLod(const Scene& scene, entt::entity entity, const Model& model, const Aabb& bounds,
-                      const float* viewMtx, const float* projMtx)
+                      const bx::Vec3& eye, const float* projMtx)
 {
     if (!lod_ || capture_) // a probe bake sees LOD0, as the other bakers
         return 0;
@@ -1335,28 +1341,29 @@ int Renderer::pickLod(const Scene& scene, entt::entity entity, const Model& mode
     const auto* group = scene.registry().try_get<LODGroup>(entity);
     const std::span<const float> thresholds = group ? group->thresholds : model.lod.thresholds;
     const bool cullBelow = group ? group->cullBelow : model.lod.cullBelowLast;
-    const float screenHeight = lodScreenHeight(bounds, viewMtx, projMtx) * lodBias_ * (group ? group->bias : 1.0f);
-    const std::pair key{&scene, entity};
-    const auto last = lodLevels_.find(key);
-    const int selected = selectLod(screenHeight, thresholds, cullBelow, last != lodLevels_.end() ? last->second.selected : -1);
+    const float screenHeight = lodScreenHeight(bounds, eye, projMtx) * lodBias_ * (group ? group->bias : 1.0f);
+    LodState& state = lodStates_[{&scene, entity}];
+    const bool drawnLast = state.frame + 1 == lodFrame_; // in the render() before this one
+    const int selected = selectLod(screenHeight, thresholds, cullBelow, drawnLast ? state.selected : -1);
     const int drawn = cullBelow && selected == static_cast<int>(thresholds.size()) ? -1 : selected;
-    if (lodLogging_ && (last == lodLevels_.end() || last->second.drawn != drawn)) { // -1: culled
+    if (lodLogging_ && (!drawnLast || state.drawn != drawn)) { // -1: culled
         const auto* name = scene.registry().try_get<Name>(entity);
         log::info(std::format("LOD: '{}' level {} -> {} (screen height {:.4f})", name ? name->value : "",
-                              last == lodLevels_.end() ? "none" : std::to_string(last->second.drawn), drawn, screenHeight));
+                              drawnLast ? std::to_string(state.drawn) : "none", drawn, screenHeight));
     }
-    lodNext_[key] = {selected, drawn};
+    state = {selected, drawn, lodFrame_};
+    ++lodPicked_;
     return drawn;
 }
 
 std::optional<int> Renderer::lodLevel(const Scene& scene, entt::entity entity) const
 {
-    const auto it = lodLevels_.find({&scene, entity});
-    return it == lodLevels_.end() ? std::nullopt : std::optional<int>(it->second.drawn);
+    const auto it = lodStates_.find({&scene, entity});
+    return it == lodStates_.end() || it->second.frame != lodFrame_ ? std::nullopt : std::optional<int>(it->second.drawn);
 }
 
 void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const ModelRenderer& renderer, const float* world,
-                             const float* viewMtx, const float* projMtx, std::vector<DrawItem>& draws,
+                             const bx::Vec3& eye, const float* projMtx, std::vector<DrawItem>& draws,
                              std::vector<std::vector<Mat4>>& boneSets)
 {
     if (renderer.model.empty())
@@ -1372,6 +1379,8 @@ void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const Mode
         item.material = &errorMaterial();
         item.vertices = cube.vertices;
         item.indices = cube.indices;
+        item.triangles = cube.triangles;
+        item.id = drawId(&scene, entt::to_integral(entity), 0);
         draws.push_back(item);
         return;
     }
@@ -1381,7 +1390,7 @@ void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const Mode
         state && state->model == &model && state->globals.size() == model.nodes.size() ? state->globals : gpu->bindGlobals;
     item.bounds = transformBounds(model.bounds, world); // ponytail: bind-pose bounds, also for posed models
     item.posed = &globals != &gpu->bindGlobals;
-    const int level = pickLod(scene, entity, model, item.bounds, viewMtx, projMtx);
+    const int level = pickLod(scene, entity, model, item.bounds, eye, projMtx);
     if (level < 0) // culled below its last threshold
         return;
     // Past the model's last level: its last (as lodIndices).
@@ -1397,6 +1406,8 @@ void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const Mode
         item.submesh = i;
         if (!bgfx::isValid(item.indices)) // an authored level without this part
             continue;
+        item.triangles = static_cast<uint32_t>(lodIndices(mesh, lod).size() / 3);
+        item.id = drawId(&scene, entt::to_integral(entity), i + 1);
         item.bones = -1;
         if (!mesh.joints.empty() && mesh.joints.size() <= kMaxBones) {
             std::copy_n(world, 16, item.world.begin());
@@ -2221,6 +2232,8 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             item.material = instance ? &instance->material : &materials_.get(mesh.material);
             item.vertices = gpu.vertices;
             item.indices = gpu.indices;
+            item.triangles = gpu.triangles;
+            item.id = drawId(&from, entt::to_integral(entity), 0);
             item.castShadows = mesh.castShadows;
             item.receiveShadows = mesh.receiveShadows;
             if (baked && mesh.giMode == GiMode::Static) // unbaked: the probe grid, if any
@@ -2234,7 +2247,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         }
         for (auto [entity, model] : entities.view<ModelRenderer>().each()) {
             const size_t first = draws.size();
-            addModelDraws(from, entity, model, worldOf(entity).data(), viewMtx, projMtx, draws, boneSets);
+            addModelDraws(from, entity, model, worldOf(entity).data(), eye, projMtx, draws, boneSets);
             if (sdfgiOn && &from == &scene && model.giMode == GiMode::Static)
                 for (size_t i = first; i < draws.size(); ++i)
                     if (draws[i].bones < 0) {
@@ -2257,12 +2270,29 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         }
         addTerrainDraws(from, viewMtx, projMtx, draws);
     };
-    lodNext_.clear();
+    ++lodFrame_;
+    lodPicked_ = 0;
     addDraws(scene, gi.enabled);
     if (extra)
         addDraws(*extra, false);
-    lodLevels_.swap(lodNext_);
+    if (lodStates_.size() > 2 * lodPicked_ + 256) // entities no longer drawn
+        std::erase_if(lodStates_, [&](const auto& entry) { return entry.second.frame != lodFrame_; });
     pruneTerrain();
+    if (lodTint_) // a tinted copy of each (material, level), untextured so the tint shows
+        for (DrawItem& item : draws) {
+            static constexpr std::array<std::array<float, 3>, 5> kTints{{{0.2f, 1.0f, 0.2f},
+                                                                         {1.0f, 1.0f, 0.1f},
+                                                                         {1.0f, 0.5f, 0.0f},
+                                                                         {1.0f, 0.1f, 0.1f},
+                                                                         {0.7f, 0.2f, 1.0f}}};
+            const int level = std::min(item.lod, int(kTints.size()) - 1);
+            Material& tinted = lodTints_[{item.material, level}];
+            tinted = *item.material;
+            tinted.baseColorTexture.clear();
+            for (size_t c = 0; c < 3; ++c)
+                tinted.baseColor[c] = kTints[size_t(level)][c];
+            item.material = &tinted;
+        }
     resolveShaders(draws);
     for (DrawItem& item : draws) {
         // Lightmaps off (terrain tiles carry theirs), or a .kshader using the lightmap's stages: the probe grid instead.
@@ -2567,9 +2597,29 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     std::vector<size_t> opaqueGiKeys;              // BatchKey::gi
     std::vector<const DrawItem*> blended;
     std::vector<bx::Vec3> centers;
+    // Occlusion (occlusion.h): skips what an earlier frame's depth hid, and tests what passes the frustum for later
+    // frames. Blended draws are tested too (they write no depth, so they never hide anything).
+    stats_ = {};
+    occludedBoxes_.clear();
+    const bool occlusion = occlusion_ && culling_ && !capture_ && bgfx::isValid(target) && hiz_.supported();
+    if (occlusion)
+        hiz_.beginFrame(eye, targetWidth_, targetHeight_);
+    else
+        hiz_.reset();
+    std::vector<HizOcclusion::Candidate> candidates;
     for (const DrawItem& item : draws) {
         if (culled(item, frustum))
             continue;
+        if (occlusion && item.id != 0 && !item.posed) { // posed: bounds are the bind pose's
+            candidates.push_back({item.id, item.bounds});
+            if (hiz_.occluded(item.id, item.bounds)) {
+                ++stats_.occluded;
+                if (showOccluded_)
+                    occludedBoxes_.push_back(item.bounds);
+                continue;
+            }
+        }
+        ++stats_.lodDraws[size_t(std::clamp(item.lod, 0, int(stats_.lodDraws.size()) - 1))];
         if (!isTransparent(*item.material)) {
             opaque.push_back(&item);
             opaqueLights.push_back(lightsOf(item));
@@ -2605,7 +2655,10 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         for (size_t i : indices)
             batch.push_back(opaque[i]);
         bgfx::InstanceDataBuffer instances;
+        for (const DrawItem* item : batch)
+            stats_.triangles += item->triangles;
         if (instanced(batch, instances)) {
+            ++stats_.draws;
             setDrawState(*batch.front(), opaqueLights[indices.front()], opaqueEnvironments[indices.front()],
                          opaqueGi[indices.front()]);
             bgfx::setInstanceDataBuffer(&instances);
@@ -2614,6 +2667,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
                                                                                        : instancedProgram_);
             continue;
         }
+        stats_.draws += uint32_t(indices.size());
         for (size_t i : indices)
             submit(view, *opaque[i], opaqueLights[i]);
     }
@@ -2632,8 +2686,12 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         }
         copyScene(blendView, target, screenCopied, depthCopied);
     }
+    if (occlusion)
+        hiz_.endFrame(view, blendView, bgfx::getTexture(target, 1), viewProj, eye, std::move(candidates));
     for (size_t i : backToFront(centers, eye)) {
         if (i < blended.size()) {
+            ++stats_.draws;
+            stats_.triangles += blended[i]->triangles;
             submit(blendView, *blended[i], lightsOf(*blended[i]));
             continue;
         }
@@ -2655,6 +2713,22 @@ void Renderer::renderOverlays(const Scene& scene, bgfx::ViewId view, const float
     drawProbeBox(scene, view, selected);
     drawColliderWireframe(scene, view, selected);
     drawParticleShape(scene, view, selected);
+    drawOccludedBoxes(view);
+}
+
+void Renderer::drawOccludedBoxes(bgfx::ViewId view)
+{
+    constexpr uint32_t kOccludedColor = 0xff0099ff; // ABGR: the editor's darken orange
+    std::vector<LineVertex> lines;
+    for (const Aabb& box : occludedBoxes_)
+        for (int i = 0; i < 8; ++i)
+            for (int axis : {1, 2, 4})
+                if (!(i & axis)) // each edge once, as drawProbeBox
+                    for (const int corner : {i, i | axis})
+                        lines.push_back({corner & 1 ? box.max.x : box.min.x, corner & 2 ? box.max.y : box.min.y,
+                                         corner & 4 ? box.max.z : box.min.z, kOccludedColor});
+    // Not depth-tested: they are behind what hid them.
+    submitLines(lines, lineLayout_, lineProgram_, view, BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_PT_LINES);
 }
 
 void Renderer::drawGrid(bgfx::ViewId view)

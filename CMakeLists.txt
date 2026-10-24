@@ -50,6 +50,7 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
              engine/shaders/cs_particle_sim engine/shaders/vs_particle engine/shaders/fs_particle engine/shaders/cs_ibl
              engine/shaders/cs_voxelgi_inject engine/shaders/cs_voxelgi_mip engine/shaders/cs_voxelgi_bounce
              engine/shaders/cs_sdfgi_build engine/shaders/cs_sdfgi_light engine/shaders/cs_sdfgi_probe
+             engine/shaders/cs_hiz_build engine/shaders/cs_hiz_test engine/shaders/cs_hiz_debug
              engine/shaders/gui/vs_gui engine/shaders/gui/fs_gui engine/shaders/gui/fs_gui_matrix
              engine/shaders/gui/fs_gui_blur engine/shaders/gui/fs_gui_gradient
              engine/shaders/post/vs_post engine/shaders/post/fs_post_bright engine/shaders/post/fs_post_down
@@ -175,7 +176,7 @@ target_compile_options(xatlas PRIVATE /W0 /utf-8)
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/undo.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/prefab.cpp engine/components.cpp
-  engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/lod.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
+  engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/lod.cpp engine/occlusion.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/gui_lists.cpp engine/gui_richtext.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
@@ -324,6 +325,40 @@ add_test(NAME scene_play_screenshot
 add_test(NAME scene_play_differs
   COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/scene_basic.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/scene_play.png"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+# LOD and occlusion benchmark (tests/scenes/gen_lod_occlusion.py, docs/engine/lod-and-occlusion.html#benchmark): the
+# far-field view draws the tori at LOD3 (--log-fps prints the Scene view's counts once a second); behind the near wall
+# Hi-Z occlusion skips most of them; forced unsupported (as on a GPU without compute / read-back) it skips none and
+# logs no error.
+add_test(NAME lod_far_field
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/lod_far_field.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/lod_occlusion.scene --log-fps --window-pos -1900,40" -DFRAMES=2000
+          "-DEXPECT_OUTPUT=Scene view: Tris [0-9.]+k  Draws [0-9]+  Occluded [0-9]+  LOD [0-9]+/0/0/[0-9][0-9][0-9]"
+          "-DFORBID_OUTPUT=\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME occlusion_behind_wall
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/occlusion_behind_wall.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/lod_occlusion_wall.scene --log-fps --window-pos -1900,40" -DFRAMES=2000
+          "-DEXPECT_OUTPUT=Occluded [3-9][0-9][0-9]  " "-DFORBID_OUTPUT=\\[error\\]"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME occlusion_unsupported
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/occlusion_unsupported.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/lod_occlusion_wall.scene --occlusion-unsupported --log-fps --window-pos -1900,40"
+          -DFRAMES=2000 "-DEXPECT_OUTPUT=Occlusion culling: off \\(--occlusion-unsupported\\).*Occluded 0  "
+          "-DFORBID_OUTPUT=\\[error\\]|Occluded [1-9]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# Occlusion on and off draw the same still image (the wall hides what it skips).
+foreach(mode on off)
+  set(flag "")
+  if(mode STREQUAL "off")
+    set(flag "--no-occlusion")
+  endif()
+  add_test(NAME occlusion_${mode}_screenshot
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/occlusion_${mode}.png"
+            "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/lod_occlusion_wall.scene ${flag} --window-pos -1900,40" -DFRAMES=300
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endforeach()
+add_test(NAME occlusion_same_image
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/occlusion_on.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/occlusion_off.png"
+          -DSAME=ON -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(occlusion_same_image PROPERTIES DEPENDS "occlusion_on_screenshot;occlusion_off_screenshot")
 # Play brings the Game tab to the front: the shot shows the scene through its Main Camera, without grid or gizmos.
 add_test(NAME game_play_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/game_play.png"

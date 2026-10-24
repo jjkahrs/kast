@@ -322,7 +322,7 @@ void FrameLimit::onScreenshotSaved(bool saved)
     kast::requestQuit();
 }
 
-void FpsLog::endFrame(uint64_t frameStart)
+void FpsLog::endFrame(uint64_t frameStart, const kast::RenderStats* scene, int hizLatency)
 {
     const uint64_t now = SDL_GetPerformanceCounter();
     const auto frequency = static_cast<double>(SDL_GetPerformanceFrequency());
@@ -336,8 +336,11 @@ void FpsLog::endFrame(uint64_t frameStart)
     const bgfx::Stats* stats = bgfx::getStats();
     const double gpuMs = 1000.0 * static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) /
                          static_cast<double>(stats->gpuTimerFreq);
-    kast::log::info(std::format("FPS {:.1f}, CPU {:.2f} ms/frame, GPU {:.2f} ms/frame, {} draw calls", frames_ / elapsed,
-                                1000.0 * cpuSeconds_ / frames_, gpuMs, stats->numDraw));
+    std::string line = std::format("FPS {:.1f}, CPU {:.2f} ms/frame, GPU {:.2f} ms/frame, {} draw calls", frames_ / elapsed,
+                                   1000.0 * cpuSeconds_ / frames_, gpuMs, stats->numDraw);
+    if (scene)
+        line += std::format("; Scene view: {}, Hi-Z latency {} frames", kast::renderStatsText(*scene), hizLatency);
+    kast::log::info(line);
     windowStart_ = now;
     frames_ = 0;
     cpuSeconds_ = 0.0;

@@ -20,6 +20,8 @@ constexpr float kLodHysteresis = 0.1f;
 // the height the view sees at the distance of its center (perspective) or the view's height (orthographic). Over 1
 // when it's larger than the screen; distance-based, so turning the camera doesn't change it.
 float lodScreenHeight(const Aabb& bounds, const float* viewMtx, const float* projMtx);
+// The same from the eye's world position (the view's inverse), for callers that pick many draws per view.
+float lodScreenHeight(const Aabb& bounds, const bx::Vec3& eye, const float* projMtx);
 
 // The level for a screen height: the first whose threshold (decreasing per level) it reaches; below the last, the last
 // level, or thresholds.size() (not drawn) if cullBelow. previous: the level chosen last frame (-1: none), kept while

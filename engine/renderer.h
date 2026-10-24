@@ -6,12 +6,14 @@
 #include "lod.h"
 #include "material.h"
 #include "model.h"
+#include "occlusion.h"
 #include "particles.h"
 #include "scene.h"
 #include "shader.h"
 #include "shader_clock.h"
 #include "shadow.h"
 #include "sky.h"
+#include "stats_overlay.h"
 #include "texture_cook.h"
 
 #include <bgfx/bgfx.h>
@@ -27,6 +29,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -166,7 +169,8 @@ void buildMips(MipImage& image, bool srgb);
 // Every pass culls its draws to its view frustum (main camera, each cascade, each cube face, each tile), and draws that
 // share buffers, material, shadow flags and (main pass) lights, unskinned and not blended, are drawn as one GPU-instanced
 // submit (see docs/engine/instancing-and-culling.html). Model draws are at the LOD their screen height picks (setLod);
-// each level has its own index buffer, so levels batch apart.
+// each level has its own index buffer, so levels batch apart. The camera pass also skips draws a Hi-Z test of an
+// earlier frame's depth found hidden (setOcclusion; docs/engine/lod-and-occlusion.html).
 // The caller owns the views' framebuffers, rects and clears; these set the view transform and mode and submit.
 class Renderer {
 public:
@@ -223,12 +227,29 @@ public:
     // at most 8; the LOD bias scales distance and error).
     // Logs each ModelRenderer's level when first drawn and each change (--log-lod).
     void setLodLogging(bool on) { lodLogging_ = on; }
-    // Terrain LOD test hooks: tint chunks by stride (1 green, 2 yellow, 4 orange, 8 red: --terrain-lod-tint); a
-    // checkerboard of strides 1 and 8 by chunk, the worst case for cracks (--terrain-lod-checker); no skirts, so cracks
-    // show (--no-terrain-skirts; set before the first frame: built into the tile meshes).
-    void setTerrainLodTint(bool on) { terrainLodTint_ = on; }
+    // Terrain LOD test hooks: a checkerboard of strides 1 and 8 by chunk, the worst case for cracks
+    // (--terrain-lod-checker); no skirts, so cracks show (--no-terrain-skirts; set before the first frame: built into
+    // the tile meshes).
     void setTerrainLodChecker(bool on) { terrainLodChecker_ = on; }
     void setTerrainSkirts(bool on) { terrainSkirts_ = on; }
+    // Hi-Z occlusion culling of the camera pass (occlusion.h HizOcclusion), on by default: a draw in the frustum is
+    // skipped while the newest test (of a depth 5 frames old) found its dilated box hidden. Never skipped: posed
+    // draws, draws with no result yet, everything for a while after a cut or a resize, everything without a target
+    // (setTarget) or on a GPU without compute / read-back. setOcclusion(false): none skipped (--no-occlusion).
+    // setOcclusionUnsupported (before init): behave as on such a GPU (--occlusion-unsupported).
+    void setOcclusion(bool on) { occlusion_ = on; }
+    void setOcclusionUnsupported(bool on) { hiz_.setForceUnsupported(on); }
+    // Debug views: every draw tinted by its level (LOD0 green, 1 yellow, 2 orange, 3 red, 4+ purple; terrain chunks
+    // by stride 1, 2, 4, 8 the same; --lod-tint), the boxes of the draws occlusion skipped in renderOverlays
+    // (--show-occluded), and a picture of a Hi-Z pyramid mip (-1 off; --show-hiz N), refreshed as tests run.
+    void setLodTint(bool on) { lodTint_ = on; }
+    void setShowOccluded(bool on) { showOccluded_ = on; }
+    void setHizDebugMip(int mip) { hiz_.setDebugMip(mip); }
+    bgfx::TextureHandle hizDebugTexture() const { return hiz_.debugTexture(); }
+    // The last render()'s camera pass: triangles and draw calls submitted, draws occlusion skipped, draws per level.
+    const RenderStats& stats() const { return stats_; }
+    // Frames from a depth to the frame its occlusion results were used, as last measured (0: none yet).
+    int occlusionLatency() const { return hiz_.latency(); }
     // The level entity of scene drew at in the last render() that drew it: -1 culled below its last threshold;
     // nullopt if that render() didn't draw it (no model, or not rendered by this Renderer). The LODGroup Inspector shows it.
     std::optional<int> lodLevel(const Scene& scene, entt::entity entity) const;
@@ -258,6 +279,7 @@ private:
     struct Mesh {
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
+        uint32_t triangles = 0;
     };
     struct ModelMeshBuffers {
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
@@ -291,7 +313,9 @@ private:
         uint32_t firstIndex = 0, indexCount = UINT32_MAX; // the range of indices drawn (terrain chunks); default all
         int bones = -1; // index into the frame's bone sets; -1 = not skinned
         size_t submesh = 0; // a model draw's mesh index (Model::meshes)
-        int lod = 0;        // a model draw's level: indices is that level's (lodIndices)
+        int lod = 0;        // a model draw's level (indices is that level's: lodIndices), a terrain run's stride level
+        uint32_t triangles = 0; // drawn (stats)
+        uint64_t id = 0;        // stable across frames, for occlusion results (drawId); 0: always drawn
         bool posed = false; // animated: bounds are the bind pose's, so the draw is never culled
         bool mirrored = false; // world matrix has a negative determinant: front faces wind the other way
         bool castShadows = true;
@@ -402,12 +426,12 @@ private:
     void pruneTerrain();
     void clearTerrain();
     // Appends the draws of a ModelRenderer entity (an error cube if its model fails to load) at the LOD its screen
-    // height through viewMtx / projMtx picks (none if culled below its last threshold), recording it in lodNext_.
+    // height from eye through projMtx picks (none if culled below its last threshold), recording it in lodStates_.
     void addModelDraws(const Scene& scene, entt::entity entity, const ModelRenderer& renderer, const float* world,
-                       const float* viewMtx, const float* projMtx, std::vector<DrawItem>& draws,
+                       const bx::Vec3& eye, const float* projMtx, std::vector<DrawItem>& draws,
                        std::vector<std::vector<Mat4>>& boneSets);
     // The level addModelDraws draws entity's model at: -1 culled below its last threshold.
-    int pickLod(const Scene& scene, entt::entity entity, const Model& model, const Aabb& bounds, const float* viewMtx,
+    int pickLod(const Scene& scene, entt::entity entity, const Model& model, const Aabb& bounds, const bx::Vec3& eye,
                 const float* projMtx);
     // Renders the shadow maps for this frame's casters into views from shadowViews (creating the maps on first use).
     // sun: the scene's DirectionalLight (null: none), shining along sunDir.
@@ -426,6 +450,8 @@ private:
     // copy again before such a draw (as Godot's BackBufferCopy) if layered refraction is ever needed.
     void copyScene(bgfx::ViewId view, bgfx::FrameBufferHandle target, bool screen, bool depth);
     void destroyCopies();
+    // Draws occlusion found hidden: their boxes for renderOverlays (setShowOccluded), counted in stats_.
+    void drawOccludedBoxes(bgfx::ViewId view);
     // Culling is on and item is outside frustum (posed draws never are: their bounds are the bind pose's).
     // ponytail: by the undisplaced bounds; a .kshader vertex() moving geometry outside them can pop at the frustum's edge.
     // Pad the bounds per material (a .kshader "cull margin") if that shows.
@@ -577,15 +603,31 @@ private:
     float lodBias_ = 1.0f;
     int forcedLod_ = -1;
     bool lodLogging_ = false;
-    bool terrainLodTint_ = false, terrainLodChecker_ = false, terrainSkirts_ = true;
-    std::map<std::pair<const Material*, int>, Material> terrainTints_; // (material, level): its tinted copy
-    // Per (scene, entity) drawn: selectLod's pick (its previous next frame) and the level drawn (-1 culled). lodNext_
-    // fills during a render() and then replaces lodLevels_, so entities no longer drawn drop out.
+    bool terrainLodChecker_ = false, terrainSkirts_ = true;
+    bool lodTint_ = false;
+    std::map<std::pair<const Material*, int>, Material> lodTints_; // (material, level): its tinted copy
+    bool occlusion_ = true;
+    HizOcclusion hiz_;
+    bool showOccluded_ = false;
+    std::vector<Aabb> occludedBoxes_; // the last render()'s, with showOccluded_
+    RenderStats stats_;
+    // Per (scene, entity) drawn: selectLod's pick (its previous next frame), the level drawn (-1 culled) and the
+    // render() (lodFrame_) that drew it; kept across frames (no allocations per frame), entries not drawn pruned now
+    // and then.
     struct LodState {
         int selected = 0;
         int drawn = 0;
+        uint64_t frame = UINT64_MAX; // none yet
     };
-    std::map<std::pair<const Scene*, entt::entity>, LodState> lodLevels_, lodNext_;
+    struct LodKeyHash {
+        size_t operator()(const std::pair<const Scene*, entt::entity>& key) const
+        {
+            return std::hash<const void*>()(key.first) ^ (size_t(entt::to_integral(key.second)) * 0x9e3779b97f4a7c15ull);
+        }
+    };
+    std::unordered_map<std::pair<const Scene*, entt::entity>, LodState, LodKeyHash> lodStates_;
+    uint64_t lodFrame_ = 0; // render() calls
+    size_t lodPicked_ = 0;  // entities picked in this render()
 };
 
 } // namespace kast

@@ -8,14 +8,18 @@ namespace kast {
 
 float lodScreenHeight(const Aabb& bounds, const float* viewMtx, const float* projMtx)
 {
+    float cameraWorld[16];
+    bx::mtxInverse(cameraWorld, viewMtx);
+    return lodScreenHeight(bounds, {cameraWorld[12], cameraWorld[13], cameraWorld[14]}, projMtx);
+}
+
+float lodScreenHeight(const Aabb& bounds, const bx::Vec3& eye, const float* projMtx)
+{
     const bx::Vec3 extent = bx::sub(bounds.max, bounds.min);
     const float size = std::max({extent.x, extent.y, extent.z});
     // projMtx[5] is 1 / tan(fovY / 2) (perspective) or 2 / height (orthographic, projMtx[15] = 1).
     if (projMtx[15] != 0.0f)
         return 0.5f * size * projMtx[5];
-    float cameraWorld[16];
-    bx::mtxInverse(cameraWorld, viewMtx);
-    const bx::Vec3 eye{cameraWorld[12], cameraWorld[13], cameraWorld[14]};
     const bx::Vec3 center = bx::mul(bx::add(bounds.min, bounds.max), 0.5f);
     const float distance = std::max(bx::length(bx::sub(center, eye)), 1e-4f);
     return 0.5f * size * projMtx[5] / distance;

@@ -57,6 +57,7 @@
 #include <sky.h>
 #include <frustum.h>
 #include <lod.h>
+#include <occlusion.h>
 #include <ibl.h>
 #include <state_machines.h>
 #include <stats_overlay.h>
@@ -619,6 +620,14 @@ void checkStatsOverlay()
     check(kast::statsOverlayText(144, 42) == "FPS 144  Ping 42 ms", "stats: text 'FPS 144  Ping 42 ms'");
     check(kast::statsOverlayText(60, std::nullopt) == "FPS 60  Ping -- ms", "stats: no RTT -> 'Ping -- ms'");
     check(kast::statsOverlayText(0, 0) == "FPS 0  Ping 0 ms", "stats: zeros print as numbers");
+    kast::RenderStats render{.triangles = 1234567, .draws = 45, .occluded = 300, .lodDraws = {12, 30, 0, 5}};
+    check(kast::renderStatsText(render) == "Tris 1.23M  Draws 45  Occluded 300  LOD 12/30/0/5",
+          "stats: render counts, levels up to the last with draws");
+    check(kast::statsOverlayText(60, std::nullopt, std::nullopt, std::nullopt, &render) ==
+              "FPS 60  Ping -- ms  Tris 1.23M  Draws 45  Occluded 300  LOD 12/30/0/5",
+          "stats: render counts after the FPS");
+    check(kast::renderStatsText({.triangles = 900, .draws = 1}) == "Tris 900  Draws 1  Occluded 0  LOD 0",
+          "stats: small counts, LOD0 only");
     kast::StatsOverlay overlay;
     check(!overlay.visible(), "stats: the overlay starts hidden");
 
@@ -7021,6 +7030,89 @@ void checkLodSelection()
     const kast::LightmapSubmesh kept{.sourceVertices = 3, .xref = {0, 1, 2}, .uv = std::vector<float>(6), .indices = {0, 1, 2}};
     check(kast::lightmapLodIndices(kept, std::vector<bx::Vec3>(3, bx::Vec3{0.0f, 0.0f, 0.0f}), {2, 1, 0}) == std::vector<uint32_t>{2, 1, 0},
           "lightmap LOD: an unwrap that kept the source's vertices draws the model's level");
+}
+
+void checkOcclusion()
+{
+    // Box dilation and containment.
+    const kast::Aabb unit{{0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f}};
+    const kast::Aabb grown = kast::dilateForOcclusion(unit);
+    check(std::abs(grown.min.x + kast::kOcclusionMinDilation) < 1e-6f && std::abs(grown.max.y - 2.05f) < 1e-6f,
+          "occlusion: a small box grows by the minimum");
+    const kast::Aabb big = kast::dilateForOcclusion({{0.0f, 0.0f, 0.0f}, {10.0f, 1.0f, 1.0f}});
+    check(std::abs(big.min.z + 10.0f * kast::kOcclusionDilation) < 1e-6f, "occlusion: a big box grows by its extent");
+    check(kast::contains(grown, unit) && !kast::contains(unit, grown), "occlusion: contains");
+
+    // Pyramid sizes: powers of 2 below half the target, mips down to 1 x 1; mip-0 texels cover every depth pixel.
+    check(kast::hizSize(1280, 720) == std::pair<uint16_t, uint16_t>{512, 256} && kast::hizMipCount(512, 256) == 10,
+          "occlusion: 1280 x 720 -> 512 x 256, 10 mips");
+    check(kast::hizSize(1, 1) == std::pair<uint16_t, uint16_t>{1, 1} && kast::hizMipCount(1, 1) == 1,
+          "occlusion: 1 x 1 -> one mip");
+    for (const auto& [width, width0] : {std::pair{1280u, 512u}, {161u, 64u}, {64u, 32u}, {1023u, 256u}, {3u, 1u}}) {
+        uint32_t next = 0;
+        bool ok = true;
+        for (uint32_t x = 0; x < width0; ++x) {
+            const auto [first, last] = kast::hizDepthSpan(x, width, width0);
+            ok = ok && first <= next && last + 1 >= next && last - first < 5 && last < width;
+            next = last + 1;
+        }
+        check(ok && next == width, "occlusion: mip-0 texels cover the depth pixels, at most 5 each");
+    }
+
+    // A camera at the origin looking down +z (bx's left-handed default), and a depth target where a 6 x 6 m wall at
+    // z = 10 drew (pixel centers inside its rect), far plane elsewhere.
+    float view[16], proj[16], viewProj[16];
+    bx::mtxLookAt(view, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f});
+    bx::mtxProj(proj, 60.0f, 16.0f / 9.0f, 0.1f, 100.0f, false);
+    bx::mtxMul(viewProj, view, proj);
+    const auto depthTarget = [&](uint16_t width, uint16_t height, int holeColumn) {
+        const kast::Aabb wall{{-3.0f, -3.0f, 10.0f}, {3.0f, 3.0f, 10.0f}};
+        const kast::HizRect rect = *kast::hizProject(wall, viewProj, false, false);
+        std::vector<float> depth(size_t(width) * height, 1.0f);
+        for (uint16_t y = 0; y < height; ++y)
+            for (uint16_t x = 0; x < width; ++x) {
+                const float u = (x + 0.5f) / width, v = (y + 0.5f) / height;
+                if (u >= rect.u0 && u <= rect.u1 && v >= rect.v0 && v <= rect.v1 && x != holeColumn)
+                    depth[size_t(y) * width + x] = rect.depth;
+            }
+        return depth;
+    };
+    const auto occluded = [&](const kast::HizPyramid& pyramid, const kast::Aabb& box) {
+        return kast::hizOccluded(pyramid, box, viewProj, false, false);
+    };
+    const kast::HizPyramid pyramid = kast::buildHizPyramid(depthTarget(160, 90, -1), 160, 90);
+    check(pyramid.width0 == 64 && pyramid.height0 == 32 && pyramid.mips.size() == 7 && pyramid.mips[6].size() == 1,
+          "occlusion: 160 x 90 pyramid is 64 x 32 .. 1 x 1");
+    check(occluded(pyramid, {{-0.5f, -0.5f, 20.0f}, {0.5f, 0.5f, 21.0f}}), "occlusion: a box behind the wall is hidden");
+    check(!occluded(pyramid, {{-0.5f, -0.5f, 9.5f}, {0.5f, 0.5f, 10.5f}}), "occlusion: a box through the wall is visible");
+    check(!occluded(pyramid, {{-0.5f, -0.5f, 5.0f}, {0.5f, 0.5f, 6.0f}}), "occlusion: a box in front is visible");
+    check(!occluded(pyramid, {{7.5f, -0.5f, 20.0f}, {8.5f, 0.5f, 21.0f}}), "occlusion: a box beside it is visible");
+    check(!occluded(pyramid, {{2.5f, -0.5f, 10.5f}, {4.5f, 0.5f, 11.0f}}),
+          "occlusion: a box across the wall's silhouette is visible");
+    check(!occluded(pyramid, {{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 30.0f}}),
+          "occlusion: a box around the eye is visible");
+    check(!occluded(pyramid, {{-0.5f, -0.5f, -20.0f}, {0.5f, 0.5f, -19.0f}}), "occlusion: a box behind the eye is visible");
+    check(!kast::hizProject({{-1.0f, -1.0f, 0.05f}, {1.0f, 1.0f, 2.0f}}, viewProj, false, false),
+          "occlusion: a box through the near plane has no rect");
+    // An odd-sized target with a one-pixel gap in the wall: the pyramid keeps the gap (farthest depth wins).
+    const kast::HizPyramid odd = kast::buildHizPyramid(depthTarget(161, 91, 80), 161, 91);
+    check(!occluded(odd, {{-0.05f, -0.5f, 20.0f}, {0.05f, 0.5f, 21.0f}}),
+          "occlusion: a box seen through a one-pixel gap is visible");
+    check(occluded(odd, {{-2.5f, -0.5f, 20.0f}, {-1.5f, 0.5f, 21.0f}}), "occlusion: away from the gap it is hidden");
+
+    // Footprints: at most 2 x 2 texels, covering the whole rect at mip 0.
+    bool footprintsOk = true;
+    for (int i = 0; i < 2000; ++i) {
+        const float a = float((i * 7919) % 1000) / 1000.0f, b = float((i * 104729) % 1000) / 1000.0f;
+        const float w = float((i * 31) % 1000) / 1000.0f, h = float((i * 17) % 997) / 997.0f;
+        const kast::HizRect rect{a * (1.0f - w), b * (1.0f - h), a * (1.0f - w) + w, b * (1.0f - h) + h, 0.5f};
+        const kast::HizFootprint at = kast::hizFootprint(rect, 1024, 512, 11);
+        const int x0 = int(rect.u0 * 1024.0f), x1 = std::min(int(rect.u1 * 1024.0f), 1023);
+        const int y0 = int(rect.v0 * 512.0f), y1 = std::min(int(rect.v1 * 512.0f), 511);
+        footprintsOk = footprintsOk && at.x1 - at.x0 <= 1 && at.y1 - at.y0 <= 1 && (at.x0 << at.mip) <= x0 &&
+                       ((at.x1 + 1) << at.mip) > x1 && (at.y0 << at.mip) <= y0 && ((at.y1 + 1) << at.mip) > y1;
+    }
+    check(footprintsOk, "occlusion: footprints are at most 2 x 2 texels and cover the rect");
 }
 
 void checkTerrainLod()
@@ -14690,6 +14782,7 @@ int main(int argc, char** argv)
         checkModelLods();
         checkLodSelection();
         checkTerrainLod();
+        checkOcclusion();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All model checks passed" : std::format("{} model check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
@@ -14793,6 +14886,7 @@ int main(int argc, char** argv)
     checkFrustumCulling();
     checkLodSelection();
     checkTerrainLod();
+    checkOcclusion();
     checkPostProcessing();
     checkSky();
     checkMaterialFiles();

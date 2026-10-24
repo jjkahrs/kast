@@ -87,7 +87,7 @@ constexpr const char* kUsage =
     "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
-    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--log-lod] [--terrain-lod-tint] [--terrain-lod-checker] [--no-terrain-skirts] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
+    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--log-lod] [--no-occlusion] [--occlusion-unsupported] [--lod-tint] [--show-occluded] [--show-hiz MIP] [--scene-debug-menu] [--terrain-lod-tint] [--terrain-lod-checker] [--no-terrain-skirts] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel (without --play: on the Scene view), for
@@ -217,8 +217,14 @@ struct Options {
     float lodBias = 1.0f;           // --lod-bias: Renderer::setLodBias of the Scene and Game views
     int forceLod = -1;              // --force-lod: Renderer::setForcedLod of the Scene and Game views (-1: by screen height)
     bool logLod = false;            // log each model's LOD level change in the Scene and Game views (Renderer::setLodLogging)
-    // Terrain LOD test hooks of the Scene and Game views: Renderer::setTerrainLodTint / setTerrainLodChecker / setTerrainSkirts.
-    bool terrainLodTint = false, terrainLodChecker = false, noTerrainSkirts = false;
+    bool noOcclusion = false;          // the Scene and Game views cull nothing by occlusion (Renderer::setOcclusion)
+    bool occlusionUnsupported = false; // as on a GPU without compute / read-back (Renderer::setOcclusionUnsupported)
+    // Debug views: LOD tint (Scene and Game views; --terrain-lod-tint is the same), and the Scene view's occluded boxes,
+    // Hi-Z mip (-1: off) and its Debug menu opened (SceneViewport::debugViews / openDebugMenu).
+    bool lodTint = false, showOccluded = false, sceneDebugMenu = false;
+    int showHiz = -1;
+    // Terrain LOD test hooks of the Scene and Game views: Renderer::setTerrainLodChecker / setTerrainSkirts.
+    bool terrainLodChecker = false, noTerrainSkirts = false;
     bool noAudioDevice = false;     // play sound on the null backend (silent), as if there were no output device
     std::vector<std::string> childArgs; // the flags after --, passed on to the editor the Project Manager starts
 
@@ -641,8 +647,23 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.noLod = true;
         } else if (arg == "--log-lod") {
             options.logLod = true;
-        } else if (arg == "--terrain-lod-tint") {
-            options.terrainLodTint = true;
+        } else if (arg == "--no-occlusion") {
+            options.noOcclusion = true;
+        } else if (arg == "--occlusion-unsupported") {
+            options.occlusionUnsupported = true;
+        } else if (arg == "--lod-tint" || arg == "--terrain-lod-tint") {
+            options.lodTint = true;
+        } else if (arg == "--show-occluded") {
+            options.showOccluded = true;
+        } else if (arg == "--scene-debug-menu") {
+            options.sceneDebugMenu = true;
+        } else if (arg == "--show-hiz" && hasValue) {
+            const std::string_view text = argv[++i];
+            const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), options.showHiz);
+            if (ec != std::errc{} || end != text.data() + text.size() || options.showHiz < 0) {
+                kast::log::error(std::format("Invalid --show-hiz '{}', expected a mip (0, 1, ...)", text));
+                return std::nullopt;
+            }
         } else if (arg == "--terrain-lod-checker") {
             options.terrainLodChecker = true;
         } else if (arg == "--no-terrain-skirts") {
@@ -745,7 +766,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.prefabSteps.empty() || !options.assetsDelete.empty() || !options.inspectorApplyMenu.empty() ||
                              options.prefabBackPrompt ||
                              options.noVsync || options.noInstancing || options.noCulling || options.noLod || options.lodBias != 1.0f ||
-                             options.forceLod >= 0 || options.logLod || options.terrainLodTint ||
+                             options.forceLod >= 0 || options.logLod || options.lodTint || options.noOcclusion ||
+                             options.occlusionUnsupported || options.showOccluded || options.showHiz >= 0 || options.sceneDebugMenu ||
                              options.terrainLodChecker || options.noTerrainSkirts || !options.worldAddress.empty() || options.onlineLoginEnv ||
                              options.onlineCompose || !options.zoneOps.empty() || options.headless || options.noRecycle ||
                              options.sculptLoop || options.focus || options.promptRemoveTile || options.fileSave ||
@@ -1561,20 +1583,25 @@ int main(int argc, char** argv)
             return false;
         }
         imgui_bgfx::init(kImGuiView);
-        viewport.init();
-        viewport.setPostEffects(!options->noScenePost);
-        game.init();
-        for (kast::Renderer* renderer : {&viewport.renderer(), &game.renderer()}) {
+        for (kast::Renderer* renderer : {&viewport.renderer(), &game.renderer()}) { // before init: occlusion support
             renderer->setInstancing(!options->noInstancing);
             renderer->setCulling(!options->noCulling);
             renderer->setLod(!options->noLod);
             renderer->setLodBias(options->lodBias);
             renderer->setForcedLod(options->forceLod);
             renderer->setLodLogging(options->logLod);
-            renderer->setTerrainLodTint(options->terrainLodTint);
+            renderer->setOcclusion(!options->noOcclusion);
+            renderer->setOcclusionUnsupported(options->occlusionUnsupported);
+            renderer->setLodTint(options->lodTint); // the Scene view's comes from its Debug menu, below
             renderer->setTerrainLodChecker(options->terrainLodChecker);
             renderer->setTerrainSkirts(!options->noTerrainSkirts);
         }
+        viewport.debugViews() = {options->lodTint, options->showOccluded, options->showHiz};
+        if (options->sceneDebugMenu)
+            viewport.openDebugMenu();
+        viewport.init();
+        viewport.setPostEffects(!options->noScenePost);
+        game.init();
         kast::gui::init();
         if (!options->openGui.empty()) {
             std::filesystem::path rml = std::filesystem::path(reinterpret_cast<const char8_t*>(options->openGui.c_str()));
@@ -1907,7 +1934,7 @@ int main(int argc, char** argv)
             frames.endFrame();
         }
         if (options->logFps)
-            fpsLog.endFrame(frameStart);
+            fpsLog.endFrame(frameStart, &viewport.renderer().stats(), viewport.renderer().occlusionLatency());
     };
     hooks.screenshotSaved = [&](const char*, bool saved) { frames.onScreenshotSaved(saved); };
     hooks.quitRequested = [&] {
