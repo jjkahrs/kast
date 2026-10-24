@@ -866,6 +866,14 @@ void Renderer::addTerrainDraws(const Scene& scene, const float* viewMtx, const f
     bx::mtxMul(viewProj, viewMtx, projMtx);
     const bx::Vec3 eye{cameraWorld[12], cameraWorld[13], cameraWorld[14]};
     const Frustum frustum = frustumFromViewProj(viewProj, bgfx::getCaps()->homogeneousDepth);
+    // An eye under the ground (below the tile it is over) sees the surface from behind, culled, but would see every
+    // skirt as a strip hanging in the air: no skirts then (any crack is behind a culled surface too).
+    bool underground = false;
+    for (auto [entity, tile] : registry.view<TerrainTile>().each()) {
+        const float x0 = float(tile.tx) * map::kTileSize, z0 = float(tile.tz) * map::kTileSize;
+        if (tile.data && eye.x >= x0 && eye.x < x0 + map::kTileSize && eye.z >= z0 && eye.z < z0 + map::kTileSize)
+            underground = eye.y < map::ground(tile.data->heights, *tile.data->map, eye.x - x0, eye.z - z0);
+    }
     for (auto [entity, tile] : registry.view<TerrainTile>().each()) {
         if (!tile.data)
             continue;
@@ -963,6 +971,7 @@ void Renderer::addTerrainDraws(const Scene& scene, const float* viewMtx, const f
         // One stride everywhere (LOD off or forced, a probe bake): edges match, so no skirts, and the tile is one draw
         // with its full bounds, as before chunks (the same shadow cascades' depth range: the same image).
         const bool skirts = terrainLodChecker_ || (lod_ && !capture_ && forcedLod_ < 0);
+        const bool hang = skirts && !underground; // draw the skirts
         int runStart = 0, runLevel = -1;
         bool runVisible = false;
         for (int chunk = 0; chunk <= kTerrainChunks; ++chunk) {
@@ -984,15 +993,15 @@ void Renderer::addTerrainDraws(const Scene& scene, const float* viewMtx, const f
                     continue;
             }
             if (chunk > 0) { // close the run [runStart, chunk)
-                const uint32_t count = terrainChunkIndexCount(1 << runLevel, skirts);
-                item.indices = terrainIndices_[size_t(runLevel)][skirts];
+                const uint32_t count = terrainChunkIndexCount(1 << runLevel, hang);
+                item.indices = terrainIndices_[size_t(runLevel)][hang];
                 item.firstIndex = uint32_t(runStart) * count;
                 item.indexCount = uint32_t(chunk - runStart) * count;
                 item.bounds = mesh.chunkBounds[size_t(runStart)];
                 for (int i = runStart + 1; i < chunk; ++i)
                     item.bounds = {bx::min(item.bounds.min, mesh.chunkBounds[size_t(i)].min),
                                    bx::max(item.bounds.max, mesh.chunkBounds[size_t(i)].max)};
-                if (skirts)
+                if (hang)
                     item.bounds.min.y -= mesh.skirtDepth;
                 item.material = material;
                 item.lod = runLevel;

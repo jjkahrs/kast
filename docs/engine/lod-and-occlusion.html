@@ -112,7 +112,8 @@ model's thresholds and cull-below for that entity:</p>
 <li><strong>Skirts</strong> hide the cracks between chunks (and tiles) at different strides: every chunk edge hangs a strip
   facing out of the chunk, as deep as 2 x the largest edge error through that sample plus 0.25 m. Skirt vertices copy the
   edge vertex's normal, UVs and lightmap UVs, so they shade like the edge. A skirt at the outer edge of the loaded tiles
-  can be seen from outside them.</li>
+  can be seen from outside them. With the eye under the ground (below the surface of the tile it is over) no skirts are
+  drawn: from there the surface is seen from behind and culled, but skirts would show as strips hanging in the air.</li>
 <li>Lightmap UVs (TEXCOORD1) and the tiled / map UVs are unchanged; lightmapped tiles keep their lightmaps at every stride.</li>
 <li>One draw per run of consecutive chunks at one stride and on the same side of the camera's frustum; the camera pass
   still culls by chunk, the shadow passes by run, with the camera's strides. Terrain is never instanced.</li>
