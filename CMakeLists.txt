@@ -142,6 +142,10 @@ inline unsigned char @array@[] = {
 endfunction()
 # The editor UI font and the game GUI fallback face.
 kast_embed_font(Roboto-Regular.ttf roboto_regular.h kRobotoRegularTtf)
+# The game GUI's real bold / italic faces of Roboto (rich text [b] / [i], font-weight / font-style).
+kast_embed_font(Roboto-Bold.ttf roboto_bold.h kRobotoBoldTtf)
+kast_embed_font(Roboto-Italic.ttf roboto_italic.h kRobotoItalicTtf)
+kast_embed_font(Roboto-BoldItalic.ttf roboto_bold_italic.h kRobotoBoldItalicTtf)
 # The editor's Play / Pause / Stop icons: Google Fonts' static subset of Material Symbols Outlined (FILL 1, wght 400,
 # opsz 24) with only play_arrow, pause and stop (css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,1,0
 # &icon_names=pause,play_arrow,stop).
@@ -173,7 +177,7 @@ add_library(kast_engine STATIC
   engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
-  engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/gui_lists.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
+  engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/gui_lists.cpp engine/gui_richtext.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
   engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/ibl.cpp engine/bvh.cpp engine/lightmap.cpp engine/lightmap_bake.cpp engine/voxel_gi.cpp engine/sdfgi.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
@@ -1746,6 +1750,7 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow"
                "ui|UI Test|ui.scene|FALSE" "effects|Effects Test|ui_effects.scene|FALSE" "bind|Bind Test|ui_bind.scene|FALSE"
                "widgets|Widgets Test|ui_widgets.scene|FALSE" "lists|Lists Test|ui_lists.scene|FALSE"
+               "richtext|Rich Text Test|ui_richtext.scene|FALSE"
                "lights|Lights Test|point_lights.scene|FALSE"
                "materials|Materials Test|materials.scene|FALSE" "post|Post Test|post_processing.scene|FALSE"
                "models|Models Test|models_anim.scene|FALSE" "shadows|Shadows Test|shadows.scene|FALSE"
@@ -3095,6 +3100,55 @@ add_test(NAME gui_builder_list_reopen_screenshot
           "-DFORBID_OUTPUT=${bind_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(gui_builder_list_edit PROPERTIES FIXTURES_REQUIRED new_gui_copy FIXTURES_SETUP gui_list_saved)
 set_tests_properties(gui_builder_list_saved_file gui_builder_list_reopen_screenshot PROPERTIES FIXTURES_REQUIRED gui_list_saved)
+
+# Rich text (ui_richtext.scene: ui/richtext.rml driven by scripts/ui_richtext.lua; the C++ side is self_check's
+# checkGuiRichText, checkGuiRichTextScene and checkGuiDocRichText, kast_self_check --richtext): every BBCode tag, images,
+# the project font tests/project/fonts/LatoLatin-Regular.ttf, malformed markup, kast.gui.setRichText / setText and a
+# data-rich binding, with no RmlUi warning; --sim-mouse clicks the link at the Game view's centre and the Lua script
+# logs the gui.link it publishes. The Game view must match the committed reference tests/reference/ui_richtext.png (its
+# 955x652 pixels at 322,44 of the 1600x1000 shot). The built game loads the project font from game.pak.
+set(richtext_forbid "\\[warn\\] RmlUi|\\[error\\]|Lua error")
+add_test(NAME ui_richtext_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_richtext.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui_richtext.scene --play --size 1600x1000 --sim-mouse 60,left,0,0,0"
+          "-DEXPECT_OUTPUT=Loaded font face 'LatoLatin' \\[regular\\].*richtext: SET.*richtext: REBOUND.*richtext: RICHLINK target=quest_log id=rich_center document=ui/richtext.rml"
+          "-DFORBID_OUTPUT=${richtext_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(ui_richtext_screenshot PROPERTIES FIXTURES_SETUP ui_richtext_shot)
+add_test(NAME ui_richtext_matches_reference
+  COMMAND kast_self_check --diff-png "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference/ui_richtext.png"
+          "${CMAKE_CURRENT_BINARY_DIR}/ui_richtext.png" 1.0 0,0,955,652,322,44)
+set_tests_properties(ui_richtext_matches_reference PROPERTIES FIXTURES_REQUIRED ui_richtext_shot)
+add_test(NAME player_richtext_fonts
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/richtext" "-DEXE=Rich Text Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/richtext_fonts.run" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_richtext_fonts.png"
+          -DEXPECT=0 "-DEXPECT_OUTPUT=Loaded font face 'LatoLatin' \\[regular\\] from '[^']*fonts/LatoLatin-Regular.ttf'.*richtext: SET.*richtext: REBOUND"
+          "-DFORBID_OUTPUT=${richtext_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_richtext_fonts PROPERTIES FIXTURES_REQUIRED game_richtext_built TIMEOUT 90)
+# Rich Text in the builder: richtext.rml with rich_malformed selected (the markup field, its toolbar and the converter's
+# warnings in the Inspector; the preview converted, with the project font and images, and no RmlUi warning); a Rich
+# Text added to main_menu.rml's #buttons through the Hierarchy's deferred add, undone and redone; on the
+# new_gui_project copy, the toolbar's [b] around rich_lua's first word (bytes 0..7), undone, redone and saved: the
+# markup saved verbatim, the other rich texts unchanged.
+add_test(NAME gui_builder_richtext_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_richtext.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --open-gui ui/richtext.rml --size 1600x1000 --gui-select rich_malformed"
+          "-DFORBID_OUTPUT=${bind_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME gui_builder_add_RichText_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_add_RichText.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} ${builder_args} --gui-select buttons --gui-add RichText --gui-undo 1 --gui-redo 1"
+          "-DEXPECT_OUTPUT=Undo Add Rich Text.*Redo Add Rich Text" "-DFORBID_OUTPUT=${bind_forbid}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME gui_builder_rich_edit
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_rich_edit.png"
+          "-DEXTRA_ARGS=--project ${KAST_NEW_GUI_PROJECT} --open-gui ui/richtext.rml --size 1600x1000 --gui-select rich_lua --gui-rich-wrap b,0,7 --gui-undo 1 --gui-redo 1 --gui-save"
+          "-DEXPECT_OUTPUT=--gui-rich-wrap \\[b\\] 0..7 on 'rich_lua'.*Undo Rich Text \\[b\\].*Redo Rich Text \\[b\\].*Saved GUI"
+          "-DFORBID_OUTPUT=${bind_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME gui_builder_rich_saved_file COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_NEW_GUI_PROJECT}/ui/richtext.rml")
+set_tests_properties(gui_builder_rich_saved_file PROPERTIES PASS_REGULAR_EXPRESSION
+  "<!-- Rich text .*\\[b\\]Bold\\[/b\\] \\[i\\]Italic\\[/i\\].*Line one.Line two: &lt;b&gt; &amp; \"quotes\" stay text</p>.*\\[blink\\]x\\[/blink\\] \\[color=nope\\]c.*<p id=\"rich_lua\" class=\"rich\">\\[b\\]waiting\\[/b\\] for Lua</p>.*data-rich=\"line\"")
+set_tests_properties(gui_builder_rich_edit PROPERTIES FIXTURES_REQUIRED new_gui_copy FIXTURES_SETUP gui_rich_saved)
+set_tests_properties(gui_builder_rich_saved_file PROPERTIES FIXTURES_REQUIRED gui_rich_saved)
 
 # Crash dialogs: --crash makes the editor fail on purpose; with KAST_NO_CRASH_DIALOGS=1 it must exit, not wait on a
 # "Debug Error!" dialog. Debug builds also report the failed assert on stderr (release compiles assert() out).

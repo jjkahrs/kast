@@ -222,6 +222,7 @@ std::string_view kindMarkup(GuiKind kind)
     switch (kind) {
     case GuiKind::Panel: return "<div/>";
     case GuiKind::Text: return "<p>Text</p>";
+    case GuiKind::RichText: return R"(<p class="rich">[b]Rich[/b] text</p>)";
     case GuiKind::Button: return "<button>Button</button>";
     case GuiKind::Toggle: return R"(<label><input type="checkbox" class="toggle"/>Toggle</label>)";
     case GuiKind::Slider: return R"(<input type="range" min="0" max="100" step="1" value="50"/>)";
@@ -316,6 +317,7 @@ const char* guiKindLabel(GuiKind kind)
     case GuiKind::Progress: return "Progress";
     case GuiKind::ListBox: return "List Box";
     case GuiKind::VirtualList: return "Virtual List";
+    case GuiKind::RichText: return "Rich Text";
     default: return "Unknown";
     }
 }
@@ -339,7 +341,7 @@ GuiKind guiKind(pugi::xml_node node)
                : hasClass(node, "listbox") && !hasClass(node, "virtuallist") ? GuiKind::ListBox
                                                                           : GuiKind::Panel;
     if (tag == "p")
-        return GuiKind::Text;
+        return hasClass(node, "rich") ? GuiKind::RichText : GuiKind::Text;
     if (tag == "button")
         return GuiKind::Button;
     if (tag == "select")
@@ -439,7 +441,7 @@ void GuiDoc::setAttribute(pugi::xml_node node, const char* name, std::string_vie
 bool GuiDoc::hasEditableText(pugi::xml_node node)
 {
     const GuiKind kind = guiKind(node);
-    if (kind != GuiKind::Text && kind != GuiKind::Button)
+    if (kind != GuiKind::Text && kind != GuiKind::RichText && kind != GuiKind::Button)
         return false;
     for (pugi::xml_node child : node.children())
         if (child.type() != pugi::node_pcdata)
@@ -677,6 +679,18 @@ std::string GuiDoc::previewRml(std::string_view rcss, std::vector<pugi::xml_node
     std::string rml = out.str();
     rml.replace(rml.find(kSheetMarker), kSheetMarker.size(), rcss);
     return rml;
+}
+
+std::string guiWrapRichText(std::string_view markup, size_t start, size_t end, std::string_view tag, std::string_view value)
+{
+    if (start > end)
+        std::swap(start, end);
+    end = std::min(end, markup.size());
+    start = std::min(start, end);
+    const std::string open = value.empty() ? std::format("[{}]", tag) : std::format("[{}={}]", tag, value);
+    if (tag == "img")
+        return std::format("{}{}{}", markup.substr(0, start), open, markup.substr(start));
+    return std::format("{}{}{}[/{}]{}", markup.substr(0, start), open, markup.substr(start, end - start), tag, markup.substr(end));
 }
 
 bool writeNewGui(const std::filesystem::path& dir, std::filesystem::path& rml, std::string& error)

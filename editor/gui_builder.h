@@ -19,19 +19,22 @@ class ElementDocument;
 } // namespace Rml
 
 // GUI Builder: four panels on one open .rml (gui_doc.h) and the .rcss it links.
-// - GUI Hierarchy: element tree; add Panel / Text / Button / Toggle / Slider / Dropdown / Spinbox / Progress / List Box /
+// - GUI Hierarchy: element tree; add Panel / Text / Rich Text / Button / Toggle / Slider / Dropdown / Spinbox / Progress / List Box /
 //   Virtual List (into the selected Panel, else <body>), delete, move up/down, drag-drop onto a Panel or <body> to
 //   reparent; Save. A composite widget (GuiDoc::composite) is one node: its insides are not listed.
 // - GUI Inspector: id, class, text (Text, Button) and data-event (Button, the input widgets and the lists) of the
 //   selection, its widget properties (GuiDoc::widgetProperties), a Dropdown's options and a List Box's rows (add,
-//   remove, move, value, label, selected), and on any element its RmlUi data binding attributes (guiBindingAttribute)
+//   remove, move, value, label, selected), a Rich Text's markup (multiline; a toolbar wraps the selection in or puts at
+//   the cursor [b] [i] [u] [s] [color] [size] [font] [link] or an [img], each one step; the converter's warnings below
+//   it), and on any element its RmlUi data binding attributes (guiBindingAttribute)
 //   but those edited as widget properties: edited, emptied to remove, or added by name. Other attributes of Unknown
 //   elements are read-only.
 // - GUI Style: the .rcss text, applied to the preview 0.3 s after the last keystroke. A sheet RmlUi logs problems for
 //   (in the Console) is not applied: the preview keeps the last good one.
 // - GUI Preview: the document rendered by RmlUi at a chosen resolution, scaled to fit; click selects the deepest
 //   element under the cursor (a composite widget's inside selects the widget); the selection is outlined (an overlay,
-//   not in the file). It wears the engine's default widget style under the GUI's own sheet, as in Play.
+//   not in the file). It wears the engine's default widget style under the GUI's own sheet and shows Rich Text
+//   converted (with the project's fonts/), as in Play.
 // Edits mark the GUI dirty ("*" in the titles) and are steps on its own undo history (gui_undo.h), cleared when a GUI is
 // opened or reloaded; an Inspector or Style text field is one step from activation to letting go. Save or Ctrl+S (a builder panel focused) writes both files. Files
 // changed on disk reload when clean, else Reload / Keep mine is asked. Opening another GUI or quitting while dirty asks
@@ -65,6 +68,9 @@ public:
     // Sets a widget property of the selection (GuiDoc::setWidgetProperty) as one Inspector edit step. False if the
     // selection has no such property.
     bool setWidgetProperty(const std::string& name, const std::string& value);
+    // The Rich Text toolbar's edit (guiWrapRichText) of the selection's markup at bytes start..end, as one Inspector
+    // step. False if the selection is no Rich Text.
+    bool wrapRichText(const std::string& tag, const std::string& value, size_t start, size_t end);
     // The open GUI's undo history (Edit > Undo / Redo while a builder panel is focused).
     const UndoStack& history() const { return history_; }
     // Undo / redo a step, then reselect the element it affected and set the dirty flag from the save point.
@@ -111,6 +117,7 @@ private:
     // nothing.
     bool editStep(const std::string& name, const std::function<void()>& edit);
     void drawOptions(); // the selected Dropdown's options or List Box's rows
+    void drawRichText(); // the selected Rich Text's markup, toolbar and warnings
     void afterUndoRedo();
     void rememberFileTimes();
     std::string title(const char* name, const char* window) const;
@@ -149,6 +156,13 @@ private:
     std::vector<std::pair<std::string, std::string>> widgetBuffers_; // inspectorNode_'s widget properties: name, text
     std::vector<std::pair<std::string, std::string>> optionBuffers_; // inspectorNode_'s options / rows: value, label
     pugi::xml_node inspectorNode_;
+    std::pair<int, int> richSelection_; // the Rich Text markup field's last selection (bytes; equal: the cursor)
+    float richColor_[3] = {1.0f, 0.667f, 0.0f}; // the toolbar's popups' last values
+    int richSize_ = 24;
+    std::string richFont_ = "Roboto";
+    std::string richLink_;
+    std::string richImage_;
+    int richImageSize_[2] = {0, 0}; // w, h; 0 = auto
     UndoStack history_;
     struct Gesture {
         std::string name;

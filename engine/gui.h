@@ -12,12 +12,14 @@ struct SDL_Window;
 
 namespace Rml {
 class Context;
+class Element;
 class ElementDocument;
 }
 
 // Game GUI on RmlUi (HTML/CSS-like .rml documents styled by .rcss sheets). RmlUi reads files through kast::readFile
 // (disk, or the mounted pak in kast_player), logs to kast::log ("RmlUi: ..."), draws with bgfx and has the bundled
-// Roboto as its fallback font face. See docs/engine/game-gui.html.
+// Roboto (regular, the fallback face, plus bold, italic and bold italic) and the project's fonts/. See
+// docs/engine/game-gui.html.
 namespace kast::gui {
 
 // bgfx views one GuiContext::render takes: its view and the kViews - 1 after it. A document draws in the first until it
@@ -56,6 +58,16 @@ void addWidgetStyle(Rml::ElementDocument& document);
 // True while a GuiContext::render updates its documents (data binding writes its views then): a widget change seen
 // then is the game's doing, not the player's.
 bool updating();
+// Loads every <projectRoot>/fonts/**.ttf / .otf (through kast::readFile: from the pak in kast_player) not loaded yet,
+// under the family its file names, its bold / italic faces told apart by their weight and style. A file that fails is
+// logged with its name (RmlUi logs why too) and not tried again; the others still load. Faces stay until shutdown.
+// Call before a document loads (SceneGui, the GUI Builder preview).
+void loadProjectFonts(const std::filesystem::path& projectRoot);
+// True if a face of this font family (any case) is loaded: the bundled Roboto or a project font.
+bool fontFamilyLoaded(std::string_view family);
+// Every <p class="rich"> under root holding only text gets that text, trimmed, as rich text (guiRichTextRml, a [font=]
+// of an unloaded family shown as text). Call once a document has loaded (SceneGui, the GUI Builder preview).
+void convertRichText(Rml::Element& root);
 
 } // namespace kast::gui
 

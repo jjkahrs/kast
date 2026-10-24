@@ -47,6 +47,7 @@
 #include <scene.h>
 #include <gui_models.h>
 #include <gui_lists.h>
+#include <gui_richtext.h>
 #include <gui_widgets.h>
 #include <scene_gui.h>
 #include <scene_io.h>
@@ -1192,6 +1193,11 @@ public:
         texts[id] = std::string(text);
         history.push_back(std::format("text {}={}", id, text));
     }
+    void setRichText(const std::string& id, std::string_view text) override
+    {
+        texts[id] = std::string(text);
+        history.push_back(std::format("rich {}={}", id, text));
+    }
     void setVisible(const std::string& id, bool visible) override
     {
         visible_[id] = visible;
@@ -1362,6 +1368,7 @@ return {
         assert(kast.gui.value("nothing") == nil, "value of a missing field is nil")
         kast.gui.setText("password", "")
         kast.gui.setText("log", "a\nb")
+        kast.gui.setRichText("log", "[b]rich[/b]")
         kast.gui.setVisible("realm_2", false)
         assert(kast.gui.focusedField() == "chat_input", "focusedField")
         assert(kast.gui.mouseOver() == true, "mouseOver")
@@ -1371,6 +1378,8 @@ return {
         fails("kast.gui.value: id must be a string, got 1", function() kast.gui.value(1) end)
         fails("kast.gui.setAttribute: value must be a string, got nil", function() kast.gui.setAttribute("x", "class") end)
         fails("kast.gui.setText: text must be a string, got nil", function() kast.gui.setText("x") end)
+        fails("kast.gui.setRichText: text must be a string, got 5", function() kast.gui.setRichText("x", 5) end)
+        fails("kast.gui.setRichText: id must be a string, got nil", function() kast.gui.setRichText(nil, "x") end)
         fails("kast.gui.setVisible: visible must be a boolean, got 1", function() kast.gui.setVisible("x", 1) end)
         fails("kast is read-only", function() kast.gui.value = nil end)
         -- data models: values Lua <-> C++ (nested arrays and tables, scalars)
@@ -1453,6 +1462,7 @@ return {
     lua.tick(0.1f);
     checkOk(lua, 0, "kast.gui.* asserts in Lua pass");
     check(gui.history == std::vector<std::string>{"text status=written in init", "text password=", "text log=a\nb",
+                                                  "rich log=[b]rich[/b]",
                                                   "visible realm_2=false", "attribute icon_3.src=../textures/icons/wing.png",
                                                   "focus chat_input", "focus nope",
                                                   R"(set hud.rows=[{"level":2.5,"name":"a","tags":["x","y"]},{"name":"b","tags":{}}])",
@@ -1463,7 +1473,7 @@ return {
                                                   "value volume=150.0", "value sound=false", R"(value quality="high")",
                                                   R"(value big="50000")", "value big=null", "scrollTo big 49999",
                                                   "scrollToEnd big", "scrollTo big -1", "visible hud=true"},
-          "setText / setVisible / setAttribute / setValue / scrollTo / scrollToEnd reach the GUI with their arguments, in call order");
+          "setText / setRichText / setVisible / setAttribute / setValue / scrollTo / scrollToEnd reach the GUI with their arguments, in call order");
     check(gui.resets == 2 && gui.texts.empty() && gui.visible_ == std::map<std::string, bool>{{"hud", true}} &&
               gui.models.empty(),
           "a kast.loadScene switch resets the GUI (writes and model values) before the new scene's inits");
@@ -3133,7 +3143,7 @@ void checkBuildSettings()
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                        "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_widgets.scene", "voxelgi_room.scene",
+                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_richtext.scene", "ui_widgets.scene", "voxelgi_room.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
 
@@ -3157,7 +3167,7 @@ void checkBuildSettings()
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                                           "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_widgets.scene", "voxelgi_room.scene",
+                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_richtext.scene", "ui_widgets.scene", "voxelgi_room.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
@@ -5593,6 +5603,297 @@ void checkGuiWidgets()
     bgfx::shutdown();
 }
 
+// Rich text BBCode (gui_richtext.h, no RmlUi): every tag, nesting, line breaks, the [[ escape and spaces between tags;
+// injection attempts staying text or escaped attribute values; malformed markup (unknown tags, bad values, stray and
+// unclosed tags, mis-nesting) shown as documented, with its problems; random input never emitting other markup.
+void checkGuiRichText()
+{
+    using kast::guiRichTextRml;
+    const std::string bold = R"(<span style="font-weight: bold;">)";
+    const std::string italic = R"(<span style="font-style: italic;">)";
+    check(guiRichTextRml("[b]B[/b][i]I[/i][u]U[/u][s]S[/s]") ==
+              bold + "B</span>" + italic + R"(I</span><span style="text-decoration: underline;">U</span>)" +
+                  R"(<span style="text-decoration: line-through;">S</span>)",
+          "rich text: [b] [i] [u] [s]");
+    check(guiRichTextRml("[B]x[/b][I]y[/I]") == bold + "x</span>" + italic + "y</span>", "rich text: tag names ignore case");
+    check(guiRichTextRml("[color=#f00]a[/color][color=#ff000080]b[/color][color=RED]c[/color][color=#0f08]d[/color]") ==
+              R"(<span style="color: #f00;">a</span><span style="color: #ff000080;">b</span><span style="color: red;">c</span>)"
+              R"(<span style="color: #0f08;">d</span>)",
+          "rich text: [color] takes #rgb, #rrggbbaa, a colour name (lower-cased) and #rgba");
+    std::vector<kast::GuiRichTextProblem> problems;
+    check(guiRichTextRml("[size=20]a[/size][size=12.5]b[/size][size=1000]c[/size][size=1]d[/size]", &problems) ==
+              R"(<span style="font-size: 20px;">a</span><span style="font-size: 12.5px;">b</span>)"
+              R"(<span style="font-size: 200px;">c</span><span style="font-size: 4px;">d</span>)" &&
+              problems.size() == 2 && problems[0].message == "[size=1000] is clamped to 200" && problems[1].offset == 55 &&
+              problems[1].message == "[size=1] is clamped to 4",
+          "rich text: [size] in pixels, clamped to 4..200 with a problem each");
+    check(guiRichTextRml("[font=LatoLatin]a[/font][font=Open Sans_2-x]b[/font]") ==
+              R"(<span style="font-family: LatoLatin;">a</span><span style="font-family: Open Sans_2-x;">b</span>)",
+          "rich text: [font] with letters, digits, spaces, _ and -");
+    problems.clear();
+    const kast::GuiFontKnown onlyLato = [](std::string_view family) { return family == "LatoLatin"; };
+    check(guiRichTextRml("[font=LatoLatin]a[/font][font=Nope]b[/font]", &problems, onlyLato) ==
+              R"(<span style="font-family: LatoLatin;">a</span>[font=Nope]b[/font])" &&
+              problems.size() == 2 && contains(problems[0].message, "no font family 'Nope' is loaded"),
+          "rich text: a font family that isn't loaded is a bad value (text), its [/font] then stray");
+    check(guiRichTextRml("[link=quest_42]Quest log[/link]") == R"(<span class="link" data-link="quest_42">Quest log</span>)",
+          "rich text: [link] is a span the click listener finds by data-link");
+    check(guiRichTextRml("[img=icons/a b.png]") == "[img=icons/a b.png]" &&
+              guiRichTextRml("[img=icons/a.png]") == R"(<img src="icons/a.png" style="height: 1em;"/>)" &&
+              guiRichTextRml("[img=a.png w=32 h=16]") == R"(<img src="a.png" style="width: 32px;height: 16px;"/>)" &&
+              guiRichTextRml("[img=a.png h=8]x") == R"(<img src="a.png" style="height: 8px;"/>x)",
+          "rich text: [img] one line high by default, w / h in pixels, no closing tag (a space ends the path)");
+    check(guiRichTextRml("[b][i]x[/i][/b]") == bold + italic + "x</span></span>" &&
+              guiRichTextRml("[color=red][link=a][b]x[/b][/link][/color]") ==
+                  R"(<span style="color: red;"><span class="link" data-link="a">)" + bold + "x</span></span></span>",
+          "rich text: nesting");
+    check(guiRichTextRml("a\nb [b]c\nd[/b]") == "a<br/>b " + bold + "c<br/>d</span>", "rich text: \\n is <br/>");
+    check(guiRichTextRml("[[b]] and [[[b]x[/b]") == "[b]] and [" + bold + "x</span>", "rich text: [[ is a literal [");
+    check(guiRichTextRml("[b]a[/b] [i]b[/i]") == bold + "a </span>" + italic + "b</span>" &&
+              guiRichTextRml("[b] [i]x[/i][/b]") == bold + italic + " x</span></span>" &&
+              guiRichTextRml("[img=a.png] [img=b.png] [/x]") ==
+                  R"(<img src="a.png" style="height: 1em;"/>&nbsp;<img src="b.png" style="height: 1em;"/> [/x])" &&
+              guiRichTextRml("[b]a[/b]  ") == bold + "a </span>" &&
+              guiRichTextRml("[b][i]a[/i][/b] [u]b[/u]") == bold + italic + R"(a </span></span><span style="text-decoration: underline;">b</span>)" &&
+              guiRichTextRml("[b][/b] x") == bold + "</span> x",
+          "rich text: spaces alone between tags are kept (RmlUi draws no all-space text node): after the text of the "
+          "spans just closed, before text or in the next span's text, else as &nbsp;");
+    check(guiRichTextRml("{{secret}} & <b>\"x\"</b>") == "&#123;&#123;secret&#125;&#125; &amp; &lt;b&gt;&quot;x&quot;&lt;/b&gt;",
+          "rich text: text is escaped like guiTextRml, braces too (no data binding runs)");
+
+    // Injection: nothing outside the tags above ever becomes markup or an attribute.
+    const auto onlyText = [](const std::string& rml) { return rml.find('<') == std::string::npos; };
+    check(onlyText(guiRichTextRml("<img src=x>")) && guiRichTextRml("<img src=x>") == "&lt;img src=x&gt;",
+          "injection: raw RML is text");
+    check(guiRichTextRml(R"([color=red" onclick="x]t[/color])") == "[color=red&quot; onclick=&quot;x]t[/color]",
+          "injection: a colour with a quote is a bad value, shown escaped");
+    check(guiRichTextRml(R"([link=a"><b]t[/link])") == R"(<span class="link" data-link="a&quot;&gt;&lt;b">t</span>)",
+          "injection: a link target is an escaped attribute value");
+    check(onlyText(guiRichTextRml("[font=x;y]t[/font]")) && onlyText(guiRichTextRml("[font=x\"y]t[/font]")),
+          "injection: a font name with ; or a quote is text");
+    check(guiRichTextRml(R"([img=..."])") == "[img=...&quot;]" && onlyText(guiRichTextRml("[img=a.png onerror=x]")) &&
+              onlyText(guiRichTextRml("[img=a.png w=1 w=2]")) && onlyText(guiRichTextRml("[img=<b>.png]")),
+          "injection: an image path with a quote or < >, or an unknown or repeated size, is text");
+    check(onlyText(guiRichTextRml("[link=]x[/link]")) && onlyText(guiRichTextRml("[link=a\x01]x[/link]")),
+          "a link target must be printable and not empty");
+
+    // Malformed markup: as the header documents, each with a problem.
+    problems.clear();
+    check(guiRichTextRml("[blink]x[/blink]", &problems) == "[blink]x[/blink]" && problems.size() == 2 &&
+              problems[0].offset == 0 && contains(problems[0].message, "unknown tag") && problems[1].offset == 8,
+          "malformed: an unknown tag and its closer are text");
+    problems.clear();
+    check(guiRichTextRml("[color=nope]a[/color][size=0]b[/size][size=x]c[/size][b=1]d[/b]", &problems) ==
+              "[color=nope]a[/color][size=0]b[/size][size=x]c[/size][b=1]d[/b]" && problems.size() == 8,
+          "malformed: bad colour and size values (and their closers) are text");
+    problems.clear();
+    check(guiRichTextRml("stray[/b] [/img]", &problems) == "stray[/b] [/img]" && problems.size() == 2 &&
+              contains(problems[0].message, "closes nothing that is open"),
+          "malformed: a stray closing tag is text");
+    problems.clear();
+    check(guiRichTextRml("[b]open [i]both", &problems) == bold + "open " + italic + "both</span></span>" &&
+              problems.size() == 2 && problems[0].offset == 8 && problems[1].offset == 0 &&
+              contains(problems[1].message, "[b] is not closed: closed at the end"),
+          "malformed: unclosed tags close at the end");
+    problems.clear();
+    check(guiRichTextRml("[b]a[i]b[/b]c[/i]", &problems) == bold + "a" + italic + "b</span></span>" + italic + "c</span>" &&
+              problems.size() == 1 && problems[0].offset == 8 && contains(problems[0].message, "mis-nested"),
+          "malformed: a closer skipping an inner tag closes it too and opens it again after itself");
+    problems.clear();
+    check(guiRichTextRml("a [ b [b]c[/b] ]", &problems) == "a [ b " + bold + "c</span> ]" && problems.size() == 1 &&
+              guiRichTextRml("[") == "[" && guiRichTextRml("[]") == "[]" && guiRichTextRml("[/]") == "[/]" && guiRichTextRml("").empty(),
+          "malformed: a [ without ] is text; empty tags are text");
+
+    // Random input: only the converter's own markup, never a crash.
+    std::mt19937 random(1234);
+    const std::string alphabet = "[]/=bisuBcolrzefntkmgw#0123456789 <>\"'&{};\n.x";
+    bool clean = true;
+    for (int n = 0; n < 3000 && clean; ++n) {
+        std::string input;
+        for (int length = static_cast<int>(random() % 60); length > 0; --length)
+            input += alphabet[random() % alphabet.size()];
+        const std::string rml = guiRichTextRml(input);
+        for (size_t at = rml.find('<'); at != std::string::npos && clean; at = rml.find('<', at + 1)) {
+            const std::string_view rest = std::string_view(rml).substr(at);
+            clean = rest.starts_with(R"(<span style=")") || rest.starts_with(R"(<span class="link" data-link=")") ||
+                    rest.starts_with("</span>") || rest.starts_with("<br/>") || rest.starts_with(R"(<img src=")");
+        }
+        clean = clean && std::ranges::count(rml, '"') % 2 == 0 && rml.find('{') == std::string::npos;
+        if (!clean)
+            std::printf("rich text fuzz: '%s' -> '%s'\n", input.c_str(), rml.c_str());
+    }
+    check(clean, "rich text: 3000 random inputs give only the converter's tags and balanced quotes");
+}
+
+// Rich text through SceneGui, headless like checkGuiWidgets, on tests/project/ui/richtext.rml (with the project font and
+// a broken one in fonts/): <p class="rich"> converted on load with real Roboto bold / italic faces and the project
+// font; setRichText and setText; the data-rich view following its model; a link clicked with the mouse publishing
+// gui.link {id, document, target}; the default link style.
+void checkGuiRichTextScene()
+{
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    check(bgfx::init(init) && kast::gui::init(), "headless bgfx and RmlUi start (rich text)");
+    {
+        const std::filesystem::path source = std::filesystem::path(KAST_SOURCE_DIR) / "tests/project";
+        const std::filesystem::path root = projectTestDir("kast_gui_richtext", "richtext");
+        for (const char* dir : {"ui", "fonts", "textures"})
+            std::filesystem::create_directories(root / dir);
+        for (const char* file : {"ui/richtext.rml", "ui/richtext.rcss", "fonts/LatoLatin-Regular.ttf", "textures/checker.png"})
+            std::filesystem::copy_file(source / file, root / file);
+        writeFile(root / "fonts/0_broken.ttf", "not a font"); // tried first (sorted): the good one after it still loads
+        kast::Scene scene;
+        scene.registry().emplace<kast::UIDocument>(scene.create("Rich"), kast::UIDocument{"ui/richtext.rml", true});
+        kast::EventBus bus;
+        std::vector<std::string> links; // "id document target"
+        const kast::EventBus::Subscription subscription = bus.subscribe("gui.link", [&links](const nlohmann::json& e) {
+            check(e.size() == 3, "gui.link's payload is {id, document, target}");
+            links.push_back(std::format("{} {} {}", e["id"].get<std::string>(), e["document"].get<std::string>(),
+                                        e["target"].get<std::string>()));
+        });
+        kast::SceneGui gui("richtext_check");
+        gui.context().resize(1280, 720);
+        gui.setModelValue("richbind", "line", "[b]Bound[/b] once");
+        gui.sync(scene, root, bus);
+        Rml::Context* rml = gui.context().context();
+        const auto update = [&] {
+            gui.context().render(0, BGFX_INVALID_HANDLE);
+            bgfx::frame();
+            bus.drain();
+        };
+        update();
+        const uint64_t problems = kast::gui::problemCount();
+        Rml::ElementDocument* doc = rml->GetNumDocuments() == 1 ? rml->GetDocument(0) : nullptr;
+        check(doc != nullptr, "richtext.rml loads without an RmlUi warning (a bad font file isn't the document's)");
+        check(logged("Font 'fonts/0_broken.ttf' could not be loaded") && kast::gui::fontFamilyLoaded("LatoLatin") &&
+                  kast::gui::fontFamilyLoaded("latolatin") && kast::gui::fontFamilyLoaded("Roboto") &&
+                  !kast::gui::fontFamilyLoaded("Nope"),
+              "a bad font file is logged by name; the project's good font still loads, by its family (any case)");
+        if (!doc)
+            return;
+        const auto byId = [&](const char* id) { return doc->GetElementById(id); };
+        const auto spans = [](Rml::Element* element) {
+            Rml::ElementList out;
+            if (element)
+                element->QuerySelectorAll(out, "span");
+            return out;
+        };
+        const auto inner = [&](const char* id) { return byId(id) ? byId(id)->GetInnerRML() : std::string("<none>"); };
+
+        // Real faces: four distinct Roboto faces for regular, bold, italic and bold italic, chosen by weight and style.
+        const Rml::ElementList styles = spans(byId("rich_styles"));
+        check(styles.size() == 6 && contains(inner("rich_styles"), "Bold </span>"),
+              "rich_styles: [b] [i] [b][i] [u] [s] are six spans, the spaces between them kept");
+        if (styles.size() == 6) {
+            using Rml::Style::FontStyle;
+            using Rml::Style::FontWeight;
+            const auto& boldValues = styles[0]->GetComputedValues();
+            const auto& boldItalicValues = styles[3]->GetComputedValues();
+            check(boldValues.font_weight() == FontWeight::Bold && styles[1]->GetComputedValues().font_style() == FontStyle::Italic &&
+                      boldItalicValues.font_weight() == FontWeight::Bold && boldItalicValues.font_style() == FontStyle::Italic &&
+                      styles[4]->GetComputedValues().text_decoration() == Rml::Style::TextDecoration::Underline &&
+                      styles[5]->GetComputedValues().text_decoration() == Rml::Style::TextDecoration::LineThrough,
+                  "the spans compute bold, italic, bold italic, underline and line-through");
+            const Rml::FontFaceHandle regular = byId("rich_plain")->GetFontFaceHandle();
+            const std::set<Rml::FontFaceHandle> faces = {regular, styles[0]->GetFontFaceHandle(), styles[1]->GetFontFaceHandle(),
+                                                         styles[3]->GetFontFaceHandle()};
+            check(regular != 0 && faces.size() == 4 && !faces.contains(0),
+                  "regular, bold, italic and bold italic text use four different font faces (real Roboto faces, not one "
+                  "face for all)");
+            const Rml::ElementList font = spans(byId("rich_font"));
+            const Rml::FontFaceHandle lato = Rml::GetFontEngineInterface()->GetFontFaceHandle("latolatin", FontStyle::Normal,
+                                                                                               FontWeight::Normal, 16);
+            check(font.size() == 1 && lato != 0 && font[0]->GetFontFaceHandle() == lato && lato != regular,
+                  "[font=LatoLatin] uses the project font's face");
+        }
+        Rml::ElementList images;
+        byId("rich_media")->QuerySelectorAll(images, "img");
+        check(images.size() == 2 && images[0]->GetAttribute<Rml::String>("src", "") == "../textures/checker.png" &&
+                  contains(inner("rich_media"), "[brackets]]") && byId("rich_lines")->QuerySelector("br") != nullptr &&
+                  contains(inner("rich_lines"), "&lt;b&gt; &amp; &quot;quotes&quot;"),
+              "images, [[ as a literal [, a line break and escaped text in the converted document");
+        check(contains(inner("rich_malformed"), "[blink]x[/blink] [color=nope]c[/color] stray[/b]") &&
+                  spans(byId("rich_malformed")).size() == 4,
+              "malformed markup shows as text; the mis-nested [i] is split in two and [u] closed at the end");
+        const Rml::ElementList link = spans(byId("rich_center"));
+        check(link.size() == 1 && link[0]->GetProperty<Rml::Colourb>("color") == Rml::Colourb(0xff, 0xaa, 0x00),
+              "the link wears the default link style (#ffaa00)");
+
+        // setRichText / setText: rich and plain, the later write winning; kept across a hot reload.
+        gui.setRichText("rich_lua", "[i]Set[/i] by [b]Lua[/b]");
+        gui.setText("rich_plain", "[b]plain[/b] <b>");
+        update();
+        check(spans(byId("rich_lua")).size() == 2 && inner("rich_plain") == "[b]plain[/b] &lt;b&gt;" &&
+                  spans(byId("rich_plain")).empty() && !byId("rich_plain")->QuerySelector("b"),
+              "setRichText writes rich text; setText still shows markup as typed");
+        gui.setText("rich_lua", "now [b]plain[/b]");
+        gui.setRichText("rich_plain", "now [b]rich[/b]");
+        update();
+        check(spans(byId("rich_lua")).empty() && spans(byId("rich_plain")).size() == 1, "the later of setText / setRichText wins");
+        gui.setRichText("rich_lua", "[u]kept[/u]");
+        const std::filesystem::path rmlFile = root / "ui/richtext.rml";
+        std::filesystem::last_write_time(rmlFile, std::filesystem::last_write_time(rmlFile) + std::chrono::seconds(5));
+        gui.reloadChanged();
+        update();
+        doc = rml->GetNumDocuments() == 1 ? rml->GetDocument(0) : nullptr;
+        check(doc && spans(byId("rich_lua")).size() == 1 && spans(byId("rich_styles")).size() == 6,
+              "after a hot reload: the document converted again and setRichText's text back");
+        if (!doc)
+            return;
+
+        // data-rich: the bound BBCode as rich text, following the model; a value can't inject markup.
+        check(spans(byId("rich_bound")).size() == 1 && contains(inner("rich_bound"), "Bound"), "data-rich shows the bound BBCode");
+        gui.setModelValue("richbind", "line", "[color=lime]Two[/color] [i]lines[/i]");
+        update();
+        const Rml::ElementList bound = spans(byId("rich_bound"));
+        check(bound.size() == 2 && bound[0]->GetProperty<Rml::Colourb>("color") == Rml::Colourb(0, 255, 0) &&
+                  contains(inner("rich_bound"), "Two"),
+              "data-rich follows the model");
+        gui.setModelValue("richbind", "line", "<b>x</b> {{line}}");
+        update();
+        check(!byId("rich_bound")->QuerySelector("b") && contains(inner("rich_bound"), "&lt;b&gt;x&lt;/b&gt; {{line}}"),
+              "a bound value's markup and braces stay text");
+
+        // Links: a real mouse click on the centred link publishes once; a click on other text publishes nothing.
+        Rml::Element* centre = spans(byId("rich_center")).empty() ? nullptr : spans(byId("rich_center"))[0];
+        check(centre != nullptr, "rich_center holds its link");
+        if (centre) {
+            const Rml::Vector2f at = centre->GetAbsoluteOffset(Rml::BoxArea::Border) + centre->GetBox().GetSize() * 0.5f;
+            for (const SDL_EventType type : {SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_MOUSE_BUTTON_UP}) {
+                SDL_Event event{};
+                event.type = type;
+                if (type == SDL_EVENT_MOUSE_MOTION) {
+                    event.motion.x = at.x;
+                    event.motion.y = at.y;
+                } else {
+                    event.button.button = SDL_BUTTON_LEFT;
+                    event.button.x = at.x;
+                    event.button.y = at.y;
+                }
+                gui.context().onEvent(event);
+                update();
+            }
+            check(links == std::vector<std::string>{"rich_center ui/richtext.rml quest_log"} &&
+                      bus.history().back().publisher == "UI",
+                  "clicking a link publishes gui.link {id: the rich text's, document, target} from UI");
+            check(centre->GetProperty<Rml::Colourb>("color") == Rml::Colourb(0xff, 0xcc, 0x00), "a hovered link turns #ffcc00");
+        }
+        links.clear();
+        gui.setRichText("rich_lua", "go [link=a\"b]there[/link]");
+        update();
+        byId("rich_styles")->Click();
+        if (const Rml::ElementList lua = spans(byId("rich_lua")); !lua.empty())
+            lua[0]->Click();
+        update();
+        check(links == std::vector<std::string>{"rich_lua ui/richtext.rml a\"b"},
+              "a link set by setRichText publishes its target as written; plain text publishes nothing");
+        check(kast::gui::problemCount() == problems, "no RmlUi warning through the whole rich text run");
+        gui.reset();
+    }
+    kast::gui::shutdown();
+    bgfx::shutdown();
+}
+
 // The list math (gui_lists.h, no RmlUi): the virtual window for a scroll position, scrolling a row into view, the keys,
 // row keys and following a selection through a replaced source.
 void checkGuiListMath()
@@ -5774,9 +6075,10 @@ void checkGuiLists()
             const Rml::Vector2f at = big->GetAbsoluteOffset(Rml::BoxArea::Border);
             const float scrolled = big->GetScrollTop();
             mouse(SDL_EVENT_MOUSE_MOTION, at.x + 100.0f, at.y + 200.0f);
+            // RmlUi scrolls a wheel turn smoothly on the wall clock (SystemInterface::GetElapsedTime), and these frames take
+            // a millisecond or two: its last pixels would land in some later check (Home's scrollTop 1, not 0). Instant here.
+            rml->SetDefaultScrollBehavior(Rml::ScrollBehavior::Instant, 1.0f);
             mouse(SDL_EVENT_MOUSE_WHEEL, 0.0f, 0.0f, -3.0f); // towards the user: down
-            for (int i = 0; i < 30; ++i) // RmlUi may scroll smoothly over frames
-                update();
             check(big->GetScrollTop() > scrolled && showsRight() && few(), "the wheel scrolls the Virtual List; the rows follow");
             // The scrollbar: its bar is where scrollTop / range puts it on the track; dragged 100 px down.
             const float barY = at.y + 1.0f + big->GetScrollTop() / big->GetScrollHeight() * big->GetClientHeight();
@@ -13479,6 +13781,64 @@ void checkGuiDocLists()
     });
 }
 
+// Rich Text in the builder's model (gui_doc.h): <p class="rich"> by markup (tests/project/ui/richtext.rml), its BBCode
+// the editable text, saved verbatim and round-tripping; added with its placeholder; the toolbar's wrap and insert
+// (guiWrapRichText); markup edits undone and redone through gui_undo.
+void checkGuiDocRichText()
+{
+    std::string error;
+    GuiDoc doc;
+    check(doc.parse(readText(std::filesystem::path(KAST_SOURCE_DIR) / "tests/project/ui/richtext.rml"), error),
+          "GuiDoc parses richtext.rml");
+    const pugi::xml_node styles = guiNode(doc, "rich_styles");
+    check(guiKind(styles) == GuiKind::RichText && guiKind(guiNode(doc, "rich_center")) == GuiKind::RichText &&
+              guiKind(guiNode(doc, "rich_plain")) == GuiKind::Text && guiKind(guiNode(doc, "rich_bound")) == GuiKind::Text &&
+              guiKindLabel(GuiKind::RichText) == std::string("Rich Text") && GuiDoc::hasEditableText(styles) &&
+              GuiDoc::text(guiNode(doc, "rich_lines")) == "Line one\nLine two: <b> & \"quotes\" stay text",
+          "richtext.rml: <p class=\"rich\"> (among other classes too) is Rich Text, a plain <p> still Text; the markup is "
+          "its text");
+    const std::string saved = doc.serialize();
+    GuiDoc again;
+    check(again.parse(saved, error) && again.serialize() == saved &&
+              contains(saved, R"(<p id="rich_styles" class="rich">[b]Bold[/b] [i]Italic[/i] [b][i]Bold italic[/i][/b] [u]Underline[/u] [s]Strike[/s]</p>)") &&
+              contains(saved, "<p id=\"rich_lines\" class=\"rich\">Line one\nLine two: &lt;b&gt; &amp; \"quotes\" stay text</p>") &&
+              contains(saved, R"([blink]x[/blink] [color=nope]c[/color] stray[/b] [b]b [i]mis[/b]nested[/i] [u]open</p>)") &&
+              contains(saved, R"(<p id="rich_bound" data-rich="line" />)"),
+          "richtext.rml round-trips with its BBCode verbatim (line break and malformed markup included)");
+    const pugi::xml_node added = doc.add(GuiKind::RichText, doc.body());
+    check(guiKind(added) == GuiKind::RichText && GuiDoc::text(added) == "[b]Rich[/b] text" &&
+              contains(doc.serialize(), R"(<p class="rich">[b]Rich[/b] text</p>)"),
+          "add Rich Text: <p class=\"rich\"> with placeholder markup");
+
+    check(guiWrapRichText("hello world", 0, 5, "b", "") == "[b]hello[/b] world" &&
+              guiWrapRichText("hello world", 5, 0, "i", "") == "[i]hello[/i] world" &&
+              guiWrapRichText("hello world", 6, 6, "color", "#ff0000") == "hello [color=#ff0000][/color]world" &&
+              guiWrapRichText("hello world", 3, 99, "link", "quest") == "hel[link=quest]lo world[/link]" &&
+              guiWrapRichText("ab", 1, 2, "img", "x.png w=8") == "a[img=x.png w=8]b" &&
+              guiWrapRichText("", 0, 0, "s", "") == "[s][/s]",
+          "the toolbar wraps the selection (either way round, clamped), inserts at the cursor, and puts an image at "
+          "the selection's start");
+
+    UndoStack history;
+    pugi::xml_node selected;
+    const auto edit = [&](const char* name, auto change) {
+        const pugi::xml_node node = guiNode(doc, "rich_lua");
+        GuiElementCopy before = copyGuiElement(node);
+        change(node);
+        pushGuiStep(history, doc.body().root(), name, std::move(before), copyGuiElement(node),
+                    [&](pugi::xml_node n) { selected = n; });
+    };
+    checkGuiUndoRedo(doc, history, "rich text bold", [&] {
+        edit("Rich Text [b]", [](pugi::xml_node node) {
+            GuiDoc::setText(node, guiWrapRichText(GuiDoc::text(node), 0, 7, "b", ""));
+        });
+    });
+    check(GuiDoc::text(guiNode(doc, "rich_lua")) == "[b]waiting[/b] for Lua", "the wrap is in the markup");
+    checkGuiUndoRedo(doc, history, "rich text markup typed", [&] {
+        edit("Edit Rich Text markup", [](pugi::xml_node node) { GuiDoc::setText(node, "[size=40]Big[/size]\nnext"); });
+    });
+}
+
 void checkGuiUndo()
 {
     GuiDoc doc;
@@ -13939,6 +14299,7 @@ int main(int argc, char** argv)
         checkPrefabModeUndo();
         checkGuiUndo();
         checkGuiDocLists();
+        checkGuiDocRichText();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All undo checks passed" : std::format("{} undo check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
@@ -13963,8 +14324,20 @@ int main(int argc, char** argv)
         checkGuiLists();
         checkGuiUndo();
         checkGuiDocLists();
+        checkGuiRichText();
+        checkGuiRichTextScene();
+        checkGuiDocRichText();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All GUI checks passed" : std::format("{} GUI check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--richtext") { // only the rich text checks
+        checkLuaGui();
+        checkGuiRichText();
+        checkGuiRichTextScene();
+        checkGuiDocRichText();
+        removeTree(testRoot());
+        kast::log::info(g_failures == 0 ? "All rich text checks passed" : std::format("{} rich text check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--particles") { // only the particle checks
@@ -14063,6 +14436,7 @@ int main(int argc, char** argv)
     checkPrefabModeUndo();
     checkGuiUndo();
     checkGuiDocLists();
+    checkGuiDocRichText();
     checkLuaInstantiate();
     checkLuaGui();
     checkGuiEffectCompile();
@@ -14119,6 +14493,8 @@ int main(int argc, char** argv)
     checkGuiClipboard();
     checkGuiDataModels();
     checkGuiWidgets();
+    checkGuiRichText();
+    checkGuiRichTextScene();
     checkGuiListMath();
     checkGuiLists();
     checkExternalEditor();

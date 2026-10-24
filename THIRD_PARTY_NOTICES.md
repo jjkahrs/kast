@@ -104,6 +104,8 @@ Their transitive dependencies are MIT, ISC, BSD-2-Clause, BSD-3-Clause, Apache-2
 | Asset | Source | License |
 |---|---|---|
 | `editor/assets/fonts/Roboto-Regular.ttf` | Google (Roboto 2.138) | Apache-2.0 (`editor/assets/fonts/LICENSE.txt`) |
+| `editor/assets/fonts/Roboto-Bold.ttf`, `Roboto-Italic.ttf`, `Roboto-BoldItalic.ttf` | Google (Roboto 2.138, `roboto-unhinted.zip` from the googlefonts/roboto v2.138 release) | Apache-2.0 (`editor/assets/fonts/LICENSE.txt`) |
+| `tests/project/fonts/LatoLatin-Regular.ttf` (test font) | Łukasz Dziedzic (Lato, as shipped in RmlUi 6.2's samples) | OFL-1.1 (`tests/project/fonts/LatoLatin-OFL.txt`) |
 | `editor/assets/fonts/MaterialSymbolsOutlined-Filled.ttf` | Google (Material Symbols 2.975) | Apache-2.0 (`editor/assets/fonts/LICENSE.txt`) |
 | `tests/project/models/kenney/*` | Kenney, Animated Characters 2 (www.kenney.nl) | CC0-1.0 (`tests/project/models/kenney/License.txt`) |
 | `samples/starter-mmo/models/female-128-anim.glb`, `tests/project/models/female-128-anim.glb` | Mesh2Motion (https://mesh2motion.org, https://github.com/Mesh2Motion/mesh2motion-assets) | CC0-1.0 |

@@ -1,0 +1,24 @@
+<rml>
+    <head>
+        <title>Rich Text</title>
+        <link type="text/rcss" href="richtext.rcss"/>
+    </head>
+    <body>
+        <!-- Rich text (ctest ui_richtext_*, scripts/ui_richtext.lua; self_check's checkGuiRichText): every BBCode tag, an
+             image, the project font (fonts/LatoLatin-Regular.ttf), malformed markup, kast.gui.setRichText / setText and a
+             data-rich binding. rich_center's link sits at the middle of the view (the tests' sim-mouse clicks it). -->
+        <div id="rich_panel" class="panel" data-model="richbind">
+            <p id="rich_styles" class="rich">[b]Bold[/b] [i]Italic[/i] [b][i]Bold italic[/i][/b] [u]Underline[/u] [s]Strike[/s]</p>
+            <p id="rich_colors" class="rich">[color=#ff4040]Red[/color] [color=lime]lime[/color] [color=#4af]short[/color] [color=#ffffff80]half[/color] [size=30]Big[/size] [size=12]small[/size]</p>
+            <p id="rich_font" class="rich">[font=LatoLatin]LatoLatin, a project font[/font]</p>
+            <p id="rich_media" class="rich">Icon [img=../textures/checker.png] wide [img=../textures/checker.png w=48 h=16] and [[brackets]]</p>
+            <p id="rich_lines" class="rich">Line one
+Line two: &lt;b&gt; &amp; "quotes" stay text</p>
+            <p id="rich_malformed" class="rich">[blink]x[/blink] [color=nope]c[/color] stray[/b] [b]b [i]mis[/b]nested[/i] [u]open</p>
+            <p id="rich_lua" class="rich">waiting for Lua</p>
+            <p id="rich_plain">waiting for Lua</p>
+            <p id="rich_bound" data-rich="line"></p>
+        </div>
+        <p id="rich_center" class="rich center">[link=quest_log]Quest log[/link]</p>
+    </body>
+</rml>

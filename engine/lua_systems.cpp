@@ -1321,6 +1321,9 @@ void LuaSystems::State::bindGuiApi()
     guiApi.set_function("setText", [=, this](sol::this_state L, const sol::object& id, const sol::object& value) {
         gui->setText(text(L, "setText", "id", id), text(L, "setText", "text", value));
     });
+    guiApi.set_function("setRichText", [=, this](sol::this_state L, const sol::object& id, const sol::object& value) {
+        gui->setRichText(text(L, "setRichText", "id", id), text(L, "setRichText", "text", value));
+    });
     guiApi.set_function("setVisible", [=, this](sol::this_state L, const sol::object& id, const sol::object& visible) {
         if (visible.get_type() != sol::type::boolean)
             raise(L, std::format("kast.gui.setVisible: visible must be a boolean, got {}", toString(L, visible)));

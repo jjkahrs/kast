@@ -6,6 +6,7 @@
 #include "gui_events.h"
 #include "gui_lists.h"
 #include "gui_models.h"
+#include "gui_richtext.h"
 #include "gui_widgets.h"
 #include "scene.h"
 
@@ -27,9 +28,6 @@ class ElementDocument;
 // drags, widget changes and list selections publish on the bus (gui_events.h, gui_widgets.h, gui_lists.h). A missing or broken .rml/.rcss logs an error
 // naming the file and that document shows nothing; Play goes on.
 namespace kast {
-
-// text as RML: &, <, > and " escaped, "\n" as <br/> (GuiAccess::setText on an element that isn't a text field).
-std::string guiTextRml(std::string_view text);
 
 class SceneGui final : public GuiAccess {
 public:
@@ -54,6 +52,7 @@ public:
     void scrollTo(const std::string& id, int index) override;
     void scrollToEnd(const std::string& id) override;
     void setText(const std::string& id, std::string_view text) override;
+    void setRichText(const std::string& id, std::string_view text) override;
     void setVisible(const std::string& id, bool visible) override;
     void setAttribute(const std::string& id, const std::string& name, std::string_view value) override;
     bool focus(const std::string& id) override;
@@ -71,6 +70,7 @@ public:
 private:
     struct Written { // kast.gui writes to one id, applied again to documents that load later
         std::optional<std::string> text;
+        std::optional<std::string> rich; // BBCode; text or rich, the later write
         std::optional<bool> visible;
         std::map<std::string, std::string> attributes;
         std::optional<GuiValue> value;

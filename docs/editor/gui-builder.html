@@ -20,13 +20,13 @@ nothing changed, if either new name is taken); moves and renames of the open fil
 <code>.rml</code> in Assets to open it (one GUI at a time; with unsaved builder changes, Save / Discard / Cancel first); its
 four panels come to the front.</p>
 <ul>
-<li><strong>GUI Hierarchy</strong> (tab beside Hierarchy): the elements under <strong>Body</strong>. <strong>+ Panel / + Text / + Button</strong> and the
+<li><strong>GUI Hierarchy</strong> (tab beside Hierarchy): the elements under <strong>Body</strong>. <strong>+ Panel / + Text / + <a href="#rich-text">Rich Text</a> / + Button</strong> and the
   <a href="#form-widgets">form widgets</a> <strong>+ Toggle / + Slider / + Dropdown / + Spinbox / + Progress</strong> and the
   <a href="#lists">lists</a> <strong>+ List Box / + Virtual List</strong> add into the selected Panel, else into Body (the buttons wrap to the panel's width); <strong>Delete</strong>, <strong>Up</strong>, <strong>Down</strong> act on the
   selection; the right-click menu has the same (<strong>Add Toggle</strong>, ...). Drag an element onto a Panel or Body to move it
   there (into itself or its own children is refused). Unknown elements are greyed and labelled <code>&lt;tag&gt;</code>.</li>
 <li><strong>GUI Inspector</strong> (tab beside Inspector): the selection's <code>id</code> and <code>class</code>, its text (Text and Button holding only
-  text; one with child elements says so), <code>data-event</code> for a Button, the input widgets and the lists, and a widget's
+  text; one with child elements says so), a Rich Text's <a href="#rich-text">markup, toolbar and warnings</a>, <code>data-event</code> for a Button, the input widgets and the lists, and a widget's
   <a href="#form-widgets">properties and options</a> or a list's <a href="#lists">properties and rows</a>. Then, on any element (Unknown ones too),
   <strong>Data binding</strong>: one field per RmlUi <a href="../engine/game-gui.html#data-binding">binding attribute</a> it has
   (<code>data-model</code>, <code>data-for</code>, <code>data-if</code>, <code>data-visible</code>, <code>data-value</code>, <code>data-checked</code>,
@@ -45,6 +45,29 @@ four panels come to the front.</p>
   select a row template in the GUI Hierarchy. A Virtual List is the exception: it shows 20 placeholder rows made from its
   template (see <a href="#lists">Lists</a>).</li>
 </ul>
+<h2 id="rich-text">Rich Text</h2>
+<p><strong>+ Rich Text</strong> adds <code>&lt;p class="rich"&gt;[b]Rich[/b] text&lt;/p&gt;</code>: a paragraph whose text is
+<a href="../engine/game-gui.html#rich-text">BBCode</a>, converted to styled RML in the preview, in Play and in the built game. Any
+<code>&lt;p&gt;</code> with class <code>rich</code> (among others too) is Rich Text; a plain <code>&lt;p&gt;</code> stays Text, its text shown as typed. The
+markup is saved verbatim (line breaks included; the file escapes only <code>&amp; &lt; &gt;</code>), so it round-trips.</p>
+<ul>
+<li><strong>markup</strong>: a multiline field (Enter makes a line break). Like the other fields, one edit is one undo step from
+activation to letting go, and the preview follows as you type.</li>
+<li><strong>Toolbar</strong> under it: <strong>B</strong>, <strong>I</strong>, <strong>U</strong>, <strong>S</strong> wrap the field's selection in
+<code>[b]...[/b]</code>, <code>[i]</code>, <code>[u]</code>, <code>[s]</code>, or put an empty pair at the cursor when nothing is selected.
+<strong>Color</strong> (a colour picker), <strong>Size</strong> (pixels, 4..200), <strong>Font</strong> (a family name, <code>Roboto</code> or a
+project font from <code>fonts/</code>) and <strong>Link</strong> (a target) ask for their value in a popup, then <strong>Apply</strong>
+wraps the same way (<code>[color=#ffaa00]...[/color]</code>). <strong>Image</strong> asks for a path (relative to the
+<code>.rml</code>) and an optional width / height (0: automatic) and inserts <code>[img=path w=N h=N]</code> at the selection's start.
+Each button is one undo step (<code>Rich Text [b]</code>, ...). The selection used is the field's last one, so select text, then
+click.</li>
+<li><strong>Warnings</strong> under the toolbar list what the converter reports, with its byte offset in the markup: unknown tags,
+bad values, closing tags that close nothing, unclosed tags, mis-nesting and a font family that isn't loaded. Play shows
+those as documented (literal text, closed at the end, reopened); <em>Markup OK</em> when there are none.</li>
+</ul>
+<p>The preview loads the project's <code>fonts/</code> and resolves <code>[img]</code> paths next to the <code>.rml</code>. Clicking rich text in the
+preview selects the paragraph. <code>--gui-add RichText</code> and <code>--gui-rich-wrap b,0,7</code> (the toolbar's edit on bytes 0..7 of
+the selection's markup) do the same from the <a href="command-line.html">command line</a>.</p>
 <h2 id="form-widgets">Form widgets</h2>
 <p>Elements are recognised by their markup (<a href="../engine/game-gui.html#form-widgets">Game GUI: Form widgets</a>), so
 hand-written controls are editable too: an <code>&lt;input type="range"&gt;</code> is a Slider, a <code>&lt;select&gt;</code> a Dropdown, an

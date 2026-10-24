@@ -80,7 +80,7 @@ constexpr const char* kUsage =
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-select path] [--material-set field=json] [--material-undo N] [--material-redo N] "
     "[--focus-panel Window] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
-    "[--gui-add Panel|Text|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] "
+    "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
     "[--graph-save] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-view-code] [--preview-model path] [--preview-clip name] "
@@ -172,6 +172,11 @@ struct Options {
                                                                    // GUI Inspector does (one step)
     std::optional<std::pair<std::string, std::string>> guiSetProp; // then set this widget property of the selection, as
                                                                    // the GUI Inspector does (one step)
+    struct GuiRichWrap {
+        std::string tag, value;
+        size_t start = 0, end = 0;
+    };
+    std::optional<GuiRichWrap> guiRichWrap; // then wrap the selected Rich Text's bytes start..end as its toolbar does
     int guiUndo = 0, guiRedo = 0;  // then GUI Undo N times, then Redo N times
     bool guiSave = false;          // then save the GUI as its Save button does
     std::string guiClick;           // with --play: click the game GUI element with this id (frame kAddComponentPopupFrame)
@@ -501,6 +506,25 @@ std::optional<Options> parseArgs(int argc, char** argv)
                 return std::nullopt;
             }
             options.guiSetProp.emplace(text.substr(0, equals), text.substr(equals + 1));
+        } else if (arg == "--gui-rich-wrap" && hasValue) { // tag[=value],start,end
+            const std::string text = argv[++i];
+            const size_t second = text.rfind(',');
+            const size_t first = second == std::string::npos || second == 0 ? std::string::npos : text.rfind(',', second - 1);
+            Options::GuiRichWrap wrap;
+            const auto offset = [&](size_t from, size_t to, size_t& out) {
+                const auto [end, error] = std::from_chars(text.data() + from, text.data() + to, out);
+                return error == std::errc() && end == text.data() + to && from < to;
+            };
+            if (first == std::string::npos || first == 0 || !offset(first + 1, second, wrap.start) ||
+                !offset(second + 1, text.size(), wrap.end)) {
+                kast::log::error(std::format("Invalid --gui-rich-wrap '{}', expected tag[=value],start,end", text));
+                return std::nullopt;
+            }
+            const std::string tag = text.substr(0, first);
+            const size_t equals = tag.find('=');
+            wrap.tag = tag.substr(0, equals);
+            wrap.value = equals == std::string::npos ? "" : tag.substr(equals + 1);
+            options.guiRichWrap = std::move(wrap);
         } else if (arg == "--gui-undo" && hasValue && parsePositive(argv[i + 1], options.guiUndo)) {
             ++i;
         } else if (arg == "--gui-redo" && hasValue && parsePositive(argv[i + 1], options.guiRedo)) {
@@ -682,7 +706,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.materialSets.empty() || options.materialUndo || options.materialRedo ||
                              !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
-                             options.guiAdd || options.guiSetAttr || options.guiSetProp || options.guiSave || !options.guiClick.empty() || options.openPreferences ||
+                             options.guiAdd || options.guiSetAttr || options.guiSetProp || options.guiRichWrap || options.guiSave || !options.guiClick.empty() || options.openPreferences ||
                              !options.openGraph.empty() || !options.previewModel.empty() ||
                              !options.openExternal.empty() || !options.dropModel.empty() || options.logFps ||
                              !options.prefabSteps.empty() || !options.assetsDelete.empty() || !options.inspectorApplyMenu.empty() ||
@@ -707,9 +731,9 @@ std::optional<Options> parseArgs(int argc, char** argv)
         return std::nullopt;
     }
     if ((!options.guiSelect.empty() || options.guiPick || options.guiAdd || options.guiSetAttr || options.guiSetProp ||
-         options.guiUndo || options.guiRedo || options.guiSave) && options.openGui.empty()) {
-        kast::log::error("--gui-select, --gui-pick, --gui-add, --gui-set-attr, --gui-set-prop, --gui-undo, --gui-redo and "
-                         "--gui-save require --open-gui <file.rml>");
+         options.guiRichWrap || options.guiUndo || options.guiRedo || options.guiSave) && options.openGui.empty()) {
+        kast::log::error("--gui-select, --gui-pick, --gui-add, --gui-set-attr, --gui-set-prop, --gui-rich-wrap, --gui-undo, "
+                         "--gui-redo and --gui-save require --open-gui <file.rml>");
         return std::nullopt;
     }
     if (!options.graphSteps.empty() && options.openGraph.empty()) {
@@ -1693,6 +1717,14 @@ int main(int argc, char** argv)
                 kast::log::info(std::format("--gui-set-prop {}=\"{}\" on '{}'", name, value, guiBuilder.selectedId()));
             else
                 kast::log::error(std::format("--gui-set-prop: the selection has no widget property '{}'", name));
+        }
+        if (options->guiRichWrap && frames.frame() == kAddComponentPopupFrame + 7) {
+            const auto& wrap = *options->guiRichWrap;
+            if (guiBuilder.wrapRichText(wrap.tag, wrap.value, wrap.start, wrap.end))
+                kast::log::info(std::format("--gui-rich-wrap [{}] {}..{} on '{}'", wrap.tag, wrap.start, wrap.end,
+                                            guiBuilder.selectedId()));
+            else
+                kast::log::error("--gui-rich-wrap: the selection is no Rich Text");
         }
         if (frames.frame() == kAddComponentPopupFrame + 8) { // after --gui-add's edit was applied
             for (int i = 0; i < options->guiUndo; ++i)

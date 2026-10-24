@@ -49,6 +49,9 @@ public:
     // A text field's value, else the element's text (escaped; "\n" is a line break). Kept and applied again to every
     // document that loads later (Play start, hot reload) until reset().
     virtual void setText(const std::string& id, std::string_view text) = 0;
+    // The element's content as rich text: BBCode (gui_richtext.h) turned into safe RML; a text field takes it as typed.
+    // Kept like setText; the later of setText and setRichText on an id wins.
+    virtual void setRichText(const std::string& id, std::string_view text) = 0;
     // Hides (display: none) or shows (the style sheet's display) the element. Kept like setText.
     virtual void setVisible(const std::string& id, bool visible) = 0;
     // Sets an attribute of the element (src of an <img>, class, ...). Kept like setText.
