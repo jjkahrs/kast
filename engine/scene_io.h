@@ -39,6 +39,10 @@ bool sceneFromJson(const nlohmann::ordered_json& json, Scene& out, std::string& 
 // default). lightmapsFromJson replaces out only on success; error says why not.
 nlohmann::ordered_json lightmapsToJson(const SceneLightmaps& lightmaps);
 bool lightmapsFromJson(const nlohmann::ordered_json& json, SceneLightmaps& out, std::string& error);
+// The "lighting" > "sdfgi" block (kast.sdfgi uses these too), likewise. A scene file with a bad one loads with it
+// dropped (SDFGI off) and a warning naming the field.
+nlohmann::ordered_json sdfgiToJson(const SceneSdfgi& sdfgi);
+bool sdfgiFromJson(const nlohmann::ordered_json& json, SceneSdfgi& out, std::string& error);
 // A scene's "sky" block (kast.sky uses these too). skyFromJson replaces out only on success; error says why not.
 nlohmann::ordered_json skyToJson(const SceneSky& sky);
 bool skyFromJson(const nlohmann::ordered_json& json, SceneSky& out, std::string& error);

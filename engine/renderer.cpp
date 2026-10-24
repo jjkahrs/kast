@@ -2,6 +2,7 @@
 
 #include "fs_line.bin.h"
 #include "fs_mesh.bin.h"
+#include "fs_mesh_sdfgi.bin.h"
 #include "fs_shadow.bin.h"
 #include "vs_line.bin.h"
 #include "vs_mesh.bin.h"
@@ -29,6 +30,7 @@
 #include "physics.h"
 #include "post_process.h"
 #include "project.h"
+#include "sdfgi.h"
 #include "terrain.h"
 #include "voxel_gi.h"
 
@@ -631,7 +633,7 @@ struct Renderer::VoxelGiState {
     }
 };
 
-Renderer::Renderer() : voxelGi_(std::make_unique<VoxelGiState>()) {}
+Renderer::Renderer() : voxelGi_(std::make_unique<VoxelGiState>()), sdfgi_(std::make_unique<SdfgiRenderer>()) {}
 Renderer::~Renderer() = default;
 
 void Renderer::init()
@@ -679,7 +681,11 @@ void Renderer::init()
     meshProgram_ = bgfx::createProgram(meshVertex_, meshFragment);
     skinnedProgram_ = bgfx::createProgram(skinnedVertex_, meshFragment);
     instancedProgram_ = bgfx::createProgram(instancedVertex_, meshFragment);
-    bgfx::destroy(meshFragment); // the programs keep it
+    const bgfx::ShaderHandle sdfgiFragment = bgfx::createShader(bgfx::makeRef(fs_mesh_sdfgi, sizeof(fs_mesh_sdfgi)));
+    sdfgiPrograms_ = {bgfx::createProgram(meshVertex_, sdfgiFragment), bgfx::createProgram(skinnedVertex_, sdfgiFragment),
+                      bgfx::createProgram(instancedVertex_, sdfgiFragment)};
+    bgfx::destroy(meshFragment); // the programs keep them
+    bgfx::destroy(sdfgiFragment);
     lineProgram_ = makeProgram(vs_line, sizeof(vs_line), fs_line, sizeof(fs_line));
     shadowProgram_ = makeProgram(vs_shadow, sizeof(vs_shadow), fs_shadow, sizeof(fs_shadow));
     shadowSkinnedProgram_ = makeProgram(vs_shadow_skinned, sizeof(vs_shadow_skinned), fs_shadow, sizeof(fs_shadow));
@@ -751,6 +757,7 @@ void Renderer::init()
     envFilter_.init();
     particles_.init(bgfx::getCaps()->supported);
     voxelGi_->passes.init();
+    sdfgi_->init();
     voxelGi_->params = bgfx::createUniform("u_voxelGi", bgfx::UniformType::Vec4, 4);
     voxelGi_->cones = bgfx::createUniform("u_voxelCones", bgfx::UniformType::Vec4, kMaxVoxelGiCones);
     voxelGi_->sampler = bgfx::createUniform("s_voxelGi", bgfx::UniformType::Sampler);
@@ -771,6 +778,8 @@ void Renderer::shutdown()
     bgfx::destroy(meshProgram_);
     bgfx::destroy(skinnedProgram_);
     bgfx::destroy(instancedProgram_);
+    for (bgfx::ProgramHandle program : sdfgiPrograms_)
+        bgfx::destroy(program);
     for (bgfx::ShaderHandle shader : {meshVertex_, skinnedVertex_, instancedVertex_})
         bgfx::destroy(shader);
     bgfx::destroy(lineProgram_);
@@ -826,6 +835,7 @@ void Renderer::shutdown()
     for (bgfx::UniformHandle uniform : {voxelGi_->params, voxelGi_->cones, voxelGi_->sampler})
         bgfx::destroy(uniform);
     voxelGi_->passes.shutdown();
+    sdfgi_->shutdown();
 }
 
 // ponytail: full-res tiles (66049 vertices, 131072 triangles each); LOD and skirts when the draw distance grows.
@@ -2015,6 +2025,19 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         bake = nullptr;
     constexpr const char* kPrimitiveNames[] = {"primitive:cube", "primitive:plane", "primitive:sphere"}; // by Primitive
 
+    // SDFGI (sdfgi.h): on, it gathers the scene's Static shapes as its draws are made.
+    const SceneSdfgi& sdfgiSettings = scene.lighting.sdfgi;
+    const bool sdfgiOn = sdfgiSettings.enabled && !capture_ && sdfgi_->supported();
+    if (sdfgiSettings.enabled && !capture_ && !sdfgi_->supported())
+        warnOnce("SDFGI: this GPU lacks compute or the 3D image formats it needs; SDFGI is off");
+    if (!sdfgiOn && sdfgi_->ready())
+        sdfgi_->reset();
+    std::vector<SdfgiShape> sdfgiShapes;
+    const auto addShape = [&](const DrawItem& item, SdfgiShapeType type, const bx::Vec3& half) {
+        const bx::Vec3 albedo{item.material->baseColor[0], item.material->baseColor[1], item.material->baseColor[2]};
+        sdfgiShapes.push_back(sdfgiShape(type, item.world.data(), half, albedo, emissiveRadiance(*item.material)));
+    };
+
     std::vector<DrawItem> draws;
     std::vector<std::vector<Mat4>> boneSets;
     const auto addDraws = [&](const Scene& from, bool baked) {
@@ -2036,11 +2059,22 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
                 item.giDynamic = !(bake && applyLightmap(*bake, entities.get<PersistentId>(entity).value,
                                                          kPrimitiveNames[static_cast<size_t>(mesh.primitive)], 0, item));
             item.giDynamic = item.giDynamic || (baked && mesh.giMode == GiMode::Dynamic);
+            if (sdfgiOn && &from == &scene && mesh.giMode == GiMode::Static)
+                addShape(item, mesh.primitive == Primitive::Sphere ? SdfgiShapeType::Ellipsoid : SdfgiShapeType::Box,
+                         mesh.primitive == Primitive::Plane ? bx::Vec3{0.5f, 0.0f, 0.5f} : bx::Vec3{0.5f, 0.5f, 0.5f});
             draws.push_back(item);
         }
         for (auto [entity, model] : entities.view<ModelRenderer>().each()) {
             const size_t first = draws.size();
             addModelDraws(from, entity, model, worldOf(entity).data(), draws, boneSets);
+            if (sdfgiOn && &from == &scene && model.giMode == GiMode::Static)
+                for (size_t i = first; i < draws.size(); ++i)
+                    if (draws[i].bones < 0) {
+                        const Material& material = *draws[i].material;
+                        sdfgiShapes.push_back(sdfgiBoxShape(
+                            draws[i].bounds, {material.baseColor[0], material.baseColor[1], material.baseColor[2]},
+                            emissiveRadiance(material)));
+                    }
             if (!baked || model.giMode == GiMode::Off)
                 continue;
             const EntityId id = entities.get<PersistentId>(entity).value;
@@ -2100,7 +2134,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     };
     std::vector<VoxelVolume> volumes;
     std::vector<ProbeBox> volumeBoxes;
-    const auto giView = static_cast<bgfx::ViewId>(shadowViews + kShadowViews - 1);
+    const auto giView = static_cast<bgfx::ViewId>(shadowViews + kShadowViews - 2);
     for (auto [entity, component] : registry.view<VoxelGI>().each()) {
         if (capture_ || !component.enabled)
             continue; // one bounce: a probe bake sees no volume
@@ -2139,6 +2173,49 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         bgfx::setViewName(giView, "VoxelGI");
         bgfx::setViewMode(giView, bgfx::ViewMode::Sequential);
     }
+    // SDFGI (sdfgi.h): its cascades around the eye scrolled, rebuilt where Static shapes or terrain tiles changed,
+    // relit and their probes updated, in the last shadow view.
+    if (sdfgiOn) {
+        SdfgiRenderer::Frame frame{.eye = eye, .settings = sdfgiSettings, .shapes = std::move(sdfgiShapes)};
+        std::map<std::pair<int, int>, const TerrainTileData*> tiles;
+        std::vector<const TerrainTile*> streamed; // the scene's tiles, and the extra scene's (the editor's open zone)
+        for (const Scene* from : {&scene, extra})
+            if (from)
+                for (auto [entity, tile] : from->registry().view<TerrainTile>().each())
+                    streamed.push_back(&tile);
+        for (const TerrainTile* streamedTile : streamed) {
+            const TerrainTile& tile = *streamedTile;
+            if (!tile.data)
+                continue;
+            const float x0 = float(tile.tx) * map::kTileSize, z0 = float(tile.tz) * map::kTileSize;
+            frame.tiles.push_back({tile.map, tile.tx, tile.tz, tile.data.get(), x0, z0, x0 + map::kTileSize,
+                                   z0 + map::kTileSize});
+            tiles[{tile.tx, tile.tz}] = tile.data.get();
+            const std::string& material = tile.data->map->material;
+            const std::array<float, 4>& color = materials_.get(material).baseColor;
+            frame.terrainAlbedo = {color[0], color[1], color[2]};
+        }
+        // ponytail: tiles by (tx, tz) alone: one map streamed at a time, as TerrainStreamer does.
+        if (!tiles.empty())
+            frame.heightAt = [tiles](float x, float z) -> std::optional<float> {
+                const int tx = int(std::floor(x / map::kTileSize)), tz = int(std::floor(z / map::kTileSize));
+                const auto it = tiles.find({tx, tz});
+                if (it == tiles.end())
+                    return std::nullopt;
+                return map::ground(it->second->heights, *it->second->map, x - float(tx) * map::kTileSize,
+                                   z - float(tz) * map::kTileSize);
+            };
+        const bx::Vec3 sunDir{lightDir[0], lightDir[1], lightDir[2]};
+        frame.sunDirection = sun ? &sunDir : nullptr;
+        frame.sunColor = {lightColor[0], lightColor[1], lightColor[2]};
+        frame.lights = localLights;
+        frame.sky = bgfx::isValid(environments[0].cube);
+        frame.skySh = environments[0].sh;
+        frame.ambient = {ambient[0], ambient[1], ambient[2]};
+        sdfgi_->update(static_cast<bgfx::ViewId>(shadowViews + kShadowViews - 1), frame);
+    }
+    const bool sdfgiReady = sdfgiOn && sdfgi_->ready();
+
     // The volume a draw cone-traces: the one its bounds' center selects, if its shader leaves VoxelGI its stage.
     const auto volumeOf = [&](const DrawItem& item) -> int {
         if (volumeBoxes.empty() || (item.shader && !shaderTakesVoxelGi(item.shader->source->source)))
@@ -2148,13 +2225,16 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         return volume ? static_cast<int>(*volume) : -1;
     };
     // A draw's diffuse GI (the selection point, lightmap.h selectDiffuseGi): its lightmap, else the VoxelGI volume its
-    // bounds' center is in, else the probe grid there if it samples it, else the environment. A volume's specular too.
+    // bounds' center is in, else SDFGI if on (built-in shader only: its SDFGI variant), else the probe grid there if it
+    // samples it, else the environment. A volume's specular too, and SDFGI's rough reflections outside reflection probes.
     const auto giOf = [&](const DrawItem& item) {
         std::optional<Sh9> grid;
         if (item.giDynamic && bake)
             grid = sampleProbeGrid(bake->sidecar.grid, bx::mul(bx::add(item.bounds.min, item.bounds.max), 0.5f));
         const int volume = volumeOf(item);
-        GiDraw draw{selectDiffuseGi(bgfx::isValid(item.lightmap), grid.has_value(), volume >= 0)};
+        const bool sdfgi = sdfgiReady && !item.shader; // the built-in shader's SDFGI variant
+        GiDraw draw{selectDiffuseGi(bgfx::isValid(item.lightmap), grid.has_value(), volume >= 0, sdfgi)};
+        draw.sdfgiSpecular = draw.source == DiffuseGi::Sdfgi && environmentOf(item) == 0;
         draw.volume = volume;
         draw.grid = grid.has_value();
         if (grid)
@@ -2229,7 +2309,8 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         bgfx::setUniform(lightDir_, sunOff ? noSun : lightDir);
         bgfx::setUniform(lightColor_, sunOff ? black : lightColor);
         bgfx::setUniform(gi_, giParams);
-        if (giDraw.source == DiffuseGi::ProbeGrid || (giDraw.source == DiffuseGi::VoxelGi && giDraw.grid)) {
+        if (giDraw.source == DiffuseGi::ProbeGrid ||
+            ((giDraw.source == DiffuseGi::VoxelGi || giDraw.source == DiffuseGi::Sdfgi) && giDraw.grid)) {
             float giSh[9][4] = {};
             for (size_t i = 0; i < 9; ++i)
                 std::memcpy(giSh[i], &giDraw.sh[i * 3], 3 * sizeof(float));
@@ -2251,6 +2332,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             bgfx::setTexture(11, voxelGi_->sampler, volume.radiance);
         }
         bgfx::setUniform(voxelGi_->params, voxelGi, 4);
+        sdfgi_->bind(giDraw.source == DiffuseGi::Sdfgi, giDraw.grid, giDraw.sdfgiSpecular); // zeros unless SDFGI
         if (lightmapped) {
             bgfx::setUniform(lightmapST_, item.lightmapST.data());
             bgfx::setTexture(12, lightmapSampler_, item.lightmap);
@@ -2287,7 +2369,8 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     const auto submit = [&](bgfx::ViewId to, const DrawItem& item, const std::vector<size_t>& nearest) {
         float normal[16];
         normalMatrix(item.world, normal);
-        setDrawState(item, nearest, environmentOf(item), giOf(item));
+        const GiDraw giDraw = giOf(item);
+        setDrawState(item, nearest, environmentOf(item), giDraw);
         bgfx::setTransform(item.world.data());
         bgfx::setUniform(normalMatrix_, normal);
         if (item.bones >= 0) {
@@ -2297,7 +2380,9 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         if (item.shader)
             bgfx::submit(to, item.bones >= 0 ? item.shader->skinned : item.shader->mesh);
         else
-            bgfx::submit(to, item.bones >= 0 ? skinnedProgram_ : meshProgram_);
+            bgfx::submit(to, giDraw.source == DiffuseGi::Sdfgi ? sdfgiPrograms_[item.bones >= 0 ? 1 : 0]
+                             : item.bones >= 0                   ? skinnedProgram_
+                                                                 : meshProgram_);
     };
 
     // Opaque and mask meshes in the view now, batched; blended ones after, one by one far to near by world-space
@@ -2321,11 +2406,14 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             opaqueEnvironments.push_back(environmentOf(item));
             opaqueGi.push_back(giOf(item));
             // A lightmap batches with its texture; each probe-grid draw has its own harmonics, so batches alone (as does
-            // a VoxelGI draw fading to them); a VoxelGI volume batches with itself.
+            // a VoxelGI or SDFGI draw fading to them); a VoxelGI volume batches with itself, SDFGI draws (by reflection
+            // or not) with each other.
             const GiDraw& drawGi = opaqueGi.back();
-            const bool own = drawGi.source == DiffuseGi::ProbeGrid || (drawGi.source == DiffuseGi::VoxelGi && drawGi.grid);
+            const bool own = drawGi.source == DiffuseGi::ProbeGrid ||
+                             ((drawGi.source == DiffuseGi::VoxelGi || drawGi.source == DiffuseGi::Sdfgi) && drawGi.grid);
             opaqueGiKeys.push_back((drawGi.source == DiffuseGi::Lightmap ? size_t(item.lightmap.idx) + 1
                                     : own                            ? (size_t(1) << 20) + opaque.size()
+                                    : drawGi.source == DiffuseGi::Sdfgi ? (size_t(1) << 30) + (drawGi.sdfgiSpecular ? 1 : 0)
                                                                      : 0) +
                                    (drawGi.volume >= 0 ? size_t(drawGi.volume + 1) << 40 : 0));
             continue;
@@ -2351,7 +2439,9 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             setDrawState(*batch.front(), opaqueLights[indices.front()], opaqueEnvironments[indices.front()],
                          opaqueGi[indices.front()]);
             bgfx::setInstanceDataBuffer(&instances);
-            bgfx::submit(view, batch.front()->shader ? batch.front()->shader->instanced : instancedProgram_);
+            bgfx::submit(view, batch.front()->shader                                    ? batch.front()->shader->instanced
+                               : opaqueGi[indices.front()].source == DiffuseGi::Sdfgi ? sdfgiPrograms_[2]
+                                                                                       : instancedProgram_);
             continue;
         }
         for (size_t i : indices)

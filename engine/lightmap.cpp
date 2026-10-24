@@ -116,12 +116,14 @@ bool finite(const Json& value) { return value.is_number() && std::isfinite(value
 
 } // namespace
 
-DiffuseGi selectDiffuseGi(bool lightmapped, bool probeGrid, bool voxelGi)
+DiffuseGi selectDiffuseGi(bool lightmapped, bool probeGrid, bool voxelGi, bool sdfgi)
 {
     if (lightmapped)
         return DiffuseGi::Lightmap;
     if (voxelGi)
         return DiffuseGi::VoxelGi;
+    if (sdfgi)
+        return DiffuseGi::Sdfgi;
     return probeGrid ? DiffuseGi::ProbeGrid : DiffuseGi::Environment;
 }
 

@@ -31,6 +31,7 @@
 #include <log.h>
 #include <prefab.h>
 #include <renderer.h>
+#include <sdfgi.h>
 #include <world_client.h>
 
 #include <SDL3/SDL.h>
@@ -86,7 +87,7 @@ constexpr const char* kUsage =
     "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
-    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
+    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel (without --play: on the Scene view), for
@@ -590,6 +591,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.prefabBackPrompt = true;
         } else if (arg == "--log-fps") {
             options.logFps = true;
+        } else if (arg == "--log-sdfgi") {
+            kast::setSdfgiLogging(true); // each frame's SDFGI rebuilt cells and probes (sdfgi.h)
         } else if (arg == "--no-vsync") {
             options.noVsync = true;
         } else if (arg == "--no-instancing") {

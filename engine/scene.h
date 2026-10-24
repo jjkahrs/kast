@@ -197,12 +197,35 @@ struct SceneLightmaps {
     bool operator==(const SceneLightmaps&) const = default;
 };
 
+// SDFGI's cost / quality (sdfgi.h sdfgiPreset): rays per probe per frame, march steps, temporal blend.
+enum class SdfgiQuality { Low, Medium, High };
+
+constexpr int kMaxSdfgiCascades = 4;
+constexpr float kMinSdfgiCellSize = 0.125f, kMaxSdfgiCellSize = 4.0f;
+constexpr float kSdfgiYScales[] = {1.0f, 0.5f, 0.25f}; // SceneSdfgi::yScale's choices
+
+// Per-scene SDFGI settings (docs/engine/sdfgi.html, sdfgi.h), saved under "lighting" > "sdfgi" when not all default:
+// signed-distance-field cascades and probe grids that follow the camera, built on the GPU from the Static meshes, static
+// models and streamed Terrain tiles, lit live (no bake). Meshes without a lightmap or a VoxelGI volume take their diffuse
+// ambient (and rough reflections) from it. enabled and energy also change from Lua (kast.sdfgi.set).
+struct SceneSdfgi {
+    bool enabled = false;
+    int cascades = kMaxSdfgiCascades; // 1..4, each twice the size of the one before
+    float cellSize = 0.5f;            // kMinSdfgiCellSize..kMaxSdfgiCellSize: meters per SDF cell of the first cascade
+    float energy = 1.0f;              // >= 0: scales its diffuse and reflected light
+    float bounceFeedback = 0.5f;      // 0..1: how much of the probes' light surfaces bounce again (0: one bounce)
+    SdfgiQuality quality = SdfgiQuality::Medium;
+    float yScale = 1.0f;              // kSdfgiYScales: the cascades' height relative to their width (flat open worlds)
+    bool operator==(const SceneSdfgi&) const = default;
+};
+
 // Per-scene light settings. The defaults match the renderer's former fixed 0.2 grey ambient. Sky off, the ambient is
 // that flat color; sky on, image-based lighting from the sky (ibl.h) replaces it, scaled and tinted by these.
 struct SceneLighting {
     bx::Vec3 ambientColor{1.0f, 1.0f, 1.0f}; // linear RGB 0..1
     float ambientIntensity = 0.2f;           // >= 0
     SceneLightmaps lightmaps;
+    SceneSdfgi sdfgi;
 };
 
 enum class SkyMode { Off, Procedural, Cubemap };

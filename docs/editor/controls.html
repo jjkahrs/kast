@@ -84,7 +84,9 @@ switches scenes; <code>kast_player.exe</code> clears it the same way on window f
 normal unless a system locks it with <code>kast.input.setCursorLocked(true)</code> (<code>kast::CursorLock</code>: SDL relative mouse mode,
 the cursor hidden; on unlock it reappears where the lock began).</p>
 <p id="stats-overlay"><strong>Stats overlay (F3)</strong>: during Play (playing or paused), with the Game panel focused, F3 shows
-or hides one line at the bottom-left of the Game image: <code>FPS 144  Ping 42 ms</code>. FPS is averaged over the last 0.5 s;
+or hides one line at the bottom-left of the Game image: <code>FPS 144  Ping 42 ms</code> (then <code>VoxelGI 0.31 ms</code> while VoxelGI
+volumes relight and <code>SDFGI 0.40 ms</code> while <a href="../engine/sdfgi.html">SDFGI</a> is on: the GPU time of their compute
+views). FPS is averaged over the last 0.5 s;
 Ping is the world server round-trip time (<a href="../engine/networking.html">Networking</a>, World round-trip time), <code>--</code>
 when not connected or when a Ping has gone unanswered for more than 5 s. F3 does nothing while stopped or with another
 panel focused, and Stop hides the overlay. It is off at every start and never saved. It also works in the built game

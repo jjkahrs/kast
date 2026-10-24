@@ -39,7 +39,8 @@ SAMPLER2D(s_normal, 7);            // linear tangent-space normal, glTF / OpenGL
 SAMPLERCUBE(s_env, 8);
 SAMPLER2D(s_emissive, 9);          // sRGB, sampled as linear, times u_emissive; white if none
 // Stages 10..13: a .kshader's texture2D params (shader.cpp generateShader); 12 and 13 are the lightmap's (s_lightmap,
-// s_lightmapDir below) in shaders with at most two, 11 VoxelGI's (s_voxelGi) in shaders with at most one.
+// s_lightmapDir below) in shaders with at most two, 11 VoxelGI's (s_voxelGi) in shaders with at most one; 10 is SDFGI's
+// (s_sdfgi) in the built-in shader's SDFGI variant.
 SAMPLER2D(s_kastScreen, 14); // SCREEN_TEXTURE: the opaque scene's HDR linear color (Renderer::render copies it)
 SAMPLER2D(s_kastDepth, 15);  // DEPTH_TEXTURE: the opaque scene's depth (D3D 0..1); linearDepth() makes it meters
 
@@ -59,9 +60,10 @@ uniform vec4 u_envSpecular;
 uniform vec4 u_envBox[2];
 // Global illumination (docs/engine/lightmaps.html; renderer.cpp setDrawState): x: where the diffuse ambient comes from
 // (lightmap.h DiffuseGi): 0 the environment as above, 1 the lightmap (s_lightmap, s_lightmapDir at v_lightmapUv), 2
-// u_giSh, the probe grid sampled at the mesh (Sh9, as u_envSh), 3 a VoxelGI volume (u_voxelGi below); y: the lightmaps'
-// and grid's intensity; z: 1 to bend lightmap light by the normal (the directional term). The specular stays the
-// environment's, but inside a VoxelGI volume (u_voxelGi[3].w).
+// u_giSh, the probe grid sampled at the mesh (Sh9, as u_envSh), 3 a VoxelGI volume (u_voxelGi below), 4 SDFGI's probes
+// (u_sdfgi below); y: the lightmaps' and grid's intensity; z: 1 to bend lightmap light by the normal (the directional
+// term). The specular stays the environment's, but inside a VoxelGI volume (u_voxelGi[3].w) or on a rough SDFGI mesh
+// (u_sdfgi[5].z, KAST_SDFGI only).
 uniform vec4 u_gi;
 uniform vec4 u_giSh[9];
 // The local light slots (Renderer::render setDrawState), nearest the mesh first. Unused slots: black, range 1.
@@ -602,8 +604,134 @@ vec3 kastVoxelSpecular(vec3 n, vec3 v, vec3 p, float roughness, vec3 f0, float n
 }
 #endif
 
+// SDFGI (sdfgi.h, docs/engine/sdfgi.html): the cascades' probes, updated this frame, on stage 10. Only in the built-in
+// shader's SDFGI variant (fs_mesh_sdfgi: this file compiled with KAST_SDFGI), which the renderer gives the draws that take
+// SDFGI: every other draw runs code compiled exactly as before SDFGI. s_sdfgi: per probe 4 texels along x
+// (cs_sdfgi_probe.sc: a0 rgb + a valid, then a1 per channel), at the global probe mod the probes per axis, the cascades
+// stacked along z.
+#ifdef KAST_SDFGI
+#define KAST_HAS_SDFGI
+static const float SDFGI_BLEND = 2.0;        // kSdfgiBlendProbes in sdfgi.h
+static const float SDFGI_ROUGHNESS = 0.5;    // kSdfgiRoughness in sdfgi.h
+static const float SDFGI_NORMAL_BIAS = 0.25; // kSdfgiNormalBias in sdfgi.h
+SAMPLER3D(s_sdfgi, 10);
+// SdfgiRenderer::bind: [0..3] per cascade: xyz its first probe (a global probe index), w the probe spacing (m); [4] xyz:
+// probes per axis, w: cascades; [5] x: energy, y: 1 if the light past the last cascade is the probe grid's (u_giSh),
+// z: 1 for rough reflections from SDFGI, w: 1 if the draw takes SDFGI.
+uniform vec4 u_sdfgi[6];
+
+// sdfgiCascadeWeight in sdfgi.cpp: how much the (biased) point q uses cascade c.
+float kastSdfgiEdge(int c, vec3 q)
+{
+    vec3 local = q / u_sdfgi[c].w - u_sdfgi[c].xyz;
+    vec3 e = min(local, u_sdfgi[4].xyz - vec3_splat(1.0) - local);
+    return saturate(min(e.x, min(e.y, e.z)) / SDFGI_BLEND);
+}
+
+// Cascade c's probes around p (unit normal n) weighted as sdfgiProbeWeights in sdfgi.cpp: their harmonics' weighted
+// mean into a0 and a1 (per channel). Returns the weights' sum (0: no valid probe).
+float kastSdfgiCascade(int c, vec3 p, vec3 n, out vec3 a0, out vec3 ar, out vec3 ag, out vec3 ab)
+{
+    a0 = vec3_splat(0.0);
+    ar = vec3_splat(0.0);
+    ag = vec3_splat(0.0);
+    ab = vec3_splat(0.0);
+    float spacing = u_sdfgi[c].w;
+    vec3 dims = u_sdfgi[4].xyz;
+    vec3 first = u_sdfgi[c].xyz;
+    vec3 local = clamp((p + n * (SDFGI_NORMAL_BIAS * spacing)) / spacing - first, vec3_splat(0.0), dims - vec3_splat(1.001));
+    vec3 base = floor(local);
+    vec3 f = local - base;
+    float total = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        vec3 corner = vec3(float(i - (i / 2) * 2), float((i / 2) - (i / 4) * 2), float(i / 4));
+        vec3 q = first + base + corner;
+        vec3 t = q - dims * floor(q / dims);
+        ivec3 texel = ivec3(int(t.x) * 4, int(t.y), int(t.z) + c * int(dims.z));
+        vec4 c0 = texelFetch(s_sdfgi, texel, 0);
+        if (c0.a < 0.5)
+            continue; // inside geometry, or no history yet
+        vec3 tri = mix(vec3_splat(1.0) - f, f, corner);
+        vec3 toProbe = normalize(q * spacing - p + vec3_splat(1e-5));
+        float back = (dot(toProbe, n) + 1.0) * 0.5;
+        float w = tri.x * tri.y * tri.z * (back * back + 0.05);
+        a0 += w * c0.rgb;
+        ar += w * texelFetch(s_sdfgi, texel + ivec3(1, 0, 0), 0).xyz;
+        ag += w * texelFetch(s_sdfgi, texel + ivec3(2, 0, 0), 0).xyz;
+        ab += w * texelFetch(s_sdfgi, texel + ivec3(3, 0, 0), 0).xyz;
+        total += w;
+    }
+    if (total > 0.0) {
+        a0 /= total;
+        ar /= total;
+        ag /= total;
+        ab /= total;
+    }
+    return total;
+}
+
+// The probes' harmonics at p (unit normal n): the finest cascade holding it, blended into the next ones at its edge.
+// Returns how much of the light is SDFGI's (1 well inside the cascades, falling to 0 past the last).
+float kastSdfgiProbes(vec3 p, vec3 n, out vec3 a0, out vec3 ar, out vec3 ag, out vec3 ab)
+{
+    a0 = vec3_splat(0.0);
+    ar = vec3_splat(0.0);
+    ag = vec3_splat(0.0);
+    ab = vec3_splat(0.0);
+    float left = 1.0;
+    for (int c = 0; c < 4; ++c) {
+        if (float(c) >= u_sdfgi[4].w || left <= 0.0)
+            break;
+        float e = kastSdfgiEdge(c, p + n * (SDFGI_NORMAL_BIAS * u_sdfgi[c].w));
+        if (e <= 0.0)
+            continue;
+        vec3 b0, br, bg, bb;
+        if (kastSdfgiCascade(c, p, n, b0, br, bg, bb) <= 0.0)
+            continue;
+        float w = left * e;
+        a0 += w * b0;
+        ar += w * br;
+        ag += w * bg;
+        ab += w * bb;
+        left -= w;
+    }
+    float used = 1.0 - left;
+    if (used > 0.0) {
+        a0 /= used;
+        ar /= used;
+        ag /= used;
+        ab /= used;
+    }
+    return used;
+}
+
+// SDFGI's diffuse light at p (unit normal n), times its energy; fallback (the light without it) past the cascades.
+vec3 kastSdfgiDiffuse(vec3 n, vec3 p, vec3 fallback)
+{
+    vec3 a0, ar, ag, ab;
+    float w = kastSdfgiProbes(p, n, a0, ar, ag, ab);
+    vec3 e = max(a0 + (2.0 / 3.0) * vec3(dot(ar, n), dot(ag, n), dot(ab, n)), vec3_splat(0.0)) * u_sdfgi[5].x;
+    return mix(fallback, e, w);
+}
+
+// SDFGI's reflection on a rough surface: the probes' radiance along the reflection times the split sum's BRDF, over
+// fallback (the environment's) from roughness SDFGI_ROUGHNESS - 0.1 to + 0.1.
+vec3 kastSdfgiSpecular(vec3 n, vec3 v, vec3 p, float roughness, vec3 f0, float nv, vec3 fallback)
+{
+    float rough = smoothstep(SDFGI_ROUGHNESS - 0.1, SDFGI_ROUGHNESS + 0.1, roughness);
+    if (rough <= 0.0)
+        return fallback;
+    vec3 r = reflect(-v, n);
+    vec3 a0, ar, ag, ab;
+    float w = kastSdfgiProbes(p, n, a0, ar, ag, ab) * rough;
+    vec3 radiance = max(a0 + vec3(dot(ar, r), dot(ag, r), dot(ab, r)), vec3_splat(0.0)) * u_sdfgi[5].x;
+    vec2 brdf = kastEnvBrdf(roughness, nv);
+    return mix(fallback, radiance * (f0 * brdf.x + brdf.y), w);
+}
+#endif
+
 // The diffuse GI selection point (u_gi.x, lightmap.h selectDiffuseGi): the irradiance / pi that replaces the
-// environment's at unit normal n of the surface at p. ponytail: SDFGI (part 3) slots in here between VoxelGI and the grid.
+// environment's at unit normal n of the surface at p.
 vec3 kastGiDiffuse(vec3 n, vec2 lightmapUv, vec3 p)
 {
 #ifdef KAST_HAS_LIGHTMAP
@@ -615,6 +743,10 @@ vec3 kastGiDiffuse(vec3 n, vec2 lightmapUv, vec3 p)
         }
         return e * u_gi.y;
     }
+#endif
+#ifdef KAST_HAS_SDFGI
+    if (u_gi.x > 3.5) // SDFGI, over the probe grid or the environment the mesh gets without it
+        return kastSdfgiDiffuse(n, p, u_sdfgi[5].y > 0.5 ? kastGiSh(n) : u_envSpecular.w > 0.0 ? kastSh9(n) : u_ambient.rgb);
 #endif
 #ifdef KAST_HAS_VOXELGI
     if (u_gi.x > 2.5) // VoxelGI, over the probe grid or the environment the mesh gets without it
@@ -787,6 +919,10 @@ void main()
 #ifdef KAST_HAS_VOXELGI
         if (u_voxelGi[3].w > 0.5) // in a VoxelGI volume: its reflection instead (lightmapped draws too)
             specular = kastVoxelSpecular(n, v, v_worldPos, roughness, f0, nv, specular);
+#endif
+#ifdef KAST_HAS_SDFGI
+        if (u_sdfgi[5].z > 0.5) // a rough SDFGI mesh outside reflection probes: SDFGI's reflection instead
+            specular = kastSdfgiSpecular(n, v, v_worldPos, roughness, f0, nv, specular);
 #endif
         color += (diffuse + specular) * f.ao;
     }

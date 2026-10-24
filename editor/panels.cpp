@@ -1831,6 +1831,31 @@ void Panels::drawLighting(Document& doc, bool& open, const std::string& skyError
         changed |= ImGui::DragFloat("Probe Spacing (m)", &lightmaps.probeSpacing, 0.05f, kast::kMinProbeSpacing,
                                     kast::kMaxProbeSpacing, "%.2f", ImGuiSliderFlags_AlwaysClamp);
         ImGui::PopID();
+
+        // SDFGI (docs/engine/sdfgi.html): no bake, every setting applies at once (Lua sets enabled and energy too).
+        kast::SceneSdfgi& sdfgi = lighting.sdfgi;
+        ImGui::SeparatorText("SDFGI");
+        ImGui::PushID("sdfgi");
+        changed |= ImGui::Checkbox("Enabled", &sdfgi.enabled);
+        ImGui::SetItemTooltip("Camera-centered SDF cascades and probes: diffuse GI and rough reflections, no bake");
+        changed |= ImGui::DragFloat("Energy", &sdfgi.energy, 0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        changed |= ImGui::SliderFloat("Bounce Feedback", &sdfgi.bounceFeedback, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetItemTooltip("How much of the probes' light surfaces bounce again (0: one bounce)");
+        int quality = static_cast<int>(sdfgi.quality);
+        if (ImGui::Combo("Quality", &quality, "Low\0Medium\0High\0")) {
+            sdfgi.quality = static_cast<kast::SdfgiQuality>(quality);
+            changed = true;
+        }
+        changed |= ImGui::SliderInt("Cascades", &sdfgi.cascades, 1, kast::kMaxSdfgiCascades, "%d", ImGuiSliderFlags_AlwaysClamp);
+        changed |= ImGui::DragFloat("Cell Size (m)", &sdfgi.cellSize, 0.01f, kast::kMinSdfgiCellSize, kast::kMaxSdfgiCellSize,
+                                    "%.3f", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetItemTooltip("Meters per SDF cell of the first cascade; each next cascade doubles it");
+        int yScale = static_cast<int>(std::ranges::find(kast::kSdfgiYScales, sdfgi.yScale) - std::begin(kast::kSdfgiYScales));
+        if (ImGui::Combo("Y Scale", &yScale, "1 (cubes)\0" "0.5\0" "0.25 (flat worlds)\0")) {
+            sdfgi.yScale = kast::kSdfgiYScales[yScale];
+            changed = true;
+        }
+        ImGui::PopID();
         if (changed)
             settingsChanged(doc, "Edit Lighting", before);
         const std::optional<float> baking = lightmapProgress ? lightmapProgress() : std::nullopt;

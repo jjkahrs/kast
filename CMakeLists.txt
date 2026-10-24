@@ -48,6 +48,7 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
              engine/shaders/fs_line engine/shaders/vs_sky engine/shaders/fs_sky
              engine/shaders/cs_particle_sim engine/shaders/vs_particle engine/shaders/fs_particle engine/shaders/cs_ibl
              engine/shaders/cs_voxelgi_inject engine/shaders/cs_voxelgi_mip engine/shaders/cs_voxelgi_bounce
+             engine/shaders/cs_sdfgi_build engine/shaders/cs_sdfgi_light engine/shaders/cs_sdfgi_probe
              engine/shaders/gui/vs_gui engine/shaders/gui/fs_gui engine/shaders/gui/fs_gui_matrix
              engine/shaders/gui/fs_gui_blur engine/shaders/gui/fs_gui_gradient
              engine/shaders/post/vs_post engine/shaders/post/fs_post_bright engine/shaders/post/fs_post_down
@@ -81,6 +82,20 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
     list(APPEND KAST_EDITOR_SHADERS "${out}")
   endif()
 endforeach()
+# fs_mesh's SDFGI variant (docs/engine/sdfgi.html): the same source with KAST_SDFGI, for the draws that take SDFGI, so
+# every other draw's shader compiles exactly as before.
+file(GLOB headers "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/*.sh")
+add_custom_command(
+  OUTPUT "${KAST_SHADER_OUT}/fs_mesh_sdfgi.bin.h"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${KAST_SHADER_OUT}"
+  COMMAND "${KAST_SHADERC}" -f "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/fs_mesh.sc" -o "${KAST_SHADER_OUT}/fs_mesh_sdfgi.bin.h"
+          --bin2c fs_mesh_sdfgi --type fragment --platform windows -p s_5_0 -i "${KAST_SHADER_INCLUDE}"
+          -i "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders" --varyingdef "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/varying.def.sc"
+          --define KAST_SDFGI
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/varying.def.sc" ${headers}
+  COMMENT "shaderc fs_mesh.sc (KAST_SDFGI)"
+  VERBATIM)
+list(APPEND KAST_ENGINE_SHADERS "${KAST_SHADER_OUT}/fs_mesh_sdfgi.bin.h")
 
 # --- shader tools: .kshader files compile in the editor at run time (editor/shader_compiler.cpp) with this shaderc,
 # next to the editor, plus bgfx's shader headers and the mesh templates in kshader/ beside it. Images are compressed
@@ -159,7 +174,7 @@ add_library(kast_engine STATIC
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/gui_lists.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
-  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/ibl.cpp engine/bvh.cpp engine/lightmap.cpp engine/lightmap_bake.cpp engine/voxel_gi.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
+  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/ibl.cpp engine/bvh.cpp engine/lightmap.cpp engine/lightmap_bake.cpp engine/voxel_gi.cpp engine/sdfgi.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
@@ -226,7 +241,7 @@ target_compile_options(kast_ltc_fit PRIVATE ${KAST_COMPILE_OPTIONS})
 
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
-add_executable(kast_self_check tests/self_check.cpp tests/lightmap_self_check.cpp tests/voxelgi_self_check.cpp tests/net_self_check.cpp tests/net_test_util.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp
+add_executable(kast_self_check tests/self_check.cpp tests/lightmap_self_check.cpp tests/voxelgi_self_check.cpp tests/sdfgi_self_check.cpp tests/net_self_check.cpp tests/net_test_util.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp
   editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/shader_graph_doc.cpp editor/external_editor.cpp
   editor/editor_settings.cpp editor/shader_compiler.cpp editor/texture_cooker.cpp editor/online.cpp "${KAST_MANIFEST}")
 target_include_directories(kast_self_check PRIVATE editor)
@@ -3126,6 +3141,7 @@ include(cmake/shader_graph_tests.cmake)
 include(cmake/ibl_tests.cmake)
 include(cmake/lightmap_tests.cmake)
 include(cmake/voxelgi_tests.cmake)
+include(cmake/sdfgi_tests.cmake)
 
 # Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.
 get_property(kast_tests DIRECTORY PROPERTY TESTS)
