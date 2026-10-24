@@ -1,5 +1,5 @@
-$input a_position, a_normal, a_tangent, a_texcoord0, a_color0
-$output v_normal, v_tangent, v_worldPos, v_texcoord0, v_color0
+$input a_position, a_normal, a_tangent, a_texcoord0, a_color0, a_texcoord1
+$output v_normal, v_tangent, v_worldPos, v_texcoord0, v_color0, v_lightmapUv
 
 // A mesh vertex template (with vs_mesh_skinned.sc and vs_mesh_instanced.sc): Kast's built-in vertex shader as is, and
 // every .kshader's vertex() at the //@user line (shader.cpp generateShader). A .kshader's shadow passes run it too, so
@@ -9,6 +9,9 @@ $output v_normal, v_tangent, v_worldPos, v_texcoord0, v_color0
 #include <mesh.sh>
 
 uniform mat4 u_normalMatrix; // transpose(inverse(model)), so non-uniform scale keeps normals perpendicular
+// A lightmapped draw's place in its atlas page (docs/engine/lightmaps.html): lightmap uv = TEXCOORD1 * xy + zw. Other
+// draws leave it stale and fs_mesh.sc doesn't read their v_lightmapUv.
+uniform vec4 u_lightmapST;
 
 //@user
 #ifndef KAST_VERTEX
@@ -34,4 +37,5 @@ void main()
     v_worldPos = worldPos.xyz;
     v_texcoord0 = v.uv;
     v_color0 = v.color; // white unless the mesh has vertex colors; only .kshaders read it (COLOR)
+    v_lightmapUv = a_texcoord1 * u_lightmapST.xy + u_lightmapST.zw;
 }

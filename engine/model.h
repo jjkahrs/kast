@@ -36,10 +36,11 @@
 //              count + {f32 time, f32[3]} scale keys
 //   materials: count N, then per slot: string name, string material JSON (materialToJson, as in a .mat file)
 //   textures:  count N, then per embedded image: string bytes (a PNG/JPG file; empty for one that isn't)
-//   end of file: bytes past the textures are an error
+//   uv2:       (version 2) per mesh, in order: count U + f32[U] (its second UV set, 2 per vertex; U is 0 without one)
+//   end of file: bytes past the last section are an error. Version 1 files (no uv2) still read.
 namespace kast {
 
-constexpr uint32_t kModelFormatVersion = 1;
+constexpr uint32_t kModelFormatVersion = 2;
 
 constexpr size_t kMaxBones = 128; // MAX_BONES in vs_mesh_skinned.sc: joints per skinned mesh
 constexpr size_t kMaxBoneWeights = 4;
@@ -78,6 +79,7 @@ struct ModelMesh {
     int node = 0;                   // unskinned meshes render at this node's transform
     std::vector<int> joints;        // skin: the node of each bone index; empty = not skinned
     std::vector<Mat4> inverseBinds; // per joint: mesh space to the joint's space at bind time
+    std::vector<float> uv2;         // glTF TEXCOORD_1, (u, v) per vertex: lightmap UVs (lightmap_bake.h); empty = none
 };
 
 template <typename T>
@@ -137,7 +139,7 @@ std::string embeddedTextureModel(const std::string& path);
 
 // model as .kmodel bytes.
 std::string writeModel(const Model& model);
-// .kmodel bytes as a model; nullptr + error if they are not a valid .kmodel of kModelFormatVersion.
+// .kmodel bytes as a model; nullptr + error if they are not a valid .kmodel of kModelFormatVersion (or version 1).
 std::shared_ptr<const Model> readModel(std::string_view bytes, std::string& error);
 
 // Imports <root>/<path> (a model file; disk or mounted pak) into a Model: the editor's Assimp importer

@@ -121,6 +121,8 @@ std::string modelIndexError(const Model& model)
         if (mesh.indices.empty() || mesh.indices.size() % 3 != 0 ||
             !std::ranges::all_of(mesh.indices, [&](uint32_t i) { return i < mesh.vertices.size(); }))
             return "a mesh has bad indices";
+        if (!mesh.uv2.empty() && mesh.uv2.size() != mesh.vertices.size() * 2)
+            return "a mesh's second UV set doesn't match its vertices";
         const float joints = static_cast<float>(std::max<size_t>(mesh.joints.size(), 1));
         for (const ModelVertex& v : mesh.vertices)
             for (float joint : v.joints)
@@ -298,6 +300,8 @@ std::string writeModel(const Model& model)
     w.count(model.textures.size());
     for (const std::string& texture : model.textures)
         w.string(texture);
+    for (const ModelMesh& mesh : model.meshes)
+        w.array(mesh.uv2);
     return std::move(w.out);
 }
 
@@ -310,7 +314,8 @@ std::shared_ptr<const Model> readModel(std::string_view bytes, std::string& erro
         error = "not a .kmodel file";
         return nullptr;
     }
-    if (const uint32_t version = r.pod<uint32_t>(); version != kModelFormatVersion) {
+    const uint32_t version = r.pod<uint32_t>();
+    if (version != kModelFormatVersion && version != 1) {
         error = std::format(".kmodel version {}, expected {}", version, kModelFormatVersion);
         return nullptr;
     }
@@ -361,6 +366,9 @@ std::shared_ptr<const Model> readModel(std::string_view bytes, std::string& erro
     model->textures.resize(r.count(4));
     for (std::string& texture : model->textures)
         texture = r.string();
+    if (version >= 2)
+        for (ModelMesh& mesh : model->meshes)
+            r.array(mesh.uv2, 0.0f);
     if (!r.ok || !r.in.empty()) {
         error = r.ok ? "bytes past the end of the .kmodel" : "the .kmodel is cut short";
         return nullptr;

@@ -138,6 +138,58 @@ Sh9 proceduralSkySh9(const SceneSky& sky)
 
 std::optional<Sh9> cubeFileSh9(std::string_view bytes, bool srgb)
 {
+    const std::optional<CubeSides> cube = cubeFileSides(bytes, srgb);
+    return cube ? std::optional(projectSh9(cube->rgb, cube->size)) : std::nullopt;
+}
+
+bx::Vec3 sampleCubeSides(const CubeSides& cube, const bx::Vec3& d)
+{
+    // Kast's world direction in the cube's space (z flipped), then D3D's face and (u, v) as cubeTexelDirection lays them.
+    const float x = d.x, y = d.y, z = -d.z;
+    const float ax = std::abs(x), ay = std::abs(y), az = std::abs(z);
+    int side = 0;
+    float u = 0.0f, v = 0.0f;
+    if (ax >= ay && ax >= az) {
+        side = x >= 0.0f ? 0 : 1;
+        u = (x >= 0.0f ? -z : z) / ax;
+        v = -y / ax;
+    } else if (ay >= az) {
+        side = y >= 0.0f ? 2 : 3;
+        u = x / ay;
+        v = (y >= 0.0f ? z : -z) / ay;
+    } else {
+        side = z >= 0.0f ? 4 : 5;
+        u = (z >= 0.0f ? x : -x) / az;
+        v = -y / az;
+    }
+    if (cube.size == 0)
+        return {0.0f, 0.0f, 0.0f};
+    const int s = cube.size;
+    const int tx = std::clamp(int((u * 0.5f + 0.5f) * float(s)), 0, s - 1);
+    const int ty = std::clamp(int((v * 0.5f + 0.5f) * float(s)), 0, s - 1);
+    const float* rgb = &cube.rgb[size_t(side)][(size_t(ty) * size_t(s) + size_t(tx)) * 3];
+    return {rgb[0], rgb[1], rgb[2]};
+}
+
+Sh9 projectRadianceSamples(std::span<const bx::Vec3> directions, std::span<const bx::Vec3> radiance)
+{
+    std::array<double, 27> sum{};
+    for (size_t k = 0; k < directions.size() && k < radiance.size(); ++k) {
+        const std::array<float, 9> basis = shBasis(directions[k]);
+        const float rgb[3] = {radiance[k].x, radiance[k].y, radiance[k].z};
+        for (size_t i = 0; i < 9; ++i)
+            for (size_t c = 0; c < 3; ++c)
+                sum[i * 3 + c] += rgb[c] * basis[i];
+    }
+    const double solidAngle = directions.empty() ? 0.0 : 4.0 * bx::kPi / double(directions.size());
+    Sh9 sh;
+    for (size_t i = 0; i < 27; ++i)
+        sh[i] = static_cast<float>(sum[i] * kShBasis[i / 3] * kShBasis[i / 3] * kShCosine[i / 3] * solidAngle);
+    return sh;
+}
+
+std::optional<CubeSides> cubeFileSides(std::string_view bytes, bool srgb)
+{
     bimg::ImageContainer image{};
     bx::Error err;
     if (bytes.size() > UINT32_MAX || !bimg::imageParse(image, bytes.data(), static_cast<uint32_t>(bytes.size()), &err) ||
@@ -162,7 +214,7 @@ std::optional<Sh9> cubeFileSh9(std::string_view bytes, bool srgb)
             for (size_t c = 0; c < 3; ++c)
                 rgb.push_back(srgb ? srgbToLinear(rgba[i + c]) : rgba[i + c]);
     }
-    return projectSh9(sides, size);
+    return CubeSides{size, std::move(sides)};
 }
 
 std::array<float, 2> envBrdf(float roughness, float nv)

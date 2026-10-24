@@ -1,5 +1,5 @@
 $input a_position, a_normal, a_tangent, a_texcoord0, a_color0, a_indices, a_weight
-$output v_normal, v_tangent, v_worldPos, v_texcoord0, v_color0
+$output v_normal, v_tangent, v_worldPos, v_texcoord0, v_color0, v_lightmapUv
 
 #include <bgfx_shader.sh>
 #include <mesh.sh>
@@ -35,4 +35,5 @@ void main()
     v_worldPos = mul(u_model[0], vec4(v.vertex, position.w)).xyz;
     v_texcoord0 = v.uv;
     v_color0 = v.color; // white unless the mesh has vertex colors; only .kshaders read it (COLOR)
+    v_lightmapUv = vec2_splat(0.0); // skinned meshes are never lightmapped
 }

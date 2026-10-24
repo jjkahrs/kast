@@ -180,8 +180,11 @@ void SceneState::restore(kast::Scene& scene) const
             syncEntity(stash_.registry(), record.copy, scene.registry(), entity);
     }
     if (settings_) {
+        // A lightmap bake isn't an undo step: undoing a settings edit made before it keeps the bake it wrote.
+        const std::string baked = scene.lighting.lightmaps.bakedPath;
         scene.systems = settings_->systems;
         scene.lighting = settings_->lighting;
+        scene.lighting.lightmaps.bakedPath = baked;
         scene.sky = settings_->sky;
         scene.postProcessing = settings_->postProcessing;
         scene.physics = settings_->physics;

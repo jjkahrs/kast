@@ -119,6 +119,7 @@ struct LuaSystems::State {
     sol::table audioApi;   // kast.audio.*
     sol::table netApi;     // kast.net.*
     sol::table skyApi;     // kast.sky.*
+    sol::table lightmapsApi; // kast.lightmaps.*
     sol::table particlesApi; // kast.particles.*
     sol::table authApi;    // kast.auth.*, only while Online Services are enabled
     sol::table worldApi;   // kast.world.*, likewise
@@ -169,6 +170,7 @@ struct LuaSystems::State {
     void bindAudioApi();
     void bindNetApi();
     void bindSkyApi();
+    void bindLightmapsApi();
     void bindParticlesApi();
     void bindAuthApi();
     void bindWorldApi();
@@ -359,6 +361,7 @@ sol::environment LuaSystems::State::environment()
     kast["audio"] = readOnly(audioApi);
     kast["net"] = readOnly(netApi);
     kast["sky"] = readOnly(skyApi);
+    kast["lightmaps"] = readOnly(lightmapsApi);
     kast["particles"] = readOnly(particlesApi);
     kast["items"] = itemTable();
     if (auth.enabled())
@@ -899,6 +902,7 @@ void LuaSystems::State::bindApi()
     bindAudioApi();
     bindNetApi();
     bindSkyApi();
+    bindLightmapsApi();
     bindParticlesApi();
     bindAuthApi();
     bindWorldApi();
@@ -1459,6 +1463,38 @@ void LuaSystems::State::bindSkyApi()
         if (!skyFromJson(json, sky, error))
             raise(L, "kast.sky.set: " + error);
         scene.sky = sky;
+    });
+}
+
+// kast.lightmaps.get() / set{...}: the scene's lightmap settings (docs/engine/lightmaps.html). Only the runtime ones
+// (enabled, intensity, directional) can be set: the others need a re-bake, which Lua can't start. All-or-nothing, as
+// kast.sky.set.
+void LuaSystems::State::bindLightmapsApi()
+{
+    lightmapsApi = lua.create_table();
+    lightmapsApi.set_function("get", [this] { return jsonToLua(lua, lightmapsToJson(scene.lighting.lightmaps)); });
+    lightmapsApi.set_function("set", [this](sol::this_state L, const sol::object& fields) {
+        if (fields.get_type() != sol::type::table)
+            raise(L, std::format("kast.lightmaps.set: expected a table, got {}", toString(L, fields)));
+        nlohmann::ordered_json json = lightmapsToJson(scene.lighting.lightmaps);
+        std::string error;
+        for (const auto& [key, value] : fields.as<sol::table>()) {
+            if (key.get_type() != sol::type::string)
+                raise(L, std::format("kast.lightmaps.set: field names must be strings, got {}", toString(L, key)));
+            const std::string name = key.as<std::string>();
+            if (name != "enabled" && name != "intensity" && name != "directional")
+                raise(L, std::format("kast.lightmaps.set: \"{}\" can't be set at run time (only enabled, intensity and "
+                                     "directional: the rest need Bake Lightmaps)",
+                                     name));
+            nlohmann::json plain;
+            if (!luaToJson(value, plain, error))
+                raise(L, std::format("kast.lightmaps.set: \"{}\": {}", name, error));
+            json[name] = plain;
+        }
+        SceneLightmaps lightmaps;
+        if (!lightmapsFromJson(json, lightmaps, error))
+            raise(L, "kast.lightmaps.set: " + error);
+        scene.lighting.lightmaps = lightmaps;
     });
 }
 

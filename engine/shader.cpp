@@ -366,7 +366,7 @@ const std::vector<std::string>& shaderBuiltinNames()
         // vertex() (mesh.sh) and light() built-ins, SCREEN_TEXTURE / DEPTH_TEXTURE
         "VERTEX", "INSTANCE_ID", "MODEL_MATRIX", "WORLD_MATRIX", "VIEW_MATRIX", "PROJECTION_MATRIX", "LIGHT_DIRECTION",
         "LIGHT_COLOR", "ATTENUATION", "VIEW", "DIFFUSE_LIGHT", "SPECULAR_LIGHT", "SCREEN_TEXTURE", "SCREEN_UV",
-        "DEPTH_TEXTURE", "PI"};
+        "DEPTH_TEXTURE", "PI", "KAST_HAS_LIGHTMAP"};
     return names;
 }
 
@@ -547,6 +547,12 @@ bool setShaderParamField(Material& material, const ShaderSource& source, std::st
     return true;
 }
 
+bool shaderTakesLightmap(const ShaderSource& source)
+{
+    return std::ranges::count_if(source.params, [](const ShaderParam& p) { return p.type == ShaderParamType::Texture2D; }) <=
+           kMaxShaderTextures - 2;
+}
+
 bool isVertexStage(ShaderStage stage)
 {
     return stage != ShaderStage::Fragment && stage != ShaderStage::Shadow;
@@ -598,6 +604,11 @@ std::string generateShader(std::string_view templateText, const ShaderSource& so
             out += "#define KAST_SHADOW\n";
         if (!vertex && source.customNormal)
             out += "#define KAST_CUSTOM_NORMAL\n";
+        if (const auto textures = std::ranges::count_if(source.params, [](const ShaderParam& p) {
+                return p.type == ShaderParamType::Texture2D;
+            });
+            !vertex && textures > 0)
+            out += std::format("#define KAST_TEXTURE_PARAMS {}\n", textures); // fs_mesh.sc: the lightmap's stages
         if (std::ranges::any_of(source.params, [](const ShaderParam& p) { return p.type != ShaderParamType::Texture2D; }))
             out += std::format("uniform vec4 u_kastParams[{}];\n", kMaxShaderParams);
         for (const ShaderParam& param : source.params) {

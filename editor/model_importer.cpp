@@ -292,6 +292,8 @@ struct Loader {
                 out.u = source.mTextureCoords[0][v].x;
                 out.v = source.mTextureCoords[0][v].y;
             }
+            if (source.mTextureCoords[1]) // glTF TEXCOORD_1: lightmap UVs (lightmap_bake.h)
+                mesh.uv2.insert(mesh.uv2.end(), {source.mTextureCoords[1][v].x, source.mTextureCoords[1][v].y});
             if (source.mColors[0]) { // glTF COLOR_0 (linear; RGB files come in with alpha 1)
                 const aiColor4D& c = source.mColors[0][v];
                 const auto byte = [](float f) { return static_cast<uint32_t>(std::lround(bx::clamp(f, 0.0f, 1.0f) * 255.0f)); };

@@ -24,6 +24,8 @@ themselves in their own folders: [Map Bake](services/world/tools/mapbake/README.
 
 Dependencies (`sdl3`, `bgfx`, `imgui[docking-experimental,sdl3-binding]`, `imguizmo`, `imgui-node-editor` (the editor's Shader Graph canvas), `entt`, `nlohmann-json`, `luajit`, `sol2`) install automatically from `vcpkg.json`
 on first configure. The first configure builds bgfx's shader tools (glslang, SPIRV-Tools, ...) and takes several minutes.
+[xatlas](https://github.com/jpcy/xatlas) (lightmap UV unwrapping for Bake Lightmaps, [Lightmaps and GI](docs/engine/lightmaps.html))
+is vendored under `third_party/xatlas` (the pinned vcpkg baseline has no port) and builds with the rest: nothing to install.
 
 `CMakePresets.json` sets `VCPKG_VISUAL_STUDIO_PATH` to `C:/Program Files/Microsoft Visual Studio/2022/Community`
 so vcpkg builds ports with VS 2022 even when newer Visual Studio versions are installed. Edit it if VS 2022 lives elsewhere.

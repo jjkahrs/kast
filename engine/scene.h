@@ -41,23 +41,39 @@ struct Hierarchy {
 
 enum class Primitive { Cube, Plane, Sphere };
 
+// How a mesh takes part in global illumination (docs/engine/lightmaps.html). Off: as before GI, its diffuse ambient
+// from a reflection probe, the sky or the flat ambient. Static: baked into the scene's lightmaps (it bounces light and
+// occludes it; it must not move after the bake); skinned models can't be (treated as Dynamic). Dynamic: its diffuse
+// ambient from the baked probe grid at its bounds' center.
+enum class GiMode { Off, Static, Dynamic };
+
+// How a light takes part in the lightmap bake. Realtime: not baked at all. Indirect: its bounces are baked, its direct
+// light and shadows stay realtime. Full: direct light, shadows and bounces baked, so at run time it no longer lights
+// lightmapped Static meshes (it still lights Dynamic and Off ones).
+enum class LightBakeMode { Realtime, Indirect, Full };
+
 // material: a project-relative .mat file (see material.h); empty = the default grey material.
 // castShadows / receiveShadows: into / from the shadow maps of shadow-casting lights (see renderer.h).
+// giMode / lightmapScale: see GiMode; lightmapScale (> 0) multiplies the scene's lightmap texels per meter for it.
 struct MeshRenderer {
     Primitive primitive = Primitive::Cube;
     std::string material;
     bool castShadows = true;
     bool receiveShadows = true;
+    GiMode giMode = GiMode::Off;
+    float lightmapScale = 1.0f;
 };
 
 // model: a project-relative .glb/.gltf/.fbx/.obj file (see model.h). materials: per-slot .mat overrides by slot index;
 // empty (or past the end) = the model's embedded material.
-// castShadows / receiveShadows: as MeshRenderer.
+// castShadows / receiveShadows / giMode / lightmapScale: as MeshRenderer.
 struct ModelRenderer {
     std::string model;
     std::vector<std::string> materials;
     bool castShadows = true;
     bool receiveShadows = true;
+    GiMode giMode = GiMode::Off;
+    float lightmapScale = 1.0f;
 };
 
 constexpr float kMaxAnimatorSpeed = 10.0f;
@@ -84,6 +100,7 @@ struct DirectionalLight {
     float normalBias = 1.5f;  // >= 0
     float maxDistance = 100.0f; // > 0
     int cascadeCount = kMaxShadowCascades;
+    LightBakeMode bakeMode = LightBakeMode::Indirect;
 };
 
 // Lights meshes within range meters of the entity's world position (see pointLightFalloff in renderer.h).
@@ -93,6 +110,7 @@ struct PointLight {
     float range = 10.0f;
     bool castShadows = false; // a cube shadow map; only the kMaxShadowedPointLights nearest the eye get one
     float bias = 0.05f;       // >= 0, meters toward the light against shadow acne
+    LightBakeMode bakeMode = LightBakeMode::Indirect;
 };
 
 // Shines along the entity's world -Z axis in a cone: full inside innerAngle, fading smoothly to 0 at outerAngle
@@ -106,6 +124,7 @@ struct SpotLight {
     float outerAngle = 45.0f;
     bool castShadows = false; // a shadow atlas tile; only the kMaxShadowedLocalLights spot / area lights nearest the eye get one
     float bias = 0.05f;       // >= 0, meters toward the light against shadow acne
+    LightBakeMode bakeMode = LightBakeMode::Indirect;
 };
 
 // A width x height meter rectangle in the entity's XY plane, centered on it, emitting toward its world -Z (both ways if
@@ -121,6 +140,7 @@ struct AreaLight {
     bool twoSided = false;
     bool castShadows = false; // a shadow atlas tile, as SpotLight's
     float bias = 0.05f;       // >= 0, meters toward the light against shadow acne
+    LightBakeMode bakeMode = LightBakeMode::Indirect;
 };
 
 // A box-projected reflection probe (see ibl.h, docs/engine/ibl-reflection-probes.html): the editor's Bake renders the
@@ -137,11 +157,32 @@ struct ReflectionProbe {
     std::string bakedPath;                // project-relative .ktx written by Bake; empty = not baked
 };
 
+constexpr float kMinLightmapTexelsPerMeter = 0.25f, kMaxLightmapTexelsPerMeter = 64.0f;
+constexpr int kMaxLightmapBounces = 8, kMaxLightmapSamples = 4096;
+constexpr float kMinProbeSpacing = 0.25f, kMaxProbeSpacing = 16.0f;
+
+// Per-scene lightmap settings (docs/engine/lightmaps.html), saved under "lighting" > "lightmaps" when not all default.
+// The bake settings (texelsPerMeter .. probeSpacing) take effect at the next Bake Lightmaps; the runtime ones (enabled,
+// intensity, directional) at once, also from Lua (kast.lightmaps.set). The defaults bake lightmap_room.scene in well
+// under a minute on a desktop CPU.
+struct SceneLightmaps {
+    float texelsPerMeter = 8.0f; // 0.25..64: lightmap texels per meter of Static surface (times each mesh's lightmapScale)
+    int bounces = 2;             // 0..8: indirect bounces after the first surface
+    int samplesPerTexel = 256;   // 1..4096: paths per lightmap texel (and per probe of the grid)
+    float probeSpacing = 1.0f;   // 0.25..16 meters between probes of the grid over the Static meshes
+    bool enabled = true;         // the bake lights the scene (off: everything renders as if not baked)
+    float intensity = 1.0f;      // >= 0: scales the baked diffuse light (lightmaps and probe grid)
+    bool directional = true;     // the lightmaps' dominant direction bends baked light by normal maps
+    std::string bakedPath;       // project-relative lightmaps.json written by Bake Lightmaps; empty = not baked
+    bool operator==(const SceneLightmaps&) const = default;
+};
+
 // Per-scene light settings. The defaults match the renderer's former fixed 0.2 grey ambient. Sky off, the ambient is
 // that flat color; sky on, image-based lighting from the sky (ibl.h) replaces it, scaled and tinted by these.
 struct SceneLighting {
     bx::Vec3 ambientColor{1.0f, 1.0f, 1.0f}; // linear RGB 0..1
     float ambientIntensity = 0.2f;           // >= 0
+    SceneLightmaps lightmaps;
 };
 
 enum class SkyMode { Off, Procedural, Cubemap };
@@ -306,9 +347,12 @@ struct NetworkEntity {
 
 // Heightmap terrain (docs/engine/terrain.html): in Play, the tiles of map `map` within `radius` tiles of the local player
 // (else the camera) stream in as TerrainTile children. Online, the world server's map replaces `map`.
+// lightmap: Bake Lightmaps bakes one lightmap per tile of the map (maps/<folder>/lightmaps/, docs/engine/lightmaps.html)
+// and the tiles render with them; off, they keep the sky or flat ambient.
 struct Terrain {
     int map = 0;    // map.json id, 0..65535
     int radius = 1; // 0..4 tiles around the centre tile
+    bool lightmap = false;
 };
 
 struct TerrainTileData; // terrain.h: the tile's heights and its map

@@ -9,6 +9,7 @@
 #include "model_preview.h"
 #include "online.h"
 #include "online_panel.h"
+#include "lightmap_job.h"
 #include "panels.h"
 #include "recent_projects.h"
 #include "shader_compiler.h"
@@ -84,7 +85,7 @@ constexpr const char* kUsage =
     "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
-    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [zone edits] | "
+    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [zone edits] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel (without --play: on the Scene view), for
@@ -144,6 +145,11 @@ struct Options {
     std::string zoneSelect; // --zone-select: select this zone area or spawn id, or "object:tx,tz,index"
     bool bake = false;      // --bake: Bake Navmesh on the zone (--frames counts once it ends; exit 1 if it fails)
     bool bakeProbes = false; // --bake-probes: Window > Lighting's Bake All Probes, before --file-save's frame
+    // --bake-lightmaps: Window > Lighting's Bake Lightmaps, waited for, before --file-save's frame. --bake-lightmaps-async:
+    // started there but not waited for (the editor draws meanwhile); --cancel-lightmaps N: its Cancel at frame N.
+    bool bakeLightmaps = false;
+    bool bakeLightmapsAsync = false;
+    int cancelLightmaps = 0;
     std::string mapbake;    // --mapbake: the kast_mapbake.exe for this run (not saved to the settings)
     std::vector<zone_cli::Op> zoneOps; // --map, --new-map, --sculpt, ..., --save-zone (zone_cli.h), in order, before the window
     bool headless = false;  // --headless: run the zone edits (and --bake) and exit without opening a window
@@ -534,6 +540,12 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.fileSave = true;
         } else if (arg == "--bake-probes") {
             options.bakeProbes = true;
+        } else if (arg == "--bake-lightmaps") {
+            options.bakeLightmaps = true;
+        } else if (arg == "--bake-lightmaps-async") {
+            options.bakeLightmapsAsync = true;
+        } else if (arg == "--cancel-lightmaps" && hasValue && parsePositive(argv[i + 1], options.cancelLightmaps)) {
+            ++i;
         } else if (arg == "--scene-undo" && hasValue && parsePositive(argv[i + 1], options.undo)) {
             ++i;
         } else if (arg == "--scene-redo" && hasValue && parsePositive(argv[i + 1], options.redo)) {
@@ -671,14 +683,15 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.noVsync || options.noInstancing || options.noCulling || !options.worldAddress.empty() || options.onlineLoginEnv ||
                              options.onlineCompose || !options.zoneOps.empty() || options.headless || options.noRecycle ||
                              options.sculptLoop || options.focus || options.promptRemoveTile || options.fileSave ||
-                             options.bakeProbes || options.undo || options.redo;
+                             options.bakeProbes || options.bakeLightmaps || options.bakeLightmapsAsync ||
+                             options.cancelLightmaps || options.undo || options.redo;
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --select-network-entity, --add-component-popup, --new-component[-prompt], "
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
                          "--assets-menu, "
                          "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
                          "--gui-click, --open-graph, --preview-model, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
-                         "steps, --scene-undo, --scene-redo, --assets-delete, --inspector-apply-menu, --file-save, --bake-probes and the zone flags require "
+                         "steps, --scene-undo, --scene-redo, --assets-delete, --inspector-apply-menu, --file-save, --bake-probes, --bake-lightmaps[-async], --cancel-lightmaps and the zone flags require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
     }
@@ -1526,6 +1539,9 @@ int main(int argc, char** argv)
     FpsLog fpsLog;
     kast::CursorLock cursorLock;
     panels.probeStatus = [&](const kast::ReflectionProbe& probe) { return viewport.renderer().probeStatus(probe); };
+    LightmapJob lightmapJob; // Bake Lightmaps on a worker thread
+    panels.lightmapStatus = [&](const kast::Scene& scene) { return viewport.renderer().lightmapStatus(scene); };
+    panels.lightmapProgress = [&] { return lightmapJob.progress(); };
     hooks.frame = [&] {
         const uint64_t frameStart = SDL_GetPerformanceCounter();
         // Before this frame submits anything: a bake runs frames of its own on the Scene view's views.
@@ -1601,6 +1617,22 @@ int main(int argc, char** argv)
             zonePanel.askRemoveTile({(*options->promptRemoveTile)[0], (*options->promptRemoveTile)[1]});
         if (options->bakeProbes && frames.frame() == kAddComponentPopupFrame - 2) // baked next frame, saved after
             panels.requestBakeAll(doc);
+        if ((options->bakeLightmaps || options->bakeLightmapsAsync) && frames.frame() == kAddComponentPopupFrame - 2) {
+            std::string error;
+            if (!lightmapJob.start(doc, error))
+                kast::log::error(std::format("Bake Lightmaps: {}", error));
+            else if (options->bakeLightmaps)
+                lightmapJob.wait(); // done (and written by poll below) before --file-save's frame
+        }
+        if (options->cancelLightmaps > 0 && frames.frame() == options->cancelLightmaps)
+            lightmapJob.cancel();
+        if (panels.takeLightmapBakeRequest()) {
+            if (std::string error; !lightmapJob.start(doc, error))
+                kast::log::error(std::format("Bake Lightmaps: {}", error));
+        }
+        if (panels.takeLightmapCancelRequest())
+            lightmapJob.cancel();
+        lightmapJob.poll(doc, static_cast<uint64_t>(frames.frame()));
         if (options->fileSave && frames.frame() == kAddComponentPopupFrame)
             files.save();
         if (!options->openGui.empty() && frames.frame() == kAddComponentPopupFrame)

@@ -58,6 +58,12 @@ std::string skyCubeKtx(const std::array<MipImage, 6>& faces)
 
 Sh9 skyFacesSh9(const std::array<MipImage, 6>& faces)
 {
+    const CubeSides cube = skyFacesSides(faces);
+    return projectSh9(cube.rgb, cube.size);
+}
+
+CubeSides skyFacesSides(const std::array<MipImage, 6>& faces)
+{
     // The first mip at most 64 texels across: plenty for 9 coefficients.
     size_t offset = 0;
     uint16_t size = faces[0].width;
@@ -70,7 +76,7 @@ Sh9 skyFacesSh9(const std::array<MipImage, 6>& faces)
                 const float v = faces[kFaceOfSide[side]].rgba[offset + i * 4 + c] / 255.0f;
                 sides[side].push_back(v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f));
             }
-    return projectSh9(sides, size);
+    return {size, std::move(sides)};
 }
 
 void SkyRenderer::init()

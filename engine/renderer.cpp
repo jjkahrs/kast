@@ -228,8 +228,8 @@ Aabb transformBounds(const Aabb& local, const float* world)
 }
 
 // What draws must share to be one instanced submit: buffers, material, shadow flags and, in the main pass, the local
-// lights that reach them and the environment they take their ambient from (so each instance is lit as its own draw
-// would be).
+// lights that reach them, the environment they take their ambient from and their diffuse GI (gi: 0 none, else a
+// lightmap's texture + 1, or a probe-grid draw's own number: so each instance is lit as its own draw would be).
 struct BatchKey {
     uint16_t vertices = 0, indices = 0;
     const Material* material = nullptr;
@@ -237,14 +237,15 @@ struct BatchKey {
     bool mirrored = false; // culls the other winding (cullState)
     std::vector<size_t> lights;
     size_t environment = 0;
+    size_t gi = 0;
     auto operator<=>(const BatchKey&) const = default;
 };
 
 template <typename Item> // Renderer::DrawItem
-BatchKey batchKey(const Item& item, std::vector<size_t> lights, size_t environment = 0)
+BatchKey batchKey(const Item& item, std::vector<size_t> lights, size_t environment = 0, size_t gi = 0)
 {
     return {item.vertices.idx, item.indices.idx, item.material, item.bones >= 0, item.castShadows, item.receiveShadows,
-            item.mirrored, std::move(lights), environment};
+            item.mirrored, std::move(lights), environment, gi};
 }
 
 // Indices 0..count-1 grouped by keyOf(index): groups in order of first appearance, indices in order within each.
@@ -574,8 +575,9 @@ void Renderer::init()
         .add(bgfx::Attrib::Tangent, 4, bgfx::AttribType::Float)
         .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
+        .add(bgfx::Attrib::TexCoord1, 2, bgfx::AttribType::Float)
         .end();
-    static_assert(sizeof(MeshVertex) == 12 * sizeof(float) + 4, "MeshVertex must match meshLayout_");
+    static_assert(sizeof(MeshVertex) == 14 * sizeof(float) + 4, "MeshVertex must match meshLayout_");
     for (size_t i = 0; i < meshes_.size(); ++i) {
         const MeshData data = primitiveMesh(static_cast<Primitive>(i));
         meshes_[i].vertices = bgfx::createVertexBuffer(copyOf(data.vertices), meshLayout_);
@@ -640,6 +642,11 @@ void Renderer::init()
     envSh_ = bgfx::createUniform("u_envSh", bgfx::UniformType::Vec4, 9);
     envSpecular_ = bgfx::createUniform("u_envSpecular", bgfx::UniformType::Vec4);
     envBox_ = bgfx::createUniform("u_envBox", bgfx::UniformType::Vec4, 2);
+    gi_ = bgfx::createUniform("u_gi", bgfx::UniformType::Vec4);
+    giSh_ = bgfx::createUniform("u_giSh", bgfx::UniformType::Vec4, 9);
+    lightmapST_ = bgfx::createUniform("u_lightmapST", bgfx::UniformType::Vec4);
+    lightmapSampler_ = bgfx::createUniform("s_lightmap", bgfx::UniformType::Sampler);
+    lightmapDirSampler_ = bgfx::createUniform("s_lightmapDir", bgfx::UniformType::Sampler);
     emissiveSampler_ = bgfx::createUniform("s_emissive", bgfx::UniformType::Sampler);
     csmMtx_ = bgfx::createUniform("u_csmMtx", bgfx::UniformType::Mat4, kMaxShadowCascades + kMaxShadowedLocalLights);
     csmSplits_ = bgfx::createUniform("u_csmSplits", bgfx::UniformType::Vec4);
@@ -705,7 +712,7 @@ void Renderer::shutdown()
                                         metallicRoughnessSampler_, normalSampler_, envSampler_, emissiveSampler_,
                                         materialOrm_, envSh_, envSpecular_, envBox_, csmMtx_, csmSplits_,
                                         csmBias_, shadowParams_, localShadow_, csmSampler_, kastParams_, screenSampler_,
-                                        depthSampler_})
+                                        depthSampler_, gi_, giSh_, lightmapST_, lightmapSampler_, lightmapDirSampler_})
         bgfx::destroy(uniform);
     for (bgfx::UniformHandle uniform : pointShadowSamplers_)
         bgfx::destroy(uniform);
@@ -736,6 +743,7 @@ void Renderer::shutdown()
     bgfx::destroy(blackCube_);
     destroyCopies();
     clearProbes();
+    clearLightmaps();
     if (bgfx::isValid(skyEnv_))
         bgfx::destroy(skyEnv_);
     skyEnv_ = BGFX_INVALID_HANDLE;
@@ -782,13 +790,20 @@ void Renderer::addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws)
                     const float y = map::sample_height(data.heights[size_t(v) * n + size_t(u)], info);
                     const auto normal = map::normal_at(data.heights, info, u, v);
                     const bx::Vec3 t = terrainTangent({normal[0], normal[1], normal[2]});
+                    // TEXCOORD1: the tile's lightmap, one texel per sample, centered on it (lightmap_bake.h).
                     vertices.push_back({float(u), y, float(v), normal[0], normal[1], normal[2], t.x, t.y, t.z, 1.0f,
-                                        float(uvOrigin[0] + u) * uvScale[0], float(uvOrigin[1] + v) * uvScale[1]});
+                                        float(uvOrigin[0] + u) * uvScale[0], float(uvOrigin[1] + v) * uvScale[1],
+                                        0xffffffff, (float(u) + 0.5f) / float(n), (float(v) + 0.5f) / float(n)});
                     lo = std::min(lo, y);
                     hi = std::max(hi, y);
                 }
             mesh.data = tile.data;
             mesh.vertices = bgfx::createVertexBuffer(copyOf(vertices), meshLayout_);
+            if (!data.lightmap.empty()) { // checked by the streamer (TerrainTileData)
+                std::string error;
+                mesh.lightmap = createGpuTexture(data.lightmap, false, false, BGFX_SAMPLER_UVW_CLAMP, error);
+                mesh.lightmapDirection = createGpuTexture(data.lightmapDirection, false, false, BGFX_SAMPLER_UVW_CLAMP, error);
+            }
             const bx::Vec3 origin{float(data.tile.x) * map::kTileSize, 0.0f, float(data.tile.z) * map::kTileSize};
             mesh.bounds = {{origin.x, lo, origin.z}, {origin.x + map::kTileSize, hi, origin.z + map::kTileSize}};
         }
@@ -799,6 +814,13 @@ void Renderer::addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws)
                                                                                       : &materials_.get(info.material);
         item.vertices = mesh.vertices;
         item.indices = terrainIndices_;
+        if (bgfx::isValid(mesh.lightmap) && bgfx::isValid(mesh.lightmapDirection)) {
+            item.lightmap = mesh.lightmap;
+            item.lightmapDirection = mesh.lightmapDirection;
+        } else if (!data.lightmapError.empty()) {
+            warnOnce(std::format("Terrain tile {}_{}: lightmap: {}; lit as unbaked", data.tile.x, data.tile.z,
+                                 data.lightmapError));
+        }
         draws.push_back(item);
     }
 }
@@ -811,14 +833,21 @@ void Renderer::pruneTerrain()
             continue;
         }
         bgfx::destroy(it->second.vertices);
+        for (bgfx::TextureHandle texture : {it->second.lightmap, it->second.lightmapDirection})
+            if (bgfx::isValid(texture))
+                bgfx::destroy(texture);
         it = terrain_.erase(it);
     }
 }
 
 void Renderer::clearTerrain()
 {
-    for (auto& [data, mesh] : terrain_)
+    for (auto& [data, mesh] : terrain_) {
         bgfx::destroy(mesh.vertices);
+        for (bgfx::TextureHandle texture : {mesh.lightmap, mesh.lightmapDirection})
+            if (bgfx::isValid(texture))
+                bgfx::destroy(texture);
+    }
     terrain_.clear();
 }
 
@@ -1157,15 +1186,21 @@ void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const Mode
 
 bool Renderer::instanced(const std::vector<const DrawItem*>& batch, bgfx::InstanceDataBuffer& instances) const
 {
-    constexpr uint16_t kStride = sizeof(Mat4); // i_data0..3 in vs_mesh_instanced.sc and vs_shadow_instanced.sc
+    // i_data0..3 in vs_mesh_instanced.sc and vs_shadow_instanced.sc; a lightmapped batch's i_data4 after them (the
+    // batch shares its lightmap: BatchKey).
+    const bool lightmapped = bgfx::isValid(batch.front()->lightmap);
+    const auto stride = static_cast<uint16_t>(sizeof(Mat4) + (lightmapped ? 4 * sizeof(float) : 0));
     const auto count = static_cast<uint32_t>(batch.size());
     // ponytail: a batch this frame's transient buffer can't hold whole draws one by one; split it if that shows.
     if (!instancing_ || count < 2 || batch.front()->bones >= 0 || !(bgfx::getCaps()->supported & BGFX_CAPS_INSTANCING) ||
-        bgfx::getAvailInstanceDataBuffer(count, kStride) < count)
+        bgfx::getAvailInstanceDataBuffer(count, stride) < count)
         return false;
-    bgfx::allocInstanceDataBuffer(&instances, count, kStride);
-    for (uint32_t i = 0; i < count; ++i)
-        std::memcpy(instances.data + i * kStride, batch[i]->world.data(), kStride);
+    bgfx::allocInstanceDataBuffer(&instances, count, stride);
+    for (uint32_t i = 0; i < count; ++i) {
+        std::memcpy(instances.data + i * stride, batch[i]->world.data(), sizeof(Mat4));
+        if (lightmapped)
+            std::memcpy(instances.data + i * stride + sizeof(Mat4), batch[i]->lightmapST.data(), 4 * sizeof(float));
+    }
     return true;
 }
 
@@ -1498,6 +1533,145 @@ std::string Renderer::probeStatus(const ReflectionProbe& probe)
     return file.error.empty() ? "Baked" : file.error;
 }
 
+void Renderer::clearLightmaps()
+{
+    for (const std::vector<bgfx::TextureHandle>* textures : {&lightmaps_.irradiance, &lightmaps_.direction})
+        for (bgfx::TextureHandle texture : *textures)
+            bgfx::destroy(texture);
+    for (auto& [key, mesh] : lightmaps_.buffers) {
+        bgfx::destroy(mesh.vertices);
+        bgfx::destroy(mesh.indices);
+    }
+    lightmaps_ = {};
+}
+
+Renderer::LightmapSet& Renderer::lightmapSet(const std::string& bakedPath)
+{
+    std::string error = "no project";
+    const std::optional<std::filesystem::path> json =
+        root_.empty() ? std::nullopt : resolveProjectPath(root_, bakedPath, error);
+    const auto jsonTime = json ? modifiedTime(*json) : std::nullopt;
+    if (lightmaps_.path == bakedPath && lightmaps_.jsonTime == jsonTime) // a re-bake rewrites the json last
+        return lightmaps_;
+    const LoadTimer timer(assetLoadStats().textures, assetLoadStats().textureSeconds);
+    clearLightmaps();
+    LightmapSet& set = lightmaps_;
+    set.path = bakedPath;
+    set.jsonTime = jsonTime;
+    const std::filesystem::path folder = json ? json->parent_path() : std::filesystem::path();
+    std::string text, bytes;
+    const auto load = [&](const std::string& name, uint64_t hash, std::string& out) {
+        if (!readFile(folder / std::filesystem::path(reinterpret_cast<const char8_t*>(name.c_str())), out)) {
+            error = std::format("cannot read '{}'", name);
+            return false;
+        }
+        if (lightmapFileHash(out) != hash) {
+            error = std::format("'{}' doesn't match lightmaps.json (bake again)", name);
+            return false;
+        }
+        return true;
+    };
+    bool ok = json && readFile(*json, text);
+    if (json && !ok)
+        error = "cannot read the file";
+    ok = ok && parseLightmapSidecar(text, set.sidecar, error);
+    for (size_t i = 0; ok && i < set.sidecar.atlases.size(); ++i) {
+        const LightmapAtlas& atlas = set.sidecar.atlases[i];
+        for (const auto& [name, hash, textures] :
+             {std::tuple(atlas.irradiance, atlas.irradianceHash, &set.irradiance),
+              std::tuple(atlas.direction, atlas.directionHash, &set.direction)}) {
+            ok = ok && load(name, hash, bytes) && checkLightmapKtx(bytes, atlas.width, atlas.height, error);
+            const bgfx::TextureHandle texture =
+                ok ? createGpuTexture(bytes, false, false, BGFX_SAMPLER_UVW_CLAMP, error) : bgfx::TextureHandle BGFX_INVALID_HANDLE;
+            ok = ok && bgfx::isValid(texture);
+            if (ok)
+                textures->push_back(texture);
+        }
+    }
+    ok = ok && load(set.sidecar.meshes, set.sidecar.meshesHash, bytes) && readLightmapMeshes(bytes, set.meshes, error);
+    if (!ok) {
+        const std::string why = error;
+        clearLightmaps();
+        lightmaps_.path = bakedPath;
+        lightmaps_.jsonTime = jsonTime;
+        lightmaps_.error = why;
+        warnOnce(std::format("Lightmaps '{}': {}; the scene renders unbaked", bakedPath, why));
+        return lightmaps_;
+    }
+    for (size_t i = 0; i < set.meshes.size(); ++i)
+        set.meshIndex[set.meshes[i].key] = i;
+    for (size_t i = 0; i < set.sidecar.entities.size(); ++i)
+        set.entities[set.sidecar.entities[i].id] = i;
+    log::info(std::format("Loaded lightmaps '{}' ({} atlas pages, {} meshes, {} probes)", bakedPath,
+                          set.sidecar.atlases.size(), set.sidecar.entities.size(), set.sidecar.grid.sh.size()));
+    return set;
+}
+
+bool Renderer::applyLightmap(LightmapSet& set, EntityId id, const std::string& source, size_t submesh,
+                             DrawItem& item)
+{
+    const auto entity = set.entities.find(id);
+    if (!set.error.empty() || entity == set.entities.end())
+        return false;
+    const LightmapEntity& e = set.sidecar.entities[entity->second];
+    const auto mesh = set.meshIndex.find(e.mesh);
+    if (mesh == set.meshIndex.end() || set.meshes[mesh->second].source != source ||
+        submesh >= set.meshes[mesh->second].submeshes.size())
+        return false;
+    const std::pair key{mesh->second, submesh};
+    if (set.broken.contains(key))
+        return false;
+    auto buffers = set.buffers.find(key);
+    if (buffers == set.buffers.end()) { // the source's vertices, copied out along xref with their lightmap UVs
+        const LightmapSubmesh& sub = set.meshes[mesh->second].submeshes[submesh];
+        std::vector<MeshVertex> source_vertices;
+        if (source.starts_with("primitive:")) {
+            const std::string name = source.substr(10);
+            const Primitive primitive = name == "plane" ? Primitive::Plane : name == "sphere" ? Primitive::Sphere : Primitive::Cube;
+            source_vertices = primitiveMesh(primitive).vertices;
+        } else if (const GpuModel* gpu = gpuModel(source.substr(6)); gpu && submesh < gpu->source->meshes.size()) {
+            for (const ModelVertex& v : gpu->source->meshes[submesh].vertices)
+                source_vertices.push_back({v.x, v.y, v.z, v.nx, v.ny, v.nz, v.tx, v.ty, v.tz, v.tw, v.u, v.v, v.color});
+        }
+        LightmapSet& owned = set;
+        if (source_vertices.size() != sub.sourceVertices) {
+            owned.broken.insert(key);
+            warnOnce(std::format("Lightmaps '{}': '{}' changed since the bake; its meshes render unbaked (bake again)",
+                                 set.path, source));
+            return false;
+        }
+        std::vector<MeshVertex> vertices;
+        vertices.reserve(sub.xref.size());
+        for (size_t v = 0; v < sub.xref.size(); ++v) {
+            MeshVertex vertex = source_vertices[sub.xref[v]];
+            vertex.u2 = sub.uv[v * 2];
+            vertex.v2 = sub.uv[v * 2 + 1];
+            vertices.push_back(vertex);
+        }
+        buffers = owned.buffers
+                      .emplace(key, Mesh{bgfx::createVertexBuffer(copyOf(vertices), meshLayout_),
+                                         bgfx::createIndexBuffer(copyOf(sub.indices), BGFX_BUFFER_INDEX32)})
+                      .first;
+    }
+    item.vertices = buffers->second.vertices;
+    item.indices = buffers->second.indices;
+    item.lightmap = set.irradiance[e.atlas];
+    item.lightmapDirection = set.direction[e.atlas];
+    item.lightmapST = e.scaleOffset;
+    return true;
+}
+
+std::string Renderer::lightmapStatus(const Scene& scene)
+{
+    const std::string& path = scene.lighting.lightmaps.bakedPath;
+    if (path.empty())
+        return "Not baked";
+    const LightmapSet& set = lightmapSet(path);
+    if (!set.error.empty())
+        return set.error;
+    return set.sidecar.hash == lightmapSceneHash(scene) ? "Baked" : "Out of date";
+}
+
 bool Renderer::bakeProbe(const Scene& scene, const Scene* extra, const std::filesystem::path& projectRoot,
                          const bx::Vec3& center, uint16_t size, bgfx::ViewId firstView, BakedProbe& out,
                          std::string& error)
@@ -1695,8 +1869,12 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     for (auto [entity, light] : registry.view<PointLight>().each()) {
         float world[16];
         scene.worldMatrix(entity, world);
-        localLights.push_back({{world[12], world[13], world[14]}, light.range, bx::mul(light.color, light.intensity),
-                               light.castShadows, light.bias});
+        localLights.push_back({.position = {world[12], world[13], world[14]},
+                               .range = light.range,
+                               .color = bx::mul(light.color, light.intensity),
+                               .castShadows = light.castShadows,
+                               .bias = light.bias,
+                               .baked = light.bakeMode == LightBakeMode::Full});
     }
     for (auto [entity, light] : registry.view<SpotLight>().each()) {
         float world[16];
@@ -1709,7 +1887,8 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
                                .type = LocalLightType::Spot,
                                .direction = bx::normalize(transformDir({0.0f, 0.0f, -1.0f}, world)),
                                .cosInner = std::cos(bx::toRad(light.innerAngle)),
-                               .cosOuter = std::cos(bx::toRad(light.outerAngle))});
+                               .cosOuter = std::cos(bx::toRad(light.outerAngle)),
+                               .baked = light.bakeMode == LightBakeMode::Full});
     }
     for (auto [entity, light] : registry.view<AreaLight>().each()) {
         float world[16];
@@ -1724,12 +1903,30 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
              .direction = bx::normalize(transformDir({0.0f, 0.0f, -1.0f}, world)),
              .halfWidth = bx::mul(bx::normalize(transformDir({1.0f, 0.0f, 0.0f}, world)), 0.5f * light.width),
              .halfHeight = bx::mul(bx::normalize(transformDir({0.0f, 1.0f, 0.0f}, world)), 0.5f * light.height),
-             .twoSided = light.twoSided});
+             .twoSided = light.twoSided,
+             .baked = light.bakeMode == LightBakeMode::Full});
     }
+    // The local lights a lightmapped draw still gets (lightShinesOn: not the Full ones), by index into localLights.
+    std::vector<size_t> realtimeLights;
+    std::vector<LocalLightSample> realtimeSamples;
+    for (size_t i = 0; i < localLights.size(); ++i)
+        if (lightShinesOn(localLights[i].baked ? LightBakeMode::Full : LightBakeMode::Indirect, true)) {
+            realtimeLights.push_back(i);
+            realtimeSamples.push_back(localLights[i]);
+        }
+    const bool sunBaked = sun && sun->bakeMode == LightBakeMode::Full;
+
+    // GI (docs/engine/lightmaps.html): the scene's bake, if on and it loads (the extra scene's meshes get none: its ids
+    // aren't the bake's).
+    const SceneLightmaps& gi = scene.lighting.lightmaps;
+    LightmapSet* bake = gi.enabled && !gi.bakedPath.empty() ? &lightmapSet(gi.bakedPath) : nullptr;
+    if (bake && !bake->error.empty())
+        bake = nullptr;
+    constexpr const char* kPrimitiveNames[] = {"primitive:cube", "primitive:plane", "primitive:sphere"}; // by Primitive
 
     std::vector<DrawItem> draws;
     std::vector<std::vector<Mat4>> boneSets;
-    const auto addDraws = [&](const Scene& from) {
+    const auto addDraws = [&](const Scene& from, bool baked) {
         const entt::registry& entities = from.registry();
         WorldMatrices worldOf(from);
         for (auto [entity, mesh] : entities.view<MeshRenderer>().each()) {
@@ -1744,17 +1941,62 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             item.indices = gpu.indices;
             item.castShadows = mesh.castShadows;
             item.receiveShadows = mesh.receiveShadows;
+            if (baked && mesh.giMode == GiMode::Static) // unbaked: the probe grid, if any
+                item.giDynamic = !(bake && applyLightmap(*bake, entities.get<PersistentId>(entity).value,
+                                                         kPrimitiveNames[static_cast<size_t>(mesh.primitive)], 0, item));
+            item.giDynamic = item.giDynamic || (baked && mesh.giMode == GiMode::Dynamic);
             draws.push_back(item);
         }
-        for (auto [entity, model] : entities.view<ModelRenderer>().each())
+        for (auto [entity, model] : entities.view<ModelRenderer>().each()) {
+            const size_t first = draws.size();
             addModelDraws(from, entity, model, worldOf(entity).data(), draws, boneSets);
+            if (!baked || model.giMode == GiMode::Off)
+                continue;
+            const EntityId id = entities.get<PersistentId>(entity).value;
+            for (size_t i = first; i < draws.size(); ++i) {
+                DrawItem& item = draws[i];
+                if (model.giMode == GiMode::Static && item.bones >= 0)
+                    warnOnce(std::format("'{}': a skinned model can't be Static; lit as Dynamic",
+                                         entities.get<Name>(entity).value));
+                item.giDynamic = !(model.giMode == GiMode::Static && item.bones < 0 && bake &&
+                                   applyLightmap(*bake, id, "model:" + model.model, i - first, item));
+            }
+        }
         addTerrainDraws(from, draws);
     };
-    addDraws(scene);
+    addDraws(scene, gi.enabled);
     if (extra)
-        addDraws(*extra);
+        addDraws(*extra, false);
     pruneTerrain();
     resolveShaders(draws);
+    for (DrawItem& item : draws) {
+        // Lightmaps off (terrain tiles carry theirs), or a .kshader using the lightmap's stages: the probe grid instead.
+        const bool usable = gi.enabled && (!item.shader || shaderTakesLightmap(item.shader->source->source));
+        if (bgfx::isValid(item.lightmap) && !usable) {
+            item.lightmap = item.lightmapDirection = BGFX_INVALID_HANDLE;
+            item.giDynamic = gi.enabled;
+        }
+    }
+    // A draw's diffuse GI (the selection point, lightmap.h selectDiffuseGi): its lightmap, else the probe grid at its
+    // bounds' center if it samples it, else the environment.
+    const auto giOf = [&](const DrawItem& item) {
+        std::optional<Sh9> grid;
+        if (item.giDynamic && bake)
+            grid = sampleProbeGrid(bake->sidecar.grid, bx::mul(bx::add(item.bounds.min, item.bounds.max), 0.5f));
+        GiDraw draw{selectDiffuseGi(bgfx::isValid(item.lightmap), grid.has_value())};
+        if (draw.source == DiffuseGi::ProbeGrid)
+            draw.sh = *grid;
+        return draw;
+    };
+    // The local lights of a draw: the nearest that reach it, but for the Full ones on a lightmapped draw.
+    const auto lightsOf = [&](const DrawItem& item) {
+        if (!bgfx::isValid(item.lightmap))
+            return nearestLocalLights(localLights, item.bounds);
+        std::vector<size_t> nearest = nearestLocalLights(realtimeSamples, item.bounds);
+        for (size_t& i : nearest)
+            i = realtimeLights[i];
+        return nearest;
+    };
 
     const ShadowFrame shadows = renderShadows(sun, {lightDir[0], lightDir[1], lightDir[2]}, draws, boneSets,
                                               localLights, viewMtx, projMtx, shadowViews);
@@ -1766,9 +2008,10 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         shadowOf[shadows.tileLights[tile]] = static_cast<float>(kMaxShadowCascades + tile);
     const bool atlas = shadows.sun || !shadows.tileLights.empty();
 
-    // Everything a mesh draw sets but its transform: material, lights (nearest: nearestLocalLights), environment (an
-    // index in environments), shadows, buffers.
-    const auto setDrawState = [&](const DrawItem& item, const std::vector<size_t>& nearest, size_t environment) {
+    // Everything a mesh draw sets but its transform: material, lights (nearest: lightsOf), environment (an index in
+    // environments), GI (giOf), shadows, buffers.
+    const auto setDrawState = [&](const DrawItem& item, const std::vector<size_t>& nearest, size_t environment,
+                                  const GiDraw& giDraw) {
         const Material& material = *item.material;
         // Unused slots: black, range 1, so they add nothing. Packed as fs_mesh.sc's u_local* comments say.
         float localPosRange[kMaxLocalLights][4] = {};
@@ -1818,12 +2061,31 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         const bool blend = material.alphaMode == AlphaMode::Blend;
         const bool additive = material.alphaMode == AlphaMode::Additive;
 
+        // Packed as fs_mesh.sc's u_gi says. A Full sun's light is in a lightmapped draw's lightmap: none for it.
+        const bool lightmapped = giDraw.source == DiffuseGi::Lightmap;
+        const float giParams[4] = {float(giDraw.source), gi.intensity, gi.directional ? 1.0f : 0.0f, 0.0f};
+        const bool sunOff = lightmapped && sunBaked;
+        const float noSun[4] = {lightDir[0], lightDir[1], lightDir[2], 0.0f};
+        const float black[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
         setMaterialState(item);
         bgfx::setUniform(cameraPos_, cameraPos);
         bgfx::setUniform(fogColor_, fogColor);
         bgfx::setUniform(fogParams_, fogParams);
-        bgfx::setUniform(lightDir_, lightDir);
-        bgfx::setUniform(lightColor_, lightColor);
+        bgfx::setUniform(lightDir_, sunOff ? noSun : lightDir);
+        bgfx::setUniform(lightColor_, sunOff ? black : lightColor);
+        bgfx::setUniform(gi_, giParams);
+        if (giDraw.source == DiffuseGi::ProbeGrid) {
+            float giSh[9][4] = {};
+            for (size_t i = 0; i < 9; ++i)
+                std::memcpy(giSh[i], &giDraw.sh[i * 3], 3 * sizeof(float));
+            bgfx::setUniform(giSh_, giSh, 9);
+        }
+        if (lightmapped) {
+            bgfx::setUniform(lightmapST_, item.lightmapST.data());
+            bgfx::setTexture(12, lightmapSampler_, item.lightmap);
+            bgfx::setTexture(13, lightmapDirSampler_, item.lightmapDirection);
+        }
         bgfx::setUniform(ambient_, ambient);
         bgfx::setUniform(envSh_, envSh, 9);
         bgfx::setUniform(envSpecular_, envSpecular);
@@ -1855,7 +2117,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     const auto submit = [&](bgfx::ViewId to, const DrawItem& item, const std::vector<size_t>& nearest) {
         float normal[16];
         normalMatrix(item.world, normal);
-        setDrawState(item, nearest, environmentOf(item));
+        setDrawState(item, nearest, environmentOf(item), giOf(item));
         bgfx::setTransform(item.world.data());
         bgfx::setUniform(normalMatrix_, normal);
         if (item.bones >= 0) {
@@ -1876,6 +2138,8 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     std::vector<const DrawItem*> opaque;
     std::vector<std::vector<size_t>> opaqueLights; // per opaque draw
     std::vector<size_t> opaqueEnvironments;        // the same
+    std::vector<GiDraw> opaqueGi;                  // the same
+    std::vector<size_t> opaqueGiKeys;              // BatchKey::gi
     std::vector<const DrawItem*> blended;
     std::vector<bx::Vec3> centers;
     for (const DrawItem& item : draws) {
@@ -1883,8 +2147,14 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             continue;
         if (!isTransparent(*item.material)) {
             opaque.push_back(&item);
-            opaqueLights.push_back(nearestLocalLights(localLights, item.bounds));
+            opaqueLights.push_back(lightsOf(item));
             opaqueEnvironments.push_back(environmentOf(item));
+            opaqueGi.push_back(giOf(item));
+            // A lightmap batches with its texture; each probe-grid draw has its own harmonics, so batches alone.
+            const DiffuseGi source = opaqueGi.back().source;
+            opaqueGiKeys.push_back(source == DiffuseGi::Lightmap    ? size_t(item.lightmap.idx) + 1
+                                   : source == DiffuseGi::ProbeGrid ? (size_t(1) << 20) + opaque.size()
+                                                                    : 0);
             continue;
         }
         blended.push_back(&item);
@@ -1897,13 +2167,16 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         centers.push_back(emitter.center);
     std::vector<const DrawItem*> batch;
     for (const std::vector<size_t>& indices :
-         batchDraws(opaque.size(), [&](size_t i) { return batchKey(*opaque[i], opaqueLights[i], opaqueEnvironments[i]); })) {
+         batchDraws(opaque.size(), [&](size_t i) {
+             return batchKey(*opaque[i], opaqueLights[i], opaqueEnvironments[i], opaqueGiKeys[i]);
+         })) {
         batch.clear();
         for (size_t i : indices)
             batch.push_back(opaque[i]);
         bgfx::InstanceDataBuffer instances;
         if (instanced(batch, instances)) {
-            setDrawState(*batch.front(), opaqueLights[indices.front()], opaqueEnvironments[indices.front()]);
+            setDrawState(*batch.front(), opaqueLights[indices.front()], opaqueEnvironments[indices.front()],
+                         opaqueGi[indices.front()]);
             bgfx::setInstanceDataBuffer(&instances);
             bgfx::submit(view, batch.front()->shader ? batch.front()->shader->instanced : instancedProgram_);
             continue;
@@ -1928,7 +2201,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     }
     for (size_t i : backToFront(centers, eye)) {
         if (i < blended.size()) {
-            submit(blendView, *blended[i], nearestLocalLights(localLights, blended[i]->bounds));
+            submit(blendView, *blended[i], lightsOf(*blended[i]));
             continue;
         }
         const ParticleRenderer::Draw& emitter = particles[i - blended.size()];

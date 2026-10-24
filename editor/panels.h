@@ -71,9 +71,17 @@ public:
     void drawComponents(Document& doc);
     void drawStateMachines(Document& doc);
     void drawEvents(Document& doc);
-    // The scene's ambient light, sky and Bake All Probes (Window > Lighting); draws nothing while open is false. skyError:
-    // why the Scene view's cubemap sky fell back to the procedural one (Renderer::skyError), shown under the faces.
+    // The scene's ambient light, sky, lightmaps (settings, Bake Lightmaps, its progress and Cancel, its status) and Bake
+    // All Probes (Window > Lighting); draws nothing while open is false. skyError: why the Scene view's cubemap sky fell
+    // back to the procedural one (Renderer::skyError), shown under the faces.
     void drawLighting(Document& doc, bool& open, const std::string& skyError);
+    // The scene's lightmap bake as the host's renderer sees it (Renderer::lightmapStatus: "Not baked", "Baked", "Out of
+    // date" or why its files can't be used), and the running bake's progress (nullopt: none). Set by the host.
+    std::function<std::string(const kast::Scene&)> lightmapStatus;
+    std::function<std::optional<float>()> lightmapProgress;
+    // Whether Bake Lightmaps / Cancel was pressed since the last call: the host starts or stops its LightmapJob.
+    bool takeLightmapBakeRequest() { return std::exchange(lightmapBakeRequested_, false); }
+    bool takeLightmapCancelRequest() { return std::exchange(lightmapCancelRequested_, false); }
     // A ReflectionProbe's bake as the host's renderer sees its files ("Not baked", "Baked" or why they can't be used:
     // Renderer::probeStatus), shown in its Inspector section. Set by the host.
     std::function<std::string(const kast::ReflectionProbe&)> probeStatus;
@@ -204,6 +212,8 @@ private:
 
     bool addComponentRequested_ = false;
     std::vector<entt::entity> bakeRequests_; // takeBakeRequests
+    bool lightmapBakeRequested_ = false, lightmapCancelRequested_ = false;
+    std::string lightmapStatus_; // the Lighting panel's last status, logged when it changes
     bool newComponentRequested_ = false;
     std::string newComponentName_;
     std::string newComponentError_; // why the last Create failed (write or load); cleared when the name changes

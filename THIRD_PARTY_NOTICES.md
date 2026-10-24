@@ -48,6 +48,7 @@ These are linked into `kast_editor` and the player, or shipped beside them as DL
 | mattiasgustavsson/libs | 2019-09-29 | MIT or Public Domain | https://github.com/mattiasgustavsson/libs |
 | itlib | 1.12.1 | MIT | https://github.com/iboB/itlib |
 | robin-hood-hashing | 3.11.5 | MIT | https://github.com/martinus/robin-hood-hashing |
+| xatlas (vendored in `third_party/xatlas`, its `LICENSE` beside it) | jpcy/xatlas f700c77 (2022-07-25) | MIT | https://github.com/jpcy/xatlas |
 
 ### FreeType
 

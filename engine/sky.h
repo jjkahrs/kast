@@ -25,6 +25,8 @@ std::string skyFacesError(const std::array<MipImage, 6>& faces);
 std::string skyCubeKtx(const std::array<MipImage, 6>& faces);
 // Six decoded faces that make a cube (sRGB) projected for the sky's diffuse light (ibl.h).
 Sh9 skyFacesSh9(const std::array<MipImage, 6>& faces);
+// Their first mip at most 64 texels across, as linear cube sides (what skyFacesSh9 projects; the lightmap baker's sky).
+CubeSides skyFacesSides(const std::array<MipImage, 6>& faces);
 
 // Draws a SceneSky behind everything else in a view (Renderer::render calls it between opaque and blended meshes):
 // a full-screen triangle at the far plane, depth-tested so it only fills pixels no mesh covered. Uses the camera's

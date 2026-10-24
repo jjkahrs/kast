@@ -1,4 +1,4 @@
-$input v_normal, v_tangent, v_worldPos, v_texcoord0, v_color0
+$input v_normal, v_tangent, v_worldPos, v_texcoord0, v_color0, v_lightmapUv
 
 // The mesh fragment template: Kast's built-in shader as is, and every .kshader's fragment() at the //@user line
 // (shader.cpp generateShader; see docs/engine/shaders.html). With KAST_SHADOW it is the .kshader's shadow pass shader.
@@ -38,7 +38,8 @@ SAMPLER2D(s_normal, 7);            // linear tangent-space normal, glTF / OpenGL
 // into s_metallicRoughness's R: every stage is taken (D3D11's 16).
 SAMPLERCUBE(s_env, 8);
 SAMPLER2D(s_emissive, 9);          // sRGB, sampled as linear, times u_emissive; white if none
-// Stages 10..13: a .kshader's texture2D params (shader.cpp generateShader).
+// Stages 10..13: a .kshader's texture2D params (shader.cpp generateShader); 12 and 13 are the lightmap's (s_lightmap,
+// s_lightmapDir below) in shaders with at most two.
 SAMPLER2D(s_kastScreen, 14); // SCREEN_TEXTURE: the opaque scene's HDR linear color (Renderer::render copies it)
 SAMPLER2D(s_kastDepth, 15);  // DEPTH_TEXTURE: the opaque scene's depth (D3D 0..1); linearDepth() makes it meters
 
@@ -56,6 +57,12 @@ uniform vec4 u_ambient;    // rgb: scene ambient color * intensity: the flat amb
 uniform vec4 u_envSh[9];
 uniform vec4 u_envSpecular;
 uniform vec4 u_envBox[2];
+// Global illumination (docs/engine/lightmaps.html; renderer.cpp setDrawState): x: where the diffuse ambient comes from
+// (lightmap.h DiffuseGi): 0 the environment as above, 1 the lightmap (s_lightmap, s_lightmapDir at v_lightmapUv), 2
+// u_giSh, the probe grid sampled at the mesh (Sh9, as u_envSh); y: its intensity; z: 1 to bend lightmap light by the
+// normal (the directional term). The specular stays the environment's.
+uniform vec4 u_gi;
+uniform vec4 u_giSh[9];
 // The local light slots (Renderer::render setDrawState), nearest the mesh first. Unused slots: black, range 1.
 uniform vec4 u_localPosRange[MAX_LOCAL_LIGHTS]; // xyz: world position (area: the rect's center); w: range
 uniform vec4 u_localColor[MAX_LOCAL_LIGHTS];    // rgb: color * intensity; w: type: 0 point, LIGHT_SPOT, LIGHT_AREA(_TWO_SIDED)
@@ -476,6 +483,35 @@ float linearDepth(float depth)
 void fragment(inout KastFragment kast_f) {}
 #endif
 
+// The lightmap (lightmap.h): rgb irradiance / pi, and the direction it mostly came from (xyz) with its half-Lambert at
+// the baked surface's normal (w). On stages a .kshader's third and fourth texture2D params take: shaders with those get
+// no lightmap (KAST_TEXTURE_PARAMS, shader.cpp; the renderer gives their draws the probe grid instead).
+#if !defined(KAST_TEXTURE_PARAMS) || KAST_TEXTURE_PARAMS <= 2
+#define KAST_HAS_LIGHTMAP
+SAMPLER2D(s_lightmap, 12);
+SAMPLER2D(s_lightmapDir, 13);
+#endif
+
+// The diffuse GI selection point (u_gi.x, lightmap.h selectDiffuseGi): the irradiance / pi that replaces the
+// environment's at unit normal n. ponytail: VoxelGI and SDFGI (later) slot in here between the lightmap and the grid.
+vec3 kastGiDiffuse(vec3 n, vec2 lightmapUv)
+{
+#ifdef KAST_HAS_LIGHTMAP
+    if (u_gi.x < 1.5) {
+        vec3 e = texture2D(s_lightmap, lightmapUv).rgb;
+        if (u_gi.z > 0.5) { // lightmapDiffuse in lightmap.cpp
+            vec4 d = texture2D(s_lightmapDir, lightmapUv);
+            e *= (dot(n, d.xyz) * 0.5 + 0.5) / max(d.w, 0.25);
+        }
+        return e * u_gi.y;
+    }
+#endif
+    vec3 e = u_giSh[0].rgb + u_giSh[1].rgb * n.y + u_giSh[2].rgb * n.z + u_giSh[3].rgb * n.x
+           + u_giSh[4].rgb * (n.x * n.y) + u_giSh[5].rgb * (n.y * n.z) + u_giSh[6].rgb * (3.0 * n.z * n.z - 1.0)
+           + u_giSh[7].rgb * (n.x * n.z) + u_giSh[8].rgb * (n.x * n.x - n.y * n.y);
+    return max(e, vec3_splat(0.0)) * u_gi.y;
+}
+
 void main()
 {
     KastFragment f;
@@ -615,16 +651,29 @@ void main()
     // metals (no diffuse) still show it. With an environment (image-based lighting, ibl.h): its irradiance for the
     // diffuse, and the split sum for the specular, the prefiltered cube at the roughness's mip along the reflection
     // times the GGX BRDF's integral. Without: the flat ambient color for both.
+    // With GI (u_gi.x > 0) the diffuse comes from kastGiDiffuse instead; GI off runs the code above unchanged.
     float nv = max(dot(n, v), 0.0);
     vec3 fAmbient = f0 + (max(vec3_splat(1.0 - roughness), f0) - f0) * pow(saturate(1.0 - nv), 5.0);
-    if (u_envSpecular.w > 0.0) {
-        vec3 r = kastEnvDirection(reflect(-v, n), v_worldPos);
-        vec3 prefiltered = textureCubeLod(s_env, vec3(r.x, r.y, -r.z), roughness * u_envSpecular.w).rgb;
-        vec2 brdf = kastEnvBrdf(roughness, nv);
-        color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo * kastSh9(n)
-                  + prefiltered * u_envSpecular.rgb * (f0 * brdf.x + brdf.y)) * f.ao;
+    if (u_gi.x < 0.5) {
+        if (u_envSpecular.w > 0.0) {
+            vec3 r = kastEnvDirection(reflect(-v, n), v_worldPos);
+            vec3 prefiltered = textureCubeLod(s_env, vec3(r.x, r.y, -r.z), roughness * u_envSpecular.w).rgb;
+            vec2 brdf = kastEnvBrdf(roughness, nv);
+            color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo * kastSh9(n)
+                      + prefiltered * u_envSpecular.rgb * (f0 * brdf.x + brdf.y)) * f.ao;
+        } else {
+            color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo + fAmbient) * u_ambient.rgb * f.ao;
+        }
     } else {
-        color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo + fAmbient) * u_ambient.rgb * f.ao;
+        vec3 diffuse = (vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo * kastGiDiffuse(n, v_lightmapUv);
+        vec3 specular = fAmbient * u_ambient.rgb;
+        if (u_envSpecular.w > 0.0) {
+            vec3 r = kastEnvDirection(reflect(-v, n), v_worldPos);
+            vec3 prefiltered = textureCubeLod(s_env, vec3(r.x, r.y, -r.z), roughness * u_envSpecular.w).rgb;
+            vec2 brdf = kastEnvBrdf(roughness, nv);
+            specular = prefiltered * u_envSpecular.rgb * (f0 * brdf.x + brdf.y);
+        }
+        color += (diffuse + specular) * f.ao;
     }
 
     color += f.emission;
