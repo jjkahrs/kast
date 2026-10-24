@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SDFGI - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="lightmaps.html">Lightmaps and GI</a></li><li><a href="voxelgi.html">VoxelGI</a></li><li><a href="sdfgi.html" class="active">SDFGI</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li></ul></nav>
+<main>
+<h1 id="sdfgi">SDFGI</h1>
+<p><strong>SDFGI</strong> (signed distance field global illumination) gives a whole open world diffuse bounce light, sky
+occlusion and rough reflections with no bake. Four nested grids (<em>cascades</em>) of a signed distance field and a probe
+grid follow the camera; the GPU builds them from the scene's Static geometry and its streamed terrain, relights them
+every frame with the scene's lights and sky, and meshes take their ambient light from the probes. Turn the sun and the
+bounce light under every overhang follows; stream in a new terrain tile and it has GI a few frames later
+(<code>engine/sdfgi.h</code>, <code>engine/shaders/cs_sdfgi_*.sc</code>, <code>engine/shaders/fs_mesh.sc</code>). The Scene view, the Game view
+and the built game render it alike; each viewport's cascades follow its own camera.</p>
+<p>It is a per-scene setting, off by default: a scene with SDFGI off renders pixel for pixel as before.</p>
+
+<h2 id="quick-start">Quick start</h2>
+<ol>
+<li>Set the buildings, walls, rocks and other fixed geometry to <strong>GI Mode Static</strong> (their Mesh Renderer or Model
+  Renderer; <a href="lightmaps.html#gi-mode">Lightmaps and GI</a>). Static is what enters the distance field: what bounces and
+  blocks SDFGI's light. <a href="terrain.html">Terrain</a> tiles always do.</li>
+<li><strong>Window &gt; Lighting &gt; SDFGI &gt; Enabled</strong>. That is all: the cascades build in the next frame.</li>
+<li>Tune <strong>Cell Size</strong> to the scene's scale (0.5 m, the default, suits buildings; a smaller cell resolves thinner walls
+  over a smaller area) and <strong>Energy</strong> to taste. Everything applies at once.</li>
+</ol>
+<p><code>tests/project/sdfgi_outdoor.scene</code> is the example: the hills map's terrain around a plinth with a red and a green wall,
+a white back wall and an overhang, a Dynamic ball, the sun and the procedural sky; in Play its camera flies a path
+(<code>scripts/sdfgi_camera_path.lua</code>).</p>
+
+<h2 id="settings">Settings</h2>
+<p>Saved under <code>"lighting"</code> &gt; <code>"sdfgi"</code> in the scene file, only when not all default (so scenes without SDFGI stay
+byte-identical); every field is optional.</p>
+<table>
+<tr><th>Field</th><th>Default</th><th>Range</th><th>Meaning</th></tr>
+<tr><td><code>enabled</code></td><td>false</td><td></td><td>SDFGI on; also from Lua</td></tr>
+<tr><td><code>cascades</code></td><td>4</td><td>1 to 4</td><td>how many cascades, each twice the size of the one before. 4 keeps the default
+  reach (32 m to 256 m wide at 0.5 m cells) well inside the budget; fewer only shorten the reach</td></tr>
+<tr><td><code>cellSize</code></td><td>0.5</td><td>0.125 to 4</td><td>meters per distance-field cell in the first cascade; the probes are 4 cells
+  apart, the cascades 64 cells wide</td></tr>
+<tr><td><code>energy</code></td><td>1</td><td>&gt;= 0</td><td>scales SDFGI's diffuse and reflected light; also from Lua</td></tr>
+<tr><td><code>bounceFeedback</code></td><td>0.5</td><td>0 to 1</td><td>how much of the probes' light the surfaces bounce again each frame (0: one
+  bounce of the lights and sky; higher: more bounces, brighter interiors)</td></tr>
+<tr><td><code>quality</code></td><td><code>"medium"</code></td><td><code>"low"</code>, <code>"medium"</code>, <code>"high"</code></td><td>the <a href="#quality">preset</a>: rays per
+  probe, march steps, temporal blend</td></tr>
+<tr><td><code>yScale</code></td><td>1</td><td>1, 0.5, 0.25</td><td>the cascades' height relative to their width: 0.5 or 0.25 for flat open
+  worlds (half or a quarter of the probes and cells for the same horizontal reach)</td></tr>
+</table>
+<pre><code class="language-json">"lighting": {
+  "ambientColor": [1, 1, 1],
+  "ambientIntensity": 0.5,
+  "sdfgi": { "enabled": true, "cascades": 4, "cellSize": 0.5, "energy": 1, "bounceFeedback": 0.5, "quality": "medium", "yScale": 1 }
+}</code></pre>
+<p>A field out of range (or of the wrong type, or unknown) doesn't fail the scene: it loads with SDFGI off and one warning
+naming it, e.g. <code>lighting.sdfgi: "cellSize" must be a number between 0.125 and 4; SDFGI left off</code>. The
+<a href="../editor/index.html">Lighting panel</a>'s SDFGI section edits them all (undoable, applied at once).</p>
+
+<h2 id="how">How it works</h2>
+<h3 id="cascades">Cascades</h3>
+<p>Each cascade is a grid of 64 x 64 x 64 cells (64 x 32 x 64 or 64 x 16 x 64 with <code>yScale</code>) centered on the camera, its
+cell size twice the last's: with the defaults 0.5, 1, 2 and 4 m, so the cascades are 32, 64, 128 and 256 m wide. A
+cascade's origin snaps to its probe spacing (4 cells), so it moves in whole probe slabs. Its textures are
+<em>toroidal</em>: a cell at global position <code>g</code> lives at texel <code>g mod 64</code>, so when the camera moves the cells still
+in the cascade keep their texels and only the slabs that came into it are rebuilt (<code>sdfgiScrollRegions</code>: up to three
+disjoint slabs, one per axis moved). A cascade is only rebuilt whole when the camera jumps past its extent (a teleport),
+which is logged (<code>SDFGI: cascade 0 rebuilt in full (moved past its extent)</code>), and when its settings change.</p>
+<h3 id="sdf">The distance field</h3>
+<p>Per cell (<code>cs_sdfgi_build.sc</code>): the signed distance, clamped to 4 cells, to the nearest surface, and that surface's
+albedo (its material's base color) and emission:</p>
+<ul>
+<li><strong>Static primitives</strong>: cubes and planes as oriented boxes (a plane as a 10 cm sliver), spheres as ellipsoids,
+  from their world transform (exact for boxes).</li>
+<li><strong>Static models</strong>: each submesh as the box of its world bounds.</li>
+<li><strong>Terrain tiles</strong>: a heightfield. Each cascade keeps a column per cell (x, z) holding the ground's height at its
+  center and its slope; a cell's distance is its height above the ground times the cosine of the slope (exact for a
+  plane; checked against brute force in <code>sdfgi_self_check</code>).</li>
+</ul>
+<p>Every frame the renderer diffs the Static shapes and the streamed tiles against the last frame's: a shape added,
+removed, moved or recolored in the editor, or a tile streamed in or out, rebuilds the cells within reach of it in every
+cascade, that frame.</p>
+<h3 id="light">Lighting and probes</h3>
+<ol>
+<li><strong>Light</strong> (<code>cs_sdfgi_light.sc</code>, every cell of every cascade, every frame): a cell on a surface is lit where the
+  surface crosses it, its normal the distance field's gradient: the sun and up to 16 local lights (point, spot, area, with
+  the falloffs <code>fs_mesh.sc</code> uses), each shadowed by marching the distance field toward it, plus
+  <code>bounceFeedback</code> times its cascade's probes' light there (so light bounces once more every frame), times its albedo,
+  plus its emission.</li>
+<li><strong>Probes</strong> (<code>cs_sdfgi_probe.sc</code>): a probe every 4 cells (16 x 16 x 16 per cascade, 16 384 in all) casts the
+  preset's rays, a spherical Fibonacci set turned anew each frame, through the distance field (a ray leaving its cascade
+  goes on in the next, coarser one). A hit takes the lit cell's light; a ray that leaves the last cascade sees the sky
+  (its harmonics, or the flat ambient without a sky). The rays' first-order spherical harmonics blend into the probe's
+  (temporal accumulation: the preset's hysteresis of last frame's kept). A probe whose cell is inside geometry is marked
+  invalid and skipped by the shading.</li>
+</ol>
+<h3 id="shading">Shading</h3>
+<p>A mesh that takes SDFGI (<a href="#precedence">below</a>) samples the finest cascade holding the shaded point: the 8 probes
+around it after pushing it a quarter of a probe spacing off the surface along its normal, each weighted by its trilinear
+weight times <code>((n . toward the probe + 1) / 2)^2 + 0.05</code> (probes behind the surface count little), invalid ones left
+out (<code>sdfgiProbeWeights</code>). Over a cascade's outer two probe spacings it fades into the next cascade, and past the last
+into the light the mesh gets without SDFGI, so nothing pops at the edges.</p>
+<pre><code>diffuse  = SDFGI(p, n) = energy * (a0 + 2/3 a1 . n)       // irradiance / pi from the probes' harmonics
+specular = rough surfaces (roughness 0.4 .. 0.6 blending in): energy * (a0 + a1 . r) * split-sum BRDF
+           smooth ones: the environment's (sky or flat ambient) as before</code></pre>
+<p><strong>Rough reflections</strong> come from SDFGI above a roughness of 0.5 (blended from 0.4 to 0.6): the probes' radiance along
+the reflection replaces the sky's prefiltered cube, so a rough wall under an overhang no longer reflects the open sky.
+A mesh inside a <a href="ibl-reflection-probes.html">ReflectionProbe</a>'s box keeps the probe's specular (a baked probe sees its
+room better than the coarse SDFGI probes); smooth surfaces keep the sky's.</p>
+
+<h2 id="precedence">Precedence</h2>
+<p>SDFGI fills its slot in the one <a href="lightmaps.html#shading">selection point</a>: <strong>Lightmap &gt; VoxelGI &gt; SDFGI &gt; probe
+grid &gt; environment</strong>. A Static mesh with a valid lightmap keeps its lightmap (and its specular); a mesh whose bounds
+center is in an enabled, baked <a href="voxelgi.html">VoxelGI</a> volume keeps the volume's light; every other mesh (Off,
+Dynamic, Static without a lightmap, terrain without one) takes SDFGI. Lightmapped and VoxelGI geometry still enters the
+distance field when Static, so it bounces and blocks SDFGI's light for the meshes around it. Tested in
+<code>lightmap_room</code> and <code>voxelgi_room</code> with SDFGI on: the lightmapped floor and walls and every mesh in the VoxelGI room
+render exactly as without SDFGI, the Dynamic ball takes SDFGI instead of the probe grid.</p>
+<p>Meshes with a <code>.kshader</code> material get the light below SDFGI (the probe grid or the environment): SDFGI lives in a
+variant of the built-in mesh shader (<code>fs_mesh.sc</code> compiled with <code>KAST_SDFGI</code>) that only the draws taking SDFGI use,
+so every other draw runs exactly the code it ran before SDFGI existed (and scenes without SDFGI render pixel-identical).</p>
+<p><strong>Dynamic meshes</strong> (and anything not Static: skinned models, particles) receive SDFGI but never enter the distance
+field: they neither bounce nor block its light. SDFGI's shadows are the distance field's, not the shadow maps', so a
+Dynamic mesh doesn't darken it either (tested: the scene without the Dynamic ball is pixel-identical away from the ball
+and its direct shadow).</p>
+
+<h2 id="terrain">Terrain streaming</h2>
+<p>A tile that streams in enters the distance field the frame it appears (its columns in every cascade, the cells above
+them rebuilt and relit); a tile that streams out leaves the same way. The probes around it see it from the next frame
+on and blend it into their light at the preset's hysteresis (restarting them instead converged slower, noisier), so
+<strong>10 frames</strong> after a tile streamed in its GI is within a mean difference of 1 / 255 of where it settles
+(<code>sg_stream_lit_in_time</code>: measured 0.58 / 255, and 5 / 255 away from the same view without SDFGI). With
+<code>--log-sdfgi</code> the editor and the player log <code>SDFGI: terrain tile 1_0 streamed in</code> / <code>streamed out</code>.</p>
+
+<h2 id="quality">Quality and cost</h2>
+<table>
+<tr><th>Preset</th><th>Rays per probe per frame</th><th>March steps per ray</th><th>Hysteresis (last frame kept)</th></tr>
+<tr><td>Low</td><td>16</td><td>32</td><td>0.95</td></tr>
+<tr><td>Medium</td><td>32</td><td>48</td><td>0.92</td></tr>
+<tr><td>High</td><td>64</td><td>64</td><td>0.90</td></tr>
+</table>
+<p>GPU time of <code>sdfgi_outdoor</code> in the built player at 1600 x 900 (RTX 4070 Ti SUPER, <code>--gpu-stats</code>: the frame's views
+summed, averaged over 300 frames after 10 warmup ones; in brackets the <code>SDFGI</code> view, the compute passes):</p>
+<table id="timings">
+<tr><th>Camera</th><th>Off</th><th>Low</th><th>Medium</th><th>High</th></tr>
+<tr><td>Still</td><td>0.31 ms</td><td>0.76 ms (0.18)</td><td>0.87 ms (0.36)</td><td>1.06 ms (0.58)</td></tr>
+<tr><td>Along the path</td><td>0.33 ms</td><td>0.68 ms (0.17)</td><td>0.82 ms (0.37)</td><td>1.00 ms (0.56)</td></tr>
+</table>
+<p>Along the path the 99th percentile frame took 1.00 / 1.17 / 1.19 ms (Low / Medium / High), the SDFGI view 0.20 /
+0.63 / 0.60 ms; repeated runs vary by up to about 50% with the GPU's clocks. The budget is 4 ms at Medium, frames where
+the cascades scroll included: <code>player_sdfgi_gpu_time</code> checks the 99th percentile frame along the path (the slowest
+frame is logged too, but a lone hiccup of the OS or another program on the GPU, seen now and then at 3 to 10 ms with the
+camera still, doesn't fail it). Scrolling
+costs little: a probe slab of one cascade is 4 x 64 x 64 cells. The light and probe passes run every frame over all four
+cascades whatever the camera does; the shading cost grows with the pixels that take SDFGI. The stats overlay (F3 in the
+Game view and the player) adds <code>SDFGI &lt;ms&gt; ms</code>, the <code>SDFGI</code> view's GPU time; <code>--log-sdfgi</code> logs each frame's
+rebuilt cells per cascade. GPU memory per viewport at the defaults: about 21 MB (four 64<sup>3</sup> cascades of albedo,
+distance + emission and light, two probe textures, the terrain columns).</p>
+
+<h2 id="leaks">Leaks and limitations</h2>
+<ul>
+<li><strong>Thin walls</strong>: a wall thinner than a cell (0.5 m in the first cascade, 4 m in the last) has no cell inside it,
+  so light can leak through, more so far from the camera where the cells are coarse. Mitigations: probes inside geometry
+  are skipped, the shaded point is pushed off the surface along its normal, and probes behind the surface weigh little;
+  there is no per-probe visibility (depth moments), so a probe on the far side of a thin wall can still bleed through.
+  Make walls at least a cell thick, or lower <code>cellSize</code>, where interiors matter. Indoors, a
+  <a href="voxelgi.html">VoxelGI</a> volume or <a href="lightmaps.html">lightmaps</a> win over SDFGI and hold walls better.</li>
+<li><strong>Models</strong> enter the field as their submeshes' bounding boxes (solid): a hollow or concave model blocks light
+  inside its bounds. Albedo is the material's base color factor; textures are ignored.</li>
+<li>Low frequency: the probes are 2 m apart at the defaults (16 m in the last cascade) and store first-order harmonics,
+  so contact shadows and small details still come from the shadow maps and the direct light.</li>
+<li>The sky is seen through its spherical harmonics (no sun disk in the bounce); emissive surfaces light through the
+  probes only (no direct emissive term).</li>
+<li>At most 16 local lights (the nearest the cascades' center) light the field. D3D11 compute and 3D images are required:
+  without them SDFGI is off with one warning (<code>SDFGI: this GPU lacks compute or the 3D image formats it needs; SDFGI is
+  off</code>) and meshes get the light below it.</li>
+<li>Nothing is baked or saved: there are no SDFGI files, in the project or in <code>game.pak</code>.</li>
+</ul>
+
+<h2 id="lua">Lua</h2>
+<p><code>kast.sdfgi.get()</code> returns the settings as a table; <code>kast.sdfgi.set{...}</code> changes <code>enabled</code> and <code>energy</code> at run
+time (all-or-nothing, checked as on load; the other fields rebuild the cascades and belong to the scene, so setting one
+is an error).</p>
+<pre><code class="language-lua">kast.sdfgi.set({energy = 0.5})      -- dusk: half the bounced light
+kast.sdfgi.set({enabled = false})   -- off: the probe grid or the sky instead
+print(kast.sdfgi.get().quality)     -- "medium"</code></pre>
+<p>Moving the sun from Lua (<code>kast.set</code> on its Transform) changes the bounce light live: the light pass reads the scene's
+lights every frame (<code>scripts/sdfgi_sun.lua</code>).</p>
+
+<h2 id="tests">Tests</h2>
+<p><code>sdfgi_self_check</code> (<code>kast_self_check --sdfgi</code>: cascade placement, scroll regions, toroidal addressing, the
+heightfield distance against brute force, shape distances, probe and cascade weights, presets, settings) and the
+<code>sg_*</code> tests of <code>cmake/sdfgi_tests.cmake</code>: bounce and sky occlusion against SDFGI off, the reference shot, no
+popping and no full rebuild along the camera path, terrain streaming, the Lua sun, energy and toggle, precedence with
+lightmaps and VoxelGI, the Dynamic ball adding nothing, a bad setting, the player matching the editor and its GPU time.</p>
+</main>
+</div>
+</body>
+</html>

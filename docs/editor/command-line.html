@@ -312,6 +312,10 @@ volume of the scene is voxelized into <code>&lt;scene-name&gt;_voxelgi/&lt;entit
 <td>Play sound on miniaudio's null backend (silent), as if there were no output device: one warning, everything else behaves normally. Tests use it.</td>
 </tr>
 <tr>
+<td><code>--log-sdfgi</code></td>
+<td>Log every frame's <a href="../engine/sdfgi.html">SDFGI</a> work per viewport: <code>SDFGI frame &lt;n&gt;: rebuilt cells c0 &lt;n&gt;, c1 &lt;n&gt;, c2 &lt;n&gt;, c3 &lt;n&gt;; &lt;n&gt; probes updated</code>, and each terrain tile entering or leaving its SDF (<code>SDFGI: terrain tile 1_0 streamed in</code>). A cascade rebuilt in full logs <code>SDFGI: cascade &lt;i&gt; rebuilt in full (moved past its extent)</code> with or without it. Also a player flag.</td>
+</tr>
+<tr>
 <td><code>--log-fps</code></td>
 <td>Log once a second: frames per second (vsync caps it at the display's refresh rate), the editor's CPU time per frame and bgfx's GPU frame time, and the draw call count.</td>
 </tr>

@@ -167,12 +167,60 @@ SceneLightmaps parseLightmaps(const Json& json)
     return out;
 }
 
+// "lighting" > "sdfgi": every field optional (missing = default), present ones checked against the ranges in scene.h.
+SceneSdfgi parseSdfgi(const Json& json)
+{
+    if (!json.is_object())
+        throw Invalid("lighting: \"sdfgi\" must be an object");
+    SceneSdfgi out;
+    const auto number = [&](const char* key, float lo, float hi) {
+        const double v = json[key].is_number() ? json[key].get<double>() : std::nan("");
+        if (!(v >= lo && v <= hi))
+            throw Invalid(hi == FLT_MAX ? std::format("lighting.sdfgi: \"{}\" must be a number >= {}", key, lo)
+                                        : std::format("lighting.sdfgi: \"{}\" must be a number between {} and {}", key,
+                                                      lo, hi));
+        return static_cast<float>(v);
+    };
+    for (const auto& [key, value] : json.items()) {
+        if (key == "enabled" && value.is_boolean()) {
+            out.enabled = value.get<bool>();
+        } else if (key == "enabled") {
+            throw Invalid("lighting.sdfgi: \"enabled\" must be true or false");
+        } else if (key == "cascades") {
+            const float v = number("cascades", 1.0f, float(kMaxSdfgiCascades));
+            if (v != std::floor(v))
+                throw Invalid("lighting.sdfgi: \"cascades\" must be a whole number");
+            out.cascades = static_cast<int>(v);
+        } else if (key == "cellSize") {
+            out.cellSize = number("cellSize", kMinSdfgiCellSize, kMaxSdfgiCellSize);
+        } else if (key == "energy") {
+            out.energy = number("energy", 0.0f, FLT_MAX);
+        } else if (key == "bounceFeedback") {
+            out.bounceFeedback = number("bounceFeedback", 0.0f, 1.0f);
+        } else if (key == "quality") {
+            constexpr const char* kQualities[] = {"low", "medium", "high"}; // SdfgiQuality order
+            const auto* it = value.is_string() ? std::ranges::find(kQualities, value.get<std::string>()) : std::end(kQualities);
+            if (it == std::end(kQualities))
+                throw Invalid("lighting.sdfgi: \"quality\" must be \"low\", \"medium\" or \"high\"");
+            out.quality = static_cast<SdfgiQuality>(it - std::begin(kQualities));
+        } else if (key == "yScale") {
+            const double v = value.is_number() ? value.get<double>() : std::nan("");
+            if (std::ranges::find(kSdfgiYScales, float(v)) == std::end(kSdfgiYScales))
+                throw Invalid("lighting.sdfgi: \"yScale\" must be 1, 0.5 or 0.25");
+            out.yScale = float(v);
+        } else {
+            throw Invalid(std::format("lighting.sdfgi: unknown field \"{}\"", key));
+        }
+    }
+    return out;
+}
+
 SceneLighting parseLighting(const Json& json)
 {
     if (!json.is_object())
         throw Invalid("\"lighting\" must be an object");
     for (const auto& [key, value] : json.items())
-        if (key != "ambientColor" && key != "ambientIntensity" && key != "lightmaps")
+        if (key != "ambientColor" && key != "ambientIntensity" && key != "lightmaps" && key != "sdfgi")
             throw Invalid(std::format("lighting: unknown field \"{}\"", key));
     SceneLighting lighting;
     if (json.contains("lightmaps"))
@@ -753,8 +801,13 @@ void parseScene(const Json& json, Scene& out, LoadContext& context, SceneLoadRep
             throw Invalid("\"editor\" must be an object");
         scene.editorData = json["editor"];
     }
-    if (json.contains("lighting"))
+    if (json.contains("lighting")) {
         scene.lighting = parseLighting(json["lighting"]);
+        // A bad "sdfgi" block doesn't fail the load: it is dropped (SDFGI off) with a warning.
+        if (std::string error; json["lighting"].contains("sdfgi") &&
+                               !sdfgiFromJson(json["lighting"]["sdfgi"], scene.lighting.sdfgi, error))
+            report.warnings.push_back(std::format("{}; SDFGI left off", error));
+    }
     if (json.contains("postProcessing"))
         scene.postProcessing = parsePostProcessing(json["postProcessing"]);
     if (json.contains("sky"))
@@ -1063,6 +1116,25 @@ bool lightmapsFromJson(const Json& json, SceneLightmaps& out, std::string& error
     return false;
 }
 
+Json sdfgiToJson(const SceneSdfgi& sdfgi)
+{
+    constexpr const char* kQualities[] = {"low", "medium", "high"}; // SdfgiQuality order
+    return {{"enabled", sdfgi.enabled}, {"cascades", sdfgi.cascades}, {"cellSize", jsonNumber(sdfgi.cellSize)},
+            {"energy", jsonNumber(sdfgi.energy)}, {"bounceFeedback", jsonNumber(sdfgi.bounceFeedback)},
+            {"quality", kQualities[static_cast<int>(sdfgi.quality)]}, {"yScale", jsonNumber(sdfgi.yScale)}};
+}
+
+bool sdfgiFromJson(const Json& json, SceneSdfgi& out, std::string& error)
+{
+    try {
+        out = parseSdfgi(json);
+        return true;
+    } catch (const Invalid& e) {
+        error = e.what();
+    }
+    return false;
+}
+
 bool skyFromJson(const Json& json, SceneSky& out, std::string& error)
 {
     try {
@@ -1086,6 +1158,8 @@ Json sceneToJson(const Scene& scene)
                         {"ambientIntensity", jsonNumber(lighting.ambientIntensity)}};
     if (lighting.lightmaps != SceneLightmaps{}) // scenes without lightmaps stay byte-identical on save
         root["lighting"]["lightmaps"] = lightmapsToJson(lighting.lightmaps);
+    if (lighting.sdfgi != SceneSdfgi{}) // nor without SDFGI settings
+        root["lighting"]["sdfgi"] = sdfgiToJson(lighting.sdfgi);
     root["postProcessing"] = postProcessingToJson(scene.postProcessing);
     root["sky"] = skyToJson(scene.sky);
     const bx::Vec3& gravity = scene.physics.gravity;

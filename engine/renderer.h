@@ -30,6 +30,8 @@
 
 namespace kast {
 
+class SdfgiRenderer; // sdfgi.h
+
 // ponytail: forward shading with a fixed uniform array per draw; clustered lighting if scenes need more per mesh.
 constexpr size_t kMaxLocalLights = 8; // MAX_LOCAL_LIGHTS in fs_mesh.sc: point, spot and area lights per draw
 constexpr size_t kMaxShadowedPointLights = 4; // s_pointShadow0..3 in fs_mesh.sc
@@ -147,7 +149,9 @@ void buildMips(MipImage& image, bool srgb);
 // docs/engine/lightmaps.html) the diffuse part comes from a Static mesh's lightmap or a Dynamic mesh's probe-grid sample
 // instead (selectDiffuseGi), and Full lights skip lightmapped draws. A mesh inside an enabled, baked VoxelGI volume's box
 // (voxel_gi.h, docs/engine/voxelgi.html; relit on the GPU every frame in the last of the shadow views) cone-traces it for
-// its specular and, unless lightmapped, its diffuse. Opaque and mask meshes first, then its sky (sky.h), then blended ones and particle
+// its specular and, unless lightmapped, its diffuse. With the scene's SDFGI on (sdfgi.h, docs/engine/sdfgi.html; its
+// camera-centered cascades built and relit on the GPU every frame in the last shadow view) a mesh with neither and no
+// .kshader takes its diffuse, and if rough its specular, from SDFGI's probes (fs_mesh.sc's SDFGI variant). Opaque and mask meshes first, then its sky (sky.h), then blended ones and particle
 // emitters (particles.h, simulated on the GPU here) far to near. Blended draws whose .kshader samples SCREEN_TEXTURE or
 // DEPTH_TEXTURE see a copy of the target's color or depth as the opaque meshes and the sky left it, made only on frames
 // such a draw is in view.
@@ -164,9 +168,10 @@ void buildMips(MipImage& image, bool srgb);
 class Renderer {
 public:
     // The cascades, then 6 cube faces per shadowed point light, then one per shadowed spot / area light, then the VoxelGI
-    // view (its volumes' compute passes, after the shadow maps they read; named "VoxelGI" for its GPU time).
+    // view (its volumes' compute passes, after the shadow maps they read; named "VoxelGI" for its GPU time), then the
+    // SDFGI view (its cascades' compute passes; "SDFGI").
     static constexpr bgfx::ViewId kShadowViews =
-        kMaxShadowCascades + kMaxShadowedPointLights * 6 + kMaxShadowedLocalLights + 1;
+        kMaxShadowCascades + kMaxShadowedPointLights * 6 + kMaxShadowedLocalLights + 2;
 
     Renderer();
     ~Renderer();
@@ -274,7 +279,8 @@ private:
         DiffuseGi source = DiffuseGi::Environment;
         Sh9 sh{}; // ProbeGrid (or VoxelGi over it, grid set): the grid sampled at the draw
         int volume = -1;   // the VoxelGI volume (this frame's index) its box selected; -1 none
-        bool grid = false; // VoxelGi: what it fades to at the box's faces is the probe grid (sh), not the environment
+        bool grid = false; // VoxelGi / Sdfgi: what it fades to (box faces, past the cascades) is the probe grid (sh)
+        bool sdfgiSpecular = false; // Sdfgi outside reflection probes: rough reflections from SDFGI
     };
     // A scene's bake (lightmap.h), loaded once per bakedPath and again when its lightmaps.json changes on disk.
     struct LightmapSet {
@@ -423,6 +429,8 @@ private:
     bgfx::ProgramHandle meshProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle skinnedProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle instancedProgram_ = BGFX_INVALID_HANDLE;
+    // The same three with fs_mesh.sc's SDFGI variant (KAST_SDFGI), for the draws that take SDFGI.
+    std::array<bgfx::ProgramHandle, 3> sdfgiPrograms_{{{bgfx::kInvalidHandle}, {bgfx::kInvalidHandle}, {bgfx::kInvalidHandle}}};
     bgfx::ProgramHandle lineProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle shadowProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle shadowSkinnedProgram_ = BGFX_INVALID_HANDLE;
@@ -513,7 +521,9 @@ private:
     // when either file changes on disk. Defined in renderer.cpp (voxel_gi.h includes this header).
     struct VoxelGiState;
     std::unique_ptr<VoxelGiState> voxelGi_;
-    bool capture_ = false; // bakeProbe: no particles, no probes, no VoxelGI
+    // SDFGI (sdfgi.h): its cascades follow this Renderer's camera (each viewport has its own).
+    std::unique_ptr<SdfgiRenderer> sdfgi_;
+    bool capture_ = false; // bakeProbe: no particles, no probes, no VoxelGI, no SDFGI
     ParticleRenderer particles_;
     float timeSeconds_ = 0.0f; // setTime
     bool instancing_ = true;

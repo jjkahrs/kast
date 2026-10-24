@@ -95,6 +95,7 @@
 int netSelfCheck(); // tests/net_self_check.cpp: returns its failure count
 int lightmapSelfCheck(); // tests/lightmap_self_check.cpp: returns its failure count
 int voxelGiSelfCheck(); // tests/voxelgi_self_check.cpp: returns its failure count
+int sdfgiSelfCheck(); // tests/sdfgi_self_check.cpp: returns its failure count
 int liveAuthCheck(const std::string& authUrl, const std::string& mailpitUrl); // the same file: 0, 1 or 77 (skipped)
 int liveWorldCheck(const std::string& authUrl, const std::string& mailpitUrl, const std::string& caFile,
                    const std::string& realmName); // the same file: 0, 1 or 77 (skipped)
@@ -3130,7 +3131,7 @@ void checkBuildSettings()
                                        "particles_shapes.scene", "particles_space.scene", "particles_texture.scene",
                                        "physics.scene",
                                        "point_lights.scene",
-                                       "point_shadows.scene", "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene",
+                                       "point_shadows.scene", "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                        "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                        "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_widgets.scene", "voxelgi_room.scene",
                                        "zone_objects.scene"},
@@ -3154,7 +3155,7 @@ void checkBuildSettings()
                                                           "particles_shapes.scene", "particles_space.scene",
                                                           "particles_texture.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
-                                                          "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene",
+                                                          "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                                           "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                                           "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_widgets.scene", "voxelgi_room.scene",
                                                           "zone_objects.scene"},
@@ -13029,6 +13030,14 @@ void checkSceneUndo()
         frame("Edit Lighting", {.settings = true}, [&] { doc.scene.lighting.ambientIntensity = 0.8f; });
         endSceneGesture(doc);
     });
+    checkUndoRedo(doc, "sdfgi settings", [&] { // the Lighting panel's SDFGI section
+        frame("Edit Lighting", {.settings = true}, [&] {
+            doc.scene.lighting.sdfgi.enabled = true;
+            doc.scene.lighting.sdfgi.cellSize = 1.0f;
+            doc.scene.lighting.sdfgi.quality = kast::SdfgiQuality::High;
+        });
+        endSceneGesture(doc);
+    });
     std::string error;
     writeFile(dir / "scripts/a.lua", "return { update = function() end }");
     writeFile(dir / "scripts/b.lua", "return { update = function() end }");
@@ -13993,6 +14002,8 @@ int main(int argc, char** argv)
         return lightmapSelfCheck() == 0 ? 0 : 1;
     if (argc == 2 && std::string_view(argv[1]) == "--voxelgi") // only the VoxelGI checks
         return voxelGiSelfCheck() == 0 ? 0 : 1;
+    if (argc == 2 && std::string_view(argv[1]) == "--sdfgi") // only the SDFGI checks
+        return sdfgiSelfCheck() == 0 ? 0 : 1;
     if (argc == 2 && std::string_view(argv[1]) == "--net") // only the networking checks
         return netSelfCheck() == 0 ? 0 : 1;
     if (argc == 4 && std::string_view(argv[1]) == "--live-auth") // against a running services/world stack
@@ -14152,6 +14163,7 @@ int main(int argc, char** argv)
     checkParticleLua();
     g_failures += lightmapSelfCheck(); // tests/lightmap_self_check.cpp
     g_failures += voxelGiSelfCheck(); // tests/voxelgi_self_check.cpp
+    g_failures += sdfgiSelfCheck(); // tests/sdfgi_self_check.cpp
     g_failures += netSelfCheck(); // tests/net_self_check.cpp
     checkMountedPak(); // last: the mounted pak hides the disk for the rest of the run
     removeTree(testRoot());

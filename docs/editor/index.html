@@ -33,7 +33,11 @@ dirty (<code>*</code> in the title).</p>
   (<a href="../engine/voxelgi.html">VoxelGI</a>): each VoxelGI volume's name and bake status (as its Inspector shows it,
   logged as <code>VoxelGI '&lt;name&gt;': &lt;status&gt;</code> when it changes) and <strong>Bake VoxelGI</strong>, which voxelizes every
   volume on a worker thread while the editor keeps drawing: a progress bar and <strong>Cancel</strong> replace the button until
-  it is done (disabled during Play, without volumes, or until the scene is saved in a project). Then <strong>Reflection Probes</strong>: how
+  it is done (disabled during Play, without volumes, or until the scene is saved in a project). Then <strong>SDFGI</strong>
+  (<a href="../engine/sdfgi.html">SDFGI</a>): <strong>Enabled</strong>, <strong>Energy</strong>, <strong>Bounce Feedback</strong> (0 to 1), a
+  <strong>Quality</strong> combo (Low, Medium, High), <strong>Cascades</strong> (1 to 4), <strong>Cell Size (m)</strong> (0.125 to 4, the first
+  cascade's) and a <strong>Y Scale</strong> combo (1, 0.5, 0.25: flatter cascades for open worlds). There is nothing to bake:
+  every field applies at once in the Scene and Game views, each an undoable edit. Then <strong>Reflection Probes</strong>: how
   many the scene has and <strong>Bake All Probes</strong>, which bakes each one as its Inspector's Bake does
   (<a href="controls.html#reflection-probes">Reflection probes</a>; disabled during Play, without probes, or until the scene
   is saved in a project).</li>

@@ -117,7 +117,8 @@ window and doesn't hot reload. Its scene's <a href="../engine/game-gui.html#game
 input. Flags (for tests): <code>--frames N</code> and <code>--screenshot out.png</code>, as in the editor, <code>--gui-click &lt;id&gt;</code> (click that
 GUI element on frame 10), <code>--sim-key frame,key</code> (repeatable: push a press of that SDL key on that frame, e.g. <code>30,F3</code> for the
 <a href="controls.html#stats-overlay">stats overlay</a>), <code>--size WxH</code> (window size, default 1280x720), <code>--window-pos X,Y</code> (window position, as in the editor; also <code>KAST_WINDOW_POS</code>), <code>--fixed-dt S</code> (each frame advances S seconds, as in the editor, so screenshots of moving or <code>TIME</code>-driven scenes repeat), <code>--no-audio-device</code> (silent null audio backend), <code>--gpu-stats</code> (log the average GPU time of
-the frame's views, after 10 warmup frames, on exit), and <code>--no-instancing</code> and <code>--no-culling</code> (turn off
+the frame's views, after 10 warmup frames, on exit; with <a href="../engine/sdfgi.html">SDFGI</a> on also its view's average,
+99th percentile and slowest frame, and the whole frame's), <code>--log-sdfgi</code> (log each frame's SDFGI work, as in the editor), and <code>--no-instancing</code> and <code>--no-culling</code> (turn off
 <a href="../engine/instancing-and-culling.html#instancing-and-culling">instancing and culling</a>, as in the editor). A missing
 or corrupt <code>game.pak</code>, an invalid <code>project.kast</code>, Online Services enabled with a CA file missing from <code>game.pak</code> or
 not a valid certificate, or a <code>startScene</code> that is missing or doesn't load shows an error

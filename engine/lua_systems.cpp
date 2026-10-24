@@ -120,6 +120,7 @@ struct LuaSystems::State {
     sol::table netApi;     // kast.net.*
     sol::table skyApi;     // kast.sky.*
     sol::table lightmapsApi; // kast.lightmaps.*
+    sol::table sdfgiApi;     // kast.sdfgi.*
     sol::table particlesApi; // kast.particles.*
     sol::table authApi;    // kast.auth.*, only while Online Services are enabled
     sol::table worldApi;   // kast.world.*, likewise
@@ -171,6 +172,7 @@ struct LuaSystems::State {
     void bindNetApi();
     void bindSkyApi();
     void bindLightmapsApi();
+    void bindSdfgiApi();
     void bindParticlesApi();
     void bindAuthApi();
     void bindWorldApi();
@@ -362,6 +364,7 @@ sol::environment LuaSystems::State::environment()
     kast["net"] = readOnly(netApi);
     kast["sky"] = readOnly(skyApi);
     kast["lightmaps"] = readOnly(lightmapsApi);
+    kast["sdfgi"] = readOnly(sdfgiApi);
     kast["particles"] = readOnly(particlesApi);
     kast["items"] = itemTable();
     if (auth.enabled())
@@ -903,6 +906,7 @@ void LuaSystems::State::bindApi()
     bindNetApi();
     bindSkyApi();
     bindLightmapsApi();
+    bindSdfgiApi();
     bindParticlesApi();
     bindAuthApi();
     bindWorldApi();
@@ -1495,6 +1499,35 @@ void LuaSystems::State::bindLightmapsApi()
         if (!lightmapsFromJson(json, lightmaps, error))
             raise(L, "kast.lightmaps.set: " + error);
         scene.lighting.lightmaps = lightmaps;
+    });
+}
+
+// kast.sdfgi.get() / set{...}: the scene's SDFGI settings (docs/engine/sdfgi.html). Only enabled and energy can be set:
+// the others resize or rebuild the cascades, which belongs to the scene, not a script. All-or-nothing, as kast.sky.set.
+void LuaSystems::State::bindSdfgiApi()
+{
+    sdfgiApi = lua.create_table();
+    sdfgiApi.set_function("get", [this] { return jsonToLua(lua, sdfgiToJson(scene.lighting.sdfgi)); });
+    sdfgiApi.set_function("set", [this](sol::this_state L, const sol::object& fields) {
+        if (fields.get_type() != sol::type::table)
+            raise(L, std::format("kast.sdfgi.set: expected a table, got {}", toString(L, fields)));
+        nlohmann::ordered_json json = sdfgiToJson(scene.lighting.sdfgi);
+        std::string error;
+        for (const auto& [key, value] : fields.as<sol::table>()) {
+            if (key.get_type() != sol::type::string)
+                raise(L, std::format("kast.sdfgi.set: field names must be strings, got {}", toString(L, key)));
+            const std::string name = key.as<std::string>();
+            if (name != "enabled" && name != "energy")
+                raise(L, std::format("kast.sdfgi.set: \"{}\" can't be set at run time (only enabled and energy)", name));
+            nlohmann::json plain;
+            if (!luaToJson(value, plain, error))
+                raise(L, std::format("kast.sdfgi.set: \"{}\": {}", name, error));
+            json[name] = plain;
+        }
+        SceneSdfgi sdfgi;
+        if (!sdfgiFromJson(json, sdfgi, error))
+            raise(L, "kast.sdfgi.set: " + error);
+        scene.lighting.sdfgi = sdfgi;
     });
 }
 

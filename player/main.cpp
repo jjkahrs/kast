@@ -16,12 +16,14 @@
 #include <scene.h>
 #include <scene_gui.h>
 #include <scene_io.h>
+#include <sdfgi.h>
 #include <stats_overlay.h>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <bgfx/bgfx.h>
 
+#include <algorithm>
 #include <charconv>
 #include <filesystem>
 #include <format>
@@ -42,7 +44,7 @@ constexpr int kScreenshotTimeoutFrames = 30;
 constexpr const char* kPakFileName = "game.pak";
 constexpr int kGuiClickFrame = 10; // --gui-click: once the GUIs have loaded and laid out
 constexpr const char* kUsage =
-    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--sim-key frame,key]... [--size WxH] [--window-pos X,Y] [--fixed-dt S] [--gpu-stats] [--no-instancing] [--no-culling] [--no-audio-device]";
+    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--sim-key frame,key]... [--size WxH] [--window-pos X,Y] [--fixed-dt S] [--gpu-stats] [--log-sdfgi] [--no-instancing] [--no-culling] [--no-audio-device]";
 constexpr int kGpuStatsWarmupFrames = 10; // --gpu-stats: skip startup frames (shader and target creation)
 
 struct Options {
@@ -120,6 +122,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             }
         } else if (arg == "--gpu-stats") {
             options.gpuStats = true;
+        } else if (arg == "--log-sdfgi") {
+            kast::setSdfgiLogging(true); // each frame's SDFGI rebuilt cells and probes (sdfgi.h)
         } else if (arg == "--no-instancing") {
             options.noInstancing = true;
         } else if (arg == "--no-culling") {
@@ -202,6 +206,8 @@ int main(int argc, char** argv)
     kast::PostProcess post(kGameView);
     double gpuMs = 0.0; // --gpu-stats: summed after the warmup
     double voxelGiMs = 0.0; // --gpu-stats: the VoxelGI view's share (its volumes' compute passes)
+    double sdfgiMs = 0.0;   // --gpu-stats: the SDFGI view's (its cascades' compute passes)
+    std::vector<double> frameMs, sdfgiFrameMs; // --gpu-stats: each frame's, and its SDFGI view's (for percentiles)
     int gpuFrames = 0;
     kast::SceneGui gui("game");
     kast::StatsOverlay stats(options->gpuStats ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE); // F3
@@ -292,6 +298,10 @@ int main(int argc, char** argv)
         if (const std::optional<double> ms = kast::viewGpuMs(nullptr); options->gpuStats && frame >= kGpuStatsWarmupFrames && ms) {
             gpuMs += *ms;
             voxelGiMs += kast::viewGpuMs("VoxelGI").value_or(0.0);
+            const double sdfgi = kast::viewGpuMs("SDFGI").value_or(0.0);
+            sdfgiMs += sdfgi;
+            frameMs.push_back(*ms);
+            sdfgiFrameMs.push_back(sdfgi);
             ++gpuFrames;
         }
         if (width > 0 && height > 0) {
@@ -337,6 +347,17 @@ int main(int argc, char** argv)
         if (options->gpuStats && gpuFrames > 0)
             kast::log::info(std::format("GPU frame time: {:.3f} ms average over {} frames (VoxelGI view {:.3f} ms)",
                                         gpuMs / gpuFrames, gpuFrames, voxelGiMs / gpuFrames));
+        // The 99th percentile and the slowest: a lone slow frame (the OS or another program on the GPU) shows in the
+        // latter only.
+        const auto percentile = [](std::vector<double> ms, double p) {
+            std::ranges::sort(ms);
+            return ms[std::min(ms.size() - 1, static_cast<size_t>(p * static_cast<double>(ms.size())))];
+        };
+        if (options->gpuStats && gpuFrames > 0 && scene.lighting.sdfgi.enabled)
+            kast::log::info(std::format("SDFGI view GPU time: {:.3f} ms average, {:.3f} ms 99th percentile, {:.3f} ms at "
+                                        "most over {} frames (frame: {:.3f} ms 99th percentile, {:.3f} ms at most)",
+                                        sdfgiMs / gpuFrames, percentile(sdfgiFrameMs, 0.99), percentile(sdfgiFrameMs, 1.0),
+                                        gpuFrames, percentile(frameMs, 0.99), percentile(frameMs, 1.0)));
         kast::log::info(kast::assetLoadSummary());
         lua.stop();
         gui.clear();

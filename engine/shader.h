@@ -25,7 +25,8 @@ constexpr int kMaxShaderParams = 16;  // float / vec / color params: one u_kastP
 // The mesh shader takes 0..9 (material textures, shadow maps); texture2D params take 10..13; 14 and 15 are
 // SCREEN_TEXTURE and DEPTH_TEXTURE (s_kastScreen, s_kastDepth in fs_mesh.sc). The lightmap (docs/engine/lightmaps.html)
 // takes 12 and 13 in shaders with at most two texture2D params (shaderTakesLightmap), VoxelGI (docs/engine/voxelgi.html)
-// 11 in shaders with at most one (shaderTakesVoxelGi).
+// 11 in shaders with at most one (shaderTakesVoxelGi). SDFGI (docs/engine/sdfgi.html) takes 10 in the built-in shader's
+// SDFGI variant only (no .kshader samples it).
 constexpr int kMaxTextureSamplers = 16;
 constexpr uint8_t kFirstShaderTextureStage = 10;
 constexpr int kMaxShaderTextures = 4;

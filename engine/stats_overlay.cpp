@@ -23,11 +23,14 @@ int FpsAverage::fps() const
     return total_ > 0.0 ? static_cast<int>(std::lround(static_cast<double>(frames_.size()) / total_)) : 0;
 }
 
-std::string statsOverlayText(int fps, std::optional<int> pingMs, std::optional<double> voxelGiMs)
+std::string statsOverlayText(int fps, std::optional<int> pingMs, std::optional<double> voxelGiMs,
+                             std::optional<double> sdfgiMs)
 {
     std::string text = std::format("FPS {}  Ping {} ms", fps, pingMs ? std::to_string(*pingMs) : std::string("--"));
     if (voxelGiMs)
         text += std::format("  VoxelGI {:.2f} ms", *voxelGiMs);
+    if (sdfgiMs)
+        text += std::format("  SDFGI {:.2f} ms", *sdfgiMs);
     return text;
 }
 
@@ -61,7 +64,7 @@ void StatsOverlay::frame(double dt, std::optional<int> pingMs)
     if (!visible_)
         return;
     bgfx::dbgTextClear();
-    const std::string text = statsOverlayText(fps_.fps(), pingMs, viewGpuMs("VoxelGI"));
+    const std::string text = statsOverlayText(fps_.fps(), pingMs, viewGpuMs("VoxelGI"), viewGpuMs("SDFGI"));
     // White on dark gray: palette 0 (black) is transparent.
     bgfx::dbgTextPrintf(0, bgfx::getStats()->textHeight - 1, 0x8f, "%s", text.c_str());
 }

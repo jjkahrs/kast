@@ -28,7 +28,8 @@ void GameViewport::drawStats(const Document& doc) const
 {
     constexpr float kPad = 4.0f;
     const std::string text = kast::statsOverlayText(fps_.fps(), doc.lua.world().rttMs(),
-                                                    kast::viewGpuMs("VoxelGI", shadowViews_, kast::Renderer::kShadowViews));
+                                                    kast::viewGpuMs("VoxelGI", shadowViews_, kast::Renderer::kShadowViews),
+                                                    kast::viewGpuMs("SDFGI", shadowViews_, kast::Renderer::kShadowViews));
     const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
     const ImVec2 min(imageMin_.x, imageMin_.y + imageSize_.y - textSize.y - 2.0f * kPad);
     ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -45,7 +46,7 @@ void GameViewport::draw(Document& doc)
     const bool f3 = focused_ && ImGui::Shortcut(ImGuiKey_F3); // hardcoded, like Ctrl+P
     if (stats_.update(f3, focused_, doc.play)) {
         kast::log::info(stats_.visible ? "Stats overlay shown" : "Stats overlay hidden");
-        bgfx::setDebug(stats_.visible ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE); // the VoxelGI view's GPU time
+        bgfx::setDebug(stats_.visible ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE); // the VoxelGI and SDFGI views' GPU time
     }
     const ImVec2 size = ImGui::GetContentRegionAvail();
     const entt::entity camera = kast::activeCamera(doc.scene);
