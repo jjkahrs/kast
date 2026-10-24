@@ -219,8 +219,16 @@ public:
     void setLod(bool on) { lod_ = on; }
     void setLodBias(float bias) { lodBias_ = bias; }
     void setForcedLod(int level) { forcedLod_ = level; }
+    // Terrain draws its chunks at strides by the same switches (lod.h terrainLevel; a forced level n is stride 1 << n,
+    // at most 8; the LOD bias scales distance and error).
     // Logs each ModelRenderer's level when first drawn and each change (--log-lod).
     void setLodLogging(bool on) { lodLogging_ = on; }
+    // Terrain LOD test hooks: tint chunks by stride (1 green, 2 yellow, 4 orange, 8 red: --terrain-lod-tint); a
+    // checkerboard of strides 1 and 8 by chunk, the worst case for cracks (--terrain-lod-checker); no skirts, so cracks
+    // show (--no-terrain-skirts; set before the first frame: built into the tile meshes).
+    void setTerrainLodTint(bool on) { terrainLodTint_ = on; }
+    void setTerrainLodChecker(bool on) { terrainLodChecker_ = on; }
+    void setTerrainSkirts(bool on) { terrainSkirts_ = on; }
     // The level entity of scene drew at in the last render() that drew it: -1 culled below its last threshold;
     // nullopt if that render() didn't draw it (no model, or not rendered by this Renderer). The LODGroup Inspector shows it.
     std::optional<int> lodLevel(const Scene& scene, entt::entity entity) const;
@@ -280,6 +288,7 @@ private:
         const UserShader* shader = nullptr; // the material's .kshader; null: the built-in mesh shader
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
+        uint32_t firstIndex = 0, indexCount = UINT32_MAX; // the range of indices drawn (terrain chunks); default all
         int bones = -1; // index into the frame's bone sets; -1 = not skinned
         size_t submesh = 0; // a model draw's mesh index (Model::meshes)
         int lod = 0;        // a model draw's level: indices is that level's (lodIndices)
@@ -386,7 +395,10 @@ private:
     void resolveShaders(std::vector<DrawItem>& draws);
     // Builds the GPU meshes of the scene's TerrainTiles (one per TerrainTileData: new data, new mesh), marks them used
     // and appends their draws. pruneTerrain then drops the meshes no rendered scene used this frame.
-    void addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws);
+    // Each chunk at the stride (terrainLevel) the camera's view (viewMtx / projMtx) picks; a draw per run of chunks
+    // (Morton order) at one stride and on the same side of the camera's frustum; one per tile when every chunk has
+    // the same stride (LOD off or forced).
+    void addTerrainDraws(const Scene& scene, const float* viewMtx, const float* projMtx, std::vector<DrawItem>& draws);
     void pruneTerrain();
     void clearTerrain();
     // Appends the draws of a ModelRenderer entity (an error cube if its model fails to load) at the LOD its screen
@@ -433,10 +445,14 @@ private:
     void drawColliderWireframe(const Scene& scene, bgfx::ViewId view, entt::entity selected);
     void drawParticleShape(const Scene& scene, bgfx::ViewId view, entt::entity selected);
 
-    // GPU copy of a TerrainTile's heights: kTileSamples^2 vertices in tile-local metres; indices are terrainIndices_.
+    // GPU copy of a TerrainTile's heights: kTileSamples^2 vertices in tile-local metres, then its skirt vertices
+    // (lod.h terrainSkirtVertex); indices are terrainIndices_.
     struct TerrainMesh {
         std::shared_ptr<const TerrainTileData> data; // the key's, kept alive so no other data reuses its address
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
+        std::vector<Aabb> chunkBounds;                                              // per chunk, world, the surface
+        float skirtDepth = 0.0f;                                                    // the deepest skirt
+        std::array<std::array<float, kTerrainStrides>, kTerrainChunks> chunkErrors{}; // terrainChunkError per level
         bgfx::TextureHandle lightmap = BGFX_INVALID_HANDLE, lightmapDirection = BGFX_INVALID_HANDLE; // its baked tile
         Aabb bounds{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}}; // world space
         bool used = false; // by a tile this frame
@@ -444,7 +460,9 @@ private:
 
     std::array<Mesh, 3> meshes_; // indexed by Primitive
     bgfx::VertexLayout meshLayout_;  // MeshVertex: primitives and terrain
-    bgfx::IndexBufferHandle terrainIndices_ = BGFX_INVALID_HANDLE; // 32-bit, map::for_each_triangle, shared by tiles
+    // Per level (stride 1 << level), without and with skirts: every chunk's indices (appendTerrainChunk) in chunk order,
+    // 32-bit, shared by tiles.
+    std::array<std::array<bgfx::IndexBufferHandle, 2>, kTerrainStrides> terrainIndices_{};
     std::map<const TerrainTileData*, TerrainMesh> terrain_; // data is kept alive by its mesh
     bgfx::VertexLayout lineLayout_;
     bgfx::VertexBufferHandle grid_ = BGFX_INVALID_HANDLE;
@@ -559,6 +577,8 @@ private:
     float lodBias_ = 1.0f;
     int forcedLod_ = -1;
     bool lodLogging_ = false;
+    bool terrainLodTint_ = false, terrainLodChecker_ = false, terrainSkirts_ = true;
+    std::map<std::pair<const Material*, int>, Material> terrainTints_; // (material, level): its tinted copy
     // Per (scene, entity) drawn: selectLod's pick (its previous next frame) and the level drawn (-1 culled). lodNext_
     // fills during a render() and then replaces lodLevels_, so entities no longer drawn drop out.
     struct LodState {

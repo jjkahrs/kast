@@ -237,6 +237,7 @@ Aabb transformBounds(const Aabb& local, const float* world)
 // as its own draw would be).
 struct BatchKey {
     uint16_t vertices = 0, indices = 0;
+    uint32_t firstIndex = 0; // terrain chunks share their tile's buffers
     int lod = 0; // so each batch is one level (levels have their own indices, but a lightmapped one may fall back to LOD0's)
     const Material* material = nullptr;
     bool skinned = false, castShadows = false, receiveShadows = false;
@@ -250,8 +251,8 @@ struct BatchKey {
 template <typename Item> // Renderer::DrawItem
 BatchKey batchKey(const Item& item, std::vector<size_t> lights, size_t environment = 0, size_t gi = 0)
 {
-    return {item.vertices.idx, item.indices.idx, item.lod, item.material, item.bones >= 0, item.castShadows, item.receiveShadows,
-            item.mirrored, std::move(lights), environment, gi};
+    return {item.vertices.idx, item.indices.idx, item.firstIndex, item.lod, item.material, item.bones >= 0,
+            item.castShadows, item.receiveShadows, item.mirrored, std::move(lights), environment, gi};
 }
 
 // Indices 0..count-1 grouped by keyOf(index): groups in order of first appearance, indices in order within each.
@@ -653,10 +654,14 @@ void Renderer::init()
         meshes_[i].vertices = bgfx::createVertexBuffer(copyOf(data.vertices), meshLayout_);
         meshes_[i].indices = bgfx::createIndexBuffer(copyOf(data.indices));
     }
-    std::vector<uint32_t> terrainIndices;
-    terrainIndices.reserve(size_t(map::kTileSamples - 1) * (map::kTileSamples - 1) * 6);
-    map::for_each_triangle([&](uint32_t a, uint32_t b, uint32_t c) { terrainIndices.insert(terrainIndices.end(), {a, b, c}); });
-    terrainIndices_ = bgfx::createIndexBuffer(copyOf(terrainIndices), BGFX_BUFFER_INDEX32);
+    for (int level = 0; level < kTerrainStrides; ++level)
+        for (const bool skirts : {false, true}) {
+            std::vector<uint32_t> terrainIndices;
+            terrainIndices.reserve(size_t(kTerrainChunks) * terrainChunkIndexCount(1 << level, skirts));
+            for (int chunk = 0; chunk < kTerrainChunks; ++chunk)
+                appendTerrainChunk(chunk, 1 << level, skirts, terrainIndices);
+            terrainIndices_[size_t(level)][skirts] = bgfx::createIndexBuffer(copyOf(terrainIndices), BGFX_BUFFER_INDEX32);
+        }
 
     modelLayout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
@@ -771,7 +776,9 @@ void Renderer::shutdown()
         bgfx::destroy(mesh.indices);
     }
     clearTerrain();
-    bgfx::destroy(terrainIndices_);
+    for (const auto& level : terrainIndices_)
+        for (bgfx::IndexBufferHandle indices : level)
+            bgfx::destroy(indices);
     bgfx::destroy(grid_);
     for (auto& [path, shader] : userShaders_)
         destroy(shader);
@@ -839,10 +846,14 @@ void Renderer::shutdown()
     sdfgi_->shutdown();
 }
 
-// ponytail: full-res tiles (66049 vertices, 131072 triangles each); LOD and skirts when the draw distance grows.
-void Renderer::addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws)
+void Renderer::addTerrainDraws(const Scene& scene, const float* viewMtx, const float* projMtx, std::vector<DrawItem>& draws)
 {
     const entt::registry& registry = scene.registry();
+    float cameraWorld[16], viewProj[16];
+    bx::mtxInverse(cameraWorld, viewMtx);
+    bx::mtxMul(viewProj, viewMtx, projMtx);
+    const bx::Vec3 eye{cameraWorld[12], cameraWorld[13], cameraWorld[14]};
+    const Frustum frustum = frustumFromViewProj(viewProj, bgfx::getCaps()->homogeneousDepth);
     for (auto [entity, tile] : registry.view<TerrainTile>().each()) {
         if (!tile.data)
             continue;
@@ -869,8 +880,9 @@ void Renderer::addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws)
                 uvOrigin[1] = (data.tile.z - z0) * int(map::kTileSize);
             }
             std::vector<MeshVertex> vertices;
-            vertices.reserve(size_t(n) * n);
-            float lo = FLT_MAX, hi = -FLT_MAX;
+            vertices.reserve(size_t(n) * n + kTerrainSkirtVertices);
+            std::vector<float> heights;
+            heights.reserve(size_t(n) * n);
             for (int v = 0; v < n; ++v)
                 for (int u = 0; u < n; ++u) {
                     const float y = map::sample_height(data.heights[size_t(v) * n + size_t(u)], info);
@@ -880,9 +892,35 @@ void Renderer::addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws)
                     vertices.push_back({float(u), y, float(v), normal[0], normal[1], normal[2], t.x, t.y, t.z, 1.0f,
                                         float(uvOrigin[0] + u) * uvScale[0], float(uvOrigin[1] + v) * uvScale[1],
                                         0xffffffff, (float(u) + 0.5f) / float(n), (float(v) + 0.5f) / float(n)});
-                    lo = std::min(lo, y);
-                    hi = std::max(hi, y);
+                    heights.push_back(y);
                 }
+            for (int chunk = 0; chunk < kTerrainChunks; ++chunk)
+                for (int level = 1; level < kTerrainStrides; ++level)
+                    mesh.chunkErrors[size_t(chunk)][size_t(level)] = terrainChunkError(heights, chunk, 1 << level);
+            for (int line = 0; line < 2 * (kTerrainChunksPerEdge + 1); ++line) // terrainSkirtVertex's order
+                for (int along = 0; along < n; ++along) {
+                    const int at = (line % (kTerrainChunksPerEdge + 1)) * kTerrainChunkQuads;
+                    const bool uLine = line <= kTerrainChunksPerEdge;
+                    const int u = uLine ? at : along, v = uLine ? along : at;
+                    MeshVertex skirt = vertices[size_t(v) * n + size_t(u)];
+                    const float depth = terrainSkirts_ ? terrainSkirtDepth(heights, u, v) : 0.0f;
+                    skirt.y -= depth; // same normal and UVs: shaded as the edge it hangs from
+                    mesh.skirtDepth = std::max(mesh.skirtDepth, depth);
+                    vertices.push_back(skirt);
+                }
+            const bx::Vec3 origin{float(data.tile.x) * map::kTileSize, 0.0f, float(data.tile.z) * map::kTileSize};
+            for (int chunk = 0; chunk < kTerrainChunks; ++chunk) {
+                const auto [cu, cv] = terrainChunkCell(chunk);
+                float lo = FLT_MAX, hi = -FLT_MAX;
+                for (int v = cv * kTerrainChunkQuads; v <= (cv + 1) * kTerrainChunkQuads; ++v)
+                    for (int u = cu * kTerrainChunkQuads; u <= (cu + 1) * kTerrainChunkQuads; ++u) {
+                        lo = std::min(lo, heights[size_t(v) * n + size_t(u)]);
+                        hi = std::max(hi, heights[size_t(v) * n + size_t(u)]);
+                    }
+                const float x = origin.x + float(cu * kTerrainChunkQuads), z = origin.z + float(cv * kTerrainChunkQuads);
+                mesh.chunkBounds.push_back({{x, lo, z},
+                                            {x + float(kTerrainChunkQuads), hi, z + float(kTerrainChunkQuads)}});
+            }
             mesh.data = tile.data;
             mesh.vertices = bgfx::createVertexBuffer(copyOf(vertices), meshLayout_);
             if (!data.lightmap.empty()) { // checked by the streamer (TerrainTileData)
@@ -890,16 +928,15 @@ void Renderer::addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws)
                 mesh.lightmap = createGpuTexture(data.lightmap, false, false, BGFX_SAMPLER_UVW_CLAMP, error);
                 mesh.lightmapDirection = createGpuTexture(data.lightmapDirection, false, false, BGFX_SAMPLER_UVW_CLAMP, error);
             }
-            const bx::Vec3 origin{float(data.tile.x) * map::kTileSize, 0.0f, float(data.tile.z) * map::kTileSize};
-            mesh.bounds = {{origin.x, lo, origin.z}, {origin.x + map::kTileSize, hi, origin.z + map::kTileSize}};
+            mesh.bounds = mesh.chunkBounds[0];
+            for (const Aabb& chunk : mesh.chunkBounds)
+                mesh.bounds = {bx::min(mesh.bounds.min, chunk.min), bx::max(mesh.bounds.max, chunk.max)};
         }
         DrawItem item;
         bx::mtxTranslate(item.world.data(), mesh.bounds.min.x, 0.0f, mesh.bounds.min.z);
-        item.bounds = mesh.bounds;
         item.material = !info.material.empty() && info.material == previewMaterialPath_ ? &previewMaterial_
                                                                                       : &materials_.get(info.material);
         item.vertices = mesh.vertices;
-        item.indices = terrainIndices_;
         if (bgfx::isValid(mesh.lightmap) && bgfx::isValid(mesh.lightmapDirection)) {
             item.lightmap = mesh.lightmap;
             item.lightmapDirection = mesh.lightmapDirection;
@@ -907,7 +944,61 @@ void Renderer::addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws)
             warnOnce(std::format("Terrain tile {}_{}: lightmap: {}; lit as unbaked", data.tile.x, data.tile.z,
                                  data.lightmapError));
         }
-        draws.push_back(item);
+        // A draw per run of chunks at one level and on one side of the camera's frustum: a run is one range of its
+        // level's indices (Morton order), so a uniform tile is one draw and the camera pass still culls by chunk.
+        // ponytail: shadow passes cull by run; split runs by cascade too if far shadow casters cost.
+        const Material* material = item.material;
+        // One stride everywhere (LOD off or forced, a probe bake): edges match, so no skirts, and the tile is one draw
+        // with its full bounds, as before chunks (the same shadow cascades' depth range: the same image).
+        const bool skirts = terrainLodChecker_ || (lod_ && !capture_ && forcedLod_ < 0);
+        int runStart = 0, runLevel = -1;
+        bool runVisible = false;
+        for (int chunk = 0; chunk <= kTerrainChunks; ++chunk) {
+            int level = 0;
+            bool visible = false;
+            if (chunk < kTerrainChunks) {
+                const Aabb& bounds = mesh.chunkBounds[size_t(chunk)];
+                const auto [cu, cv] = terrainChunkCell(chunk);
+                if (terrainLodChecker_)
+                    level = (cu + cv) % 2 == 0 ? 0 : kTerrainStrides - 1;
+                else if (!lod_ || capture_) // a probe bake sees the full surface, as the other bakers
+                    level = 0;
+                else if (forcedLod_ >= 0)
+                    level = std::min(forcedLod_, kTerrainStrides - 1);
+                else
+                    level = terrainLevel(bounds, eye, projMtx, mesh.chunkErrors[size_t(chunk)], lodBias_);
+                visible = !skirts || !culling_ || intersects(frustum, bounds);
+                if (chunk > 0 && level == runLevel && visible == runVisible)
+                    continue;
+            }
+            if (chunk > 0) { // close the run [runStart, chunk)
+                const uint32_t count = terrainChunkIndexCount(1 << runLevel, skirts);
+                item.indices = terrainIndices_[size_t(runLevel)][skirts];
+                item.firstIndex = uint32_t(runStart) * count;
+                item.indexCount = uint32_t(chunk - runStart) * count;
+                item.bounds = mesh.chunkBounds[size_t(runStart)];
+                for (int i = runStart + 1; i < chunk; ++i)
+                    item.bounds = {bx::min(item.bounds.min, mesh.chunkBounds[size_t(i)].min),
+                                   bx::max(item.bounds.max, mesh.chunkBounds[size_t(i)].max)};
+                if (skirts)
+                    item.bounds.min.y -= mesh.skirtDepth;
+                item.material = material;
+                if (terrainLodTint_) {
+                    static constexpr std::array<std::array<float, 3>, kTerrainStrides> kTints{
+                        {{0.2f, 1.0f, 0.2f}, {1.0f, 1.0f, 0.1f}, {1.0f, 0.5f, 0.0f}, {1.0f, 0.1f, 0.1f}}};
+                    Material& tinted = terrainTints_[{material, runLevel}];
+                    tinted = *material;
+                    tinted.baseColorTexture.clear();
+                    for (size_t c = 0; c < 3; ++c)
+                        tinted.baseColor[c] = kTints[size_t(runLevel)][c];
+                    item.material = &tinted;
+                }
+                draws.push_back(item);
+            }
+            runStart = chunk;
+            runLevel = level;
+            runVisible = visible;
+        }
     }
 }
 
@@ -1362,7 +1453,7 @@ void Renderer::submitShadowCasters(const std::vector<const DrawItem*>& batch, co
             bgfx::setTexture(0, baseColorSampler_, texture(material.baseColorTexture, TextureUsage::Color));
         }
         bgfx::setVertexBuffer(0, first.vertices);
-        bgfx::setIndexBuffer(first.indices);
+        bgfx::setIndexBuffer(first.indices, first.firstIndex, first.indexCount);
         bgfx::setState(kShadowState);
     };
     bgfx::InstanceDataBuffer instances;
@@ -2164,7 +2255,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
                                    applyLightmap(*bake, id, "model:" + model.model, item.submesh, item));
             }
         }
-        addTerrainDraws(from, draws);
+        addTerrainDraws(from, viewMtx, projMtx, draws);
     };
     lodNext_.clear();
     addDraws(scene, gi.enabled);
@@ -2442,7 +2533,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             bgfx::setTexture(static_cast<uint8_t>(3 + cube), pointShadowSamplers_[cube],
                              cube < shadows.pointLights.size() ? cubes_[cube] : noShadowCube_);
         bgfx::setVertexBuffer(0, item.vertices);
-        bgfx::setIndexBuffer(item.indices);
+        bgfx::setIndexBuffer(item.indices, item.firstIndex, item.indexCount);
         bgfx::setState((additive ? kAdditiveState : blend ? kBlendState : kState) | cullState(material.cullMode, item.mirrored));
     };
     const auto submit = [&](bgfx::ViewId to, const DrawItem& item, const std::vector<size_t>& nearest) {

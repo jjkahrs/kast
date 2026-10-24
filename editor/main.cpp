@@ -87,7 +87,7 @@ constexpr const char* kUsage =
     "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
-    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--log-lod] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
+    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--log-lod] [--terrain-lod-tint] [--terrain-lod-checker] [--no-terrain-skirts] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel (without --play: on the Scene view), for
@@ -217,6 +217,8 @@ struct Options {
     float lodBias = 1.0f;           // --lod-bias: Renderer::setLodBias of the Scene and Game views
     int forceLod = -1;              // --force-lod: Renderer::setForcedLod of the Scene and Game views (-1: by screen height)
     bool logLod = false;            // log each model's LOD level change in the Scene and Game views (Renderer::setLodLogging)
+    // Terrain LOD test hooks of the Scene and Game views: Renderer::setTerrainLodTint / setTerrainLodChecker / setTerrainSkirts.
+    bool terrainLodTint = false, terrainLodChecker = false, noTerrainSkirts = false;
     bool noAudioDevice = false;     // play sound on the null backend (silent), as if there were no output device
     std::vector<std::string> childArgs; // the flags after --, passed on to the editor the Project Manager starts
 
@@ -639,6 +641,12 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.noLod = true;
         } else if (arg == "--log-lod") {
             options.logLod = true;
+        } else if (arg == "--terrain-lod-tint") {
+            options.terrainLodTint = true;
+        } else if (arg == "--terrain-lod-checker") {
+            options.terrainLodChecker = true;
+        } else if (arg == "--no-terrain-skirts") {
+            options.noTerrainSkirts = true;
         } else if (arg == "--lod-bias" && hasValue && parsePositive(argv[i + 1], options.lodBias)) {
             ++i;
         } else if (arg == "--force-lod" && hasValue) {
@@ -737,7 +745,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.prefabSteps.empty() || !options.assetsDelete.empty() || !options.inspectorApplyMenu.empty() ||
                              options.prefabBackPrompt ||
                              options.noVsync || options.noInstancing || options.noCulling || options.noLod || options.lodBias != 1.0f ||
-                             options.forceLod >= 0 || options.logLod || !options.worldAddress.empty() || options.onlineLoginEnv ||
+                             options.forceLod >= 0 || options.logLod || options.terrainLodTint ||
+                             options.terrainLodChecker || options.noTerrainSkirts || !options.worldAddress.empty() || options.onlineLoginEnv ||
                              options.onlineCompose || !options.zoneOps.empty() || options.headless || options.noRecycle ||
                              options.sculptLoop || options.focus || options.promptRemoveTile || options.fileSave ||
                              options.bakeProbes || options.bakeLightmaps || options.bakeLightmapsAsync ||
@@ -1562,6 +1571,9 @@ int main(int argc, char** argv)
             renderer->setLodBias(options->lodBias);
             renderer->setForcedLod(options->forceLod);
             renderer->setLodLogging(options->logLod);
+            renderer->setTerrainLodTint(options->terrainLodTint);
+            renderer->setTerrainLodChecker(options->terrainLodChecker);
+            renderer->setTerrainSkirts(!options->noTerrainSkirts);
         }
         kast::gui::init();
         if (!options->openGui.empty()) {

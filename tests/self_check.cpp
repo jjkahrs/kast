@@ -85,6 +85,7 @@
 #include <process.h> // _getpid
 #include <random>
 #include <regex>
+#include <set>
 #include <share.h>   // _SH_DENYRW
 #include <source_location>
 #include <stdexcept>
@@ -7020,6 +7021,118 @@ void checkLodSelection()
     const kast::LightmapSubmesh kept{.sourceVertices = 3, .xref = {0, 1, 2}, .uv = std::vector<float>(6), .indices = {0, 1, 2}};
     check(kast::lightmapLodIndices(kept, std::vector<bx::Vec3>(3, bx::Vec3{0.0f, 0.0f, 0.0f}), {2, 1, 0}) == std::vector<uint32_t>{2, 1, 0},
           "lightmap LOD: an unwrap that kept the source's vertices draws the model's level");
+}
+
+void checkTerrainLod()
+{
+    constexpr int n = kast::map::kTileSamples;
+    // Morton cells: every chunk once, and each aligned 2x2 block is four consecutive chunks.
+    std::set<std::pair<int, int>> cells;
+    for (int chunk = 0; chunk < kast::kTerrainChunks; ++chunk)
+        cells.insert(kast::terrainChunkCell(chunk));
+    check(int(cells.size()) == kast::kTerrainChunks && cells.rbegin()->first == kast::kTerrainChunksPerEdge - 1,
+          "terrain LOD: chunk cells cover the tile once");
+    check(kast::terrainChunkCell(3) == std::pair{1, 1} && kast::terrainChunkCell(4) == std::pair{2, 0},
+          "terrain LOD: chunks are in Morton order");
+
+    // Stride 1 over all chunks is exactly the full tile (map::for_each_triangle), plus skirts (indices past the grid).
+    std::vector<uint32_t> fine;
+    for (int chunk = 0; chunk < kast::kTerrainChunks; ++chunk)
+        kast::appendTerrainChunk(chunk, 1, true, fine);
+    std::vector<std::array<uint32_t, 3>> full, chunked;
+    kast::map::for_each_triangle([&](uint32_t a, uint32_t b, uint32_t c) { full.push_back({a, b, c}); });
+    for (size_t i = 0; i < fine.size(); i += 3)
+        if (std::max({fine[i], fine[i + 1], fine[i + 2]}) < uint32_t(n * n))
+            chunked.push_back({fine[i], fine[i + 1], fine[i + 2]});
+    std::sort(full.begin(), full.end());
+    std::sort(chunked.begin(), chunked.end());
+    check(full == chunked && fine.size() == size_t(kast::kTerrainChunks) * kast::terrainChunkIndexCount(1, true),
+          "terrain LOD: stride 1 chunks draw the full tile's triangles, same winding, plus skirts");
+    std::vector<uint32_t> bare;
+    for (int chunk = 0; chunk < kast::kTerrainChunks; ++chunk)
+        kast::appendTerrainChunk(chunk, 1, false, bare);
+    check(bare.size() == full.size() * 3 && bare.size() == size_t(kast::kTerrainChunks) * kast::terrainChunkIndexCount(1, false) &&
+              *std::max_element(bare.begin(), bare.end()) < uint32_t(n * n),
+          "terrain LOD: without skirts, only the full tile's triangles");
+
+    // Every stride: the per-chunk count holds, indices stay inside grid + skirt, the grid faces up and skirts face out
+    // of their chunk (grid vertex (u, h, v), skirt vertex one metre under its edge sample).
+    std::vector<bx::Vec3> positions(size_t(n) * n + kast::kTerrainSkirtVertices, bx::Vec3{0.0f, 0.0f, 0.0f});
+    for (int v = 0; v < n; ++v)
+        for (int u = 0; u < n; ++u) {
+            positions[size_t(v) * n + size_t(u)] = {float(u), 0.0f, float(v)};
+            if (u % kast::kTerrainChunkQuads == 0 || v % kast::kTerrainChunkQuads == 0)
+                positions[kast::terrainSkirtVertex(u, v)] = {float(u), -1.0f, float(v)};
+        }
+    for (int stride : {1, 2, 4, 8}) {
+        bool counts = true, inRange = true, facing = true;
+        size_t skirts = 0;
+        for (int chunk = 0; chunk < kast::kTerrainChunks; ++chunk) {
+            std::vector<uint32_t> indices;
+            kast::appendTerrainChunk(chunk, stride, true, indices);
+            counts = counts && indices.size() == kast::terrainChunkIndexCount(stride, true);
+            const auto [cu, cv] = kast::terrainChunkCell(chunk);
+            const bx::Vec3 center{(float(cu) + 0.5f) * kast::kTerrainChunkQuads, 0.0f, (float(cv) + 0.5f) * kast::kTerrainChunkQuads};
+            for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+                if (std::max({indices[i], indices[i + 1], indices[i + 2]}) >= positions.size()) {
+                    inRange = false;
+                    continue;
+                }
+                const bx::Vec3 a = positions[indices[i]], b = positions[indices[i + 1]], c = positions[indices[i + 2]];
+                const bx::Vec3 normal = bx::cross(bx::sub(b, a), bx::sub(c, a));
+                const bool skirt = a.y < 0.0f || b.y < 0.0f || c.y < 0.0f;
+                skirts += skirt;
+                const bx::Vec3 out = bx::sub(bx::mul(bx::add(a, c), 0.5f), center);
+                facing = facing && (skirt ? bx::dot(normal, {out.x, 0.0f, out.z}) > 0.0f && std::abs(normal.y) < 1e-4f
+                                          : normal.y > 0.0f);
+            }
+        }
+        check(counts && inRange, std::format("terrain LOD: stride {} index counts and ranges", stride).c_str());
+        check(facing && skirts == size_t(kast::kTerrainChunks) * 8 * (kast::kTerrainChunkQuads / stride),
+              std::format("terrain LOD: stride {} grid faces up, a skirt quad per edge segment faces out", stride).c_str());
+    }
+
+    // Height error: a tilted plane is exact at every stride; a spike on an odd sample shows from stride 2 up.
+    std::vector<float> heights(size_t(n) * n);
+    for (int v = 0; v < n; ++v)
+        for (int u = 0; u < n; ++u)
+            heights[size_t(v) * n + size_t(u)] = 0.25f * float(u) - 0.1f * float(v);
+    check(kast::terrainChunkError(heights, 0, 8) < 1e-4f && kast::terrainChunkError(heights, 63, 2) < 1e-4f,
+          "terrain LOD: a plane has no error at any stride");
+    heights.assign(heights.size(), 0.0f);
+    heights[size_t(5) * n + 3] = 2.0f; // chunk 0, sample (3, 5)
+    check(kast::terrainChunkError(heights, 0, 1) == 0.0f && std::abs(kast::terrainChunkError(heights, 0, 2) - 2.0f) < 1e-5f &&
+              std::abs(kast::terrainChunkError(heights, 0, 8) - 2.0f) < 1e-5f && kast::terrainChunkError(heights, 1, 8) == 0.0f,
+          "terrain LOD: a spike is the error of the chunk holding it, from stride 2");
+    // Skirt depth: only chunk-edge samples count; a spike on an edge deepens the skirt along that edge (and at its ends).
+    const float margin = kast::kTerrainSkirtMargin;
+    check(kast::terrainSkirtDepth(heights, 0, 5) == margin && kast::terrainSkirtDepth(heights, 32, 0) == margin,
+          "terrain LOD: an inner spike doesn't deepen skirts");
+    heights[size_t(5) * n + 32] = 2.0f; // on the u = 32 line, edge v 0..32
+    check(std::abs(kast::terrainSkirtDepth(heights, 32, 5) - (4.0f + margin)) < 1e-5f &&
+              std::abs(kast::terrainSkirtDepth(heights, 32, 32) - (4.0f + margin)) < 1e-5f &&
+              std::abs(kast::terrainSkirtDepth(heights, 64, 0) - margin) < 1e-5f &&
+              std::abs(kast::terrainSkirtDepth(heights, 32, 40) - margin) < 1e-5f,
+          "terrain LOD: an edge spike deepens that edge's skirt, twice its error, and no other");
+
+    // Level choice: near is stride 1; far and flat is 8; error pulls it finer; bias keeps detail; orthographic.
+    float proj[16], ortho[16];
+    bx::mtxProj(proj, 60.0f, 16.0f / 9.0f, 0.1f, 1000.0f, false, bx::Handedness::Right);
+    bx::mtxOrtho(ortho, -50.0f, 50.0f, -50.0f, 50.0f, 0.1f, 1000.0f, 0.0f, false, bx::Handedness::Right);
+    const kast::Aabb chunk{{0, 0, 0}, {32, 1, 32}};
+    const std::array<float, 4> flat{0, 0, 0, 0}, rough{0, 0.05f, 0.4f, 2.0f};
+    const auto at = [&](float distance, const std::array<float, 4>& errors, float bias = 1.0f, const float* p = nullptr) {
+        return kast::terrainLevel(chunk, {32.0f + distance, 0.5f, 16.0f}, p ? p : proj, errors, bias);
+    };
+    check(at(0.0f, flat) == 0 && at(-10.0f, flat) == 0, "terrain LOD: on or over the chunk, stride 1");
+    check(at(63.0f, flat) == 0 && at(65.0f, flat) == 1 && at(130.0f, flat) == 2 && at(300.0f, flat) == 3,
+          "terrain LOD: flat ground coarsens with distance (64, 128, 256 m)");
+    // rough at 300 m, 1 / tan 30 = 1.732: stride 8 is 2 * 0.866 / 300 = 0.0058 > 0.002; stride 4 0.4 -> 0.0012.
+    check(at(300.0f, rough) == 2 && at(1000.0f, rough) == 3 && at(70.0f, rough) == 1,
+          "terrain LOD: height error keeps a chunk finer until it is small on screen");
+    check(at(300.0f, flat, 2.0f) == 2 && at(300.0f, flat, 0.5f) == 3, "terrain LOD: bias over 1 keeps detail further");
+    // Orthographic (2 / 100 view height): stride 8's 2 m error is 0.02 of the view, stride 4's 0.4 m 0.004, stride 2 0.0005.
+    check(at(300.0f, rough, 1.0f, ortho) == 1, "terrain LOD: orthographic error doesn't shrink with distance");
 }
 
 void checkFrustumCulling()
@@ -14576,6 +14689,7 @@ int main(int argc, char** argv)
         checkModelCache();
         checkModelLods();
         checkLodSelection();
+        checkTerrainLod();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All model checks passed" : std::format("{} model check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
@@ -14678,6 +14792,7 @@ int main(int argc, char** argv)
     checkIbl();
     checkFrustumCulling();
     checkLodSelection();
+    checkTerrainLod();
     checkPostProcessing();
     checkSky();
     checkMaterialFiles();
