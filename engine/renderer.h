@@ -145,7 +145,9 @@ void buildMips(MipImage& image, bool srgb);
 // that probe (selectProbe); else, with a sky, from the sky's environment cube (built on the GPU when the sky changes,
 // in view before the meshes); else the flat ambient color. With the scene's lightmap bake (lightmap.h,
 // docs/engine/lightmaps.html) the diffuse part comes from a Static mesh's lightmap or a Dynamic mesh's probe-grid sample
-// instead (selectDiffuseGi), and Full lights skip lightmapped draws. Opaque and mask meshes first, then its sky (sky.h), then blended ones and particle
+// instead (selectDiffuseGi), and Full lights skip lightmapped draws. A mesh inside an enabled, baked VoxelGI volume's box
+// (voxel_gi.h, docs/engine/voxelgi.html; relit on the GPU every frame in the last of the shadow views) cone-traces it for
+// its specular and, unless lightmapped, its diffuse. Opaque and mask meshes first, then its sky (sky.h), then blended ones and particle
 // emitters (particles.h, simulated on the GPU here) far to near. Blended draws whose .kshader samples SCREEN_TEXTURE or
 // DEPTH_TEXTURE see a copy of the target's color or depth as the opaque meshes and the sky left it, made only on frames
 // such a draw is in view.
@@ -153,7 +155,7 @@ void buildMips(MipImage& image, bool srgb);
 // PointLights nearest the eye and perspective atlas tiles for the kMaxShadowedLocalLights castShadows SpotLights and
 // AreaLights nearest it, rendered in kShadowViews views before the scene's (see shadow.h).
 // renderOverlays draws the editor's: a ground grid, axis lines, a short frustum preview per Camera, the range of the
-// selected PointLight (cone of a SpotLight, rect of an AreaLight), the box of the selected ReflectionProbe, the selected
+// selected PointLight (cone of a SpotLight, rect of an AreaLight), the box of the selected ReflectionProbe or VoxelGI, the selected
 // entity's collider and its ParticleEmitter's shape.
 // Every pass culls its draws to its view frustum (main camera, each cascade, each cube face, each tile), and draws that
 // share buffers, material, shadow flags and (main pass) lights, unskinned and not blended, are drawn as one GPU-instanced
@@ -161,10 +163,13 @@ void buildMips(MipImage& image, bool srgb);
 // The caller owns the views' framebuffers, rects and clears; these set the view transform and mode and submit.
 class Renderer {
 public:
-    // The cascades, then 6 cube faces per shadowed point light, then one per shadowed spot / area light.
+    // The cascades, then 6 cube faces per shadowed point light, then one per shadowed spot / area light, then the VoxelGI
+    // view (its volumes' compute passes, after the shadow maps they read; named "VoxelGI" for its GPU time).
     static constexpr bgfx::ViewId kShadowViews =
-        kMaxShadowCascades + kMaxShadowedPointLights * 6 + kMaxShadowedLocalLights;
+        kMaxShadowCascades + kMaxShadowedPointLights * 6 + kMaxShadowedLocalLights + 1;
 
+    Renderer();
+    ~Renderer();
     void init();
     void shutdown();
     // Materials and textures load from projectRoot (empty = none: every material path renders as an error). Files
@@ -207,6 +212,10 @@ public:
     // date" (the scene's lightmapSceneHash differs from the bake's), or why its files can't be used (the Lighting panel
     // shows it).
     std::string lightmapStatus(const Scene& scene);
+    // A VoxelGI volume's bake (its bakedPath) as the renderer sees it: "Not baked", "Baked", "Out of date" (its
+    // voxelGiSceneHash differs from the bake's), or why its files can't be used (the Inspector and Lighting panel show it);
+    // "" before the first render() (the project isn't known yet).
+    std::string voxelGiStatus(const Scene& scene, entt::entity volume);
     // The editor's Bake: renders scene (and extra, as render() does) into the six faces of a size x size cube at center,
     // without particles and without probes (one bounce: meshes are lit by the sky's environment), prefilters it and reads
     // it back into out. Uses views firstView .. firstView + kShadowViews and runs bgfx::frame() itself (about ten
@@ -263,7 +272,9 @@ private:
     // Where a draw's diffuse ambient comes from (fs_mesh.sc u_gi, u_giSh, s_lightmap): lightmap.h selectDiffuseGi.
     struct GiDraw {
         DiffuseGi source = DiffuseGi::Environment;
-        Sh9 sh{}; // ProbeGrid: the grid sampled at the draw
+        Sh9 sh{}; // ProbeGrid (or VoxelGi over it, grid set): the grid sampled at the draw
+        int volume = -1;   // the VoxelGI volume (this frame's index) its box selected; -1 none
+        bool grid = false; // VoxelGi: what it fades to at the box's faces is the probe grid (sh), not the environment
     };
     // A scene's bake (lightmap.h), loaded once per bakedPath and again when its lightmaps.json changes on disk.
     struct LightmapSet {
@@ -384,6 +395,7 @@ private:
     void drawCameraFrustums(const Scene& scene, bgfx::ViewId view);
     // The selected light's gizmo: a PointLight's range, a SpotLight's cone, an AreaLight's rect, facing and range.
     void drawLightGizmo(const Scene& scene, bgfx::ViewId view, entt::entity selected);
+    // The selected ReflectionProbe's or VoxelGI volume's box.
     void drawProbeBox(const Scene& scene, bgfx::ViewId view, entt::entity selected);
     void drawColliderWireframe(const Scene& scene, bgfx::ViewId view, entt::entity selected);
     void drawParticleShape(const Scene& scene, bgfx::ViewId view, entt::entity selected);
@@ -497,7 +509,11 @@ private:
     std::map<std::pair<std::string, int>, ProbeFile> probeFiles_; // by (bakedPath, resolution)
     // ponytail: one bake per Renderer, as the probes: the Scene and Game views each load it; share it if bakes get big.
     LightmapSet lightmaps_; // the last scene's bake (lightmapSet)
-    bool capture_ = false; // bakeProbe: no particles, no probes
+    // VoxelGI (voxel_gi.h): its compute passes and the volumes' bakes, loaded once per (bakedPath, resolution) and again
+    // when either file changes on disk. Defined in renderer.cpp (voxel_gi.h includes this header).
+    struct VoxelGiState;
+    std::unique_ptr<VoxelGiState> voxelGi_;
+    bool capture_ = false; // bakeProbe: no particles, no probes, no VoxelGI
     ParticleRenderer particles_;
     float timeSeconds_ = 0.0f; // setTime
     bool instancing_ = true;

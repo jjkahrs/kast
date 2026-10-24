@@ -90,6 +90,14 @@ public:
     std::vector<entt::entity> takeBakeRequests() { return std::exchange(bakeRequests_, {}); }
     // Every ReflectionProbe of the scene, as Bake All Probes asks (--bake-probes).
     void requestBakeAll(const Document& doc);
+    // A VoxelGI volume's bake as the host's renderer sees it (Renderer::voxelGiStatus: "Not baked", "Baked", "Out of
+    // date" or why its files can't be used), and the running VoxelGI bake's progress (nullopt: none). Set by the host.
+    std::function<std::string(const kast::Scene&, entt::entity)> voxelGiStatus;
+    std::function<std::optional<float>()> voxelGiProgress;
+    // The volumes a VoxelGI's Inspector Bake (one) or the Lighting panel's Bake VoxelGI (empty: all) asked for since the
+    // last call, and whether Cancel was pressed: the host starts or stops its VoxelGiJob.
+    std::optional<std::vector<entt::entity>> takeVoxelGiBakeRequest() { return std::exchange(voxelGiBakeRequest_, std::nullopt); }
+    bool takeVoxelGiCancelRequest() { return std::exchange(voxelGiCancelRequested_, false); }
     // The scene's post-processing and fog, a section per effect (Window > Post Processing); nothing while open is false.
     void drawPostProcessing(Document& doc, bool& open);
     // The scene's physics settings: gravity (Window > Physics); draws nothing while open is false.
@@ -172,6 +180,11 @@ private:
     void drawParticlePreview(Document& doc, entt::entity entity);
     // A ReflectionProbe's Inspector section: its bake status and the Bake button.
     void drawProbeBake(Document& doc, entt::entity entity);
+    // A VoxelGI's Inspector section: its bake status (logged when it changes), the Bake button or the running bake's
+    // progress and Cancel.
+    void drawVoxelGiBake(Document& doc, entt::entity entity);
+    // The status line of a bake ("Not baked" dimmed, "Baked", "Out of date" highlighted, else an error).
+    static void drawBakeStatus(const std::string& status);
     // The Inspector for the .mat in inspectedAsset_: every edit saves the file (the renderers reload it) and is an undo
     // step on materialHistory_. Its Shader section picks the .kshader, shows its compile status and its params.
     void drawMaterialInspector(Document& doc);
@@ -214,6 +227,9 @@ private:
     std::vector<entt::entity> bakeRequests_; // takeBakeRequests
     bool lightmapBakeRequested_ = false, lightmapCancelRequested_ = false;
     std::string lightmapStatus_; // the Lighting panel's last status, logged when it changes
+    std::optional<std::vector<entt::entity>> voxelGiBakeRequest_; // takeVoxelGiBakeRequest
+    bool voxelGiCancelRequested_ = false;
+    std::map<std::string, std::string> voxelGiStatus_; // each volume's (by name) last status shown, logged when it changes
     bool newComponentRequested_ = false;
     std::string newComponentName_;
     std::string newComponentError_; // why the last Create failed (write or load); cleared when the name changes

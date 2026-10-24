@@ -1,0 +1,130 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Floor",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, -0.15, -6], "rotation": [0, 0, 0, 1], "scale": [6.6, 0.3, 6.6] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_white.mat", "giMode": "static" }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ceiling",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 4.15, -6], "rotation": [0, 0, 0, 1], "scale": [6.6, 0.3, 6.6] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_white.mat", "giMode": "static" }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Back Wall",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 2, -9.15], "rotation": [0, 0, 0, 1], "scale": [6.6, 4.6, 0.3] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_white.mat", "giMode": "static" }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Red Wall",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-3.15, 2, -6], "rotation": [0, 0, 0, 1], "scale": [0.3, 4.6, 6.6] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_red.mat", "giMode": "static" }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Green Wall",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [3.15, 2, -6], "rotation": [0, 0, 0, 1], "scale": [0.3, 4.6, 6.6] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_green.mat", "giMode": "static" }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Tall Box",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-1.4, 1.2, -7.4], "rotation": [0, 0.173648, 0, 0.984808], "scale": [1.2, 2.4, 1.2] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_white.mat", "giMode": "static" }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Rough Sphere",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-1.6, 0.5, -4.6], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "sphere", "material": "materials/lm_white.mat", "giMode": "static" }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Chrome Sphere",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [1.2, 0.8, -6.6], "rotation": [0, 0, 0, 1], "scale": [1.6, 1.6, 1.6] },
+        "MeshRenderer": { "primitive": "sphere", "material": "materials/ibl_chrome.mat" }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Dynamic Cube",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [1.5, 0.4, -4.3], "rotation": [0, 0.382683, 0, 0.92388], "scale": [0.8, 0.8, 0.8] },
+        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_white.mat", "giMode": "dynamic" }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Lamp Pivot",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 3, -6.2], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "Rotator": { "axis": [0, 1, 0], "degreesPerSecond": 90 }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Lamp",
+      "parent": 10,
+      "components": {
+        "Transform": { "position": [-2, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "PointLight": { "color": [1, 0.92, 0.8], "intensity": 4, "range": 10, "castShadows": true }
+      }
+    },
+    {
+      "id": 13,
+      "name": "VoxelGI Volume",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 2, -6], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "VoxelGI": { "boxSize": [6.6, 4.6, 6.6], "resolution": 128, "intensity": 1, "quality": "medium", "priority": 0, "enabled": true, "bakedPath": "voxelgi_room_voxelgi/13.json" }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 2, 2.6], "rotation": [-0.0348995, 0, 0, 0.999391], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    }
+  ],
+  "systems": [],
+  "lighting": {
+    "ambientColor": [1, 1, 1],
+    "ambientIntensity": 0.1
+  },
+  "editor": {
+    "camera": { "pivot": [0, 1.8, -6], "yaw": 0, "pitch": -5, "distance": 8.6 }
+  }
+}

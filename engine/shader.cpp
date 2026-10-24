@@ -366,7 +366,7 @@ const std::vector<std::string>& shaderBuiltinNames()
         // vertex() (mesh.sh) and light() built-ins, SCREEN_TEXTURE / DEPTH_TEXTURE
         "VERTEX", "INSTANCE_ID", "MODEL_MATRIX", "WORLD_MATRIX", "VIEW_MATRIX", "PROJECTION_MATRIX", "LIGHT_DIRECTION",
         "LIGHT_COLOR", "ATTENUATION", "VIEW", "DIFFUSE_LIGHT", "SPECULAR_LIGHT", "SCREEN_TEXTURE", "SCREEN_UV",
-        "DEPTH_TEXTURE", "PI", "KAST_HAS_LIGHTMAP"};
+        "DEPTH_TEXTURE", "PI", "KAST_HAS_LIGHTMAP", "KAST_HAS_VOXELGI"};
     return names;
 }
 
@@ -551,6 +551,12 @@ bool shaderTakesLightmap(const ShaderSource& source)
 {
     return std::ranges::count_if(source.params, [](const ShaderParam& p) { return p.type == ShaderParamType::Texture2D; }) <=
            kMaxShaderTextures - 2;
+}
+
+bool shaderTakesVoxelGi(const ShaderSource& source)
+{
+    return std::ranges::count_if(source.params, [](const ShaderParam& p) { return p.type == ShaderParamType::Texture2D; }) <=
+           kMaxShaderTextures - 3;
 }
 
 bool isVertexStage(ShaderStage stage)

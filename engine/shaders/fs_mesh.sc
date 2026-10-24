@@ -39,7 +39,7 @@ SAMPLER2D(s_normal, 7);            // linear tangent-space normal, glTF / OpenGL
 SAMPLERCUBE(s_env, 8);
 SAMPLER2D(s_emissive, 9);          // sRGB, sampled as linear, times u_emissive; white if none
 // Stages 10..13: a .kshader's texture2D params (shader.cpp generateShader); 12 and 13 are the lightmap's (s_lightmap,
-// s_lightmapDir below) in shaders with at most two.
+// s_lightmapDir below) in shaders with at most two, 11 VoxelGI's (s_voxelGi) in shaders with at most one.
 SAMPLER2D(s_kastScreen, 14); // SCREEN_TEXTURE: the opaque scene's HDR linear color (Renderer::render copies it)
 SAMPLER2D(s_kastDepth, 15);  // DEPTH_TEXTURE: the opaque scene's depth (D3D 0..1); linearDepth() makes it meters
 
@@ -59,8 +59,9 @@ uniform vec4 u_envSpecular;
 uniform vec4 u_envBox[2];
 // Global illumination (docs/engine/lightmaps.html; renderer.cpp setDrawState): x: where the diffuse ambient comes from
 // (lightmap.h DiffuseGi): 0 the environment as above, 1 the lightmap (s_lightmap, s_lightmapDir at v_lightmapUv), 2
-// u_giSh, the probe grid sampled at the mesh (Sh9, as u_envSh); y: its intensity; z: 1 to bend lightmap light by the
-// normal (the directional term). The specular stays the environment's.
+// u_giSh, the probe grid sampled at the mesh (Sh9, as u_envSh), 3 a VoxelGI volume (u_voxelGi below); y: the lightmaps'
+// and grid's intensity; z: 1 to bend lightmap light by the normal (the directional term). The specular stays the
+// environment's, but inside a VoxelGI volume (u_voxelGi[3].w).
 uniform vec4 u_gi;
 uniform vec4 u_giSh[9];
 // The local light slots (Renderer::render setDrawState), nearest the mesh first. Unused slots: black, range 1.
@@ -492,9 +493,118 @@ SAMPLER2D(s_lightmap, 12);
 SAMPLER2D(s_lightmapDir, 13);
 #endif
 
+// The probe grid's diffuse light at unit normal n (u_giSh, as kastSh9), times its intensity.
+vec3 kastGiSh(vec3 n)
+{
+    vec3 e = u_giSh[0].rgb + u_giSh[1].rgb * n.y + u_giSh[2].rgb * n.z + u_giSh[3].rgb * n.x
+           + u_giSh[4].rgb * (n.x * n.y) + u_giSh[5].rgb * (n.y * n.z) + u_giSh[6].rgb * (3.0 * n.z * n.z - 1.0)
+           + u_giSh[7].rgb * (n.x * n.z) + u_giSh[8].rgb * (n.x * n.x - n.y * n.y);
+    return max(e, vec3_splat(0.0)) * u_gi.y;
+}
+
+// VoxelGI (voxel_gi.h, docs/engine/voxelgi.html): the radiance volume the draw's box selected, relit this frame (rgb
+// premultiplied by opacity in a, mip i of 2^i voxels). On the stage a .kshader's second texture2D param takes: shaders
+// with two or more get none (KAST_TEXTURE_PARAMS; the renderer gives their draws the light below VoxelGI instead).
+#if !defined(KAST_TEXTURE_PARAMS) || KAST_TEXTURE_PARAMS <= 1
+#define KAST_HAS_VOXELGI
+static const float VOXEL_EDGE = 4.0;           // kVoxelGiEdgeVoxels in voxel_gi.h
+static const float VOXEL_MIN_APERTURE = 0.04;  // kVoxelGiMinAperture in voxel_gi.h
+#define MAX_VOXEL_CONES 9                      // kMaxVoxelGiCones in voxel_gi.h
+SAMPLER3D(s_voxelGi, 11);
+// Renderer::render setDrawState: [0] xyz: the grid's min corner, w: voxel size (m); [1] xyz: 1 / its extent (m), w:
+// intensity; [2] x: its last mip, y: diffuse cones, z: step scale, w: specular steps at most; [3] x: the diffuse cones'
+// aperture (tan of the half angle), y: 1 if the light without the volume is the probe grid's (u_giSh), z: diffuse steps
+// at most, w: 1 if a volume is bound (its specular replaces the environment's).
+uniform vec4 u_voxelGi[4];
+uniform vec4 u_voxelCones[MAX_VOXEL_CONES]; // voxelGiCones in voxel_gi.h: xyz in the tangent frame (z: the normal), w weight
+
+// voxelGiEdgeWeight in voxel_gi.cpp: 1 inside, 0 at (and outside) the grid's faces, linear over its last VOXEL_EDGE voxels.
+float kastVoxelEdge(vec3 p)
+{
+    vec3 lo = u_voxelGi[0].xyz;
+    vec3 hi = lo + vec3_splat(1.0) / u_voxelGi[1].xyz;
+    vec3 d = min(p - lo, hi - p);
+    return saturate(min(min(d.x, d.y), d.z) / (VOXEL_EDGE * u_voxelGi[0].w));
+}
+
+// The volume front to back along a cone from p (unit dir; aperture: tan of its half angle) off a surface of unit normal
+// n, as voxelConeSteps in voxel_gi.cpp steps it, until it leaves the grid, is 95% blocked or took maxSteps: rgb the light
+// it gathered, a how much of the view it blocked. Each sample is lifted off the surface by the cone's width there,
+// so the mip voxels holding the surface itself (around most of a wide cone's samples) don't shade it.
+vec4 kastVoxelCone(vec3 p, vec3 n, vec3 dir, float aperture, float maxSteps)
+{
+    float voxel = u_voxelGi[0].w;
+    vec4 sum = vec4_splat(0.0);
+    float t = voxel;
+    for (int i = 0; i < 128; ++i) {
+        if (float(i) >= maxSteps || sum.a >= 0.95)
+            break;
+        float diameter = max(voxel, 2.0 * aperture * t);
+        vec3 uvw = (p + dir * t + n * diameter - u_voxelGi[0].xyz) * u_voxelGi[1].xyz;
+        if (any(lessThan(uvw, vec3_splat(0.0))) || any(greaterThan(uvw, vec3_splat(1.0))))
+            break;
+        float lod = min(log2(diameter / voxel), u_voxelGi[2].x);
+        vec4 s = texture3DLod(s_voxelGi, uvw, lod);
+        float a = min(s.a * exp2(lod), 1.0); // a voxel-thin surface fills 1 / 2^lod of a mip voxel: count it as filling it
+        s = vec4(s.rgb * (a / max(s.a, 1e-4)), a);
+        sum += (1.0 - sum.a) * s;
+        t += diameter * u_voxelGi[2].z;
+    }
+    return sum;
+}
+
+// What a cone that leaves the volume unblocked sees along d: the environment's diffuse light (its harmonics, for these
+// wide cones), or the flat ambient.
+vec3 kastVoxelEnvironment(vec3 d)
+{
+    return u_envSpecular.w > 0.0 ? kastSh9(d) : u_ambient.rgb;
+}
+
+// The volume's diffuse light at p (unit normal n): the preset's cones around n, weighted, each seeing past the volume
+// what it didn't block; blended toward fallback (the light without the volume) at the box's faces.
+vec3 kastVoxelDiffuse(vec3 n, vec3 p, vec3 fallback)
+{
+    float w = kastVoxelEdge(p);
+    if (w <= 0.0)
+        return fallback;
+    vec3 t = normalize(cross(abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), n));
+    vec3 b = cross(n, t);
+    vec3 origin = p + n * u_voxelGi[0].w;
+    vec3 sum = vec3_splat(0.0);
+    for (int i = 0; i < MAX_VOXEL_CONES; ++i) {
+        if (float(i) >= u_voxelGi[2].y)
+            break;
+        vec4 c = u_voxelCones[i];
+        vec3 d = t * c.x + b * c.y + n * c.z;
+        vec4 cone = kastVoxelCone(origin, n, d, u_voxelGi[3].x, u_voxelGi[3].z);
+        sum += c.w * (cone.rgb * u_voxelGi[1].w + (1.0 - cone.a) * kastVoxelEnvironment(d));
+    }
+    return mix(fallback, sum, w);
+}
+
+// The volume's specular at p: one cone along the reflection as wide as the GGX lobe (voxelGiSpecularAperture), past it
+// the environment's prefiltered cube (or the flat ambient), times the split sum's BRDF; blended toward fallback at the
+// box's faces.
+vec3 kastVoxelSpecular(vec3 n, vec3 v, vec3 p, float roughness, vec3 f0, float nv, vec3 fallback)
+{
+    float w = kastVoxelEdge(p);
+    if (w <= 0.0)
+        return fallback;
+    vec3 r = reflect(-v, n);
+    vec3 env = u_ambient.rgb;
+    if (u_envSpecular.w > 0.0) {
+        vec3 er = kastEnvDirection(r, p);
+        env = textureCubeLod(s_env, vec3(er.x, er.y, -er.z), roughness * u_envSpecular.w).rgb * u_envSpecular.rgb;
+    }
+    vec4 cone = kastVoxelCone(p + n * u_voxelGi[0].w, n, r, max(roughness * roughness, VOXEL_MIN_APERTURE), u_voxelGi[2].w);
+    vec2 brdf = kastEnvBrdf(roughness, nv);
+    return mix(fallback, (cone.rgb * u_voxelGi[1].w + (1.0 - cone.a) * env) * (f0 * brdf.x + brdf.y), w);
+}
+#endif
+
 // The diffuse GI selection point (u_gi.x, lightmap.h selectDiffuseGi): the irradiance / pi that replaces the
-// environment's at unit normal n. ponytail: VoxelGI and SDFGI (later) slot in here between the lightmap and the grid.
-vec3 kastGiDiffuse(vec3 n, vec2 lightmapUv)
+// environment's at unit normal n of the surface at p. ponytail: SDFGI (part 3) slots in here between VoxelGI and the grid.
+vec3 kastGiDiffuse(vec3 n, vec2 lightmapUv, vec3 p)
 {
 #ifdef KAST_HAS_LIGHTMAP
     if (u_gi.x < 1.5) {
@@ -506,10 +616,11 @@ vec3 kastGiDiffuse(vec3 n, vec2 lightmapUv)
         return e * u_gi.y;
     }
 #endif
-    vec3 e = u_giSh[0].rgb + u_giSh[1].rgb * n.y + u_giSh[2].rgb * n.z + u_giSh[3].rgb * n.x
-           + u_giSh[4].rgb * (n.x * n.y) + u_giSh[5].rgb * (n.y * n.z) + u_giSh[6].rgb * (3.0 * n.z * n.z - 1.0)
-           + u_giSh[7].rgb * (n.x * n.z) + u_giSh[8].rgb * (n.x * n.x - n.y * n.y);
-    return max(e, vec3_splat(0.0)) * u_gi.y;
+#ifdef KAST_HAS_VOXELGI
+    if (u_gi.x > 2.5) // VoxelGI, over the probe grid or the environment the mesh gets without it
+        return kastVoxelDiffuse(n, p, u_voxelGi[3].y > 0.5 ? kastGiSh(n) : kastVoxelEnvironment(n));
+#endif
+    return kastGiSh(n);
 }
 
 void main()
@@ -665,7 +776,7 @@ void main()
             color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo + fAmbient) * u_ambient.rgb * f.ao;
         }
     } else {
-        vec3 diffuse = (vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo * kastGiDiffuse(n, v_lightmapUv);
+        vec3 diffuse = (vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo * kastGiDiffuse(n, v_lightmapUv, v_worldPos);
         vec3 specular = fAmbient * u_ambient.rgb;
         if (u_envSpecular.w > 0.0) {
             vec3 r = kastEnvDirection(reflect(-v, n), v_worldPos);
@@ -673,6 +784,10 @@ void main()
             vec2 brdf = kastEnvBrdf(roughness, nv);
             specular = prefiltered * u_envSpecular.rgb * (f0 * brdf.x + brdf.y);
         }
+#ifdef KAST_HAS_VOXELGI
+        if (u_voxelGi[3].w > 0.5) // in a VoxelGI volume: its reflection instead (lightmapped draws too)
+            specular = kastVoxelSpecular(n, v, v_worldPos, roughness, f0, nv, specular);
+#endif
         color += (diffuse + specular) * f.ao;
     }
 

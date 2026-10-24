@@ -15,6 +15,7 @@
 #include <scene_io.h>
 #include <shader.h>
 #include <state_machines.h>
+#include <voxel_gi.h>
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
@@ -533,6 +534,7 @@ void Panels::drawInspector(Document& doc)
                         const bool sound = type.meta() && type.meta() == entt::resolve<kast::AudioSource>();
                         const bool particles = type.meta() && type.meta() == entt::resolve<kast::ParticleEmitter>();
                         const bool probe = type.meta() && type.meta() == entt::resolve<kast::ReflectionProbe>();
+                        const bool voxel = type.meta() && type.meta() == entt::resolve<kast::VoxelGI>();
                         const auto drawOne = [&](const kast::FieldDesc& field, Json& value) {
                             if (mesh && field.name == "material")
                                 return drawMaterialPicker(doc, value);
@@ -568,11 +570,14 @@ void Panels::drawInspector(Document& doc)
                                 return drawClipPicker(doc, entity, value);
                             if (sound && field.name == "clip")
                                 return drawSoundPicker(doc, value);
-                            if (probe && field.name == "resolution") { // only kast::kProbeResolutions
+                            if ((probe || voxel) && field.name == "resolution") { // kProbeResolutions, kVoxelGiResolutions
                                 const std::string current = std::to_string(value.get<int>());
                                 bool picked = false;
                                 if (ImGui::BeginCombo(field.displayName.c_str(), current.c_str())) {
-                                    for (const uint16_t resolution : kast::kProbeResolutions)
+                                    const std::vector<int> choices =
+                                        voxel ? std::vector<int>(std::begin(kast::kVoxelGiResolutions), std::end(kast::kVoxelGiResolutions))
+                                              : std::vector<int>(std::begin(kast::kProbeResolutions), std::end(kast::kProbeResolutions));
+                                    for (const int resolution : choices)
                                         if (ImGui::Selectable(std::to_string(resolution).c_str(), value == resolution) &&
                                             value != resolution) {
                                             value = resolution;
@@ -607,6 +612,8 @@ void Panels::drawInspector(Document& doc)
                             drawAudioPreview(doc, entity);
                         if (probe)
                             drawProbeBake(doc, entity);
+                        if (voxel)
+                            drawVoxelGiBake(doc, entity);
                     }
                 }
                 endCard();
@@ -1306,19 +1313,47 @@ const char* probeBakeBlocker(const Document& doc)
 
 } // namespace
 
-void Panels::drawProbeBake(Document& doc, entt::entity entity)
+void Panels::drawBakeStatus(const std::string& status)
 {
-    ImGui::SeparatorText("Bake");
-    const std::string status = probeStatus ? probeStatus(doc.scene.registry().get<kast::ReflectionProbe>(entity)) : "";
-    if (status == "Not baked") {
+    if (status.empty()) { // the renderer hasn't drawn the scene yet
+        ImGui::NewLine();
+    } else if (status == "Not baked") {
         ImGui::TextDisabled("Not baked");
     } else if (status == "Baked") {
         ImGui::TextUnformatted("Baked");
     } else {
-        ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+        ImGui::PushStyleColor(ImGuiCol_Text, status == "Out of date" ? kOutOfDateColor : kErrorColor);
         ImGui::TextWrapped("%s", status.c_str());
         ImGui::PopStyleColor();
     }
+}
+
+void Panels::drawVoxelGiBake(Document& doc, entt::entity entity)
+{
+    ImGui::SeparatorText("Bake");
+    if (const std::optional<float> baking = voxelGiProgress ? voxelGiProgress() : std::nullopt) {
+        ImGui::ProgressBar(*baking, ImVec2(-FLT_MIN, 0.0f), std::format("Baking {:.0f}%", *baking * 100.0f).c_str());
+        if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f)))
+            voxelGiCancelRequested_ = true;
+        return;
+    }
+    const std::string status = voxelGiStatus ? voxelGiStatus(doc.scene, entity) : "";
+    const std::string& name = doc.scene.registry().get<kast::Name>(entity).value;
+    if (std::string& last = voxelGiStatus_[name]; !status.empty() && status != std::exchange(last, status))
+        kast::log::info(std::format("VoxelGI '{}': {}", name, status));
+    drawBakeStatus(status);
+    const char* blocked = probeBakeBlocker(doc);
+    ImGui::BeginDisabled(blocked != nullptr);
+    if (ImGui::Button("Bake", ImVec2(-FLT_MIN, 0.0f)))
+        voxelGiBakeRequest_ = std::vector<entt::entity>{entity};
+    ImGui::EndDisabled();
+    disabledTooltip(blocked);
+}
+
+void Panels::drawProbeBake(Document& doc, entt::entity entity)
+{
+    ImGui::SeparatorText("Bake");
+    drawBakeStatus(probeStatus ? probeStatus(doc.scene.registry().get<kast::ReflectionProbe>(entity)) : "");
     const char* blocked = probeBakeBlocker(doc);
     ImGui::BeginDisabled(blocked != nullptr);
     if (ImGui::Button("Bake", ImVec2(-FLT_MIN, 0.0f)))
@@ -1827,6 +1862,37 @@ void Panels::drawLighting(Document& doc, bool& open, const std::string& skyError
             ImGui::BeginDisabled(blocked != nullptr);
             if (ImGui::Button("Bake Lightmaps", ImVec2(-FLT_MIN, 0.0f)))
                 lightmapBakeRequested_ = true;
+            ImGui::EndDisabled();
+            disabledTooltip(blocked);
+        }
+
+        // VoxelGI (docs/engine/voxelgi.html): each volume's bake status, Bake VoxelGI (all of them), its progress and Cancel.
+        ImGui::SeparatorText("VoxelGI");
+        if (const std::optional<float> voxelBaking = voxelGiProgress ? voxelGiProgress() : std::nullopt) {
+            ImGui::ProgressBar(*voxelBaking, ImVec2(-FLT_MIN, 0.0f),
+                               std::format("Baking {:.0f}%", *voxelBaking * 100.0f).c_str());
+            ImGui::PushID("voxelgi");
+            if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f)))
+                voxelGiCancelRequested_ = true;
+            ImGui::PopID();
+        } else {
+            const auto volumes = doc.scene.registry().view<const kast::VoxelGI>();
+            doc.scene.forEachDepthFirst([&](entt::entity entity) {
+                if (!volumes.contains(entity))
+                    return;
+                const std::string& name = doc.scene.registry().get<kast::Name>(entity).value;
+                const std::string status = voxelGiStatus ? voxelGiStatus(doc.scene, entity) : "";
+                if (std::string& last = voxelGiStatus_[name]; !status.empty() && status != std::exchange(last, status))
+                    kast::log::info(std::format("VoxelGI '{}': {}", name, status));
+                ImGui::TextUnformatted(std::format("{}:", name).c_str());
+                ImGui::SameLine();
+                drawBakeStatus(status);
+            });
+            const char* blocked = volumes.empty() ? "The scene has no VoxelGI volume (Add Component > Voxel GI)"
+                                                  : probeBakeBlocker(doc);
+            ImGui::BeginDisabled(blocked != nullptr);
+            if (ImGui::Button("Bake VoxelGI", ImVec2(-FLT_MIN, 0.0f)))
+                voxelGiBakeRequest_ = std::vector<entt::entity>{};
             ImGui::EndDisabled();
             disabledTooltip(blocked);
         }

@@ -29,7 +29,11 @@ dirty (<code>*</code> in the title).</p>
   (<em>Not baked</em>, <em>Baked</em>, <em>Out of date</em> in #ffcc00, or in red why its files can't be used) and
   <strong>Bake Lightmaps</strong>, which bakes on worker threads while the editor keeps drawing: a progress bar and
   <strong>Cancel</strong> replace the button until it is done (disabled during Play, until the scene is saved in a project, or
-  while no mesh is Static and no Terrain has Bake Lightmap; the tooltip says why). Then <strong>Reflection Probes</strong>: how
+  while no mesh is Static and no Terrain has Bake Lightmap; the tooltip says why). Then <strong>VoxelGI</strong>
+  (<a href="../engine/voxelgi.html">VoxelGI</a>): each VoxelGI volume's name and bake status (as its Inspector shows it,
+  logged as <code>VoxelGI '&lt;name&gt;': &lt;status&gt;</code> when it changes) and <strong>Bake VoxelGI</strong>, which voxelizes every
+  volume on a worker thread while the editor keeps drawing: a progress bar and <strong>Cancel</strong> replace the button until
+  it is done (disabled during Play, without volumes, or until the scene is saved in a project). Then <strong>Reflection Probes</strong>: how
   many the scene has and <strong>Bake All Probes</strong>, which bakes each one as its Inspector's Bake does
   (<a href="controls.html#reflection-probes">Reflection probes</a>; disabled during Play, without probes, or until the scene
   is saved in a project).</li>

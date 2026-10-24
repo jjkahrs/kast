@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoxelGI - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="lightmaps.html">Lightmaps and GI</a></li><li><a href="voxelgi.html" class="active">VoxelGI</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li></ul></nav>
+<main>
+<h1 id="voxelgi">VoxelGI volumes</h1>
+<p>A <strong>VoxelGI</strong> volume gives everything inside its box diffuse global illumination and glossy reflections that
+follow the lights in real time: move a lamp, swing a door's light, change the time of day, and the red wall's glow on the
+floor moves with it, without a re-bake. The room's <em>Static</em> geometry is voxelized once in the editor; every frame the
+GPU relights those voxels with the scene's lights (their shadow maps occluding), bounces the light, and meshes
+cone-trace the result (<code>engine/voxel_gi.h</code>, <code>engine/shaders/cs_voxelgi_*.sc</code>, <code>engine/shaders/fs_mesh.sc</code>).
+The Scene view, the Game view and the built game render it alike.</p>
+<p>Nothing changes until you add a volume: a scene without one renders pixel for pixel as before.</p>
+
+<h2 id="quick-start">Quick start</h2>
+<ol>
+<li>Set the room's walls, floor, ceiling and fixed props to <strong>GI Mode Static</strong> (their Mesh Renderer or Model
+  Renderer; <a href="lightmaps.html#gi-mode">Lightmaps and GI</a>). Static is what the volume voxelizes: what bounces and
+  blocks its light.</li>
+<li>Create an empty entity in the middle of the room, <strong>Add Component &gt; Voxel GI</strong> and size its <strong>Box Size</strong>
+  to just enclose the room (the orange box in the Scene view).</li>
+<li>Save the scene in a project and press the volume's <strong>Bake</strong> (Inspector) or <strong>Window &gt; Lighting &gt; Bake
+  VoxelGI</strong>. It takes a fraction of a second; the scene is marked dirty: save it.</li>
+<li>Everything inside the box now takes its ambient light from the volume. Lights can move; Static meshes can't (move
+  one and the status says <strong>Out of date</strong>: bake again).</li>
+</ol>
+
+<h2 id="component">The VoxelGI component</h2>
+<table>
+<tr><th>Field</th><th>Default</th><th>Range</th><th>Meaning</th></tr>
+<tr><td><code>boxSize</code></td><td>[10, 4, 10]</td><td>&gt; 0 per axis</td><td>meters, axis-aligned, centered on the entity's world
+  position (its rotation and scale are ignored, as a <a href="ibl-reflection-probes.html#probes">reflection probe</a>'s)</td></tr>
+<tr><td><code>resolution</code></td><td>128</td><td>64, 128, 256</td><td>voxels along the box's longest axis; the other axes get as many
+  cubic voxels as cover them (so the voxel grid can be a little larger than the box)</td></tr>
+<tr><td><code>intensity</code></td><td>1</td><td>&gt;= 0</td><td>scales the volume's light (diffuse and specular)</td></tr>
+<tr><td><code>quality</code></td><td><code>"medium"</code></td><td><code>"low"</code>, <code>"medium"</code>, <code>"high"</code></td><td>the <a href="#quality">preset</a>: cones,
+  step size, bounces</td></tr>
+<tr><td><code>priority</code></td><td>0</td><td></td><td>where boxes overlap, the higher priority wins (<a href="#selection">selection</a>)</td></tr>
+<tr><td><code>enabled</code></td><td>true</td><td></td><td>off: the volume lights nothing (meshes in it are lit as outside it)</td></tr>
+<tr><td><code>bakedPath</code></td><td>""</td><td>project-relative</td><td>the bake's <code>&lt;id&gt;.json</code>, set by Bake; empty = not baked</td></tr>
+</table>
+<pre><code class="language-json">"VoxelGI": { "boxSize": [6.6, 4.6, 6.6], "resolution": 128, "intensity": 1, "quality": "medium",
+             "priority": 0, "enabled": true, "bakedPath": "voxelgi_room_voxelgi/13.json" }</code></pre>
+<p><code>quality</code>, <code>priority</code> and <code>enabled</code> are optional in the scene file. Intensity, quality, priority and
+enabled apply at once; box size, resolution and the volume's position at the next bake (until then the old bake keeps
+rendering where it was baked and the status says Out of date; a bake of another resolution than the volume's can't be
+used at all).</p>
+
+<h2 id="bake">Baking</h2>
+<p>The bake gathers the scene as <a href="lightmaps.html#how">Bake Lightmaps</a> does (Static primitives and non-skinned models in
+their bind pose, and the tiles of every Terrain with Bake Lightmap on), then samples every triangle touching the box at
+half a voxel's spacing; each voxel a sample falls in averages its surfaces' albedo (base color times its texture's average
+times 1 - metallic), interpolated normal and emission. It is deterministic and runs on a worker thread: the editor keeps
+drawing, with a progress bar and Cancel in the Lighting panel and the Inspector. <code>tests/project/voxelgi_room.scene</code>
+(a 6.6 m room) bakes in 0.03 s at resolution 128 (119 000 voxels) and in 0.15 s at 256 (483 000 voxels). Command line:
+<a href="../editor/command-line.html">--bake-voxelgi</a>.</p>
+<h3 id="files">Files</h3>
+<pre><code>&lt;scene-dir&gt;/&lt;scene-name&gt;_voxelgi/&lt;id&gt;.kvox   the voxels: "KVOX", version, grid size, count, then per voxel 16 bytes:
+                                            index, albedo RGBA8 (a: opacity), normal RGB8, emission RGBE8
+&lt;scene-dir&gt;/&lt;scene-name&gt;_voxelgi/&lt;id&gt;.json   version, hash, resolution, grid (origin, voxel size, dims), voxel count,
+                                            the .kvox's name and FNV-1a hash</code></pre>
+<p>Only voxels a surface touches are stored, so a file grows with the surface area, not with the box's volume: 1.9 MB for
+the test room at 128, 7.7 MB at 256 (a dense 256<sup>3</sup> RGBA8 volume would be 64 MB per channel). Both files are written
+atomically, the json last, so a cancelled or failed bake leaves the previous one intact. The <code>hash</code> covers every
+Static mesh (mesh, material, world matrix), lightmapped terrain and the volume's position, box and resolution.
+<a href="../editor/build.html">Build</a> ships both files in <code>game.pak</code>; the player loads them like the editor.</p>
+
+<h2 id="runtime">Every frame</h2>
+<p>Each enabled, baked volume runs three compute passes in the <code>VoxelGI</code> view, after the frame's shadow maps (the last
+of <code>Renderer::kShadowViews</code>):</p>
+<ol>
+<li><strong>Inject</strong> (<code>cs_voxelgi_inject.sc</code>, one thread per baked voxel): the directional light and the local lights
+  nearest the volume that reach it (point, spot and area; 16 lights in all) light each voxel exactly as
+  <code>fs_mesh.sc</code> lights a rough surface (<code>pointLightFalloff</code>, <code>spotConeFalloff</code>, the area light's form factor and
+  range window; the C++ mirror <code>voxelGiLightIrradiance</code> is checked against them in <code>kast_self_check</code>), each shadowed
+  by its shadow map of this frame (one hardware-compared tap; points outside the directional light's cascades count as
+  lit). A voxel's light is its albedo times that plus its emission.</li>
+<li><strong>Mips</strong> (<code>cs_voxelgi_mip.sc</code>): an RGBA16F 3D radiance texture (rgb premultiplied by opacity in a) gets its
+  isotropic mip chain, each level the mean of the 2 x 2 x 2 voxels under it.</li>
+<li><strong>Bounces</strong> (<code>cs_voxelgi_bounce.sc</code>): every voxel gathers the mipped volume with the preset's diffuse cones and
+  writes its direct light plus albedo times what it gathered into a second volume (ping-pong), mipped again: one bounce
+  at Low and Medium, two at High.</li>
+</ol>
+<h3 id="shading">Shading</h3>
+<p>A draw whose world bounds' center is inside a volume's box cone-traces its final radiance volume
+(<code>kastVoxelDiffuse</code>, <code>kastVoxelSpecular</code> in <code>fs_mesh.sc</code>):</p>
+<pre><code>diffuse  = sum over the preset's cones of weight * (cone light + (1 - cone occlusion) * environment(cone direction))
+specular = (cone light + (1 - cone occlusion) * environment cube) * (F0 * brdf.x + brdf.y)   one cone along the reflection,
+           tan(half angle) = max(roughness^2, 0.04)
+both     * intensity, faded into the light the mesh gets without the volume over the box's last 4 voxels</code></pre>
+<p>Cones march front to back, each step's mip as wide as the cone there. A mip voxel's opacity is scaled by its size in
+voxels (so a voxel-thin wall blocks a wide cone as a solid one would) and each sample is lifted off the surface by the
+cone's width (so the surface's own voxels don't shade it). What a cone sees past the volume unblocked is the
+environment the mesh would get anyway: the sky's or a reflection probe's light, or the flat ambient.</p>
+<p>The diffuse follows the <a href="lightmaps.html#shading">precedence</a> <strong>Lightmap &gt; VoxelGI &gt; (SDFGI) &gt; probe grid &gt;
+environment</strong>: a Static mesh with a valid lightmap keeps the lightmap's diffuse; every other mesh in the box (Off,
+Dynamic, a Static one the lightmaps don't cover) takes the volume's, fading at the box's faces into the probe grid (if it
+samples one) or the environment. The specular inside the box is the volume's for every mesh, lightmapped ones included:
+it replaces the reflection probe's and the sky's.</p>
+<p><strong>Dynamic meshes</strong> are lit by the volume but are never voxelized: they don't bounce its light or block it (their
+shadows in the shadow maps do darken what inject lights).</p>
+<h3 id="selection">Overlapping volumes</h3>
+<p>A draw takes one volume, chosen as reflection probes are (<code>selectProbe</code>): of the volumes whose box contains its bounds'
+center, the highest <code>priority</code>; among equals the nearest box center; then scene order. Put a small high-priority
+volume in an alcove of a big room's volume to give it finer voxels.</p>
+
+<h2 id="quality">Quality and cost</h2>
+<table>
+<tr><th>Preset</th><th>Diffuse cones</th><th>Step</th><th>Bounces</th><th>Specular steps</th></tr>
+<tr><td>Low</td><td>4 (40 degree half angle)</td><td>1 cone width</td><td>1</td><td>32</td></tr>
+<tr><td>Medium</td><td>6 (30 degrees)</td><td>0.75 cone widths</td><td>1</td><td>64</td></tr>
+<tr><td>High</td><td>9 (22.5 degrees)</td><td>0.5 cone widths</td><td>2</td><td>128</td></tr>
+</table>
+<p>GPU time of <code>voxelgi_room</code> in the built player at 1600 x 900 (RTX 4070 Ti SUPER, <code>--gpu-stats</code>: the frame's views
+summed, averaged over 300 frames; without the volume the frame takes 0.11 ms; in brackets the <code>VoxelGI</code> view, the
+compute passes):</p>
+<table>
+<tr><th>Resolution</th><th>Low</th><th>Medium</th><th>High</th></tr>
+<tr><td>128 (119 000 voxels)</td><td>0.30 ms (0.12)</td><td>0.38 ms (0.14)</td><td>0.75 ms (0.27)</td></tr>
+<tr><td>256 (483 000 voxels)</td><td>1.03 ms (0.64)</td><td>1.69 ms (0.68)</td><td>5.91 ms (4.18)</td></tr>
+</table>
+<p>The compute passes scale with the voxels a bake holds (and High's second bounce), the shading with the pixels inside a
+box. The stats overlay (F3 in the Game view and the player) adds <code>VoxelGI &lt;ms&gt; ms</code>, the <code>VoxelGI</code> view's GPU time.
+GPU memory per volume: two radiance volumes with their mips (about 18 bytes per voxel of the grid: 27 MB for the test
+room's 128 x 90 x 128) plus 80 bytes per baked voxel.</p>
+
+<h2 id="fallbacks">When a bake can't be used</h2>
+<p>Not baked, a missing or corrupt <code>.json</code> or <code>.kvox</code>, a <code>.kvox</code> that doesn't match its hash, another version, or a
+bake of another resolution than the volume's: the engine warns once (<code>VoxelGI 'Room': 'room_voxelgi/13.json': baked at
+resolution 128, the volume is 64 (bake again); meshes in its box are lit as outside it</code>), the Inspector and the Lighting
+panel show why, and the meshes in its box get the light below VoxelGI in the precedence, exactly as without the volume.
+A GPU without compute shaders or RGBA16F 3D images turns VoxelGI off with one warning. Never a crash, never black.</p>
+
+<h2 id="lua">Lua</h2>
+<p>A volume's fields are ordinary component fields: read and set them with <code>kast.get</code> / <code>kast.set</code>. Intensity and
+enabled apply at once; there is no Lua bake (changing the box or resolution only makes the bake out of date or unusable).</p>
+<pre><code class="language-lua">for e in kast.query("VoxelGI") do
+    kast.set(e, "VoxelGI", {intensity = 0.5})   -- dusk: half the bounced light
+end
+kast.set(room, "VoxelGI", {enabled = false})    -- this volume off: the probe grid or the sky instead</code></pre>
+
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Isotropic mips: light leaks through walls thinner than about two voxels at coarse mips, and a mip voxel's color is
+  the mean of all its sides. Six anisotropic volumes would fix both, at six times the memory and mip cost.</li>
+<li>Shadows come from this frame's shadow maps: the directional light's cascades follow the camera, so voxels outside
+  them count as lit, and only the shadowed point, spot and area lights nearest the camera have maps at all.</li>
+<li>Static means static: moving geometry neither bounces nor blocks the volume's light until the next bake. The sky's light
+  isn't bounced (cones that leave the volume see it directly), only the lights'.</li>
+<li>At most 16 lights relight a volume; every volume relights every frame (no time slicing); D3D11 only, as the rest of the
+  renderer.</li>
+<li><code>.kshader</code> materials with two or more <code>texture2D</code> params give VoxelGI's sampler stage (11) to their second one: their
+  draws get the light below VoxelGI.</li>
+</ul>
+</main>
+</div>
+</body>
+</html>

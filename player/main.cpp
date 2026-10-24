@@ -201,6 +201,7 @@ int main(int argc, char** argv)
     kast::Renderer renderer;
     kast::PostProcess post(kGameView);
     double gpuMs = 0.0; // --gpu-stats: summed after the warmup
+    double voxelGiMs = 0.0; // --gpu-stats: the VoxelGI view's share (its volumes' compute passes)
     int gpuFrames = 0;
     kast::SceneGui gui("game");
     kast::StatsOverlay stats(options->gpuStats ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE); // F3
@@ -286,11 +287,11 @@ int main(int argc, char** argv)
             kast::log::info(std::format("Drawing through a readable {}x{} framebuffer (a GUI reads its backdrop)", width, height));
         }
         post.apply(scene.postProcessing, true, readable);
-        if (const bgfx::Stats* stats = bgfx::getStats(); options->gpuStats && frame >= kGpuStatsWarmupFrames) {
-            // The last frame's views (the profiler's per-view timers), so the vsync wait isn't counted.
-            for (uint16_t i = 0; i < stats->numViews; ++i)
-                gpuMs += static_cast<double>(stats->viewStats[i].gpuTimeEnd - stats->viewStats[i].gpuTimeBegin) *
-                         1000.0 / static_cast<double>(stats->gpuTimerFreq);
+        // The last frame's views (the profiler's per-view timers), so the vsync wait isn't counted; a frame with a timer
+        // not read back yet is left out.
+        if (const std::optional<double> ms = kast::viewGpuMs(nullptr); options->gpuStats && frame >= kGpuStatsWarmupFrames && ms) {
+            gpuMs += *ms;
+            voxelGiMs += kast::viewGpuMs("VoxelGI").value_or(0.0);
             ++gpuFrames;
         }
         if (width > 0 && height > 0) {
@@ -334,7 +335,8 @@ int main(int argc, char** argv)
     };
     hooks.shutdown = [&] {
         if (options->gpuStats && gpuFrames > 0)
-            kast::log::info(std::format("GPU frame time: {:.3f} ms average over {} frames", gpuMs / gpuFrames, gpuFrames));
+            kast::log::info(std::format("GPU frame time: {:.3f} ms average over {} frames (VoxelGI view {:.3f} ms)",
+                                        gpuMs / gpuFrames, gpuFrames, voxelGiMs / gpuFrames));
         kast::log::info(kast::assetLoadSummary());
         lua.stop();
         gui.clear();

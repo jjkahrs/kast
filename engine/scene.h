@@ -157,6 +157,26 @@ struct ReflectionProbe {
     std::string bakedPath;                // project-relative .ktx written by Bake; empty = not baked
 };
 
+// A VoxelGI volume's cost / quality (voxel_gi.h voxelGiPreset): diffuse cones per pixel, step size, bounces.
+enum class VoxelGiQuality { Low, Medium, High };
+
+// A VoxelGI volume (docs/engine/voxelgi.html, voxel_gi.h): the editor's Bake voxelizes the Static meshes (and lightmapped
+// Terrain tiles) in its box (boxSize meters, axis-aligned, centered on the entity; rotation and scale are ignored, as a
+// ReflectionProbe's) into resolution voxels along its longest axis, saved to bakedPath; every frame the GPU lights them
+// with the scene's lights (their shadow maps occluding) and bounces that light, and meshes whose world bounds' center
+// is inside the box cone-trace it: their diffuse ambient (unless a lightmap gives it, lightmap.h selectDiffuseGi) and
+// their glossy specular, both times intensity, fading to the light outside the box over its last few voxels. Where boxes
+// overlap, the highest priority wins, then the nearest box center. Off (enabled false, also from Lua), it lights nothing.
+struct VoxelGI {
+    bx::Vec3 boxSize{10.0f, 4.0f, 10.0f}; // > 0 on every axis
+    int resolution = 128;                 // 64, 128 or 256 voxels along the longest axis
+    float intensity = 1.0f;               // >= 0
+    VoxelGiQuality quality = VoxelGiQuality::Medium;
+    int priority = 0;
+    bool enabled = true;
+    std::string bakedPath;                // project-relative .json written by Bake; empty = not baked
+};
+
 constexpr float kMinLightmapTexelsPerMeter = 0.25f, kMaxLightmapTexelsPerMeter = 64.0f;
 constexpr int kMaxLightmapBounces = 8, kMaxLightmapSamples = 4096;
 constexpr float kMinProbeSpacing = 0.25f, kMaxProbeSpacing = 16.0f;

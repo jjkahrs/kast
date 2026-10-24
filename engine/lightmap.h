@@ -29,11 +29,12 @@ constexpr int kLightmapFormatVersion = 1;
 constexpr uint16_t kLightmapAtlasSize = 1024; // texels per side of an atlas page at most
 constexpr size_t kMaxGridProbes = 8192;       // the probe grid's spacing grows until it has at most this many
 
-// The diffuse ambient a draw takes (fs_mesh.sc u_gi.x), the one selection point: a lightmap if it has one, else the
-// probe grid if it samples it, else the environment (reflection probe, sky or flat ambient) as before GI.
-// ponytail: VoxelGI and SDFGI (later parts) slot in between Lightmap and ProbeGrid here and in fs_mesh.sc kastGiDiffuse.
-enum class DiffuseGi { Environment = 0, Lightmap = 1, ProbeGrid = 2 };
-DiffuseGi selectDiffuseGi(bool lightmapped, bool probeGrid);
+// The diffuse ambient a draw takes (fs_mesh.sc u_gi.x), the one selection point: a lightmap if it has one, else a
+// VoxelGI volume if it is in one (voxel_gi.h), else the probe grid if it samples it, else the environment (reflection
+// probe, sky or flat ambient) as before GI.
+// ponytail: SDFGI (part 3) slots in between VoxelGi and ProbeGrid here and in fs_mesh.sc kastGiDiffuse.
+enum class DiffuseGi { Environment = 0, Lightmap = 1, ProbeGrid = 2, VoxelGi = 3 };
+DiffuseGi selectDiffuseGi(bool lightmapped, bool probeGrid, bool voxelGi = false);
 
 // Whether a light of this bake mode shines on a draw at run time: everything but a Full light on a lightmapped draw
 // (its direct light is in the lightmap already).

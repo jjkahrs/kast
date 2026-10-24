@@ -135,6 +135,9 @@ struct LightmapUnwrap {
 bool unwrapLightmapMeshes(const std::vector<BakeMesh>& meshes, const bx::Vec3& scale, float density, LightmapUnwrap& out,
                           std::string& error);
 
+// A normal carried by m (inverse transpose: right for non-uniform scale), unit.
+bx::Vec3 transformNormal(const bx::Vec3& n, const Mat4& m);
+
 // A light's irradiance / pi at p with unit normal n (lightmap units: a white surface shows it), unshadowed: exactly as
 // fs_mesh.sc shades a rough white dielectric with it (pointLightFalloff, spotConeFalloff, rectFormFactor and the range
 // window).

@@ -166,6 +166,13 @@ its <code>bakedPath</code> set. Logs <code>Baked lightmaps to '&lt;path&gt;' in 
 (<code>Lightmap bake cancelled; the previous bake is kept</code>), for tests.</td>
 </tr>
 <tr>
+<td><code>--bake-voxelgi</code></td>
+<td>Window &gt; Lighting's Bake VoxelGI after the first 8 frames, waited for (the frame doesn't end until the bake is
+written), so <code>--file-save</code> and <code>--screenshot</code> see it: every <a href="../engine/voxelgi.html#bake">VoxelGI</a>
+volume of the scene is voxelized into <code>&lt;scene-name&gt;_voxelgi/&lt;entity id&gt;.kvox</code> and <code>.json</code> next to it and its
+<code>bakedPath</code> set. Logs <code>Baked VoxelGI '&lt;name&gt;' to '&lt;path&gt;' in &lt;seconds&gt; s: &lt;n&gt; voxels</code> per volume.</td>
+</tr>
+<tr>
 <td><code>--file-save</code></td>
 <td>File &gt; Save (as Ctrl+S: the scene, then a zone with unsaved edits) after the first 10 frames, for tests.</td>
 </tr>
