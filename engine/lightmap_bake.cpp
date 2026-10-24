@@ -82,7 +82,8 @@ bx::Vec3 sphereDirection(float u, float v)
 
 bx::Vec3 transformPoint(const bx::Vec3& p, const Mat4& m) { return bx::mul(p, m.data()); }
 
-// A normal carried by m (inverse transpose: right for non-uniform scale), unit.
+} // namespace
+
 bx::Vec3 transformNormal(const bx::Vec3& n, const Mat4& m)
 {
     const bx::Vec3 c0{m[0], m[1], m[2]}, c1{m[4], m[5], m[6]}, c2{m[8], m[9], m[10]};
@@ -93,6 +94,8 @@ bx::Vec3 transformNormal(const bx::Vec3& n, const Mat4& m)
     const float length = bx::length(out);
     return length > 0.0f ? bx::mul(out, 1.0f / length) : bx::Vec3{0.0f, 1.0f, 0.0f};
 }
+
+namespace {
 
 // The scale of each of m's axes (no shear assumed).
 bx::Vec3 axisScale(const Mat4& m)

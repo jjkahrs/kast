@@ -10,6 +10,7 @@
 #include "online.h"
 #include "online_panel.h"
 #include "lightmap_job.h"
+#include "voxelgi_job.h"
 #include "panels.h"
 #include "recent_projects.h"
 #include "shader_compiler.h"
@@ -59,7 +60,7 @@ constexpr float kZoneNearPlane = 0.5f; // the editor camera's planes while the S
 constexpr float kZoneFarPlane = 6000.0f;
 // Each viewport's shadow maps, then its scene and post passes (see SceneViewport, GameViewport).
 constexpr bgfx::ViewId kViewportViews = kast::Renderer::kShadowViews + kast::PostProcess::kViews;
-constexpr bgfx::ViewId kSceneView = 1; // then its overlays
+constexpr bgfx::ViewId kSceneView = 0; // then its overlays (view 0 too: 256 views hold no more)
 constexpr bgfx::ViewId kGameView = kSceneView + kViewportViews + 1;
 constexpr bgfx::ViewId kGameGuiView = kGameView + kViewportViews; // the game GUIs (kast::gui::kViews), over the Game view's scene
 constexpr bgfx::ViewId kGuiPreviewView = kGameGuiView + kast::gui::kViews; // the GUI Builder's preview
@@ -85,7 +86,7 @@ constexpr const char* kUsage =
     "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
-    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [zone edits] | "
+    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel (without --play: on the Scene view), for
@@ -150,6 +151,7 @@ struct Options {
     bool bakeLightmaps = false;
     bool bakeLightmapsAsync = false;
     int cancelLightmaps = 0;
+    bool bakeVoxelGi = false; // --bake-voxelgi: Window > Lighting's Bake VoxelGI, waited for, before --file-save's frame
     std::string mapbake;    // --mapbake: the kast_mapbake.exe for this run (not saved to the settings)
     std::vector<zone_cli::Op> zoneOps; // --map, --new-map, --sculpt, ..., --save-zone (zone_cli.h), in order, before the window
     bool headless = false;  // --headless: run the zone edits (and --bake) and exit without opening a window
@@ -542,6 +544,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.bakeProbes = true;
         } else if (arg == "--bake-lightmaps") {
             options.bakeLightmaps = true;
+        } else if (arg == "--bake-voxelgi") {
+            options.bakeVoxelGi = true;
         } else if (arg == "--bake-lightmaps-async") {
             options.bakeLightmapsAsync = true;
         } else if (arg == "--cancel-lightmaps" && hasValue && parsePositive(argv[i + 1], options.cancelLightmaps)) {
@@ -684,14 +688,14 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.onlineCompose || !options.zoneOps.empty() || options.headless || options.noRecycle ||
                              options.sculptLoop || options.focus || options.promptRemoveTile || options.fileSave ||
                              options.bakeProbes || options.bakeLightmaps || options.bakeLightmapsAsync ||
-                             options.cancelLightmaps || options.undo || options.redo;
+                             options.cancelLightmaps || options.bakeVoxelGi || options.undo || options.redo;
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --select-network-entity, --add-component-popup, --new-component[-prompt], "
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
                          "--assets-menu, "
                          "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
                          "--gui-click, --open-graph, --preview-model, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
-                         "steps, --scene-undo, --scene-redo, --assets-delete, --inspector-apply-menu, --file-save, --bake-probes, --bake-lightmaps[-async], --cancel-lightmaps and the zone flags require "
+                         "steps, --scene-undo, --scene-redo, --assets-delete, --inspector-apply-menu, --file-save, --bake-probes, --bake-lightmaps[-async], --cancel-lightmaps, --bake-voxelgi and the zone flags require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
     }
@@ -1542,6 +1546,9 @@ int main(int argc, char** argv)
     LightmapJob lightmapJob; // Bake Lightmaps on a worker thread
     panels.lightmapStatus = [&](const kast::Scene& scene) { return viewport.renderer().lightmapStatus(scene); };
     panels.lightmapProgress = [&] { return lightmapJob.progress(); };
+    VoxelGiJob voxelGiJob; // Bake VoxelGI on a worker thread
+    panels.voxelGiStatus = [&](const kast::Scene& scene, entt::entity volume) { return viewport.renderer().voxelGiStatus(scene, volume); };
+    panels.voxelGiProgress = [&] { return voxelGiJob.progress(); };
     hooks.frame = [&] {
         const uint64_t frameStart = SDL_GetPerformanceCounter();
         // Before this frame submits anything: a bake runs frames of its own on the Scene view's views.
@@ -1633,6 +1640,19 @@ int main(int argc, char** argv)
         if (panels.takeLightmapCancelRequest())
             lightmapJob.cancel();
         lightmapJob.poll(doc, static_cast<uint64_t>(frames.frame()));
+        if (options->bakeVoxelGi && frames.frame() == kAddComponentPopupFrame - 2) {
+            std::string error;
+            if (!voxelGiJob.start(doc, {}, error))
+                kast::log::error(std::format("Bake VoxelGI: {}", error));
+            voxelGiJob.wait(); // done (and written by poll below) before --file-save's frame
+        }
+        if (std::optional<std::vector<entt::entity>> volumes = panels.takeVoxelGiBakeRequest()) {
+            if (std::string error; !voxelGiJob.start(doc, std::move(*volumes), error))
+                kast::log::error(std::format("Bake VoxelGI: {}", error));
+        }
+        if (panels.takeVoxelGiCancelRequest())
+            voxelGiJob.cancel();
+        voxelGiJob.poll(doc);
         if (options->fileSave && frames.frame() == kAddComponentPopupFrame)
             files.save();
         if (!options->openGui.empty() && frames.frame() == kAddComponentPopupFrame)

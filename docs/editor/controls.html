@@ -159,6 +159,18 @@ Renderer have a <strong>GI Mode</strong> combo (Off, Static, Dynamic; a skinned 
 <strong>Lightmap Scale</strong> (floored at 0.01); every light has a <strong>Bake Mode</strong> combo (Realtime, Indirect, Full); Terrain
 has <strong>Bake Lightmap</strong>. All are ordinary undoable fields. <strong>Window &gt; Lighting</strong>'s <strong>Bake Lightmaps</strong> bakes
 the scene in the background (<a href="index.html">Lighting panel</a>).</p>
+<p id="voxelgi"><strong>VoxelGI volumes</strong> (<a href="../engine/voxelgi.html">VoxelGI</a>): <strong>Add Component &gt; Voxel GI</strong>
+on an entity (usually an empty one centered in a room). The selected volume's voxel grid shows as orange (#ffaa00) lines
+in the Scene view, axis-aligned around its position (rotation and scale don't apply to it; the box is whole voxels, so a
+little past Box Size on its shorter axes). Its Inspector section: <strong>Box Size</strong> (floored at 0.01 m per axis), a
+<strong>Resolution</strong> combo (64, 128, 256 voxels along the longest axis), <strong>Intensity</strong>, a <strong>Quality</strong> combo
+(Low, Medium, High), <strong>Priority</strong>, <strong>Enabled</strong>, <strong>Baked Path</strong>, then a <strong>Bake</strong> row: the status
+(<em>Not baked</em>, <em>Baked</em>, <em>Out of date</em> in #ffcc00 once a Static mesh moved or the box changed, or in red why its
+files can't be used, e.g. <em>baked at resolution 128, the volume is 64 (bake again)</em>, logged when it changes) and the
+<strong>Bake</strong> button, which voxelizes this volume in the background (a progress bar and <strong>Cancel</strong> while it runs),
+writes <code>&lt;scene-name&gt;_voxelgi/&lt;entity id&gt;.kvox</code> and <code>.json</code> next to the scene, sets Baked Path and marks the
+scene dirty (not an undo step). Bake is disabled during Play and until the scene is saved in a project; the field edits
+are ordinary undoable edits; Intensity, Quality, Priority and Enabled apply at once, the rest at the next bake.</p>
 <p><strong>Play mode</strong> (the Play / Pause / Stop icon buttons at the right of the Scene / Game tab bar, whichever tab is shown, or of the Scene title bar while it floats; hidden when the bar is too narrow. Or Ctrl+P): Play snapshots the scene in memory and runs the systems
 (e.g. <code>Rotator</code>) every frame; Pause holds them, Play or Pause again resumes; Stop restores the snapshot exactly (scene,
 unsaved-changes flag, selection by id; the editor camera stays where it is). Play (from stopped, including <code>--play</code>)

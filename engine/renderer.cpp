@@ -30,6 +30,7 @@
 #include "post_process.h"
 #include "project.h"
 #include "terrain.h"
+#include "voxel_gi.h"
 
 #include <bimg/bimg.h>
 #include <bx/error.h>
@@ -58,6 +59,7 @@ constexpr uint32_t kColliderColor = 0xff40ff60; // ABGR: green
 constexpr int kRangeCircleSegments = 48;
 constexpr uint32_t kParticleShapeColor = 0xff00aaff; // ABGR: the editor's orange
 constexpr uint32_t kProbeBoxColor = 0xff00ccff;      // ABGR: the editor's highlight yellow
+constexpr uint32_t kVoxelGiBoxColor = 0xff00aaff;    // ABGR: the editor's orange
 constexpr int kSphereStacks = 16;
 constexpr int kSphereSlices = 32;
 // No culling here: a mesh draw adds its material's cullMode (cullState), lines draw as they are.
@@ -229,7 +231,8 @@ Aabb transformBounds(const Aabb& local, const float* world)
 
 // What draws must share to be one instanced submit: buffers, material, shadow flags and, in the main pass, the local
 // lights that reach them, the environment they take their ambient from and their diffuse GI (gi: 0 none, else a
-// lightmap's texture + 1, or a probe-grid draw's own number: so each instance is lit as its own draw would be).
+// lightmap's texture + 1, or a probe-grid draw's own number, plus its VoxelGI volume + 1 << 40: so each instance is lit
+// as its own draw would be).
 struct BatchKey {
     uint16_t vertices = 0, indices = 0;
     const Material* material = nullptr;
@@ -567,6 +570,70 @@ float rectFormFactor(const std::array<bx::Vec3, 4>& corners, const bx::Vec3& nor
     return twoSided ? std::abs(sum) : std::max(sum, 0.0f);
 }
 
+struct Renderer::VoxelGiState {
+    // A baked volume's files as loaded: its sidecar and its voxels on the GPU (volume.voxels 0 and error set: unusable).
+    struct File {
+        std::string error;
+        std::optional<std::filesystem::file_time_type> jsonTime, kvoxTime;
+        VoxelGiSidecar sidecar;
+        VoxelGiRenderer::Volume volume;
+    };
+    VoxelGiRenderer passes;
+    std::map<std::pair<std::string, int>, File> files; // by (bakedPath, resolution)
+    bgfx::UniformHandle params = BGFX_INVALID_HANDLE;  // u_voxelGi[4]
+    bgfx::UniformHandle cones = BGFX_INVALID_HANDLE;   // u_voxelCones
+    bgfx::UniformHandle sampler = BGFX_INVALID_HANDLE; // s_voxelGi (stage 11)
+
+    void clear()
+    {
+        for (auto& [key, file] : files)
+            passes.destroy(file.volume);
+        files.clear();
+    }
+
+    // volume.bakedPath's files (set), loaded or reloaded first.
+    const File& file(const std::filesystem::path& root, const VoxelGI& volume)
+    {
+        std::string error = "no project";
+        const std::optional<std::filesystem::path> json =
+            root.empty() ? std::nullopt : resolveProjectPath(root, volume.bakedPath, error);
+        const std::filesystem::path kvox = json ? std::filesystem::path(*json).replace_extension(".kvox") : std::filesystem::path();
+        const auto jsonTime = json ? modifiedTime(*json) : std::nullopt;
+        const auto kvoxTime = json ? modifiedTime(kvox) : std::nullopt;
+        auto [it, added] = files.try_emplace({volume.bakedPath, volume.resolution});
+        File& f = it->second;
+        if (!added && f.jsonTime == jsonTime && f.kvoxTime == kvoxTime) // a re-bake rewrites both
+            return f;
+        const LoadTimer timer(assetLoadStats().textures, assetLoadStats().textureSeconds);
+        passes.destroy(f.volume);
+        f = File{};
+        f.jsonTime = jsonTime;
+        f.kvoxTime = kvoxTime;
+        std::string text, bytes;
+        std::vector<Voxel> voxels;
+        if (json && !readFile(*json, text))
+            error = "cannot read the file";
+        else if (json && !readFile(kvox, bytes))
+            error = "cannot read its .kvox";
+        else if (json && checkVoxelGiBake(text, bytes, volume.resolution, f.sidecar, voxels, error) &&
+                 !passes.create(f.volume, f.sidecar.grid, voxels))
+            error = "this GPU can't run VoxelGI (no compute or 3D images)";
+        else if (json && bgfx::isValid(f.volume.data))
+            error.clear();
+        if (!error.empty()) {
+            f.error = error;
+            passes.destroy(f.volume);
+        } else {
+            log::info(std::format("Loaded VoxelGI '{}' ({} voxels, {}x{}x{})", volume.bakedPath, f.sidecar.voxels,
+                                  f.sidecar.grid.dims[0], f.sidecar.grid.dims[1], f.sidecar.grid.dims[2]));
+        }
+        return f;
+    }
+};
+
+Renderer::Renderer() : voxelGi_(std::make_unique<VoxelGiState>()) {}
+Renderer::~Renderer() = default;
+
 void Renderer::init()
 {
     meshLayout_.begin()
@@ -683,6 +750,10 @@ void Renderer::init()
     sky_.init();
     envFilter_.init();
     particles_.init(bgfx::getCaps()->supported);
+    voxelGi_->passes.init();
+    voxelGi_->params = bgfx::createUniform("u_voxelGi", bgfx::UniformType::Vec4, 4);
+    voxelGi_->cones = bgfx::createUniform("u_voxelCones", bgfx::UniformType::Vec4, kMaxVoxelGiCones);
+    voxelGi_->sampler = bgfx::createUniform("s_voxelGi", bgfx::UniformType::Sampler);
 }
 
 void Renderer::shutdown()
@@ -751,6 +822,10 @@ void Renderer::shutdown()
     envFilter_.shutdown();
     sky_.shutdown();
     particles_.shutdown();
+    voxelGi_->clear();
+    for (bgfx::UniformHandle uniform : {voxelGi_->params, voxelGi_->cones, voxelGi_->sampler})
+        bgfx::destroy(uniform);
+    voxelGi_->passes.shutdown();
 }
 
 // ponytail: full-res tiles (66049 vertices, 131072 triangles each); LOD and skirts when the draw distance grows.
@@ -858,6 +933,7 @@ void Renderer::setProjectRoot(const std::filesystem::path& root)
         clearTextures();
         clearModels();
         clearProbes();
+        voxelGi_->clear();
     }
     materials_.setRoot(root);
     materials_.reloadChanged();
@@ -1672,6 +1748,21 @@ std::string Renderer::lightmapStatus(const Scene& scene)
     return set.sidecar.hash == lightmapSceneHash(scene) ? "Baked" : "Out of date";
 }
 
+std::string Renderer::voxelGiStatus(const Scene& scene, entt::entity volume)
+{
+    const VoxelGI& component = scene.registry().get<VoxelGI>(volume);
+    if (component.bakedPath.empty())
+        return "Not baked";
+    if (!voxelGi_->passes.supported())
+        return "This GPU can't run VoxelGI (no compute or 3D images)";
+    if (root_.empty())
+        return ""; // not rendered yet: its project's files aren't known
+    const VoxelGiState::File& file = voxelGi_->file(root_, component);
+    if (!file.error.empty())
+        return file.error;
+    return file.sidecar.hash == voxelGiSceneHash(scene, volume) ? "Baked" : "Out of date";
+}
+
 bool Renderer::bakeProbe(const Scene& scene, const Scene* extra, const std::filesystem::path& projectRoot,
                          const bx::Vec3& center, uint16_t size, bgfx::ViewId firstView, BakedProbe& out,
                          std::string& error)
@@ -1977,17 +2068,6 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             item.giDynamic = gi.enabled;
         }
     }
-    // A draw's diffuse GI (the selection point, lightmap.h selectDiffuseGi): its lightmap, else the probe grid at its
-    // bounds' center if it samples it, else the environment.
-    const auto giOf = [&](const DrawItem& item) {
-        std::optional<Sh9> grid;
-        if (item.giDynamic && bake)
-            grid = sampleProbeGrid(bake->sidecar.grid, bx::mul(bx::add(item.bounds.min, item.bounds.max), 0.5f));
-        GiDraw draw{selectDiffuseGi(bgfx::isValid(item.lightmap), grid.has_value())};
-        if (draw.source == DiffuseGi::ProbeGrid)
-            draw.sh = *grid;
-        return draw;
-    };
     // The local lights of a draw: the nearest that reach it, but for the Full ones on a lightmapped draw.
     const auto lightsOf = [&](const DrawItem& item) {
         if (!bgfx::isValid(item.lightmap))
@@ -2007,6 +2087,80 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     for (size_t tile = 0; tile < shadows.tileLights.size(); ++tile)
         shadowOf[shadows.tileLights[tile]] = static_cast<float>(kMaxShadowCascades + tile);
     const bool atlas = shadows.sun || !shadows.tileLights.empty();
+
+    // VoxelGI (voxel_gi.h): each enabled, baked volume relit for this frame by every light, occluded by the shadow maps
+    // just rendered, in the view after them. volumeBoxes: their grids' boxes, as draws select them (selectProbe).
+    struct VoxelVolume {
+        VoxelGrid grid;
+        bgfx::TextureHandle radiance = BGFX_INVALID_HANDLE;
+        uint8_t mips = 1;
+        float intensity = 1.0f;
+        VoxelGiPreset preset;
+        std::array<std::array<float, 4>, kMaxVoxelGiCones> cones{}; // u_voxelCones: voxelGiCones(preset.cones)
+    };
+    std::vector<VoxelVolume> volumes;
+    std::vector<ProbeBox> volumeBoxes;
+    const auto giView = static_cast<bgfx::ViewId>(shadowViews + kShadowViews - 1);
+    for (auto [entity, component] : registry.view<VoxelGI>().each()) {
+        if (capture_ || !component.enabled)
+            continue; // one bounce: a probe bake sees no volume
+        const std::string& name = registry.get<Name>(entity).value;
+        if (component.bakedPath.empty()) {
+            warnOnce(std::format("VoxelGI '{}': not baked; meshes in its box are lit as outside it", name));
+            continue;
+        }
+        if (!voxelGi_->passes.supported())
+            continue; // warned once at init
+        const VoxelGiState::File& file = voxelGi_->file(root_, component);
+        if (!file.error.empty()) {
+            warnOnce(std::format("VoxelGI '{}': '{}': {}; meshes in its box are lit as outside it", name,
+                                 component.bakedPath, file.error));
+            continue;
+        }
+        const VoxelGrid& grid = file.volume.grid;
+        const bx::Vec3 sunDir{lightDir[0], lightDir[1], lightDir[2]};
+        const VoxelGiLights lights =
+            packVoxelGiLights(sun ? &sunDir : nullptr, {lightColor[0], lightColor[1], lightColor[2]}, shadows.sun,
+                              localLights, shadowOf, {grid.origin, bx::add(grid.origin, grid.extent())});
+        VoxelGiRenderer::Shadows maps{.atlas = atlas ? csm_ : bgfx::TextureHandle BGFX_INVALID_HANDLE,
+                                      .csmMtx = shadows.csmMtx[0],
+                                      .csmBias = shadows.csmBias[0],
+                                      .cascades = shadows.sun ? std::clamp(sun->cascadeCount, 1, kMaxShadowCascades) : 0};
+        for (size_t cube = 0; cube < shadows.pointLights.size(); ++cube)
+            maps.cubes[cube] = cubes_[cube];
+        const VoxelGiPreset preset = voxelGiPreset(component.quality);
+        volumes.push_back({grid, voxelGi_->passes.update(giView, file.volume, preset, lights, maps), file.volume.mips,
+                           component.intensity, preset});
+        const std::vector<std::array<float, 4>> cones = voxelGiCones(preset.cones);
+        std::ranges::copy(cones, volumes.back().cones.begin());
+        volumeBoxes.push_back(voxelGiBox(grid, component.priority));
+    }
+    if (!volumes.empty()) {
+        bgfx::setViewName(giView, "VoxelGI");
+        bgfx::setViewMode(giView, bgfx::ViewMode::Sequential);
+    }
+    // The volume a draw cone-traces: the one its bounds' center selects, if its shader leaves VoxelGI its stage.
+    const auto volumeOf = [&](const DrawItem& item) -> int {
+        if (volumeBoxes.empty() || (item.shader && !shaderTakesVoxelGi(item.shader->source->source)))
+            return -1;
+        const std::optional<size_t> volume =
+            selectProbe(volumeBoxes, bx::mul(bx::add(item.bounds.min, item.bounds.max), 0.5f));
+        return volume ? static_cast<int>(*volume) : -1;
+    };
+    // A draw's diffuse GI (the selection point, lightmap.h selectDiffuseGi): its lightmap, else the VoxelGI volume its
+    // bounds' center is in, else the probe grid there if it samples it, else the environment. A volume's specular too.
+    const auto giOf = [&](const DrawItem& item) {
+        std::optional<Sh9> grid;
+        if (item.giDynamic && bake)
+            grid = sampleProbeGrid(bake->sidecar.grid, bx::mul(bx::add(item.bounds.min, item.bounds.max), 0.5f));
+        const int volume = volumeOf(item);
+        GiDraw draw{selectDiffuseGi(bgfx::isValid(item.lightmap), grid.has_value(), volume >= 0)};
+        draw.volume = volume;
+        draw.grid = grid.has_value();
+        if (grid)
+            draw.sh = *grid;
+        return draw;
+    };
 
     // Everything a mesh draw sets but its transform: material, lights (nearest: lightsOf), environment (an index in
     // environments), GI (giOf), shadows, buffers.
@@ -2075,12 +2229,28 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         bgfx::setUniform(lightDir_, sunOff ? noSun : lightDir);
         bgfx::setUniform(lightColor_, sunOff ? black : lightColor);
         bgfx::setUniform(gi_, giParams);
-        if (giDraw.source == DiffuseGi::ProbeGrid) {
+        if (giDraw.source == DiffuseGi::ProbeGrid || (giDraw.source == DiffuseGi::VoxelGi && giDraw.grid)) {
             float giSh[9][4] = {};
             for (size_t i = 0; i < 9; ++i)
                 std::memcpy(giSh[i], &giDraw.sh[i * 3], 3 * sizeof(float));
             bgfx::setUniform(giSh_, giSh, 9);
         }
+        // Packed as fs_mesh.sc's u_voxelGi says; every draw sets it (zeros: no volume), as uniforms outlive their draw.
+        float voxelGi[4][4] = {};
+        if (giDraw.volume >= 0) {
+            const VoxelVolume& volume = volumes[static_cast<size_t>(giDraw.volume)];
+            const bx::Vec3 extent = volume.grid.extent();
+            const VoxelGiPreset& p = volume.preset;
+            const float packed[4][4] = {
+                {volume.grid.origin.x, volume.grid.origin.y, volume.grid.origin.z, volume.grid.voxelSize},
+                {1.0f / extent.x, 1.0f / extent.y, 1.0f / extent.z, volume.intensity},
+                {float(volume.mips - 1), float(p.cones), p.stepScale, float(p.specularSteps)},
+                {p.aperture, giDraw.grid ? 1.0f : 0.0f, float(p.diffuseSteps), 1.0f}};
+            std::memcpy(voxelGi, packed, sizeof(voxelGi));
+            bgfx::setUniform(voxelGi_->cones, volume.cones.data(), kMaxVoxelGiCones);
+            bgfx::setTexture(11, voxelGi_->sampler, volume.radiance);
+        }
+        bgfx::setUniform(voxelGi_->params, voxelGi, 4);
         if (lightmapped) {
             bgfx::setUniform(lightmapST_, item.lightmapST.data());
             bgfx::setTexture(12, lightmapSampler_, item.lightmap);
@@ -2150,11 +2320,14 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             opaqueLights.push_back(lightsOf(item));
             opaqueEnvironments.push_back(environmentOf(item));
             opaqueGi.push_back(giOf(item));
-            // A lightmap batches with its texture; each probe-grid draw has its own harmonics, so batches alone.
-            const DiffuseGi source = opaqueGi.back().source;
-            opaqueGiKeys.push_back(source == DiffuseGi::Lightmap    ? size_t(item.lightmap.idx) + 1
-                                   : source == DiffuseGi::ProbeGrid ? (size_t(1) << 20) + opaque.size()
-                                                                    : 0);
+            // A lightmap batches with its texture; each probe-grid draw has its own harmonics, so batches alone (as does
+            // a VoxelGI draw fading to them); a VoxelGI volume batches with itself.
+            const GiDraw& drawGi = opaqueGi.back();
+            const bool own = drawGi.source == DiffuseGi::ProbeGrid || (drawGi.source == DiffuseGi::VoxelGi && drawGi.grid);
+            opaqueGiKeys.push_back((drawGi.source == DiffuseGi::Lightmap ? size_t(item.lightmap.idx) + 1
+                                    : own                            ? (size_t(1) << 20) + opaque.size()
+                                                                     : 0) +
+                                   (drawGi.volume >= 0 ? size_t(drawGi.volume + 1) << 40 : 0));
             continue;
         }
         blended.push_back(&item);
@@ -2328,13 +2501,22 @@ void Renderer::drawLightGizmo(const Scene& scene, bgfx::ViewId view, entt::entit
 // lighting).
 void Renderer::drawProbeBox(const Scene& scene, bgfx::ViewId view, entt::entity selected)
 {
-    const auto* probe = scene.valid(selected) ? scene.registry().try_get<ReflectionProbe>(selected) : nullptr;
-    if (!probe)
+    if (!scene.valid(selected))
+        return;
+    const auto* probe = scene.registry().try_get<ReflectionProbe>(selected);
+    const auto* volume = scene.registry().try_get<VoxelGI>(selected);
+    if (!probe && !volume)
         return;
     float world[16];
     scene.worldMatrix(selected, world);
-    const bx::Vec3 center{world[12], world[13], world[14]};
-    const bx::Vec3 half = bx::mul(probe->boxSize, 0.5f);
+    bx::Vec3 center{world[12], world[13], world[14]};
+    bx::Vec3 half = probe ? bx::mul(probe->boxSize, 0.5f) : bx::Vec3{0.0f, 0.0f, 0.0f};
+    if (volume) { // its voxel grid's box (whole voxels, so a little past boxSize on the shorter axes)
+        const VoxelGrid grid = voxelGridFor(center, volume->boxSize, volume->resolution);
+        center = grid.center();
+        half = bx::mul(grid.extent(), 0.5f);
+    }
+    const uint32_t color = probe ? kProbeBoxColor : kVoxelGiBoxColor;
     const auto corner = [&](int i) {
         return bx::add(center, bx::Vec3{i & 1 ? half.x : -half.x, i & 2 ? half.y : -half.y, i & 4 ? half.z : -half.z});
     };
@@ -2343,8 +2525,8 @@ void Renderer::drawProbeBox(const Scene& scene, bgfx::ViewId view, entt::entity 
         for (int axis : {1, 2, 4})
             if (!(i & axis)) { // each edge once: from the corner without that axis bit to the one with it
                 const bx::Vec3 a = corner(i), b = corner(i | axis);
-                lines.push_back({a.x, a.y, a.z, kProbeBoxColor});
-                lines.push_back({b.x, b.y, b.z, kProbeBoxColor});
+                lines.push_back({a.x, a.y, a.z, color});
+                lines.push_back({b.x, b.y, b.z, color});
             }
     submitLines(lines, lineLayout_, lineProgram_, view);
 }

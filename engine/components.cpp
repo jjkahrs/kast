@@ -3,6 +3,7 @@
 #include "ibl.h"
 #include "particles.h"
 #include "scene_io.h"
+#include "voxel_gi.h"
 
 #include <entt/core/hashed_string.hpp>
 
@@ -116,6 +117,18 @@ const char* validateReflectionProbe(const entt::meta_any& component)
     if (std::ranges::find(kProbeResolutions, probe.resolution) == std::end(kProbeResolutions))
         return "\"resolution\" must be 64, 128 or 256"; // kProbeResolutions
     if (!(probe.intensity >= 0.0f))
+        return "\"intensity\" must be >= 0";
+    return nullptr;
+}
+
+const char* validateVoxelGI(const entt::meta_any& component)
+{
+    const auto& volume = component.cast<const VoxelGI&>();
+    if (!(volume.boxSize.x > 0.0f && volume.boxSize.y > 0.0f && volume.boxSize.z > 0.0f))
+        return "\"boxSize\" must be > 0 on every axis";
+    if (std::ranges::find(kVoxelGiResolutions, volume.resolution) == std::end(kVoxelGiResolutions))
+        return "\"resolution\" must be 64, 128 or 256"; // kVoxelGiResolutions
+    if (!(volume.intensity >= 0.0f))
         return "\"intensity\" must be >= 0";
     return nullptr;
 }
@@ -354,6 +367,20 @@ void registerBuiltins()
         .data<&ReflectionProbe::intensity>("intensity").custom<FieldInfo>("Intensity", false, 0.0)
         .data<&ReflectionProbe::priority>("priority").custom<FieldInfo>("Priority")
         .data<&ReflectionProbe::bakedPath>("bakedPath").custom<FieldInfo>("Baked Path");
+
+    entt::meta_factory<VoxelGiQuality>{}
+        .type("VoxelGiQuality")
+        .data<VoxelGiQuality::Low>("low").custom<FieldInfo>("Low")
+        .data<VoxelGiQuality::Medium>("medium").custom<FieldInfo>("Medium")
+        .data<VoxelGiQuality::High>("high").custom<FieldInfo>("High");
+    registerComponent<VoxelGI>("VoxelGI", {"Voxel GI", true, validateVoxelGI})
+        .data<&VoxelGI::boxSize>("boxSize").custom<FieldInfo>(FieldInfo{.displayName = "Box Size", .min = kMinProbeBox})
+        .data<&VoxelGI::resolution>("resolution").custom<FieldInfo>("Resolution", false, 64.0, 256.0)
+        .data<&VoxelGI::intensity>("intensity").custom<FieldInfo>("Intensity", false, 0.0)
+        .data<&VoxelGI::quality>("quality").custom<FieldInfo>(FieldInfo{.displayName = "Quality", .optional = true})
+        .data<&VoxelGI::priority>("priority").custom<FieldInfo>(FieldInfo{.displayName = "Priority", .optional = true})
+        .data<&VoxelGI::enabled>("enabled").custom<FieldInfo>(FieldInfo{.displayName = "Enabled", .optional = true})
+        .data<&VoxelGI::bakedPath>("bakedPath").custom<FieldInfo>("Baked Path");
 
     registerComponent<Camera>("Camera", {"Camera", true, validateCamera})
         .data<&Camera::verticalFovDegrees>("verticalFovDegrees").custom<FieldInfo>("Vertical FOV")

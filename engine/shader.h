@@ -24,7 +24,8 @@ constexpr int kMaxShaderParams = 16;  // float / vec / color params: one u_kastP
 // Sampler stages per draw: bgfx's D3D11 limit (caps limits.maxTextureSamplers, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT).
 // The mesh shader takes 0..9 (material textures, shadow maps); texture2D params take 10..13; 14 and 15 are
 // SCREEN_TEXTURE and DEPTH_TEXTURE (s_kastScreen, s_kastDepth in fs_mesh.sc). The lightmap (docs/engine/lightmaps.html)
-// takes 12 and 13 in shaders with at most two texture2D params (shaderTakesLightmap).
+// takes 12 and 13 in shaders with at most two texture2D params (shaderTakesLightmap), VoxelGI (docs/engine/voxelgi.html)
+// 11 in shaders with at most one (shaderTakesVoxelGi).
 constexpr int kMaxTextureSamplers = 16;
 constexpr uint8_t kFirstShaderTextureStage = 10;
 constexpr int kMaxShaderTextures = 4;
@@ -97,6 +98,9 @@ bool isVertexStage(ShaderStage stage);
 // Whether a .kshader leaves stages 12 and 13 to the lightmap (at most two texture2D params): its Static draws can be
 // lightmapped; the others' fall back to the probe grid.
 bool shaderTakesLightmap(const ShaderSource& source);
+// Whether a .kshader leaves stage 11 to VoxelGI (at most one texture2D param: s_voxelGi in fs_mesh.sc): its draws can
+// cone-trace a VoxelGI volume (docs/engine/voxelgi.html); the others' get the light below it in the precedence.
+bool shaderTakesVoxelGi(const ShaderSource& source);
 // The template stage compiles from, as engine/shaders names it ("fs_mesh.sc", "vs_mesh_skinned.sc", ...).
 std::string_view shaderTemplate(ShaderStage stage);
 // The stages source compiles into: Fragment and Shadow, and the vertex stages if it has a vertex() (else its draws use
