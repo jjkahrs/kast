@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -69,6 +70,15 @@ struct LightmapSubmesh {
     std::vector<float> uv; // 2 per output vertex
     std::vector<uint32_t> indices;
 };
+// A model LOD's triangles for a lightmapped draw, over submesh's unwrapped vertices (positions: theirs, one per xref),
+// so the level samples LOD0's lightmap. sourceLevel: the level's triangles over the source submesh's vertices. An unwrap
+// that kept the source's vertices (its own second UV set: xref is the identity) takes them as they are; else the
+// unwrap's triangles are simplified to as many triangles as sourceLevel has (meshopt keeps the chart seams, so no
+// triangle spans two charts), as far as kLodMaxError allows.
+// ponytail: so a model without a second UV set draws a generated level when lightmapped, even where its level is
+// authored; unwrap authored levels in the bake if that shows.
+std::vector<uint32_t> lightmapLodIndices(const LightmapSubmesh& submesh, std::span<const bx::Vec3> positions,
+                                         const std::vector<uint32_t>& sourceLevel);
 // A mesh as unwrapped once for every Static entity drawing it at one scale and texel density. source: "primitive:cube",
 // "primitive:plane", "primitive:sphere" or "model:<project-relative path>"; key: source plus that scale and density.
 struct LightmapMesh {

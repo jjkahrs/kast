@@ -87,7 +87,7 @@ constexpr const char* kUsage =
     "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
-    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
+    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--log-lod] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel (without --play: on the Scene view), for
@@ -213,6 +213,10 @@ struct Options {
     bool noVsync = false;           // present as fast as possible, to measure the frame rate past the display's
     bool noInstancing = false;      // the Scene and Game views draw every mesh one by one (Renderer::setInstancing)
     bool noCulling = false;         // the Scene and Game views draw every mesh in every pass (Renderer::setCulling)
+    bool noLod = false;             // the Scene and Game views draw every model at LOD0 (Renderer::setLod)
+    float lodBias = 1.0f;           // --lod-bias: Renderer::setLodBias of the Scene and Game views
+    int forceLod = -1;              // --force-lod: Renderer::setForcedLod of the Scene and Game views (-1: by screen height)
+    bool logLod = false;            // log each model's LOD level change in the Scene and Game views (Renderer::setLodLogging)
     bool noAudioDevice = false;     // play sound on the null backend (silent), as if there were no output device
     std::vector<std::string> childArgs; // the flags after --, passed on to the editor the Project Manager starts
 
@@ -631,6 +635,19 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.noInstancing = true;
         } else if (arg == "--no-culling") {
             options.noCulling = true;
+        } else if (arg == "--no-lod") {
+            options.noLod = true;
+        } else if (arg == "--log-lod") {
+            options.logLod = true;
+        } else if (arg == "--lod-bias" && hasValue && parsePositive(argv[i + 1], options.lodBias)) {
+            ++i;
+        } else if (arg == "--force-lod" && hasValue) {
+            const std::string_view text = argv[++i];
+            const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), options.forceLod);
+            if (ec != std::errc{} || end != text.data() + text.size() || options.forceLod < 0) {
+                kast::log::error(std::format("Invalid --force-lod '{}', expected a level (0, 1, ...)", text));
+                return std::nullopt;
+            }
         } else if (arg == "--no-audio-device") {
             options.noAudioDevice = true;
         } else if (arg == "--crash" && hasValue && (argv[i + 1] == std::string_view("abort") ||
@@ -719,7 +736,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.openExternal.empty() || !options.dropModel.empty() || options.logFps ||
                              !options.prefabSteps.empty() || !options.assetsDelete.empty() || !options.inspectorApplyMenu.empty() ||
                              options.prefabBackPrompt ||
-                             options.noVsync || options.noInstancing || options.noCulling || !options.worldAddress.empty() || options.onlineLoginEnv ||
+                             options.noVsync || options.noInstancing || options.noCulling || options.noLod || options.lodBias != 1.0f ||
+                             options.forceLod >= 0 || options.logLod || !options.worldAddress.empty() || options.onlineLoginEnv ||
                              options.onlineCompose || !options.zoneOps.empty() || options.headless || options.noRecycle ||
                              options.sculptLoop || options.focus || options.promptRemoveTile || options.fileSave ||
                              options.bakeProbes || options.bakeLightmaps || options.bakeLightmapsAsync ||
@@ -1540,6 +1558,10 @@ int main(int argc, char** argv)
         for (kast::Renderer* renderer : {&viewport.renderer(), &game.renderer()}) {
             renderer->setInstancing(!options->noInstancing);
             renderer->setCulling(!options->noCulling);
+            renderer->setLod(!options->noLod);
+            renderer->setLodBias(options->lodBias);
+            renderer->setForcedLod(options->forceLod);
+            renderer->setLodLogging(options->logLod);
         }
         kast::gui::init();
         if (!options->openGui.empty()) {
@@ -1579,6 +1601,7 @@ int main(int argc, char** argv)
     FpsLog fpsLog;
     kast::CursorLock cursorLock;
     panels.probeStatus = [&](const kast::ReflectionProbe& probe) { return viewport.renderer().probeStatus(probe); };
+    panels.lodLevel = [&](const kast::Scene& scene, entt::entity entity) { return viewport.renderer().lodLevel(scene, entity); };
     LightmapJob lightmapJob; // Bake Lightmaps on a worker thread
     panels.lightmapStatus = [&](const kast::Scene& scene) { return viewport.renderer().lightmapStatus(scene); };
     panels.lightmapProgress = [&] { return lightmapJob.progress(); };

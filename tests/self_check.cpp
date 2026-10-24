@@ -56,6 +56,7 @@
 #include <shadow.h>
 #include <sky.h>
 #include <frustum.h>
+#include <lod.h>
 #include <ibl.h>
 #include <state_machines.h>
 #include <stats_overlay.h>
@@ -339,7 +340,7 @@ std::vector<std::string> typeNames()
 
 void checkComponentRegistry()
 {
-    check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "ModelRenderer", "Animator",
+    check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "ModelRenderer", "LODGroup", "Animator",
                                                  "DirectionalLight", "PointLight", "SpotLight", "AreaLight", "ReflectionProbe", "VoxelGI", "Camera",
                                                  "Rotator", "Collider", "Rigidbody", "CharacterController", "StateMachine", "UIDocument",
                                                  "AudioSource", "NetworkLocalPlayer", "NetworkReplication",
@@ -6921,6 +6922,106 @@ void checkIbl()
 
 // --- Post-processing ---
 
+void checkLodSelection()
+{
+    // Screen height: a 2 m box 10 m from a 90 degree camera covers 2 / (2 * 10 * tan 45) = 0.1 of the view.
+    const kast::Aabb box{{-1, -1, -11}, {1, 1, -9}};
+    float view[16], turned[16], proj[16], ortho[16];
+    bx::mtxLookAt(view, {0, 0, 0}, {0, 0, -1}, {0, 1, 0}, bx::Handedness::Right);
+    bx::mtxLookAt(turned, {0, 0, 0}, {1, 0, 0}, {0, 1, 0}, bx::Handedness::Right);
+    bx::mtxProj(proj, 90.0f, 16.0f / 9.0f, 0.1f, 100.0f, false, bx::Handedness::Right);
+    bx::mtxOrtho(ortho, -10.0f, 10.0f, -10.0f, 10.0f, 0.1f, 100.0f, 0.0f, false, bx::Handedness::Right);
+    check(std::abs(kast::lodScreenHeight(box, view, proj) - 0.1f) < 1e-4f, "LOD: screen height by distance and FOV");
+    check(kast::lodScreenHeight(box, turned, proj) == kast::lodScreenHeight(box, view, proj),
+          "LOD: turning the camera doesn't change the screen height");
+    check(std::abs(kast::lodScreenHeight(box, view, ortho) - 0.1f) < 1e-4f, "LOD: orthographic screen height by view height");
+    check(kast::lodScreenHeight({{-1, -1, -1}, {1, 1, 1}}, view, proj) > 1.0f, "LOD: the eye inside the box is LOD0's");
+
+    // Levels by thresholds, no previous level.
+    const std::vector<float> t{0.5f, 0.25f, 0.1f, 0.03f};
+    check(kast::selectLod(0.6f, t, false, -1) == 0 && kast::selectLod(0.5f, t, false, -1) == 0,
+          "LOD: at or above the first threshold is LOD0");
+    check(kast::selectLod(0.3f, t, false, -1) == 1 && kast::selectLod(0.05f, t, false, -1) == 3, "LOD: levels by threshold");
+    check(kast::selectLod(0.01f, t, false, -1) == 3, "LOD: below the last threshold stays at the last level");
+    check(kast::selectLod(0.01f, t, true, -1) == 4, "LOD: below the last threshold is culled with cullBelow");
+    check(kast::selectLod(0.01f, {}, true, -1) == 0, "LOD: no thresholds is LOD0");
+    // Hysteresis: a level is kept within kLodHysteresis of its range.
+    check(kast::selectLod(0.48f, t, false, 0) == 0 && kast::selectLod(0.44f, t, false, 0) == 1,
+          "LOD: LOD0 is kept just below its threshold, not further");
+    check(kast::selectLod(0.52f, t, false, 1) == 1 && kast::selectLod(0.56f, t, false, 1) == 0,
+          "LOD: LOD1 is kept just above its range, not further");
+    check(kast::selectLod(0.031f, t, true, 4) == 4 && kast::selectLod(0.034f, t, true, 4) == 3,
+          "LOD: culled is kept just above the last threshold");
+    check(kast::selectLod(0.001f, t, false, 3) == 3 && kast::selectLod(0.6f, t, false, 9) == 0,
+          "LOD: the last level has no floor; an out-of-range previous level is ignored");
+    // A camera parked at a threshold (its screen height jittering 2% around 0.25 for 120 frames) changes level at
+    // most once.
+    int level = -1, changes = 0;
+    for (int frame = 0; frame < 120; ++frame) {
+        const int next = kast::selectLod(0.25f * (1.0f + 0.02f * std::sin(static_cast<float>(frame) * 1.7f)), t, false, level);
+        changes += level >= 0 && next != level;
+        level = next;
+    }
+    check(changes <= 1, std::format("LOD: a parked camera at a threshold changes level at most once ({})", changes).c_str());
+    // Moving away, levels only ever get coarser.
+    level = -1;
+    bool monotonic = true;
+    for (float h = 1.0f; h > 0.001f; h *= 0.97f) {
+        const int next = kast::selectLod(h, t, true, level);
+        monotonic = monotonic && next >= level;
+        level = next;
+    }
+    check(monotonic && level == 4, "LOD: moving away only coarsens, down to culled");
+
+    // LODGroup: saved and loaded as a built-in component; invalid thresholds and bias are rejected.
+    const entt::meta_type type = kast::findComponentType("LODGroup");
+    check(static_cast<bool>(type), "LODGroup is a registered component");
+    if (type) {
+        kast::LODGroup group{{0.6f, 0.2f}, 1.5f, true};
+        const auto json = kast::componentToJson(entt::forward_as_meta(group));
+        std::string error;
+        const entt::meta_any back = kast::componentFromJson(type, json, error);
+        const auto* loaded = back ? back.try_cast<kast::LODGroup>() : nullptr;
+        check(loaded && loaded->thresholds == group.thresholds && loaded->bias == 1.5f && loaded->cullBelow,
+              std::format("LODGroup round trips ({}, {})", json.dump(), error).c_str());
+        for (const char* bad : {R"({"thresholds": [0.2, 0.5], "bias": 1, "cullBelow": false})",
+                                R"({"thresholds": [], "bias": 1, "cullBelow": false})",
+                                R"({"thresholds": [0.5, 0.25], "bias": 0, "cullBelow": false})",
+                                R"({"thresholds": [1.5], "bias": 1, "cullBelow": false})",
+                                R"({"thresholds": ["a"], "bias": 1, "cullBelow": false})"})
+            check(!kast::componentFromJson(type, nlohmann::ordered_json::parse(bad), error), std::format("LODGroup rejects {}", bad).c_str());
+    }
+
+    // A lightmapped level: a 9 x 9 grid of vertices unwrapped into two charts split along column 4 (its vertices
+    // copied into both), simplified to an eighth without a triangle spanning both charts; an unwrap that kept the
+    // source's vertices takes the model's level as it is.
+    kast::LightmapSubmesh sub;
+    std::vector<bx::Vec3> positions;
+    for (int chart = 0; chart < 2; ++chart)
+        for (int z = 0; z < 9; ++z)
+            for (int x = chart * 4; x <= chart * 4 + 4; ++x) {
+                sub.xref.push_back(static_cast<uint32_t>(z * 9 + x));
+                positions.push_back({static_cast<float>(x), 0.0f, static_cast<float>(z)});
+            }
+    sub.sourceVertices = 81;
+    sub.uv.resize(sub.xref.size() * 2);
+    for (uint32_t chart = 0; chart < 2; ++chart)
+        for (uint32_t z = 0; z < 8; ++z)
+            for (uint32_t x = 0; x < 4; ++x) {
+                const uint32_t a = chart * 45 + z * 5 + x, b = a + 5;
+                sub.indices.insert(sub.indices.end(), {a, b, a + 1, a + 1, b, b + 1});
+            }
+    const std::vector<uint32_t> lightmapped = kast::lightmapLodIndices(sub, positions, std::vector<uint32_t>(sub.indices.size() / 8));
+    bool oneChart = !lightmapped.empty() && lightmapped.size() < sub.indices.size();
+    for (size_t i = 0; oneChart && i < lightmapped.size(); i += 3)
+        oneChart = lightmapped[i] / 45 == lightmapped[i + 1] / 45 && lightmapped[i] / 45 == lightmapped[i + 2] / 45;
+    check(oneChart, std::format("lightmap LOD: simplified over the unwrap, no triangle spans two charts ({} of {} indices)",
+                                lightmapped.size(), sub.indices.size()).c_str());
+    const kast::LightmapSubmesh kept{.sourceVertices = 3, .xref = {0, 1, 2}, .uv = std::vector<float>(6), .indices = {0, 1, 2}};
+    check(kast::lightmapLodIndices(kept, std::vector<bx::Vec3>(3, bx::Vec3{0.0f, 0.0f, 0.0f}), {2, 1, 0}) == std::vector<uint32_t>{2, 1, 0},
+          "lightmap LOD: an unwrap that kept the source's vertices draws the model's level");
+}
+
 void checkFrustumCulling()
 {
     const auto box = [](bx::Vec3 center, float half) {
@@ -10585,6 +10686,7 @@ kast::ModelMesh uvSphere(int rings, int segments)
 // only), import settings parse and steer the import, authored "<name>_LOD<n>" meshes become levels of their LOD0.
 void checkModelLods()
 {
+    std::string error0;
     // Generated: within 10% of 50 / 25 / 12.5% of LOD0, over LOD0's own vertices.
     kast::ModelMesh sphere = uvSphere(48, 96);
     generateLods(sphere, kast::ModelLodSettings{});
@@ -10599,6 +10701,27 @@ void checkModelLods()
                                     100.0 * got / lod0, 100.0 * want / lod0));
     }
     check(ratios, "generated LODs are within 10% of 50%, 25% and 12.5% of LOD0's triangles, indexing LOD0's vertices");
+    // A tiny closed mesh keeps its shape (the sloppy fallback's error is bounded); the starter character still gets
+    // near its targets.
+    const auto cube = importModel(KAST_TEST_PROJECT_DIR, "models/cube.gltf", error0);
+    check(cube && !cube->meshes.empty() &&
+              std::ranges::all_of(cube->meshes[0].lods, [&](const std::vector<uint32_t>& lod) {
+                  return lod.size() == cube->meshes[0].indices.size();
+              }),
+          ("a 12-triangle cube isn't collapsed at any level " + error0).c_str());
+    const auto female = importModel(KAST_TEST_PROJECT_DIR, "models/female-128-anim.glb", error0);
+    check(female != nullptr, ("the starter character imports " + error0).c_str());
+    if (female) {
+        const kast::ModelStats stats = kast::modelStats(*female);
+        bool near = stats.lodTriangles.size() == 4;
+        for (size_t level = 1; near && level < 4; ++level) {
+            const double want = static_cast<double>(stats.lodTriangles[0]) * kast::ModelLodSettings{}.ratios[level];
+            near = std::abs(static_cast<double>(stats.lodTriangles[level]) - want) <= want * 0.1;
+            kast::log::info(std::format("Starter character LOD{}: {} of {} triangles", level, stats.lodTriangles[level],
+                                        stats.lodTriangles[0]));
+        }
+        check(near, "the starter character's levels are within 10% of 50%, 25% and 12.5%");
+    }
     kast::ModelMesh small = uvSphere(8, 16);
     generateLods(small, kast::ModelLodSettings{.ratios = {1.0f, 0.3f}, .thresholds = {0.5f, 0.1f}});
     check(small.lods.size() == 1, "the levels follow the settings' ratios");
@@ -14452,6 +14575,7 @@ int main(int argc, char** argv)
         checkModelLoading();
         checkModelCache();
         checkModelLods();
+        checkLodSelection();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All model checks passed" : std::format("{} model check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
@@ -14553,6 +14677,7 @@ int main(int argc, char** argv)
     checkSpotAreaLights();
     checkIbl();
     checkFrustumCulling();
+    checkLodSelection();
     checkPostProcessing();
     checkSky();
     checkMaterialFiles();

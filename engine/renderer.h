@@ -3,6 +3,7 @@
 #include "frustum.h"
 #include "ibl.h"
 #include "lightmap.h"
+#include "lod.h"
 #include "material.h"
 #include "model.h"
 #include "particles.h"
@@ -25,6 +26,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -163,7 +165,8 @@ void buildMips(MipImage& image, bool srgb);
 // entity's collider and its ParticleEmitter's shape.
 // Every pass culls its draws to its view frustum (main camera, each cascade, each cube face, each tile), and draws that
 // share buffers, material, shadow flags and (main pass) lights, unskinned and not blended, are drawn as one GPU-instanced
-// submit (see docs/engine/instancing-and-culling.html).
+// submit (see docs/engine/instancing-and-culling.html). Model draws are at the LOD their screen height picks (setLod);
+// each level has its own index buffer, so levels batch apart.
 // The caller owns the views' framebuffers, rects and clears; these set the view transform and mode and submit.
 class Renderer {
 public:
@@ -208,9 +211,19 @@ public:
     // Either way the output is the same, so off is a reference (--no-instancing, --no-culling).
     void setInstancing(bool on) { instancing_ = on; }
     void setCulling(bool on) { culling_ = on; }
-    // Model meshes draw at this LOD (lodIndices: a mesh with fewer levels draws its last); -1 (the default) = LOD0.
-    // ponytail: no screen-size selection yet; the Model Preview forces a level to show it.
+    // Mesh LOD (lod.h): each ModelRenderer draws at the level its bounds' screen height in the camera's view picks
+    // (selectLod, with hysteresis) by its LODGroup's thresholds, else its model's (ModelLodSettings); the shadow passes
+    // draw the same level. setLod(false): always LOD0 (--no-lod). setLodBias: multiplies every screen height (> 0;
+    // above 1 keeps detail further away; --lod-bias). setForcedLod: every model at this level (a mesh with fewer levels
+    // draws its last, nothing is culled below the thresholds); -1 (the default) picks by screen height (--force-lod).
+    void setLod(bool on) { lod_ = on; }
+    void setLodBias(float bias) { lodBias_ = bias; }
     void setForcedLod(int level) { forcedLod_ = level; }
+    // Logs each ModelRenderer's level when first drawn and each change (--log-lod).
+    void setLodLogging(bool on) { lodLogging_ = on; }
+    // The level entity of scene drew at in the last render() that drew it: -1 culled below its last threshold;
+    // nullopt if that render() didn't draw it (no model, or not rendered by this Renderer). The LODGroup Inspector shows it.
+    std::optional<int> lodLevel(const Scene& scene, entt::entity entity) const;
     // Why the scene's cubemap sky last fell back to the procedural one ("" = it didn't): the Lighting panel shows it.
     const std::string& skyError() const { return sky_.error(); }
     // A ReflectionProbe's bake as the renderer sees it: "Not baked", "Baked", or why its files can't be used (the
@@ -268,6 +281,8 @@ private:
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
         int bones = -1; // index into the frame's bone sets; -1 = not skinned
+        size_t submesh = 0; // a model draw's mesh index (Model::meshes)
+        int lod = 0;        // a model draw's level: indices is that level's (lodIndices)
         bool posed = false; // animated: bounds are the bind pose's, so the draw is never culled
         bool mirrored = false; // world matrix has a negative determinant: front faces wind the other way
         bool castShadows = true;
@@ -297,6 +312,8 @@ private:
         std::map<std::string, size_t> meshIndex;          // LightmapMesh::key -> meshes
         std::map<EntityId, size_t> entities;              // -> sidecar.entities
         std::map<std::pair<size_t, size_t>, Mesh> buffers; // (mesh, submesh): its unwrapped vertices, made on first use
+        // (mesh, submesh, level): a model LOD's triangles over those unwrapped vertices; invalid: LOD0's are drawn instead.
+        std::map<std::tuple<size_t, size_t, int>, bgfx::IndexBufferHandle> lodIndices;
         std::set<std::pair<size_t, size_t>> broken;        // ones that no longer match their source (warned)
     };
     struct ShadowFrame {
@@ -372,9 +389,14 @@ private:
     void addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws);
     void pruneTerrain();
     void clearTerrain();
-    // Appends the draws of a ModelRenderer entity (an error cube if its model fails to load).
+    // Appends the draws of a ModelRenderer entity (an error cube if its model fails to load) at the LOD its screen
+    // height through viewMtx / projMtx picks (none if culled below its last threshold), recording it in lodNext_.
     void addModelDraws(const Scene& scene, entt::entity entity, const ModelRenderer& renderer, const float* world,
-                       std::vector<DrawItem>& draws, std::vector<std::vector<Mat4>>& boneSets);
+                       const float* viewMtx, const float* projMtx, std::vector<DrawItem>& draws,
+                       std::vector<std::vector<Mat4>>& boneSets);
+    // The level addModelDraws draws entity's model at: -1 culled below its last threshold.
+    int pickLod(const Scene& scene, entt::entity entity, const Model& model, const Aabb& bounds, const float* viewMtx,
+                const float* projMtx);
     // Renders the shadow maps for this frame's casters into views from shadowViews (creating the maps on first use).
     // sun: the scene's DirectionalLight (null: none), shining along sunDir.
     ShadowFrame renderShadows(const DirectionalLight* sun, const bx::Vec3& sunDir, const std::vector<DrawItem>& draws,
@@ -533,7 +555,17 @@ private:
     float timeSeconds_ = 0.0f; // setTime
     bool instancing_ = true;
     bool culling_ = true;
+    bool lod_ = true;
+    float lodBias_ = 1.0f;
     int forcedLod_ = -1;
+    bool lodLogging_ = false;
+    // Per (scene, entity) drawn: selectLod's pick (its previous next frame) and the level drawn (-1 culled). lodNext_
+    // fills during a render() and then replaces lodLevels_, so entities no longer drawn drop out.
+    struct LodState {
+        int selected = 0;
+        int drawn = 0;
+    };
+    std::map<std::pair<const Scene*, entt::entity>, LodState> lodLevels_, lodNext_;
 };
 
 } // namespace kast

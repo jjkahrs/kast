@@ -231,12 +231,13 @@ Aabb transformBounds(const Aabb& local, const float* world)
     return result;
 }
 
-// What draws must share to be one instanced submit: buffers, material, shadow flags and, in the main pass, the local
+// What draws must share to be one instanced submit: buffers, LOD level, material, shadow flags and, in the main pass, the local
 // lights that reach them, the environment they take their ambient from and their diffuse GI (gi: 0 none, else a
 // lightmap's texture + 1, or a probe-grid draw's own number, plus its VoxelGI volume + 1 << 40: so each instance is lit
 // as its own draw would be).
 struct BatchKey {
     uint16_t vertices = 0, indices = 0;
+    int lod = 0; // so each batch is one level (levels have their own indices, but a lightmapped one may fall back to LOD0's)
     const Material* material = nullptr;
     bool skinned = false, castShadows = false, receiveShadows = false;
     bool mirrored = false; // culls the other winding (cullState)
@@ -249,7 +250,7 @@ struct BatchKey {
 template <typename Item> // Renderer::DrawItem
 BatchKey batchKey(const Item& item, std::vector<size_t> lights, size_t environment = 0, size_t gi = 0)
 {
-    return {item.vertices.idx, item.indices.idx, item.material, item.bones >= 0, item.castShadows, item.receiveShadows,
+    return {item.vertices.idx, item.indices.idx, item.lod, item.material, item.bones >= 0, item.castShadows, item.receiveShadows,
             item.mirrored, std::move(lights), environment, gi};
 }
 
@@ -1233,8 +1234,39 @@ void Renderer::resolveShaders(std::vector<DrawItem>& draws)
     std::erase_if(draws, [](const DrawItem& item) { return !item.material; });
 }
 
+int Renderer::pickLod(const Scene& scene, entt::entity entity, const Model& model, const Aabb& bounds,
+                      const float* viewMtx, const float* projMtx)
+{
+    if (!lod_ || capture_) // a probe bake sees LOD0, as the other bakers
+        return 0;
+    if (forcedLod_ >= 0)
+        return forcedLod_;
+    const auto* group = scene.registry().try_get<LODGroup>(entity);
+    const std::span<const float> thresholds = group ? group->thresholds : model.lod.thresholds;
+    const bool cullBelow = group ? group->cullBelow : model.lod.cullBelowLast;
+    const float screenHeight = lodScreenHeight(bounds, viewMtx, projMtx) * lodBias_ * (group ? group->bias : 1.0f);
+    const std::pair key{&scene, entity};
+    const auto last = lodLevels_.find(key);
+    const int selected = selectLod(screenHeight, thresholds, cullBelow, last != lodLevels_.end() ? last->second.selected : -1);
+    const int drawn = cullBelow && selected == static_cast<int>(thresholds.size()) ? -1 : selected;
+    if (lodLogging_ && (last == lodLevels_.end() || last->second.drawn != drawn)) { // -1: culled
+        const auto* name = scene.registry().try_get<Name>(entity);
+        log::info(std::format("LOD: '{}' level {} -> {} (screen height {:.4f})", name ? name->value : "",
+                              last == lodLevels_.end() ? "none" : std::to_string(last->second.drawn), drawn, screenHeight));
+    }
+    lodNext_[key] = {selected, drawn};
+    return drawn;
+}
+
+std::optional<int> Renderer::lodLevel(const Scene& scene, entt::entity entity) const
+{
+    const auto it = lodLevels_.find({&scene, entity});
+    return it == lodLevels_.end() ? std::nullopt : std::optional<int>(it->second.drawn);
+}
+
 void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const ModelRenderer& renderer, const float* world,
-                             std::vector<DrawItem>& draws, std::vector<std::vector<Mat4>>& boneSets)
+                             const float* viewMtx, const float* projMtx, std::vector<DrawItem>& draws,
+                             std::vector<std::vector<Mat4>>& boneSets)
 {
     if (renderer.model.empty())
         return;
@@ -1258,14 +1290,20 @@ void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const Mode
         state && state->model == &model && state->globals.size() == model.nodes.size() ? state->globals : gpu->bindGlobals;
     item.bounds = transformBounds(model.bounds, world); // ponytail: bind-pose bounds, also for posed models
     item.posed = &globals != &gpu->bindGlobals;
+    const int level = pickLod(scene, entity, model, item.bounds, viewMtx, projMtx);
+    if (level < 0) // culled below its last threshold
+        return;
+    // Past the model's last level: its last (as lodIndices).
+    item.lod = std::min(level, static_cast<int>(modelLodCount(model)) - 1);
     for (size_t i = 0; i < model.meshes.size(); ++i) {
         const ModelMesh& mesh = model.meshes[i];
         const std::string* slot = mesh.material < renderer.materials.size() ? &renderer.materials[mesh.material] : nullptr;
         item.material = slot && !slot->empty() ? &materials_.get(*slot) : &model.materials[mesh.material].material;
         const ModelMeshBuffers& buffers = gpu->meshes[i];
-        const auto lod = static_cast<size_t>(std::max(forcedLod_, 0));
+        const auto lod = static_cast<size_t>(item.lod);
         item.vertices = buffers.vertices;
         item.indices = lod == 0 || buffers.lods.empty() ? buffers.indices : buffers.lods[std::min(lod, buffers.lods.size()) - 1];
+        item.submesh = i;
         if (!bgfx::isValid(item.indices)) // an authored level without this part
             continue;
         item.bones = -1;
@@ -1641,6 +1679,9 @@ void Renderer::clearLightmaps()
         bgfx::destroy(mesh.vertices);
         bgfx::destroy(mesh.indices);
     }
+    for (auto& [key, indices] : lightmaps_.lodIndices)
+        if (bgfx::isValid(indices))
+            bgfx::destroy(indices);
     lightmaps_ = {};
 }
 
@@ -1754,6 +1795,29 @@ bool Renderer::applyLightmap(LightmapSet& set, EntityId id, const std::string& s
     }
     item.vertices = buffers->second.vertices;
     item.indices = buffers->second.indices;
+    if (item.lod > 0) {
+        const std::tuple lodKey{mesh->second, submesh, item.lod};
+        auto lod = set.lodIndices.find(lodKey);
+        if (lod == set.lodIndices.end()) {
+            const GpuModel* gpu = gpuModel(source.substr(6)); // a model: primitives have no levels
+            std::vector<uint32_t> indices;
+            if (gpu && submesh < gpu->source->meshes.size()) {
+                const ModelMesh& model = gpu->source->meshes[submesh];
+                const LightmapSubmesh& sub = set.meshes[mesh->second].submeshes[submesh];
+                std::vector<bx::Vec3> positions;
+                positions.reserve(sub.xref.size());
+                for (uint32_t v : sub.xref)
+                    positions.push_back({model.vertices[v].x, model.vertices[v].y, model.vertices[v].z});
+                indices = lightmapLodIndices(sub, positions, lodIndices(model, static_cast<size_t>(item.lod)));
+            }
+            lod = set.lodIndices
+                      .emplace(lodKey, indices.empty() ? bgfx::IndexBufferHandle{bgfx::kInvalidHandle}
+                                                       : bgfx::createIndexBuffer(copyOf(indices), BGFX_BUFFER_INDEX32))
+                      .first;
+        }
+        if (bgfx::isValid(lod->second))
+            item.indices = lod->second;
+    }
     item.lightmap = set.irradiance[e.atlas];
     item.lightmapDirection = set.direction[e.atlas];
     item.lightmapST = e.scaleOffset;
@@ -2079,7 +2143,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         }
         for (auto [entity, model] : entities.view<ModelRenderer>().each()) {
             const size_t first = draws.size();
-            addModelDraws(from, entity, model, worldOf(entity).data(), draws, boneSets);
+            addModelDraws(from, entity, model, worldOf(entity).data(), viewMtx, projMtx, draws, boneSets);
             if (sdfgiOn && &from == &scene && model.giMode == GiMode::Static)
                 for (size_t i = first; i < draws.size(); ++i)
                     if (draws[i].bones < 0) {
@@ -2097,14 +2161,16 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
                     warnOnce(std::format("'{}': a skinned model can't be Static; lit as Dynamic",
                                          entities.get<Name>(entity).value));
                 item.giDynamic = !(model.giMode == GiMode::Static && item.bones < 0 && bake &&
-                                   applyLightmap(*bake, id, "model:" + model.model, i - first, item));
+                                   applyLightmap(*bake, id, "model:" + model.model, item.submesh, item));
             }
         }
         addTerrainDraws(from, draws);
     };
+    lodNext_.clear();
     addDraws(scene, gi.enabled);
     if (extra)
         addDraws(*extra, false);
+    lodLevels_.swap(lodNext_);
     pruneTerrain();
     resolveShaders(draws);
     for (DrawItem& item : draws) {

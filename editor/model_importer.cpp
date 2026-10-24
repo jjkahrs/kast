@@ -745,7 +745,7 @@ std::shared_ptr<const kast::Model> importModelFromMemory(std::string_view bytes,
 std::string modelImporterVersion()
 {
     // ponytail: bump kImporterRevision when the conversion above changes what it makes from the same file.
-    constexpr int kImporterRevision = 3; // 3: LODs
+    constexpr int kImporterRevision = 4; // 3: LODs, 4: bounded sloppy LODs
     return std::format("assimp {}.{}.{} rev {:x}; flags {:x}; kast importer {}", aiGetVersionMajor(), aiGetVersionMinor(),
                        aiGetVersionPatch(), aiGetVersionRevision(), kast::kImportFlags, kImporterRevision);
 }
@@ -808,21 +808,23 @@ void generateLods(kast::ModelMesh& mesh, const kast::ModelLodSettings& settings)
         const size_t target =
             std::max<size_t>(static_cast<size_t>(std::lround(static_cast<double>(triangles) * settings.ratios[level])), 1);
         std::vector<uint32_t> lod(mesh.indices.size());
-        // Error unbounded (1 = the mesh's extent): the ratio decides.
         lod.resize(meshopt_simplifyWithAttributes(lod.data(), mesh.indices.data(), mesh.indices.size(), &mesh.vertices[0].x,
                                                   mesh.vertices.size(), sizeof(ModelVertex), &mesh.vertices[0].nx,
                                                   sizeof(ModelVertex), kWeights, std::size(kWeights), nullptr, target * 3,
-                                                  1.0f, meshopt_SimplifyLockBorder, nullptr));
+                                                  kast::kLodMaxError, meshopt_SimplifyLockBorder, nullptr));
         // ponytail: the topology-keeping simplifier stops short where collapses would flip triangles or break seams
         // (the starter character, many small closed parts, stops at ~91%). Like gltfpack -sa, such a level comes from
         // the sloppy (vertex clustering) simplifier instead, borders still locked; it ignores UV seams, so textures
-        // can smear at that level. Per-part simplification if that shows up close.
+        // can smear at that level. Per-part simplification if that shows up close. Kept only if it got further.
         if (static_cast<float>(lod.size()) > static_cast<float>(target * 3) * kShortBy) {
             if (locks.empty())
                 locks = borderLocks(mesh);
-            lod.resize(meshopt_simplifySloppy(lod.data(), mesh.indices.data(), mesh.indices.size(), &mesh.vertices[0].x,
-                                              mesh.vertices.size(), sizeof(ModelVertex), locks.data(), target * 3, 1.0f,
-                                              nullptr));
+            std::vector<uint32_t> sloppy(mesh.indices.size());
+            sloppy.resize(meshopt_simplifySloppy(sloppy.data(), mesh.indices.data(), mesh.indices.size(),
+                                                 &mesh.vertices[0].x, mesh.vertices.size(), sizeof(ModelVertex),
+                                                 locks.data(), target * 3, kast::kLodMaxError, nullptr));
+            if (!sloppy.empty() && sloppy.size() < lod.size())
+                lod = std::move(sloppy);
         }
         if (lod.empty()) // collapsed entirely: keep the previous level
             lod = mesh.lods.empty() ? mesh.indices : mesh.lods.back();

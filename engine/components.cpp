@@ -1,6 +1,7 @@
 #include "components.h"
 
 #include "ibl.h"
+#include "model.h"
 #include "particles.h"
 #include "scene_io.h"
 #include "voxel_gi.h"
@@ -103,6 +104,18 @@ const char* validateMeshRenderer(const entt::meta_any& component)
 const char* validateModelRenderer(const entt::meta_any& component)
 {
     return component.cast<const ModelRenderer&>().lightmapScale > 0.0f ? nullptr : "\"lightmapScale\" must be > 0";
+}
+
+const char* validateLodGroup(const entt::meta_any& component)
+{
+    const auto& group = component.cast<const LODGroup&>();
+    if (group.thresholds.empty() || group.thresholds.size() > kMaxModelLods)
+        return "\"thresholds\" must have 1 to 8 levels";
+    for (size_t i = 0; i < group.thresholds.size(); ++i)
+        if (!(group.thresholds[i] >= 0.0f && group.thresholds[i] <= 1.0f) ||
+            (i > 0 && group.thresholds[i] > group.thresholds[i - 1]))
+            return "\"thresholds\" must be 0..1, each at most the one before";
+    return group.bias > 0.0f ? nullptr : "\"bias\" must be > 0";
 }
 
 constexpr double kMinLightmapScale = 0.01; // Inspector floor; files and kast.set only need > 0
@@ -314,6 +327,12 @@ void registerBuiltins()
         .data<&ModelRenderer::receiveShadows>("receiveShadows").custom<FieldInfo>(FieldInfo{.displayName = "Receive Shadows", .optional = true})
         .data<&ModelRenderer::giMode>("giMode").custom<FieldInfo>(FieldInfo{.displayName = "GI Mode", .optional = true})
         .data<&ModelRenderer::lightmapScale>("lightmapScale").custom<FieldInfo>(FieldInfo{.displayName = "Lightmap Scale", .min = kMinLightmapScale, .optional = true});
+
+    // thresholds: a JSON array of numbers, the first built-in float list.
+    registerComponent<LODGroup>("LODGroup", {"LOD Group", true, validateLodGroup})
+        .data<&LODGroup::thresholds>("thresholds").custom<FieldInfo>(FieldInfo{.displayName = "Screen Heights", .min = 0.0, .max = 1.0})
+        .data<&LODGroup::bias>("bias").custom<FieldInfo>(FieldInfo{.displayName = "Bias", .min = 0.01})
+        .data<&LODGroup::cullBelow>("cullBelow").custom<FieldInfo>("Cull Below Last");
 
     registerComponent<Animator>("Animator", {"Animator", true, validateAnimator})
         .data<&Animator::clip>("clip").custom<FieldInfo>("Clip")
@@ -542,6 +561,12 @@ Json fieldToJson(const entt::meta_any& value)
         return value.cast<const std::string&>();
     if (isType<std::vector<std::string>>(type))
         return value.cast<const std::vector<std::string>&>();
+    if (isType<std::vector<float>>(type)) {
+        Json out = Json::array();
+        for (float f : value.cast<const std::vector<float>&>())
+            out.push_back(jsonNumber(f));
+        return out;
+    }
     if (isType<bx::Vec3>(type)) {
         const auto& v = value.cast<const bx::Vec3&>();
         return numbers({v.x, v.y, v.z});
@@ -616,6 +641,14 @@ entt::meta_any fieldFromJson(const entt::meta_type& type, const Json& json)
         if (!json.is_array() || !std::ranges::all_of(json, [](const Json& e) { return e.is_string(); }))
             throw Invalid("must be an array of strings");
         return json.get<std::vector<std::string>>();
+    }
+    if (isType<std::vector<float>>(type)) {
+        if (!json.is_array() || !std::ranges::all_of(json, [](const Json& e) { return e.is_number(); }))
+            throw Invalid("must be an array of numbers");
+        std::vector<float> out;
+        for (const Json& e : json)
+            out.push_back(finiteFloat(e.get<double>()));
+        return out;
     }
     if (isType<bx::Vec3>(type)) {
         const auto v = floats<3>(json);
@@ -801,6 +834,9 @@ std::vector<FieldDesc> describeBuiltin(const entt::meta_type& type)
             field.kind = FieldKind::String;
         } else if (isType<std::vector<std::string>>(t)) {
             field.kind = FieldKind::String;
+            field.array = true;
+        } else if (isType<std::vector<float>>(t)) {
+            field.kind = FieldKind::Float;
             field.array = true;
         } else if (isType<bx::Vec3>(t)) {
             field.kind = FieldKind::Vec3;

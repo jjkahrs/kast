@@ -47,6 +47,9 @@ namespace kast {
 
 constexpr uint32_t kModelFormatVersion = 3;
 constexpr size_t kMaxModelLods = 8; // LOD0 included
+// Simplification stops at this error (relative to the mesh's extent) short of a level's target triangle count: a tiny
+// closed mesh (a 12-triangle cube has nothing to lose) keeps its shape instead of collapsing to a sliver.
+constexpr float kLodMaxError = 0.1f;
 
 constexpr size_t kMaxBones = 128; // MAX_BONES in vs_mesh_skinned.sc: joints per skinned mesh
 constexpr size_t kMaxBoneWeights = 4;

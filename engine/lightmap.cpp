@@ -3,6 +3,7 @@
 #include "renderer.h"
 
 #include <bimg/bimg.h>
+#include <meshoptimizer.h>
 #include <bx/error.h>
 #include <bx/readerwriter.h>
 #include <nlohmann/json.hpp>
@@ -178,6 +179,22 @@ std::optional<Sh9> sampleProbeGrid(const ProbeGrid& grid, const bx::Vec3& point)
     }
     return std::nullopt;
 }
+
+std::vector<uint32_t> lightmapLodIndices(const LightmapSubmesh& submesh, std::span<const bx::Vec3> positions,
+                                         const std::vector<uint32_t>& sourceLevel)
+{
+    bool identity = submesh.xref.size() == submesh.sourceVertices;
+    for (uint32_t v = 0; identity && v < submesh.xref.size(); ++v)
+        identity = submesh.xref[v] == v;
+    if (identity)
+        return sourceLevel;
+    std::vector<uint32_t> out(submesh.indices.size());
+    out.resize(meshopt_simplify(out.data(), submesh.indices.data(), submesh.indices.size(), &positions[0].x,
+                                positions.size(), sizeof(bx::Vec3), sourceLevel.size(), kLodMaxError,
+                                meshopt_SimplifyLockBorder, nullptr));
+    return out;
+}
+
 std::string writeLightmapMeshes(const std::vector<LightmapMesh>& meshes)
 {
     std::string out(kMeshesMagic, sizeof(kMeshesMagic));
