@@ -6075,9 +6075,10 @@ void checkGuiLists()
             const Rml::Vector2f at = big->GetAbsoluteOffset(Rml::BoxArea::Border);
             const float scrolled = big->GetScrollTop();
             mouse(SDL_EVENT_MOUSE_MOTION, at.x + 100.0f, at.y + 200.0f);
+            // RmlUi scrolls a wheel turn smoothly on the wall clock (SystemInterface::GetElapsedTime), and these frames take
+            // a millisecond or two: its last pixels would land in some later check (Home's scrollTop 1, not 0). Instant here.
+            rml->SetDefaultScrollBehavior(Rml::ScrollBehavior::Instant, 1.0f);
             mouse(SDL_EVENT_MOUSE_WHEEL, 0.0f, 0.0f, -3.0f); // towards the user: down
-            for (int i = 0; i < 30; ++i) // RmlUi may scroll smoothly over frames
-                update();
             check(big->GetScrollTop() > scrolled && showsRight() && few(), "the wheel scrolls the Virtual List; the rows follow");
             // The scrollbar: its bar is where scrollTop / range puts it on the track; dragged 100 px down.
             const float barY = at.y + 1.0f + big->GetScrollTop() / big->GetScrollHeight() * big->GetClientHeight();
