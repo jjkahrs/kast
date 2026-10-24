@@ -29,7 +29,7 @@ constexpr size_t kOcclusionMinDraws = 64;
 // While the newest result hid under this fraction of the draws it tested, a test runs only every
 // kOcclusionIdleInterval frames (its results stand meanwhile): the pyramid, test and read-back cost about 0.1 ms a
 // frame, more than they save where little is hidden.
-constexpr float kOcclusionUsefulFraction = 0.05f;
+constexpr float kOcclusionUsefulFraction = 0.2f;
 constexpr uint64_t kOcclusionIdleInterval = 8;
 // Draws tested per frame (the visibility image is kOcclusionImageWidth wide); the rest always draw.
 constexpr uint32_t kOcclusionImageWidth = 256;

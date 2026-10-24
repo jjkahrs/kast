@@ -315,6 +315,50 @@ Text.</td>
 <td>The Scene and Game views draw every mesh in every pass (camera, shadow cascades, point light cube faces) instead of only those whose bounds are inside that pass's view (see <a href="../engine/instancing-and-culling.html#instancing-and-culling">Instancing and culling</a>). For comparing output and performance.</td>
 </tr>
 <tr>
+<td><code>--no-lod</code></td>
+<td>The Scene and Game views draw every model at LOD0 and terrain at full resolution (see <a href="../engine/lod-and-occlusion.html#mesh-lod">LOD and occlusion</a>). Also a player flag.</td>
+</tr>
+<tr>
+<td><code>--lod-bias &lt;F&gt;</code></td>
+<td>Multiply every model's and terrain chunk's screen size by F (&gt; 0) when picking its level: above 1 keeps detail further away. Also a player flag.</td>
+</tr>
+<tr>
+<td><code>--force-lod &lt;n&gt;</code></td>
+<td>Every model at level n (its last if it has fewer; nothing culled below its thresholds), terrain at stride 2<sup>min(n, 3)</sup>. Also a player flag.</td>
+</tr>
+<tr>
+<td><code>--log-lod</code></td>
+<td>Log each model's level when first drawn and every change, with its screen height: <code>LOD: 'Rock' level 1 -&gt; 2 (screen height 0.2400)</code>.</td>
+</tr>
+<tr>
+<td><code>--no-occlusion</code></td>
+<td>No <a href="../engine/lod-and-occlusion.html#occlusion">Hi-Z occlusion culling</a> in the Scene and Game views: every draw in the frustum is drawn. For comparing output and performance. Also a player flag.</td>
+</tr>
+<tr>
+<td><code>--occlusion-unsupported</code></td>
+<td>Behave as on a GPU without compute or read-back: occlusion culling is off and the log says so once (a test hook).</td>
+</tr>
+<tr>
+<td><code>--lod-tint</code></td>
+<td>The Scene and Game views tint every draw by its LOD level (terrain by stride): the Scene view's <a href="controls.html#debug-views">Debug &gt; LOD tint</a>. <code>--terrain-lod-tint</code> is the same.</td>
+</tr>
+<tr>
+<td><code>--show-occluded</code></td>
+<td>Start with the Scene view's Debug &gt; Occluded boxes on.</td>
+</tr>
+<tr>
+<td><code>--show-hiz &lt;mip&gt;</code></td>
+<td>Start with the Scene view's Debug &gt; Hi-Z mip on, showing that mip (clamped to the last).</td>
+</tr>
+<tr>
+<td><code>--scene-debug-menu</code></td>
+<td>Keep the Scene view's Debug menu open, for screenshots.</td>
+</tr>
+<tr>
+<td><code>--terrain-lod-checker</code>, <code>--no-terrain-skirts</code></td>
+<td>Terrain LOD test hooks: chunks at strides 1 and 8 in a checkerboard, the worst case for cracks; no skirts (set at start), so cracks show.</td>
+</tr>
+<tr>
 <td><code>--no-audio-device</code></td>
 <td>Play sound on miniaudio's null backend (silent), as if there were no output device: one warning, everything else behaves normally. Tests use it.</td>
 </tr>
@@ -324,7 +368,7 @@ Text.</td>
 </tr>
 <tr>
 <td><code>--log-fps</code></td>
-<td>Log once a second: frames per second (vsync caps it at the display's refresh rate), the editor's CPU time per frame and bgfx's GPU frame time, and the draw call count.</td>
+<td>Log once a second: frames per second (vsync caps it at the display's refresh rate), the editor's CPU time per frame and bgfx's GPU frame time, and the draw call count; then the Scene view's last camera pass (triangles, draw calls, draws occluded, draws per LOD level) and the measured Hi-Z latency (see <a href="../engine/lod-and-occlusion.html#stats">Stats</a>).</td>
 </tr>
 <tr>
 <td><code>--world-address &lt;host:port&gt;</code></td>
@@ -468,6 +512,10 @@ the demo's meshes red in the Scene view without saving.</p>
 <tr>
 <td><code>--preview-clip &lt;name&gt;</code></td>
 <td>With <code>--preview-model</code>: play that clip instead of the default one. A name the model doesn't have logs <code>Model Preview: '&lt;path&gt;' has no clip '&lt;name&gt;'; playing '&lt;default&gt;'</code>.</td>
+</tr>
+<tr>
+<td><code>--preview-lod &lt;n&gt;</code></td>
+<td>With <code>--preview-model</code>: show LOD level n (see <a href="model-preview.html#mp-lod">LOD</a>).</td>
 </tr>
 </tbody>
 </table>

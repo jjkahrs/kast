@@ -33,6 +33,19 @@ shows <em>No animations</em> instead of these controls.</p>
 <p>Above the image: <strong>Meshes</strong> (submeshes, one per material slot), <strong>Vertices</strong>, <strong>Triangles</strong>,
 <strong>Nodes</strong> (the node hierarchy), <strong>Bones</strong> (distinct joint nodes across the skinned meshes), <strong>Clips</strong>
 and the bind-pose bounds <strong>Size</strong> in meters (x by y by z).</p>
+<h2 id="mp-lod">LOD</h2>
+<p>The collapsible <strong>LOD</strong> section shows and edits the model's <a href="../engine/lod-and-occlusion.html#import-settings">LOD import settings</a>
+(its <code>&lt;model&gt;.import.json</code>):</p>
+<ul>
+<li><strong>Auto LOD</strong> (generate levels), <strong>Levels</strong> (1 to 8) and <strong>Cull below last</strong>.</li>
+<li>A table with a row per level: a radio button to <strong>preview</strong> that level in the view (the default is LOD0), its target
+  <strong>ratio</strong> of LOD0's triangles, its <strong>screen height</strong> threshold in percent, and the triangles the
+  imported model has at that level (with the percentage of LOD0's), so a level that missed its target shows.</li>
+<li><strong>Apply</strong> writes the sidecar and the model is imported again (the new counts show within a frame);
+  <strong>Revert</strong> drops unapplied edits.</li>
+</ul>
+<p>Authored levels (<code>_LOD0</code>, <code>_LOD1</code> ... nodes) show with their own triangle counts. <code>--preview-lod &lt;n&gt;</code>
+starts on level n.</p>
 <h2 id="mp-files">Files</h2>
 <ul>
 <li>A file that can't be loaded (missing pieces, corrupt, unsupported) shows <em>Can't load this model</em> in the panel; the
