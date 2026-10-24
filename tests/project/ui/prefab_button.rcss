@@ -1,0 +1,34 @@
+/* GUI prefab ui/prefab_button.guiprefab: linked into every GUI that holds an instance of it. */
+.prefab-card {
+    display: block;
+    width: 280px;
+    margin-bottom: 12px;
+    padding: 12px;
+    background-color: #313131;
+    border: 2px #ffaa00;
+    border-radius: 6px;
+}
+
+.prefab-title {
+    display: block;
+    color: #ffcc00;
+    font-size: 20px;
+    margin-bottom: 8px;
+}
+
+.prefab-button {
+    display: inline-block;
+    padding: 6px 14px;
+    background-color: #ffaa00;
+    color: #000000;
+    border-radius: 4px;
+}
+
+.prefab-button:hover {
+    background-color: #ffcc00;
+}
+
+.big {
+    font-size: 28px;
+    color: #40c0ff;
+}

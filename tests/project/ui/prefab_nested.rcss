@@ -1,0 +1,14 @@
+/* GUI prefab ui/prefab_nested.guiprefab: a frame holding an instance of ui/prefab_button.guiprefab. */
+.prefab-frame {
+    display: block;
+    width: 320px;
+    padding: 8px;
+    border: 2px #818181;
+    border-radius: 6px;
+}
+
+.prefab-caption {
+    display: block;
+    color: #818181;
+    margin-bottom: 6px;
+}

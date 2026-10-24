@@ -1,8 +1,12 @@
 #pragma once
 
+#include <gui_prefabs.h>
+
 #include <pugixml.hpp>
 
 #include <filesystem>
+#include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -32,12 +36,78 @@ constexpr GuiKind kGuiCreatableKinds[] = {GuiKind::Panel,    GuiKind::Text,     
 const char* guiKindLabel(GuiKind kind);
 GuiKind guiKind(pugi::xml_node node);
 
+// GUI prefabs (gui_prefabs.h, docs/editor/gui-builder.html "GUI prefabs"): once setPrefabContext names the project, parse
+// expands every instance in place with the engine's expander (the tree holds what Play shows; the instance root keeps
+// data-prefab) and serialize collapses each back to its reference, its overrides worked out by comparing it with a fresh
+// expansion: a value set back to the prefab's is no override. Prefab files are read once and kept until refreshPrefabs.
+// Inside an instance only attributes and text change: add, remove, move and reparent refuse an element inside one (its
+// root itself moves like any element) and adding into one. A reference that doesn't expand stays as it was (overrides
+// kept, saved unchanged), marked kGuiMissingPrefabAttribute.
 class GuiDoc {
 public:
+    // Where prefab paths resolve (the project root, else the GUI's folder) and the document's own path there (in warnings;
+    // a .guiprefab can't hold itself). Unset: instances are kept as written, not expanded.
+    void setPrefabContext(const std::filesystem::path& root, std::string documentPath);
     // False + error (document unchanged) if rml is not well-formed or has no <rml><body>.
     bool parse(std::string_view rml, std::string& error);
+    // A .guiprefab: exactly one element (else false + error), edited as the only element under body().
+    bool parsePrefab(std::string_view text, std::string& error);
+    bool isPrefab() const { return prefab_; }
+    // The .rml, or for a prefab its one element; instances collapsed to references.
     std::string serialize() const;
     pugi::xml_node body() const { return xml_.child("rml").child("body"); }
+
+    // Re-reads every prefab: instances are collapsed against the prefabs as last read, then expanded again from the files.
+    // Every node handle goes stale (element paths stay: no structure outside instances changes).
+    void refreshPrefabs();
+    // The prefab files and prefab .rcss the instances read (project paths), and the .rcss in the order a document links them.
+    const std::vector<std::string>& prefabFiles() const { return prefabFiles_; }
+    const std::vector<std::string>& prefabSheets() const { return prefabSheets_; }
+    // The outermost expanded instance root holding node (node itself included); null if none.
+    static pugi::xml_node instanceRoot(pugi::xml_node node);
+    // Inside an instance but not its root: only its attributes and text can change.
+    static bool prefabLocked(pugi::xml_node node);
+    // A reference whose prefab didn't expand (missing, broken, a cycle).
+    static bool missingPrefab(pugi::xml_node node);
+    // node can take new children: not inside or the root of an instance, no missing placeholder, and in a prefab not
+    // <body> once it holds the prefab's element.
+    bool canAddInto(pugi::xml_node node) const;
+    // node's element in a fresh expansion of its instance (the prefab's values, no overrides of this instance), kept in
+    // holder; null if node is in no instance.
+    pugi::xml_node pristine(pugi::xml_node node, pugi::xml_document& holder) const;
+    // A field as the Inspector edits it: "text" (text()), a widget property (widgetProperties), else an attribute of
+    // widgetElement(node); nullopt for an attribute it doesn't have.
+    static std::optional<std::string> field(pugi::xml_node node, std::string_view name);
+    static void setField(pugi::xml_node node, std::string_view name, const std::optional<std::string>& value);
+    // node (in an instance) has this field differing from the prefab's. Never the instance root's id.
+    bool overridden(pugi::xml_node node, std::string_view name) const;
+    // Sets an instance root's id, renaming the ids inside it that start with "<old id>_". An empty id is refused.
+    static bool setInstanceId(pugi::xml_node root, std::string_view id);
+
+    // Each returns false + error (document unchanged) or does it; the caller records the undo step.
+    // Appends a new instance of the prefab at the project path to parent (canAddInto), its id the prefab's file stem made
+    // unique in the document (_2, _3, ...). Refused if the prefab doesn't expand (missing, broken) or would hold the
+    // document's own prefab (a cycle).
+    pugi::xml_node placePrefab(const std::string& path, pugi::xml_node parent, std::string& error);
+    // Writes node (not <body>, nothing inside an instance nor an instance root) as dir/<its id, else its kind>.guiprefab
+    // plus an .rcss holding only a comment (_2, _3, ... if either name is taken; never overwrites), ids inside it that
+    // start with "<its id>_" saved without that (so the instance's ids stay as they were), and replaces node with an
+    // instance of it (its id: node's, else the file stem). Refused if the prefab would hold itself. file: the new
+    // .guiprefab. Returns the instance.
+    pugi::xml_node createPrefab(pugi::xml_node node, const std::filesystem::path& dir, std::filesystem::path& file,
+                                std::string& error);
+    // A field (field()) of node in an instance back to the prefab's value. False if not overridden.
+    bool revert(pugi::xml_node node, std::string_view name);
+    // The whole instance (root) back to the prefab: returns its new root.
+    pugi::xml_node revertAll(pugi::xml_node root);
+    // The instance root becomes plain elements, ids as expanded; instances nested in it stay linked (what it changed on
+    // them now their own overrides).
+    static bool unpack(pugi::xml_node root);
+    // Writes node's field (empty name: every override of root's whole instance) into the outermost prefab's file, then
+    // refreshPrefabs. False + error if the file can't be read or written.
+    bool apply(pugi::xml_node node, std::string_view name, std::string& error);
+    // Rewrites data-prefab paths from (or inside) from to where remapProjectPaths puts them. True if any changed.
+    bool remapPrefabPaths(const std::string& from, const std::string& to);
 
     // Element children of parent, in order (text and comments skipped).
     static std::vector<pugi::xml_node> elements(pugi::xml_node parent);
@@ -108,8 +178,32 @@ public:
     std::string previewRml(std::string_view rcss, std::vector<pugi::xml_node>& nodes) const;
 
 private:
+    kast::GuiPrefabExpansion expansion(bool quiet) const; // reads through prefabCache_
+    void expandInstances();
+    // The prefab path's reference, collapsed from the instance root (overrides by comparing with a fresh expansion).
+    void collapse(pugi::xml_node root) const;
+    void collapseUnder(pugi::xml_node node) const; // every instance under node (not node)
+
     pugi::xml_document xml_;
+    bool prefab_ = false;
+    std::filesystem::path prefabRoot_; // empty: instances not expanded
+    std::string documentPath_;
+    mutable std::map<std::string, std::optional<std::string>> prefabCache_; // project path -> text, as first read
+    std::vector<std::string> prefabFiles_, prefabSheets_;
 };
+
+// The .rcss beside a .guiprefab (<stem>.rcss); its Style panel and Save use it.
+std::filesystem::path guiPrefabSheet(const std::filesystem::path& prefab);
+// Renames a .guiprefab to newName (renameAsset rules), its sibling <stem>.rcss with it if there is one. False + error
+// (disk unchanged) if a name is invalid or taken or a rename fails.
+bool renameGuiPrefab(const std::filesystem::path& prefab, const std::string& newName, std::string& error);
+// Moves a .guiprefab into destDir (moveAsset rules), its sibling .rcss with it. False + error (disk unchanged).
+bool moveGuiPrefab(const std::filesystem::path& prefab, const std::filesystem::path& destDir, std::string& error);
+// Rewrites the data-prefab paths in every .rml and .guiprefab under root that point at from or inside it (as
+// remapProjectPaths; the text is kept as written otherwise). Returns the files changed (project-relative); a file that
+// can't be written is logged.
+std::vector<std::string> remapGuiPrefabReferences(const std::filesystem::path& root, const std::string& from,
+                                                  const std::string& to);
 
 // The Rich Text toolbar's edit of markup (byte offsets start..end: the selection, or the cursor when equal; clamped and
 // ordered): [tag] or [tag=value] put before it and [/tag] after it, or for "img" [img=value] put at start (an image

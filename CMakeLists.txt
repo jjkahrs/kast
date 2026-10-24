@@ -179,7 +179,7 @@ add_library(kast_engine STATIC
   engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/lod.cpp engine/occlusion.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
-  engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/gui_lists.cpp engine/gui_richtext.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
+  engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/gui_lists.cpp engine/gui_richtext.cpp engine/gui_prefabs.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
   engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/ibl.cpp engine/bvh.cpp engine/lightmap.cpp engine/lightmap_bake.cpp engine/voxel_gi.cpp engine/sdfgi.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
@@ -192,7 +192,7 @@ target_compile_options(kast_engine PRIVATE ${KAST_COMPILE_OPTIONS})
 set_source_files_properties(engine/network.cpp PROPERTIES COMPILE_DEFINITIONS "_WIN32_WINNT=0x0A00" COMPILE_OPTIONS /bigobj)
 set_source_files_properties(engine/lua_systems.cpp PROPERTIES COMPILE_OPTIONS /bigobj) # sol2 templates
 target_link_libraries(kast_engine
-  PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json RmlUi::RmlUi kast_map
+  PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json RmlUi::RmlUi pugixml::pugixml kast_map
   PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 Jolt::Jolt "${LUAJIT_LIBRARY}" kast_protocol xatlas meshoptimizer::meshoptimizer
           Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto crypt32 shell32) # shell32: recycleFile
 

@@ -1,0 +1,15 @@
+<rml>
+    <head>
+        <title>Prefab Missing</title>
+        <link type="text/rcss" href="prefab_host.rcss"/>
+    </head>
+    <body>
+        <div id="column" class="column">
+            <div id="ok" data-prefab="ui/prefab_button.guiprefab"/>
+            <div id="gone" data-prefab="ui/prefab_gone.guiprefab">
+                <override target="title" text="Kept while missing"/>
+            </div>
+            <div id="loop" data-prefab="ui/prefab_cycle_a.guiprefab"/>
+        </div>
+    </body>
+</rml>

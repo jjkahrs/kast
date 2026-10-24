@@ -6,6 +6,7 @@
 #include "texture_cooker.h"
 
 #include <files.h>
+#include <gui_prefabs.h>
 #include <log.h>
 #include <model.h>
 #include <pak.h>
@@ -242,11 +243,11 @@ void sceneTextures(const Json& json, TextureUsages& usages, std::set<std::array<
 // material, model, particle, .kshader / graph param or sky can sample into KTX entries at kast::texturePakPath, through
 // the editor's texture cache, one per usage it is sampled with (materialTextures; a scene's or prefab's particles: Color);
 // an image nothing names (Lua may use it) as Color. Each sky's six faces become one cube at kast::skyPakPath. Takes an
-// image out of paths unless the GUI (an .rml / .rcss) or Lua names it, or nothing does, or it is a terrain heightmap
-// (maps/<map>/heights/) or a face of a sky that can't be cooked: RmlUi, terrain and the player's sky fallback read
-// source images. False + error naming the first image that fails.
-// ponytail: an image counts as named by .rml / .rcss / .lua text when its file name appears in it (over-inclusive: a
-// same-named image elsewhere ships its source too); parse the documents' and scripts' paths if pak size matters.
+// image out of paths unless the GUI (an .rml / .rcss / .guiprefab) or Lua names it, or nothing does, or it is a terrain
+// heightmap (maps/<map>/heights/) or a face of a sky that can't be cooked: RmlUi, terrain and the player's sky fallback
+// read source images. False + error naming the first image that fails.
+// ponytail: an image counts as named by .rml / .rcss / .guiprefab / .lua text when its file name appears in it
+// (over-inclusive: a same-named image elsewhere ships its source too); parse their paths if pak size matters.
 bool cookShippedTextures(const std::filesystem::path& root, std::vector<std::string>& paths,
                          const std::map<std::string, kast::ShaderSource>& sources, TextureUsages usages,
                          const std::map<std::string, std::string>& embedded, std::map<std::string, std::string>& cooked,
@@ -267,7 +268,8 @@ bool cookShippedTextures(const std::filesystem::path& root, std::vector<std::str
             }
         } else if ((path.ends_with(".scene") || path.ends_with(".prefab")) && kast::readFile(file, text)) {
             sceneTextures(Json::parse(text, nullptr, false), usages, skies);
-        } else if ((path.ends_with(".rml") || path.ends_with(".rcss")) && kast::readFile(file, text)) {
+        } else if ((path.ends_with(".rml") || path.ends_with(".rcss") || path.ends_with(kast::kGuiPrefabExtension)) &&
+                   kast::readFile(file, text)) {
             guiText += text;
         } else if (path.ends_with(".lua") && kast::readFile(file, text)) {
             luaText += text;

@@ -6,6 +6,7 @@
 #include "gui_events.h"
 #include "gui_lists.h"
 #include "gui_models.h"
+#include "gui_prefabs.h"
 #include "gui_richtext.h"
 #include "gui_widgets.h"
 #include "scene.h"
@@ -64,6 +65,7 @@ public:
     bool cloneElement(const std::string& templateId, const std::string& parentId, const std::string& newId) override;
     bool createElement(const std::string& parentId, const std::string& tag, const std::string& newId,
                        const std::map<std::string, std::string>& attributes) override;
+    bool instantiatePrefab(const std::string& prefab, const std::string& parentId, const std::string& newId) override;
     bool removeElement(const std::string& id) override;
     void reset() override;
 
@@ -86,7 +88,8 @@ private:
         std::unique_ptr<DragListener> dragListener;
         std::unique_ptr<WidgetListener> widgetListener;
         std::unique_ptr<ListListener> listListener;
-        std::vector<std::pair<std::filesystem::path, std::filesystem::file_time_type>> files; // .rml, linked .rcss
+        std::vector<std::pair<std::filesystem::path, std::filesystem::file_time_type>> files; // .rml, .rcss, GUI prefabs
+        std::vector<std::string> prefabSheets; // the GUI prefab .rcss it has (project paths)
     };
 
     void load(Entry& entry, EventBus& bus);
@@ -97,6 +100,7 @@ private:
     bool applyValue(Entry& entry, Rml::Element& element, const std::string& id, const GuiValue& value); // false: logged
     void scroll(const std::string& id, int index, const char* function); // scrollTo, scrollToEnd
     Rml::ElementDocument* documentWith(const std::string& id) const; // the topmost loaded one holding id
+    GuiPrefabReader prefabReader() const; // project files by project path
 
     GuiModels models_; // before context_: the context's models point into it
     GuiContext context_;

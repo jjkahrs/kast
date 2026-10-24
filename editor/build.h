@@ -21,11 +21,11 @@ constexpr const char* kPlayerExeName = "kast_player.exe";
 #ifdef NDEBUG
 constexpr const char* kPlayerDlls[] = {"SDL3.dll",      "lua51.dll",     "rmlui.dll",        "freetype.dll",
                                        "zlib1.dll",     "bz2.dll",       "libpng16.dll",     "brotlidec.dll",
-                                       "brotlicommon.dll", "libssl-3-x64.dll", "libcrypto-3-x64.dll", "meshoptimizer.dll"};
+                                       "brotlicommon.dll", "libssl-3-x64.dll", "libcrypto-3-x64.dll", "meshoptimizer.dll", "pugixml.dll"};
 #else
 constexpr const char* kPlayerDlls[] = {"SDL3.dll",      "lua51.dll",     "rmlui.dll",        "freetyped.dll",
                                        "zlibd1.dll",    "bz2d.dll",      "libpng16d.dll",    "brotlidec.dll",
-                                       "brotlicommon.dll", "libssl-3-x64.dll", "libcrypto-3-x64.dll", "meshoptimizer.dll"};
+                                       "brotlicommon.dll", "libssl-3-x64.dll", "libcrypto-3-x64.dll", "meshoptimizer.dll", "pugixml.dll"};
 #endif
 
 // c can't appear in a Windows file name: one of < > : " / \ | ? * or a control character.

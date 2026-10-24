@@ -1,0 +1,4 @@
+<div class="prefab-card">
+    <p id="title" class="prefab-title">Prefab Card</p>
+    <button id="button" class="prefab-button" data-event="prefab.clicked">Press</button>
+</div>
