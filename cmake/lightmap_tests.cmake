@@ -152,7 +152,7 @@ kast_lm_region(lm_ball_back_warm lightmap_room_ball_back ${lm_ball_back} lightma
 kast_lm_region(lm_ball_bright_vs_dark lightmap_room ${lm_ball_front} lightmap_room_ball_back ${lm_ball_back} l 1 1.2)
 add_test(NAME lm_lightmap_room_matches_reference
   COMMAND kast_self_check --diff-png "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference/lightmap_room.png"
-          "${CMAKE_CURRENT_BINARY_DIR}/lm_lightmap_room.png" 1.5 ${lm_scene_rect})
+          "${CMAKE_CURRENT_BINARY_DIR}/lm_lightmap_room.png" 1.5 0,0,955,551,322,76) # the reference: the Scene view only
 set_tests_properties(lm_lightmap_room_matches_reference PROPERTIES FIXTURES_REQUIRED lm_lightmap_room_shot)
 
 # Bake from the command line on project copies: the room (at the default settings, under a minute), its lights Full and
