@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -39,11 +40,23 @@ Sh9 scaleSh9(const Sh9& sh, const bx::Vec3& tint);
 // The Kast world direction (not unit) through (u, v) (-1..1 across the face, v down) of cube side 0..5 (+X, -X, +Y,
 // -Y, +Z, -Z as bgfx / D3D lay them out; a world direction d is the cube direction (d.x, d.y, -d.z), as for the sky).
 bx::Vec3 cubeTexelDirection(int side, float u, float v);
+// A cube's radiance as projectSh9 reads it, kept for the CPU lightmap baker (lightmap_bake.h) to look up.
+struct CubeSides {
+    uint16_t size = 0;
+    std::array<std::vector<float>, 6> rgb;
+};
+// The texel of cube along Kast world direction d (any length), nearest: cubeTexelDirection's inverse.
+bx::Vec3 sampleCubeSides(const CubeSides& cube, const bx::Vec3& d);
+// Radiance samples spread uniformly over the whole sphere (each 4 pi / count of solid angle; unit directions) projected
+// as projectSh9 projects a cube.
+Sh9 projectRadianceSamples(std::span<const bx::Vec3> directions, std::span<const bx::Vec3> radiance);
 // A procedural sky's environment (proceduralSkyColor in every direction) projected.
 Sh9 proceduralSkySh9(const SceneSky& sky);
 // A KTX / DDS cube's (any format bimg decodes; srgb: its values are sRGB-encoded) projected, from its first mip at most
 // 64 texels across. nullopt if it isn't a cube bimg can read.
 std::optional<Sh9> cubeFileSh9(std::string_view bytes, bool srgb);
+// The same cube's first mip at most 64 texels across, decoded to linear RGB.
+std::optional<CubeSides> cubeFileSides(std::string_view bytes, bool srgb);
 
 // fs_mesh.sc kastEnvBrdf: Karis' analytic fit ("Physically Based Shading on Mobile", 2014) of the split-sum's GGX BRDF
 // integral at (roughness, N.V): the specular reflectance is F0 * [0] + [1].

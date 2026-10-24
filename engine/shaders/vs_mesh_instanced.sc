@@ -1,10 +1,11 @@
-$input a_position, a_normal, a_tangent, a_texcoord0, a_color0, i_data0, i_data1, i_data2, i_data3
-$output v_normal, v_tangent, v_worldPos, v_texcoord0, v_color0
+$input a_position, a_normal, a_tangent, a_texcoord0, a_color0, a_texcoord1, i_data0, i_data1, i_data2, i_data3, i_data4
+$output v_normal, v_tangent, v_worldPos, v_texcoord0, v_color0, v_lightmapUv
 
 #include <bgfx_shader.sh>
 #include <mesh.sh>
 
-// vs_mesh.sc's template with the model matrix per instance (i_data0..3: its rows as bx stores them) instead of u_model.
+// vs_mesh.sc's template with the model matrix per instance (i_data0..3: its rows as bx stores them) instead of u_model,
+// and a lightmapped batch's lightmap scale / offset per instance too (i_data4, as vs_mesh.sc's u_lightmapST).
 //@user
 #ifndef KAST_VERTEX
 void vertex(inout KastVertex kast_v) {}
@@ -29,4 +30,5 @@ void main()
     v_worldPos = worldPos.xyz;
     v_texcoord0 = v.uv;
     v_color0 = v.color; // white unless the mesh has vertex colors; only .kshaders read it (COLOR)
+    v_lightmapUv = a_texcoord1 * i_data4.xy + i_data4.zw;
 }

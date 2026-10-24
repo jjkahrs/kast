@@ -94,6 +94,18 @@ const char* validateAreaLight(const entt::meta_any& component)
     return nullptr;
 }
 
+const char* validateMeshRenderer(const entt::meta_any& component)
+{
+    return component.cast<const MeshRenderer&>().lightmapScale > 0.0f ? nullptr : "\"lightmapScale\" must be > 0";
+}
+
+const char* validateModelRenderer(const entt::meta_any& component)
+{
+    return component.cast<const ModelRenderer&>().lightmapScale > 0.0f ? nullptr : "\"lightmapScale\" must be > 0";
+}
+
+constexpr double kMinLightmapScale = 0.01; // Inspector floor; files and kast.set only need > 0
+
 constexpr double kMinProbeBox = 0.01; // Inspector floor in meters per axis; files and kast.set only need > 0
 
 const char* validateReflectionProbe(const entt::meta_any& component)
@@ -263,18 +275,32 @@ void registerBuiltins()
         .data<Primitive::Cube>("cube").custom<FieldInfo>("Cube")
         .data<Primitive::Plane>("plane").custom<FieldInfo>("Plane")
         .data<Primitive::Sphere>("sphere").custom<FieldInfo>("Sphere");
-    registerComponent<MeshRenderer>("MeshRenderer", {"Mesh Renderer"})
+    entt::meta_factory<GiMode>{}
+        .type("GiMode")
+        .data<GiMode::Off>("off").custom<FieldInfo>("Off")
+        .data<GiMode::Static>("static").custom<FieldInfo>("Static")
+        .data<GiMode::Dynamic>("dynamic").custom<FieldInfo>("Dynamic");
+    entt::meta_factory<LightBakeMode>{}
+        .type("LightBakeMode")
+        .data<LightBakeMode::Realtime>("realtime").custom<FieldInfo>("Realtime")
+        .data<LightBakeMode::Indirect>("indirect").custom<FieldInfo>("Indirect")
+        .data<LightBakeMode::Full>("full").custom<FieldInfo>("Full");
+    registerComponent<MeshRenderer>("MeshRenderer", {"Mesh Renderer", true, validateMeshRenderer})
         .data<&MeshRenderer::primitive>("primitive").custom<FieldInfo>("Primitive")
         .data<&MeshRenderer::material>("material").custom<FieldInfo>("Material")
         .data<&MeshRenderer::castShadows>("castShadows").custom<FieldInfo>(FieldInfo{.displayName = "Cast Shadows", .optional = true})
-        .data<&MeshRenderer::receiveShadows>("receiveShadows").custom<FieldInfo>(FieldInfo{.displayName = "Receive Shadows", .optional = true});
+        .data<&MeshRenderer::receiveShadows>("receiveShadows").custom<FieldInfo>(FieldInfo{.displayName = "Receive Shadows", .optional = true})
+        .data<&MeshRenderer::giMode>("giMode").custom<FieldInfo>(FieldInfo{.displayName = "GI Mode", .optional = true})
+        .data<&MeshRenderer::lightmapScale>("lightmapScale").custom<FieldInfo>(FieldInfo{.displayName = "Lightmap Scale", .min = kMinLightmapScale, .optional = true});
 
     // materials: a JSON array of strings (see FieldDesc::array); the first built-in list field.
-    registerComponent<ModelRenderer>("ModelRenderer", {"Model Renderer"})
+    registerComponent<ModelRenderer>("ModelRenderer", {"Model Renderer", true, validateModelRenderer})
         .data<&ModelRenderer::model>("model").custom<FieldInfo>("Model")
         .data<&ModelRenderer::materials>("materials").custom<FieldInfo>("Materials")
         .data<&ModelRenderer::castShadows>("castShadows").custom<FieldInfo>(FieldInfo{.displayName = "Cast Shadows", .optional = true})
-        .data<&ModelRenderer::receiveShadows>("receiveShadows").custom<FieldInfo>(FieldInfo{.displayName = "Receive Shadows", .optional = true});
+        .data<&ModelRenderer::receiveShadows>("receiveShadows").custom<FieldInfo>(FieldInfo{.displayName = "Receive Shadows", .optional = true})
+        .data<&ModelRenderer::giMode>("giMode").custom<FieldInfo>(FieldInfo{.displayName = "GI Mode", .optional = true})
+        .data<&ModelRenderer::lightmapScale>("lightmapScale").custom<FieldInfo>(FieldInfo{.displayName = "Lightmap Scale", .min = kMinLightmapScale, .optional = true});
 
     registerComponent<Animator>("Animator", {"Animator", true, validateAnimator})
         .data<&Animator::clip>("clip").custom<FieldInfo>("Clip")
@@ -290,14 +316,16 @@ void registerBuiltins()
         .data<&DirectionalLight::normalBias>("normalBias").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Normal Bias", .min = 0.0, .optional = true})
         .data<&DirectionalLight::maxDistance>("maxDistance").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Distance", .min = 0.1, .optional = true})
         .data<&DirectionalLight::cascadeCount>("cascadeCount")
-        .custom<FieldInfo>(FieldInfo{.displayName = "Shadow Cascades", .min = 1.0, .max = double(kMaxShadowCascades), .optional = true});
+        .custom<FieldInfo>(FieldInfo{.displayName = "Shadow Cascades", .min = 1.0, .max = double(kMaxShadowCascades), .optional = true})
+        .data<&DirectionalLight::bakeMode>("bakeMode").custom<FieldInfo>(FieldInfo{.displayName = "Bake Mode", .optional = true});
 
     registerComponent<PointLight>("PointLight", {"Point Light", true, validatePointLight})
         .data<&PointLight::color>("color").custom<FieldInfo>("Color", true)
         .data<&PointLight::intensity>("intensity").custom<FieldInfo>("Intensity", false, 0.0)
         .data<&PointLight::range>("range").custom<FieldInfo>("Range", false, kMinLightRange)
         .data<&PointLight::castShadows>("castShadows").custom<FieldInfo>(FieldInfo{.displayName = "Cast Shadows", .optional = true})
-        .data<&PointLight::bias>("bias").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Bias", .min = 0.0, .optional = true});
+        .data<&PointLight::bias>("bias").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Bias", .min = 0.0, .optional = true})
+        .data<&PointLight::bakeMode>("bakeMode").custom<FieldInfo>(FieldInfo{.displayName = "Bake Mode", .optional = true});
 
     registerComponent<SpotLight>("SpotLight", {"Spot Light", true, validateSpotLight})
         .data<&SpotLight::color>("color").custom<FieldInfo>("Color", true)
@@ -306,7 +334,8 @@ void registerBuiltins()
         .data<&SpotLight::innerAngle>("innerAngle").custom<FieldInfo>("Inner Angle", false, kMinSpotAngle, kMaxSpotAngle)
         .data<&SpotLight::outerAngle>("outerAngle").custom<FieldInfo>("Outer Angle", false, kMinSpotAngle, kMaxSpotAngle)
         .data<&SpotLight::castShadows>("castShadows").custom<FieldInfo>(FieldInfo{.displayName = "Cast Shadows", .optional = true})
-        .data<&SpotLight::bias>("bias").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Bias", .min = 0.0, .optional = true});
+        .data<&SpotLight::bias>("bias").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Bias", .min = 0.0, .optional = true})
+        .data<&SpotLight::bakeMode>("bakeMode").custom<FieldInfo>(FieldInfo{.displayName = "Bake Mode", .optional = true});
 
     registerComponent<AreaLight>("AreaLight", {"Area Light", true, validateAreaLight})
         .data<&AreaLight::color>("color").custom<FieldInfo>("Color", true)
@@ -316,7 +345,8 @@ void registerBuiltins()
         .data<&AreaLight::range>("range").custom<FieldInfo>("Range", false, kMinLightRange)
         .data<&AreaLight::twoSided>("twoSided").custom<FieldInfo>(FieldInfo{.displayName = "Two Sided", .optional = true})
         .data<&AreaLight::castShadows>("castShadows").custom<FieldInfo>(FieldInfo{.displayName = "Cast Shadows", .optional = true})
-        .data<&AreaLight::bias>("bias").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Bias", .min = 0.0, .optional = true});
+        .data<&AreaLight::bias>("bias").custom<FieldInfo>(FieldInfo{.displayName = "Shadow Bias", .min = 0.0, .optional = true})
+        .data<&AreaLight::bakeMode>("bakeMode").custom<FieldInfo>(FieldInfo{.displayName = "Bake Mode", .optional = true});
 
     registerComponent<ReflectionProbe>("ReflectionProbe", {"Reflection Probe", true, validateReflectionProbe})
         .data<&ReflectionProbe::boxSize>("boxSize").custom<FieldInfo>(FieldInfo{.displayName = "Box Size", .min = kMinProbeBox})
@@ -403,7 +433,8 @@ void registerBuiltins()
         .data<&NetworkEntity::entityId>("entityId").custom<FieldInfo>("Entity Id");
     registerComponent<Terrain>("Terrain", {"Terrain", true, validateTerrain})
         .data<&Terrain::map>("map").custom<FieldInfo>("Map", false, 0.0, 65535.0)
-        .data<&Terrain::radius>("radius").custom<FieldInfo>("Radius (tiles)", false, 0.0, 4.0);
+        .data<&Terrain::radius>("radius").custom<FieldInfo>("Radius (tiles)", false, 0.0, 4.0)
+        .data<&Terrain::lightmap>("lightmap").custom<FieldInfo>(FieldInfo{.displayName = "Bake Lightmap", .optional = true});
     registerComponent<TerrainTile>("TerrainTile", {"Terrain Tile", true, nullptr, true})
         .data<&TerrainTile::map>("map").custom<FieldInfo>("Map")
         .data<&TerrainTile::tx>("tx").custom<FieldInfo>("Tile X")

@@ -117,14 +117,66 @@ float lightingNumber(const Json& value, const char* what, bool unit)
     return static_cast<float>(v);
 }
 
+// "lighting" > "lightmaps": every field optional (missing = default), present ones checked.
+SceneLightmaps parseLightmaps(const Json& json)
+{
+    if (!json.is_object())
+        throw Invalid("lighting: \"lightmaps\" must be an object");
+    SceneLightmaps out;
+    const auto number = [&](const char* key, float lo, float hi) {
+        const double v = json[key].is_number() ? json[key].get<double>() : std::nan("");
+        if (!(v >= lo && v <= hi))
+            throw Invalid(hi == FLT_MAX ? std::format("lighting.lightmaps: \"{}\" must be a number >= {}", key, lo)
+                                        : std::format("lighting.lightmaps: \"{}\" must be a number between {} and {}",
+                                                      key, lo, hi));
+        return static_cast<float>(v);
+    };
+    const auto whole = [&](const char* key, int lo, int hi) {
+        const float v = number(key, float(lo), float(hi));
+        if (v != std::floor(v))
+            throw Invalid(std::format("lighting.lightmaps: \"{}\" must be a whole number", key));
+        return static_cast<int>(v);
+    };
+    const auto flag = [&](const char* key) {
+        if (!json[key].is_boolean())
+            throw Invalid(std::format("lighting.lightmaps: \"{}\" must be true or false", key));
+        return json[key].get<bool>();
+    };
+    for (const auto& [key, value] : json.items()) {
+        if (key == "texelsPerMeter")
+            out.texelsPerMeter = number("texelsPerMeter", kMinLightmapTexelsPerMeter, kMaxLightmapTexelsPerMeter);
+        else if (key == "bounces")
+            out.bounces = whole("bounces", 0, kMaxLightmapBounces);
+        else if (key == "samplesPerTexel")
+            out.samplesPerTexel = whole("samplesPerTexel", 1, kMaxLightmapSamples);
+        else if (key == "probeSpacing")
+            out.probeSpacing = number("probeSpacing", kMinProbeSpacing, kMaxProbeSpacing);
+        else if (key == "enabled")
+            out.enabled = flag("enabled");
+        else if (key == "intensity")
+            out.intensity = number("intensity", 0.0f, FLT_MAX);
+        else if (key == "directional")
+            out.directional = flag("directional");
+        else if (key == "bakedPath" && value.is_string())
+            out.bakedPath = value.get<std::string>();
+        else if (key == "bakedPath")
+            throw Invalid("lighting.lightmaps: \"bakedPath\" must be a string");
+        else
+            throw Invalid(std::format("lighting.lightmaps: unknown field \"{}\"", key));
+    }
+    return out;
+}
+
 SceneLighting parseLighting(const Json& json)
 {
     if (!json.is_object())
         throw Invalid("\"lighting\" must be an object");
     for (const auto& [key, value] : json.items())
-        if (key != "ambientColor" && key != "ambientIntensity")
+        if (key != "ambientColor" && key != "ambientIntensity" && key != "lightmaps")
             throw Invalid(std::format("lighting: unknown field \"{}\"", key));
     SceneLighting lighting;
+    if (json.contains("lightmaps"))
+        lighting.lightmaps = parseLightmaps(json["lightmaps"]);
     const Json& color = field(json, "ambientColor");
     if (!color.is_array() || color.size() != 3)
         throw Invalid("lighting: \"ambientColor\" must be an array of 3 numbers");
@@ -992,6 +1044,25 @@ Json skyToJson(const SceneSky& sky)
     return json;
 }
 
+Json lightmapsToJson(const SceneLightmaps& lightmaps)
+{
+    return {{"texelsPerMeter", jsonNumber(lightmaps.texelsPerMeter)}, {"bounces", lightmaps.bounces},
+            {"samplesPerTexel", lightmaps.samplesPerTexel}, {"probeSpacing", jsonNumber(lightmaps.probeSpacing)},
+            {"enabled", lightmaps.enabled}, {"intensity", jsonNumber(lightmaps.intensity)},
+            {"directional", lightmaps.directional}, {"bakedPath", lightmaps.bakedPath}};
+}
+
+bool lightmapsFromJson(const Json& json, SceneLightmaps& out, std::string& error)
+{
+    try {
+        out = parseLightmaps(json);
+        return true;
+    } catch (const Invalid& e) {
+        error = e.what();
+    }
+    return false;
+}
+
 bool skyFromJson(const Json& json, SceneSky& out, std::string& error)
 {
     try {
@@ -1013,6 +1084,8 @@ Json sceneToJson(const Scene& scene)
     root["lighting"] = {{"ambientColor", Json::array({jsonNumber(lighting.ambientColor.x), jsonNumber(lighting.ambientColor.y),
                                                       jsonNumber(lighting.ambientColor.z)})},
                         {"ambientIntensity", jsonNumber(lighting.ambientIntensity)}};
+    if (lighting.lightmaps != SceneLightmaps{}) // scenes without lightmaps stay byte-identical on save
+        root["lighting"]["lightmaps"] = lightmapsToJson(lighting.lightmaps);
     root["postProcessing"] = postProcessingToJson(scene.postProcessing);
     root["sky"] = skyToJson(scene.sky);
     const bx::Vec3& gravity = scene.physics.gravity;

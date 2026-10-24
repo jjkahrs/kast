@@ -2,6 +2,7 @@
 
 #include "frustum.h"
 #include "ibl.h"
+#include "lightmap.h"
 #include "material.h"
 #include "model.h"
 #include "particles.h"
@@ -20,6 +21,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -42,6 +44,7 @@ struct MeshVertex {
     float tx, ty, tz, tw;
     float u, v; // (0, 0) is the image's top-left
     uint32_t color = 0xffffffff; // RGBA8 (R in the low byte), linear: COLOR0, white
+    float u2 = 0.0f, v2 = 0.0f;  // TEXCOORD1: lightmap UV (lightmapped meshes and terrain; docs/engine/lightmaps.html)
 };
 
 struct MeshData {
@@ -73,6 +76,7 @@ struct LocalLightSample {
     bx::Vec3 halfHeight{0.0f, 0.5f, 0.0f};  // area: from the center to its +Y edge
     float cosInner = 1.0f, cosOuter = 0.0f; // spot: cosines of its half-angles
     bool twoSided = false;                  // area
+    bool baked = false;                     // bakeMode Full: its light is in the lightmaps (lightShinesOn)
 };
 
 // Windowed inverse square (Unreal / Frostbite style): saturate(1 - (d/r)^4)^2 / (d^2 + 1). Largest at the light, falls
@@ -139,7 +143,9 @@ void buildMips(MipImage& image, bool srgb);
 // kMaxLocalLights nearest point, spot and area lights each (nearestLocalLights), fogged by its postProcessing.fog, as
 // linear HDR color (for PostProcess). The ambient (ibl.h): a mesh inside a baked ReflectionProbe's box takes it from
 // that probe (selectProbe); else, with a sky, from the sky's environment cube (built on the GPU when the sky changes,
-// in view before the meshes); else the flat ambient color. Opaque and mask meshes first, then its sky (sky.h), then blended ones and particle
+// in view before the meshes); else the flat ambient color. With the scene's lightmap bake (lightmap.h,
+// docs/engine/lightmaps.html) the diffuse part comes from a Static mesh's lightmap or a Dynamic mesh's probe-grid sample
+// instead (selectDiffuseGi), and Full lights skip lightmapped draws. Opaque and mask meshes first, then its sky (sky.h), then blended ones and particle
 // emitters (particles.h, simulated on the GPU here) far to near. Blended draws whose .kshader samples SCREEN_TEXTURE or
 // DEPTH_TEXTURE see a copy of the target's color or depth as the opaque meshes and the sky left it, made only on frames
 // such a draw is in view.
@@ -197,6 +203,10 @@ public:
     // A ReflectionProbe's bake as the renderer sees it: "Not baked", "Baked", or why its files can't be used (the
     // Inspector shows it).
     std::string probeStatus(const ReflectionProbe& probe);
+    // The scene's lightmap bake (lighting.lightmaps.bakedPath) as the renderer sees it: "Not baked", "Baked", "Out of
+    // date" (the scene's lightmapSceneHash differs from the bake's), or why its files can't be used (the Lighting panel
+    // shows it).
+    std::string lightmapStatus(const Scene& scene);
     // The editor's Bake: renders scene (and extra, as render() does) into the six faces of a size x size cube at center,
     // without particles and without probes (one bounce: meshes are lit by the sky's environment), prefilters it and reads
     // it back into out. Uses views firstView .. firstView + kShadowViews and runs bgfx::frame() itself (about ten
@@ -244,8 +254,30 @@ private:
         bool mirrored = false; // world matrix has a negative determinant: front faces wind the other way
         bool castShadows = true;
         bool receiveShadows = true;
+        // GI (lightmap.h): a lightmapped draw's lightmap textures (invalid: none) and its place in them; giDynamic: it
+        // samples the probe grid (GiMode::Dynamic, or a Static mesh the bake can't light).
+        bgfx::TextureHandle lightmap = BGFX_INVALID_HANDLE, lightmapDirection = BGFX_INVALID_HANDLE;
+        std::array<float, 4> lightmapST{1.0f, 1.0f, 0.0f, 0.0f};
+        bool giDynamic = false;
     };
-    // Per-frame shadow state the scene draws sample.
+    // Where a draw's diffuse ambient comes from (fs_mesh.sc u_gi, u_giSh, s_lightmap): lightmap.h selectDiffuseGi.
+    struct GiDraw {
+        DiffuseGi source = DiffuseGi::Environment;
+        Sh9 sh{}; // ProbeGrid: the grid sampled at the draw
+    };
+    // A scene's bake (lightmap.h), loaded once per bakedPath and again when its lightmaps.json changes on disk.
+    struct LightmapSet {
+        std::string path;  // bakedPath it was loaded from
+        std::string error; // why it can't be used; "" = loaded
+        std::optional<std::filesystem::file_time_type> jsonTime;
+        LightmapSidecar sidecar;
+        std::vector<bgfx::TextureHandle> irradiance, direction; // per atlas page
+        std::vector<LightmapMesh> meshes;
+        std::map<std::string, size_t> meshIndex;          // LightmapMesh::key -> meshes
+        std::map<EntityId, size_t> entities;              // -> sidecar.entities
+        std::map<std::pair<size_t, size_t>, Mesh> buffers; // (mesh, submesh): its unwrapped vertices, made on first use
+        std::set<std::pair<size_t, size_t>> broken;        // ones that no longer match their source (warned)
+    };
     struct ShadowFrame {
         // World to (atlas u, v, depth) per cascade, then (projective) per spot / area light tile: u_csmMtx.
         float csmMtx[kMaxShadowCascades + kMaxShadowedLocalLights][16] = {};
@@ -300,6 +332,12 @@ private:
     void updateSkyEnvironment(const SceneSky& sky, bgfx::ViewId view);
     const ProbeFile& probeFile(const ReflectionProbe& probe); // probe.bakedPath is set
     void clearProbes();
+    // The scene's bake (bakedPath set), loading or reloading it first; warns once per path when it can't be used.
+    LightmapSet& lightmapSet(const std::string& bakedPath);
+    void clearLightmaps();
+    // Points a Static draw of entity id, submesh submesh of source (LightmapMesh::source) at its unwrapped buffers and
+    // atlas page; false (and nothing changed) if the bake has none for it.
+    bool applyLightmap(LightmapSet& set, EntityId id, const std::string& source, size_t submesh, DrawItem& item);
     const GpuModel* gpuModel(const std::string& path); // null if the model fails to load
     void clearModels();
     const UserShader* userShader(const std::string& path); // null if the .kshader fails to load or compile
@@ -339,7 +377,8 @@ private:
     {
         return culling_ && !item.posed && !intersects(frustum, item.bounds);
     }
-    // True if batch can be one instanced submit, with its world matrices in instances (this frame's buffer).
+    // True if batch can be one instanced submit, with its world matrices in instances (this frame's buffer), and a
+    // lightmapped batch's lightmap scale / offsets after them (vs_mesh_instanced.sc i_data4).
     bool instanced(const std::vector<const DrawItem*>& batch, bgfx::InstanceDataBuffer& instances) const;
     void drawGrid(bgfx::ViewId view);
     void drawCameraFrustums(const Scene& scene, bgfx::ViewId view);
@@ -353,6 +392,7 @@ private:
     struct TerrainMesh {
         std::shared_ptr<const TerrainTileData> data; // the key's, kept alive so no other data reuses its address
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
+        bgfx::TextureHandle lightmap = BGFX_INVALID_HANDLE, lightmapDirection = BGFX_INVALID_HANDLE; // its baked tile
         Aabb bounds{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}}; // world space
         bool used = false; // by a tile this frame
     };
@@ -403,6 +443,10 @@ private:
     bgfx::UniformHandle envSh_ = BGFX_INVALID_HANDLE;       // u_envSh[9]
     bgfx::UniformHandle envSpecular_ = BGFX_INVALID_HANDLE; // u_envSpecular
     bgfx::UniformHandle envBox_ = BGFX_INVALID_HANDLE;      // u_envBox[2]
+    bgfx::UniformHandle gi_ = BGFX_INVALID_HANDLE;          // u_gi
+    bgfx::UniformHandle giSh_ = BGFX_INVALID_HANDLE;        // u_giSh[9]
+    bgfx::UniformHandle lightmapST_ = BGFX_INVALID_HANDLE;  // u_lightmapST
+    bgfx::UniformHandle lightmapSampler_ = BGFX_INVALID_HANDLE, lightmapDirSampler_ = BGFX_INVALID_HANDLE; // 12, 13
     bgfx::UniformHandle csmMtx_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle csmSplits_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle csmBias_ = BGFX_INVALID_HANDLE;
@@ -451,6 +495,8 @@ private:
     // ponytail: per Renderer, as the sky's cube: the Scene and Game views each load a probe's cube; share them if
     // scenes get many large probes.
     std::map<std::pair<std::string, int>, ProbeFile> probeFiles_; // by (bakedPath, resolution)
+    // ponytail: one bake per Renderer, as the probes: the Scene and Game views each load it; share it if bakes get big.
+    LightmapSet lightmaps_; // the last scene's bake (lightmapSet)
     bool capture_ = false; // bakeProbe: no particles, no probes
     ParticleRenderer particles_;
     float timeSeconds_ = 0.0f; // setTime

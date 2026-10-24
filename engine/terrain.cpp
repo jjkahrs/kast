@@ -1,6 +1,7 @@
 #include "terrain.h"
 
 #include "files.h"
+#include "lightmap.h"
 #include "log.h"
 #include "prefab.h"
 #include "replication.h" // yawRotation
@@ -166,8 +167,20 @@ const map::MapInfo* TerrainStreamer::map(uint16_t id) const
     return it == maps_.end() ? nullptr : it->second.info.get();
 }
 
+const std::filesystem::path* TerrainStreamer::folder(uint16_t id) const
+{
+    const auto it = maps_.find(id);
+    return it == maps_.end() ? nullptr : &it->second.folder;
+}
+
+std::shared_ptr<const TerrainTileData> TerrainStreamer::loadTile(uint16_t id, map::TileKey tile, bool lightmap) const
+{
+    const auto it = maps_.find(id);
+    return it == maps_.end() ? nullptr : load(it->second, tile, lightmap);
+}
+
 // ponytail: sync load on the main thread; move to a worker thread if tile crossings hitch.
-std::shared_ptr<const TerrainTileData> TerrainStreamer::load(const LoadedMap& map, map::TileKey tile) const
+std::shared_ptr<const TerrainTileData> TerrainStreamer::load(const LoadedMap& map, map::TileKey tile, bool lightmap) const
 {
     auto data = std::make_shared<TerrainTileData>();
     data->map = map.info;
@@ -198,6 +211,23 @@ std::shared_ptr<const TerrainTileData> TerrainStreamer::load(const LoadedMap& ma
         data->objects = std::move(parsed.objects);
     } else if (exists) {
         log::error(std::format("Terrain: {}: not valid JSON; the tile has no objects", objects.string()));
+    }
+    if (lightmap) { // a missing or bad one: the renderer warns with lightmapError and lights the tile as unbaked
+        const std::filesystem::path dir = map.folder / "lightmaps";
+        std::string index, irradiance, direction, error;
+        TerrainLightmaps parsed;
+        if (!readFile(dir / "lightmaps.json", index))
+            error = "not baked (no lightmaps/lightmaps.json in its map folder)";
+        else if (!parseTerrainLightmaps(index, parsed, error))
+            ;
+        else if (!readFile(dir / terrainLightmapFile(tile.x, tile.z, false), irradiance) ||
+                 !readFile(dir / terrainLightmapFile(tile.x, tile.z, true), direction))
+            error = "cannot read its lightmap files";
+        else if (checkTerrainLightmap(parsed, tile.x, tile.z, irradiance, direction, error)) {
+            data->lightmap = std::move(irradiance);
+            data->lightmapDirection = std::move(direction);
+        }
+        data->lightmapError = error;
     }
     return data;
 }
@@ -265,7 +295,7 @@ void TerrainStreamer::update(Scene& scene, EventBus& bus)
         if (entity == entt::null)
             continue;
         registry.get<Transform>(entity).position = {float(key.x) * map::kTileSize, 0.0f, float(key.z) * map::kTileSize};
-        const std::shared_ptr<const TerrainTileData> data = load(loaded->second, key);
+        const std::shared_ptr<const TerrainTileData> data = load(loaded->second, key, terrain->lightmap);
         registry.emplace<TerrainTile>(entity, terrain->map, key.x, key.z, data);
         spawnObjects(scene, entity, loaded->second, *data);
     }

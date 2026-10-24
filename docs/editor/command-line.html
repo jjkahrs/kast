@@ -149,6 +149,23 @@
 <code>bakedPath</code> set.</td>
 </tr>
 <tr>
+<td><code>--bake-lightmaps</code></td>
+<td>Window &gt; Lighting's Bake Lightmaps after the first 8 frames, waited for (the frame doesn't end until the bake is
+written), so <code>--file-save</code> and <code>--screenshot</code> see it: the scene's
+<a href="../engine/lightmaps.html#how">lightmaps</a> are baked next to it (and lightmapped terrain's into its map folder) and
+its <code>bakedPath</code> set. Logs <code>Baked lightmaps to '&lt;path&gt;' in &lt;seconds&gt; s: ...</code>.</td>
+</tr>
+<tr>
+<td><code>--bake-lightmaps-async</code></td>
+<td>The same bake started as the button does: not waited for, the editor keeps drawing; its progress is logged at every
+10% with the frame number (<code>Baking lightmaps: 40% (frame 57)</code>), for tests.</td>
+</tr>
+<tr>
+<td><code>--cancel-lightmaps &lt;frame&gt;</code></td>
+<td>Presses the Lighting panel's Cancel on that frame: the running bake stops, writes nothing and the previous bake stays
+(<code>Lightmap bake cancelled; the previous bake is kept</code>), for tests.</td>
+</tr>
+<tr>
 <td><code>--file-save</code></td>
 <td>File &gt; Save (as Ctrl+S: the scene, then a zone with unsaved edits) after the first 10 frames, for tests.</td>
 </tr>

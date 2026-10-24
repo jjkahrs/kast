@@ -93,6 +93,7 @@
 #include <type_traits>
 
 int netSelfCheck(); // tests/net_self_check.cpp: returns its failure count
+int lightmapSelfCheck(); // tests/lightmap_self_check.cpp: returns its failure count
 int liveAuthCheck(const std::string& authUrl, const std::string& mailpitUrl); // the same file: 0, 1 or 77 (skipped)
 int liveWorldCheck(const std::string& authUrl, const std::string& mailpitUrl, const std::string& caFile,
                    const std::string& realmName); // the same file: 0, 1 or 77 (skipped)
@@ -392,10 +393,10 @@ void checkComponentJson()
     check(sameRotation(t.rotation, {0, 0.6f, 0, 0.8f}) && near(t.position, {1.5f, -2, 0.1f}),
           "Transform values (Quaternion field)");
     const kast::MeshRenderer m = roundTrip(kast::MeshRenderer{kast::Primitive::Sphere, "materials/red.mat"},
-                                           R"({"primitive":"sphere","material":"materials/red.mat","castShadows":true,"receiveShadows":true})");
+                                           R"({"primitive":"sphere","material":"materials/red.mat","castShadows":true,"receiveShadows":true,"giMode":"off","lightmapScale":1.0})");
     check(m.primitive == kast::Primitive::Sphere && m.material == "materials/red.mat", "MeshRenderer values (enum field)");
     const kast::DirectionalLight l = roundTrip(kast::DirectionalLight{{1, 0.9f, 0.8f}, 2.5f},
-                                               R"({"color":[1.0,0.9,0.8],"intensity":2.5,"castShadows":true,"bias":0.05,"normalBias":1.5,"maxDistance":100.0,"cascadeCount":4})");
+                                               R"({"color":[1.0,0.9,0.8],"intensity":2.5,"castShadows":true,"bias":0.05,"normalBias":1.5,"maxDistance":100.0,"cascadeCount":4,"bakeMode":"indirect"})");
     check(l.intensity == 2.5f, "DirectionalLight values");
     const kast::Rotator r = roundTrip(kast::Rotator{{1, 0, 0}, -30}, R"({"axis":[1.0,0.0,0.0],"degreesPerSecond":-30.0})");
     check(r.degreesPerSecond == -30.0f && near(r.axis, {1, 0, 0}), "Rotator values");
@@ -3120,7 +3121,7 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"area_lights.scene", "audio.scene", "custom_shaders.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "material_features.scene",
+              std::vector<std::string>{"area_lights.scene", "audio.scene", "custom_shaders.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "lightmap_room.scene", "material_features.scene",
                                        "materials.scene", "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
                                        "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "orm_split.scene",
@@ -3143,7 +3144,7 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
     check(projectScenes(root) == std::vector<std::string>{"area_lights.scene", "audio.scene", "broken.scene", "custom_shaders.scene", "events.scene", "fsm.scene",
-                                                          "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "levels/c.scene", "material_features.scene", "materials.scene",
+                                                          "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "levels/c.scene", "lightmap_room.scene", "material_features.scene", "materials.scene",
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
                                                           "models_material.scene", "models_missing.scene", "net_a.scene",
@@ -7175,6 +7176,52 @@ int diffPng(int argc, char** argv)
     const double mean = sum / (static_cast<double>(w) * h * 3.0);
     const bool ok = mean <= limit;
     std::printf("diff %s: mean %.6f (limit %.6f), max %d over %dx%d\n", ok ? "ok" : "FAIL", mean, limit, max, w, h);
+    return ok ? 0 : 1;
+}
+
+// --region-compare <a.png> <rect> <b.png> <rect> <num> <den> <factor>: per image, q = the mean of channel num over the
+// mean of channel den in its rect (channels r, g, b, l = luminance, 1 = one); passes if q(a) >= factor * q(b). A rect is
+// x,y,w,h, or x,y,w,h:x,y,w,h to take den over the second one. E.g. "r g 1.05": the rect in a is redder than in b;
+// "l 1 1.2": a's rect is 20% brighter than b's; "l l 1.1" over open:contact rects: the contact darker in a, relatively.
+int regionCompare(int argc, char** argv)
+{
+    double q[2] = {};
+    for (int i = 0; i < 2; ++i) {
+        std::string bytes;
+        const std::optional<kast::MipImage> image =
+            kast::readFile(argv[2 + i * 2], bytes) ? kast::decodeImage(bytes, false) : std::nullopt;
+        int r[2][4] = {};
+        const int fields = std::sscanf(argv[3 + i * 2], "%d,%d,%d,%d:%d,%d,%d,%d", &r[0][0], &r[0][1], &r[0][2], &r[0][3],
+                                       &r[1][0], &r[1][1], &r[1][2], &r[1][3]);
+        if (fields == 4)
+            std::copy_n(r[0], 4, r[1]);
+        const auto fits = [&](const int* rect) {
+            return rect[2] > 0 && rect[3] > 0 && rect[0] >= 0 && rect[1] >= 0 && rect[0] + rect[2] <= image->width &&
+                   rect[1] + rect[3] <= image->height;
+        };
+        if (!image || (fields != 4 && fields != 8) || !fits(r[0]) || !fits(r[1])) {
+            std::printf("region: cannot read '%s' or its rect '%s'\n", argv[2 + i * 2], argv[3 + i * 2]);
+            return 1;
+        }
+        const auto mean = [&](std::string_view channel, const int* rect) {
+            const auto [x, y, w, h] = std::array{rect[0], rect[1], rect[2], rect[3]};
+            double sum = 0.0;
+            for (int row = y; row < y + h; ++row)
+                for (int col = x; col < x + w; ++col) {
+                    const uint8_t* p = &image->rgba[(static_cast<size_t>(row) * image->width + col) * 4];
+                    sum += channel == "r" ? p[0] : channel == "g" ? p[1] : channel == "b" ? p[2]
+                           : channel == "l"                         ? 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
+                                                                    : 1.0;
+                }
+            return sum / (static_cast<double>(w) * h);
+        };
+        q[i] = mean(argv[6], r[0]) / std::max(mean(argv[7], r[1]), 1e-9);
+    }
+    (void)argc;
+    const double factor = std::atof(argv[8]);
+    const bool ok = q[0] >= factor * q[1];
+    std::printf("region %s: %s/%s %.4f in a, %.4f in b (a must be >= %.3f x b)\n", ok ? "ok" : "FAIL", argv[6], argv[7], q[0],
+                q[1], factor);
     return ok ? 0 : 1;
 }
 
@@ -13871,6 +13918,8 @@ int main(int argc, char** argv)
         return probePng(argc, argv);
     if ((argc == 5 || argc == 6) && std::string_view(argv[1]) == "--diff-png")
         return diffPng(argc, argv);
+    if (argc == 9 && std::string_view(argv[1]) == "--region-compare")
+        return regionCompare(argc, argv);
     if (argc == 2 && std::string_view(argv[1]) == "--bench-physics")
         return benchPhysics();
     if (argc == 2 && std::string_view(argv[1]) == "--undo") { // only the undo / redo checks
@@ -13939,6 +13988,8 @@ int main(int argc, char** argv)
         kast::log::info(g_failures == 0 ? "All texture checks passed" : std::format("{} texture check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--lightmaps") // only the global illumination checks
+        return lightmapSelfCheck() == 0 ? 0 : 1;
     if (argc == 2 && std::string_view(argv[1]) == "--net") // only the networking checks
         return netSelfCheck() == 0 ? 0 : 1;
     if (argc == 4 && std::string_view(argv[1]) == "--live-auth") // against a running services/world stack
@@ -14096,6 +14147,7 @@ int main(int argc, char** argv)
     checkParticleGizmo();
     checkParticleEditor();
     checkParticleLua();
+    g_failures += lightmapSelfCheck(); // tests/lightmap_self_check.cpp
     g_failures += netSelfCheck(); // tests/net_self_check.cpp
     checkMountedPak(); // last: the mounted pak hides the disk for the rest of the run
     removeTree(testRoot());

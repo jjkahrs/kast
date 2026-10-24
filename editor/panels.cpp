@@ -42,6 +42,7 @@ using Json = nlohmann::ordered_json;
 
 constexpr const char* kEntityPayload = "KAST_ENTITY";
 constexpr ImU32 kOverrideColor = IM_COL32(0xff, 0xcc, 0x00, 0xff); // the palette's highlight: overridden prefab values
+constexpr ImVec4 kOutOfDateColor{1.0f, 0.8f, 0.0f, 1.0f}; // #ffcc00, the palette's highlight: a lightmap bake out of date
 constexpr SDL_DialogFileFilter kLuaFilter{"Lua script (*.lua)", "lua"};
 
 bool sameBits(const bx::Quaternion& a, const bx::Quaternion& b) { return std::memcmp(&a, &b, sizeof(a)) == 0; }
@@ -539,6 +540,30 @@ void Panels::drawInspector(Document& doc)
                                 return drawModelPicker(doc, value);
                             if (model && field.name == "materials")
                                 return drawSlotMaterialPickers(doc, entity, value);
+                            if (model && field.name == "giMode") { // a skinned model can't be Static
+                                const auto loaded = kast::models().get(registry.get<kast::ModelRenderer>(entity).model);
+                                const bool skinned = loaded && std::ranges::any_of(loaded->meshes, [](const kast::ModelMesh& m) {
+                                                         return !m.joints.empty();
+                                                     });
+                                bool picked = false;
+                                const std::string current = value.is_string() ? value.get<std::string>() : "off";
+                                const size_t index = std::ranges::find(field.enumValues, current) - field.enumValues.begin();
+                                if (ImGui::BeginCombo(field.displayName.c_str(),
+                                                      index < field.enumLabels.size() ? field.enumLabels[index].c_str() : "")) {
+                                    for (size_t i = 0; i < field.enumValues.size(); ++i) {
+                                        const bool forbidden = skinned && field.enumValues[i] == "static";
+                                        ImGui::BeginDisabled(forbidden);
+                                        if (ImGui::Selectable(field.enumLabels[i].c_str(), i == index) && i != index) {
+                                            value = field.enumValues[i];
+                                            picked = true;
+                                        }
+                                        ImGui::EndDisabled();
+                                        disabledTooltip(forbidden ? "A skinned model can't be Static: its pose changes" : nullptr);
+                                    }
+                                    ImGui::EndCombo();
+                                }
+                                return picked;
+                            }
                             if (animator && field.name == "clip")
                                 return drawClipPicker(doc, entity, value);
                             if (sound && field.name == "clip")
@@ -1703,7 +1728,7 @@ void Panels::drawLighting(Document& doc, bool& open, const std::string& skyError
     if (!open)
         return;
     const float em = ImGui::GetFontSize();
-    ImGui::SetNextWindowSize(ImVec2(em * 22, em * 24), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(em * 22, em * 36), ImGuiCond_FirstUseEver); // tall: ambient, sky, lightmaps, probes
     if (ImGui::Begin("Lighting", &open)) {
         const SceneState before = settingsBefore(doc);
         bool changed = false;
@@ -1752,8 +1777,59 @@ void Panels::drawLighting(Document& doc, bool& open, const std::string& skyError
                     changed = drawFilePicker(kLabels[i], textures, "None", sky.faces[i]) || changed;
         }
         ImGui::PopID();
+
+        // Lightmaps (docs/engine/lightmaps.html): bake settings, then the ones that apply at once (Lua sets them too).
+        kast::SceneLightmaps& lightmaps = lighting.lightmaps;
+        ImGui::SeparatorText("Lightmaps");
+        ImGui::PushID("lightmaps");
+        changed |= ImGui::Checkbox("Enabled", &lightmaps.enabled);
+        ImGui::SetItemTooltip("Off: the scene renders as if it had no bake");
+        changed |= ImGui::DragFloat("Intensity", &lightmaps.intensity, 0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        changed |= ImGui::Checkbox("Directional", &lightmaps.directional);
+        ImGui::SetItemTooltip("Normal maps bend baked light along the direction it mostly came from");
+        changed |= ImGui::DragFloat("Texels / Meter", &lightmaps.texelsPerMeter, 0.1f, kast::kMinLightmapTexelsPerMeter,
+                                    kast::kMaxLightmapTexelsPerMeter, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        changed |= ImGui::DragInt("Bounces", &lightmaps.bounces, 0.1f, 0, kast::kMaxLightmapBounces, "%d",
+                                  ImGuiSliderFlags_AlwaysClamp);
+        changed |= ImGui::DragInt("Samples / Texel", &lightmaps.samplesPerTexel, 1.0f, 1, kast::kMaxLightmapSamples, "%d",
+                                  ImGuiSliderFlags_AlwaysClamp);
+        changed |= ImGui::DragFloat("Probe Spacing (m)", &lightmaps.probeSpacing, 0.05f, kast::kMinProbeSpacing,
+                                    kast::kMaxProbeSpacing, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::PopID();
         if (changed)
             settingsChanged(doc, "Edit Lighting", before);
+        const std::optional<float> baking = lightmapProgress ? lightmapProgress() : std::nullopt;
+        if (baking) {
+            ImGui::ProgressBar(*baking, ImVec2(-FLT_MIN, 0.0f), std::format("Baking {:.0f}%", *baking * 100.0f).c_str());
+            if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f)))
+                lightmapCancelRequested_ = true;
+        } else {
+            const std::string status = lightmapStatus ? lightmapStatus(doc.scene) : "";
+            if (status != std::exchange(lightmapStatus_, status))
+                kast::log::info(std::format("Lightmaps: {}", status));
+            if (status == "Not baked") {
+                ImGui::TextDisabled("Not baked");
+            } else if (status == "Baked") {
+                ImGui::TextUnformatted("Baked");
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Text, status == "Out of date" ? kOutOfDateColor : kErrorColor);
+                ImGui::TextWrapped("%s", status.c_str());
+                ImGui::PopStyleColor();
+            }
+            const bool statics = std::ranges::any_of(doc.scene.registry().view<const kast::MeshRenderer>().each(),
+                                                     [](const auto& e) { return std::get<1>(e).giMode == kast::GiMode::Static; }) ||
+                                 std::ranges::any_of(doc.scene.registry().view<const kast::ModelRenderer>().each(),
+                                                     [](const auto& e) { return std::get<1>(e).giMode == kast::GiMode::Static; }) ||
+                                 std::ranges::any_of(doc.scene.registry().view<const kast::Terrain>().each(),
+                                                     [](const auto& e) { return std::get<1>(e).lightmap; });
+            const char* blocked = !statics ? "No mesh has GI Mode Static (and no Terrain has Bake Lightmap)"
+                                           : probeBakeBlocker(doc);
+            ImGui::BeginDisabled(blocked != nullptr);
+            if (ImGui::Button("Bake Lightmaps", ImVec2(-FLT_MIN, 0.0f)))
+                lightmapBakeRequested_ = true;
+            ImGui::EndDisabled();
+            disabledTooltip(blocked);
+        }
 
         ImGui::SeparatorText("Reflection Probes");
         const size_t probes = doc.scene.registry().view<const kast::ReflectionProbe>().size();

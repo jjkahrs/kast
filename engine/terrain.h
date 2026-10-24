@@ -30,6 +30,10 @@ struct TerrainTileData {
     map::TileKey tile;
     map::Heights heights;
     std::vector<map::ZoneObject> objects; // the tile's objects file, its bad entries left out
+    // Its baked lightmap (Terrain.lightmap, lightmap.h): the irradiance and direction KTX bytes, checked against the map's
+    // lightmaps.json; both empty if it has none (lightmapError says why, empty when not asked for).
+    std::string lightmap, lightmapDirection;
+    std::string lightmapError;
 };
 
 // The declared tiles of info within radius tiles (a square) of the tile holding centre (x, z), sorted by z then x.
@@ -72,13 +76,17 @@ public:
 
     // A loaded map, or null.
     const map::MapInfo* map(uint16_t id) const;
+    // A loaded map's folder (maps/<name>, absolute), or null.
+    const std::filesystem::path* folder(uint16_t id) const;
+    // A tile of a loaded map as update() loads it (with its lightmap if lightmap), or null if the map isn't loaded.
+    std::shared_ptr<const TerrainTileData> loadTile(uint16_t id, map::TileKey tile, bool lightmap) const;
 
 private:
     struct LoadedMap {
         std::shared_ptr<const map::MapInfo> info;
         std::filesystem::path folder;
     };
-    std::shared_ptr<const TerrainTileData> load(const LoadedMap& map, map::TileKey tile) const;
+    std::shared_ptr<const TerrainTileData> load(const LoadedMap& map, map::TileKey tile, bool lightmap) const;
     void spawnObjects(Scene& scene, entt::entity tile, const LoadedMap& map, const TerrainTileData& data);
     void setArea(EventBus& bus, uint16_t map, int16_t area);
 

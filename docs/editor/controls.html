@@ -154,6 +154,11 @@ is 128 (bake it again)</em>) and the <strong>Bake</strong> button, which renders
 <code>&lt;scene-name&gt;_probes/&lt;entity id&gt;.ktx</code> and <code>.json</code> next to the scene, sets Baked Path and marks the scene dirty
 (not an undo step). Bake is disabled during Play and until the scene is saved in a project (the tooltip says why);
 <strong>Window &gt; Lighting</strong>'s <strong>Bake All Probes</strong> bakes every probe of the scene.</p>
+<p id="gi"><strong>Global illumination</strong> (<a href="../engine/lightmaps.html">Lightmaps and GI</a>): Mesh Renderer and Model
+Renderer have a <strong>GI Mode</strong> combo (Off, Static, Dynamic; a skinned model's Static is greyed out with a tooltip) and
+<strong>Lightmap Scale</strong> (floored at 0.01); every light has a <strong>Bake Mode</strong> combo (Realtime, Indirect, Full); Terrain
+has <strong>Bake Lightmap</strong>. All are ordinary undoable fields. <strong>Window &gt; Lighting</strong>'s <strong>Bake Lightmaps</strong> bakes
+the scene in the background (<a href="index.html">Lighting panel</a>).</p>
 <p><strong>Play mode</strong> (the Play / Pause / Stop icon buttons at the right of the Scene / Game tab bar, whichever tab is shown, or of the Scene title bar while it floats; hidden when the bar is too narrow. Or Ctrl+P): Play snapshots the scene in memory and runs the systems
 (e.g. <code>Rotator</code>) every frame; Pause holds them, Play or Pause again resumes; Stop restores the snapshot exactly (scene,
 unsaved-changes flag, selection by id; the editor camera stays where it is). Play (from stopped, including <code>--play</code>)

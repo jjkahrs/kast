@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lightmaps and GI - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="lightmaps.html" class="active">Lightmaps and GI</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li></ul></nav>
+<main>
+<h1 id="lightmaps">Lightmaps and baked global illumination</h1>
+<p>Light bounces: a red wall tints the floor beside it, a ceiling shades the corner under it, a box darkens the floor at
+its foot. Kast bakes that <strong>global illumination</strong> (GI) on the CPU in the editor: <strong>lightmaps</strong> for the
+meshes that never move (<em>Static</em>) and a grid of <strong>light probes</strong> for the ones that do (<em>Dynamic</em>). At run
+time they replace the mesh's diffuse ambient light; specular reflections still come from the
+<a href="ibl-reflection-probes.html">reflection probes or the sky</a>. The Scene view, the Game view and the built game render
+them alike (<code>engine/lightmap.h</code>, <code>engine/lightmap_bake.h</code>, <code>engine/shaders/fs_mesh.sc</code>).</p>
+<p>Nothing changes until you opt in: every mesh is <em>Off</em> by default, and a scene without a bake renders pixel for pixel
+as before.</p>
+
+<h2 id="quick-start">Quick start</h2>
+<ol>
+<li>Select the meshes that never move (walls, floors, rocks, buildings) and set <strong>GI Mode</strong> to <strong>Static</strong>
+  in their Mesh Renderer or Model Renderer.</li>
+<li>Set the moving ones (characters, props the player pushes) to <strong>Dynamic</strong>.</li>
+<li>Save the scene in a project, open <strong>Window &gt; Lighting</strong> and press <strong>Bake Lightmaps</strong>. The bake runs in the
+  background with a progress bar and <strong>Cancel</strong>; the editor keeps working. When it is done the scene lights
+  with it and is marked dirty: save it.</li>
+<li>Move a Static mesh, change a baked light or the sky, and the status says <strong>Out of date</strong>: bake again.</li>
+</ol>
+
+<h2 id="gi-mode">GI Mode and lightmap scale</h2>
+<table>
+<tr><th>Field</th><th>Component</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>giMode</code></td><td>MeshRenderer, ModelRenderer</td><td><code>"off"</code></td><td><code>"off"</code>: as before GI (diffuse
+  ambient from a reflection probe, the sky or the flat ambient). <code>"static"</code>: baked into a lightmap; it also bounces
+  light and casts soft occlusion onto everything else in the bake. <code>"dynamic"</code>: lit by the probe grid, sampled at the
+  center of its world bounds every frame</td></tr>
+<tr><td><code>lightmapScale</code></td><td>MeshRenderer, ModelRenderer</td><td>1</td><td>&gt; 0 (Inspector floor 0.01): multiplies the scene's
+  texels per meter for this mesh (2: twice as sharp, four times the texels)</td></tr>
+<tr><td><code>bakeMode</code></td><td>DirectionalLight, PointLight, SpotLight, AreaLight</td><td><code>"indirect"</code></td><td>see
+  <a href="#bake-mode">below</a></td></tr>
+<tr><td><code>lightmap</code></td><td>Terrain</td><td>false</td><td>bake one lightmap per tile of its map (<a href="#terrain">terrain</a>)</td></tr>
+</table>
+<p>A <strong>skinned</strong> model can't be Static (its pose changes): the Inspector greys Static out, and a scene file that says
+so anyway loads, warns once (<code>'Hero': a skinned model can't be Static; lit as Dynamic</code>) and lights it as Dynamic.
+All fields are optional in the scene file (missing = the default) and are undoable Inspector edits like any other.</p>
+<pre><code class="language-json">"MeshRenderer": { "primitive": "cube", "material": "materials/wall.mat", "giMode": "static", "lightmapScale": 2 }
+"PointLight": { "color": [1, 0.75, 0.45], "intensity": 3, "range": 8, "bakeMode": "full" }</code></pre>
+
+<h3 id="bake-mode">Light bake mode</h3>
+<table>
+<tr><th>bakeMode</th><th>Direct light and shadows</th><th>Bounces</th></tr>
+<tr><td><code>"realtime"</code></td><td>realtime, on everything</td><td>none (the light is left out of the bake)</td></tr>
+<tr><td><code>"indirect"</code> (default)</td><td>realtime, on everything</td><td>baked</td></tr>
+<tr><td><code>"full"</code></td><td>baked into Static meshes' lightmaps (soft area-light shadows included); realtime on Dynamic and Off
+  meshes</td><td>baked</td></tr>
+</table>
+<p>A Full light costs nothing at run time on lightmapped meshes: it isn't among their light slots (or, for the
+sun, its color is zero for them). The baker shines lights exactly as the renderer does (<code>pointLightFalloff</code>,
+<code>spotConeFalloff</code>, the area light's form factor and range window; color times intensity is radiance times pi), so a
+Full light's baked look matches its realtime one, give or take its specular highlight (diffuse only is baked) and the
+sharpness of its shadow. Dynamic meshes' realtime shadows don't fall on Static meshes from Full lights (their light is
+in the lightmap); use Indirect where that matters.</p>
+
+<h2 id="settings">Scene settings (Window &gt; Lighting)</h2>
+<p>Saved in the scene file under <code>"lighting"</code> &gt; <code>"lightmaps"</code> (only when not all default, so older scenes save
+byte-identically). The first four take effect at the next bake, the next three at once (also from <a href="#lua">Lua</a>):</p>
+<table>
+<tr><th>Field</th><th>Default</th><th>Range</th><th>Meaning</th></tr>
+<tr><td><code>texelsPerMeter</code></td><td>8</td><td>0.25 .. 64</td><td>lightmap texels per meter of Static surface (times each mesh's
+  <code>lightmapScale</code>)</td></tr>
+<tr><td><code>bounces</code></td><td>2</td><td>0 .. 8</td><td>diffuse bounces of light before it reaches a texel (0: sky and emissive
+  surfaces seen directly, plus Full lights)</td></tr>
+<tr><td><code>samplesPerTexel</code></td><td>256</td><td>1 .. 4096</td><td>paths traced per texel (and rays per probe of the grid, at
+  least 64). More: less noise, longer bake</td></tr>
+<tr><td><code>probeSpacing</code></td><td>1</td><td>0.25 .. 16</td><td>meters between the probes of the grid</td></tr>
+<tr><td><code>enabled</code></td><td>true</td><td></td><td>off: the scene renders as if it had no bake (Full lights light Static meshes
+  again)</td></tr>
+<tr><td><code>intensity</code></td><td>1</td><td>&gt;= 0</td><td>scales the baked diffuse light (lightmaps and probe grid)</td></tr>
+<tr><td><code>directional</code></td><td>true</td><td></td><td>the lightmaps' directional term bends baked light by normal maps</td></tr>
+<tr><td><code>bakedPath</code></td><td>""</td><td>project-relative</td><td>the bake's <code>lightmaps.json</code>, set by Bake Lightmaps; empty =
+  not baked</td></tr>
+</table>
+<p>The defaults bake <code>tests/project/lightmap_room.scene</code> (ten Static meshes, three lights, 27 000 texels, 405 probes)
+in under a second on a 16-core desktop (Release); the target is under a minute. Raise <code>samplesPerTexel</code> first if
+lightmaps look noisy (the bake has no denoiser), <code>texelsPerMeter</code> or a mesh's <code>lightmapScale</code> if they look
+blurry. The panel also shows the bake's status: <em>Not baked</em>, <em>Baked</em>, <em>Out of date</em> (highlighted) or why its files
+can't be used (red), and logs it when it changes.</p>
+
+<h2 id="how">How the bake works</h2>
+<ol>
+<li><strong>Gather</strong> (main thread): every Static mesh (primitives and non-skinned models in their bind pose), the lights
+  that aren't Realtime, the sky and lightmapped terrain become plain data, so the bake runs while you keep editing.
+  Surfaces bounce their material's base color times its base color texture's average color times (1 - metallic), and
+  emissive materials emit their emission (times the emissive texture's average).</li>
+<li><strong>Unwrap</strong>: each mesh gets a second UV set with <a href="https://github.com/jpcy/xatlas">xatlas</a>, non-overlapping
+  charts padded against bilinear bleeding, at its texel density, in its own rect. Meshes of the same source at the
+  same scale and density share one unwrap (and can still be <a href="instancing-and-culling.html">instanced</a>). A glTF mesh
+  with a second UV set (<code>TEXCOORD_1</code>) keeps its own instead. The rects are packed into atlas pages of up to
+  1024 x 1024 texels.</li>
+<li><strong>Trace</strong>: a BVH (<code>engine/bvh.h</code>) over all Static triangles and terrain, then for every texel
+  <code>samplesPerTexel</code> cosine-weighted paths (stratified, each texel its own random stream from a fixed seed: the bake is
+  deterministic and its files are identical on every run) on every CPU core. Escaped rays see the sky times the ambient
+  color and intensity (the flat ambient with the sky off), as the renderer lights with it; every bounce is lit by the
+  baked lights with shadow rays. A texel whose rays mostly hit the back of one-sided geometry is inside it (e.g. under
+  a wall) and is filled from its neighbors; every chart is then dilated 8 texels against seams.</li>
+<li><strong>Probe grid</strong>: probes at <code>probeSpacing</code> over the Static meshes' bounds (at most 8192: the spacing grows if
+  it would be more), each projecting its incoming light (sky, bounces, emission: not the lights' direct light, which
+  Dynamic meshes get in real time) into order-2 spherical harmonics. A probe buried in geometry is marked invalid.</li>
+<li><strong>Write</strong> (main thread, when done): each file atomically, the json last, so a cancelled, failed or interrupted bake
+  leaves the previous one intact.</li>
+</ol>
+
+<h3 id="files">Files</h3>
+<pre><code>&lt;scene-dir&gt;/&lt;scene-name&gt;_lightmaps/lightmaps.json     version, hash, atlas pages, per-entity placement, probe grid
+&lt;scene-dir&gt;/&lt;scene-name&gt;_lightmaps/atlas&lt;i&gt;.ktx        RGBA16F: rgb irradiance / pi (what a white surface shows)
+&lt;scene-dir&gt;/&lt;scene-name&gt;_lightmaps/atlas&lt;i&gt;_dir.ktx    RGBA16F: xyz the mean direction light arrives from, w its half-Lambert
+&lt;scene-dir&gt;/&lt;scene-name&gt;_lightmaps/meshes.klmm         the unwrapped meshes: per vertex its source vertex and its lightmap UV
+maps/&lt;name&gt;/lightmaps/&lt;tx&gt;_&lt;tz&gt;.ktx, _dir.ktx            a lightmapped terrain tile's (257 x 257: one texel per height sample)
+maps/&lt;name&gt;/lightmaps/lightmaps.json                   the map's baked tiles</code></pre>
+<pre><code class="language-json">{"version":1,"hash":"8c0f…","atlases":[{"size":[588,84],"irradiance":"atlas0.ktx","direction":"atlas0_dir.ktx",
+ "irradianceHash":"…","directionHash":"…"}],"meshes":{"file":"meshes.klmm","hash":"…"},
+ "entities":[{"id":3,"mesh":"primitive:cube@0.2000,4.0000,8.0000@8.0000","atlas":0,"scaleOffset":[0.131,0.94,0.2755,0]}],
+ "probeGrid":{"origin":[-4,0.1,-10.1],"spacing":1,"counts":[9,5,9],"probes":[{"valid":true,"sh":[…27 floats]}, …]}}</code></pre>
+<p>Entities are matched by their persistent scene id. The <code>hash</code> covers what the bake depends on: every Static mesh
+(mesh, material, world matrix, lightmap scale), every light that isn't Realtime, the ambient and sky, the bake
+settings and lightmapped terrain; when the scene's differs the status says Out of date (and the old bake still
+renders). Each file's FNV-1a hash is in the json too, so a mix of two bakes is caught. <a href="../editor/build.html">Build</a>
+ships all of them in <code>game.pak</code> as they are; the player loads them like the editor.</p>
+
+<h2 id="shading">Shading</h2>
+<p>The diffuse ambient of a draw comes from <strong>one selection point</strong> (<code>selectDiffuseGi</code> in
+<code>lightmap.h</code>, <code>kastGiDiffuse</code> in <code>fs_mesh.sc</code>), in this order:</p>
+<ol>
+<li><strong>Lightmap</strong>: a Static mesh the bake covers.</li>
+<li>(VoxelGI, SDFGI: later parts of Kast's GI slot in here.)</li>
+<li><strong>Probe grid</strong>: a Dynamic mesh, or a Static one the bake can't light (not in the bake, a model changed since).</li>
+<li>The <strong>environment</strong> as before GI: a reflection probe's or the sky's spherical harmonics, or the flat ambient.</li>
+</ol>
+<pre><code>diffuse  = (1 - F) * (1 - metallic) * albedo * GI(n) * intensity
+GI(n)    = lightmap(uv2) * (dot(n, d.xyz) * 0.5 + 0.5) / d.w     // directional: d = the direction texel
+         | SH(grid sampled at the mesh's bounds center, n)
+specular = the environment's, unchanged</code></pre>
+<p>The directional term: at the baked surface's own normal the factor is exactly 1; a normal map tilting toward where the
+light came from gets more, away less, so bumps show under baked light too. The probe grid is sampled trilinearly from the
+eight probes around the point (clamped into the grid); invalid probes are left out and the rest reweighted, so a probe
+inside a wall never darkens a mesh beside it; with no valid probe around, the mesh falls back to the environment.</p>
+<p><strong>Second UV set</strong>: primitive and terrain vertices carry a TEXCOORD1; a lightmapped draw uses its unwrapped vertex
+buffer and its rect in the atlas page (<code>u_lightmapST</code>, or per instance in <code>i_data4</code> for an instanced batch).
+Static meshes sharing an unwrap and an atlas page still draw as one instanced submit; each probe-grid draw samples its
+own harmonics, so Dynamic meshes draw one by one.</p>
+<p><strong>Texture stages</strong>: the lightmap and its direction take stages 12 and 13, which a <code>.kshader</code>'s third and fourth
+<code>texture2D</code> params also use. A shader with at most two keeps its lightmaps; a material whose shader has three or four
+lights its Static meshes with the probe grid instead (the stages are then the shader's).</p>
+
+<h2 id="terrain">Terrain</h2>
+<p>A <code>Terrain</code> with <strong>Bake Lightmap</strong> on (<code>"lightmap": true</code>) bakes every declared tile of its map:
+one 257 x 257 lightmap per tile, one texel per height sample (the heightmap grid is its UV set: no unwrap), into the
+map's folder (<code>maps/&lt;name&gt;/lightmaps/</code>), so each lightmap streams in and out with its tile. Terrain also occludes
+and bounces light for the scene's Static meshes. Only client data: nothing goes under <code>.server/</code>. The map's lightmaps
+are the last scene's that baked it. A tile whose files are missing or don't match its map's <code>lightmaps.json</code> warns
+once (<code>Terrain tile 0_1: lightmap: not baked …; lit as unbaked</code>) and keeps the sky or flat ambient. On the 2 x 2
+tile test map a bake takes about 10 to 20 seconds.</p>
+
+<h2 id="fallbacks">When a bake can't be used</h2>
+<p>A missing <code>lightmaps.json</code>, a corrupt or truncated file, a file that doesn't match its hash, another version, or
+malformed json: the engine warns once (<code>Lightmaps 'room_lightmaps/lightmaps.json': lightmaps.json is version 2, expected 1
+(bake again); the scene renders unbaked</code>), the Lighting panel shows the reason, and every mesh lights as if there were no
+bake. A model that changed since the bake (a different vertex count) warns and its meshes fall back to the probe grid.
+Never a crash, never black.</p>
+
+<h2 id="lua">Lua</h2>
+<p><code>kast.lightmaps.get()</code> returns the scene's settings as a table; <code>kast.lightmaps.set{...}</code> changes the ones that
+apply at once: <code>enabled</code>, <code>intensity</code>, <code>directional</code> (the rest need a bake and raise; anything the scene
+file would reject raises and changes nothing, as <code>kast.sky.set</code>):</p>
+<pre><code class="language-lua">kast.lightmaps.set({intensity = 0.5, directional = false})  -- dusk: half the bounced light
+kast.lightmaps.set({enabled = false})                       -- the realtime lights alone</code></pre>
+<p>There is no Lua bake. <code>giMode</code> and <code>bakeMode</code> are regular component fields (<code>kast.set</code>), but changing them
+at run time only changes how the existing bake is applied.</p>
+
+<h2 id="limits">Limits</h2>
+<ul>
+<li>CPU only, no denoiser: noise is traded against <code>samplesPerTexel</code>. Diffuse only: no baked specular; transparent and
+  cut-out materials bake as opaque; material files are named, not read, by the out-of-date hash (editing a .mat's color
+  doesn't mark the bake out of date).</li>
+<li>Static means static: a moved Static mesh keeps its old light until the next bake. Skinned meshes are never Static;
+  a non-skinned model is baked in its bind pose.</li>
+<li>One bake per scene (and one per terrain map); no lightmap streaming beyond terrain tiles; atlases are RGBA16F and
+  uncompressed.</li>
+<li>The probe grid is a box over the Static meshes: Dynamic meshes outside it are clamped to its nearest probes.</li>
+</ul>
+</main>
+</div>
+</body>
+</html>

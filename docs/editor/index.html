@@ -23,9 +23,16 @@ dirty (<code>*</code> in the title).</p>
   picker per face (<strong>+X (px)</strong> .. <strong>-Z (nz)</strong>) listing the project's PNG and JPG files. When a face
   can't be used the panel says why in red and the views show the gradient (<a href="../engine/skybox.html">Skybox</a>).
   With a sky on, the sky also lights the meshes (<a href="../engine/ibl-reflection-probes.html">Image-based lighting</a>).
-  Then <strong>Reflection Probes</strong>: how many the scene has and <strong>Bake All Probes</strong>, which bakes each one as its
-  Inspector's Bake does (<a href="controls.html#reflection-probes">Reflection probes</a>; disabled during Play, without probes,
-  or until the scene is saved in a project).</li>
+  Then <strong>Lightmaps</strong> (<a href="../engine/lightmaps.html">Lightmaps and GI</a>): <strong>Enabled</strong>,
+  <strong>Intensity</strong> and <strong>Directional</strong> (apply at once), <strong>Texels / Meter</strong>, <strong>Bounces</strong>,
+  <strong>Samples / Texel</strong> and <strong>Probe Spacing (m)</strong> (apply at the next bake), all undoable; the bake's status
+  (<em>Not baked</em>, <em>Baked</em>, <em>Out of date</em> in #ffcc00, or in red why its files can't be used) and
+  <strong>Bake Lightmaps</strong>, which bakes on worker threads while the editor keeps drawing: a progress bar and
+  <strong>Cancel</strong> replace the button until it is done (disabled during Play, until the scene is saved in a project, or
+  while no mesh is Static and no Terrain has Bake Lightmap; the tooltip says why). Then <strong>Reflection Probes</strong>: how
+  many the scene has and <strong>Bake All Probes</strong>, which bakes each one as its Inspector's Bake does
+  (<a href="controls.html#reflection-probes">Reflection probes</a>; disabled during Play, without probes, or until the scene
+  is saved in a project).</li>
 <li><strong>Post Processing</strong>: the post effects and fog (<a href="../engine/post-processing.html">Post-processing and fog</a>).</li>
 <li><strong>Physics</strong>: gravity (<a href="../engine/physics.html">Physics</a>).</li>
 </ul>
