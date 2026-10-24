@@ -42,37 +42,10 @@ bool hasExtension(const std::string& name, std::string_view extension); // below
 using Json = nlohmann::ordered_json;
 
 constexpr const char* kEntityPayload = "KAST_ENTITY";
-constexpr ImU32 kOverrideColor = IM_COL32(0xff, 0xcc, 0x00, 0xff); // the palette's highlight: overridden prefab values
 constexpr ImVec4 kOutOfDateColor{1.0f, 0.8f, 0.0f, 1.0f}; // #ffcc00, the palette's highlight: a lightmap bake out of date
 constexpr SDL_DialogFileFilter kLuaFilter{"Lua script (*.lua)", "lua"};
 
 bool sameBits(const bx::Quaternion& a, const bx::Quaternion& b) { return std::memcmp(&a, &b, sizeof(a)) == 0; }
-
-// A small cube (top face and two sides) at x in a row from y, height tall: marks prefab instance roots in the Hierarchy.
-// Accent colored, black on a selected (accent-filled) row.
-void drawPrefabIcon(float x, float y, float height, bool selected)
-{
-    ImDrawList* draw = ImGui::GetWindowDrawList();
-    const float s = ImGui::GetFontSize() * 0.6f; // icon height
-    const float top = y + (height - s) * 0.5f;
-    const ImU32 color = selected ? IM_COL32_BLACK : ImGui::GetColorU32(ImGuiCol_Button);
-    const float w = s * 0.5f, q = s * 0.25f;
-    const ImVec2 up{x + w, top}, left{x, top + q}, right{x + s, top + q}, mid{x + w, top + 2.0f * q};
-    const ImVec2 bottomLeft{x, top + s - q}, bottomRight{x + s, top + s - q}, bottom{x + w, top + s};
-    draw->AddQuadFilled(up, right, mid, left, color);
-    const float line = bx::max(1.0f, s * 0.1f);
-    draw->AddPolyline(std::array{left, bottomLeft, bottom, bottomRight, right}.data(), 5, color, ImDrawFlags_None, line);
-    draw->AddLine(mid, bottom, color, line);
-}
-
-// The #ffcc00 bar at the Inspector's left edge beside an overridden prefab value, from y top to bottom (screen).
-void markOverride(float top, float bottom)
-{
-    const float x = ImGui::GetWindowPos().x + 1.0f;
-    ImGui::GetWindowDrawList()->PushClipRectFullScreen();
-    ImGui::GetWindowDrawList()->AddRectFilled({x, top}, {x + 4.0f, bottom}, kOverrideColor);
-    ImGui::GetWindowDrawList()->PopClipRect();
-}
 
 // The Lighting, Post Processing and Physics panels: the scene settings before this frame's edits; a change makes one undo
 // step named name, open until the widget lets go.
@@ -2241,6 +2214,7 @@ void drawSpeakerIcon(float x, float y, float height, bool selected)
 bool isTextAsset(const std::string& name)
 {
     return hasExtension(name, ".lua") || hasExtension(name, ".rcss") || hasExtension(name, ".rml") ||
+           hasExtension(name, kast::kGuiPrefabExtension) ||
            hasExtension(name, ".json") || hasExtension(name, ".mat") || hasExtension(name, ".kshader");
 }
 
@@ -2326,6 +2300,7 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, Shad
                 assetEdit_ = {AssetEdit::Op::Move, dropped, ""};
             if (entt::entity dropped = entt::null; acceptEntityDrop(dropped)) // a new prefab of it, at the root
                 assetEdit_ = {AssetEdit::Op::NewPrefab, "", "", dropped};
+            gui.acceptElementDrop(assetsRoot_); // a GUI Hierarchy element: a new GUI prefab of it, at the root
             if (assetMenuRequest_ == "")
                 openRequestedAssetMenu("##rootMenu");
             if (ImGui::BeginPopupContextItem("##rootMenu")) {
@@ -2418,7 +2393,8 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
     if ((ImGui::IsItemClicked(ImGuiMouseButton_Left) || ImGui::IsItemClicked(ImGuiMouseButton_Right)) &&
         !ImGui::IsItemToggledOpen())
         selectAsset(entry.path);
-    if (!entry.folder && hasExtension(entry.name, ".rml") && ImGui::IsItemHovered() &&
+    if (!entry.folder && (hasExtension(entry.name, ".rml") || hasExtension(entry.name, kast::kGuiPrefabExtension)) &&
+        ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
         gui.open(assetsRoot_ / fromUtf8(entry.path));
     if (!entry.folder && hasExtension(entry.name, kast::kShaderGraphExtension) && ImGui::IsItemHovered() &&
@@ -2427,7 +2403,8 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
     if (!entry.folder && kast::isModelFile(fromUtf8(entry.name)) && ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
         preview.open(entry.path);
-    if (!entry.folder && isTextAsset(entry.name) && !hasExtension(entry.name, ".rml") && ImGui::IsItemHovered() &&
+    if (!entry.folder && isTextAsset(entry.name) && !hasExtension(entry.name, ".rml") &&
+        !hasExtension(entry.name, kast::kGuiPrefabExtension) && ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) // .rml: the GUI Builder above; its menu opens it here
         editor.open(assetsRoot_ / fromUtf8(entry.path));
     if (!entry.folder && !blocker && hasExtension(entry.name, kast::kPrefabExtension) && ImGui::IsItemHovered() &&
@@ -2450,6 +2427,8 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
         assetEdit_ = {AssetEdit::Op::Move, dropped, entry.path};
     if (entt::entity dropped = entt::null; entry.folder && acceptEntityDrop(dropped)) // a new prefab of it, here
         assetEdit_ = {AssetEdit::Op::NewPrefab, entry.path, "", dropped};
+    if (entry.folder)
+        gui.acceptElementDrop(assetsRoot_ / fromUtf8(entry.path)); // a GUI element: a new GUI prefab of it, here
     if (assetMenuRequest_ == entry.path)
         openRequestedAssetMenu("##assetMenu");
     if (ImGui::BeginPopupContextItem("##assetMenu")) {
@@ -2740,6 +2719,9 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& g
                         (newFsm ? renameNewStateMachine(source, edit.target, stateMachineNames(doc), error)
                          : edit.op == AssetEdit::Op::Rename && hasExtension(edit.path, ".rml")
                              ? renameGui(source, edit.target, error) // its linked .rcss follows
+                         : edit.op == AssetEdit::Op::Rename && hasExtension(edit.path, kast::kGuiPrefabExtension)
+                             ? renameGuiPrefab(source, edit.target, error) // its .rcss follows
+                         : hasExtension(edit.path, kast::kGuiPrefabExtension) ? moveGuiPrefab(source, dest.parent_path(), error)
                          : edit.op == AssetEdit::Op::Rename ? renameAsset(source, edit.target, error)
                                                             : moveAsset(source, dest.parent_path(), error));
         if (ok) {
@@ -2756,6 +2738,8 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& g
                 kast::log::info(std::format("Updated texture and shader paths in '{}'", file));
             for (const std::string& file : remapPrefabReferences(root, edit.path, selected))
                 kast::log::info(std::format("Updated prefab references in '{}'", file));
+            for (const std::string& file : remapGuiPrefabReferences(root, edit.path, selected))
+                kast::log::info(std::format("Updated GUI prefab references in '{}'", file));
             refreshPrefabs(doc); // instances reload from the moved files
             if (std::vector<std::string> path = {inspectedAsset_}; remapProjectPaths(path, edit.path, selected))
                 inspectedAsset_ = path[0];

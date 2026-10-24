@@ -1786,7 +1786,7 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow"
                "ui|UI Test|ui.scene|FALSE" "effects|Effects Test|ui_effects.scene|FALSE" "bind|Bind Test|ui_bind.scene|FALSE"
                "widgets|Widgets Test|ui_widgets.scene|FALSE" "lists|Lists Test|ui_lists.scene|FALSE"
-               "richtext|Rich Text Test|ui_richtext.scene|FALSE"
+               "richtext|Rich Text Test|ui_richtext.scene|FALSE" "guiprefab|GUI Prefab Test|ui_prefab.scene|FALSE"
                "lights|Lights Test|point_lights.scene|FALSE"
                "materials|Materials Test|materials.scene|FALSE" "post|Post Test|post_processing.scene|FALSE"
                "models|Models Test|models_anim.scene|FALSE" "shadows|Shadows Test|shadows.scene|FALSE"
@@ -3185,6 +3185,9 @@ set_tests_properties(gui_builder_rich_saved_file PROPERTIES PASS_REGULAR_EXPRESS
   "<!-- Rich text .*\\[b\\]Bold\\[/b\\] \\[i\\]Italic\\[/i\\].*Line one.Line two: &lt;b&gt; &amp; \"quotes\" stay text</p>.*\\[blink\\]x\\[/blink\\] \\[color=nope\\]c.*<p id=\"rich_lua\" class=\"rich\">\\[b\\]waiting\\[/b\\] for Lua</p>.*data-rich=\"line\"")
 set_tests_properties(gui_builder_rich_edit PROPERTIES FIXTURES_REQUIRED new_gui_copy FIXTURES_SETUP gui_rich_saved)
 set_tests_properties(gui_builder_rich_saved_file PROPERTIES FIXTURES_REQUIRED gui_rich_saved)
+
+# GUI prefabs: builder create / place / override / revert / apply / unpack / missing / cycle / locked, Play, player.
+include(cmake/gui_prefab_tests.cmake)
 
 # Crash dialogs: --crash makes the editor fail on purpose; with KAST_NO_CRASH_DIALOGS=1 it must exit, not wait on a
 # "Debug Error!" dialog. Debug builds also report the failed assert on stderr (release compiles assert() out).

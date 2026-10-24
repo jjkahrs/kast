@@ -40,6 +40,13 @@ constexpr const char* kAssetPayload = "KAST_ASSET"; // drag and drop from the As
 bool acceptModelDrop(std::string& path);
 // The same for a .prefab.
 bool acceptPrefabDrop(std::string& path);
+// The same for a .guiprefab.
+bool acceptGuiPrefabDrop(std::string& path);
+// A small cube (top face and two sides) at x in a row from y, height tall: marks prefab instance roots in the Hierarchy
+// and GUI Hierarchy. Accent colored, black on a selected (accent-filled) row.
+void drawPrefabIcon(float x, float y, float height, bool selected);
+// The #ffcc00 bar at the window's left edge beside an overridden prefab value, from y top to bottom (screen).
+void markOverride(float top, float bottom);
 
 // A card: a rounded, tinted, bordered panel behind everything drawn between beginCard and endCard, spanning the window's
 // width, with a gap below it. Cards do not nest. Its edges line up with collapsing headers, which cardHeader draws with

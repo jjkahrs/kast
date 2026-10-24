@@ -9,8 +9,8 @@
         <div id="column" class="column">
             <div id="a" data-prefab="ui/prefab_button.guiprefab"/>
             <div id="b" data-prefab="ui/prefab_button.guiprefab">
-                <override target="title" text="Overridden"/>
                 <override target="title" attribute="class" value="prefab-title big"/>
+                <override target="title" text="Overridden"/>
             </div>
             <div id="n" data-prefab="ui/prefab_nested.guiprefab"/>
         </div>

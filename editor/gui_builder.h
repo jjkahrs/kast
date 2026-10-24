@@ -35,6 +35,12 @@ class ElementDocument;
 //   element under the cursor (a composite widget's inside selects the widget); the selection is outlined (an overlay,
 //   not in the file). It wears the engine's default widget style under the GUI's own sheet and shows Rich Text
 //   converted (with the project's fonts/), as in Play.
+// - GUI prefabs (gui_doc.h): a .guiprefab opens like an .rml (its one element under Body, its sibling .rcss in GUI
+//   Style). An instance is one node with a prefab marker; its prefab elements are listed and selectable but fixed (no
+//   move, delete, reparent or children); a missing prefab's node is red. Create GUI Prefab (node menu, or a node dropped
+//   on the Assets panel) and placing (a .guiprefab dropped on a Panel / Body or the Preview) are steps. The Inspector
+//   shows a Prefab card (Select Root, Open Prefab; on the root Revert All, Apply All, Unpack) and marks overridden
+//   fields #ffcc00 (right-click: Revert, Apply). A prefab saved on disk refreshes the open GUI's instances.
 // Edits mark the GUI dirty ("*" in the titles) and are steps on its own undo history (gui_undo.h), cleared when a GUI is
 // opened or reloaded; an Inspector or Style text field is one step from activation to letting go. Save or Ctrl+S (a builder panel focused) writes both files. Files
 // changed on disk reload when clean, else Reload / Keep mine is asked. Opening another GUI or quitting while dirty asks
@@ -62,6 +68,30 @@ public:
     std::string selectedId() const { return GuiDoc::attribute(GuiDoc::widgetElement(selected_), "id"); } // "" if none
     // Adds an element of kind as the GUI Hierarchy's + buttons do (applied when the panel next draws).
     void requestAdd(GuiKind kind) { edit_ = {Edit::Op::Add, addParent(), {}, kind}; }
+    // Deletes, moves (-1 up, +1 down) or reparents (onto the element with that id) the selection as the GUI Hierarchy
+    // does (applied when the panel next draws; refused, with a warning, inside a prefab instance).
+    void requestDelete() { edit_ = {Edit::Op::Delete, selected_}; }
+    void requestMove(int delta) { edit_ = {Edit::Op::Move, selected_, {}, GuiKind::Panel, delta}; }
+    bool requestReparent(const std::string& parentId);
+
+    // GUI prefabs (gui_doc.h), each one undo step but Apply, which writes the prefab and clears the history (as a scene
+    // prefab's Apply does). False (logged; a refusal shown in a modal) if it can't be done.
+    // The Assets panel's current folder (absolute; the project root if none): where Create GUI Prefab writes. Set by the
+    // host.
+    std::function<std::filesystem::path()> assetFolder;
+    // Makes the selection a new .guiprefab in dir and an instance of it.
+    bool createPrefab(const std::filesystem::path& dir);
+    // Places an instance of the prefab (project path) in the selected Panel (beside a selected instance), else <body>,
+    // and selects it.
+    bool placePrefab(const std::string& path);
+    // Reverts or applies the selection's field (GuiDoc::field names); "*": Revert All / Apply All of its instance.
+    bool revertField(const std::string& name);
+    bool applyField(const std::string& name);
+    // Unpacks the selection's instance.
+    bool unpack();
+    // The last item (the Assets panel's background or a folder) as a drop target for an element dragged from the GUI
+    // Hierarchy: Create GUI Prefab in dir.
+    void acceptElementDrop(const std::filesystem::path& dir);
     // Sets (empty: removes) an attribute of the selection as one Inspector edit step, as typing it in does. False if
     // nothing or only <body> is selected.
     bool setAttribute(const std::string& name, const std::string& value);
@@ -100,11 +130,18 @@ public:
 
 private:
     struct Edit {
-        enum class Op { None, Add, Delete, Move, Reparent } op = Op::None;
-        pugi::xml_node node; // Delete, Move, Reparent: the element; Add: the parent
+        enum class Op { None, Add, Delete, Move, Reparent, PlacePrefab, CreatePrefab } op = Op::None;
+        pugi::xml_node node; // Delete, Move, Reparent, CreatePrefab: the element; Add, PlacePrefab: the parent
         pugi::xml_node parent;
         GuiKind kind = GuiKind::Panel;
         int delta = 0;
+        std::string path;          // PlacePrefab: the prefab's project path
+        std::filesystem::path dir; // CreatePrefab: where
+    };
+    // A prefab action asked for while the Inspector draws, done once it has (it may replace every node).
+    struct PrefabOp {
+        enum class Kind { Revert, Apply, Unpack, Open } kind;
+        std::string field;
     };
 
     bool load(const std::filesystem::path& rml); // false (logged, nothing changed) if it can't be read or parsed
@@ -125,6 +162,14 @@ private:
 
     void drawNode(pugi::xml_node node);
     void applyEdit();
+    std::filesystem::path projectRoot() const; // the open file's project, else its folder
+    void prefabFailed(std::string error);      // logged and shown in a modal
+    void drawPrefabCard(pugi::xml_node root);  // the Inspector's Prefab card (root null: a missing prefab)
+    // The #ffcc00 marker and the Revert / Apply menu after an Inspector field of the selection, if it is overridden.
+    void overrideMarker(const std::string& field);
+    void runPrefabOp(const PrefabOp& op);
+    void reselect(const std::vector<size_t>& path); // after every node was replaced (refresh, Apply)
+    void refreshPrefabs(); // a prefab changed on disk while the GUI has unsaved edits: instances re-read, edits kept
     void saveShortcut();
     void rebuildPreview();
 
@@ -148,6 +193,12 @@ private:
     bool rmlDirty_ = false;
     bool rcssDirty_ = false;
     std::filesystem::file_time_type rmlTime_, rcssTime_;
+    std::vector<std::pair<std::filesystem::path, std::filesystem::file_time_type>> prefabTimes_; // the prefabs it reads
+    pugi::xml_document pristineHolder_;
+    pugi::xml_node pristine_; // inspectorNode_ as its prefab has it (GuiDoc::pristine); null outside instances
+    std::optional<PrefabOp> prefabOp_;
+    std::string prefabError_;
+    bool prefabErrorRequested_ = false;
     pugi::xml_node selected_;
     Edit edit_;
     std::string inspectorBuffer_[4]; // id, class, text, data-event of inspectorNode_
