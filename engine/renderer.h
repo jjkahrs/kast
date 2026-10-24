@@ -208,6 +208,9 @@ public:
     // Either way the output is the same, so off is a reference (--no-instancing, --no-culling).
     void setInstancing(bool on) { instancing_ = on; }
     void setCulling(bool on) { culling_ = on; }
+    // Model meshes draw at this LOD (lodIndices: a mesh with fewer levels draws its last); -1 (the default) = LOD0.
+    // ponytail: no screen-size selection yet; the Model Preview forces a level to show it.
+    void setForcedLod(int level) { forcedLod_ = level; }
     // Why the scene's cubemap sky last fell back to the procedural one ("" = it didn't): the Lighting panel shows it.
     const std::string& skyError() const { return sky_.error(); }
     // A ReflectionProbe's bake as the renderer sees it: "Not baked", "Baked", or why its files can't be used (the
@@ -238,6 +241,7 @@ private:
     struct ModelMeshBuffers {
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
+        std::vector<bgfx::IndexBufferHandle> lods; // per ModelMesh::lods; invalid for an empty level (draws nothing)
     };
     // A .kshader's programs: its fs_mesh (main pass) and its shadow fragment shader (shadow passes), each with its mesh
     // vertex shaders (the built-in ones if it has no vertex()). Rebuilt when the library hands out a different
@@ -359,6 +363,7 @@ private:
     void clearModels();
     const UserShader* userShader(const std::string& path); // null if the .kshader fails to load or compile
     void destroy(UserShader& shader);
+    static void destroy(ModelMeshBuffers& mesh);
     // Points each draw whose material has a .kshader at its programs; a shader that fails, or material values of the
     // wrong type for it, draw with errorMaterial() instead.
     void resolveShaders(std::vector<DrawItem>& draws);
@@ -528,6 +533,7 @@ private:
     float timeSeconds_ = 0.0f; // setTime
     bool instancing_ = true;
     bool culling_ = true;
+    int forcedLod_ = -1;
 };
 
 } // namespace kast

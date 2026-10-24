@@ -10352,8 +10352,9 @@ bool sameModel(const kast::Model& a, const kast::Model& b)
     for (size_t i = 0; ok && i < a.meshes.size(); ++i) {
         const kast::ModelMesh &x = a.meshes[i], &y = b.meshes[i];
         ok = same(x.vertices, y.vertices) && same(x.indices, y.indices) && x.material == y.material && x.node == y.node &&
-             same(x.joints, y.joints) && same(x.inverseBinds, y.inverseBinds);
+             same(x.joints, y.joints) && same(x.inverseBinds, y.inverseBinds) && x.lods == y.lods && x.uv2 == y.uv2;
     }
+    ok = ok && a.lod == b.lod;
     for (size_t i = 0; ok && i < a.clips.size(); ++i) {
         const kast::Clip &x = a.clips[i], &y = b.clips[i];
         ok = x.name == y.name && x.duration == y.duration && x.channels.size() == y.channels.size();
@@ -10554,6 +10555,149 @@ void checkModelCache()
               contains(error, "Build failed: model 'models/corrupt.glb'") &&
               !std::filesystem::exists(source.parent_path() / "kast_model_build_bad"),
           "Build fails naming a model that can't be imported, writing nothing");
+}
+
+// A UV sphere: rings x segments quads, its u seam split (as an imported mesh's would be), lightmap UVs on every vertex.
+kast::ModelMesh uvSphere(int rings, int segments)
+{
+    kast::ModelMesh mesh;
+    for (int r = 0; r <= rings; ++r)
+        for (int s = 0; s <= segments; ++s) {
+            const float theta = bx::kPi * static_cast<float>(r) / static_cast<float>(rings);
+            const float phi = 2.0f * bx::kPi * static_cast<float>(s) / static_cast<float>(segments);
+            kast::ModelVertex v{};
+            v.x = v.nx = std::sin(theta) * std::cos(phi);
+            v.y = v.ny = std::cos(theta);
+            v.z = v.nz = std::sin(theta) * std::sin(phi);
+            v.u = static_cast<float>(s) / static_cast<float>(segments);
+            v.v = static_cast<float>(r) / static_cast<float>(rings);
+            mesh.vertices.push_back(v);
+            mesh.uv2.insert(mesh.uv2.end(), {v.u, v.v});
+        }
+    const auto at = [&](int r, int s) { return static_cast<uint32_t>(r * (segments + 1) + s); };
+    for (int r = 0; r < rings; ++r)
+        for (int s = 0; s < segments; ++s)
+            mesh.indices.insert(mesh.indices.end(), {at(r, s), at(r + 1, s), at(r, s + 1), at(r, s + 1), at(r + 1, s), at(r + 1, s + 1)});
+    return mesh;
+}
+
+// Model LODs: generated levels hit their triangle ratios, the .kmodel keeps them (v3) and still reads v2 files (LOD0
+// only), import settings parse and steer the import, authored "<name>_LOD<n>" meshes become levels of their LOD0.
+void checkModelLods()
+{
+    // Generated: within 10% of 50 / 25 / 12.5% of LOD0, over LOD0's own vertices.
+    kast::ModelMesh sphere = uvSphere(48, 96);
+    generateLods(sphere, kast::ModelLodSettings{});
+    const double lod0 = static_cast<double>(sphere.indices.size() / 3);
+    bool ratios = sphere.lods.size() == 3;
+    for (size_t level = 0; ratios && level < sphere.lods.size(); ++level) {
+        const double want = lod0 * kast::ModelLodSettings{}.ratios[level + 1];
+        const double got = static_cast<double>(sphere.lods[level].size() / 3);
+        ratios = std::abs(got - want) <= want * 0.1 &&
+                 std::ranges::all_of(sphere.lods[level], [&](uint32_t i) { return i < sphere.vertices.size(); });
+        kast::log::info(std::format("Generated LOD{}: {} of {} triangles ({:.1f}%, target {:.1f}%)", level + 1, got, lod0,
+                                    100.0 * got / lod0, 100.0 * want / lod0));
+    }
+    check(ratios, "generated LODs are within 10% of 50%, 25% and 12.5% of LOD0's triangles, indexing LOD0's vertices");
+    kast::ModelMesh small = uvSphere(8, 16);
+    generateLods(small, kast::ModelLodSettings{.ratios = {1.0f, 0.3f}, .thresholds = {0.5f, 0.1f}});
+    check(small.lods.size() == 1, "the levels follow the settings' ratios");
+
+    // v3 round trip: levels, an empty (authored) level and the settings.
+    kast::Model model;
+    model.nodes.push_back({"root", -1, {}});
+    model.materials.push_back({"m", {}});
+    model.meshes.push_back(sphere);
+    model.meshes.push_back(sphere);
+    model.meshes[1].lods[2].clear();
+    model.lod = {.autoLod = false, .ratios = {1.0f, 0.4f, 0.2f, 0.1f}, .thresholds = {0.6f, 0.3f, 0.1f, 0.02f}, .cullBelowLast = true};
+    std::string error;
+    const std::string v3 = kast::writeModel(model);
+    const auto read = kast::readModel(v3, error);
+    check(read && sameModel(model, *read), (".kmodel v3 round trip keeps every mesh's LODs and the LOD settings " + error).c_str());
+    if (read) {
+        const kast::ModelStats stats = kast::modelStats(*read);
+        check(kast::modelLodCount(*read) == 4 && stats.lodTriangles.size() == 4 &&
+                  stats.lodTriangles[0] == 2 * sphere.indices.size() / 3 && stats.lodTriangles[3] == sphere.lods[2].size() / 3 &&
+                  &kast::lodIndices(read->meshes[0], 9) == &read->meshes[0].lods[2],
+              "per-level triangle counts; a level past a mesh's last is its last");
+    }
+    // v2: the same bytes without the lods section (flags, ratios, thresholds, then per mesh its levels).
+    size_t lodsSection = 4 + 4 + 4 * model.lod.ratios.size() + 4 + 4 * model.lod.thresholds.size();
+    for (const kast::ModelMesh& mesh : model.meshes) {
+        lodsSection += 4;
+        for (const std::vector<uint32_t>& lod : mesh.lods)
+            lodsSection += 4 + 4 + 4 * lod.size();
+    }
+    std::string v2 = v3.substr(0, v3.size() - lodsSection);
+    v2[4] = 2;
+    const auto old = kast::readModel(v2, error);
+    check(old && old->meshes.size() == 2 && old->meshes[0].lods.empty() && old->meshes[0].uv2 == sphere.uv2 &&
+              old->meshes[0].indices == sphere.indices && old->lod == kast::ModelLodSettings{} && kast::modelLodCount(*old) == 1,
+          (".kmodel v2 files still load: LOD0 only, the default LOD settings " + error).c_str());
+    kast::Model badLod = model;
+    badLod.meshes[0].lods[0][0] = 1u << 30;
+    check(!kast::readModel(kast::writeModel(badLod), error) && contains(error, "LOD"), "an out-of-range LOD index is an error");
+    std::string badCount = v3;
+    badCount[v3.size() - lodsSection + 4 + 4 + 16 + 4 + 16 + 4] = 99; // mesh 0's LOD1 triangle count
+    check(!kast::readModel(badCount, error) && contains(error, "triangle count"),
+          "a LOD triangle count that doesn't match its indices is an error");
+
+    // Import settings.
+    kast::ModelLodSettings settings;
+    check(kast::parseModelImportSettings(kast::modelImportSettingsJson(model.lod), settings, error) && settings == model.lod,
+          "import settings round trip through their JSON");
+    check(kast::parseModelImportSettings(R"({"version": 1})", settings, error) && settings == kast::ModelLodSettings{},
+          "missing import settings fields keep their defaults");
+    for (const char* bad : {"nope", R"({"lod": {"ratios": [1, 0.5]}})", R"({"lod": {"ratios": [0.5], "thresholds": [0.5]}})",
+                            R"({"lod": {"ratios": [1, 2], "thresholds": [0.5, 0.1]}})", R"({"lod": {"auto": "yes"}})"})
+        check(!kast::parseModelImportSettings(bad, settings, error), (std::string("malformed import settings are an error: ") + bad).c_str());
+    check(kast::modelImportSettingsPath("models/a.glb") == "models/a.glb.import.json", "import settings sit beside the model");
+
+    // Authored LODs.
+    std::string base;
+    int level = -1;
+    check(authoredLodName("Tree_LOD0", base, level) && base == "Tree" && level == 0 &&
+              authoredLodName("big_rock_lod12", base, level) && base == "big_rock" && level == 12,
+          "<name>_LOD<n> names an authored level");
+    for (const char* name : {"Tree", "Tree_LOD", "Tree_LODx", "Tree_LOD1a", "_LOD1", "TreeLOD1", "Tree_LOD-1", "Tree_LAD1"})
+        check(!authoredLodName(name, base, level), (std::string("not an authored LOD name: ") + name).c_str());
+    // An OBJ whose objects are Box_LOD0 (2 triangles), Box_LOD1 (1 triangle, its own vertices) and Plain (1 triangle).
+    const std::string obj = "o Box_LOD0\nv 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3\nf 1 3 4\n"
+                            "o Box_LOD1\nv 0 0 0\nv 1 0 0\nv 1 1 0\nf 5 6 7\n"
+                            "o Plain\nv 3 0 0\nv 4 0 0\nv 4 1 0\nf 8 9 10\n";
+    const auto authored = importModelFromMemory(obj, "obj", error);
+    const kast::ModelMesh* box = nullptr;
+    const kast::ModelMesh* plain = nullptr;
+    for (size_t m = 0; authored && m < authored->meshes.size(); ++m)
+        (authored->meshes[m].indices.size() == 6 ? box : plain) = &authored->meshes[m];
+    check(authored && authored->meshes.size() == 2 && box && box->lods.size() == 1 && box->lods[0].size() == 3 &&
+              box->vertices.size() >= 7 &&
+              std::ranges::all_of(box->lods[0], [&](uint32_t i) { return i >= 4 && i < box->vertices.size(); }),
+          ("an authored _LOD1 is its _LOD0's level (its own vertices appended), not a mesh of its own " + error).c_str());
+    check(plain && plain->lods.size() == 3, "meshes outside an authored group get generated levels");
+
+    // The import reads the model's settings file, a sidecar of the cache: writing it re-imports.
+    const std::filesystem::path dir = looseTestDir("kast_model_lods");
+    std::filesystem::create_directories(dir / "models");
+    writeFile(dir / "models/ball.obj", "o Ball\nv 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3\nf 1 3 4\n");
+    kast::ModelLibrary library;
+    library.setRoot(dir);
+    library.setImporter(importModel, "v1");
+    const auto first = library.get("models/ball.obj");
+    check(first && first->lod == kast::ModelLodSettings{} && first->meshes[0].lods.size() == 3, "no settings file: the default LOD chain");
+    writeFile(dir / "models/ball.obj.import.json",
+              kast::modelImportSettingsJson({.autoLod = false, .ratios = {1.0f, 0.5f}, .thresholds = {0.4f, 0.1f}}));
+    library.reloadChanged();
+    const auto second = library.get("models/ball.obj");
+    check(second && second != first && !second->lod.autoLod && second->lod.thresholds == std::vector<float>{0.4f, 0.1f} &&
+              second->meshes[0].lods.empty(),
+          "writing the settings file re-imports the model with them (auto LOD off: no generated levels)");
+    rewrite(dir / "models/ball.obj.import.json", "{ broken");
+    library.reloadChanged();
+    const auto third = library.get("models/ball.obj");
+    check(third && third->lod == kast::ModelLodSettings{} && logCount("importing with the default settings") >= 1,
+          "a malformed settings file warns and imports with the defaults");
 }
 
 void checkAnimatorSystem()
@@ -14304,6 +14448,14 @@ int main(int argc, char** argv)
         kast::log::info(g_failures == 0 ? "All undo checks passed" : std::format("{} undo check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--models") { // only the model import, .kmodel and LOD checks
+        checkModelLoading();
+        checkModelCache();
+        checkModelLods();
+        removeTree(testRoot());
+        kast::log::info(g_failures == 0 ? "All model checks passed" : std::format("{} model check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--lists") { // only the game GUI list checks
         checkGuiListMath();
         checkGuiLists();
@@ -14500,6 +14652,7 @@ int main(int argc, char** argv)
     checkExternalEditor();
     checkModelLoading();
     checkModelCache();
+    checkModelLods();
     checkAnimationSampling();
     checkAnimatorSystem();
     checkModelEditor();

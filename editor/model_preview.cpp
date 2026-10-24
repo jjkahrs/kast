@@ -4,6 +4,7 @@
 #include "ui_common.h"
 
 #include <animation.h>
+#include <files.h>
 #include <log.h>
 
 #include <imgui.h>
@@ -67,6 +68,7 @@ void ModelPreview::show(const std::shared_ptr<const kast::Model>& model)
 {
     const bool fresh = !shown_;
     shown_ = model;
+    lodEdit_ = model->lod;
     if (!initialized_)
         init();
     if (fresh) {
@@ -118,6 +120,7 @@ void ModelPreview::drawImage(const kast::Model& model, float dt)
     ImGui::TextDisabled("Meshes %zu  Vertices %zu  Triangles %zu  Nodes %zu  Bones %zu  Clips %zu", stats.meshes,
                         stats.vertices, stats.triangles, stats.nodes, stats.bones, stats.clips);
     ImGui::TextDisabled("Size %.2f x %.2f x %.2f m", stats.size.x, stats.size.y, stats.size.z);
+    drawLod(model, stats);
     if (ImGui::Button("Reset view")) {
         camera_ = kStartCamera;
         camera_.focus(model.bounds);
@@ -166,8 +169,90 @@ void ModelPreview::drawImage(const kast::Model& model, float dt)
     float view[16], proj[16];
     camera_.viewMatrix(view);
     camera_.projMatrix(proj, size.x / size.y);
+    renderer_.setForcedLod(lod_);
     renderer_.setTarget(post_.target(), post_.width(), post_.height());
     // No shadows (the light casts none), so no shadow views: the scene's view stands in for them.
     renderer_.render(scene_, kast::models().root(), post_.sceneView(), view, proj, post_.sceneView());
     post_.apply(scene_.postProcessing, false, target_.frameBuffer());
+}
+
+void ModelPreview::drawLod(const kast::Model& model, const kast::ModelStats& stats)
+{
+    if (!ImGui::CollapsingHeader("LOD", ImGuiTreeNodeFlags_DefaultOpen))
+        return;
+    lod_ = std::clamp(lod_, 0, static_cast<int>(stats.lodTriangles.size()) - 1);
+    kast::ModelLodSettings& edit = lodEdit_;
+    ImGui::Checkbox("Auto LOD", &edit.autoLod);
+    ImGui::SetItemTooltip("Generate levels for meshes without authored <name>_LOD<n> ones");
+    ImGui::SameLine();
+    int levels = static_cast<int>(edit.ratios.size());
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.0f);
+    if (ImGui::SliderInt("Levels", &levels, 1, static_cast<int>(kast::kMaxModelLods))) {
+        // A new level halves the last one's triangles and screen size.
+        while (edit.ratios.size() < static_cast<size_t>(levels)) {
+            edit.ratios.push_back(edit.ratios.back() * 0.5f);
+            edit.thresholds.push_back(edit.thresholds.back() * 0.5f);
+        }
+        edit.ratios.resize(static_cast<size_t>(levels));
+        edit.thresholds.resize(static_cast<size_t>(levels));
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("Cull below last", &edit.cullBelowLast);
+    ImGui::SetItemTooltip("Don't draw the model when it covers less of the screen height than the last level's size");
+    constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchSame;
+    if (ImGui::BeginTable("##lods", 4, kFlags)) {
+        ImGui::TableSetupColumn("Preview");
+        ImGui::TableSetupColumn("Triangles (target %)");
+        ImGui::TableSetupColumn("Screen height %");
+        ImGui::TableSetupColumn("Triangles (imported)");
+        ImGui::TableHeadersRow();
+        const size_t rows = std::max(edit.ratios.size(), stats.lodTriangles.size());
+        for (size_t level = 0; level < rows; ++level) {
+            ImGui::PushID(static_cast<int>(level));
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (level < stats.lodTriangles.size())
+                ImGui::RadioButton(std::format("LOD{}", level).c_str(), &lod_, static_cast<int>(level));
+            else
+                ImGui::TextDisabled("LOD%zu", level);
+            ImGui::TableNextColumn();
+            if (level < edit.ratios.size()) {
+                float percent = edit.ratios[level] * 100.0f;
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::BeginDisabled(level == 0);
+                if (ImGui::DragFloat("##ratio", &percent, 0.5f, 1.0f, 100.0f, "%.1f%%", ImGuiSliderFlags_AlwaysClamp))
+                    edit.ratios[level] = percent / 100.0f;
+                ImGui::EndDisabled();
+            }
+            ImGui::TableNextColumn();
+            if (level < edit.thresholds.size()) {
+                float percent = edit.thresholds[level] * 100.0f;
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::DragFloat("##threshold", &percent, 0.25f, 0.0f, 100.0f, "%.1f%%", ImGuiSliderFlags_AlwaysClamp))
+                    edit.thresholds[level] = percent / 100.0f;
+            }
+            ImGui::TableNextColumn();
+            if (level < stats.lodTriangles.size())
+                ImGui::Text("%zu (%.1f%%)", stats.lodTriangles[level],
+                            100.0 * static_cast<double>(stats.lodTriangles[level]) /
+                                static_cast<double>(std::max<size_t>(stats.lodTriangles[0], 1)));
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    const bool changed = edit != model.lod;
+    ImGui::BeginDisabled(!changed);
+    if (ImGui::Button("Apply")) {
+        const std::string file = kast::modelImportSettingsPath(path_);
+        if (kast::writeFileAtomic(kast::models().root() / fromUtf8(file), kast::modelImportSettingsJson(edit)))
+            kast::log::info(std::format("Model Preview: wrote '{}'; re-importing '{}'", file, path_));
+        else
+            kast::log::error(std::format("Model Preview: can't write '{}'", file));
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Revert"))
+        edit = model.lod;
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled(changed ? "Apply re-imports the model with these settings" : "Settings as imported");
 }

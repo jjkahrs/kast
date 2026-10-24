@@ -1114,11 +1114,18 @@ void Renderer::clearTextures()
 void Renderer::clearModels()
 {
     for (auto& [path, gpu] : models_)
-        for (ModelMeshBuffers& mesh : gpu.meshes) {
-            bgfx::destroy(mesh.vertices);
-            bgfx::destroy(mesh.indices);
-        }
+        for (ModelMeshBuffers& mesh : gpu.meshes)
+            destroy(mesh);
     models_.clear();
+}
+
+void Renderer::destroy(ModelMeshBuffers& mesh)
+{
+    bgfx::destroy(mesh.vertices);
+    bgfx::destroy(mesh.indices);
+    for (bgfx::IndexBufferHandle lod : mesh.lods)
+        if (bgfx::isValid(lod))
+            bgfx::destroy(lod);
 }
 
 const Renderer::GpuModel* Renderer::gpuModel(const std::string& path)
@@ -1128,19 +1135,21 @@ const Renderer::GpuModel* Renderer::gpuModel(const std::string& path)
     if (it != models_.end() && it->second.source == model)
         return model ? &it->second : nullptr;
     if (it != models_.end()) { // reloaded or now failing: drop the old buffers
-        for (ModelMeshBuffers& mesh : it->second.meshes) {
-            bgfx::destroy(mesh.vertices);
-            bgfx::destroy(mesh.indices);
-        }
+        for (ModelMeshBuffers& mesh : it->second.meshes)
+            destroy(mesh);
         models_.erase(it);
     }
     if (!model)
         return nullptr;
     GpuModel& gpu = models_[path];
     gpu.source = model;
-    for (const ModelMesh& mesh : model->meshes)
-        gpu.meshes.push_back({bgfx::createVertexBuffer(copyOf(mesh.vertices), modelLayout_),
-                              bgfx::createIndexBuffer(copyOf(mesh.indices), BGFX_BUFFER_INDEX32)});
+    for (const ModelMesh& mesh : model->meshes) {
+        ModelMeshBuffers& buffers = gpu.meshes.emplace_back(bgfx::createVertexBuffer(copyOf(mesh.vertices), modelLayout_),
+                                                            bgfx::createIndexBuffer(copyOf(mesh.indices), BGFX_BUFFER_INDEX32));
+        for (const std::vector<uint32_t>& lod : mesh.lods)
+            buffers.lods.push_back(lod.empty() ? bgfx::IndexBufferHandle{bgfx::kInvalidHandle}
+                                               : bgfx::createIndexBuffer(copyOf(lod), BGFX_BUFFER_INDEX32));
+    }
     nodeGlobals(*model, bindPose(*model), gpu.bindGlobals);
     if (model->overBoneLimit) // once per load: the GPU copy is made once
         log::error(std::format("Model '{}' has a mesh with more than {} joints; rendering it in bind pose, unskinned",
@@ -1253,8 +1262,12 @@ void Renderer::addModelDraws(const Scene& scene, entt::entity entity, const Mode
         const ModelMesh& mesh = model.meshes[i];
         const std::string* slot = mesh.material < renderer.materials.size() ? &renderer.materials[mesh.material] : nullptr;
         item.material = slot && !slot->empty() ? &materials_.get(*slot) : &model.materials[mesh.material].material;
-        item.vertices = gpu->meshes[i].vertices;
-        item.indices = gpu->meshes[i].indices;
+        const ModelMeshBuffers& buffers = gpu->meshes[i];
+        const auto lod = static_cast<size_t>(std::max(forcedLod_, 0));
+        item.vertices = buffers.vertices;
+        item.indices = lod == 0 || buffers.lods.empty() ? buffers.indices : buffers.lods[std::min(lod, buffers.lods.size()) - 1];
+        if (!bgfx::isValid(item.indices)) // an authored level without this part
+            continue;
         item.bones = -1;
         if (!mesh.joints.empty() && mesh.joints.size() <= kMaxBones) {
             std::copy_n(world, 16, item.world.begin());

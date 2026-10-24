@@ -15,6 +15,7 @@ find_package(sol2 CONFIG REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
 find_package(pugixml CONFIG REQUIRED)
 find_package(assimp CONFIG REQUIRED) # model import: glTF/GLB, FBX, OBJ
+find_package(meshoptimizer CONFIG REQUIRED) # model import: generated LODs (meshopt_simplifyWithAttributes)
 find_package(Jolt CONFIG REQUIRED) # physics: rigid bodies, character controller (see engine/physics.h)
 find_package(Stb REQUIRED) # header-only: stb_image (PNG/JPG decode), stb_image_resize2 (mips)
 # vcpkg's luajit port ships no CMake config, only headers in include/luajit and lua51.lib/.dll.
@@ -198,7 +199,7 @@ target_link_libraries(kast_engine
 # and the tests link it, so the shipped kast_player has no Assimp and loads the models Build cooked into game.pak ---
 add_library(kast_model_import STATIC editor/model_importer.cpp)
 target_compile_options(kast_model_import PRIVATE ${KAST_COMPILE_OPTIONS})
-target_link_libraries(kast_model_import PUBLIC kast_engine PRIVATE assimp::assimp)
+target_link_libraries(kast_model_import PUBLIC kast_engine PRIVATE assimp::assimp meshoptimizer::meshoptimizer)
 
 # --- player: the prebuilt game client the editor's Build menu copies; engine only, no ImGui ---
 # A Windows-subsystem app (no console window); SDL_main.h supplies WinMain.

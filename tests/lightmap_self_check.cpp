@@ -443,7 +443,8 @@ void checkModelUv2AndShaders()
     const auto read = kast::readModel(kast::writeModel(model), error);
     check(read && read->meshes[0].uv2 == mesh.uv2, ".kmodel version 2 keeps a mesh's second UV set " + error);
     std::string v1 = kast::writeModel(model);
-    v1.resize(v1.size() - 4 - 6 * sizeof(float)); // a version 1 file: no uv2 section
+    // A version 1 file: no lods section (flags, 4 ratios, 4 thresholds, the mesh's 0 levels), no uv2 section.
+    v1.resize(v1.size() - (4 + 4 + 16 + 4 + 16 + 4) - (4 + 6 * sizeof(float)));
     v1[4] = 1;
     const auto old = kast::readModel(v1, error);
     check(old && old->meshes[0].uv2.empty(), ".kmodel version 1 files still load (no second UV set) " + error);

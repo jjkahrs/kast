@@ -83,7 +83,7 @@ constexpr const char* kUsage =
     "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
-    "[--graph-save] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-view-code] [--preview-model path] [--preview-clip name] "
+    "[--graph-save] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-view-code] [--preview-model path] [--preview-clip name] [--preview-lod N] "
     "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
@@ -186,6 +186,7 @@ struct Options {
     std::vector<std::pair<std::string, std::string>> graphSteps;
     std::string previewModel; // open this model (project-relative) in the Model Preview at startup
     std::string previewClip;  // and play this clip of it instead of its default
+    int previewLod = 0;       // and show this LOD of it
     std::optional<SimMouse> simMouse; // push these SDL mouse events on the Game panel (--play) or Scene view (the cursor lock isn't applied)
     std::vector<SimKey> simKeys;      // with --play: these key presses
     std::string simOnLog;             // --sim-on-log: simMouse's and simKeys' frames count from the first log line with this
@@ -455,6 +456,13 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.openGui = argv[++i];
         } else if (arg == "--preview-model" && hasValue) {
             options.previewModel = argv[++i];
+        } else if (arg == "--preview-lod" && hasValue) {
+            const std::string_view text = argv[++i];
+            const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), options.previewLod);
+            if (ec != std::errc{} || end != text.data() + text.size() || options.previewLod < 0) {
+                kast::log::error(std::format("Invalid --preview-lod '{}', expected a level (0, 1, ...)", text));
+                return std::nullopt;
+            }
         } else if (arg == "--preview-clip" && hasValue) {
             options.previewClip = argv[++i];
         } else if (arg == "--open-graph" && hasValue && options.openGraph.empty()) {
@@ -740,8 +748,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
         kast::log::error("--graph-* flags require --open-graph <file.kshadergraph>");
         return std::nullopt;
     }
-    if (!options.previewClip.empty() && options.previewModel.empty()) {
-        kast::log::error("--preview-clip requires --preview-model <path>");
+    if ((!options.previewClip.empty() || options.previewLod != 0) && options.previewModel.empty()) {
+        kast::log::error("--preview-clip and --preview-lod require --preview-model <path>");
         return std::nullopt;
     }
     if (!options.guiClick.empty() && !options.play) {
@@ -1550,6 +1558,7 @@ int main(int argc, char** argv)
         if (!options->previewModel.empty()) {
             modelPreview.open(options->previewModel);
             modelPreview.selectClip(options->previewClip);
+            modelPreview.selectLod(options->previewLod);
         }
         if (options->guiPreviewSize)
             guiBuilder.setPreviewSize(options->guiPreviewSize->first, options->guiPreviewSize->second);
