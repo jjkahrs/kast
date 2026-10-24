@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LOD and occlusion - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="lightmaps.html">Lightmaps and GI</a></li><li><a href="voxelgi.html">VoxelGI</a></li><li><a href="sdfgi.html">SDFGI</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li><li><a href="lod-and-occlusion.html" class="active">LOD and occlusion</a></li></ul></nav>
+<main>
+<h1 id="lod-and-occlusion">LOD and occlusion</h1>
+<p>Three automatic steps cut what large scenes submit, on top of <a href="instancing-and-culling.html">frustum culling and
+instancing</a>: <a href="#mesh-lod">mesh LOD</a> (a model draws a coarser copy of itself when it is small on screen),
+<a href="#terrain-lod">terrain LOD</a> (far terrain chunks draw every 2nd, 4th or 8th sample) and
+<a href="#occlusion">Hi-Z occlusion culling</a> (the camera pass skips what an earlier frame's depth shows is hidden). All
+three work in the editor's Scene and Game views, the built game and the Scene view's open zone, and each can be turned off
+with a <a href="#flags">flag</a> to compare output and speed.</p>
+
+<h2 id="mesh-lod">Mesh LOD</h2>
+<h3 id="import">At import: the LOD chain</h3>
+<p>The editor's importer (<code>editor/model_importer.cpp</code>) gives every mesh of a model a chain of levels. LOD0 is the
+mesh as authored. By default there are 4 levels, LOD1, LOD2 and LOD3 aiming at 50%, 25% and 12.5% of LOD0's triangles.
+They are made with <a href="https://github.com/zeux/meshoptimizer">meshoptimizer</a>:</p>
+<ul>
+<li><code>meshopt_simplifyWithAttributes</code> with the mesh borders locked and normals (weight 0.5) and UVs (weight 1)
+  as attributes, so UV seams and hard edges stay where they are.</li>
+<li>Simplification stops at an error of <code>kLodMaxError</code> = 10% of the mesh's extent even if the target count is not
+  reached, so a tiny closed mesh (a 12-triangle cube) keeps its shape instead of collapsing.</li>
+<li>If a level still ends more than 10% over its target (seen on dense skinned characters), it is made again with
+  <code>meshopt_simplifySloppy</code> (borders locked) and that result is kept if it is smaller. Sloppy levels ignore UV
+  seams: textures can smear a little on far levels.</li>
+<li>Levels are <strong>index-only</strong>: each level is a new index list over LOD0's vertices. Lightmap UVs, skin weights
+  and vertex colours stay valid at every level, and skinned meshes keep their bones.</li>
+</ul>
+<p>The starter MMO's skinned <code>female-128-anim.glb</code> (14244 triangles) gets 7083 / 3478 / 1657, within 10% of
+the targets.</p>
+
+<h3 id="authored">Authored levels: <code>_LODn</code></h3>
+<p>A model that already has levels uses them instead of generated ones. Name the nodes (or meshes) Unity-style:
+<code>Rock_LOD0</code>, <code>Rock_LOD1</code>, <code>Rock_LOD2</code> ... (case-insensitive; the node name is tried first, then the
+mesh name). For each group, each level's parts are merged into the LOD0 mesh with the same material: their vertices are
+appended to LOD0's vertex buffer (transformed into LOD0's node space; for skinned meshes the joints are remapped) and their
+triangles become that level. Non-LOD0 parts are not drawn as meshes of their own, so nothing renders twice. A level
+without a part for some LOD0 mesh draws nothing for that mesh. A level part whose material LOD0 doesn't use is dropped
+with a warning, and a <code>_LOD1</code> part with no <code>_LOD0</code> group renders as an ordinary mesh with a warning.</p>
+
+<h3 id="import-settings">Import settings: <code>&lt;model&gt;.import.json</code></h3>
+<p>A model's LOD settings live in a sidecar next to it, written by the <a href="../editor/model-preview.html#mp-lod">Model
+Preview's LOD section</a> (or by hand). Without one the defaults apply.</p>
+<pre><code>{"version": 1, "lod": {"auto": true, "ratios": [1, 0.5, 0.25, 0.125],
+                       "thresholds": [0.5, 0.25, 0.1, 0.03], "cullBelowLast": false}}</code></pre>
+<ul>
+<li><code>auto</code>: generate levels (false: LOD0 only, unless the file has authored levels).</li>
+<li><code>ratios</code>: one per level (1 to 8 levels), LOD0's always 1: the target fraction of LOD0's triangles.</li>
+<li><code>thresholds</code>: per level, the <a href="#selection">screen height</a> from which it is used (defaults 50%, 25%,
+  10%, 3%).</li>
+<li><code>cullBelowLast</code>: below the last threshold the model is not drawn at all (else it keeps its last level).</li>
+</ul>
+<p>The sidecar is part of the model's <a href="models-animation.html#model-cache">import cache</a> key, so editing it
+imports the model again (within a frame). It is not shipped: Build bakes the settings into the cooked <code>.kmodel</code>
+(<a href="models-animation.html#kmodel">.kmodel version 3</a>), so the built game, which has no importer, has the same
+levels and thresholds. A malformed sidecar logs a warning and the defaults are used.</p>
+
+<h3 id="selection">At run time: picking a level</h3>
+<ul>
+<li>The <strong>screen height</strong> of a <code>ModelRenderer</code> is the largest extent of its world bounds (bind pose)
+  over the height the camera sees at the distance of the bounds' centre: <code>extent * proj[5] / (2 * distance)</code>
+  (orthographic: <code>extent * proj[5] / 2</code>). It depends on distance only, so turning the camera never changes a
+  level (<code>engine/lod.h</code> <code>lodScreenHeight</code>).</li>
+<li>The level is the first whose threshold the screen height reaches (<code>selectLod</code>). Below the last threshold it is
+  the last level, or nothing with cull-below.</li>
+<li><strong>Hysteresis</strong>: a level is kept until the screen height leaves its range by <code>kLodHysteresis</code> = 10%
+  of the boundary it crossed, so a model parked at a threshold doesn't flicker (with the camera parked at a boundary for
+  150 frames, no change was logged). Switching is an instant pop; there is no crossfade.</li>
+<li>One level per entity, from the main camera's view. The shadow passes (cascades, point, spot and area light shadows)
+  draw the same level. Each level has its own index buffer and the level is part of the
+  <a href="instancing-and-culling.html#instancing">instancing batch key</a>, so each level batches separately.</li>
+<li><strong>Bias</strong> multiplies the screen height: above 1 keeps detail further away. The global bias
+  (<code>Renderer::setLodBias</code>, <code>--lod-bias</code>) and an entity's <code>LODGroup</code> bias multiply.</li>
+<li>Always LOD0: physics colliders, the lightmap, VoxelGI, SDFGI and reflection probe bakers.</li>
+<li>Lightmapped meshes at LOD1+ keep sampling their lightmap: if the bake kept the mesh's own vertices, the model's level
+  is drawn over them; otherwise (an unwrapped copy) the level is made at run time from LOD0's unwrapped triangles with
+  <code>meshopt_simplify</code> to the same triangle count, keeping chart seams, and cached.</li>
+</ul>
+
+<h3 id="lodgroup"><code>LODGroup</code> component</h3>
+<p>Optional, on an entity with a <code>ModelRenderer</code> (<strong>Add Component &gt; LOD Group</strong>). It overrides the
+model's thresholds and cull-below for that entity:</p>
+<table>
+<tr><th>Field</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>thresholds</code> (Screen Heights)</td><td>0.5, 0.25, 0.1, 0.03</td><td>1 to 8 values in 0..1, not increasing: where each level starts.</td></tr>
+<tr><td><code>bias</code></td><td>1</td><td>Above 0; multiplies the screen height (with the global bias).</td></tr>
+<tr><td><code>cullBelow</code> (Cull Below Last)</td><td>false</td><td>Not drawn below the last threshold.</td></tr>
+</table>
+<pre><code>"LODGroup": { "thresholds": [0.6, 0.3, 0.1], "bias": 1.5, "cullBelow": true }</code></pre>
+<p>A level past the model's last draws its last. The Inspector shows the level the Scene view drew it at
+(<a href="../editor/controls.html#lodgroup">LOD Group Inspector</a>).</p>
+
+<h2 id="terrain-lod">Terrain LOD</h2>
+<ul>
+<li>Each 256 m <a href="terrain.html">terrain</a> tile (257 x 257 samples, one vertex buffer) is split into 8 x 8 chunks of
+  32 x 32 quads, numbered in Morton order (<code>terrainChunkCell</code>).</li>
+<li>Each chunk draws with an index stride of 1, 2, 4 or 8 samples. The index buffers are shared by every tile: one per
+  stride, with and without skirts, each holding every chunk.</li>
+<li>The renderer takes the <strong>coarsest stride</strong> that meets both: the chunk's largest height error at that stride
+  covers at most <code>kTerrainMaxScreenError</code> = 0.002 of the view's height (about 1.5 px at 720p) at the chunk's
+  nearest point, and the chunk is at least <code>kTerrainStrideDistance</code> x stride = 32 m x stride away (stride 2 from
+  64 m, 4 from 128 m, 8 from 256 m), so near terrain keeps its vertex normals. The LOD bias scales both. No hysteresis.</li>
+<li><strong>Skirts</strong> hide the cracks between chunks (and tiles) at different strides: every chunk edge hangs a strip
+  facing out of the chunk, as deep as 2 x the largest edge error through that sample plus 0.25 m. Skirt vertices copy the
+  edge vertex's normal, UVs and lightmap UVs, so they shade like the edge. A skirt at the outer edge of the loaded tiles
+  can be seen from outside them. With the eye under the ground (below the surface of the tile it is over) no skirts are
+  drawn: from there the surface is seen from behind and culled, but skirts would show as strips hanging in the air.</li>
+<li>Lightmap UVs (TEXCOORD1) and the tiled / map UVs are unchanged; lightmapped tiles keep their lightmaps at every stride.</li>
+<li>One draw per run of consecutive chunks at one stride and on the same side of the camera's frustum; the camera pass
+  still culls by chunk, the shadow passes by run, with the camera's strides. Terrain is never instanced.</li>
+<li><code>--no-lod</code>, <code>--force-lod N</code> and reflection probe bakes use one stride everywhere (1; stride
+  <code>1 &lt;&lt; min(N, 3)</code> forced), without skirts, one draw per tile: stride 1 is the exact pre-LOD mesh.</li>
+</ul>
+
+<h2 id="occlusion">Hi-Z occlusion culling</h2>
+<p>In the camera pass, after frustum culling and before batching, a draw is skipped when a GPU test of its box against an
+earlier frame's depth found it hidden (<code>engine/occlusion.h</code> <code>HizOcclusion</code>). Each frame, per viewport:</p>
+<ol>
+<li>The depth the opaque meshes just wrote is copied, and the boxes of this frame's candidates (every draw that passed the
+  frustum, skipped or not) are kept, grown by 2% of their largest extent (at least 5 cm) on every side.</li>
+<li>Next frame, a compute shader (<code>cs_hiz_build.sc</code>, 4 mips per pass) builds a depth pyramid from that copy:
+  mip 0 is the largest power of 2 not over half the view (1280 x 720 gives 512 x 256), each texel the farthest depth
+  under it; each mip below halves it, down to 1 x 1.</li>
+<li>Another compute shader (<code>cs_hiz_test.sc</code>) projects each kept box with that frame's view-projection, picks
+  the mip where its screen rect covers at most 2 x 2 texels and marks it hidden if its nearest depth is beyond the
+  farthest depth there. A box through the near plane or behind the eye is always visible.</li>
+<li>The visibility is blitted to a read-back texture and read back 3 frames later (Direct3D 11 waits for the GPU when a
+  read-back is mapped, so asking at once stalls every frame).</li>
+</ol>
+<p><strong>Latency</strong>: a result is used <strong>5 frames</strong> after the depth it was tested against was drawn
+(measured: <code>Hi-Z latency 5 frames</code> in <a href="#stats"><code>--log-fps</code></a>). With a still camera that changes
+nothing: the image with occlusion on matches <code>--no-occlusion</code> exactly. <strong>While the camera moves</strong>, a draw
+coming out from behind an occluder can appear up to about 5 frames late (a 1&ndash;5 frame pop at the occluder's edge); the
+box dilation hides most of it at walking speeds. A draw that moves out of the box it was tested with is drawn at once.</p>
+<h3 id="never-culled">Never skipped</h3>
+<ul>
+<li><strong>Animated (posed) models</strong>: their bounds are the bind pose's.</li>
+<li>Draws with <strong>no result yet</strong>: new ones, ones that just came into the frustum.</li>
+<li>Everything after a <strong>cut, teleport or big jump</strong> (results tested from an eye more than 2 m from the camera's
+  are dropped) and after a <strong>viewport resize</strong>, until new results come back.</li>
+<li>Everything <strong>without a render target</strong> to copy depth from, and on a GPU <strong>without compute, blit or
+  read-back</strong> (<code>bgfx::getCaps()</code>); the log says <code>Occlusion culling: this GPU lacks compute, blit or
+  read-back; every draw in the frustum is drawn</code>. <code>--occlusion-unsupported</code> forces this (a test hook).</li>
+<li>Frames with fewer than 64 candidate draws test nothing (<code>kOcclusionMinDraws</code>): the pyramid and read-back cost
+  a fixed few tens of microseconds. While the newest result hid less than 20% of its draws, a test runs only every 8th
+  frame (its results stand meanwhile).</li>
+<li>Shadow passes are not occlusion culled. At most 65536 draws are tested per frame; the rest draw.</li>
+</ul>
+<p><strong>Blended draws</strong> are tested like the rest, but never hide anything: only what writes depth is in the
+pyramid. Draws whose <code>.kshader</code> <code>vertex()</code> moves geometry outside their bounds can be culled wrongly, as with
+frustum culling.</p>
+
+<h2 id="debug-views">Debug views</h2>
+<p>The Scene view's toolbar has a <strong>Debug</strong> menu (<a href="../editor/controls.html#debug-views">Editor
+controls</a>):</p>
+<ul>
+<li><strong>LOD tint</strong>: every draw in an untextured colour by its level: LOD0 green, 1 yellow, 2 orange, 3 red, 4+
+  purple; terrain chunks by stride 1, 2, 4, 8 the same way (<code>--lod-tint</code>; <code>--terrain-lod-tint</code> is the same).</li>
+<li><strong>Occluded boxes</strong>: the boxes of the draws occlusion skipped, as orange lines drawn through what hides them
+  (<code>--show-occluded</code>).</li>
+<li><strong>Hi-Z mip</strong>: a picture of one pyramid mip in the view's corner, brighter = nearer (<code>--show-hiz N</code>).</li>
+</ul>
+
+<h2 id="stats">Stats</h2>
+<p><code>Renderer::stats()</code> counts the last camera pass: triangles submitted, draw calls (an instanced batch is one),
+draws occluded and draws per level. The <a href="../editor/controls.html#stats-overlay">F3 overlay</a> (Game view and
+built game) and the editor's <code>--log-fps</code> line (the Scene view's) print them:</p>
+<pre><code>FPS 1424.0, CPU 0.38 ms/frame, GPU 0.47 ms/frame, 33 draw calls; Scene view: Tris 580.6k  Draws 3  Occluded 72  LOD 3/0/0/504, Hi-Z latency 5 frames</code></pre>
+
+<h2 id="flags">Flags</h2>
+<p>Editor (Scene and Game views) and built game unless noted; all are in the usage text.</p>
+<table>
+<tr><th>Flag</th><th>Effect</th></tr>
+<tr><td><code>--no-lod</code></td><td>Every model at LOD0, terrain at stride 1 (<code>Renderer::setLod(false)</code>).</td></tr>
+<tr><td><code>--lod-bias F</code></td><td>Multiplies every screen height (&gt; 0; above 1 keeps detail; <code>setLodBias</code>).</td></tr>
+<tr><td><code>--force-lod N</code></td><td>Every model at level N (its last if it has fewer), terrain at stride <code>1 &lt;&lt; min(N, 3)</code>, nothing culled below thresholds (<code>setForcedLod</code>).</td></tr>
+<tr><td><code>--no-occlusion</code></td><td>No occlusion culling (<code>setOcclusion(false)</code>).</td></tr>
+<tr><td><code>--occlusion-unsupported</code></td><td>Editor: behave as on a GPU without compute / read-back (<code>setOcclusionUnsupported</code>).</td></tr>
+<tr><td><code>--log-lod</code></td><td>Editor: log each model's first level and every change, with its screen height.</td></tr>
+<tr><td><code>--lod-tint</code>, <code>--show-occluded</code>, <code>--show-hiz N</code>, <code>--scene-debug-menu</code></td><td>Editor: the <a href="#debug-views">debug views</a> on at start, the Debug menu kept open (screenshots).</td></tr>
+<tr><td><code>--terrain-lod-checker</code>, <code>--no-terrain-skirts</code></td><td>Editor test hooks: strides 1 and 8 in a checkerboard (the worst case for cracks); no skirts (cracks show).</td></tr>
+<tr><td><code>--preview-lod N</code></td><td>Editor: the Model Preview shows level N.</td></tr>
+</table>
+
+<h2 id="benchmark">Benchmark</h2>
+<p><code>tests/scenes/lod_occlusion.scene</code> (far-field view) and <code>tests/scenes/lod_occlusion_wall.scene</code>
+(behind-wall view) are the same scene with a different Main Camera and editor camera: a 24 x 24 field of a 9216-triangle
+torus (<code>tests/scenes/models/lod_torus.obj</code>), an 80 x 15 m near wall and a 40 x 10 m middle wall. All three files
+are written by <code>tests/scenes/gen_lod_occlusion.py</code>. Run, for example:</p>
+<pre><code>kast_editor --scene tests/scenes/lod_occlusion.scene --log-fps --no-vsync
+kast_editor --scene tests/scenes/lod_occlusion_wall.scene --log-fps --no-vsync --no-lod --no-occlusion</code></pre>
+<p>Measured on the development machine (Release, <code>--no-vsync</code>, 1280 x 720 window, Scene view 765 x 426),
+three interleaved rounds; the machine was also running another GPU-heavy program, so the FPS figures vary by about 10%
+between rounds. Triangles, draws and occluded are the Scene view's camera pass.</p>
+<table>
+<tr><th>View</th><th>Flags</th><th>Triangles</th><th>Draw calls</th><th>Occluded</th><th>FPS (per round)</th></tr>
+<tr><td>Far field</td><td>(all on)</td><td>580.6k</td><td>3</td><td>72 of 576</td><td>1360, 1373, 1401</td></tr>
+<tr><td>Far field</td><td><code>--no-lod</code></td><td>4.64M</td><td>3</td><td>72</td><td>713, 671, 661</td></tr>
+<tr><td>Far field</td><td><code>--no-occlusion</code></td><td>663.6k</td><td>3</td><td>0</td><td>1361, 1352, 1844</td></tr>
+<tr><td>Far field</td><td><code>--no-lod --no-occlusion</code></td><td>5.31M</td><td>3</td><td>0</td><td>610, 600, 799</td></tr>
+<tr><td>Behind wall</td><td>(all on)</td><td>30.0k</td><td>3</td><td>548 of 577</td><td>1213, 1221, 1428</td></tr>
+<tr><td>Behind wall</td><td><code>--no-lod</code></td><td>239.6k</td><td>3</td><td>548</td><td>978, 920, 885</td></tr>
+<tr><td>Behind wall</td><td><code>--no-occlusion</code></td><td>661.3k</td><td>3</td><td>0</td><td>1412, 1497, 1435</td></tr>
+<tr><td>Behind wall</td><td><code>--no-lod --no-occlusion</code></td><td>5.29M</td><td>3</td><td>0</td><td>575, 619, 517</td></tr>
+</table>
+<p>LOD cuts the far field's triangles by 87.5% (all tori at LOD3); behind the wall occlusion skips 95% of the draws. In this
+scene a torus is cheap once at LOD3, so with LOD on, occlusion saves little GPU time and its fixed cost (pyramid, test,
+read-back) shows: behind the wall all-on is up to 15% slower than <code>--no-occlusion</code>. Its gain is largest with LOD off
+(<code>--no-lod</code> 885&ndash;978 FPS vs 517&ndash;619 without either) and in scenes whose hidden draws are expensive.</p>
+</main>
+</div>
+</body>
+</html>

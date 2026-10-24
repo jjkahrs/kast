@@ -85,6 +85,9 @@ public:
     // A ReflectionProbe's bake as the host's renderer sees its files ("Not baked", "Baked" or why they can't be used:
     // Renderer::probeStatus), shown in its Inspector section. Set by the host.
     std::function<std::string(const kast::ReflectionProbe&)> probeStatus;
+    // The LOD level the host's Scene view drew an entity at (Renderer::lodLevel: -1 culled, nullopt not drawn), shown
+    // live in its LOD Group Inspector section. Set by the host.
+    std::function<std::optional<int>(const kast::Scene&, entt::entity)> lodLevel;
     // The probes the Inspector's Bake or the Lighting panel's Bake All Probes asked for since the last call: the host
     // bakes them between frames (SceneViewport::bakeProbes).
     std::vector<entt::entity> takeBakeRequests() { return std::exchange(bakeRequests_, {}); }

@@ -105,6 +105,18 @@ Trs readTrs(ModelReader& r)
     return trs;
 }
 
+// Why settings can't be used; "" if they can.
+std::string lodSettingsError(const ModelLodSettings& settings)
+{
+    const size_t levels = settings.ratios.size();
+    if (levels < 1 || levels > kMaxModelLods || settings.thresholds.size() != levels)
+        return std::format("1 to {} levels, as many ratios as thresholds", kMaxModelLods);
+    if (settings.ratios[0] != 1.0f || !std::ranges::all_of(settings.ratios, [](float r) { return r > 0.0f && r <= 1.0f; }) ||
+        !std::ranges::all_of(settings.thresholds, [](float t) { return t >= 0.0f && t <= 1.0f; }))
+        return "ratios in (0, 1] starting at 1, thresholds in [0, 1]";
+    return "";
+}
+
 // What the renderer and animation index with, in range: a corrupt file must not crash the player.
 std::string modelIndexError(const Model& model)
 {
@@ -121,6 +133,11 @@ std::string modelIndexError(const Model& model)
         if (mesh.indices.empty() || mesh.indices.size() % 3 != 0 ||
             !std::ranges::all_of(mesh.indices, [&](uint32_t i) { return i < mesh.vertices.size(); }))
             return "a mesh has bad indices";
+        if (mesh.lods.size() >= kMaxModelLods || !std::ranges::all_of(mesh.lods, [&](const std::vector<uint32_t>& lod) {
+                return lod.size() % 3 == 0 &&
+                       std::ranges::all_of(lod, [&](uint32_t i) { return i < mesh.vertices.size(); });
+            }))
+            return "a mesh has bad LOD indices";
         if (!mesh.uv2.empty() && mesh.uv2.size() != mesh.vertices.size() * 2)
             return "a mesh's second UV set doesn't match its vertices";
         const float joints = static_cast<float>(std::max<size_t>(mesh.joints.size(), 1));
@@ -129,6 +146,8 @@ std::string modelIndexError(const Model& model)
                 if (!(joint >= 0.0f && joint < joints))
                     return "a vertex refers to a missing joint";
     }
+    if (const std::string error = lodSettingsError(model.lod); !error.empty())
+        return "bad LOD settings: " + error;
     for (const Clip& clip : model.clips)
         if (!std::ranges::all_of(clip.channels, [&](const Channel& c) { return nodeOk(c.node); }))
             return std::format("clip '{}' animates a missing node", clip.name);
@@ -233,6 +252,58 @@ bool isModelFile(const std::filesystem::path& file)
     return std::ranges::find(modelExtensions(), ext) != modelExtensions().end();
 }
 
+size_t modelLodCount(const Model& model)
+{
+    size_t levels = 0;
+    for (const ModelMesh& mesh : model.meshes)
+        levels = std::max(levels, mesh.lods.size());
+    return levels + 1;
+}
+
+const std::vector<uint32_t>& lodIndices(const ModelMesh& mesh, size_t level)
+{
+    return level == 0 || mesh.lods.empty() ? mesh.indices : mesh.lods[std::min(level, mesh.lods.size()) - 1];
+}
+
+std::string modelImportSettingsPath(const std::string& path) { return path + ".import.json"; }
+
+bool parseModelImportSettings(std::string_view text, ModelLodSettings& out, std::string& error)
+{
+    const nlohmann::json doc = nlohmann::json::parse(text, nullptr, false);
+    if (!doc.is_object()) {
+        error = "not a JSON object";
+        return false;
+    }
+    ModelLodSettings settings;
+    const nlohmann::json lod = doc.value("lod", nlohmann::json::object());
+    try {
+        settings.autoLod = lod.value("auto", settings.autoLod);
+        settings.ratios = lod.value("ratios", settings.ratios);
+        settings.thresholds = lod.value("thresholds", settings.thresholds);
+        settings.cullBelowLast = lod.value("cullBelowLast", settings.cullBelowLast);
+    } catch (const nlohmann::json::exception& e) {
+        error = std::format("lod: {}", e.what());
+        return false;
+    }
+    if (const std::string reason = lodSettingsError(settings); !reason.empty()) {
+        error = "lod: " + reason;
+        return false;
+    }
+    out = std::move(settings);
+    return true;
+}
+
+std::string modelImportSettingsJson(const ModelLodSettings& settings)
+{
+    const nlohmann::ordered_json doc = {{"version", 1},
+                                        {"lod",
+                                         {{"auto", settings.autoLod},
+                                          {"ratios", settings.ratios},
+                                          {"thresholds", settings.thresholds},
+                                          {"cullBelowLast", settings.cullBelowLast}}}};
+    return doc.dump(2) + '\n';
+}
+
 ModelStats modelStats(const Model& model)
 {
     ModelStats stats{.meshes = model.meshes.size(), .nodes = model.nodes.size(), .clips = model.clips.size(),
@@ -242,6 +313,11 @@ ModelStats modelStats(const Model& model)
         stats.vertices += mesh.vertices.size();
         stats.triangles += mesh.indices.size() / 3;
         bones.insert(bones.end(), mesh.joints.begin(), mesh.joints.end());
+    }
+    for (size_t level = 0; level < modelLodCount(model); ++level) {
+        stats.lodTriangles.push_back(0);
+        for (const ModelMesh& mesh : model.meshes)
+            stats.lodTriangles.back() += lodIndices(mesh, level).size() / 3;
     }
     std::ranges::sort(bones);
     stats.bones = static_cast<size_t>(std::ranges::distance(bones.begin(), std::ranges::unique(bones).begin()));
@@ -302,6 +378,16 @@ std::string writeModel(const Model& model)
         w.string(texture);
     for (const ModelMesh& mesh : model.meshes)
         w.array(mesh.uv2);
+    w.pod(static_cast<uint32_t>((model.lod.autoLod ? 1 : 0) | (model.lod.cullBelowLast ? 2 : 0)));
+    w.array(model.lod.ratios);
+    w.array(model.lod.thresholds);
+    for (const ModelMesh& mesh : model.meshes) {
+        w.count(mesh.lods.size());
+        for (const std::vector<uint32_t>& lod : mesh.lods) {
+            w.count(lod.size() / 3);
+            w.array(lod);
+        }
+    }
     return std::move(w.out);
 }
 
@@ -315,7 +401,7 @@ std::shared_ptr<const Model> readModel(std::string_view bytes, std::string& erro
         return nullptr;
     }
     const uint32_t version = r.pod<uint32_t>();
-    if (version != kModelFormatVersion && version != 1) {
+    if (version < 1 || version > kModelFormatVersion) {
         error = std::format(".kmodel version {}, expected {}", version, kModelFormatVersion);
         return nullptr;
     }
@@ -369,6 +455,28 @@ std::shared_ptr<const Model> readModel(std::string_view bytes, std::string& erro
     if (version >= 2)
         for (ModelMesh& mesh : model->meshes)
             r.array(mesh.uv2, 0.0f);
+    if (version >= 3) {
+        const uint32_t flags = r.pod<uint32_t>();
+        model->lod.autoLod = (flags & 1) != 0;
+        model->lod.cullBelowLast = (flags & 2) != 0;
+        r.array(model->lod.ratios, 0.0f);
+        r.array(model->lod.thresholds, 0.0f);
+        for (ModelMesh& mesh : model->meshes) {
+            mesh.lods.resize(r.count(8));
+            if (mesh.lods.size() >= kMaxModelLods) {
+                error = "a mesh has too many LODs";
+                return nullptr;
+            }
+            for (std::vector<uint32_t>& lod : mesh.lods) {
+                const uint32_t triangles = r.pod<uint32_t>();
+                r.array(lod, 0u);
+                if (r.ok && lod.size() != size_t{triangles} * 3) {
+                    error = "a mesh's LOD triangle count doesn't match its indices";
+                    return nullptr;
+                }
+            }
+        }
+    }
     if (!r.ok || !r.in.empty()) {
         error = r.ok ? "bytes past the end of the .kmodel" : "the .kmodel is cut short";
         return nullptr;
@@ -417,6 +525,7 @@ bool cookModel(const std::filesystem::path& root, const std::string& path, const
         return false;
     }
     out.sidecars = modelSidecars(path, bytes);
+    out.sidecars.push_back(modelImportSettingsPath(path));
     std::filesystem::path cached;
     if (!version.empty()) {
         std::vector<std::optional<std::string>> sidecarBytes;

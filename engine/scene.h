@@ -76,6 +76,16 @@ struct ModelRenderer {
     float lightmapScale = 1.0f;
 };
 
+// Overrides the LOD switching of the entity's ModelRenderer (its model's ModelLodSettings thresholds and cullBelowLast):
+// thresholds per level, decreasing screen-height fractions 0..1 (1..kMaxModelLods of them, see lod.h selectLod); bias
+// (> 0) multiplies the screen height (above 1 keeps detail further away), on top of the Renderer's global bias;
+// cullBelow: not drawn below the last threshold.
+struct LODGroup {
+    std::vector<float> thresholds{0.5f, 0.25f, 0.1f, 0.03f};
+    float bias = 1.0f;
+    bool cullBelow = false;
+};
+
 constexpr float kMaxAnimatorSpeed = 10.0f;
 
 // Plays the entity's ModelRenderer's skeletal animation clips (see animation.h). Without a ModelRenderer it does

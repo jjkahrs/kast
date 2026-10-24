@@ -44,7 +44,7 @@ constexpr int kScreenshotTimeoutFrames = 30;
 constexpr const char* kPakFileName = "game.pak";
 constexpr int kGuiClickFrame = 10; // --gui-click: once the GUIs have loaded and laid out
 constexpr const char* kUsage =
-    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--sim-key frame,key]... [--size WxH] [--window-pos X,Y] [--fixed-dt S] [--gpu-stats] [--log-sdfgi] [--no-instancing] [--no-culling] [--no-audio-device]";
+    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--sim-key frame,key]... [--size WxH] [--window-pos X,Y] [--fixed-dt S] [--gpu-stats] [--log-sdfgi] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--no-occlusion] [--no-audio-device]";
 constexpr int kGpuStatsWarmupFrames = 10; // --gpu-stats: skip startup frames (shader and target creation)
 
 struct Options {
@@ -58,6 +58,10 @@ struct Options {
     bool gpuStats = false;  // log the average GPU frame time on exit
     bool noInstancing = false; // draw every mesh one by one (Renderer::setInstancing)
     bool noCulling = false;    // draw every mesh in every pass (Renderer::setCulling)
+    bool noLod = false;        // draw every model at LOD0 (Renderer::setLod)
+    bool noOcclusion = false;  // no Hi-Z occlusion culling (Renderer::setOcclusion)
+    float lodBias = 1.0f;      // --lod-bias: Renderer::setLodBias
+    int forceLod = -1;         // --force-lod: Renderer::setForcedLod (-1: by screen height)
     bool noAudioDevice = false; // tests: sound on the null backend (silent), as if there were no output device
 };
 
@@ -128,6 +132,24 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.noInstancing = true;
         } else if (arg == "--no-culling") {
             options.noCulling = true;
+        } else if (arg == "--no-lod") {
+            options.noLod = true;
+        } else if (arg == "--no-occlusion") {
+            options.noOcclusion = true;
+        } else if (arg == "--lod-bias" && hasValue) {
+            const std::string_view text = argv[++i];
+            auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), options.lodBias);
+            if (ec != std::errc{} || ptr != text.data() + text.size() || !(options.lodBias > 0.0f)) {
+                kast::log::error(std::format("Invalid --lod-bias '{}', expected a positive number. {}", text, kUsage));
+                return std::nullopt;
+            }
+        } else if (arg == "--force-lod" && hasValue) {
+            const std::string_view text = argv[++i];
+            auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), options.forceLod);
+            if (ec != std::errc{} || ptr != text.data() + text.size() || options.forceLod < 0) {
+                kast::log::error(std::format("Invalid --force-lod '{}', expected a level (0, 1, ...). {}", text, kUsage));
+                return std::nullopt;
+            }
         } else if (arg == "--no-audio-device") {
             options.noAudioDevice = true;
         } else {
@@ -232,6 +254,10 @@ int main(int argc, char** argv)
         renderer.init();
         renderer.setInstancing(!options->noInstancing);
         renderer.setCulling(!options->noCulling);
+        renderer.setLod(!options->noLod);
+        renderer.setLodBias(options->lodBias);
+        renderer.setForcedLod(options->forceLod);
+        renderer.setOcclusion(!options->noOcclusion);
         post.init();
         kast::gui::init();
         lua.setGui(&gui); // kast.gui.*
@@ -258,7 +284,7 @@ int main(int argc, char** argv)
     hooks.frame = [&] {
         const uint64_t ticks = SDL_GetTicksNS();
         const double dt = options->fixedDt > 0.0f ? options->fixedDt : static_cast<double>(ticks - lastTicks) * 1e-9;
-        stats.frame(dt, lua.world().rttMs());
+        stats.frame(dt, lua.world().rttMs(), &renderer.stats()); // the last frame's
         shaderClock.advance(dt);
         renderer.setTime(shaderClock.seconds());
         if (kast::tickPlay(scene, lua, static_cast<float>(dt)))

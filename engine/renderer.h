@@ -3,14 +3,17 @@
 #include "frustum.h"
 #include "ibl.h"
 #include "lightmap.h"
+#include "lod.h"
 #include "material.h"
 #include "model.h"
+#include "occlusion.h"
 #include "particles.h"
 #include "scene.h"
 #include "shader.h"
 #include "shader_clock.h"
 #include "shadow.h"
 #include "sky.h"
+#include "stats_overlay.h"
 #include "texture_cook.h"
 
 #include <bgfx/bgfx.h>
@@ -25,6 +28,8 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -163,7 +168,9 @@ void buildMips(MipImage& image, bool srgb);
 // entity's collider and its ParticleEmitter's shape.
 // Every pass culls its draws to its view frustum (main camera, each cascade, each cube face, each tile), and draws that
 // share buffers, material, shadow flags and (main pass) lights, unskinned and not blended, are drawn as one GPU-instanced
-// submit (see docs/engine/instancing-and-culling.html).
+// submit (see docs/engine/instancing-and-culling.html). Model draws are at the LOD their screen height picks (setLod);
+// each level has its own index buffer, so levels batch apart. The camera pass also skips draws a Hi-Z test of an
+// earlier frame's depth found hidden (setOcclusion; docs/engine/lod-and-occlusion.html).
 // The caller owns the views' framebuffers, rects and clears; these set the view transform and mode and submit.
 class Renderer {
 public:
@@ -208,6 +215,44 @@ public:
     // Either way the output is the same, so off is a reference (--no-instancing, --no-culling).
     void setInstancing(bool on) { instancing_ = on; }
     void setCulling(bool on) { culling_ = on; }
+    // Mesh LOD (lod.h): each ModelRenderer draws at the level its bounds' screen height in the camera's view picks
+    // (selectLod, with hysteresis) by its LODGroup's thresholds, else its model's (ModelLodSettings); the shadow passes
+    // draw the same level. setLod(false): always LOD0 (--no-lod). setLodBias: multiplies every screen height (> 0;
+    // above 1 keeps detail further away; --lod-bias). setForcedLod: every model at this level (a mesh with fewer levels
+    // draws its last, nothing is culled below the thresholds); -1 (the default) picks by screen height (--force-lod).
+    void setLod(bool on) { lod_ = on; }
+    void setLodBias(float bias) { lodBias_ = bias; }
+    void setForcedLod(int level) { forcedLod_ = level; }
+    // Terrain draws its chunks at strides by the same switches (lod.h terrainLevel; a forced level n is stride 1 << n,
+    // at most 8; the LOD bias scales distance and error).
+    // Logs each ModelRenderer's level when first drawn and each change (--log-lod).
+    void setLodLogging(bool on) { lodLogging_ = on; }
+    // Terrain LOD test hooks: a checkerboard of strides 1 and 8 by chunk, the worst case for cracks
+    // (--terrain-lod-checker); no skirts, so cracks show (--no-terrain-skirts; set before the first frame: built into
+    // the tile meshes).
+    void setTerrainLodChecker(bool on) { terrainLodChecker_ = on; }
+    void setTerrainSkirts(bool on) { terrainSkirts_ = on; }
+    // Hi-Z occlusion culling of the camera pass (occlusion.h HizOcclusion), on by default: a draw in the frustum is
+    // skipped while the newest test (of a depth 5 frames old) found its dilated box hidden. Never skipped: posed
+    // draws, draws with no result yet, everything for a while after a cut or a resize, everything without a target
+    // (setTarget) or on a GPU without compute / read-back. setOcclusion(false): none skipped (--no-occlusion).
+    // setOcclusionUnsupported (before init): behave as on such a GPU (--occlusion-unsupported).
+    void setOcclusion(bool on) { occlusion_ = on; }
+    void setOcclusionUnsupported(bool on) { hiz_.setForceUnsupported(on); }
+    // Debug views: every draw tinted by its level (LOD0 green, 1 yellow, 2 orange, 3 red, 4+ purple; terrain chunks
+    // by stride 1, 2, 4, 8 the same; --lod-tint), the boxes of the draws occlusion skipped in renderOverlays
+    // (--show-occluded), and a picture of a Hi-Z pyramid mip (-1 off; --show-hiz N), refreshed as tests run.
+    void setLodTint(bool on) { lodTint_ = on; }
+    void setShowOccluded(bool on) { showOccluded_ = on; }
+    void setHizDebugMip(int mip) { hiz_.setDebugMip(mip); }
+    bgfx::TextureHandle hizDebugTexture() const { return hiz_.debugTexture(); }
+    // The last render()'s camera pass: triangles and draw calls submitted, draws occlusion skipped, draws per level.
+    const RenderStats& stats() const { return stats_; }
+    // Frames from a depth to the frame its occlusion results were used, as last measured (0: none yet).
+    int occlusionLatency() const { return hiz_.latency(); }
+    // The level entity of scene drew at in the last render() that drew it: -1 culled below its last threshold;
+    // nullopt if that render() didn't draw it (no model, or not rendered by this Renderer). The LODGroup Inspector shows it.
+    std::optional<int> lodLevel(const Scene& scene, entt::entity entity) const;
     // Why the scene's cubemap sky last fell back to the procedural one ("" = it didn't): the Lighting panel shows it.
     const std::string& skyError() const { return sky_.error(); }
     // A ReflectionProbe's bake as the renderer sees it: "Not baked", "Baked", or why its files can't be used (the
@@ -234,10 +279,12 @@ private:
     struct Mesh {
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
+        uint32_t triangles = 0;
     };
     struct ModelMeshBuffers {
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
+        std::vector<bgfx::IndexBufferHandle> lods; // per ModelMesh::lods; invalid for an empty level (draws nothing)
     };
     // A .kshader's programs: its fs_mesh (main pass) and its shadow fragment shader (shadow passes), each with its mesh
     // vertex shaders (the built-in ones if it has no vertex()). Rebuilt when the library hands out a different
@@ -263,7 +310,12 @@ private:
         const UserShader* shader = nullptr; // the material's .kshader; null: the built-in mesh shader
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
+        uint32_t firstIndex = 0, indexCount = UINT32_MAX; // the range of indices drawn (terrain chunks); default all
         int bones = -1; // index into the frame's bone sets; -1 = not skinned
+        size_t submesh = 0; // a model draw's mesh index (Model::meshes)
+        int lod = 0;        // a model draw's level (indices is that level's: lodIndices), a terrain run's stride level
+        uint32_t triangles = 0; // drawn (stats)
+        uint64_t id = 0;        // stable across frames, for occlusion results (drawId); 0: always drawn
         bool posed = false; // animated: bounds are the bind pose's, so the draw is never culled
         bool mirrored = false; // world matrix has a negative determinant: front faces wind the other way
         bool castShadows = true;
@@ -293,6 +345,8 @@ private:
         std::map<std::string, size_t> meshIndex;          // LightmapMesh::key -> meshes
         std::map<EntityId, size_t> entities;              // -> sidecar.entities
         std::map<std::pair<size_t, size_t>, Mesh> buffers; // (mesh, submesh): its unwrapped vertices, made on first use
+        // (mesh, submesh, level): a model LOD's triangles over those unwrapped vertices; invalid: LOD0's are drawn instead.
+        std::map<std::tuple<size_t, size_t, int>, bgfx::IndexBufferHandle> lodIndices;
         std::set<std::pair<size_t, size_t>> broken;        // ones that no longer match their source (warned)
     };
     struct ShadowFrame {
@@ -359,17 +413,26 @@ private:
     void clearModels();
     const UserShader* userShader(const std::string& path); // null if the .kshader fails to load or compile
     void destroy(UserShader& shader);
+    static void destroy(ModelMeshBuffers& mesh);
     // Points each draw whose material has a .kshader at its programs; a shader that fails, or material values of the
     // wrong type for it, draw with errorMaterial() instead.
     void resolveShaders(std::vector<DrawItem>& draws);
     // Builds the GPU meshes of the scene's TerrainTiles (one per TerrainTileData: new data, new mesh), marks them used
     // and appends their draws. pruneTerrain then drops the meshes no rendered scene used this frame.
-    void addTerrainDraws(const Scene& scene, std::vector<DrawItem>& draws);
+    // Each chunk at the stride (terrainLevel) the camera's view (viewMtx / projMtx) picks; a draw per run of chunks
+    // (Morton order) at one stride and on the same side of the camera's frustum; one per tile when every chunk has
+    // the same stride (LOD off or forced).
+    void addTerrainDraws(const Scene& scene, const float* viewMtx, const float* projMtx, std::vector<DrawItem>& draws);
     void pruneTerrain();
     void clearTerrain();
-    // Appends the draws of a ModelRenderer entity (an error cube if its model fails to load).
+    // Appends the draws of a ModelRenderer entity (an error cube if its model fails to load) at the LOD its screen
+    // height from eye through projMtx picks (none if culled below its last threshold), recording it in lodStates_.
     void addModelDraws(const Scene& scene, entt::entity entity, const ModelRenderer& renderer, const float* world,
-                       std::vector<DrawItem>& draws, std::vector<std::vector<Mat4>>& boneSets);
+                       const bx::Vec3& eye, const float* projMtx, std::vector<DrawItem>& draws,
+                       std::vector<std::vector<Mat4>>& boneSets);
+    // The level addModelDraws draws entity's model at: -1 culled below its last threshold.
+    int pickLod(const Scene& scene, entt::entity entity, const Model& model, const Aabb& bounds, const bx::Vec3& eye,
+                const float* projMtx);
     // Renders the shadow maps for this frame's casters into views from shadowViews (creating the maps on first use).
     // sun: the scene's DirectionalLight (null: none), shining along sunDir.
     ShadowFrame renderShadows(const DirectionalLight* sun, const bx::Vec3& sunDir, const std::vector<DrawItem>& draws,
@@ -387,6 +450,8 @@ private:
     // copy again before such a draw (as Godot's BackBufferCopy) if layered refraction is ever needed.
     void copyScene(bgfx::ViewId view, bgfx::FrameBufferHandle target, bool screen, bool depth);
     void destroyCopies();
+    // Draws occlusion found hidden: their boxes for renderOverlays (setShowOccluded), counted in stats_.
+    void drawOccludedBoxes(bgfx::ViewId view);
     // Culling is on and item is outside frustum (posed draws never are: their bounds are the bind pose's).
     // ponytail: by the undisplaced bounds; a .kshader vertex() moving geometry outside them can pop at the frustum's edge.
     // Pad the bounds per material (a .kshader "cull margin") if that shows.
@@ -406,10 +471,14 @@ private:
     void drawColliderWireframe(const Scene& scene, bgfx::ViewId view, entt::entity selected);
     void drawParticleShape(const Scene& scene, bgfx::ViewId view, entt::entity selected);
 
-    // GPU copy of a TerrainTile's heights: kTileSamples^2 vertices in tile-local metres; indices are terrainIndices_.
+    // GPU copy of a TerrainTile's heights: kTileSamples^2 vertices in tile-local metres, then its skirt vertices
+    // (lod.h terrainSkirtVertex); indices are terrainIndices_.
     struct TerrainMesh {
         std::shared_ptr<const TerrainTileData> data; // the key's, kept alive so no other data reuses its address
         bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
+        std::vector<Aabb> chunkBounds;                                              // per chunk, world, the surface
+        float skirtDepth = 0.0f;                                                    // the deepest skirt
+        std::array<std::array<float, kTerrainStrides>, kTerrainChunks> chunkErrors{}; // terrainChunkError per level
         bgfx::TextureHandle lightmap = BGFX_INVALID_HANDLE, lightmapDirection = BGFX_INVALID_HANDLE; // its baked tile
         Aabb bounds{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}}; // world space
         bool used = false; // by a tile this frame
@@ -417,7 +486,9 @@ private:
 
     std::array<Mesh, 3> meshes_; // indexed by Primitive
     bgfx::VertexLayout meshLayout_;  // MeshVertex: primitives and terrain
-    bgfx::IndexBufferHandle terrainIndices_ = BGFX_INVALID_HANDLE; // 32-bit, map::for_each_triangle, shared by tiles
+    // Per level (stride 1 << level), without and with skirts: every chunk's indices (appendTerrainChunk) in chunk order,
+    // 32-bit, shared by tiles.
+    std::array<std::array<bgfx::IndexBufferHandle, 2>, kTerrainStrides> terrainIndices_{};
     std::map<const TerrainTileData*, TerrainMesh> terrain_; // data is kept alive by its mesh
     bgfx::VertexLayout lineLayout_;
     bgfx::VertexBufferHandle grid_ = BGFX_INVALID_HANDLE;
@@ -528,6 +599,35 @@ private:
     float timeSeconds_ = 0.0f; // setTime
     bool instancing_ = true;
     bool culling_ = true;
+    bool lod_ = true;
+    float lodBias_ = 1.0f;
+    int forcedLod_ = -1;
+    bool lodLogging_ = false;
+    bool terrainLodChecker_ = false, terrainSkirts_ = true;
+    bool lodTint_ = false;
+    std::map<std::pair<const Material*, int>, Material> lodTints_; // (material, level): its tinted copy
+    bool occlusion_ = true;
+    HizOcclusion hiz_;
+    bool showOccluded_ = false;
+    std::vector<Aabb> occludedBoxes_; // the last render()'s, with showOccluded_
+    RenderStats stats_;
+    // Per (scene, entity) drawn: selectLod's pick (its previous next frame), the level drawn (-1 culled) and the
+    // render() (lodFrame_) that drew it; kept across frames (no allocations per frame), entries not drawn pruned now
+    // and then.
+    struct LodState {
+        int selected = 0;
+        int drawn = 0;
+        uint64_t frame = UINT64_MAX; // none yet
+    };
+    struct LodKeyHash {
+        size_t operator()(const std::pair<const Scene*, entt::entity>& key) const
+        {
+            return std::hash<const void*>()(key.first) ^ (size_t(entt::to_integral(key.second)) * 0x9e3779b97f4a7c15ull);
+        }
+    };
+    std::unordered_map<std::pair<const Scene*, entt::entity>, LodState, LodKeyHash> lodStates_;
+    uint64_t lodFrame_ = 0; // render() calls
+    size_t lodPicked_ = 0;  // entities picked in this render()
 };
 
 } // namespace kast

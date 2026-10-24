@@ -37,10 +37,19 @@
 //   materials: count N, then per slot: string name, string material JSON (materialToJson, as in a .mat file)
 //   textures:  count N, then per embedded image: string bytes (a PNG/JPG file; empty for one that isn't)
 //   uv2:       (version 2) per mesh, in order: count U + f32[U] (its second UV set, 2 per vertex; U is 0 without one)
-//   end of file: bytes past the last section are an error. Version 1 files (no uv2) still read.
+//   lods:      (version 3) the LOD settings (ModelLodSettings): u32 flags (bit 0 = autoLod, bit 1 = cullBelowLast),
+//              count + f32 ratios, count + f32 thresholds; then per mesh, in order: count L (its levels after LOD0),
+//              per level: u32 triangles, count I + u32[I] indices (I = 3 x triangles; 0 = the mesh draws nothing at
+//              that level). Levels index the mesh's own vertices: LOD0's, plus any an authored level appended.
+//   end of file: bytes past the last section are an error. Version 1 (no uv2) and 2 (no lods: LOD0 only, default
+//   settings) files still read.
 namespace kast {
 
-constexpr uint32_t kModelFormatVersion = 2;
+constexpr uint32_t kModelFormatVersion = 3;
+constexpr size_t kMaxModelLods = 8; // LOD0 included
+// Simplification stops at this error (relative to the mesh's extent) short of a level's target triangle count: a tiny
+// closed mesh (a 12-triangle cube has nothing to lose) keeps its shape instead of collapsing to a sliver.
+constexpr float kLodMaxError = 0.1f;
 
 constexpr size_t kMaxBones = 128; // MAX_BONES in vs_mesh_skinned.sc: joints per skinned mesh
 constexpr size_t kMaxBoneWeights = 4;
@@ -74,7 +83,8 @@ struct ModelNode {
 // One submesh: a single material slot.
 struct ModelMesh {
     std::vector<ModelVertex> vertices;
-    std::vector<uint32_t> indices;
+    std::vector<uint32_t> indices;                // LOD0 (what bakers, colliders and pickers use)
+    std::vector<std::vector<uint32_t>> lods;      // LOD1.. triangle lists over vertices; one may be empty (draws nothing)
     uint32_t material = 0;          // slot in Model::materials
     int node = 0;                   // unskinned meshes render at this node's transform
     std::vector<int> joints;        // skin: the node of each bone index; empty = not skinned
@@ -107,6 +117,18 @@ struct ModelMaterial {
     Material material;
 };
 
+// A model's LOD chain, set per model file in its import settings (modelImportSettingsPath) and kept in the .kmodel:
+// how the importer builds the levels and the screen sizes the renderer switches at. A level is used while the model's
+// bounds cover at least its threshold of the screen height; below the last it stays at the last level, or isn't drawn
+// with cullBelowLast.
+struct ModelLodSettings {
+    bool autoLod = true;                                    // generate levels for meshes without authored _LODn ones
+    std::vector<float> ratios{1.0f, 0.5f, 0.25f, 0.125f};   // per level: target triangles / LOD0's (ratios[0] is 1)
+    std::vector<float> thresholds{0.5f, 0.25f, 0.1f, 0.03f}; // per level: screen-height fraction, decreasing
+    bool cullBelowLast = false;
+    bool operator==(const ModelLodSettings&) const = default;
+};
+
 struct Model {
     std::vector<ModelMesh> meshes;
     std::vector<ModelNode> nodes;
@@ -116,7 +138,22 @@ struct Model {
     std::vector<std::string> textures;
     Aabb bounds{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}}; // model space, bind pose
     bool overBoneLimit = false; // some mesh has more than kMaxBones joints: it renders in bind pose, unskinned
+    ModelLodSettings lod;       // as imported
 };
+
+// The levels a model has: 1 + its meshes' most LODs.
+size_t modelLodCount(const Model& model);
+// A mesh's triangle list at level (0 = LOD0); past its last level, its last.
+const std::vector<uint32_t>& lodIndices(const ModelMesh& mesh, size_t level);
+
+// A model file's import settings: "<path>.import.json", beside it. Editor-only: the importer reads it (cookModel counts
+// it as a sidecar, so editing it re-imports), Build ships what it made in the .kmodel, not the file.
+std::string modelImportSettingsPath(const std::string& path);
+// {"version": 1, "lod": {"auto": true, "ratios": [...], "thresholds": [...], "cullBelowLast": false}}; a missing field
+// keeps its default. False + error if malformed: not JSON, 1..kMaxModelLods levels, ratios[0] 1 and the rest in
+// (0, 1], thresholds in [0, 1], ratios and thresholds the same length.
+bool parseModelImportSettings(std::string_view text, ModelLodSettings& out, std::string& error);
+std::string modelImportSettingsJson(const ModelLodSettings& settings);
 
 // The extensions models load from: .glb, .gltf, .fbx, .obj.
 const std::vector<std::string>& modelExtensions();
@@ -130,6 +167,7 @@ struct ModelStats {
     size_t nodes = 0;
     size_t bones = 0; // distinct joint nodes across the skinned meshes
     size_t clips = 0;
+    std::vector<size_t> lodTriangles; // per level (modelLodCount), as drawn
     bx::Vec3 size{0.0f, 0.0f, 0.0f}; // of the bind-pose bounds, meters
 };
 ModelStats modelStats(const Model& model);
@@ -139,7 +177,7 @@ std::string embeddedTextureModel(const std::string& path);
 
 // model as .kmodel bytes.
 std::string writeModel(const Model& model);
-// .kmodel bytes as a model; nullptr + error if they are not a valid .kmodel of kModelFormatVersion (or version 1).
+// .kmodel bytes as a model; nullptr + error if they are not a valid .kmodel of kModelFormatVersion (or version 1, 2).
 std::shared_ptr<const Model> readModel(std::string_view bytes, std::string& error);
 
 // Imports <root>/<path> (a model file; disk or mounted pak) into a Model: the editor's Assimp importer
@@ -160,7 +198,7 @@ std::string modelCacheKey(const std::string& path, std::string_view bytes,
 struct CookedModel {
     std::shared_ptr<const Model> model;
     std::string bytes;                 // model as .kmodel (writeModel)
-    std::vector<std::string> sidecars; // modelSidecars: the other files it is imported from
+    std::vector<std::string> sidecars; // modelSidecars, then modelImportSettingsPath: the other files it is imported from
     bool cached = false;               // read from the cache: the importer didn't run
 };
 // Imports <root>/<path> with importer, through <cacheDir>/<modelCacheKey>.kmodel when version is set: a hit reads that

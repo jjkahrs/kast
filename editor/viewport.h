@@ -66,6 +66,15 @@ public:
     void draw(Document& doc);
     void setPostEffects(bool on) { postEffects_ = on; } // the toolbar's "Post" toggle
     kast::Renderer& renderer() { return renderer_; }     // --no-instancing, --no-culling
+    // The toolbar's Debug menu (docs/editor/controls.html#debug-views), applied to the renderer each frame: tint by
+    // LOD level, boxes of the draws occlusion culled, and a Hi-Z pyramid mip (-1: off) in the view's corner.
+    struct DebugViews {
+        bool lodTint = false;
+        bool occludedBoxes = false;
+        int hizMip = -1;
+    };
+    DebugViews& debugViews() { return debug_; } // --lod-tint, --show-occluded, --show-hiz
+    void openDebugMenu() { openDebugMenu_ = true; } // --scene-debug-menu: kept open, for screenshots
     // Bakes each of probes (ReflectionProbe entities of doc.scene) with this view's renderer and views
     // (Renderer::bakeProbe: call between frames), writes it to kast::bakedProbePath next to the scene, sets its
     // bakedPath and marks the document dirty. Edit mode and a scene saved in the project only; failures are logged.
@@ -109,4 +118,6 @@ private:
     bool local_ = true;
     const kast::Scene* extraScene_ = nullptr;
     ImVec2 imageCenter_{0.0f, 0.0f};
+    DebugViews debug_;
+    bool openDebugMenu_ = false;
 };

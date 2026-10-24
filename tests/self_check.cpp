@@ -56,6 +56,8 @@
 #include <shadow.h>
 #include <sky.h>
 #include <frustum.h>
+#include <lod.h>
+#include <occlusion.h>
 #include <ibl.h>
 #include <state_machines.h>
 #include <stats_overlay.h>
@@ -84,6 +86,7 @@
 #include <process.h> // _getpid
 #include <random>
 #include <regex>
+#include <set>
 #include <share.h>   // _SH_DENYRW
 #include <source_location>
 #include <stdexcept>
@@ -339,7 +342,7 @@ std::vector<std::string> typeNames()
 
 void checkComponentRegistry()
 {
-    check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "ModelRenderer", "Animator",
+    check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "ModelRenderer", "LODGroup", "Animator",
                                                  "DirectionalLight", "PointLight", "SpotLight", "AreaLight", "ReflectionProbe", "VoxelGI", "Camera",
                                                  "Rotator", "Collider", "Rigidbody", "CharacterController", "StateMachine", "UIDocument",
                                                  "AudioSource", "NetworkLocalPlayer", "NetworkReplication",
@@ -617,6 +620,14 @@ void checkStatsOverlay()
     check(kast::statsOverlayText(144, 42) == "FPS 144  Ping 42 ms", "stats: text 'FPS 144  Ping 42 ms'");
     check(kast::statsOverlayText(60, std::nullopt) == "FPS 60  Ping -- ms", "stats: no RTT -> 'Ping -- ms'");
     check(kast::statsOverlayText(0, 0) == "FPS 0  Ping 0 ms", "stats: zeros print as numbers");
+    kast::RenderStats render{.triangles = 1234567, .draws = 45, .occluded = 300, .lodDraws = {12, 30, 0, 5}};
+    check(kast::renderStatsText(render) == "Tris 1.23M  Draws 45  Occluded 300  LOD 12/30/0/5",
+          "stats: render counts, levels up to the last with draws");
+    check(kast::statsOverlayText(60, std::nullopt, std::nullopt, std::nullopt, &render) ==
+              "FPS 60  Ping -- ms  Tris 1.23M  Draws 45  Occluded 300  LOD 12/30/0/5",
+          "stats: render counts after the FPS");
+    check(kast::renderStatsText({.triangles = 900, .draws = 1}) == "Tris 900  Draws 1  Occluded 0  LOD 0",
+          "stats: small counts, LOD0 only");
     kast::StatsOverlay overlay;
     check(!overlay.visible(), "stats: the overlay starts hidden");
 
@@ -6921,6 +6932,301 @@ void checkIbl()
 
 // --- Post-processing ---
 
+void checkLodSelection()
+{
+    // Screen height: a 2 m box 10 m from a 90 degree camera covers 2 / (2 * 10 * tan 45) = 0.1 of the view.
+    const kast::Aabb box{{-1, -1, -11}, {1, 1, -9}};
+    float view[16], turned[16], proj[16], ortho[16];
+    bx::mtxLookAt(view, {0, 0, 0}, {0, 0, -1}, {0, 1, 0}, bx::Handedness::Right);
+    bx::mtxLookAt(turned, {0, 0, 0}, {1, 0, 0}, {0, 1, 0}, bx::Handedness::Right);
+    bx::mtxProj(proj, 90.0f, 16.0f / 9.0f, 0.1f, 100.0f, false, bx::Handedness::Right);
+    bx::mtxOrtho(ortho, -10.0f, 10.0f, -10.0f, 10.0f, 0.1f, 100.0f, 0.0f, false, bx::Handedness::Right);
+    check(std::abs(kast::lodScreenHeight(box, view, proj) - 0.1f) < 1e-4f, "LOD: screen height by distance and FOV");
+    check(kast::lodScreenHeight(box, turned, proj) == kast::lodScreenHeight(box, view, proj),
+          "LOD: turning the camera doesn't change the screen height");
+    check(std::abs(kast::lodScreenHeight(box, view, ortho) - 0.1f) < 1e-4f, "LOD: orthographic screen height by view height");
+    check(kast::lodScreenHeight({{-1, -1, -1}, {1, 1, 1}}, view, proj) > 1.0f, "LOD: the eye inside the box is LOD0's");
+
+    // Levels by thresholds, no previous level.
+    const std::vector<float> t{0.5f, 0.25f, 0.1f, 0.03f};
+    check(kast::selectLod(0.6f, t, false, -1) == 0 && kast::selectLod(0.5f, t, false, -1) == 0,
+          "LOD: at or above the first threshold is LOD0");
+    check(kast::selectLod(0.3f, t, false, -1) == 1 && kast::selectLod(0.05f, t, false, -1) == 3, "LOD: levels by threshold");
+    check(kast::selectLod(0.01f, t, false, -1) == 3, "LOD: below the last threshold stays at the last level");
+    check(kast::selectLod(0.01f, t, true, -1) == 4, "LOD: below the last threshold is culled with cullBelow");
+    check(kast::selectLod(0.01f, {}, true, -1) == 0, "LOD: no thresholds is LOD0");
+    // Hysteresis: a level is kept within kLodHysteresis of its range.
+    check(kast::selectLod(0.48f, t, false, 0) == 0 && kast::selectLod(0.44f, t, false, 0) == 1,
+          "LOD: LOD0 is kept just below its threshold, not further");
+    check(kast::selectLod(0.52f, t, false, 1) == 1 && kast::selectLod(0.56f, t, false, 1) == 0,
+          "LOD: LOD1 is kept just above its range, not further");
+    check(kast::selectLod(0.031f, t, true, 4) == 4 && kast::selectLod(0.034f, t, true, 4) == 3,
+          "LOD: culled is kept just above the last threshold");
+    check(kast::selectLod(0.001f, t, false, 3) == 3 && kast::selectLod(0.6f, t, false, 9) == 0,
+          "LOD: the last level has no floor; an out-of-range previous level is ignored");
+    // A camera parked at a threshold (its screen height jittering 2% around 0.25 for 120 frames) changes level at
+    // most once.
+    int level = -1, changes = 0;
+    for (int frame = 0; frame < 120; ++frame) {
+        const int next = kast::selectLod(0.25f * (1.0f + 0.02f * std::sin(static_cast<float>(frame) * 1.7f)), t, false, level);
+        changes += level >= 0 && next != level;
+        level = next;
+    }
+    check(changes <= 1, std::format("LOD: a parked camera at a threshold changes level at most once ({})", changes).c_str());
+    // Moving away, levels only ever get coarser.
+    level = -1;
+    bool monotonic = true;
+    for (float h = 1.0f; h > 0.001f; h *= 0.97f) {
+        const int next = kast::selectLod(h, t, true, level);
+        monotonic = monotonic && next >= level;
+        level = next;
+    }
+    check(monotonic && level == 4, "LOD: moving away only coarsens, down to culled");
+
+    // LODGroup: saved and loaded as a built-in component; invalid thresholds and bias are rejected.
+    const entt::meta_type type = kast::findComponentType("LODGroup");
+    check(static_cast<bool>(type), "LODGroup is a registered component");
+    if (type) {
+        kast::LODGroup group{{0.6f, 0.2f}, 1.5f, true};
+        const auto json = kast::componentToJson(entt::forward_as_meta(group));
+        std::string error;
+        const entt::meta_any back = kast::componentFromJson(type, json, error);
+        const auto* loaded = back ? back.try_cast<kast::LODGroup>() : nullptr;
+        check(loaded && loaded->thresholds == group.thresholds && loaded->bias == 1.5f && loaded->cullBelow,
+              std::format("LODGroup round trips ({}, {})", json.dump(), error).c_str());
+        for (const char* bad : {R"({"thresholds": [0.2, 0.5], "bias": 1, "cullBelow": false})",
+                                R"({"thresholds": [], "bias": 1, "cullBelow": false})",
+                                R"({"thresholds": [0.5, 0.25], "bias": 0, "cullBelow": false})",
+                                R"({"thresholds": [1.5], "bias": 1, "cullBelow": false})",
+                                R"({"thresholds": ["a"], "bias": 1, "cullBelow": false})"})
+            check(!kast::componentFromJson(type, nlohmann::ordered_json::parse(bad), error), std::format("LODGroup rejects {}", bad).c_str());
+    }
+
+    // A lightmapped level: a 9 x 9 grid of vertices unwrapped into two charts split along column 4 (its vertices
+    // copied into both), simplified to an eighth without a triangle spanning both charts; an unwrap that kept the
+    // source's vertices takes the model's level as it is.
+    kast::LightmapSubmesh sub;
+    std::vector<bx::Vec3> positions;
+    for (int chart = 0; chart < 2; ++chart)
+        for (int z = 0; z < 9; ++z)
+            for (int x = chart * 4; x <= chart * 4 + 4; ++x) {
+                sub.xref.push_back(static_cast<uint32_t>(z * 9 + x));
+                positions.push_back({static_cast<float>(x), 0.0f, static_cast<float>(z)});
+            }
+    sub.sourceVertices = 81;
+    sub.uv.resize(sub.xref.size() * 2);
+    for (uint32_t chart = 0; chart < 2; ++chart)
+        for (uint32_t z = 0; z < 8; ++z)
+            for (uint32_t x = 0; x < 4; ++x) {
+                const uint32_t a = chart * 45 + z * 5 + x, b = a + 5;
+                sub.indices.insert(sub.indices.end(), {a, b, a + 1, a + 1, b, b + 1});
+            }
+    const std::vector<uint32_t> lightmapped = kast::lightmapLodIndices(sub, positions, std::vector<uint32_t>(sub.indices.size() / 8));
+    bool oneChart = !lightmapped.empty() && lightmapped.size() < sub.indices.size();
+    for (size_t i = 0; oneChart && i < lightmapped.size(); i += 3)
+        oneChart = lightmapped[i] / 45 == lightmapped[i + 1] / 45 && lightmapped[i] / 45 == lightmapped[i + 2] / 45;
+    check(oneChart, std::format("lightmap LOD: simplified over the unwrap, no triangle spans two charts ({} of {} indices)",
+                                lightmapped.size(), sub.indices.size()).c_str());
+    const kast::LightmapSubmesh kept{.sourceVertices = 3, .xref = {0, 1, 2}, .uv = std::vector<float>(6), .indices = {0, 1, 2}};
+    check(kast::lightmapLodIndices(kept, std::vector<bx::Vec3>(3, bx::Vec3{0.0f, 0.0f, 0.0f}), {2, 1, 0}) == std::vector<uint32_t>{2, 1, 0},
+          "lightmap LOD: an unwrap that kept the source's vertices draws the model's level");
+}
+
+void checkOcclusion()
+{
+    // Box dilation and containment.
+    const kast::Aabb unit{{0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f}};
+    const kast::Aabb grown = kast::dilateForOcclusion(unit);
+    check(std::abs(grown.min.x + kast::kOcclusionMinDilation) < 1e-6f && std::abs(grown.max.y - 2.05f) < 1e-6f,
+          "occlusion: a small box grows by the minimum");
+    const kast::Aabb big = kast::dilateForOcclusion({{0.0f, 0.0f, 0.0f}, {10.0f, 1.0f, 1.0f}});
+    check(std::abs(big.min.z + 10.0f * kast::kOcclusionDilation) < 1e-6f, "occlusion: a big box grows by its extent");
+    check(kast::contains(grown, unit) && !kast::contains(unit, grown), "occlusion: contains");
+
+    // Pyramid sizes: powers of 2 below half the target, mips down to 1 x 1; mip-0 texels cover every depth pixel.
+    check(kast::hizSize(1280, 720) == std::pair<uint16_t, uint16_t>{512, 256} && kast::hizMipCount(512, 256) == 10,
+          "occlusion: 1280 x 720 -> 512 x 256, 10 mips");
+    check(kast::hizSize(1, 1) == std::pair<uint16_t, uint16_t>{1, 1} && kast::hizMipCount(1, 1) == 1,
+          "occlusion: 1 x 1 -> one mip");
+    for (const auto& [width, width0] : {std::pair{1280u, 512u}, {161u, 64u}, {64u, 32u}, {1023u, 256u}, {3u, 1u}}) {
+        uint32_t next = 0;
+        bool ok = true;
+        for (uint32_t x = 0; x < width0; ++x) {
+            const auto [first, last] = kast::hizDepthSpan(x, width, width0);
+            ok = ok && first <= next && last + 1 >= next && last - first < 5 && last < width;
+            next = last + 1;
+        }
+        check(ok && next == width, "occlusion: mip-0 texels cover the depth pixels, at most 5 each");
+    }
+
+    // A camera at the origin looking down +z (bx's left-handed default), and a depth target where a 6 x 6 m wall at
+    // z = 10 drew (pixel centers inside its rect), far plane elsewhere.
+    float view[16], proj[16], viewProj[16];
+    bx::mtxLookAt(view, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f});
+    bx::mtxProj(proj, 60.0f, 16.0f / 9.0f, 0.1f, 100.0f, false);
+    bx::mtxMul(viewProj, view, proj);
+    const auto depthTarget = [&](uint16_t width, uint16_t height, int holeColumn) {
+        const kast::Aabb wall{{-3.0f, -3.0f, 10.0f}, {3.0f, 3.0f, 10.0f}};
+        const kast::HizRect rect = *kast::hizProject(wall, viewProj, false, false);
+        std::vector<float> depth(size_t(width) * height, 1.0f);
+        for (uint16_t y = 0; y < height; ++y)
+            for (uint16_t x = 0; x < width; ++x) {
+                const float u = (x + 0.5f) / width, v = (y + 0.5f) / height;
+                if (u >= rect.u0 && u <= rect.u1 && v >= rect.v0 && v <= rect.v1 && x != holeColumn)
+                    depth[size_t(y) * width + x] = rect.depth;
+            }
+        return depth;
+    };
+    const auto occluded = [&](const kast::HizPyramid& pyramid, const kast::Aabb& box) {
+        return kast::hizOccluded(pyramid, box, viewProj, false, false);
+    };
+    const kast::HizPyramid pyramid = kast::buildHizPyramid(depthTarget(160, 90, -1), 160, 90);
+    check(pyramid.width0 == 64 && pyramid.height0 == 32 && pyramid.mips.size() == 7 && pyramid.mips[6].size() == 1,
+          "occlusion: 160 x 90 pyramid is 64 x 32 .. 1 x 1");
+    check(occluded(pyramid, {{-0.5f, -0.5f, 20.0f}, {0.5f, 0.5f, 21.0f}}), "occlusion: a box behind the wall is hidden");
+    check(!occluded(pyramid, {{-0.5f, -0.5f, 9.5f}, {0.5f, 0.5f, 10.5f}}), "occlusion: a box through the wall is visible");
+    check(!occluded(pyramid, {{-0.5f, -0.5f, 5.0f}, {0.5f, 0.5f, 6.0f}}), "occlusion: a box in front is visible");
+    check(!occluded(pyramid, {{7.5f, -0.5f, 20.0f}, {8.5f, 0.5f, 21.0f}}), "occlusion: a box beside it is visible");
+    check(!occluded(pyramid, {{2.5f, -0.5f, 10.5f}, {4.5f, 0.5f, 11.0f}}),
+          "occlusion: a box across the wall's silhouette is visible");
+    check(!occluded(pyramid, {{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 30.0f}}),
+          "occlusion: a box around the eye is visible");
+    check(!occluded(pyramid, {{-0.5f, -0.5f, -20.0f}, {0.5f, 0.5f, -19.0f}}), "occlusion: a box behind the eye is visible");
+    check(!kast::hizProject({{-1.0f, -1.0f, 0.05f}, {1.0f, 1.0f, 2.0f}}, viewProj, false, false),
+          "occlusion: a box through the near plane has no rect");
+    // An odd-sized target with a one-pixel gap in the wall: the pyramid keeps the gap (farthest depth wins).
+    const kast::HizPyramid odd = kast::buildHizPyramid(depthTarget(161, 91, 80), 161, 91);
+    check(!occluded(odd, {{-0.05f, -0.5f, 20.0f}, {0.05f, 0.5f, 21.0f}}),
+          "occlusion: a box seen through a one-pixel gap is visible");
+    check(occluded(odd, {{-2.5f, -0.5f, 20.0f}, {-1.5f, 0.5f, 21.0f}}), "occlusion: away from the gap it is hidden");
+
+    // Footprints: at most 2 x 2 texels, covering the whole rect at mip 0.
+    bool footprintsOk = true;
+    for (int i = 0; i < 2000; ++i) {
+        const float a = float((i * 7919) % 1000) / 1000.0f, b = float((i * 104729) % 1000) / 1000.0f;
+        const float w = float((i * 31) % 1000) / 1000.0f, h = float((i * 17) % 997) / 997.0f;
+        const kast::HizRect rect{a * (1.0f - w), b * (1.0f - h), a * (1.0f - w) + w, b * (1.0f - h) + h, 0.5f};
+        const kast::HizFootprint at = kast::hizFootprint(rect, 1024, 512, 11);
+        const int x0 = int(rect.u0 * 1024.0f), x1 = std::min(int(rect.u1 * 1024.0f), 1023);
+        const int y0 = int(rect.v0 * 512.0f), y1 = std::min(int(rect.v1 * 512.0f), 511);
+        footprintsOk = footprintsOk && at.x1 - at.x0 <= 1 && at.y1 - at.y0 <= 1 && (at.x0 << at.mip) <= x0 &&
+                       ((at.x1 + 1) << at.mip) > x1 && (at.y0 << at.mip) <= y0 && ((at.y1 + 1) << at.mip) > y1;
+    }
+    check(footprintsOk, "occlusion: footprints are at most 2 x 2 texels and cover the rect");
+}
+
+void checkTerrainLod()
+{
+    constexpr int n = kast::map::kTileSamples;
+    // Morton cells: every chunk once, and each aligned 2x2 block is four consecutive chunks.
+    std::set<std::pair<int, int>> cells;
+    for (int chunk = 0; chunk < kast::kTerrainChunks; ++chunk)
+        cells.insert(kast::terrainChunkCell(chunk));
+    check(int(cells.size()) == kast::kTerrainChunks && cells.rbegin()->first == kast::kTerrainChunksPerEdge - 1,
+          "terrain LOD: chunk cells cover the tile once");
+    check(kast::terrainChunkCell(3) == std::pair{1, 1} && kast::terrainChunkCell(4) == std::pair{2, 0},
+          "terrain LOD: chunks are in Morton order");
+
+    // Stride 1 over all chunks is exactly the full tile (map::for_each_triangle), plus skirts (indices past the grid).
+    std::vector<uint32_t> fine;
+    for (int chunk = 0; chunk < kast::kTerrainChunks; ++chunk)
+        kast::appendTerrainChunk(chunk, 1, true, fine);
+    std::vector<std::array<uint32_t, 3>> full, chunked;
+    kast::map::for_each_triangle([&](uint32_t a, uint32_t b, uint32_t c) { full.push_back({a, b, c}); });
+    for (size_t i = 0; i < fine.size(); i += 3)
+        if (std::max({fine[i], fine[i + 1], fine[i + 2]}) < uint32_t(n * n))
+            chunked.push_back({fine[i], fine[i + 1], fine[i + 2]});
+    std::sort(full.begin(), full.end());
+    std::sort(chunked.begin(), chunked.end());
+    check(full == chunked && fine.size() == size_t(kast::kTerrainChunks) * kast::terrainChunkIndexCount(1, true),
+          "terrain LOD: stride 1 chunks draw the full tile's triangles, same winding, plus skirts");
+    std::vector<uint32_t> bare;
+    for (int chunk = 0; chunk < kast::kTerrainChunks; ++chunk)
+        kast::appendTerrainChunk(chunk, 1, false, bare);
+    check(bare.size() == full.size() * 3 && bare.size() == size_t(kast::kTerrainChunks) * kast::terrainChunkIndexCount(1, false) &&
+              *std::max_element(bare.begin(), bare.end()) < uint32_t(n * n),
+          "terrain LOD: without skirts, only the full tile's triangles");
+
+    // Every stride: the per-chunk count holds, indices stay inside grid + skirt, the grid faces up and skirts face out
+    // of their chunk (grid vertex (u, h, v), skirt vertex one metre under its edge sample).
+    std::vector<bx::Vec3> positions(size_t(n) * n + kast::kTerrainSkirtVertices, bx::Vec3{0.0f, 0.0f, 0.0f});
+    for (int v = 0; v < n; ++v)
+        for (int u = 0; u < n; ++u) {
+            positions[size_t(v) * n + size_t(u)] = {float(u), 0.0f, float(v)};
+            if (u % kast::kTerrainChunkQuads == 0 || v % kast::kTerrainChunkQuads == 0)
+                positions[kast::terrainSkirtVertex(u, v)] = {float(u), -1.0f, float(v)};
+        }
+    for (int stride : {1, 2, 4, 8}) {
+        bool counts = true, inRange = true, facing = true;
+        size_t skirts = 0;
+        for (int chunk = 0; chunk < kast::kTerrainChunks; ++chunk) {
+            std::vector<uint32_t> indices;
+            kast::appendTerrainChunk(chunk, stride, true, indices);
+            counts = counts && indices.size() == kast::terrainChunkIndexCount(stride, true);
+            const auto [cu, cv] = kast::terrainChunkCell(chunk);
+            const bx::Vec3 center{(float(cu) + 0.5f) * kast::kTerrainChunkQuads, 0.0f, (float(cv) + 0.5f) * kast::kTerrainChunkQuads};
+            for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+                if (std::max({indices[i], indices[i + 1], indices[i + 2]}) >= positions.size()) {
+                    inRange = false;
+                    continue;
+                }
+                const bx::Vec3 a = positions[indices[i]], b = positions[indices[i + 1]], c = positions[indices[i + 2]];
+                const bx::Vec3 normal = bx::cross(bx::sub(b, a), bx::sub(c, a));
+                const bool skirt = a.y < 0.0f || b.y < 0.0f || c.y < 0.0f;
+                skirts += skirt;
+                const bx::Vec3 out = bx::sub(bx::mul(bx::add(a, c), 0.5f), center);
+                facing = facing && (skirt ? bx::dot(normal, {out.x, 0.0f, out.z}) > 0.0f && std::abs(normal.y) < 1e-4f
+                                          : normal.y > 0.0f);
+            }
+        }
+        check(counts && inRange, std::format("terrain LOD: stride {} index counts and ranges", stride).c_str());
+        check(facing && skirts == size_t(kast::kTerrainChunks) * 8 * (kast::kTerrainChunkQuads / stride),
+              std::format("terrain LOD: stride {} grid faces up, a skirt quad per edge segment faces out", stride).c_str());
+    }
+
+    // Height error: a tilted plane is exact at every stride; a spike on an odd sample shows from stride 2 up.
+    std::vector<float> heights(size_t(n) * n);
+    for (int v = 0; v < n; ++v)
+        for (int u = 0; u < n; ++u)
+            heights[size_t(v) * n + size_t(u)] = 0.25f * float(u) - 0.1f * float(v);
+    check(kast::terrainChunkError(heights, 0, 8) < 1e-4f && kast::terrainChunkError(heights, 63, 2) < 1e-4f,
+          "terrain LOD: a plane has no error at any stride");
+    heights.assign(heights.size(), 0.0f);
+    heights[size_t(5) * n + 3] = 2.0f; // chunk 0, sample (3, 5)
+    check(kast::terrainChunkError(heights, 0, 1) == 0.0f && std::abs(kast::terrainChunkError(heights, 0, 2) - 2.0f) < 1e-5f &&
+              std::abs(kast::terrainChunkError(heights, 0, 8) - 2.0f) < 1e-5f && kast::terrainChunkError(heights, 1, 8) == 0.0f,
+          "terrain LOD: a spike is the error of the chunk holding it, from stride 2");
+    // Skirt depth: only chunk-edge samples count; a spike on an edge deepens the skirt along that edge (and at its ends).
+    const float margin = kast::kTerrainSkirtMargin;
+    check(kast::terrainSkirtDepth(heights, 0, 5) == margin && kast::terrainSkirtDepth(heights, 32, 0) == margin,
+          "terrain LOD: an inner spike doesn't deepen skirts");
+    heights[size_t(5) * n + 32] = 2.0f; // on the u = 32 line, edge v 0..32
+    check(std::abs(kast::terrainSkirtDepth(heights, 32, 5) - (4.0f + margin)) < 1e-5f &&
+              std::abs(kast::terrainSkirtDepth(heights, 32, 32) - (4.0f + margin)) < 1e-5f &&
+              std::abs(kast::terrainSkirtDepth(heights, 64, 0) - margin) < 1e-5f &&
+              std::abs(kast::terrainSkirtDepth(heights, 32, 40) - margin) < 1e-5f,
+          "terrain LOD: an edge spike deepens that edge's skirt, twice its error, and no other");
+
+    // Level choice: near is stride 1; far and flat is 8; error pulls it finer; bias keeps detail; orthographic.
+    float proj[16], ortho[16];
+    bx::mtxProj(proj, 60.0f, 16.0f / 9.0f, 0.1f, 1000.0f, false, bx::Handedness::Right);
+    bx::mtxOrtho(ortho, -50.0f, 50.0f, -50.0f, 50.0f, 0.1f, 1000.0f, 0.0f, false, bx::Handedness::Right);
+    const kast::Aabb chunk{{0, 0, 0}, {32, 1, 32}};
+    const std::array<float, 4> flat{0, 0, 0, 0}, rough{0, 0.05f, 0.4f, 2.0f};
+    const auto at = [&](float distance, const std::array<float, 4>& errors, float bias = 1.0f, const float* p = nullptr) {
+        return kast::terrainLevel(chunk, {32.0f + distance, 0.5f, 16.0f}, p ? p : proj, errors, bias);
+    };
+    check(at(0.0f, flat) == 0 && at(-10.0f, flat) == 0, "terrain LOD: on or over the chunk, stride 1");
+    check(at(63.0f, flat) == 0 && at(65.0f, flat) == 1 && at(130.0f, flat) == 2 && at(300.0f, flat) == 3,
+          "terrain LOD: flat ground coarsens with distance (64, 128, 256 m)");
+    // rough at 300 m, 1 / tan 30 = 1.732: stride 8 is 2 * 0.866 / 300 = 0.0058 > 0.002; stride 4 0.4 -> 0.0012.
+    check(at(300.0f, rough) == 2 && at(1000.0f, rough) == 3 && at(70.0f, rough) == 1,
+          "terrain LOD: height error keeps a chunk finer until it is small on screen");
+    check(at(300.0f, flat, 2.0f) == 2 && at(300.0f, flat, 0.5f) == 3, "terrain LOD: bias over 1 keeps detail further");
+    // Orthographic (2 / 100 view height): stride 8's 2 m error is 0.02 of the view, stride 4's 0.4 m 0.004, stride 2 0.0005.
+    check(at(300.0f, rough, 1.0f, ortho) == 1, "terrain LOD: orthographic error doesn't shrink with distance");
+}
+
 void checkFrustumCulling()
 {
     const auto box = [](bx::Vec3 center, float half) {
@@ -10352,8 +10658,9 @@ bool sameModel(const kast::Model& a, const kast::Model& b)
     for (size_t i = 0; ok && i < a.meshes.size(); ++i) {
         const kast::ModelMesh &x = a.meshes[i], &y = b.meshes[i];
         ok = same(x.vertices, y.vertices) && same(x.indices, y.indices) && x.material == y.material && x.node == y.node &&
-             same(x.joints, y.joints) && same(x.inverseBinds, y.inverseBinds);
+             same(x.joints, y.joints) && same(x.inverseBinds, y.inverseBinds) && x.lods == y.lods && x.uv2 == y.uv2;
     }
+    ok = ok && a.lod == b.lod;
     for (size_t i = 0; ok && i < a.clips.size(); ++i) {
         const kast::Clip &x = a.clips[i], &y = b.clips[i];
         ok = x.name == y.name && x.duration == y.duration && x.channels.size() == y.channels.size();
@@ -10554,6 +10861,171 @@ void checkModelCache()
               contains(error, "Build failed: model 'models/corrupt.glb'") &&
               !std::filesystem::exists(source.parent_path() / "kast_model_build_bad"),
           "Build fails naming a model that can't be imported, writing nothing");
+}
+
+// A UV sphere: rings x segments quads, its u seam split (as an imported mesh's would be), lightmap UVs on every vertex.
+kast::ModelMesh uvSphere(int rings, int segments)
+{
+    kast::ModelMesh mesh;
+    for (int r = 0; r <= rings; ++r)
+        for (int s = 0; s <= segments; ++s) {
+            const float theta = bx::kPi * static_cast<float>(r) / static_cast<float>(rings);
+            const float phi = 2.0f * bx::kPi * static_cast<float>(s) / static_cast<float>(segments);
+            kast::ModelVertex v{};
+            v.x = v.nx = std::sin(theta) * std::cos(phi);
+            v.y = v.ny = std::cos(theta);
+            v.z = v.nz = std::sin(theta) * std::sin(phi);
+            v.u = static_cast<float>(s) / static_cast<float>(segments);
+            v.v = static_cast<float>(r) / static_cast<float>(rings);
+            mesh.vertices.push_back(v);
+            mesh.uv2.insert(mesh.uv2.end(), {v.u, v.v});
+        }
+    const auto at = [&](int r, int s) { return static_cast<uint32_t>(r * (segments + 1) + s); };
+    for (int r = 0; r < rings; ++r)
+        for (int s = 0; s < segments; ++s)
+            mesh.indices.insert(mesh.indices.end(), {at(r, s), at(r + 1, s), at(r, s + 1), at(r, s + 1), at(r + 1, s), at(r + 1, s + 1)});
+    return mesh;
+}
+
+// Model LODs: generated levels hit their triangle ratios, the .kmodel keeps them (v3) and still reads v2 files (LOD0
+// only), import settings parse and steer the import, authored "<name>_LOD<n>" meshes become levels of their LOD0.
+void checkModelLods()
+{
+    std::string error0;
+    // Generated: within 10% of 50 / 25 / 12.5% of LOD0, over LOD0's own vertices.
+    kast::ModelMesh sphere = uvSphere(48, 96);
+    generateLods(sphere, kast::ModelLodSettings{});
+    const double lod0 = static_cast<double>(sphere.indices.size() / 3);
+    bool ratios = sphere.lods.size() == 3;
+    for (size_t level = 0; ratios && level < sphere.lods.size(); ++level) {
+        const double want = lod0 * kast::ModelLodSettings{}.ratios[level + 1];
+        const double got = static_cast<double>(sphere.lods[level].size() / 3);
+        ratios = std::abs(got - want) <= want * 0.1 &&
+                 std::ranges::all_of(sphere.lods[level], [&](uint32_t i) { return i < sphere.vertices.size(); });
+        kast::log::info(std::format("Generated LOD{}: {} of {} triangles ({:.1f}%, target {:.1f}%)", level + 1, got, lod0,
+                                    100.0 * got / lod0, 100.0 * want / lod0));
+    }
+    check(ratios, "generated LODs are within 10% of 50%, 25% and 12.5% of LOD0's triangles, indexing LOD0's vertices");
+    // A tiny closed mesh keeps its shape (the sloppy fallback's error is bounded); the starter character still gets
+    // near its targets.
+    const auto cube = importModel(KAST_TEST_PROJECT_DIR, "models/cube.gltf", error0);
+    check(cube && !cube->meshes.empty() &&
+              std::ranges::all_of(cube->meshes[0].lods, [&](const std::vector<uint32_t>& lod) {
+                  return lod.size() == cube->meshes[0].indices.size();
+              }),
+          ("a 12-triangle cube isn't collapsed at any level " + error0).c_str());
+    const auto female = importModel(KAST_TEST_PROJECT_DIR, "models/female-128-anim.glb", error0);
+    check(female != nullptr, ("the starter character imports " + error0).c_str());
+    if (female) {
+        const kast::ModelStats stats = kast::modelStats(*female);
+        bool near = stats.lodTriangles.size() == 4;
+        for (size_t level = 1; near && level < 4; ++level) {
+            const double want = static_cast<double>(stats.lodTriangles[0]) * kast::ModelLodSettings{}.ratios[level];
+            near = std::abs(static_cast<double>(stats.lodTriangles[level]) - want) <= want * 0.1;
+            kast::log::info(std::format("Starter character LOD{}: {} of {} triangles", level, stats.lodTriangles[level],
+                                        stats.lodTriangles[0]));
+        }
+        check(near, "the starter character's levels are within 10% of 50%, 25% and 12.5%");
+    }
+    kast::ModelMesh small = uvSphere(8, 16);
+    generateLods(small, kast::ModelLodSettings{.ratios = {1.0f, 0.3f}, .thresholds = {0.5f, 0.1f}});
+    check(small.lods.size() == 1, "the levels follow the settings' ratios");
+
+    // v3 round trip: levels, an empty (authored) level and the settings.
+    kast::Model model;
+    model.nodes.push_back({"root", -1, {}});
+    model.materials.push_back({"m", {}});
+    model.meshes.push_back(sphere);
+    model.meshes.push_back(sphere);
+    model.meshes[1].lods[2].clear();
+    model.lod = {.autoLod = false, .ratios = {1.0f, 0.4f, 0.2f, 0.1f}, .thresholds = {0.6f, 0.3f, 0.1f, 0.02f}, .cullBelowLast = true};
+    std::string error;
+    const std::string v3 = kast::writeModel(model);
+    const auto read = kast::readModel(v3, error);
+    check(read && sameModel(model, *read), (".kmodel v3 round trip keeps every mesh's LODs and the LOD settings " + error).c_str());
+    if (read) {
+        const kast::ModelStats stats = kast::modelStats(*read);
+        check(kast::modelLodCount(*read) == 4 && stats.lodTriangles.size() == 4 &&
+                  stats.lodTriangles[0] == 2 * sphere.indices.size() / 3 && stats.lodTriangles[3] == sphere.lods[2].size() / 3 &&
+                  &kast::lodIndices(read->meshes[0], 9) == &read->meshes[0].lods[2],
+              "per-level triangle counts; a level past a mesh's last is its last");
+    }
+    // v2: the same bytes without the lods section (flags, ratios, thresholds, then per mesh its levels).
+    size_t lodsSection = 4 + 4 + 4 * model.lod.ratios.size() + 4 + 4 * model.lod.thresholds.size();
+    for (const kast::ModelMesh& mesh : model.meshes) {
+        lodsSection += 4;
+        for (const std::vector<uint32_t>& lod : mesh.lods)
+            lodsSection += 4 + 4 + 4 * lod.size();
+    }
+    std::string v2 = v3.substr(0, v3.size() - lodsSection);
+    v2[4] = 2;
+    const auto old = kast::readModel(v2, error);
+    check(old && old->meshes.size() == 2 && old->meshes[0].lods.empty() && old->meshes[0].uv2 == sphere.uv2 &&
+              old->meshes[0].indices == sphere.indices && old->lod == kast::ModelLodSettings{} && kast::modelLodCount(*old) == 1,
+          (".kmodel v2 files still load: LOD0 only, the default LOD settings " + error).c_str());
+    kast::Model badLod = model;
+    badLod.meshes[0].lods[0][0] = 1u << 30;
+    check(!kast::readModel(kast::writeModel(badLod), error) && contains(error, "LOD"), "an out-of-range LOD index is an error");
+    std::string badCount = v3;
+    badCount[v3.size() - lodsSection + 4 + 4 + 16 + 4 + 16 + 4] = 99; // mesh 0's LOD1 triangle count
+    check(!kast::readModel(badCount, error) && contains(error, "triangle count"),
+          "a LOD triangle count that doesn't match its indices is an error");
+
+    // Import settings.
+    kast::ModelLodSettings settings;
+    check(kast::parseModelImportSettings(kast::modelImportSettingsJson(model.lod), settings, error) && settings == model.lod,
+          "import settings round trip through their JSON");
+    check(kast::parseModelImportSettings(R"({"version": 1})", settings, error) && settings == kast::ModelLodSettings{},
+          "missing import settings fields keep their defaults");
+    for (const char* bad : {"nope", R"({"lod": {"ratios": [1, 0.5]}})", R"({"lod": {"ratios": [0.5], "thresholds": [0.5]}})",
+                            R"({"lod": {"ratios": [1, 2], "thresholds": [0.5, 0.1]}})", R"({"lod": {"auto": "yes"}})"})
+        check(!kast::parseModelImportSettings(bad, settings, error), (std::string("malformed import settings are an error: ") + bad).c_str());
+    check(kast::modelImportSettingsPath("models/a.glb") == "models/a.glb.import.json", "import settings sit beside the model");
+
+    // Authored LODs.
+    std::string base;
+    int level = -1;
+    check(authoredLodName("Tree_LOD0", base, level) && base == "Tree" && level == 0 &&
+              authoredLodName("big_rock_lod12", base, level) && base == "big_rock" && level == 12,
+          "<name>_LOD<n> names an authored level");
+    for (const char* name : {"Tree", "Tree_LOD", "Tree_LODx", "Tree_LOD1a", "_LOD1", "TreeLOD1", "Tree_LOD-1", "Tree_LAD1"})
+        check(!authoredLodName(name, base, level), (std::string("not an authored LOD name: ") + name).c_str());
+    // An OBJ whose objects are Box_LOD0 (2 triangles), Box_LOD1 (1 triangle, its own vertices) and Plain (1 triangle).
+    const std::string obj = "o Box_LOD0\nv 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3\nf 1 3 4\n"
+                            "o Box_LOD1\nv 0 0 0\nv 1 0 0\nv 1 1 0\nf 5 6 7\n"
+                            "o Plain\nv 3 0 0\nv 4 0 0\nv 4 1 0\nf 8 9 10\n";
+    const auto authored = importModelFromMemory(obj, "obj", error);
+    const kast::ModelMesh* box = nullptr;
+    const kast::ModelMesh* plain = nullptr;
+    for (size_t m = 0; authored && m < authored->meshes.size(); ++m)
+        (authored->meshes[m].indices.size() == 6 ? box : plain) = &authored->meshes[m];
+    check(authored && authored->meshes.size() == 2 && box && box->lods.size() == 1 && box->lods[0].size() == 3 &&
+              box->vertices.size() >= 7 &&
+              std::ranges::all_of(box->lods[0], [&](uint32_t i) { return i >= 4 && i < box->vertices.size(); }),
+          ("an authored _LOD1 is its _LOD0's level (its own vertices appended), not a mesh of its own " + error).c_str());
+    check(plain && plain->lods.size() == 3, "meshes outside an authored group get generated levels");
+
+    // The import reads the model's settings file, a sidecar of the cache: writing it re-imports.
+    const std::filesystem::path dir = looseTestDir("kast_model_lods");
+    std::filesystem::create_directories(dir / "models");
+    writeFile(dir / "models/ball.obj", "o Ball\nv 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3\nf 1 3 4\n");
+    kast::ModelLibrary library;
+    library.setRoot(dir);
+    library.setImporter(importModel, "v1");
+    const auto first = library.get("models/ball.obj");
+    check(first && first->lod == kast::ModelLodSettings{} && first->meshes[0].lods.size() == 3, "no settings file: the default LOD chain");
+    writeFile(dir / "models/ball.obj.import.json",
+              kast::modelImportSettingsJson({.autoLod = false, .ratios = {1.0f, 0.5f}, .thresholds = {0.4f, 0.1f}}));
+    library.reloadChanged();
+    const auto second = library.get("models/ball.obj");
+    check(second && second != first && !second->lod.autoLod && second->lod.thresholds == std::vector<float>{0.4f, 0.1f} &&
+              second->meshes[0].lods.empty(),
+          "writing the settings file re-imports the model with them (auto LOD off: no generated levels)");
+    rewrite(dir / "models/ball.obj.import.json", "{ broken");
+    library.reloadChanged();
+    const auto third = library.get("models/ball.obj");
+    check(third && third->lod == kast::ModelLodSettings{} && logCount("importing with the default settings") >= 1,
+          "a malformed settings file warns and imports with the defaults");
 }
 
 void checkAnimatorSystem()
@@ -14304,6 +14776,17 @@ int main(int argc, char** argv)
         kast::log::info(g_failures == 0 ? "All undo checks passed" : std::format("{} undo check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--models") { // only the model import, .kmodel and LOD checks
+        checkModelLoading();
+        checkModelCache();
+        checkModelLods();
+        checkLodSelection();
+        checkTerrainLod();
+        checkOcclusion();
+        removeTree(testRoot());
+        kast::log::info(g_failures == 0 ? "All model checks passed" : std::format("{} model check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--lists") { // only the game GUI list checks
         checkGuiListMath();
         checkGuiLists();
@@ -14401,6 +14884,9 @@ int main(int argc, char** argv)
     checkSpotAreaLights();
     checkIbl();
     checkFrustumCulling();
+    checkLodSelection();
+    checkTerrainLod();
+    checkOcclusion();
     checkPostProcessing();
     checkSky();
     checkMaterialFiles();
@@ -14500,6 +14986,7 @@ int main(int argc, char** argv)
     checkExternalEditor();
     checkModelLoading();
     checkModelCache();
+    checkModelLods();
     checkAnimationSampling();
     checkAnimatorSystem();
     checkModelEditor();

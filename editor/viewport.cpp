@@ -286,11 +286,25 @@ void SceneViewport::draw(Document& doc)
             doc.camera.viewMatrix(view);
             doc.camera.projMatrix(proj, size.x / size.y);
             bx::mtxMul(viewProj, view, proj);
+            renderer_.setLodTint(debug_.lodTint);
+            renderer_.setShowOccluded(debug_.occludedBoxes);
+            renderer_.setHizDebugMip(debug_.hizMip);
             renderer_.setTarget(post_.target(), post_.width(), post_.height());
             renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), post_.sceneView(), view,
                              proj, shadowViews_, extraScene_);
             post_.apply(doc.scene.postProcessing, postEffects_, target_.frameBuffer());
             renderer_.renderOverlays(doc.scene, target_.view(), view, proj, doc.selected);
+            if (const bgfx::TextureHandle hiz = renderer_.hizDebugTexture(); bgfx::isValid(hiz)) {
+                // The Hi-Z debug view: a quarter-width inset at the image's bottom-right, outlined in the accent.
+                const float insetWidth = size.x * 0.25f, insetHeight = insetWidth * size.y / size.x;
+                const ImVec2 max(origin.x + size.x - 8.0f, origin.y + size.y - 8.0f);
+                const ImVec2 min(max.x - insetWidth, max.y - insetHeight);
+                ImDrawList* draw = ImGui::GetWindowDrawList();
+                draw->AddImage(static_cast<ImTextureID>(hiz.idx), min, max);
+                draw->AddRect(min, max, IM_COL32(0xff, 0xaa, 0x00, 0xff));
+                draw->AddText(ImVec2(min.x + 4.0f, min.y + 2.0f), IM_COL32(0xff, 0xcc, 0x00, 0xff),
+                              std::format("Hi-Z mip {}", debug_.hizMip).c_str());
+            }
 
             imageCenter_ = ImVec2(origin.x + size.x * 0.5f, origin.y + size.y * 0.5f);
             const bool claimed =
@@ -368,6 +382,29 @@ void SceneViewport::drawToolbar()
     ImGui::SameLine(0.0f, style.ItemSpacing.x * 3.0f);
     ImGui::Checkbox("Post", &postEffects_);
     ImGui::SetItemTooltip("Show the scene's post-processing effects (Window > Post Processing); fog always shows");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Debug") || (openDebugMenu_ && !ImGui::IsPopupOpen("SceneDebug")))
+        ImGui::OpenPopup("SceneDebug");
+    ImGui::SetItemTooltip("Debug views: LOD levels, occlusion culling");
+    if (openDebugMenu_) // opened without a click: below the button, not at the mouse
+        ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y));
+    if (ImGui::BeginPopup("SceneDebug")) {
+        ImGui::Checkbox("LOD tint", &debug_.lodTint);
+        ImGui::SetItemTooltip("Tint each draw by its LOD level: 0 green, 1 yellow, 2 orange, 3 red, 4+ purple (terrain by "
+                              "stride 1, 2, 4, 8)");
+        ImGui::Checkbox("Occluded boxes", &debug_.occludedBoxes);
+        ImGui::SetItemTooltip("Draw the boxes of the draws occlusion culling skipped, through what hides them");
+        bool hiz = debug_.hizMip >= 0;
+        if (ImGui::Checkbox("Hi-Z mip", &hiz))
+            debug_.hizMip = hiz ? 0 : -1;
+        ImGui::SetItemTooltip("Show a mip of the Hi-Z depth pyramid occlusion tests against (brighter is nearer)");
+        if (hiz) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.0f);
+            ImGui::SliderInt("##HizMip", &debug_.hizMip, 0, 11);
+        }
+        ImGui::EndPopup();
+    }
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + style.FramePadding.y);
 }
 

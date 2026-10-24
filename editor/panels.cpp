@@ -535,6 +535,7 @@ void Panels::drawInspector(Document& doc)
                         const bool particles = type.meta() && type.meta() == entt::resolve<kast::ParticleEmitter>();
                         const bool probe = type.meta() && type.meta() == entt::resolve<kast::ReflectionProbe>();
                         const bool voxel = type.meta() && type.meta() == entt::resolve<kast::VoxelGI>();
+                        const bool lodGroup = type.meta() && type.meta() == entt::resolve<kast::LODGroup>();
                         const auto drawOne = [&](const kast::FieldDesc& field, Json& value) {
                             if (mesh && field.name == "material")
                                 return drawMaterialPicker(doc, value);
@@ -614,6 +615,17 @@ void Panels::drawInspector(Document& doc)
                             drawProbeBake(doc, entity);
                         if (voxel)
                             drawVoxelGiBake(doc, entity);
+                        if (lodGroup) {
+                            const std::optional<int> level = lodLevel ? lodLevel(doc.scene, entity) : std::nullopt;
+                            if (!registry.all_of<kast::ModelRenderer>(entity))
+                                ImGui::TextWrapped("Needs a Model Renderer on this entity: the LOD Group does nothing without one");
+                            else if (!level)
+                                ImGui::TextDisabled("Current LOD: not drawn in the Scene view");
+                            else if (*level < 0)
+                                ImGui::Text("Current LOD: culled");
+                            else
+                                ImGui::Text("Current LOD: %d", *level);
+                        }
                     }
                 }
                 endCard();

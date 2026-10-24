@@ -83,11 +83,11 @@ constexpr const char* kUsage =
     "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
-    "[--graph-save] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-view-code] [--preview-model path] [--preview-clip name] "
+    "[--graph-save] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-view-code] [--preview-model path] [--preview-clip name] [--preview-lod N] "
     "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
-    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
+    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--log-lod] [--no-occlusion] [--occlusion-unsupported] [--lod-tint] [--show-occluded] [--show-hiz MIP] [--scene-debug-menu] [--terrain-lod-tint] [--terrain-lod-checker] [--no-terrain-skirts] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel (without --play: on the Scene view), for
@@ -186,6 +186,7 @@ struct Options {
     std::vector<std::pair<std::string, std::string>> graphSteps;
     std::string previewModel; // open this model (project-relative) in the Model Preview at startup
     std::string previewClip;  // and play this clip of it instead of its default
+    int previewLod = 0;       // and show this LOD of it
     std::optional<SimMouse> simMouse; // push these SDL mouse events on the Game panel (--play) or Scene view (the cursor lock isn't applied)
     std::vector<SimKey> simKeys;      // with --play: these key presses
     std::string simOnLog;             // --sim-on-log: simMouse's and simKeys' frames count from the first log line with this
@@ -212,6 +213,18 @@ struct Options {
     bool noVsync = false;           // present as fast as possible, to measure the frame rate past the display's
     bool noInstancing = false;      // the Scene and Game views draw every mesh one by one (Renderer::setInstancing)
     bool noCulling = false;         // the Scene and Game views draw every mesh in every pass (Renderer::setCulling)
+    bool noLod = false;             // the Scene and Game views draw every model at LOD0 (Renderer::setLod)
+    float lodBias = 1.0f;           // --lod-bias: Renderer::setLodBias of the Scene and Game views
+    int forceLod = -1;              // --force-lod: Renderer::setForcedLod of the Scene and Game views (-1: by screen height)
+    bool logLod = false;            // log each model's LOD level change in the Scene and Game views (Renderer::setLodLogging)
+    bool noOcclusion = false;          // the Scene and Game views cull nothing by occlusion (Renderer::setOcclusion)
+    bool occlusionUnsupported = false; // as on a GPU without compute / read-back (Renderer::setOcclusionUnsupported)
+    // Debug views: LOD tint (Scene and Game views; --terrain-lod-tint is the same), and the Scene view's occluded boxes,
+    // Hi-Z mip (-1: off) and its Debug menu opened (SceneViewport::debugViews / openDebugMenu).
+    bool lodTint = false, showOccluded = false, sceneDebugMenu = false;
+    int showHiz = -1;
+    // Terrain LOD test hooks of the Scene and Game views: Renderer::setTerrainLodChecker / setTerrainSkirts.
+    bool terrainLodChecker = false, noTerrainSkirts = false;
     bool noAudioDevice = false;     // play sound on the null backend (silent), as if there were no output device
     std::vector<std::string> childArgs; // the flags after --, passed on to the editor the Project Manager starts
 
@@ -455,6 +468,13 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.openGui = argv[++i];
         } else if (arg == "--preview-model" && hasValue) {
             options.previewModel = argv[++i];
+        } else if (arg == "--preview-lod" && hasValue) {
+            const std::string_view text = argv[++i];
+            const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), options.previewLod);
+            if (ec != std::errc{} || end != text.data() + text.size() || options.previewLod < 0) {
+                kast::log::error(std::format("Invalid --preview-lod '{}', expected a level (0, 1, ...)", text));
+                return std::nullopt;
+            }
         } else if (arg == "--preview-clip" && hasValue) {
             options.previewClip = argv[++i];
         } else if (arg == "--open-graph" && hasValue && options.openGraph.empty()) {
@@ -623,6 +643,40 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.noInstancing = true;
         } else if (arg == "--no-culling") {
             options.noCulling = true;
+        } else if (arg == "--no-lod") {
+            options.noLod = true;
+        } else if (arg == "--log-lod") {
+            options.logLod = true;
+        } else if (arg == "--no-occlusion") {
+            options.noOcclusion = true;
+        } else if (arg == "--occlusion-unsupported") {
+            options.occlusionUnsupported = true;
+        } else if (arg == "--lod-tint" || arg == "--terrain-lod-tint") {
+            options.lodTint = true;
+        } else if (arg == "--show-occluded") {
+            options.showOccluded = true;
+        } else if (arg == "--scene-debug-menu") {
+            options.sceneDebugMenu = true;
+        } else if (arg == "--show-hiz" && hasValue) {
+            const std::string_view text = argv[++i];
+            const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), options.showHiz);
+            if (ec != std::errc{} || end != text.data() + text.size() || options.showHiz < 0) {
+                kast::log::error(std::format("Invalid --show-hiz '{}', expected a mip (0, 1, ...)", text));
+                return std::nullopt;
+            }
+        } else if (arg == "--terrain-lod-checker") {
+            options.terrainLodChecker = true;
+        } else if (arg == "--no-terrain-skirts") {
+            options.noTerrainSkirts = true;
+        } else if (arg == "--lod-bias" && hasValue && parsePositive(argv[i + 1], options.lodBias)) {
+            ++i;
+        } else if (arg == "--force-lod" && hasValue) {
+            const std::string_view text = argv[++i];
+            const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), options.forceLod);
+            if (ec != std::errc{} || end != text.data() + text.size() || options.forceLod < 0) {
+                kast::log::error(std::format("Invalid --force-lod '{}', expected a level (0, 1, ...)", text));
+                return std::nullopt;
+            }
         } else if (arg == "--no-audio-device") {
             options.noAudioDevice = true;
         } else if (arg == "--crash" && hasValue && (argv[i + 1] == std::string_view("abort") ||
@@ -711,7 +765,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.openExternal.empty() || !options.dropModel.empty() || options.logFps ||
                              !options.prefabSteps.empty() || !options.assetsDelete.empty() || !options.inspectorApplyMenu.empty() ||
                              options.prefabBackPrompt ||
-                             options.noVsync || options.noInstancing || options.noCulling || !options.worldAddress.empty() || options.onlineLoginEnv ||
+                             options.noVsync || options.noInstancing || options.noCulling || options.noLod || options.lodBias != 1.0f ||
+                             options.forceLod >= 0 || options.logLod || options.lodTint || options.noOcclusion ||
+                             options.occlusionUnsupported || options.showOccluded || options.showHiz >= 0 || options.sceneDebugMenu ||
+                             options.terrainLodChecker || options.noTerrainSkirts || !options.worldAddress.empty() || options.onlineLoginEnv ||
                              options.onlineCompose || !options.zoneOps.empty() || options.headless || options.noRecycle ||
                              options.sculptLoop || options.focus || options.promptRemoveTile || options.fileSave ||
                              options.bakeProbes || options.bakeLightmaps || options.bakeLightmapsAsync ||
@@ -740,8 +797,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
         kast::log::error("--graph-* flags require --open-graph <file.kshadergraph>");
         return std::nullopt;
     }
-    if (!options.previewClip.empty() && options.previewModel.empty()) {
-        kast::log::error("--preview-clip requires --preview-model <path>");
+    if ((!options.previewClip.empty() || options.previewLod != 0) && options.previewModel.empty()) {
+        kast::log::error("--preview-clip and --preview-lod require --preview-model <path>");
         return std::nullopt;
     }
     if (!options.guiClick.empty() && !options.play) {
@@ -1526,13 +1583,25 @@ int main(int argc, char** argv)
             return false;
         }
         imgui_bgfx::init(kImGuiView);
+        for (kast::Renderer* renderer : {&viewport.renderer(), &game.renderer()}) { // before init: occlusion support
+            renderer->setInstancing(!options->noInstancing);
+            renderer->setCulling(!options->noCulling);
+            renderer->setLod(!options->noLod);
+            renderer->setLodBias(options->lodBias);
+            renderer->setForcedLod(options->forceLod);
+            renderer->setLodLogging(options->logLod);
+            renderer->setOcclusion(!options->noOcclusion);
+            renderer->setOcclusionUnsupported(options->occlusionUnsupported);
+            renderer->setLodTint(options->lodTint); // the Scene view's comes from its Debug menu, below
+            renderer->setTerrainLodChecker(options->terrainLodChecker);
+            renderer->setTerrainSkirts(!options->noTerrainSkirts);
+        }
+        viewport.debugViews() = {options->lodTint, options->showOccluded, options->showHiz};
+        if (options->sceneDebugMenu)
+            viewport.openDebugMenu();
         viewport.init();
         viewport.setPostEffects(!options->noScenePost);
         game.init();
-        for (kast::Renderer* renderer : {&viewport.renderer(), &game.renderer()}) {
-            renderer->setInstancing(!options->noInstancing);
-            renderer->setCulling(!options->noCulling);
-        }
         kast::gui::init();
         if (!options->openGui.empty()) {
             std::filesystem::path rml = std::filesystem::path(reinterpret_cast<const char8_t*>(options->openGui.c_str()));
@@ -1550,6 +1619,7 @@ int main(int argc, char** argv)
         if (!options->previewModel.empty()) {
             modelPreview.open(options->previewModel);
             modelPreview.selectClip(options->previewClip);
+            modelPreview.selectLod(options->previewLod);
         }
         if (options->guiPreviewSize)
             guiBuilder.setPreviewSize(options->guiPreviewSize->first, options->guiPreviewSize->second);
@@ -1570,6 +1640,7 @@ int main(int argc, char** argv)
     FpsLog fpsLog;
     kast::CursorLock cursorLock;
     panels.probeStatus = [&](const kast::ReflectionProbe& probe) { return viewport.renderer().probeStatus(probe); };
+    panels.lodLevel = [&](const kast::Scene& scene, entt::entity entity) { return viewport.renderer().lodLevel(scene, entity); };
     LightmapJob lightmapJob; // Bake Lightmaps on a worker thread
     panels.lightmapStatus = [&](const kast::Scene& scene) { return viewport.renderer().lightmapStatus(scene); };
     panels.lightmapProgress = [&] { return lightmapJob.progress(); };
@@ -1863,7 +1934,7 @@ int main(int argc, char** argv)
             frames.endFrame();
         }
         if (options->logFps)
-            fpsLog.endFrame(frameStart);
+            fpsLog.endFrame(frameStart, &viewport.renderer().stats(), viewport.renderer().occlusionLatency());
     };
     hooks.screenshotSaved = [&](const char*, bool saved) { frames.onScreenshotSaved(saved); };
     hooks.quitRequested = [&] {

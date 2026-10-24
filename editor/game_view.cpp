@@ -29,7 +29,8 @@ void GameViewport::drawStats(const Document& doc) const
     constexpr float kPad = 4.0f;
     const std::string text = kast::statsOverlayText(fps_.fps(), doc.lua.world().rttMs(),
                                                     kast::viewGpuMs("VoxelGI", shadowViews_, kast::Renderer::kShadowViews),
-                                                    kast::viewGpuMs("SDFGI", shadowViews_, kast::Renderer::kShadowViews));
+                                                    kast::viewGpuMs("SDFGI", shadowViews_, kast::Renderer::kShadowViews),
+                                                    &renderer_.stats());
     const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
     const ImVec2 min(imageMin_.x, imageMin_.y + imageSize_.y - textSize.y - 2.0f * kPad);
     ImDrawList* draw = ImGui::GetWindowDrawList();

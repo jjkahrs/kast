@@ -16,7 +16,9 @@
 // The Model Preview panel: one model file (double-clicked in Assets) rendered with its own materials under a
 // directional light, ambient light and a procedural sky, auto-framed. Dragging the image orbits the camera, the wheel
 // dollies it, "Reset view" frames it again. Its clips play looping at speed 1 (a combo picks one, a button pauses), and
-// a readout gives its mesh stats (kast::modelStats). The file changing on disk shows the new version (ModelLibrary
+// a readout gives its mesh stats (kast::modelStats). Its LOD section shows the model's LOD settings and triangles per
+// level and edits them (Apply writes its import settings, kast::modelImportSettingsPath, which re-imports it), and
+// picks the level the preview draws. The file changing on disk shows the new version (ModelLibrary
 // reloads it; the clip is found again by name), deleting it clears the panel ("The file doesn't exist."), an Assets
 // rename or move follows it (remap). Rendered on its own views and target, like the Shader Preview: the scene and post
 // views first .. first + 3, the output target on first + 4.
@@ -35,6 +37,8 @@ public:
     void focus() { focus_ = true; }
     // Plays the clip of that name instead of the default once the model loads (falls back to the default, warning).
     void selectClip(const std::string& name) { clip_ = name; }
+    // Draws this LOD (past the model's last: its last).
+    void selectLod(int level) { lod_ = level; }
     // An Assets rename or move (project-relative): the shown file follows.
     void remap(const std::string& from, const std::string& to);
     bool isOpen() const { return open_; }
@@ -46,6 +50,7 @@ private:
     // A newly shown model, or a reload of it: re-resolves the clip by name (else the default), and frames it if new.
     void show(const std::shared_ptr<const kast::Model>& model);
     void drawImage(const kast::Model& model, float dt);
+    void drawLod(const kast::Model& model, const kast::ModelStats& stats);
 
     kast::PostProcess post_;
     ViewTarget target_;
@@ -59,6 +64,8 @@ private:
     std::shared_ptr<const kast::Model> shown_; // what the AnimatorState was set up for (held: a reload is a new pointer)
     std::string clip_;                    // the clip's name ("" = the default)
     bool playing_ = true;
+    int lod_ = 0;                        // the level drawn
+    kast::ModelLodSettings lodEdit_;     // the LOD section's settings, Apply writes them
     bool open_ = false;
     bool focus_ = false;
 };

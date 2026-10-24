@@ -17,6 +17,7 @@
     "pugixml",
     "stb",
     "assimp",
+    "meshoptimizer",
     "joltphysics",
     "miniaudio",
     "boost-asio",

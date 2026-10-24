@@ -13,11 +13,18 @@
 #include <assimp/scene.h>
 #include <assimp/version.h>
 
+#include <meshoptimizer.h>
+
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
+#include <charconv>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <format>
+#include <map>
+#include <tuple>
 
 namespace kast {
 namespace {
@@ -271,9 +278,15 @@ struct Loader {
 
     void addMesh(const aiMesh& source, int node)
     {
+        if (ModelMesh mesh; makeMesh(source, node, mesh))
+            model.meshes.push_back(std::move(mesh));
+    }
+
+    // False if source has no triangles.
+    bool makeMesh(const aiMesh& source, int node, ModelMesh& mesh)
+    {
         if (!(source.mPrimitiveTypes & aiPrimitiveType_TRIANGLE))
-            return;
-        ModelMesh mesh;
+            return false;
         mesh.material = source.mMaterialIndex;
         mesh.node = node;
         mesh.vertices.resize(source.mNumVertices);
@@ -304,7 +317,7 @@ struct Loader {
             if (source.mFaces[f].mNumIndices == 3)
                 mesh.indices.insert(mesh.indices.end(), source.mFaces[f].mIndices, source.mFaces[f].mIndices + 3);
         if (mesh.indices.empty()) // nothing to draw, and bgfx can't make an empty buffer
-            return;
+            return false;
         addTangents(source, mesh.vertices, mesh.indices);
         Mat4 identity;
         bx::mtxIdentity(identity.data());
@@ -341,7 +354,56 @@ struct Loader {
                     weight /= sum;
             }
         model.overBoneLimit = model.overBoneLimit || mesh.joints.size() > kMaxBones;
-        model.meshes.push_back(std::move(mesh));
+        return true;
+    }
+
+    // Authored LODs: a later level's mesh merged into the LOD0 mesh of its group with its material, as that mesh's
+    // level lod: its vertices appended (moved into the LOD0 mesh's node space at bind, or its joints remapped onto the
+    // LOD0 mesh's), its triangles the level's. False (and a warning) if one is skinned and the other isn't.
+    // ponytail: one vertex buffer per mesh, so the renderer and the .kmodel treat authored and generated levels alike;
+    // the LOD0 draw binds the extra vertices without using them.
+    bool mergeLevel(ModelMesh& target, ModelMesh level, size_t lod, const std::vector<Mat4>& globals)
+    {
+        if (target.joints.empty() != level.joints.empty()) {
+            log::warn(std::format("Model '{}': LOD{} of a mesh is {}skinned and its LOD0 isn't; leaving it out",
+                                  texturePrefix, lod, level.joints.empty() ? "not " : ""));
+            return false;
+        }
+        if (level.joints.empty() && level.node != target.node) {
+            Mat4 inverse, to;
+            bx::mtxInverse(inverse.data(), globals[static_cast<size_t>(target.node)].data());
+            bx::mtxMul(to.data(), globals[static_cast<size_t>(level.node)].data(), inverse.data());
+            for (ModelVertex& v : level.vertices) {
+                const bx::Vec3 p = bx::mul(bx::Vec3{v.x, v.y, v.z}, to.data());
+                const bx::Vec3 n = bx::normalize(bx::mulXyz0(bx::Vec3{v.nx, v.ny, v.nz}, to.data()));
+                const bx::Vec3 t = bx::normalize(bx::mulXyz0(bx::Vec3{v.tx, v.ty, v.tz}, to.data()));
+                std::tie(v.x, v.y, v.z, v.nx, v.ny, v.nz, v.tx, v.ty, v.tz) =
+                    std::tuple{p.x, p.y, p.z, n.x, n.y, n.z, t.x, t.y, t.z};
+            }
+        }
+        std::vector<float> joints; // level's joint -> target's
+        for (size_t j = 0; j < level.joints.size(); ++j) {
+            const auto it = std::ranges::find(target.joints, level.joints[j]);
+            joints.push_back(static_cast<float>(it - target.joints.begin()));
+            if (it == target.joints.end()) {
+                target.joints.push_back(level.joints[j]);
+                target.inverseBinds.push_back(level.inverseBinds[j]);
+            }
+        }
+        model.overBoneLimit = model.overBoneLimit || target.joints.size() > kMaxBones;
+        for (ModelVertex& v : level.vertices)
+            for (float& joint : v.joints)
+                joint = joints.empty() ? 0.0f : joints[static_cast<size_t>(joint)];
+        const auto base = static_cast<uint32_t>(target.vertices.size());
+        if (!target.uv2.empty() && level.uv2.empty()) // no lightmap UVs on the level: zeros
+            target.uv2.resize(target.uv2.size() + level.vertices.size() * 2);
+        else if (!target.uv2.empty()) // (ones the LOD0 mesh lacks are dropped)
+            target.uv2.insert(target.uv2.end(), level.uv2.begin(), level.uv2.end());
+        target.vertices.insert(target.vertices.end(), level.vertices.begin(), level.vertices.end());
+        target.lods.resize(std::max(target.lods.size(), lod));
+        for (uint32_t index : level.indices)
+            target.lods[lod - 1].push_back(base + index);
+        return true;
     }
 
     // Keeps the kMaxBoneWeights largest weights (LimitBoneWeights already did, this guards files it misses).
@@ -536,7 +598,7 @@ struct Loader {
 };
 
 std::shared_ptr<const Model> convert(const aiScene* scene, Assimp::Importer& importer, std::string prefix,
-                                     std::filesystem::path modelDir, std::string& error)
+                                     std::filesystem::path modelDir, const ModelLodSettings& settings, std::string& error)
 {
     if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
         error = importer.GetErrorString();
@@ -554,15 +616,74 @@ std::shared_ptr<const Model> convert(const aiScene* scene, Assimp::Importer& imp
     loader.sources.push_back(nullptr);
     loader.addNodes(*scene->mRootNode, 0);
     loader.isJoint.resize(loader.sources.size());
+    // Authored LODs: the meshes of "<base>_LOD<n>" nodes (or meshes). LOD0's are the group's model meshes; later
+    // levels merge into them (mergeLevel) once every node is in.
+    struct Later {
+        const aiMesh* mesh;
+        int node;
+        std::string base;
+        size_t lod;
+    };
+    std::vector<Later> later;
+    std::map<std::string, std::vector<size_t>> groups; // base -> its LOD0 model meshes
     for (size_t index = 1; index < loader.sources.size(); ++index) { // after all nodes: bones look them up by name
         const aiNode& node = *loader.sources[index];
-        for (unsigned i = 0; i < node.mNumMeshes; ++i)
-            loader.addMesh(*scene->mMeshes[node.mMeshes[i]], static_cast<int>(index));
+        for (unsigned i = 0; i < node.mNumMeshes; ++i) {
+            const aiMesh& mesh = *scene->mMeshes[node.mMeshes[i]];
+            std::string base;
+            int lod = -1;
+            if (!authoredLodName(node.mName.C_Str(), base, lod))
+                authoredLodName(mesh.mName.C_Str(), base, lod);
+            if (lod > 0) {
+                later.push_back({&mesh, static_cast<int>(index), base, static_cast<size_t>(lod)});
+                continue;
+            }
+            const size_t before = loader.model.meshes.size();
+            loader.addMesh(mesh, static_cast<int>(index));
+            if (lod == 0 && loader.model.meshes.size() > before)
+                groups[base].push_back(before);
+        }
+    }
+    std::vector<Mat4> globals;
+    nodeGlobals(loader.model, bindPose(loader.model), globals);
+    for (const Later& level : later) {
+        ModelMesh mesh;
+        if (!loader.makeMesh(*level.mesh, level.node, mesh))
+            continue;
+        const auto group = groups.find(level.base);
+        if (group == groups.end() || level.lod >= kMaxModelLods) {
+            log::warn(std::format("Model '{}': '{}_LOD{}' has no {}_LOD0 (or is past LOD{}); drawing it as an ordinary mesh",
+                                  loader.texturePrefix, level.base, level.lod, level.base, kMaxModelLods - 1));
+            loader.model.meshes.push_back(std::move(mesh));
+            continue;
+        }
+        const auto target = std::ranges::find_if(group->second, [&](size_t m) { return loader.model.meshes[m].material == mesh.material; });
+        if (target == group->second.end())
+            log::warn(std::format("Model '{}': '{}_LOD{}' has a material its LOD0 doesn't; leaving that part out",
+                                  loader.texturePrefix, level.base, level.lod));
+        else
+            loader.mergeLevel(loader.model.meshes[*target], std::move(mesh), level.lod, globals);
     }
     if (loader.model.meshes.empty()) {
         error = "no triangle meshes in the file";
         return nullptr;
     }
+    // Every mesh of a group gets all the group's levels (a part a level lacks draws nothing there); the rest get
+    // generated ones.
+    std::vector<bool> authored(loader.model.meshes.size());
+    for (const auto& [base, meshes] : groups) {
+        size_t levels = 0;
+        for (size_t m : meshes)
+            levels = std::max(levels, loader.model.meshes[m].lods.size());
+        for (size_t m : meshes) {
+            loader.model.meshes[m].lods.resize(levels);
+            authored[m] = levels > 0;
+        }
+    }
+    loader.model.lod = settings;
+    for (size_t m = 0; m < loader.model.meshes.size(); ++m)
+        if (settings.autoLod && !authored[m])
+            generateLods(loader.model.meshes[m], settings);
     loader.addMaterials();
     loader.addTextures();
     loader.addClips();
@@ -602,8 +723,14 @@ std::shared_ptr<const kast::Model> importModel(const std::filesystem::path& root
     configure(importer);
     importer.SetIOHandler(new FileLayerIOSystem); // the importer owns it
     const std::u8string name = file->generic_u8string();
+    ModelLodSettings settings;
+    std::string text, reason;
+    if (const auto settingsFile = resolveProjectPath(root, modelImportSettingsPath(path), reason);
+        settingsFile && readFile(*settingsFile, text) && !parseModelImportSettings(text, settings, reason))
+        log::warn(std::format("Model '{}': {}: {}; importing with the default settings", path,
+                              modelImportSettingsPath(path), reason));
     const aiScene* scene = importer.ReadFile(reinterpret_cast<const char*>(name.c_str()), kImportFlags);
-    return convert(scene, importer, path, std::filesystem::path(path).parent_path(), error);
+    return convert(scene, importer, path, std::filesystem::path(path).parent_path(), settings, error);
 }
 
 std::shared_ptr<const kast::Model> importModelFromMemory(std::string_view bytes, const char* hint, std::string& error)
@@ -612,13 +739,95 @@ std::shared_ptr<const kast::Model> importModelFromMemory(std::string_view bytes,
     Assimp::Importer importer;
     configure(importer);
     const aiScene* scene = importer.ReadFileFromMemory(bytes.data(), bytes.size(), kImportFlags, hint);
-    return convert(scene, importer, "", "", error);
+    return convert(scene, importer, "", "", {}, error);
 }
 
 std::string modelImporterVersion()
 {
     // ponytail: bump kImporterRevision when the conversion above changes what it makes from the same file.
-    constexpr int kImporterRevision = 1;
+    constexpr int kImporterRevision = 4; // 3: LODs, 4: bounded sloppy LODs
     return std::format("assimp {}.{}.{} rev {:x}; flags {:x}; kast importer {}", aiGetVersionMajor(), aiGetVersionMinor(),
                        aiGetVersionPatch(), aiGetVersionRevision(), kast::kImportFlags, kImporterRevision);
+}
+
+bool authoredLodName(std::string_view name, std::string& base, int& level)
+{
+    const size_t at = name.rfind('_');
+    if (at == std::string_view::npos || at == 0 || name.size() < at + 5)
+        return false;
+    const std::string_view tag = name.substr(at + 1, 3), digits = name.substr(at + 4);
+    const auto lower = [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == b; };
+    int n = -1;
+    const auto [end, ec] = std::from_chars(digits.data(), digits.data() + digits.size(), n);
+    if (!std::ranges::equal(tag, std::string_view("lod"), lower) || ec != std::errc{} ||
+        end != digits.data() + digits.size() || n < 0)
+        return false;
+    base = name.substr(0, at);
+    level = n;
+    return true;
+}
+
+namespace {
+
+// Per vertex: meshopt_SimplifyVertex_Lock if it is on an open edge of the mesh (positions welded, so UV and normal
+// seams aren't edges), what sloppy LOD levels keep in place.
+std::vector<unsigned char> borderLocks(const kast::ModelMesh& mesh)
+{
+    std::vector<unsigned> welded(mesh.vertices.size());
+    const meshopt_Stream positions{&mesh.vertices[0].x, 3 * sizeof(float), sizeof(kast::ModelVertex)};
+    meshopt_generateVertexRemapMulti(welded.data(), mesh.indices.data(), mesh.indices.size(), mesh.vertices.size(), &positions, 1);
+    std::unordered_map<uint64_t, int> edges; // welded (low, high) -> triangles on it
+    for (size_t t = 0; t < mesh.indices.size(); t += 3)
+        for (size_t k = 0; k < 3; ++k) {
+            const uint64_t a = welded[mesh.indices[t + k]], b = welded[mesh.indices[t + (k + 1) % 3]];
+            ++edges[std::min(a, b) << 32 | std::max(a, b)];
+        }
+    std::vector<bool> border(mesh.vertices.size());
+    for (const auto& [edge, triangles] : edges)
+        if (triangles == 1)
+            border[edge >> 32] = border[edge & 0xffffffffu] = true;
+    std::vector<unsigned char> locks(mesh.vertices.size());
+    for (size_t v = 0; v < locks.size(); ++v)
+        locks[v] = welded[v] < border.size() && border[welded[v]] ? meshopt_SimplifyVertex_Lock : 0;
+    return locks;
+}
+
+} // namespace
+
+void generateLods(kast::ModelMesh& mesh, const kast::ModelLodSettings& settings)
+{
+    using kast::ModelVertex;
+    // The attributes from nx to v: normals and UVs weigh in, tangents don't (they follow the normals).
+    constexpr float kWeights[] = {0.5f, 0.5f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f};
+    static_assert(offsetof(ModelVertex, v) - offsetof(ModelVertex, nx) == (std::size(kWeights) - 1) * sizeof(float));
+    constexpr float kShortBy = 1.1f; // a level over its target by more than this goes sloppy
+    mesh.lods.clear();
+    std::vector<unsigned char> locks; // borderLocks, once a level needs them
+    const size_t triangles = mesh.indices.size() / 3;
+    for (size_t level = 1; level < settings.ratios.size(); ++level) {
+        const size_t target =
+            std::max<size_t>(static_cast<size_t>(std::lround(static_cast<double>(triangles) * settings.ratios[level])), 1);
+        std::vector<uint32_t> lod(mesh.indices.size());
+        lod.resize(meshopt_simplifyWithAttributes(lod.data(), mesh.indices.data(), mesh.indices.size(), &mesh.vertices[0].x,
+                                                  mesh.vertices.size(), sizeof(ModelVertex), &mesh.vertices[0].nx,
+                                                  sizeof(ModelVertex), kWeights, std::size(kWeights), nullptr, target * 3,
+                                                  kast::kLodMaxError, meshopt_SimplifyLockBorder, nullptr));
+        // ponytail: the topology-keeping simplifier stops short where collapses would flip triangles or break seams
+        // (the starter character, many small closed parts, stops at ~91%). Like gltfpack -sa, such a level comes from
+        // the sloppy (vertex clustering) simplifier instead, borders still locked; it ignores UV seams, so textures
+        // can smear at that level. Per-part simplification if that shows up close. Kept only if it got further.
+        if (static_cast<float>(lod.size()) > static_cast<float>(target * 3) * kShortBy) {
+            if (locks.empty())
+                locks = borderLocks(mesh);
+            std::vector<uint32_t> sloppy(mesh.indices.size());
+            sloppy.resize(meshopt_simplifySloppy(sloppy.data(), mesh.indices.data(), mesh.indices.size(),
+                                                 &mesh.vertices[0].x, mesh.vertices.size(), sizeof(ModelVertex),
+                                                 locks.data(), target * 3, kast::kLodMaxError, nullptr));
+            if (!sloppy.empty() && sloppy.size() < lod.size())
+                lod = std::move(sloppy);
+        }
+        if (lod.empty()) // collapsed entirely: keep the previous level
+            lod = mesh.lods.empty() ? mesh.indices : mesh.lods.back();
+        mesh.lods.push_back(std::move(lod));
+    }
 }

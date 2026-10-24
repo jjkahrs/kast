@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html" class="active">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="lightmaps.html">Lightmaps and GI</a></li><li><a href="voxelgi.html">VoxelGI</a></li><li><a href="sdfgi.html">SDFGI</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li></ul></nav>
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html" class="active">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="lightmaps.html">Lightmaps and GI</a></li><li><a href="voxelgi.html">VoxelGI</a></li><li><a href="sdfgi.html">SDFGI</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li><li><a href="lod-and-occlusion.html">LOD and occlusion</a></li></ul></nav>
 <main>
 <h1 id="models--animation">Models &amp; Animation</h1>
 <p>Model files placed anywhere in the project render through a <code>ModelRenderer</code>; skinned characters play skeletal
@@ -43,9 +43,21 @@ animation clips through an <code>Animator</code>. The editor imports each model 
   (the Assimp version, its import flags and the importer's own revision). So an unchanged model loads from the cache on the
   next start (<code>Loaded model 'models/hero.glb' (cache hit)</code>) without running Assimp, while editing the file or a sidecar,
   upgrading Assimp or a new <code>.kmodel</code> version imports it again (<code>Loaded model 'models/hero.glb' (imported in 0.24 s)</code>).
-  The cache is never pruned. <code>.kmodel</code> is a versioned little-endian binary of everything the engine keeps of a model
-  (meshes with their vertices and indices, nodes, skins and inverse binds, clips, materials, embedded image bytes, bounds);
-  its byte layout is documented in <code>engine/model.h</code>.</li>
+  The cache is never pruned. A model's <a href="lod-and-occlusion.html#import-settings"><code>&lt;model&gt;.import.json</code></a>
+  (its LOD import settings) counts as a sidecar: editing it imports the model again.</li>
+<li id="kmodel"><strong><code>.kmodel</code></strong> is a versioned little-endian binary of everything the engine keeps of a model
+  (meshes with their vertices and indices, nodes, skins and inverse binds, clips, materials, embedded image bytes, bounds,
+  lightmap UVs and LODs); its byte layout is documented in <code>engine/model.h</code>. <strong>Version 3</strong> (the current one)
+  ends with a <code>lods</code> section: the model's <a href="lod-and-occlusion.html#import-settings">LOD settings</a> (flags
+  <code>autoLod</code> and <code>cullBelowLast</code>, the per-level ratios and screen-height thresholds), then per mesh its levels
+  after LOD0, each a triangle count and an index list over the mesh's own vertices (0 triangles: the mesh draws nothing at
+  that level). Version 2 files (lightmap UVs, no LODs) and version 1 files still load, with LOD0 only and the default
+  settings; the format version is part of the cache key, so caches of older versions are imported again.</li>
+<li id="lods"><strong>LODs</strong>: every imported model gets a chain of levels, generated with meshoptimizer (4 by default:
+  100%, 50%, 25%, 12.5% of the triangles) or taken from authored <code>*_LOD0</code>, <code>*_LOD1</code> ... nodes, and draws the
+  level its size on screen picks, also when skinned. See <a href="lod-and-occlusion.html#mesh-lod">LOD and occlusion</a>,
+  the <code>LODGroup</code> component there, and the <a href="../editor/model-preview.html#mp-lod">Model Preview's LOD
+  section</a>.</li>
 <li>
 <p><strong><code>ModelRenderer</code></strong>: <code>model</code> (project-relative <code>.glb/.gltf/.fbx/.obj</code>; empty = renders nothing) and <code>materials</code>, the
   per-slot <code>.mat</code> overrides by slot index: a JSON array of strings, <code>""</code> (or no entry) = the model's embedded material.
@@ -126,7 +138,8 @@ Lua error naming the problem.</p>
 <li><strong>Limits</strong>: 128 bones per skinned mesh, 4 weights per vertex, one UV set for textures (a glTF
   <code>TEXCOORD_1</code> is kept as the mesh's <a href="lightmaps.html#how">lightmap UVs</a>: .kmodel version 2, version 1 files
   still load); no morph targets, no node (non-skinned)
-  animation playback, no animation layers / blend trees / events / IK, no root-motion extraction, no LOD or instancing,
+  animation playback, no animation layers / blend trees / events / IK, no root-motion extraction, no LOD crossfades
+  (levels pop), skinned meshes not instanced,
   embedded images only as PNG/JPG. Animations stored in separate animation-only files (e.g. Kenney's <code>run.fbx</code>) are not
   merged into a model. Assimp 6.0.4 crashes on a glTF skin without <code>inverseBindMatrices</code> (valid glTF); such files must
   include them.</li>

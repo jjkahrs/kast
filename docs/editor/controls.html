@@ -70,6 +70,18 @@
 <p>Letter shortcuts work only when the Scene panel is focused and no text field is active.</p>
 <p>The Scene view draws each <code>Camera</code> as white frustum lines out to 2 m (a preview at 16:9, not the far plane). Select a
 camera and the gizmo moves/rotates it like any entity.</p>
+<p id="debug-views"><strong>Debug views</strong>: the Scene view toolbar's <strong>Debug</strong> button (after Post) opens a menu of
+views for <a href="../engine/lod-and-occlusion.html">LOD and occlusion</a>. They are not saved.</p>
+<ul>
+<li><strong>LOD tint</strong>: every draw in a flat colour by the level it draws at: LOD0 green, LOD1 yellow, LOD2 orange, LOD3 red,
+  LOD4 and up purple. Terrain chunks show their stride the same way (1 green, 2 yellow, 4 orange, 8 red).</li>
+<li><strong>Occluded boxes</strong>: the bounds of the draws occlusion culling skipped this frame, as orange (#ff9900) boxes drawn
+  through whatever hides them.</li>
+<li><strong>Hi-Z mip</strong>: a quarter-width picture at the view's bottom-right of one mip of the depth pyramid occlusion tests
+  against (brighter is nearer), outlined in the accent colour; the slider picks the mip (0 is the finest).</li>
+</ul>
+<p>The same views start on with <code>--lod-tint</code>, <code>--show-occluded</code> and <code>--show-hiz &lt;mip&gt;</code>
+(<a href="command-line.html">Command line</a>).</p>
 <p><strong>Game panel</strong> (a tab beside Scene; Scene is the front tab on first run): renders the scene through the <strong>active
 camera</strong>, the first entity with a <code>Camera</code> component in hierarchy (depth-first) order, at the panel's aspect ratio.
 No grid, axes, gizmos or frustum lines. It renders live in edit mode too; systems only tick while playing, so it
@@ -86,7 +98,8 @@ the cursor hidden; on unlock it reappears where the lock began).</p>
 <p id="stats-overlay"><strong>Stats overlay (F3)</strong>: during Play (playing or paused), with the Game panel focused, F3 shows
 or hides one line at the bottom-left of the Game image: <code>FPS 144  Ping 42 ms</code> (then <code>VoxelGI 0.31 ms</code> while VoxelGI
 volumes relight and <code>SDFGI 0.40 ms</code> while <a href="../engine/sdfgi.html">SDFGI</a> is on: the GPU time of their compute
-views). FPS is averaged over the last 0.5 s;
+views), then the Game view's last camera pass: <code>Tris 580.6k  Draws 3  Occluded 72  LOD 3/0/0/504</code> (triangles
+submitted, draw calls, draws occlusion culled, draws per LOD level; see <a href="../engine/lod-and-occlusion.html#stats">Stats</a>). FPS is averaged over the last 0.5 s;
 Ping is the world server round-trip time (<a href="../engine/networking.html">Networking</a>, World round-trip time), <code>--</code>
 when not connected or when a Ping has gone unanswered for more than 5 s. F3 does nothing while stopped or with another
 panel focused, and Stop hides the overlay. It is off at every start and never saved. It also works in the built game
@@ -120,6 +133,13 @@ empty name, a non-identifier, the name of any listed definition (even one in err
 (case-insensitive); it never overwrites. Global and New State Machine are disabled with no active project and during
 Play ("Stop Play to change state machines"). The list is rescanned every 0.5 s, also during Play (Play itself reloads
 its own copy). Layouts saved before the panel existed get it docked as a tab beside Console.</p>
+<p id="lodgroup"><strong>LOD Group</strong> (<a href="../engine/lod-and-occlusion.html#lodgroup">LODGroup</a>): <strong>Add Component &gt; LOD Group</strong>
+on an entity with a Model Renderer overrides its model's LOD thresholds. Its Inspector section: <strong>Screen Heights</strong> (a
+list, one per level, 0..1, not increasing; 1 to 8 entries), <strong>Bias</strong> (above 0; above 1 keeps detail further away),
+<strong>Cull Below Last</strong>, and a live readout of the level the Scene view drew it at last frame: <em>Current LOD: 2</em>,
+<em>Current LOD: culled</em> (below the last threshold with Cull Below Last), or <em>Current LOD: not drawn in the Scene view</em>. Without a
+Model Renderer it says <em>Needs a Model Renderer on this entity: the LOD Group does nothing without one</em>. Invalid values
+(an increasing list, a bias of 0) are refused like other fields.</p>
 <p><strong>New Lua Component...</strong> (first item of the Inspector's Add Component popup) creates a Lua component and adds it to the
 selected entity in one step. Type a name (e.g. <code>PlayerHealth</code>) and choose Create (or Enter; Esc cancels): it writes the
 New from Template definition with that type name to <code>&lt;project&gt;/components/&lt;snake_case&gt;.lua</code> (<code>player_health.lua</code>;
