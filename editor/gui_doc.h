@@ -8,7 +8,7 @@
 #include <vector>
 
 // GUI Builder document model, no UI: an .rml file as an element tree under <body> that the builder edits and saves.
-// Panel = <div>, Text = <p>, Button = <button> (data-event = the event its click publishes, see gui_events.h), and the
+// Panel = <div>, Text = <p>, Rich Text = <p class="rich"> (its text BBCode, gui_richtext.h), Button = <button> (data-event = the event its click publishes, see gui_events.h), and the
 // form widgets by their markup (gui_widgets.h; data-event = the event their changes publish): Toggle = <input
 // type="checkbox" class="toggle"/>, alone or as the only element in a <label> holding its text; Slider = <input
 // type="range"/>; Dropdown = <select>; Spinbox = <div class="spinbox"> holding exactly <button>, <input>, <button>;
@@ -19,16 +19,17 @@
 // edited. Everything the builder doesn't edit (other elements, attributes, comments, <head>) is kept;
 // saving normalizes whitespace and indentation only.
 
-enum class GuiKind { Panel, Text, Button, Toggle, Slider, Dropdown, Spinbox, Progress, ListBox, VirtualList, Unknown };
+enum class GuiKind { Panel, Text, Button, Toggle, Slider, Dropdown, Spinbox, Progress, ListBox, VirtualList, RichText, Unknown };
 // An RmlUi data binding attribute the GUI Inspector edits (docs/editor/gui-builder.html): data-model, data-for, data-if,
 // data-visible, data-value, data-checked, data-rml, data-text, or data-attr-*, data-attrif-*, data-class-*,
 // data-style-*, data-event-*, data-alias-* with a name after the prefix. Not kast's own data-event / data-drag.
 bool guiBindingAttribute(std::string_view name);
 constexpr int kGuiPreviewRows = 20; // placeholder rows a Virtual List shows in the GUI Builder preview
-constexpr GuiKind kGuiCreatableKinds[] = {GuiKind::Panel,    GuiKind::Text,    GuiKind::Button,   GuiKind::Toggle,
-                                           GuiKind::Slider,   GuiKind::Dropdown, GuiKind::Spinbox, GuiKind::Progress,
-                                           GuiKind::ListBox,  GuiKind::VirtualList};
-const char* guiKindLabel(GuiKind kind); // "Panel", "Text", "Button", "Toggle", ..., "List Box", "Virtual List", "Unknown"
+constexpr GuiKind kGuiCreatableKinds[] = {GuiKind::Panel,    GuiKind::Text,     GuiKind::RichText, GuiKind::Button,
+                                           GuiKind::Toggle,   GuiKind::Slider,   GuiKind::Dropdown, GuiKind::Spinbox,
+                                           GuiKind::Progress, GuiKind::ListBox,  GuiKind::VirtualList};
+// "Panel", "Text", "Button", "Toggle", ..., "List Box", "Virtual List", "Rich Text", "Unknown"
+const char* guiKindLabel(GuiKind kind);
 GuiKind guiKind(pugi::xml_node node);
 
 class GuiDoc {
@@ -40,7 +41,8 @@ public:
 
     // Element children of parent, in order (text and comments skipped).
     static std::vector<pugi::xml_node> elements(pugi::xml_node parent);
-    // Appends a new element of kind (not Unknown) to parent: Text and Button get placeholder text, a Toggle a <label>
+    // Appends a new element of kind (not Unknown) to parent: Text and Button get placeholder text, Rich Text the markup
+    // "[b]Rich[/b] text", a Toggle a <label>
     // ("Toggle"), a Slider 0..100 step 1 value 50, a Dropdown three options (the first selected), a Spinbox 0..10 step
     // 1 value 0, a Progress value 0.5 max 1, a List Box three rows (row1..row3, none selected), a Virtual List model
     // "list", row height 24 and the row template <div class="row" data-for="item : items">{{item.name}}</div>.
@@ -55,7 +57,8 @@ public:
 
     static std::string attribute(pugi::xml_node node, const char* name);
     static void setAttribute(pugi::xml_node node, const char* name, std::string_view value); // empty removes it
-    // Text and Buttons whose children are only text (or none) have editable text.
+    // Text, Rich Text and Buttons whose children are only text (or none) have editable text (Rich Text's: its BBCode,
+    // saved verbatim).
     static bool hasEditableText(pugi::xml_node node);
     static std::string text(pugi::xml_node node);
     static void setText(pugi::xml_node node, std::string_view text);
@@ -107,6 +110,11 @@ public:
 private:
     pugi::xml_document xml_;
 };
+
+// The Rich Text toolbar's edit of markup (byte offsets start..end: the selection, or the cursor when equal; clamped and
+// ordered): [tag] or [tag=value] put before it and [/tag] after it, or for "img" [img=value] put at start (an image
+// has no closing tag).
+std::string guiWrapRichText(std::string_view markup, size_t start, size_t end, std::string_view tag, std::string_view value);
 
 // Writes a template GUI as dir/new_gui[_N].rml + .rcss (a Panel holding a Text and a Button; the .rml links the .rcss):
 // the first N for which neither name is taken in dir (ignoring case). Sets rml to the .rml. False + error if a write

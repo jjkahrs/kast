@@ -26,6 +26,12 @@ struct GuiBindingNames {
 };
 GuiBindingNames guiBindingNames(std::string_view rml);
 
+// The rich text data view: rml with every data-rich="expr" (or '...') also given data-rml="(expr) | rich", RmlUi's
+// inner-RML view through the "rich" transform prepare() registers on the context with its first model (the value's
+// BBCode as rich text, gui_richtext.h; unset reads as empty). Load the result, not rml. data-rich itself is no RmlUi
+// view: it stays, unread.
+std::string guiRichBindings(std::string_view rml);
+
 // A virtual list's window (gui_lists.h) on an array of a model: RmlUi reads the variable name as the array of its
 // source's rows first .. first + count - 1 (fewer past the source's end; none if it isn't an array). version counts
 // the times GuiModels::set replaced the source.

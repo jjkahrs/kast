@@ -209,12 +209,19 @@ volume of the scene is voxelized into <code>&lt;scene-name&gt;_voxelgi/&lt;entit
 <td>With <code>--open-gui</code>: click the GUI Preview at (X, Y) in preview pixels after 16 frames, as the mouse does, and log <code>--gui-pick X,Y selected '&lt;id&gt;'</code>.</td>
 </tr>
 <tr>
-<td><code>--gui-add Panel\|Text\|Button\|Toggle\|Slider\|Dropdown\|Spinbox\|Progress\|ListBox\|VirtualList</code></td>
+<td><code>--gui-add Panel\|Text\|RichText\|Button\|Toggle\|Slider\|Dropdown\|Spinbox\|Progress\|ListBox\|VirtualList</code></td>
 <td>With <code>--open-gui</code>: add that element as the GUI Hierarchy's <strong>+</strong> buttons do (into the selected Panel, else <code>&lt;body&gt;</code>), after 17 frames. A kind's label also works (<code>"List Box"</code>).</td>
 </tr>
 <tr>
 <td><code>--gui-set-prop &lt;name&gt;=&lt;value&gt;</code></td>
 <td>With <code>--open-gui</code>: set a <a href="gui-builder.html#form-widgets">widget property</a> of the selection (<code>min</code>, <code>max</code>, <code>step</code>, <code>value</code>, <code>data-value</code>, <code>checked</code> = <code>true</code> / <code>false</code>, <code>label</code>; a <a href="gui-builder.html#lists">list</a>'s <code>follow</code> = <code>true</code> / <code>false</code>, <code>model</code>, <code>source</code>, <code>key</code>, <code>row-height</code>, <code>template</code>) as one GUI Inspector edit step, after 17 frames; logs <code>--gui-set-prop name="value" on '&lt;id&gt;'</code>, or an error if the selection has no such property.</td>
+</tr>
+<tr>
+<td><code>--gui-rich-wrap &lt;tag&gt;[=&lt;value&gt;],&lt;start&gt;,&lt;end&gt;</code></td>
+<td>With <code>--open-gui</code>: the <a href="gui-builder.html#rich-text">Rich Text toolbar</a>'s edit of the selection's markup, bytes
+<code>start</code>..<code>end</code> (equal: the cursor), as one GUI Inspector step after 17 frames (e.g. <code>b,0,7</code>, <code>color=#ff0000,3,9</code>,
+<code>img=icon.png,0,0</code>); logs <code>--gui-rich-wrap [tag] start..end on '&lt;id&gt;'</code>, or an error if the selection is no Rich
+Text.</td>
 </tr>
 <tr>
 <td><code>--gui-set-attr &lt;name&gt;=&lt;value&gt;</code></td>

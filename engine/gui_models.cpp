@@ -1,7 +1,11 @@
 #include "gui_models.h"
 
+#include "gui.h"
+#include "gui_richtext.h"
+
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/DataModelHandle.h>
+#include <RmlUi/Core/DataTypeRegister.h>
 #include <RmlUi/Core/DataVariable.h>
 #include <RmlUi/Core/Variant.h>
 
@@ -210,7 +214,7 @@ GuiBindingNames guiBindingNames(std::string_view rml)
     static const std::regex comment(R"(<!--[\s\S]*?-->)");
     static const std::regex attribute(R"re(\sdata-([A-Za-z]+)(?:-([^\s=/>]*))?\s*=\s*(?:"([^"]*)"|'([^']*)'))re");
     static const std::set<std::string, std::less<>> kViews = {"attr", "attrif", "class", "if", "visible", "rml",
-                                                              "style", "text", "value", "checked"};
+                                                              "style", "text", "value", "checked", "rich"};
     const std::string text = std::regex_replace(std::string(rml), comment, "");
     GuiBindingNames names;
     std::set<std::string> aliases, read;
@@ -254,6 +258,24 @@ GuiBindingNames guiBindingNames(std::string_view rml)
     return names;
 }
 
+std::string guiRichBindings(std::string_view rml)
+{
+    static const std::regex rich(R"re(\sdata-rich\s*=\s*(?:"([^"]*)"|'([^']*)'))re");
+    std::string out;
+    const std::string text(rml);
+    auto last = text.cbegin();
+    for (auto it = std::sregex_iterator(text.begin(), text.end(), rich); it != std::sregex_iterator(); ++it) {
+        const std::smatch& match = *it;
+        const bool doubled = match[1].matched;
+        out.append(last, match[0].second);
+        out += doubled ? std::format(R"( data-rml="({}) | rich")", match[1].str())
+                       : std::format(" data-rml='({}) | rich'", match[2].str());
+        last = match[0].second;
+    }
+    out.append(last, text.cend());
+    return out;
+}
+
 // ponytail: a name stays bound for the context's life (RmlUi can't unbind one); a hot reload that turns a bound name
 // into a data-for / data-alias name gets RmlUi's "shadowed" warning (document rejected) until Play restarts.
 void GuiModels::prepare(Rml::Context& context, std::string_view rml)
@@ -261,7 +283,16 @@ void GuiModels::prepare(Rml::Context& context, std::string_view rml)
     const GuiBindingNames names = guiBindingNames(rml);
     for (const std::string& model : names.models) {
         if (!hasModel(context, model))
-            context.CreateDataModel(model);
+            if (Rml::DataModelConstructor constructor = context.CreateDataModel(model)) {
+                // Transforms belong to the context, shared by its models: registered once (a second time is an error).
+                Rml::TransformFuncRegister& transforms = *constructor.GetDataTypeRegister()->GetTransformFuncRegister();
+                Rml::Variant unused;
+                if (!transforms.Call("rich", {Rml::Variant(Rml::String())}, unused))
+                    transforms.Register("rich", [](const Rml::VariantList& arguments) {
+                        const Rml::String bbcode = arguments.empty() ? Rml::String() : arguments[0].Get<Rml::String>();
+                        return Rml::Variant(guiRichTextRml(bbcode, nullptr, gui::fontFamilyLoaded));
+                    });
+            }
         for (const std::string& key : names.variables)
             bind(context, model, key);
         for (const auto& [key, unused] : values_[model])

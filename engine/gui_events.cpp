@@ -23,6 +23,15 @@ void ButtonClickListener::ProcessEvent(Rml::Event& event)
     Rml::Element* button = target && target->GetTagName() == "button" ? target : target ? target->Closest("button") : nullptr;
     if (button)
         publishButtonClick(bus_, button->GetAttribute<Rml::String>("data-event", ""), button->GetId(), document_);
+    for (Rml::Element* link = target; link && link != link->GetOwnerDocument(); link = link->GetParentNode())
+        if (link->HasAttribute("data-link")) {
+            bus_.publish("gui.link",
+                         {{"id", guiElementId(link)},
+                          {"document", document_},
+                          {"target", link->GetAttribute<Rml::String>("data-link", "")}},
+                         "UI");
+            break;
+        }
 }
 
 } // namespace kast

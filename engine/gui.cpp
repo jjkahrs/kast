@@ -2,20 +2,28 @@
 
 #include "files.h"
 #include "gui_render.h"
+#include "gui_richtext.h"
 #include "gui_widgets.h"
 #include "log.h"
+#include "project.h"
 
+#include "roboto_bold.h"
+#include "roboto_bold_italic.h"
+#include "roboto_italic.h"
 #include "roboto_regular.h"
 
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/ElementText.h>
 
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <format>
 #include <memory>
+#include <set>
 
 namespace kast::gui {
 namespace {
@@ -111,6 +119,7 @@ struct Globals {
     Files files;
     GuiRenderer renderer;
     Rml::SharedPtr<Rml::StyleSheetContainer> widgetStyle; // kGuiWidgetStyle, parsed once; null if it failed
+    std::set<std::filesystem::path> projectFonts;           // loadProjectFonts: every file tried, loaded or not
 };
 std::unique_ptr<Globals> g_globals;
 bool g_updating = false;
@@ -130,10 +139,18 @@ bool init()
         return false;
     }
     globals->renderer.init();
-    // The bytes outlive Rml::Shutdown (a static array).
-    if (!Rml::LoadFontFace({reinterpret_cast<const Rml::byte*>(kRobotoRegularTtf), sizeof(kRobotoRegularTtf)}, "Roboto",
-                           Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Auto, true))
+    // The bytes outlive Rml::Shutdown (static arrays). Regular is the fallback face for characters the others lack.
+    using Rml::Style::FontStyle;
+    using Rml::Style::FontWeight;
+    const auto roboto = [](const unsigned char* ttf, size_t size, FontStyle style, FontWeight weight, bool fallback) {
+        return Rml::LoadFontFace({reinterpret_cast<const Rml::byte*>(ttf), size}, "Roboto", style, weight, fallback);
+    };
+    if (!roboto(kRobotoRegularTtf, sizeof(kRobotoRegularTtf), FontStyle::Normal, FontWeight::Normal, true))
         log::error("RmlUi could not load the bundled Roboto font: GUI text will not show");
+    if (!roboto(kRobotoBoldTtf, sizeof(kRobotoBoldTtf), FontStyle::Normal, FontWeight::Bold, false) ||
+        !roboto(kRobotoItalicTtf, sizeof(kRobotoItalicTtf), FontStyle::Italic, FontWeight::Normal, false) ||
+        !roboto(kRobotoBoldItalicTtf, sizeof(kRobotoBoldItalicTtf), FontStyle::Italic, FontWeight::Bold, false))
+        log::error("RmlUi could not load the bundled Roboto bold / italic faces: bold and italic GUI text shows regular");
     const uint64_t problems = globals->system.problems;
     globals->widgetStyle = Rml::Factory::InstanceStyleSheetString(kGuiWidgetStyle);
     if (!globals->widgetStyle || globals->system.problems != problems) {
@@ -185,6 +202,51 @@ void addWidgetStyle(Rml::ElementDocument& document)
 }
 
 bool updating() { return g_updating; }
+
+void loadProjectFonts(const std::filesystem::path& projectRoot)
+{
+    if (!g_globals || projectRoot.empty())
+        return;
+    for (const std::filesystem::path& file : listFiles(projectRoot / "fonts")) {
+        std::string extension = file.extension().string();
+        std::ranges::transform(extension, extension.begin(), [](char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); });
+        if ((extension != ".ttf" && extension != ".otf") || !g_globals->projectFonts.insert(file).second)
+            continue;
+        // An empty family: RmlUi reads the family, style and weight from the file.
+        if (!Rml::LoadFontFace(toRmlPath(file), false, Rml::Style::FontWeight::Auto))
+            log::error(std::format("Font '{}' could not be loaded (see above): rich text and styles can't use it",
+                                   toProjectPath(projectRoot, file).value_or(file.string())));
+    }
+}
+
+bool fontFamilyLoaded(std::string_view family)
+{
+    Rml::FontEngineInterface* fonts = g_globals ? Rml::GetFontEngineInterface() : nullptr;
+    return fonts && fonts->GetFontFaceHandle(Rml::StringUtilities::ToLower(Rml::String(family)), Rml::Style::FontStyle::Normal,
+                                             Rml::Style::FontWeight::Normal, 16) != 0;
+}
+
+void convertRichText(Rml::Element& root)
+{
+    Rml::ElementList rich;
+    root.QuerySelectorAll(rich, "p.rich");
+    for (Rml::Element* element : rich) {
+        std::string text;
+        bool plain = true;
+        for (int i = 0; i < element->GetNumChildren() && plain; ++i) {
+            const auto* part = rmlui_dynamic_cast<Rml::ElementText*>(element->GetChild(i));
+            plain = part && !part->HasAttribute("data-text"); // a {{...}} binding is RmlUi's to fill
+            if (part)
+                text += part->GetText();
+        }
+        if (!plain)
+            continue;
+        constexpr const char* kSpace = " \t\r\n"; // the .rml's own line breaks around the markup
+        const size_t first = text.find_first_not_of(kSpace);
+        text = first == std::string::npos ? "" : text.substr(first, text.find_last_not_of(kSpace) - first + 1);
+        element->SetInnerRML(guiRichTextRml(text, nullptr, fontFamilyLoaded));
+    }
+}
 
 std::string toRmlPath(const std::filesystem::path& file)
 {

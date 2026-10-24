@@ -11,6 +11,9 @@
 // The links from game GUIs to game logic, all published on the Play session's event bus from publisher "UI":
 // - clicking a <button data-event="name"> publishes "name" with payload {"id": <button id or "">, "document":
 //   <project-relative .rml path>}. A missing or empty data-event publishes nothing.
+// - clicking a rich text link (<span class="link" data-link="target">, gui_richtext.h; any element with data-link)
+//   publishes "gui.link" with {"id": <the id of the link's nearest element that has one, the rich text element's in a
+//   rich text with an id; "" if none>, "document": <.rml path>, "target": <its data-link>}.
 // - dragging an element whose RCSS makes it draggable (drag: clone, drag-drop, drag) and that has data-drag="name"
 //   (on it or an ancestor) publishes "name.start" when the drag begins and "name.drop" when the button is released,
 //   both with {"id", "document", "target", "targetDocument", "shift", "ctrl", "alt"}. target is the id of the element
@@ -21,7 +24,7 @@ namespace kast {
 // Publishes the click event, or nothing if event is empty. True if it published.
 bool publishButtonClick(EventBus& bus, std::string_view event, std::string_view id, std::string_view document);
 
-// Listens for clicks on one document; the bus must outlive it.
+// Listens for clicks (buttons, links) on one document; the bus must outlive it.
 class ButtonClickListener final : public Rml::EventListener {
 public:
     ButtonClickListener(EventBus& bus, std::string document) : bus_(bus), document_(std::move(document)) {}

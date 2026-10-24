@@ -17,7 +17,8 @@
 // - Spinbox: <div class="spinbox" data-min data-max data-step> holding a <button> (-), a text <input> (its value) and a
 //   <button> (+). Value: a number. Missing data-min / data-max: unbounded; missing or bad data-step: 1.
 // - Progress: <progress value max/>. Value: a number in 0..max.
-// Every one, and the lists (gui_lists.h), is styled by kGuiWidgetStyle unless the document's own sheets say otherwise.
+// Every one, the lists (gui_lists.h) and rich text links (gui_richtext.h) are styled by kGuiWidgetStyle unless the
+// document's own sheets say otherwise.
 namespace kast {
 
 // The engine's default widget style (Kast palette), put under every game GUI document's own sheets (gui::init,

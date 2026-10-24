@@ -3,7 +3,9 @@
 #include "assets.h"
 
 #include <app.h>
+#include <gui_richtext.h>
 #include <log.h>
+#include <project.h>
 
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/Element.h>
@@ -220,6 +222,16 @@ bool GuiBuilder::setWidgetProperty(const std::string& name, const std::string& v
         return false;
     editStep(std::format("Edit {} {}", guiKindLabel(guiKind(selected_)), name),
              [&] { GuiDoc::setWidgetProperty(selected_, name, value); });
+    return true;
+}
+
+bool GuiBuilder::wrapRichText(const std::string& tag, const std::string& value, size_t start, size_t end)
+{
+    if (!selected_ || guiKind(selected_) != GuiKind::RichText || !GuiDoc::hasEditableText(selected_))
+        return false;
+    editStep(std::format("Rich Text [{}]", tag), [&] {
+        GuiDoc::setText(selected_, guiWrapRichText(GuiDoc::text(selected_), start, end, tag, value));
+    });
     return true;
 }
 
@@ -526,6 +538,7 @@ void GuiBuilder::drawInspector()
                 inspectorBuffer_[0] = GuiDoc::attribute(element, "id");
                 inspectorBuffer_[1] = GuiDoc::attribute(element, "class");
                 inspectorBuffer_[2] = GuiDoc::text(selected_);
+                richSelection_ = {static_cast<int>(inspectorBuffer_[2].size()), static_cast<int>(inspectorBuffer_[2].size())};
                 inspectorBuffer_[3] = GuiDoc::attribute(element, "data-event");
                 bindingBuffers_.clear();
                 for (pugi::xml_attribute attribute : element.attributes())
@@ -565,7 +578,9 @@ void GuiBuilder::drawInspector()
             } else {
                 field("id", inspectorBuffer_[0], attribute("id"));
                 field("class", inspectorBuffer_[1], attribute("class"));
-                if (kind == GuiKind::Text || kind == GuiKind::Button) {
+                if (kind == GuiKind::RichText && GuiDoc::hasEditableText(selected_)) {
+                    drawRichText();
+                } else if (kind == GuiKind::Text || kind == GuiKind::Button || kind == GuiKind::RichText) {
                     if (GuiDoc::hasEditableText(selected_))
                         field("text", inspectorBuffer_[2],
                               [this](const std::string& value) { GuiDoc::setText(selected_, value); });
@@ -702,6 +717,88 @@ void GuiBuilder::drawOptions()
         });
 }
 
+void GuiBuilder::drawRichText()
+{
+    // The markup: one step from activation to letting go, like the other fields; its selection kept for the toolbar.
+    const auto selection = [](ImGuiInputTextCallbackData* data) {
+        *static_cast<std::pair<int, int>*>(data->UserData) = std::minmax(data->SelectionStart, data->SelectionEnd);
+        return 0;
+    };
+    std::string& markup = inspectorBuffer_[2];
+    const bool changed = ImGui::InputTextMultiline("##markup", &markup, ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 6.0f),
+                                                   ImGuiInputTextFlags_CallbackAlways, selection, &richSelection_);
+    if (ImGui::IsItemActive() && !gesture_)
+        gesture_ = Gesture{"Edit Rich Text markup", selected_, copyGuiElement(selected_)};
+    if (changed) {
+        GuiDoc::setText(selected_, markup);
+        markRmlDirty();
+    }
+    if (ImGui::IsItemDeactivated())
+        endGesture();
+
+    // Toolbar: B I U S wrap at once; the others ask for their value in a popup first. A wrap is a step that refills
+    // the Inspector (inspectorNode_ cleared): nothing more is drawn from the old buffers then.
+    const auto wrap = [&](const char* tag, const std::string& value) {
+        wrapRichText(tag, value, static_cast<size_t>(richSelection_.first), static_cast<size_t>(richSelection_.second));
+    };
+    bool first = true;
+    const auto button = [&](const char* label) { // wrapped to the panel's width, as the GUI Hierarchy's
+        const float width = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        if (!std::exchange(first, false) && ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + width <=
+                                                ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x)
+            ImGui::SameLine();
+        return ImGui::Button(label);
+    };
+    for (const char* tag : {"b", "i", "u", "s"}) {
+        const std::string label(1, static_cast<char>(std::toupper(static_cast<unsigned char>(*tag))));
+        if (button(label.c_str()))
+            wrap(tag, "");
+    }
+    const auto popup = [&](const char* label, const char* tag, const auto& body, const auto& value) {
+        if (button(label))
+            ImGui::OpenPopup(label);
+        if (ImGui::BeginPopup(label)) {
+            body();
+            if (ImGui::Button("Apply")) {
+                wrap(tag, value());
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    };
+    popup("Color", "color", [&] { ImGui::ColorPicker3("##color", richColor_, ImGuiColorEditFlags_NoAlpha); }, [&] {
+        const auto byte = [](float v) { return static_cast<int>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+        return std::format("#{:02x}{:02x}{:02x}", byte(richColor_[0]), byte(richColor_[1]), byte(richColor_[2]));
+    });
+    popup("Size", "size", [&] { ImGui::InputInt("pixels", &richSize_); },
+          [&] { return std::to_string(std::clamp(richSize_, 4, 200)); });
+    popup("Font", "font", [&] { ImGui::InputText("family", &richFont_); }, [&] { return richFont_; });
+    popup("Link", "link", [&] { ImGui::InputTextWithHint("target", "quest_log", &richLink_); }, [&] { return richLink_; });
+    popup("Image", "img", [&] {
+        ImGui::InputTextWithHint("path", "../textures/icon.png", &richImage_);
+        ImGui::InputInt2("w, h (0: auto)", richImageSize_);
+    }, [&] {
+        std::string value = richImage_;
+        if (richImageSize_[0] > 0)
+            value += std::format(" w={}", richImageSize_[0]);
+        if (richImageSize_[1] > 0)
+            value += std::format(" h={}", richImageSize_[1]);
+        return value;
+    });
+
+    // The converter's warnings: what Play would show as literal text, close or reopen.
+    std::vector<kast::GuiRichTextProblem> problems;
+    kast::guiRichTextRml(GuiDoc::text(selected_), &problems, kast::gui::fontFamilyLoaded);
+    ImGui::PushTextWrapPos(0.0f);
+    if (problems.empty())
+        ImGui::TextDisabled("Markup OK. Tags: [b] [i] [u] [s] [color=] [size=] [font=] [link=] [img=]; [[ is a literal [.");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.0f, 1.0f)); // #ffcc00, the palette's highlight
+    for (const kast::GuiRichTextProblem& problem : problems)
+        ImGui::Text("Warning at %zu: %s", problem.offset, problem.message.c_str());
+    ImGui::PopStyleColor();
+    ImGui::PopTextWrapPos();
+}
+
 void GuiBuilder::drawStyle()
 {
     if (focusStep_ == 2)
@@ -748,15 +845,17 @@ void GuiBuilder::rebuildPreview()
     previewElements_.clear();
     if (rml_.empty())
         return;
-    // ponytail: the source URL is just the file name (RmlUi's URL parser rejects "C:/..."); fine while previews load
-    // no relative resources (images, @import).
+    // The source URL is the .rml's own, as RmlUi spells it (gui::toRmlPath): relative images (a Rich Text's [img])
+    // resolve next to it.
     const std::string rml = doc_.previewRml(goodRcss_, previewNodes_);
     previewModels_.clear(context); // fresh: a name the last version bound would shadow an alias this one declares
     previewModels_.prepare(*context, rml); // templates as authored: data-for rows and {{...}} show no data
-    previewDoc_ = context->LoadDocumentFromMemory(rml, utf8(rml_.filename()));
+    kast::gui::loadProjectFonts(kast::findProjectDir(rml_.parent_path()).value_or(std::filesystem::path()));
+    previewDoc_ = context->LoadDocumentFromMemory(rml, kast::gui::toRmlPath(rml_));
     if (!previewDoc_)
         return;
     kast::gui::addWidgetStyle(*previewDoc_);
+    kast::gui::convertRichText(*previewDoc_);
     previewDoc_->Show();
     previewElements_.assign(previewNodes_.size(), nullptr);
     collectElements(previewDoc_, previewElements_);

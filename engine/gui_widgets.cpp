@@ -214,6 +214,16 @@ progress fill {
 .listbox scrollbarvertical sliderbar:active, .virtuallist scrollbarvertical sliderbar:active {
     background-color: #ff9900;
 }
+/* Rich text links ([link=...], gui_richtext.h). */
+.link {
+    color: #ffaa00;
+}
+.link:hover {
+    color: #ffcc00;
+}
+.link:active {
+    color: #ff9900;
+}
 )";
 
 namespace {

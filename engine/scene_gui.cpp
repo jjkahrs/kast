@@ -53,23 +53,6 @@ bool isTextField(const Rml::Element& element)
 
 } // namespace
 
-std::string guiTextRml(std::string_view text)
-{
-    std::string out;
-    out.reserve(text.size());
-    for (const char c : text) {
-        switch (c) {
-        case '&': out += "&amp;"; break;
-        case '<': out += "&lt;"; break;
-        case '>': out += "&gt;"; break;
-        case '"': out += "&quot;"; break;
-        case '\n': out += "<br/>"; break;
-        default: out += c; break;
-        }
-    }
-    return out;
-}
-
 void SceneGui::sync(const Scene& scene, const std::filesystem::path& projectRoot, EventBus& bus)
 {
     root_ = projectRoot;
@@ -195,9 +178,20 @@ void SceneGui::setText(const std::string& id, std::string_view text)
 {
     Written& written = written_[id];
     written.text = std::string(text);
+    written.rich.reset();
     for (Entry& entry : entries_)
         if (entry.document)
             apply(entry, *entry.document, id, {.text = written.text});
+}
+
+void SceneGui::setRichText(const std::string& id, std::string_view text)
+{
+    Written& written = written_[id];
+    written.rich = std::string(text);
+    written.text.reset();
+    for (Entry& entry : entries_)
+        if (entry.document)
+            apply(entry, *entry.document, id, {.rich = written.rich});
 }
 
 void SceneGui::setVisible(const std::string& id, bool visible)
@@ -351,11 +345,12 @@ void SceneGui::apply(Entry& entry, Rml::ElementDocument& document, const std::st
     Rml::Element* element = document.GetElementById(id);
     if (!element)
         return;
-    if (written.text) {
+    if (written.text || written.rich) {
         if (auto* control = dynamic_cast<Rml::ElementFormControl*>(element))
-            control->SetValue(*written.text);
+            control->SetValue(written.text ? *written.text : *written.rich);
         else
-            element->SetInnerRML(guiTextRml(*written.text));
+            element->SetInnerRML(written.text ? guiTextRml(*written.text)
+                                              : guiRichTextRml(*written.rich, nullptr, gui::fontFamilyLoaded));
     }
     for (const auto& [name, value] : written.attributes)
         element->SetAttribute(name, value);
@@ -403,16 +398,20 @@ void SceneGui::load(Entry& entry, EventBus& bus)
         log::error(std::format("UI document '{}' not found", entry.path));
         return;
     }
+    gui::loadProjectFonts(root_); // first: a bad font file's RmlUi error isn't this document's
     const uint64_t problems = gui::problemCount();
-    models_.prepare(*context, text);
+    const std::string rml = guiRichBindings(text);
+    models_.prepare(*context, rml);
     // Its virtual lists' sources read as empty while it loads, until their row templates are over windows
     // (ListListener::hold, attach).
     entry.listListener = std::make_unique<ListListener>(bus, entry.path, models_);
     context->AddEventListener("load", entry.listListener.get(), true);
-    Rml::ElementDocument* document = context->LoadDocument(gui::toRmlPath(*file));
+    Rml::ElementDocument* document = context->LoadDocumentFromMemory(rml, gui::toRmlPath(*file));
     context->RemoveEventListener("load", entry.listListener.get(), true);
-    if (document)
+    if (document) {
         entry.listListener->attach(*document);
+        gui::convertRichText(*document);
+    }
     models_.restore(context);
     if (!document || gui::problemCount() != problems) {
         log::error(std::format("UI document '{}' (or its style sheet) has errors, see above: not shown", entry.path));

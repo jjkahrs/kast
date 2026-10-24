@@ -30,14 +30,17 @@ through the engine's file access (disk in the editor, <code>game.pak</code> in t
     &lt;/body&gt;
 &lt;/rml&gt;
 </code></pre>
-<p><strong>Elements</strong>: <strong>Panel</strong> = <code>&lt;div&gt;</code>, <strong>Text</strong> = <code>&lt;p&gt;</code>, <strong>Button</strong> = <code>&lt;button&gt;</code>. A Button's <code>data-event</code> names the event
+<p><strong>Elements</strong>: <strong>Panel</strong> = <code>&lt;div&gt;</code>, <strong>Text</strong> = <code>&lt;p&gt;</code>, <strong>Rich Text</strong> = <code>&lt;p class="rich"&gt;</code>
+(its text is <a href="#rich-text">BBCode markup</a>), <strong>Button</strong> = <code>&lt;button&gt;</code>. A Button's <code>data-event</code> names the event
 its click publishes (see below). Any other element (hand-written <code>&lt;span&gt;</code>, <code>&lt;img&gt;</code>, ...) is <strong>Unknown</strong> to the builder:
 listed and movable/deletable there, never created or edited, and kept with its attributes and children on save.
 Attributes the builder doesn't edit (<code>style</code>, <code>title</code>, <code>data-*</code>, ...) and comments are kept too; saving only
 normalizes whitespace and indentation.</p>
 <p><strong>Style sheets</strong> are RCSS (CSS2-like; see the RmlUi docs). RmlUi has no built-in styles: elements are inline until a
-rule says otherwise, so sheets start with <code>div, p { display: block; }</code>. The only font is the bundled Roboto
-(<code>font-family: Roboto;</code>, set on <code>body</code>); text without a <code>font-family</code> doesn't show (RmlUi warns). Images
+rule says otherwise, so sheets start with <code>div, p { display: block; }</code>. The bundled font is Roboto
+(<code>font-family: Roboto;</code>, set on <code>body</code>) with real regular, bold, italic and bold italic faces
+(<code>font-weight: bold</code> / <code>font-style: italic</code> pick them); a project adds its own in <a href="#fonts"><code>fonts/</code></a>. Text
+without a <code>font-family</code> doesn't show (RmlUi warns). Images
 (<code>&lt;img src&gt;</code>, <code>decorator: image(...)</code>) are PNG or JPG files, paths relative to the document (or style sheet),
 read from disk or the built game's pak and drawn 1:1; a missing file is RmlUi's <code>Could not load texture</code> warning.
 A dragged element's clone (outside any document) finds them relative to the dragged element's document.</p>
@@ -114,7 +117,12 @@ loaded documents by <code>id</code>, topmost document first (<code>engine/gui_ac
 <tr>
 <td><code>kast.gui.setText(id, text)</code></td>
 <td>—</td>
-<td>A text field's value; any other element's content as plain text (escaped, <code>"\n"</code> is a line break).</td>
+<td>A text field's value; any other element's content as plain text (escaped, <code>"\n"</code> is a line break): markup shows as typed.</td>
+</tr>
+<tr>
+<td><code>kast.gui.setRichText(id, text)</code></td>
+<td>—</td>
+<td>The element's content as <a href="#rich-text">rich text</a>: <code>text</code> is BBCode, turned into safe RML (a text field takes it as typed). Kept like <code>setText</code>; the later of the two on an id wins.</td>
 </tr>
 <tr>
 <td><code>kast.gui.setVisible(id, visible)</code></td>
@@ -192,11 +200,79 @@ document reloads; fix a broken file and it shows again. Not in the built game.</
 <p><strong>Sample</strong>: <code>tests/project/ui.scene</code> has a <em>Main Menu</em> entity with a <code>UIDocument</code> for <code>ui/main_menu.rml</code>
 (+ <code>main_menu.rcss</code>: a panel with a title, a subtitle holding an unknown <code>&lt;span&gt;</code>, and Start / Quit buttons publishing
 <code>menu.start</code> / <code>menu.quit</code>); <code>scripts/ui_menu.lua</code> logs both events.</p>
+<h2 id="rich-text">Rich text</h2>
+<p>Rich text is BBCode markup turned into RML by the engine (<code>engine/gui_richtext.h</code>, <code>guiRichTextRml</code>): bold, italic,
+underline, strikethrough, colour, size, font, clickable links and inline images, from three places that share one converter:</p>
+<ul>
+<li><strong>Authored</strong>: a <code>&lt;p class="rich"&gt;</code> (the GUI Builder's <em>Rich Text</em>, <a href="../editor/gui-builder.html#rich-text">its
+toolbar</a>) holds the markup verbatim in the <code>.rml</code>; it is converted when the document loads (Play, the built game, the
+builder's preview). Its surrounding whitespace (the <code>.rml</code>'s own line breaks) is trimmed. Only a <code>&lt;p class="rich"&gt;</code>
+holding text alone is converted, once at load: one inside a <code>data-for</code> row isn't (use <code>data-rich</code> there).</li>
+<li><strong>Lua</strong>: <code>kast.gui.setRichText(id, text)</code> on any element (<code>kast.gui.setText</code> stays plain).</li>
+<li><strong>Data binding</strong>: <code>data-rich="expression"</code> shows the bound value as rich text and follows the model like
+<code>{{...}}</code> does (inside a <code>data-model</code>; an unset variable shows nothing).</li>
+</ul>
+<pre><code class="language-html">&lt;p id=&quot;quest_text&quot; class=&quot;rich&quot;&gt;Bring [b]3 bat wings[/b] to [color=#ffcc00]Mara[/color]. [link=quest_42]Details[/link]&lt;/p&gt;
+&lt;div data-model=&quot;chat&quot;&gt;&lt;p class=&quot;line&quot; data-for=&quot;line : lines&quot; data-rich=&quot;line.text&quot;&gt;&lt;/p&gt;&lt;/div&gt;
+</code></pre>
+<pre><code class="language-lua">kast.gui.setRichText(&quot;status&quot;, &quot;[i]Saved[/i] [img=../icons/ok.png]&quot;)
+kast.gui.set(&quot;chat&quot;, &quot;lines&quot;, {{text = &quot;[color=#40c0ff]Mara:[/color] hello&quot;}})
+kast.subscribe(&quot;gui.link&quot;, function(e) openQuest(e.target) end) -- e.id, e.document too
+</code></pre>
+<p><strong>Tags</strong> (names in any case; no spaces around <code>=</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Tag</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr><td><code>[b]...[/b]</code>, <code>[i]...[/i]</code></td><td>Bold, italic (Roboto's real bold / italic faces; any font family's faces when it has them).</td></tr>
+<tr><td><code>[u]...[/u]</code>, <code>[s]...[/s]</code></td><td>Underline, strikethrough. RmlUi draws one decoration: inside each other the inner one wins.</td></tr>
+<tr><td><code>[color=X]...[/color]</code></td><td><code>#rgb</code>, <code>#rgba</code>, <code>#rrggbb</code>, <code>#rrggbbaa</code> or a colour name RmlUi knows: black, silver, gray, grey, white, maroon, red, orange, purple, fuchsia, green, lime, olive, yellow, navy, blue, teal, aqua, transparent.</td></tr>
+<tr><td><code>[size=N]...[/size]</code></td><td>Font size in pixels: a positive number, clamped to 4..200 (a clamp is a warning).</td></tr>
+<tr><td><code>[font=Family]...[/font]</code></td><td>A loaded font family: <code>Roboto</code> or a <a href="#fonts">project font</a>. Letters, digits, spaces, <code>_</code> and <code>-</code> only; a family that isn't loaded is a bad value.</td></tr>
+<tr><td><code>[link=target]...[/link]</code></td><td>A clickable <code>&lt;span class="link" data-link="target"&gt;</code>; <code>target</code> is any printable text (escaped). Clicking it publishes <a href="#gui-link"><code>gui.link</code></a>; it opens nothing by itself.</td></tr>
+<tr><td><code>[img=path]</code>, <code>[img=path w=N h=N]</code></td><td>An inline <code>&lt;img&gt;</code>, no closing tag. <code>path</code> is relative to the <code>.rml</code> (no spaces, quotes or <code>&lt; &gt;</code>); without <code>w</code> / <code>h</code> it is one line high (<code>1em</code>), with one of them the other follows the image's aspect; whole pixels 1..4096.</td></tr>
+</tbody>
+</table>
+<p><strong>Text and escaping</strong>: everything else is text, escaped as <code>setText</code> escapes it (<code>&amp; &lt; &gt; "</code>), and
+<code>{</code> / <code>}</code> too, so no <code>{{...}}</code> binding runs from it; a line break (<code>"\n"</code>, or one typed in the builder) is a line
+break. <strong><code>[[</code> is a literal <code>[</code></strong> (<code>[[b]</code> shows <code>[b]</code>); a <code>]</code> needs no escape. No input can produce
+an element or attribute other than the tags above: values are checked (colours, sizes, font names, image paths) or
+escaped (link targets). Spaces alone between two tags are kept (RmlUi drops text that is only spaces): the converter
+moves them next to text, or writes <code>&amp;nbsp;</code> between two images.</p>
+<p><strong>Malformed markup</strong> never fails and never crashes; each case is a warning (the builder lists them under the field):</p>
+<ul>
+<li>an unknown tag (<code>[blink]</code>), a bad value (<code>[color=nope]</code>, <code>[size=-3]</code>, <code>[b=1]</code>), a <code>[</code> with no
+<code>]</code>, and a closing tag with nothing open to close (<code>stray[/b]</code>, <code>[/img]</code>) show as the literal text they are;</li>
+<li>tags still open at the end are closed there (<code>[b]open</code> is bold to the end);</li>
+<li><strong>mis-nesting</strong>: a closing tag that skips inner open tags closes them with it and opens them again right after it,
+so <code>[b]a[i]b[/b]c[/i]</code> is <code>&lt;b&gt;a&lt;i&gt;b&lt;/i&gt;&lt;/b&gt;&lt;i&gt;c&lt;/i&gt;</code>: bold <em>a</em>, bold italic <em>b</em>,
+italic <em>c</em>.</li>
+</ul>
+<p id="gui-link"><strong>Links</strong>: clicking a link publishes <code>gui.link</code> on the event bus, publisher <code>UI</code>, payload
+<code>{"id": "&lt;id&gt;", "document": "&lt;rml path&gt;", "target": "&lt;link target&gt;"}</code>; <code>id</code> is the id of the link's nearest
+element that has one: the rich text element's (<code>""</code> if it and its ancestors have none). The engine's default style
+colours links <code>#ffaa00</code>, <code>#ffcc00</code> hovered and <code>#ff9900</code> pressed; a document rule for <code>.link</code> overrides it.</p>
+<p id="fonts"><strong>Fonts</strong>: every <code>.ttf</code> / <code>.otf</code> under the project's <code>fonts/</code> folder loads when Play starts (and in the
+built game, from <code>game.pak</code>) and when the GUI Builder previews a GUI. Its family is the name inside the file (e.g.
+<code>LatoLatin</code> for <code>LatoLatin-Regular.ttf</code>; the Console logs <code>RmlUi: Loaded font face 'LatoLatin' [regular]</code>), its bold and
+italic files (same family) are picked by <code>font-weight</code> / <code>font-style</code> and by <code>[b]</code> / <code>[i]</code>. Use it with
+<code>[font=LatoLatin]</code> or <code>font-family: LatoLatin;</code>. A file that isn't a font logs <code>Font 'fonts/x.ttf' could not be
+loaded</code> and the others still load; documents aren't rejected for it. A font loads once per session (replacing the file
+needs a restart).</p>
+<p><strong>Sample</strong>: <code>tests/project/ui_richtext.scene</code> (<code>ui/richtext.rml</code>, <code>scripts/ui_richtext.lua</code>) shows every tag,
+the project font <code>fonts/LatoLatin-Regular.ttf</code>, malformed markup, <code>setRichText</code> / <code>setText</code>, a <code>data-rich</code> binding and
+a link whose <code>gui.link</code> the script logs (<code>ctest -R richtext</code>; <code>kast_self_check --richtext</code> runs the converter and
+headless checks).</p>
 <h2 id="data-binding">Data binding</h2>
 <p>RmlUi's <a href="https://mikke89.github.io/RmlUiDoc/pages/data_bindings.html">data bindings</a> work without any C++: an element with
 <code>data-model="name"</code> opens a model, and inside it <code>{{expression}}</code> in text, <code>data-for</code>, <code>data-if</code>,
 <code>data-visible</code>, <code>data-value</code>, <code>data-checked</code>, <code>data-attr-*</code>, <code>data-class-*</code>, <code>data-style-*</code>,
-<code>data-rml</code>, <code>data-alias-*</code> and <code>data-event-*</code> read its variables. Lua fills them with <code>kast.gui.set</code>:</p>
+<code>data-rml</code>, <code>data-alias-*</code> and <code>data-event-*</code> read its variables, and kast's <a href="#rich-text"><code>data-rich</code></a>
+shows one as rich text. Lua fills them with <code>kast.gui.set</code>:</p>
 <pre><code class="language-html">&lt;div id=&quot;quests&quot; data-model=&quot;quest_log&quot;&gt;
     &lt;p&gt;{{title}} ({{count}}) &lt;span data-if=&quot;full&quot;&gt;full&lt;/span&gt;&lt;/p&gt;
     &lt;button class=&quot;row&quot; data-for=&quot;row : rows&quot; data-attr-id=&quot;'row_' + it_index&quot;
