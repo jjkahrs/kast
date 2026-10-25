@@ -285,10 +285,14 @@ public:
     // writes project.kast via setOnlineConfig).
     void openOnlineSettings();
     bool onlineSettingsOpen() const { return onlineSettingsOpen_; }
+    // Opens the Display & GUI Scaling modal (project.gui: reference resolution, match, OS display scale, UI scale and
+    // the player's default window; Save writes project.kast via setGuiConfig).
+    void openGuiSettings();
+    bool guiSettingsOpen() const { return guiSettingsOpen_; }
     // File actions are available: no dialog, unsaved-changes prompt or settings modal open and not in Play mode.
     bool idle() const
     {
-        return !dialogOpen_ && pending_ == Pending::None && !buildSettingsOpen_ && !onlineSettingsOpen_ &&
+        return !dialogOpen_ && pending_ == Pending::None && !buildSettingsOpen_ && !onlineSettingsOpen_ && !guiSettingsOpen_ &&
                doc_.play == PlayState::Stopped;
     }
     // Build menu items are available: idle and a project is open.
@@ -326,6 +330,7 @@ private:
     void drawModals();
     void drawBuildSettingsModal();
     void drawOnlineSettingsModal();
+    void drawGuiSettingsModal();
     // Build / Build and Run: false (Build Settings opened instead) if the project's startScene can't be built.
     bool startSceneReady();
     void browseBuildFolder(bool run);
@@ -356,6 +361,10 @@ private:
     std::string onlineError_;
     bool onlineSettingsRequested_ = false;
     bool onlineSettingsOpen_ = false;
+    kast::GuiConfig gui_; // Display & GUI Scaling modal: the edited copy of project.gui
+    std::string guiError_;
+    bool guiSettingsRequested_ = false;
+    bool guiSettingsOpen_ = false;
 
     // SDL calls onDialogDone on any thread; the main thread picks the result up in update().
     bool dialogOpen_ = false;

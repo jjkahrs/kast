@@ -5,6 +5,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -50,11 +51,16 @@ public:
     // Before a document of this rml loads into context: creates the models it names and binds the variables it reads
     // (and every key already set on those models).
     void prepare(Rml::Context& context, std::string_view rml);
-    // Replaces model.key; if context (may be null) has the model, binds key there and refreshes the views reading it.
-    void set(Rml::Context* context, const std::string& model, const std::string& key, GuiValue value);
+    // Replaces model.key; in each context (may be null) having the model, binds key and refreshes the views reading it.
+    void set(std::span<Rml::Context* const> contexts, const std::string& model, const std::string& key, GuiValue value);
+    void set(Rml::Context* context, const std::string& model, const std::string& key, GuiValue value)
+    {
+        set({&context, 1}, model, key, std::move(value));
+    }
     std::optional<GuiValue> get(const std::string& model, const std::string& key) const;
-    // Removes the models from context (may be null: already gone) and forgets every value and window.
-    void clear(Rml::Context* context);
+    // Removes the models from the contexts (may be null: already gone) and forgets every value and window.
+    void clear(std::span<Rml::Context* const> contexts);
+    void clear(Rml::Context* context) { clear({&context, 1}); }
     // A new window on model.source, bound in context's model under a name of its own; null if context has no such
     // model. ponytail: every call binds one more name (RmlUi can't unbind one): a hot reload's lists take new windows,
     // as the old document's rows still read theirs until RmlUi frees them.
@@ -64,7 +70,8 @@ public:
     // model.key reads as an empty array until restore(), which puts every held value back and refreshes its views
     // (a virtual list's source while its document loads: its row template's data-for must not make a row per item).
     void hold(const std::string& model, const std::string& key);
-    void restore(Rml::Context* context);
+    void restore(std::span<Rml::Context* const> contexts);
+    void restore(Rml::Context* context) { restore({&context, 1}); }
 
 private:
     void bind(Rml::Context& context, const std::string& model, const std::string& key);

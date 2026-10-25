@@ -1104,6 +1104,18 @@ bool Panels::drawUIDocumentComponent(Document& doc, entt::entity entity)
         ImGui::PopStyleColor();
     }
     changed = ImGui::Checkbox("Visible", &component.visible) || changed;
+    // gui_scale.h: what follows the dp ratio (display scale, reference resolution, the player's UI scale).
+    constexpr std::pair<kast::GuiScaling, const char*> kScalings[] = {{kast::GuiScaling::Dp, "dp units only"},
+                                                                      {kast::GuiScaling::All, "Everything (px too)"}};
+    const char* current = component.scaling == kast::GuiScaling::All ? kScalings[1].second : kScalings[0].second;
+    if (ImGui::BeginCombo("Scaling", current)) {
+        for (const auto& [scaling, name] : kScalings)
+            if (ImGui::Selectable(name, scaling == component.scaling) && scaling != component.scaling) {
+                component.scaling = scaling;
+                changed = true;
+            }
+        ImGui::EndCombo();
+    }
     return changed;
 }
 

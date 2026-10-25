@@ -464,9 +464,14 @@ void registerBuiltins()
         .data<&StateMachine::machine>("machine").custom<FieldInfo>("Machine")
         .data<&StateMachine::initialState>("initialState").custom<FieldInfo>("Initial State");
 
+    entt::meta_factory<GuiScaling>{}
+        .type("GuiScaling")
+        .data<GuiScaling::Dp>("dp").custom<FieldInfo>("dp units only")
+        .data<GuiScaling::All>("all").custom<FieldInfo>("Everything (px too)");
     registerComponent<UIDocument>("UIDocument", {"UI Document"})
         .data<&UIDocument::path>("path").custom<FieldInfo>("Path")
-        .data<&UIDocument::visible>("visible").custom<FieldInfo>("Visible");
+        .data<&UIDocument::visible>("visible").custom<FieldInfo>("Visible")
+        .data<&UIDocument::scaling>("scaling").custom<FieldInfo>(FieldInfo{.displayName = "Scaling", .optional = true, .omitDefault = true});
     entt::meta_factory<AudioBus>{}
         .type("AudioBus")
         .data<AudioBus::Master>("Master").custom<FieldInfo>("Master")
@@ -794,8 +799,17 @@ void copyComponents(const entt::registry& from, entt::entity source, entt::regis
 Json componentToJson(const entt::meta_any& component)
 {
     Json json = Json::object();
-    for (auto [id, field] : component.type().data())
-        json[field.name()] = fieldToJson(field.get(component));
+    entt::meta_any defaults; // made for the first omitDefault field
+    for (auto [id, field] : component.type().data()) {
+        Json value = fieldToJson(field.get(component));
+        if (const auto* info = static_cast<const FieldInfo*>(field.custom()); info && info->omitDefault) {
+            if (!defaults)
+                defaults = component.type().construct();
+            if (value == fieldToJson(field.get(defaults)))
+                continue;
+        }
+        json[field.name()] = std::move(value);
+    }
     return json;
 }
 

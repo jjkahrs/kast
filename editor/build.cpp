@@ -437,6 +437,22 @@ bool setOnlineConfig(kast::Project& project, const kast::OnlineConfig& online, s
     return true;
 }
 
+bool setGuiConfig(kast::Project& project, const kast::GuiConfig& gui, std::string& error)
+{
+    kast::GuiConfig checked; // the rules project.kast loads by
+    if (std::string reason; !kast::guiConfigFromJson(kast::guiConfigToJson(gui), checked, reason)) {
+        error = "Display & GUI Scaling: " + reason;
+        return false;
+    }
+    kast::Project updated = project;
+    updated.gui = gui;
+    if (!kast::saveProject(updated, error))
+        return false;
+    project = std::move(updated);
+    kast::log::info(std::format("Display & GUI Scaling saved in {}", kast::kProjectFileName));
+    return true;
+}
+
 bool buildGame(const kast::Project& project, const std::filesystem::path& outDir, const std::filesystem::path& playerDir,
                std::filesystem::path& exe, std::string& error)
 {

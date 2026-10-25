@@ -87,19 +87,27 @@ void GuiRenderer::shutdown()
     white_ = BGFX_INVALID_HANDLE;
 }
 
-void GuiRenderer::begin(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, int width, int height)
+void GuiRenderer::begin(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, int width, int height, float scale,
+                        bool shareViews)
 {
     if (width != width_ || height != height_)
         destroyLayers(); // the pool is the GUI's size; recreated as layers are pushed
-    firstView_ = view_ = view;
     base_ = frameBuffer;
     width_ = static_cast<uint16_t>(width);
     height_ = static_cast<uint16_t>(height);
-    top_ = viewLayer_ = 0;
+    scale_ = scale > 0.0f ? scale : 1.0f;
+    top_ = 0;
     scissor_ = false;
     transform_.reset();
-    bx::mtxOrtho(proj_, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 0.0f, 1000.0f, 0.0f,
-                 bgfx::getCaps()->homogeneousDepth);
+    bx::mtxOrtho(proj_, 0.0f, static_cast<float>(width) / scale_, static_cast<float>(height) / scale_, 0.0f, 0.0f,
+                 1000.0f, 0.0f, bgfx::getCaps()->homogeneousDepth);
+    if (shareViews) {
+        if (!nextView(0, false))
+            viewLayer_ = kNoLayer; // out of views: every draw tries for one and is dropped
+        return;
+    }
+    firstView_ = view_ = view;
+    viewLayer_ = 0;
     setView(view, frameBuffer);
 }
 
@@ -190,11 +198,22 @@ void GuiRenderer::submit(Rml::CompiledGeometryHandle handle, Rml::Vector2f trans
     bgfx::submit(view_, program);
 }
 
+Rml::Rectanglei GuiRenderer::scissorPixels() const
+{
+    if (scale_ == 1.0f)
+        return scissorRegion_;
+    const Rml::Vector2f min = Rml::Vector2f(scissorRegion_.TopLeft()) * scale_;
+    const Rml::Vector2f max = Rml::Vector2f(scissorRegion_.BottomRight()) * scale_;
+    return Rml::Rectanglei::FromCorners({static_cast<int>(std::floor(min.x)), static_cast<int>(std::floor(min.y))},
+                                        {static_cast<int>(std::ceil(max.x)), static_cast<int>(std::ceil(max.y))});
+}
+
 void GuiRenderer::applyScissor()
 {
     if (scissor_) { // clamped at the top-left corner: a region off-screen there loses the off-screen part
-        const int x0 = std::max(scissorRegion_.Left(), 0), y0 = std::max(scissorRegion_.Top(), 0);
-        const int x1 = std::max(scissorRegion_.Right(), x0), y1 = std::max(scissorRegion_.Bottom(), y0);
+        const Rml::Rectanglei region = scissorPixels();
+        const int x0 = std::max(region.Left(), 0), y0 = std::max(region.Top(), 0);
+        const int x1 = std::max(region.Right(), x0), y1 = std::max(region.Bottom(), y0);
         bgfx::setScissor(static_cast<uint16_t>(x0), static_cast<uint16_t>(y0), static_cast<uint16_t>(x1 - x0),
                          static_cast<uint16_t>(y1 - y0));
     }
@@ -202,7 +221,7 @@ void GuiRenderer::applyScissor()
 
 void GuiRenderer::applyScissor(float scale)
 {
-    const Rml::Rectanglei region = scissor_ ? scissorRegion_ : Rml::Rectanglei::FromSize({width_, height_});
+    const Rml::Rectanglei region = scissor_ ? scissorPixels() : Rml::Rectanglei::FromSize({width_, height_});
     const int x0 = std::clamp(static_cast<int>(std::floor(region.Left() * scale)), 0, int(width_));
     const int y0 = std::clamp(static_cast<int>(std::floor(region.Top() * scale)), 0, int(height_));
     const int x1 = std::clamp(static_cast<int>(std::ceil(region.Right() * scale)), x0, int(width_));
@@ -320,7 +339,7 @@ void GuiRenderer::drawImage(Image image, float toScale, bgfx::ProgramHandle prog
     bgfx::allocTransientVertexBuffer(&vertices, 3, layout_);
     // One triangle past the target's corners in GUI pixels, drawn at toScale; each pixel samples image's texel under
     // it (SetTransform is for geometry only).
-    const float w = width_, h = height_;
+    const float w = width_ / scale_, h = height_ / scale_; // in RmlUi units, as proj_
     const bool bottomLeft = bgfx::getCaps()->originBottomLeft;
     const auto uv = [&](float x, float y) {
         const float v = (y - offset.y) * image.scale / h;
@@ -410,10 +429,11 @@ void GuiRenderer::PopLayer()
 Rml::TextureHandle GuiRenderer::SaveLayerAsTexture()
 {
     // The top layer inside the scissor region (RmlUi sets one first). Not the base layer: it may be the backbuffer.
-    const int x0 = std::clamp(scissorRegion_.Left(), 0, int(width_));
-    const int y0 = std::clamp(scissorRegion_.Top(), 0, int(height_));
-    const int x1 = std::clamp(scissorRegion_.Right(), x0, int(width_));
-    const int y1 = std::clamp(scissorRegion_.Bottom(), y0, int(height_));
+    const Rml::Rectanglei region = scissorPixels();
+    const int x0 = std::clamp(region.Left(), 0, int(width_));
+    const int y0 = std::clamp(region.Top(), 0, int(height_));
+    const int x1 = std::clamp(region.Right(), x0, int(width_));
+    const int y1 = std::clamp(region.Bottom(), y0, int(height_));
     // A view of its own: bgfx blits at the start of a view, so the copy comes after the layer's draws so far.
     if (top_ == 0 || x1 == x0 || y1 == y0 || !nextView(top_, false))
         return 0;

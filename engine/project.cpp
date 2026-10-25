@@ -15,7 +15,7 @@ namespace {
 using Json = nlohmann::ordered_json;
 
 constexpr const char* kProjectKeys[] = {"version", "name", "startScene"}; // required
-constexpr const char* kOptionalProjectKeys[] = {"stateMachines", "audio", "online"};
+constexpr const char* kOptionalProjectKeys[] = {"stateMachines", "audio", "online", "gui"};
 
 std::string validate(const Json& json)
 {
@@ -128,6 +128,8 @@ bool loadProject(const std::filesystem::path& file, Project& out, std::string& e
                 if (const std::string onlineError = onlineConfigError(loaded.root, loaded.online); !onlineError.empty())
                     reason = "\"online\": " + onlineError;
             }
+            if (std::string guiError; reason.empty() && json.contains("gui") && !guiConfigFromJson(json["gui"], loaded.gui, guiError))
+                reason = "\"gui\": " + guiError;
             if (reason.empty()) {
                 out = std::move(loaded);
                 return true;
@@ -160,6 +162,8 @@ bool saveProject(const Project& project, std::string& error)
         if (project.online.caFile)
             online["caFile"] = *project.online.caFile;
     }
+    if (project.gui != GuiConfig{})
+        json["gui"] = guiConfigToJson(project.gui);
     const std::filesystem::path file = project.root / kProjectFileName;
     if (!writeFileAtomic(file, json.dump(2) + '\n')) {
         error = std::format("Cannot write project '{}'", file.string());

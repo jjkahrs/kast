@@ -661,6 +661,128 @@ so <code>overflow: hidden</code> on a transformed or rounded element clips to it
 <p>Tests: <code>ctest -R "effects|ui_layer|bad_filter|starter_mmo_(login_hover|hud_glow)"</code> plays
 <code>tests/project/ui/effects.rml</code> (one element per effect) in the Game view, the GUI Builder and the built player and
 checks each effect's pixels.</p>
+
+<h2 id="scaling">Resolution and DPI scaling</h2>
+<p>A GUI designed at one resolution should look right on a 4K monitor, at Windows' 150% display scale, and when the
+player asks for bigger text. One number does that: the <strong>dp ratio</strong>, how many window pixels one RmlUi
+<code>dp</code> unit is.</p>
+<pre><code>dpRatio = refFit × (useOsDpi ? osScale : 1) × uiScale
+refFit  = exp2(lerp(log2(width / refWidth), log2(height / refHeight), match))   (1 without a reference resolution)</code></pre>
+<ul>
+<li><code>refFit</code> is Unity's CanvasScaler "Scale With Screen Size / Match Width Or Height": the window's size against the
+project's <strong>reference resolution</strong>, blended in log space. <code>match</code> 0 fits the width, 1 the height, 0.5
+both equally. Reference 1920x1080 in a 3840x2160 window is 2 at any match; in a 1920x2160 window it is 1 at match 0, 2 at
+match 1 and √2 at 0.5.</li>
+<li><code>osScale</code> is the OS display scale of the monitor the window is on (1 = 100%), <code>SDL_GetWindowDisplayScale</code>.</li>
+<li><code>uiScale</code> is the player's multiplier, 0.5 to 3 (<code>kast.gui.setScale</code>).</li>
+</ul>
+<p>The ratio is recomputed when the window is resized, moves to another monitor, the Windows scale changes
+(<code>SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED</code>) and when any setting changes; a minimized (zero-size) window keeps the last
+one. Each change logs <code>GUI dp ratio 2 (1280x720 pixels, display scale 1, UI scale 1)</code>.</p>
+
+<h3 id="scaling-modes">dp and all documents</h3>
+<p>Each UI Document chooses what follows the ratio, with its <strong>Scaling</strong> field (Inspector; <code>"scaling"</code> in the
+scene file, left out while it is <code>dp</code>, so older scenes load and save unchanged):</p>
+<table>
+<tr><th>Scaling</th><th>What scales</th><th>Use it for</th></tr>
+<tr><td><code>dp</code> (default)</td><td>Only <code>dp</code> units: <code>width: 160dp</code> is 320 pixels at ratio 2. <code>px</code> stay physical
+pixels. Text in <code>dp</code> is rasterized at its real size, so it stays sharp.</td><td>New GUIs: write sizes and fonts in
+<code>dp</code>, keep <code>px</code> for hairlines that must stay one pixel.</td></tr>
+<tr><td><code>all</code></td><td>Everything, <code>px</code> too: the document lays out at the window's size ÷ dpRatio and is drawn
+scaled up by dpRatio; mouse positions are mapped back, so clicks land on the scaled elements. Text is drawn at its
+layout size and magnified, so it is softer than <code>dp</code> text at ratios above 1.</td><td>Existing <code>px</code> GUIs that
+should simply grow with the screen.</td></tr>
+</table>
+<p>Both kinds work together in one scene. They live in two RmlUi contexts (RmlUi's dp ratio and layout size are per
+context) that act as one GUI: <code>all</code> documents draw above every <code>dp</code> document, whatever their entity order;
+the mouse goes to an <code>all</code> document while it is over one of its elements, otherwise to the <code>dp</code> documents; a
+click or <code>kast.gui.focus</code> in one takes the keyboard there and blurs the other's focused field;
+<code>kast.gui.click</code>, <code>focus</code>, <code>mouseOver</code>, <code>hovered</code>, data models and every other
+<code>kast.gui</code> call span both. Without a reference resolution and at 100% display scale the ratio is 1, so existing
+<code>px</code> documents look exactly as before. Effect filters in an <code>all</code> document run on the window's pixels, so a
+<code>blur()</code> radius is not scaled with the document.</p>
+
+<h3 id="scaling-project">project.kast "gui"</h3>
+<p>The project's defaults, set in <strong>Build &gt; Display &amp; GUI Scaling...</strong> (the block is left out of
+<code>project.kast</code> while everything is default; without it the ratio is just the display scale):</p>
+<pre><code>"gui": {
+  "referenceResolution": [1920, 1080],  // optional; [width, height], 1..16384
+  "match": 0.5,                         // 0..1, default 0.5
+  "useOsDpi": true,                     // default true
+  "uiScale": 1.0,                       // 0.5..3, default 1
+  "mode": "windowed",                   // the player's window: "windowed" | "borderless" | "exclusive"
+  "width": 1280, "height": 720,         // its size (exclusive: the display mode's), default 1280x720
+  "refresh": 144                        // optional; exclusive: Hz, unset = the highest that size has
+}</code></pre>
+<p>A wrong type or value fails the project's load naming the field, e.g. <code>Invalid project '...': "gui": match must be a
+number from 0 to 1</code>.</p>
+
+<h3 id="display">Player window modes</h3>
+<p>The built player opens <strong>windowed</strong> at any size, <strong>borderless</strong> fullscreen on the desktop of its monitor,
+or <strong>exclusive</strong> fullscreen in one of that monitor's display modes (WxH@Hz, from
+<code>SDL_GetFullscreenDisplayModes</code>). At startup the project's window applies, the user settings file over it, and the
+<code>--size WxH</code> flag over both (a window of that size). Lua switches at run time with <code>kast.display.setMode</code>.</p>
+
+<h3 id="user-settings">User settings file</h3>
+<p>What the player chooses through <code>kast.display.setMode</code> and <code>kast.gui.setScale</code> is kept per Windows user in
+<code>%APPDATA%\Kast\&lt;project name&gt;\settings.json</code> (<code>SDL_GetPrefPath("Kast", name)</code>; characters other than
+letters, digits, space, <code>-</code>, <code>_</code> and <code>.</code> in the name become <code>_</code>). The player logs its path at
+startup (<code>User settings: ...</code>); <code>--user-settings &lt;file&gt;</code> uses another file (tests). Every key is
+optional:</p>
+<pre><code>{ "mode": "windowed", "width": 800, "height": 600, "refresh": 60, "uiScale": 1.5 }</code></pre>
+<p>A missing file means the project's defaults. A corrupt or invalid one logs <code>User settings '...' are invalid (...): using
+the project's defaults</code> and the project's defaults apply. Runtime changes are never written back to
+<code>project.kast</code>. The editor never reads or writes this file.</p>
+
+<h3 id="scaling-lua">Lua: kast.gui scaling and kast.display</h3>
+<p>Wrong argument types raise a Lua error at the calling line, as other <code>kast.gui</code> calls do. Out-of-range numbers are
+clamped and logged as a warning.</p>
+<table>
+<tr><th>Function</th><th>Returns</th><th>Notes</th></tr>
+<tr><td><code>kast.gui.setScale(m)</code></td><td>—</td><td>The player's UI scale; clamped to 0.5..3 (<code>kast.gui.setScale: scale 4
+clamped to 3</code>). Saved in the user settings file (player).</td></tr>
+<tr><td><code>kast.gui.scale()</code></td><td>number</td><td>The UI scale now.</td></tr>
+<tr><td><code>kast.gui.dpRatio()</code></td><td>number</td><td>The final ratio the documents use.</td></tr>
+<tr><td><code>kast.gui.setReferenceResolution(w, h[, match])</code></td><td>—</td><td>Whole numbers 1..16384 (else an error);
+<code>match</code> clamped to 0..1, kept if <code>nil</code>. <code>setReferenceResolution(nil)</code> removes it. For this run only.</td></tr>
+<tr><td><code>kast.gui.referenceResolution()</code></td><td>w, h, match or <code>nil</code></td><td><code>nil</code> when there is none.</td></tr>
+<tr><td><code>kast.display.setMode{mode=, width=, height=, refresh=}</code></td><td>boolean</td><td>Every field optional: the current
+mode's where left out (refresh: the highest). <code>false</code> plus a warning, the mode unchanged, for an exclusive size and
+rate the monitor lacks or an unknown mode name. Saved in the user settings file (player).</td></tr>
+<tr><td><code>kast.display.mode()</code></td><td>table</td><td><code>{mode=, width=, height=, refresh=}</code>: the window's size
+(exclusive: the display mode's, with its refresh).</td></tr>
+<tr><td><code>kast.display.modes()</code></td><td>array</td><td>The exclusive modes <code>{width, height, refresh}</code> of the
+monitor the window is on, largest first.</td></tr>
+<tr><td><code>kast.display.displayScale()</code></td><td>number</td><td>That monitor's OS display scale.</td></tr>
+</table>
+<pre><code>-- An options menu: bigger UI, then exclusive fullscreen at the monitor's best mode.
+kast.gui.setScale(1.25)
+local best = kast.display.modes()[1]
+if not kast.display.setMode{mode = "exclusive", width = best.width, height = best.height} then
+    kast.display.setMode{mode = "borderless"}
+end
+local now = kast.display.mode()
+kast.log(string.format("%s %dx%d, dp ratio %.2f", now.mode, now.width, now.height, kast.gui.dpRatio()))</code></pre>
+
+<h3 id="scaling-editor">In the editor</h3>
+<ul>
+<li><strong>Game view</strong>: in Play the GUIs scale as in the player, from the project's settings and the editor window's
+display scale. <strong>Window &gt; Game View</strong> simulates another resolution (the image is rendered at it and fitted in the
+panel) and another display scale (100% to 200%); while one is on, the view shows <code>Simulating 1920x1080 at 150%</code>.
+<code>kast.display.setMode</code> only logs and records the mode (<code>kast.display.setMode borderless 1280x720: recorded</code>):
+the editor window never changes and nothing is saved. <code>kast.display.mode()</code> returns the recorded mode at the Game
+view's size, <code>displayScale()</code> the (simulated) scale. A new Play starts from the project's settings again.</li>
+<li><strong>GUI Builder</strong>: the Preview's <strong>UI scale</strong> (100%, 125%, 150%, 200%, next to Resolution) stands for the
+display scale times the player's scale; the preview also fits the project's reference resolution, so <code>dp</code> sizes show
+as they will in game. The preview lays the document out as a <code>dp</code> document.</li>
+<li><strong>Inspector</strong>: the UI Document's <strong>Scaling</strong> dropdown (dp units only / Everything), undoable like any
+field.</li>
+<li><strong>Build &gt; Display &amp; GUI Scaling...</strong>: the whole <code>"gui"</code> block.</li>
+</ul>
+<p>Tests: <code>kast_self_check --gui</code> (the math, <code>project.kast</code>, the settings file, both documents in one
+<code>SceneGui</code>) and <code>ctest -R "scale|gui_settings"</code> (built player at ratio 1 and 2 with pixel probes, a real click on
+an <code>all</code> button, every Lua function, settings persistence, window modes on a secondary monitor only, the editor's Game
+view, GUI Builder, Inspector and settings modal).</p>
 </main>
 </div>
 </body>

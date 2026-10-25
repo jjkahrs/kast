@@ -22,9 +22,12 @@ class GuiRenderer final : public Rml::RenderInterface {
 public:
     void init();
     void shutdown();
-    // Where the next RenderGeometry calls draw: view on frameBuffer, laid out as width x height pixels. Layer passes
-    // take the views after it, up to view + gui::kViews - 1.
-    void begin(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, int width, int height);
+    // Where the next RenderGeometry calls draw: view on frameBuffer, width x height pixels. Layer passes take the views
+    // after it, up to view + gui::kViews - 1. scale: RmlUi's units are scale pixels each (a context laid out at
+    // width / scale x height / scale, drawn scaled up). shareViews: a second context drawn over the last begin()'s in
+    // the same frame, taking the views after the ones it used (view is ignored), within the same range.
+    void begin(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, int width, int height, float scale = 1.0f,
+               bool shareViews = false);
 
     Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) override;
     void RenderGeometry(Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation, Rml::TextureHandle texture) override;
@@ -60,6 +63,7 @@ public:
 
 private:
     static constexpr int kMaxGradientStops = 16; // fs_gui_gradient.sc's MAX_STOPS
+    static constexpr Rml::LayerHandle kNoLayer = ~Rml::LayerHandle(0); // viewLayer_ when no view is left to draw in
 
     // A layer's picture held at scale (1, 1/2, 1/4, ...) of the GUI's size, from the target's top-left corner.
     struct Image {
@@ -73,6 +77,7 @@ private:
     bool nextView(Rml::LayerHandle layer, bool clear);
     void setView(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer);
     bgfx::FrameBufferHandle frameBuffer(Rml::LayerHandle layer) const;
+    Rml::Rectanglei scissorPixels() const; // the scissor region in target pixels
     void applyScissor();
     // The scissor region (the whole GUI without one) at scale, rounded outwards.
     void applyScissor(float scale);
@@ -98,6 +103,7 @@ private:
     bgfx::FrameBufferHandle base_ = BGFX_INVALID_HANDLE; // layer 0, begin()'s target
     uint16_t width_ = 0;
     uint16_t height_ = 0;
+    float scale_ = 1.0f; // target pixels per RmlUi unit (begin)
     float proj_[16] = {};
     std::vector<bgfx::FrameBufferHandle> layers_; // the pool: layers_[i] backs layer handle i + 1
     Rml::LayerHandle top_ = 0;       // where RmlUi draws now

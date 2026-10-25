@@ -1,5 +1,8 @@
 #pragma once
 
+#include "gui_scale.h"
+
+#include <RmlUi/Core/Types.h>
 #include <bgfx/bgfx.h>
 
 #include <cstdint>
@@ -84,20 +87,31 @@ public:
     // Created on first use; null if gui::ready() is false.
     Rml::Context* context();
     void release(); // removes the context and its documents
-    // Pixel size of the area the documents lay out in.
-    void resize(int width, int height);
+    // Pixel size of the area the documents draw in, and how they follow the dp ratio (gui_scale.h). Dp: they lay out at
+    // width x height, a dp being dpRatio pixels. All: they lay out at width / dpRatio x height / dpRatio (dp == px) and
+    // draw scaled up by dpRatio, so px scale too.
+    void resize(int width, int height, float dpRatio = 1.0f, GuiScaling scaling = GuiScaling::Dp);
     // Updates and draws the documents into view on frameBuffer (BGFX_INVALID_HANDLE = backbuffer) at the resize()
     // size, using views view .. view + gui::kViews - 1 (only the first unless a document has effects). The view's
-    // clear is the caller's.
-    void render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer);
-    // Mouse, wheel, key and text events. Event positions are mapped to the context as (p - origin) * scale.
+    // clear is the caller's. shareViews: drawn over another context rendered just before in the same range, in the
+    // views after its (view is ignored).
+    void render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, bool shareViews = false);
+    // Mouse, wheel, key and text events. Event positions are mapped to the area's pixels as (p - origin) * scale (then
+    // to the context's units).
     void onEvent(const SDL_Event& event, float originX = 0.0f, float originY = 0.0f, float scale = 1.0f);
+    bool created() const { return context_ != nullptr; }
+    // RmlUi units per area pixel: 1 / dpRatio for All, else 1.
+    float unitsPerPixel() const { return scaling_ == GuiScaling::All ? 1.0f / dpRatio_ : 1.0f; }
 
 private:
+    Rml::Vector2i layoutSize() const;
+
     std::string name_;
     Rml::Context* context_ = nullptr;
     int width_ = 1;
     int height_ = 1;
+    float dpRatio_ = 1.0f;
+    GuiScaling scaling_ = GuiScaling::Dp;
 };
 
 } // namespace kast

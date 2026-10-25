@@ -300,7 +300,7 @@ void GuiModels::prepare(Rml::Context& context, std::string_view rml)
     }
 }
 
-void GuiModels::set(Rml::Context* context, const std::string& model, const std::string& key, GuiValue value)
+void GuiModels::set(std::span<Rml::Context* const> contexts, const std::string& model, const std::string& key, GuiValue value)
 {
     values_[model][key] = std::move(value);
     const auto windows = windows_.find(model);
@@ -308,15 +308,17 @@ void GuiModels::set(Rml::Context* context, const std::string& model, const std::
         for (auto& [name, window] : windows->second)
             if (window.source == &values_[model][key])
                 ++window.version;
-    if (!context || !hasModel(*context, model))
-        return;
-    bind(*context, model, key);
-    Rml::DataModelHandle handle = context->GetDataModel(model).GetModelHandle();
-    handle.DirtyVariable(key);
-    if (windows != windows_.end())
-        for (const auto& [name, window] : windows->second)
-            if (window.source == &values_[model][key])
-                handle.DirtyVariable(window.name);
+    for (Rml::Context* context : contexts) {
+        if (!context || !hasModel(*context, model))
+            continue;
+        bind(*context, model, key);
+        Rml::DataModelHandle handle = context->GetDataModel(model).GetModelHandle();
+        handle.DirtyVariable(key);
+        if (windows != windows_.end())
+            for (const auto& [name, window] : windows->second)
+                if (window.source == &values_[model][key])
+                    handle.DirtyVariable(window.name); // a window of another context: no such variable, ignored
+    }
 }
 
 std::optional<GuiValue> GuiModels::get(const std::string& model, const std::string& key) const
@@ -328,11 +330,12 @@ std::optional<GuiValue> GuiModels::get(const std::string& model, const std::stri
     return value == found->second.end() ? std::nullopt : std::optional(value->second);
 }
 
-void GuiModels::clear(Rml::Context* context)
+void GuiModels::clear(std::span<Rml::Context* const> contexts)
 {
-    if (context)
-        for (const auto& [model, unused] : values_)
-            context->RemoveDataModel(model);
+    for (Rml::Context* context : contexts)
+        if (context)
+            for (const auto& [model, unused] : values_)
+                context->RemoveDataModel(model);
     values_.clear();
     windows_.clear();
     held_.clear();
@@ -359,12 +362,13 @@ void GuiModels::hold(const std::string& model, const std::string& key)
         held_[{model, key}] = std::exchange(values_[model][key], GuiValue::array());
 }
 
-void GuiModels::restore(Rml::Context* context)
+void GuiModels::restore(std::span<Rml::Context* const> contexts)
 {
     for (auto& [name, value] : held_) {
         values_[name.first][name.second] = std::move(value);
-        if (context && hasModel(*context, name.first))
-            context->GetDataModel(name.first).GetModelHandle().DirtyVariable(name.second);
+        for (Rml::Context* context : contexts)
+            if (context && hasModel(*context, name.first))
+                context->GetDataModel(name.first).GetModelHandle().DirtyVariable(name.second);
     }
     held_.clear();
 }

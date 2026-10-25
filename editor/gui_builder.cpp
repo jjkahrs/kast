@@ -480,6 +480,13 @@ void GuiBuilder::setPreviewSize(int width, int height)
     resolution_ = static_cast<int>(resolutions_.size()) - 2;
 }
 
+void GuiBuilder::setPreviewScale(int percent)
+{
+    if (std::ranges::find(scales_, percent) == scales_.end())
+        scales_.push_back(percent);
+    scale_ = static_cast<int>(std::ranges::find(scales_, percent) - scales_.begin());
+}
+
 void GuiBuilder::remap(const std::filesystem::path& from, const std::filesystem::path& to)
 {
     if (rml_.empty())
@@ -1211,6 +1218,15 @@ void GuiBuilder::drawPreview()
                     resolution_ = i;
             ImGui::EndCombo();
         }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(90.0f);
+        const auto percent = [&](int i) { return std::format("{}%", scales_[static_cast<size_t>(i)]); };
+        if (ImGui::BeginCombo("UI scale", percent(scale_).c_str())) {
+            for (int i = 0; i < static_cast<int>(scales_.size()); ++i)
+                if (ImGui::Selectable(percent(i).c_str(), i == scale_))
+                    scale_ = i;
+            ImGui::EndCombo();
+        }
         const ImVec2 avail = ImGui::GetContentRegionAvail();
         const float fbScale = ImGui::GetIO().DisplayFramebufferScale.x;
         auto [width, height] = resolutions_[static_cast<size_t>(resolution_)];
@@ -1222,7 +1238,18 @@ void GuiBuilder::drawPreview()
             if (previewStale_)
                 rebuildPreview();
             target_.resize(static_cast<uint16_t>(width), static_cast<uint16_t>(height));
-            preview_.resize(width, height);
+            // The dp ratio as in Play (gui_scale.h), the chosen UI scale standing for the display's and the player's;
+            // the preview lays out as a dp document (its dp units follow the ratio).
+            kast::GuiScale guiScale = projectScale;
+            guiScale.useOsDpi = false;
+            guiScale.uiScale = scales_[static_cast<size_t>(scale_)] / 100.0;
+            const double ratio = kast::guiDpRatio(guiScale, width, height, 1.0);
+            if (ratio != previewRatio_) {
+                previewRatio_ = ratio;
+                kast::log::info(std::format("GUI Preview dp ratio {:.4g} ({}x{}, UI scale {}%)", ratio, width, height,
+                                            scales_[static_cast<size_t>(scale_)]));
+            }
+            preview_.resize(width, height, static_cast<float>(ratio));
             preview_.render(target_.view(), target_.frameBuffer());
             const float scale = std::min(avail.x / static_cast<float>(width), avail.y / static_cast<float>(height));
             const ImVec2 size(static_cast<float>(width) * scale, static_cast<float>(height) * scale);

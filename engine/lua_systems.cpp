@@ -88,9 +88,9 @@ struct PendingScene {
 struct LuaSystems::State {
     State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, std::string scenePath, Input* input,
           EventBus& bus, StateMachines& fsm, Physics& physics, Audio& audio, Network& network, AuthClient& auth,
-          WorldClient& world, ChatClient& chat, GuiAccess* gui)
+          WorldClient& world, ChatClient& chat, GuiAccess* gui, DisplayAccess* display)
         : scene(scene), projectRoot(projectRoot), scenePath(std::move(scenePath)), input(input), bus(bus), fsm(fsm),
-          physics(physics), audio(audio), network(network), auth(auth), world(world), chat(chat), gui(gui)
+          physics(physics), audio(audio), network(network), auth(auth), world(world), chat(chat), gui(gui), display(display)
     {
     }
 
@@ -107,6 +107,7 @@ struct LuaSystems::State {
     WorldClient& world;
     ChatClient& chat;
     GuiAccess* gui; // null: no game GUIs here, kast.gui is nil
+    DisplayAccess* display; // null: no window here, kast.display is nil
     std::unordered_map<entt::entity, AudioHandle> sources; // the last voice each AudioSource started (kast.audio.stopSource)
     MaterialLibrary materials; // shared .mat files, for kast.get/setMaterialProperty
     std::optional<PendingScene> pending; // last kast.loadScene call wins
@@ -130,6 +131,7 @@ struct LuaSystems::State {
     sol::table worldApi;   // kast.world.*, likewise
     sol::table chatApi;    // kast.chat.*, likewise
     sol::table guiApi;     // kast.gui.*, only with a GuiAccess
+    sol::table displayApi; // kast.display.*, only with a DisplayAccess
     DefinitionFiles fsmFiles; // state machine definition files at the last load, for hot reload
     std::string callbackPath; // the definition file whose enter/exit is running (log prefixes, event publisher)
     std::vector<System> systems;
@@ -182,6 +184,7 @@ struct LuaSystems::State {
     void bindAuthApi();
     void bindWorldApi();
     void bindGuiApi();
+    void bindDisplayApi();
     // Starts entity's AudioSource. Throws std::invalid_argument (see Audio::play).
     AudioHandle playSource(entt::entity entity);
     void playOnStart(); // every AudioSource with playOnStart; a bad clip logs an error and plays nothing
@@ -384,6 +387,8 @@ sol::environment LuaSystems::State::environment()
         kast["chat"] = readOnly(chatApi);
     if (gui)
         kast["gui"] = readOnly(guiApi);
+    if (display)
+        kast["display"] = readOnly(displayApi);
     env["kast"] = readOnly(kast);
     return env;
 }
@@ -925,6 +930,7 @@ void LuaSystems::State::bindApi()
     bindWorldApi();
     chatApi = makeChatApi(lua, chat); // kast.chat.*: see lua_chat_api.h
     bindGuiApi();
+    bindDisplayApi();
 }
 
 // kast.fsm.*: thin wrappers over StateMachines, whose std::invalid_argument (a bad target) becomes a Lua error at the
@@ -1409,6 +1415,120 @@ void LuaSystems::State::bindGuiApi()
         const std::optional<std::string> id = gui->hovered();
         return id ? sol::make_object(lua, *id) : sol::object(sol::lua_nil);
     });
+    // Scaling (docs/engine/game-gui.html#scaling): out-of-range numbers are clamped (logged), wrong types raise.
+    const auto number = [](lua_State* L, const char* function, const char* what, const sol::object& value) {
+        const double n = value.get_type() == sol::type::number ? value.as<double>() : std::nan("");
+        if (!std::isfinite(n))
+            raise(L, std::format("kast.gui.{}: {} must be a number, got {}", function, what, toString(L, value)));
+        return n;
+    };
+    const auto clamped = [](const char* function, const char* what, double value, double min, double max) {
+        const double out = std::clamp(value, min, max);
+        if (out != value)
+            log::warn(std::format("kast.gui.{}: {} {} clamped to {}", function, what, value, out));
+        return out;
+    };
+    guiApi.set_function("setScale", [=, this](sol::this_state L, const sol::object& value) {
+        GuiScale scale = gui->scale();
+        scale.uiScale = clamped("setScale", "scale", number(L, "setScale", "scale", value), kMinUiScale, kMaxUiScale);
+        gui->setScale(scale);
+    });
+    guiApi.set_function("scale", [this] { return gui->scale().uiScale; });
+    guiApi.set_function("dpRatio", [this] { return gui->dpRatio(); });
+    // (w, h[, match]) sets it, match kept if nil; (nil) unsets it.
+    guiApi.set_function("setReferenceResolution", [=, this](sol::this_state L, const sol::object& w, const sol::object& h,
+                                                            const sol::object& match) {
+        GuiScale scale = gui->scale();
+        const auto none = [](const sol::object& value) {
+            return value.get_type() == sol::type::lua_nil || value.get_type() == sol::type::none;
+        };
+        if (none(w) && none(h)) {
+            scale.referenceResolution.reset();
+        } else {
+            const auto side = [&](const char* what, const sol::object& value) {
+                const double n = number(L, "setReferenceResolution", what, value);
+                if (n < 1.0 || n > 16384.0 || n != std::floor(n))
+                    raise(L, std::format("kast.gui.setReferenceResolution: {} must be a whole number from 1 to 16384, got {}",
+                                         what, toString(L, value)));
+                return static_cast<int>(n);
+            };
+            scale.referenceResolution = std::pair{side("width", w), side("height", h)};
+        }
+        if (!none(match))
+            scale.match = clamped("setReferenceResolution", "match", number(L, "setReferenceResolution", "match", match), 0.0, 1.0);
+        gui->setScale(scale);
+    });
+    guiApi.set_function("referenceResolution", [this](sol::this_state L) -> sol::variadic_results {
+        sol::variadic_results out;
+        const GuiScale scale = gui->scale();
+        if (!scale.referenceResolution) {
+            out.push_back(sol::make_object(L, sol::lua_nil));
+            return out;
+        }
+        out.push_back(sol::make_object(L, scale.referenceResolution->first));
+        out.push_back(sol::make_object(L, scale.referenceResolution->second));
+        out.push_back(sol::make_object(L, scale.match));
+        return out;
+    });
+}
+
+// kast.display.*: the game's window through DisplayAccess (docs/engine/game-gui.html#display). Wrong types raise; a
+// mode the display can't do returns false (logged) and changes nothing.
+void LuaSystems::State::bindDisplayApi()
+{
+    const auto modeTable = [this](const DisplayMode& mode) {
+        sol::table table = lua.create_table();
+        table["mode"] = windowModeName(mode.mode);
+        table["width"] = mode.width;
+        table["height"] = mode.height;
+        if (mode.refresh)
+            table["refresh"] = *mode.refresh;
+        return table;
+    };
+    displayApi = lua.create_table();
+    // {mode=, width=, height=, refresh=}: each optional, the current mode's where left out (refresh: the highest).
+    displayApi.set_function("setMode", [=, this](sol::this_state L, const sol::object& fields) {
+        if (fields.get_type() != sol::type::table)
+            raise(L, std::format("kast.display.setMode: expected a table {{mode=, width=, height=, refresh=}}, got {}",
+                                 toString(L, fields)));
+        DisplayMode want = display->mode();
+        want.refresh.reset();
+        std::string modeName;
+        for (const auto& [key, value] : fields.as<sol::table>()) {
+            const std::string name = key.get_type() == sol::type::string ? key.as<std::string>() : "";
+            if (name == "mode") {
+                if (value.get_type() != sol::type::string)
+                    raise(L, std::format("kast.display.setMode: mode must be a string, got {}", toString(L, value)));
+                modeName = value.as<std::string>();
+            } else if (name == "width" || name == "height" || name == "refresh") {
+                const double n = value.get_type() == sol::type::number ? value.as<double>() : 0.0;
+                if (!(n >= 1.0 && n <= 16384.0 && n == std::floor(n)))
+                    raise(L, std::format("kast.display.setMode: {} must be a whole number from 1 to 16384, got {}", name,
+                                         toString(L, value)));
+                (name == "width" ? want.width : name == "height" ? want.height : want.refresh.emplace()) = static_cast<int>(n);
+            } else {
+                raise(L, std::format("kast.display.setMode: unknown field {}", toString(L, key)));
+            }
+        }
+        if (!modeName.empty()) {
+            const std::optional<WindowMode> mode = windowModeFromName(modeName);
+            if (!mode) {
+                log::warn(std::format("kast.display.setMode: unknown mode '{}' (windowed, borderless or exclusive): unchanged",
+                                      modeName));
+                return false;
+            }
+            want.mode = *mode;
+        }
+        return display->setMode(want);
+    });
+    displayApi.set_function("mode", [=, this] { return modeTable(display->mode()); });
+    displayApi.set_function("modes", [this] {
+        sol::table list = lua.create_table();
+        for (const DisplayModeInfo& mode : display->modes())
+            list.add(lua.create_table_with("width", mode.width, "height", mode.height, "refresh", mode.refresh));
+        return list;
+    });
+    displayApi.set_function("displayScale", [this] { return display->displayScale(); });
 }
 
 // kast.sky.*: the scene's sky as its "sky" block (scene_io.h), but colors as {x=, y=, z=} like kast.get's Vec3 fields.
@@ -1886,7 +2006,7 @@ void LuaSystems::launch(Scene& scene, const std::optional<std::filesystem::path>
     if (gui_)
         gui_->reset(); // the old scene's documents and writes; the inits' writes apply as the new documents load
     state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_, physics_, audio_, network_, auth_,
-                                     world_, chat_, gui_);
+                                     world_, chat_, gui_, display_);
     state_->playOnStart(); // before the inits, which may stop them
     state_->init(scene.systems);
 }

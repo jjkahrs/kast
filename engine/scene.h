@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio.h"
+#include "gui_scale.h"
 #include "math3d.h"
 
 #include <entt/entity/registry.hpp>
@@ -367,10 +368,12 @@ struct StateMachine {
     std::string initialState;
 };
 
-// Shows a game GUI over the Game view in Play mode (see scene_gui.h): path is a project-relative .rml file.
+// Shows a game GUI over the Game view in Play mode (see scene_gui.h): path is a project-relative .rml file. scaling:
+// how it follows the dp ratio (gui_scale.h); saved only when not dp, so older scenes load and save unchanged.
 struct UIDocument {
     std::string path;
     bool visible = true;
+    GuiScaling scaling = GuiScaling::Dp;
 };
 
 enum class ColliderShape { Box, Sphere, Capsule, Cylinder };

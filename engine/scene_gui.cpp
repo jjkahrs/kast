@@ -10,6 +10,8 @@
 #include <RmlUi/Core/Factory.h>
 #include <RmlUi/Core/StyleSheetContainer.h>
 
+#include <SDL3/SDL.h>
+
 #include <algorithm>
 #include <format>
 #include <regex>
@@ -52,6 +54,13 @@ bool isTextField(const Rml::Element& element)
     return type == "text" || type == "password";
 }
 
+// Over an element of a document, not just a document's <body> or nothing.
+bool overElement(Rml::Context& context)
+{
+    Rml::Element* hover = context.GetHoverElement();
+    return hover && hover != context.GetRootElement() && hover != hover->GetOwnerDocument();
+}
+
 } // namespace
 
 void SceneGui::sync(const Scene& scene, const std::filesystem::path& projectRoot, EventBus& bus)
@@ -62,7 +71,8 @@ void SceneGui::sync(const Scene& scene, const std::filesystem::path& projectRoot
     const entt::registry& registry = scene.registry();
     for (auto [entity, component, id] : registry.view<const UIDocument, const PersistentId>().each())
         if (!component.path.empty())
-            wanted.push_back({.entity = entity, .id = id.value, .path = component.path, .visible = component.visible});
+            wanted.push_back({.entity = entity, .id = id.value, .path = component.path, .visible = component.visible,
+                              .scaling = component.scaling});
     std::ranges::sort(wanted, {}, &Entry::id);
 
     bool changed = false;
@@ -70,7 +80,7 @@ void SceneGui::sync(const Scene& scene, const std::filesystem::path& projectRoot
     next.reserve(wanted.size());
     for (Entry& want : wanted) {
         auto old = std::ranges::find_if(entries_, [&](const Entry& entry) {
-            return entry.entity == want.entity && entry.path == want.path;
+            return entry.entity == want.entity && entry.path == want.path && entry.scaling == want.scaling;
         });
         if (old != entries_.end()) {
             next.push_back(std::move(*old));
@@ -215,14 +225,19 @@ bool SceneGui::focus(const std::string& id)
 {
     for (auto it = entries_.rbegin(); it != entries_.rend(); ++it)
         if (it->document && it->visible)
-            if (Rml::Element* element = it->document->GetElementById(id))
-                return element->Focus();
+            if (Rml::Element* element = it->document->GetElementById(id)) {
+                if (!element->Focus())
+                    return false;
+                takeKeyboard(it->scaling);
+                return true;
+            }
     return false;
 }
 
 std::optional<std::string> SceneGui::focusedField()
 {
-    Rml::Context* context = gui::ready() ? context_.context() : nullptr;
+    GuiContext& keyboard = contextFor(keyboard_);
+    Rml::Context* context = gui::ready() && keyboard.created() ? keyboard.context() : nullptr;
     Rml::Element* focus = context ? context->GetFocusElement() : nullptr;
     if (!focus || !isTextField(*focus))
         return std::nullopt;
@@ -231,21 +246,22 @@ std::optional<std::string> SceneGui::focusedField()
 
 bool SceneGui::mouseOver()
 {
-    Rml::Context* context = gui::ready() ? context_.context() : nullptr;
-    Rml::Element* hover = context ? context->GetHoverElement() : nullptr;
-    return hover && hover != context->GetRootElement() && hover != hover->GetOwnerDocument();
+    return std::ranges::any_of(contexts(), [](Rml::Context* context) { return overElement(*context); });
 }
 
 std::optional<std::string> SceneGui::hovered()
 {
-    Rml::Context* context = gui::ready() ? context_.context() : nullptr;
-    const std::string id = guiElementId(context ? context->GetHoverElement() : nullptr);
-    return id.empty() ? std::nullopt : std::optional(id);
+    for (Rml::Context* context : contexts()) // the All one first: it is on top
+        if (overElement(*context)) {
+            const std::string id = guiElementId(context->GetHoverElement());
+            return id.empty() ? std::nullopt : std::optional(id);
+        }
+    return std::nullopt;
 }
 
 void SceneGui::setModelValue(const std::string& model, const std::string& key, GuiValue value)
 {
-    models_.set(gui::ready() ? context_.context() : nullptr, model, key, std::move(value));
+    models_.set(contexts(), model, key, std::move(value));
 }
 
 std::optional<GuiValue> SceneGui::modelValue(const std::string& model, const std::string& key)
@@ -384,7 +400,117 @@ void SceneGui::reset()
 {
     clear();
     written_.clear();
-    models_.clear(gui::ready() ? context_.context() : nullptr);
+    models_.clear(contexts());
+}
+
+void SceneGui::release()
+{
+    clear();
+    context_.release();
+    allContext_.release();
+}
+
+std::vector<Rml::Context*> SceneGui::contexts()
+{
+    std::vector<Rml::Context*> out;
+    if (!gui::ready())
+        return out;
+    if (allContext_.created())
+        out.push_back(allContext_.context());
+    if (Rml::Context* context = context_.context())
+        out.push_back(context);
+    return out;
+}
+
+void SceneGui::resize(int width, int height)
+{
+    if (width <= 0 || height <= 0)
+        return; // minimized: no size to fit, the documents keep theirs
+    if (width == width_ && height == height_)
+        return;
+    width_ = width;
+    height_ = height;
+    updateScale();
+}
+
+void SceneGui::setDisplayScale(double osScale)
+{
+    if (!(osScale > 0.0) || osScale == osScale_)
+        return;
+    osScale_ = osScale;
+    updateScale();
+}
+
+void SceneGui::setScale(const GuiScale& scale)
+{
+    scale_ = scale;
+    updateScale();
+    if (scaleListener_)
+        scaleListener_(scale_);
+}
+
+void SceneGui::updateScale()
+{
+    if (width_ <= 0 || height_ <= 0)
+        return;
+    dpRatio_ = guiDpRatio(scale_, width_, height_, osScale_);
+    if (loggedRatio_ != dpRatio_)
+        log::info(std::format("GUI dp ratio {:.4g} ({}x{} pixels, display scale {:.4g}, UI scale {:.4g})", dpRatio_, width_,
+                              height_, scale_.useOsDpi ? osScale_ : 1.0, scale_.uiScale));
+    loggedRatio_ = dpRatio_;
+    context_.resize(width_, height_, static_cast<float>(dpRatio_), GuiScaling::Dp);
+    allContext_.resize(width_, height_, static_cast<float>(dpRatio_), GuiScaling::All);
+}
+
+void SceneGui::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer)
+{
+    context_.render(view, frameBuffer);
+    if (allContext_.created())
+        allContext_.render(view, frameBuffer, true);
+}
+
+void SceneGui::onEvent(const SDL_Event& event, float originX, float originY, float scale)
+{
+    if (!allContext_.created() || !gui::ready()) {
+        context_.onEvent(event, originX, originY, scale);
+        return;
+    }
+    const bool button = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP;
+    if (event.type == SDL_EVENT_MOUSE_MOTION || button) {
+        // The All context is on top: it gets the mouse while it is over one of its elements, else the Dp one does.
+        SDL_Event motion{};
+        motion.motion.type = SDL_EVENT_MOUSE_MOTION;
+        motion.motion.x = button ? event.button.x : event.motion.x;
+        motion.motion.y = button ? event.button.y : event.motion.y;
+        allContext_.onEvent(motion, originX, originY, scale);
+        const bool overAll = overElement(*allContext_.context());
+        if (overAll) {
+            context_.context()->ProcessMouseLeave();
+            if (button)
+                allContext_.onEvent(event, originX, originY, scale);
+        } else {
+            context_.onEvent(event, originX, originY, scale);
+        }
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+            takeKeyboard(overAll ? GuiScaling::All : GuiScaling::Dp);
+    } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+        contextFor(overElement(*allContext_.context()) ? GuiScaling::All : GuiScaling::Dp).onEvent(event, originX, originY, scale);
+    } else if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE) {
+        context_.onEvent(event, originX, originY, scale);
+        allContext_.onEvent(event, originX, originY, scale);
+    } else { // keys and text
+        contextFor(keyboard_).onEvent(event, originX, originY, scale);
+    }
+}
+
+void SceneGui::takeKeyboard(GuiScaling scaling)
+{
+    keyboard_ = scaling;
+    GuiContext& other = contextFor(scaling == GuiScaling::All ? GuiScaling::Dp : GuiScaling::All);
+    Rml::Context* context = gui::ready() && other.created() ? other.context() : nullptr;
+    Rml::Element* focus = context ? context->GetFocusElement() : nullptr;
+    if (focus && focus != context->GetRootElement() && focus != focus->GetOwnerDocument())
+        focus->Blur();
 }
 
 Rml::ElementDocument* SceneGui::documentWith(const std::string& id) const
@@ -435,7 +561,7 @@ void SceneGui::load(Entry& entry, EventBus& bus)
 {
     entry.document = nullptr;
     entry.files.clear();
-    Rml::Context* context = context_.context();
+    Rml::Context* context = contextFor(entry.scaling).context();
     if (!context)
         return;
     std::string reason = "no project is open";
@@ -474,7 +600,7 @@ void SceneGui::load(Entry& entry, EventBus& bus)
         entry.listListener->attach(*document);
         gui::convertRichText(*document);
     }
-    models_.restore(context);
+    models_.restore(contexts());
     if (!document || gui::problemCount() != problems) {
         log::error(std::format("UI document '{}' (or its style sheet) has errors, see above: not shown", entry.path));
         if (document)

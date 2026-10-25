@@ -1472,6 +1472,7 @@ void FileActions::drawModals()
 
     drawBuildSettingsModal();
     drawOnlineSettingsModal();
+    drawGuiSettingsModal();
 
     if (std::exchange(errorRequested_, false))
         ImGui::OpenPopup("Error");
@@ -1596,6 +1597,82 @@ void FileActions::drawOnlineSettingsModal()
             kast::log::error(onlineError_);
     } else if (ImGui::Button("Cancel") || (ImGui::IsKeyPressed(ImGuiKey_Escape) && !dialogOpen_)) {
         ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+void FileActions::openGuiSettings()
+{
+    if (!doc_.project)
+        return;
+    gui_ = doc_.project->gui;
+    guiError_.clear();
+    guiSettingsRequested_ = true;
+    guiSettingsOpen_ = true;
+}
+
+void FileActions::drawGuiSettingsModal()
+{
+    if (std::exchange(guiSettingsRequested_, false))
+        ImGui::OpenPopup("Display & GUI Scaling");
+    // Tracks the popup itself, so idle() also sees it closed when another popup (an Error) replaced it.
+    guiSettingsOpen_ = ImGui::BeginPopupModal("Display & GUI Scaling", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+    if (!guiSettingsOpen_)
+        return;
+    const float fieldWidth = ImGui::GetFontSize() * 12.0f;
+    kast::GuiScale& scale = gui_.scale;
+    ImGui::SeparatorText("GUI scaling");
+    bool reference = scale.referenceResolution.has_value();
+    if (ImGui::Checkbox("Reference resolution", &reference))
+        scale.referenceResolution = reference ? std::optional(std::pair{1920, 1080}) : std::nullopt;
+    if (scale.referenceResolution) {
+        int size[2] = {scale.referenceResolution->first, scale.referenceResolution->second};
+        ImGui::SetNextItemWidth(fieldWidth);
+        if (ImGui::InputInt2("Width x height", size))
+            scale.referenceResolution = std::pair{std::clamp(size[0], 1, 16384), std::clamp(size[1], 1, 16384)};
+        float match = static_cast<float>(scale.match);
+        ImGui::SetNextItemWidth(fieldWidth);
+        if (ImGui::SliderFloat("Match (width 0, height 1)", &match, 0.0f, 1.0f, "%.2f"))
+            scale.match = match;
+    }
+    ImGui::Checkbox("Use the OS display scale", &scale.useOsDpi);
+    float uiScale = static_cast<float>(scale.uiScale);
+    ImGui::SetNextItemWidth(fieldWidth);
+    if (ImGui::SliderFloat("UI scale", &uiScale, static_cast<float>(kast::kMinUiScale), static_cast<float>(kast::kMaxUiScale), "%.2f"))
+        scale.uiScale = uiScale;
+    ImGui::TextDisabled("dp ratio = reference fit x display scale x UI scale (the player can change the UI scale)");
+    ImGui::SeparatorText("Player window (default)");
+    kast::DisplayMode& window = gui_.window;
+    constexpr kast::WindowMode kModes[] = {kast::WindowMode::Windowed, kast::WindowMode::Borderless, kast::WindowMode::Exclusive};
+    ImGui::SetNextItemWidth(fieldWidth);
+    if (ImGui::BeginCombo("Mode", kast::windowModeName(window.mode))) {
+        for (const kast::WindowMode mode : kModes)
+            if (ImGui::Selectable(kast::windowModeName(mode), mode == window.mode))
+                window.mode = mode;
+        ImGui::EndCombo();
+    }
+    int size[2] = {window.width, window.height};
+    ImGui::SetNextItemWidth(fieldWidth);
+    if (ImGui::InputInt2("Size", size)) {
+        window.width = std::clamp(size[0], 1, 16384);
+        window.height = std::clamp(size[1], 1, 16384);
+    }
+    int refresh = window.refresh.value_or(0);
+    ImGui::SetNextItemWidth(fieldWidth);
+    if (ImGui::InputInt("Refresh Hz (0 = highest)", &refresh))
+        window.refresh = refresh > 0 ? std::optional(std::min(refresh, 1000)) : std::nullopt;
+    if (!guiError_.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", guiError_.c_str());
+    ImGui::Spacing();
+    if (ImGui::Button("Save")) {
+        if (setGuiConfig(*doc_.project, gui_, guiError_))
+            ImGui::CloseCurrentPopup();
+        else
+            kast::log::error(guiError_);
+    } else {
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape))
+            ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
 }

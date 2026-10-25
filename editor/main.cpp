@@ -78,7 +78,7 @@ constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--screenshot-on-log frames,text] [--size WxH] [--window-pos X,Y] [--ui-scale F] [--projects-file list.json] "
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
-    "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-select path] [--material-set field=json] [--material-undo N] [--material-redo N] "
+    "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--open-gui-settings] [--gui-settings-set json] [--game-resolution WxH] [--game-display-scale S] [--gui-preview-scale PERCENT] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-select path] [--material-set field=json] [--material-undo N] [--material-redo N] "
     "[--focus-panel Window] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
@@ -142,6 +142,11 @@ struct Options {
     std::optional<std::pair<Panels::AssetCreate, std::string>> assetsCreate; // run Assets Create in that folder
     bool openBuildSettings = false; // open the Build Settings modal (needs --project) for screenshots
     bool openOnlineSettings = false; // open the Online Services modal (needs --project) for screenshots
+    bool openGuiSettings = false; // open the Display & GUI Scaling modal (needs --project) for screenshots
+    std::optional<nlohmann::ordered_json> guiSettingsSet; // --gui-settings-set: these "gui" keys saved as that modal's Save would
+    std::optional<std::pair<int, int>> gameResolution; // --game-resolution: Window > Game View simulates it
+    std::optional<double> gameDisplayScale;           // --game-display-scale: likewise
+    std::optional<int> guiPreviewScale;               // --gui-preview-scale: the GUI Preview's UI scale, in percent
     std::vector<std::string> zoneSections; // --zone-section: expand these Zone tab sections, collapse the others (with --focus-panel Zone), for screenshots
     std::optional<ZonePanel::Tool> zoneTool; // --zone-tool: this Zone tab tool is active (tests, with --sim-mouse)
     std::string zoneSelect; // --zone-select: select this zone area or spawn id, or "object:tx,tz,index"
@@ -416,13 +421,50 @@ bool parseAssetCreate(std::string_view value, std::optional<std::pair<Panels::As
     return false;
 }
 
+// The GUI scaling flags, outside parseArgs' else-if chain (at MSVC's nesting limit). True if arg is one of them; ok
+// false (logged) if its value is bad.
+bool parseGuiScalingArg(std::string_view arg, int argc, char** argv, int& i, Options& options, bool& ok)
+{
+    const bool hasValue = i + 1 < argc;
+    if (arg == "--open-gui-settings") {
+        options.openGuiSettings = true;
+    } else if (arg == "--gui-settings-set" && hasValue) {
+        options.guiSettingsSet = nlohmann::ordered_json::parse(argv[++i], nullptr, false);
+        ok = !options.guiSettingsSet->is_discarded() && options.guiSettingsSet->is_object();
+        if (!ok)
+            kast::log::error(std::format("Invalid --gui-settings-set '{}', expected a JSON object. {}", argv[i], kUsage));
+    } else if (arg == "--game-resolution" && hasValue) {
+        ok = parseSize(argv[++i], options.gameResolution);
+    } else if (arg == "--game-display-scale" && hasValue) {
+        double scale = 0.0;
+        ok = parsePositive(std::string_view(argv[++i]), scale);
+        if (ok)
+            options.gameDisplayScale = scale;
+        else
+            kast::log::error(std::format("Invalid --game-display-scale '{}', expected a positive number. {}", argv[i], kUsage));
+    } else if (arg == "--gui-preview-scale" && hasValue) {
+        int percent = 0;
+        ok = parsePositive(std::string_view(argv[++i]), percent);
+        if (ok)
+            options.guiPreviewScale = percent;
+        else
+            kast::log::error(std::format("Invalid --gui-preview-scale '{}', expected a percentage. {}", argv[i], kUsage));
+    } else {
+        return false;
+    }
+    return true;
+}
+
 std::optional<Options> parseArgs(int argc, char** argv)
 {
     Options options;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
         const bool hasValue = i + 1 < argc;
-        if (arg == "--frames" && hasValue && parsePositive(argv[i + 1], options.frames)) {
+        if (bool ok = true; parseGuiScalingArg(arg, argc, argv, i, options, ok)) {
+            if (!ok)
+                return std::nullopt;
+        } else if (arg == "--frames" && hasValue && parsePositive(argv[i + 1], options.frames)) {
             ++i;
         } else if (arg == "--screenshot" && hasValue) {
             options.screenshot = argv[++i];
@@ -795,7 +837,9 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     const bool editorFlags = options.select != 0 || options.play || options.selectNetworkEntity || options.addComponentPopup ||
                              options.newComponentPrompt || !options.newComponent.empty() || !options.openMenu.empty() ||
-                             options.openBuildSettings || options.openOnlineSettings || !options.focusPanel.empty() || !options.scrollPostSection.empty() || !options.zoneSections.empty() || options.zoneTool || !options.zoneSelect.empty() || options.bake || !options.mapbake.empty() || options.newStateMachinePrompt ||
+                             options.openBuildSettings || options.openOnlineSettings || options.openGuiSettings ||
+                             options.guiSettingsSet || options.gameResolution || options.gameDisplayScale ||
+                             options.guiPreviewScale || !options.focusPanel.empty() || !options.scrollPostSection.empty() || !options.zoneSections.empty() || options.zoneTool || !options.zoneSelect.empty() || options.bake || !options.mapbake.empty() || options.newStateMachinePrompt ||
                              options.assetsMenu || options.assetsCreate || !options.assetsSelect.empty() ||
                              !options.materialSets.empty() || options.materialUndo || options.materialRedo ||
                              !options.openGui.empty() ||
@@ -815,7 +859,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.cancelLightmaps || options.bakeVoxelGi || options.undo || options.redo;
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --select-network-entity, --add-component-popup, --new-component[-prompt], "
-                         "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --focus-panel, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
+                         "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --open-gui-settings, "
+                         "--gui-settings-set, --game-resolution, --game-display-scale, --gui-preview-scale, --focus-panel, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
                          "--assets-menu, "
                          "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
                          "--gui-click, --open-graph, --preview-model, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
@@ -866,6 +911,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     if (options.openOnlineSettings && options.project.empty()) {
         kast::log::error("--open-online-settings requires --project <dir>");
+        return std::nullopt;
+    }
+    if ((options.openGuiSettings || options.guiSettingsSet) && options.project.empty()) {
+        kast::log::error("--open-gui-settings and --gui-settings-set require --project <dir>");
         return std::nullopt;
     }
     if ((!options.screenshot.empty() || options.screenshotOnLog) && options.frames == 0) {
@@ -970,7 +1019,7 @@ void undoShortcuts(const UndoTarget& target, const FileActions& files)
 // openMenu: a main menu to open this frame (--open-menu), or empty. openPreferences: set when File > Preferences... is
 // chosen. showLighting, showPostProcessing, showPhysics, showMixer, showNetwork, showOnline: those panels' visibility,
 // toggled in the Window menu. undo: what the Edit menu acts on.
-void drawMenuBar(FileActions& files, Document& doc, const UndoTarget& undo, const std::string& openMenu,
+void drawMenuBar(FileActions& files, Document& doc, const UndoTarget& undo, GameViewport& game, const std::string& openMenu,
                  bool& openPreferences, bool& showLighting, bool& showPostProcessing, bool& showPhysics, bool& showMixer,
                  bool& showNetwork, bool& showOnline)
 {
@@ -1019,6 +1068,8 @@ void drawMenuBar(FileActions& files, Document& doc, const UndoTarget& undo, cons
                 files.openBuildSettings();
             if (ImGui::MenuItem("Online Services...", nullptr, false, canBuild))
                 files.openOnlineSettings();
+            if (ImGui::MenuItem("Display & GUI Scaling...", nullptr, false, canBuild))
+                files.openGuiSettings();
             ImGui::Separator();
             if (ImGui::MenuItem("Build...", nullptr, false, canBuild))
                 files.build();
@@ -1033,6 +1084,8 @@ void drawMenuBar(FileActions& files, Document& doc, const UndoTarget& undo, cons
             ImGui::MenuItem("Mixer", nullptr, &showMixer);
             ImGui::MenuItem("Network", nullptr, &showNetwork);
             ImGui::MenuItem("Online", nullptr, &showOnline);
+            ImGui::Separator();
+            game.drawSimulationMenu();
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -1529,6 +1582,7 @@ int main(int argc, char** argv)
     applyWorldOverride();
     GameViewport game(kGameView, kGameGuiView);
     doc.lua.setGui(&game.gui()); // kast.gui.* in Play, from the first (--play) start on
+    doc.lua.setDisplay(&game.display()); // kast.display.*: recorded, never applied to the editor window
     bool playAfterLogin = false; // --play waiting for --online-login-env's answer
     if (options->onlineLoginEnv) {
         online.poll(doc.project ? &*doc.project : nullptr, false);
@@ -1648,7 +1702,8 @@ int main(int argc, char** argv)
             viewport.openDebugMenu();
         viewport.init();
         viewport.setPostEffects(!options->noScenePost);
-        game.init();
+        game.init(window);
+        game.simulate(options->gameResolution, options->gameDisplayScale);
         kast::gui::init();
         if (!options->openGui.empty()) {
             std::filesystem::path rml = std::filesystem::path(reinterpret_cast<const char8_t*>(options->openGui.c_str()));
@@ -1670,6 +1725,8 @@ int main(int argc, char** argv)
         }
         if (options->guiPreviewSize)
             guiBuilder.setPreviewSize(options->guiPreviewSize->first, options->guiPreviewSize->second);
+        if (options->guiPreviewScale)
+            guiBuilder.setPreviewScale(*options->guiPreviewScale);
         files.setWindow(window);
         bgfx::setViewClear(kImGuiView, BGFX_CLEAR_COLOR, kBackbufferClearColor);
         kast::log::info("ImGui initialized (docking enabled)");
@@ -1734,7 +1791,7 @@ int main(int argc, char** argv)
         const int openMenuFrame =
             kAddComponentPopupFrame +
             (options->openGui.empty() && options->openGraph.empty() && options->focusPanel.empty() ? 0 : 10);
-        drawMenuBar(files, doc, undo, frames.frame() == openMenuFrame ? options->openMenu : std::string(),
+        drawMenuBar(files, doc, undo, game, frames.frame() == openMenuFrame ? options->openMenu : std::string(),
                     openPreferences, showLighting, showPostProcessing, showPhysics, showMixer, showNetwork, showOnline);
         const ImGuiID dockspace = ImGui::GetID("MainDockSpace");
         if (!ImGui::DockBuilderGetNode(dockspace)) // no saved layout in imgui.ini
@@ -1752,6 +1809,17 @@ int main(int argc, char** argv)
             files.openBuildSettings();
         if (options->openOnlineSettings && frames.frame() == kAddComponentPopupFrame)
             files.openOnlineSettings();
+        if (options->openGuiSettings && frames.frame() == kAddComponentPopupFrame)
+            files.openGuiSettings();
+        if (options->guiSettingsSet && frames.frame() == kAddComponentPopupFrame) {
+            nlohmann::ordered_json json = kast::guiConfigToJson(doc.project->gui);
+            for (const auto& [key, value] : options->guiSettingsSet->items())
+                json[key] = value;
+            kast::GuiConfig gui;
+            std::string error;
+            if (!kast::guiConfigFromJson(json, gui, error) || !setGuiConfig(*doc.project, gui, error))
+                kast::log::error(std::format("--gui-settings-set: {}", error));
+        }
         // With --open-graph: after the graph panels took the focus (Shader Preview, Graph Inspector, canvas).
         if (!options->focusPanel.empty() && frames.frame() == kAddComponentPopupFrame + (options->openGraph.empty() ? 0 : 3)) {
             // Applied when that window is submitted below. Builder panels go by their "###" id.
@@ -1951,6 +2019,7 @@ int main(int argc, char** argv)
         panels.drawMixer(doc, showMixer);
         panels.drawNetwork(doc, showNetwork);
         onlinePanel.draw(doc, online, files, options->worldAddress, showOnline);
+        guiBuilder.projectScale = doc.project ? doc.project->gui.scale : kast::GuiScale{};
         drawGuiBuilder(guiBuilder);
         drawShaderGraph(graphs, doc.shaderClock.seconds());
         // Layouts saved before the Model Preview existed: dock it as a tab beside Scene. Only when it draws, or the dock

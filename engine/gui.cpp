@@ -333,11 +333,21 @@ int toRmlButton(Uint8 button)
 Rml::Context* GuiContext::context()
 {
     if (!context_ && gui::ready()) {
-        context_ = Rml::CreateContext(name_, {width_, height_});
-        if (!context_)
+        context_ = Rml::CreateContext(name_, layoutSize());
+        if (context_)
+            context_->SetDensityIndependentPixelRatio(scaling_ == GuiScaling::Dp ? dpRatio_ : 1.0f);
+        else
             log::error(std::format("RmlUi could not create the '{}' GUI context", name_));
     }
     return context_;
+}
+
+Rml::Vector2i GuiContext::layoutSize() const
+{
+    if (scaling_ == GuiScaling::Dp)
+        return {width_, height_};
+    return {std::max(static_cast<int>(static_cast<float>(width_) / dpRatio_), 1),
+            std::max(static_cast<int>(static_cast<float>(height_) / dpRatio_), 1)};
 }
 
 void GuiContext::release()
@@ -347,21 +357,28 @@ void GuiContext::release()
     context_ = nullptr;
 }
 
-void GuiContext::resize(int width, int height)
+void GuiContext::resize(int width, int height, float dpRatio, GuiScaling scaling)
 {
     width_ = std::max(width, 1);
     height_ = std::max(height, 1);
-    if (context_)
-        context_->SetDimensions({width_, height_});
+    dpRatio_ = dpRatio > 0.0f ? dpRatio : 1.0f;
+    scaling_ = scaling;
+    if (!context_)
+        return;
+    const float dp = scaling_ == GuiScaling::Dp ? dpRatio_ : 1.0f;
+    if (context_->GetDensityIndependentPixelRatio() != dp)
+        context_->SetDensityIndependentPixelRatio(dp);
+    if (context_->GetDimensions() != layoutSize())
+        context_->SetDimensions(layoutSize());
 }
 
-void GuiContext::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer)
+void GuiContext::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, bool shareViews)
 {
     Rml::Context* rml = context();
     GuiRenderer* renderer = gui::renderer();
     if (!rml || !renderer)
         return;
-    renderer->begin(view, frameBuffer, width_, height_);
+    renderer->begin(view, frameBuffer, width_, height_, 1.0f / unitsPerPixel(), shareViews);
     gui::g_updating = true;
     rml->Update();
     gui::g_updating = false;
@@ -374,8 +391,9 @@ void GuiContext::onEvent(const SDL_Event& event, float originX, float originY, f
     if (!rml)
         return;
     const int mods = toRmlModifiers(SDL_GetModState());
-    const auto x = [&](float value) { return static_cast<int>((value - originX) * scale); };
-    const auto y = [&](float value) { return static_cast<int>((value - originY) * scale); };
+    const float units = scale * unitsPerPixel();
+    const auto x = [&](float value) { return static_cast<int>((value - originX) * units); };
+    const auto y = [&](float value) { return static_cast<int>((value - originY) * units); };
     switch (event.type) {
     case SDL_EVENT_MOUSE_MOTION:
         rml->ProcessMouseMove(x(event.motion.x), y(event.motion.y), mods);

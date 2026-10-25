@@ -1270,7 +1270,11 @@ public:
         visible_.clear();
         models.clear();
     }
+    kast::GuiScale scale() override { return guiScale; }
+    void setScale(const kast::GuiScale& scale) override { guiScale = scale; }
+    double dpRatio() override { return kast::guiDpRatio(guiScale, 1920, 1080, 1.0); }
 
+    kast::GuiScale guiScale;
     std::map<std::string, kast::GuiValue> values;
     std::map<std::string, std::string> texts;
     std::map<std::string, bool> visible_;
@@ -3165,7 +3169,7 @@ void checkBuildSettings()
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                        "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene",
+                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
 
@@ -3189,7 +3193,7 @@ void checkBuildSettings()
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                                           "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene",
+                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
@@ -15311,6 +15315,324 @@ end }}
     stopPlay(doc);
 }
 
+// --- GUI resolution and DPI scaling (gui_scale.h, docs/engine/game-gui.html#scaling) ---
+
+// The scale math, project.kast "gui", the user settings file, the exclusive mode pick and UIDocument.scaling.
+void checkGuiScaling()
+{
+    using kast::guiDpRatio;
+    const auto near = [](double a, double b) { return std::abs(a - b) < 1e-9; };
+    const kast::GuiScale none{};
+    check(near(guiDpRatio(none, 1280, 720, 1.5), 1.5) && near(guiDpRatio({.uiScale = 2.0}, 3840, 2160, 1.25), 2.5),
+          "no reference resolution: dpRatio = osScale x userScale");
+    for (const double match : {0.0, 0.3, 0.5, 1.0})
+        check(near(guiDpRatio({.referenceResolution = std::pair{1920, 1080}, .match = match}, 3840, 2160, 1.0), 2.0),
+              "ref 1920x1080 in 3840x2160: 2 at any match");
+    const auto tall = [&](double match) {
+        return guiDpRatio({.referenceResolution = std::pair{1920, 1080}, .match = match}, 1920, 2160, 1.0);
+    };
+    check(near(tall(0.0), 1.0) && near(tall(1.0), 2.0) && near(tall(0.5), std::sqrt(2.0)),
+          "ref 1920x1080 in 1920x2160: match 0 -> 1, 1 -> 2, 0.5 -> sqrt(2) (log-space blend)");
+    check(near(guiDpRatio({.useOsDpi = false}, 1280, 720, 2.0), 1.0) &&
+              near(guiDpRatio({.referenceResolution = std::pair{640, 360}, .useOsDpi = false, .uiScale = 1.5}, 1280, 720, 3.0), 3.0),
+          "useOsDpi false ignores the OS scale");
+    check(near(kast::guiReferenceFit(0, 0, std::pair{1920, 1080}, 0.5), 1.0) &&
+              near(kast::guiReferenceFit(1920, 1080, std::pair{0, 1080}, 0.5), 1.0),
+          "a zero window or reference size fits as 1 (no divide by zero)");
+
+    // pickExclusiveMode: the size at the refresh asked for, else the highest; nothing for a size the display lacks.
+    const std::vector<kast::DisplayModeInfo> modes{{1920, 1080, 144}, {1920, 1080, 60}, {1280, 720, 60}};
+    check(kast::pickExclusiveMode({.mode = kast::WindowMode::Exclusive, .width = 1920, .height = 1080}, modes) ==
+                  kast::DisplayModeInfo{1920, 1080, 144} &&
+              kast::pickExclusiveMode({.mode = kast::WindowMode::Exclusive, .width = 1920, .height = 1080, .refresh = 60}, modes) ==
+                  kast::DisplayModeInfo{1920, 1080, 60} &&
+              !kast::pickExclusiveMode({.mode = kast::WindowMode::Exclusive, .width = 1920, .height = 1080, .refresh = 75}, modes) &&
+              !kast::pickExclusiveMode({.mode = kast::WindowMode::Exclusive, .width = 800, .height = 600}, modes),
+          "pickExclusiveMode: the highest refresh, the one asked for, or none");
+    check(kast::prefFolderName("My Game: Online!") == "My Game_ Online_" && kast::prefFolderName(" ..") == "Game" &&
+              kast::prefFolderName("Kast Quest") == "Kast Quest",
+          "prefFolderName keeps a safe folder name");
+
+    // project.kast "gui": left out while default, round-trips, and bad values fail the load naming the field.
+    const std::filesystem::path dir = looseTestDir("kast_gui_scale_check");
+    const std::filesystem::path root = (dir / "p").lexically_normal();
+    std::filesystem::create_directories(root);
+    std::string error;
+    kast::Project project{.root = root, .name = "Scale"};
+    check(kast::saveProject(project, error) && !contains(readText(root / "project.kast"), "\"gui\""),
+          "a project with the default gui settings saves no \"gui\" block");
+    project.gui = {.scale = {.referenceResolution = std::pair{1920, 1080}, .match = 0.25, .useOsDpi = false, .uiScale = 1.5},
+                   .window = {.mode = kast::WindowMode::Exclusive, .width = 2560, .height = 1440, .refresh = 144}};
+    kast::Project loaded;
+    check(kast::saveProject(project, error) && kast::loadProject(root / "project.kast", loaded, error) && loaded.gui == project.gui,
+          "the gui block round-trips through project.kast");
+    project.gui = {.window = {.mode = kast::WindowMode::Borderless}};
+    check(kast::saveProject(project, error) && kast::loadProject(root / "project.kast", loaded, error) &&
+              loaded.gui == project.gui && !loaded.gui.scale.referenceResolution && !loaded.gui.window.refresh,
+          "a gui block with only some settings round-trips (no reference resolution, no refresh)");
+    const std::pair<const char*, const char*> bad[] = {
+        {R"("gui": 5)", "\"gui\": must be an object"},
+        {R"("gui": {"match": 2})", "\"gui\": match must be a number from 0 to 1"},
+        {R"("gui": {"uiScale": 9})", "\"gui\": uiScale must be a number from 0.5 to 3"},
+        {R"("gui": {"useOsDpi": "yes"})", "\"gui\": useOsDpi must be true or false"},
+        {R"("gui": {"referenceResolution": [1920]})", "\"gui\": referenceResolution must be [width, height]"},
+        {R"("gui": {"referenceResolution": [0, 1080]})", "\"gui\": referenceResolution must be [width, height]"},
+        {R"("gui": {"mode": "fullscreen"})", "\"gui\": mode must be \"windowed\", \"borderless\" or \"exclusive\""},
+        {R"("gui": {"width": -1})", "\"gui\": width must be a whole number from 1 to 16384"},
+        {R"("gui": {"height": 1.5})", "\"gui\": height must be a whole number from 1 to 16384"},
+        {R"("gui": {"refresh": 0})", "\"gui\": refresh must be a whole number of Hz from 1 to 1000"},
+        {R"("gui": {"scale": 1})", "\"gui\": unknown key \"scale\""},
+    };
+    for (const auto& [block, mention] : bad) {
+        writeFile(root / "project.kast", std::format(R"({{"version": 1, "name": "Scale", "startScene": null, {}}})", block));
+        error.clear();
+        check(!kast::loadProject(root / "project.kast", loaded, error) && contains(error, mention),
+              std::format("project.kast {} fails to load naming the field", block).c_str());
+        if (!contains(error, mention))
+            kast::log::error(std::format("  got: {}", error));
+    }
+
+    // The user settings file: good, missing and corrupt or invalid (a warning, then the project's defaults).
+    const kast::UserDisplaySettings user{.mode = kast::WindowMode::Windowed, .width = 800, .height = 600, .uiScale = 1.25};
+    kast::UserDisplaySettings read;
+    check(kast::saveUserDisplaySettings(dir / "settings.json", user) && kast::loadUserDisplaySettings(dir / "settings.json") == user,
+          "user settings round-trip through their file");
+    check(kast::loadUserDisplaySettings(dir / "missing.json") == kast::UserDisplaySettings{} && !logged("missing.json"),
+          "a missing user settings file gives empty settings, quietly");
+    writeFile(dir / "corrupt.json", "{\"mode\": \"windowed\", ");
+    check(kast::loadUserDisplaySettings(dir / "corrupt.json") == kast::UserDisplaySettings{} &&
+              logged("corrupt.json' are invalid") && logged("using the project's defaults"),
+          "a corrupt user settings file warns and gives empty settings");
+    writeFile(dir / "invalid.json", R"({"uiScale": 12})");
+    check(kast::loadUserDisplaySettings(dir / "invalid.json") == kast::UserDisplaySettings{} &&
+              logged("invalid.json' are invalid (uiScale must be a number from 0.5 to 3)"),
+          "an out-of-range user setting warns and gives empty settings");
+    check(!kast::userDisplaySettingsFromText(R"({"match": 1})", read, error) && error == "unknown key \"match\"",
+          "user settings hold only the window and UI scale");
+    const kast::DisplayMode projectWindow{.mode = kast::WindowMode::Borderless, .width = 1280, .height = 720};
+    check(kast::applyUserDisplay(projectWindow, {}) == projectWindow &&
+              kast::applyUserDisplay(projectWindow, user) == kast::DisplayMode{.mode = kast::WindowMode::Windowed, .width = 800, .height = 600},
+          "the user's settings override the project's window, field by field");
+
+    // UIDocument.scaling: left out of the scene file while dp, so older scenes save unchanged.
+    kast::Scene scene;
+    const entt::entity dp = scene.create("Dp");
+    scene.registry().emplace<kast::UIDocument>(dp, kast::UIDocument{"ui/a.rml", true});
+    const entt::entity all = scene.create("All");
+    scene.registry().emplace<kast::UIDocument>(all, kast::UIDocument{"ui/b.rml", true, kast::GuiScaling::All});
+    const std::string json = kast::sceneToJson(scene).dump();
+    check(contains(json, R"("UIDocument":{"path":"ui/a.rml","visible":true})") &&
+              contains(json, R"("UIDocument":{"path":"ui/b.rml","visible":true,"scaling":"all"})"),
+          "UIDocument saves scaling only when it is all");
+    kast::Scene reloaded;
+    check(kast::sceneFromJson(kast::sceneToJson(scene), reloaded, error), "scenes with UIDocument scaling load");
+    std::vector<kast::GuiScaling> scalings;
+    for (auto [e, ui] : reloaded.registry().view<const kast::UIDocument>().each())
+        scalings.push_back(ui.scaling);
+    std::ranges::sort(scalings);
+    check(scalings == std::vector{kast::GuiScaling::Dp, kast::GuiScaling::All}, "UIDocument scaling round-trips (absent = dp)");
+    removeTree(dir);
+}
+
+// dp and all documents together in one headless SceneGui (tests/project/ui/scale_dp.rml in dp mode, scale_all.rml in
+// all mode): sizes at dp ratio 1 and 2, a display scale change recomputing it, a minimized window keeping it, mouse
+// clicks hitting the scaled all-mode button, and focus, hover and mouseOver across both documents.
+void checkGuiScalingScene()
+{
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    check(bgfx::init(init) && kast::gui::init(), "headless bgfx and RmlUi start (GUI scaling)");
+    {
+        const std::filesystem::path root = projectTestDir("kast_gui_scale_scene", "scale");
+        std::filesystem::create_directories(root / "ui");
+        const std::filesystem::path source = std::filesystem::path(KAST_SOURCE_DIR) / "tests/project/ui";
+        for (const char* file : {"scale_dp.rml", "scale_dp.rcss", "scale_all.rml", "scale_all.rcss"})
+            std::filesystem::copy_file(source / file, root / "ui" / file);
+        kast::Scene scene;
+        scene.registry().emplace<kast::UIDocument>(scene.create("Dp"), kast::UIDocument{"ui/scale_dp.rml", true});
+        scene.registry().emplace<kast::UIDocument>(scene.create("All"),
+                                                   kast::UIDocument{"ui/scale_all.rml", true, kast::GuiScaling::All});
+        kast::EventBus bus;
+        std::vector<std::string> clicks;
+        auto subscription = bus.subscribe("scale.all", [&](const nlohmann::json& payload) {
+            clicks.push_back(payload["id"].get<std::string>());
+        });
+        kast::SceneGui gui("scale_check");
+        gui.setScale({.referenceResolution = std::pair{640, 360}, .useOsDpi = false});
+        gui.resize(640, 360);
+        const uint64_t problems = kast::gui::problemCount();
+        gui.sync(scene, root, bus);
+        const auto update = [&] {
+            gui.render(0, BGFX_INVALID_HANDLE); // updates the layout of both contexts
+            bus.drain();
+        };
+        update();
+        check(kast::gui::problemCount() == problems, "the dp and all documents load without an RmlUi warning");
+        Rml::Context* dpContext = gui.context().context();
+        Rml::Context* allContext = Rml::GetContext("scale_check-all");
+        Rml::ElementDocument* dpDoc = dpContext && dpContext->GetNumDocuments() == 1 ? dpContext->GetDocument(0) : nullptr;
+        Rml::ElementDocument* allDoc = allContext && allContext->GetNumDocuments() == 1 ? allContext->GetDocument(0) : nullptr;
+        check(dpDoc && allDoc, "a dp document and an all document live in their own contexts of one SceneGui");
+        if (dpDoc && allDoc) {
+            const auto width = [](Rml::Element* element) { return element->GetBox().GetSize(Rml::BoxArea::Border).x; };
+            Rml::Element* dpBox = dpDoc->GetElementById("dp_box");
+            Rml::Element* pxBox = dpDoc->GetElementById("px_box");
+            Rml::Element* allBox = allDoc->GetElementById("all_box");
+            check(gui.dpRatio() == 1.0 && width(dpBox) == 160.0f && width(pxBox) == 160.0f && width(allBox) == 160.0f &&
+                      allContext->GetDimensions() == Rml::Vector2i(640, 360),
+                  "at the reference size (dp ratio 1): dp == px, the all context at the window's size");
+            gui.resize(1280, 720);
+            update();
+            check(gui.dpRatio() == 2.0 && width(dpBox) == 320.0f && width(pxBox) == 160.0f,
+                  "at twice the reference size (dp ratio 2): the dp box doubles, the px box stays");
+            check(width(allBox) == 160.0f && allContext->GetDimensions() == Rml::Vector2i(640, 360),
+                  "the all document lays out at the window's size / 2 (drawn scaled up by 2)");
+            check(logged("GUI dp ratio 2 (1280x720 pixels"), "a dp ratio change is logged");
+
+            // A click at the all button's scaled-up place (window pixels) hits it; at its unscaled place it doesn't.
+            const auto click = [&](float x, float y) {
+                for (const SDL_EventType type : {SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_MOUSE_BUTTON_UP}) {
+                    SDL_Event event{};
+                    event.type = type;
+                    if (type == SDL_EVENT_MOUSE_MOTION) {
+                        event.motion.x = x;
+                        event.motion.y = y;
+                    } else {
+                        event.button.button = SDL_BUTTON_LEFT;
+                        event.button.x = x;
+                        event.button.y = y;
+                    }
+                    gui.onEvent(event);
+                    update();
+                }
+            };
+            click(480.0f, 60.0f); // the box's unscaled place: nothing there
+            check(clicks.empty(), "a click where the all button would be unscaled misses it");
+            click(960.0f, 120.0f); // its centre at dp ratio 2
+            check(clicks == std::vector<std::string>{"all_box"} && gui.mouseOver() && gui.hovered() == "all_box",
+                  "a click at the all button's scaled place hits it; hover and mouseOver see it");
+            click(200.0f, 120.0f); // the dp box (40..360 x 40..200 at ratio 2), under no all element
+            check(clicks.size() == 1 && gui.mouseOver() && gui.hovered() == "dp_box",
+                  "away from the all document's elements the mouse reaches the dp document");
+            click(1000.0f, 700.0f);
+            check(!gui.mouseOver() && !gui.hovered(), "over no element of either document: no mouseOver");
+
+            // Focus moves between the documents: one focused text field at a time, typed text goes there.
+            const auto type = [&](const char* text) {
+                SDL_Event event{};
+                event.type = SDL_EVENT_TEXT_INPUT;
+                event.text.text = text;
+                gui.onEvent(event);
+                update();
+            };
+            const auto value = [&](const char* id) { return gui.value(id).value_or(kast::GuiValue()).dump(); };
+            check(gui.focus("dp_field") && gui.focusedField() == "dp_field", "focus() on the dp document's field");
+            type("a");
+            check(gui.focus("all_field") && gui.focusedField() == "all_field" && dpContext->GetFocusElement() != dpDoc->GetElementById("dp_field"),
+                  "focus() on the all document's field takes the focus from the dp one");
+            type("b");
+            check(value("dp_field") == "\"a\"" && value("all_field") == "\"b\"", "typed text goes to the focused document's field");
+            const Rml::Vector2f field = dpDoc->GetElementById("dp_field")->GetAbsoluteOffset(Rml::BoxArea::Border);
+            click(field.x + 4.0f, field.y + 4.0f); // a click on the dp field takes the keyboard back
+            check(gui.focusedField() == "dp_field" && allContext->GetFocusElement() != allDoc->GetElementById("all_field"),
+                  "a click on the dp document's field takes the focus from the all one");
+            check(gui.click("all_box"), "click(id) finds the all document's button");
+            bus.drain();
+            check(clicks.size() == 2, "click(id) reaches the all document");
+
+            // A display scale change (another monitor, a new Windows scale) recomputes the ratio; minimized keeps it.
+            gui.setScale({.referenceResolution = std::pair{640, 360}, .useOsDpi = true});
+            gui.setDisplayScale(1.5);
+            update();
+            check(gui.dpRatio() == 3.0 && width(dpBox) == 480.0f, "a display scale change recomputes the dp ratio (2 x 1.5)");
+            gui.resize(0, 0);
+            check(gui.dpRatio() == 3.0, "a zero-size (minimized) window keeps the dp ratio");
+        }
+        check(kast::gui::problemCount() == problems, "no RmlUi warning through the scaling run");
+        gui.release();
+    }
+    kast::gui::shutdown();
+    bgfx::shutdown();
+}
+
+// Stands in for the player's window: records what kast.display.* asks for.
+class FakeDisplay final : public kast::DisplayAccess {
+public:
+    bool setMode(const kast::DisplayMode& mode) override
+    {
+        if (mode.mode == kast::WindowMode::Exclusive && !kast::pickExclusiveMode(mode, modes()))
+            return false;
+        current = mode;
+        return true;
+    }
+    kast::DisplayMode mode() override { return current; }
+    std::vector<kast::DisplayModeInfo> modes() override { return {{1920, 1080, 144}, {1920, 1080, 60}}; }
+    double displayScale() override { return 1.25; }
+
+    kast::DisplayMode current;
+};
+
+// kast.gui scaling and kast.display through LuaSystems: values, clamps and argument errors.
+void checkLuaGuiScaling()
+{
+    const std::filesystem::path dir = luaTestDir();
+    writeFile(dir / "scale.lua", R"(
+local function fails(message, fn)
+    local ok, err = pcall(fn)
+    assert(not ok and tostring(err):find(message, 1, true), "expected '" .. message .. "', got " .. tostring(err))
+end
+return { init = function() end, update = function()
+    assert(kast.gui.scale() == 1 and kast.gui.referenceResolution() == nil, "defaults")
+    kast.gui.setScale(4)
+    assert(kast.gui.scale() == 3, "clamped to 3")
+    kast.gui.setScale(1.25)
+    kast.gui.setReferenceResolution(960, 540, 1.5)
+    local w, h, m = kast.gui.referenceResolution()
+    assert(w == 960 and h == 540 and m == 1, "set, match clamped")
+    assert(math.abs(kast.gui.dpRatio() - 2.5) < 1e-9, "dpRatio from the GUI: " .. kast.gui.dpRatio())
+    fails("kast.gui.setScale: scale must be a number, got", function() kast.gui.setScale({}) end)
+    fails("kast.gui.setReferenceResolution: width must be a whole number from 1 to 16384, got 1.5",
+          function() kast.gui.setReferenceResolution(1.5, 2) end)
+    fails("kast.gui.setReferenceResolution: height must be a number, got nil", function() kast.gui.setReferenceResolution(2) end)
+    assert(kast.display.displayScale() == 1.25, "displayScale")
+    assert(#kast.display.modes() == 2 and kast.display.modes()[1].refresh == 144, "modes")
+    assert(kast.display.setMode({mode = "exclusive", width = 1920, height = 1080}) == true, "exclusive")
+    local mode = kast.display.mode()
+    assert(mode.mode == "exclusive" and mode.width == 1920 and mode.height == 1080 and mode.refresh == nil, "mode")
+    assert(kast.display.setMode({mode = "exclusive", width = 640, height = 480}) == false, "no such mode")
+    assert(kast.display.setMode({mode = "nope"}) == false, "unknown mode")
+    assert(kast.display.mode().mode == "exclusive", "kept")
+    assert(kast.display.setMode({refresh = 60}) == true, "the current mode at another refresh")
+    fails("kast.display.setMode: height must be a whole number from 1 to 16384, got -1",
+          function() kast.display.setMode({height = -1}) end)
+    fails("kast.display.setMode: expected a table", function() kast.display.setMode() end)
+end })");
+    kast::Scene scene;
+    scene.systems = {"scale.lua"};
+    FakeGui gui;
+    FakeDisplay display;
+    kast::LuaSystems lua;
+    lua.setGui(&gui);
+    lua.setDisplay(&display);
+    lua.start(scene, dir, "", nullptr);
+    lua.tick(0.1f);
+    checkOk(lua, 0, "kast.gui scaling and kast.display asserts in Lua pass");
+    check(gui.guiScale == kast::GuiScale{.referenceResolution = std::pair{960, 540}, .match = 1.0, .uiScale = 1.25} &&
+              logged("kast.gui.setScale: scale 4 clamped to 3") && logged("kast.gui.setReferenceResolution: match 1.5 clamped to 1"),
+          "the scale reaches the GUI, clamps logged");
+    check(display.current == kast::DisplayMode{.mode = kast::WindowMode::Exclusive, .width = 1920, .height = 1080, .refresh = 60},
+          "setMode reaches the display with the current mode's fields where left out");
+    check(logged("kast.display.setMode: unknown mode 'nope'"), "an unknown mode name logs a warning");
+    lua.stop();
+    kast::LuaSystems bare;
+    writeFile(dir / "bare.lua", R"(return { init = function() end, update = function() assert(kast.display == nil, "nil") end })");
+    scene.systems = {"bare.lua"};
+    bare.start(scene, dir, "", nullptr);
+    bare.tick(0.1f);
+    checkOk(bare, 0, "kast.display is nil without a display");
+    bare.stop();
+}
+
 int main(int argc, char** argv)
 {
     kast::disableCrashDialogsIfRequested();
@@ -15322,6 +15644,14 @@ int main(int argc, char** argv)
         return diffPng(argc, argv);
     if (argc == 9 && std::string_view(argv[1]) == "--region-compare")
         return regionCompare(argc, argv);
+    if (argc == 2 && std::string_view(argv[1]) == "--displays") { // ctest: is there a display besides the main one?
+        int count = 0;
+        if (SDL_Init(SDL_INIT_VIDEO))
+            SDL_free(SDL_GetDisplays(&count));
+        SDL_Quit();
+        std::printf("displays: %d\n", count);
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--bench-physics")
         return benchPhysics();
     if (argc == 2 && std::string_view(argv[1]) == "--undo") { // only the undo / redo checks
@@ -15357,6 +15687,9 @@ int main(int argc, char** argv)
     }
     if (argc == 2 && std::string_view(argv[1]) == "--gui") { // only the game GUI and GUI Builder checks
         checkLuaGui();
+        checkGuiScaling();
+        checkLuaGuiScaling();
+        checkGuiScalingScene();
         checkGuiEffectCompile();
         checkGui();
         checkGuiBindingNames();
@@ -15492,6 +15825,8 @@ int main(int argc, char** argv)
     checkGuiDocRichText();
     checkLuaInstantiate();
     checkLuaGui();
+    checkGuiScaling();
+    checkLuaGuiScaling();
     checkGuiEffectCompile();
     checkLuaItems();
     checkLuaSandbox();
@@ -15545,6 +15880,7 @@ int main(int argc, char** argv)
     checkGuiBindingNames();
     checkGuiClipboard();
     checkGuiDataModels();
+    checkGuiScalingScene();
     checkGuiWidgets();
     checkGuiRichText();
     checkGuiRichTextScene();
