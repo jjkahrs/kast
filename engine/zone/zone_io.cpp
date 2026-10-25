@@ -2,6 +2,7 @@
 
 #include "terrain_edit.h"
 
+#include <asset_ref.h>
 #include <files.h> // recycleFile
 #include <objects.h>
 
@@ -31,6 +32,7 @@ std::optional<Json> read_json(const fs::path& file, bool& exists, std::string& e
         err = "not valid JSON";
         return std::nullopt;
     }
+    kast::readAssetRefs(j);
     return j;
 }
 
@@ -52,6 +54,11 @@ void for_each_tile(const km::MapInfo& info, Fn&& fn) {
 }
 
 std::string dump(const Json& j) { return j.dump(2) + "\n"; }
+// map.json and objects/ files hold asset refs (the material, prefabs); the server's files and areas.json none.
+std::string dumpRefs(Json j) {
+    kast::writeAssetRefs(j);
+    return dump(j);
+}
 
 } // namespace
 
@@ -388,7 +395,7 @@ std::vector<ZoneError> save_map(Project& project, ZoneDoc& doc, bool recycle) {
         writeProject(terrain_texture_path(doc.folder), terrainPng);
         writeProject(terrain_material_path(doc.folder), terrainMat);
     }
-    if (doc.state.manifest != doc.saved.manifest) write("map.json", dump(doc.state.manifest));
+    if (doc.state.manifest != doc.saved.manifest) write("map.json", dumpRefs(doc.state.manifest));
     if (!doc.state.areas.is_null() && doc.state.areas != doc.saved.areas) write("areas.json", dump(doc.state.areas));
     for (const auto& [tile, json] : doc.state.spawns) {
         const auto old = doc.saved.spawns.find(tile);
@@ -398,7 +405,8 @@ std::vector<ZoneError> save_map(Project& project, ZoneDoc& doc, bool recycle) {
                                             {".server/interactables/", &doc.state.interactables, &doc.saved.interactables}})
         for (const auto& [tile, json] : *files) {
             const auto old = saved->find(tile);
-            if (old == saved->end() || old->second != json) write(sub + tile_name(tile) + ".json", dump(json));
+            if (old == saved->end() || old->second != json)
+                write(sub + tile_name(tile) + ".json", std::string_view(sub) == "objects/" ? dumpRefs(json) : dump(json));
         }
     for (const auto& [tile, heights] : doc.state.heights) {
         const auto old = doc.saved.heights.find(tile);

@@ -1,8 +1,10 @@
 #include "assets.h"
+#include "asset_ids.h"
 
 #include "build.h"
 #include "shader_graph_doc.h"
 
+#include <asset_ref.h>
 #include <files.h>
 #include <log.h>
 #include <prefab.h>
@@ -243,7 +245,9 @@ bool createAssetFolder(const fs::path& dir, const std::string& name, std::string
 
 bool saveMaterial(const fs::path& file, const kast::Material& material, std::string& error)
 {
-    return writeTextFile(file, kast::materialToJson(material).dump(2) + "\n", error);
+    nlohmann::ordered_json json = kast::materialToJson(material);
+    kast::writeAssetRefs(json);
+    return writeTextFile(file, json.dump(2) + "\n", error);
 }
 
 bool writeNewMaterial(const fs::path& dir, fs::path& file, std::string& error)
@@ -306,35 +310,6 @@ bool writeNewShaderGraph(const fs::path& dir, fs::path& file, std::string& error
         name = std::format("new_shader_graph_{}.kshadergraph", n);
     file = dir / fromUtf8(name); // ponytail: free when checked, not locked until written
     return writeTextFile(file, kast::shaderGraphText(starterShaderGraph()), error);
-}
-
-std::vector<std::string> remapMaterialPaths(const fs::path& root, const std::string& from, const std::string& to)
-{
-    std::vector<std::string> changed;
-    for (const fs::path& file : kast::listFiles(root)) {
-        kast::Material material;
-        std::string error;
-        if (file.extension() != ".mat" || !kast::loadMaterial(file, material, error))
-            continue; // an invalid .mat is left alone: it renders as an error anyway
-        std::vector<std::string*> fields = {&material.baseColorTexture, &material.metallicRoughnessTexture,
-                                            &material.normalTexture,    &material.occlusionTexture,
-                                            &material.emissiveTexture,  &material.shader};
-        for (auto& [name, value] : material.params)
-            if (value.numbers.empty())
-                fields.push_back(&value.texture);
-        std::vector<std::string> paths;
-        for (const std::string* field : fields)
-            paths.push_back(*field);
-        if (!remapProjectPaths(paths, from, to))
-            continue;
-        for (size_t i = 0; i < fields.size(); ++i)
-            *fields[i] = paths[i];
-        if (saveMaterial(file, material, error))
-            changed.push_back(kast::toProjectPath(root, file).value_or(utf8(file)));
-        else
-            kast::log::error(std::format("Cannot update the paths in '{}': {}", utf8(file), error));
-    }
-    return changed;
 }
 
 bool writeTextFile(const fs::path& file, std::string_view text, std::string& error)
@@ -401,60 +376,25 @@ std::string uniquePrefabName(const fs::path& dir, const std::string& entityName)
     return name;
 }
 
-namespace {
-
-// Each .scene / .prefab under root with its JSON; files that don't parse are skipped.
-template <typename Fn>
-void forEachSceneFile(const fs::path& root, Fn&& fn)
-{
-    for (const fs::path& file : kast::listFiles(root)) {
-        if (file.extension() != ".scene" && file.extension() != kast::kPrefabExtension)
-            continue;
-        std::string text;
-        if (!kast::readFile(file, text))
-            continue;
-        nlohmann::ordered_json json = nlohmann::ordered_json::parse(text, nullptr, false);
-        if (json.is_object() && json.contains("entities") && json["entities"].is_array())
-            fn(file, json);
-    }
-}
-
-} // namespace
-
 std::vector<std::string> prefabUsers(const fs::path& root, const std::string& target)
 {
     std::vector<std::string> users;
-    forEachSceneFile(root, [&](const fs::path& file, const nlohmann::ordered_json& json) {
-        for (const auto& entity : json["entities"])
-            if (entity.is_object() && entity.contains("prefab") && entity["prefab"].is_string() &&
-                isSameOrInside(fromUtf8(entity["prefab"].get<std::string>()), fromUtf8(target))) {
-                users.push_back(kast::toProjectPath(root, file).value_or(utf8(file)));
-                return;
-            }
-    });
+    for (const fs::path& file : kast::listFiles(root)) {
+        std::string text;
+        if ((file.extension() != ".scene" && file.extension() != kast::kPrefabExtension) || !kast::readFile(file, text))
+            continue;
+        nlohmann::ordered_json json = nlohmann::ordered_json::parse(text, nullptr, false);
+        if (!json.is_object() || !json.contains("entities") || !json["entities"].is_array())
+            continue; // files that don't parse are skipped
+        editAssetRefs(json["entities"], [](std::string& path, std::string& id) { // refs as paths, by id first
+            path = (id.empty() ? std::nullopt : assetIds().pathOf(id)).value_or(path);
+            id.clear();
+        });
+        if (std::ranges::any_of(json["entities"], [&](const nlohmann::ordered_json& entity) {
+                return entity.is_object() && entity.contains("prefab") && entity["prefab"].is_string() &&
+                       isSameOrInside(fromUtf8(entity["prefab"].get<std::string>()), fromUtf8(target));
+            }))
+            users.push_back(kast::toProjectPath(root, file).value_or(utf8(file)));
+    }
     return users;
-}
-
-std::vector<std::string> remapPrefabReferences(const fs::path& root, const std::string& from, const std::string& to)
-{
-    std::vector<std::string> changed;
-    forEachSceneFile(root, [&](const fs::path& file, nlohmann::ordered_json& json) {
-        bool any = false;
-        for (auto& entity : json["entities"]) {
-            if (!entity.is_object() || !entity.contains("prefab") || !entity["prefab"].is_string())
-                continue;
-            std::vector<std::string> path = {entity["prefab"].get<std::string>()};
-            if (remapProjectPaths(path, from, to)) {
-                entity["prefab"] = path[0];
-                any = true;
-            }
-        }
-        if (!any)
-            return;
-        if (kast::writeFileAtomic(file, json.dump(2) + '\n')) // the scene / prefab writers' own format
-            changed.push_back(kast::toProjectPath(root, file).value_or(utf8(file)));
-        else
-            kast::log::error(std::format("Cannot update the prefab references in '{}'", utf8(file)));
-    });
-    return changed;
 }

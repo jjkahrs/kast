@@ -1,4 +1,5 @@
 #include "project.h"
+#include "asset_ref.h"
 
 #include "files.h"
 #include "log.h"
@@ -105,7 +106,8 @@ bool loadProject(const std::filesystem::path& file, Project& out, std::string& e
     }
     std::string reason;
     try {
-        const Json json = Json::parse(text);
+        Json json = Json::parse(text);
+        readAssetRefs(json);
         reason = validate(json);
         if (reason.empty()) {
             Project loaded{.root = normalized(file).parent_path(), .name = json["name"].get<std::string>()};
@@ -165,6 +167,7 @@ bool saveProject(const Project& project, std::string& error)
     if (project.gui != GuiConfig{})
         json["gui"] = guiConfigToJson(project.gui);
     const std::filesystem::path file = project.root / kProjectFileName;
+    writeAssetRefs(json);
     if (!writeFileAtomic(file, json.dump(2) + '\n')) {
         error = std::format("Cannot write project '{}'", file.string());
         return false;

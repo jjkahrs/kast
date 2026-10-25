@@ -74,7 +74,7 @@ kast_gui_prefab_shot(create "${KAST_GUI_PREFAB_PROJECT}" "--open-gui ui/prefab_s
                      EXPECT "Created GUI prefab '[^']*/ui/card_2.guiprefab' \\(and its .rcss\\); #card is an instance of it.*Saved GUI"
                      FORBID "${prefab_forbid}" REQUIRES gui_prefab_created_undone_checked SETUP gui_prefab_created)
 kast_gui_prefab_file(create "${KAST_GUI_PREFAB_PROJECT}/ui/prefab_source.rml"
-                     "<div id=\"card\" data-prefab=\"ui/card_2.guiprefab\" />" gui_prefab_created)
+                     "<div id=\"card\" data-prefab=\"ui/card_2.guiprefab\"( data-kast-id=\"[0-9a-f-]+\")? />" gui_prefab_created)
 
 # Place the same prefab twice into main_menu.rml's #buttons: unique ids prefab_button, prefab_button_2 (their ids inside
 # prefixed), no RmlUi warning; saved as two references.
@@ -83,7 +83,7 @@ kast_gui_prefab_shot(place "${KAST_GUI_PREFAB_PROJECT}"
                      EXPECT "Placed GUI prefab 'ui/prefab_button.guiprefab' as #prefab_button[\r\n].*Placed GUI prefab 'ui/prefab_button.guiprefab' as #prefab_button_2.*Saved GUI"
                      FORBID "${prefab_forbid}" REQUIRES gui_prefab_created_checked SETUP gui_prefab_placed)
 kast_gui_prefab_file(place "${KAST_GUI_PREFAB_PROJECT}/ui/main_menu.rml"
-                     "<div id=\"prefab_button\" data-prefab=\"ui/prefab_button.guiprefab\" />[\r\n ]*<div id=\"prefab_button_2\" data-prefab=\"ui/prefab_button.guiprefab\" />"
+                     "<div id=\"prefab_button\" data-prefab=\"ui/prefab_button.guiprefab\"( data-kast-id=\"[0-9a-f-]+\")? />[\r\n ]*<div id=\"prefab_button_2\" data-prefab=\"ui/prefab_button.guiprefab\"( data-kast-id=\"[0-9a-f-]+\")? />"
                      gui_prefab_placed)
 
 # Overrides on prefab_host.rml: an attribute of a's button saved as an <override> (b's untouched); reopened, it is
@@ -93,7 +93,7 @@ kast_gui_prefab_file(place "${KAST_GUI_PREFAB_PROJECT}/ui/main_menu.rml"
 kast_gui_prefab_shot(override "${KAST_GUI_PREFAB_PROJECT}" "--open-gui ui/prefab_host.rml --gui-select a_button --gui-set-attr data-event=a.go --gui-save"
                      EXPECT "--gui-set-attr data-event=.a.go. on 'a_button'.*Saved GUI" REQUIRES gui_prefab_placed_checked SETUP gui_prefab_overridden)
 kast_gui_prefab_file(override "${KAST_GUI_PREFAB_PROJECT}/ui/prefab_host.rml"
-                     "<div id=\"a\" data-prefab=\"ui/prefab_button.guiprefab\">[\r\n ]*<override target=\"button\" attribute=\"data-event\" value=\"a.go\" />[\r\n ]*</div>[\r\n ]*<div id=\"b\" data-prefab=\"ui/prefab_button.guiprefab\">[\r\n ]*<override target=\"title\" attribute=\"class\" value=\"prefab-title big\" />[\r\n ]*<override target=\"title\" text=\"Overridden\" />"
+                     "<div id=\"a\" data-prefab=\"ui/prefab_button.guiprefab\"( data-kast-id=\"[0-9a-f-]+\")?>[\r\n ]*<override target=\"button\" attribute=\"data-event\" value=\"a.go\" />[\r\n ]*</div>[\r\n ]*<div id=\"b\" data-prefab=\"ui/prefab_button.guiprefab\"( data-kast-id=\"[0-9a-f-]+\")?>[\r\n ]*<override target=\"title\" attribute=\"class\" value=\"prefab-title big\" />[\r\n ]*<override target=\"title\" text=\"Overridden\" />"
                      gui_prefab_overridden)
 kast_gui_prefab_shot(override_reopen "${KAST_GUI_PREFAB_PROJECT}" "--open-gui ui/prefab_host.rml --gui-select a_button"
                      REQUIRES gui_prefab_overridden_checked SETUP gui_prefab_override_reopened)
@@ -101,12 +101,12 @@ kast_gui_prefab_shot(override_setback "${KAST_GUI_PREFAB_PROJECT}"
                      "--open-gui ui/prefab_host.rml --gui-select a_button --gui-set-attr data-event=prefab.clicked --gui-save"
                      EXPECT "Saved GUI" REQUIRES gui_prefab_override_reopened SETUP gui_prefab_set_back)
 kast_gui_prefab_file(override_setback "${KAST_GUI_PREFAB_PROJECT}/ui/prefab_host.rml"
-                     "<div id=\"a\" data-prefab=\"ui/prefab_button.guiprefab\" />[\r\n ]*<div id=\"b\"" gui_prefab_set_back)
+                     "<div id=\"a\" data-prefab=\"ui/prefab_button.guiprefab\"( data-kast-id=\"[0-9a-f-]+\")? />[\r\n ]*<div id=\"b\"" gui_prefab_set_back)
 kast_gui_prefab_shot(revert "${KAST_GUI_PREFAB_PROJECT}"
                      "--open-gui ui/prefab_host.rml --gui-select a_title --gui-set-attr class=big --gui-revert class --gui-save"
                      EXPECT "--gui-revert class on 'a_title'.*Saved GUI" REQUIRES gui_prefab_set_back_checked SETUP gui_prefab_reverted)
 kast_gui_prefab_file(revert "${KAST_GUI_PREFAB_PROJECT}/ui/prefab_host.rml"
-                     "<div id=\"a\" data-prefab=\"ui/prefab_button.guiprefab\" />[\r\n ]*<div id=\"b\"" gui_prefab_reverted)
+                     "<div id=\"a\" data-prefab=\"ui/prefab_button.guiprefab\"( data-kast-id=\"[0-9a-f-]+\")? />[\r\n ]*<div id=\"b\"" gui_prefab_reverted)
 kast_gui_prefab_shot(apply "${KAST_GUI_PREFAB_PROJECT}"
                      "--open-gui ui/prefab_host.rml --gui-select a_title --gui-set-attr class=big --gui-apply class --gui-save"
                      EXPECT "Applied 'class' to GUI prefab 'ui/prefab_button.guiprefab'.*--gui-apply class on 'a_title'.*Saved GUI"
@@ -114,7 +114,7 @@ kast_gui_prefab_shot(apply "${KAST_GUI_PREFAB_PROJECT}"
 kast_gui_prefab_file(apply_prefab "${KAST_GUI_PREFAB_PROJECT}/ui/prefab_button.guiprefab"
                      "<p id=\"title\" class=\"big\">Prefab Card</p>" gui_prefab_applied)
 kast_gui_prefab_file(apply_host "${KAST_GUI_PREFAB_PROJECT}/ui/prefab_host.rml"
-                     "<div id=\"a\" data-prefab=\"ui/prefab_button.guiprefab\" />[\r\n ]*<div id=\"b\" data-prefab=\"ui/prefab_button.guiprefab\">[\r\n ]*<override target=\"title\" attribute=\"class\" value=\"prefab-title big\" />[\r\n ]*<override target=\"title\" text=\"Overridden\" />"
+                     "<div id=\"a\" data-prefab=\"ui/prefab_button.guiprefab\"( data-kast-id=\"[0-9a-f-]+\")? />[\r\n ]*<div id=\"b\" data-prefab=\"ui/prefab_button.guiprefab\"( data-kast-id=\"[0-9a-f-]+\")?>[\r\n ]*<override target=\"title\" attribute=\"class\" value=\"prefab-title big\" />[\r\n ]*<override target=\"title\" text=\"Overridden\" />"
                      gui_prefab_applied)
 
 # Unpack b: plain markup (ids as expanded) that renders exactly as the instance did (the preview before and after,
@@ -139,7 +139,7 @@ kast_gui_prefab_shot(missing "${KAST_GUI_PREFAB_PROJECT}" "--open-gui ui/prefab_
                      EXPECT "GUI 'ui/prefab_missing.rml': prefab 'ui/prefab_gone.guiprefab' \\(#gone\\): not found.*GUI 'ui/prefab_missing.rml': prefab 'ui/prefab_cycle_a.guiprefab' \\(#a\\): a cycle \\(ui/prefab_cycle_a.guiprefab -> ui/prefab_cycle_b.guiprefab -> ui/prefab_cycle_a.guiprefab\\).*Saved GUI"
                      FORBID "\\[warn\\] RmlUi" REQUIRES gui_prefab_applied_checked SETUP gui_prefab_missing_saved)
 kast_gui_prefab_file(missing "${KAST_GUI_PREFAB_PROJECT}/ui/prefab_missing.rml"
-                     "<div id=\"gone\" data-prefab=\"ui/prefab_gone.guiprefab\">[\r\n ]*<override target=\"title\" text=\"Kept while missing\" />[\r\n ]*</div>[\r\n ]*<div id=\"loop\" data-prefab=\"ui/prefab_cycle_a.guiprefab\" />"
+                     "<div id=\"gone\" data-prefab=\"ui/prefab_gone.guiprefab\"( data-kast-id=\"[0-9a-f-]+\")?>[\r\n ]*<override target=\"title\" text=\"Kept while missing\" />[\r\n ]*</div>[\r\n ]*<div id=\"loop\" data-prefab=\"ui/prefab_cycle_a.guiprefab\"( data-kast-id=\"[0-9a-f-]+\")? />"
                      gui_prefab_missing_saved)
 
 # Editing a prefab: prefab_nested.guiprefab opened in the builder, its caption's class set and saved: the file keeps
@@ -148,7 +148,7 @@ kast_gui_prefab_shot(edit "${KAST_GUI_PREFAB_PROJECT}" "--open-gui ui/prefab_nes
                      EXPECT "--gui-set-attr class=.big. on 'caption'.*Saved GUI" FORBID "${prefab_forbid}"
                      REQUIRES gui_prefab_missing_saved_checked SETUP gui_prefab_edited)
 kast_gui_prefab_file(edit "${KAST_GUI_PREFAB_PROJECT}/ui/prefab_nested.guiprefab"
-                     "^<div class=\"prefab-frame\">[\r\n ]*<p id=\"caption\" class=\"big\">Nested frame</p>[\r\n ]*<div id=\"inner\" data-prefab=\"ui/prefab_button.guiprefab\">[\r\n ]*<override target=\"title\" text=\"Inner card\" />[\r\n ]*</div>[\r\n ]*</div>[\r\n ]*$"
+                     "^<div class=\"prefab-frame\">[\r\n ]*<p id=\"caption\" class=\"big\">Nested frame</p>[\r\n ]*<div id=\"inner\" data-prefab=\"ui/prefab_button.guiprefab\"( data-kast-id=\"[0-9a-f-]+\")?>[\r\n ]*<override target=\"title\" text=\"Inner card\" />[\r\n ]*</div>[\r\n ]*</div>[\r\n ]*$"
                      gui_prefab_edited)
 
 # A prefab that would hold itself is refused with a message: prefab_button.guiprefab open, its root picked, placing

@@ -6,6 +6,7 @@
 #include <zone/zone_edit.h>
 #include <zone/zone_io.h>
 
+#include <asset_ref.h>
 #include <event_bus.h>
 #include <files.h>
 #include <scene.h>
@@ -95,7 +96,8 @@ void check_round_trip(const fs::path& project, const std::string& name, const st
     const Json manifest = json_file(dir / "map.json");
     const Json areas = fs::exists(dir / "areas.json") ? json_file(dir / "areas.json") : Json();
     std::map<std::string, std::string> heightBytes;
-    for (const auto& entry : fs::directory_iterator(dir / "heights")) heightBytes[entry.path().filename().string()] = bytes(entry.path());
+    for (const auto& entry : fs::directory_iterator(dir / "heights"))
+        if (entry.path().extension() != ".meta") heightBytes[entry.path().filename().string()] = bytes(entry.path()); // not the editor's asset ids
 
     doc->saved = {}; // everything differs from "disk": every file is rewritten
     if (doc->state.manifest.contains("material")) doc->saved.manifest = Json{{"material", doc->state.manifest["material"]}}; // still owns its generated terrain files
@@ -553,6 +555,38 @@ void check_spawns() {
 // Zone objects: every type placed, edited, moved across a tile border and deleted, each interactable's server entry in
 // step; unknown keys survive a save and load; validate() blocks a save on a bad shape, a missing server entry or a
 // duplicate id; an emptied tile's files are deleted.
+// Asset refs (engine/asset_ref.h): with the editor's idOf hook, map.json's material and the objects' prefabs are saved as
+// {"id", "path"} (areas.json and the server's files never); the zone loaders, the engine and the server read them back
+// as paths.
+void check_asset_refs() {
+    const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "refs");
+    Project p = scan_project(root);
+    ZoneDoc doc = flat_map(p);
+    doc.edit([&](ZoneState& s) {
+        add_object(s, km::ObjectType::Visual, "prefabs/grass.prefab", {10, 0, 10}, 0.5f, 0.8f);
+        s.manifest["material"] = "materials/ground.mat";
+    });
+    kast::setAssetRefHooks({.idOf = [](const std::string& path) -> std::optional<std::string> {
+        return path.ends_with(".prefab") || path.ends_with(".mat") ? std::optional("id:" + path) : std::nullopt;
+    }});
+    const auto errors = save_map(p, doc, false);
+    kast::setAssetRefHooks({});
+    print_errors(errors);
+    CHECK(errors.empty());
+    const fs::path dir = root / "maps" / "sculpt";
+    const Json manifest = json_file(dir / "map.json"), objects = json_file(dir / "objects" / "0_0.json");
+    CHECK(manifest["material"] == (Json{{"id", "id:materials/ground.mat"}, {"path", "materials/ground.mat"}}));
+    CHECK(objects["objects"][0]["prefab"] == (Json{{"id", "id:prefabs/grass.prefab"}, {"path", "prefabs/grass.prefab"}}));
+    std::string err;
+    const auto info = km::parse_manifest(nlohmann::json(manifest), err); // as the server reads the file
+    CHECK(info && info->material == "materials/ground.mat");
+    const auto parsed = km::parse_objects(nlohmann::json(objects), {0, 0});
+    CHECK(parsed.errors.empty() && parsed.objects.size() == 1 && parsed.objects[0].prefab == "prefabs/grass.prefab");
+    auto again = load_map(scan_project(root), "sculpt", err);
+    CHECK(again && again->state.manifest["material"] == "materials/ground.mat" &&
+          again->state.objects.at({0, 0})["objects"][0]["prefab"] == "prefabs/grass.prefab");
+}
+
 void check_objects() {
     const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "objects");
     Project p = scan_project(root);
@@ -1093,6 +1127,7 @@ int main(int argc, char** argv) {
     check_areas();
     check_spawns();
     check_objects();
+    check_asset_refs();
     check_scatter();
     check_undo_each();
     check_undo_history();

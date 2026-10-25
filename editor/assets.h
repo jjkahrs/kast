@@ -60,7 +60,7 @@ std::string deleteBlocker(const std::filesystem::path& target, const std::filesy
 
 // Writes text to file (creating its folder), replacing any file there. False + error if that fails.
 bool writeTextFile(const std::filesystem::path& file, std::string_view text, std::string& error);
-// Writes material to file as a .mat (2-space indented JSON, fixed key order).
+// Writes material to file as a .mat (2-space indented JSON, fixed key order; its paths as asset refs, asset_ref.h).
 bool saveMaterial(const std::filesystem::path& file, const kast::Material& material, std::string& error);
 // Creates "new_material.mat" (else "new_material_2.mat", ...) with the default material in dir; file is where.
 bool writeNewMaterial(const std::filesystem::path& dir, std::filesystem::path& file, std::string& error);
@@ -74,11 +74,6 @@ bool writeNewShader(const std::filesystem::path& dir, std::filesystem::path& fil
 // Creates "new_shader_graph.kshadergraph" (else "new_shader_graph_2.kshadergraph", ...) in dir: starterShaderGraph(), a
 // Color param into a Fragment Output's ALBEDO. file is where.
 bool writeNewShaderGraph(const std::filesystem::path& dir, std::filesystem::path& file, std::string& error);
-// Rewrites the paths of every valid .mat under root that point at from or inside it (project-relative, as
-// remapProjectPaths): its textures, texture2D param values and .kshader. Returns the .mat files changed
-// (project-relative); a file that can't be written is logged.
-std::vector<std::string> remapMaterialPaths(const std::filesystem::path& root, const std::string& from,
-                                            const std::string& to);
 // Creates folder name in dir. False + error (nothing created) if the name is invalid or taken.
 bool createAssetFolder(const std::filesystem::path& dir, const std::string& name, std::string& error);
 // Renames source in place, a file's .meta with it. A name differing only in case is allowed. False + error (disk
@@ -97,7 +92,3 @@ std::string uniquePrefabName(const std::filesystem::path& dir, const std::string
 // The .scene and .prefab files under root (project-relative, sorted) with an instance of a prefab at target or inside
 // it (target: project-relative, a .prefab or a folder).
 std::vector<std::string> prefabUsers(const std::filesystem::path& root, const std::string& target);
-// Rewrites the prefab references in every .scene and .prefab under root that point at from or inside it (as
-// remapProjectPaths). Returns the files changed (project-relative); a file that can't be written is logged.
-std::vector<std::string> remapPrefabReferences(const std::filesystem::path& root, const std::string& from,
-                                               const std::string& to);

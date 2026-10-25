@@ -48,6 +48,11 @@ public:
                                          AssetEdit::Op::NewMaterial, AssetEdit::Op::NewShader, AssetEdit::Op::NewShaderGraph};
         assetEdit_ = {ops[static_cast<int>(what)], std::move(folder)};
     }
+    // Renames the Assets entry at path (project-relative) to name, as its Rename field does. --assets-rename.
+    void requestAssetRename(std::string path, std::string name)
+    {
+        assetEdit_ = {AssetEdit::Op::Rename, std::move(path), std::move(name)};
+    }
     // Selects the Assets entry at path (project-relative), as a click does: a .mat or .kshader also shows in the
     // Inspector until an entity is selected. Opens the entry's folder.
     void selectAsset(const std::string& path);

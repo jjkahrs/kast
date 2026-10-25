@@ -93,7 +93,8 @@ std::optional<ZoneObject> parse_object(const Json& e, TileKey tile, const std::s
         err = at + "\"type\" must be \"visual\", \"obstacle\" or \"interactable\"";
         return std::nullopt;
     }
-    const Json& prefab = e.value("prefab", Json());
+    Json prefab = e.value("prefab", Json());
+    if (prefab.is_object()) prefab = prefab.value("path", Json()); // the editor's asset ref {"id", "path"}
     if (!prefab.is_string() || !prefab.get<std::string>().ends_with(".prefab")) {
         err = at + "\"prefab\" must be a project-relative .prefab path";
         return std::nullopt;

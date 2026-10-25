@@ -292,8 +292,10 @@ std::optional<MapInfo> parse_manifest(const Json& j, std::string& err) {
         m.heightRange = {j["heightRange"][0].get<float>(), j["heightRange"][1].get<float>()};
     }
     if (j.contains("material")) {
-        if (!j["material"].is_string()) return fail("\"material\" must be a string");
-        m.material = j["material"].get<std::string>();
+        // The editor writes an asset ref {"id", "path"}: the path is what loads.
+        const Json& material = j["material"].is_object() ? j["material"].value("path", Json()) : j["material"];
+        if (!material.is_string()) return fail("\"material\" must be a string");
+        m.material = material.get<std::string>();
     }
     if (j.contains("terrainUv")) {
         const Json& uv = j["terrainUv"];

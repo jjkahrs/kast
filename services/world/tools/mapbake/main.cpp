@@ -81,6 +81,7 @@ std::map<std::pair<int32_t, int32_t>, std::vector<map::ZoneObject>> load_objects
     std::set<uint32_t> ids;
     std::error_code ec;
     for (const auto& entry : fs::directory_iterator(dir / "objects", ec)) {
+        if (entry.path().extension() == ".meta") continue; // the editor's asset id sidecar
         const std::string where = entry.path().string();
         const auto t = tile_of_file(entry.path());
         if (!t) { errors.push_back(where + ": file name must be <tx>_<tz>.json"); continue; }

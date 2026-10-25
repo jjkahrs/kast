@@ -183,7 +183,7 @@ target_compile_options(xatlas PRIVATE /W0 /utf-8)
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/undo.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/prefab.cpp engine/components.cpp
-  engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/lod.cpp engine/occlusion.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
+  engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/lod.cpp engine/occlusion.cpp engine/material.cpp engine/asset_ref.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/gui_lists.cpp engine/gui_richtext.cpp engine/gui_prefabs.cpp engine/gui_scale.cpp engine/scene_gui.cpp engine/window_display.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
@@ -495,10 +495,10 @@ function(kast_prefab_test name args)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/prefab_test.cmake")
 endfunction()
 kast_prefab_test(create "--select 3 --create-prefab prefabs"
-  "-DEXPECT=out.scene|\"id\":3,\"name\":\"Ground\",\"parent\":null,\"prefab\":\"prefabs/Ground.prefab\"\;prefabs/Ground.prefab|\"name\":\"Ground\",\"parent\":null,\"components\"")
-kast_prefab_test(create_root "--select 3 --create-prefab /" "-DEXPECT=out.scene|\"prefab\":\"Ground.prefab\"\;Ground.prefab|\"Ground\"")
+  "-DEXPECT=out.scene|\"id\":3,\"name\":\"Ground\",\"parent\":null,\"prefab\":(.\"id\":\"[0-9a-f-]+\",\"path\":)?\"prefabs/Ground.prefab\"\;prefabs/Ground.prefab|\"name\":\"Ground\",\"parent\":null,\"components\"")
+kast_prefab_test(create_root "--select 3 --create-prefab /" "-DEXPECT=out.scene|\"prefab\":(.\"id\":\"[0-9a-f-]+\",\"path\":)?\"Ground.prefab\"\;Ground.prefab|\"Ground\"")
 kast_prefab_test(drop_hierarchy "--drop-prefab prefabs/Crate.prefab --drop-prefab prefabs/Crate.prefab,3"
-  "-DEXPECT=out.scene|\"id\":14,\"name\":\"Crate\",\"parent\":null,\"prefab\":\"prefabs/Crate.prefab\"\;out.scene|\"id\":16,\"name\":\"Crate\",\"parent\":3,\"prefab\":\"prefabs/Crate.prefab\"")
+  "-DEXPECT=out.scene|\"id\":14,\"name\":\"Crate\",\"parent\":null,\"prefab\":(.\"id\":\"[0-9a-f-]+\",\"path\":)?\"prefabs/Crate.prefab\"\;out.scene|\"id\":16,\"name\":\"Crate\",\"parent\":3,\"prefab\":(.\"id\":\"[0-9a-f-]+\",\"path\":)?\"prefabs/Crate.prefab\"")
 # Scene view drops along the editor camera's center ray: onto the Crate at (-3, 0.5, 0); far off the Ground onto the
 # y = 0 plane; at the sky, 10 m ahead.
 kast_prefab_test(drop_view_mesh "--drop-prefab-view prefabs/Crate.prefab,0.5,0.5"
@@ -521,7 +521,7 @@ kast_prefab_test(revert_field "--prefab-revert 11:PointLight.color"
   "-DEXPECT=out.scene|{\"source\":2,\"id\":11}\;out.scene|gold_r05.mat")
 kast_prefab_test(revert_all "--prefab-revert 10" "-DFORBID=out.scene|gold_r05\;prefabs/Crate.prefab|gold_r05")
 kast_prefab_test(unpack "--prefab-unpack 6"
-  "-DEXPECT=out.scene|\"id\":6,\"name\":\"Tower\",\"parent\":null,\"components\"\;out.scene|\"id\":8,\"name\":\"Crate\",\"parent\":6,\"prefab\":\"prefabs/Crate.prefab\"")
+  "-DEXPECT=out.scene|\"id\":6,\"name\":\"Tower\",\"parent\":null,\"components\"\;out.scene|\"id\":8,\"name\":\"Crate\",\"parent\":6,\"prefab\":(.\"id\":\"[0-9a-f-]+\",\"path\":)?\"prefabs/Crate.prefab\"")
 kast_prefab_test(edit_mode "--edit-prefab prefabs/Crate.prefab --set-field 2,PointLight.intensity,5 --prefab-save --prefab-back"
   "-DEXPECT=prefabs/Crate.prefab|\"intensity\":5.0\;out.scene|\"color\"\;out.scene|missing.prefab")
 kast_prefab_test(cycle_refused "--edit-prefab prefabs/Crate.prefab --drop-prefab prefabs/Tower.prefab" -DEXPECT_FAIL=1)
@@ -3253,6 +3253,11 @@ include(cmake/screen_space_tests.cmake)
 
 # Game GUI resolution and DPI scaling, display modes, kast.gui scaling / kast.display.
 include(cmake/gui_scaling_tests.cmake)
+# Stable asset ids end to end: a legacy copy of tests/project opens, builds and plays; its refs upgrade on save; Assets
+# renames rewrite unopened scenes and project.kast; an Explorer rename with the .meta ships fresh hints in game.pak.
+add_test(NAME asset_ids_rename
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSOURCE=${KAST_TEST_PROJECT}"
+          "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/asset_ids_rename" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/asset_ids_test.cmake")
 
 # Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.
 get_property(kast_tests DIRECTORY PROPERTY TESTS)

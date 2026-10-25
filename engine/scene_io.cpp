@@ -1,4 +1,5 @@
 #include "scene_io.h"
+#include "asset_ref.h"
 
 #include "components.h"
 #include "files.h"
@@ -614,7 +615,9 @@ void readPrefab(LoadContext& context, const std::string& path, Scene& out, Scene
     std::string text;
     if (!readFile(*file, text))
         throw Invalid("cannot open the file");
-    parseScene(Json::parse(text), out, context, report, true);
+    Json json = Json::parse(text);
+    readAssetRefs(json);
+    parseScene(json, out, context, report, true);
 }
 
 // The prefab at path, loaded once per context; null + why if it doesn't load. A nested prefab's warnings are added
@@ -1099,7 +1102,9 @@ bool loadScene(const std::string& path, Scene& out, std::string& error, SceneLoa
     std::string reason;
     try {
         SceneLoadReport local;
-        if (sceneFromJson(Json::parse(text), out, reason, &local, projectRoot)) {
+        Json json = Json::parse(text);
+        readAssetRefs(json);
+        if (sceneFromJson(json, out, reason, &local, projectRoot)) {
             for (const std::string& warning : local.warnings)
                 log::warn(std::format("Scene '{}': {}", path, warning));
             if (report)
@@ -1261,7 +1266,9 @@ Json prefabToJson(const Scene& scene) { return {{"version", kSceneFileVersion}, 
 
 bool saveScene(const Scene& scene, const std::string& path, std::string& error)
 {
-    if (!writeFileAtomic(path, sceneToJson(scene).dump(2) + '\n')) {
+    Json json = sceneToJson(scene);
+    writeAssetRefs(json);
+    if (!writeFileAtomic(path, json.dump(2) + '\n')) {
         error = std::format("Cannot write scene '{}'", path);
         return false;
     }
@@ -1288,7 +1295,9 @@ bool savePrefab(const Scene& scene, const std::filesystem::path& projectRoot, co
     std::error_code ec;
     if (file)
         std::filesystem::create_directories(file->parent_path(), ec); // a failed write below says so
-    if (!file || !writeFileAtomic(*file, prefabToJson(scene).dump(2) + '\n')) {
+    Json json = prefabToJson(scene);
+    writeAssetRefs(json);
+    if (!file || !writeFileAtomic(*file, json.dump(2) + '\n')) {
         error = std::format("Cannot write prefab '{}'{}", path, file ? "" : ": " + reason);
         return false;
     }

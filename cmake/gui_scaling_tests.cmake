@@ -156,14 +156,14 @@ add_test(NAME ui_scale_inspector_set
   COMMAND "${CMAKE_COMMAND}" "-DEXE=$<TARGET_FILE:kast_editor>" "-DCOPY_FROM=${scale_edit}"
           "-DWORK_DIR=${scale_out}/ui_scale_inspector_set.run" "-DARGS=${scale_set_field}|--file-save|${scale_editor_args}"
           "-DCHECK_FILE=${scale_out}/ui_scale_inspector_set.run/ui_scale.scene"
-          "-DFILE_EXPECT=\"path\":\"ui/scale_dp.rml\",\"visible\":true,\"scaling\":\"all\"" -P "${scale_script}")
+          "-DFILE_EXPECT=\"path\":(.\"id\":\"[0-9a-f-]+\",\"path\":)?\"ui/scale_dp.rml\".?,\"visible\":true,\"scaling\":\"all\"" -P "${scale_script}")
 add_test(NAME ui_scale_inspector_undo
   COMMAND "${CMAKE_COMMAND}" "-DEXE=$<TARGET_FILE:kast_editor>" "-DCOPY_FROM=${scale_edit}"
           "-DWORK_DIR=${scale_out}/ui_scale_inspector_undo.run"
           "-DARGS=${scale_set_field}|--scene-undo|1|--file-save|${scale_editor_args}"
           "-DCHECK_FILE=${scale_out}/ui_scale_inspector_undo.run/ui_scale.scene"
-          "-DFILE_EXPECT=\"path\":\"ui/scale_all.rml\",\"visible\":true,\"scaling\":\"all\""
-          "-DFILE_FORBID=scale_dp.rml\",\"visible\":true,\"scaling\"" -P "${scale_script}")
+          "-DFILE_EXPECT=\"path\":(.\"id\":\"[0-9a-f-]+\",\"path\":)?\"ui/scale_all.rml\".?,\"visible\":true,\"scaling\":\"all\""
+          "-DFILE_FORBID=scale_dp.rml\".?,\"visible\":true,\"scaling\"" -P "${scale_script}")
 add_test(NAME gui_settings_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${scale_out}/gui_settings.png"
           "-DEXTRA_ARGS=--project ${CMAKE_CURRENT_BINARY_DIR}/game_projects/scale --open-gui-settings"

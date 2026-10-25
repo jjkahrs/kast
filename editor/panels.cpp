@@ -2794,13 +2794,10 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& g
             preview.remap(edit.path, selected);
             if (scenePath)
                 doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
-            remapScenePaths(doc, edit.path, selected); // systems, MeshRenderer materials, models, overrides, prefabs
-            for (const std::string& file : remapMaterialPaths(root, edit.path, selected))
-                kast::log::info(std::format("Updated texture and shader paths in '{}'", file));
-            for (const std::string& file : remapPrefabReferences(root, edit.path, selected))
-                kast::log::info(std::format("Updated prefab references in '{}'", file));
-            for (const std::string& file : remapGuiPrefabReferences(root, edit.path, selected))
-                kast::log::info(std::format("Updated GUI prefab references in '{}'", file));
+            remapScenePaths(doc, edit.path, selected); // in memory; the files below
+            assetIds().scan(root);                      // the moved files' ids at their new paths
+            for (const std::string& file : remapAssetRefs(root, edit.path, selected, assetIds()))
+                kast::log::info(std::format("Updated asset references in '{}'", file));
             refreshPrefabs(doc); // instances reload from the moved files
             if (std::vector<std::string> path = {inspectedAsset_}; remapProjectPaths(path, edit.path, selected))
                 inspectedAsset_ = path[0];

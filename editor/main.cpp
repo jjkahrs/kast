@@ -1,3 +1,4 @@
+#include "asset_ids.h"
 #include "build.h"
 #include "document.h"
 #include "editor_settings.h"
@@ -78,7 +79,7 @@ constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--screenshot-on-log frames,text] [--size WxH] [--window-pos X,Y] [--ui-scale F] [--projects-file list.json] "
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
-    "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--open-gui-settings] [--gui-settings-set json] [--game-resolution WxH] [--game-display-scale S] [--gui-preview-scale PERCENT] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-select path] [--material-set field=json] [--material-undo N] [--material-redo N] "
+    "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--open-gui-settings] [--gui-settings-set json] [--game-resolution WxH] [--game-display-scale S] [--gui-preview-scale PERCENT] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-rename path=name] [--assets-select path] [--material-set field=json] [--material-undo N] [--material-redo N] "
     "[--focus-panel Window] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
@@ -136,6 +137,7 @@ struct Options {
     std::string build;        // build the --project game into this folder and exit, without opening a window
     std::string openMenu;     // open this main menu (e.g. "Build") for screenshots
     std::optional<std::string> assetsMenu; // open this Assets entry's context menu + Create submenu ("" = background)
+    std::optional<std::pair<std::string, std::string>> assetsRename; // rename this Assets entry (project-relative) to a name
     std::string assetsSelect; // select this Assets entry (project-relative) as a click does: a .mat shows in the Inspector
     std::vector<std::pair<std::string, nlohmann::ordered_json>> materialSets; // --material-set: Inspector edits of that .mat, in order
     int materialUndo = 0, materialRedo = 0; // --material-undo N / --material-redo N: then material Undo N times, then Redo N times
@@ -501,6 +503,9 @@ std::optional<Options> parseArgs(int argc, char** argv)
         } else if (arg == "--assets-menu" && hasValue) {
             const std::string_view path = argv[++i];
             options.assetsMenu = std::string(path == "/" ? "" : path);
+        } else if (arg == "--assets-rename" && hasValue && std::string_view(argv[i + 1]).find('=') != std::string_view::npos) {
+            const std::string_view text = argv[++i];
+            options.assetsRename.emplace(text.substr(0, text.find('=')), text.substr(text.find('=') + 1));
         } else if (arg == "--assets-select" && hasValue) {
             options.assetsSelect = argv[++i];
         } else if (arg == "--material-set" && hasValue) {
@@ -840,7 +845,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.openBuildSettings || options.openOnlineSettings || options.openGuiSettings ||
                              options.guiSettingsSet || options.gameResolution || options.gameDisplayScale ||
                              options.guiPreviewScale || !options.focusPanel.empty() || !options.scrollPostSection.empty() || !options.zoneSections.empty() || options.zoneTool || !options.zoneSelect.empty() || options.bake || !options.mapbake.empty() || options.newStateMachinePrompt ||
-                             options.assetsMenu || options.assetsCreate || !options.assetsSelect.empty() ||
+                             options.assetsMenu || options.assetsCreate || options.assetsRename || !options.assetsSelect.empty() ||
                              !options.materialSets.empty() || options.materialUndo || options.materialRedo ||
                              !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
@@ -862,7 +867,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --open-gui-settings, "
                          "--gui-settings-set, --game-resolution, --game-display-scale, --gui-preview-scale, --focus-panel, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
                          "--assets-menu, "
-                         "--assets-create, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
+                         "--assets-create, --assets-rename, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
                          "--gui-click, --open-graph, --preview-model, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
                          "steps, --scene-undo, --scene-redo, --assets-delete, --inspector-apply-menu, --file-save, --bake-probes, --bake-lightmaps[-async], --cancel-lightmaps, --bake-voxelgi and the zone flags require "
                          "--project <dir> or --scene <file>");
@@ -1456,6 +1461,7 @@ int main(int argc, char** argv)
     const std::optional<Options> options = parseArgs(argc, argv);
     if (!options)
         return 2;
+    hookAssetRefs(); // project files' asset refs resolve by id through the Assets registry
     // .kshader materials compile with shaderc here (not in the player), on worker threads; a --screenshot run compiles
     // each one when first drawn instead, so the shot is the same every run (--screenshot-on-log runs, e.g. the hot
     // reload test, keep the worker threads).
@@ -1953,6 +1959,8 @@ int main(int argc, char** argv)
             files.backFromPrefab();
         if (options->assetsCreate && frames.frame() == kAddComponentPopupFrame)
             panels.requestAssetCreate(options->assetsCreate->first, options->assetsCreate->second);
+        if (options->assetsRename && frames.frame() == kAddComponentPopupFrame)
+            panels.requestAssetRename(options->assetsRename->first, options->assetsRename->second);
         if (!options->assetsSelect.empty() && frames.frame() == kAddComponentPopupFrame)
             panels.selectAsset(options->assetsSelect);
         if (frames.frame() == kAddComponentPopupFrame + 1) { // the Inspector has shown --assets-select's material
