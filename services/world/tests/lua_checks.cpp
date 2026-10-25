@@ -669,6 +669,39 @@ void checkReplicationIdleTiming() {
 #endif
 }
 
+// Cost of kast.query on a rare Lua component: 10000 NPCs, 10 of them with Health, queried from a Lua update. A
+// Runtime of its own on the World's registry, so the timed update runs nothing else.
+void checkQueryTiming() {
+    LuaRoot r;
+    r.write("components/health.lua", "return { name = 'Health', fields = { { name = 'hp', type = 'int' } } }");
+    r.write("systems/q.lua", R"(local n = 0
+return { update = function()
+    for _ = 1, 100 do for _ in kast.query("Health") do n = n + 1 end end
+end })");
+    const lua::Defs defs = r.defs().defs;
+    TestWorld w(defs);
+    const Json health = Json::parse(R"({"Health":{"hp":1}})");
+    for (int i = 0; i < 10000; ++i)
+        w.world.create_npc("N", "", 1, proto::Vec3{1000.0f + i % 100, 0, 1000.0f + i / 100}, 0, "",
+                           i % 1000 == 500 ? health : Json::object());
+    lua::Runtime rt(w.world.registry(), defs);
+    check(rt.load(r.root).empty(), "query timing: loads");
+    constexpr int kUpdates = 10, kQueries = kUpdates * 100;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < kUpdates; ++i) rt.update(0.05f);
+    const double perQueryUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / kQueries;
+    check(lua::pool(w.world.registry(), "Health").size() == 10, "query timing: 10 Health");
+    for (const auto& s : rt.status()) check(s.ok, "query timing: system still enabled " + s.error);
+    std::printf("kast.query(\"Health\"): %.1f us/query (10000 NPCs, 10 with Health)\n", perQueryUs);
+#ifdef NDEBUG
+    // Baseline before walking the smallest pool (every Transform entity checked, its storage hashed per entity):
+    // 240.9-244.7 us/query over 5 runs, Release (preset release, MSVC, the dev machine). Must be at least 10x cheaper.
+    // Debug: not checked.
+    constexpr double kBaselineUs = 241.0;
+    check(perQueryUs <= kBaselineUs / 10, std::format("timing: {:.1f} us/query > baseline {} / 10", perQueryUs, kBaselineUs));
+#endif
+}
+
 // --- events (docs/services/world/events.html): the same cases as the engine's checks ---
 
 std::vector<std::string> g_log; // log lines while a LogCapture lives; the log backend thread appends
@@ -1944,6 +1977,117 @@ void checkNpcApi() {
     check_lua_expectations("npc api", "npc api done");
     for (const auto& s : w.world.script_status()) check(s.ok, "npc api: system still enabled " + s.error);
     check(w.sent.of<proto::ServerEvent>(1).empty(), "sendTo(npc) sends nothing");
+}
+
+// kast.query walks the smallest storage among its types: exactly the in-world matches, in wire id order, whichever
+// pool is smaller. Each update logs "q<tick> <names>: [ids]"; the second also destroys an NPC mid-loop.
+void checkQueryPools() {
+    LogCapture capture;
+    LuaRoot r;
+    for (const char* n : {"Health", "Mana", "Unused"})
+        r.write(std::string("components/") + n + ".lua", std::string("return { name = '") + n + "', fields = {} }");
+    r.write("systems/q.lua", R"(local function list(it)
+    local out = {}
+    for e in it do out[#out + 1] = e end
+    return out
+end
+local queries = {
+    {"Health", function() return kast.query("Health") end},
+    {"Health+Mana", function() return kast.query("Health", "Mana") end},
+    {"Mana+Health", function() return kast.query("Mana", "Health") end},
+    {"Character+Health", function() return kast.query("Character", "Health") end},
+    {"Npc+Health", function() return kast.query("Npc", "Health") end},
+    {"Spawn", function() return kast.query("Spawn") end},
+    {"all", function() return kast.query() end},
+    {"Unused", function() return kast.query("Unused") end},
+    {"Unused+Health", function() return kast.query("Unused", "Health") end},
+    {"Transform+Mana", function() return kast.query("Transform", "Mana") end},
+}
+local tick = 0
+return { update = function()
+    tick = tick + 1
+    for _, q in ipairs(queries) do kast.log("q" .. tick .. " " .. q[1] .. ": [" .. table.concat(list(q[2]()), ",") .. "]") end
+    if tick ~= 2 then return end
+    local all, seen = list(kast.query("Npc", "Health")), {}
+    for e in kast.query("Npc", "Health") do
+        seen[#seen + 1] = e
+        if #seen == 1 then kast.destroy(all[#all]) end
+    end
+    kast.log("q2 midloop: [" .. table.concat(seen, ",") .. "]")
+end })");
+    TestWorld w(r.defs().defs);
+    check(w.world.load_scripts(r.root).empty(), "query pools: loads");
+    auto& reg = w.world.registry();
+    const auto add = [&](entt::entity e, const char* name) { lua::pool(reg, name).emplace(e, lua::ComponentData{Json::object()}); };
+    const entt::entity a = w.spawn(1, 201, "Alice", 1000, 1000), b = w.spawn(2, 202, "Bob", 1001, 1000);
+    std::vector<entt::entity> npc;
+    for (int i = 0; i < 30; ++i) {
+        npc.push_back(w.world.create_npc("N", "T", 1, proto::Vec3{1000.0f + i, 0, 1010}, 0));
+        if (i % 10 == 3) add(npc.back(), "Health");
+        if (i % 3 == 0) add(npc.back(), "Mana");
+    }
+    reg.emplace<world::SpawnRef>(npc[5]);
+    reg.emplace<world::SpawnRef>(npc[17]);
+    add(a, "Health");
+    // Not in the world: Transform but no Character/Npc, and no Transform at all.
+    const entt::entity loose = reg.create(), bare = reg.create();
+    reg.emplace<world::Transform>(loose);
+    for (auto e : {loose, bare}) {
+        add(e, "Health");
+        add(e, "Mana");
+    }
+
+    const auto ids = [&](std::vector<entt::entity> es) {
+        std::vector<uint32_t> v;
+        for (auto e : es) v.push_back(wire(e));
+        std::ranges::sort(v);
+        std::string s = "[";
+        for (auto id : v) s += (s.size() > 1 ? "," : "") + std::to_string(id);
+        return s + "]";
+    };
+    const auto npcs = [&](auto keep) {
+        std::vector<entt::entity> out;
+        for (int i = 0; i < 30; ++i)
+            if (keep(i)) out.push_back(npc[i]);
+        return out;
+    };
+    const auto expect = [&](int tick, const std::string& names, const std::string& want) {
+        const std::string line = "q" + std::to_string(tick) + " " + names + ": " + want;
+        check(said(line), "query pools: " + line);
+    };
+    const auto both = [](std::vector<entt::entity> v, entt::entity e) { v.push_back(e); return v; };
+
+    // Health (4) is smaller than Mana (12) here.
+    w.world.tick(T0);
+    const auto health1 = npcs([](int i) { return i % 10 == 3; });
+    expect(1, "Health", ids(both(health1, a)));
+    expect(1, "Health+Mana", ids({npc[3]}));
+    expect(1, "Mana+Health", ids({npc[3]}));
+    expect(1, "Character+Health", ids({a}));
+    expect(1, "Npc+Health", ids(health1));
+    expect(1, "Spawn", ids({npc[5], npc[17]}));
+    expect(1, "all", ids(both(both(npcs([](int) { return true; }), a), b)));
+    expect(1, "Unused", "[]");
+    expect(1, "Unused+Health", "[]");
+    expect(1, "Transform+Mana", ids(npcs([](int i) { return i % 3 == 0; })));
+
+    // Health (19) is now larger than Mana (12); npc[3] is removed and re-added, so it is last in its pool.
+    lua::pool(reg, "Health").remove(npc[3]);
+    add(npc[3], "Health");
+    for (int i = 0; i < 30; i += 2) add(npc[i], "Health");
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    const auto health2 = npcs([](int i) { return i % 2 == 0 || i % 10 == 3; });
+    const auto healthMana2 = npcs([](int i) { return i % 3 == 0 && (i % 2 == 0 || i % 10 == 3); });
+    expect(2, "Health", ids(both(health2, a)));
+    expect(2, "Health+Mana", ids(healthMana2));
+    expect(2, "Mana+Health", ids(healthMana2));
+    expect(2, "Npc+Health", ids(health2));
+    auto midloop = health2;
+    std::ranges::sort(midloop, {}, wire);
+    midloop.pop_back(); // the last one, destroyed on the first iteration
+    check(said("q2 midloop: " + ids(midloop)), "query pools: an entity destroyed mid-loop is skipped");
+    check(!reg.valid(*std::ranges::max_element(health2, {}, wire)), "query pools: the last NPC was destroyed");
+    for (const auto& s : w.world.script_status()) check(s.ok, "query pools: system still enabled " + s.error);
 }
 
 // MAX_NPCS: create past the cap raises and creates nothing; a destroy frees a slot.
@@ -5565,6 +5709,7 @@ int lua_checks(int& checks) {
     checkPersistence();
     checkReplication();
     checkReplicationIdleTiming();
+    checkQueryTiming();
     checkReplicationDirty();
     checkEventBus();
     checkLuaEvents();
@@ -5582,6 +5727,7 @@ int lua_checks(int& checks) {
     checkFsmLuaApi();
     checkFsmEntities();
     checkNpcApi();
+    checkQueryPools();
     checkNpcCap();
     checkNpcRouting();
     checkNpcDestroyedOnEnter();

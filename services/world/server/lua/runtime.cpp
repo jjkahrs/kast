@@ -31,6 +31,9 @@ enum class Builtin { none, character, transform, npc, spawn };
 struct Type {
     Builtin builtin = Builtin::none;
     const ComponentDef* def = nullptr;
+    // def's storage, resolved once by type(). EnTT keeps each storage in a shared_ptr (registry.hpp pool_container_type,
+    // assure), so the reference stays valid when later pools are created; only registry::reset(id) would drop it.
+    entt::storage_for_t<ComponentData>* pool = nullptr;
     std::string_view name() const {
         if (def) return def->name;
         switch (builtin) {
@@ -374,7 +377,7 @@ struct Runtime::Impl {
         if (name == "Npc") return {Builtin::npc, nullptr};
         if (name == "Spawn") return {Builtin::spawn, nullptr};
         for (const auto& def : defs)
-            if (def->name == name) return {Builtin::none, def.get()};
+            if (def->name == name) return {Builtin::none, def.get(), &pool(reg, def->name)};
         raise(L, std::format("unknown component \"{}\"", name));
     }
 
@@ -386,7 +389,19 @@ struct Runtime::Impl {
         case Builtin::transform: return true;
         case Builtin::none: break;
         }
-        return pool(reg, t.def->name).contains(e);
+        return t.pool->contains(e);
+    }
+
+    // The entities that may have t: its storage, or nullptr for Transform (every entity in the view).
+    const entt::sparse_set* candidates(const Type& t) {
+        switch (t.builtin) {
+        case Builtin::character: return &reg.storage<world::CharacterRef>();
+        case Builtin::npc: return &reg.storage<world::Npc>();
+        case Builtin::spawn: return &reg.storage<world::SpawnRef>();
+        case Builtin::transform: return nullptr;
+        case Builtin::none: break;
+        }
+        return t.pool;
     }
 
     const ComponentDef& writable(lua_State* L, const Type& t) {
@@ -592,9 +607,15 @@ struct Runtime::Impl {
                     raise(L, std::format("component name must be a string, got {}", to_string(L, name)));
                 types.push_back(type(L, name.as<std::string>()));
             }
+            // Walk the smallest storage among the types (Transform: every player and NPC).
+            const auto& transforms = reg.storage<world::Transform>();
+            const entt::sparse_set* walk = &transforms;
+            for (const Type& t : types)
+                if (const auto* c = candidates(t); c && c->size() < walk->size()) walk = c;
             std::vector<uint32_t> matches;
-            for (auto e : reg.view<world::Transform>()) // every player and NPC
-                if (std::ranges::all_of(types, [&](const Type& t) { return has(e, t); })) matches.push_back(wire(e));
+            for (auto e : *walk)
+                if (transforms.contains(e) && std::ranges::all_of(types, [&](const Type& t) { return has(e, t); }))
+                    matches.push_back(wire(e));
             std::ranges::sort(matches);
             // nil ends the generic for.
             return std::function<sol::object()>([this, matches = std::move(matches), next = size_t{0}]() mutable {
@@ -684,8 +705,9 @@ struct Runtime::Impl {
         });
         api.set_function("add", [this](sol::this_state L, const sol::object& id, const std::string& name) {
             const entt::entity e = entity(L, id);
-            const ComponentDef& def = writable(L, type(L, name));
-            auto& p = pool(reg, def.name);
+            const Type t = type(L, name);
+            const ComponentDef& def = writable(L, t);
+            auto& p = *t.pool;
             if (p.contains(e)) return;
             p.emplace(e, ComponentData{default_component(def)});
             changed(e, def);
@@ -694,7 +716,7 @@ struct Runtime::Impl {
             const entt::entity e = entity(L, id);
             const Type t = type(L, name);
             if (!t.def) raise(L, std::format("\"{}\" cannot be removed", name));
-            auto& p = pool(reg, t.def->name);
+            auto& p = *t.pool;
             if (!p.contains(e)) return;
             p.remove(e);
             changed(e, *t.def);
@@ -734,7 +756,7 @@ struct Runtime::Impl {
                 table["heading"] = tf.heading;
                 table["map"] = reg.get<world::MapRef>(e).map;
             } else {
-                const Json& json = pool(reg, t.def->name).get(e).value;
+                const Json& json = t.pool->get(e).value;
                 for (const FieldDesc& field : t.def->fields) table[field.name] = field_json_to_lua(lua, field, json[field.name]);
             }
             return table;
@@ -749,7 +771,7 @@ struct Runtime::Impl {
             if (!has(e, t)) raise(L, std::format("entity {} has no \"{}\"", to_string(L, id), name));
             if (t.builtin == Builtin::transform && reg.all_of<world::Npc>(e)) return set_npc_transform(L, e, fields);
             const ComponentDef& def = writable(L, t);
-            auto& p = pool(reg, def.name);
+            auto& p = *t.pool;
             std::string error;
             std::optional<Json> valid = set_fields(def, p.get(e).value, fields, error);
             if (!valid) raise(L, error);
