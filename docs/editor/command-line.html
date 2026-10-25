@@ -193,8 +193,8 @@ volume of the scene is voxelized into <code>&lt;scene-name&gt;_voxelgi/&lt;entit
 <td>With <code>--assets-select</code> of a <code>.mat</code>: set that field or <code>.kshader</code> / <code>.kshadergraph</code> param as an Inspector edit does (saved, one undo step each, in order), then Undo N times, then Redo N times, at frame 11. For tests of the material Inspector's undo.</td>
 </tr>
 <tr>
-<td><code>--open-gui &lt;file.rml&gt;</code></td>
-<td>Open that <code>.rml</code> in the <a href="gui-builder.html#gui-builder">GUI Builder</a> at startup (relative paths: to the project, else the working directory) and bring its four panels to the front.</td>
+<td><code>--open-gui &lt;file.rml&gt;|&lt;file.guiprefab&gt;</code></td>
+<td>Open that <code>.rml</code> (or <a href="gui-builder.html#prefabs">GUI prefab</a>) in the <a href="gui-builder.html#gui-builder">GUI Builder</a> at startup (relative paths: to the project, else the working directory) and bring its four panels to the front.</td>
 </tr>
 <tr>
 <td><code>--gui-select &lt;id&gt;</code></td>
@@ -234,6 +234,26 @@ Text.</td>
 <tr>
 <td><code>--gui-save</code></td>
 <td>With <code>--open-gui</code>: save the GUI as its <strong>Save</strong> button does, after 19 frames.</td>
+</tr>
+<tr>
+<td><code>--gui-create-prefab &lt;folder&gt;|/</code></td>
+<td>With <code>--open-gui</code>: <a href="gui-builder.html#prefabs">Create GUI Prefab</a> from the selection into that project folder (<code>/</code> = the project root) after 17 frames, before the field edits: writes <code>&lt;id or kind&gt;.guiprefab</code> + <code>.rcss</code> (<code>_2</code>, ... if taken) and makes the element an instance; logs <code>Created GUI prefab '&lt;file&gt;' (and its .rcss); #&lt;id&gt; is an instance of it</code>, or the refusal (also shown in a <strong>GUI Prefab</strong> modal).</td>
+</tr>
+<tr>
+<td><code>--gui-place-prefab &lt;path&gt;</code></td>
+<td>With <code>--open-gui</code>, repeatable: place an instance of that <code>.guiprefab</code> (project path) as a drop on the GUI Hierarchy does, into the selected Panel (beside a selected instance), else <code>&lt;body&gt;</code>, after 17 frames; it gets a unique id and is selected. Logs <code>Placed GUI prefab '&lt;path&gt;' as #&lt;id&gt;</code>, or the refusal (missing prefab, a cycle, into an instance).</td>
+</tr>
+<tr>
+<td><code>--gui-revert &lt;name&gt;|*</code>, <code>--gui-apply &lt;name&gt;|*</code></td>
+<td>With <code>--open-gui</code>: <strong>Revert</strong> / <strong>Apply</strong> that field of the selection (an attribute name, <code>text</code> or a widget property; <code>*</code> = <strong>Revert All</strong> / <strong>Apply All</strong> of its instance) after 17 frames, after <code>--gui-set-attr</code> / <code>--gui-set-prop</code>; logs <code>--gui-revert name on '&lt;id&gt;'</code> / <code>--gui-apply name on '&lt;id&gt;'</code> (Apply also <code>Applied ... to GUI prefab '&lt;path&gt;'</code>).</td>
+</tr>
+<tr>
+<td><code>--gui-unpack</code></td>
+<td>With <code>--open-gui</code>: <strong>Unpack</strong> the selection's instance after 17 frames; logs <code>--gui-unpack '&lt;id&gt;'</code>.</td>
+</tr>
+<tr>
+<td><code>--gui-delete</code>, <code>--gui-move up|down</code>, <code>--gui-reparent &lt;id&gt;|/</code></td>
+<td>With <code>--open-gui</code>: delete, move or reparent (onto the element with that id; <code>/</code> = <code>&lt;body&gt;</code>) the selection as the GUI Hierarchy does, after 17 frames. Inside a prefab instance they are refused with a warning (<code>GUI Hierarchy: the edit refused: ...</code>), as <code>--gui-add</code> into one is.</td>
 </tr>
 <tr>
 <td><code>--drop-model &lt;path&gt;</code></td>

@@ -65,7 +65,18 @@ Roboto faces for regular / bold / italic / bold italic and the project font's fa
 <code>setRichText</code> / <code>setText</code> and the later winning, a hot reload, <code>data-rich</code> following its model without injecting markup, a
 real mouse click on a link publishing <code>gui.link {id, document, target}</code> once from <code>UI</code>, the default link colours, no RmlUi
 warning) and <code>checkGuiDocRichText</code> (Rich Text by markup, verbatim round trip, the added placeholder, the toolbar's wrap and
-insert, undo / redo). No window.</td>
+insert, undo / redo). <code>kast_self_check --guiprefabs</code> only the GUI prefab ones (also in <code>--gui</code> and the full run):
+<code>checkGuiPrefabExpansion</code> (the engine's expander on files from a map: ids prefixed, overrides by id, root and child index,
+text / attribute set / removed, an unknown target warned, nested prefabs, the prefab sheet linked once before the document's,
+missing / broken / two-element / id-less references and a cycle as empty placeholders with warnings naming document and path,
+the rest of the text kept as written, instance markup for Lua), <code>checkGuiDocPrefabs</code> (on a project on disk: expanded on
+parse and saved exactly as read, overrides set / set back / reverted, no structural edit inside an instance, place twice with
+unique ids and its refusals, Revert All, Unpack keeping a nested instance linked, Apply one field and Apply All into the
+<code>.guiprefab</code>, Create with ids kept, <code>_2</code>, never overwriting, the kind as name and a cycle refused, undo / redo of
+Create, prefab documents and their cycle refusals, rename / move taking the <code>.rcss</code> and rewriting references) and
+<code>checkGuiPrefabScene</code> (headless SceneGui on <code>ui/prefab_host.rml</code>: expanded with no RmlUi warning, the prefab sheet
+styling the instances, the missing placeholder, <code>kast.gui.instantiate</code> adding a working instance whose button publishes,
+its three refusals, nested instantiation, and a prefab edit hot-reloading the document). No window.</td>
 </tr>
 <tr>
 <td><code>editor_smoke</code></td>
@@ -696,6 +707,48 @@ warnings in the Inspector, the converted preview, no RmlUi warning; <code>--gui-
 <td>On <code>new_gui_project</code>: <code>--gui-select rich_lua --gui-rich-wrap b,0,7 --gui-undo 1 --gui-redo 1 --gui-save</code> logs the
 wrap, <code>Undo Rich Text [b]</code>, <code>Redo ...</code> and <code>Saved GUI</code>; the saved <code>ui/richtext.rml</code> has
 <code>[b]waiting[/b] for Lua</code> and every other rich text's BBCode verbatim (line break and malformed markup included).</td>
+</tr>
+<tr>
+<td><code>gui_builder_prefab_screenshot</code>, <code>gui_builder_prefab_nested</code></td>
+<td><a href="../editor/gui-builder.html#prefabs">GUI prefabs</a> on <code>tests/project</code>: <code>ui/prefab_host.rml</code> with <code>b_title</code>
+(an overridden title: <code>#ffcc00</code> markers on class and text) or the nested instance's <code>n_inner_title</code> selected; the
+missing prefab warned about, no RmlUi warning.</td>
+</tr>
+<tr>
+<td><code>gui_builder_prefab_create_undo</code>, <code>_create</code>, <code>_place</code>, <code>_override</code>, <code>_override_reopen</code>,
+<code>_override_setback</code>, <code>_revert</code>, <code>_apply</code>, <code>_missing</code>, <code>_edit</code> and their <code>_file</code> checks</td>
+<td>In order on <code>gui_prefab_project</code> (a copy of <code>tests/project</code>): Create GUI Prefab from <code>prefab_source.rml</code>'s
+<code>#card</code> writes <code>ui/card.guiprefab</code> + <code>.rcss</code> (ids without <code>card_</code>), undone the element is back; again,
+<code>card_2.guiprefab</code> and the element an instance of it; <code>prefab_button</code> placed twice in <code>main_menu.rml</code>'s
+<code>#buttons</code> as <code>#prefab_button</code> and <code>#prefab_button_2</code>; an attribute override of <code>a_button</code> saved (b's untouched)
+and shown again on reopening, gone when set back to the prefab's value, gone when reverted; <code>a_title</code>'s class applied
+into <code>prefab_button.guiprefab</code> (no override left in the host); <code>prefab_missing.rml</code> loads with the missing prefab and
+the hand-made cycle warned about and saves the reference with its override; <code>prefab_nested.guiprefab</code> edited and saved
+with its nested instance kept as a reference.</td>
+</tr>
+<tr>
+<td><code>gui_builder_prefab_unpack_before</code>, <code>_unpack</code>, <code>_unpack_file</code>, <code>_unpack_after</code>, <code>_unpack_matches</code></td>
+<td>On <code>gui_prefab_unpack_project</code>: <code>#b</code> unpacked and saved as plain markup (ids as expanded); the preview before and
+after (940x520 at 330,120, nothing selected) is identical (<code>--diff-png</code> limit 0).</td>
+</tr>
+<tr>
+<td><code>gui_builder_prefab_cycle</code>, <code>gui_builder_prefab_locked_*</code></td>
+<td><code>prefab_button.guiprefab</code> open, its root picked, placing <code>prefab_nested.guiprefab</code> refused (it holds
+<code>prefab_button</code>) with the message in the log and a modal; on <code>prefab_host.rml</code> deleting, moving or reparenting a prefab
+element, reparenting into an instance and adding into one are refused with a warning.</td>
+</tr>
+<tr>
+<td><code>ui_prefab_screenshot</code>, <code>ui_prefab_matches_reference</code></td>
+<td><code>--play</code> on <code>tests/project/ui_prefab.scene</code> (<code>ui/prefab_host.rml</code>, <code>scripts/ui_prefab.lua</code>):
+<code>kast.gui.instantiate</code> spawns <code>#s</code> (<code>prefab: INSTANTIATED true</code>) and refuses a missing prefab, an unknown parent
+and a taken id (<code>REFUSED missing=false parent=false taken=false</code>); <code>--gui-click s_button</code> logs
+<code>prefab: CLICKED id=s_button</code>; no RmlUi warning or error; the Game view (955x652 at 322,44) matches
+<code>tests/reference/ui_prefab.png</code> within a mean of 1.0.</td>
+</tr>
+<tr>
+<td><code>build_game_guiprefab</code>, <code>player_guiprefab_screenshot</code>, <code>game_guiprefab_pak</code>, <code>player_guiprefab_click</code></td>
+<td>The built game of <code>ui_prefab.scene</code> (<code>GUI Prefab Test.exe</code>): <code>game.pak</code> holds the prefabs and their
+<code>.rcss</code>; the player renders the instances, instantiates <code>#s</code> and its click publishes.</td>
 </tr>
 <tr>
 <td><code>ui_document_inspector_screenshot</code></td>
