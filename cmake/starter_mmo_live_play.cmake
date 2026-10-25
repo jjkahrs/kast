@@ -11,6 +11,7 @@
 #              [-DSTOP_CHAT=ON] -P starter_mmo_live_play.cmake
 # STOP_CHAT=ON stops the stack's chat service for the run and starts it again afterwards.
 # EDITOR_ARGS go to the editor too (e.g. --sim-mouse for the camera stages).
+include("${CMAKE_CURRENT_LIST_DIR}/asset_refs.cmake")
 if(NOT EXISTS "${STATE}/ready")
   message("SKIP: starter_mmo_live_setup did not get the stack ready (see its output)")
   return()
@@ -25,6 +26,7 @@ foreach(scene_script "realms|realms" "characters|world_flow" "meadow|world_flow"
   list(GET scene_script 0 scene)
   list(GET scene_script 1 script)
   file(READ "${project}/scenes/${scene}.scene" text)
+  kast_plain_asset_refs(text)
   string(REPLACE "\"scripts/${script}.lua\"" "\"scripts/${script}.lua\", \"scripts/test_driver.lua\"" text "${text}")
   file(WRITE "${project}/scenes/${scene}.scene" "${text}")
 endforeach()

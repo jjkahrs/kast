@@ -96,6 +96,9 @@ std::optional<std::string> editAssetRefs(std::string_view path, std::string_view
 // to from moves only if it has an extension (from is a file then, not e.g. the folder "ui" matching the bus "UI"). True
 // if path changed.
 bool remapAssetPath(std::string& path, const std::string& from, const std::string& to);
+// remapAssetPath on every ref and other string value in json: an open document's in-memory refs (the zone's map.json
+// and objects) after a rename or move. True if anything changed.
+bool remapAssetPaths(nlohmann::ordered_json& json, const std::string& from, const std::string& to);
 // The rename / move pass, after from became to on disk and ids was rescanned: in every file under root that
 // holdsAssetRefs, a ref whose id ids knows gets its path as the hint (the moved files, and a linked file that moved
 // with them, e.g. renameGui's .rcss), any other ref or plain string remapAssetPath's. Returns the files changed (project-relative); a file that can't be written is logged.

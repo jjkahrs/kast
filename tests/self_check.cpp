@@ -5109,6 +5109,14 @@ void checkAssetRefs()
     std::string bus = "UI", inside = "ui/x.png";
     check(!remapAssetPath(bus, "ui", "hud") && remapAssetPath(inside, "ui", "hud") && inside == "hud/x.png",
           "remapAssetPath: a plain string equal to a folder name (an enum value) is no path; one inside it is");
+    // An open zone's in-memory map.json and objects (loaded refs are plain paths) follow a rename (ZoneSession::remap).
+    nlohmann::ordered_json zoneManifest = {{"name", "Hills"}, {"material", "gfx/ground.mat"}},
+                           zoneObjects = {{"objects", {{{"type", "visual"}, {"prefab", "gfx/props/crate.prefab"}}}}};
+    check(remapAssetPaths(zoneManifest, "gfx/ground.mat", "gfx/dirt.mat") && zoneManifest["material"] == "gfx/dirt.mat" &&
+              remapAssetPaths(zoneObjects, "gfx/props", "props") &&
+              zoneObjects["objects"][0]["prefab"] == "props/crate.prefab" && zoneObjects["objects"][0]["type"] == "visual" &&
+              !remapAssetPaths(zoneManifest, "gfx/ground.mat", "gfx/dirt.mat"),
+          "remapAssetPaths: an open zone's material and object prefab paths follow a rename and a folder move");
 
     // Build ships fresh hints: a file renamed with its .meta in Explorer, the scene not saved since.
     fs::rename(root / "gfx/audio/hit.wav", root / "gfx/audio/boom.wav");
@@ -16119,6 +16127,54 @@ end })");
     bare.stop();
 }
 
+// --migrate-assets <project>: scans it (creating the .meta files), then upgrades each plain string naming an asset in
+// the files that holdsAssetRefs to a ref, as the editor's next save would. A file in the writers' format (dump(2)) is
+// rewritten in it; a hand-formatted one (most tests/project scenes) keeps its layout, each such string becoming an inline
+// { "id": ..., "path": ... } (configure-time test regexes match that layout). Values of a "path" key are left alone (an
+// existing ref's hint).
+int migrateAssets(const std::filesystem::path& root)
+{
+    hookAssetRefs();
+    assetIds().scan(root);
+    const AssetRefEdit edit = [](std::string& path, std::string& id) { id = assetRefId(path).value_or(id); };
+    const std::regex token(R"re("((?:[^"\\]|\\.)*)"(\s*:)?)re"); // a JSON string, and the ':' if it's a key
+    for (const std::filesystem::path& file : kast::listFiles(root)) {
+        const std::optional<std::string> path = kast::toProjectPath(root, file);
+        std::string text, error;
+        if (!path || path->starts_with('.') || path->find("/.") != std::string::npos || !holdsAssetRefs(*path) ||
+            !kast::readFile(file, text))
+            continue;
+        std::optional<std::string> out;
+        const nlohmann::ordered_json json = nlohmann::ordered_json::parse(text, nullptr, false);
+        if (json.is_discarded() || json.dump(2) + "\n" == text) {
+            out = editAssetRefs(*path, text, edit); // GUI markup, or JSON in the writers' format
+        } else {
+            std::string edited, key;
+            size_t last = 0;
+            for (auto it = std::sregex_iterator(text.begin(), text.end(), token); it != std::sregex_iterator(); ++it) {
+                const std::smatch& match = *it;
+                edited += text.substr(last, match.position() - last);
+                last = match.position() + match.length();
+                const std::string value = match[1].str();
+                const std::optional<std::string> id = match[2].matched || key == "path" ? std::nullopt : assetRefId(value);
+                key = match[2].matched ? value : std::string();
+                edited += id ? std::format(R"({{ "id": "{}", "path": "{}" }})", *id, value) : match.str();
+            }
+            edited += text.substr(last);
+            if (edited != text)
+                out = std::move(edited);
+        }
+        if (!out)
+            continue;
+        if (!writeTextFile(file, *out, error)) {
+            kast::log::error(std::format("Cannot write '{}': {}", *path, error));
+            return 1;
+        }
+        kast::log::info(std::format("Upgraded the asset references in '{}'", *path));
+    }
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     kast::disableCrashDialogsIfRequested();
@@ -16169,6 +16225,8 @@ int main(int argc, char** argv)
         kast::log::info(g_failures == 0 ? "All asset checks passed" : std::format("{} asset check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
+    if (argc == 3 && std::string_view(argv[1]) == "--migrate-assets") // one-off: a project's .meta files and {id, path} refs
+        return migrateAssets(argv[2]);
     if (argc == 2 && std::string_view(argv[1]) == "--lists") { // only the game GUI list checks
         checkGuiListMath();
         checkGuiLists();

@@ -93,7 +93,8 @@ void check_round_trip(const fs::path& project, const std::string& name, const st
     CHECK(errors.empty());
     CHECK(fs::last_write_time(dir / "map.json") == before);
 
-    const Json manifest = json_file(dir / "map.json");
+    Json manifest = json_file(dir / "map.json");
+    kast::readAssetRefs(manifest); // its {id, path} refs: saved below without the editor's ids, as plain paths
     const Json areas = fs::exists(dir / "areas.json") ? json_file(dir / "areas.json") : Json();
     std::map<std::string, std::string> heightBytes;
     for (const auto& entry : fs::directory_iterator(dir / "heights"))

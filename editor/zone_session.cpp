@@ -1,5 +1,7 @@
 #include "zone_session.h"
 
+#include "asset_ids.h"
+
 #include <files.h>
 #include <log.h>
 #include <prefab.h> // kPrefabExtension
@@ -63,6 +65,17 @@ void ZoneSession::update(const Document& doc)
                                 problems_.empty() ? "" : std::format(" with {} problem(s)", problems_.size())));
     for (const zone::ZoneError& e : problems_)
         kast::log::warn(std::format("Zone: {}: {}", e.file, e.message));
+}
+
+void ZoneSession::remap(const std::string& from, const std::string& to)
+{
+    if (!zone_)
+        return;
+    for (zone::ZoneState* state : {&zone_->state, &zone_->saved}) {
+        remapAssetPaths(state->manifest, from, to);
+        for (auto& [tile, objects] : state->objects)
+            remapAssetPaths(objects, from, to);
+    }
 }
 
 bool ZoneSession::save()

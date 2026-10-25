@@ -2334,7 +2334,7 @@ void Panels::refreshAssets(const Document& doc)
 }
 
 void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
-                        ExternalEditor& editor)
+                        ExternalEditor& editor, ZoneSession& zone)
 {
     if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
         refreshAssets(doc);
@@ -2424,7 +2424,7 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, Shad
         }
     }
     ImGui::End();
-    applyAssetEdit(doc, gui, graphs, preview);
+    applyAssetEdit(doc, gui, graphs, preview, zone);
 }
 
 void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
@@ -2625,7 +2625,8 @@ void Panels::assetsFailed(std::string error)
     assetsErrorRequested_ = true;
 }
 
-void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview)
+void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
+                            ZoneSession& zone)
 {
     const AssetEdit edit = std::exchange(assetEdit_, AssetEdit{});
     if (edit.op == AssetEdit::Op::None || !doc.project || doc.play != PlayState::Stopped)
@@ -2792,6 +2793,7 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& g
             gui.remap(source, dest);
             graphs.remap(source, dest);
             preview.remap(edit.path, selected);
+            zone.remap(edit.path, selected);
             if (scenePath)
                 doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
             remapScenePaths(doc, edit.path, selected); // in memory; the files below

@@ -1,4 +1,5 @@
-# Stable asset ids end to end, on a copy of SOURCE (tests/project: legacy plain-string refs) without its .meta files:
+# Stable asset ids end to end, on a copy of SOURCE (tests/legacy_project: plain-string refs, no .meta files; its
+# startScene is models_material.scene):
 # 1. the legacy project opens in the editor (shot legacy_editor.png) and builds and plays (shot legacy_player.png);
 # 2. --save-scene upgrades models.scene and models_material.scene to {id, path} refs;
 # 3. the editor's Assets rename (--assets-rename, with another scene open) renames models/cube.gltf, the material
@@ -13,15 +14,6 @@ set(SHOTS "${WORK}/shots")
 file(REMOVE_RECURSE "${WORK}")
 file(COPY "${SOURCE}/" DESTINATION "${P}")
 file(MAKE_DIRECTORY "${SHOTS}")
-file(GLOB_RECURSE metas "${P}/*.meta")
-if(metas)
-  file(REMOVE ${metas})
-endif()
-# Build compiles every .kshader and cooks every model: drop the deliberately broken ones (as kast_game_project does).
-file(REMOVE "${P}/shaders/broken.kshader" "${P}/shaders/bad_param.kshader" "${P}/models/corrupt.glb")
-file(READ "${P}/project.kast" project)
-string(REGEX REPLACE "\"startScene\": \"[^\"]*\"" "\"startScene\": \"models_material.scene\"" project "${project}")
-file(WRITE "${P}/project.kast" "${project}")
 
 # Runs the editor (output in `output`); it must exit 0.
 function(editor)
@@ -38,7 +30,7 @@ endfunction()
 function(player dir shot)
   set(path "$ENV{PATH}")
   set(ENV{PATH} "$ENV{SystemRoot}/System32;$ENV{SystemRoot}")
-  execute_process(COMMAND "${dir}/Switch Test.exe" --frames 120 --screenshot "${shot}" WORKING_DIRECTORY "${dir}" TIMEOUT 60
+  execute_process(COMMAND "${dir}/Legacy Test.exe" --frames 120 --screenshot "${shot}" WORKING_DIRECTORY "${dir}" TIMEOUT 60
                   RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE out)
   set(ENV{PATH} "${path}")
   message("${out}")

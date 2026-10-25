@@ -37,6 +37,7 @@ kast_particle_probe(shapes 0.3664,0.4861,255,64,0,30 0.3664,0.3472,255,242,0,20 
                     0.7031,0.4167,0,0,0,8)
 # Edit mode previews the emitters in the Scene view: it differs from a copy whose emitters don't play on start.
 file(READ "${KAST_PARTICLE_SHAPES}" particles_scene)
+kast_plain_asset_refs(particles_scene)
 string(REPLACE "\"playOnStart\": true" "\"playOnStart\": false" particles_scene "${particles_scene}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/particles_shapes_off.scene" "${particles_scene}")
 foreach(shot shapes_edit shapes_edit_off)
@@ -88,6 +89,7 @@ kast_particle_probe(fog 0.5000,0.3778,251,255,251,6 0.4117,0.3778,182,255,182,8 
 set(KAST_PARTICLE_SPACE "${KAST_TEST_PROJECT}/particles_space.scene")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_PARTICLE_SPACE}")
 file(READ "${KAST_PARTICLE_SPACE}" particles_scene)
+kast_plain_asset_refs(particles_scene)
 string(REPLACE "\"space\": \"world\"" "\"space\": \"local\"" particles_scene "${particles_scene}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/particles_space_local.scene" "${particles_scene}")
 kast_particle_shot(space_world "${KAST_PARTICLE_SPACE}")

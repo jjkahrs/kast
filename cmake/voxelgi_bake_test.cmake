@@ -5,6 +5,7 @@
 # loaded.png in OUT_DIR.
 # Usage: cmake -DEDITOR=<kast_editor> -DSELF_CHECK=<kast_self_check> -DPROJECT=<dir> -DSCENE=<project-relative .scene>
 #              -DVOLUMES=<count> -DOUT_DIR=<dir> -P voxelgi_bake_test.cmake
+include("${CMAKE_CURRENT_LIST_DIR}/asset_refs.cmake")
 set(copy "${OUT_DIR}/project")
 file(REMOVE_RECURSE "${OUT_DIR}")
 file(MAKE_DIRECTORY "${OUT_DIR}")
@@ -33,6 +34,7 @@ if(NOT count EQUAL VOLUMES OR NOT out MATCHES "Saved scene")
   message(FATAL_ERROR "${count} VoxelGI volumes baked (expected ${VOLUMES}), or the scene not saved")
 endif()
 file(READ "${copy}/${SCENE}" saved)
+kast_plain_asset_refs(saved) # the hint, whether the save wrote a ref or a plain path
 foreach(line IN LISTS baked)
   string(REGEX MATCH "to '([^']*)' in ([0-9.]+) s" ignored "${line}")
   set(sidecar "${CMAKE_MATCH_1}")

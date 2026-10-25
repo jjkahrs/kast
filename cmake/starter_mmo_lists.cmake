@@ -3,11 +3,13 @@
 # fakes 15 chat lines and 25 active quests and opens the quest log (the copy's quest_log.lua asks no server): all 25 rows
 # exist (none past them), the 23rd selects; the screenshot shows the chat's 15 lines and the log on Quest 23.
 # Usage: cmake -DEDITOR=<exe> -DSAMPLE=<dir> -DOUT=<dir> -DSCREENSHOT=<png> -P starter_mmo_lists.cmake
+include("${CMAKE_CURRENT_LIST_DIR}/asset_refs.cmake")
 set(project "${OUT}/project")
 file(REMOVE_RECURSE "${project}")
 file(COPY "${SAMPLE}/" DESTINATION "${project}")
 file(COPY_FILE "${CMAKE_CURRENT_LIST_DIR}/starter_mmo_lists_driver.lua" "${project}/scripts/test_lists.lua")
 file(READ "${project}/scenes/meadow.scene" text)
+kast_plain_asset_refs(text)
 string(REPLACE "\"scripts/quest_log.lua\"" "\"scripts/quest_log.lua\", \"scripts/test_lists.lua\"" text "${text}")
 file(WRITE "${project}/scenes/meadow.scene" "${text}")
 # Offline there is no server to ask for the quest descriptions (the driver publishes its answer).

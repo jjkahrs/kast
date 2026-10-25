@@ -20,7 +20,7 @@ function Write-Shader([string]$text) { [IO.File]::WriteAllText($shader, $text) }
 Write-Shader "void fragment()`n{`n    ALBEDO = vec3(1.0, 0.0, 0.0);`n}`n"
 [IO.File]::WriteAllText((Join-Path $proj 'materials\hot.mat'),
     "{`"version`": 3, `"unlit`": true, `"shader`": `"shaders/hot.kshader`"}`n")
-$scene = [IO.File]::ReadAllText((Join-Path $proj 'shader_showcase.scene')) -replace 'materials/shader_showcase\.mat', 'materials/hot.mat'
+$scene = [IO.File]::ReadAllText((Join-Path $proj 'shader_showcase.scene')) -replace '(\{ "id": "[0-9a-f-]+", "path": )?"materials/shader_showcase\.mat"( \})?', '"materials/hot.mat"' # a ref: its id too
 [IO.File]::WriteAllText((Join-Path $proj 'hot.scene'), $scene)
 
 # Pixels of the screenshot that are clearly pure blue ($channel 0) or red (2), sampling every 4th row and column.

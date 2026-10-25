@@ -8,6 +8,7 @@ set(KAST_VGI_ROOM "${KAST_TEST_PROJECT}/voxelgi_room.scene")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_VGI_ROOM}"
              "${KAST_TEST_PROJECT}/voxelgi_room_voxelgi/13.json")
 file(READ "${KAST_VGI_ROOM}" vgi_room)
+kast_plain_asset_refs(vgi_room)
 file(COPY_FILE "${KAST_VGI_ROOM}" "${KAST_SHADOW_PROJECT}/voxelgi_room.scene")
 set(vgi_baked "\"bakedPath\": \"[^\"]*\"")
 set(vgi_entity "[\r\n]+    {[\r\n]+      \"id\": 13,[^{]*{[\r\n]+[^\r\n]*[\r\n]+[^\r\n]*VoxelGI[^\r\n]*[\r\n]+      }[\r\n]+    },")
@@ -23,9 +24,11 @@ kast_shadow_variant(voxelgi_room_corrupt "${vgi_room}" "${vgi_baked}" "\"bakedPa
 kast_shadow_variant(voxelgi_room_version "${vgi_room}" "${vgi_baked}" "\"bakedPath\": \"voxelgi_room_version_voxelgi/13.json\"")
 kast_shadow_variant(voxelgi_room_mismatch "${vgi_room}" "\"resolution\": 128" "\"resolution\": 64")
 file(REMOVE_RECURSE "${KAST_SHADOW_PROJECT}/voxelgi_room_corrupt_voxelgi" "${KAST_SHADOW_PROJECT}/voxelgi_room_version_voxelgi")
-file(COPY "${KAST_TEST_PROJECT}/voxelgi_room_voxelgi/" DESTINATION "${KAST_SHADOW_PROJECT}/voxelgi_room_corrupt_voxelgi")
+file(COPY "${KAST_TEST_PROJECT}/voxelgi_room_voxelgi/" DESTINATION "${KAST_SHADOW_PROJECT}/voxelgi_room_corrupt_voxelgi"
+     PATTERN "*.meta" EXCLUDE) # the copy gets ids of its own, not duplicates
 file(WRITE "${KAST_SHADOW_PROJECT}/voxelgi_room_corrupt_voxelgi/13.kvox" "not a KVOX")
-file(COPY "${KAST_TEST_PROJECT}/voxelgi_room_voxelgi/" DESTINATION "${KAST_SHADOW_PROJECT}/voxelgi_room_version_voxelgi")
+file(COPY "${KAST_TEST_PROJECT}/voxelgi_room_voxelgi/" DESTINATION "${KAST_SHADOW_PROJECT}/voxelgi_room_version_voxelgi"
+     PATTERN "*.meta" EXCLUDE) # the copy gets ids of its own, not duplicates
 file(READ "${KAST_TEST_PROJECT}/voxelgi_room_voxelgi/13.json" vgi_sidecar)
 string(REPLACE "\"version\": 1," "\"version\": 99," vgi_sidecar "${vgi_sidecar}")
 file(WRITE "${KAST_SHADOW_PROJECT}/voxelgi_room_version_voxelgi/13.json" "${vgi_sidecar}")
@@ -41,6 +44,7 @@ kast_shadow_variant(voxelgi_room_still "${vgi_room}" "\"degreesPerSecond\": 90" 
 # Precedence: lightmap_room (lightmaps baked, a Dynamic ball on the probe grid) with a VoxelGI volume over the room,
 # baked by voxelgi_lightmap_room_bake.
 file(READ "${KAST_TEST_PROJECT}/lightmap_room.scene" vgi_lm_room)
+kast_plain_asset_refs(vgi_lm_room)
 string(REGEX REPLACE "([\r\n]+  \\],[\r\n]+  \"systems\")"
        ",\n    {\n      \"id\": 30,\n      \"name\": \"Room VoxelGI\",\n      \"parent\": null,\n      \"components\": {\n        \"Transform\": { \"position\": [0, 2.1, -6], \"rotation\": [0, 0, 0, 1], \"scale\": [1, 1, 1] },\n        \"VoxelGI\": { \"boxSize\": [8.8, 4.6, 8.8], \"resolution\": 128, \"intensity\": 1, \"bakedPath\": \"\" }\n      }\n    }\\1"
        vgi_lm_voxel "${vgi_lm_room}")

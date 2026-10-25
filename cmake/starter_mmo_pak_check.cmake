@@ -13,8 +13,8 @@ function(read_u32 offset out)
   set(${out} ${value} PARENT_SCOPE)
 endfunction()
 
-file(READ "${PAK}" magic LIMIT 4)
-if(NOT magic STREQUAL "KPAK")
+file(READ "${PAK}" magic LIMIT 4 HEX) # as text, a newline byte later in the file can end up in it
+if(NOT magic STREQUAL "4b50414b") # "KPAK"
   message(FATAL_ERROR "${PAK} is not a Kast pak")
 endif()
 read_u32(8 count)

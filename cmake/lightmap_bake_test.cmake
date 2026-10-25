@@ -9,6 +9,7 @@
 #              [-DPLAY_SCENES=<a.scene,b.scene>] [-DINSTANCING_CHECK=ON] -P lightmap_bake_test.cmake
 # INSTANCING_CHECK: the loaded scene renders the same with --no-instancing, in more draw calls (--log-fps): its
 # lightmapped draws were instanced.
+include("${CMAKE_CURRENT_LIST_DIR}/asset_refs.cmake")
 set(copy "${OUT_DIR}/project")
 file(REMOVE_RECURSE "${OUT_DIR}")
 file(MAKE_DIRECTORY "${OUT_DIR}")
@@ -55,6 +56,7 @@ foreach(file lightmaps.json meshes.klmm)
   endif()
 endforeach()
 file(READ "${copy}/${SCENE}" saved)
+kast_plain_asset_refs(saved) # the hint, whether the save wrote a ref or a plain path
 if(NOT saved MATCHES "\"bakedPath\": \"${sidecar}\"")
   message(FATAL_ERROR "the saved scene does not name ${sidecar}")
 endif()

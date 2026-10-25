@@ -403,6 +403,11 @@ bool remapAssetPath(std::string& path, const std::string& from, const std::strin
     return true;
 }
 
+bool remapAssetPaths(nlohmann::ordered_json& json, const std::string& from, const std::string& to)
+{
+    return editAssetRefs(json, [&](std::string& path, std::string&) { remapAssetPath(path, from, to); });
+}
+
 std::vector<std::string> remapAssetRefs(const fs::path& root, const std::string& from, const std::string& to,
                                         const AssetIds& ids)
 {
