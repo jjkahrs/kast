@@ -187,6 +187,21 @@ struct VoxelGI {
     std::string bakedPath;                // project-relative .json written by Bake; empty = not baked
 };
 
+enum class FogVolumeShape { Box, Sphere };
+
+// A local region of volumetric fog (volumetric_fog.h, docs/engine/volumetric-fog.html): while the scene's
+// postProcessing.volumetricFog is on, adds density (extinction per meter) scattering with its albedo inside a unit box
+// or a sphere 1 across in the entity's world transform (its scale sizes it), fading out over the last edgeFalloff of
+// the way from its center to its surface, and with heightFalloff > 0 thinning by exp(-heightFalloff * the height above
+// its lowest point).
+struct FogVolume {
+    FogVolumeShape shape = FogVolumeShape::Box;
+    float density = 0.1f;               // >= 0, per meter
+    bx::Vec3 albedo{0.9f, 0.9f, 0.9f};  // linear RGB 0..1
+    float edgeFalloff = 0.25f;          // 0..1
+    float heightFalloff = 0.0f;         // >= 0, per meter; optional in files
+};
+
 constexpr float kMinLightmapTexelsPerMeter = 0.25f, kMaxLightmapTexelsPerMeter = 64.0f;
 constexpr int kMaxLightmapBounces = 8, kMaxLightmapSamples = 4096;
 constexpr float kMinProbeSpacing = 0.25f, kMaxProbeSpacing = 16.0f;
@@ -294,6 +309,42 @@ struct ScenePostProcessing {
         float density = 0.05f;          // >= 0, per meter
         float start = 0.0f;             // >= 0, meters from the eye before fog begins
     } fog;
+    // Screen-space and volumetric effects (docs/engine/post-processing.html). SSAO and SSR read the opaque scene's
+    // G-data (PostProcess::begin), composited before the blended draws; depth of field runs after them, before bloom.
+    struct Ssao { // ground-truth AO (GTAO): darkens the indirect diffuse light only
+        bool enabled = false;
+        float radius = 0.5f;    // meters, 0.05..5: how far around a point occluders count
+        float intensity = 1.0f; // 0..4
+        float power = 1.5f;     // 0.5..4: falloff, ao^power
+        int sliceCount = 2;     // 1..4: horizon search directions per pixel (quality)
+    } ssao;
+    struct Ssr { // screen-space reflections: replace the probe / IBL specular where the ray hits
+        bool enabled = false;
+        float maxDistance = 50.0f; // meters, 0.5..1000: the ray's length in the view
+        float thickness = 0.3f;    // meters, 0.01..5: how deep a surface counts as hit behind the depth buffer
+        float maxRoughness = 0.6f; // 0..1: rougher surfaces keep the probe specular
+        float intensity = 1.0f;    // 0..1
+        int steps = 32;            // 8..128: ray march steps (quality)
+    } ssr;
+    struct DepthOfField { // physical thin lens, manual focus, 35 mm full-frame sensor
+        bool enabled = false;
+        float focusDistance = 10.0f; // meters, 0.1..10000
+        float fStop = 2.8f;          // 0.7..32
+        float focalLength = 50.0f;   // millimeters, 8..400
+        float maxCoc = 16.0f;        // pixels, 1..64: the largest blur radius
+    } depthOfField;
+    struct VolumetricFog { // froxel in-scattering of the scene's lights; adds to the distance fog above
+        bool enabled = false;
+        float density = 0.02f;                 // >= 0, extinction per meter at baseHeight
+        bx::Vec3 albedo{0.9f, 0.9f, 0.9f};     // linear RGB 0..1: scattered / extinguished
+        float anisotropy = 0.2f;               // Henyey-Greenstein g, -0.9..0.9 (> 0: forward scattering)
+        float heightFalloff = 0.1f;            // >= 0, per meter: density * exp(-falloff * max(y - baseHeight, 0))
+        float baseHeight = 0.0f;               // meters, -10000..10000
+        float maxDistance = 100.0f;            // meters, 1..1000: the froxel grid's depth
+        float temporalBlend = 0.9f;            // 0..0.99: how much of the last frame's scattering stays
+        float lightIntensity = 1.0f;           // >= 0: scales the lights' in-scattering
+        float ambientIntensity = 1.0f;         // >= 0: scales the ambient's
+    } volumetricFog;
 };
 
 // Renders the scene from the entity's world position looking down its world -Z (scale is ignored).

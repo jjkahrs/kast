@@ -87,7 +87,7 @@ constexpr const char* kUsage =
     "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
-    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--log-lod] [--no-occlusion] [--occlusion-unsupported] [--lod-tint] [--show-occluded] [--show-hiz MIP] [--scene-debug-menu] [--terrain-lod-tint] [--terrain-lod-checker] [--no-terrain-skirts] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
+    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--log-lod] [--no-occlusion] [--occlusion-unsupported] [--lod-tint] [--show-occluded] [--show-hiz MIP] [--show-gdata 1|2|3] [--scroll-post-section NAME] [--scene-debug-menu] [--terrain-lod-tint] [--terrain-lod-checker] [--no-terrain-skirts] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel (without --play: on the Scene view), for
@@ -162,6 +162,7 @@ struct Options {
     std::optional<std::array<int, 2>> promptRemoveTile; // --prompt-remove-tile: open the Zone tab's remove-tile dialog
     bool fileSave = false;  // --file-save: File > Save (as Ctrl+S) at frame kAddComponentPopupFrame, for tests
     int undo = 0, redo = 0; // --scene-undo N / --scene-redo N: scene Undo N times, then Redo N times, after the startup edits
+    std::string scrollPostSection;  // the Post Processing panel's section to keep scrolled to its top (Panels::scrollPostSection)
     std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting", "Post Processing", "Physics", "Mixer", "Network" and "Online" also open it) to the front, for screenshots
     std::string openGui;            // open this .rml in the GUI Builder (relative paths: to the project, else the cwd)
     std::string guiSelect;          // then select the element with this id in it
@@ -234,6 +235,7 @@ struct Options {
     // Hi-Z mip (-1: off) and its Debug menu opened (SceneViewport::debugViews / openDebugMenu).
     bool lodTint = false, showOccluded = false, sceneDebugMenu = false;
     int showHiz = -1;
+    int showGData = 0; // --show-gdata: the Scene view shows that G-data attachment (PostProcess::setDebugGData)
     // Terrain LOD test hooks of the Scene and Game views: Renderer::setTerrainLodChecker / setTerrainSkirts.
     bool terrainLodChecker = false, noTerrainSkirts = false;
     bool noAudioDevice = false;     // play sound on the null backend (silent), as if there were no output device
@@ -590,6 +592,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.openMenu = argv[++i];
         } else if (arg == "--focus-panel" && hasValue) {
             options.focusPanel = argv[++i];
+        } else if (arg == "--scroll-post-section" && hasValue) {
+            options.scrollPostSection = argv[++i];
         } else if (arg == "--zone-section" && hasValue) {
             for (const auto part : std::views::split(std::string_view(argv[++i]), ','))
                 options.zoneSections.emplace_back(std::string_view(part.begin(), part.end()));
@@ -693,6 +697,13 @@ std::optional<Options> parseArgs(int argc, char** argv)
                 kast::log::error(std::format("Invalid --show-hiz '{}', expected a mip (0, 1, ...)", text));
                 return std::nullopt;
             }
+        } else if (arg == "--show-gdata" && hasValue) {
+            const std::string_view text = argv[++i];
+            if (text != "1" && text != "2" && text != "3") {
+                kast::log::error(std::format("Invalid --show-gdata '{}', expected 1, 2 or 3", text));
+                return std::nullopt;
+            }
+            options.showGData = text[0] - '0';
         } else if (arg == "--terrain-lod-checker") {
             options.terrainLodChecker = true;
         } else if (arg == "--no-terrain-skirts") {
@@ -784,7 +795,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     const bool editorFlags = options.select != 0 || options.play || options.selectNetworkEntity || options.addComponentPopup ||
                              options.newComponentPrompt || !options.newComponent.empty() || !options.openMenu.empty() ||
-                             options.openBuildSettings || options.openOnlineSettings || !options.focusPanel.empty() || !options.zoneSections.empty() || options.zoneTool || !options.zoneSelect.empty() || options.bake || !options.mapbake.empty() || options.newStateMachinePrompt ||
+                             options.openBuildSettings || options.openOnlineSettings || !options.focusPanel.empty() || !options.scrollPostSection.empty() || !options.zoneSections.empty() || options.zoneTool || !options.zoneSelect.empty() || options.bake || !options.mapbake.empty() || options.newStateMachinePrompt ||
                              options.assetsMenu || options.assetsCreate || !options.assetsSelect.empty() ||
                              !options.materialSets.empty() || options.materialUndo || options.materialRedo ||
                              !options.openGui.empty() ||
@@ -796,7 +807,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.prefabBackPrompt ||
                              options.noVsync || options.noInstancing || options.noCulling || options.noLod || options.lodBias != 1.0f ||
                              options.forceLod >= 0 || options.logLod || options.lodTint || options.noOcclusion ||
-                             options.occlusionUnsupported || options.showOccluded || options.showHiz >= 0 || options.sceneDebugMenu ||
+                             options.occlusionUnsupported || options.showOccluded || options.showHiz >= 0 || options.showGData != 0 || options.sceneDebugMenu ||
                              options.terrainLodChecker || options.noTerrainSkirts || !options.worldAddress.empty() || options.onlineLoginEnv ||
                              options.onlineCompose || !options.zoneOps.empty() || options.headless || options.noRecycle ||
                              options.sculptLoop || options.focus || options.promptRemoveTile || options.fileSave ||
@@ -1632,6 +1643,7 @@ int main(int argc, char** argv)
             renderer->setTerrainSkirts(!options->noTerrainSkirts);
         }
         viewport.debugViews() = {options->lodTint, options->showOccluded, options->showHiz};
+        viewport.showGData(options->showGData);
         if (options->sceneDebugMenu)
             viewport.openDebugMenu();
         viewport.init();
@@ -1674,6 +1686,7 @@ int main(int argc, char** argv)
     };
     FpsLog fpsLog;
     kast::CursorLock cursorLock;
+    panels.scrollPostSection = options->scrollPostSection;
     panels.probeStatus = [&](const kast::ReflectionProbe& probe) { return viewport.renderer().probeStatus(probe); };
     panels.lodLevel = [&](const kast::Scene& scene, entt::entity entity) { return viewport.renderer().lodLevel(scene, entity); };
     LightmapJob lightmapJob; // Bake Lightmaps on a worker thread

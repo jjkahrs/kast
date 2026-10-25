@@ -27,7 +27,7 @@ namespace kast::gui {
 // texture, filter pass) takes the next view, in order. Hosts reserve the whole range for each context they render in a
 // frame. A blurred box-shadow costs about 9 views the frame its texture is made (then it is cached), a blur filter
 // 3 to 5 per frame, a color filter 2.
-constexpr bgfx::ViewId kViews = 75; // the editor fits two of these with two viewports (main.cpp) in bgfx's 256 views
+constexpr bgfx::ViewId kViews = 65; // the editor fits two of these with two viewports (main.cpp) in bgfx's 256 views
 
 // Starts RmlUi; call after bgfx::init. False (logged) if it fails; GUI calls then do nothing.
 bool init();

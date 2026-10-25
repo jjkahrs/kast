@@ -46,6 +46,11 @@ bool sdfgiFromJson(const nlohmann::ordered_json& json, SceneSdfgi& out, std::str
 // A scene's "sky" block (kast.sky uses these too). skyFromJson replaces out only on success; error says why not.
 nlohmann::ordered_json skyToJson(const SceneSky& sky);
 bool skyFromJson(const nlohmann::ordered_json& json, SceneSky& out, std::string& error);
+// One "postProcessing" block, e.g. "ssao" (kast.ssao uses these): every field of post's, and json back into out's
+// through the scene file's validation (missing fields default). postBlockFromJson changes out only on success; error
+// says why not.
+nlohmann::ordered_json postBlockToJson(const ScenePostProcessing& post, const char* name);
+bool postBlockFromJson(const nlohmann::ordered_json& json, const char* name, ScenePostProcessing& out, std::string& error);
 
 // .prefab files: {"version", "entities"} holding exactly one root entity, which isn't itself a prefab instance.
 // loadPrefab resolves nested instances (one that contains the prefab itself is a missing-prefab placeholder).

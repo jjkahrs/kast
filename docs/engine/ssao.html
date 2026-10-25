@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSAO - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="ssao.html" class="active">SSAO</a></li><li><a href="ssr.html">Screen-space reflections</a></li><li><a href="depth-of-field.html">Depth of field</a></li><li><a href="volumetric-fog.html">Volumetric fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="lightmaps.html">Lightmaps and GI</a></li><li><a href="voxelgi.html">VoxelGI</a></li><li><a href="sdfgi.html">SDFGI</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li><li><a href="lod-and-occlusion.html">LOD and occlusion</a></li></ul></nav>
+<main>
+<h1 id="ssao">SSAO</h1>
+<p><strong>Screen-space ambient occlusion</strong> darkens the ambient light in creases, corners and where objects meet the ground,
+computed every frame from the depth buffer and the view-space normals (ground-truth AO, GTAO: Jimenez et al. 2016,
+with XeGTAO's falloff). It only takes away <em>indirect diffuse</em> light (flat ambient, IBL / reflection probes, lightmaps,
+VoxelGI, SDFGI): direct light, specular and emission are never darkened, so a surface lit only by a lamp is unchanged
+(<code>engine/post_process.h</code>, <code>engine/shaders/post/fs_ssao_*.sc</code>). The Scene view (with its toolbar's <strong>Post</strong> box),
+the Game view and the built game apply it alike.</p>
+<p>It is a per-scene setting (<code>"postProcessing"</code> &gt; <code>"ssao"</code>), off by default: a scene without it renders exactly as
+before. Edit it in <strong>Window &gt; Post Processing &gt; SSAO</strong> (live, undoable, marks the scene dirty) or from Lua.</p>
+
+<h2 id="settings">Settings</h2>
+<table>
+<tr><th>Field</th><th>Default</th><th>Range</th><th>Meaning</th></tr>
+<tr><td><code>enabled</code></td><td>false</td><td></td><td>SSAO on</td></tr>
+<tr><td><code>radius</code></td><td>0.5</td><td>0.05 to 5</td><td>meters around a point within which geometry occludes it</td></tr>
+<tr><td><code>intensity</code></td><td>1</td><td>0 to 4</td><td>scales the occlusion (0: no change, byte for byte)</td></tr>
+<tr><td><code>power</code></td><td>1.5</td><td>0.5 to 4</td><td>falloff: higher darkens the creases more and open surfaces less</td></tr>
+<tr><td><code>sliceCount</code></td><td>2</td><td>integer 1 to 4</td><td>horizon search directions per pixel (quality and cost)</td></tr>
+</table>
+<pre><code class="language-json">"postProcessing": {
+  "ssao": { "enabled": true, "radius": 0.5, "intensity": 1, "power": 1.5, "sliceCount": 2 }
+}</code></pre>
+<p>Every field is optional (missing ones take the default). An unknown field, a wrong type or a value out of range fails
+the scene's load with an error naming it, e.g. <code>postProcessing.ssao: "radius" must be a number between 0.05 and 5</code>,
+and the open scene is left untouched, as for the other post effects.</p>
+
+<h2 id="how">How it works</h2>
+<ol>
+<li><strong>G-data</strong>: while SSAO or SSR is on, opaque and alpha-masked meshes (every <code>fs_mesh.sc</code> variant, <code>.kshader</code>s and
+  shader graphs) also write their view-space normal and roughness (<code>RGB10A2</code>, octahedral) and their indirect diffuse
+  light (<code>RG11B10F</code>, already times the material's AO and the distance fog's remaining fraction) next to the scene color.
+  Blended meshes, particles and the sky don't (cleared to 0: no surface). About 24 MiB at 1920 x 1080, allocated only
+  while needed.</li>
+<li><strong>GTAO</strong>, half resolution: for <code>sliceCount</code> directions around the view vector (rotated and jittered by a 4 x 4
+  Bayer pattern), the highest horizon either side within <code>radius</code> (6 steps a side, samples fading to the open horizon
+  over the radius's outer 61.5%, at most 64 half-res pixels), integrated against the normal's cosine. Output: visibility
+  <code>v</code> 0..1 (1 open).</li>
+<li><strong>Blur</strong>: a bilateral 4 x 4 box at half resolution (taps weighed by depth within 5% + 1 cm and normal agreement),
+  which averages out the 4 x 4 dither. No temporal history: every frame stands alone.</li>
+<li><strong>Composite</strong>, full resolution (depth-aware 2 x 2 upsample), subtracted from the scene color:
+  <pre><code>occlusion = saturate(intensity * (1 - v^power))
+color     = color - indirectDiffuse * occlusion</code></pre>
+  (<code>kast::aoComposite</code> is the CPU mirror checked by <code>engine_self_check</code>.)</li>
+</ol>
+
+<h2 id="cost">Cost</h2>
+<p>Debug build, RTX 4070 Ti SUPER, built player at 1920 x 1080 (<code>--gpu-stats</code>, mean of 3 runs of 590 frames), on
+<code>tests/project/ssao.scene</code>: 2.93 ms GPU frame with SSAO vs 2.51 ms off, about <strong>+0.4 ms</strong> for the G-data and the three
+passes together. Memory: the G-data (24 MiB) plus two half-res <code>RG16F</code> targets (4 MiB).</p>
+
+<h2 id="lua">Lua</h2>
+<p><code>kast.ssao.get()</code> returns the settings as a table; <code>kast.ssao.set{...}</code> changes any of its fields at run time. It is
+all-or-nothing and checked as on load: a bad field changes nothing and raises an error such as
+<code>kast.ssao.set: postProcessing.ssao: "sliceCount" must be an integer between 1 and 4</code>.</p>
+<pre><code class="language-lua">kast.ssao.set({enabled = true, radius = 1, intensity = 2})
+print(kast.ssao.get().sliceCount)   -- 2</code></pre>
+<p>See <code>tests/project/ssao.scene</code> (a cube, a sphere and boxes on the ground, in a corner and stacked) and <code>scripts/ssao_set.lua</code>.</p>
+</main>
+</div>
+</body>
+</html>

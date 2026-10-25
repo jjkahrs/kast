@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Depth of field - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="ssao.html">SSAO</a></li><li><a href="ssr.html">Screen-space reflections</a></li><li><a href="depth-of-field.html" class="active">Depth of field</a></li><li><a href="volumetric-fog.html">Volumetric fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="lightmaps.html">Lightmaps and GI</a></li><li><a href="voxelgi.html">VoxelGI</a></li><li><a href="sdfgi.html">SDFGI</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li><li><a href="lod-and-occlusion.html">LOD and occlusion</a></li></ul></nav>
+<main>
+<h1 id="depth-of-field">Depth of field</h1>
+<p><strong>Depth of field</strong> blurs what is nearer or farther than the focus distance, like a real camera lens: a physical
+thin-lens circle of confusion, disc-shaped bokeh on bright highlights, and a near field that blurs softly over in-focus
+edges (<code>engine/post_process.h</code>, <code>engine/shaders/post/fs_dof_*.sc</code>, <code>dof.sh</code>). Focus is manual: set it from the scene
+or from Lua (a cutscene's focus pull). The Scene view follows its toolbar's <strong>Post</strong> box like every other effect; the
+Game view and the built game always apply it.</p>
+<p>It is a per-scene setting (<code>"postProcessing"</code> &gt; <code>"depthOfField"</code>), not per camera, off by default: a scene without
+it renders exactly as before. Edit it in <strong>Window &gt; Post Processing &gt; Depth of Field</strong> (live, undoable, marks the
+scene dirty) or from Lua.</p>
+
+<h2 id="settings">Settings</h2>
+<table>
+<tr><th>Field</th><th>Default</th><th>Range</th><th>Meaning</th></tr>
+<tr><td><code>enabled</code></td><td>false</td><td></td><td>depth of field on</td></tr>
+<tr><td><code>focusDistance</code></td><td>10</td><td>0.1 to 10000</td><td>meters from the camera that are sharp</td></tr>
+<tr><td><code>fStop</code></td><td>2.8</td><td>0.7 to 32</td><td>aperture N: smaller is a shallower focus band and bigger blur</td></tr>
+<tr><td><code>focalLength</code></td><td>50</td><td>8 to 400</td><td>millimeters; longer is more blur. It sets only the blur: the camera's field of view is unchanged</td></tr>
+<tr><td><code>maxCoc</code></td><td>16</td><td>1 to 64</td><td>pixels: the largest blur radius (at the image's height in pixels, any resolution)</td></tr>
+</table>
+<pre><code class="language-json">"postProcessing": {
+  "depthOfField": { "enabled": true, "focusDistance": 6, "fStop": 1.4, "focalLength": 85, "maxCoc": 24 }
+}</code></pre>
+<p>Every field is optional (missing ones take the default). An unknown field, a wrong type or a value out of range fails
+the scene's load with an error naming it, e.g. <code>postProcessing.depthOfField: "fStop" must be a number between 0.7 and
+32</code>, and the open scene is left untouched.</p>
+
+<h2 id="coc">Circle of confusion</h2>
+<p>A 35 mm full-frame sensor (36 x 24 mm) is assumed; its 24 mm height is matched to the image's height, so the blur
+looks the same at any aspect ratio. With focal length <code>f</code> and focus distance <code>S</code> in millimeters, f-stop <code>N</code>,
+image height <code>H</code> pixels and view depth <code>z</code>, the signed CoC radius in pixels is:</p>
+<pre><code>scale = f^2 / (N * (S - f)) / 2 * H / 24 mm
+coc   = clamp(scale * (z - S) / z, -maxCoc, maxCoc)      (&lt; 0 near field, &gt; 0 far field)</code></pre>
+<p>It is 0 at the focus distance, grows with defocus, and doubles when the f-stop halves (<code>kast::circleOfConfusion</code> and
+<code>kast::dofCocScale</code> are the CPU mirrors checked by <code>engine_self_check</code>).</p>
+
+<h2 id="how">How it works</h2>
+<ol>
+<li><strong>Setup</strong>, half resolution (<code>RGBA16F</code>): color and signed CoC of each 2 x 2 block; the nearest's CoC if any is
+  in the near field (so the near blur reaches past its silhouette), else their mean.</li>
+<li><strong>Gather</strong>, half resolution, two layers over a 64-tap Vogel disc. Far: taps over the pixel's own CoC, kept where
+  their CoC reaches it, equal weights, so bright highlights become flat discs and a sharp foreground never smears into
+  the blurred background. Near: taps over <code>maxCoc</code>, weighed by <code>1 / coc^2</code>, with a coverage that falls off smoothly
+  past an object's edge: near blur bleeds over in-focus pixels without a hard halo.</li>
+<li><strong>Composite</strong>, full resolution, into its own <code>RGBA16F</code> target that bloom, tonemap and FXAA then read: the sharp
+  color blends to the far layer as its CoC grows past half a pixel, then the near layer goes over by its coverage.</li>
+</ol>
+<p>Order: SSAO / SSR / volumetric fog composites, blended meshes and particles, <strong>depth of field</strong>, then bloom and
+the tonemap (so blurred highlights still bloom, and blended draws blur with the scene). Limit: heavily blurred near
+edges show a faint dotted grain; CoC tile dilation and scatter are the upgrade path.</p>
+
+<h2 id="cost">Cost</h2>
+<p>Debug build, RTX 4070 Ti SUPER, built player at 1920 x 1080 (<code>--gpu-stats</code>, mean of 3 runs of 590 frames), on
+<code>tests/project/dof.scene</code>: 3.22 ms GPU frame with depth of field vs 2.61 ms off, about <strong>+0.6 ms</strong>. Memory about 28 MiB
+at 1920 x 1080 (three half-res and one full-res <code>RGBA16F</code> target), made on first use and freed when off.</p>
+
+<h2 id="lua">Lua</h2>
+<p><code>kast.dof.get()</code> returns the settings as a table; <code>kast.dof.set{...}</code> changes any of its fields at run time,
+all-or-nothing and checked as on load: <code>kast.dof.set: postProcessing.depthOfField: "fStop" must be a number between 0.7
+and 32</code>.</p>
+<pre><code class="language-lua">-- cutscene focus pull: from the near character to the far one
+kast.dof.set({enabled = true, focusDistance = 14, fStop = 2})</code></pre>
+<p>See <code>tests/project/dof.scene</code> (rows of objects at three depths, emissive lights far away) and
+<code>scripts/dof_set.lua</code>.</p>
+</main>
+</div>
+</body>
+</html>

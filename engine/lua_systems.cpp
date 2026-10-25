@@ -121,6 +121,10 @@ struct LuaSystems::State {
     sol::table skyApi;     // kast.sky.*
     sol::table lightmapsApi; // kast.lightmaps.*
     sol::table sdfgiApi;     // kast.sdfgi.*
+    sol::table ssaoApi;      // kast.ssao.*
+    sol::table ssrApi;       // kast.ssr.*
+    sol::table dofApi;       // kast.dof.*
+    sol::table volumetricFogApi; // kast.volumetricFog.*
     sol::table particlesApi; // kast.particles.*
     sol::table authApi;    // kast.auth.*, only while Online Services are enabled
     sol::table worldApi;   // kast.world.*, likewise
@@ -173,6 +177,7 @@ struct LuaSystems::State {
     void bindSkyApi();
     void bindLightmapsApi();
     void bindSdfgiApi();
+    sol::table postBlockApi(const char* luaName, const char* block);
     void bindParticlesApi();
     void bindAuthApi();
     void bindWorldApi();
@@ -365,6 +370,10 @@ sol::environment LuaSystems::State::environment()
     kast["sky"] = readOnly(skyApi);
     kast["lightmaps"] = readOnly(lightmapsApi);
     kast["sdfgi"] = readOnly(sdfgiApi);
+    kast["ssao"] = readOnly(ssaoApi);
+    kast["ssr"] = readOnly(ssrApi);
+    kast["dof"] = readOnly(dofApi);
+    kast["volumetricFog"] = readOnly(volumetricFogApi);
     kast["particles"] = readOnly(particlesApi);
     kast["items"] = itemTable();
     if (auth.enabled())
@@ -907,6 +916,10 @@ void LuaSystems::State::bindApi()
     bindSkyApi();
     bindLightmapsApi();
     bindSdfgiApi();
+    ssaoApi = postBlockApi("ssao", "ssao");
+    ssrApi = postBlockApi("ssr", "ssr");
+    dofApi = postBlockApi("dof", "depthOfField");
+    volumetricFogApi = postBlockApi("volumetricFog", "volumetricFog");
     bindParticlesApi();
     bindAuthApi();
     bindWorldApi();
@@ -1537,6 +1550,32 @@ void LuaSystems::State::bindSdfgiApi()
             raise(L, "kast.sdfgi.set: " + error);
         scene.lighting.sdfgi = sdfgi;
     });
+}
+
+// kast.<luaName>.get() / set{...}: the scene's "postProcessing" block (docs/engine/post-processing.html), e.g. kast.ssao.
+// Every field can be set at run time (none rebuilds a resource); all-or-nothing, as kast.sky.set.
+sol::table LuaSystems::State::postBlockApi(const char* luaName, const char* block)
+{
+    sol::table table = lua.create_table();
+    table.set_function("get", [this, block] { return jsonToLua(lua, postBlockToJson(scene.postProcessing, block)); });
+    table.set_function("set", [this, luaName, block](sol::this_state L, const sol::object& fields) {
+        if (fields.get_type() != sol::type::table)
+            raise(L, std::format("kast.{}.set: expected a table, got {}", luaName, toString(L, fields)));
+        nlohmann::ordered_json json = postBlockToJson(scene.postProcessing, block);
+        std::string error;
+        for (const auto& [key, value] : fields.as<sol::table>()) {
+            if (key.get_type() != sol::type::string)
+                raise(L, std::format("kast.{}.set: field names must be strings, got {}", luaName, toString(L, key)));
+            const std::string name = key.as<std::string>();
+            nlohmann::json plain;
+            if (!luaToJson(value, plain, error))
+                raise(L, std::format("kast.{}.set: \"{}\": {}", luaName, name, error));
+            json[name] = plain; // an unknown field or a bad value: postBlockFromJson says which
+        }
+        if (!postBlockFromJson(json, block, scene.postProcessing, error))
+            raise(L, std::format("kast.{}.set: {}", luaName, error));
+    });
+    return table;
 }
 
 // kast.world.*: see lua_world_api.h.

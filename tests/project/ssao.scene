@@ -1,0 +1,93 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Sun",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 6, 0], "rotation": [-0.408218, -0.23457, -0.109382, 0.875426], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.95, 0.9], "intensity": 0.6 }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, -10], "rotation": [0, 0, 0, 1], "scale": [40, 1, 40] },
+        "MeshRenderer": { "primitive": "plane", "material": "" }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Back Wall",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 2, -4], "rotation": [0, 0, 0, 1], "scale": [10, 4, 0.5] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Side Wall",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-4.75, 2, -0.75], "rotation": [0, 0, 0, 1], "scale": [0.5, 4, 6] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Cube",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-2, 0.75, 0], "rotation": [0, 0.173648, 0, 0.984808], "scale": [1.5, 1.5, 1.5] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Sphere",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [1, 1, 0.5], "rotation": [0, 0, 0, 1], "scale": [2, 2, 2] },
+        "MeshRenderer": { "primitive": "sphere", "material": "" }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Corner Box",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [3.5, 0.5, -3.25], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Stacked Box",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [3.6, 1.4, -3.3], "rotation": [0, 0.258819, 0, 0.965926], "scale": [0.8, 0.8, 0.8] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 5, 9], "rotation": [-0.21644, 0, 0, 0.976296], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    }
+  ],
+  "lighting": { "ambientColor": [0.7, 0.8, 1], "ambientIntensity": 0.6 },
+  "postProcessing": {
+    "ssao": { "enabled": true, "radius": 1, "intensity": 1, "power": 1.5, "sliceCount": 2 }
+  },
+  "editor": {
+    "camera": { "pivot": [0, 1, -1], "yaw": 0, "pitch": -25, "distance": 11 }
+  }
+}

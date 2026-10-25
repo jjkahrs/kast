@@ -2071,6 +2071,8 @@ void Panels::drawPostProcessing(Document& doc, bool& open)
         bool changed = false;
         // A card per effect: a collapsing header and its enable checkbox; the controls (body) show while it's open.
         const auto section = [&](const char* name, bool& enabled, const auto& body) {
+            if (!scrollPostSection.empty() && std::string_view(name).starts_with(scrollPostSection))
+                ImGui::SetScrollHereY(0.0f);
             beginCard();
             ImGui::PushID(name);
             const bool expanded = cardHeader(name, nullptr, ImGuiTreeNodeFlags_DefaultOpen);
@@ -2125,6 +2127,50 @@ void Panels::drawPostProcessing(Document& doc, bool& open)
             color("Color", post.fog.color);
             changed |= ImGui::DragFloat("Density", &post.fog.density, 0.001f, 0.0f, FLT_MAX, "%.3f", kClamp);
             changed |= ImGui::DragFloat("Start", &post.fog.start, 0.1f, 0.0f, FLT_MAX, "%.1f m", kClamp);
+        });
+        ImGui::PopID();
+        ImGui::PushID("ssao");
+        section("SSAO", post.ssao.enabled, [&] {
+            changed |= ImGui::SliderFloat("Radius", &post.ssao.radius, 0.05f, 5.0f, "%.2f m", kClamp);
+            changed |= ImGui::SliderFloat("Intensity", &post.ssao.intensity, 0.0f, 4.0f, "%.2f", kClamp);
+            changed |= ImGui::SliderFloat("Power", &post.ssao.power, 0.5f, 4.0f, "%.2f", kClamp);
+            changed |= ImGui::SliderInt("Slices", &post.ssao.sliceCount, 1, 4, "%d", kClamp);
+        });
+        ImGui::PopID();
+        ImGui::PushID("ssr");
+        section("SSR", post.ssr.enabled, [&] {
+            changed |= ImGui::SliderFloat("Max Distance", &post.ssr.maxDistance, 0.5f, 1000.0f, "%.1f m",
+                                          kClamp | ImGuiSliderFlags_Logarithmic);
+            changed |= ImGui::SliderFloat("Thickness", &post.ssr.thickness, 0.01f, 5.0f, "%.2f m", kClamp);
+            changed |= ImGui::SliderFloat("Max Roughness", &post.ssr.maxRoughness, 0.0f, 1.0f, "%.2f", kClamp);
+            changed |= ImGui::SliderFloat("Intensity", &post.ssr.intensity, 0.0f, 1.0f, "%.2f", kClamp);
+            changed |= ImGui::SliderInt("Steps", &post.ssr.steps, 8, 128, "%d", kClamp);
+        });
+        ImGui::PopID();
+        ImGui::PushID("dof");
+        section("Depth of Field", post.depthOfField.enabled, [&] {
+            changed |= ImGui::SliderFloat("Focus Distance", &post.depthOfField.focusDistance, 0.1f, 10000.0f, "%.2f m",
+                                          kClamp | ImGuiSliderFlags_Logarithmic);
+            changed |= ImGui::SliderFloat("f-Stop", &post.depthOfField.fStop, 0.7f, 32.0f, "f/%.1f",
+                                          kClamp | ImGuiSliderFlags_Logarithmic);
+            changed |= ImGui::SliderFloat("Focal Length", &post.depthOfField.focalLength, 8.0f, 400.0f, "%.0f mm",
+                                          kClamp | ImGuiSliderFlags_Logarithmic);
+            changed |= ImGui::SliderFloat("Max CoC", &post.depthOfField.maxCoc, 1.0f, 64.0f, "%.0f px", kClamp);
+        });
+        ImGui::PopID();
+        ImGui::PushID("volumetricFog");
+        auto& fog = post.volumetricFog;
+        section("Volumetric Fog", fog.enabled, [&] {
+            changed |= ImGui::DragFloat("Density", &fog.density, 0.001f, 0.0f, FLT_MAX, "%.3f /m", kClamp);
+            color("Albedo", fog.albedo);
+            changed |= ImGui::SliderFloat("Anisotropy", &fog.anisotropy, -0.9f, 0.9f, "%.2f", kClamp);
+            changed |= ImGui::DragFloat("Height Falloff", &fog.heightFalloff, 0.005f, 0.0f, FLT_MAX, "%.3f /m", kClamp);
+            changed |= ImGui::DragFloat("Base Height", &fog.baseHeight, 0.1f, -10000.0f, 10000.0f, "%.1f m", kClamp);
+            changed |= ImGui::SliderFloat("Max Distance", &fog.maxDistance, 1.0f, 1000.0f, "%.0f m",
+                                          kClamp | ImGuiSliderFlags_Logarithmic);
+            changed |= ImGui::SliderFloat("Temporal Blend", &fog.temporalBlend, 0.0f, 0.99f, "%.2f", kClamp);
+            changed |= ImGui::DragFloat("Light Intensity", &fog.lightIntensity, 0.01f, 0.0f, FLT_MAX, "%.2f", kClamp);
+            changed |= ImGui::DragFloat("Ambient Intensity", &fog.ambientIntensity, 0.01f, 0.0f, FLT_MAX, "%.2f", kClamp);
         });
         ImGui::PopID();
         if (changed)

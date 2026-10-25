@@ -103,6 +103,9 @@ public:
     bool takeVoxelGiCancelRequest() { return std::exchange(voxelGiCancelRequested_, false); }
     // The scene's post-processing and fog, a section per effect (Window > Post Processing); nothing while open is false.
     void drawPostProcessing(Document& doc, bool& open);
+    // Test hook (--scroll-post-section): the Post Processing panel keeps the section whose name starts with this at its
+    // top, for screenshots.
+    std::string scrollPostSection;
     // The scene's physics settings: gravity (Window > Physics); draws nothing while open is false.
     void drawPhysics(Document& doc, bool& open);
     // The project's default bus volumes and mutes, saved in project.kast (Window > Mixer); during Play also the live

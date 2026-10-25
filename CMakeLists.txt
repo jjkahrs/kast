@@ -51,10 +51,15 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
              engine/shaders/cs_voxelgi_inject engine/shaders/cs_voxelgi_mip engine/shaders/cs_voxelgi_bounce
              engine/shaders/cs_sdfgi_build engine/shaders/cs_sdfgi_light engine/shaders/cs_sdfgi_probe
              engine/shaders/cs_hiz_build engine/shaders/cs_hiz_test engine/shaders/cs_hiz_debug
+             engine/shaders/cs_volfog_inject engine/shaders/cs_volfog_scatter engine/shaders/cs_volfog_integrate
              engine/shaders/gui/vs_gui engine/shaders/gui/fs_gui engine/shaders/gui/fs_gui_matrix
              engine/shaders/gui/fs_gui_blur engine/shaders/gui/fs_gui_gradient
              engine/shaders/post/vs_post engine/shaders/post/fs_post_bright engine/shaders/post/fs_post_down
-             engine/shaders/post/fs_post_up engine/shaders/post/fs_post_final engine/shaders/post/fs_post_fxaa)
+             engine/shaders/post/fs_post_up engine/shaders/post/fs_post_final engine/shaders/post/fs_post_fxaa
+             engine/shaders/post/fs_ssao_gtao engine/shaders/post/fs_ssao_blur engine/shaders/post/fs_ssao_composite
+             engine/shaders/post/fs_ssr_trace engine/shaders/post/fs_ssr_composite
+             engine/shaders/post/fs_dof_setup engine/shaders/post/fs_dof_gather engine/shaders/post/fs_dof_composite
+             engine/shaders/post/fs_volfog_composite)
   get_filename_component(shader ${path} NAME)
   get_filename_component(dir ${path} DIRECTORY)
   set(varying "${CMAKE_CURRENT_SOURCE_DIR}/${dir}/varying.def.sc")
@@ -69,6 +74,7 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
   set(src "${CMAKE_CURRENT_SOURCE_DIR}/${path}.sc")
   set(out "${KAST_SHADER_OUT}/${shader}.bin.h")
   file(GLOB headers "${CMAKE_CURRENT_SOURCE_DIR}/${dir}/*.sh") # e.g. engine/shaders/mesh.sh, included from the dir
+  list(APPEND headers "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/volumetric_fog.sh") # post/fs_volfog_composite.sc's too
   add_custom_command(
     OUTPUT "${out}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${KAST_SHADER_OUT}"
@@ -115,6 +121,7 @@ foreach(pair "${KAST_SHADERC}|shaderc.exe" "${KAST_TEXTUREC}|texturec.exe" "${KA
              "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/vs_mesh_instanced.sc|kshader/mesh/vs_mesh_instanced.sc"
              "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/mesh.sh|kshader/mesh/mesh.sh"
              "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/ltc_table.sh|kshader/mesh/ltc_table.sh"
+             "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/volumetric_fog.sh|kshader/mesh/volumetric_fog.sh"
              "${CMAKE_CURRENT_SOURCE_DIR}/engine/shaders/varying.def.sc|kshader/mesh/varying.def.sc")
   string(REPLACE "|" ";" pair "${pair}")
   list(GET pair 0 from)
@@ -180,7 +187,7 @@ add_library(kast_engine STATIC
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/gui_lists.cpp engine/gui_richtext.cpp engine/gui_prefabs.cpp engine/scene_gui.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
-  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/ibl.cpp engine/bvh.cpp engine/lightmap.cpp engine/lightmap_bake.cpp engine/voxel_gi.cpp engine/sdfgi.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
+  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/ibl.cpp engine/bvh.cpp engine/lightmap.cpp engine/lightmap_bake.cpp engine/voxel_gi.cpp engine/sdfgi.cpp engine/volumetric_fog.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
@@ -1802,7 +1809,12 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "sky_cube_back|Sky Test|sky_cubemap_back.scene|FALSE" "sky_fallback|Sky Test|sky_missing_face.scene|FALSE"
                "particles|Particles Test|particles_shapes.scene|FALSE"
                "gpu_textures|GPU Textures Test|gpu_textures.scene|FALSE"
-               "sky_cube_ktx|Sky Test|sky_cubemap_ktx.scene|FALSE" "sky_cube_dds|Sky Test|sky_cubemap_dds.scene|FALSE")
+               "sky_cube_ktx|Sky Test|sky_cubemap_ktx.scene|FALSE" "sky_cube_dds|Sky Test|sky_cubemap_dds.scene|FALSE"
+               "ssao|SSAO Test|ssao.scene|FALSE" "ssao_off|SSAO Test|ssao_off.scene|FALSE"
+               "ssr|SSR Test|ssr.scene|FALSE" "ssr_off|SSR Test|ssr_off.scene|FALSE"
+               "dof|DoF Test|dof.scene|FALSE" "dof_off|DoF Test|dof_off.scene|FALSE"
+               "vfog|Volumetric Fog Test|volumetric_fog.scene|FALSE"
+               "vfog_off|Volumetric Fog Test|volumetric_fog_off.scene|FALSE")
 foreach(game ${KAST_GAMES})
   string(REPLACE "|" ";" game "${game}")
   list(GET game 0 name)
@@ -3235,6 +3247,9 @@ include(cmake/ibl_tests.cmake)
 include(cmake/lightmap_tests.cmake)
 include(cmake/voxelgi_tests.cmake)
 include(cmake/sdfgi_tests.cmake)
+
+# Screen-space effects: G-data, SSAO, SSR, depth of field, volumetric fog (post_process.h).
+include(cmake/screen_space_tests.cmake)
 
 # Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.
 get_property(kast_tests DIRECTORY PROPERTY TESTS)

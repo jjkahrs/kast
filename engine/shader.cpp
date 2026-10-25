@@ -610,6 +610,8 @@ std::string generateShader(std::string_view templateText, const ShaderSource& so
             out += "#define KAST_SHADOW\n";
         if (!vertex && source.customNormal)
             out += "#define KAST_CUSTOM_NORMAL\n";
+        if (!vertex && !source.screenTexture)
+            out += "#define KAST_VOLUMETRIC_FOG\n"; // fs_mesh.sc: volumetric fog's atlas takes SCREEN_TEXTURE's stage
         if (const auto textures = std::ranges::count_if(source.params, [](const ShaderParam& p) {
                 return p.type == ShaderParamType::Texture2D;
             });

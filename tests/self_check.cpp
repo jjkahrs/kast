@@ -59,6 +59,7 @@
 #include <lod.h>
 #include <occlusion.h>
 #include <ibl.h>
+#include <volumetric_fog.h>
 #include <state_machines.h>
 #include <stats_overlay.h>
 #include <systems.h>
@@ -346,7 +347,7 @@ void checkComponentRegistry()
                                                  "DirectionalLight", "PointLight", "SpotLight", "AreaLight", "ReflectionProbe", "VoxelGI", "Camera",
                                                  "Rotator", "Collider", "Rigidbody", "CharacterController", "StateMachine", "UIDocument",
                                                  "AudioSource", "NetworkLocalPlayer", "NetworkReplication",
-                                                 "NetworkEntity", "Terrain", "TerrainTile", "ParticleEmitter"},
+                                                 "NetworkEntity", "Terrain", "TerrainTile", "ParticleEmitter", "FogVolume"},
           "built-in component types in registration order");
     check(kast::componentInfo(kast::findComponentType("TerrainTile")).runtime &&
               !kast::componentInfo(kast::findComponentType("Terrain")).runtime,
@@ -3154,7 +3155,7 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"area_lights.scene", "audio.scene", "custom_shaders.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "lightmap_room.scene", "material_features.scene",
+              std::vector<std::string>{"area_lights.scene", "audio.scene", "custom_shaders.scene", "dof.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "lightmap_room.scene", "material_features.scene",
                                        "materials.scene", "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
                                        "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "orm_split.scene",
@@ -3164,7 +3165,7 @@ void checkBuildSettings()
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                        "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_widgets.scene", "voxelgi_room.scene",
+                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
 
@@ -3176,7 +3177,7 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / ".dot.scene");
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
-    check(projectScenes(root) == std::vector<std::string>{"area_lights.scene", "audio.scene", "broken.scene", "custom_shaders.scene", "events.scene", "fsm.scene",
+    check(projectScenes(root) == std::vector<std::string>{"area_lights.scene", "audio.scene", "broken.scene", "custom_shaders.scene", "dof.scene", "events.scene", "fsm.scene",
                                                           "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "levels/c.scene", "lightmap_room.scene", "material_features.scene", "materials.scene",
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
@@ -3188,7 +3189,7 @@ void checkBuildSettings()
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                                           "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_widgets.scene", "voxelgi_room.scene",
+                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
@@ -8228,6 +8229,10 @@ void checkPostProcessing()
     post.vignette = {true, 0.6f, 0.25f};
     post.fxaa.enabled = true;
     post.fog = {true, {0.3f, 0.4f, 0.5f}, 0.08f, 3.0f};
+    post.ssao = {true, 1.25f, 2.0f, 2.5f, 3};
+    post.ssr = {true, 80.0f, 0.5f, 0.4f, 0.75f, 64};
+    post.depthOfField = {true, 4.5f, 1.4f, 85.0f, 24.0f};
+    post.volumetricFog = {true, 0.05f, {0.8f, 0.7f, 0.6f}, -0.3f, 0.25f, -2.0f, 150.0f, 0.5f, 2.0f, 0.5f};
     const nlohmann::ordered_json json = kast::sceneToJson(scene);
     check(json["version"] == kast::kSceneFileVersion && json.contains("postProcessing"), "saved with postProcessing, current version");
     kast::Scene loaded;
@@ -8245,6 +8250,20 @@ void checkPostProcessing()
     check(p.fxaa.enabled, "fxaa round trip");
     check(p.fog.enabled && near(p.fog.color, {0.3f, 0.4f, 0.5f}) && p.fog.density == 0.08f && p.fog.start == 3.0f,
           "fog round trip");
+    check(p.ssao.enabled && p.ssao.radius == 1.25f && p.ssao.intensity == 2.0f && p.ssao.power == 2.5f &&
+              p.ssao.sliceCount == 3,
+          "ssao round trip");
+    check(p.ssr.enabled && p.ssr.maxDistance == 80.0f && p.ssr.thickness == 0.5f && p.ssr.maxRoughness == 0.4f &&
+              p.ssr.intensity == 0.75f && p.ssr.steps == 64,
+          "ssr round trip");
+    check(p.depthOfField.enabled && p.depthOfField.focusDistance == 4.5f && p.depthOfField.fStop == 1.4f &&
+              p.depthOfField.focalLength == 85.0f && p.depthOfField.maxCoc == 24.0f,
+          "depth of field round trip");
+    const auto& vf = p.volumetricFog;
+    check(vf.enabled && vf.density == 0.05f && near(vf.albedo, {0.8f, 0.7f, 0.6f}) && vf.anisotropy == -0.3f &&
+              vf.heightFalloff == 0.25f && vf.baseHeight == -2.0f && vf.maxDistance == 150.0f &&
+              vf.temporalBlend == 0.5f && vf.lightIntensity == 2.0f && vf.ambientIntensity == 0.5f,
+          "volumetric fog round trip");
     check(kast::sceneToJson(loaded) == json, "post: second save is identical");
 
     const nlohmann::ordered_json defaultJson = kast::sceneToJson(kast::Scene())["postProcessing"];
@@ -8255,15 +8274,180 @@ void checkPostProcessing()
     const kast::ScenePostProcessing defaults;
     check(!defaults.tonemapping.enabled && defaults.tonemapping.op == kast::Tonemap::None &&
               defaults.tonemapping.exposure == 0.0f && !defaults.bloom.enabled && !defaults.colorGrading.enabled &&
-              !defaults.vignette.enabled && !defaults.fxaa.enabled && !defaults.fog.enabled,
+              !defaults.vignette.enabled && !defaults.fxaa.enabled && !defaults.fog.enabled && !defaults.ssao.enabled &&
+              !defaults.ssr.enabled && !defaults.depthOfField.enabled && !defaults.volumetricFog.enabled,
           "post defaults: everything off");
+    check(!kast::needsGData(defaults, true) && !kast::needsScreenSpace(defaults, true),
+          "post defaults: no G-data, no screen-space views");
+    kast::ScenePostProcessing screenSpace;
+    screenSpace.volumetricFog.enabled = true;
+    check(!kast::needsGData(screenSpace, true) && kast::needsScreenSpace(screenSpace, true) &&
+              !kast::needsScreenSpace(screenSpace, false),
+          "volumetric fog: screen-space views without G-data, none with effects off");
+    screenSpace.ssr.enabled = true;
+    check(kast::needsGData(screenSpace, true) && !kast::needsGData(screenSpace, false), "ssr: G-data");
+    bool octRoundTrip = true;
+    for (const bx::Vec3 n : {bx::Vec3{0, 0, 1}, bx::Vec3{0, 0, -1}, bx::Vec3{1, 0, 0}, bx::Vec3{0, -1, 0},
+                             bx::normalize(bx::Vec3{0.3f, -0.5f, -0.8f}), bx::normalize(bx::Vec3{-0.7f, 0.2f, 0.1f})}) {
+        const auto [u, v] = kast::octEncode(n);
+        octRoundTrip = octRoundTrip && u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f && near(kast::octDecode(u, v), n);
+    }
+    check(octRoundTrip, "G-data normal: octahedral encode / decode round trip in 0..1");
+    // SSAO's composite (fs_ssao_composite.sc) darkens only the indirect diffuse; GTAO's slice integral (fs_ssao_gtao.sc).
+    const bx::Vec3 lit{0.8f, 0.6f, 0.4f}, indirect{0.2f, 0.1f, 0.05f};
+    check(near(kast::aoComposite(lit, {0.0f, 0.0f, 0.0f}, 0.0f, 4.0f, 1.5f), lit),
+          "ssao: direct-only light is unchanged even fully occluded");
+    check(near(kast::aoComposite(lit, indirect, 0.3f, 0.0f, 1.5f), lit) &&
+              near(kast::aoComposite(lit, indirect, 1.0f, 4.0f, 1.5f), lit),
+          "ssao: intensity 0 or an open horizon changes nothing");
+    check(near(kast::aoComposite(lit, indirect, 0.0f, 1.0f, 1.0f), bx::sub(lit, indirect)) &&
+              near(kast::aoComposite(lit, indirect, 0.5f, 1.0f, 1.0f), bx::sub(lit, bx::mul(indirect, 0.5f))) &&
+              near(kast::aoComposite(lit, indirect, 0.5f, 1.0f, 2.0f), bx::sub(lit, bx::mul(indirect, 0.75f))),
+          "ssao: full occlusion removes the indirect diffuse, partial removes 1 - visibility^power of it");
+    constexpr float kHalfPi = 1.5707963f;
+    const float open = kast::gtaoSliceVisibility(0.0f, -kHalfPi, kHalfPi);
+    const float halfOpen = kast::gtaoSliceVisibility(0.0f, -kHalfPi * 0.5f, kHalfPi * 0.5f);
+    check(near(open, 1.0f) && halfOpen > 0.0f && halfOpen < open && near(kast::gtaoSliceVisibility(0.0f, 0.0f, 0.0f), 0.0f),
+          "gtao: open horizons see 1, raised horizons less, closed 0");
+    // SSR's composite (fs_ssr_composite.sc) replaces the indirect specular where rays hit, never adds to it.
+    const bx::Vec3 probeSpecular{0.1f, 0.08f, 0.06f}, specWeight{0.5f, 0.4f, 0.3f}, reflected{0.9f, 0.2f, 0.1f};
+    check(near(kast::ssrComposite(lit, probeSpecular, specWeight, reflected, 0.0f, 1.0f), lit),
+          "SSR composite with confidence 0 equals input");
+    check(near(kast::ssrComposite(lit, probeSpecular, specWeight, reflected, 1.0f, 0.0f), lit),
+          "ssr: intensity 0 equals input");
+    check(near(kast::ssrComposite(lit, probeSpecular, specWeight, {0.2f, 0.2f, 0.2f}, 1.0f, 1.0f), lit),
+          "ssr: a hit reflecting what the probe saw changes nothing (no double counting)");
+    check(near(kast::ssrComposite(lit, probeSpecular, specWeight, reflected, 1.0f, 1.0f),
+               bx::add(bx::sub(lit, probeSpecular), bx::mul(specWeight, reflected))) &&
+              near(kast::ssrComposite(lit, probeSpecular, specWeight, reflected, 0.5f, 1.0f),
+                   bx::add(lit, bx::mul(bx::sub(bx::mul(specWeight, reflected), probeSpecular), 0.5f))),
+          "ssr: a full-confidence hit swaps the probe specular for the weighted reflection, partial blends");
+    // Depth of field's thin-lens CoC (dof.sh kastCoc): 0 in focus, grows with defocus either side, wider open = larger.
+    kast::ScenePostProcessing::DepthOfField lens{true, 4.0f, 2.8f, 50.0f, 16.0f};
+    kast::ScenePostProcessing::DepthOfField wide = lens;
+    wide.fStop = 1.4f;
+    const auto coc = [](const kast::ScenePostProcessing::DepthOfField& d, float z) {
+        return kast::circleOfConfusion(d, 1080.0f, z);
+    };
+    check(near(coc(lens, 4.0f), 0.0f), "dof: CoC is 0 at the focus distance");
+    check(coc(lens, 8.0f) > coc(lens, 5.0f) && coc(lens, 5.0f) > 0.0f && coc(lens, 1.0f) < coc(lens, 3.0f) &&
+              coc(lens, 3.0f) < 0.0f,
+          "dof: CoC grows with defocus, far > 0, near < 0");
+    check(std::abs(coc(wide, 8.0f)) > std::abs(coc(lens, 8.0f)) && std::abs(coc(wide, 2.0f)) > std::abs(coc(lens, 2.0f)),
+          "dof: a smaller f-stop gives a larger CoC");
+    check(near(coc(wide, 8.0f), 2.0f * coc(lens, 8.0f), 1e-3f) &&
+              near(kast::dofCocScale(lens, 1080.0f), 50.0f * 50.0f / (2.8f * 3950.0f) * 0.5f * 1080.0f / 24.0f, 1e-3f),
+          "dof: CoC radius = f^2 / (N (S - f)) / 2 on a 24 mm tall sensor, inversely proportional to the f-stop");
+    kast::ScenePostProcessing block;
+    std::string blockError;
+    check(kast::postBlockFromJson(nlohmann::ordered_json::parse(R"({"enabled": true, "radius": 2})"), "ssao", block,
+                                  blockError) &&
+              block.ssao.enabled && block.ssao.radius == 2.0f && block.ssao.sliceCount == 2 &&
+              kast::postBlockToJson(block, "ssao")["radius"] == 2.0 &&
+              !kast::postBlockFromJson(nlohmann::ordered_json::parse(R"({"radius": 2, "sliceCount": 9})"), "ssao",
+                                       block, blockError) &&
+              blockError.find("sliceCount") != std::string::npos && block.ssao.sliceCount == 2 && block.ssao.enabled,
+          "postBlockFromJson: one block through the scene file's validation, all-or-nothing");
+
+    // Volumetric fog (volumetric_fog.sh): the Henyey-Greenstein phase integrates to 1 over the sphere, g = 0 is isotropic.
+    const auto phaseIntegral = [](float g) {
+        constexpr int kSteps = 200000;
+        double sum = 0.0;
+        for (int i = 0; i < kSteps; ++i) // 2 pi * integral over cos theta in -1..1 (midpoints)
+            sum += kast::henyeyGreenstein(-1.0f + 2.0f * (float(i) + 0.5f) / kSteps, g);
+        return float(sum * 2.0 / kSteps * 2.0 * 3.14159265358979);
+    };
+    check(near(phaseIntegral(0.0f), 1.0f, 1e-3f) && near(phaseIntegral(0.5f), 1.0f, 1e-3f) &&
+              near(phaseIntegral(-0.7f), 1.0f, 1e-3f) && near(phaseIntegral(0.9f), 1.0f, 1e-2f),
+          "volumetric fog: the HG phase integrates to ~1 over the sphere");
+    check(near(kast::henyeyGreenstein(1.0f, 0.0f), 1.0f / (4.0f * 3.14159265f)) &&
+              near(kast::henyeyGreenstein(-1.0f, 0.0f), kast::henyeyGreenstein(0.3f, 0.0f)) &&
+              kast::henyeyGreenstein(1.0f, 0.6f) > kast::henyeyGreenstein(-1.0f, 0.6f) &&
+              kast::henyeyGreenstein(-1.0f, -0.6f) > kast::henyeyGreenstein(1.0f, -0.6f),
+          "volumetric fog: HG g = 0 is isotropic (1 / 4 pi), g > 0 scatters forward, g < 0 back");
+    // Its froxel slices: kFroxelNear .. maxDistance, monotonic, invertible.
+    bool slicesMonotonic = true, slicesInvertible = true;
+    for (float far : {1.0f, 30.0f, 100.0f, 1000.0f}) {
+        float last = 0.0f;
+        for (int i = 0; i <= 4 * kast::kFroxelSlices; ++i) {
+            const float slice = float(i) / 4.0f, depth = kast::froxelSliceDepth(slice, far);
+            slicesMonotonic = slicesMonotonic && depth > last;
+            slicesInvertible = slicesInvertible && near(kast::froxelSlice(depth, far), slice, 1e-3f);
+            last = depth;
+        }
+        slicesInvertible = slicesInvertible && near(kast::froxelSliceDepth(0.0f, far), kast::kFroxelNear) &&
+                     near(kast::froxelSliceDepth(float(kast::kFroxelSlices), far), far, far * 1e-5f);
+    }
+    check(slicesMonotonic && slicesInvertible, "volumetric fog: froxel slice depths are monotonic, near to maxDistance, invertible");
+    // FogVolume (cs_volfog_inject.sc kastFogVolume): full density inside, edge falloff toward the surface, none outside.
+    float fogWorld[16];
+    kast::mtxFromTrs(fogWorld, {2.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {4.0f, 2.0f, 4.0f});
+    kast::FogVolume fogBox{kast::FogVolumeShape::Box, 0.5f, {1.0f, 0.5f, 0.2f}, 0.5f, 0.0f};
+    const kast::FogVolumeSample box = kast::fogVolumeSample(fogBox, fogWorld);
+    check(near(kast::fogVolumeDensity(box, {2.0f, 1.0f, 0.0f}), 0.5f) &&
+              near(kast::fogVolumeDensity(box, {3.0f, 1.0f, 0.0f}), 0.5f) &&
+              near(kast::fogVolumeDensity(box, {3.5f, 1.0f, 0.0f}), 0.25f) &&
+              kast::fogVolumeDensity(box, {4.1f, 1.0f, 0.0f}) == 0.0f && near(box.bottom, 0.0f) &&
+              near(box.bounds.max.x, 4.0f),
+          "FogVolume box: its density inside, fading over the last edgeFalloff, none outside its scaled box");
+    kast::FogVolume fogBall{kast::FogVolumeShape::Sphere, 1.0f, {1.0f, 1.0f, 1.0f}, 0.0f, 1.0f};
+    const kast::FogVolumeSample ball = kast::fogVolumeSample(fogBall, fogWorld);
+    check(near(kast::fogVolumeDensity(ball, {2.0f, 0.1f, 0.0f}), std::exp(-0.1f)) &&
+              near(kast::fogVolumeDensity(ball, {2.0f, 1.0f, 0.0f}), std::exp(-1.0f)) &&
+              kast::fogVolumeDensity(ball, {3.9f, 1.0f, 1.9f}) == 0.0f && kast::fogVolumeDensity(ball, {3.9f, 1.0f, 0.0f}) > 0.0f,
+          "FogVolume sphere: hard edge at edgeFalloff 0, thinning by heightFalloff above its bottom, round");
+    // FogVolume JSON: round trip, defaults (heightFalloff optional), invalid values refused.
+    const entt::meta_type fogType = kast::findComponentType("FogVolume");
+    const kast::FogVolume fogDefaults;
+    check(fogType && kast::componentInfo(fogType).removable && !kast::componentInfo(fogType).runtime &&
+              fogDefaults.shape == kast::FogVolumeShape::Box && fogDefaults.density == 0.1f &&
+              fogDefaults.edgeFalloff == 0.25f && fogDefaults.heightFalloff == 0.0f,
+          "FogVolume registered, authored, defaults box, density 0.1, edge 0.25, no height falloff");
+    std::string fogError;
+    const nlohmann::ordered_json fogJson = kast::componentToJson(entt::meta_any{fogBall});
+    const entt::meta_any fogBack = kast::componentFromJson(fogType, fogJson, fogError);
+    const auto* fogRead = fogBack ? fogBack.try_cast<const kast::FogVolume>() : nullptr;
+    check(fogJson["shape"] == "sphere" && fogJson["heightFalloff"] == 1.0 && fogRead &&
+              fogRead->shape == kast::FogVolumeShape::Sphere && fogRead->density == 1.0f && fogRead->edgeFalloff == 0.0f &&
+              fogRead->heightFalloff == 1.0f && near(fogRead->albedo, fogBall.albedo),
+          "FogVolume round trip");
+    const entt::meta_any fogPartial = kast::componentFromJson(
+        fogType, nlohmann::ordered_json::parse(R"({"shape": "box", "density": 2, "albedo": [1, 1, 1], "edgeFalloff": 0})"),
+        fogError);
+    check(fogPartial && fogPartial.cast<const kast::FogVolume&>().heightFalloff == 0.0f &&
+              fogPartial.cast<const kast::FogVolume&>().density == 2.0f,
+          "FogVolume: heightFalloff is optional (0)");
+    bool fogRejected = true;
+    for (const auto& [fogText, reason] : std::initializer_list<std::pair<const char*, const char*>>{
+             {R"({"shape": "cone", "density": 1, "albedo": [1, 1, 1], "edgeFalloff": 0})", "shape"},
+             {R"({"shape": "box", "density": -1, "albedo": [1, 1, 1], "edgeFalloff": 0})", "density"},
+             {R"({"shape": "box", "density": 1, "albedo": [1, 2, 1], "edgeFalloff": 0})", "albedo"},
+             {R"({"shape": "box", "density": 1, "albedo": [1, 1, 1], "edgeFalloff": 1.5})", "edgeFalloff"},
+             {R"({"shape": "box", "density": 1, "albedo": [1, 1, 1], "edgeFalloff": 0, "heightFalloff": -1})", "heightFalloff"},
+             {R"({"shape": "box", "density": "thick", "albedo": [1, 1, 1], "edgeFalloff": 0})", "density"},
+             {R"({"shape": "box", "albedo": [1, 1, 1], "edgeFalloff": 0})", "density"},
+             {R"({"shape": "box", "density": 1, "albedo": [1, 1, 1], "edgeFalloff": 0, "noise": 1})", "noise"}}) {
+        fogError.clear();
+        const bool refused = !kast::componentFromJson(fogType, nlohmann::ordered_json::parse(fogText), fogError) &&
+                             fogError.find(reason) != std::string::npos;
+        if (!refused)
+            std::fprintf(stderr, "FogVolume accepted %s (%s)\n", fogText, fogError.c_str());
+        fogRejected = fogRejected && refused;
+    }
+    check(fogRejected, "FogVolume: bad shape, density, albedo, edgeFalloff, heightFalloff and unknown fields refused");
     nlohmann::ordered_json partial = without;
-    partial["postProcessing"] = nlohmann::ordered_json::parse(R"({"bloom": {"enabled": true}, "fog": {"density": 0.2}})");
+    partial["postProcessing"] = nlohmann::ordered_json::parse(
+        R"({"bloom": {"enabled": true}, "fog": {"density": 0.2}, "ssao": {"radius": 2}, "volumetricFog": {"enabled": true}})");
     const kast::ScenePostProcessing& q = loaded.postProcessing;
     check(kast::sceneFromJson(partial, loaded, error) && q.bloom.enabled && q.bloom.threshold == defaults.bloom.threshold &&
               q.bloom.intensity == defaults.bloom.intensity && !q.fog.enabled && q.fog.density == 0.2f &&
               near(q.fog.color, defaults.fog.color) && !q.vignette.enabled,
           "partial postProcessing: missing fields default");
+    check(!q.ssao.enabled && q.ssao.radius == 2.0f && q.ssao.sliceCount == defaults.ssao.sliceCount &&
+              q.volumetricFog.enabled && q.volumetricFog.density == defaults.volumetricFog.density &&
+              !q.ssr.enabled && q.ssr.steps == defaults.ssr.steps && !q.depthOfField.enabled &&
+              q.depthOfField.fStop == defaults.depthOfField.fStop,
+          "partial postProcessing: new blocks' missing fields default");
 
     const std::pair<const char*, const char*> bad[] = {
         {R"(3)", "postProcessing"},
@@ -8288,6 +8472,33 @@ void checkPostProcessing()
         {R"({"fog": {"density": -0.1}})", "density"},
         {R"({"fog": {"start": -1}})", "start"},
         {R"({"fog": {"color": [0.5, 0.5, -1]}})", "color"},
+        {R"({"ssao": 1})", "ssao"},
+        {R"({"ssao": {"enabled": "on"}})", "enabled"},
+        {R"({"ssao": {"radius": 0}})", "radius"},
+        {R"({"ssao": {"intensity": 5}})", "intensity"},
+        {R"({"ssao": {"power": 0.1}})", "power"},
+        {R"({"ssao": {"sliceCount": 2.5}})", "sliceCount"},
+        {R"({"ssao": {"sliceCount": 9}})", "sliceCount"},
+        {R"({"ssao": {"bias": 1}})", "bias"},
+        {R"({"ssr": {"maxDistance": 0}})", "maxDistance"},
+        {R"({"ssr": {"thickness": "thin"}})", "thickness"},
+        {R"({"ssr": {"maxRoughness": 1.5}})", "maxRoughness"},
+        {R"({"ssr": {"intensity": -0.5}})", "intensity"},
+        {R"({"ssr": {"steps": 4}})", "steps"},
+        {R"({"depthOfField": {"focusDistance": 0}})", "focusDistance"},
+        {R"({"depthOfField": {"fStop": 0.5}})", "fStop"},
+        {R"({"depthOfField": {"focalLength": 1000}})", "focalLength"},
+        {R"({"depthOfField": {"maxCoc": 100}})", "maxCoc"},
+        {R"({"depthOfField": {"autofocus": true}})", "autofocus"},
+        {R"({"volumetricFog": {"density": -1}})", "density"},
+        {R"({"volumetricFog": {"albedo": [1, 1]}})", "albedo"},
+        {R"({"volumetricFog": {"anisotropy": 0.95}})", "anisotropy"},
+        {R"({"volumetricFog": {"heightFalloff": -0.1}})", "heightFalloff"},
+        {R"({"volumetricFog": {"baseHeight": "sea"}})", "baseHeight"},
+        {R"({"volumetricFog": {"maxDistance": 0.5}})", "maxDistance"},
+        {R"({"volumetricFog": {"temporalBlend": 1}})", "temporalBlend"},
+        {R"({"volumetricFog": {"lightIntensity": -1}})", "lightIntensity"},
+        {R"({"volumetricFog": {"ambientIntensity": null}})", "ambientIntensity"},
     };
     const std::filesystem::path dir = looseTestDir("kast_post_check");
     const std::string path = (dir / "bad.scene").string();
@@ -8973,7 +9184,7 @@ void checkSceneCopies()
             scene.registry().get<kast::Transform>(plane).position = {x, 0.0f, 0.0f};
             const kast::Renderer::SceneCopies before = renderer.sceneCopies();
             if (withTarget)
-                renderer.setTarget(target, kSize, kSize);
+                renderer.setTarget(target, kSize, kSize, kast::Renderer::kShadowViews + 1);
             renderer.render(scene, dir, kast::Renderer::kShadowViews, view, proj, 0);
             bgfx::frame();
             const kast::Renderer::SceneCopies& after = renderer.sceneCopies();

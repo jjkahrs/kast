@@ -261,7 +261,8 @@ void SceneViewport::draw(Document& doc)
         const auto pixels = [](float v) { return static_cast<uint16_t>(std::clamp(v, 0.0f, 65535.0f)); };
         const uint16_t width = pixels(size.x * scale.x);
         const uint16_t height = pixels(size.y * scale.y);
-        post_.begin(width, height, kast::sceneClearColor(doc.scene.postProcessing, kViewportClearColor));
+        post_.begin(width, height, kast::sceneClearColor(doc.scene.postProcessing, kViewportClearColor),
+                    doc.scene.postProcessing, postEffects_);
         target_.resize(width, height, post_.depth());
         if (target_.valid() && size.x > 0.0f && size.y > 0.0f) {
             const ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -289,7 +290,9 @@ void SceneViewport::draw(Document& doc)
             renderer_.setLodTint(debug_.lodTint);
             renderer_.setShowOccluded(debug_.occludedBoxes);
             renderer_.setHizDebugMip(debug_.hizMip);
-            renderer_.setTarget(post_.target(), post_.width(), post_.height());
+            post_.setProjection(proj);
+            renderer_.setTarget(post_.target(), post_.width(), post_.height(), post_.blendView(),
+                                post_.volumetricFogView());
             renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), post_.sceneView(), view,
                              proj, shadowViews_, extraScene_);
             post_.apply(doc.scene.postProcessing, postEffects_, target_.frameBuffer());

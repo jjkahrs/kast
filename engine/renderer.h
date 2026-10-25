@@ -36,6 +36,7 @@
 namespace kast {
 
 class SdfgiRenderer; // sdfgi.h
+class VolumetricFog; // volumetric_fog.h
 
 // ponytail: forward shading with a fixed uniform array per draw; clustered lighting if scenes need more per mesh.
 constexpr size_t kMaxLocalLights = 8; // MAX_LOCAL_LIGHTS in fs_mesh.sc: point, spot and area lights per draw
@@ -165,7 +166,10 @@ void buildMips(MipImage& image, bool srgb);
 // AreaLights nearest it, rendered in kShadowViews views before the scene's (see shadow.h).
 // renderOverlays draws the editor's: a ground grid, axis lines, a short frustum preview per Camera, the range of the
 // selected PointLight (cone of a SpotLight, rect of an AreaLight), the box of the selected ReflectionProbe or VoxelGI, the selected
-// entity's collider and its ParticleEmitter's shape.
+// entity's collider, its ParticleEmitter's shape and its FogVolume's box or sphere.
+// Volumetric fog (volumetric_fog.h; the scene's postProcessing.volumetricFog, with a target whose fogView setTarget
+// gives): its froxel grid lit by the sun, local lights and their shadow maps just rendered in fogView, composited over
+// the opaque scene in fogView + 1, and sampled by the blended meshes and particles.
 // Every pass culls its draws to its view frustum (main camera, each cascade, each cube face, each tile), and draws that
 // share buffers, material, shadow flags and (main pass) lights, unskinned and not blended, are drawn as one GPU-instanced
 // submit (see docs/engine/instancing-and-culling.html). Model draws are at the LOD their screen height picks (setLod);
@@ -186,7 +190,7 @@ public:
     void shutdown();
     // Materials and textures load from projectRoot (empty = none: every material path renders as an error). Files
     // changed on disk since loaded reload first. shadowViews: the first of kShadowViews views, all before view. With a
-    // target (setTarget) the blended draws go to view + 1, after the SCREEN_TEXTURE / DEPTH_TEXTURE copies.
+    // target (setTarget) the blended draws go to its blendView, after the SCREEN_TEXTURE / DEPTH_TEXTURE copies.
     // extra: another scene whose meshes, models and terrain draw too, lit by scene's lights, sky and fog (the editor's
     // open zone over the edited scene).
     void render(const Scene& scene, const std::filesystem::path& projectRoot, bgfx::ViewId view, const float* viewMtx,
@@ -201,9 +205,12 @@ public:
     void setPreview(const std::string& materialPath, const Material& material, const std::string& texturePath,
                     MipImage image);
     // What the next render() draws into with view (PostProcess::target(): RGBA16F color, D24S8 depth) and its size, so
-    // it can copy them for SCREEN_TEXTURE / DEPTH_TEXTURE. Set before each render(); without one (the default) blended
-    // draws stay in view and those sample black and the far plane.
-    void setTarget(bgfx::FrameBufferHandle target, uint16_t width, uint16_t height);
+    // it can copy them for SCREEN_TEXTURE / DEPTH_TEXTURE, and the later view its blended draws go to (into target;
+    // PostProcess::blendView()). Set before each render(); without one (the default) blended draws stay in view and
+    // those sample black and the far plane. fogView: the first of the 2 views volumetric fog uses, both between view and
+    // blendView (PostProcess::volumetricFogView()); UINT16_MAX (the default): no volumetric fog.
+    void setTarget(bgfx::FrameBufferHandle target, uint16_t width, uint16_t height, bgfx::ViewId blendView,
+                   bgfx::ViewId fogView = UINT16_MAX);
     // Frames whose opaque scene color / depth was copied for SCREEN_TEXTURE / DEPTH_TEXTURE, since init.
     struct SceneCopies {
         uint64_t screen = 0, depth = 0;
@@ -470,6 +477,7 @@ private:
     void drawProbeBox(const Scene& scene, bgfx::ViewId view, entt::entity selected);
     void drawColliderWireframe(const Scene& scene, bgfx::ViewId view, entt::entity selected);
     void drawParticleShape(const Scene& scene, bgfx::ViewId view, entt::entity selected);
+    void drawFogVolume(const Scene& scene, bgfx::ViewId view, entt::entity selected);
 
     // GPU copy of a TerrainTile's heights: kTileSamples^2 vertices in tile-local metres, then its skirt vertices
     // (lod.h terrainSkirtVertex); indices are terrainIndices_.
@@ -565,6 +573,9 @@ private:
     bgfx::UniformHandle depthSampler_ = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle target_ = BGFX_INVALID_HANDLE; // setTarget, for one render()
     uint16_t targetWidth_ = 0, targetHeight_ = 0;
+    bgfx::ViewId targetBlendView_ = 0;
+    bgfx::ViewId targetFogView_ = UINT16_MAX;
+    bgfx::UniformHandle volFog_ = BGFX_INVALID_HANDLE; // u_volFog: every mesh draw sets it (w 0: none)
     bgfx::TextureHandle screenCopy_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle depthCopy_ = BGFX_INVALID_HANDLE;
     uint16_t copyWidth_ = 0, copyHeight_ = 0;
@@ -594,6 +605,7 @@ private:
     std::unique_ptr<VoxelGiState> voxelGi_;
     // SDFGI (sdfgi.h): its cascades follow this Renderer's camera (each viewport has its own).
     std::unique_ptr<SdfgiRenderer> sdfgi_;
+    std::unique_ptr<VolumetricFog> volumetricFog_; // its history follows this Renderer's camera
     bool capture_ = false; // bakeProbe: no particles, no probes, no VoxelGI, no SDFGI
     ParticleRenderer particles_;
     float timeSeconds_ = 0.0f; // setTime
