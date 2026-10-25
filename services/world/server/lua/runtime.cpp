@@ -395,7 +395,9 @@ struct Runtime::Impl {
     }
 
     void changed(entt::entity e, const ComponentDef& def) {
-        // replication diffs on its own; NPCs are never saved
+        if (def.replicate != Replicate::none) // component_replication_system diffs only what is marked
+            if (auto* rep = reg.try_get<world::ReplicatedState>(e)) rep->dirty.insert(def.name);
+        // NPCs are never saved
         if (def.persist && reg.all_of<world::CharacterRef>(e)) reg.emplace_or_replace<world::Dirty>(e);
         if (def.name == kStateMachineComponent) fsm.syncEntity(e); // a new "machine" enters its initial state now
     }

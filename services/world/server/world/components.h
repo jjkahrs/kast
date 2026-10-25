@@ -97,10 +97,16 @@ struct SaveTimer {
     TimePoint lastSave{};
 };
 
-// The replicated Lua components as last sent to clients, by name (component_replication_system diffs against it).
+// The replicated Lua components as last sent to clients, by name, with the JSON text sent (component_replication_system
+// diffs the dirty ones against it).
 struct ReplicatedState {
-    std::map<std::string, nlohmann::ordered_json, std::less<>> sent;
+    struct Sent {
+        nlohmann::ordered_json value;
+        std::string json; // value.dump(): serialized once, reused for every viewer
+    };
+    std::map<std::string, Sent, std::less<>> sent;
     std::set<std::string, std::less<>> oversize; // too big for a frame: logged once until it fits again
+    std::set<std::string, std::less<>> dirty;    // replicated components written since the last run; every writer marks
 };
 
 struct ScriptsLeft {}; // tag: onLeave already ran (graceful shutdown runs it for everyone first)

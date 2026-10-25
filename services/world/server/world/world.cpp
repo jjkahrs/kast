@@ -8,6 +8,15 @@
 
 namespace kast::world {
 
+namespace {
+// Marks every replicated component e has, for component_replication_system to send (writers outside kast mark here).
+void mark_replicated(entt::registry& reg, entt::entity e, const lua::Defs& defs) {
+    auto& rep = reg.get<ReplicatedState>(e);
+    for (const auto& def : defs)
+        if (def->replicate != lua::Replicate::none && lua::pool(reg, def->name).contains(e)) rep.dirty.insert(def->name);
+}
+} // namespace
+
 World::World(WorldRules rules, const Maps& maps, Send send, Save save, lua::Defs defs)
     : rules_(rules), maps_(maps), send_(std::move(send)), save_(std::move(save)), defs_(defs),
       grid_(rules.cellSize, rules.viewRadius),
@@ -89,6 +98,7 @@ entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint 
     lua::restore_components(reg_, e, defs_, row.components, [&](const std::string& fix) {
         log::warn("persisted component fixed on load", {{"char", row.id}, {"fix", fix}});
     });
+    mark_replicated(reg_, e, defs_);
     lua_.enter(e);
     return e;
 }
@@ -166,6 +176,7 @@ entt::entity World::create_npc(std::string name, std::string templateName, std::
     reg_.emplace<ReplicatedState>(e);
     grid_.insert(wire_id(e), cell);
     for (const auto& [type, value] : components.items()) lua::pool(reg_, type).emplace(e, lua::ComponentData{value});
+    mark_replicated(reg_, e, defs_);
     if (components.contains(lua::kStateMachineComponent)) lua_.fsm().syncEntity(e); // as kast.add + kast.set would
     return e;
 }

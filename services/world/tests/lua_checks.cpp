@@ -11,6 +11,7 @@
 #include "lua/components.h"
 #include "world/components.h"
 #include "world/maps.h"
+#include "world/systems.h"
 #include "world/world.h"
 #include <bake.h>
 #include <heights.h>
@@ -570,10 +571,12 @@ void checkReplication() {
     r.write("components/big.lua", "return { name = 'Big', replicate = 'aoi', fields = { { name = 's', type = 'string' } } }");
     TestWorld w(r.defs().defs);
     auto& reg = w.world.registry();
+    // Writes storage directly, so it marks the component dirty itself, as kast.add/set/remove do.
     const auto set = [&](entt::entity e, const char* name, const char* json) {
         auto& p = lua::pool(reg, name);
         if (p.contains(e)) p.get(e).value = Json::parse(json);
         else p.emplace(e, lua::ComponentData{Json::parse(json)});
+        reg.get<world::ReplicatedState>(e).dirty.insert(name);
     };
     const auto a = w.spawn(1, 51, "Alice", 1000, 1000);
     const auto b = w.spawn(2, 52, "Bob", 1050, 1000);
@@ -603,6 +606,7 @@ void checkReplication() {
     w.sent.clear();
     set(a, "Health", R"({"hp":6})");
     lua::pool(reg, "Wallet").remove(a);
+    reg.get<world::ReplicatedState>(a).dirty.insert("Wallet");
     w.world.tick(T0 + std::chrono::milliseconds(100));
     check(w.sent.updates(1, A).size() == 1 && w.sent.updates(2, A).size() == 1 && w.sent.updates(2, A)[0].json == R"({"hp":6})",
           "a change goes to owner + observers once");
@@ -631,6 +635,38 @@ void checkReplication() {
     w.world.tick(T0 + std::chrono::milliseconds(250));
     for (uint32_t sid : {1u, 2u, 3u}) check(w.sent.updates(sid, A).empty(), "nothing after Despawn");
     (void)b;
+}
+
+// Idle cost of component_replication_system: 1000 entities (one viewer + 999 NPCs it sees), 3 replicated components
+// each, then ticks with no writes.
+void checkReplicationIdleTiming() {
+    LuaRoot r;
+    for (const char* n : {"RepA", "RepB", "RepC"})
+        r.write(std::string("components/") + n + ".lua",
+                std::string("return { name = '") + n + "', replicate = 'aoi', fields = { { name = 'v', type = 'int' } } }");
+    const lua::Defs defs = r.defs().defs;
+    TestWorld w(defs);
+    w.spawn(1, 61, "Viewer", 1000, 1000);
+    const Json comps = Json::parse(R"({"RepA":{"v":1},"RepB":{"v":2},"RepC":{"v":3}})");
+    for (int i = 0; i < 999; ++i)
+        w.world.create_npc("N", "", 1, proto::Vec3{1000.0f + i % 30, 0, 1000.0f + i / 30}, 0, "", comps);
+    w.world.tick(T0);                                    // Spawns
+    w.world.tick(T0 + std::chrono::milliseconds(50));    // nothing entered view any more
+    check(w.sent.updates(1, wire(w.world.registry().view<world::Npc>().front())).size() == 3, "timing: full set sent once");
+    size_t sends = 0;
+    const world::Send send = [&](uint32_t, const proto::Message&) { ++sends; };
+    constexpr int kTicks = 200;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < kTicks; ++i) world::component_replication_system(w.world.registry(), defs, send);
+    const double perTickUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / kTicks;
+    check(sends == 0, "timing: idle ticks send nothing");
+    std::printf("component_replication_system idle: %.1f us/tick (1000 entities x 3 components)\n", perTickUs);
+#ifdef NDEBUG
+    // Baseline before dirty flags (every component compared every tick): 59.0-61.7 us/tick over 5 runs, Release
+    // (preset release, MSVC, the dev machine). Dirty flags must make idle ticks at least 5x cheaper. Debug: not checked.
+    constexpr double kBaselineUs = 60.0;
+    check(perTickUs <= kBaselineUs / 5, std::format("timing: idle {:.1f} us/tick > baseline {} / 5", perTickUs, kBaselineUs));
+#endif
 }
 
 // --- events (docs/services/world/events.html): the same cases as the engine's checks ---
@@ -666,6 +702,119 @@ size_t log_index(const std::string& part) {
     return SIZE_MAX;
 }
 bool logged(const std::string& part) { return log_index(part) != SIZE_MAX; }
+
+// Dirty-flag replication through the real writers (kast.add/set/remove, create_npc, login restore): exactly what each
+// session receives, tick by tick.
+void checkReplicationDirty() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("components/a_health.lua", "return { name = 'Health', replicate = 'aoi', fields = { { name = 'hp', type = 'int', default = 5 } } }");
+    r.write("components/b_wallet.lua", "return { name = 'Wallet', replicate = 'owner', fields = { { name = 'gold', type = 'int' } } }");
+    r.write("components/c_big.lua", "return { name = 'Big', replicate = 'aoi', fields = { { name = 's', type = 'string' } } }");
+    r.write("components/d_saved.lua",
+            "return { name = 'Saved', replicate = 'owner', persist = true, fields = { { name = 'n', type = 'int' } } }");
+    r.write("systems/s.lua", R"(
+local t = 0
+local function alice() for e in kast.query('Character') do if kast.get(e, 'Character').name == 'Alice' then return e end end end
+return { update = function()
+    t = t + 1
+    local a = alice()
+    if t == 2 then kast.add(a, 'Health'); kast.set(a, 'Health', {hp = 6}); kast.add(a, 'Wallet')
+    elseif t == 4 then kast.set(a, 'Health', {hp = 9}); kast.set(a, 'Health', {hp = 6})
+    elseif t == 5 then kast.remove(a, 'Health')
+    elseif t == 6 then kast.remove(a, 'Wallet'); kast.add(a, 'Wallet'); kast.set(a, 'Wallet', {gold = 3})
+    elseif t == 7 then kast.remove(a, 'Wallet')
+    elseif t == 8 then kast.add(a, 'Wallet'); kast.add(a, 'Health')
+    elseif t == 10 then kast.add(a, 'Big'); kast.set(a, 'Big', {s = string.rep('x', 70000)})
+    elseif t == 11 then kast.set(a, 'Big', {s = string.rep('y', 70000)})
+    elseif t == 12 then kast.set(a, 'Big', {s = 'ok'})
+    elseif t == 14 then for n in kast.query('Npc') do kast.set(n, 'Health', {hp = 3}); kast.set(n, 'Wallet', {gold = 2}) end
+    end
+end })");
+    TestWorld w(r.defs().defs);
+    check(w.world.load_scripts(r.root).empty(), "dirty: system loads");
+    auto& reg = w.world.registry();
+    const auto a = w.spawn(1, 71, "Alice", 1000, 1000);
+    w.spawn(2, 72, "Bob", 1050, 1000);
+    const auto c = w.spawn(3, 73, "Carol", 1800, 1800);
+    const uint32_t A = wire(a);
+    using V = std::vector<std::string>;
+    const auto comps = [&](uint32_t sid) {
+        V out;
+        if (const auto it = w.sent.bySession.find(sid); it != w.sent.bySession.end())
+            for (const auto& m : it->second) {
+                if (const auto* u = std::get_if<proto::ComponentUpdate>(&m))
+                    out.push_back(std::format("update {} {} {}", u->entityId, u->name, u->json));
+                if (const auto* x = std::get_if<proto::ComponentRemove>(&m)) out.push_back(std::format("remove {} {}", x->entityId, x->name));
+            }
+        return out;
+    };
+    const auto text = [](const V& v) {
+        std::string out;
+        for (const auto& s : v) out += s.substr(0, 60) + "; ";
+        return out;
+    };
+    int tick = 0;
+    const auto step = [&] {
+        w.sent.clear();
+        w.world.tick(T0 + std::chrono::milliseconds(50 * tick++));
+    };
+    const auto expect = [&](const V& s1, const V& s2, const V& s3, const std::string& what) {
+        check(comps(1) == s1 && comps(2) == s2 && comps(3) == s3,
+              "dirty: " + what + ": " + text(comps(1)) + " | " + text(comps(2)) + " | " + text(comps(3)));
+    };
+    const auto upd = [](uint32_t id, const char* name, const char* json) { return std::format("update {} {} {}", id, name, json); };
+    const auto rem = [](uint32_t id, const char* name) { return std::format("remove {} {}", id, name); };
+
+    step(); // t1: Spawns only
+    expect({}, {}, {}, "nothing written, nothing sent");
+    step();
+    expect({upd(A, "Health", R"({"hp":6})"), upd(A, "Wallet", R"({"gold":0})")}, {upd(A, "Health", R"({"hp":6})")}, {},
+           "a change goes once to the owner (owner + aoi) and to viewers (aoi)");
+    step();
+    expect({}, {}, {}, "untouched components send nothing");
+    step();
+    expect({}, {}, {}, "set then restored in the same tick sends nothing");
+    step();
+    expect({rem(A, "Health")}, {rem(A, "Health")}, {}, "remove sends ComponentRemove");
+    step();
+    expect({upd(A, "Wallet", R"({"gold":3})")}, {}, {}, "remove + re-add + set in one tick sends the new value");
+    step();
+    expect({rem(A, "Wallet")}, {}, {}, "remove (owner component)");
+    step();
+    expect({upd(A, "Health", R"({"hp":5})"), upd(A, "Wallet", R"({"gold":0})")}, {upd(A, "Health", R"({"hp":5})")}, {},
+           "re-added after a remove: sent again");
+
+    reg.get<world::Transform>(c).pos = {1000, 0, 1060}; // Carol walks into range
+    reg.emplace_or_replace<world::Moved>(c);
+    step();
+    expect({}, {}, {upd(A, "Health", R"({"hp":5})")}, "a new viewer gets the aoi set (cached), nobody else anything");
+
+    const auto oversizeLogs = [&] {
+        return std::ranges::count_if(captured(), [](const std::string& l) { return contains(l, "component too large"); });
+    };
+    step();
+    expect({}, {}, {}, "oversize: not sent");
+    step();
+    expect({}, {}, {}, "oversize changed again: still not sent");
+    check(oversizeLogs() == 1, "dirty: oversize logged once per episode: " + std::to_string(oversizeLogs()));
+    step();
+    const V big{upd(A, "Big", R"({"s":"ok"})")};
+    expect(big, big, big, "oversize fits again: sent");
+
+    const auto n = w.world.create_npc("Guard", "", 1, proto::Vec3{1020, 0, 1000}, 0, "",
+                                      Json::parse(R"({"Health":{"hp":4},"Wallet":{"gold":1}})"));
+    const V npcNew{upd(wire(n), "Health", R"({"hp":4})")};
+    step();
+    expect(npcNew, npcNew, npcNew, "NPC: aoi component reaches its viewers, owner component nobody");
+    step();
+    const V npcSet{upd(wire(n), "Health", R"({"hp":3})")};
+    expect(npcSet, npcSet, npcSet, "NPC: changes to its aoi component only");
+
+    const auto d = w.spawn(4, 74, "Dan", 200, 200, R"({"Saved":{"n":8}})");
+    step();
+    check(comps(4) == V{upd(wire(d), "Saved", R"({"n":8})")}, "dirty: a component restored on login is sent on the first tick: " + text(comps(4)));
+}
 
 void checkEventBus() {
     LogCapture capture;
@@ -5415,6 +5564,8 @@ int lua_checks(int& checks) {
     checkStartupErrors();
     checkPersistence();
     checkReplication();
+    checkReplicationIdleTiming();
+    checkReplicationDirty();
     checkEventBus();
     checkLuaEvents();
     checkLuaEventsFromCpp();
