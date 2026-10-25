@@ -113,6 +113,12 @@ public:
     bool save();
     // Adds WxH to the preview resolutions and picks it.
     void setPreviewSize(int width, int height);
+    // The preview's UI scale in percent (one of 100, 125, 150, 200; else added): it stands for the display scale times
+    // the player's UI scale.
+    void setPreviewScale(int percent);
+    // The project's "gui" scale settings (host, each frame): the preview fits its reference resolution, so dp units
+    // show at the size they will have.
+    kast::GuiScale projectScale;
     bool dirty() const { return rmlDirty_ || rcssDirty_; }
     // An Assets rename or move: the open files follow if they were from or inside it.
     void remap(const std::filesystem::path& from, const std::filesystem::path& to);
@@ -182,6 +188,9 @@ private:
     bool previewStale_ = true;
     std::vector<std::pair<int, int>> resolutions_{{1280, 720}, {1920, 1080}, {0, 0}}; // {0, 0} = the panel's size
     int resolution_ = 0;
+    std::vector<int> scales_{100, 125, 150, 200}; // the preview's UI scale choices, percent
+    int scale_ = 0;
+    double previewRatio_ = 0.0; // the dp ratio last logged
 
     std::filesystem::path rml_; // empty = nothing open
     std::filesystem::path rcss_; // the linked sheet; empty if none

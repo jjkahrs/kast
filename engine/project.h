@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio.h"
+#include "gui_scale.h"
 
 #include <filesystem>
 #include <optional>
@@ -36,6 +37,9 @@ struct Project {
     // unmuted, and saving leaves out the block when every bus is.
     AudioMix audio{};
     OnlineConfig online{};
+    // Game GUI scaling defaults and the player's default window (docs/engine/game-gui.html#scaling). Optional in the
+    // file ("gui"): absent = all defaults, and saving leaves out the block while it is.
+    GuiConfig gui{};
 };
 
 // online's own rules, without touching files: authUrl empty or an http(s) URL (set when enabled), caFile a path inside

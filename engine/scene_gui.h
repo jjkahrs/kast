@@ -12,6 +12,7 @@
 #include "scene.h"
 
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -28,11 +29,16 @@ class ElementDocument;
 // stacked in entity creation order (PersistentId), shown while visible, each over the default widget style. Clicks,
 // drags, widget changes and list selections publish on the bus (gui_events.h, gui_widgets.h, gui_lists.h). A missing or broken .rml/.rcss logs an error
 // naming the file and that document shows nothing; Play goes on.
+// Scaling (gui_scale.h): Dp documents live in one RmlUi context, All documents in a second one laid out at the size /
+// dp ratio and drawn over the first (so an All document is above every Dp one, whatever their ids). Why two: RmlUi's
+// dp ratio and layout size are per context. Both act as one GUI: the mouse goes to the All context while it is over
+// one of its elements, else to the Dp one; a click or focus() in one takes the keyboard there and blurs the other's
+// focused element; click, focus, mouseOver, hovered and the data models span both.
 namespace kast {
 
 class SceneGui final : public GuiAccess {
 public:
-    explicit SceneGui(std::string contextName) : context_(std::move(contextName)) {}
+    explicit SceneGui(std::string contextName) : context_(contextName), allContext_(contextName + "-all") {}
     ~SceneGui() override { clear(); }
 
     // Loads, unloads, shows and hides documents so they match scene's UIDocuments (paths relative to projectRoot;
@@ -45,7 +51,18 @@ public:
     void reloadChanged();
     // Clicks the element with this id in the topmost visible document holding one, as the mouse would. False if none.
     bool click(const std::string& id);
-    GuiContext& context() { return context_; }
+    GuiContext& context() { return context_; } // the Dp documents' (tests drive it directly)
+    // The pixel size the GUIs draw in (a zero side, e.g. minimized: ignored, nothing recomputes), and the OS display
+    // scale of the window's display; either recomputes the dp ratio. setScale (below) sets the rest.
+    void resize(int width, int height);
+    void setDisplayScale(double osScale);
+    // Draws both contexts into view .. view + gui::kViews - 1 on frameBuffer, as GuiContext::render.
+    void render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer);
+    // An SDL event, positions mapped as GuiContext::onEvent; routed between the two contexts (see above).
+    void onEvent(const SDL_Event& event, float originX = 0.0f, float originY = 0.0f, float scale = 1.0f);
+    void release(); // unloads every document and removes both contexts (before gui::shutdown)
+    // Called after each setScale (kast_player saves the player's UI scale).
+    void setScaleListener(std::function<void(const GuiScale&)> listener) { scaleListener_ = std::move(listener); }
 
     // kast.gui.* (gui_access.h).
     std::optional<GuiValue> value(const std::string& id) override;
@@ -68,6 +85,9 @@ public:
     bool instantiatePrefab(const std::string& prefab, const std::string& parentId, const std::string& newId) override;
     bool removeElement(const std::string& id) override;
     void reset() override;
+    GuiScale scale() override { return scale_; }
+    void setScale(const GuiScale& scale) override;
+    double dpRatio() override { return dpRatio_; }
 
 private:
     struct Written { // kast.gui writes to one id, applied again to documents that load later
@@ -83,6 +103,7 @@ private:
         EntityId id = 0;
         std::string path; // project-relative, as in the component
         bool visible = true;
+        GuiScaling scaling = GuiScaling::Dp; // which context it is in
         Rml::ElementDocument* document = nullptr; // null if it failed to load
         std::unique_ptr<ButtonClickListener> listener;
         std::unique_ptr<DragListener> dragListener;
@@ -101,9 +122,22 @@ private:
     void scroll(const std::string& id, int index, const char* function); // scrollTo, scrollToEnd
     Rml::ElementDocument* documentWith(const std::string& id) const; // the topmost loaded one holding id
     GuiPrefabReader prefabReader() const; // project files by project path
+    GuiContext& contextFor(GuiScaling scaling) { return scaling == GuiScaling::All ? allContext_ : context_; }
+    std::vector<Rml::Context*> contexts(); // the live ones (the Dp one made if needed); none without RmlUi
+    void updateScale(); // the dp ratio from the size and settings, applied to both contexts
+    void takeKeyboard(GuiScaling scaling); // that context gets keys and text; the other's focused element is blurred
 
-    GuiModels models_; // before context_: the context's models point into it
-    GuiContext context_;
+    GuiModels models_; // before the contexts: their models point into it
+    GuiContext context_;    // Dp documents
+    GuiContext allContext_; // All documents, made when the first loads
+    GuiScaling keyboard_ = GuiScaling::Dp; // the context keys and text go to
+    GuiScale scale_;
+    double osScale_ = 1.0;
+    int width_ = 0;
+    int height_ = 0;
+    double dpRatio_ = 1.0;
+    std::optional<double> loggedRatio_;
+    std::function<void(const GuiScale&)> scaleListener_;
     std::map<std::string, Written> written_;
     std::filesystem::path root_;
     EventBus* bus_ = nullptr;

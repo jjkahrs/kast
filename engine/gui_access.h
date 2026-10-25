@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gui_scale.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -86,7 +88,14 @@ public:
     // Removes the element with this id from the topmost document holding one.
     virtual bool removeElement(const std::string& id) = 0;
     // A new scene's systems are about to start: forget the kept writes and model values and unload the documents.
+    // The scale (below) stays.
     virtual void reset() = 0;
+    // GUI scaling (gui_scale.h, kast.gui.setScale / setReferenceResolution): the settings the dp ratio is made of now,
+    // and new ones (applied at once; uiScale and match already clamped by the caller).
+    virtual GuiScale scale() = 0;
+    virtual void setScale(const GuiScale& scale) = 0;
+    // The dp ratio the documents use now.
+    virtual double dpRatio() = 0;
 };
 
 } // namespace kast

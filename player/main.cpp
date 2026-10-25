@@ -18,6 +18,7 @@
 #include <scene_io.h>
 #include <sdfgi.h>
 #include <stats_overlay.h>
+#include <window_display.h>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -44,7 +45,7 @@ constexpr int kScreenshotTimeoutFrames = 30;
 constexpr const char* kPakFileName = "game.pak";
 constexpr int kGuiClickFrame = 10; // --gui-click: once the GUIs have loaded and laid out
 constexpr const char* kUsage =
-    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--sim-key frame,key]... [--size WxH] [--window-pos X,Y] [--fixed-dt S] [--gpu-stats] [--log-sdfgi] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--no-occlusion] [--no-audio-device]";
+    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--sim-key frame,key]... [--sim-click frame,x,y]... [--size WxH] [--window-pos X,Y] [--user-settings file] [--fixed-dt S] [--gpu-stats] [--log-sdfgi] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--no-occlusion] [--no-audio-device]";
 constexpr int kGpuStatsWarmupFrames = 10; // --gpu-stats: skip startup frames (shader and target creation)
 
 struct Options {
@@ -52,7 +53,9 @@ struct Options {
     std::string screenshot; // captured after the last frame
     std::string guiClick;   // tests: click this GUI element id on frame kGuiClickFrame
     std::vector<std::pair<int, SDL_Scancode>> simKeys; // tests: these keys pressed on these frames (pushed SDL events)
-    int width = kast::AppConfig{}.width, height = kast::AppConfig{}.height; // --size: window size
+    std::vector<std::pair<int, SDL_FPoint>> simClicks; // tests: a left click at this window position on this frame
+    std::optional<std::pair<int, int>> size; // --size: a window of this size, over the project's and user's mode
+    std::filesystem::path userSettings; // --user-settings: this file instead of the per-user one (tests)
     std::optional<std::pair<int, int>> windowPos; // --window-pos: window top-left
     float fixedDt = 0.0f;   // --fixed-dt: each frame advances this many seconds (0: real time), as in the editor
     bool gpuStats = false;  // log the average GPU frame time on exit
@@ -101,14 +104,29 @@ std::optional<Options> parseArgs(int argc, char** argv)
                 return std::nullopt;
             }
             options.simKeys.emplace_back(frame, key);
+        } else if (arg == "--sim-click" && hasValue) {
+            const std::string_view text = argv[++i];
+            const size_t first = text.find(','), second = first == std::string_view::npos ? first : text.find(',', first + 1);
+            int frame = 0, x = -1, y = -1;
+            const auto coordinate = [](std::string_view part, int& out) {
+                const auto [ptr, ec] = std::from_chars(part.data(), part.data() + part.size(), out);
+                return ec == std::errc{} && ptr == part.data() + part.size() && out >= 0;
+            };
+            if (second == std::string_view::npos || !parseInt(text.substr(0, first), frame) ||
+                !coordinate(text.substr(first + 1, second - first - 1), x) || !coordinate(text.substr(second + 1), y)) {
+                kast::log::error(std::format("Invalid --sim-click '{}', expected frame,x,y (window units). {}", text, kUsage));
+                return std::nullopt;
+            }
+            options.simClicks.emplace_back(frame, SDL_FPoint{static_cast<float>(x), static_cast<float>(y)});
         } else if (arg == "--size" && hasValue) {
             const std::string_view text = argv[++i];
             const size_t x = text.find('x');
-            if (x == std::string_view::npos || !parseInt(text.substr(0, x), options.width) ||
-                !parseInt(text.substr(x + 1), options.height)) {
+            int width = 0, height = 0;
+            if (x == std::string_view::npos || !parseInt(text.substr(0, x), width) || !parseInt(text.substr(x + 1), height)) {
                 kast::log::error(std::format("Invalid --size '{}', expected WxH. {}", text, kUsage));
                 return std::nullopt;
             }
+            options.size = std::pair{width, height};
         } else if (arg == "--window-pos" && hasValue) {
             const std::string_view text = argv[++i];
             options.windowPos = kast::parseWindowPos(text);
@@ -116,6 +134,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
                 kast::log::error(std::format("Invalid --window-pos '{}', expected X,Y. {}", text, kUsage));
                 return std::nullopt;
             }
+        } else if (arg == "--user-settings" && hasValue) {
+            options.userSettings = std::filesystem::path(reinterpret_cast<const char8_t*>(argv[++i]));
         } else if (arg == "--fixed-dt" && hasValue) { // deterministic screenshots of anything that moves
             const std::string_view text = argv[++i];
             auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), options.fixedDt);
@@ -200,6 +220,20 @@ bool loadGame(kast::Project& project, std::optional<kast::AuthConfig>& auth, kas
     return kast::loadScene(file->string(), scene, error, nullptr, project.root);
 }
 
+// The player's own display settings file: <SDL_GetPrefPath("Kast", project name)>settings.json, i.e.
+// %APPDATA%\Kast\<project name>\settings.json (docs/engine/game-gui.html#user-settings). Empty if SDL can't tell.
+std::filesystem::path userSettingsFile(const kast::Project& project)
+{
+    char* folder = SDL_GetPrefPath("Kast", kast::prefFolderName(project.name).c_str());
+    if (!folder) {
+        kast::log::warn(std::format("No folder for user settings ({}): they are not kept", SDL_GetError()));
+        return {};
+    }
+    const std::filesystem::path file = std::filesystem::path(reinterpret_cast<const char8_t*>(folder)) / "settings.json";
+    SDL_free(folder);
+    return file;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -219,6 +253,18 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    // The window: the project's, under the player's own choices, under --size.
+    const std::filesystem::path settingsFile = options->userSettings.empty() ? userSettingsFile(project) : options->userSettings;
+    kast::UserDisplaySettings userSettings = settingsFile.empty() ? kast::UserDisplaySettings{}
+                                                                  : kast::loadUserDisplaySettings(settingsFile);
+    if (!settingsFile.empty())
+        kast::log::info(std::format("User settings: {}", settingsFile.string()));
+    kast::DisplayMode startMode = kast::applyUserDisplay(project.gui.window, userSettings);
+    if (options->size)
+        startMode = {.mode = kast::WindowMode::Windowed, .width = options->size->first, .height = options->size->second};
+    kast::GuiScale guiScale = project.gui.scale;
+    guiScale.uiScale = std::clamp(userSettings.uiScale.value_or(guiScale.uiScale), kast::kMinUiScale, kast::kMaxUiScale);
+
     if (options->noAudioDevice)
         kast::Audio::setDefaultOutput(kast::Audio::Output::Null);
     kast::LuaSystems lua;
@@ -232,6 +278,7 @@ int main(int argc, char** argv)
     std::vector<double> frameMs, sdfgiFrameMs; // --gpu-stats: each frame's, and its SDFGI view's (for percentiles)
     int gpuFrames = 0;
     kast::SceneGui gui("game");
+    kast::WindowDisplay display;
     kast::StatsOverlay stats(options->gpuStats ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE); // F3
     // Scene and GUI draw on the backbuffer until a GUI reads what is under it (backdrop-filter), then into this
     // sampleable target, copied onto the screen after the GUI. ponytail: switched the frame after the first read, so
@@ -260,7 +307,31 @@ int main(int argc, char** argv)
         renderer.setOcclusion(!options->noOcclusion);
         post.init();
         kast::gui::init();
+        display.attach(window);
+        if (startMode.mode != kast::WindowMode::Windowed)
+            display.setMode(startMode);
+        gui.setScale(guiScale);
+        gui.setDisplayScale(display.displayScale());
+        // What Lua changes from now on is the player's: kept in the settings file.
+        const auto save = [&] {
+            if (!settingsFile.empty())
+                kast::saveUserDisplaySettings(settingsFile, userSettings);
+        };
+        display.setListener([&, save](const kast::DisplayMode& mode) {
+            userSettings.mode = mode.mode;
+            userSettings.width = mode.width;
+            userSettings.height = mode.height;
+            userSettings.refresh = mode.refresh;
+            save();
+        });
+        gui.setScaleListener([&, save](const kast::GuiScale& scale) {
+            if (userSettings.uiScale.value_or(guiScale.uiScale) == scale.uiScale)
+                return;
+            userSettings.uiScale = scale.uiScale;
+            save();
+        });
         lua.setGui(&gui); // kast.gui.*
+        lua.setDisplay(&display); // kast.display.*
         if (options->gpuStats)
             bgfx::setDebug(BGFX_DEBUG_PROFILER);
         if (kast::activeCamera(scene) == entt::null)
@@ -277,7 +348,9 @@ int main(int argc, char** argv)
         SDL_GetWindowSize(window, &windowWidth, &windowHeight); // event coordinates are window, not pixel, units
         input.view = {0.0f, 0.0f, static_cast<float>(windowWidth), static_cast<float>(windowHeight)};
         input.onEvent(event);
-        gui.context().onEvent(event);
+        gui.onEvent(event, 0.0f, 0.0f, SDL_GetWindowPixelDensity(window)); // the GUI is in pixels
+        if (event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED || event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED)
+            gui.setDisplayScale(display.displayScale()); // another monitor or a changed Windows scale
         if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F3 && !event.key.repeat)
             stats.toggle();
     };
@@ -333,8 +406,8 @@ int main(int argc, char** argv)
             ++gpuFrames;
         }
         if (width > 0 && height > 0) {
-            gui.context().resize(width, height);
-            gui.context().render(kGuiView, readable);
+            gui.resize(width, height);
+            gui.render(kGuiView, readable);
             if (bgfx::isValid(readable))
                 kast::gui::present(kPresentView, bgfx::getTexture(readable), width, height);
         }
@@ -349,6 +422,19 @@ int main(int argc, char** argv)
             SDL_PushEvent(&event);
             event.key.type = SDL_EVENT_KEY_UP;
             event.key.down = false;
+            SDL_PushEvent(&event);
+        }
+        for (const auto& [clickFrame, at] : options->simClicks) { // a move there, a press and a release, as a real click
+            if (frame != clickFrame)
+                continue;
+            SDL_Event event{};
+            event.motion = {.type = SDL_EVENT_MOUSE_MOTION, .windowID = SDL_GetWindowID(window), .x = at.x, .y = at.y};
+            SDL_PushEvent(&event);
+            event.button = {.type = SDL_EVENT_MOUSE_BUTTON_DOWN, .windowID = SDL_GetWindowID(window),
+                            .button = SDL_BUTTON_LEFT, .down = true, .clicks = 1, .x = at.x, .y = at.y};
+            SDL_PushEvent(&event);
+            event.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            event.button.down = false;
             SDL_PushEvent(&event);
         }
         if (!options->guiClick.empty() && frame == kGuiClickFrame && !gui.click(options->guiClick))
@@ -388,8 +474,7 @@ int main(int argc, char** argv)
                                         gpuFrames, percentile(frameMs, 0.99), percentile(frameMs, 1.0)));
         kast::log::info(kast::assetLoadSummary());
         lua.stop();
-        gui.clear();
-        gui.context().release();
+        gui.release();
         kast::gui::shutdown();
         if (bgfx::isValid(readable))
             bgfx::destroy(readable);
@@ -397,7 +482,7 @@ int main(int argc, char** argv)
         renderer.shutdown();
     };
 
-    const int code = kast::run({.title = project.name.c_str(), .width = options->width, .height = options->height,
+    const int code = kast::run({.title = project.name.c_str(), .width = startMode.width, .height = startMode.height,
                                 .activate = options->frames == 0, .position = options->windowPos},
                                hooks);
     if (code != 0)

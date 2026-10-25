@@ -53,6 +53,9 @@ bool checkOnlineConfig(const kast::Project& project, const kast::OnlineConfig& o
 // Online Services > Save: checkOnlineConfig, then writes project.kast with online and updates project. Writes nothing
 // and leaves project unchanged on failure (false + error).
 bool setOnlineConfig(kast::Project& project, const kast::OnlineConfig& online, std::string& error);
+// Display & GUI Scaling > Save (and --gui-settings-set): writes project.kast with gui (validated as loading would) and
+// updates project. Writes nothing and returns false + error if gui is invalid or the write fails.
+bool setGuiConfig(kast::Project& project, const kast::GuiConfig& gui, std::string& error);
 // Validates first (checkStartScene; checkOnlineConfig; outDir not the project root; an outDir inside the project new, empty or holding
 // game.pak, and not holding startScene; the player and its DLLs present in playerDir), writing nothing on failure. Then creates outDir if needed and writes the exe, game.pak
 // and the DLLs, overwriting those files only. Sets exe to the written exe. False + error on failure.

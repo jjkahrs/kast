@@ -4,6 +4,7 @@
 #include "auth_client.h"
 #include "chat_client.h"
 #include "event_bus.h"
+#include "display_access.h"
 #include "gui_access.h"
 #include "input.h"
 #include "network.h"
@@ -111,6 +112,9 @@ public:
     // reset() before each scene's systems start. Null (the default) leaves kast.gui nil. Takes effect at the next
     // start or scene switch.
     void setGui(GuiAccess* gui) { gui_ = gui; }
+    // The game's window for kast.display.* (kast_player's; the editor's Game view simulates one); null (the default)
+    // leaves kast.display nil. Takes effect like setGui.
+    void setDisplay(DisplayAccess* display) { display_ = display; }
 
 private:
     struct State;
@@ -128,6 +132,7 @@ private:
     ChatClient chat_{network_, auth_};
     Replication replication_; // subscribes on bus_, sends through world_
     GuiAccess* gui_ = nullptr;
+    DisplayAccess* display_ = nullptr;
     std::unique_ptr<State> state_;
     StateMachines fsm_{bus_}; // declared after state_, so its Lua callbacks are released while the Lua state lives
 };

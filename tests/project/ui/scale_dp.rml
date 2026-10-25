@@ -1,0 +1,13 @@
+<rml>
+    <head>
+        <title>Scale dp</title>
+        <link type="text/rcss" href="scale_dp.rcss"/>
+    </head>
+    <body>
+        <!-- GUI scaling (docs/engine/game-gui.html#scaling) in dp mode: the orange box is in dp (follows the dp ratio),
+             the blue one in px (stays physical pixels). -->
+        <div id="dp_box">dp box</div>
+        <div id="px_box">px box</div>
+        <input id="dp_field" type="text" value=""/>
+    </body>
+</rml>

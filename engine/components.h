@@ -36,6 +36,7 @@ struct FieldInfo {
     bool color = false; // bx::Vec3 edited as a color
     std::optional<double> min, max; // float Inspector clamp; enforce it in ComponentInfo::validate too
     bool optional = false; // missing from JSON = the default (fields added after scenes were saved without them)
+    bool omitDefault = false; // optional, and left out of the JSON while it has the default value
 };
 
 namespace detail {

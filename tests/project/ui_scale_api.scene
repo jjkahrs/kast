@@ -1,0 +1,26 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Scale dp",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "UIDocument": { "path": "ui/scale_dp.rml", "visible": true }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Scale all",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "UIDocument": { "path": "ui/scale_all.rml", "visible": true, "scaling": "all" }
+      }
+    }
+  ],
+  "systems": [
+    "scripts/ui_scale_api.lua"
+  ]
+}

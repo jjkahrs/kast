@@ -1,0 +1,12 @@
+<rml>
+    <head>
+        <title>Scale all</title>
+        <link type="text/rcss" href="scale_all.rcss"/>
+    </head>
+    <body>
+        <!-- GUI scaling in all mode (the UIDocument's "scaling": "all"): everything, px too, follows the dp ratio. The
+             green box is a button publishing scale.all. -->
+        <button id="all_box" data-event="scale.all">all: px button</button>
+        <input id="all_field" type="text" value=""/>
+    </body>
+</rml>
