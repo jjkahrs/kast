@@ -21,6 +21,6 @@
     }
   ],
   "systems": [
-    "scripts/ui_scale_editor.lua"
+    { "id": "7a1896e3-3778-456d-b820-30cba5ac7f2c", "path": "scripts/ui_scale_editor.lua" }
   ]
 }

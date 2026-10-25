@@ -2,5 +2,5 @@
   "version": 3,
   "alphaMode": "blend",
   "unlit": true,
-  "shader": "shaders/water.kshader"
+  "shader": { "id": "4f287fb2-7fcf-43ea-85b4-5523281f94b0", "path": "shaders/water.kshader" }
 }

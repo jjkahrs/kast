@@ -74,6 +74,7 @@ set_tests_properties(gdata_differs PROPERTIES FIXTURES_REQUIRED "gdata_post_proc
 # scene saved with the values it sets) and an out-of-range sliceCount (must fail to load). The post toggle off must
 # match SSAO off (both toggled off); Play differs on and off; the player (built games "ssao", "ssao_off") likewise.
 file(READ "${KAST_TEST_PROJECT}/ssao.scene" ssao_scene)
+kast_plain_asset_refs(ssao_scene)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/ssao.scene")
 set(ssao_lua_systems "\"systems\": [\"scripts/ssao_set.lua\"],\n  \"editor\":")
 foreach(variant "off|\"enabled\": true, \"radius\"|\"enabled\": false, \"radius\""
@@ -165,6 +166,7 @@ set_tests_properties(player_ssao_differs PROPERTIES FIXTURES_REQUIRED "player_ss
 # values it sets) and steps 200 (must fail to load). The post toggle off must match SSR off (both toggled off); Play
 # differs on and off; the player (built games "ssr", "ssr_off") likewise.
 file(READ "${KAST_TEST_PROJECT}/ssr.scene" ssr_scene)
+kast_plain_asset_refs(ssr_scene)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/ssr.scene")
 set(ssr_lua_systems "\"systems\": [\"scripts/ssr_set.lua\"],")
 foreach(variant "off|\"enabled\": true, \"maxDistance\"|\"enabled\": false, \"maxDistance\""
@@ -241,6 +243,7 @@ set_tests_properties(player_ssr_differs PROPERTIES FIXTURES_REQUIRED "player_ssr
 # saved with the values it sets) and fStop 0.2 (must fail to load). The post toggle off must match DoF off (both
 # toggled off); Play differs on and off; the player (built games "dof", "dof_off") likewise.
 file(READ "${KAST_TEST_PROJECT}/dof.scene" dof_scene)
+kast_plain_asset_refs(dof_scene)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/dof.scene")
 set(dof_lua_systems "\"systems\": [\"scripts/dof_set.lua\"],")
 foreach(variant "off|\"enabled\": true, \"focusDistance\"|\"enabled\": false, \"focusDistance\""
@@ -308,6 +311,7 @@ set_tests_properties(player_dof_differs PROPERTIES FIXTURES_REQUIRED "player_dof
 # camera sweeping sideways in Play (scripts/volfog_camera.lua: ghosting, by eye). Each FogVolume selected shows its
 # Inspector and outline; one saved as a prefab and dropped back keeps its fields.
 file(READ "${KAST_TEST_PROJECT}/volumetric_fog.scene" vfog_scene)
+kast_plain_asset_refs(vfog_scene)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/volumetric_fog.scene")
 set(vfog_box "\"shape\": \"box\", \"density\": 0.5,")
 set(vfog_sphere "\"shape\": \"sphere\", \"density\": 0.6,")
@@ -390,7 +394,7 @@ endforeach()
 # scene both instances.
 kast_prefab_test(vfog "--select 16 --create-prefab prefabs --drop-prefab prefabs/FogSphere.prefab"
   -DSCENE=volumetric_fog.scene
-  "-DEXPECT=prefabs/FogSphere.prefab|\"FogVolume\":{\"shape\":\"sphere\",\"density\":0.6,\"albedo\":\\[0.8,1.0,0.85\\],\"edgeFalloff\":0.6,\"heightFalloff\":0.3}\;out.scene|\"name\":\"FogSphere\",\"parent\":null,\"prefab\":\"prefabs/FogSphere.prefab\".*\"name\":\"FogSphere\",\"parent\":null,\"prefab\":\"prefabs/FogSphere.prefab\"")
+  "-DEXPECT=prefabs/FogSphere.prefab|\"FogVolume\":{\"shape\":\"sphere\",\"density\":0.6,\"albedo\":\\[0.8,1.0,0.85\\],\"edgeFalloff\":0.6,\"heightFalloff\":0.3}\;out.scene|\"name\":\"FogSphere\",\"parent\":null,\"prefab\":(.\"id\":\"[0-9a-f-]+\",\"path\":)?\"prefabs/FogSphere.prefab\".*\"name\":\"FogSphere\",\"parent\":null,\"prefab\":(.\"id\":\"[0-9a-f-]+\",\"path\":)?\"prefabs/FogSphere.prefab\"")
 add_test(NAME player_vfog_differs
   COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/player_vfog.png"
           "-DB=${CMAKE_CURRENT_BINARY_DIR}/player_vfog_off.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")

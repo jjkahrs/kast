@@ -1,5 +1,6 @@
 #include "document.h"
 
+#include "asset_ids.h"
 #include "assets.h"
 #include "build.h"
 
@@ -379,43 +380,40 @@ void moveSystem(Document& doc, size_t index, int delta)
 
 void remapScenePaths(Document& doc, const std::string& from, const std::string& to)
 {
-    bool changed = remapProjectPaths(doc.scene.systems, from, to);
-    for (auto [entity, mesh] : doc.scene.registry().view<kast::MeshRenderer>().each()) {
-        std::vector<std::string> path = {mesh.material};
-        if (remapProjectPaths(path, from, to)) {
-            mesh.material = path[0];
-            changed = true;
-        }
-    }
-    for (auto [entity, model] : doc.scene.registry().view<kast::ModelRenderer>().each()) {
-        std::vector<std::string> path = {model.model};
-        const bool moved = remapProjectPaths(path, from, to);
-        model.model = path[0];
-        const bool overrides = remapProjectPaths(model.materials, from, to);
-        changed = changed || moved || overrides;
-    }
-    // Instances (also in the scene waiting behind prefab edit mode, which is dirtied with it); refreshPrefabs then
-    // reloads them from the moved files.
-    const auto remapInstances = [&](kast::Scene& scene) {
-        bool changed = false;
-        for (auto [entity, instance] : scene.registry().view<kast::PrefabInstance>().each()) {
-            std::vector<std::string> path = {instance.path};
-            if (remapProjectPaths(path, from, to)) {
-                instance.path = path[0];
-                if (instance.placeholder.is_object())
-                    instance.placeholder["prefab"] = path[0];
-                changed = true;
+    const AssetRefEdit edit = [&](std::string& path, std::string&) { remapAssetPath(path, from, to); };
+    const auto remapIn = [&](kast::Scene& scene) {
+        bool changed = remapAssetPath(scene.sky.cube, from, to);
+        for (std::string& path : scene.sky.faces)
+            changed = remapAssetPath(path, from, to) || changed;
+        for (std::string& path : scene.systems)
+            changed = remapAssetPath(path, from, to) || changed;
+        changed = remapAssetPath(scene.lighting.lightmaps.bakedPath, from, to) || changed;
+        entt::registry& registry = scene.registry();
+        for (const entt::entity entity : registry.view<kast::PersistentId>()) {
+            for (const kast::ComponentType& type : kast::allComponentTypes()) {
+                if (!kast::hasComponent(registry, entity, type))
+                    continue;
+                nlohmann::ordered_json json = kast::componentToJson(registry, entity, type);
+                if (std::string error; editAssetRefs(json, edit) && kast::setComponentJson(registry, entity, type, json, error))
+                    changed = true;
+            }
+            if (auto* preserved = registry.try_get<kast::PreservedComponents>(entity))
+                for (auto& [name, json] : preserved->byName)
+                    changed = editAssetRefs(json, edit) || changed;
+            if (auto* instance = registry.try_get<kast::PrefabInstance>(entity)) { // refreshPrefabs reloads it
+                const bool moved = remapAssetPath(instance->path, from, to);
+                changed = editAssetRefs(instance->placeholder, edit) || moved || changed;
             }
         }
         return changed;
     };
     // The files moved, so the histories' copies would put the old paths back: they are dropped.
-    if (remapInstances(doc.scene) || changed) {
+    if (remapIn(doc.scene)) {
         markDirty(doc);
         clearSceneHistory(doc);
     }
     if (doc.prefabEdit) {
-        if (remapInstances(doc.prefabEdit->scene)) {
+        if (remapIn(doc.prefabEdit->scene)) {
             doc.prefabEdit->dirty = true;
             doc.prefabEdit->history.clear(false);
         }
@@ -709,9 +707,12 @@ bool openFile(Document& doc, const std::string& path, std::string& error)
 {
     // The scene's project's Lua components must be active before it loads; the current scene is replaced below.
     std::optional<kast::Project> project = projectOf(path);
+    if (project)
+        assetIds().scan(project->root);
     kast::activateComponentDefinitions(rootOf(project), nullptr);
     kast::Scene scene;
     kast::SceneLoadReport report;
+    const size_t stale = staleAssetRefs();
     if (!kast::loadScene(path, scene, error, &report, rootOf(project).value_or(std::filesystem::path()))) {
         if (kast::activateComponentDefinitions(rootOf(doc.project), &doc.scene)) { // back to the kept scene's project
             markDirty(doc);
@@ -727,7 +728,9 @@ bool openFile(Document& doc, const std::string& path, std::string& error)
     doc.path = path;
     doc.project = std::move(project);
     doc.selected = entt::null;
-    doc.dirty = report.migrated; // Lua component data fixed by the drift rules
+    // Lua component data fixed by the drift rules, or refs resolved by id to a path other than their hint: Save writes
+    // the fresh hints.
+    doc.dirty = report.migrated || staleAssetRefs() != stale;
     doc.prefabEdit.reset();
     clearSceneHistory(doc);
     ++doc.sceneGeneration;
@@ -780,8 +783,12 @@ bool openProject(Document& doc, const std::filesystem::path& file, std::string& 
         return false;
     }
     kast::Project project;
+    assetIds().scan(std::filesystem::absolute(file).parent_path()); // startScene resolves by id
+    const size_t stale = staleAssetRefs();
     if (!kast::loadProject(file, project, error))
         return false;
+    if (std::string reason; staleAssetRefs() != stale && !kast::saveProject(project, reason)) // the fresh hint
+        kast::log::warn(reason);
     kast::log::info(std::format("Opened project '{}' ({})", project.name, project.root.string()));
     if (project.startScene) {
         std::string reason;
@@ -791,6 +798,7 @@ bool openProject(Document& doc, const std::filesystem::path& file, std::string& 
         kast::log::warn(std::format("Cannot open the project's startScene '{}': {}", *project.startScene, reason));
     }
     resetToDefault(doc);
+    assetIds().scan(project.root);
     doc.project = std::move(project);
     kast::activateComponentDefinitions(rootOf(doc.project), &doc.scene); // the default scene has no Lua components
     return true;

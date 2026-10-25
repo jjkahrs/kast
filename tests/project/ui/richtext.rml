@@ -1,7 +1,7 @@
 <rml>
     <head>
         <title>Rich Text</title>
-        <link type="text/rcss" href="richtext.rcss"/>
+        <link type="text/rcss" href="richtext.rcss" data-kast-id="b65b41d0-7fcc-444c-b5a1-0cc53989c0f9"/>
     </head>
     <body>
         <!-- Rich text (ctest ui_richtext_*, scripts/ui_richtext.lua; self_check's checkGuiRichText): every BBCode tag, an

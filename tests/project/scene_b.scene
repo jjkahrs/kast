@@ -57,7 +57,7 @@
     }
   ],
   "systems": [
-    "scripts/report.lua"
+    { "id": "89e96ef3-5af5-480c-a493-a4ee6e385c6f", "path": "scripts/report.lua" }
   ],
   "editor": {
     "camera": { "pivot": [0, 0.75, 0], "yaw": 20, "pitch": -20, "distance": 8 }

@@ -7,7 +7,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [-3, 1.5, -6], "rotation": [0, 0, 0, 1], "scale": [1.8, 1.8, 1.8] },
-        "MeshRenderer": { "primitive": "sphere", "material": "materials/ibl_chrome.mat" }
+        "MeshRenderer": { "primitive": "sphere", "material": { "id": "e5425188-c302-469f-87e5-ba0d36af9fff", "path": "materials/ibl_chrome.mat" } }
       }
     },
     {
@@ -16,7 +16,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [-1, 1.5, -6], "rotation": [0, 0, 0, 1], "scale": [1.8, 1.8, 1.8] },
-        "MeshRenderer": { "primitive": "sphere", "material": "materials/ibl_rough_metal.mat" }
+        "MeshRenderer": { "primitive": "sphere", "material": { "id": "ff96734a-b96a-4d7b-9ca9-f0115a79dc35", "path": "materials/ibl_rough_metal.mat" } }
       }
     },
     {
@@ -25,7 +25,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [1, 1.5, -6], "rotation": [0, 0, 0, 1], "scale": [1.8, 1.8, 1.8] },
-        "MeshRenderer": { "primitive": "sphere", "material": "materials/ibl_plastic.mat" }
+        "MeshRenderer": { "primitive": "sphere", "material": { "id": "0f8369bc-a7d3-46a7-81ad-d853c1974816", "path": "materials/ibl_plastic.mat" } }
       }
     },
     {
@@ -34,7 +34,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [3, 1.5, -6], "rotation": [0, 0, 0, 1], "scale": [1.8, 1.8, 1.8] },
-        "MeshRenderer": { "primitive": "sphere", "material": "materials/ibl_matte.mat" }
+        "MeshRenderer": { "primitive": "sphere", "material": { "id": "8ddc311f-36f9-4ed8-ad52-be80e9ede0cb", "path": "materials/ibl_matte.mat" } }
       }
     },
     {
@@ -57,7 +57,7 @@
     "top": [0.1, 0.3, 0.9],
     "horizon": [0.9, 0.85, 0.75],
     "bottom": [0.35, 0.22, 0.08],
-    "faces": { "px": "textures/sky_test/px.png", "nx": "textures/sky_test/nx.png", "py": "textures/sky_test/py.png", "ny": "textures/sky_test/ny.png", "pz": "textures/sky_test/pz.png", "nz": "textures/sky_test/nz.png" }
+    "faces": { "px": { "id": "4988caa0-3cc3-4b29-a912-9b0d3b650c53", "path": "textures/sky_test/px.png" }, "nx": { "id": "59047bbe-41f6-4fb7-94ce-63e57f259a1b", "path": "textures/sky_test/nx.png" }, "py": { "id": "952f7dd5-f87d-4c17-876d-9b1d6f3d6be3", "path": "textures/sky_test/py.png" }, "ny": { "id": "fcd440b3-aa54-4563-bb1e-2dd6462a8d87", "path": "textures/sky_test/ny.png" }, "pz": { "id": "bdb248c7-eed3-4429-84a6-abaeea797e02", "path": "textures/sky_test/pz.png" }, "nz": { "id": "978c2d83-7581-4f20-95d7-25b1aa43dfad", "path": "textures/sky_test/nz.png" } }
   },
   "editor": {
     "camera": { "pivot": [0, 1.5, -6], "yaw": 0, "pitch": 0, "distance": 6 }

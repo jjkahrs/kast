@@ -1,5 +1,6 @@
 #include "gui_builder.h"
 
+#include "asset_ids.h"
 #include "assets.h"
 #include "ui_common.h"
 
@@ -95,7 +96,16 @@ bool GuiBuilder::load(const std::filesystem::path& rml)
     std::string error = "cannot read it";
     const bool prefab = rml.extension() == kast::kGuiPrefabExtension;
     GuiDoc doc;
-    if (!readText(rml, text) || !(prefab ? doc.parsePrefab(text, error) : doc.parse(text, error))) {
+    const std::filesystem::path root = kast::findProjectDir(rml.parent_path()).value_or(rml.parent_path());
+    const std::string documentPath = kast::toProjectPath(root, rml).value_or(utf8(rml.filename()));
+    const size_t stale = staleAssetRefs();
+    const bool read = readText(rml, text);
+    if (const std::optional<std::string> fresh = read ? editAssetRefs(documentPath, text, [](std::string& path, std::string& id) {
+            if (!id.empty())
+                path = resolveAssetRef(id, path); // by id first
+        }) : std::nullopt)
+        text = *fresh;
+    if (!read || !(prefab ? doc.parsePrefab(text, error) : doc.parse(text, error))) {
         kast::log::error(std::format("Cannot open GUI '{}': {}", rml.string(), error));
         return false;
     }
@@ -103,8 +113,7 @@ bool GuiBuilder::load(const std::filesystem::path& rml)
     const bool reload = rml == rml_;
     const std::string selectedId = reload && selected_ ? GuiDoc::attribute(selected_, "id") : std::string();
     rml_ = rml;
-    const std::filesystem::path root = projectRoot();
-    doc_.setPrefabContext(root, kast::toProjectPath(root, rml).value_or(utf8(rml.filename())));
+    doc_.setPrefabContext(root, documentPath);
     prefab ? doc_.parsePrefab(text, error) : doc_.parse(text, error); // parsed fine above (now with its instances)
     rcss_ = prefab ? guiPrefabSheet(rml) : linkedStylesheet(rml);
     rcssText_.clear();
@@ -116,7 +125,8 @@ bool GuiBuilder::load(const std::filesystem::path& rml)
     else if (!rcss_.empty() && !readText(rcss_, rcssText_))
         kast::log::warn(std::format("GUI '{}' links '{}', which is missing: Save creates it", utf8(rml.filename()),
                                     utf8(rcss_.filename())));
-    rmlDirty_ = rcssDirty_ = false;
+    rmlDirty_ = staleAssetRefs() != stale; // Save writes the fresh hints
+    rcssDirty_ = false;
     rcssEditedAt_ = -1.0;
     if (!reload)
         goodRcss_.clear(); // a reload keeps the last good style if the changed sheet has errors
@@ -157,7 +167,13 @@ bool GuiBuilder::save()
     std::string error;
     std::error_code ec;
     const bool sheet = !rcss_.empty() && (!doc_.isPrefab() || !rcssText_.empty() || std::filesystem::exists(rcss_, ec));
-    if (!writeTextFile(rml_, doc_.serialize(), error) || (sheet && !writeTextFile(rcss_, rcssText_, error))) {
+    std::string text = doc_.serialize();
+    const std::filesystem::path root = projectRoot();
+    if (const std::optional<std::string> withIds =
+            editAssetRefs(kast::toProjectPath(root, rml_).value_or(utf8(rml_.filename())), text,
+                          [](std::string& path, std::string& id) { id = assetRefId(path).value_or(id); }))
+        text = *withIds;
+    if (!writeTextFile(rml_, text, error) || (sheet && !writeTextFile(rcss_, rcssText_, error))) {
         kast::log::error(std::format("Cannot save GUI: {}", error));
         return false;
     }
@@ -491,10 +507,11 @@ void GuiBuilder::remap(const std::filesystem::path& from, const std::filesystem:
 {
     if (rml_.empty())
         return;
-    if (const auto moved = remapPath(rml_, from, to))
-        rml_ = *moved;
-    if (const auto moved = rcss_.empty() ? std::nullopt : remapPath(rcss_, from, to))
-        rcss_ = *moved;
+    bool moved = false;
+    if (const auto path = remapPath(rml_, from, to))
+        rml_ = *path, moved = true;
+    if (const auto path = rcss_.empty() ? std::nullopt : remapPath(rcss_, from, to))
+        rcss_ = *path, moved = true;
     // Instances follow their prefab's new path (the files on disk were rewritten too).
     const std::filesystem::path root = projectRoot();
     const std::optional<std::string> fromPath = kast::toProjectPath(root, from);
@@ -508,12 +525,13 @@ void GuiBuilder::remap(const std::filesystem::path& from, const std::filesystem:
         rememberFileTimes();
         return;
     }
-    // renameGui renamed the sibling .rcss and rewrote the link on disk: follow it, so Save keeps the link.
+    // renameGui renamed the sibling .rcss and rewrote the link on disk: follow it. The link follows the sheet or the
+    // .rml moving away from it (as the rename pass rewrote it on disk), so Save keeps it.
     if (const std::filesystem::path linked = linkedStylesheet(rml_);
-        !linked.empty() && linked != rcss_ && !rcss_.empty() && !std::filesystem::exists(rcss_, ec)) {
-        rcss_ = linked;
-        doc_.setStylesheetHref(utf8(linked.filename()));
-    }
+        !linked.empty() && linked != rcss_ && !rcss_.empty() && !std::filesystem::exists(rcss_, ec))
+        rcss_ = linked, moved = true;
+    if (moved && !rcss_.empty())
+        doc_.setStylesheetHref(utf8(rcss_.lexically_relative(rml_.parent_path())));
     rememberFileTimes();
 }
 

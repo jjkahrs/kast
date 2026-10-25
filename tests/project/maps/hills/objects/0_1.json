@@ -3,7 +3,10 @@
   "objects": [
     {
       "type": "interactable",
-      "prefab": "prefabs/Crate.prefab",
+      "prefab": {
+        "id": "5027ef5e-8f59-46ba-8cb6-5195e0e6d83d",
+        "path": "prefabs/Crate.prefab"
+      },
       "pos": [
         250.0,
         28.476997,
@@ -22,7 +25,10 @@
     },
     {
       "type": "obstacle",
-      "prefab": "prefabs/Crate.prefab",
+      "prefab": {
+        "id": "5027ef5e-8f59-46ba-8cb6-5195e0e6d83d",
+        "path": "prefabs/Crate.prefab"
+      },
       "pos": [
         160.0,
         3.0957506,

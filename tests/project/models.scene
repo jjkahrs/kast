@@ -145,7 +145,10 @@
           ]
         },
         "ModelRenderer": {
-          "model": "models/cube.obj",
+          "model": {
+            "id": "37fbc2d8-979b-4899-80ee-5b40a3a5d7bd",
+            "path": "models/cube.obj"
+          },
           "materials": []
         }
       }
@@ -174,7 +177,10 @@
           ]
         },
         "ModelRenderer": {
-          "model": "models/cube.gltf",
+          "model": {
+            "id": "71bbadc2-535d-4b8c-9e7e-9170b2d32563",
+            "path": "models/cube.gltf"
+          },
           "materials": []
         }
       }
@@ -203,7 +209,10 @@
           ]
         },
         "ModelRenderer": {
-          "model": "models/female-128-anim.glb",
+          "model": {
+            "id": "83a442f9-69ae-4dd9-b1ce-af46df00dd99",
+            "path": "models/female-128-anim.glb"
+          },
           "materials": []
         },
         "Animator": {
@@ -238,9 +247,15 @@
           ]
         },
         "ModelRenderer": {
-          "model": "models/kenney/characterMedium.fbx",
+          "model": {
+            "id": "aee07b6c-6455-4774-9e8e-b367a802537a",
+            "path": "models/kenney/characterMedium.fbx"
+          },
           "materials": [
-            "materials/kenney_skater.mat"
+            {
+              "id": "aa745990-5103-4650-88a2-95981b6eb195",
+              "path": "materials/kenney_skater.mat"
+            }
           ]
         }
       }

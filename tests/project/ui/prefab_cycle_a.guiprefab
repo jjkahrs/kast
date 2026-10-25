@@ -1,5 +1,5 @@
 <!-- Hand-made cycle: A holds B, which holds A. Loading either logs a warning and skips the reference that closes it. -->
 <div class="prefab-card">
     <p id="label">Cycle A</p>
-    <div id="b" data-prefab="ui/prefab_cycle_b.guiprefab"/>
+    <div id="b" data-prefab="ui/prefab_cycle_b.guiprefab" data-kast-id="8e28f3c0-9315-4680-a605-1259a9158656"/>
 </div>

@@ -34,7 +34,7 @@
       "parent": 3,
       "components": {
         "Transform": { "position": [0, 0.9, 0], "rotation": [0, 0, 0, 1], "scale": [0.8, 1.8, 0.8] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/red_plastic_r05.mat" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "9dee402f-d253-4dda-a97d-65487f9bd68c", "path": "materials/red_plastic_r05.mat" } }
       }
     },
     {

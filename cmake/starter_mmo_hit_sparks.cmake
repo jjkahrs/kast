@@ -3,11 +3,13 @@
 # the server's hit; the log must show the burst (24 sparks alive), its entity destroyed once none is left, and a second
 # burst, screenshotted mid-flight.
 # Usage: cmake -DEDITOR=<exe> -DSAMPLE=<dir> -DOUT=<dir> -DSCREENSHOT=<png> -P starter_mmo_hit_sparks.cmake
+include("${CMAKE_CURRENT_LIST_DIR}/asset_refs.cmake")
 set(project "${OUT}/project")
 file(REMOVE_RECURSE "${project}")
 file(COPY "${SAMPLE}/" DESTINATION "${project}")
 file(COPY_FILE "${CMAKE_CURRENT_LIST_DIR}/starter_mmo_hit_driver.lua" "${project}/scripts/test_hit.lua")
 file(READ "${project}/scenes/meadow.scene" text)
+kast_plain_asset_refs(text)
 string(REPLACE "\"scripts/combat.lua\"" "\"scripts/combat.lua\", \"scripts/test_hit.lua\"" text "${text}")
 file(WRITE "${project}/scenes/meadow.scene" "${text}")
 execute_process(COMMAND "${CMAKE_COMMAND}" "-DEDITOR=${EDITOR}" "-DSCREENSHOT=${SCREENSHOT}" -DFRAMES=600

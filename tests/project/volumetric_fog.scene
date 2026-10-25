@@ -115,7 +115,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [0, 1.2, 6], "rotation": [0, 0, 0, 1], "scale": [1.4, 1.4, 1.4] },
-        "MeshRenderer": { "primitive": "sphere", "material": "materials/glass_blue.mat" }
+        "MeshRenderer": { "primitive": "sphere", "material": { "id": "8340bd4b-639a-45e9-824e-3e1352808516", "path": "materials/glass_blue.mat" } }
       }
     },
     {

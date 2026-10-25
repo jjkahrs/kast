@@ -14,7 +14,6 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
-#include <regex>
 #include <sstream>
 
 namespace {
@@ -1332,34 +1331,4 @@ bool moveGuiPrefab(const std::filesystem::path& prefab, const std::filesystem::p
     if (withSheet)
         moveAsset(destDir / sheet.filename(), sheet.parent_path(), undo);
     return false;
-}
-
-std::vector<std::string> remapGuiPrefabReferences(const std::filesystem::path& root, const std::string& from,
-                                                  const std::string& to)
-{
-    static const std::regex reference(R"re((data-prefab\s*=\s*")([^"]*)("))re");
-    std::vector<std::string> changed;
-    for (const std::filesystem::path& file : kast::listFiles(root)) {
-        if (file.extension() != ".rml" && file.extension() != kast::kGuiPrefabExtension)
-            continue;
-        const std::string text = readText(file);
-        std::string out;
-        bool any = false;
-        auto last = text.cbegin();
-        for (auto it = std::sregex_iterator(text.begin(), text.end(), reference); it != std::sregex_iterator(); ++it) {
-            std::vector<std::string> path{(*it)[2].str()};
-            any = remapProjectPaths(path, from, to) || any;
-            out.append(last, (*it)[0].first).append((*it)[1].str() + path[0] + (*it)[3].str());
-            last = (*it)[0].second;
-        }
-        out.append(last, text.cend());
-        std::string error;
-        if (!any)
-            continue;
-        if (writeTextFile(file, out, error))
-            changed.push_back(kast::toProjectPath(root, file).value_or(utf8(file)));
-        else
-            kast::log::error(std::format("Cannot update the GUI prefab references in '{}': {}", utf8(file), error));
-    }
-    return changed;
 }

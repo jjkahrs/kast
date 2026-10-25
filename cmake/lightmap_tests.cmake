@@ -8,7 +8,9 @@ set(KAST_LM_TERRAIN "${KAST_TEST_PROJECT}/terrain.scene")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_LM_ROOM}"
              "${KAST_TEST_PROJECT}/lightmap_room_lightmaps/lightmaps.json")
 file(READ "${KAST_LM_ROOM}" lm_room)
+kast_plain_asset_refs(lm_room)
 file(READ "${KAST_LM_TERRAIN}" lm_terrain)
+kast_plain_asset_refs(lm_terrain)
 file(COPY_FILE "${KAST_LM_ROOM}" "${KAST_SHADOW_PROJECT}/lightmap_room.scene")
 set(lm_baked "\"bakedPath\": \"[^\"]*\"")
 set(lm_ball "\"position\": \\[-2.9, 1.2, -5.5\\]")
@@ -42,9 +44,11 @@ kast_shadow_variant(lightmap_room_corrupt "${lm_room}" "${lm_baked}"
 kast_shadow_variant(lightmap_room_version "${lm_room}" "${lm_baked}"
                     "\"bakedPath\": \"lightmap_room_version_lightmaps/lightmaps.json\"")
 file(REMOVE_RECURSE "${KAST_SHADOW_PROJECT}/lightmap_room_corrupt_lightmaps" "${KAST_SHADOW_PROJECT}/lightmap_room_version_lightmaps")
-file(COPY "${KAST_TEST_PROJECT}/lightmap_room_lightmaps/" DESTINATION "${KAST_SHADOW_PROJECT}/lightmap_room_corrupt_lightmaps")
+file(COPY "${KAST_TEST_PROJECT}/lightmap_room_lightmaps/" DESTINATION "${KAST_SHADOW_PROJECT}/lightmap_room_corrupt_lightmaps"
+     PATTERN "*.meta" EXCLUDE) # the copy gets ids of its own, not duplicates
 file(WRITE "${KAST_SHADOW_PROJECT}/lightmap_room_corrupt_lightmaps/atlas0.ktx" "not a KTX")
-file(COPY "${KAST_TEST_PROJECT}/lightmap_room_lightmaps/" DESTINATION "${KAST_SHADOW_PROJECT}/lightmap_room_version_lightmaps")
+file(COPY "${KAST_TEST_PROJECT}/lightmap_room_lightmaps/" DESTINATION "${KAST_SHADOW_PROJECT}/lightmap_room_version_lightmaps"
+     PATTERN "*.meta" EXCLUDE) # the copy gets ids of its own, not duplicates
 file(READ "${KAST_TEST_PROJECT}/lightmap_room_lightmaps/lightmaps.json" lm_sidecar)
 string(REPLACE "{\"version\":1," "{\"version\":99," lm_sidecar "${lm_sidecar}")
 file(WRITE "${KAST_SHADOW_PROJECT}/lightmap_room_version_lightmaps/lightmaps.json" "${lm_sidecar}")
@@ -93,6 +97,7 @@ kast_lm_shot(lightmap_room_version lightmap_room_version ""
   -DEXPECT_COUNT=1)
 # A skinned model set Static loads, warns once and is lit as Dynamic; the Inspector shows a model's GI fields.
 file(READ "${KAST_TEST_PROJECT}/models_anim.scene" lm_skinned)
+kast_plain_asset_refs(lm_skinned)
 kast_shadow_variant(lightmap_skinned_static "${lm_skinned}" "(\"model\": \"models/female-128-anim.glb\",)"
                     "\\1 \"giMode\": \"static\",")
 kast_lm_shot(lightmap_skinned_static lightmap_skinned_static ""

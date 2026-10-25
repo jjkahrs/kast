@@ -7,7 +7,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [14, 1, 14] },
-        "MeshRenderer": { "primitive": "plane", "material": "materials/red_plastic_r01.mat" }
+        "MeshRenderer": { "primitive": "plane", "material": { "id": "b7faf365-5281-412e-bf53-823ea3e68b3f", "path": "materials/red_plastic_r01.mat" } }
       }
     },
     {

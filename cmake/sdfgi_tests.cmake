@@ -7,6 +7,7 @@
 set(KAST_SG_SCENE "${KAST_TEST_PROJECT}/sdfgi_outdoor.scene")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_SG_SCENE}")
 file(READ "${KAST_SG_SCENE}" sg_scene)
+kast_plain_asset_refs(sg_scene)
 file(COPY_FILE "${KAST_SG_SCENE}" "${KAST_SHADOW_PROJECT}/sdfgi_outdoor.scene")
 set(sg_path "\"systems\": \\[\"scripts/sdfgi_camera_path.lua\"\\]")
 set(sg_on "\"sdfgi\": { \"enabled\": true")
@@ -43,9 +44,11 @@ kast_shadow_variant(sdfgi_bad_cell "${sg_still}" "\"cellSize\": 0.5" "\"cellSize
 # its VoxelGI volume) with SDFGI on.
 set(sg_settings "\"sdfgi\": { \"enabled\": true, \"cascades\": 4, \"cellSize\": 0.25, \"energy\": 1, \"bounceFeedback\": 0.5, \"quality\": \"medium\", \"yScale\": 1 }")
 file(READ "${KAST_TEST_PROJECT}/lightmap_room.scene" sg_lm_room)
+kast_plain_asset_refs(sg_lm_room)
 kast_shadow_variant(lightmap_room_sdfgi "${sg_lm_room}" "(\"bakedPath\": \"lightmap_room_lightmaps/lightmaps.json\" })"
                     "\\1,\n    ${sg_settings}")
 file(READ "${KAST_TEST_PROJECT}/voxelgi_room.scene" sg_vgi_room)
+kast_plain_asset_refs(sg_vgi_room)
 kast_shadow_variant(voxelgi_room_sdfgi "${sg_vgi_room}" "(\"ambientIntensity\": 0.1)" "\\1,\n    ${sg_settings}")
 
 set(sg_no_errors "-DFORBID_OUTPUT=\\[error\\]|\\[warn\\]|magenta")

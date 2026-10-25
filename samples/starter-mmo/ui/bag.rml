@@ -1,7 +1,7 @@
 <rml>
     <head>
         <title>Bag</title>
-        <link type="text/rcss" href="starter.rcss"/>
+        <link type="text/rcss" href="starter.rcss" data-kast-id="15ecd441-7e6e-4395-bce7-288118db1e7c"/>
     </head>
     <body>
         <!-- scripts/bag.lua: B opens and closes the bag; slots show the server's Inventory (icon, quality border,

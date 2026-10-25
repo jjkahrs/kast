@@ -8,6 +8,6 @@
   ],
   "metallic": 1,
   "roughness": 1,
-  "metallicRoughnessTexture": "textures/orm.png",
-  "occlusionTexture": "textures/orm_ao.png"
+  "metallicRoughnessTexture": { "id": "34e3cb0c-76de-4bc8-8d98-f35e3f670425", "path": "textures/orm.png" },
+  "occlusionTexture": { "id": "5068cae7-b87a-402a-9847-4538f1d4ac62", "path": "textures/orm_ao.png" }
 }

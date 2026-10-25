@@ -199,12 +199,6 @@ std::filesystem::path guiPrefabSheet(const std::filesystem::path& prefab);
 bool renameGuiPrefab(const std::filesystem::path& prefab, const std::string& newName, std::string& error);
 // Moves a .guiprefab into destDir (moveAsset rules), its sibling .rcss with it. False + error (disk unchanged).
 bool moveGuiPrefab(const std::filesystem::path& prefab, const std::filesystem::path& destDir, std::string& error);
-// Rewrites the data-prefab paths in every .rml and .guiprefab under root that point at from or inside it (as
-// remapProjectPaths; the text is kept as written otherwise). Returns the files changed (project-relative); a file that
-// can't be written is logged.
-std::vector<std::string> remapGuiPrefabReferences(const std::filesystem::path& root, const std::string& from,
-                                                  const std::string& to);
-
 // The Rich Text toolbar's edit of markup (byte offsets start..end: the selection, or the cursor when equal; clamped and
 // ordered): [tag] or [tag=value] put before it and [/tag] after it, or for "img" [img=value] put at start (an image
 // has no closing tag).

@@ -46,6 +46,9 @@ public:
     // The last validation (load, save): what would stop the world server loading the map; empty when it passed.
     const std::vector<zone::ZoneError>& problems() const { return problems_; }
 
+    // After the Assets panel renamed or moved from to to (project-relative): the open zone's map.json and objects, as
+    // shown and as saved, name the new paths (the rename pass rewrote the files), so a later save writes no stale one.
+    void remap(const std::string& from, const std::string& to);
     // zone::save_map on the open zone (validation first: any problem writes nothing). Logs the result and each problem
     // to the Console. False with no zone or when blocked.
     bool save();

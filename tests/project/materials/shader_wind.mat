@@ -2,5 +2,5 @@
   "version": 3,
   "baseColor": [0.2, 0.6, 0.18, 1],
   "roughness": 0.8,
-  "shader": "shaders/wind.kshader"
+  "shader": { "id": "c72d0b41-e837-491a-bc65-aa0caf9d000e", "path": "shaders/wind.kshader" }
 }

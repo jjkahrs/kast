@@ -39,7 +39,7 @@
     }
   ],
   "systems": [
-    "scripts/go_to_b.lua"
+    { "id": "e027b16d-486e-4865-abbf-66b8b1432264", "path": "scripts/go_to_b.lua" }
   ],
   "editor": {
     "camera": { "pivot": [0, 0.75, 0], "yaw": 20, "pitch": -20, "distance": 8 }

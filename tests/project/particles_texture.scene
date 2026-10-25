@@ -95,7 +95,7 @@
             0
           ],
           "space": "world",
-          "texture": "textures/checker.png",
+          "texture": { "id": "1224a48a-6473-4fcd-9520-20ac8986a250", "path": "textures/checker.png" },
           "blend": "alpha"
         }
       }

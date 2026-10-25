@@ -95,7 +95,7 @@
     }
   ],
   "systems": [
-    "scripts/ui_prefab.lua"
+    { "id": "0e7d1e05-7187-488a-bc54-28a3ef07c436", "path": "scripts/ui_prefab.lua" }
   ],
   "editor": {
     "camera": {

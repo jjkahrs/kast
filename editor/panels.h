@@ -6,6 +6,7 @@
 #include "gui_builder.h"
 #include "model_preview.h"
 #include "shader_graph_editor.h"
+#include "zone_session.h"
 
 #include <components.h>
 #include <material.h>
@@ -47,6 +48,11 @@ public:
         constexpr AssetEdit::Op ops[] = {AssetEdit::Op::NewSystem, AssetEdit::Op::NewStateMachine, AssetEdit::Op::NewGui,
                                          AssetEdit::Op::NewMaterial, AssetEdit::Op::NewShader, AssetEdit::Op::NewShaderGraph};
         assetEdit_ = {ops[static_cast<int>(what)], std::move(folder)};
+    }
+    // Renames the Assets entry at path (project-relative) to name, as its Rename field does. --assets-rename.
+    void requestAssetRename(std::string path, std::string name)
+    {
+        assetEdit_ = {AssetEdit::Op::Rename, std::move(path), std::move(name)};
     }
     // Selects the Assets entry at path (project-relative), as a click does: a .mat or .kshader also shows in the
     // Inspector until an entity is selected. Opens the entry's folder.
@@ -117,9 +123,9 @@ public:
     // Rescans the project's files for the Assets panel (main's poll). drawAssets also rescans when the project changes.
     void refreshAssets(const Document& doc);
     // Double-clicked .rml files open in gui, .kshadergraph files in graphs, models in preview, .lua/.rcss/.json files in
-    // editor; renames and moves of their open files reach them.
+    // editor; renames and moves of their open files reach them, and of any asset the open zone's refs.
     void drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
-                    ExternalEditor& editor);
+                    ExternalEditor& editor, ZoneSession& zone);
 
 private:
     // Tree edits are deferred to the end of drawHierarchy so the child lists are not changed mid-iteration.
@@ -157,7 +163,7 @@ private:
     void openRequestedAssetMenu(const char* popup); // opens popup (the last item's context menu) for openAssetMenu
     void startAssetRename(const std::string& path, const std::string& name);
     void requestAssetDelete(const Document& doc, const std::string& path);
-    void applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview);
+    void applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview, ZoneSession& zone);
     void assetsFailed(std::string error); // logs it and shows the Assets Error modal
     void drawCreateItems(entt::entity parent);
     void applyEdit(Document& doc);

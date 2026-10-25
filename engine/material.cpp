@@ -1,4 +1,5 @@
 #include "material.h"
+#include "asset_ref.h"
 
 #include "files.h"
 #include "log.h"
@@ -357,11 +358,12 @@ bool loadMaterial(const std::filesystem::path& file, Material& out, std::string&
         error = "cannot read the file";
         return false;
     }
-    const Json json = Json::parse(text, nullptr, false);
+    Json json = Json::parse(text, nullptr, false);
     if (json.is_discarded()) {
         error = "invalid JSON";
         return false;
     }
+    readAssetRefs(json);
     return materialFromJson(json, out, error);
 }
 

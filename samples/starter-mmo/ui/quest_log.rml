@@ -1,7 +1,7 @@
 <rml>
     <head>
         <title>Quest Log</title>
-        <link type="text/rcss" href="starter.rcss"/>
+        <link type="text/rcss" href="starter.rcss" data-kast-id="15ecd441-7e6e-4395-bce7-288118db1e7c"/>
     </head>
     <body>
         <!-- scripts/quest_log.lua: L opens and closes the quest log. Each active quest (the replicated Quests, titles

@@ -22,7 +22,10 @@
     ],
     "heading": 0
   },
-  "material": "materials/meadow_terrain.mat",
+  "material": {
+    "id": "830a3933-e498-49cc-a3c5-1205faba48a8",
+    "path": "materials/meadow_terrain.mat"
+  },
   "nav": {
     "maxSlopeDeg": 45
   },

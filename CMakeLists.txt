@@ -183,7 +183,7 @@ target_compile_options(xatlas PRIVATE /W0 /utf-8)
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/undo.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/prefab.cpp engine/components.cpp
-  engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/lod.cpp engine/occlusion.cpp engine/material.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
+  engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/lod.cpp engine/occlusion.cpp engine/material.cpp engine/asset_ref.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/gui_lists.cpp engine/gui_richtext.cpp engine/gui_prefabs.cpp engine/gui_scale.cpp engine/scene_gui.cpp engine/window_display.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
@@ -219,7 +219,7 @@ target_link_libraries(kast_player PRIVATE kast_engine SDL3::SDL3)
 add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/lightmap_job.cpp editor/voxelgi_job.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
-  editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/shader_graph_doc.cpp editor/shader_graph_editor.cpp editor/shader_preview.cpp editor/model_preview.cpp editor/external_editor.cpp editor/editor_settings.cpp
+  editor/assets.cpp editor/asset_ids.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/shader_graph_doc.cpp editor/shader_graph_editor.cpp editor/shader_preview.cpp editor/model_preview.cpp editor/external_editor.cpp editor/editor_settings.cpp
   editor/shader_compiler.cpp editor/texture_cooker.cpp editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp editor/zone_cli.cpp
   editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
@@ -255,7 +255,7 @@ target_compile_options(kast_ltc_fit PRIVATE ${KAST_COMPILE_OPTIONS})
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
 add_executable(kast_self_check tests/self_check.cpp tests/lightmap_self_check.cpp tests/voxelgi_self_check.cpp tests/sdfgi_self_check.cpp tests/net_self_check.cpp tests/net_test_util.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp
-  editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/shader_graph_doc.cpp editor/external_editor.cpp
+  editor/recent_projects.cpp editor/assets.cpp editor/asset_ids.cpp editor/gui_doc.cpp editor/shader_graph_doc.cpp editor/external_editor.cpp
   editor/editor_settings.cpp editor/shader_compiler.cpp editor/texture_cooker.cpp editor/online.cpp "${KAST_MANIFEST}")
 target_include_directories(kast_self_check PRIVATE editor)
 add_dependencies(kast_self_check kast_shader_tools) # the .kshader checks compile with them
@@ -280,6 +280,7 @@ target_compile_options(kast_focus_probe PRIVATE ${KAST_COMPILE_OPTIONS})
 enable_testing()
 set(KAST_TEST_SCENES "${CMAKE_CURRENT_SOURCE_DIR}/tests/scenes")
 set(KAST_TEST_PROJECT "${CMAKE_CURRENT_SOURCE_DIR}/tests/project")
+include(cmake/asset_refs.cmake) # kast_plain_asset_refs: the configure-time scene variants below edit paths as text
 add_test(NAME engine_self_check COMMAND kast_self_check)
 add_test(NAME zone_self_check COMMAND kast_zone_self_check)
 # The checked-in area light table is what tools/ltc_fit fits (regenerate it after changing the fit or the BRDF).
@@ -442,6 +443,7 @@ set_tests_properties(game_f3_differs PROPERTIES FIXTURES_REQUIRED "game_shot;gam
 # Lua systems: lua.scene in Play vs the same scene with its "systems" emptied, so only the scripts can differ.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_SCENES}/lua.scene")
 file(READ "${KAST_TEST_SCENES}/lua.scene" lua_scene)
+kast_plain_asset_refs(lua_scene)
 string(REGEX REPLACE "\"systems\": \\[[^]]*\\]" "\"systems\": []" lua_scene "${lua_scene}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/lua_no_systems.scene" "${lua_scene}")
 add_test(NAME lua_scene_screenshot
@@ -495,10 +497,10 @@ function(kast_prefab_test name args)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/prefab_test.cmake")
 endfunction()
 kast_prefab_test(create "--select 3 --create-prefab prefabs"
-  "-DEXPECT=out.scene|\"id\":3,\"name\":\"Ground\",\"parent\":null,\"prefab\":\"prefabs/Ground.prefab\"\;prefabs/Ground.prefab|\"name\":\"Ground\",\"parent\":null,\"components\"")
-kast_prefab_test(create_root "--select 3 --create-prefab /" "-DEXPECT=out.scene|\"prefab\":\"Ground.prefab\"\;Ground.prefab|\"Ground\"")
+  "-DEXPECT=out.scene|\"id\":3,\"name\":\"Ground\",\"parent\":null,\"prefab\":(.\"id\":\"[0-9a-f-]+\",\"path\":)?\"prefabs/Ground.prefab\"\;prefabs/Ground.prefab|\"name\":\"Ground\",\"parent\":null,\"components\"")
+kast_prefab_test(create_root "--select 3 --create-prefab /" "-DEXPECT=out.scene|\"prefab\":(.\"id\":\"[0-9a-f-]+\",\"path\":)?\"Ground.prefab\"\;Ground.prefab|\"Ground\"")
 kast_prefab_test(drop_hierarchy "--drop-prefab prefabs/Crate.prefab --drop-prefab prefabs/Crate.prefab,3"
-  "-DEXPECT=out.scene|\"id\":14,\"name\":\"Crate\",\"parent\":null,\"prefab\":\"prefabs/Crate.prefab\"\;out.scene|\"id\":16,\"name\":\"Crate\",\"parent\":3,\"prefab\":\"prefabs/Crate.prefab\"")
+  "-DEXPECT=out.scene|\"id\":14,\"name\":\"Crate\",\"parent\":null,\"prefab\":(.\"id\":\"[0-9a-f-]+\",\"path\":)?\"prefabs/Crate.prefab\"\;out.scene|\"id\":16,\"name\":\"Crate\",\"parent\":3,\"prefab\":(.\"id\":\"[0-9a-f-]+\",\"path\":)?\"prefabs/Crate.prefab\"")
 # Scene view drops along the editor camera's center ray: onto the Crate at (-3, 0.5, 0); far off the Ground onto the
 # y = 0 plane; at the sky, 10 m ahead.
 kast_prefab_test(drop_view_mesh "--drop-prefab-view prefabs/Crate.prefab,0.5,0.5"
@@ -521,7 +523,7 @@ kast_prefab_test(revert_field "--prefab-revert 11:PointLight.color"
   "-DEXPECT=out.scene|{\"source\":2,\"id\":11}\;out.scene|gold_r05.mat")
 kast_prefab_test(revert_all "--prefab-revert 10" "-DFORBID=out.scene|gold_r05\;prefabs/Crate.prefab|gold_r05")
 kast_prefab_test(unpack "--prefab-unpack 6"
-  "-DEXPECT=out.scene|\"id\":6,\"name\":\"Tower\",\"parent\":null,\"components\"\;out.scene|\"id\":8,\"name\":\"Crate\",\"parent\":6,\"prefab\":\"prefabs/Crate.prefab\"")
+  "-DEXPECT=out.scene|\"id\":6,\"name\":\"Tower\",\"parent\":null,\"components\"\;out.scene|\"id\":8,\"name\":\"Crate\",\"parent\":6,\"prefab\":(.\"id\":\"[0-9a-f-]+\",\"path\":)?\"prefabs/Crate.prefab\"")
 kast_prefab_test(edit_mode "--edit-prefab prefabs/Crate.prefab --set-field 2,PointLight.intensity,5 --prefab-save --prefab-back"
   "-DEXPECT=prefabs/Crate.prefab|\"intensity\":5.0\;out.scene|\"color\"\;out.scene|missing.prefab")
 kast_prefab_test(cycle_refused "--edit-prefab prefabs/Crate.prefab --drop-prefab prefabs/Tower.prefab" -DEXPECT_FAIL=1)
@@ -556,6 +558,7 @@ add_test(NAME prefab_delete_dialog_screenshot
 set(KAST_POINT_LIGHTS "${KAST_TEST_PROJECT}/point_lights.scene")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_POINT_LIGHTS}")
 file(READ "${KAST_POINT_LIGHTS}" lights_scene)
+kast_plain_asset_refs(lights_scene)
 string(REGEX REPLACE "(\"PointLight\": {[^}]*\"intensity\": )[0-9.]+" "\\10" lights_off "${lights_scene}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/point_lights_off.scene" "${lights_off}")
 string(REPLACE "\"range\": 5" "\"range\": 0" lights_bad "${lights_scene}")
@@ -603,6 +606,7 @@ set(KAST_PHYSICS "${KAST_TEST_PROJECT}/physics.scene")
 set(KAST_PHYSICS_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/physics_project")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_PHYSICS}")
 file(READ "${KAST_PHYSICS}" physics_scene)
+kast_plain_asset_refs(physics_scene)
 file(REMOVE_RECURSE "${KAST_PHYSICS_PROJECT}")
 file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${KAST_PHYSICS_PROJECT}") # copies run physics_log.lua too
 string(REPLACE "\"gravity\": [0, -9.81, 0]" "\"gravity\": [0, 0, 0]" physics_variant "${physics_scene}")
@@ -678,7 +682,9 @@ set(KAST_SHADOWS "${KAST_TEST_PROJECT}/shadows.scene")
 set(KAST_POINT_SHADOWS "${KAST_TEST_PROJECT}/point_shadows.scene")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_SHADOWS}" "${KAST_POINT_SHADOWS}")
 file(READ "${KAST_SHADOWS}" shadows_scene)
+kast_plain_asset_refs(shadows_scene)
 file(READ "${KAST_POINT_SHADOWS}" point_shadows_scene)
+kast_plain_asset_refs(point_shadows_scene)
 # kast_shadow_variant(<name> <scene text> <regex> <replacement>): writes <name>.scene into the project (so models and
 # materials resolve) under the build folder.
 set(KAST_SHADOW_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/shadow_project")
@@ -783,8 +789,11 @@ set(KAST_SPOT_AREA_SHADOWS "${KAST_TEST_PROJECT}/spot_area_shadows.scene")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_SPOT_LIGHTS}" "${KAST_AREA_LIGHTS}"
              "${KAST_SPOT_AREA_SHADOWS}")
 file(READ "${KAST_SPOT_LIGHTS}" spot_scene)
+kast_plain_asset_refs(spot_scene)
 file(READ "${KAST_AREA_LIGHTS}" area_scene)
+kast_plain_asset_refs(area_scene)
 file(READ "${KAST_SPOT_AREA_SHADOWS}" spot_area_scene)
+kast_plain_asset_refs(spot_area_scene)
 set(spot_intensity "(\"SpotLight\": {[^}]*\"intensity\": )[0-9.]+")
 set(area_intensity "(\"AreaLight\": {[^}]*\"intensity\": )[0-9.]+")
 kast_shadow_variant(spot_lights_off "${spot_scene}" "${spot_intensity}" "\\10")
@@ -876,6 +885,7 @@ endforeach()
 set(KAST_TERRAIN "${KAST_TEST_PROJECT}/terrain.scene")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TERRAIN}")
 file(READ "${KAST_TERRAIN}" terrain_scene)
+kast_plain_asset_refs(terrain_scene)
 kast_shadow_variant(terrain_off "${terrain_scene}" ",\n *\"Terrain\": {[^}]*}" "")
 kast_shadow_variant(terrain_sun_cast_off "${terrain_scene}" "(\"intensity\": 1)( })" "\\1, \"castShadows\": false\\2")
 file(COPY_FILE "${KAST_TERRAIN}" "${KAST_SHADOW_PROJECT}/terrain.scene")
@@ -1002,6 +1012,7 @@ add_test(NAME terrain_roundtrip
 set(KAST_POST "${KAST_TEST_PROJECT}/post_processing.scene")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_POST}")
 file(READ "${KAST_POST}" post_scene)
+kast_plain_asset_refs(post_scene)
 set(KAST_POST_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/post_project")
 file(REMOVE_RECURSE "${KAST_POST_PROJECT}")
 file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${KAST_POST_PROJECT}")
@@ -1061,6 +1072,7 @@ add_test(NAME post_processing_bad_rejected
 set(KAST_SKY "${KAST_TEST_PROJECT}/sky_procedural.scene")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_SKY}")
 file(READ "${KAST_SKY}" sky_scene)
+kast_plain_asset_refs(sky_scene)
 string(JSON sky_off REMOVE "${sky_scene}" sky)
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/sky_off.scene" "${sky_off}")
 string(REPLACE "\"position\": [0, 1.5, 0]" "\"position\": [500, 80, -900]" sky_moved "${sky_scene}") # the camera only
@@ -1108,6 +1120,7 @@ add_test(NAME sky_bad_rejected
 set(KAST_MATERIALS "${KAST_TEST_PROJECT}/materials.scene")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_MATERIALS}")
 file(READ "${KAST_MATERIALS}" materials_scene)
+kast_plain_asset_refs(materials_scene)
 string(REGEX REPLACE "\"material\": \"[^\"]*\"" "\"material\": \"\"" materials_default "${materials_scene}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/materials_default.scene" "${materials_default}")
 set(KAST_MATERIALS_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/materials_project")
@@ -1126,10 +1139,12 @@ set(KAST_GPU_TEXTURES "${KAST_TEST_PROJECT}/gpu_textures.scene")
 set(KAST_GPU_TEXTURES_BAD "${KAST_TEST_PROJECT}/gpu_textures_bad.scene")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_GPU_TEXTURES}" "${KAST_GPU_TEXTURES_BAD}")
 file(READ "${KAST_GPU_TEXTURES}" gpu_scene)
+kast_plain_asset_refs(gpu_scene)
 string(REGEX REPLACE "materials/gpu_[a-z0-9]+\\.mat" "materials/checker.mat" gpu_png "${gpu_scene}")
 string(REGEX REPLACE ",[ \r\n]*\"cube\": \"[^\"]*\"" "" gpu_png "${gpu_png}")
 file(WRITE "${KAST_MATERIALS_PROJECT}/gpu_textures_png.scene" "${gpu_png}")
 file(READ "${KAST_GPU_TEXTURES_BAD}" gpu_bad_scene)
+kast_plain_asset_refs(gpu_bad_scene)
 string(REGEX REPLACE "materials/gpu_[a-z0-9]+\\.mat" "materials/gpu_missing.mat" gpu_missing "${gpu_bad_scene}")
 string(REGEX REPLACE ",[ \r\n]*\"cube\": \"[^\"]*\"" "" gpu_missing "${gpu_missing}")
 string(REPLACE "sky_test/px.png" "sky_test/missing.png" gpu_missing "${gpu_missing}")
@@ -1300,9 +1315,11 @@ endforeach()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/shader_errors.scene"
              "${KAST_TEST_PROJECT}/shader_showcase.scene")
 file(READ "${KAST_TEST_PROJECT}/shader_errors.scene" shader_scene)
+kast_plain_asset_refs(shader_scene)
 string(REGEX REPLACE "materials/shader_[a-z_]+\\.mat" "materials/does_not_exist.mat" shader_scene "${shader_scene}")
 file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_errors_reference.scene" "${shader_scene}")
 file(READ "${KAST_TEST_PROJECT}/shader_showcase.scene" shader_scene)
+kast_plain_asset_refs(shader_scene)
 string(REGEX REPLACE "materials/shader_[a-z_]+\\.mat" "" shader_scene "${shader_scene}")
 file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_showcase_builtin.scene" "${shader_scene}")
 kast_shader_shot(errors "${KAST_SHADER_TEST_PROJECT}" shader_errors.scene
@@ -1328,6 +1345,7 @@ kast_shader_shot(vertex_offset_reference "${KAST_SHADER_TEST_PROJECT}" shader_ve
 kast_shader_compare(shader_vertex_offset_same vertex_offset_reference vertex_offset ON)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/shader_vertex.scene")
 file(READ "${KAST_TEST_PROJECT}/shader_vertex.scene" shader_scene)
+kast_plain_asset_refs(shader_scene)
 string(REGEX REPLACE "materials/shader_[a-z_]+\\.mat" "" shader_scene "${shader_scene}")
 file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_vertex_builtin.scene" "${shader_scene}")
 kast_shader_shot(vertex "${KAST_SHADER_TEST_PROJECT}" shader_vertex.scene
@@ -1344,11 +1362,13 @@ kast_shader_compare(shader_vertex_differs vertex_builtin vertex OFF)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/shader_light.scene"
              "${KAST_TEST_PROJECT}/shader_screen_identity.scene")
 file(READ "${KAST_TEST_PROJECT}/shader_light.scene" shader_scene)
+kast_plain_asset_refs(shader_scene)
 string(REGEX REPLACE "materials/shader_light_pbr\\.mat" "" light_reference "${shader_scene}")
 file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_light_reference.scene" "${light_reference}")
 string(REGEX REPLACE "materials/shader_[a-z_]+\\.mat" "" shader_scene "${shader_scene}")
 file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_light_builtin.scene" "${shader_scene}")
 file(READ "${KAST_TEST_PROJECT}/shader_screen_identity.scene" shader_scene)
+kast_plain_asset_refs(shader_scene)
 string(REGEX REPLACE "materials/shader_screen_identity\\.mat" "materials/screen_clear.mat" shader_scene "${shader_scene}")
 file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_screen_identity_reference.scene" "${shader_scene}")
 kast_shader_shot(light "${KAST_SHADER_TEST_PROJECT}" shader_light.scene
@@ -1363,6 +1383,7 @@ kast_shader_compare(shader_light_differs light_builtin light OFF)
 #   and area intensities are 0, so light() runs for both.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/shader_light_local.scene")
 file(READ "${KAST_TEST_PROJECT}/shader_light_local.scene" shader_scene)
+kast_plain_asset_refs(shader_scene)
 string(REGEX REPLACE "(\"(Spot|Area)Light\": {[^}]*\"intensity\": )[0-9.]+" "\\10" shader_scene "${shader_scene}")
 file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_light_local_off.scene" "${shader_scene}")
 kast_shader_shot(light_local "${KAST_SHADER_TEST_PROJECT}" shader_light_local.scene
@@ -1390,6 +1411,7 @@ kast_shader_compare(shader_screen_identity_same screen_identity_reference screen
 #   the script differs at the same frame.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/custom_shaders.scene")
 file(READ "${KAST_TEST_PROJECT}/custom_shaders.scene" shader_scene)
+kast_plain_asset_refs(shader_scene)
 string(REPLACE "\"scripts/dissolve_driver.lua\"" "" shader_scene "${shader_scene}")
 file(WRITE "${KAST_SHADER_TEST_PROJECT}/custom_shaders_no_systems.scene" "${shader_scene}")
 set(custom_shaders_compiled "Compiled shader 'shaders/(pulse|wind|dissolve|water|toon)\\.kshader'")
@@ -1431,6 +1453,7 @@ foreach(scene materials material_features)
 endforeach()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/shader_graph_demo.scene")
 file(READ "${KAST_TEST_PROJECT}/shader_graph_demo.scene" shader_scene)
+kast_plain_asset_refs(shader_scene)
 string(REGEX REPLACE "materials/shader_graph_demo\\.mat" "" shader_scene "${shader_scene}")
 file(WRITE "${KAST_SHADER_TEST_PROJECT}/shader_graph_demo_builtin.scene" "${shader_scene}")
 kast_shader_shot(graph_demo "${KAST_SHADER_TEST_PROJECT}" shader_graph_demo.scene
@@ -1513,6 +1536,7 @@ add_test(NAME project_missing
 # a copy of scene_a with "systems" emptied (generated at configure time) stays on scene A.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KAST_TEST_PROJECT}/scene_a.scene")
 file(READ "${KAST_TEST_PROJECT}/scene_a.scene" switch_scene)
+kast_plain_asset_refs(switch_scene)
 string(REGEX REPLACE "\"systems\": \\[[^]]*\\]" "\"systems\": []" switch_scene "${switch_scene}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/switch_no_systems.scene" "${switch_scene}")
 add_test(NAME switch_play_screenshot
@@ -1537,6 +1561,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${health_project_
 file(REMOVE_RECURSE "${KAST_HEALTH_PROJECT}")
 file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${KAST_HEALTH_PROJECT}")
 file(READ "${KAST_TEST_PROJECT}/health.scene" health_scene)
+kast_plain_asset_refs(health_scene)
 string(REGEX REPLACE "\"systems\": \\[[^]]*\\]" "\"systems\": []" health_scene "${health_scene}")
 file(WRITE "${KAST_HEALTH_PROJECT}/health_no_systems.scene" "${health_scene}")
 add_test(NAME lua_components_screenshot
@@ -1561,6 +1586,7 @@ set_tests_properties(lua_components_play_differs PROPERTIES FIXTURES_REQUIRED "h
 # and scripts/on_health_empty.lua (greys the named entity), so only event delivery makes Play differ from the copy
 # with "systems": [] (in the health_project copy, so Health stays defined). --focus-panel shows the Events panel.
 file(READ "${KAST_TEST_PROJECT}/events.scene" events_scene)
+kast_plain_asset_refs(events_scene)
 string(REGEX REPLACE "\"systems\": \\[[^]]*\\]" "\"systems\": []" events_scene "${events_scene}")
 file(WRITE "${KAST_HEALTH_PROJECT}/events_no_systems.scene" "${events_scene}")
 add_test(NAME events_play_screenshot
@@ -1583,6 +1609,7 @@ set_tests_properties(events_play_differs PROPERTIES FIXTURES_REQUIRED "events_pl
 # copies enter their initial states at Play start, so only the driven transitions make Play differ from the copy with
 # "systems": []. --focus-panel Events shows the fsm.changed events.
 file(READ "${KAST_TEST_PROJECT}/fsm.scene" fsm_scene)
+kast_plain_asset_refs(fsm_scene)
 string(REGEX REPLACE "\"systems\": \\[[^]]*\\]" "\"systems\": []" fsm_scene "${fsm_scene}")
 file(WRITE "${KAST_HEALTH_PROJECT}/fsm_no_systems.scene" "${fsm_scene}")
 add_test(NAME fsm_play_screenshot
@@ -1727,9 +1754,11 @@ file(COPY "${KAST_TEST_PROJECT}/models" "${KAST_TEST_PROJECT}/materials" "${KAST
 file(WRITE "${KAST_MODEL_PROJECT}/project.kast"
      "{\n  \"version\": 1,\n  \"name\": \"Model Test\",\n  \"startScene\": \"no_animator.scene\"\n}\n")
 file(READ "${KAST_TEST_PROJECT}/models_anim.scene" model_scene)
+kast_plain_asset_refs(model_scene)
 string(REGEX REPLACE ",[ \n]*\"Animator\": {[^}]*}" "" model_scene "${model_scene}")
 file(WRITE "${KAST_MODEL_PROJECT}/no_animator.scene" "${model_scene}")
 file(READ "${KAST_TEST_PROJECT}/models_material.scene" model_scene)
+kast_plain_asset_refs(model_scene)
 string(REGEX REPLACE "\"materials\": \\[[^]]*\\]" "\"materials\": []" model_scene "${model_scene}")
 file(WRITE "${KAST_MODEL_PROJECT}/embedded_material.scene" "${model_scene}")
 macro(kast_model_shot name)
@@ -1860,6 +1889,7 @@ file(COPY_FILE "${CMAKE_CURRENT_BINARY_DIR}/sky_off.scene" "${CMAKE_CURRENT_BINA
 # sky_cubemap.scene with the sky_test faces as one cube file (texturec --strip; RGBA8 .ktx, BC7 .dds): the same probes
 # as sky_cube must pass, so the cube's sides face the same way as the six faces. The faces stay set but unused.
 file(READ "${KAST_TEST_PROJECT}/sky_cubemap.scene" sky_cube_scene)
+kast_plain_asset_refs(sky_cube_scene)
 foreach(ext ktx dds)
   string(REPLACE "\"faces\":" "\"cube\": \"textures/sky_test/cube.${ext}\",\n    \"faces\":" sky_cube_file "${sky_cube_scene}")
   file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/game_projects/sky_cube_${ext}/sky_cubemap_${ext}.scene" "${sky_cube_file}")
@@ -2224,6 +2254,7 @@ set_tests_properties(player_shader_offset_same PROPERTIES FIXTURES_REQUIRED "pla
 # player_shader_screen_identity_same: SCREEN_TEXTURE / DEPTH_TEXTURE in the player (as shader_screen_identity_same);
 # the reference game's plane is the fully transparent screen_clear.mat.
 file(READ "${CMAKE_CURRENT_BINARY_DIR}/game_projects/shader_screen_identity_ref/shader_screen_identity.scene" scene_text)
+kast_plain_asset_refs(scene_text)
 string(REPLACE "materials/shader_screen_identity.mat" "materials/screen_clear.mat" scene_text "${scene_text}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/game_projects/shader_screen_identity_ref/shader_screen_identity.scene" "${scene_text}")
 add_test(NAME player_shader_screen_identity_same
@@ -2474,6 +2505,7 @@ file(READ "${world_dir}/scripts/online_world_demo.lua" world_demo)
 string(REPLACE "local REALM, CHARACTER = \"Testgrove\"" "local REALM, CHARACTER = \"Ashenvale\"" world_demo "${world_demo}")
 file(WRITE "${world_dir}/scripts/online_world_override.lua" "${world_demo}")
 file(READ "${world_dir}/online_world.scene" world_scene)
+kast_plain_asset_refs(world_scene)
 string(REPLACE "online_world_demo.lua" "online_world_override.lua" world_scene "${world_scene}")
 file(WRITE "${world_dir}/online_world_override.scene" "${world_scene}")
 add_test(NAME world_address_override
@@ -2597,6 +2629,7 @@ set_tests_properties(online_secrets PROPERTIES RESOURCE_LOCK net_test_ports TIME
 # Play: tests/project/ui.scene shows ui/main_menu.rml over the Game view; configure-time copies (in health_project) with
 # the UIDocument hidden (must look different) and with a missing .rml (logs the file, Play goes on).
 file(READ "${KAST_TEST_PROJECT}/ui.scene" ui_scene)
+kast_plain_asset_refs(ui_scene)
 string(REPLACE "\"visible\": true" "\"visible\": false" ui_hidden_scene "${ui_scene}")
 file(WRITE "${KAST_HEALTH_PROJECT}/ui_hidden.scene" "${ui_hidden_scene}")
 string(REPLACE "ui/main_menu.rml" "ui/missing.rml" ui_bad_scene "${ui_scene}")
@@ -2624,6 +2657,7 @@ add_test(NAME ui_bad_path_screenshot
 # ui_play.png's colors over ui_play_hidden.png's scene (the panel's #1b2333dd: alpha 0.87; the button and the text's
 # panel opaque). The floor is outside the panel.
 file(READ "${KAST_TEST_PROJECT}/ui/main_menu.rml" ui_layer_rml)
+kast_plain_asset_refs(ui_layer_rml)
 string(REPLACE "main_menu.rcss" "layer_menu.rcss" ui_layer_rml "${ui_layer_rml}")
 file(WRITE "${KAST_HEALTH_PROJECT}/ui/layer_menu.rml" "${ui_layer_rml}")
 file(READ "${KAST_TEST_PROJECT}/ui/main_menu.rcss" ui_layer_rcss)
@@ -3253,6 +3287,11 @@ include(cmake/screen_space_tests.cmake)
 
 # Game GUI resolution and DPI scaling, display modes, kast.gui scaling / kast.display.
 include(cmake/gui_scaling_tests.cmake)
+# Stable asset ids end to end: a copy of the legacy fixture tests/legacy_project opens, builds and plays; its refs
+# upgrade on save; Assets renames rewrite unopened scenes and project.kast; an Explorer rename with the .meta ships fresh hints in game.pak.
+add_test(NAME asset_ids_rename
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/legacy_project"
+          "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/asset_ids_rename" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/asset_ids_test.cmake")
 
 # Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.
 get_property(kast_tests DIRECTORY PROPERTY TESTS)

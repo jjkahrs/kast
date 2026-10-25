@@ -23,7 +23,7 @@
       "parent": 2,
       "components": {
         "Transform": {"position": [0, 0.9, 0], "rotation": [0, 0, 0, 1], "scale": [0.8, 1.8, 0.6]},
-        "MeshRenderer": {"primitive": "cube", "material": "materials/guard_armor.mat"}
+        "MeshRenderer": {"primitive": "cube", "material": { "id": "2c05eeb9-0a07-46f9-880d-0482f00be73c", "path": "materials/guard_armor.mat" }}
       }
     },
     {
@@ -32,7 +32,7 @@
       "parent": 2,
       "components": {
         "Transform": {"position": [0, 2.05, 0], "rotation": [0, 0, 0, 1], "scale": [0.55, 0.55, 0.55]},
-        "MeshRenderer": {"primitive": "sphere", "material": "materials/gold.mat"}
+        "MeshRenderer": {"primitive": "sphere", "material": { "id": "4efc09e1-e45f-4352-9233-2ba8bd50b2fe", "path": "materials/gold.mat" }}
       }
     },
     {
@@ -41,7 +41,7 @@
       "parent": 2,
       "components": {
         "Transform": {"position": [0.55, 1.3, 0], "rotation": [0, 0, 0, 1], "scale": [0.08, 2.6, 0.08]},
-        "MeshRenderer": {"primitive": "cube", "material": "materials/stone.mat"}
+        "MeshRenderer": {"primitive": "cube", "material": { "id": "3abf18f7-6e69-4c7f-b930-f2da7b812af8", "path": "materials/stone.mat" }}
       }
     },
     {
@@ -58,7 +58,7 @@
       "parent": 6,
       "components": {
         "Transform": {"position": [0, 2.2, 0], "rotation": [0, 0, 0, 1], "scale": [0.5, 0.4, 0.5]},
-        "MeshRenderer": {"primitive": "sphere", "material": "materials/bat_wing.mat"}
+        "MeshRenderer": {"primitive": "sphere", "material": { "id": "99e2f4db-1da6-4b31-839c-5dde15303da3", "path": "materials/bat_wing.mat" }}
       }
     },
     {
@@ -67,7 +67,7 @@
       "parent": 6,
       "components": {
         "Transform": {"position": [-0.6, 2.3, 0], "rotation": [0, 0, 0, 1], "scale": [0.9, 0.05, 0.4]},
-        "MeshRenderer": {"primitive": "cube", "material": "materials/bat_wing.mat"}
+        "MeshRenderer": {"primitive": "cube", "material": { "id": "99e2f4db-1da6-4b31-839c-5dde15303da3", "path": "materials/bat_wing.mat" }}
       }
     },
     {
@@ -76,7 +76,7 @@
       "parent": 6,
       "components": {
         "Transform": {"position": [0.6, 2.3, 0], "rotation": [0, 0, 0, 1], "scale": [0.9, 0.05, 0.4]},
-        "MeshRenderer": {"primitive": "cube", "material": "materials/bat_wing.mat"}
+        "MeshRenderer": {"primitive": "cube", "material": { "id": "99e2f4db-1da6-4b31-839c-5dde15303da3", "path": "materials/bat_wing.mat" }}
       }
     },
     {
@@ -93,7 +93,7 @@
       "parent": 10,
       "components": {
         "Transform": {"position": [0, 0.85, 0], "rotation": [0, 0, 0, 1], "scale": [0.85, 1.7, 0.85]},
-        "MeshRenderer": {"primitive": "sphere", "material": "materials/elder_robe.mat"}
+        "MeshRenderer": {"primitive": "sphere", "material": { "id": "d9656cce-91cc-4e5c-90c9-4b44bbec35fd", "path": "materials/elder_robe.mat" }}
       }
     },
     {
@@ -102,7 +102,7 @@
       "parent": 10,
       "components": {
         "Transform": {"position": [0, 1.85, 0], "rotation": [0, 0, 0, 1], "scale": [0.42, 0.45, 0.42]},
-        "MeshRenderer": {"primitive": "sphere", "material": "materials/elder_skin.mat"}
+        "MeshRenderer": {"primitive": "sphere", "material": { "id": "511ad12c-28fc-4cbb-b26c-12fdecc9d7a6", "path": "materials/elder_skin.mat" }}
       }
     },
     {
@@ -111,7 +111,7 @@
       "parent": 10,
       "components": {
         "Transform": {"position": [0, 1.62, 0.16], "rotation": [0, 0, 0, 1], "scale": [0.32, 0.42, 0.18]},
-        "MeshRenderer": {"primitive": "sphere", "material": "materials/elder_beard.mat"}
+        "MeshRenderer": {"primitive": "sphere", "material": { "id": "168b9b42-378b-45a7-9471-dc57f58ccf27", "path": "materials/elder_beard.mat" }}
       }
     },
     {
@@ -120,7 +120,7 @@
       "parent": 10,
       "components": {
         "Transform": {"position": [0.55, 1.1, 0.15], "rotation": [0, 0, 0, 1], "scale": [0.07, 2.2, 0.07]},
-        "MeshRenderer": {"primitive": "cube", "material": "materials/bark.mat"}
+        "MeshRenderer": {"primitive": "cube", "material": { "id": "5a99a619-9668-4d93-9b0a-e6446377facf", "path": "materials/bark.mat" }}
       }
     },
     {
@@ -129,7 +129,7 @@
       "parent": 10,
       "components": {
         "Transform": {"position": [0.55, 2.28, 0.15], "rotation": [0, 0, 0, 1], "scale": [0.2, 0.2, 0.2]},
-        "MeshRenderer": {"primitive": "sphere", "material": "materials/frost.mat", "castShadows": false}
+        "MeshRenderer": {"primitive": "sphere", "material": { "id": "d45c9de0-191d-40bb-a4d0-eebe2bcadbed", "path": "materials/frost.mat" }, "castShadows": false}
       }
     }
   ]

@@ -1,0 +1,299 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Directional Light",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            4,
+            0
+          ],
+          "rotation": [
+            -0.408218,
+            -0.23457,
+            -0.109382,
+            0.875426
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "DirectionalLight": {
+          "color": [
+            1,
+            0.95,
+            0.9
+          ],
+          "intensity": 1.2
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            12,
+            1,
+            8
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "plane",
+          "material": ""
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Cube (primitive)",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -3.4,
+            0.5,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": ""
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Sphere (primitive)",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -2.2,
+            0.5,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "sphere",
+          "material": ""
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "OBJ Cube",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            -1.0,
+            0.5,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ModelRenderer": {
+          "model": "models/cube.obj",
+          "materials": []
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "glTF Cube",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.2,
+            0.5,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ModelRenderer": {
+          "model": "models/cube.gltf",
+          "materials": []
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Character (GLB)",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            1.6,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "ModelRenderer": {
+          "model": "models/female-128-anim.glb",
+          "materials": []
+        },
+        "Animator": {
+          "clip": "Idle_A",
+          "loop": true,
+          "speed": 1,
+          "playOnStart": false
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Kenney (FBX)",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            3.4,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        },
+        "ModelRenderer": {
+          "model": "models/kenney/characterMedium.fbx",
+          "materials": [
+            "materials/kenney_skater.mat"
+          ]
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.4,
+            5.2
+          ],
+          "rotation": [
+            -0.0871557,
+            0,
+            0,
+            0.9961947
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Camera": {
+          "verticalFovDegrees": 60,
+          "nearPlane": 0.1,
+          "farPlane": 1000
+        }
+      }
+    }
+  ],
+  "lighting": {
+    "ambientColor": [
+      1,
+      1,
+      1
+    ],
+    "ambientIntensity": 0.3
+  },
+  "editor": {
+    "camera": {
+      "pivot": [
+        0,
+        0.9,
+        0
+      ],
+      "yaw": 0,
+      "pitch": -12,
+      "distance": 7
+    }
+  }
+}

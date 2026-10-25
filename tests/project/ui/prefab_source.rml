@@ -1,7 +1,7 @@
 <rml>
     <head>
         <title>Prefab Source</title>
-        <link type="text/rcss" href="prefab_source.rcss"/>
+        <link type="text/rcss" href="prefab_source.rcss" data-kast-id="82c4d45c-1c85-4d18-88fc-7d0bafee3101"/>
     </head>
     <body>
         <!-- Create GUI Prefab from #card (ctest gui_builder_prefab_create*): a Panel holding a Text and a Button. -->

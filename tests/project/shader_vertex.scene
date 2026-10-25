@@ -108,7 +108,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/shader_sway_cutout.mat"
+          "material": { "id": "a4201d33-0717-4b7f-bc5f-d0b734bdfcd7", "path": "materials/shader_sway_cutout.mat" }
         }
       }
     },
@@ -137,7 +137,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/shader_sway.mat"
+          "material": { "id": "6eefc2a7-9c27-43f1-ba40-e2e9e92c4db8", "path": "materials/shader_sway.mat" }
         }
       }
     },
@@ -166,7 +166,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/shader_sway.mat"
+          "material": { "id": "6eefc2a7-9c27-43f1-ba40-e2e9e92c4db8", "path": "materials/shader_sway.mat" }
         }
       }
     },
@@ -195,7 +195,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/shader_sway.mat"
+          "material": { "id": "6eefc2a7-9c27-43f1-ba40-e2e9e92c4db8", "path": "materials/shader_sway.mat" }
         }
       }
     },
@@ -224,7 +224,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/shader_sway.mat"
+          "material": { "id": "6eefc2a7-9c27-43f1-ba40-e2e9e92c4db8", "path": "materials/shader_sway.mat" }
         }
       }
     },
@@ -253,7 +253,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/shader_sway.mat"
+          "material": { "id": "6eefc2a7-9c27-43f1-ba40-e2e9e92c4db8", "path": "materials/shader_sway.mat" }
         }
       }
     },
@@ -281,9 +281,9 @@
           ]
         },
         "ModelRenderer": {
-          "model": "models/female-128-anim.glb",
+          "model": { "id": "83a442f9-69ae-4dd9-b1ce-af46df00dd99", "path": "models/female-128-anim.glb" },
           "materials": [
-            "materials/shader_sway_character.mat"
+            { "id": "660f99a1-4c64-464c-859e-3a24900e6ec4", "path": "materials/shader_sway_character.mat" }
           ]
         }
       }

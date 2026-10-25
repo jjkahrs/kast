@@ -88,14 +88,20 @@
           ]
         },
         "UIDocument": {
-          "path": "ui/drag.rml",
+          "path": {
+            "id": "0d96fb60-26b5-470d-8d60-28bc85c2f633",
+            "path": "ui/drag.rml"
+          },
           "visible": true
         }
       }
     }
   ],
   "systems": [
-    "scripts/ui_drag.lua"
+    {
+      "id": "4cd452d3-e0df-4f46-9af4-d0352993097d",
+      "path": "scripts/ui_drag.lua"
+    }
   ],
   "editor": {
     "camera": {

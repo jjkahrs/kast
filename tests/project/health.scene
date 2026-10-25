@@ -52,7 +52,7 @@
     }
   ],
   "systems": [
-    "scripts/health_drain.lua"
+    { "id": "485bf369-c830-4ee1-8150-da028ca796b0", "path": "scripts/health_drain.lua" }
   ],
   "editor": {
     "camera": { "pivot": [0, 0.75, 0], "yaw": 20, "pitch": -20, "distance": 8 }

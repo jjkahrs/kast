@@ -4,6 +4,7 @@
 # a second run that only loads them must render the same Scene view (kast_self_check --diff-png, exactly).
 # Usage: cmake -DEDITOR=<kast_editor> -DSELF_CHECK=<kast_self_check> -DPROJECT=<dir> -DSCENE=<project-relative .scene>
 #              -DOUT_DIR=<dir> -P probe_bake_test.cmake
+include("${CMAKE_CURRENT_LIST_DIR}/asset_refs.cmake")
 set(copy "${OUT_DIR}/project")
 file(REMOVE_RECURSE "${OUT_DIR}")
 file(MAKE_DIRECTORY "${OUT_DIR}")
@@ -33,6 +34,7 @@ foreach(run baked loaded)
   endif()
 endforeach()
 file(READ "${copy}/${SCENE}" saved)
+kast_plain_asset_refs(saved) # the hint, whether the save wrote a ref or a plain path
 file(GLOB ktx "${copy}/${stem}_probes/*.ktx")
 foreach(file IN LISTS ktx)
   get_filename_component(id "${file}" NAME_WE)

@@ -50,7 +50,7 @@
     }
   ],
   "systems": [
-    "scripts/fsm_driver.lua"
+    { "id": "a4b016e4-d855-458e-8cd1-ad597c56156d", "path": "scripts/fsm_driver.lua" }
   ],
   "editor": {
     "camera": { "pivot": [0, 0.75, 0], "yaw": 20, "pitch": -20, "distance": 8 }

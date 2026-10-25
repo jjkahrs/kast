@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assets and asset ids - Kast Editor</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="zone-builder.html">Zone Builder</a></li><li><a href="model-preview.html">Model Preview</a></li><li><a href="assets.html" class="active">Assets and asset ids</a></li></ul></nav>
+<main>
+<h1 id="assets">Assets and asset ids</h1>
+<p>The <strong>Assets</strong> panel lists the files of the open project. Every asset file has a stable <strong>asset id</strong>
+kept in a <code>.meta</code> file beside it, and every reference to an asset in a project file stores that id next to the
+asset's path. Renaming or moving an asset (in the editor, or in Explorer together with its <code>.meta</code>) therefore never
+breaks a reference, in any project file, opened or not. Ids are an editor and project-file concept only: the engine, the built
+game, <code>game.pak</code> and Lua keep loading assets by path (<a href="../engine/asset-refs.html">Asset references</a>).</p>
+
+<h2 id="meta">.meta files</h2>
+<p><code>models/knight.glb</code> has its id in <code>models/knight.glb.meta</code>:</p>
+<pre><code>{
+  "id": "3f0c2a9e-5b1d-4c7a-9e2f-8a6b4d1c0e57"
+}</code></pre>
+<ul>
+<li>The id is a lowercase UUID (version 4), made when the file first gets its <code>.meta</code>.</li>
+<li>Only files have one. Folders, dot-entries (<code>.kast/</code>, <code>.server/</code>, <code>.env</code>), <code>project.kast</code>,
+  the Build output folder, <code>.tmp</code> files and the <code>.meta</code> files themselves have none.</li>
+<li>The editor creates the missing ones whenever it scans the project: on project open, after every Assets panel operation and
+  every half second while it runs. Opening an older project without <code>.meta</code> files is the migration; the Console logs
+  <code>Created N asset id file(s) (.meta)</code>.</li>
+<li><code>.meta</code> files are hidden in the Assets panel and in every asset picker, and never ship in <code>game.pak</code>.</li>
+<li>Commit them to version control with their assets: a clone without them gets new ids, and its references fall back to their
+  paths.</li>
+</ul>
+
+<h2 id="operations">Editor operations</h2>
+<p>Every Assets panel operation carries the <code>.meta</code> with its file:</p>
+<ul>
+<li><strong>Rename</strong> and <strong>Move</strong> (drag onto a folder) move the <code>.meta</code> too; a <code>.rml</code> or GUI
+  prefab rename moves its linked <code>.rcss</code> and that file's <code>.meta</code>. If a step fails, the files and their
+  <code>.meta</code> files are put back.</li>
+<li><strong>Delete</strong> sends the file and its <code>.meta</code> to the Recycle Bin.</li>
+<li>Created files (materials, shaders, shader graphs, GUIs, prefabs, Lua from templates) get their <code>.meta</code> at once.</li>
+<li>A file can't be named <code>*.meta</code>.</li>
+</ul>
+<p>After a rename or move, one pass rewrites the path hint of every reference to the moved asset (or to anything inside a moved
+folder) in every project file that holds references, opened or not: scenes, prefabs, materials, <code>project.kast</code>
+(<code>startScene</code>), maps (<code>map.json</code>, <code>objects/*.json</code>), <code>.rml</code> and GUI prefabs. The Console
+logs <code>Updated asset references in '&lt;file&gt;'</code> for each file it changed. What is open follows in memory as well: the
+open scene (its own path too), the prefab being edited, the GUI Builder, Shader Graph, Model Preview and the open zone, so a later
+save writes no stale path.</p>
+<p>Lua string paths (<code>"models/x.glb"</code> in a script) are not tracked: rename those by hand.</p>
+
+<h2 id="explorer">Renaming and moving in Explorer</h2>
+<p>Close the editor or not; the next scan sorts it out:</p>
+<ul>
+<li><strong>File and its <code>.meta</code> together</strong> (the recommended way): the id moves with the file and every reference
+  resolves by id. A document opened with an out-of-date path hint is marked changed, so its next save writes the current path;
+  <code>project.kast</code> is saved at once when its <code>startScene</code> hint is out of date.</li>
+<li><strong>Only the file</strong>: its old <code>.meta</code> is left behind as an orphan. If that folder holds exactly one orphan
+  <code>.meta</code> and exactly one file without a <code>.meta</code> with the same extension, the file takes the orphan's id (the
+  <code>.meta</code> is renamed; logged <code>'&lt;new&gt;' took the asset id of missing '&lt;old&gt;' (its .meta was left
+  behind)</code>). Anything more ambiguous (two renamed files of one type in one folder, a move to another folder) is not paired:
+  the file gets a new id and its references fall back to their paths.</li>
+<li><strong>Leftover orphans</strong> (a <code>.meta</code> whose file is gone and that nothing adopted) go to the Recycle Bin, logged
+  <code>Moved orphan '&lt;file&gt;.meta' to the Recycle Bin: '&lt;file&gt;' is gone</code>.</li>
+<li><strong>Copies</strong> (a file copied with its <code>.meta</code>): files sharing an id keep it only for the oldest one (the newer
+  of creation and modification time; on a tie the first path A-Z). Each other file gets a new id, with a warning naming both
+  files.</li>
+<li>A <code>.meta</code> that holds no valid id is replaced, with a warning.</li>
+</ul>
+
+<h2 id="references">References in the editor</h2>
+<ul>
+<li>A reference resolves by id first; if the id is unknown it uses its path hint.</li>
+<li>When neither the id nor the path exists, the reference is <strong>missing</strong>: it is kept exactly as written (never dropped
+  or rewritten, also on save), the Inspector shows <code>(missing) &lt;path&gt;</code>, and the Console logs once per load
+  <code>Missing asset '&lt;path&gt;' (id &lt;id&gt;): no file has that id or path; the reference is kept</code>.</li>
+<li>On save, every string value that exactly names an asset of the project becomes a reference with its id. Files written by
+  older versions (plain path strings) load as they are and are upgraded by their next save.</li>
+<li><a href="build.html">Build</a> re-resolves every reference in the shipped copies of scenes, prefabs, materials, GUI files, maps and
+  <code>project.kast</code>, so <code>game.pak</code> always has the current paths, even for files not saved since a rename in
+  Explorer (logged <code>Shipping '&lt;file&gt;' with its asset references' current paths</code>). The source files are not
+  changed.</li>
+</ul>
+
+<h2 id="command-line">Command line</h2>
+<p><code>--assets-rename &lt;path&gt;=&lt;name&gt;</code> renames that project-relative Assets entry to a new name at frame 10, as the
+panel's Rename does (its <code>.meta</code> and the rename pass included), for tests:</p>
+<p><code>kast_editor --project tests/project --scene tests/project/scene_a.scene --assets-rename models/cube.gltf=cube_renamed.gltf --frames 20</code></p>
+<p>The test <code>asset_ids_rename</code> (<code>cmake/asset_ids_test.cmake</code>) runs the whole cycle on a copy of
+<code>tests/legacy_project</code>, the legacy fixture (plain path strings, no <code>.meta</code> files): it opens, builds and plays,
+its saves upgrade the references, Assets renames rewrite the unopened scenes and <code>project.kast</code>, and an Explorer rename
+with the <code>.meta</code> ships fresh paths in <code>game.pak</code>.</p>
+</main>
+</div>
+</body>
+</html>

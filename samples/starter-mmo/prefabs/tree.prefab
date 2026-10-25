@@ -15,7 +15,7 @@
       "parent": 1,
       "components": {
         "Transform": {"position": [0, 1.5, 0], "rotation": [0, 0, 0, 1], "scale": [0.5, 3, 0.5]},
-        "MeshRenderer": {"primitive": "cube", "material": "materials/bark.mat", "castShadows": true, "receiveShadows": true}
+        "MeshRenderer": {"primitive": "cube", "material": { "id": "5a99a619-9668-4d93-9b0a-e6446377facf", "path": "materials/bark.mat" }, "castShadows": true, "receiveShadows": true}
       }
     },
     {
@@ -24,7 +24,7 @@
       "parent": 1,
       "components": {
         "Transform": {"position": [0, 4, 0], "rotation": [0, 0, 0, 1], "scale": [3.2, 3.2, 3.2]},
-        "MeshRenderer": {"primitive": "sphere", "material": "materials/leaves.mat", "castShadows": true, "receiveShadows": true}
+        "MeshRenderer": {"primitive": "sphere", "material": { "id": "9291020c-77a2-4395-a9fd-b2a0f55fed6a", "path": "materials/leaves.mat" }, "castShadows": true, "receiveShadows": true}
       }
     }
   ]

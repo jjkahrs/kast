@@ -108,7 +108,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/shader_broken.mat"
+          "material": { "id": "f4abdf6e-5350-428a-a8ec-4a739406a847", "path": "materials/shader_broken.mat" }
         }
       }
     },
@@ -137,7 +137,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/shader_bad_param.mat"
+          "material": { "id": "762e8312-c3a5-4320-8bbc-06a57576a92f", "path": "materials/shader_bad_param.mat" }
         }
       }
     },
@@ -166,7 +166,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/shader_missing.mat"
+          "material": { "id": "9589fc96-c4b4-465f-b776-7d72482ef439", "path": "materials/shader_missing.mat" }
         }
       }
     },
@@ -195,7 +195,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/shader_wrong_type.mat"
+          "material": { "id": "41d02715-84db-4155-921c-712d441b94ef", "path": "materials/shader_wrong_type.mat" }
         }
       }
     },

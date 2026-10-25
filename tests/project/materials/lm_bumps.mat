@@ -2,6 +2,6 @@
   "version": 2,
   "baseColor": [0.8, 0.8, 0.8, 1],
   "roughness": 1,
-  "normalTexture": "textures/normal_bumps.png",
+  "normalTexture": { "id": "ea2a6bd5-cb49-44c5-bd35-c7b4cc28b151", "path": "textures/normal_bumps.png" },
   "uvScale": [4, 2]
 }

@@ -1,4 +1,5 @@
 #include "terrain.h"
+#include "asset_ref.h"
 
 #include "files.h"
 #include "lightmap.h"
@@ -26,6 +27,7 @@ std::optional<Json> readJson(const std::filesystem::path& file, bool& exists)
     Json j = Json::parse(text, nullptr, false);
     if (j.is_discarded())
         return std::nullopt;
+    readAssetRefs(j); // map.json's material, objects' prefabs
     return j;
 }
 

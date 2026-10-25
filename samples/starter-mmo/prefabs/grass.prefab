@@ -50,9 +50,9 @@
           ]
         },
         "ModelRenderer": {
-          "model": "models/grass-mesh.obj",
+          "model": { "id": "8bfff034-a6f8-4cb6-af06-04b4a44f6b81", "path": "models/grass-mesh.obj" },
           "materials": [
-            "materials/grass_material.mat"
+            { "id": "02b3e13e-7fea-4e29-9815-ae5c151cac98", "path": "materials/grass_material.mat" }
           ],
           "castShadows": true,
           "receiveShadows": true

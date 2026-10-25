@@ -6,7 +6,7 @@
     1,
     1
   ],
-  "baseColorTexture": "textures/gpu/truncated.dds",
+  "baseColorTexture": { "id": "5a9ca31a-3733-4ee5-ba98-f331c6254883", "path": "textures/gpu/truncated.dds" },
   "metallic": 0,
   "roughness": 0.6,
   "metallicRoughnessTexture": "",

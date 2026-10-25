@@ -87,9 +87,15 @@
           ]
         },
         "ModelRenderer": {
-          "model": "models/female-128-anim.glb",
+          "model": {
+            "id": "83a442f9-69ae-4dd9-b1ce-af46df00dd99",
+            "path": "models/female-128-anim.glb"
+          },
           "materials": [
-            "materials/gold_r05.mat"
+            {
+              "id": "e0bda0c7-806b-42cb-84dc-b6ccd51ddab3",
+              "path": "materials/gold_r05.mat"
+            }
           ]
         },
         "Animator": {

@@ -91,8 +91,8 @@
     }
   ],
   "systems": [
-    "scripts/characters.lua",
-    "scripts/world_flow.lua"
+    { "id": "5e892a68-eef7-406c-a3d2-f69253cd37dc", "path": "scripts/characters.lua" },
+    { "id": "d2a63451-37f7-47fd-bd24-31223cdf1aff", "path": "scripts/world_flow.lua" }
   ],
   "lighting": {
     "ambientColor": [

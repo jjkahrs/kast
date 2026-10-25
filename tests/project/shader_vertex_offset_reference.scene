@@ -224,7 +224,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/shader_hidden_reference.mat"
+          "material": { "id": "29abc27c-a921-4ab9-a98c-c7c65736387b", "path": "materials/shader_hidden_reference.mat" }
         }
       }
     }

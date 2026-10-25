@@ -16,7 +16,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [-3, 0, -6], "rotation": [0, 0, 0, 1], "scale": [6, 1, 16] },
-        "MeshRenderer": { "primitive": "plane", "material": "materials/ssr_floor_smooth.mat" }
+        "MeshRenderer": { "primitive": "plane", "material": { "id": "2198e57e-727c-4d0f-bab3-280b32922529", "path": "materials/ssr_floor_smooth.mat" } }
       }
     },
     {
@@ -25,7 +25,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [3, 0, -6], "rotation": [0, 0, 0, 1], "scale": [6, 1, 16] },
-        "MeshRenderer": { "primitive": "plane", "material": "materials/ssr_floor_rough.mat" }
+        "MeshRenderer": { "primitive": "plane", "material": { "id": "649a418e-93a3-4111-add1-334ab4c47902", "path": "materials/ssr_floor_rough.mat" } }
       }
     },
     {
@@ -34,7 +34,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [-3.5, 0.75, -6], "rotation": [0, 0.173648, 0, 0.984808], "scale": [1.5, 1.5, 1.5] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/ibl_wall_red.mat" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "8ee638e7-2a0a-4eb3-b6ae-4098d4278356", "path": "materials/ibl_wall_red.mat" } }
       }
     },
     {
@@ -43,7 +43,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [-1.4, 0.8, -4.5], "rotation": [0, 0, 0, 1], "scale": [1.6, 1.6, 1.6] },
-        "MeshRenderer": { "primitive": "sphere", "material": "materials/ibl_wall_blue.mat" }
+        "MeshRenderer": { "primitive": "sphere", "material": { "id": "356ba498-d648-4813-a495-afc612af8c1d", "path": "materials/ibl_wall_blue.mat" } }
       }
     },
     {
@@ -52,7 +52,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [2.2, 0.75, -6], "rotation": [0, -0.173648, 0, 0.984808], "scale": [1.5, 1.5, 1.5] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/ibl_wall_green.mat" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "e3e60889-48cc-42b1-b937-e76a6a46ef78", "path": "materials/ibl_wall_green.mat" } }
       }
     },
     {
@@ -61,7 +61,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [4.2, 0.8, -4.5], "rotation": [0, 0, 0, 1], "scale": [1.6, 1.6, 1.6] },
-        "MeshRenderer": { "primitive": "sphere", "material": "materials/gold_r01.mat" }
+        "MeshRenderer": { "primitive": "sphere", "material": { "id": "acc500bc-2244-44cf-88ff-d1819c898f9e", "path": "materials/gold_r01.mat" } }
       }
     },
     {
@@ -70,7 +70,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [0, 2, -11], "rotation": [0, 0, 0, 1], "scale": [1, 4, 1] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/ibl_plastic.mat" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "0f8369bc-a7d3-46a7-81ad-d853c1974816", "path": "materials/ibl_plastic.mat" } }
       }
     },
     {

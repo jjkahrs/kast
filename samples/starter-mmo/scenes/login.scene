@@ -55,14 +55,20 @@
           ]
         },
         "UIDocument": {
-          "path": "ui/login.rml",
+          "path": {
+            "id": "8dae598b-cb3d-44a3-91d3-324f7adae747",
+            "path": "ui/login.rml"
+          },
           "visible": true
         }
       }
     }
   ],
   "systems": [
-    "scripts/login.lua"
+    {
+      "id": "55cd5440-2540-497e-a435-3a95b9695a28",
+      "path": "scripts/login.lua"
+    }
   ],
   "lighting": {
     "ambientColor": [

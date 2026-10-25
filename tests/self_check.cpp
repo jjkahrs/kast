@@ -5,6 +5,7 @@
 // (Assimp loading, animation sampling, crossfades, skinning limits) and physics (bodies, events, kast.physics,
 // characters). --bench-physics instead times 500 dynamic boxes and exits.
 // Exit 0 if every check passes. Run by CTest as engine_self_check.
+#include "asset_ids.h" // stable asset ids; links editor/asset_ids.cpp
 #include "assets.h"   // Assets panel file logic; links editor/assets.cpp
 #include "build.h"    // editor Build pipeline; links editor/build.cpp
 #include "document.h" // editor Play mode; links editor/document.cpp, no window needed
@@ -36,6 +37,7 @@
 #include <physics.h>
 #include <play.h>
 #include <animation.h>
+#include <asset_ref.h>
 #include <app.h>
 #include <audio.h>
 #include <pak.h>
@@ -4753,6 +4755,383 @@ void checkAssetCreate()
           "remapProjectPaths leaves unrelated paths unchanged");
 }
 
+// Stable asset ids (asset_ids.h): .meta sidecars created on scan, kept by renames, moves and recycling, and the scan's
+// fixes for Explorer copies, renames without the .meta and orphans.
+void checkAssetIds()
+{
+    std::set<std::string> fresh;
+    for (int i = 0; i < 1000; ++i)
+        fresh.insert(newAssetId());
+    check(fresh.size() == 1000 && std::ranges::all_of(fresh, [](const std::string& id) { return isAssetId(id); }),
+          "newAssetId: 1000 unique lowercase UUIDv4s");
+    for (const char* bad : {"", "6F9619FF-8B86-4011-B42D-00C04FC964FF", "6f9619ff-8b86-1011-b42d-00c04fc964ff",
+                            "6f9619ff-8b86-4011-742d-00c04fc964ff", "6f9619ff8b864011b42d00c04fc964ff"})
+        check(!isAssetId(bad), std::format("isAssetId refuses '{}'", bad).c_str());
+
+    const auto logged = [](size_t from, const std::string& text) {
+        const std::vector<std::string>& lines = kast::log::lines();
+        return std::count_if(lines.begin() + static_cast<std::ptrdiff_t>(from), lines.end(),
+                             [&](const std::string& line) { return contains(line, text); });
+    };
+    const auto meta = [](const std::filesystem::path& file) { return readAssetMeta(metaFileOf(file)); };
+
+    // Creation on scan and the skip rules.
+    const std::filesystem::path root = projectTestDir("kast_asset_ids", "Ids");
+    for (const char* dir : {"models", "Empty", ".kast", "out"})
+        std::filesystem::create_directories(root / dir);
+    for (const char* file : {"a.lua", "models/k.glb", "models/K2.png", ".gitignore", ".kast/cache.bin", "out/game.pak",
+                             "save.scene.tmp"})
+        writeFile(root / file, file);
+    std::string error;
+    check(saveBuildFolder(root, root / "out", error), "asset ids: an in-project build folder");
+    AssetIds ids;
+    ids.scan(root);
+    const std::optional<std::string> idA = meta(root / "a.lua"), idK = meta(root / "models/k.glb");
+    check(idA && idK && meta(root / "models/K2.png") && *idA != *idK && ids.size() == 3,
+          "scan gives every asset file a .meta with a valid, unique id");
+    check(idA && readText(metaFileOf(root / "a.lua")) == std::format("{{\n  \"id\": \"{}\"\n}}\n", *idA),
+          ".meta format: {\"id\": ...}, 2-space indented, trailing newline");
+    for (const char* none : {"models", "Empty", "scripts", ".gitignore", ".kast/cache.bin", "out/game.pak", "project.kast",
+                             "save.scene.tmp"})
+        check(!std::filesystem::exists(metaFileOf(root / none)), std::format("no .meta for '{}'", none).c_str());
+    check(idK && ids.pathOf(*idK) == "models/k.glb" && ids.idOf("MODELS/K.GLB") == idK && !ids.idOf("models/none.glb") &&
+              !ids.pathOf(newAssetId()),
+          "AssetIds: id -> path, path -> id ignoring case");
+    check(!findAsset(scanAssets(root), "a.lua.meta") && findAsset(scanAssets(root), "a.lua"), "scanAssets hides .meta files");
+    check(!shipsInPak("a.lua.meta") && !shipsInPak("models/k.glb.META") && shipsInPak("a.lua") &&
+              std::ranges::none_of(pakContents(root, root / "out"), [](const std::string& path) { return path.ends_with(".meta"); }),
+          ".meta files never ship in game.pak");
+    check(!assetNameError("x.lua.meta").empty(), "assetNameError refuses a .meta name");
+    ids.scan(root);
+    check(meta(root / "a.lua") == idA && ids.idOf("a.lua") == idA, "a rescan keeps the ids");
+    if (!idA || !idK)
+        return;
+
+    // Editor file operations carry the .meta along.
+    check(renameAsset(root / "a.lua", "b.lua", error) && meta(root / "b.lua") == idA &&
+              !std::filesystem::exists(metaFileOf(root / "a.lua")),
+          "renameAsset renames the .meta");
+    check(renameAsset(root / "b.lua", "B.lua", error) &&
+              diskNames(root) == std::vector<std::string>{".gitignore", ".kast", "B.lua", "B.lua.meta", "Empty", "models",
+                                                          "out", "project.kast", "save.scene.tmp", "scripts"},
+          "a case-only rename renames the .meta's case too");
+    writeFile(root / "c.lua", "c");
+    ids.scan(root); // c.lua gets a .meta
+    writeFile(root / "d.lua.meta", "{}"); // a stale sidecar holding the name
+    check(!renameAsset(root / "c.lua", "d.lua", error) && std::filesystem::exists(root / "c.lua") &&
+              !std::filesystem::exists(root / "d.lua"),
+          "a rename whose .meta can't follow changes nothing");
+    std::filesystem::remove(root / "d.lua.meta");
+    check(moveAsset(root / "B.lua", root / "models", error) && meta(root / "models/B.lua") == idA,
+          "moveAsset moves the .meta");
+    check(renameAsset(root / "models", "art", error) && meta(root / "art/k.glb") == idK, "a folder rename keeps its files' ids");
+    ids.scan(root);
+    check(ids.pathOf(*idA) == "art/B.lua" && ids.pathOf(*idK) == "art/k.glb", "the registry follows the moves on rescan");
+    check(recycleAsset(root / "art/B.lua", error) && !std::filesystem::exists(metaFileOf(root / "art/B.lua")),
+          "recycleAsset recycles the .meta");
+
+    std::filesystem::path rml;
+    check(writeNewGui(root / "ui", rml, error), "asset ids: a new GUI");
+    ids.scan(root);
+    const std::optional<std::string> idRml = meta(rml), idRcss = meta(root / "ui/new_gui.rcss");
+    check(idRml && idRcss && renameGui(rml, "menu.rml", error) && meta(root / "ui/menu.rml") == idRml &&
+              meta(root / "ui/menu.rcss") == idRcss && !std::filesystem::exists(root / "ui/new_gui.rcss.meta"),
+          "renameGui carries the .rml's and the linked .rcss's .meta");
+    writeFile(root / "ui/p.guiprefab", "<p/>");
+    writeFile(root / "ui/p.rcss", "");
+    writeFile(root / "ui/taken.guiprefab", "<p/>");
+    ids.scan(root);
+    const std::optional<std::string> idSheet = meta(root / "ui/p.rcss"), idPrefab = meta(root / "ui/p.guiprefab");
+    check(!renameGuiPrefab(root / "ui/p.guiprefab", "taken.guiprefab", error) && meta(root / "ui/p.rcss") == idSheet &&
+              !std::filesystem::exists(root / "ui/taken.rcss.meta"),
+          "a failed renameGuiPrefab puts the sheet's .meta back too");
+    check(renameGuiPrefab(root / "ui/p.guiprefab", "q.guiprefab", error) && meta(root / "ui/q.guiprefab") == idPrefab &&
+              meta(root / "ui/q.rcss") == idSheet,
+          "renameGuiPrefab carries both .meta files");
+    std::filesystem::create_directories(root / "ui/sub");
+    check(moveGuiPrefab(root / "ui/q.guiprefab", root / "ui/sub", error) && meta(root / "ui/sub/q.guiprefab") == idPrefab &&
+              meta(root / "ui/sub/q.rcss") == idSheet,
+          "moveGuiPrefab carries both .meta files");
+    std::filesystem::path machine;
+    check(writeNewStateMachine(root / "fsms", {}, machine, error), "asset ids: a new state machine");
+    ids.scan(root);
+    const std::optional<std::string> idMachine = meta(machine);
+    check(idMachine && renameNewStateMachine(machine, "door.lua", {}, error) && meta(root / "fsms/door.lua") == idMachine,
+          "renameNewStateMachine carries the .meta");
+
+    // Explorer copy of file + .meta: the copy gets a new id, the original keeps its own.
+    std::filesystem::copy_file(root / "art/k.glb", root / "art/k_copy.glb");
+    std::filesystem::copy_file(metaFileOf(root / "art/k.glb"), metaFileOf(root / "art/k_copy.glb"));
+    size_t mark = kast::log::lines().size();
+    ids.scan(root);
+    check(meta(root / "art/k.glb") == idK && meta(root / "art/k_copy.glb") && meta(root / "art/k_copy.glb") != idK &&
+              ids.idOf("art/k_copy.glb") == meta(root / "art/k_copy.glb"),
+          "a copied .meta: the copy gets a fresh id");
+    check(logged(mark, "'art/k.glb' and 'art/k_copy.glb' had the same asset id") == 1, "the duplicate is logged, naming both");
+
+    // Explorer rename without the .meta: the one orphan is re-paired with the one meta-less file of its extension.
+    std::filesystem::rename(root / "art/k.glb", root / "art/hero.glb");
+    mark = kast::log::lines().size();
+    ids.scan(root);
+    check(meta(root / "art/hero.glb") == idK && !std::filesystem::exists(metaFileOf(root / "art/k.glb")) &&
+              ids.pathOf(*idK) == "art/hero.glb",
+          "an orphan .meta is adopted by the renamed file");
+    check(logged(mark, "'art/hero.glb' took the asset id of missing 'art/k.glb'") == 1, "the re-pairing is logged");
+
+    // Ambiguous: two orphans of one extension in a folder are not re-paired; both are recycled.
+    writeFile(root / "art/x1.png", "1");
+    writeFile(root / "art/x2.png", "2");
+    ids.scan(root);
+    const std::optional<std::string> idX1 = meta(root / "art/x1.png"), idX2 = meta(root / "art/x2.png");
+    std::filesystem::rename(root / "art/x1.png", root / "art/y1.png");
+    std::filesystem::rename(root / "art/x2.png", root / "art/y2.png");
+    mark = kast::log::lines().size();
+    ids.scan(root);
+    check(meta(root / "art/y1.png") && meta(root / "art/y2.png") && meta(root / "art/y1.png") != idX1 &&
+              meta(root / "art/y1.png") != idX2 && meta(root / "art/y2.png") != idX1 && meta(root / "art/y2.png") != idX2 &&
+              !std::filesystem::exists(metaFileOf(root / "art/x1.png")) && !std::filesystem::exists(metaFileOf(root / "art/x2.png")),
+          "ambiguous orphans are not re-paired: the files get fresh ids");
+    check(logged(mark, "Moved orphan 'art/x1.png.meta' to the Recycle Bin") == 1 &&
+              logged(mark, "Moved orphan 'art/x2.png.meta' to the Recycle Bin") == 1,
+          "each recycled orphan is logged");
+
+    // A lone orphan (its file deleted outside the editor) is recycled; a broken .meta is replaced.
+    std::filesystem::remove(root / "art/hero.glb");
+    writeFile(root / "B.lua", "b");
+    writeFile(metaFileOf(root / "B.lua"), "not json");
+    mark = kast::log::lines().size();
+    ids.scan(root);
+    check(!std::filesystem::exists(metaFileOf(root / "art/hero.glb")) && !ids.pathOf(*idK) &&
+              logged(mark, "Moved orphan 'art/hero.glb.meta' to the Recycle Bin") == 1,
+          "a lone orphan .meta is recycled");
+    check(meta(root / "B.lua") && logged(mark, "'B.lua.meta' holds no valid asset id") == 1, "a broken .meta is replaced");
+}
+
+// {id, path} asset references (engine/asset_ref.h, editor/asset_ids.h): the engine loaders read both forms by path, the
+// editor's hooks resolve by id, write ids, keep missing refs, and the rename pass and Build rewrite hints.
+void checkAssetRefs()
+{
+    namespace fs = std::filesystem;
+    using Json = nlohmann::ordered_json;
+    std::string error;
+    const auto logged = [](size_t from, const std::string& text) {
+        const std::vector<std::string>& lines = kast::log::lines();
+        return std::count_if(lines.begin() + static_cast<std::ptrdiff_t>(from), lines.end(),
+                             [&](const std::string& line) { return contains(line, text); });
+    };
+    const auto ref = [](const std::string& id, const std::string& path) { return Json{{"id", id}, {"path", path}}; };
+    const auto jsonOf = [](const fs::path& file) { return Json::parse(readText(file)); };
+
+    // Engine loaders, no editor hooks: a ref and a plain string both load by path.
+    kast::setAssetRefHooks({});
+    const fs::path root = projectTestDir("kast_asset_refs", "Refs");
+    for (const char* dir : {"art/models", "art/textures", "art/audio", "art/ui", "maps/m/objects", "scripts"})
+        fs::create_directories(root / dir);
+    for (const char* file : {"art/models/cube.gltf", "art/textures/a.png", "art/audio/hit.wav", "art/ui/hud.rcss",
+                             "art/ui/box.guiprefab", "scripts/spin.lua"})
+        writeFile(root / file, "x");
+    writeFile(root / "art/ui/box.guiprefab", R"(<div id="box"><p id="t">Box</p></div>)");
+    const std::string someId = newAssetId();
+    writeFile(root / "art/red.mat", ref(someId, "art/textures/a.png").dump().insert(0, R"({"version": 3, "baseColorTexture": )") + "}");
+    kast::Material material;
+    check(kast::loadMaterial(root / "art/red.mat", material, error) && material.baseColorTexture == "art/textures/a.png",
+          "asset refs: a .mat texture ref loads by its path");
+    writeFile(root / "art/legacy.mat", R"({"version": 3, "baseColorTexture": "art/textures/a.png"})");
+    check(kast::loadMaterial(root / "art/legacy.mat", material, error) && material.baseColorTexture == "art/textures/a.png",
+          "asset refs: a legacy .mat texture string still loads");
+    kast::Scene scene;
+    const entt::entity thing = scene.create("Thing");
+    entt::registry& registry = scene.registry();
+    registry.emplace<kast::ModelRenderer>(thing).model = "art/models/cube.gltf";
+    registry.get<kast::ModelRenderer>(thing).materials = {"art/red.mat"};
+    registry.emplace<kast::AudioSource>(thing).clip = "art/audio/hit.wav";
+    registry.emplace<kast::ParticleEmitter>(thing).texture = "art/textures/a.png";
+    registry.emplace<kast::UIDocument>(thing).path = "art/ui/hud.rml";
+    scene.systems = {"scripts/spin.lua"};
+    check(kast::saveScene(scene, (root / "art/main.scene").string(), error) &&
+              jsonOf(root / "art/main.scene")["systems"][0] == "scripts/spin.lua",
+          "asset refs: without the editor's hooks refs are written as plain paths (legacy form)");
+    Json upgraded = jsonOf(root / "art/main.scene");
+    Json& components = upgraded["entities"][0]["components"];
+    components["ModelRenderer"]["model"] = ref(someId, "art/models/cube.gltf");
+    components["ModelRenderer"]["materials"][0] = ref(newAssetId(), "art/red.mat");
+    upgraded["systems"][0] = ref(newAssetId(), "scripts/spin.lua");
+    writeFile(root / "art/refs.scene", upgraded.dump(2));
+    kast::Scene loaded;
+    check(kast::loadScene((root / "art/refs.scene").string(), loaded, error, nullptr, root) &&
+              registry.get<kast::ModelRenderer>(thing).model == loaded.registry().get<kast::ModelRenderer>(named(loaded, "Thing")).model &&
+              loaded.registry().get<kast::ModelRenderer>(named(loaded, "Thing")).materials == std::vector<std::string>{"art/red.mat"} &&
+              loaded.systems == std::vector<std::string>{"scripts/spin.lua"},
+          "asset refs: scene refs (model, materials, systems) load by path");
+    writeFile(root / "proj.kast.json", "");
+    {
+        Json project = jsonOf(root / kast::kProjectFileName);
+        project["startScene"] = ref(someId, "art/main.scene");
+        writeFile(root / kast::kProjectFileName, project.dump(2));
+        kast::Project opened;
+        check(kast::loadProject(root / kast::kProjectFileName, opened, error) && opened.startScene == "art/main.scene",
+              "asset refs: project.kast startScene ref loads by path");
+    }
+    nlohmann::json manifest = {{"version", 1}, {"id", 0u}, {"name", "m"}, {"heightRange", {0, 100}},
+                               {"spawn", {{"pos", {128, 0, 128}}, {"heading", 0}}},
+                               {"material", {{"id", someId}, {"path", "art/red.mat"}}}};
+    manifest["tiles"] = nlohmann::json::array({nlohmann::json::array({0, 0, 0, 0})});
+    const std::optional<kast::map::MapInfo> map = kast::map::parse_manifest(manifest, error);
+    check(map && map->material == "art/red.mat", "asset refs: a map.json material ref loads by path (engine and server)");
+    nlohmann::json objects = {{"version", 1}, {"objects", nlohmann::json::array()}};
+    objects["objects"].push_back({{"type", "visual"}, {"prefab", {{"id", someId}, {"path", "art/box.prefab"}}}, {"pos", {10, 0, 10}}});
+    objects["objects"].push_back({{"type", "visual"}, {"prefab", "art/old.prefab"}, {"pos", {12, 0, 12}}});
+    const kast::map::ParsedObjects parsed = kast::map::parse_objects(objects, {0, 0});
+    check(parsed.errors.empty() && parsed.objects.size() == 2 && parsed.objects[0].prefab == "art/box.prefab" &&
+              parsed.objects[1].prefab == "art/old.prefab",
+          "asset refs: zone object prefab refs and legacy strings load by path (engine and server)");
+    GuiDoc gui;
+    gui.setPrefabContext(root, "art/ui/hud.rml");
+    check(gui.parse(std::format(R"(<rml><head><link type="text/rcss" href="hud.rcss" {}="{}"/></head><body>)"
+                                R"(<div id="b" data-prefab="art/ui/box.guiprefab" {}="{}"/></body></rml>)",
+                                kGuiAssetIdAttribute, someId, kGuiAssetIdAttribute, someId),
+                    error) &&
+              contains(gui.serialize(), R"(data-prefab="art/ui/box.guiprefab")") && GuiDoc::elements(gui.body()).size() == 1 &&
+              GuiDoc::text(GuiDoc::elements(GuiDoc::elements(gui.body())[0])[0]) == "Box" && gui.stylesheetHref() == "hud.rcss",
+          "asset refs: GUI refs keep their path attributes (the id attribute is ignored): the prefab expands, the sheet links");
+
+    // The editor's hooks: writers emit {id, path}; legacy files upgrade on save.
+    hookAssetRefs();
+    assetIds().scan(root);
+    const std::optional<std::string> modelId = assetIds().idOf("art/models/cube.gltf"), luaId = assetIds().idOf("scripts/spin.lua");
+    Document doc;
+    check(modelId && luaId && openFile(doc, (root / "art/main.scene").string(), error) && !doc.dirty &&
+              saveFile(doc, (root / "art/main.scene").string(), error),
+          "asset refs: open and save a legacy scene");
+    Json saved = jsonOf(root / "art/main.scene");
+    const Json& savedComponents = saved["entities"][0]["components"];
+    check(savedComponents["ModelRenderer"]["model"] == ref(*modelId, "art/models/cube.gltf") &&
+              savedComponents["ModelRenderer"]["materials"][0] == ref(*assetIds().idOf("art/red.mat"), "art/red.mat") &&
+              savedComponents["AudioSource"]["clip"] == ref(*assetIds().idOf("art/audio/hit.wav"), "art/audio/hit.wav") &&
+              savedComponents["ParticleEmitter"]["texture"] == ref(*assetIds().idOf("art/textures/a.png"), "art/textures/a.png") &&
+              savedComponents["UIDocument"]["path"] == "art/ui/hud.rml" && saved["systems"][0] == ref(*luaId, "scripts/spin.lua"),
+          "asset refs: saving upgrades legacy strings to {id, path} (a path to no file stays a string)");
+    check(saveMaterial(root / "art/legacy.mat", material, error) &&
+              jsonOf(root / "art/legacy.mat")["baseColorTexture"] == ref(*assetIds().idOf("art/textures/a.png"), "art/textures/a.png"),
+          "asset refs: a .mat's texture is written as a ref");
+
+    // Missing target: kept unchanged on save, logged once, shown as missing (its path is listed nowhere).
+    const std::string goneId = newAssetId();
+    Json missing = saved;
+    missing["entities"][0]["components"]["ModelRenderer"]["model"] = ref(goneId, "art/models/gone.gltf");
+    writeFile(root / "art/missing.scene", missing.dump(2));
+    size_t from = kast::log::lines().size();
+    check(openFile(doc, (root / "art/missing.scene").string(), error) &&
+              doc.scene.registry().get<kast::ModelRenderer>(named(doc.scene, "Thing")).model == "art/models/gone.gltf" &&
+              logged(from, "Missing asset 'art/models/gone.gltf'") == 1,
+          "asset refs: a ref with an unknown id and path loads as-is, logged once");
+    check(saveFile(doc, (root / "art/missing.scene").string(), error) &&
+              jsonOf(root / "art/missing.scene")["entities"][0]["components"]["ModelRenderer"]["model"] ==
+                  ref(goneId, "art/models/gone.gltf"),
+          "asset refs: a missing ref is saved unchanged (id and path kept)");
+
+    // Explorer rename with the .meta (editor closed): refs resolve by id, the doc is marked so Save writes the hint.
+    fs::rename(root / "art/models/cube.gltf", root / "art/models/box.gltf");
+    fs::rename(root / "art/models/cube.gltf.meta", root / "art/models/box.gltf.meta");
+    size_t stale = staleAssetRefs();
+    check(openFile(doc, (root / "art/main.scene").string(), error) && staleAssetRefs() > stale && doc.dirty &&
+              doc.scene.registry().get<kast::ModelRenderer>(named(doc.scene, "Thing")).model == "art/models/box.gltf",
+          "asset refs: a file renamed with its .meta outside the editor: refs resolve by id (stale hint), doc dirty");
+    check(saveFile(doc, (root / "art/main.scene").string(), error) &&
+              jsonOf(root / "art/main.scene")["entities"][0]["components"]["ModelRenderer"]["model"] ==
+                  ref(*modelId, "art/models/box.gltf"),
+          "asset refs: the next save writes the fresh hint");
+    // Explorer rename without the .meta: the scan re-pairs it, refs resolve.
+    fs::rename(root / "art/models/box.gltf", root / "art/models/crate.gltf");
+    from = kast::log::lines().size();
+    check(openFile(doc, (root / "art/main.scene").string(), error) && logged(from, "took the asset id of missing") == 1 &&
+              doc.scene.registry().get<kast::ModelRenderer>(named(doc.scene, "Thing")).model == "art/models/crate.gltf" &&
+              assetIds().idOf("art/models/crate.gltf") == modelId,
+          "asset refs: a file renamed without its .meta is re-paired and its refs resolve");
+    check(saveFile(doc, (root / "art/main.scene").string(), error), "asset refs: save the re-paired scene");
+
+    // The rename pass over unopened files: scene, .mat, GUI, project.kast startScene, map.json material, zone objects.
+    writeFile(root / "art/ui/hud.rml", std::format("<rml>\n<head>\n<link type=\"text/rcss\" href=\"hud.rcss\"/>\n</head>\n<body>\n"
+                                                   "<div id=\"b\" data-prefab=\"art/ui/box.guiprefab\"/>\n</body>\n</rml>\n"));
+    const std::optional<std::string> withIds = editAssetRefs("art/ui/hud.rml", readText(root / "art/ui/hud.rml"),
+                                                             [](std::string& path, std::string& id) { id = assetRefId(path).value_or(id); });
+    check(withIds && contains(*withIds, std::format(R"(href="hud.rcss" {}="{}")", kGuiAssetIdAttribute, *assetIds().idOf("art/ui/hud.rcss"))) &&
+              contains(*withIds, std::format(R"(data-prefab="art/ui/box.guiprefab" {}="{}")", kGuiAssetIdAttribute,
+                                             *assetIds().idOf("art/ui/box.guiprefab"))),
+          "asset refs: GUI markup gets an id attribute beside each ref's path");
+    writeFile(root / "art/ui/hud.rml", *withIds);
+    Json project = jsonOf(root / kast::kProjectFileName);
+    project["startScene"] = "art/main.scene";
+    writeFile(root / kast::kProjectFileName, project.dump(2));
+    kast::Project opened;
+    check(kast::loadProject(root / kast::kProjectFileName, opened, error) && kast::saveProject(opened, error) &&
+              jsonOf(root / kast::kProjectFileName)["startScene"] == ref(*assetIds().idOf("art/main.scene"), "art/main.scene"),
+          "asset refs: project.kast's startScene is written as a ref");
+    // map.json and zone object files, as the zone editor writes them with the hooks (zone_self_check checks that).
+    nlohmann::json zoneMap = manifest;
+    zoneMap["material"] = nlohmann::json::parse(ref(*assetIds().idOf("art/red.mat"), "art/red.mat").dump());
+    writeFile(root / "maps/m/map.json", zoneMap.dump(2));
+    writeFile(root / "art/box.prefab", "{}");
+    assetIds().scan(root);
+    objects["objects"][0]["prefab"] = nlohmann::json::parse(ref(*assetIds().idOf("art/box.prefab"), "art/box.prefab").dump());
+    writeFile(root / "maps/m/objects/0_0.json", objects.dump(2));
+    check(renameAsset(root / "art", "gfx", error), "asset refs: rename the folder holding every asset");
+    assetIds().scan(root);
+    const std::vector<std::string> changed = remapAssetRefs(root, "art", "gfx", assetIds());
+    check(std::ranges::is_permutation(changed, std::vector<std::string>{"gfx/legacy.mat", "gfx/main.scene", "gfx/missing.scene",
+                                                                      "gfx/red.mat", "gfx/refs.scene", "gfx/ui/hud.rml",
+                                                                      "maps/m/map.json", "maps/m/objects/0_0.json",
+                                                                      "project.kast"}),
+          "asset refs: the rename pass rewrites every file referring into the moved folder, opened or not");
+    for (const std::string& file : changed)
+        check(!contains(readText(root / fromUtf8(file)), "\"art/") && !contains(readText(root / fromUtf8(file)), "=\"art/"),
+              std::format("asset refs: no hint into the old folder left in '{}'", file).c_str());
+    check(jsonOf(root / "gfx/main.scene")["entities"][0]["components"]["ModelRenderer"]["model"] ==
+                  ref(*modelId, "gfx/models/crate.gltf") &&
+              jsonOf(root / "gfx/missing.scene")["entities"][0]["components"]["ModelRenderer"]["model"] ==
+                  ref(goneId, "gfx/models/gone.gltf") &&
+              jsonOf(root / "project.kast")["startScene"] == ref(*assetIds().idOf("gfx/main.scene"), "gfx/main.scene") &&
+              contains(readText(root / "gfx/ui/hud.rml"), R"(href="hud.rcss")") &&
+              contains(readText(root / "gfx/ui/hud.rml"), R"(data-prefab="gfx/ui/box.guiprefab")"),
+          "asset refs: hints follow (by id; a missing ref's and a legacy string's by path)");
+    check(kast::loadScene((root / "gfx/main.scene").string(), loaded, error, nullptr, root) &&
+              loaded.registry().get<kast::ModelRenderer>(named(loaded, "Thing")).model == "gfx/models/crate.gltf" &&
+              loaded.registry().get<kast::AudioSource>(named(loaded, "Thing")).clip == "gfx/audio/hit.wav" &&
+              loaded.registry().get<kast::ParticleEmitter>(named(loaded, "Thing")).texture == "gfx/textures/a.png",
+          "asset refs: the renamed scene loads with the new paths");
+    // A moved .rml keeps its link to a sheet that stayed.
+    fs::create_directories(root / "hud");
+    check(moveAsset(root / "gfx/ui/hud.rml", root / "hud", error), "asset refs: move the .rml away from its sheet");
+    assetIds().scan(root);
+    remapAssetRefs(root, "gfx/ui/hud.rml", "hud/hud.rml", assetIds());
+    check(contains(readText(root / "hud/hud.rml"), R"(href="../gfx/ui/hud.rcss")"),
+          "asset refs: a moved .rml's link is rewritten relative to its new folder");
+    std::string bus = "UI", inside = "ui/x.png";
+    check(!remapAssetPath(bus, "ui", "hud") && remapAssetPath(inside, "ui", "hud") && inside == "hud/x.png",
+          "remapAssetPath: a plain string equal to a folder name (an enum value) is no path; one inside it is");
+    // An open zone's in-memory map.json and objects (loaded refs are plain paths) follow a rename (ZoneSession::remap).
+    nlohmann::ordered_json zoneManifest = {{"name", "Hills"}, {"material", "gfx/ground.mat"}},
+                           zoneObjects = {{"objects", {{{"type", "visual"}, {"prefab", "gfx/props/crate.prefab"}}}}};
+    check(remapAssetPaths(zoneManifest, "gfx/ground.mat", "gfx/dirt.mat") && zoneManifest["material"] == "gfx/dirt.mat" &&
+              remapAssetPaths(zoneObjects, "gfx/props", "props") &&
+              zoneObjects["objects"][0]["prefab"] == "props/crate.prefab" && zoneObjects["objects"][0]["type"] == "visual" &&
+              !remapAssetPaths(zoneManifest, "gfx/ground.mat", "gfx/dirt.mat"),
+          "remapAssetPaths: an open zone's material and object prefab paths follow a rename and a folder move");
+
+    // Build ships fresh hints: a file renamed with its .meta in Explorer, the scene not saved since.
+    fs::rename(root / "gfx/audio/hit.wav", root / "gfx/audio/boom.wav");
+    fs::rename(root / "gfx/audio/hit.wav.meta", root / "gfx/audio/boom.wav.meta");
+    assetIds().scan(root);
+    const std::optional<std::string> shipped =
+        editAssetRefs("gfx/main.scene", readText(root / "gfx/main.scene"), [](std::string& path, std::string& id) {
+            if (const std::optional<std::string> now = id.empty() ? std::nullopt : assetIds().pathOf(id))
+                path = *now;
+        });
+    check(shipped && contains(*shipped, "\"gfx/audio/boom.wav\"") && contains(readText(root / "gfx/main.scene"), "gfx/audio/hit.wav"),
+          "asset refs: re-resolving a copy gives the current path; the file on disk stays");
+    kast::setAssetRefHooks({});
+}
+
 void checkAssets()
 {
     checkAssetScan();
@@ -4761,6 +5140,8 @@ void checkAssets()
     checkAssetMoves();
     checkOpenSceneAction();
     checkAssetCreate();
+    checkAssetIds();
+    checkAssetRefs();
 }
 
 // --- game GUI: builder document model, template/rename, UIDocument, button click -> event bus ---
@@ -6198,7 +6579,7 @@ void checkGuiDocPrefabs()
               !std::filesystem::exists(root / "ui/box.rcss"),
           "gui doc prefabs: renaming a prefab renames its sheet");
     writeFile(root / "ui/host.rml", doc.serialize());
-    check(remapGuiPrefabReferences(root, "ui/box.guiprefab", "ui/crate.guiprefab") == std::vector<std::string>{"ui/host.rml"} &&
+    check(remapAssetRefs(root, "ui/box.guiprefab", "ui/crate.guiprefab", AssetIds()) == std::vector<std::string>{"ui/host.rml"} &&
               contains(readText(root / "ui/host.rml"), R"(data-prefab="ui/crate.guiprefab")") &&
               doc.remapPrefabPaths("ui/box.guiprefab", "ui/crate.guiprefab") && contains(doc.serialize(), "ui/crate.guiprefab"),
           "gui doc prefabs: references in files and in the open document follow a rename");
@@ -8792,7 +9173,7 @@ void checkMaterialVersion2()
     check(kast::defaultMaterial().cullMode == kast::CullMode::Back && !kast::defaultMaterial().unlit,
           "the default material culls back faces, like a .mat without cullMode");
     for (const std::filesystem::path& file : std::filesystem::directory_iterator(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "materials")) {
-        if (file.filename() == "broken.mat")
+        if (file.filename() == "broken.mat" || file.extension() != ".mat") // not its .meta sidecars
             continue;
         check(kast::loadMaterial(file, m, error), std::format("{} loads ({})", file.filename().string(), error).c_str());
     }
@@ -10411,14 +10792,14 @@ void checkMaterialLibrary()
 
     // Renaming / moving a texture rewrites the .mat files pointing at it.
     std::filesystem::create_directories(dir / "textures");
-    const std::vector<std::string> changed = remapMaterialPaths(dir, "textures", "art");
+    const std::vector<std::string> changed = remapAssetRefs(dir, "textures", "art", AssetIds());
     check(changed == std::vector<std::string>{"materials/saved.mat"} &&
               kast::loadMaterial(dir / "materials/saved.mat", loaded, error) && loaded.baseColorTexture == "art/a.png",
           "moving a texture folder remaps .mat texture paths");
-    check(remapMaterialPaths(dir, "art/a.png", "art/b.png").size() == 1 &&
+    check(remapAssetRefs(dir, "art/a.png", "art/b.png", AssetIds()).size() == 1 &&
               kast::loadMaterial(dir / "materials/saved.mat", loaded, error) && loaded.baseColorTexture == "art/b.png",
           "renaming a texture remaps .mat texture paths");
-    check(remapMaterialPaths(dir, "art/other.png", "art/c.png").empty(), "unrelated renames change no .mat");
+    check(remapAssetRefs(dir, "art/other.png", "art/c.png", AssetIds()).empty(), "unrelated renames change no .mat");
 
     // Renaming / moving a .mat (or its folder) rewrites the open scene's MeshRenderers pointing at it.
     Document doc;
@@ -10956,13 +11337,13 @@ end })");
           "Create > Shader picks a free name");
 
     // Renames: a .mat's shader path and texture params follow, as its textures do.
-    const std::vector<std::string> changed = remapMaterialPaths(dir, "shaders/params.kshader", "shaders/renamed.kshader");
+    const std::vector<std::string> changed = remapAssetRefs(dir, "shaders/params.kshader", "shaders/renamed.kshader", AssetIds());
     check(changed == std::vector<std::string>{"materials/p.mat"} && kast::loadMaterial(dir / "materials/p.mat", read, error) &&
               read.shader == "shaders/renamed.kshader",
           "renaming a .kshader remaps the .mat's shader");
     writeFile(dir / "materials/p.mat", R"({"version": 3, "shader": "shaders/params.kshader", "normalTexture": "textures/n.png",
                                            "params": {"mask": "textures/noise.png", "amount": 1}})");
-    check(remapMaterialPaths(dir, "textures", "art").size() == 1 && kast::loadMaterial(dir / "materials/p.mat", read, error) &&
+    check(remapAssetRefs(dir, "textures", "art", AssetIds()).size() == 1 && kast::loadMaterial(dir / "materials/p.mat", read, error) &&
               read.params.at("mask").texture == "art/noise.png" && read.normalTexture == "art/n.png" &&
               read.params.at("amount").numbers == std::vector<float>{1.0f},
           "moving a texture folder remaps texture params and every texture field");
@@ -14225,7 +14606,7 @@ void checkPrefabRemap()
     check(openFile(doc, (dir / "two.scene").string(), error), "prefab remap: open two.scene");
     std::filesystem::create_directories(dir / "assets");
     std::filesystem::rename(dir / "prefabs", dir / "assets/prefabs");
-    const std::vector<std::string> changed = remapPrefabReferences(dir, "prefabs", "assets/prefabs");
+    const std::vector<std::string> changed = remapAssetRefs(dir, "prefabs", "assets/prefabs", AssetIds());
     remapScenePaths(doc, "prefabs", "assets/prefabs");
     refreshPrefabs(doc);
     check((changed == std::vector<std::string>{"pack.prefab", "scenes/one.scene", "two.scene"}) && doc.dirty &&
@@ -14238,7 +14619,7 @@ void checkPrefabRemap()
           "prefab remap: the moved references load");
     // Rename the prefab itself.
     std::filesystem::rename(dir / "assets/prefabs/orc.prefab", dir / "assets/prefabs/brute.prefab");
-    remapPrefabReferences(dir, "assets/prefabs/orc.prefab", "assets/prefabs/brute.prefab");
+    remapAssetRefs(dir, "assets/prefabs/orc.prefab", "assets/prefabs/brute.prefab", AssetIds());
     remapScenePaths(doc, "assets/prefabs/orc.prefab", "assets/prefabs/brute.prefab");
     refreshPrefabs(doc);
     check(kast::isPrefabRoot(doc.scene, named(doc.scene, "Orc")) && contains(readText(dir / "two.scene"), "brute.prefab") &&
@@ -15746,6 +16127,54 @@ end })");
     bare.stop();
 }
 
+// --migrate-assets <project>: scans it (creating the .meta files), then upgrades each plain string naming an asset in
+// the files that holdsAssetRefs to a ref, as the editor's next save would. A file in the writers' format (dump(2)) is
+// rewritten in it; a hand-formatted one (most tests/project scenes) keeps its layout, each such string becoming an inline
+// { "id": ..., "path": ... } (configure-time test regexes match that layout). Values of a "path" key are left alone (an
+// existing ref's hint).
+int migrateAssets(const std::filesystem::path& root)
+{
+    hookAssetRefs();
+    assetIds().scan(root);
+    const AssetRefEdit edit = [](std::string& path, std::string& id) { id = assetRefId(path).value_or(id); };
+    const std::regex token(R"re("((?:[^"\\]|\\.)*)"(\s*:)?)re"); // a JSON string, and the ':' if it's a key
+    for (const std::filesystem::path& file : kast::listFiles(root)) {
+        const std::optional<std::string> path = kast::toProjectPath(root, file);
+        std::string text, error;
+        if (!path || path->starts_with('.') || path->find("/.") != std::string::npos || !holdsAssetRefs(*path) ||
+            !kast::readFile(file, text))
+            continue;
+        std::optional<std::string> out;
+        const nlohmann::ordered_json json = nlohmann::ordered_json::parse(text, nullptr, false);
+        if (json.is_discarded() || json.dump(2) + "\n" == text) {
+            out = editAssetRefs(*path, text, edit); // GUI markup, or JSON in the writers' format
+        } else {
+            std::string edited, key;
+            size_t last = 0;
+            for (auto it = std::sregex_iterator(text.begin(), text.end(), token); it != std::sregex_iterator(); ++it) {
+                const std::smatch& match = *it;
+                edited += text.substr(last, match.position() - last);
+                last = match.position() + match.length();
+                const std::string value = match[1].str();
+                const std::optional<std::string> id = match[2].matched || key == "path" ? std::nullopt : assetRefId(value);
+                key = match[2].matched ? value : std::string();
+                edited += id ? std::format(R"({{ "id": "{}", "path": "{}" }})", *id, value) : match.str();
+            }
+            edited += text.substr(last);
+            if (edited != text)
+                out = std::move(edited);
+        }
+        if (!out)
+            continue;
+        if (!writeTextFile(file, *out, error)) {
+            kast::log::error(std::format("Cannot write '{}': {}", *path, error));
+            return 1;
+        }
+        kast::log::info(std::format("Upgraded the asset references in '{}'", *path));
+    }
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     kast::disableCrashDialogsIfRequested();
@@ -15790,6 +16219,14 @@ int main(int argc, char** argv)
         kast::log::info(g_failures == 0 ? "All model checks passed" : std::format("{} model check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--assets") { // only the Assets panel file logic checks
+        checkAssets();
+        removeTree(testRoot());
+        kast::log::info(g_failures == 0 ? "All asset checks passed" : std::format("{} asset check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
+    if (argc == 3 && std::string_view(argv[1]) == "--migrate-assets") // one-off: a project's .meta files and {id, path} refs
+        return migrateAssets(argv[2]);
     if (argc == 2 && std::string_view(argv[1]) == "--lists") { // only the game GUI list checks
         checkGuiListMath();
         checkGuiLists();

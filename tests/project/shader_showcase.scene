@@ -108,7 +108,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/shader_showcase.mat"
+          "material": { "id": "c936591f-6840-4ff0-93fb-a51bbdfb5dda", "path": "materials/shader_showcase.mat" }
         }
       }
     },
@@ -137,7 +137,7 @@
         },
         "MeshRenderer": {
           "primitive": "sphere",
-          "material": "materials/shader_showcase.mat"
+          "material": { "id": "c936591f-6840-4ff0-93fb-a51bbdfb5dda", "path": "materials/shader_showcase.mat" }
         }
       }
     },
@@ -165,9 +165,9 @@
           ]
         },
         "ModelRenderer": {
-          "model": "models/vertex_colors.gltf",
+          "model": { "id": "8b7cf8eb-b01d-4b9c-bb31-a13edfa00a6d", "path": "models/vertex_colors.gltf" },
           "materials": [
-            "materials/shader_vertex_colors.mat"
+            { "id": "7cae4f5f-6a9c-4126-8296-1243a37608a4", "path": "materials/shader_vertex_colors.mat" }
           ]
         }
       }

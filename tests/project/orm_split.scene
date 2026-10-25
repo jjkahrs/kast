@@ -7,7 +7,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [0, 1.5, -6], "rotation": [0, 0, 0, 1], "scale": [2.5, 2.5, 2.5] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/orm_split.mat" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "1a68764b-a1a2-4a13-a137-446c7c82a382", "path": "materials/orm_split.mat" } }
       }
     },
     {

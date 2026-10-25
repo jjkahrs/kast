@@ -1,7 +1,7 @@
 <rml>
     <head>
         <title>Effects</title>
-        <link type="text/rcss" href="effects.rcss"/>
+        <link type="text/rcss" href="effects.rcss" data-kast-id="58d5a0c7-afea-493e-8a4c-96628d9244f9"/>
     </head>
     <body>
         <!-- One element per GUI effect at a fixed spot (effects.rcss), for the effects screenshot probes. -->

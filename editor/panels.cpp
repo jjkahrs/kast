@@ -1,10 +1,10 @@
 #include "panels.h"
 
+#include "asset_ids.h"
 #include "ui_common.h"
 
 #include <animation.h>
 #include <components.h>
-#include <files.h> // recycleFile
 #include <ibl.h>
 #include <log.h>
 #include <lua_components.h>
@@ -2322,7 +2322,10 @@ std::filesystem::path openScenePath(const Document& doc)
 void Panels::refreshAssets(const Document& doc)
 {
     assetsRoot_ = doc.project ? doc.project->root : std::filesystem::path();
-    assets_ = assetsRoot_.empty() ? std::vector<AssetEntry>{} : scanAssets(assetsRoot_);
+    std::vector<std::filesystem::directory_entry> metas;
+    assets_ = assetsRoot_.empty() ? std::vector<AssetEntry>{} : scanAssets(assetsRoot_, &metas);
+    if (!assetsRoot_.empty())
+        assetIds().scan(assetsRoot_, assets_, metas); // creates missing .meta files, fixes copies and orphans
     clipErrors_.clear(); // clips may have changed
     if (!findAsset(assets_, assetSelected_))
         assetSelected_.clear();
@@ -2331,7 +2334,7 @@ void Panels::refreshAssets(const Document& doc)
 }
 
 void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
-                        ExternalEditor& editor)
+                        ExternalEditor& editor, ZoneSession& zone)
 {
     if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
         refreshAssets(doc);
@@ -2421,7 +2424,7 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, Shad
         }
     }
     ImGui::End();
-    applyAssetEdit(doc, gui, graphs, preview);
+    applyAssetEdit(doc, gui, graphs, preview, zone);
 }
 
 void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
@@ -2622,7 +2625,8 @@ void Panels::assetsFailed(std::string error)
     assetsErrorRequested_ = true;
 }
 
-void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview)
+void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
+                            ZoneSession& zone)
 {
     const AssetEdit edit = std::exchange(assetEdit_, AssetEdit{});
     if (edit.op == AssetEdit::Op::None || !doc.project || doc.play != PlayState::Stopped)
@@ -2746,7 +2750,7 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& g
     }
     case AssetEdit::Op::Delete:
         error = deleteBlocker(source, openScenePath(doc)); // the scene may have changed since the prompt opened
-        if (error.empty() && kast::recycleFile(source, error)) {
+        if (error.empty() && recycleAsset(source, error)) { // its .meta too
             kast::log::info(std::format("Moved '{}' to the Recycle Bin", edit.path));
             refreshPrefabs(doc); // instances of a deleted prefab become placeholders
         }
@@ -2789,15 +2793,13 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& g
             gui.remap(source, dest);
             graphs.remap(source, dest);
             preview.remap(edit.path, selected);
+            zone.remap(edit.path, selected);
             if (scenePath)
                 doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
-            remapScenePaths(doc, edit.path, selected); // systems, MeshRenderer materials, models, overrides, prefabs
-            for (const std::string& file : remapMaterialPaths(root, edit.path, selected))
-                kast::log::info(std::format("Updated texture and shader paths in '{}'", file));
-            for (const std::string& file : remapPrefabReferences(root, edit.path, selected))
-                kast::log::info(std::format("Updated prefab references in '{}'", file));
-            for (const std::string& file : remapGuiPrefabReferences(root, edit.path, selected))
-                kast::log::info(std::format("Updated GUI prefab references in '{}'", file));
+            remapScenePaths(doc, edit.path, selected); // in memory; the files below
+            assetIds().scan(root);                      // the moved files' ids at their new paths
+            for (const std::string& file : remapAssetRefs(root, edit.path, selected, assetIds()))
+                kast::log::info(std::format("Updated asset references in '{}'", file));
             refreshPrefabs(doc); // instances reload from the moved files
             if (std::vector<std::string> path = {inspectedAsset_}; remapProjectPaths(path, edit.path, selected))
                 inspectedAsset_ = path[0];

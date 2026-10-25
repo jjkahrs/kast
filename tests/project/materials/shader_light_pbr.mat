@@ -1,4 +1,4 @@
 {
   "version": 3,
-  "shader": "shaders/light_pbr.kshader"
+  "shader": { "id": "5c32c5b1-1eb5-4121-929f-776a3efc98df", "path": "shaders/light_pbr.kshader" }
 }

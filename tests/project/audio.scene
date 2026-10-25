@@ -7,7 +7,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
-        "AudioSource": { "clip": "sounds/wave-demo.wav", "bus": "Music", "volume": 0.6, "loop": true, "playOnStart": true }
+        "AudioSource": { "clip": { "id": "b1ebd756-32e2-420d-8c8d-0118a9d9dd2c", "path": "sounds/wave-demo.wav" }, "bus": "Music", "volume": 0.6, "loop": true, "playOnStart": true }
       }
     },
     {
@@ -17,7 +17,7 @@
       "components": {
         "Transform": { "position": [0, 0.5, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
         "MeshRenderer": { "primitive": "cube", "material": "" },
-        "AudioSource": { "clip": "sounds/tone.wav", "bus": "UI", "volume": 0.5, "loop": false, "playOnStart": false }
+        "AudioSource": { "clip": { "id": "e40443d1-4ef9-4eb9-95ba-467b37c3d78b", "path": "sounds/tone.wav" }, "bus": "UI", "volume": 0.5, "loop": false, "playOnStart": false }
       }
     },
     {
@@ -39,5 +39,5 @@
       }
     }
   ],
-  "systems": ["scripts/audio_sfx.lua"]
+  "systems": [{ "id": "95334f2e-8cb6-4424-b6e9-6528907c6e97", "path": "scripts/audio_sfx.lua" }]
 }

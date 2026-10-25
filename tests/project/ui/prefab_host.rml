@@ -1,18 +1,18 @@
 <rml>
     <head>
         <title>Prefab Host</title>
-        <link type="text/rcss" href="prefab_host.rcss"/>
+        <link type="text/rcss" href="prefab_host.rcss" data-kast-id="f259d4bf-2633-4555-9173-91b455dc1c23"/>
     </head>
     <body>
         <!-- Linked GUI prefab instances (docs/editor/gui-builder.html#prefabs): two of prefab_button (b overrides its
              title), one of prefab_nested (holding another prefab_button) and one whose prefab is missing. -->
         <div id="column" class="column">
-            <div id="a" data-prefab="ui/prefab_button.guiprefab"/>
-            <div id="b" data-prefab="ui/prefab_button.guiprefab">
+            <div id="a" data-prefab="ui/prefab_button.guiprefab" data-kast-id="d7d5e664-fe91-415d-be8b-622d81a5f913"/>
+            <div id="b" data-prefab="ui/prefab_button.guiprefab" data-kast-id="d7d5e664-fe91-415d-be8b-622d81a5f913">
                 <override target="title" attribute="class" value="prefab-title big"/>
                 <override target="title" text="Overridden"/>
             </div>
-            <div id="n" data-prefab="ui/prefab_nested.guiprefab"/>
+            <div id="n" data-prefab="ui/prefab_nested.guiprefab" data-kast-id="7117ad3e-daf2-442d-8899-7bac77d851c9"/>
         </div>
         <div id="spawn" class="column">
             <p id="spawn_label">Spawned by Lua:</p>

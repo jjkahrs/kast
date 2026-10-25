@@ -1,10 +1,12 @@
 #include "build.h"
 
+#include "asset_ids.h"
 #include "assets.h"
 #include "model_importer.h"
 #include "shader_compiler.h"
 #include "texture_cooker.h"
 
+#include <asset_ref.h>
 #include <files.h>
 #include <gui_prefabs.h>
 #include <log.h>
@@ -85,7 +87,8 @@ std::string gameExeName(std::string_view projectName)
 bool shipsInPak(const std::string& projectPath)
 {
     const std::filesystem::path relative(projectPath);
-    return std::ranges::none_of(relative, [](const std::filesystem::path& part) { return part.string().starts_with('.'); });
+    return !isMetaFile(relative.filename()) && // asset ids are editor-only
+           std::ranges::none_of(relative, [](const std::filesystem::path& part) { return part.string().starts_with('.'); });
 }
 
 std::vector<std::string> pakContents(const std::filesystem::path& root, const std::filesystem::path& outDir)
@@ -239,6 +242,30 @@ void sceneTextures(const Json& json, TextureUsages& usages, std::set<std::array<
     }
 }
 
+// The shipped copy of each file among paths (game.pak's) holding asset refs gets every ref's hint re-resolved by id
+// (an asset renamed in Explorer with its .meta, or a file not saved since a rename): such a file moves from paths to
+// generated with the fresh hints. The file on disk stays as it is.
+void shipFreshAssetRefs(const std::filesystem::path& root, std::vector<std::string>& paths,
+                        std::map<std::string, std::string>& generated)
+{
+    assetIds().scan(root);
+    const AssetRefEdit fresh = [](std::string& path, std::string& id) {
+        if (const std::optional<std::string> now = id.empty() ? std::nullopt : assetIds().pathOf(id))
+            path = *now;
+    };
+    std::erase_if(paths, [&](const std::string& path) {
+        std::string text;
+        if (!holdsAssetRefs(path) || !kast::readFile(root / fromUtf8(path), text))
+            return false;
+        std::optional<std::string> shipped = editAssetRefs(path, text, fresh);
+        if (!shipped)
+            return false;
+        kast::log::info(std::format("Shipping '{}' with its asset references' current paths", path));
+        generated[path] = std::move(*shipped);
+        return true;
+    });
+}
+
 // Compresses every image among paths (game.pak's PNG / JPG files, and the images embedded in its models) that a
 // material, model, particle, .kshader / graph param or sky can sample into KTX entries at kast::texturePakPath, through
 // the editor's texture cache, one per usage it is sampled with (materialTextures; a scene's or prefab's particles: Color);
@@ -267,7 +294,9 @@ bool cookShippedTextures(const std::filesystem::path& root, std::vector<std::str
                     usages[texture].insert(usage);
             }
         } else if ((path.ends_with(".scene") || path.ends_with(".prefab")) && kast::readFile(file, text)) {
-            sceneTextures(Json::parse(text, nullptr, false), usages, skies);
+            Json json = Json::parse(text, nullptr, false);
+            kast::readAssetRefs(json);
+            sceneTextures(json, usages, skies);
         } else if ((path.ends_with(".rml") || path.ends_with(".rcss") || path.ends_with(kast::kGuiPrefabExtension)) &&
                    kast::readFile(file, text)) {
             guiText += text;
@@ -501,6 +530,8 @@ bool buildGame(const kast::Project& project, const std::filesystem::path& outDir
         !cookShippedModels(project.root, contents, generated, usages, embedded, error) ||
         !cookShippedTextures(project.root, contents, shaders, usages, embedded, generated, error))
         return false;
+
+    shipFreshAssetRefs(project.root, contents, generated);
 
     std::error_code ec;
     std::filesystem::create_directories(out, ec);

@@ -57,7 +57,7 @@
     }
   ],
   "systems": [
-    "scripts/online_auth_demo.lua"
+    { "id": "19d7b212-fb2f-4e97-97b9-5afe34ae1001", "path": "scripts/online_auth_demo.lua" }
   ],
   "editor": {
     "camera": { "pivot": [0, 0.75, 0], "yaw": 20, "pitch": -20, "distance": 8 }

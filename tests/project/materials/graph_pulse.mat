@@ -3,6 +3,6 @@
   "baseColor": [0.25, 0.27, 0.3, 1],
   "metallic": 0.6,
   "roughness": 0.35,
-  "shader": "shader_graphs/pulse.kshadergraph",
+  "shader": { "id": "2600044e-b6d0-4e68-9d11-35a3ebb65ef0", "path": "shader_graphs/pulse.kshadergraph" },
   "params": { "glow": [0.2, 0.8, 1, 1] }
 }

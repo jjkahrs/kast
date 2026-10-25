@@ -6,7 +6,7 @@
     1,
     1
   ],
-  "baseColorTexture": "textures/gpu/checker_rgba8.dds",
+  "baseColorTexture": { "id": "9e41b369-265e-4c8a-af52-49fe181041fe", "path": "textures/gpu/checker_rgba8.dds" },
   "metallic": 0,
   "roughness": 0.6,
   "metallicRoughnessTexture": "",

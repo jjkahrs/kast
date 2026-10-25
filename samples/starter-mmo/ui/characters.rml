@@ -1,7 +1,7 @@
 <rml>
     <head>
         <title>Characters</title>
-        <link type="text/rcss" href="starter.rcss"/>
+        <link type="text/rcss" href="starter.rcss" data-kast-id="15ecd441-7e6e-4395-bce7-288118db1e7c"/>
     </head>
     <body>
         <div id="characters_card" class="card">

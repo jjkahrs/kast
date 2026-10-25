@@ -108,7 +108,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/shader_lift.mat"
+          "material": { "id": "eeda2e7d-aab7-4e21-8525-298930464eaa", "path": "materials/shader_lift.mat" }
         }
       }
     },
@@ -137,7 +137,7 @@
         },
         "MeshRenderer": {
           "primitive": "sphere",
-          "material": "materials/shader_lift.mat"
+          "material": { "id": "eeda2e7d-aab7-4e21-8525-298930464eaa", "path": "materials/shader_lift.mat" }
         }
       }
     },
@@ -166,7 +166,7 @@
         },
         "MeshRenderer": {
           "primitive": "sphere",
-          "material": "materials/shader_lift.mat"
+          "material": { "id": "eeda2e7d-aab7-4e21-8525-298930464eaa", "path": "materials/shader_lift.mat" }
         }
       }
     },
@@ -195,7 +195,7 @@
         },
         "MeshRenderer": {
           "primitive": "sphere",
-          "material": "materials/shader_lift.mat"
+          "material": { "id": "eeda2e7d-aab7-4e21-8525-298930464eaa", "path": "materials/shader_lift.mat" }
         }
       }
     },
@@ -224,7 +224,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/shader_hidden.mat"
+          "material": { "id": "f029fe95-4216-407c-97bb-2e2b6a9315a0", "path": "materials/shader_hidden.mat" }
         }
       }
     }

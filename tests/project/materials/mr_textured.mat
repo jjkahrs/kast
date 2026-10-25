@@ -9,7 +9,10 @@
   "baseColorTexture": "",
   "metallic": 1,
   "roughness": 1,
-  "metallicRoughnessTexture": "textures/mr.png",
+  "metallicRoughnessTexture": {
+    "id": "31ca9f8f-7a6d-4e5c-bd02-d993fa57e497",
+    "path": "textures/mr.png"
+  },
   "emissive": [
     0,
     0,

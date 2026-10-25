@@ -7,5 +7,5 @@
     1
   ],
   "roughness": 0.45,
-  "normalTexture": "textures/normal_bumps.png"
+  "normalTexture": { "id": "ea2a6bd5-cb49-44c5-bd35-c7b4cc28b151", "path": "textures/normal_bumps.png" }
 }

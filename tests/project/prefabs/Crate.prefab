@@ -26,7 +26,10 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/checker.mat",
+          "material": {
+            "id": "ba527c96-08c1-4ad3-b807-907ae4675f4c",
+            "path": "materials/checker.mat"
+          },
           "castShadows": true,
           "receiveShadows": true
         }

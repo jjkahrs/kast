@@ -5,6 +5,6 @@
   "tiles": [[0, 0, 0, 0]],
   "heightRange": [0, 30],
   "spawn": {"pos": [128, 0, 128], "heading": 0},
-  "material": "materials/cavern_rock.mat",
+  "material": { "id": "e9612638-3e50-420c-9751-e0e5444e0af9", "path": "materials/cavern_rock.mat" },
   "nav": {"maxSlopeDeg": 45}
 }

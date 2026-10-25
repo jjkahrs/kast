@@ -1,8 +1,10 @@
 #include "assets.h"
+#include "asset_ids.h"
 
 #include "build.h"
 #include "shader_graph_doc.h"
 
+#include <asset_ref.h>
 #include <files.h>
 #include <log.h>
 #include <prefab.h>
@@ -58,8 +60,22 @@ bool moveOnDisk(const fs::path& source, const fs::path& dest, const char* verb, 
     return false;
 }
 
+// moveOnDisk, a file's .meta along: if the sidecar can't follow, the file goes back.
+bool moveWithMeta(const fs::path& source, const fs::path& dest, const char* verb, std::string& error)
+{
+    std::error_code ec;
+    const fs::path meta = metaFileOf(source);
+    const bool withMeta = !fs::is_directory(source, ec) && fs::is_regular_file(meta, ec);
+    if (!moveOnDisk(source, dest, verb, error))
+        return false;
+    if (!withMeta || moveOnDisk(meta, metaFileOf(dest), verb, error))
+        return true;
+    MoveFileExW(dest.c_str(), source.c_str(), 0);
+    return false;
+}
+
 void scanFolder(const fs::path& dir, const std::string& prefix, const std::optional<fs::path>& hidden,
-                std::vector<AssetEntry>& out)
+                std::vector<AssetEntry>& out, std::vector<fs::directory_entry>* metas)
 {
     std::error_code ec;
     for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
@@ -72,8 +88,13 @@ void scanFolder(const fs::path& dir, const std::string& prefix, const std::optio
         // A real directory only: junctions and symlinks are leaves, so a link loop can't recurse forever.
         AssetEntry entry{.name = name, .path = prefix + name,
                          .folder = it->symlink_status(typeError).type() == fs::file_type::directory};
+        if (!entry.folder && isMetaFile(file.filename())) {
+            if (metas)
+                metas->push_back(*it);
+            continue;
+        }
         if (entry.folder)
-            scanFolder(file, entry.path + '/', hidden, entry.children);
+            scanFolder(file, entry.path + '/', hidden, entry.children, metas);
         out.push_back(std::move(entry));
     }
     std::ranges::sort(out, [](const AssetEntry& a, const AssetEntry& b) {
@@ -96,14 +117,29 @@ fs::path fromUtf8(std::string_view text)
     return fs::path(std::u8string(reinterpret_cast<const char8_t*>(text.data()), text.size()));
 }
 
-std::vector<AssetEntry> scanAssets(const fs::path& root)
+bool isMetaFile(const fs::path& name)
+{
+    const std::wstring& text = name.native();
+    const fs::path ext(kMetaExtension);
+    return text.size() >= ext.native().size() &&
+           sameName(fs::path(text.substr(text.size() - ext.native().size())), ext);
+}
+
+fs::path metaFileOf(const fs::path& file)
+{
+    fs::path meta = file;
+    meta += kMetaExtension;
+    return meta;
+}
+
+std::vector<AssetEntry> scanAssets(const fs::path& root, std::vector<fs::directory_entry>* metas)
 {
     std::optional<fs::path> hidden = loadBuildFolder(root);
     std::error_code ec;
     if (hidden && (!isSameOrInside(*hidden, root) || isSameOrInside(root, *hidden) || !fs::exists(*hidden / kGamePakName, ec)))
         hidden.reset(); // outside the project, the project itself (Build refuses that) or not a build: hides nothing
     std::vector<AssetEntry> entries;
-    scanFolder(root, "", hidden, entries);
+    scanFolder(root, "", hidden, entries, metas);
     return entries;
 }
 
@@ -124,6 +160,8 @@ std::string assetNameError(std::string_view name)
         return "the name is empty";
     if (name.starts_with('.'))
         return "names starting with '.' are hidden from the Assets panel";
+    if (isMetaFile(fromUtf8(name)))
+        return "names ending in '.meta' are asset id files, hidden from the Assets panel";
     if (std::ranges::any_of(name, isInvalidFileChar))
         return R"(the name contains a character Windows does not allow (< > : " / \ | ? * or a control character))";
     if (name.ends_with(' ') || name.ends_with('.'))
@@ -207,7 +245,9 @@ bool createAssetFolder(const fs::path& dir, const std::string& name, std::string
 
 bool saveMaterial(const fs::path& file, const kast::Material& material, std::string& error)
 {
-    return writeTextFile(file, kast::materialToJson(material).dump(2) + "\n", error);
+    nlohmann::ordered_json json = kast::materialToJson(material);
+    kast::writeAssetRefs(json);
+    return writeTextFile(file, json.dump(2) + "\n", error);
 }
 
 bool writeNewMaterial(const fs::path& dir, fs::path& file, std::string& error)
@@ -272,35 +312,6 @@ bool writeNewShaderGraph(const fs::path& dir, fs::path& file, std::string& error
     return writeTextFile(file, kast::shaderGraphText(starterShaderGraph()), error);
 }
 
-std::vector<std::string> remapMaterialPaths(const fs::path& root, const std::string& from, const std::string& to)
-{
-    std::vector<std::string> changed;
-    for (const fs::path& file : kast::listFiles(root)) {
-        kast::Material material;
-        std::string error;
-        if (file.extension() != ".mat" || !kast::loadMaterial(file, material, error))
-            continue; // an invalid .mat is left alone: it renders as an error anyway
-        std::vector<std::string*> fields = {&material.baseColorTexture, &material.metallicRoughnessTexture,
-                                            &material.normalTexture,    &material.occlusionTexture,
-                                            &material.emissiveTexture,  &material.shader};
-        for (auto& [name, value] : material.params)
-            if (value.numbers.empty())
-                fields.push_back(&value.texture);
-        std::vector<std::string> paths;
-        for (const std::string* field : fields)
-            paths.push_back(*field);
-        if (!remapProjectPaths(paths, from, to))
-            continue;
-        for (size_t i = 0; i < fields.size(); ++i)
-            *fields[i] = paths[i];
-        if (saveMaterial(file, material, error))
-            changed.push_back(kast::toProjectPath(root, file).value_or(utf8(file)));
-        else
-            kast::log::error(std::format("Cannot update the paths in '{}': {}", utf8(file), error));
-    }
-    return changed;
-}
-
 bool writeTextFile(const fs::path& file, std::string_view text, std::string& error)
 {
     std::error_code ec;
@@ -322,7 +333,7 @@ bool renameAsset(const fs::path& source, const std::string& name, std::string& e
         error = std::format("Cannot rename '{}' to '{}': {}", utf8(source.filename()), name, reason);
         return false;
     }
-    return target == source.filename() || moveOnDisk(source, source.parent_path() / target, "rename", error);
+    return target == source.filename() || moveWithMeta(source, source.parent_path() / target, "rename", error);
 }
 
 bool moveAsset(const fs::path& source, const fs::path& destDir, std::string& error)
@@ -338,7 +349,15 @@ bool moveAsset(const fs::path& source, const fs::path& destDir, std::string& err
         error = std::format("Cannot move '{}' to '{}': '{}' already exists there", name, utf8(destDir.filename()), name);
         return false;
     }
-    return moveOnDisk(source, destDir / source.filename(), "move", error);
+    return moveWithMeta(source, destDir / source.filename(), "move", error);
+}
+
+bool recycleAsset(const fs::path& target, std::string& error)
+{
+    std::error_code ec;
+    const fs::path meta = metaFileOf(target);
+    const bool withMeta = !fs::is_directory(target, ec) && fs::is_regular_file(meta, ec);
+    return kast::recycleFile(target, error) && (!withMeta || kast::recycleFile(meta, error));
 }
 
 std::string uniquePrefabName(const fs::path& dir, const std::string& entityName)
@@ -357,60 +376,25 @@ std::string uniquePrefabName(const fs::path& dir, const std::string& entityName)
     return name;
 }
 
-namespace {
-
-// Each .scene / .prefab under root with its JSON; files that don't parse are skipped.
-template <typename Fn>
-void forEachSceneFile(const fs::path& root, Fn&& fn)
-{
-    for (const fs::path& file : kast::listFiles(root)) {
-        if (file.extension() != ".scene" && file.extension() != kast::kPrefabExtension)
-            continue;
-        std::string text;
-        if (!kast::readFile(file, text))
-            continue;
-        nlohmann::ordered_json json = nlohmann::ordered_json::parse(text, nullptr, false);
-        if (json.is_object() && json.contains("entities") && json["entities"].is_array())
-            fn(file, json);
-    }
-}
-
-} // namespace
-
 std::vector<std::string> prefabUsers(const fs::path& root, const std::string& target)
 {
     std::vector<std::string> users;
-    forEachSceneFile(root, [&](const fs::path& file, const nlohmann::ordered_json& json) {
-        for (const auto& entity : json["entities"])
-            if (entity.is_object() && entity.contains("prefab") && entity["prefab"].is_string() &&
-                isSameOrInside(fromUtf8(entity["prefab"].get<std::string>()), fromUtf8(target))) {
-                users.push_back(kast::toProjectPath(root, file).value_or(utf8(file)));
-                return;
-            }
-    });
+    for (const fs::path& file : kast::listFiles(root)) {
+        std::string text;
+        if ((file.extension() != ".scene" && file.extension() != kast::kPrefabExtension) || !kast::readFile(file, text))
+            continue;
+        nlohmann::ordered_json json = nlohmann::ordered_json::parse(text, nullptr, false);
+        if (!json.is_object() || !json.contains("entities") || !json["entities"].is_array())
+            continue; // files that don't parse are skipped
+        editAssetRefs(json["entities"], [](std::string& path, std::string& id) { // refs as paths, by id first
+            path = (id.empty() ? std::nullopt : assetIds().pathOf(id)).value_or(path);
+            id.clear();
+        });
+        if (std::ranges::any_of(json["entities"], [&](const nlohmann::ordered_json& entity) {
+                return entity.is_object() && entity.contains("prefab") && entity["prefab"].is_string() &&
+                       isSameOrInside(fromUtf8(entity["prefab"].get<std::string>()), fromUtf8(target));
+            }))
+            users.push_back(kast::toProjectPath(root, file).value_or(utf8(file)));
+    }
     return users;
-}
-
-std::vector<std::string> remapPrefabReferences(const fs::path& root, const std::string& from, const std::string& to)
-{
-    std::vector<std::string> changed;
-    forEachSceneFile(root, [&](const fs::path& file, nlohmann::ordered_json& json) {
-        bool any = false;
-        for (auto& entity : json["entities"]) {
-            if (!entity.is_object() || !entity.contains("prefab") || !entity["prefab"].is_string())
-                continue;
-            std::vector<std::string> path = {entity["prefab"].get<std::string>()};
-            if (remapProjectPaths(path, from, to)) {
-                entity["prefab"] = path[0];
-                any = true;
-            }
-        }
-        if (!any)
-            return;
-        if (kast::writeFileAtomic(file, json.dump(2) + '\n')) // the scene / prefab writers' own format
-            changed.push_back(kast::toProjectPath(root, file).value_or(utf8(file)));
-        else
-            kast::log::error(std::format("Cannot update the prefab references in '{}'", utf8(file)));
-    });
-    return changed;
 }

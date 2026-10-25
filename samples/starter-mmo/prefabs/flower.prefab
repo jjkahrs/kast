@@ -15,7 +15,7 @@
       "parent": 1,
       "components": {
         "Transform": {"position": [0, 0.2, 0], "rotation": [0, 0, 0, 1], "scale": [0.04, 0.4, 0.04]},
-        "MeshRenderer": {"primitive": "cube", "material": "materials/grass_blade.mat", "castShadows": false, "receiveShadows": true}
+        "MeshRenderer": {"primitive": "cube", "material": { "id": "0c66941c-2b51-4e28-99e5-f19ffde14149", "path": "materials/grass_blade.mat" }, "castShadows": false, "receiveShadows": true}
       }
     },
     {
@@ -24,7 +24,7 @@
       "parent": 1,
       "components": {
         "Transform": {"position": [0, 0.42, 0], "rotation": [0, 0, 0, 1], "scale": [0.16, 0.12, 0.16]},
-        "MeshRenderer": {"primitive": "sphere", "material": "materials/flower.mat", "castShadows": false, "receiveShadows": true}
+        "MeshRenderer": {"primitive": "sphere", "material": { "id": "30c5fa65-cbbf-482e-8a44-61d6c11ce8f9", "path": "materials/flower.mat" }, "castShadows": false, "receiveShadows": true}
       }
     }
   ]

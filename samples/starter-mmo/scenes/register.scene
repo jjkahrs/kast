@@ -55,14 +55,20 @@
           ]
         },
         "UIDocument": {
-          "path": "ui/register.rml",
+          "path": {
+            "id": "413a3e55-1ce7-4636-92b8-ace4bc342a5d",
+            "path": "ui/register.rml"
+          },
           "visible": true
         }
       }
     }
   ],
   "systems": [
-    "scripts/register.lua"
+    {
+      "id": "16c4d17b-72c4-4dfe-8f70-4f7cf79f3bde",
+      "path": "scripts/register.lua"
+    }
   ],
   "lighting": {
     "ambientColor": [
