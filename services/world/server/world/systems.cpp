@@ -212,7 +212,8 @@ void interact_system(entt::registry& reg, const Maps& maps, EventBus& bus) {
 
 // Runs after the Lua systems, so a change made this tick is sent this tick. Spawn always goes first: aoi_system sent
 // it earlier in the tick, and a viewer that just got it receives the full set instead of this tick's changes.
-// ponytail: diffs each replicated component's full JSON every tick; dirty flags from kast.set if entity counts grow.
+// Only components a writer marked dirty are diffed; each change is serialized once, whatever the number of viewers.
+// ponytail: a change is still sent as the component's full JSON; delta or binary encoding if bandwidth matters.
 void component_replication_system(entt::registry& reg, const lua::Defs& defs, const Send& send) {
     struct Replicated {
         const lua::ComponentDef* def;
@@ -235,8 +236,10 @@ void component_replication_system(entt::registry& reg, const lua::Defs& defs, co
         if (link) send(link->sessionId, msg);
     };
     for (auto [e, rep] : reg.view<ReplicatedState>().each()) {
+        if (rep.dirty.empty()) continue;
         const auto* link = reg.try_get<SessionLink>(e);
         for (const auto& [def, pool] : types) {
+            if (!rep.dirty.contains(def->name)) continue;
             const auto sent = rep.sent.find(def->name);
             const bool aoi = def->replicate == lua::Replicate::aoi;
             if (!pool->contains(e)) {
@@ -249,9 +252,11 @@ void component_replication_system(entt::registry& reg, const lua::Defs& defs, co
                 continue;
             }
             const auto& value = pool->get(e).value;
-            if (sent != rep.sent.end() && sent->second == value) continue;
-            rep.sent[def->name] = value;
-            std::string json = value.dump();
+            if (sent != rep.sent.end() && sent->second.value == value) continue; // set back to what was sent
+            auto& latest = rep.sent[def->name];
+            latest.value = value;
+            latest.json = value.dump();
+            const std::string& json = latest.json;
             if (!proto::ComponentUpdate::fits(def->name.size(), json.size())) {
                 if (rep.oversize.insert(def->name).second)
                     log::error("component too large to replicate; not sent until it fits",
@@ -262,10 +267,11 @@ void component_replication_system(entt::registry& reg, const lua::Defs& defs, co
                 continue;
             }
             rep.oversize.erase(def->name);
-            const proto::ComponentUpdate msg{wire_id(e), def->name, std::move(json)};
+            const proto::ComponentUpdate msg{wire_id(e), def->name, json};
             toOwner(link, msg);
             if (aoi) toViewers(e, msg);
         }
+        rep.dirty.clear();
     }
     // Viewers that saw an entity come into view this tick (after its Spawn): every aoi component it has, as sent.
     for (auto [viewer, vis, link] : reg.view<Visible, SessionLink>().each()) {
@@ -276,7 +282,7 @@ void component_replication_system(entt::registry& reg, const lua::Defs& defs, co
             for (const auto& [def, pool] : types) {
                 if (def->replicate != lua::Replicate::aoi || rep->oversize.contains(def->name)) continue;
                 const auto sent = rep->sent.find(def->name);
-                if (sent != rep->sent.end()) send(link.sessionId, proto::ComponentUpdate{id, def->name, sent->second.dump()});
+                if (sent != rep->sent.end()) send(link.sessionId, proto::ComponentUpdate{id, def->name, sent->second.json});
             }
         }
     }

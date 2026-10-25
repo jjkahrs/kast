@@ -16,7 +16,7 @@
 <ul>
 <li><strong>One database writer per realm:</strong> character limits are checked with count-then-insert on the single DB thread. Several world processes per realm would need <code>SELECT … FOR UPDATE</code>.</li>
 <li><strong>Migration splitter:</strong> splits on <code>;</code> at the end of a line.</li>
-<li><strong>Component replication diff:</strong> every replicated component's full JSON is compared with the last sent value each tick, and a change is sent in full. Fine for hundreds of players with a few small components. Past that, use dirty flags set by <code>kast.set</code>, and delta or binary encoding.</li>
+<li><strong>Component replication diff:</strong> only components marked dirty by a writer (<code>kast.add</code>, <code>kast.set</code>, <code>kast.remove</code>, NPC creation, login restore) are compared with the last sent value, and each change is serialized once for all its recipients. A change is still sent as the component's full JSON; delta or binary encoding if bandwidth matters.</li>
 <li><strong><code>kast.set</code> through JSON:</strong> reuses the definition checks; convert Lua values directly if it shows in profiles.</li>
 <li><strong>No TLS <code>close_notify</code> on disconnect:</strong> peers see EOF.</li>
 <li><strong>Map bounds by rectangle scan:</strong> each bounds check walks a map's tile rectangles. Fine for a handful per map; use a
