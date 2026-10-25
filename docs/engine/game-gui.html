@@ -176,6 +176,11 @@ loaded documents by <code>id</code>, topmost document first (<code>engine/gui_ac
 <td>Appends a new <code>&lt;tag id="newId"&gt;</code> to <code>parentId</code>, with <code>attrs</code> (a table of string attributes, e.g. <code>{class = "row"}</code>).</td>
 </tr>
 <tr>
+<td><code>kast.gui.instantiate(prefabPath, parentId, newId)</code></td>
+<td>boolean</td>
+<td>Appends a new instance of a <a href="#prefabs">GUI prefab</a> to <code>parentId</code> as <code>newId</code> (ids inside prefixed <code>newId_</code>, its <code>.rcss</code> added). See <a href="#prefab-lua">GUI prefabs: Lua</a>.</td>
+</tr>
+<tr>
 <td><code>kast.gui.remove(id)</code></td>
 <td>boolean</td>
 <td>Removes the element (and its children) from the topmost document holding it.</td>
@@ -339,6 +344,87 @@ Arguments of the wrong type raise like the other functions.</li>
 <p><strong>Sample and tests</strong>: <code>tests/project/ui_bind.scene</code> shows <code>ui/bind.rml</code> (two models: a bound list with nested tags and
 Pick buttons, two-way inputs echoed below; a clone template), driven by <code>scripts/ui_bind.lua</code>; <code>ctest -R ui_bind</code>,
 <code>player_bind_click</code> and self_check's <code>checkGuiDataModels</code>. The starter-mmo chat and quest log are bound lists.</p>
+<h2 id="prefabs">GUI prefabs</h2>
+<p>A GUI prefab is a reusable element subtree that GUIs place as <strong>linked instances</strong> (authoring:
+<a href="../editor/gui-builder.html#prefabs">GUI Builder: GUI prefabs</a>). The engine expands the instances of a document
+before RmlUi parses it, the same way in the GUI Builder preview, editor Play and the built player
+(<code>engine/gui_prefabs.h</code>, <code>.cpp</code>).</p>
+<h3 id="prefab-format">File format</h3>
+<ul>
+<li><code>&lt;stem&gt;.guiprefab</code>: XML holding <strong>exactly one element</strong> (any element, children allowed; comments around it
+  are kept). Its own <code>id</code>, if any, is ignored: an instance's id is the reference's. The root can't itself be an
+  instance of another prefab; elements inside it can (nested prefabs).</li>
+<li>An optional sibling <code>&lt;stem&gt;.rcss</code>: the prefab's styles. It is linked into every document holding an instance of
+  the prefab, once per document, before the document's own sheets (a <code>&lt;link type="text/rcss"&gt;</code> put first in
+  its <code>&lt;head&gt;</code>), so the document's rules win at equal specificity.</li>
+<li>Both ship in <code>game.pak</code> like every project file; images a <code>.guiprefab</code> names count as used by the GUI when
+  Build decides which images keep their source file.</li>
+</ul>
+<h3 id="prefab-markup">Instance markup and overrides</h3>
+<pre><code class="language-html">&lt;div id=&quot;hp&quot; data-prefab=&quot;ui/hp_bar.guiprefab&quot;&gt;
+    &lt;override target=&quot;title&quot; text=&quot;Health&quot;/&gt;                     &lt;!-- the text of the prefab element with id &quot;title&quot; --&gt;
+    &lt;override target=&quot;title&quot; attribute=&quot;class&quot; value=&quot;big&quot;/&gt;     &lt;!-- one of its attributes --&gt;
+    &lt;override target=&quot;bar&quot; attribute=&quot;style&quot;/&gt;                   &lt;!-- no value: the attribute is removed --&gt;
+    &lt;override target=&quot;&quot; attribute=&quot;class&quot; value=&quot;hp wide&quot;/&gt;     &lt;!-- &quot;&quot;: the prefab's root --&gt;
+    &lt;override target=&quot;1/0&quot; text=&quot;...&quot;/&gt;                          &lt;!-- an element without an id: child indices --&gt;
+&lt;/div&gt;
+</code></pre>
+<ul>
+<li>The reference is any element with <code>data-prefab="&lt;project path&gt;"</code> and a required <code>id</code>; the GUI Builder writes a
+  <code>&lt;div&gt;</code>. Other attributes of the reference are ignored.</li>
+<li>Each <code>&lt;override&gt;</code> child changes one field of one prefab element: <code>target</code> is the element's id inside the
+  prefab (as written in the <code>.guiprefab</code>, without the instance prefix), <code>""</code> for the root, or its element child
+  indices from the root (<code>"1/0"</code>: the root's second child's first child) when it has no id of its own. With
+  <code>text</code> it replaces the element's text (its element children stay); with <code>attribute</code> it sets that attribute to
+  <code>value</code>, or removes it when <code>value</code> is absent. A target that is no element of the prefab is ignored with a
+  warning. The instance root's <code>id</code> can't be overridden (it is the reference's).</li>
+<li>Overrides are values, not edits: the GUI Builder writes one per field that differs from the prefab, so a value set back
+  to the prefab's disappears from the file. There are no structural overrides (adding, removing or reordering
+  children) and a composite widget's insides (a Dropdown's options, ...) are edited in the prefab.</li>
+<li>Left unexpanded the reference holds only empty <code>&lt;override&gt;</code> elements: nothing of it renders as text.</li>
+</ul>
+<h3 id="prefab-expansion">Expansion and ids</h3>
+<ol>
+<li>The reference is replaced by a copy of the prefab's element; <code>data-prefab="&lt;path&gt;"</code> stays on it.</li>
+<li>References inside the prefab are expanded first (recursively), with their own overrides from the prefab file.</li>
+<li>Every id inside the copy becomes <code>&lt;instance id&gt;_&lt;id&gt;</code>, the root's id is the reference's: the convention of
+  <code>kast.gui.clone</code>. Two instances <code>a</code> and <code>b</code> of a prefab holding <code>title</code> give <code>a_title</code> and
+  <code>b_title</code>; a nested instance <code>inner</code> of another prefab inside instance <code>n</code> gives <code>n_inner_title</code>.</li>
+<li>The reference's overrides are applied (targets found first, then applied).</li>
+<li>The prefab's <code>.rcss</code>, if it exists, is linked into the document (once).</li>
+</ol>
+<p>Lua and data bindings address the expanded ids (<code>kast.gui.setText("a_title", ...)</code>; a button's click payload carries
+<code>a_button</code>).</p>
+<h3 id="prefab-missing">Missing prefabs and cycles</h3>
+<p>A reference that can't be expanded is logged with <code>log::warn</code> naming the document, the path and why, and stays as an
+<strong>empty placeholder</strong> element (its overrides dropped from what RmlUi sees); the rest of the document loads:</p>
+<pre><code>GUI 'ui/hud.rml': prefab 'ui/gone.guiprefab' (#m): not found; left as an empty placeholder
+GUI 'ui/hud.rml': prefab 'ui/a.guiprefab' (#a): a cycle (ui/a.guiprefab -&gt; ui/b.guiprefab -&gt; ui/a.guiprefab); left as an empty placeholder
+</code></pre>
+<p>The reasons: no <code>id</code>, the file not found, not well-formed XML, not exactly one element, and a <strong>cycle</strong> (a
+prefab holding itself, directly or through nesting): the reference that would close the cycle is skipped. The GUI
+Builder keeps such a reference and its overrides as written and saves them unchanged.</p>
+<h3 id="prefab-lua">Lua: kast.gui.instantiate</h3>
+<pre><code class="language-lua">if kast.gui.instantiate(&quot;ui/prefab_button.guiprefab&quot;, &quot;spawn&quot;, &quot;s&quot;) then
+    kast.gui.setText(&quot;s_title&quot;, &quot;Spawned card&quot;) -- its button publishes its data-event with id &quot;s_button&quot;
+end
+</code></pre>
+<ul>
+<li><code>kast.gui.instantiate(prefabPath, parentId, newId)</code> expands the prefab (nested prefabs included, ids prefixed with
+  <code>newId_</code>, the prefab's own overrides of its nested instances applied) and appends it under the element
+  <code>parentId</code> of the topmost loaded document holding one. The prefab's <code>.rcss</code> is added to that document if it
+  doesn't have it yet (after its own sheets). In editor Play and built games.</li>
+<li>Returns <code>true</code>, or <code>false</code> with a warning: a missing or broken prefab, an unknown parent, an empty
+  <code>newId</code>, or any of the new ids already in that document
+  (<code>kast.gui.instantiate('ui/prefab_button.guiprefab', 'spawn', 's'): the id 's' is taken in that GUI</code>). Arguments
+  that aren't strings raise.</li>
+<li>Live only, as <code>clone</code>: gone when the document reloads. <code>kast.gui.remove(newId)</code> removes it.</li>
+</ul>
+<p><strong>Hot reload</strong>: in Play, saving a <code>.guiprefab</code> (or its <code>.rcss</code>) reloads the documents holding instances of
+it, without re-saving them.</p>
+<p><strong>Sample and tests</strong>: <code>tests/project/ui_prefab.scene</code> shows <code>ui/prefab_host.rml</code> (two instances of
+<code>prefab_button.guiprefab</code>, one overriding its title, one of <code>prefab_nested.guiprefab</code>, a missing one) driven by
+<code>scripts/ui_prefab.lua</code>; <code>ctest -R "ui_prefab|guiprefab"</code> and <code>kast_self_check --guiprefabs</code>.</p>
 <h2 id="form-widgets">Form widgets</h2>
 <p>Five widgets are plain RML markup (the GUI Builder adds and edits them, see <a href="../editor/gui-builder.html">GUI Builder</a>).
 Each renders with the engine's <strong>default widget style</strong> (Kast palette) with no project RCSS, in Play, the GUI Builder

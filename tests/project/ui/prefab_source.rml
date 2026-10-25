@@ -1,0 +1,13 @@
+<rml>
+    <head>
+        <title>Prefab Source</title>
+        <link type="text/rcss" href="prefab_source.rcss"/>
+    </head>
+    <body>
+        <!-- Create GUI Prefab from #card (ctest gui_builder_prefab_create*): a Panel holding a Text and a Button. -->
+        <div id="card" class="card">
+            <p id="card_title" class="card-title">Card title</p>
+            <button id="card_button" data-event="card.clicked">Open</button>
+        </div>
+    </body>
+</rml>

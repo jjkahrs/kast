@@ -162,6 +162,82 @@ edited in the <code>.rml</code>.</td>
 dirty, update the preview at once and are saved, as for the form widgets; <code>--gui-add ListBox</code> / <code>VirtualList</code> and
 <code>--gui-set-prop row-height=30</code> (or <code>follow=true</code>, <code>source=loot</code>, ...) do the same from the
 <a href="command-line.html">command line</a>.</p>
+<h2 id="prefabs">GUI prefabs</h2>
+<p>A <strong>GUI prefab</strong> is a reusable element subtree saved as a <code>.guiprefab</code> file (one element, children allowed),
+with an optional sibling <code>.rcss</code> holding its styles. GUIs place <strong>linked instances</strong> of it: editing the prefab
+updates every instance, and each instance can <strong>override</strong> attributes and text of the prefab's elements. It is the GUI
+counterpart of <a href="prefabs.html">scene prefabs</a>. The file format, the markup and the runtime side are in
+<a href="../engine/game-gui.html#prefabs">Game GUI: GUI prefabs</a>. Prefabs need a project; paths are project paths.</p>
+<h3 id="prefab-create">Creating a prefab</h3>
+<ul>
+<li>Drag an element from the GUI Hierarchy onto the Assets panel's background (the project root) or onto a folder, or
+  right-click it &gt; <strong>Create GUI Prefab</strong> (the Assets panel's current folder: the selected folder, else the
+  selected file's folder, else the root).</li>
+<li>It writes <code>&lt;id&gt;.guiprefab</code> (an element without an id: its kind, <code>panel.guiprefab</code>), <code>_2</code>, <code>_3</code>, ... if
+  that name or its <code>.rcss</code> is taken; nothing is overwritten. The new <code>.rcss</code> holds only a comment: the element keeps
+  the look the GUI's own sheet gives it there; move rules into the prefab's sheet for it to look the same everywhere.</li>
+<li>The element becomes an instance with the same id. Ids inside it that started with <code>&lt;its id&gt;_</code> are saved without
+  that prefix, so the instance's ids stay as they were (<code>card_title</code> in <code>#card</code> is <code>title</code> in the prefab and
+  <code>card_title</code> again in the instance); other ids gain the prefix.</li>
+<li>One undo step: undo puts the original element back (the files stay). Refused (a <strong>GUI Prefab</strong> message, also in
+  the Console) for an element that is, or is inside, an instance (unpack it first), and for a prefab that would hold
+  itself (a missing-prefab placeholder inside it naming the new file).</li>
+</ul>
+<h3 id="prefab-place">Placing instances</h3>
+<ul>
+<li>Drag a <code>.guiprefab</code> from Assets onto the GUI Hierarchy: onto a Panel or Body it becomes their last child. Or onto
+  the GUI Preview: into the deepest Panel under the cursor, else Body.</li>
+<li>The instance gets the prefab's file stem as id, made unique in the document (<code>prefab_button</code>, <code>prefab_button_2</code>,
+  ...: no element has it and no id starts with it plus <code>_</code>), and is selected. One undo step.</li>
+<li>Refused if the prefab doesn't load, if the target is inside an instance, or if the prefab holds (directly or nested)
+  the prefab being edited.</li>
+</ul>
+<h3 id="prefab-instances">Instances in the builder</h3>
+<p>The GUI Hierarchy shows an instance as one node with the prefab marker (a small cube) after its label, its tooltip naming
+the prefab. Its prefab elements are listed under it and can be selected (in the tree or the preview) to override their
+attributes and text, but they can't be moved, deleted, dragged, reparented or receive children: Delete / Up / Down and
+the <strong>+</strong> buttons are disabled, their menus leave those items out, and the command-line equivalents are refused
+with a warning. The instance root itself moves, deletes and reparents like any element. A Dropdown's options and a List
+Box's rows in an instance can't be added, removed or reordered.</p>
+<p>The GUI Inspector shows a <strong>Prefab</strong> card on any element of an instance: the prefab's path (and the nested prefab
+the element belongs to, if any), <strong>Select Root</strong> (on a prefab element), <strong>Open Prefab</strong>, and on the root
+<strong>Revert All</strong>, <strong>Apply All</strong> and <strong>Unpack</strong>. The instance root's id is the instance's: changing it
+renames the ids inside that start with the old id plus <code>_</code>; it is never an override and can't be emptied.</p>
+<h3 id="prefab-overrides">Overrides, Revert, Apply, Unpack</h3>
+<ul>
+<li>Any field of a prefab element (id, class, text, Rich Text markup, data-event, data bindings, widget properties) can be
+  changed; the field is then <strong>overridden</strong> for this instance only, marked with a <code>#ffcc00</code> bar at the
+  Inspector's left edge. Overrides are worked out by comparing with the prefab when the GUI is saved, so a value changed
+  back to the prefab's is no longer one.</li>
+<li>Right-click a marked field: <strong>Revert</strong> (back to the prefab's value; one undo step) or <strong>Apply to
+  X.guiprefab</strong>: writes the value into the prefab file at once (into the outermost prefab: a nested element's value
+  becomes that prefab's override of its nested instance). As a scene prefab's Apply, Apply clears the GUI's undo history.
+  Every instance in the open GUI follows; other GUIs pick it up when they load.</li>
+<li><strong>Revert All</strong> drops every override of the instance (one step). <strong>Apply All</strong> writes them all into
+  the prefab (ids without the instance prefix).</li>
+<li><strong>Unpack</strong> replaces the instance with plain elements, ids as expanded, rendering exactly as before (one step).
+  Instances nested in it stay linked, with what it changed on them as their own overrides.</li>
+</ul>
+<h3 id="prefab-edit">Editing a prefab</h3>
+<p>Double-click a <code>.guiprefab</code> in Assets: it opens in the four GUI panels like an <code>.rml</code> (the same Save / Discard /
+Cancel prompts, undo and reload rules). Its one element is under Body (Body takes no second element and its element
+can't be deleted); GUI Style edits its sibling <code>.rcss</code> (Save creates it once it has text). The preview shows it alone,
+in Roboto white text unless its sheet says otherwise. Instances of other prefabs in it are edited as above; placing one
+that would hold this prefab is refused. Save rewrites the file. A GUI open in the builder that holds instances of a
+prefab refreshes them when the prefab changes on disk (the 0.5 s poll; unsaved edits are kept, the undo history is
+cleared), and Play reloads the documents that use it (hot reload).</p>
+<h3 id="prefab-missing">Missing prefabs, renames</h3>
+<ul>
+<li>An instance whose prefab doesn't load (deleted, broken XML, not exactly one element, a cycle) is a red <code>missing prefab
+  &lt;path&gt;</code> node; its card says so. The Console has a warning naming the GUI and the path. Saving keeps the reference
+  and its overrides unchanged, so once the prefab is back the instance is too.</li>
+<li>Renaming or moving a <code>.guiprefab</code> in Assets takes its <code>.rcss</code> along and rewrites the references to it in every
+  <code>.rml</code> and <code>.guiprefab</code> of the project (as scene prefabs do) and in the open GUI.</li>
+</ul>
+<p><strong>Testing hooks</strong>: <code>--gui-create-prefab</code>, <code>--gui-place-prefab</code>, <code>--gui-revert</code>, <code>--gui-apply</code>,
+<code>--gui-unpack</code>, <code>--gui-delete</code>, <code>--gui-move</code>, <code>--gui-reparent</code> and <code>--open-gui file.guiprefab</code>
+(<a href="command-line.html">Command line</a>); the <code>gui_builder_prefab_*</code> tests use them on the
+<code>tests/project/ui/prefab_*</code> fixtures, and <code>kast_self_check --guiprefabs</code> checks the document model.</p>
 </main>
 </div>
 </body>

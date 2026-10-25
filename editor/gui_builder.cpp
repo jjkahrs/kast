@@ -1,6 +1,7 @@
 #include "gui_builder.h"
 
 #include "assets.h"
+#include "ui_common.h"
 
 #include <app.h>
 #include <gui_richtext.h>
@@ -92,8 +93,9 @@ bool GuiBuilder::load(const std::filesystem::path& rml)
 {
     std::string text;
     std::string error = "cannot read it";
+    const bool prefab = rml.extension() == kast::kGuiPrefabExtension;
     GuiDoc doc;
-    if (!readText(rml, text) || !doc.parse(text, error)) {
+    if (!readText(rml, text) || !(prefab ? doc.parsePrefab(text, error) : doc.parse(text, error))) {
         kast::log::error(std::format("Cannot open GUI '{}': {}", rml.string(), error));
         return false;
     }
@@ -101,10 +103,14 @@ bool GuiBuilder::load(const std::filesystem::path& rml)
     const bool reload = rml == rml_;
     const std::string selectedId = reload && selected_ ? GuiDoc::attribute(selected_, "id") : std::string();
     rml_ = rml;
-    doc_.parse(text, error); // parsed fine above
-    rcss_ = linkedStylesheet(rml);
+    const std::filesystem::path root = projectRoot();
+    doc_.setPrefabContext(root, kast::toProjectPath(root, rml).value_or(utf8(rml.filename())));
+    prefab ? doc_.parsePrefab(text, error) : doc_.parse(text, error); // parsed fine above (now with its instances)
+    rcss_ = prefab ? guiPrefabSheet(rml) : linkedStylesheet(rml);
     rcssText_.clear();
-    if (rcss_.empty() && !doc_.stylesheetHref().empty())
+    if (prefab)
+        readText(rcss_, rcssText_); // none yet: Save writes one once it has rules
+    else if (rcss_.empty() && !doc_.stylesheetHref().empty())
         kast::log::warn(std::format("GUI '{}' links '{}', outside its project: the stylesheet is ignored",
                                     utf8(rml.filename()), doc_.stylesheetHref()));
     else if (!rcss_.empty() && !readText(rcss_, rcssText_))
@@ -149,7 +155,9 @@ bool GuiBuilder::save()
         return true;
     endGesture(); // the save point comes after a text field edit in progress
     std::string error;
-    if (!writeTextFile(rml_, doc_.serialize(), error) || (!rcss_.empty() && !writeTextFile(rcss_, rcssText_, error))) {
+    std::error_code ec;
+    const bool sheet = !rcss_.empty() && (!doc_.isPrefab() || !rcssText_.empty() || std::filesystem::exists(rcss_, ec));
+    if (!writeTextFile(rml_, doc_.serialize(), error) || (sheet && !writeTextFile(rcss_, rcssText_, error))) {
         kast::log::error(std::format("Cannot save GUI: {}", error));
         return false;
     }
@@ -210,9 +218,166 @@ bool GuiBuilder::setAttribute(const std::string& name, const std::string& value)
 {
     if (!selected_ || selected_ == doc_.body())
         return false;
-    editStep(std::format("Edit {} {}", guiKindLabel(guiKind(selected_)), name),
-             [&] { GuiDoc::setAttribute(GuiDoc::widgetElement(selected_), name.c_str(), value); });
+    editStep(std::format("Edit {} {}", guiKindLabel(guiKind(selected_)), name), [&] {
+        if (name == "id" && GuiDoc::instanceRoot(selected_) == selected_)
+            GuiDoc::setInstanceId(selected_, value); // the ids inside follow
+        else
+            GuiDoc::setAttribute(GuiDoc::widgetElement(selected_), name.c_str(), value);
+    });
     return true;
+}
+
+bool GuiBuilder::requestReparent(const std::string& parentId)
+{
+    std::vector<pugi::xml_node> nodes;
+    doc_.previewRml("", nodes);
+    const auto it = std::ranges::find_if(nodes, [&](pugi::xml_node node) { return GuiDoc::attribute(node, "id") == parentId; });
+    const pugi::xml_node parent = parentId.empty() ? doc_.body() : it == nodes.end() ? pugi::xml_node() : *it;
+    if (!parent || !selected_)
+        return false;
+    edit_ = {Edit::Op::Reparent, selected_, parent};
+    return true;
+}
+
+std::filesystem::path GuiBuilder::projectRoot() const
+{
+    return kast::findProjectDir(rml_.parent_path()).value_or(rml_.parent_path());
+}
+
+void GuiBuilder::prefabFailed(std::string error)
+{
+    kast::log::error(error);
+    prefabError_ = std::move(error);
+    prefabErrorRequested_ = true;
+}
+
+void GuiBuilder::reselect(const std::vector<size_t>& path)
+{
+    selected_ = path.empty() ? pugi::xml_node() : guiNodeAt(doc_.body().root(), path);
+    inspectorNode_ = {};
+    previewStale_ = true;
+}
+
+bool GuiBuilder::createPrefab(const std::filesystem::path& dir)
+{
+    endGesture();
+    if (!selected_ || selected_ == doc_.body()) {
+        prefabFailed("Create GUI Prefab: select an element under Body first");
+        return false;
+    }
+    GuiElementCopy before = copyGuiElement(selected_);
+    std::filesystem::path file;
+    std::string error;
+    const pugi::xml_node instance = doc_.createPrefab(selected_, dir, file, error);
+    if (!instance) {
+        prefabFailed(std::format("Create GUI Prefab: {}", error));
+        return false;
+    }
+    selected_ = instance;
+    record("Create GUI Prefab", std::move(before), copyGuiElement(instance));
+    inspectorNode_ = {};
+    markRmlDirty();
+    rememberFileTimes();
+    kast::log::info(std::format("Created GUI prefab '{}' (and its .rcss); #{} is an instance of it", utf8(file),
+                                GuiDoc::attribute(instance, "id")));
+    return true;
+}
+
+bool GuiBuilder::placePrefab(const std::string& path)
+{
+    endGesture();
+    std::string error;
+    pugi::xml_node parent = addParent();
+    if (!doc_.canAddInto(parent) && GuiDoc::instanceRoot(parent))
+        parent = GuiDoc::instanceRoot(parent).parent(); // a selected instance: beside it (placing twice in a row)
+    const pugi::xml_node instance = doc_.placePrefab(path, parent, error);
+    if (!instance) {
+        prefabFailed(std::format("Place GUI Prefab: {}", error));
+        return false;
+    }
+    selected_ = instance;
+    record("Place GUI Prefab", std::nullopt, copyGuiElement(instance));
+    inspectorNode_ = {};
+    markRmlDirty();
+    rememberFileTimes();
+    kast::log::info(std::format("Placed GUI prefab '{}' as #{}", path, GuiDoc::attribute(instance, "id")));
+    return true;
+}
+
+bool GuiBuilder::revertField(const std::string& name)
+{
+    endGesture();
+    const pugi::xml_node root = GuiDoc::instanceRoot(selected_);
+    if (!root) {
+        prefabFailed("Revert: the selection is not part of a prefab instance");
+        return false;
+    }
+    if (name != "*") {
+        if (!doc_.overridden(selected_, name))
+            return false;
+        return editStep(std::format("Revert {}", name), [&] { doc_.revert(selected_, name); });
+    }
+    const std::vector<size_t> path = copyGuiElement(selected_).path;
+    GuiElementCopy before = copyGuiElement(root);
+    const pugi::xml_node reverted = doc_.revertAll(root);
+    reselect(path);
+    if (record("Revert All", std::move(before), copyGuiElement(reverted)))
+        markRmlDirty();
+    return true;
+}
+
+bool GuiBuilder::applyField(const std::string& name)
+{
+    endGesture();
+    std::string error;
+    const std::vector<size_t> path = copyGuiElement(selected_).path;
+    if (!selected_ || !doc_.apply(selected_, name == "*" ? "" : name, error)) {
+        prefabFailed(std::format("Apply: {}", selected_ ? error : "nothing selected"));
+        return false;
+    }
+    history_.clear(!dirty()); // the prefab file was written: as a scene prefab's Apply, no undo across it
+    reselect(path);
+    rememberFileTimes();
+    return true;
+}
+
+bool GuiBuilder::unpack()
+{
+    endGesture();
+    const pugi::xml_node root = GuiDoc::instanceRoot(selected_);
+    if (!root) {
+        prefabFailed("Unpack: the selection is not part of a prefab instance");
+        return false;
+    }
+    GuiElementCopy before = copyGuiElement(root);
+    GuiDoc::unpack(root);
+    selected_ = root;
+    record("Unpack GUI Prefab", std::move(before), copyGuiElement(root));
+    inspectorNode_ = {};
+    markRmlDirty();
+    return true;
+}
+
+void GuiBuilder::acceptElementDrop(const std::filesystem::path& dir)
+{
+    if (rml_.empty() || !ImGui::BeginDragDropTarget())
+        return;
+    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kNodePayload)) {
+        edit_ = {Edit::Op::CreatePrefab, pugi::xml_node(*static_cast<pugi::xml_node_struct* const*>(payload->Data))};
+        edit_.dir = dir;
+    }
+    ImGui::EndDragDropTarget();
+}
+
+void GuiBuilder::refreshPrefabs()
+{
+    const std::vector<size_t> path = selected_ ? copyGuiElement(selected_).path : std::vector<size_t>();
+    doc_.refreshPrefabs();
+    history_.clear(false); // node copies of the old instances would put stale prefab content back
+    gesture_.reset();
+    reselect(path);
+    kast::log::info(std::format("A GUI prefab changed on disk: instances in '{}' refreshed (unsaved edits kept)",
+                                utf8(rml_.filename())));
 }
 
 bool GuiBuilder::setWidgetProperty(const std::string& name, const std::string& value)
@@ -277,6 +442,11 @@ void GuiBuilder::rememberFileTimes()
 {
     rmlTime_ = modified(rml_);
     rcssTime_ = modified(rcss_);
+    prefabTimes_.clear();
+    for (const std::string& path : doc_.prefabFiles()) {
+        const std::filesystem::path file = projectRoot() / fromUtf8(path);
+        prefabTimes_.emplace_back(file, modified(file));
+    }
 }
 
 bool GuiBuilder::selectById(const std::string& id)
@@ -318,8 +488,20 @@ void GuiBuilder::remap(const std::filesystem::path& from, const std::filesystem:
         rml_ = *moved;
     if (const auto moved = rcss_.empty() ? std::nullopt : remapPath(rcss_, from, to))
         rcss_ = *moved;
-    // renameGui renamed the sibling .rcss and rewrote the link on disk: follow it, so Save keeps the link.
+    // Instances follow their prefab's new path (the files on disk were rewritten too).
+    const std::filesystem::path root = projectRoot();
+    const std::optional<std::string> fromPath = kast::toProjectPath(root, from);
+    const std::optional<std::string> toPath = kast::toProjectPath(root, to);
+    if (fromPath && toPath && doc_.remapPrefabPaths(*fromPath, *toPath))
+        previewStale_ = true;
     std::error_code ec;
+    if (doc_.isPrefab()) { // renameGuiPrefab / moveGuiPrefab took its sheet along
+        rcss_ = guiPrefabSheet(rml_);
+        doc_.setPrefabContext(root, kast::toProjectPath(root, rml_).value_or(utf8(rml_.filename())));
+        rememberFileTimes();
+        return;
+    }
+    // renameGui renamed the sibling .rcss and rewrote the link on disk: follow it, so Save keeps the link.
     if (const std::filesystem::path linked = linkedStylesheet(rml_);
         !linked.empty() && linked != rcss_ && !rcss_.empty() && !std::filesystem::exists(rcss_, ec)) {
         rcss_ = linked;
@@ -334,8 +516,17 @@ void GuiBuilder::poll()
         return;
     const auto rmlTime = modified(rml_);
     const auto rcssTime = modified(rcss_);
-    if (rmlTime == rmlTime_ && rcssTime == rcssTime_)
+    if (rmlTime == rmlTime_ && rcssTime == rcssTime_) {
+        // A prefab it holds instances of was saved (by the builder, or elsewhere): they show it, unsaved edits or not.
+        if (std::ranges::any_of(prefabTimes_, [](const auto& file) { return modified(file.first) != file.second; })) {
+            if (dirty())
+                refreshPrefabs();
+            else
+                load(rml_);
+            rememberFileTimes();
+        }
         return;
+    }
     std::error_code ec;
     if (!std::filesystem::exists(rml_, ec)) {
         if (!dirty()) {
@@ -393,10 +584,12 @@ void GuiBuilder::drawHierarchy()
             if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + width <=
                 ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x)
                 ImGui::SameLine();
+            ImGui::BeginDisabled(!doc_.canAddInto(addParent())); // nothing goes into a prefab instance
             if (ImGui::Button(label.c_str()))
                 edit_ = {Edit::Op::Add, addParent(), {}, kind};
+            ImGui::EndDisabled();
         }
-        const bool movable = selected_ && selected_ != doc_.body();
+        const bool movable = selected_ && selected_ != doc_.body() && !GuiDoc::prefabLocked(selected_);
         ImGui::BeginDisabled(!movable);
         if (ImGui::Button("Delete"))
             edit_ = {Edit::Op::Delete, selected_};
@@ -419,40 +612,61 @@ void GuiBuilder::drawHierarchy()
 void GuiBuilder::drawNode(pugi::xml_node node)
 {
     const bool body = node == doc_.body();
-    const std::vector<pugi::xml_node> children = GuiDoc::composite(node) ? std::vector<pugi::xml_node>() : GuiDoc::elements(node);
+    const bool missing = GuiDoc::missingPrefab(node);
+    const bool locked = GuiDoc::prefabLocked(node); // listed and editable, but fixed in place
+    const bool instance = !body && GuiDoc::instanceRoot(node) == node;
+    const std::vector<pugi::xml_node> children =
+        GuiDoc::composite(node) || missing ? std::vector<pugi::xml_node>() : GuiDoc::elements(node);
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen |
                                ImGuiTreeNodeFlags_SpanAvailWidth;
     if (children.empty())
         flags |= ImGuiTreeNodeFlags_Leaf;
     if (node == selected_)
         flags |= ImGuiTreeNodeFlags_Selected;
-    const std::string label = body ? std::string("Body") : nodeLabel(node);
-    const bool unknown = !body && guiKind(node) == GuiKind::Unknown;
-    if (unknown)
-        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    const std::string prefab = GuiDoc::attribute(node, kast::kGuiPrefabAttribute);
+    std::string label = body ? std::string("Body") : nodeLabel(node);
+    if (missing)
+        label = std::format("missing prefab {}{}", prefab, label.substr(std::min(label.find(' '), label.size())));
+    const bool unknown = !body && !missing && guiKind(node) == GuiKind::Unknown;
+    const bool tinted = unknown || (missing && node != selected_); // a selected row's text is darkened on the accent
+    if (tinted)
+        ImGui::PushStyleColor(ImGuiCol_Text, missing ? kErrorColor : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     const bool open = ImGui::TreeNodeEx(reinterpret_cast<void*>(node.internal_object()), flags, "%s", label.c_str());
-    if (unknown)
+    if (tinted)
         ImGui::PopStyleColor();
+    if (instance) // the prefab marker after its label, as the scene Hierarchy's
+        drawPrefabIcon(ImGui::GetItemRectMin().x + ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(label.c_str()).x +
+                           ImGui::GetStyle().ItemSpacing.x,
+                       ImGui::GetItemRectMin().y, ImGui::GetItemRectSize().y, node == selected_);
+    if ((instance || missing) && ImGui::IsItemHovered())
+        ImGui::SetTooltip(missing ? "Missing GUI prefab %s: kept (with its overrides) and saved unchanged" : "Instance of %s",
+                          prefab.c_str());
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
         selected_ = node;
-    if (!body && ImGui::BeginDragDropSource()) {
+    if (!body && !locked && ImGui::BeginDragDropSource()) {
         pugi::xml_node_struct* payload = node.internal_object();
         ImGui::SetDragDropPayload(kNodePayload, &payload, sizeof(payload));
         ImGui::TextUnformatted(label.c_str());
         ImGui::EndDragDropSource();
     }
-    if (isPanelOrBody(node, doc_.body()) && ImGui::BeginDragDropTarget()) {
-        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kNodePayload))
-            edit_ = {Edit::Op::Reparent, pugi::xml_node(*static_cast<pugi::xml_node_struct* const*>(payload->Data)), node};
-        ImGui::EndDragDropTarget();
+    if (isPanelOrBody(node, doc_.body()) && doc_.canAddInto(node)) {
+        if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kNodePayload))
+                edit_ = {Edit::Op::Reparent, pugi::xml_node(*static_cast<pugi::xml_node_struct* const*>(payload->Data)), node};
+            ImGui::EndDragDropTarget();
+        }
+        if (std::string dropped; acceptGuiPrefabDrop(dropped)) {
+            edit_ = {Edit::Op::PlacePrefab, node};
+            edit_.path = dropped;
+        }
     }
     if (ImGui::BeginPopupContextItem()) {
         selected_ = node;
-        if (isPanelOrBody(node, doc_.body()))
+        if (isPanelOrBody(node, doc_.body()) && doc_.canAddInto(node))
             for (GuiKind kind : kGuiCreatableKinds)
                 if (ImGui::MenuItem(std::format("Add {}", guiKindLabel(kind)).c_str()))
                     edit_ = {Edit::Op::Add, node, {}, kind};
-        if (!body) {
+        if (!body && !locked) {
             if (ImGui::MenuItem("Move Up"))
                 edit_ = {Edit::Op::Move, node, {}, GuiKind::Panel, -1};
             if (ImGui::MenuItem("Move Down"))
@@ -460,6 +674,12 @@ void GuiBuilder::drawNode(pugi::xml_node node)
             if (ImGui::MenuItem("Delete"))
                 edit_ = {Edit::Op::Delete, node};
         }
+        if (!body && !GuiDoc::instanceRoot(node) && !missing && ImGui::MenuItem("Create GUI Prefab")) {
+            edit_ = {Edit::Op::CreatePrefab, node};
+            edit_.dir = assetFolder ? assetFolder() : projectRoot();
+        }
+        if (instance && ImGui::MenuItem("Unpack Prefab"))
+            prefabOp_ = PrefabOp{PrefabOp::Kind::Unpack, ""};
         ImGui::EndPopup();
     }
     if (open) {
@@ -475,6 +695,22 @@ void GuiBuilder::applyEdit()
     if (edit.op == Edit::Op::None)
         return;
     endGesture();
+    if (edit.op == Edit::Op::PlacePrefab || edit.op == Edit::Op::CreatePrefab) {
+        if (edit.op == Edit::Op::CreatePrefab) {
+            selected_ = edit.node;
+            createPrefab(edit.dir);
+        } else {
+            selected_ = edit.node; // the parent: placePrefab puts it in the selected Panel, else <body>
+            placePrefab(edit.path);
+        }
+        return;
+    }
+    if (GuiDoc::prefabLocked(edit.node) || (edit.op == Edit::Op::Add && !doc_.canAddInto(edit.node))) {
+        kast::log::warn(std::format("GUI Hierarchy: {} refused: {}", edit.op == Edit::Op::Add ? "Add" : "the edit",
+                                    doc_.isPrefab() && edit.node == doc_.body() ? "a GUI prefab holds exactly one element"
+                                                                                 : "a prefab instance's elements stay as the prefab has them"));
+        return;
+    }
     const std::string kind = guiKindLabel(guiKind(edit.node));
     std::optional<GuiElementCopy> before = edit.op == Edit::Op::Add ? std::nullopt : std::optional(copyGuiElement(edit.node));
     std::optional<GuiElementCopy> after;
@@ -504,10 +740,12 @@ void GuiBuilder::applyEdit()
         if (doc_.reparent(edit.node, edit.parent))
             after = copyGuiElement(edit.node);
         else
-            kast::log::warn("GUI Hierarchy: can't move an element into itself");
+            kast::log::warn("GUI Hierarchy: can't move an element into itself or into a prefab instance");
         name = "Reparent " + kind;
         break;
     case Edit::Op::None:
+    case Edit::Op::PlacePrefab:
+    case Edit::Op::CreatePrefab:
         break;
     }
     // Delete has no after; the others have one only if they happened.
@@ -529,6 +767,8 @@ void GuiBuilder::drawInspector()
             ImGui::TextDisabled("Select an element in the GUI Hierarchy or Preview.");
         } else if (selected_ == doc_.body()) {
             ImGui::TextDisabled("Body: the document root. Add elements to it from the GUI Hierarchy.");
+        } else if (GuiDoc::missingPrefab(selected_)) {
+            drawPrefabCard({}); // a placeholder: nothing of it is edited
         } else {
             const GuiKind kind = guiKind(selected_);
             // A labelled Toggle's id, class, data-event and bindings are its <input>'s.
@@ -551,12 +791,16 @@ void GuiBuilder::drawInspector()
                 const bool rows = kind == GuiKind::ListBox;
                 for (pugi::xml_node option : rows ? GuiDoc::rows(selected_) : GuiDoc::options(selected_))
                     optionBuffers_.emplace_back(GuiDoc::attribute(option, rows ? "data-value" : "value"), GuiDoc::text(option));
+                pristine_ = doc_.pristine(selected_, pristineHolder_); // null outside instances
             }
+            if (GuiDoc::instanceRoot(selected_))
+                drawPrefabCard(GuiDoc::instanceRoot(selected_));
             ImGui::Text("%s  <%s>", guiKindLabel(kind), selected_.name());
             // One step per field edit: the element is copied before its first change, recorded when it lets go.
             const auto field = [&](const char* label, std::string& buffer, auto set) {
                 const bool changed = ImGui::InputText(label, &buffer);
                 const std::string_view name = std::string_view(label).substr(0, std::string_view(label).find("##"));
+                overrideMarker(std::string(name));
                 if (ImGui::IsItemActive() && !gesture_)
                     gesture_ = Gesture{std::format("Edit {} {}", guiKindLabel(kind), name), selected_,
                                        copyGuiElement(selected_)};
@@ -576,7 +820,12 @@ void GuiBuilder::drawInspector()
                 ImGui::TextDisabled("Not editable in the builder (but for its data binding); kept as written. It can be "
                                     "moved or deleted.");
             } else {
-                field("id", inspectorBuffer_[0], attribute("id"));
+                field("id", inspectorBuffer_[0], [this, element](const std::string& value) {
+                    if (GuiDoc::instanceRoot(selected_) == selected_)
+                        GuiDoc::setInstanceId(selected_, value); // an instance's id: the ids inside it follow
+                    else
+                        GuiDoc::setAttribute(element, "id", value);
+                });
                 field("class", inspectorBuffer_[1], attribute("class"));
                 if (kind == GuiKind::RichText && GuiDoc::hasEditableText(selected_)) {
                     drawRichText();
@@ -599,7 +848,9 @@ void GuiBuilder::drawInspector()
                 for (auto& [name, buffer] : widgetBuffers_) {
                     if (name == "checked" || name == "follow") {
                         bool checked = buffer == "true";
-                        if (ImGui::Checkbox(name.c_str(), &checked))
+                        const bool clicked = ImGui::Checkbox(name.c_str(), &checked);
+                        overrideMarker(name);
+                        if (clicked)
                             editStep(std::format("Edit {} {}", guiKindLabel(kind), name),
                                      [&] { GuiDoc::setWidgetProperty(selected_, name, checked ? "true" : "false"); });
                         if (name == "follow")
@@ -647,6 +898,73 @@ void GuiBuilder::drawInspector()
         ImGui::TextDisabled("No GUI open.");
     }
     ImGui::End();
+    if (const std::optional<PrefabOp> op = std::exchange(prefabOp_, std::nullopt))
+        runPrefabOp(*op);
+}
+
+void GuiBuilder::drawPrefabCard(pugi::xml_node root)
+{
+    beginCard();
+    if (!root) {
+        ImGui::TextColored(kErrorColor, "Missing prefab: %s", GuiDoc::attribute(selected_, kast::kGuiPrefabAttribute).c_str());
+        ImGui::TextWrapped("It didn't load (see the Console). This placeholder keeps the reference and its overrides, and "
+                           "saves them unchanged.");
+        endCard();
+        return;
+    }
+    const std::string path = GuiDoc::attribute(root, kast::kGuiPrefabAttribute);
+    ImGui::Text("Prefab: %s", path.c_str());
+    for (pugi::xml_node at = selected_; at && at != root; at = at.parent())
+        if (at.attribute(kast::kGuiPrefabAttribute)) {
+            ImGui::TextDisabled("In its nested prefab %s", GuiDoc::attribute(at, kast::kGuiPrefabAttribute).c_str());
+            break;
+        }
+    if (selected_ != root) {
+        if (ImGui::Button("Select Root"))
+            selected_ = root;
+        ImGui::SameLine();
+    }
+    if (ImGui::Button("Open Prefab"))
+        prefabOp_ = PrefabOp{PrefabOp::Kind::Open, path};
+    if (selected_ == root) {
+        if (ImGui::Button("Revert All"))
+            prefabOp_ = PrefabOp{PrefabOp::Kind::Revert, "*"};
+        ImGui::SameLine();
+        if (ImGui::Button("Apply All"))
+            prefabOp_ = PrefabOp{PrefabOp::Kind::Apply, "*"};
+        ImGui::SameLine();
+        if (ImGui::Button("Unpack"))
+            prefabOp_ = PrefabOp{PrefabOp::Kind::Unpack, ""};
+    } else {
+        ImGui::TextWrapped("A prefab element: its attributes and text can be overridden; it can't move, go or take children.");
+    }
+    endCard();
+}
+
+void GuiBuilder::overrideMarker(const std::string& field)
+{
+    if (!pristine_ || (field == "id" && GuiDoc::instanceRoot(selected_) == selected_) ||
+        GuiDoc::field(selected_, field) == GuiDoc::field(pristine_, field))
+        return;
+    markOverride(ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().y);
+    if (ImGui::BeginPopupContextItem(("##override " + field).c_str())) {
+        const std::string prefab = GuiDoc::attribute(GuiDoc::instanceRoot(selected_), kast::kGuiPrefabAttribute);
+        if (ImGui::MenuItem("Revert"))
+            prefabOp_ = PrefabOp{PrefabOp::Kind::Revert, field};
+        if (ImGui::MenuItem(std::format("Apply to {}", utf8(fromUtf8(prefab).filename())).c_str()))
+            prefabOp_ = PrefabOp{PrefabOp::Kind::Apply, field};
+        ImGui::EndPopup();
+    }
+}
+
+void GuiBuilder::runPrefabOp(const PrefabOp& op)
+{
+    switch (op.kind) {
+    case PrefabOp::Kind::Revert: revertField(op.field); break;
+    case PrefabOp::Kind::Apply: applyField(op.field); break;
+    case PrefabOp::Kind::Unpack: unpack(); break;
+    case PrefabOp::Kind::Open: open(projectRoot() / fromUtf8(op.field)); break;
+    }
 }
 
 void GuiBuilder::drawOptions()
@@ -656,6 +974,7 @@ void GuiBuilder::drawOptions()
     const bool rows = guiKind(selected_) == GuiKind::ListBox;
     const std::string what = rows ? "List Box row" : "Dropdown option";
     const char* valueAttribute = rows ? "data-value" : "value";
+    const bool fixed = static_cast<bool>(GuiDoc::instanceRoot(selected_)); // in a prefab: fixed rows
     const std::vector<pugi::xml_node> options = rows ? GuiDoc::rows(selected_) : GuiDoc::options(selected_);
     if (options.size() != optionBuffers_.size()) {
         inspectorNode_ = {}; // changed under the buffers (undo): refill next frame
@@ -695,6 +1014,7 @@ void GuiBuilder::drawOptions()
             edit("##value", value, [option, valueAttribute](const std::string& text) { GuiDoc::setAttribute(option, valueAttribute, text); });
         if (inspectorNode_)
             edit("##label", label, [option](const std::string& text) { GuiDoc::setText(option, text); });
+        ImGui::BeginDisabled(fixed);
         ImGui::SameLine();
         if (ImGui::ArrowButton("##up", ImGuiDir_Up) && inspectorNode_)
             editStep("Move " + what + " Up", [&] { doc_.move(option, -1); });
@@ -704,10 +1024,12 @@ void GuiBuilder::drawOptions()
         ImGui::SameLine();
         if (ImGui::Button("X") && inspectorNode_)
             editStep("Remove " + what, [&] { selected_.remove_child(option); });
+        ImGui::EndDisabled();
         ImGui::PopID();
         if (!inspectorNode_)
             return; // a step changed the options: refill next frame
     }
+    ImGui::BeginDisabled(fixed);
     if (ImGui::Button(rows ? "Add row" : "Add option"))
         editStep("Add " + what, [this, rows] {
             if (rows)
@@ -715,6 +1037,7 @@ void GuiBuilder::drawOptions()
             else
                 GuiDoc::addOption(selected_);
         });
+    ImGui::EndDisabled();
 }
 
 void GuiBuilder::drawRichText()
@@ -727,6 +1050,7 @@ void GuiBuilder::drawRichText()
     std::string& markup = inspectorBuffer_[2];
     const bool changed = ImGui::InputTextMultiline("##markup", &markup, ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 6.0f),
                                                    ImGuiInputTextFlags_CallbackAlways, selection, &richSelection_);
+    overrideMarker("text");
     if (ImGui::IsItemActive() && !gesture_)
         gesture_ = Gesture{"Edit Rich Text markup", selected_, copyGuiElement(selected_)};
     if (changed) {
@@ -847,7 +1171,13 @@ void GuiBuilder::rebuildPreview()
         return;
     // The source URL is the .rml's own, as RmlUi spells it (gui::toRmlPath): relative images (a Rich Text's [img])
     // resolve next to it.
-    const std::string rml = doc_.previewRml(goodRcss_, previewNodes_);
+    // The prefab sheets come first, as Play links them: the GUI's own rules win at equal specificity.
+    // A prefab alone has no host to give its text a font: Roboto, white, unless its own sheet says otherwise.
+    std::string sheets = doc_.isPrefab() ? "body { font-family: Roboto; color: #ffffff; }\n" : "";
+    for (const std::string& sheet : doc_.prefabSheets())
+        if (std::string text; readText(projectRoot() / fromUtf8(sheet), text))
+            sheets += text + "\n";
+    const std::string rml = doc_.previewRml(sheets + goodRcss_, previewNodes_);
     previewModels_.clear(context); // fresh: a name the last version bound would shadow an alias this one declares
     previewModels_.prepare(*context, rml); // templates as authored: data-for rows and {{...}} show no data
     kast::gui::loadProjectFonts(kast::findProjectDir(rml_.parent_path()).value_or(std::filesystem::path()));
@@ -905,6 +1235,23 @@ void GuiBuilder::drawPreview()
                 const ImVec2 mouse = ImGui::GetMousePos();
                 pick((mouse.x - min.x) / scale, (mouse.y - min.y) / scale);
             }
+            if (std::string dropped; acceptGuiPrefabDrop(dropped)) { // into the deepest Panel under the cursor, else <body>
+                const ImVec2 mouse = ImGui::GetMousePos();
+                Rml::Element* hit = preview_.context()->GetElementAtPoint({(mouse.x - min.x) / scale, (mouse.y - min.y) / scale});
+                pugi::xml_node parent = doc_.body();
+                for (; hit; hit = hit->GetParentNode()) {
+                    const int index = hit->GetAttribute<int>("data-kast-node", -1);
+                    const pugi::xml_node node = index >= 0 && static_cast<size_t>(index) < previewNodes_.size()
+                                                    ? previewNodes_[static_cast<size_t>(index)]
+                                                    : pugi::xml_node();
+                    if (node && guiKind(node) == GuiKind::Panel && doc_.canAddInto(node)) {
+                        parent = node;
+                        break;
+                    }
+                }
+                edit_ = {Edit::Op::PlacePrefab, parent};
+                edit_.path = dropped;
+            }
             const auto found = std::ranges::find(previewNodes_, selected_);
             if (found != previewNodes_.end()) {
                 const size_t index = static_cast<size_t>(found - previewNodes_.begin());
@@ -928,6 +1275,17 @@ void GuiBuilder::drawModals()
 {
     if (focusStep_ > 0)
         --focusStep_;
+    if (!rml_.empty())
+        applyEdit(); // a drop on the Preview or the Assets panel, with the GUI Hierarchy hidden behind another tab
+    if (std::exchange(prefabErrorRequested_, false))
+        ImGui::OpenPopup("GUI Prefab");
+    if (ImGui::BeginPopupModal("GUI Prefab", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted(prefabError_.c_str());
+        ImGui::Spacing();
+        if (ImGui::Button("OK") || ImGui::IsKeyPressed(ImGuiKey_Escape))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
     if (std::exchange(openPromptRequested_, false))
         ImGui::OpenPopup("Unsaved GUI changes##open");
     if (ImGui::BeginPopupModal("Unsaved GUI changes##open", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {

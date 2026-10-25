@@ -76,6 +76,10 @@ public:
     // a deep copy of templateId (from parentId's document) appended to parentId as newId, shown (its display property
     // removed); descendant ids starting with "<templateId>_" are renamed to start with "<newId>_".
     virtual bool cloneElement(const std::string& templateId, const std::string& parentId, const std::string& newId) = 0;
+    // A new instance of the GUI prefab at the project path prefab (gui_prefabs.h: nested prefabs expanded, ids inside it
+    // prefixed "<newId>_", its .rcss added to the document if not yet) appended to parentId as newId. False (logged) if
+    // the prefab is missing or broken, no loaded document has parentId, or one of its ids is taken in that document.
+    virtual bool instantiatePrefab(const std::string& prefab, const std::string& parentId, const std::string& newId) = 0;
     // A new <tag id="newId"> with attributes appended to parentId.
     virtual bool createElement(const std::string& parentId, const std::string& tag, const std::string& newId,
                                const std::map<std::string, std::string>& attributes) = 0;

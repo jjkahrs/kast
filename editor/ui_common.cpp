@@ -4,6 +4,7 @@
 #include "roboto_regular.h"
 
 #include <app.h>
+#include <gui_prefabs.h>
 #include <log.h>
 #include <model.h>
 #include <prefab.h>
@@ -131,6 +132,37 @@ bool acceptPrefabDrop(std::string& path)
     return acceptAssetPayload(path, [](const char* file) {
         return std::filesystem::path(file).extension() == kast::kPrefabExtension;
     });
+}
+
+bool acceptGuiPrefabDrop(std::string& path)
+{
+    return acceptAssetPayload(path, [](const char* file) {
+        return std::filesystem::path(file).extension() == kast::kGuiPrefabExtension;
+    });
+}
+
+void drawPrefabIcon(float x, float y, float height, bool selected)
+{
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float s = ImGui::GetFontSize() * 0.6f; // icon height
+    const float top = y + (height - s) * 0.5f;
+    const ImU32 color = selected ? IM_COL32_BLACK : ImGui::GetColorU32(ImGuiCol_Button);
+    const float w = s * 0.5f, q = s * 0.25f;
+    const ImVec2 up{x + w, top}, left{x, top + q}, right{x + s, top + q}, mid{x + w, top + 2.0f * q};
+    const ImVec2 bottomLeft{x, top + s - q}, bottomRight{x + s, top + s - q}, bottom{x + w, top + s};
+    draw->AddQuadFilled(up, right, mid, left, color);
+    const float line = std::max(1.0f, s * 0.1f);
+    const ImVec2 outline[] = {left, bottomLeft, bottom, bottomRight, right};
+    draw->AddPolyline(outline, 5, color, ImDrawFlags_None, line);
+    draw->AddLine(mid, bottom, color, line);
+}
+
+void markOverride(float top, float bottom)
+{
+    const float x = ImGui::GetWindowPos().x + 1.0f;
+    ImGui::GetWindowDrawList()->PushClipRectFullScreen();
+    ImGui::GetWindowDrawList()->AddRectFilled({x, top}, {x + 4.0f, bottom}, IM_COL32(0xff, 0xcc, 0x00, 0xff));
+    ImGui::GetWindowDrawList()->PopClipRect();
 }
 
 void beginCard()

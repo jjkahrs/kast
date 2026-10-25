@@ -1,0 +1,24 @@
+<rml>
+    <head>
+        <title>Prefab Host</title>
+        <link type="text/rcss" href="prefab_host.rcss"/>
+    </head>
+    <body>
+        <!-- Linked GUI prefab instances (docs/editor/gui-builder.html#prefabs): two of prefab_button (b overrides its
+             title), one of prefab_nested (holding another prefab_button) and one whose prefab is missing. -->
+        <div id="column" class="column">
+            <div id="a" data-prefab="ui/prefab_button.guiprefab"/>
+            <div id="b" data-prefab="ui/prefab_button.guiprefab">
+                <override target="title" attribute="class" value="prefab-title big"/>
+                <override target="title" text="Overridden"/>
+            </div>
+            <div id="n" data-prefab="ui/prefab_nested.guiprefab"/>
+        </div>
+        <div id="spawn" class="column">
+            <p id="spawn_label">Spawned by Lua:</p>
+            <div id="m" data-prefab="ui/prefab_gone.guiprefab">
+                <override target="title" text="Kept while missing"/>
+            </div>
+        </div>
+    </body>
+</rml>

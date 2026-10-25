@@ -1,0 +1,6 @@
+<div class="prefab-frame">
+    <p id="caption" class="prefab-caption">Nested frame</p>
+    <div id="inner" data-prefab="ui/prefab_button.guiprefab">
+        <override target="title" text="Inner card"/>
+    </div>
+</div>

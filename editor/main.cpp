@@ -79,8 +79,8 @@ constexpr const char* kUsage =
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-select path] [--material-set field=json] [--material-undo N] [--material-redo N] "
-    "[--focus-panel Window] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
-    "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-click id] "
+    "[--focus-panel Window] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
+    "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
     "[--graph-save] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-view-code] [--preview-model path] [--preview-clip name] [--preview-lod N] "
@@ -179,6 +179,17 @@ struct Options {
     std::optional<GuiRichWrap> guiRichWrap; // then wrap the selected Rich Text's bytes start..end as its toolbar does
     int guiUndo = 0, guiRedo = 0;  // then GUI Undo N times, then Redo N times
     bool guiSave = false;          // then save the GUI as its Save button does
+    // GUI prefabs, after the edits above (at the same frame, in this order): Create GUI Prefab from the selection in this
+    // project folder ("/" the root), place these prefabs (project paths) in the selected Panel, else <body>, Revert / Apply a
+    // field of the selection ("*": all of its instance), Unpack its instance; then delete, move or reparent the selection as
+    // the GUI Hierarchy does.
+    std::optional<std::string> guiCreatePrefab;
+    std::vector<std::string> guiPlacePrefabs;
+    std::string guiRevert, guiApply;
+    bool guiUnpack = false;
+    bool guiDelete = false;
+    int guiMove = 0;
+    std::optional<std::string> guiReparent; // the new parent's id ("" = <body>)
     std::string guiClick;           // with --play: click the game GUI element with this id (frame kAddComponentPopupFrame)
     std::string openGraph;          // open this .kshadergraph in the Shader Graph panels (relative: to the project, else the cwd)
     // --graph-* edits of it (and later --open-graph), flag and value in command-line order, run as the panels do them
@@ -551,6 +562,24 @@ std::optional<Options> parseArgs(int argc, char** argv)
             ++i;
         } else if (arg == "--gui-save") {
             options.guiSave = true;
+        } else if (arg == "--gui-create-prefab" && hasValue) {
+            const std::string folder = argv[++i];
+            options.guiCreatePrefab = folder == "/" ? "" : folder;
+        } else if (arg == "--gui-place-prefab" && hasValue) {
+            options.guiPlacePrefabs.emplace_back(argv[++i]);
+        } else if (arg == "--gui-revert" && hasValue) {
+            options.guiRevert = argv[++i];
+        } else if (arg == "--gui-apply" && hasValue) {
+            options.guiApply = argv[++i];
+        } else if (arg == "--gui-unpack") {
+            options.guiUnpack = true;
+        } else if (arg == "--gui-delete") {
+            options.guiDelete = true;
+        } else if (arg == "--gui-move" && hasValue && (std::string_view(argv[i + 1]) == "up" || std::string_view(argv[i + 1]) == "down")) {
+            options.guiMove = std::string_view(argv[++i]) == "up" ? -1 : 1;
+        } else if (arg == "--gui-reparent" && hasValue) {
+            const std::string parent = argv[++i];
+            options.guiReparent = parent == "/" ? "" : parent;
         } else if (arg == "--gui-pick" && hasValue) {
             if (!parsePair(argv[++i], ',', options.guiPick))
                 return std::nullopt;
@@ -788,9 +817,12 @@ std::optional<Options> parseArgs(int argc, char** argv)
         return std::nullopt;
     }
     if ((!options.guiSelect.empty() || options.guiPick || options.guiAdd || options.guiSetAttr || options.guiSetProp ||
-         options.guiRichWrap || options.guiUndo || options.guiRedo || options.guiSave) && options.openGui.empty()) {
+         options.guiRichWrap || options.guiUndo || options.guiRedo || options.guiSave || options.guiCreatePrefab ||
+         !options.guiPlacePrefabs.empty() || !options.guiRevert.empty() || !options.guiApply.empty() || options.guiUnpack ||
+         options.guiDelete || options.guiMove || options.guiReparent) &&
+        options.openGui.empty()) {
         kast::log::error("--gui-select, --gui-pick, --gui-add, --gui-set-attr, --gui-set-prop, --gui-rich-wrap, --gui-undo, "
-                         "--gui-redo and --gui-save require --open-gui <file.rml>");
+                         "--gui-redo, --gui-save and the GUI prefab and hierarchy flags require --open-gui <file.rml>");
         return std::nullopt;
     }
     if (!options.graphSteps.empty() && options.openGraph.empty()) {
@@ -1542,6 +1574,9 @@ int main(int argc, char** argv)
     // An active Zone tab tool gets the Scene view's left mouse instead of picking and the gizmo.
     viewport.input = [&](const SceneViewport::Input& input) { return showZone() && zonePanel.sceneInput(zone, input); };
     GuiBuilder guiBuilder(kGuiPreviewView);
+    guiBuilder.assetFolder = [&] {
+        return doc.project ? doc.project->root / fromUtf8(panels.assetFolder()) : std::filesystem::path();
+    };
     ShaderGraphEditor graphs(kShaderPreviewView);
     ModelPreview modelPreview(kModelPreviewView);
     UiScale uiScale(options->uiScale);
@@ -1775,6 +1810,12 @@ int main(int argc, char** argv)
         }
         if (options->guiAdd && frames.frame() == kAddComponentPopupFrame + 7)
             guiBuilder.requestAdd(*options->guiAdd);
+        if (frames.frame() == kAddComponentPopupFrame + 7) { // GUI prefabs, as the GUI Hierarchy and Assets drops do
+            if (options->guiCreatePrefab && doc.project)
+                guiBuilder.createPrefab(doc.project->root / fromUtf8(*options->guiCreatePrefab));
+            for (const std::string& prefab : options->guiPlacePrefabs)
+                guiBuilder.placePrefab(prefab);
+        }
         if (options->guiSetAttr && frames.frame() == kAddComponentPopupFrame + 7) {
             const auto& [name, value] = *options->guiSetAttr;
             if (guiBuilder.setAttribute(name, value))
@@ -1796,6 +1837,20 @@ int main(int argc, char** argv)
                                             guiBuilder.selectedId()));
             else
                 kast::log::error("--gui-rich-wrap: the selection is no Rich Text");
+        }
+        if (frames.frame() == kAddComponentPopupFrame + 7) { // after the field edits above: Revert / Apply them
+            if (!options->guiRevert.empty() && guiBuilder.revertField(options->guiRevert))
+                kast::log::info(std::format("--gui-revert {} on '{}'", options->guiRevert, guiBuilder.selectedId()));
+            if (!options->guiApply.empty() && guiBuilder.applyField(options->guiApply))
+                kast::log::info(std::format("--gui-apply {} on '{}'", options->guiApply, guiBuilder.selectedId()));
+            if (options->guiUnpack && guiBuilder.unpack())
+                kast::log::info(std::format("--gui-unpack '{}'", guiBuilder.selectedId()));
+            if (options->guiDelete)
+                guiBuilder.requestDelete();
+            if (options->guiMove)
+                guiBuilder.requestMove(options->guiMove);
+            if (options->guiReparent && !guiBuilder.requestReparent(*options->guiReparent))
+                kast::log::error(std::format("--gui-reparent {}: no element with that id", *options->guiReparent));
         }
         if (frames.frame() == kAddComponentPopupFrame + 8) { // after --gui-add's edit was applied
             for (int i = 0; i < options->guiUndo; ++i)

@@ -1252,6 +1252,11 @@ public:
         history.push_back(line);
         return parentId == "list";
     }
+    bool instantiatePrefab(const std::string& prefab, const std::string& parentId, const std::string& newId) override
+    {
+        history.push_back(std::format("instantiate {} {} {}", prefab, parentId, newId));
+        return parentId == "list";
+    }
     bool removeElement(const std::string& id) override
     {
         history.push_back("remove " + id);
@@ -1410,6 +1415,8 @@ return {
                "clone returns the GUI's answer")
         assert(kast.gui.create("list", "p", "line_1", {class = "chat_line"}) == true and
                kast.gui.create("missing", "p", "line_2") == false, "create returns the GUI's answer")
+        assert(kast.gui.instantiate("ui/card.guiprefab", "list", "card_1") == true and
+               kast.gui.instantiate("ui/card.guiprefab", "missing", "card_2") == false, "instantiate returns the GUI's answer")
         assert(kast.gui.remove("row_1") == true and kast.gui.remove("row_2") == false, "remove returns the GUI's answer")
         assert(kast.gui.value("sound") == true and kast.gui.value("volume") == 20 and kast.gui.value("quality") == "medium",
                "value of a toggle, slider and dropdown: a boolean, a number, a string")
@@ -1440,6 +1447,8 @@ return {
         fails("kast.gui.set: value: table keys must be exactly 1..n", function() kast.gui.set("m", "k", {1, x = 2}) end)
         fails("kast.gui.get: key must be a string, got nil", function() kast.gui.get("m") end)
         fails("kast.gui.clone: newId must be a string, got nil", function() kast.gui.clone("a", "b") end)
+        fails("kast.gui.instantiate: prefabPath must be a string, got 3", function() kast.gui.instantiate(3, "list", "x") end)
+        fails("kast.gui.instantiate: newId must be a string, got nil", function() kast.gui.instantiate("ui/card.guiprefab", "list") end)
         fails("kast.gui.create: tag must be a string, got 3", function() kast.gui.create("list", 3, "x") end)
         fails("kast.gui.create: attrs must be a table or nil, got 5", function() kast.gui.create("list", "p", "x", 5) end)
         fails("kast.gui.create: attribute values must be a string, got 1", function() kast.gui.create("list", "p", "x", {a = 1}) end)
@@ -1480,7 +1489,8 @@ return {
                                                   R"(set hud.title="Quests")", "set hud.count=3", "set hud.open=false",
                                                   "set hud.title=null", "clone row_template list row_9",
                                                   "clone nope list row_10", "create list p line_1 class=chat_line",
-                                                  "create missing p line_2", "remove row_1", "remove row_2",
+                                                  "create missing p line_2", "instantiate ui/card.guiprefab list card_1",
+                                                  "instantiate ui/card.guiprefab missing card_2", "remove row_1", "remove row_2",
                                                   "value volume=150.0", "value sound=false", R"(value quality="high")",
                                                   R"(value big="50000")", "value big=null", "scrollTo big 49999",
                                                   "scrollToEnd big", "scrollTo big -1", "visible hud=true"},
@@ -3154,7 +3164,7 @@ void checkBuildSettings()
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                        "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_richtext.scene", "ui_widgets.scene", "voxelgi_room.scene",
+                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_widgets.scene", "voxelgi_room.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
 
@@ -3178,7 +3188,7 @@ void checkBuildSettings()
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                                           "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_richtext.scene", "ui_widgets.scene", "voxelgi_room.scene",
+                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_widgets.scene", "voxelgi_room.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
@@ -5903,6 +5913,345 @@ void checkGuiRichTextScene()
     }
     kast::gui::shutdown();
     bgfx::shutdown();
+}
+
+// GUI prefabs, the engine's expander (gui_prefabs.h, no RmlUi) on files from a map: ids prefixed, overrides by id,
+// root and index (text, attribute set and removed, an unknown target ignored), nested prefabs, the prefab sheet linked
+// once before the document's own, missing / broken / id-less references and a cycle left as empty placeholders with a
+// warning naming document and path, the text kept as written (entities, <style>), instance markup for Lua.
+void checkGuiPrefabExpansion()
+{
+    const std::map<std::string, std::string> files = {
+        {"ui/card.guiprefab", R"(<!-- a card --><div class="card"><p id="title">Title</p><button id="go" data-event="card.go">Go</button><p>plain</p></div>)"},
+        {"ui/card.rcss", ".card { display: block; }"},
+        {"ui/frame.guiprefab", R"(<div><p id="caption">Frame</p><div id="inner" data-prefab="ui/card.guiprefab"><override target="title" text="Inner"/></div></div>)"},
+        {"ui/loop_a.guiprefab", R"(<div><div id="b" data-prefab="ui/loop_b.guiprefab"/></div>)"},
+        {"ui/loop_b.guiprefab", R"(<div><div id="a" data-prefab="ui/loop_a.guiprefab"/></div>)"},
+        {"ui/two.guiprefab", "<p/><p/>"},
+        {"ui/broken.guiprefab", "<div><p></div>"},
+    };
+    const auto read = [&](const std::string& path) {
+        const auto it = files.find(path);
+        return it == files.end() ? std::nullopt : std::optional(it->second);
+    };
+    const std::string rml = R"(<rml><head><link type="text/rcss" href="host.rcss"/><style>body > div { x: 1 }</style></head><body>
+<div id="a" data-prefab="ui/card.guiprefab"/> <span>&lt;kept&gt;</span>
+<div id="b" data-prefab="ui/card.guiprefab"><override target="title" text="B &amp; co"/><override target="go" attribute="data-event" value="b.go"/><override target="" attribute="class"/><override target="2" text="indexed"/><override target="nope" text="x"/></div>
+<div id="n" data-prefab="ui/frame.guiprefab"><override target="inner_title" attribute="class" value="deep"/></div>
+<div id="m" data-prefab="ui/gone.guiprefab"><override target="title" text="kept"/></div>
+<div id="c" data-prefab="ui/loop_a.guiprefab"/>
+<div data-prefab="ui/card.guiprefab"/>
+<div id="t" data-prefab="ui/two.guiprefab"/>
+<div id="k" data-prefab="ui/broken.guiprefab"/>
+</body></rml>)";
+    kast::GuiPrefabExpansion x{.document = "ui/host.rml", .read = read};
+    const std::string out = kast::guiExpandPrefabsRml(rml, x);
+    check(contains(out, R"(<div id="a" class="card" data-prefab="ui/card.guiprefab"><p id="a_title">Title</p><button id="a_go" data-event="card.go">Go</button><p>plain</p></div>)"),
+          "gui prefab: an instance is the prefab's element, its id the reference's, ids inside prefixed <id>_");
+    check(contains(out, R"(<div id="b" data-prefab="ui/card.guiprefab"><p id="b_title">B &amp; co</p><button id="b_go" data-event="b.go">Go</button><p>indexed</p></div>)"),
+          "gui prefab: overrides by id (text, attribute), on the root (attribute removed) and by child index");
+    check(logged("GUI 'ui/host.rml': prefab 'ui/card.guiprefab' (#b): override target 'nope' is not in the prefab: ignored"),
+          "gui prefab: an override of no element is ignored with a warning");
+    check(contains(out, R"(<p id="n_caption">Frame</p><div id="n_inner" class="card" data-prefab="ui/card.guiprefab"><p id="n_inner_title" class="deep">Inner</p>)"),
+          "gui prefab: a nested prefab expands first: ids <outer>_<inner>_<id>, its own and the outer overrides applied");
+    check(contains(out, R"(<div id="m" data-prefab="ui/gone.guiprefab"/>)") && !contains(out, "kept\"") &&
+              logged("GUI 'ui/host.rml': prefab 'ui/gone.guiprefab' (#m): not found; left as an empty placeholder"),
+          "gui prefab: a missing prefab leaves an empty placeholder and a warning naming document and path");
+    check(logged("GUI 'ui/host.rml': prefab 'ui/loop_a.guiprefab' (#a): a cycle (ui/loop_a.guiprefab -> ui/loop_b.guiprefab -> ui/loop_a.guiprefab)") &&
+              contains(out, R"(<div id="c_b" data-prefab="ui/loop_b.guiprefab"><div id="c_b_a" data-prefab="ui/loop_a.guiprefab"/>)"),
+          "gui prefab: a cycle is logged and the reference closing it skipped; the rest expands");
+    check(logged("prefab 'ui/card.guiprefab': the reference has no id") &&
+              logged("prefab 'ui/two.guiprefab' (#t): it must hold exactly one element, not 2") &&
+              logged("prefab 'ui/broken.guiprefab' (#k): not well-formed"),
+          "gui prefab: no id, two elements or broken XML: placeholders with a warning each");
+    check(x.sheets == std::vector<std::string>{"ui/card.rcss"} &&
+              contains(out, R"(<head><link type="text/rcss" href="card.rcss"/><link type="text/rcss" href="host.rcss"/>)"),
+          "gui prefab: the prefab's sheet linked once, before the document's own, relative to it");
+    check(std::ranges::find(x.files, "ui/frame.guiprefab") != x.files.end() && std::ranges::find(x.files, "ui/card.rcss") != x.files.end(),
+          "gui prefab: the files read are reported (hot reload)");
+    check(contains(out, "<style>body > div { x: 1 }</style>") && contains(out, "</div> <span>&lt;kept&gt;</span>"),
+          "gui prefab: the rest of the text is kept as written (style sheet, entities, spaces)");
+    kast::GuiPrefabExpansion none{.document = "ui/plain.rml", .read = read};
+    check(kast::guiExpandPrefabsRml("<rml><body><p>a &amp; b</p></body></rml>", none) == "<rml><body><p>a &amp; b</p></body></rml>",
+          "gui prefab: a document without references is returned unchanged");
+    check(kast::guiPrefabStylesheet("ui/x.guiprefab") == "ui/x.rcss" && kast::guiPrefabStylesheet("a.b/x") == "a.b/x.rcss",
+          "gui prefab: its sheet is <stem>.rcss beside it");
+    kast::GuiPrefabExpansion lua{.document = "ui/host.rml", .read = read};
+    const std::optional<std::string> markup = kast::guiPrefabInstanceRml("ui/frame.guiprefab", "s", lua);
+    check(markup && contains(*markup, R"(id="s_inner_title")") &&
+              kast::guiMarkupIds(*markup) == std::vector<std::string>{"s", "s_caption", "s_inner", "s_inner_title", "s_inner_go"},
+          "gui prefab: instance markup for kast.gui.instantiate, nested, with its ids");
+    check(!kast::guiPrefabInstanceRml("ui/gone.guiprefab", "s", lua) && lua.error == "not found",
+          "gui prefab: no instance markup for a missing prefab; error says why");
+}
+
+template <typename Fn>
+void checkGuiUndoRedo(GuiDoc& doc, UndoStack& history, const char* what, Fn&& edit); // below, with the other GUI undo checks
+
+// GUI prefabs in the builder's document (gui_doc.h) on a project on disk: instances expanded on parse and collapsed on
+// save (overrides worked out: a value set back is none), locked prefab children, place / create / revert / apply /
+// unpack, missing and cyclic prefabs, prefab documents, renames and reference rewrites, undo through gui_undo.
+void checkGuiDocPrefabs()
+{
+    const std::filesystem::path root = projectTestDir("kast_gui_prefabs", "Prefabs");
+    std::filesystem::create_directories(root / "ui");
+    writeFile(root / "ui/card.guiprefab", "<div class=\"card\">\n    <p id=\"title\">Title</p>\n    <button id=\"go\" data-event=\"card.go\">Go</button>\n</div>\n");
+    writeFile(root / "ui/card.rcss", ".card { display: block; }\n");
+    writeFile(root / "ui/frame.guiprefab", R"(<div><p id="caption">Frame</p><div id="inner" data-prefab="ui/card.guiprefab"/></div>)");
+    const std::string host = R"(<rml>
+    <head>
+        <link type="text/rcss" href="host.rcss" />
+    </head>
+    <body>
+        <div id="column">
+            <div id="a" data-prefab="ui/card.guiprefab" />
+            <div id="b" data-prefab="ui/card.guiprefab">
+                <override target="title" text="B text" />
+            </div>
+            <div id="n" data-prefab="ui/frame.guiprefab" />
+            <div id="m" data-prefab="ui/gone.guiprefab">
+                <override target="title" text="kept" />
+            </div>
+        </div>
+        <div id="box">
+            <p id="box_label">Label</p>
+            <button id="box_go">Go</button>
+        </div>
+    </body>
+</rml>
+)";
+    writeFile(root / "ui/host.rml", host);
+    std::string error;
+    GuiDoc doc;
+    doc.setPrefabContext(root, "ui/host.rml");
+    check(doc.parse(host, error), "gui doc prefabs: parses the host");
+    const auto node = [&](const char* id) { return guiNode(doc, id); };
+    check(GuiDoc::text(node("a_title")) == "Title" && GuiDoc::text(node("b_title")) == "B text" &&
+              GuiDoc::text(node("n_inner_title")) == "Title" && GuiDoc::instanceRoot(node("n_inner_go")) == node("n") &&
+              GuiDoc::prefabLocked(node("a_title")) && GuiDoc::prefabLocked(node("n_inner")) && !GuiDoc::prefabLocked(node("a")) &&
+              GuiDoc::missingPrefab(node("m")) && !GuiDoc::instanceRoot(node("m")),
+          "gui doc prefabs: instances expanded (nested too), their insides locked, a missing one marked");
+    check(logged("GUI 'ui/host.rml': prefab 'ui/gone.guiprefab' (#m): not found"), "gui doc prefabs: a missing prefab is logged");
+    check(doc.serialize() == host, "gui doc prefabs: saved exactly as read (references, overrides, the missing one's kept)");
+    check(doc.prefabSheets() == std::vector<std::string>{"ui/card.rcss"}, "gui doc prefabs: the prefab sheets in link order");
+
+    // Overrides follow the values: set and set back.
+    check(doc.overridden(node("b_title"), "text") && !doc.overridden(node("a_title"), "text") && !doc.overridden(node("a"), "id"),
+          "gui doc prefabs: an overridden text is reported; the instance id never is");
+    GuiDoc::setText(node("a_title"), "Changed");
+    GuiDoc::setField(node("a_go"), "data-event", "a.go");
+    GuiDoc::setField(node("a"), "class", std::nullopt);
+    std::string saved = doc.serialize();
+    check(contains(saved, R"(<div id="a" data-prefab="ui/card.guiprefab">
+                <override target="" attribute="class" />
+                <override target="title" text="Changed" />
+                <override target="go" attribute="data-event" value="a.go" />)"),
+          "gui doc prefabs: text, attribute and removed-attribute overrides saved as <override> elements");
+    GuiDoc::setText(node("a_title"), "Title");
+    check(doc.revert(node("a_go"), "data-event") && doc.revert(node("a"), "class") && !doc.revert(node("a"), "class") &&
+              doc.serialize() == host,
+          "gui doc prefabs: a value set back, or reverted, is no longer an override");
+
+    // Structure inside an instance is fixed.
+    check(!doc.add(GuiKind::Text, node("a")) && !doc.add(GuiKind::Text, node("a_title")) && !doc.add(GuiKind::Text, node("m")) &&
+              !doc.remove(node("a_title")) && !doc.move(node("a_go"), -1) && !doc.reparent(node("a_title"), doc.body()) &&
+              !doc.reparent(node("box"), node("a")) && !doc.reparent(node("box"), node("n_inner")) && doc.serialize() == host,
+          "gui doc prefabs: no add into, remove, move or reparent inside an instance");
+    check(doc.move(node("a"), 1) && doc.move(node("a"), -1) && doc.serialize() == host, "gui doc prefabs: an instance root moves");
+
+    // Place: unique ids, refusals.
+    pugi::xml_node first = doc.placePrefab("ui/card.guiprefab", doc.body(), error);
+    pugi::xml_node second = doc.placePrefab("ui/card.guiprefab", doc.body(), error);
+    check(GuiDoc::attribute(first, "id") == "card" && GuiDoc::attribute(second, "id") == "card_2" && node("card_title") &&
+              node("card_2_title") && GuiDoc::instanceRoot(node("card_2_go")) == second,
+          "gui doc prefabs: placing twice gives unique ids, prefixed inside");
+    check(!doc.placePrefab("ui/gone.guiprefab", doc.body(), error) && contains(error, "not found") &&
+              !doc.placePrefab("ui/card.guiprefab", node("a"), error) && contains(error, "into a prefab instance"),
+          "gui doc prefabs: placing a missing prefab or into an instance is refused");
+    doc.remove(first);
+    doc.remove(second);
+    check(doc.serialize() == host, "gui doc prefabs: placed instances removed");
+
+    // Revert All, Unpack.
+    GuiDoc::setText(node("a_title"), "Changed");
+    pugi::xml_node reverted = doc.revertAll(node("a"));
+    check(reverted && GuiDoc::text(node("a_title")) == "Title" && doc.serialize() == host, "gui doc prefabs: Revert All");
+    GuiDoc unpacked;
+    unpacked.setPrefabContext(root, "ui/host.rml");
+    unpacked.parse(host, error);
+    check(GuiDoc::unpack(guiNode(unpacked, "n")) && !GuiDoc::unpack(guiNode(unpacked, "a_title")), "gui doc prefabs: Unpack an instance root only");
+    saved = unpacked.serialize();
+    check(contains(saved, "<div id=\"n\">") && contains(saved, R"(<p id="n_caption">Frame</p>)") &&
+              contains(saved, R"(<div id="n_inner" data-prefab="ui/card.guiprefab" />)"),
+          "gui doc prefabs: Unpack leaves plain markup, ids as expanded; the nested instance stays linked");
+
+    // Apply one field, then all: written into the prefab, both instances follow, no override left.
+    GuiDoc::setText(node("a_title"), "Applied");
+    check(doc.apply(node("a_title"), "text", error), "gui doc prefabs: Apply a text");
+    check(contains(readText(root / "ui/card.guiprefab"), R"(<p id="title">Applied</p>)") && GuiDoc::text(node("a_title")) == "Applied" &&
+              GuiDoc::text(node("n_inner_title")) == "Applied" && GuiDoc::text(node("b_title")) == "B text" &&
+              !contains(doc.serialize(), "Applied"),
+          "gui doc prefabs: Apply writes the .guiprefab and the other instances follow (an override stays)");
+    GuiDoc::setField(node("b_go"), "class", "wide");
+    GuiDoc::setField(node("b_go"), "id", "b_start");
+    check(doc.apply(node("b"), "", error), "gui doc prefabs: Apply All");
+    check(contains(readText(root / "ui/card.guiprefab"), R"(<p id="title">B text</p>)") &&
+              contains(readText(root / "ui/card.guiprefab"), R"(<button id="start" data-event="card.go" class="wide">)") &&
+              node("a_start") && GuiDoc::text(node("a_title")) == "B text" &&
+              contains(doc.serialize(), R"(<div id="b" data-prefab="ui/card.guiprefab" />)"),
+          "gui doc prefabs: Apply All writes every override (ids without the instance prefix); none is left");
+    check(!doc.apply(node("a"), "id", error) && !doc.apply(node("box"), "text", error), "gui doc prefabs: nothing to apply outside an instance");
+
+    // Create: <id>.guiprefab + .rcss, ids kept, never overwriting; refusals.
+    std::filesystem::path file;
+    UndoStack history;
+    pugi::xml_node selected;
+    checkGuiUndoRedo(doc, history, "create gui prefab", [&] {
+        const pugi::xml_node box = node("box");
+        GuiElementCopy before = copyGuiElement(box);
+        const pugi::xml_node instance = doc.createPrefab(box, root / "ui", file, error);
+        pushGuiStep(history, doc.body().root(), "Create GUI Prefab", before, copyGuiElement(instance), [&](pugi::xml_node n) { selected = n; });
+    });
+    check(file == root / "ui/box.guiprefab" && std::filesystem::exists(root / "ui/box.rcss") &&
+              contains(readText(file), R"(<p id="label">Label</p>)") && !contains(readText(file), R"(id="box")") &&
+              node("box_label") && GuiDoc::instanceRoot(node("box_label")) == node("box") &&
+              contains(doc.serialize(), R"(<div id="box" data-prefab="ui/box.guiprefab" />)"),
+          "gui doc prefabs: Create writes <id>.guiprefab + .rcss and the element becomes an instance with the same ids");
+    writeFile(root / "ui/taken.guiprefab", "keep");
+    GuiDoc other;
+    other.setPrefabContext(root, "ui/other.rml");
+    other.parse(R"(<rml><body><div id="taken"><p>x</p></div><div><p/></div><div id="self"><div id="x" data-prefab="ui/self.guiprefab"/></div></body></rml>)", error);
+    check(other.createPrefab(guiNode(other, "taken"), root / "ui", file, error) && file == root / "ui/taken_2.guiprefab" &&
+              readText(root / "ui/taken.guiprefab") == "keep",
+          "gui doc prefabs: a taken name gets _2; nothing is overwritten");
+    check(other.createPrefab(GuiDoc::elements(other.body())[1], root / "ui", file, error) && file == root / "ui/panel.guiprefab",
+          "gui doc prefabs: an element without an id is named after its kind");
+    check(!other.createPrefab(guiNode(other, "self"), root / "ui", file, error) && contains(error, "would hold itself") &&
+              !std::filesystem::exists(root / "ui/self.guiprefab"),
+          "gui doc prefabs: Create refuses a prefab that would hold itself (and writes nothing)");
+    check(!doc.createPrefab(node("a"), root / "ui", file, error) && contains(error, "unpack it first") &&
+              !doc.createPrefab(node("a_title"), root / "ui", file, error),
+          "gui doc prefabs: Create refuses (part of) an instance");
+
+    // A prefab document: one element, cycles refused.
+    GuiDoc prefab;
+    prefab.setPrefabContext(root, "ui/card.guiprefab");
+    check(!prefab.parsePrefab("<p/><p/>", error) && contains(error, "exactly one element"), "gui doc prefabs: a prefab holds one element");
+    check(prefab.parsePrefab(readText(root / "ui/card.guiprefab"), error) && prefab.serialize() == readText(root / "ui/card.guiprefab"),
+          "gui doc prefabs: a prefab round-trips");
+    check(!prefab.add(GuiKind::Text, prefab.body()) && !prefab.remove(GuiDoc::elements(prefab.body())[0]) &&
+              prefab.add(GuiKind::Text, GuiDoc::elements(prefab.body())[0]),
+          "gui doc prefabs: its body takes no second element and keeps its one");
+    check(!prefab.placePrefab("ui/frame.guiprefab", GuiDoc::elements(prefab.body())[0], error) && contains(error, "would hold itself"),
+          "gui doc prefabs: placing a prefab that holds this one is refused (cycle)");
+    GuiDoc frame;
+    frame.setPrefabContext(root, "ui/frame.guiprefab");
+    frame.parsePrefab(readText(root / "ui/frame.guiprefab"), error);
+    check(!frame.placePrefab("ui/frame.guiprefab", GuiDoc::elements(frame.body())[0], error) && contains(error, "a cycle"),
+          "gui doc prefabs: a prefab can't hold itself");
+
+    // Renames and moves: the sheet follows, references are rewritten.
+    check(renameGuiPrefab(root / "ui/box.guiprefab", "crate.guiprefab", error) && std::filesystem::exists(root / "ui/crate.rcss") &&
+              !std::filesystem::exists(root / "ui/box.rcss"),
+          "gui doc prefabs: renaming a prefab renames its sheet");
+    writeFile(root / "ui/host.rml", doc.serialize());
+    check(remapGuiPrefabReferences(root, "ui/box.guiprefab", "ui/crate.guiprefab") == std::vector<std::string>{"ui/host.rml"} &&
+              contains(readText(root / "ui/host.rml"), R"(data-prefab="ui/crate.guiprefab")") &&
+              doc.remapPrefabPaths("ui/box.guiprefab", "ui/crate.guiprefab") && contains(doc.serialize(), "ui/crate.guiprefab"),
+          "gui doc prefabs: references in files and in the open document follow a rename");
+    std::filesystem::create_directories(root / "ui/sub");
+    check(moveGuiPrefab(root / "ui/crate.guiprefab", root / "ui/sub", error) && std::filesystem::exists(root / "ui/sub/crate.rcss") &&
+              std::filesystem::exists(root / "ui/sub/crate.guiprefab"),
+          "gui doc prefabs: moving a prefab moves its sheet");
+}
+
+// GUI prefabs in Play, headless SceneGui on tests/project/ui/prefab_host.rml: expanded before RmlUi parses it (unique
+// prefixed ids, overrides, nested, the prefab sheet styling it, no RmlUi warning, a missing one warned about);
+// kast.gui.instantiate adds a working instance (its button publishes its data-event) and refuses a missing prefab, an
+// unknown parent and a taken id; a prefab file change reloads the document.
+void checkGuiPrefabScene()
+{
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    check(bgfx::init(init) && kast::gui::init(), "headless bgfx and RmlUi start (gui prefabs)");
+    {
+        const std::filesystem::path source = std::filesystem::path(KAST_SOURCE_DIR) / "tests/project";
+        const std::filesystem::path root = projectTestDir("kast_gui_prefab_scene", "prefabs");
+        std::filesystem::create_directories(root / "ui");
+        for (const char* file : {"ui/prefab_host.rml", "ui/prefab_host.rcss", "ui/prefab_button.guiprefab", "ui/prefab_button.rcss",
+                                 "ui/prefab_nested.guiprefab", "ui/prefab_nested.rcss"})
+            std::filesystem::copy_file(source / file, root / file);
+        kast::Scene scene;
+        scene.registry().emplace<kast::UIDocument>(scene.create("Prefabs"), kast::UIDocument{"ui/prefab_host.rml", true});
+        kast::EventBus bus;
+        std::vector<std::string> clicks;
+        const kast::EventBus::Subscription subscription = bus.subscribe("prefab.clicked", [&clicks](const nlohmann::json& e) {
+            clicks.push_back(e["id"].get<std::string>());
+        });
+        kast::SceneGui gui("prefab_check");
+        gui.context().resize(1280, 720);
+        const uint64_t problems = kast::gui::problemCount();
+        gui.sync(scene, root, bus);
+        const auto update = [&] {
+            gui.context().render(0, BGFX_INVALID_HANDLE);
+            bgfx::frame();
+            bus.drain();
+        };
+        update();
+        Rml::Context* rml = gui.context().context();
+        Rml::ElementDocument* doc = rml->GetNumDocuments() == 1 ? rml->GetDocument(0) : nullptr;
+        check(doc != nullptr && kast::gui::problemCount() == problems, "prefab_host.rml loads with no RmlUi warning");
+        if (!doc)
+            return;
+        const auto text = [&](const char* id) { return doc->GetElementById(id) ? doc->GetElementById(id)->GetInnerRML() : "<none>"; };
+        check(text("a_title") == "Prefab Card" && text("b_title") == "Overridden" && text("n_inner_title") == "Inner card" &&
+                  text("n_caption") == "Nested frame" && doc->GetElementById("a_button") && doc->GetElementById("b_button"),
+              "instances expanded: prefixed ids, b's override, the nested instance");
+        check(doc->GetElementById("a_title")->GetProperty<Rml::Colourb>("color") == Rml::Colourb(0xff, 0xcc, 0x00) &&
+                  doc->GetElementById("b_title")->GetProperty<Rml::Colourb>("color") == Rml::Colourb(0x40, 0xc0, 0xff),
+              "the prefab's .rcss styles its instances (b's class override too)");
+        check(doc->GetElementById("m") && doc->GetElementById("m")->GetNumChildren() == 0 &&
+                  logged("GUI 'ui/prefab_host.rml': prefab 'ui/prefab_gone.guiprefab' (#m): not found; left as an empty placeholder"),
+              "a missing prefab: an empty placeholder and a warning");
+        check(gui.instantiatePrefab("ui/prefab_button.guiprefab", "spawn", "s") && text("s_title") == "Prefab Card" &&
+                  doc->GetElementById("s")->GetParentNode() == doc->GetElementById("spawn"),
+              "kast.gui.instantiate appends a new instance under the parent");
+        gui.click("s_button");
+        update();
+        check(clicks == std::vector<std::string>{"s_button"}, "the instantiated button publishes its data-event");
+        check(!gui.instantiatePrefab("ui/prefab_gone.guiprefab", "spawn", "t") &&
+                  logged("kast.gui.instantiate('ui/prefab_gone.guiprefab', 'spawn', 't'): the prefab can't be expanded: not found"),
+              "kast.gui.instantiate: a missing prefab returns false with a warning");
+        check(!gui.instantiatePrefab("ui/prefab_button.guiprefab", "nowhere", "t") &&
+                  logged("kast.gui.instantiate('ui/prefab_button.guiprefab', 'nowhere', 't'): no loaded GUI has the parent"),
+              "kast.gui.instantiate: an unknown parent returns false with a warning");
+        check(!gui.instantiatePrefab("ui/prefab_button.guiprefab", "spawn", "s") &&
+                  logged("kast.gui.instantiate('ui/prefab_button.guiprefab', 'spawn', 's'): the id 's' is taken in that GUI") &&
+                  !gui.instantiatePrefab("ui/prefab_nested.guiprefab", "spawn", "a") && logged("the id 'a' is taken in that GUI"),
+              "kast.gui.instantiate: a taken id returns false with a warning");
+        check(gui.instantiatePrefab("ui/prefab_nested.guiprefab", "spawn", "z") && text("z_inner_title") == "Inner card",
+              "kast.gui.instantiate expands nested prefabs");
+        update();
+        check(kast::gui::problemCount() == problems, "no RmlUi warning through the instantiations");
+
+        // Hot reload: saving the prefab reloads the document holding instances of it.
+        rewrite(root / "ui/prefab_button.guiprefab",
+                readText(root / "ui/prefab_button.guiprefab").replace(readText(root / "ui/prefab_button.guiprefab").find("Prefab Card"), 11, "Edited Card"));
+        gui.reloadChanged();
+        doc = rml->GetNumDocuments() == 1 ? rml->GetDocument(0) : nullptr;
+        check(doc && text("a_title") == "Edited Card" && text("b_title") == "Overridden" && text("n_inner_title") == "Inner card",
+              "an edited prefab reloads its instances without re-saving the .rml");
+        gui.reset();
+    }
+    kast::gui::shutdown();
+    bgfx::shutdown();
+}
+
+void checkGuiPrefabs()
+{
+    checkGuiPrefabExpansion();
+    checkGuiDocPrefabs();
+    checkGuiPrefabScene();
 }
 
 // The list math (gui_lists.h, no RmlUi): the virtual window for a scroll position, scrolling a row into view, the keys,
@@ -14810,8 +15159,15 @@ int main(int argc, char** argv)
         checkGuiRichText();
         checkGuiRichTextScene();
         checkGuiDocRichText();
+        checkGuiPrefabs();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All GUI checks passed" : std::format("{} GUI check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--guiprefabs") { // only the GUI prefab checks
+        checkGuiPrefabs();
+        removeTree(testRoot());
+        kast::log::info(g_failures == 0 ? "All GUI prefab checks passed" : std::format("{} GUI prefab check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--richtext") { // only the rich text checks
@@ -14981,6 +15337,7 @@ int main(int argc, char** argv)
     checkGuiWidgets();
     checkGuiRichText();
     checkGuiRichTextScene();
+    checkGuiPrefabs();
     checkGuiListMath();
     checkGuiLists();
     checkExternalEditor();

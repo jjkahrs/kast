@@ -56,6 +56,8 @@ scene or a GUI, and so on.</p>
 <li>Add, delete, move and reparent elements.</li>
 <li>Inspector edits of id, class, text and <code>data-event</code>.</li>
 <li>Style (<code>.rcss</code>) text edits.</li>
+<li><a href="gui-builder.html#prefabs">GUI prefabs</a>: Create GUI Prefab (undo restores the element; the files stay), placing an
+instance, Revert, Revert All and Unpack.</li>
 </ul>
 <h3 id="zone">Zone builder</h3>
 <p>Every edit that marks the zone unsaved: terrain sculpt / flatten strokes, height range, heightmap import and
@@ -89,7 +91,8 @@ that moves nothing) records no step, and leaves the unsaved mark as it was.</p>
 <li><strong>Prefab edit mode</strong>: opening a prefab gives it a fresh history and the scene's waits behind it;
   switching to another prefab drops the prefab's; <strong>Back</strong> drops it and the scene's history returns. Apply
   in prefab mode also clears the waiting scene's history if it has instances.</li>
-<li><strong>GUI Builder</strong>: opening another GUI, reloading it from disk, or closing it.</li>
+<li><strong>GUI Builder</strong>: opening another GUI, reloading it from disk, or closing it; a GUI prefab Apply (it writes the
+<code>.guiprefab</code>) and a prefab changed on disk refreshing the open GUI's instances.</li>
 <li><strong>Zone</strong>: opening another map or creating a New Map (each map loads with an empty history).</li>
 </ul>
 

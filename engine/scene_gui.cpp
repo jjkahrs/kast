@@ -8,6 +8,7 @@
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Elements/ElementFormControl.h>
 #include <RmlUi/Core/Factory.h>
+#include <RmlUi/Core/StyleSheetContainer.h>
 
 #include <algorithm>
 #include <format>
@@ -301,6 +302,60 @@ bool SceneGui::createElement(const std::string& parentId, const std::string& tag
     return true;
 }
 
+bool SceneGui::instantiatePrefab(const std::string& prefab, const std::string& parentId, const std::string& newId)
+{
+    const auto fail = [&](std::string_view reason) {
+        log::warn(std::format("kast.gui.instantiate('{}', '{}', '{}'): {}", prefab, parentId, newId, reason));
+        return false;
+    };
+    Rml::ElementDocument* document = documentWith(parentId);
+    if (!document)
+        return fail("no loaded GUI has the parent");
+    if (newId.empty())
+        return fail("the new id is empty");
+    const auto entry = std::ranges::find(entries_, document, &Entry::document);
+    GuiPrefabExpansion expansion{.document = entry->path, .read = prefabReader()};
+    const std::optional<std::string> rml = guiPrefabInstanceRml(prefab, newId, expansion);
+    if (!rml)
+        return fail(std::format("the prefab can't be expanded: {}", expansion.error));
+    for (const std::string& id : guiMarkupIds(*rml))
+        if (document->GetElementById(id))
+            return fail(std::format("the id '{}' is taken in that GUI", id));
+    // The prefab's sheet joins the document's own, after them (a sheet the document had from loading stays as it was).
+    for (const std::string& sheet : expansion.sheets) {
+        std::string ignored;
+        const auto file = resolveProjectPath(root_, sheet, ignored);
+        if (std::ranges::find(entry->prefabSheets, sheet) != entry->prefabSheets.end() || !file)
+            continue;
+        if (const Rml::SharedPtr<Rml::StyleSheetContainer> added = Rml::Factory::InstanceStyleSheetFile(gui::toRmlPath(*file))) {
+            const Rml::StyleSheetContainer* own = document->GetStyleSheetContainer();
+            document->SetStyleSheetContainer(own ? own->CombineStyleSheetContainer(*added) : added);
+        }
+        entry->prefabSheets.push_back(sheet);
+    }
+    Rml::Element* parent = document->GetElementById(parentId);
+    Rml::Element* holder = parent->AppendChild(document->CreateElement("div"));
+    holder->SetInnerRML(*rml);
+    Rml::ElementPtr instance = holder->GetFirstChild() ? holder->RemoveChild(holder->GetFirstChild()) : nullptr;
+    if (!instance) {
+        parent->RemoveChild(holder);
+        return fail("the prefab's markup didn't load (see above)");
+    }
+    Rml::Element* added = instance.get();
+    parent->ReplaceChild(std::move(instance), holder);
+    gui::convertRichText(*added);
+    return true;
+}
+
+GuiPrefabReader SceneGui::prefabReader() const
+{
+    return [root = root_](const std::string& path) -> std::optional<std::string> {
+        std::string ignored, text;
+        const std::optional<std::filesystem::path> file = root.empty() ? std::nullopt : resolveProjectPath(root, path, ignored);
+        return file && readFile(*file, text) ? std::optional(std::move(text)) : std::nullopt;
+    };
+}
+
 bool SceneGui::removeElement(const std::string& id)
 {
     Rml::ElementDocument* document = documentWith(id);
@@ -398,9 +453,16 @@ void SceneGui::load(Entry& entry, EventBus& bus)
         log::error(std::format("UI document '{}' not found", entry.path));
         return;
     }
+    // GUI prefab instances expanded first (their warnings logged), their files watched for hot reload too.
+    GuiPrefabExpansion prefabs{.document = entry.path, .read = prefabReader()};
+    const std::string expanded = guiExpandPrefabsRml(text, prefabs);
+    for (const std::string& path : prefabs.files)
+        if (std::string ignored; const auto part = resolveProjectPath(root_, path, ignored))
+            entry.files.emplace_back(*part, modified(*part));
+    entry.prefabSheets = prefabs.sheets;
     gui::loadProjectFonts(root_); // first: a bad font file's RmlUi error isn't this document's
     const uint64_t problems = gui::problemCount();
-    const std::string rml = guiRichBindings(text);
+    const std::string rml = guiRichBindings(expanded);
     models_.prepare(*context, rml);
     // Its virtual lists' sources read as empty while it loads, until their row templates are over windows
     // (ListListener::hold, attach).

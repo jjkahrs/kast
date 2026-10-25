@@ -1,0 +1,4 @@
+<div class="prefab-card">
+    <p id="label">Cycle B</p>
+    <div id="a" data-prefab="ui/prefab_cycle_a.guiprefab"/>
+</div>

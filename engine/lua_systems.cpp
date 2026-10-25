@@ -1370,6 +1370,11 @@ void LuaSystems::State::bindGuiApi()
         return gui->cloneElement(text(L, "clone", "templateId", templateId), text(L, "clone", "parentId", parentId),
                                  text(L, "clone", "newId", newId));
     });
+    guiApi.set_function("instantiate", [=, this](sol::this_state L, const sol::object& prefab, const sol::object& parentId,
+                                                 const sol::object& newId) {
+        return gui->instantiatePrefab(text(L, "instantiate", "prefabPath", prefab), text(L, "instantiate", "parentId", parentId),
+                                      text(L, "instantiate", "newId", newId));
+    });
     guiApi.set_function("create", [=, this](sol::this_state L, const sol::object& parentId, const sol::object& tag,
                                             const sol::object& newId, const sol::object& attrs) {
         const std::string parent = text(L, "create", "parentId", parentId);
