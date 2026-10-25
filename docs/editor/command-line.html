@@ -420,7 +420,7 @@ Text.</td>
 </tr>
 <tr>
 <td><code>--sim-key &lt;frame,[ctrl+]key&gt;</code></td>
-<td>With <code>--play</code> or <code>--open-graph</code>, repeatable: on frame <code>frame</code> press <code>key</code> (an SDL key name: <code>B</code>, <code>Escape</code>, <code>Tab</code>, <code>Delete</code>) on the Game panel (with <code>--open-graph</code>: the focused panel, e.g. the canvas); <code>ctrl+</code> holds Ctrl with it (<code>ctrl+C</code>, <code>ctrl+V</code>; it types nothing), with the character it types (a letter or digit, lower case) for a focused game GUI text field, and release it two frames later. Synthetic SDL events, like <code>--sim-mouse</code>. Example: <code>--sim-key 600,B</code>.</td>
+<td>With <code>--play</code>, <code>--open-graph</code> or <code>--focus-panel Scene</code>, repeatable: on frame <code>frame</code> press <code>key</code> (an SDL key name: <code>B</code>, <code>Escape</code>, <code>Tab</code>, <code>Delete</code>, <code>Keypad 5</code>) on the Game panel (with <code>--open-graph</code> or <code>--focus-panel Scene</code>: the focused panel, e.g. the canvas or the Scene view); <code>ctrl+</code> holds Ctrl with it (<code>ctrl+C</code>, <code>ctrl+V</code>; it types nothing), with the character it types (a letter or digit, lower case) for a focused game GUI text field, and release it two frames later. Synthetic SDL events, like <code>--sim-mouse</code>. Example: <code>--sim-key 600,B</code>.</td>
 </tr>
 <tr>
 <td><code>--sim-on-log &lt;text&gt;</code></td>

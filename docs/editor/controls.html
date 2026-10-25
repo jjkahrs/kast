@@ -58,6 +58,10 @@
 <td>Toggle gizmo Local / World space (also the toolbar button)</td>
 </tr>
 <tr>
+<td>Numpad 5</td>
+<td>Toggle the view between perspective and orthographic (also the toolbar's <strong>Persp</strong> / <strong>Ortho</strong> button)</td>
+</tr>
+<tr>
 <td>Delete, Ctrl+D</td>
 <td>Delete / duplicate the selected entity and its children</td>
 </tr>
@@ -68,7 +72,12 @@
 </tbody>
 </table>
 <p>Letter shortcuts work only when the Scene panel is focused and no text field is active.</p>
-<p>The Scene view draws each <code>Camera</code> as white frustum lines out to 2 m (a preview at 16:9, not the far plane). Select a
+<p id="projection"><strong>Orthographic view</strong>: the toolbar's <strong>Persp</strong> / <strong>Ortho</strong> button (after Local / World)
+or Numpad 5 switches the Scene view's projection. The orthographic view's height matches what the perspective view showed at the
+pivot, so toggling keeps the framing; the wheel zooms by changing that height, and pan, F, click select, the gizmo and prefab drops
+work the same. The choice is saved with the scene's editor camera.</p>
+<p>The Scene view draws each <code>Camera</code> as white frustum lines out to 2 m (a preview at 16:9, not the far plane): a pyramid
+from a perspective camera, a box from the near plane for an orthographic one. Select a
 camera and the gizmo moves/rotates it like any entity.</p>
 <p id="debug-views"><strong>Debug views</strong>: the Scene view toolbar's <strong>Debug</strong> button (after Post) opens a menu of
 views for <a href="../engine/lod-and-occlusion.html">LOD and occlusion</a>. They are not saved.</p>

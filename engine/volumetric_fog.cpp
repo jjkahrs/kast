@@ -17,7 +17,7 @@ namespace {
 
 constexpr uint64_t kVolumeFlags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_UVW_CLAMP;
 constexpr uint64_t kShadowFlags = BGFX_TEXTURE_RT | BGFX_SAMPLER_COMPARE_LEQUAL | BGFX_SAMPLER_UVW_CLAMP;
-constexpr uint16_t kGridUniforms = 10; // u_volFogGrid in the cs_volfog_*.sc shaders
+constexpr uint16_t kGridUniforms = 12; // u_volFogGrid in the cs_volfog_*.sc shaders
 
 struct PostVertex {
     float x, y, z;
@@ -171,22 +171,34 @@ bool VolumetricFog::update(bgfx::ViewId view, bgfx::FrameBufferHandle target, ui
     bx::mtxInverse(invViewProj, viewProj);
     bx::mtxInverse(invView, frame.viewMtx);
     const bx::Vec3 eye{invView[12], invView[13], invView[14]};
-    // Per meter of view depth, the ray through a point of the screen (NDC); froxel row 0 is the image's first row in
-    // memory, as the samplers' uv.
+    // Per meter of view depth, the ray through a point of the screen (NDC), from where it leaves the eye's plane: the
+    // eye for a perspective projection, a point beside it for an orthographic one (parallel rays). Froxel row 0 is the
+    // image's first row in memory, as the samplers' uv.
+    const bool ortho = frame.projMtx[15] != 0.0f;
     const auto ray = [&](float x, float y) { return bx::sub(bx::mulH(bx::Vec3{x, y, 0.5f}, invViewProj), eye); };
     const bx::Vec3 forward = bx::normalize(ray(0.0f, 0.0f));
     const auto unit = [&](float x, float y) {
         const bx::Vec3 r = ray(x, y);
-        return bx::mul(r, 1.0f / bx::dot(r, forward));
+        return ortho ? forward : bx::mul(r, 1.0f / bx::dot(r, forward));
+    };
+    const auto start = [&](float x, float y) {
+        const bx::Vec3 r = ray(x, y);
+        return ortho ? bx::add(eye, bx::sub(r, bx::mul(forward, bx::dot(r, forward)))) : eye;
     };
     const float firstRow = caps->originBottomLeft ? -1.0f : 1.0f;
     const bx::Vec3 topLeft = unit(-1.0f, firstRow);
     const bx::Vec3 right = bx::sub(unit(1.0f, firstRow), topLeft), down = bx::sub(unit(-1.0f, -firstRow), topLeft);
+    const bx::Vec3 topLeftStart = start(-1.0f, firstRow);
+    const bx::Vec3 startRight = bx::sub(start(1.0f, firstRow), topLeftStart);
+    const bx::Vec3 startDown = bx::sub(start(-1.0f, -firstRow), topLeftStart);
     Aabb bounds{eye, eye}; // the froxel grid's
     for (int i = 0; i < 4; ++i) {
-        const bx::Vec3 corner = bx::add(bx::add(topLeft, bx::mul(right, float(i & 1))), bx::mul(down, float(i / 2)));
-        const bx::Vec3 far = bx::add(eye, bx::mul(corner, s.maxDistance));
-        bounds = {bx::min(bounds.min, far), bx::max(bounds.max, far)};
+        const auto corner = [&](const bx::Vec3& first, const bx::Vec3& across, const bx::Vec3& below) {
+            return bx::add(bx::add(first, bx::mul(across, float(i & 1))), bx::mul(below, float(i / 2)));
+        };
+        const bx::Vec3 near = corner(topLeftStart, startRight, startDown);
+        const bx::Vec3 far = bx::add(near, bx::mul(corner(topLeft, right, down), s.maxDistance));
+        bounds = {bx::min(bounds.min, bx::min(near, far)), bx::max(bounds.max, bx::max(near, far))};
     }
 
     // The FogVolumes in the grid, nearest the eye first.
@@ -231,7 +243,7 @@ bool VolumetricFog::update(bgfx::ViewId view, bgfx::FrameBufferHandle target, ui
     const bx::Vec3 ambient = bx::mul(frame.ambient, s.ambientIntensity);
     // Packed as the cs_volfog_*.sc shaders' u_volFogGrid says.
     const float grid[kGridUniforms][4] = {
-        {eye.x, eye.y, eye.z, s.maxDistance},
+        {topLeftStart.x, topLeftStart.y, topLeftStart.z, s.maxDistance},
         {topLeft.x, topLeft.y, topLeft.z, jitter},
         {right.x, right.y, right.z, float(volumes.size())},
         {down.x, down.y, down.z, float(lights.count)},
@@ -240,7 +252,9 @@ bool VolumetricFog::update(bgfx::ViewId view, bgfx::FrameBufferHandle target, ui
         {ambient.x, ambient.y, ambient.z, s.lightIntensity},
         {prevEye_.x, prevEye_.y, prevEye_.z, history ? s.temporalBlend : 0.0f},
         {prevForward_.x, prevForward_.y, prevForward_.z, 0.0f},
-        {step(0.7548777f), step(0.5698403f), jittered ? 0.0f : 1.0f, 0.0f}};
+        {step(0.7548777f), step(0.5698403f), jittered ? 0.0f : 1.0f, 0.0f},
+        {startRight.x, startRight.y, startRight.z, 0.0f},
+        {startDown.x, startDown.y, startDown.z, 0.0f}};
     const size_t next = 1 - current_;
     bgfx::setViewName(view, "Volumetric fog");
     bgfx::setViewMode(view, bgfx::ViewMode::Sequential);

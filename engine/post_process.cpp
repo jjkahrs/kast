@@ -339,7 +339,8 @@ void PostProcess::applySsao(const ScenePostProcessing::Ssao& ssao)
             fb = colorTarget(halfWidth, halfHeight, bgfx::TextureFormat::RG16F);
     const bgfx::Caps* caps = bgfx::getCaps();
     const float params[4] = {ssao.radius, static_cast<float>(ssao.sliceCount), ssao.intensity, ssao.power};
-    const float depthParams[4] = {caps->originBottomLeft ? 1.0f : 0.0f, caps->homogeneousDepth ? 1.0f : 0.0f, 0.0f, 0.0f};
+    const float depthParams[4] = {caps->originBottomLeft ? 1.0f : 0.0f, caps->homogeneousDepth ? 1.0f : 0.0f,
+                                  proj_[15] != 0.0f ? 1.0f : 0.0f, 0.0f};
     const float texel[4] = {1.0f / width_, 1.0f / height_, 1.0f / halfWidth, 1.0f / halfHeight};
     const auto view = [&](int i) {
         const auto id = static_cast<bgfx::ViewId>(first_ + 1 + i);
@@ -379,7 +380,8 @@ void PostProcess::applySsr(const ScenePostProcessing::Ssr& ssr)
     if (!bgfx::isValid(ssr_))
         ssr_ = colorTarget(halfWidth, halfHeight, bgfx::TextureFormat::RGBA16F);
     const bgfx::Caps* caps = bgfx::getCaps();
-    const float depthParams[4] = {caps->originBottomLeft ? 1.0f : 0.0f, caps->homogeneousDepth ? 1.0f : 0.0f, 0.0f, 0.0f};
+    const float depthParams[4] = {caps->originBottomLeft ? 1.0f : 0.0f, caps->homogeneousDepth ? 1.0f : 0.0f,
+                                  proj_[15] != 0.0f ? 1.0f : 0.0f, 0.0f};
     const float texel[4] = {1.0f / width_, 1.0f / height_, 1.0f / halfWidth, 1.0f / halfHeight};
     const auto view = [&](int i, const float* params) {
         const auto id = static_cast<bgfx::ViewId>(first_ + 1 + kSsaoViews + i);
@@ -425,7 +427,8 @@ bgfx::TextureHandle PostProcess::applyDof(const ScenePostProcessing::DepthOfFiel
     }
     const bgfx::Caps* caps = bgfx::getCaps();
     const float params[4] = {dofCocScale(dof, height_), dof.focusDistance, dof.maxCoc, 0.0f};
-    const float depthParams[4] = {caps->originBottomLeft ? 1.0f : 0.0f, caps->homogeneousDepth ? 1.0f : 0.0f, 0.0f, 0.0f};
+    const float depthParams[4] = {caps->originBottomLeft ? 1.0f : 0.0f, caps->homogeneousDepth ? 1.0f : 0.0f,
+                                  proj_[15] != 0.0f ? 1.0f : 0.0f, 0.0f};
     const float texel[4] = {1.0f / width_, 1.0f / height_, 1.0f / halfWidth, 1.0f / halfHeight};
     const auto view = [&](int i, const char* name) {
         const auto id = static_cast<bgfx::ViewId>(first + i);

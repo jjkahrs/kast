@@ -2817,21 +2817,29 @@ void Renderer::drawCameraFrustums(const Scene& scene, bgfx::ViewId view)
         float cameraView[16], cameraProj[16], world[16];
         cameraMatrices(scene, entity, kFrustumPreviewAspect, false, cameraView, cameraProj);
         bx::mtxInverse(world, cameraView);
+        // Perspective: a pyramid from the eye. Orthographic: a box from the near plane, as wide as the view.
+        const bool ortho = camera.projection == CameraProjection::Orthographic;
         const float depth = bx::min(kFrustumPreviewDistance, camera.farPlane);
-        const float halfHeight = depth * std::tan(bx::toRad(camera.verticalFovDegrees) * 0.5f);
+        const float halfHeight = ortho ? camera.orthographicSize : depth * std::tan(bx::toRad(camera.verticalFovDegrees) * 0.5f);
         const float halfWidth = halfHeight * kFrustumPreviewAspect;
-        const bx::Vec3 origin = bx::mul(bx::Vec3{0.0f, 0.0f, 0.0f}, world);
         const float signs[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+        const bx::Vec3 origin = bx::mul(bx::Vec3{0.0f, 0.0f, 0.0f}, world);
+        bx::Vec3 nearCorners[4] = {origin, origin, origin, origin};
         bx::Vec3 corners[4] = {origin, origin, origin, origin};
-        for (int i = 0; i < 4; ++i)
-            corners[i] = bx::mul(bx::Vec3{signs[i][0] * halfWidth, signs[i][1] * halfHeight, -depth}, world);
         for (int i = 0; i < 4; ++i) {
-            const bx::Vec3& a = corners[i];
-            const bx::Vec3& b = corners[(i + 1) % 4];
-            lines.push_back({origin.x, origin.y, origin.z, kFrustumColor});
-            lines.push_back({a.x, a.y, a.z, kFrustumColor});
+            corners[i] = bx::mul(bx::Vec3{signs[i][0] * halfWidth, signs[i][1] * halfHeight, -depth}, world);
+            if (ortho)
+                nearCorners[i] = bx::mul(bx::Vec3{signs[i][0] * halfWidth, signs[i][1] * halfHeight, -camera.nearPlane}, world);
+        }
+        const auto line = [&](const bx::Vec3& a, const bx::Vec3& b) {
             lines.push_back({a.x, a.y, a.z, kFrustumColor});
             lines.push_back({b.x, b.y, b.z, kFrustumColor});
+        };
+        for (int i = 0; i < 4; ++i) {
+            line(nearCorners[i], corners[i]);
+            line(corners[i], corners[(i + 1) % 4]);
+            if (ortho)
+                line(nearCorners[i], nearCorners[(i + 1) % 4]);
         }
     }
     submitLines(lines, lineLayout_, lineProgram_, view);

@@ -253,7 +253,7 @@ void SceneViewport::draw(Document& doc)
     const bool visible = beginViewportPanel("Scene", doc, PanelFocus::Scene);
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     if (visible) {
-        drawToolbar();
+        drawToolbar(doc);
         const ImVec2 size = ImGui::GetContentRegionAvail();
         const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
         // A window too small for the panel leaves it no room (size < 0): 0, which nothing resizes to, not a wrapped
@@ -365,7 +365,7 @@ void SceneViewport::bakeProbes(Document& doc, const std::vector<entt::entity>& p
     }
 }
 
-void SceneViewport::drawToolbar()
+void SceneViewport::drawToolbar(Document& doc)
 {
     const ImGuiStyle& style = ImGui::GetStyle();
     const ImVec2 start = ImGui::GetCursorPos(); // below the tab bar
@@ -382,6 +382,10 @@ void SceneViewport::drawToolbar()
     ImGui::SameLine();
     if (ImGui::SmallButton(local_ ? "Local (X)" : "World (X)"))
         local_ = !local_;
+    ImGui::SameLine();
+    if (ImGui::SmallButton(doc.camera.orthographic ? "Ortho" : "Persp"))
+        doc.camera.orthographic = !doc.camera.orthographic;
+    ImGui::SetItemTooltip("Perspective or orthographic projection (Numpad 5)");
     ImGui::SameLine(0.0f, style.ItemSpacing.x * 3.0f);
     ImGui::Checkbox("Post", &postEffects_);
     ImGui::SetItemTooltip("Show the scene's post-processing effects (Window > Post Processing); fog always shows");
@@ -472,6 +476,7 @@ void SceneViewport::manipulate(Document& doc, const float* view, const float* pr
     kast::Scene& scene = doc.scene;
     const entt::entity entity = doc.selected;
     ImGuizmo::Enable(drag_ == Drag::None && !ImGui::GetIO().KeyAlt);
+    ImGuizmo::SetOrthographic(doc.camera.orthographic);
     float world[16];
     scene.worldMatrix(entity, world);
     // The entity before this frame's drag: one undo step from the first change until the gizmo lets go.
@@ -538,6 +543,8 @@ void SceneViewport::shortcuts(Document& doc)
             local_ = !local_;
         if (ImGui::IsKeyPressed(ImGuiKey_F, false) && doc.scene.valid(doc.selected))
             doc.camera.focus(worldBounds(doc.scene, doc.selected));
+        if (ImGui::IsKeyPressed(ImGuiKey_Keypad5, false))
+            doc.camera.orthographic = !doc.camera.orthographic;
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))
         deleteSelected(doc);

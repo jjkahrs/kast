@@ -27,8 +27,8 @@ constexpr float kCascadeSplitLambda = 0.75f;
 // [i + 1] = far end of cascade i, entries past count = far.
 std::array<float, kMaxShadowCascades + 1> cascadeSplits(float nearDepth, float farDepth, int count);
 
-// World-space corners of the camera frustum (perspective viewMtx / projMtx, any depth convention) between view depths
-// nearDepth and farDepth: near plane corners first.
+// World-space corners of the camera frustum (perspective or orthographic viewMtx / projMtx, any depth convention)
+// between view depths nearDepth and farDepth: near plane corners first.
 std::array<bx::Vec3, 8> frustumSliceCorners(const float* viewMtx, const float* projMtx, float nearDepth, float farDepth);
 
 // A directional light's view and orthographic projection for one cascade.

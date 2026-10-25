@@ -52,7 +52,7 @@ void main()
     }
     vec3 p = kastViewPos(uv, texture2DLod(s_tex0, uv, 0.0).x);
     vec3 n = kastViewNormal(g);
-    vec3 v = normalize(-p);
+    vec3 v = kastViewDir(p);
 
     vec2 pixel = floor(gl_FragCoord.xy);
     vec2 xi = vec2(kastBayer4(pixel), kastBayer4(pixel.yx + vec2(1.0, 2.0))) + 1.0 / 32.0;

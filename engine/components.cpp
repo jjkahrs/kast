@@ -43,6 +43,8 @@ const char* validateCamera(const entt::meta_any& component)
         return "\"verticalFovDegrees\" must be between 0 and 180 (exclusive)";
     if (!(camera.nearPlane > 0.0f && camera.nearPlane < camera.farPlane))
         return "must have 0 < \"nearPlane\" < \"farPlane\"";
+    if (!(camera.orthographicSize > 0.0f))
+        return "\"orthographicSize\" must be > 0";
     return nullptr;
 }
 
@@ -416,10 +418,17 @@ void registerBuiltins()
         .data<&VoxelGI::enabled>("enabled").custom<FieldInfo>(FieldInfo{.displayName = "Enabled", .optional = true})
         .data<&VoxelGI::bakedPath>("bakedPath").custom<FieldInfo>("Baked Path");
 
+    entt::meta_factory<CameraProjection>{}
+        .type("CameraProjection")
+        .data<CameraProjection::Perspective>("perspective").custom<FieldInfo>("Perspective")
+        .data<CameraProjection::Orthographic>("orthographic").custom<FieldInfo>("Orthographic");
     registerComponent<Camera>("Camera", {"Camera", true, validateCamera})
         .data<&Camera::verticalFovDegrees>("verticalFovDegrees").custom<FieldInfo>("Vertical FOV")
         .data<&Camera::nearPlane>("nearPlane").custom<FieldInfo>("Near Plane")
-        .data<&Camera::farPlane>("farPlane").custom<FieldInfo>("Far Plane");
+        .data<&Camera::farPlane>("farPlane").custom<FieldInfo>("Far Plane")
+        .data<&Camera::projection>("projection").custom<FieldInfo>(FieldInfo{.displayName = "Projection", .optional = true})
+        .data<&Camera::orthographicSize>("orthographicSize")
+        .custom<FieldInfo>(FieldInfo{.displayName = "Orthographic Size", .optional = true});
 
     registerComponent<Rotator>("Rotator", {"Rotator"})
         .data<&Rotator::axis>("axis").custom<FieldInfo>("Axis")

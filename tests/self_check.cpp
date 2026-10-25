@@ -408,8 +408,22 @@ void checkComponentJson()
     const kast::Rotator r = roundTrip(kast::Rotator{{1, 0, 0}, -30}, R"({"axis":[1.0,0.0,0.0],"degreesPerSecond":-30.0})");
     check(r.degreesPerSecond == -30.0f && near(r.axis, {1, 0, 0}), "Rotator values");
     const kast::Camera cam = roundTrip(kast::Camera{45, 0.5f, 200},
-                                       R"({"verticalFovDegrees":45.0,"nearPlane":0.5,"farPlane":200.0})");
+                                       R"({"verticalFovDegrees":45.0,"nearPlane":0.5,"farPlane":200.0,"projection":"perspective","orthographicSize":5.0})");
     check(cam.verticalFovDegrees == 45.0f && cam.nearPlane == 0.5f && cam.farPlane == 200.0f, "Camera values");
+    const kast::Camera orthoCam = roundTrip(kast::Camera{60, 0.1f, 50, kast::CameraProjection::Orthographic, 12.5f},
+                                            R"({"verticalFovDegrees":60.0,"nearPlane":0.1,"farPlane":50.0,"projection":"orthographic","orthographicSize":12.5})");
+    check(orthoCam.projection == kast::CameraProjection::Orthographic && orthoCam.orthographicSize == 12.5f,
+          "Camera orthographic values");
+    {
+        // Saved before the projection fields existed: loads as perspective, size 5.
+        std::string error;
+        const entt::meta_any old = kast::componentFromJson(
+            entt::resolve<kast::Camera>(),
+            nlohmann::ordered_json::parse(R"({"verticalFovDegrees":45,"nearPlane":0.5,"farPlane":200})"), error);
+        check(old && error.empty() && old.cast<kast::Camera>().projection == kast::CameraProjection::Perspective &&
+                  old.cast<kast::Camera>().orthographicSize == 5.0f,
+              "Camera JSON without projection fields loads as perspective, size 5");
+    }
     const TestComponent c = roundTrip(TestComponent{-7, false, "hello"}, R"({"count":-7,"enabled":false,"label":"hello"})");
     check(c.count == -7 && !c.enabled && c.label == "hello", "int, bool and string field values");
 
@@ -490,6 +504,15 @@ void checkLoadValidation()
          "nearPlane"},
         {"camera near >= far", file(entity(1, "null", R"(, "Camera": {"verticalFovDegrees": 60, "nearPlane": 10, "farPlane": 10})")),
          "farPlane"},
+        {"camera orthographic size 0",
+         file(entity(1, "null", R"(, "Camera": {"verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 10, "projection": "orthographic", "orthographicSize": 0})")),
+         "orthographicSize"},
+        {"camera orthographic size negative",
+         file(entity(1, "null", R"(, "Camera": {"verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 10, "orthographicSize": -2})")),
+         "orthographicSize"},
+        {"camera bad projection",
+         file(entity(1, "null", R"(, "Camera": {"verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 10, "projection": "fisheye"})")),
+         "fisheye"},
         {"point light range 0", file(entity(1, "null", R"(, "PointLight": {"color": [1,1,1], "intensity": 1, "range": 0})")),
          "range"},
         {"point light negative intensity",
@@ -1025,6 +1048,8 @@ return { update = function(dt)
     assert(t.position.x == 1 and t.position.y == 2 and t.rotation.w == 1 and t.scale.z == 1, "get Vec3/Quaternion as tables")
     assert(kast.get(cube, "MeshRenderer").primitive == "cube", "get enum as its name")
     assert(kast.get(cam, "Camera").verticalFovDegrees == 60, "get float")
+    assert(kast.get(cam, "Camera").projection == "perspective" and kast.get(cam, "Camera").orthographicSize == 5,
+           "get Camera projection defaults")
     kast.set(cube, "Transform", {position = {x = 2, y = 3, z = 4}})
     kast.set(cube, "MeshRenderer", {primitive = "sphere"})
     t = kast.get(cube, "Transform")
@@ -1051,6 +1076,8 @@ return { update = function(dt)
     fails('"position" must be a table', function() kast.set(cube, "Transform", {scale = {x = 2, y = 2, z = 2}, position = {x = 9, y = 9}}) end)
     fails('"scale" must be a table', function() kast.set(cube, "Transform", {position = {x = 9, y = 9, z = 9}, scale = "big"}) end)
     fails("finite number", function() kast.set(cam, "Camera", {farPlane = math.huge}) end)
+    fails('"orthographicSize" must be > 0', function() kast.set(cam, "Camera", {orthographicSize = 0}) end)
+    fails('unknown value "fisheye"', function() kast.set(cam, "Camera", {projection = "fisheye"}) end)
     fails('"rotation" must be a nonzero quaternion', function() kast.set(cube, "Transform", {rotation = {x = 0, y = 0, z = 0, w = 0}}) end)
     fails('unknown value "torus"', function() kast.set(cube, "MeshRenderer", {primitive = "torus"}) end)
     local light = kast.get(cam, "PointLight")
@@ -1104,6 +1131,14 @@ return { update = function(dt)
            math.abs(dir.y / -dir.z - math.tan(math.rad(30))) < 1e-4 and
            math.abs(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z - 1) < 1e-4,
            "mouseRay through the cursor, normalized")
+    kast.set(cam, "Camera", {projection = "orthographic", orthographicSize = 2})
+    local camera = kast.get(cam, "Camera")
+    assert(camera.projection == "orthographic" and camera.orthographicSize == 2, "set Camera projection at runtime")
+    origin, dir = kast.input.mouseRay() -- 2:1 view 4 m high: the top right corner is (4, 2) beside the camera
+    assert(math.abs(origin.x - 4) < 1e-4 and math.abs(origin.y - 2) < 1e-4 and math.abs(origin.z + 0.1) < 1e-4,
+           "orthographic mouseRay starts on the near plane, beside the camera by the cursor")
+    assert(dir.x == 0 and dir.y == 0 and dir.z == -1, "orthographic mouseRay is parallel to the camera's forward")
+    kast.set(cam, "Camera", {projection = "perspective"})
     kast.input.setCursorLocked(true)
 
     local parent = kast.create("Parent")
@@ -1163,6 +1198,9 @@ end })");
     check(registry.get<kast::MeshRenderer>(cube).primitive == kast::Primitive::Sphere, "set wrote an enum by name");
     check(registry.get<kast::Camera>(cam).verticalFovDegrees == 60.0f && registry.get<kast::Camera>(cam).farPlane == 1000.0f,
           "rejected Camera sets left it unchanged");
+    check(registry.get<kast::Camera>(cam).projection == kast::CameraProjection::Perspective &&
+              registry.get<kast::Camera>(cam).orthographicSize == 2.0f,
+          "set wrote Camera projection and orthographicSize");
     const auto& pointLight = registry.get<kast::PointLight>(cam);
     check(pointLight.intensity == 2.0f && pointLight.range == 3.5f && near(pointLight.color, {0.5f, 0.25f, 0.0f}),
           "set wrote PointLight; rejected sets left it unchanged");
@@ -7467,6 +7505,81 @@ void checkOcclusion()
                        ((at.x1 + 1) << at.mip) > x1 && (at.y0 << at.mip) <= y0 && ((at.y1 + 1) << at.mip) > y1;
     }
     check(footprintsOk, "occlusion: footprints are at most 2 x 2 texels and cover the rect");
+}
+
+// Orthographic cameras: the Camera component's projection, the shadow cascades' slices, rays, and the editor camera.
+void checkOrthographicCamera()
+{
+    kast::Scene scene;
+    const entt::entity cam = scene.create("Camera");
+    scene.registry().get<kast::Transform>(cam).position = {1, 2, 3};
+    scene.registry().emplace<kast::Camera>(cam, 60.0f, 0.5f, 100.0f, kast::CameraProjection::Orthographic, 3.0f);
+    float view[16], proj[16], invProj[16], viewProj[16];
+    kast::cameraMatrices(scene, cam, 2.0f, false, view, proj);
+    bx::mtxInverse(invProj, proj);
+    const auto at = [&](float x, float y) { return bx::mulH({x, y, 0.5f}, invProj); };
+    check(proj[15] != 0.0f, "orthographic Camera: an orthographic matrix");
+    check(near(at(0, 1).y - at(0, -1).y, 6.0f) && near(at(1, 0).x - at(-1, 0).x, 12.0f),
+          "orthographic Camera: view height 2 * orthographicSize, width height * aspect");
+    check(near(-bx::mulH({0, 0, 0}, invProj).z, 0.5f) && near(-bx::mulH({0, 0, 1}, invProj).z, 100.0f),
+          "orthographic Camera: near and far planes (D3D depth)");
+    kast::cameraMatrices(scene, cam, 2.0f, true, view, proj);
+    bx::mtxInverse(invProj, proj);
+    check(near(-bx::mulH({0, 0, -1}, invProj).z, 0.5f) && near(-bx::mulH({0, 0, 1}, invProj).z, 100.0f),
+          "orthographic Camera: near and far planes (OpenGL depth)");
+
+    // Rays through the view are parallel, from the near plane beside the eye.
+    kast::cameraMatrices(scene, cam, 2.0f, false, view, proj);
+    bx::mtxMul(viewProj, view, proj);
+    const kast::Ray center = kast::screenRay(viewProj, 100, 50, 200, 100, false);
+    const kast::Ray corner = kast::screenRay(viewProj, 200, 0, 200, 100, false);
+    check(near(center.direction, {0, 0, -1}) && near(corner.direction, {0, 0, -1}),
+          "screenRay with an orthographic viewProj: parallel rays along the camera's forward");
+    check(near(center.origin, {1, 2, 2.5f}) && near(corner.origin, {7, 5, 2.5f}),
+          "screenRay with an orthographic viewProj: origins on the near plane, apart by the cursor");
+
+    // A cascade's slice of an orthographic view is a box: the far corners are the near ones moved along forward.
+    const auto corners = kast::frustumSliceCorners(view, proj, 2.0f, 10.0f);
+    bool box = true;
+    for (size_t i = 0; i < 4; ++i)
+        box = box && near(bx::sub(corners[i + 4], corners[i]), {0, 0, -8});
+    check(box && near(corners[0], {-5, -1, 1}) && near(corners[2], {7, 5, 1}),
+          "shadow cascades: an orthographic slice's corners are a box as wide as the view");
+
+    // The editor camera: orthographic keeps the perspective framing at the pivot.
+    EditorCamera editor;
+    editor.distance = 8.0f;
+    check(near(editor.orthoSize(), 8.0f * std::tan(bx::toRad(30.0f))), "editor camera: ortho size = distance * tan(30)");
+    float editorView[16], editorProj[16], editorViewProj[16];
+    const auto pivotTop = [&] { // where the point orthoSize above the pivot lands (NDC y)
+        editor.viewMatrix(editorView);
+        editor.projMatrix(editorProj, 1.5f);
+        bx::mtxMul(editorViewProj, editorView, editorProj);
+        return bx::mulH(bx::mad(editor.up(), editor.orthoSize(), editor.pivot), editorViewProj).y;
+    };
+    const float perspectiveTop = pivotTop();
+    const bool wasPerspective = editorProj[15] == 0.0f;
+    editor.orthographic = true;
+    check(wasPerspective && near(perspectiveTop, 1.0f) && near(pivotTop(), 1.0f) && editorProj[15] != 0.0f,
+          "editor camera: toggling to orthographic keeps the framing at the pivot");
+    const float before = editor.orthoSize();
+    editor.dolly(1.0f);
+    check(editor.orthoSize() < before, "editor camera: the wheel zooms the orthographic view in");
+    const bx::Vec3 pivot = editor.pivot;
+    editor.pan(-100.0f, 0.0f, 100.0f); // a viewport's height of drag: the view's height
+    check(near(bx::length(bx::sub(editor.pivot, pivot)), 2.0f * editor.orthoSize()),
+          "editor camera: orthographic pan follows the cursor");
+    editor.focus({{-1, -1, -1}, {1, 1, 1}});
+    check(editor.orthoSize() >= std::sqrt(3.0f) && editor.orthoSize() < 2.0f * std::sqrt(3.0f),
+          "editor camera: orthographic focus fits the box's bounding sphere in the view's height");
+
+    // Saved with the scene's editor data; files from before load as perspective.
+    EditorCamera loaded;
+    check(loaded.fromJson(editor.toJson()) && loaded.orthographic && near(loaded.distance, editor.distance),
+          "editor camera: orthographic round-trips through JSON");
+    check(loaded.fromJson(nlohmann::ordered_json::parse(R"({"pivot": [0, 1, 0], "yaw": 10, "pitch": -5, "distance": 4})")) &&
+              !loaded.orthographic,
+          "editor camera: JSON without \"orthographic\" loads as perspective");
 }
 
 void checkTerrainLod()
@@ -15785,6 +15898,7 @@ int main(int argc, char** argv)
     checkIbl();
     checkFrustumCulling();
     checkLodSelection();
+    checkOrthographicCamera();
     checkTerrainLod();
     checkOcclusion();
     checkPostProcessing();
