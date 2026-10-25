@@ -1,5 +1,6 @@
 #include "document.h"
 
+#include "asset_ids.h"
 #include "assets.h"
 #include "build.h"
 
@@ -709,6 +710,8 @@ bool openFile(Document& doc, const std::string& path, std::string& error)
 {
     // The scene's project's Lua components must be active before it loads; the current scene is replaced below.
     std::optional<kast::Project> project = projectOf(path);
+    if (project)
+        assetIds().scan(project->root);
     kast::activateComponentDefinitions(rootOf(project), nullptr);
     kast::Scene scene;
     kast::SceneLoadReport report;
@@ -791,6 +794,7 @@ bool openProject(Document& doc, const std::filesystem::path& file, std::string& 
         kast::log::warn(std::format("Cannot open the project's startScene '{}': {}", *project.startScene, reason));
     }
     resetToDefault(doc);
+    assetIds().scan(project.root);
     doc.project = std::move(project);
     kast::activateComponentDefinitions(rootOf(doc.project), &doc.scene); // the default scene has no Lua components
     return true;

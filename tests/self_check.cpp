@@ -5,6 +5,7 @@
 // (Assimp loading, animation sampling, crossfades, skinning limits) and physics (bodies, events, kast.physics,
 // characters). --bench-physics instead times 500 dynamic boxes and exits.
 // Exit 0 if every check passes. Run by CTest as engine_self_check.
+#include "asset_ids.h" // stable asset ids; links editor/asset_ids.cpp
 #include "assets.h"   // Assets panel file logic; links editor/assets.cpp
 #include "build.h"    // editor Build pipeline; links editor/build.cpp
 #include "document.h" // editor Play mode; links editor/document.cpp, no window needed
@@ -4753,6 +4754,158 @@ void checkAssetCreate()
           "remapProjectPaths leaves unrelated paths unchanged");
 }
 
+// Stable asset ids (asset_ids.h): .meta sidecars created on scan, kept by renames, moves and recycling, and the scan's
+// fixes for Explorer copies, renames without the .meta and orphans.
+void checkAssetIds()
+{
+    std::set<std::string> fresh;
+    for (int i = 0; i < 1000; ++i)
+        fresh.insert(newAssetId());
+    check(fresh.size() == 1000 && std::ranges::all_of(fresh, [](const std::string& id) { return isAssetId(id); }),
+          "newAssetId: 1000 unique lowercase UUIDv4s");
+    for (const char* bad : {"", "6F9619FF-8B86-4011-B42D-00C04FC964FF", "6f9619ff-8b86-1011-b42d-00c04fc964ff",
+                            "6f9619ff-8b86-4011-742d-00c04fc964ff", "6f9619ff8b864011b42d00c04fc964ff"})
+        check(!isAssetId(bad), std::format("isAssetId refuses '{}'", bad).c_str());
+
+    const auto logged = [](size_t from, const std::string& text) {
+        const std::vector<std::string>& lines = kast::log::lines();
+        return std::count_if(lines.begin() + static_cast<std::ptrdiff_t>(from), lines.end(),
+                             [&](const std::string& line) { return contains(line, text); });
+    };
+    const auto meta = [](const std::filesystem::path& file) { return readAssetMeta(metaFileOf(file)); };
+
+    // Creation on scan and the skip rules.
+    const std::filesystem::path root = projectTestDir("kast_asset_ids", "Ids");
+    for (const char* dir : {"models", "Empty", ".kast", "out"})
+        std::filesystem::create_directories(root / dir);
+    for (const char* file : {"a.lua", "models/k.glb", "models/K2.png", ".gitignore", ".kast/cache.bin", "out/game.pak",
+                             "save.scene.tmp"})
+        writeFile(root / file, file);
+    std::string error;
+    check(saveBuildFolder(root, root / "out", error), "asset ids: an in-project build folder");
+    AssetIds ids;
+    ids.scan(root);
+    const std::optional<std::string> idA = meta(root / "a.lua"), idK = meta(root / "models/k.glb");
+    check(idA && idK && meta(root / "models/K2.png") && *idA != *idK && ids.size() == 3,
+          "scan gives every asset file a .meta with a valid, unique id");
+    check(idA && readText(metaFileOf(root / "a.lua")) == std::format("{{\n  \"id\": \"{}\"\n}}\n", *idA),
+          ".meta format: {\"id\": ...}, 2-space indented, trailing newline");
+    for (const char* none : {"models", "Empty", "scripts", ".gitignore", ".kast/cache.bin", "out/game.pak", "project.kast",
+                             "save.scene.tmp"})
+        check(!std::filesystem::exists(metaFileOf(root / none)), std::format("no .meta for '{}'", none).c_str());
+    check(idK && ids.pathOf(*idK) == "models/k.glb" && ids.idOf("MODELS/K.GLB") == idK && !ids.idOf("models/none.glb") &&
+              !ids.pathOf(newAssetId()),
+          "AssetIds: id -> path, path -> id ignoring case");
+    check(!findAsset(scanAssets(root), "a.lua.meta") && findAsset(scanAssets(root), "a.lua"), "scanAssets hides .meta files");
+    check(!shipsInPak("a.lua.meta") && !shipsInPak("models/k.glb.META") && shipsInPak("a.lua") &&
+              std::ranges::none_of(pakContents(root, root / "out"), [](const std::string& path) { return path.ends_with(".meta"); }),
+          ".meta files never ship in game.pak");
+    check(!assetNameError("x.lua.meta").empty(), "assetNameError refuses a .meta name");
+    ids.scan(root);
+    check(meta(root / "a.lua") == idA && ids.idOf("a.lua") == idA, "a rescan keeps the ids");
+    if (!idA || !idK)
+        return;
+
+    // Editor file operations carry the .meta along.
+    check(renameAsset(root / "a.lua", "b.lua", error) && meta(root / "b.lua") == idA &&
+              !std::filesystem::exists(metaFileOf(root / "a.lua")),
+          "renameAsset renames the .meta");
+    check(renameAsset(root / "b.lua", "B.lua", error) &&
+              diskNames(root) == std::vector<std::string>{".gitignore", ".kast", "B.lua", "B.lua.meta", "Empty", "models",
+                                                          "out", "project.kast", "save.scene.tmp", "scripts"},
+          "a case-only rename renames the .meta's case too");
+    writeFile(root / "c.lua", "c");
+    ids.scan(root); // c.lua gets a .meta
+    writeFile(root / "d.lua.meta", "{}"); // a stale sidecar holding the name
+    check(!renameAsset(root / "c.lua", "d.lua", error) && std::filesystem::exists(root / "c.lua") &&
+              !std::filesystem::exists(root / "d.lua"),
+          "a rename whose .meta can't follow changes nothing");
+    std::filesystem::remove(root / "d.lua.meta");
+    check(moveAsset(root / "B.lua", root / "models", error) && meta(root / "models/B.lua") == idA,
+          "moveAsset moves the .meta");
+    check(renameAsset(root / "models", "art", error) && meta(root / "art/k.glb") == idK, "a folder rename keeps its files' ids");
+    ids.scan(root);
+    check(ids.pathOf(*idA) == "art/B.lua" && ids.pathOf(*idK) == "art/k.glb", "the registry follows the moves on rescan");
+    check(recycleAsset(root / "art/B.lua", error) && !std::filesystem::exists(metaFileOf(root / "art/B.lua")),
+          "recycleAsset recycles the .meta");
+
+    std::filesystem::path rml;
+    check(writeNewGui(root / "ui", rml, error), "asset ids: a new GUI");
+    ids.scan(root);
+    const std::optional<std::string> idRml = meta(rml), idRcss = meta(root / "ui/new_gui.rcss");
+    check(idRml && idRcss && renameGui(rml, "menu.rml", error) && meta(root / "ui/menu.rml") == idRml &&
+              meta(root / "ui/menu.rcss") == idRcss && !std::filesystem::exists(root / "ui/new_gui.rcss.meta"),
+          "renameGui carries the .rml's and the linked .rcss's .meta");
+    writeFile(root / "ui/p.guiprefab", "<p/>");
+    writeFile(root / "ui/p.rcss", "");
+    writeFile(root / "ui/taken.guiprefab", "<p/>");
+    ids.scan(root);
+    const std::optional<std::string> idSheet = meta(root / "ui/p.rcss"), idPrefab = meta(root / "ui/p.guiprefab");
+    check(!renameGuiPrefab(root / "ui/p.guiprefab", "taken.guiprefab", error) && meta(root / "ui/p.rcss") == idSheet &&
+              !std::filesystem::exists(root / "ui/taken.rcss.meta"),
+          "a failed renameGuiPrefab puts the sheet's .meta back too");
+    check(renameGuiPrefab(root / "ui/p.guiprefab", "q.guiprefab", error) && meta(root / "ui/q.guiprefab") == idPrefab &&
+              meta(root / "ui/q.rcss") == idSheet,
+          "renameGuiPrefab carries both .meta files");
+    std::filesystem::create_directories(root / "ui/sub");
+    check(moveGuiPrefab(root / "ui/q.guiprefab", root / "ui/sub", error) && meta(root / "ui/sub/q.guiprefab") == idPrefab &&
+              meta(root / "ui/sub/q.rcss") == idSheet,
+          "moveGuiPrefab carries both .meta files");
+    std::filesystem::path machine;
+    check(writeNewStateMachine(root / "fsms", {}, machine, error), "asset ids: a new state machine");
+    ids.scan(root);
+    const std::optional<std::string> idMachine = meta(machine);
+    check(idMachine && renameNewStateMachine(machine, "door.lua", {}, error) && meta(root / "fsms/door.lua") == idMachine,
+          "renameNewStateMachine carries the .meta");
+
+    // Explorer copy of file + .meta: the copy gets a new id, the original keeps its own.
+    std::filesystem::copy_file(root / "art/k.glb", root / "art/k_copy.glb");
+    std::filesystem::copy_file(metaFileOf(root / "art/k.glb"), metaFileOf(root / "art/k_copy.glb"));
+    size_t mark = kast::log::lines().size();
+    ids.scan(root);
+    check(meta(root / "art/k.glb") == idK && meta(root / "art/k_copy.glb") && meta(root / "art/k_copy.glb") != idK &&
+              ids.idOf("art/k_copy.glb") == meta(root / "art/k_copy.glb"),
+          "a copied .meta: the copy gets a fresh id");
+    check(logged(mark, "'art/k.glb' and 'art/k_copy.glb' had the same asset id") == 1, "the duplicate is logged, naming both");
+
+    // Explorer rename without the .meta: the one orphan is re-paired with the one meta-less file of its extension.
+    std::filesystem::rename(root / "art/k.glb", root / "art/hero.glb");
+    mark = kast::log::lines().size();
+    ids.scan(root);
+    check(meta(root / "art/hero.glb") == idK && !std::filesystem::exists(metaFileOf(root / "art/k.glb")) &&
+              ids.pathOf(*idK) == "art/hero.glb",
+          "an orphan .meta is adopted by the renamed file");
+    check(logged(mark, "'art/hero.glb' took the asset id of missing 'art/k.glb'") == 1, "the re-pairing is logged");
+
+    // Ambiguous: two orphans of one extension in a folder are not re-paired; both are recycled.
+    writeFile(root / "art/x1.png", "1");
+    writeFile(root / "art/x2.png", "2");
+    ids.scan(root);
+    const std::optional<std::string> idX1 = meta(root / "art/x1.png"), idX2 = meta(root / "art/x2.png");
+    std::filesystem::rename(root / "art/x1.png", root / "art/y1.png");
+    std::filesystem::rename(root / "art/x2.png", root / "art/y2.png");
+    mark = kast::log::lines().size();
+    ids.scan(root);
+    check(meta(root / "art/y1.png") && meta(root / "art/y2.png") && meta(root / "art/y1.png") != idX1 &&
+              meta(root / "art/y1.png") != idX2 && meta(root / "art/y2.png") != idX1 && meta(root / "art/y2.png") != idX2 &&
+              !std::filesystem::exists(metaFileOf(root / "art/x1.png")) && !std::filesystem::exists(metaFileOf(root / "art/x2.png")),
+          "ambiguous orphans are not re-paired: the files get fresh ids");
+    check(logged(mark, "Moved orphan 'art/x1.png.meta' to the Recycle Bin") == 1 &&
+              logged(mark, "Moved orphan 'art/x2.png.meta' to the Recycle Bin") == 1,
+          "each recycled orphan is logged");
+
+    // A lone orphan (its file deleted outside the editor) is recycled; a broken .meta is replaced.
+    std::filesystem::remove(root / "art/hero.glb");
+    writeFile(root / "B.lua", "b");
+    writeFile(metaFileOf(root / "B.lua"), "not json");
+    mark = kast::log::lines().size();
+    ids.scan(root);
+    check(!std::filesystem::exists(metaFileOf(root / "art/hero.glb")) && !ids.pathOf(*idK) &&
+              logged(mark, "Moved orphan 'art/hero.glb.meta' to the Recycle Bin") == 1,
+          "a lone orphan .meta is recycled");
+    check(meta(root / "B.lua") && logged(mark, "'B.lua.meta' holds no valid asset id") == 1, "a broken .meta is replaced");
+}
+
 void checkAssets()
 {
     checkAssetScan();
@@ -4761,6 +4914,7 @@ void checkAssets()
     checkAssetMoves();
     checkOpenSceneAction();
     checkAssetCreate();
+    checkAssetIds();
 }
 
 // --- game GUI: builder document model, template/rename, UIDocument, button click -> event bus ---
@@ -8792,7 +8946,7 @@ void checkMaterialVersion2()
     check(kast::defaultMaterial().cullMode == kast::CullMode::Back && !kast::defaultMaterial().unlit,
           "the default material culls back faces, like a .mat without cullMode");
     for (const std::filesystem::path& file : std::filesystem::directory_iterator(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "materials")) {
-        if (file.filename() == "broken.mat")
+        if (file.filename() == "broken.mat" || file.extension() != ".mat") // not its .meta sidecars
             continue;
         check(kast::loadMaterial(file, m, error), std::format("{} loads ({})", file.filename().string(), error).c_str());
     }
@@ -15788,6 +15942,12 @@ int main(int argc, char** argv)
         checkOcclusion();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All model checks passed" : std::format("{} model check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--assets") { // only the Assets panel file logic checks
+        checkAssets();
+        removeTree(testRoot());
+        kast::log::info(g_failures == 0 ? "All asset checks passed" : std::format("{} asset check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--lists") { // only the game GUI list checks

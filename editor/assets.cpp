@@ -58,8 +58,22 @@ bool moveOnDisk(const fs::path& source, const fs::path& dest, const char* verb, 
     return false;
 }
 
+// moveOnDisk, a file's .meta along: if the sidecar can't follow, the file goes back.
+bool moveWithMeta(const fs::path& source, const fs::path& dest, const char* verb, std::string& error)
+{
+    std::error_code ec;
+    const fs::path meta = metaFileOf(source);
+    const bool withMeta = !fs::is_directory(source, ec) && fs::is_regular_file(meta, ec);
+    if (!moveOnDisk(source, dest, verb, error))
+        return false;
+    if (!withMeta || moveOnDisk(meta, metaFileOf(dest), verb, error))
+        return true;
+    MoveFileExW(dest.c_str(), source.c_str(), 0);
+    return false;
+}
+
 void scanFolder(const fs::path& dir, const std::string& prefix, const std::optional<fs::path>& hidden,
-                std::vector<AssetEntry>& out)
+                std::vector<AssetEntry>& out, std::vector<fs::directory_entry>* metas)
 {
     std::error_code ec;
     for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
@@ -72,8 +86,13 @@ void scanFolder(const fs::path& dir, const std::string& prefix, const std::optio
         // A real directory only: junctions and symlinks are leaves, so a link loop can't recurse forever.
         AssetEntry entry{.name = name, .path = prefix + name,
                          .folder = it->symlink_status(typeError).type() == fs::file_type::directory};
+        if (!entry.folder && isMetaFile(file.filename())) {
+            if (metas)
+                metas->push_back(*it);
+            continue;
+        }
         if (entry.folder)
-            scanFolder(file, entry.path + '/', hidden, entry.children);
+            scanFolder(file, entry.path + '/', hidden, entry.children, metas);
         out.push_back(std::move(entry));
     }
     std::ranges::sort(out, [](const AssetEntry& a, const AssetEntry& b) {
@@ -96,14 +115,29 @@ fs::path fromUtf8(std::string_view text)
     return fs::path(std::u8string(reinterpret_cast<const char8_t*>(text.data()), text.size()));
 }
 
-std::vector<AssetEntry> scanAssets(const fs::path& root)
+bool isMetaFile(const fs::path& name)
+{
+    const std::wstring& text = name.native();
+    const fs::path ext(kMetaExtension);
+    return text.size() >= ext.native().size() &&
+           sameName(fs::path(text.substr(text.size() - ext.native().size())), ext);
+}
+
+fs::path metaFileOf(const fs::path& file)
+{
+    fs::path meta = file;
+    meta += kMetaExtension;
+    return meta;
+}
+
+std::vector<AssetEntry> scanAssets(const fs::path& root, std::vector<fs::directory_entry>* metas)
 {
     std::optional<fs::path> hidden = loadBuildFolder(root);
     std::error_code ec;
     if (hidden && (!isSameOrInside(*hidden, root) || isSameOrInside(root, *hidden) || !fs::exists(*hidden / kGamePakName, ec)))
         hidden.reset(); // outside the project, the project itself (Build refuses that) or not a build: hides nothing
     std::vector<AssetEntry> entries;
-    scanFolder(root, "", hidden, entries);
+    scanFolder(root, "", hidden, entries, metas);
     return entries;
 }
 
@@ -124,6 +158,8 @@ std::string assetNameError(std::string_view name)
         return "the name is empty";
     if (name.starts_with('.'))
         return "names starting with '.' are hidden from the Assets panel";
+    if (isMetaFile(fromUtf8(name)))
+        return "names ending in '.meta' are asset id files, hidden from the Assets panel";
     if (std::ranges::any_of(name, isInvalidFileChar))
         return R"(the name contains a character Windows does not allow (< > : " / \ | ? * or a control character))";
     if (name.ends_with(' ') || name.ends_with('.'))
@@ -322,7 +358,7 @@ bool renameAsset(const fs::path& source, const std::string& name, std::string& e
         error = std::format("Cannot rename '{}' to '{}': {}", utf8(source.filename()), name, reason);
         return false;
     }
-    return target == source.filename() || moveOnDisk(source, source.parent_path() / target, "rename", error);
+    return target == source.filename() || moveWithMeta(source, source.parent_path() / target, "rename", error);
 }
 
 bool moveAsset(const fs::path& source, const fs::path& destDir, std::string& error)
@@ -338,7 +374,15 @@ bool moveAsset(const fs::path& source, const fs::path& destDir, std::string& err
         error = std::format("Cannot move '{}' to '{}': '{}' already exists there", name, utf8(destDir.filename()), name);
         return false;
     }
-    return moveOnDisk(source, destDir / source.filename(), "move", error);
+    return moveWithMeta(source, destDir / source.filename(), "move", error);
+}
+
+bool recycleAsset(const fs::path& target, std::string& error)
+{
+    std::error_code ec;
+    const fs::path meta = metaFileOf(target);
+    const bool withMeta = !fs::is_directory(target, ec) && fs::is_regular_file(meta, ec);
+    return kast::recycleFile(target, error) && (!withMeta || kast::recycleFile(meta, error));
 }
 
 std::string uniquePrefabName(const fs::path& dir, const std::string& entityName)

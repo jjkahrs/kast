@@ -36,7 +36,8 @@ bool isReservedFileName(std::string_view name);
 // '_', trailing dots and spaces dropped, '_' appended to a reserved device name (CON, NUL, COM1, ...), "Game" if
 // nothing is left; then ".exe". "Switch Test" -> "Switch Test.exe".
 std::string gameExeName(std::string_view projectName);
-// Whether a project-relative '/' path may ship in game.pak: false for dotfiles and anything in a dot-directory.
+// Whether a project-relative '/' path may ship in game.pak: false for .meta files, dotfiles and anything in a
+// dot-directory.
 bool shipsInPak(const std::string& projectPath);
 // What game.pak holds: every file under root (project-relative, sorted) that shipsInPak, except anything under outDir.
 std::vector<std::string> pakContents(const std::filesystem::path& root, const std::filesystem::path& outDir);

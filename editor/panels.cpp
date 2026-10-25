@@ -1,10 +1,10 @@
 #include "panels.h"
 
+#include "asset_ids.h"
 #include "ui_common.h"
 
 #include <animation.h>
 #include <components.h>
-#include <files.h> // recycleFile
 #include <ibl.h>
 #include <log.h>
 #include <lua_components.h>
@@ -2322,7 +2322,10 @@ std::filesystem::path openScenePath(const Document& doc)
 void Panels::refreshAssets(const Document& doc)
 {
     assetsRoot_ = doc.project ? doc.project->root : std::filesystem::path();
-    assets_ = assetsRoot_.empty() ? std::vector<AssetEntry>{} : scanAssets(assetsRoot_);
+    std::vector<std::filesystem::directory_entry> metas;
+    assets_ = assetsRoot_.empty() ? std::vector<AssetEntry>{} : scanAssets(assetsRoot_, &metas);
+    if (!assetsRoot_.empty())
+        assetIds().scan(assetsRoot_, assets_, metas); // creates missing .meta files, fixes copies and orphans
     clipErrors_.clear(); // clips may have changed
     if (!findAsset(assets_, assetSelected_))
         assetSelected_.clear();
@@ -2746,7 +2749,7 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& g
     }
     case AssetEdit::Op::Delete:
         error = deleteBlocker(source, openScenePath(doc)); // the scene may have changed since the prompt opened
-        if (error.empty() && kast::recycleFile(source, error)) {
+        if (error.empty() && recycleAsset(source, error)) { // its .meta too
             kast::log::info(std::format("Moved '{}' to the Recycle Bin", edit.path));
             refreshPrefabs(doc); // instances of a deleted prefab become placeholders
         }

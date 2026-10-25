@@ -85,7 +85,8 @@ std::string gameExeName(std::string_view projectName)
 bool shipsInPak(const std::string& projectPath)
 {
     const std::filesystem::path relative(projectPath);
-    return std::ranges::none_of(relative, [](const std::filesystem::path& part) { return part.string().starts_with('.'); });
+    return !isMetaFile(relative.filename()) && // asset ids are editor-only
+           std::ranges::none_of(relative, [](const std::filesystem::path& part) { return part.string().starts_with('.'); });
 }
 
 std::vector<std::string> pakContents(const std::filesystem::path& root, const std::filesystem::path& outDir)

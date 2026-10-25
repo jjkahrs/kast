@@ -219,7 +219,7 @@ target_link_libraries(kast_player PRIVATE kast_engine SDL3::SDL3)
 add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/lightmap_job.cpp editor/voxelgi_job.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
-  editor/assets.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/shader_graph_doc.cpp editor/shader_graph_editor.cpp editor/shader_preview.cpp editor/model_preview.cpp editor/external_editor.cpp editor/editor_settings.cpp
+  editor/assets.cpp editor/asset_ids.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/shader_graph_doc.cpp editor/shader_graph_editor.cpp editor/shader_preview.cpp editor/model_preview.cpp editor/external_editor.cpp editor/editor_settings.cpp
   editor/shader_compiler.cpp editor/texture_cooker.cpp editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp editor/zone_cli.cpp
   editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
@@ -255,7 +255,7 @@ target_compile_options(kast_ltc_fit PRIVATE ${KAST_COMPILE_OPTIONS})
 # --- engine self-check: assert-style checks of math and hierarchy logic, no window ---
 # Also builds the editor Document (Play mode) so it can be checked without a window.
 add_executable(kast_self_check tests/self_check.cpp tests/lightmap_self_check.cpp tests/voxelgi_self_check.cpp tests/sdfgi_self_check.cpp tests/net_self_check.cpp tests/net_test_util.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp
-  editor/recent_projects.cpp editor/assets.cpp editor/gui_doc.cpp editor/shader_graph_doc.cpp editor/external_editor.cpp
+  editor/recent_projects.cpp editor/assets.cpp editor/asset_ids.cpp editor/gui_doc.cpp editor/shader_graph_doc.cpp editor/external_editor.cpp
   editor/editor_settings.cpp editor/shader_compiler.cpp editor/texture_cooker.cpp editor/online.cpp "${KAST_MANIFEST}")
 target_include_directories(kast_self_check PRIVATE editor)
 add_dependencies(kast_self_check kast_shader_tools) # the .kshader checks compile with them
