@@ -230,6 +230,8 @@ void ParticleRenderer::init(uint64_t supportedCaps)
     fogColor_ = bgfx::createUniform("u_fogColor", bgfx::UniformType::Vec4);
     fogParams_ = bgfx::createUniform("u_fogParams", bgfx::UniformType::Vec4);
     sampler_ = bgfx::createUniform("s_particle", bgfx::UniformType::Sampler);
+    volFog_ = bgfx::createUniform("u_volFog", bgfx::UniformType::Vec4, 2);
+    volFogSampler_ = bgfx::createUniform("s_volFog", bgfx::UniformType::Sampler);
 }
 
 void ParticleRenderer::shutdown()
@@ -243,7 +245,8 @@ void ParticleRenderer::shutdown()
     bgfx::destroy(simProgram_);
     bgfx::destroy(drawProgram_);
     for (bgfx::UniformHandle uniform :
-         {sim_, simWorld_, startColor_, endColor_, params_, cameraPos_, fogColor_, fogParams_, sampler_})
+         {sim_, simWorld_, startColor_, endColor_, params_, cameraPos_, fogColor_, fogParams_, sampler_, volFog_,
+          volFogSampler_})
         bgfx::destroy(uniform);
     supported_ = false;
 }
@@ -340,7 +343,8 @@ std::vector<ParticleRenderer::Draw> ParticleRenderer::simulate(const Scene& scen
 }
 
 void ParticleRenderer::draw(const Draw& item, bgfx::ViewId view, bgfx::TextureHandle texture, bool textured,
-                            const float* fogColor, const float* fogParams, const float* cameraPos)
+                            const float* fogColor, const float* fogParams, const float* cameraPos,
+                            const float* volumetricFog, bgfx::TextureHandle volumetricFogTexture)
 {
     const auto it = gpu_.find(item.id);
     if (it == gpu_.end())
@@ -356,6 +360,9 @@ void ParticleRenderer::draw(const Draw& item, bgfx::ViewId view, bgfx::TextureHa
     bgfx::setUniform(cameraPos_, cameraPos);
     bgfx::setUniform(fogColor_, fogColor);
     bgfx::setUniform(fogParams_, fogParams);
+    bgfx::setUniform(volFog_, volumetricFog, 2);
+    if (bgfx::isValid(volumetricFogTexture))
+        bgfx::setTexture(1, volFogSampler_, volumetricFogTexture, BGFX_SAMPLER_UVW_CLAMP);
     float identity[16];
     bx::mtxIdentity(identity);
     bgfx::setTransform(emitter.space == ParticleSpace::Local ? item.world.data() : identity);

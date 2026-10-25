@@ -55,13 +55,16 @@ void GameViewport::draw(Document& doc)
         pixelScale_ = ImGui::GetIO().DisplayFramebufferScale.x;
         const auto width = static_cast<uint16_t>(size.x * pixelScale_);
         const auto height = static_cast<uint16_t>(size.y * ImGui::GetIO().DisplayFramebufferScale.y);
-        post_.begin(width, height, kast::sceneClearColor(doc.scene.postProcessing, kViewportClearColor));
+        post_.begin(width, height, kast::sceneClearColor(doc.scene.postProcessing, kViewportClearColor),
+                    doc.scene.postProcessing, true);
         target_.resize(width, height, post_.depth());
         if (target_.valid()) {
             if (camera != entt::null) { // else just the clear, under any GUI
                 float view[16], proj[16];
                 kast::cameraMatrices(doc.scene, camera, size.x / size.y, bgfx::getCaps()->homogeneousDepth, view, proj);
-                renderer_.setTarget(post_.target(), post_.width(), post_.height());
+                post_.setProjection(proj);
+                renderer_.setTarget(post_.target(), post_.width(), post_.height(), post_.blendView(),
+                                    post_.volumetricFogView());
                 renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), post_.sceneView(),
                                  view, proj, shadowViews_);
             }

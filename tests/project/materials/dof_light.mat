@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "baseColor": [0, 0, 0, 1],
+  "metallic": 0,
+  "roughness": 1,
+  "emissiveEnabled": true,
+  "emissive": [1, 0.8, 0.45],
+  "emissiveIntensity": 12
+}

@@ -69,7 +69,7 @@ void ShaderPreview::draw(const std::string& shader, float time)
     camera_.viewMatrix(view);
     camera_.projMatrix(proj, size.x / size.y);
     renderer_.setTime(time);
-    renderer_.setTarget(post_.target(), post_.width(), post_.height());
+    renderer_.setTarget(post_.target(), post_.width(), post_.height(), post_.blendView());
     // No shadows (the light casts none), so no shadow views: the scene's view stands in for them.
     renderer_.render(scene_, kast::shaders().root(), post_.sceneView(), view, proj, post_.sceneView());
     post_.apply(scene_.postProcessing, false, target_.frameBuffer());

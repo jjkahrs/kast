@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Volumetric fog - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="ssao.html">SSAO</a></li><li><a href="ssr.html">Screen-space reflections</a></li><li><a href="depth-of-field.html">Depth of field</a></li><li><a href="volumetric-fog.html" class="active">Volumetric fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="lightmaps.html">Lightmaps and GI</a></li><li><a href="voxelgi.html">VoxelGI</a></li><li><a href="sdfgi.html">SDFGI</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li><li><a href="lod-and-occlusion.html">LOD and occlusion</a></li></ul></nav>
+<main>
+<h1 id="volumetric-fog">Volumetric fog</h1>
+<p><strong>Volumetric fog</strong> fills the air with a lit, shadowed medium: sun shafts through gaps in a roof, cones under spot
+lights, glowing spheres around lamps, with dense local banks placed by <a href="#fogvolume">FogVolume</a> components. A
+camera-aligned 3D grid of <em>froxels</em> is filled, lit with the scene's lights and their shadow maps, and integrated toward
+the eye every frame on compute (<code>engine/volumetric_fog.h</code>, <code>engine/shaders/cs_volfog_*.sc</code>,
+<code>volumetric_fog.sh</code>, <code>post/fs_volfog_composite.sc</code>). Opaque meshes get it in a post pass by their depth; blended meshes
+and particles sample the same grid themselves, so glass and smoke are fogged consistently with what is behind them. The
+Scene view (with its toolbar's <strong>Post</strong> box), the Game view and the built game apply it alike.</p>
+<p>It is a per-scene setting (<code>"postProcessing"</code> &gt; <code>"volumetricFog"</code>), off by default: a scene without it renders
+exactly as before. It is separate from the exp² <a href="post-processing.html">distance fog</a>: either, both or neither can be
+on, and the distance fog is unchanged. Edit it in <strong>Window &gt; Post Processing &gt; Volumetric Fog</strong> (live, undoable,
+marks the scene dirty) or from Lua.</p>
+
+<h2 id="settings">Settings</h2>
+<table>
+<tr><th>Field</th><th>Default</th><th>Range</th><th>Meaning</th></tr>
+<tr><td><code>enabled</code></td><td>false</td><td></td><td>volumetric fog on</td></tr>
+<tr><td><code>density</code></td><td>0.02</td><td>&gt;= 0</td><td>extinction per meter at <code>baseHeight</code></td></tr>
+<tr><td><code>albedo</code></td><td>[0.9, 0.9, 0.9]</td><td>0 to 1 each</td><td>linear RGB: the fraction of extinguished light that scatters (its tint)</td></tr>
+<tr><td><code>anisotropy</code></td><td>0.2</td><td>-0.9 to 0.9</td><td>Henyey-Greenstein <code>g</code>: &gt; 0 scatters forward (bright looking toward a light), 0 evenly</td></tr>
+<tr><td><code>heightFalloff</code></td><td>0.1</td><td>&gt;= 0</td><td>per meter: density thins with height above <code>baseHeight</code></td></tr>
+<tr><td><code>baseHeight</code></td><td>0</td><td>-10000 to 10000</td><td>meters (world y) below which the density is full</td></tr>
+<tr><td><code>maxDistance</code></td><td>100</td><td>1 to 1000</td><td>meters: the grid's depth; beyond it no volumetric fog</td></tr>
+<tr><td><code>temporalBlend</code></td><td>0.9</td><td>0 to 0.99</td><td>how much of the last frame's lighting each froxel keeps (smoother; higher trails more)</td></tr>
+<tr><td><code>lightIntensity</code></td><td>1</td><td>&gt;= 0</td><td>scales the lights' in-scattering</td></tr>
+<tr><td><code>ambientIntensity</code></td><td>1</td><td>&gt;= 0</td><td>scales the ambient's</td></tr>
+</table>
+<pre><code class="language-json">"postProcessing": {
+  "volumetricFog": { "enabled": true, "density": 0.06, "albedo": [0.9, 0.9, 0.9], "anisotropy": 0.6, "heightFalloff": 0.05,
+                     "baseHeight": 0, "maxDistance": 60, "temporalBlend": 0.9, "lightIntensity": 1, "ambientIntensity": 1 }
+}</code></pre>
+<p>Every field is optional (missing ones take the default). An unknown field, a wrong type or a value out of range fails
+the scene's load with an error naming it, e.g. <code>postProcessing.volumetricFog: "anisotropy" must be a number between -0.9
+and 0.9</code>, and the open scene is left untouched. With <code>density</code> 0 and no FogVolume of density above 0 nothing runs.</p>
+
+<h2 id="how">How it works</h2>
+<p>The grid is 160 x 90 cells across the view by 64 depth slices, spaced exponentially from 0.5 m to <code>maxDistance</code>:
+slice <code>s</code> (0..64) is at view depth <code>0.5 * (maxDistance / 0.5)^(s / 64)</code>, so near froxels are small and far ones large
+(<code>kast::froxelSliceDepth</code> / <code>froxelSlice</code>).</p>
+<ol>
+<li><strong>Inject</strong> (one thread per froxel): the height fog <code>density * exp(-heightFalloff * max(y - baseHeight, 0))</code> with
+  <code>albedo</code>, plus every FogVolume (below), as scattering <code>albedo * extinction</code> and extinction.</li>
+<li><strong>In-scatter</strong>: each light's radiance times the Henyey-Greenstein phase
+  <code>(1 - g^2) / (4 pi (1 + g^2 - 2 g cos theta)^1.5)</code> (<code>kast::henyeyGreenstein</code>), times <code>lightIntensity</code>: the
+  DirectionalLight through its shadow cascades, point lights through their cube shadow maps and spot lights through
+  their atlas tile when they cast shadows (unshadowed otherwise), up to 16 local lights; area lights are left out. Plus
+  the scene's flat ambient times <code>ambientIntensity</code> (isotropic). Then blended with the last frame's result at the same
+  world point (reprojected by the camera's last view-projection) by <code>temporalBlend</code>; each froxel is jittered inside
+  itself every frame so the blend smooths the grid's steps. At <code>temporalBlend</code> 0 each froxel is lit at 4 points
+  instead. The history restarts when the fog is turned on or <code>maxDistance</code> changes.</li>
+<li><strong>Integrate</strong>, front to back per froxel column, each slice energy-conserving over its thickness (Hillaire 2015:
+  <code>S * (1 - e^(-sigma t)) / sigma</code>) times the transmittance in front of it, into a 2D atlas: what the eye sees up to
+  each slice, in-scattered light and transmittance <code>T</code>.</li>
+<li><strong>Apply</strong>: opaque pixels (and the sky, the whole grid) by their depth, <code>color = color * T + inScattered</code>, before
+  the blended draws; blended meshes (<code>fs_mesh.sc</code>, after the distance fog) and particles (<code>fs_particle.sc</code>) do the same
+  lookup at their own depth. Lookups are dithered by up to half a froxel and the composite by 1/255, so neither the grid
+  nor 8-bit banding shows.</li>
+</ol>
+<p>Formats: <code>RGBA16F</code> throughout: density, scattering and its history 3D textures (160 x 90 x 64, 7 MiB each) and the
+atlas (10240 x 90, 7 MiB): about 28 MiB per view rendering it (the Scene and Game views each own one), made on first
+use and freed any frame the fog doesn't run.</p>
+<p>Limits: reprojection follows the camera only, so moving lights and objects can leave a short trail at a high
+<code>temporalBlend</code>; the ambient is the flat ambient color, not the sky; at most 8 FogVolumes (the nearest to the eye) and 16
+local lights; a <code>.kshader</code> that reads <code>SCREEN_TEXTURE</code> isn't volumetric-fogged on its own surface.</p>
+
+<h2 id="fogvolume">FogVolume</h2>
+<p>A <code>FogVolume</code> component adds density to a local region: a unit box or sphere (-0.5..0.5) sized, placed and rotated
+by its entity's world transform. It contributes only while the scene's volumetric fog is on (even at <code>density</code> 0).</p>
+<table>
+<tr><th>Field</th><th>Default</th><th>Range</th><th>Meaning</th></tr>
+<tr><td><code>shape</code></td><td><code>"box"</code></td><td><code>"box"</code>, <code>"sphere"</code></td><td>the region's shape</td></tr>
+<tr><td><code>density</code></td><td>0.1</td><td>&gt;= 0</td><td>extinction per meter inside, added to the height fog</td></tr>
+<tr><td><code>albedo</code></td><td>[0.9, 0.9, 0.9]</td><td>0 to 1 each</td><td>linear RGB scattering tint</td></tr>
+<tr><td><code>edgeFalloff</code></td><td>0.25</td><td>0 to 1</td><td>the outer fraction (center to surface) over which it fades to 0; 0 is a hard edge</td></tr>
+<tr><td><code>heightFalloff</code></td><td>0</td><td>&gt;= 0, optional</td><td>per meter: thins with height above the volume's lowest point</td></tr>
+</table>
+<pre><code class="language-json">"FogVolume": { "shape": "sphere", "density": 0.6, "albedo": [0.8, 1, 0.85], "edgeFalloff": 0.6, "heightFalloff": 0.3 }</code></pre>
+<p>Its density at a point, with <code>d</code> 0 at the center and 1 on the surface (the box's largest axis, the sphere's radius):
+<code>density * saturate((1 - d) / edgeFalloff) * exp(-heightFalloff * (y - bottom))</code>, 0 outside
+(<code>kast::fogVolumeDensity</code>).</p>
+<p>In the editor: <strong>Add Component &gt; Fog Volume</strong>, an Inspector section with these fields (undoable), and a yellow outline
+of the box or sphere while the entity is selected. It saves in scenes and prefabs like other components; from Lua,
+<code>kast.get(id, "FogVolume")</code> / <code>kast.set(id, "FogVolume", {...})</code>.</p>
+
+<h2 id="cost">Cost</h2>
+<p>Debug build, RTX 4070 Ti SUPER, built player at 1920 x 1080 (<code>--gpu-stats</code>, 590 frames each), on
+<code>tests/project/volumetric_fog.scene</code>: 3.36 ms GPU frame with volumetric fog vs 3.58 ms off (mean of 4 runs each, spread
+about 0.3 ms): the difference is within the run-to-run noise (an earlier measurement during development gave +0.5 ms).
+The three compute passes work on the fixed 160 x 90 x 64 grid whatever the resolution; only the composite is per pixel.</p>
+
+<h2 id="lua">Lua</h2>
+<p><code>kast.volumetricFog.get()</code> returns the settings as a table; <code>kast.volumetricFog.set{...}</code> changes any of its fields at
+run time, all-or-nothing and checked as on load (<code>kast.volumetricFog.set: postProcessing.volumetricFog: ...</code> on a bad field).</p>
+<pre><code class="language-lua">kast.volumetricFog.set({density = 0.1, anisotropy = 0.7})   -- thicker morning haze, strong sun glow
+print(kast.volumetricFog.get().density)</code></pre>
+<p>See <code>tests/project/volumetric_fog.scene</code> (the sun through a roof's gaps between pillars, a shadowed point and spot
+light behind occluders, a glass pane, smoke particles, a box and a sphere FogVolume) and <code>scripts/volfog_set.lua</code>.</p>
+</main>
+</div>
+</body>
+</html>

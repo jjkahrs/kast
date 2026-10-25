@@ -146,6 +146,21 @@ const char* validateVoxelGI(const entt::meta_any& component)
     return nullptr;
 }
 
+const char* validateFogVolume(const entt::meta_any& component)
+{
+    const auto& volume = component.cast<const FogVolume&>();
+    if (!(volume.density >= 0.0f))
+        return "\"density\" must be >= 0";
+    for (float channel : {volume.albedo.x, volume.albedo.y, volume.albedo.z})
+        if (!(channel >= 0.0f && channel <= 1.0f))
+            return "\"albedo\" channels must be between 0 and 1";
+    if (!(volume.edgeFalloff >= 0.0f && volume.edgeFalloff <= 1.0f))
+        return "\"edgeFalloff\" must be between 0 and 1";
+    if (!(volume.heightFalloff >= 0.0f))
+        return "\"heightFalloff\" must be >= 0";
+    return nullptr;
+}
+
 const char* validateDirectionalLight(const entt::meta_any& component)
 {
     const auto& light = component.cast<const DirectionalLight&>();
@@ -528,6 +543,17 @@ void registerBuiltins()
         .data<&ParticleEmitter::space>("space").custom<FieldInfo>("Space")
         .data<&ParticleEmitter::texture>("texture").custom<FieldInfo>("Texture")
         .data<&ParticleEmitter::blend>("blend").custom<FieldInfo>("Blend");
+
+    entt::meta_factory<FogVolumeShape>{}
+        .type("FogVolumeShape")
+        .data<FogVolumeShape::Box>("box").custom<FieldInfo>("Box")
+        .data<FogVolumeShape::Sphere>("sphere").custom<FieldInfo>("Sphere");
+    registerComponent<FogVolume>("FogVolume", {"Fog Volume", true, validateFogVolume})
+        .data<&FogVolume::shape>("shape").custom<FieldInfo>("Shape")
+        .data<&FogVolume::density>("density").custom<FieldInfo>("Density", false, 0.0)
+        .data<&FogVolume::albedo>("albedo").custom<FieldInfo>("Albedo", true, 0.0, 1.0)
+        .data<&FogVolume::edgeFalloff>("edgeFalloff").custom<FieldInfo>("Edge Falloff", false, 0.0, 1.0)
+        .data<&FogVolume::heightFalloff>("heightFalloff").custom<FieldInfo>(FieldInfo{.displayName = "Height Falloff", .min = 0.0, .optional = true});
 }
 
 // ponytail: not thread-safe; registration happens on the main thread before any scene work.

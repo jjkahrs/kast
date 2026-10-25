@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screen-space reflections - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="ssao.html">SSAO</a></li><li><a href="ssr.html" class="active">Screen-space reflections</a></li><li><a href="depth-of-field.html">Depth of field</a></li><li><a href="volumetric-fog.html">Volumetric fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="lightmaps.html">Lightmaps and GI</a></li><li><a href="voxelgi.html">VoxelGI</a></li><li><a href="sdfgi.html">SDFGI</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li><li><a href="lod-and-occlusion.html">LOD and occlusion</a></li></ul></nav>
+<main>
+<h1 id="ssr">Screen-space reflections</h1>
+<p><strong>SSR</strong> reflects what is on screen in smooth surfaces (wet floors, polished stone, metal), marched every frame
+through the depth buffer. Where a ray hits, it <em>replaces</em> the reflection probe / IBL specular already in the pixel;
+where it misses (off screen, behind something, too rough) the probe specular stays, so nothing is counted twice and a
+miss fades back to the probe instead of popping (<code>engine/post_process.h</code>, <code>engine/shaders/post/fs_ssr_*.sc</code>). The Scene
+view (with its toolbar's <strong>Post</strong> box), the Game view and the built game apply it alike.</p>
+<p>It is a per-scene setting (<code>"postProcessing"</code> &gt; <code>"ssr"</code>), off by default: a scene without it renders exactly as
+before. Edit it in <strong>Window &gt; Post Processing &gt; SSR</strong> (live, undoable, marks the scene dirty) or from Lua. Place a
+<a href="ibl-reflection-probes.html">reflection probe</a> or use a sky so misses have something to fall back to.</p>
+
+<h2 id="settings">Settings</h2>
+<table>
+<tr><th>Field</th><th>Default</th><th>Range</th><th>Meaning</th></tr>
+<tr><td><code>enabled</code></td><td>false</td><td></td><td>SSR on</td></tr>
+<tr><td><code>maxDistance</code></td><td>50</td><td>0.5 to 1000</td><td>meters a ray travels in the view; it fades over its last 30%</td></tr>
+<tr><td><code>thickness</code></td><td>0.3</td><td>0.01 to 5</td><td>meters behind the depth buffer a ray still counts as hitting a surface</td></tr>
+<tr><td><code>maxRoughness</code></td><td>0.6</td><td>0 to 1</td><td>surfaces rougher than this keep the probe specular (fading over the last 25%)</td></tr>
+<tr><td><code>intensity</code></td><td>1</td><td>0 to 1</td><td>how much of the probe specular the hits replace (0: no change, byte for byte; neither pass runs)</td></tr>
+<tr><td><code>steps</code></td><td>32</td><td>integer 8 to 128</td><td>linear march steps per ray (quality and cost)</td></tr>
+</table>
+<pre><code class="language-json">"postProcessing": {
+  "ssr": { "enabled": true, "maxDistance": 50, "thickness": 0.3, "maxRoughness": 0.6, "intensity": 1, "steps": 32 }
+}</code></pre>
+<p>Every field is optional (missing ones take the default). An unknown field, a wrong type or a value out of range fails
+the scene's load with an error naming it, e.g. <code>postProcessing.ssr: "steps" must be an integer between 8 and 128</code>,
+and the open scene is left untouched.</p>
+
+<h2 id="how">How it works</h2>
+<ol>
+<li><strong>G-data</strong> (shared with <a href="ssao.html#how">SSAO</a>): normal and roughness, the pixel's indirect specular
+  (<code>RG11B10F</code>: what the probes / IBL / VoxelGI / SDFGI added) and, for SSR only, its specular weight
+  <code>f0 * envBRDF.x + envBRDF.y</code> (<code>RGBA8</code>, times material AO and the distance fog's remaining fraction). About 32 MiB at
+  1920 x 1080 with SSR on.</li>
+<li><strong>Trace</strong>, half resolution (<code>RGBA16F</code>): a reflection ray about a GGX-sampled normal (roughness spreads the rays;
+  a 4 x 4 Bayer pattern spreads the samples) is marched linearly in screen space with perspective-correct depth over
+  <code>steps</code> steps up to <code>maxDistance</code>; the first step behind the depth buffer is refined by 5 binary steps and is a hit
+  when less than <code>thickness</code> behind it. It reads the opaque HDR scene color after SSAO (before blended draws and
+  post). Confidence 0..1 fades over the screen's edges, the ray's last 30%, the thickness, back faces and roughness.</li>
+<li><strong>Composite</strong>, full resolution: a bilateral 4 x 4 gather over the trace (its spacing grows with roughness, so rough
+  surfaces reflect blurrier; taps weighed by depth, normal and <code>1 / (1 + luma)</code>), added to the color:
+  <pre><code>color = color + intensity * confidence * (specularWeight * reflection - indirectSpecular)</code></pre>
+  Confidence 0 adds exactly 0 (<code>kast::ssrComposite</code> is the CPU mirror checked by <code>engine_self_check</code>).</li>
+</ol>
+<p>Limits: rough reflections show a faint dither pattern (no temporal filter); the occlusion culling's Hi-Z is last
+frame's, so SSR doesn't use it. A Hi-Z march and temporal resolve are the upgrade path.</p>
+
+<h2 id="cost">Cost</h2>
+<p>Debug build, RTX 4070 Ti SUPER, built player at 1920 x 1080 (<code>--gpu-stats</code>, mean of 3 runs of 590 frames), on
+<code>tests/project/ssr.scene</code>: 2.86 ms GPU frame with SSR vs 1.94 ms off, about <strong>+0.9 ms</strong> for the G-data and both passes.
+Memory: the G-data (32 MiB) plus one half-res <code>RGBA16F</code> target (4 MiB).</p>
+
+<h2 id="lua">Lua</h2>
+<p><code>kast.ssr.get()</code> returns the settings as a table; <code>kast.ssr.set{...}</code> changes any of its fields at run time,
+all-or-nothing and checked as on load (<code>kast.ssr.set: postProcessing.ssr: ...</code> on a bad field).</p>
+<pre><code class="language-lua">kast.ssr.set({maxRoughness = 0.3, steps = 64})   -- only mirror-like surfaces, finer march
+print(kast.ssr.get().enabled)</code></pre>
+<p>See <code>tests/project/ssr.scene</code> (a smooth and a rough floor, colored cubes and spheres, a pillar) and
+<code>scripts/ssr_set.lua</code>.</p>
+</main>
+</div>
+</body>
+</html>

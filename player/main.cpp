@@ -299,12 +299,14 @@ int main(int argc, char** argv)
         int height = 0;
         SDL_GetWindowSizeInPixels(window, &width, &height);
         post.begin(static_cast<uint16_t>(width), static_cast<uint16_t>(height),
-                   kast::sceneClearColor(scene.postProcessing, kClearColor));
+                   kast::sceneClearColor(scene.postProcessing, kClearColor), scene.postProcessing, true);
         if (const entt::entity camera = kast::activeCamera(scene); camera != entt::null && width > 0 && height > 0) {
             float view[16], proj[16];
             kast::cameraMatrices(scene, camera, static_cast<float>(width) / static_cast<float>(height),
                                  bgfx::getCaps()->homogeneousDepth, view, proj);
-            renderer.setTarget(post.target(), post.width(), post.height());
+            post.setProjection(proj);
+            renderer.setTarget(post.target(), post.width(), post.height(), post.blendView(),
+                               post.volumetricFogView());
             renderer.render(scene, project.root, post.sceneView(), view, proj, kShadowViews);
         }
         if (kast::gui::wantsReadableTarget() && width > 0 && height > 0 &&

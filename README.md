@@ -106,6 +106,16 @@ Without `--project`, `--scene`, `--save-scene` or `--build`, `kast_editor` runs 
 `run.bat debug --project samples\starter-mmo` opens a project directly. Every flag:
 [Editor command line](docs/editor/command-line.html).
 
+## Rendering effects
+
+Besides the HDR post stack and distance fog ([Post-processing and fog](docs/engine/post-processing.html)), a scene can
+turn on [SSAO](docs/engine/ssao.html) (GTAO ambient occlusion), [screen-space reflections](docs/engine/ssr.html),
+[depth of field](docs/engine/depth-of-field.html) (thin-lens bokeh, manual focus) and
+[volumetric fog](docs/engine/volumetric-fog.html) (lit, shadowed froxel fog, with local `FogVolume` components). All are
+off by default and set per scene (the scene file's `"postProcessing"` block, edited in Window > Post Processing); the
+Scene view, Game view and built game apply them alike. Lua scripts read and change them at run time with
+`kast.ssao`, `kast.ssr`, `kast.dof` and `kast.volumetricFog` (`get()` / `set{...}`).
+
 ## Start the services
 
 Both need Docker. Each `docker compose` stack is self-contained; their host ports differ, so both can run at once.

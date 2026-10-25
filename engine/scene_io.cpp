@@ -261,6 +261,15 @@ public:
         if (block_.contains(key))
             out = checked(block_[key], key, lo, hi);
     }
+    void integer(const char* key, int& out, int lo, int hi) const
+    {
+        if (!block_.contains(key))
+            return;
+        const Json& v = block_[key];
+        if (!v.is_number_integer() || v.get<int64_t>() < lo || v.get<int64_t>() > hi)
+            throw Invalid(std::format("postProcessing.{}: \"{}\" must be an integer between {} and {}", name_, key, lo, hi));
+        out = v.get<int>();
+    }
     void color(const char* key, bx::Vec3& out) const
     {
         if (!block_.contains(key))
@@ -306,7 +315,7 @@ ScenePostProcessing parsePostProcessing(const Json& json)
     const auto block = [&](const char* name) { return json.contains(name) ? &json[name] : nullptr; };
     for (const auto& [key, value] : json.items())
         if (key != "tonemapping" && key != "bloom" && key != "colorGrading" && key != "vignette" && key != "fxaa" &&
-            key != "fog")
+            key != "fog" && key != "ssao" && key != "ssr" && key != "depthOfField" && key != "volumetricFog")
             throw Invalid(std::format("postProcessing: unknown field \"{}\"", key));
     if (const Json* j = block("tonemapping")) {
         const PostReader r(*j, "tonemapping");
@@ -351,6 +360,50 @@ ScenePostProcessing parsePostProcessing(const Json& json)
         r.color("color", post.fog.color);
         r.number("density", post.fog.density, 0.0f, FLT_MAX);
         r.number("start", post.fog.start, 0.0f, FLT_MAX);
+    }
+    if (const Json* j = block("ssao")) {
+        const PostReader r(*j, "ssao");
+        r.fields({"enabled", "radius", "intensity", "power", "sliceCount"});
+        r.flag("enabled", post.ssao.enabled);
+        r.number("radius", post.ssao.radius, 0.05f, 5.0f);
+        r.number("intensity", post.ssao.intensity, 0.0f, 4.0f);
+        r.number("power", post.ssao.power, 0.5f, 4.0f);
+        r.integer("sliceCount", post.ssao.sliceCount, 1, 4);
+    }
+    if (const Json* j = block("ssr")) {
+        const PostReader r(*j, "ssr");
+        r.fields({"enabled", "maxDistance", "thickness", "maxRoughness", "intensity", "steps"});
+        r.flag("enabled", post.ssr.enabled);
+        r.number("maxDistance", post.ssr.maxDistance, 0.5f, 1000.0f);
+        r.number("thickness", post.ssr.thickness, 0.01f, 5.0f);
+        r.number("maxRoughness", post.ssr.maxRoughness, 0.0f, 1.0f);
+        r.number("intensity", post.ssr.intensity, 0.0f, 1.0f);
+        r.integer("steps", post.ssr.steps, 8, 128);
+    }
+    if (const Json* j = block("depthOfField")) {
+        const PostReader r(*j, "depthOfField");
+        r.fields({"enabled", "focusDistance", "fStop", "focalLength", "maxCoc"});
+        r.flag("enabled", post.depthOfField.enabled);
+        r.number("focusDistance", post.depthOfField.focusDistance, 0.1f, 10000.0f);
+        r.number("fStop", post.depthOfField.fStop, 0.7f, 32.0f);
+        r.number("focalLength", post.depthOfField.focalLength, 8.0f, 400.0f);
+        r.number("maxCoc", post.depthOfField.maxCoc, 1.0f, 64.0f);
+    }
+    if (const Json* j = block("volumetricFog")) {
+        const PostReader r(*j, "volumetricFog");
+        r.fields({"enabled", "density", "albedo", "anisotropy", "heightFalloff", "baseHeight", "maxDistance",
+                  "temporalBlend", "lightIntensity", "ambientIntensity"});
+        auto& v = post.volumetricFog;
+        r.flag("enabled", v.enabled);
+        r.number("density", v.density, 0.0f, FLT_MAX);
+        r.color("albedo", v.albedo);
+        r.number("anisotropy", v.anisotropy, -0.9f, 0.9f);
+        r.number("heightFalloff", v.heightFalloff, 0.0f, FLT_MAX);
+        r.number("baseHeight", v.baseHeight, -10000.0f, 10000.0f);
+        r.number("maxDistance", v.maxDistance, 1.0f, 1000.0f);
+        r.number("temporalBlend", v.temporalBlend, 0.0f, 0.99f);
+        r.number("lightIntensity", v.lightIntensity, 0.0f, FLT_MAX);
+        r.number("ambientIntensity", v.ambientIntensity, 0.0f, FLT_MAX);
     }
     return post;
 }
@@ -439,6 +492,10 @@ Json postProcessingToJson(const ScenePostProcessing& post)
     const auto& g = post.colorGrading;
     const auto& v = post.vignette;
     const auto& f = post.fog;
+    const auto& ao = post.ssao;
+    const auto& r = post.ssr;
+    const auto& d = post.depthOfField;
+    const auto& vf = post.volumetricFog;
     return {{"tonemapping", {{"enabled", t.enabled}, {"exposure", jsonNumber(t.exposure)},
                              {"operator", t.op == Tonemap::Aces ? "ACES" : "None"}}},
             {"bloom", {{"enabled", b.enabled}, {"threshold", jsonNumber(b.threshold)},
@@ -450,7 +507,21 @@ Json postProcessingToJson(const ScenePostProcessing& post)
                           {"smoothness", jsonNumber(v.smoothness)}}},
             {"fxaa", {{"enabled", post.fxaa.enabled}}},
             {"fog", {{"enabled", f.enabled}, {"color", color(f.color)}, {"density", jsonNumber(f.density)},
-                     {"start", jsonNumber(f.start)}}}};
+                     {"start", jsonNumber(f.start)}}},
+            {"ssao", {{"enabled", ao.enabled}, {"radius", jsonNumber(ao.radius)}, {"intensity", jsonNumber(ao.intensity)},
+                      {"power", jsonNumber(ao.power)}, {"sliceCount", ao.sliceCount}}},
+            {"ssr", {{"enabled", r.enabled}, {"maxDistance", jsonNumber(r.maxDistance)},
+                     {"thickness", jsonNumber(r.thickness)}, {"maxRoughness", jsonNumber(r.maxRoughness)},
+                     {"intensity", jsonNumber(r.intensity)}, {"steps", r.steps}}},
+            {"depthOfField", {{"enabled", d.enabled}, {"focusDistance", jsonNumber(d.focusDistance)},
+                              {"fStop", jsonNumber(d.fStop)}, {"focalLength", jsonNumber(d.focalLength)},
+                              {"maxCoc", jsonNumber(d.maxCoc)}}},
+            {"volumetricFog", {{"enabled", vf.enabled}, {"density", jsonNumber(vf.density)}, {"albedo", color(vf.albedo)},
+                               {"anisotropy", jsonNumber(vf.anisotropy)}, {"heightFalloff", jsonNumber(vf.heightFalloff)},
+                               {"baseHeight", jsonNumber(vf.baseHeight)}, {"maxDistance", jsonNumber(vf.maxDistance)},
+                               {"temporalBlend", jsonNumber(vf.temporalBlend)},
+                               {"lightIntensity", jsonNumber(vf.lightIntensity)},
+                               {"ambientIntensity", jsonNumber(vf.ambientIntensity)}}}};
 }
 
 // Roots go under attach (entt::null: scene roots).
@@ -1128,6 +1199,24 @@ bool sdfgiFromJson(const Json& json, SceneSdfgi& out, std::string& error)
 {
     try {
         out = parseSdfgi(json);
+        return true;
+    } catch (const Invalid& e) {
+        error = e.what();
+    }
+    return false;
+}
+
+Json postBlockToJson(const ScenePostProcessing& post, const char* name)
+{
+    return postProcessingToJson(post)[name];
+}
+
+bool postBlockFromJson(const Json& json, const char* name, ScenePostProcessing& out, std::string& error)
+{
+    Json all = postProcessingToJson(out);
+    all[name] = json;
+    try {
+        out = parsePostProcessing(all);
         return true;
     } catch (const Invalid& e) {
         error = e.what();

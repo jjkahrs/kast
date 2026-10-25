@@ -19,5 +19,10 @@ void main()
         // bottom -> horizon -> top by elevation; sqrt keeps the horizon band narrow (proceduralSkyColor in sky.h).
         color = mix(u_skyHorizon.xyz, dir.y >= 0.0 ? u_skyTop.xyz : u_skyBottom.xyz, sqrt(abs(dir.y)));
     }
-    gl_FragColor = vec4(color, 1.0);
+    gl_FragData[0] = vec4(color, 1.0);
+    // No surface in the G-data (post_process.h PostProcess), where the scene view has it: as its clear.
+    gl_FragData[1] = vec4_splat(0.0);
+    gl_FragData[2] = vec4_splat(0.0);
+    gl_FragData[3] = vec4_splat(0.0);
+    gl_FragData[4] = vec4_splat(0.0);
 }

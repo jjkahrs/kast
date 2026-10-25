@@ -32,6 +32,7 @@
 #include "project.h"
 #include "sdfgi.h"
 #include "terrain.h"
+#include "volumetric_fog.h"
 #include "voxel_gi.h"
 
 #include <bimg/bimg.h>
@@ -62,6 +63,7 @@ constexpr int kRangeCircleSegments = 48;
 constexpr uint32_t kParticleShapeColor = 0xff00aaff; // ABGR: the editor's orange
 constexpr uint32_t kProbeBoxColor = 0xff00ccff;      // ABGR: the editor's highlight yellow
 constexpr uint32_t kVoxelGiBoxColor = 0xff00aaff;    // ABGR: the editor's orange
+constexpr uint32_t kFogVolumeColor = 0xff00ccff;     // ABGR: the editor's highlight yellow
 constexpr int kSphereStacks = 16;
 constexpr int kSphereSlices = 32;
 // No culling here: a mesh draw adds its material's cullMode (cullState), lines draw as they are.
@@ -644,7 +646,11 @@ struct Renderer::VoxelGiState {
     }
 };
 
-Renderer::Renderer() : voxelGi_(std::make_unique<VoxelGiState>()), sdfgi_(std::make_unique<SdfgiRenderer>()) {}
+Renderer::Renderer()
+    : voxelGi_(std::make_unique<VoxelGiState>()), sdfgi_(std::make_unique<SdfgiRenderer>()),
+      volumetricFog_(std::make_unique<VolumetricFog>())
+{
+}
 Renderer::~Renderer() = default;
 
 void Renderer::init()
@@ -778,6 +784,8 @@ void Renderer::init()
     voxelGi_->params = bgfx::createUniform("u_voxelGi", bgfx::UniformType::Vec4, 4);
     voxelGi_->cones = bgfx::createUniform("u_voxelCones", bgfx::UniformType::Vec4, kMaxVoxelGiCones);
     voxelGi_->sampler = bgfx::createUniform("s_voxelGi", bgfx::UniformType::Sampler);
+    volumetricFog_->init();
+    volFog_ = bgfx::createUniform("u_volFog", bgfx::UniformType::Vec4, 2);
 }
 
 void Renderer::shutdown()
@@ -856,6 +864,8 @@ void Renderer::shutdown()
         bgfx::destroy(uniform);
     voxelGi_->passes.shutdown();
     sdfgi_->shutdown();
+    volumetricFog_->shutdown();
+    bgfx::destroy(volFog_);
 }
 
 void Renderer::addTerrainDraws(const Scene& scene, const float* viewMtx, const float* projMtx, std::vector<DrawItem>& draws)
@@ -2033,9 +2043,12 @@ bool Renderer::bakeProbe(const Scene& scene, const Scene* extra, const std::file
     return true;
 }
 
-void Renderer::setTarget(bgfx::FrameBufferHandle target, uint16_t width, uint16_t height)
+void Renderer::setTarget(bgfx::FrameBufferHandle target, uint16_t width, uint16_t height, bgfx::ViewId blendView,
+                         bgfx::ViewId fogView)
 {
     target_ = target;
+    targetBlendView_ = blendView;
+    targetFogView_ = fogView;
     targetWidth_ = width;
     targetHeight_ = height;
 }
@@ -2085,7 +2098,8 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     const float cameraPos[4] = {eye.x, eye.y, eye.z, 1.0f};
     const bgfx::FrameBufferHandle target = std::exchange(target_, BGFX_INVALID_HANDLE); // for this render() only
     // Blended draws go to blendView: the copies blit at its start, after view's opaque meshes and sky.
-    const bgfx::ViewId blendView = bgfx::isValid(target) ? static_cast<bgfx::ViewId>(view + 1) : view;
+    const bgfx::ViewId blendView = bgfx::isValid(target) ? targetBlendView_ : view;
+    const bgfx::ViewId fogView = std::exchange(targetFogView_, UINT16_MAX);
     bool screenCopied = false, depthCopied = false;
 
     float lightDir[4] = {0.0f, -1.0f, 0.0f, 0.0f};
@@ -2425,6 +2439,44 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     }
     const bool sdfgiReady = sdfgiOn && sdfgi_->ready();
 
+    // Volumetric fog (volumetric_fog.h): the froxel grid lit by the lights through the shadow maps just rendered, in
+    // the target's fog views (none: off, its volumes freed).
+    const ScenePostProcessing::VolumetricFog& volumetric = scene.postProcessing.volumetricFog;
+    bool volumetricOn = false;
+    if (volumetric.enabled && fogView != UINT16_MAX && bgfx::isValid(target) && !capture_) {
+        if (!volumetricFog_->supported())
+            warnOnce("Volumetric fog: this GPU lacks compute or RGBA16F 3D images; volumetric fog is off");
+        const bx::Vec3 sunDir{lightDir[0], lightDir[1], lightDir[2]};
+        VolumetricFog::Frame frame{
+            .settings = volumetric,
+            .viewMtx = viewMtx,
+            .projMtx = projMtx,
+            .sunDirection = sun ? &sunDir : nullptr,
+            .sunColor = {lightColor[0], lightColor[1], lightColor[2]},
+            .sunShadowed = shadows.sun,
+            .lights = localLights,
+            .shadows = shadowOf,
+            .maps = {.atlas = atlas ? csm_ : bgfx::TextureHandle BGFX_INVALID_HANDLE,
+                     .csmMtx = shadows.csmMtx[0],
+                     .csmBias = shadows.csmBias[0],
+                     .cascades = shadows.sun ? std::clamp(sun->cascadeCount, 1, kMaxShadowCascades) : 0},
+            .ambient = {ambient[0], ambient[1], ambient[2]},
+            .volumes = {}};
+        for (size_t cube = 0; cube < shadows.pointLights.size(); ++cube)
+            frame.maps.cubes[cube] = cubes_[cube];
+        for (auto [entity, volume] : registry.view<FogVolume>().each()) {
+            float world[16];
+            scene.worldMatrix(entity, world);
+            frame.volumes.push_back(fogVolumeSample(volume, world));
+        }
+        volumetricOn = volumetricFog_->update(fogView, target, targetWidth_, targetHeight_, frame);
+    }
+    if (!volumetricOn)
+        volumetricFog_->release();
+    // u_volFog of the blended draws (VolumetricFog::drawParams); the opaque ones' is off (they get the composite).
+    const std::array<std::array<float, 4>, 2> noVolumetric{};
+    const auto& blendedVolumetric = volumetricOn ? volumetricFog_->drawParams() : noVolumetric;
+
     // The volume a draw cone-traces: the one its bounds' center selects, if its shader leaves VoxelGI its stage.
     const auto volumeOf = [&](const DrawItem& item) -> int {
         if (volumeBoxes.empty() || (item.shader && !shaderTakesVoxelGi(item.shader->source->source)))
@@ -2565,6 +2617,13 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         }
         if (item.shader && item.shader->source->source.screenTexture)
             bgfx::setTexture(kScreenTextureStage, screenSampler_, screenCopied ? screenCopy_ : black_);
+        // Volumetric fog on SCREEN_TEXTURE's stage (fs_mesh.sc kastVolumetricFog), for blended draws whose shader
+        // leaves it free.
+        const bool volumetricDraw =
+            volumetricOn && (blend || additive) && !(item.shader && item.shader->source->source.screenTexture);
+        bgfx::setUniform(volFog_, volumetricDraw ? blendedVolumetric.data() : noVolumetric.data(), 2);
+        if (volumetricDraw)
+            bgfx::setTexture(kScreenTextureStage, screenSampler_, volumetricFog_->texture(), BGFX_SAMPLER_UVW_CLAMP);
         if (item.shader && item.shader->source->source.depthTexture)
             bgfx::setTexture(kDepthTextureStage, depthSampler_, depthCopied ? depthCopy_ : white_);
         bgfx::setTexture(2, csmSampler_, atlas ? csm_ : noShadow2D_);
@@ -2706,7 +2765,9 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         }
         const ParticleRenderer::Draw& emitter = particles[i - blended.size()];
         const bgfx::TextureHandle image = texture(emitter.emitter->texture, TextureUsage::Color); // white_: none or failed to load
-        particles_.draw(emitter, blendView, image, image.idx != white_.idx, fogColor, fogParams, cameraPos);
+        particles_.draw(emitter, blendView, image, image.idx != white_.idx, fogColor, fogParams, cameraPos,
+                        blendedVolumetric.data()->data(),
+                        volumetricOn ? volumetricFog_->texture() : bgfx::TextureHandle BGFX_INVALID_HANDLE);
     }
 }
 
@@ -2722,6 +2783,7 @@ void Renderer::renderOverlays(const Scene& scene, bgfx::ViewId view, const float
     drawProbeBox(scene, view, selected);
     drawColliderWireframe(scene, view, selected);
     drawParticleShape(scene, view, selected);
+    drawFogVolume(scene, view, selected);
     drawOccludedBoxes(view);
 }
 
@@ -2900,6 +2962,43 @@ void Renderer::drawParticleShape(const Scene& scene, bgfx::ViewId view, entt::en
         const bx::Vec3 wa = bx::mul(a, world), wb = bx::mul(b, world);
         lines.push_back({wa.x, wa.y, wa.z, kParticleShapeColor});
         lines.push_back({wb.x, wb.y, wb.z, kParticleShapeColor});
+    }
+    submitLines(lines, lineLayout_, lineProgram_, view);
+}
+
+// The selected entity's FogVolume: its unit box's edges, or its sphere's three great circles, in its transform (scale
+// included), as the inject pass places it.
+void Renderer::drawFogVolume(const Scene& scene, bgfx::ViewId view, entt::entity selected)
+{
+    const auto* volume = scene.valid(selected) ? scene.registry().try_get<FogVolume>(selected) : nullptr;
+    if (!volume)
+        return;
+    float world[16];
+    scene.worldMatrix(selected, world);
+    std::vector<LineVertex> lines;
+    const auto line = [&](const bx::Vec3& a, const bx::Vec3& b) {
+        const bx::Vec3 wa = bx::mul(a, world), wb = bx::mul(b, world);
+        lines.push_back({wa.x, wa.y, wa.z, kFogVolumeColor});
+        lines.push_back({wb.x, wb.y, wb.z, kFogVolumeColor});
+    };
+    if (volume->shape == FogVolumeShape::Box) {
+        const auto corner = [](int i) { return bx::Vec3{i & 1 ? 0.5f : -0.5f, i & 2 ? 0.5f : -0.5f, i & 4 ? 0.5f : -0.5f}; };
+        for (int i = 0; i < 8; ++i)
+            for (int axis : {1, 2, 4})
+                if (!(i & axis)) // each edge once
+                    line(corner(i), corner(i | axis));
+    } else {
+        for (int axis = 0; axis < 3; ++axis) {
+            const auto at = [&](int segment) {
+                const float angle = 2.0f * bx::kPi * static_cast<float>(segment) / kRangeCircleSegments;
+                float p[3] = {0.0f, 0.0f, 0.0f};
+                p[(axis + 1) % 3] = 0.5f * std::cos(angle);
+                p[(axis + 2) % 3] = 0.5f * std::sin(angle);
+                return bx::Vec3{p[0], p[1], p[2]};
+            };
+            for (int segment = 0; segment < kRangeCircleSegments; ++segment)
+                line(at(segment), at(segment + 1));
+        }
     }
     submitLines(lines, lineLayout_, lineProgram_, view);
 }

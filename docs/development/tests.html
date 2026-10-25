@@ -323,6 +323,10 @@ its three refusals, nested instantiation, and a prefab edit hot-reloading the do
 <td>The built game with startScene <code>post_processing.scene</code> (<code>Post Test.exe</code>): post effects and fog in the player, GUI on top, <code>player_post.png</code>.</td>
 </tr>
 <tr>
+<td><code>gdata_*</code>, <code>post_processing_gdata*</code>, <code>ssao_*</code>, <code>ssr_*</code>, <code>dof_*</code>, <code>vfog_*</code>, <code>prefab_vfog</code>, <code>build_game_{ssao,ssr,dof,vfog}[_off]</code>, <code>player_{ssao,ssr,dof,vfog}_*</code></td>
+<td><code>cmake/screen_space_tests.cmake</code>: <a href="../engine/ssao.html">SSAO</a>, <a href="../engine/ssr.html">SSR</a>, <a href="../engine/depth-of-field.html">depth of field</a> and <a href="../engine/volumetric-fog.html">volumetric fog</a> on <code>ssao.scene</code>, <code>ssr.scene</code>, <code>dof.scene</code>, <code>volumetric_fog.scene</code>: Scene view, Play and player shots that differ from the effect off (and from each parameter change), intensity / density 0 and the Post box off matching off, Lua <code>set</code> matching the scene saved with the same values, the panel sections (<code>--scroll-post-section</code>), FogVolume outlines, roundtrip and invalid-value load failures.</td>
+</tr>
+<tr>
 <td><code>build_game_lights</code>, <code>player_lights_screenshot</code></td>
 <td>The build and run of a copy with startScene <code>point_lights.scene</code> (<code>Lights Test.exe</code>): point lights and ambient in the standalone player, <code>player_lights.png</code>.</td>
 </tr>

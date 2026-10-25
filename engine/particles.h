@@ -133,9 +133,11 @@ public:
     // draws) and returns the ones to draw: all of them, or with frustum those whose bounds intersect it.
     std::vector<Draw> simulate(const Scene& scene, bgfx::ViewId view, const Frustum* frustum);
     // Draws one emitter's particles (blended, depth tested, no depth write): times texture if textured, else a soft
-    // circle (texture is still bound). fog / cameraPos: the scene's, as fs_mesh.sc takes them.
+    // circle (texture is still bound). fog / cameraPos: the scene's, as fs_mesh.sc takes them; volumetricFog: u_volFog
+    // (2 vec4, VolumetricFog::drawParams; w 0: none) and its atlas (bound if valid).
     void draw(const Draw& item, bgfx::ViewId view, bgfx::TextureHandle texture, bool textured, const float* fogColor,
-              const float* fogParams, const float* cameraPos);
+              const float* fogParams, const float* cameraPos, const float* volumetricFog,
+              bgfx::TextureHandle volumetricFogTexture);
     size_t emitters() const { return gpu_.size(); } // with GPU buffers
 
 private:
@@ -165,6 +167,8 @@ private:
     bgfx::UniformHandle fogColor_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle fogParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle sampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle volFog_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle volFogSampler_ = BGFX_INVALID_HANDLE;
     std::map<uint64_t, Gpu> gpu_; // by state id
 };
 

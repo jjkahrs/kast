@@ -398,6 +398,25 @@ vec3 fogged(vec3 color, vec3 worldPos)
     return u_material.w > 1.5 ? color * (1.0 - fog) : mix(color, u_fogColor.rgb, fog);
 }
 
+// How much of a surface's own light distance fog leaves at worldPos (fogged's 1 - fog): scales its G-data's indirect light.
+float kastFogKeep(vec3 worldPos)
+{
+    if (u_fogColor.w < 0.5)
+        return 1.0;
+    float fd = u_fogParams.x * max(length(u_cameraPos.xyz - worldPos) - u_fogParams.y, 0.0);
+    return exp(-fd * fd);
+}
+
+// G-data attachment 1 (post_process.h PostProcess): world normal n as view space, octahedral in rg (octEncode in
+// post_process.cpp), perceptual roughness in b, a 1 (a surface; the clear's 0 is none).
+vec4 kastGNormal(vec3 n, float roughness)
+{
+    vec3 v = mul(u_view, vec4(n, 0.0)).xyz;
+    v /= abs(v.x) + abs(v.y) + abs(v.z);
+    vec2 p = v.z >= 0.0 ? v.xy : (vec2_splat(1.0) - abs(v.yx)) * vec2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+    return vec4(p * 0.5 + 0.5, roughness, 1.0);
+}
+
 // What fragment() reads and writes (the uppercase built-ins below). main() fills it with what the built-in material
 // computes, so a fragment() that writes nothing changes nothing.
 struct KastFragment {
@@ -484,6 +503,25 @@ float linearDepth(float depth)
 //@user
 #ifndef KAST_FRAGMENT
 void fragment(inout KastFragment kast_f) {}
+#endif
+
+// Volumetric fog (volumetric_fog.h) of a blended draw (u_volFog[0].w 1; the opaque scene gets it in VolumetricFog's
+// composite): what the froxel grid's atlas holds in front of the fragment, on SCREEN_TEXTURE's stage, which the built-in
+// shader and .kshaders that don't sample SCREEN_TEXTURE (KAST_VOLUMETRIC_FOG, shader.cpp) leave free. Alpha-blended
+// surfaces take its transmittance and in-scattered light, additive ones only the transmittance (as fogged()).
+#if !defined(KAST_FRAGMENT) || defined(KAST_VOLUMETRIC_FOG)
+#include <volumetric_fog.sh>
+uniform vec4 u_volFog[2]; // VolumetricFog::drawParams: [0] xyz the camera's forward, w 1 on; [1] y maxDistance
+vec3 kastVolumetricFog(vec3 color, vec3 worldPos, vec2 pixel)
+{
+    if (u_volFog[0].w < 0.5)
+        return color;
+    vec4 fog = kastFroxelFog(s_kastScreen, (pixel - u_viewRect.xy) * u_viewTexel.xy,
+                             dot(worldPos - u_cameraPos.xyz, u_volFog[0].xyz), u_volFog[1].y, pixel);
+    return u_material.w > 1.5 ? color * fog.a : color * fog.a + fog.rgb;
+}
+#else
+vec3 kastVolumetricFog(vec3 color, vec3 worldPos, vec2 pixel) { return color; }
 #endif
 
 // The lightmap (lightmap.h): rgb irradiance / pi, and the direction it mostly came from (xyz) with its half-Lambert at
@@ -781,14 +819,26 @@ void main()
 
     if (f.alpha < u_material.z)
         discard;
+    // Every return writes all five outputs: the lit color (0) and the G-data (1..4, see kastGNormal), which only the
+    // opaque scene view of a PostProcess with SSAO or SSR has targets for (4 with SSR; elsewhere the writes are
+    // discarded).
 #ifdef KAST_SHADOW
     // The .kshader's shadow pass (fs_shadow.sc for the built-in material): depth only, cut out as the surface is.
-    gl_FragColor = vec4_splat(0.0);
+    gl_FragData[0] = vec4_splat(0.0);
+    gl_FragData[1] = vec4_splat(0.0);
+    gl_FragData[2] = vec4_splat(0.0);
+    gl_FragData[3] = vec4_splat(0.0);
+    gl_FragData[4] = vec4_splat(0.0);
     return;
 #endif
     float alpha = u_material.w > 0.5 ? f.alpha : 1.0;
-    if (u_materialExt.w > 0.5) { // unlit
-        gl_FragColor = vec4(fogged(f.albedo + f.emission, v_worldPos), alpha);
+    if (u_materialExt.w > 0.5) { // unlit: no indirect light
+        gl_FragData[0] =
+            vec4(kastVolumetricFog(fogged(f.albedo + f.emission, v_worldPos), v_worldPos, gl_FragCoord.xy), alpha);
+        gl_FragData[1] = kastGNormal(f.normal, 1.0);
+        gl_FragData[2] = vec4_splat(0.0);
+        gl_FragData[3] = vec4_splat(0.0);
+        gl_FragData[4] = vec4_splat(0.0);
         return;
     }
     float metallic = saturate(f.metallic);
@@ -895,17 +945,26 @@ void main()
     // diffuse, and the split sum for the specular, the prefiltered cube at the roughness's mip along the reflection
     // times the GGX BRDF's integral. Without: the flat ambient color for both.
     // With GI (u_gi.x > 0) the diffuse comes from kastGiDiffuse instead; GI off runs the code above unchanged.
+    // indirectDiffuse / indirectSpecular: those terms of color as added (times f.ao), for the G-data; color itself is
+    // summed exactly as before them.
     float nv = max(dot(n, v), 0.0);
     vec3 fAmbient = f0 + (max(vec3_splat(1.0 - roughness), f0) - f0) * pow(saturate(1.0 - nv), 5.0);
+    vec3 indirectDiffuse, indirectSpecular;
     if (u_gi.x < 0.5) {
         if (u_envSpecular.w > 0.0) {
             vec3 r = kastEnvDirection(reflect(-v, n), v_worldPos);
             vec3 prefiltered = textureCubeLod(s_env, vec3(r.x, r.y, -r.z), roughness * u_envSpecular.w).rgb;
             vec2 brdf = kastEnvBrdf(roughness, nv);
-            color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo * kastSh9(n)
-                      + prefiltered * u_envSpecular.rgb * (f0 * brdf.x + brdf.y)) * f.ao;
+            vec3 envDiffuse = (vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo * kastSh9(n);
+            vec3 envSpecular = prefiltered * u_envSpecular.rgb * (f0 * brdf.x + brdf.y);
+            color += (envDiffuse + envSpecular) * f.ao;
+            indirectDiffuse = envDiffuse * f.ao;
+            indirectSpecular = envSpecular * f.ao;
         } else {
-            color += ((vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo + fAmbient) * u_ambient.rgb * f.ao;
+            vec3 kd = (vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo;
+            color += (kd + fAmbient) * u_ambient.rgb * f.ao;
+            indirectDiffuse = kd * u_ambient.rgb * f.ao;
+            indirectSpecular = fAmbient * u_ambient.rgb * f.ao;
         }
     } else {
         vec3 diffuse = (vec3_splat(1.0) - fAmbient) * (1.0 - metallic) * albedo * kastGiDiffuse(n, v_lightmapUv, v_worldPos);
@@ -925,10 +984,19 @@ void main()
             specular = kastSdfgiSpecular(n, v, v_worldPos, roughness, f0, nv, specular);
 #endif
         color += (diffuse + specular) * f.ao;
+        indirectDiffuse = diffuse * f.ao;
+        indirectSpecular = specular * f.ao;
     }
 
     color += f.emission;
 
     // Linear HDR: the post chain (post_process.h) tonemaps and encodes to sRGB.
-    gl_FragColor = vec4(fogged(color, v_worldPos), alpha);
+    gl_FragData[0] = vec4(kastVolumetricFog(fogged(color, v_worldPos), v_worldPos, gl_FragCoord.xy), alpha);
+    float keep = kastFogKeep(v_worldPos);
+    gl_FragData[1] = kastGNormal(n, roughness);
+    gl_FragData[2] = vec4(indirectDiffuse * keep, 0.0);
+    gl_FragData[3] = vec4(indirectSpecular * keep, 0.0);
+    // The split sum's specular weight, what SSR's reflected color is scaled by in place of the indirect specular.
+    vec2 envBrdf = kastEnvBrdf(roughness, nv);
+    gl_FragData[4] = vec4((f0 * envBrdf.x + envBrdf.y) * f.ao * keep, 0.0);
 }

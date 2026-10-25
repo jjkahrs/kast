@@ -140,6 +140,12 @@ list, one per level, 0..1, not increasing; 1 to 8 entries), <strong>Bias</strong
 <em>Current LOD: culled</em> (below the last threshold with Cull Below Last), or <em>Current LOD: not drawn in the Scene view</em>. Without a
 Model Renderer it says <em>Needs a Model Renderer on this entity: the LOD Group does nothing without one</em>. Invalid values
 (an increasing list, a bias of 0) are refused like other fields.</p>
+<p id="fogvolume"><strong>Fog Volume</strong> (<a href="../engine/volumetric-fog.html#fogvolume">FogVolume</a>): <strong>Add Component &gt; Fog
+Volume</strong> adds a local fog region to the entity, a box or sphere sized by its Transform. Its Inspector section:
+<strong>Shape</strong> (Box / Sphere), <strong>Density</strong> (&gt;= 0), <strong>Albedo</strong> (color), <strong>Edge Falloff</strong> (0..1) and
+<strong>Height Falloff</strong> (optional, &gt;= 0), each edit an undo step. While the entity is selected the Scene view outlines
+the box or sphere in yellow. It only shows while the scene's volumetric fog is on (Window &gt; Post Processing &gt;
+Volumetric Fog).</p>
 <p><strong>New Lua Component...</strong> (first item of the Inspector's Add Component popup) creates a Lua component and adds it to the
 selected entity in one step. Type a name (e.g. <code>PlayerHealth</code>) and choose Create (or Enter; Esc cancels): it writes the
 New from Template definition with that type name to <code>&lt;project&gt;/components/&lt;snake_case&gt;.lua</code> (<code>player_health.lua</code>;

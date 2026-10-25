@@ -1,0 +1,194 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Sun",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 8, -10], "rotation": [-0.965924, 0, 0, 0.258825], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.92, 0.8], "intensity": 4, "maxDistance": 60 }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [60, 1, 60] },
+        "MeshRenderer": { "primitive": "plane", "material": "" }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Pillar 1",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-6, 3, -2], "rotation": [0, 0, 0, 1], "scale": [1.6, 6, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Pillar 2",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-3, 3, -2], "rotation": [0, 0, 0, 1], "scale": [1.6, 6, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Pillar 3",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 3, -2], "rotation": [0, 0, 0, 1], "scale": [1.6, 6, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Pillar 4",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [3, 3, -2], "rotation": [0, 0, 0, 1], "scale": [1.6, 6, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Pillar 5",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [6, 3, -2], "rotation": [0, 0, 0, 1], "scale": [1.6, 6, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Beam",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 7, -2], "rotation": [0, 0, 0, 1], "scale": [16, 2, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Point Light",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-4, 1.6, 5], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "PointLight": { "color": [1, 0.55, 0.2], "intensity": 30, "range": 6, "castShadows": true }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Point Occluder",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-3.2, 1.6, 5], "rotation": [0, 0, 0, 1], "scale": [0.5, 0.5, 0.5] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Spot Light",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [4, 5, 5], "rotation": [-0.707107, 0, 0, 0.707107], "scale": [1, 1, 1] },
+        "SpotLight": { "color": [0.3, 0.8, 1], "intensity": 80, "range": 8, "innerAngle": 20, "outerAngle": 30, "castShadows": true }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Spot Occluder",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [4, 3.4, 5], "rotation": [0, 0, 0, 1], "scale": [0.6, 0.2, 0.6] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 13,
+      "name": "Glass",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 1.2, 6], "rotation": [0, 0, 0, 1], "scale": [1.4, 1.4, 1.4] },
+        "MeshRenderer": { "primitive": "sphere", "material": "materials/glass_blue.mat" }
+      }
+    },
+    {
+      "id": 14,
+      "name": "Smoke",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [1.8, 1.5, 8], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "ParticleEmitter": { "playOnStart": true, "looping": false, "duration": 5, "rate": 0, "burstCount": 1, "maxParticles": 1, "shape": "cone", "coneAngle": 0, "radius": 0, "boxSize": [1, 1, 1], "emitFromSurface": false, "lifetimeMin": 1000, "lifetimeMax": 1000, "speedMin": 0, "speedMax": 0, "startSizeMin": 1.6, "startSizeMax": 1.6, "endSize": 1, "startColor": [0.9, 0.9, 0.9], "endColor": [0.9, 0.9, 0.9], "startAlpha": 0.8, "endAlpha": 0.8, "gravity": [0, 0, 0], "space": "world", "texture": "", "blend": "alpha" }
+      }
+    },
+    {
+      "id": 15,
+      "name": "FogBox",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-4.2, 1.6, 5], "rotation": [0, 0.258819, 0, 0.965926], "scale": [3.5, 3, 3.5] },
+        "FogVolume": { "shape": "box", "density": 0.5, "albedo": [1, 0.55, 0.45], "edgeFalloff": 0.3 }
+      }
+    },
+    {
+      "id": 16,
+      "name": "FogSphere",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [4, 2.5, 5], "rotation": [0, 0, 0, 1], "scale": [4.5, 4.5, 4.5] },
+        "FogVolume": { "shape": "sphere", "density": 0.6, "albedo": [0.8, 1, 0.85], "edgeFalloff": 0.6, "heightFalloff": 0.3 }
+      }
+    },
+    {
+      "id": 17,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 3, 15], "rotation": [-0.069756, 0, 0, 0.997564], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    },
+    {
+      "id": 18,
+      "name": "Left Wall",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-12.5, 4.25, 8.75], "rotation": [0, 0, 0, 1], "scale": [1, 8.5, 22.5] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 19,
+      "name": "Right Wall",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [12.5, 4.25, 8.75], "rotation": [0, 0, 0, 1], "scale": [1, 8.5, 22.5] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 20,
+      "name": "Roof",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 8.5, 8.75], "rotation": [0, 0, 0, 1], "scale": [24, 1, 22.5] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    }
+  ],
+  "systems": [],
+  "lighting": { "ambientColor": [0.6, 0.7, 1], "ambientIntensity": 0.08 },
+  "postProcessing": {
+    "tonemapping": { "enabled": true, "exposure": 0, "operator": "ACES" },
+    "volumetricFog": { "enabled": true, "density": 0.06, "albedo": [0.9, 0.9, 0.9], "anisotropy": 0.6, "heightFalloff": 0.05, "baseHeight": 0, "maxDistance": 60, "temporalBlend": 0.9, "lightIntensity": 1, "ambientIntensity": 1 }
+  },
+  "editor": {
+    "camera": { "pivot": [0, 2, 3], "yaw": 0, "pitch": -8, "distance": 12 }
+  }
+}

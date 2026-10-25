@@ -123,6 +123,10 @@
 <td>Bring that editor window (e.g. <code>Events</code>, <code>"State Machines"</code>, <code>"GUI Preview"</code>) to the front of its dock after the first 10 frames (with <code>--open-graph</code>: 3 frames after the graph's panels took the focus, e.g. <code>--focus-panel Scene</code> to watch a live update), for screenshots. <code>Lighting</code>, <code>"Post Processing"</code>, <code>Physics</code>, <code>Mixer</code>, <code>Network</code> and <code>Online</code> also open those hidden panels.</td>
 </tr>
 <tr>
+<td><code>--scroll-post-section &lt;Name&gt;</code></td>
+<td>Keep the Post Processing panel scrolled to the section whose name starts with this (e.g. <code>SSAO</code>, <code>Depth</code>, <code>Volumetric</code>), for screenshots; pair it with <code>--focus-panel "Post Processing"</code>.</td>
+</tr>
+<tr>
 <td><code>--zone-section &lt;Name[,Name...]&gt;</code></td>
 <td>Expand these sections of the Zone tab (e.g. <code>Map,Problems</code>) and collapse the others after the first 10 frames, for screenshots; pair it with <code>--focus-panel Zone</code> to bring the tab to the front.</td>
 </tr>
@@ -365,6 +369,10 @@ Text.</td>
 <tr>
 <td><code>--show-occluded</code></td>
 <td>Start with the Scene view's Debug &gt; Occluded boxes on.</td>
+</tr>
+<tr>
+<td><code>--show-gdata 1|2|3</code></td>
+<td>Test hook: the Scene view makes the SSAO / SSR G-data whatever the scene's effects and shows that attachment instead of the scene's color: 1 normal and roughness, 2 indirect diffuse, 3 indirect specular (<a href="../engine/ssao.html#how">SSAO</a>).</td>
 </tr>
 <tr>
 <td><code>--show-hiz &lt;mip&gt;</code></td>

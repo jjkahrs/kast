@@ -75,6 +75,7 @@ public:
     };
     DebugViews& debugViews() { return debug_; } // --lod-tint, --show-occluded, --show-hiz
     void openDebugMenu() { openDebugMenu_ = true; } // --scene-debug-menu: kept open, for screenshots
+    void showGData(int attachment) { post_.setDebugGData(attachment); } // --show-gdata (PostProcess::setDebugGData)
     // Bakes each of probes (ReflectionProbe entities of doc.scene) with this view's renderer and views
     // (Renderer::bakeProbe: call between frames), writes it to kast::bakedProbePath next to the scene, sets its
     // bakedPath and marks the document dirty. Edit mode and a scene saved in the project only; failures are logged.
