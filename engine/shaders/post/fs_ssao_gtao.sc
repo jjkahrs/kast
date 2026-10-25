@@ -26,7 +26,8 @@ float kastSliceVisibility(float n, float h0, float h1)
 
 // Ground-truth AO (GTAO) at half resolution: for u_ssao.y slices around the view vector, the highest horizon either
 // side within u_ssao.x meters (samples fade to the open horizon over the radius's outer 61.5%, XeGTAO's falloff),
-// integrated against the normal's cosine. Out: r visibility 0..1 (1 open), g distance from the eye (0: no surface).
+// integrated against the normal's cosine. Out: r visibility 0..1 (1 open), g distance from the eye
+// (kastViewDistance; 0: no surface).
 void main()
 {
     vec2 uv = v_texcoord0;
@@ -39,7 +40,7 @@ void main()
     float depth = texture2DLod(s_tex0, uv, 0.0).x;
     vec3 p = kastViewPos(uv, depth);
     vec3 n = kastViewNormal(g);
-    vec3 v = normalize(-p);
+    vec3 v = kastViewDir(p);
     float radius = u_ssao.x;
     vec4 c0 = mul(u_proj, vec4(p, 1.0));
     vec4 c1 = mul(u_proj, vec4(p + vec3(radius, 0.0, 0.0), 1.0));
@@ -83,5 +84,5 @@ void main()
         h0 = nAngle + clamp(h0 - nAngle, -KAST_HALF_PI, KAST_HALF_PI);
         visibility += projLen * kastSliceVisibility(nAngle, h0, h1);
     }
-    gl_FragColor = vec4(saturate(visibility / slices), length(p), 0.0, 0.0);
+    gl_FragColor = vec4(saturate(visibility / slices), kastViewDistance(p), 0.0, 0.0);
 }

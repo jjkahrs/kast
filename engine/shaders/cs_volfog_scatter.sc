@@ -113,7 +113,7 @@ void main()
     vec4 medium = imageLoad(s_density, cell);
     vec3 light = vec3_splat(0.0);
     if (medium.a > 0.0) {
-        vec3 toEye = normalize(u_volFogGrid[0].xyz - p);
+        vec3 toEye = -normalize(kastFroxelRay((vec2(cell.xy) + 0.5 + u_volFogGrid[9].xy) / vec2(FROXELS_X, FROXELS_Y)));
         vec3 lit = vec3_splat(0.0);
         // Without jitter, at 4 points spread over the froxel (a tetrahedron, a quarter froxel out), so shadow edges
         // fade across froxels instead of stepping.

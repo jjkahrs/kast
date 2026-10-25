@@ -348,11 +348,16 @@ struct ScenePostProcessing {
     } volumetricFog;
 };
 
-// Renders the scene from the entity's world position looking down its world -Z (scale is ignored).
+enum class CameraProjection { Perspective, Orthographic };
+
+// Renders the scene from the entity's world position looking down its world -Z (scale is ignored). Orthographic:
+// orthographicSize (> 0) is half the view's height in meters, its width that times the aspect; the FOV is unused.
 struct Camera {
     float verticalFovDegrees = 60.0f;
     float nearPlane = 0.1f;
     float farPlane = 1000.0f;
+    CameraProjection projection = CameraProjection::Perspective;
+    float orthographicSize = 5.0f;
 };
 
 // Spins the entity's local rotation around its local axis while playing (see rotatorSystem).

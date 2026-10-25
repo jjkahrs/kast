@@ -176,7 +176,12 @@ void cameraMatrices(const Scene& scene, entt::entity camera, float aspect, bool 
     const bx::Vec3 up = bx::normalize(transformDir({0.0f, 1.0f, 0.0f}, world));
     bx::mtxLookAt(view, eye, bx::add(eye, forward), up, bx::Handedness::Right);
     const Camera& c = scene.registry().get<Camera>(camera);
-    bx::mtxProj(proj, c.verticalFovDegrees, aspect, c.nearPlane, c.farPlane, homogeneousDepth, bx::Handedness::Right);
+    if (c.projection == CameraProjection::Orthographic) {
+        const float h = c.orthographicSize, w = h * aspect;
+        bx::mtxOrtho(proj, -w, w, -h, h, c.nearPlane, c.farPlane, 0.0f, homogeneousDepth, bx::Handedness::Right);
+    } else {
+        bx::mtxProj(proj, c.verticalFovDegrees, aspect, c.nearPlane, c.farPlane, homogeneousDepth, bx::Handedness::Right);
+    }
 }
 
 void Scene::worldMatrix(entt::entity entity, float* out) const

@@ -103,7 +103,7 @@ public:
 private:
     enum class Drag { None, Fly, Orbit, Pan };
 
-    void drawToolbar();
+    void drawToolbar(Document& doc);
     void updateCamera(Document& doc, bool hovered, float viewportHeight);
     void manipulate(Document& doc, const float* view, const float* proj);
     void pick(Document& doc, const float* viewProj, float x, float y, float width, float height);

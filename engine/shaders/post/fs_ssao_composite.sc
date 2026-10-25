@@ -19,7 +19,7 @@ void main()
         gl_FragColor = vec4_splat(0.0);
         return;
     }
-    float dist = length(kastViewPos(uv, texture2DLod(s_tex1, uv, 0.0).x));
+    float dist = kastViewDistance(kastViewPos(uv, texture2DLod(s_tex1, uv, 0.0).x));
     float tolerance = 0.05 * dist + 0.01;
     vec2 texelPos = uv / u_texel.zw - 0.5;
     vec2 base = floor(texelPos);

@@ -46,8 +46,17 @@ void EditorCamera::viewMatrix(float* out) const
 
 void EditorCamera::projMatrix(float* out, float aspect) const
 {
-    bx::mtxProj(out, kFovY, aspect, nearPlane, farPlane, bgfx::getCaps()->homogeneousDepth, bx::Handedness::Right);
+    const bool homogeneousDepth = bgfx::getCaps()->homogeneousDepth;
+    if (orthographic) {
+        // The planes as in perspective, from the camera's position (the pivot sits distance in front of it).
+        const float h = orthoSize(), w = h * aspect;
+        bx::mtxOrtho(out, -w, w, -h, h, nearPlane, farPlane, 0.0f, homogeneousDepth, bx::Handedness::Right);
+    } else {
+        bx::mtxProj(out, kFovY, aspect, nearPlane, farPlane, homogeneousDepth, bx::Handedness::Right);
+    }
 }
+
+float EditorCamera::orthoSize() const { return distance * std::tan(bx::toRad(kFovY) * 0.5f); }
 
 void EditorCamera::look(float dx, float dy)
 {
@@ -65,7 +74,7 @@ void EditorCamera::orbit(float dx, float dy)
 void EditorCamera::pan(float dx, float dy, float viewportHeight)
 {
     // World units per pixel at the pivot's depth, so the point under the cursor follows it.
-    const float scale = 2.0f * distance * std::tan(bx::toRad(kFovY) * 0.5f) / bx::max(viewportHeight, 1.0f);
+    const float scale = 2.0f * orthoSize() / bx::max(viewportHeight, 1.0f); // the same orthographic
     pivot = bx::add(pivot, bx::add(bx::mul(right(), -dx * scale), bx::mul(up(), dy * scale)));
 }
 
@@ -80,16 +89,21 @@ void EditorCamera::focus(const kast::Aabb& bounds)
 {
     pivot = bx::mul(bx::add(bounds.min, bounds.max), 0.5f);
     const float radius = bx::max(bx::length(bx::sub(bounds.max, bounds.min)) * 0.5f, 0.25f);
-    distance = bx::clamp(kFocusMargin * radius / std::sin(bx::toRad(kFovY) * 0.5f), kMinDistance, kMaxDistance);
+    // Perspective: the bounding sphere fits the FOV. Orthographic: orthoSize() fits the sphere's radius.
+    const float fit = orthographic ? std::tan(bx::toRad(kFovY) * 0.5f) : std::sin(bx::toRad(kFovY) * 0.5f);
+    distance = bx::clamp(kFocusMargin * radius / fit, kMinDistance, kMaxDistance);
 }
 
 nlohmann::ordered_json EditorCamera::toJson() const
 {
     using kast::jsonNumber;
-    return {{"pivot", {jsonNumber(pivot.x), jsonNumber(pivot.y), jsonNumber(pivot.z)}},
-            {"yaw", jsonNumber(yaw)},
-            {"pitch", jsonNumber(pitch)},
-            {"distance", jsonNumber(distance)}};
+    nlohmann::ordered_json json = {{"pivot", {jsonNumber(pivot.x), jsonNumber(pivot.y), jsonNumber(pivot.z)}},
+                                   {"yaw", jsonNumber(yaw)},
+                                   {"pitch", jsonNumber(pitch)},
+                                   {"distance", jsonNumber(distance)}};
+    if (orthographic) // only then: perspective scenes save as before
+        json["orthographic"] = true;
+    return json;
 }
 
 bool EditorCamera::fromJson(const nlohmann::ordered_json& json)
@@ -100,9 +114,12 @@ bool EditorCamera::fromJson(const nlohmann::ordered_json& json)
     for (const char* key : {"yaw", "pitch", "distance"})
         if (!json.contains(key) || !json[key].is_number())
             return false;
+    if (json.contains("orthographic") && !json["orthographic"].is_boolean())
+        return false;
     pivot = newPivot;
     yaw = json["yaw"].get<float>();
     pitch = bx::clamp(json["pitch"].get<float>(), -kMaxPitch, kMaxPitch);
     distance = bx::clamp(json["distance"].get<float>(), kMinDistance, kMaxDistance);
+    orthographic = json.value("orthographic", false); // missing in older files: perspective
     return true;
 }

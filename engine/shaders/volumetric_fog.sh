@@ -29,13 +29,15 @@ float kastHenyeyGreenstein(float c, float g)
 }
 
 #if BGFX_SHADER_TYPE_COMPUTE
-// The compute passes' frame (VolumetricFog::update): [0] xyz the eye, w maxDistance (farZ); [1] xyz the ray per meter
+// The compute passes' frame (VolumetricFog::update): [0] xyz where the ray through the image's first texel corner
+// leaves the eye's plane (the eye, unless orthographic), w maxDistance (farZ); [1] xyz the ray per meter
 // of view depth through the image's first texel corner, w this frame's slice jitter; [2] xyz the ray's change across
 // the image's width, w FogVolumes; [3] xyz down its height, w lights; [4] x density, y heightFalloff, z baseHeight, w
 // anisotropy; [5] rgb albedo, w the sun's cascades; [6] rgb ambient * ambientIntensity, w lightIntensity; [7] xyz the
 // last frame's eye, w the history's weight (0: none); [8] xyz the last frame's forward; [9] xy this frame's jitter
-// across the froxels (in froxels), z 1 to light each froxel at 4 points (temporalBlend 0: no jitter to average).
-uniform vec4 u_volFogGrid[10];
+// across the froxels (in froxels), z 1 to light each froxel at 4 points (temporalBlend 0: no jitter to average); [10]
+// xyz [0]'s change across the image's width, [11] down its height (both 0 unless orthographic: parallel rays).
+uniform vec4 u_volFogGrid[12];
 
 // The ray per meter of view depth through screen uv.
 vec3 kastFroxelRay(vec2 uv)
@@ -48,7 +50,7 @@ vec3 kastFroxelPositionAt(ivec3 cell, vec3 offset)
 {
     vec2 uv = (vec2(cell.xy) + 0.5 + offset.xy + u_volFogGrid[9].xy) / vec2(FROXELS_X, FROXELS_Y);
     float d = kastFroxelDepth(float(cell.z) + 0.5 + offset.z + u_volFogGrid[1].w, u_volFogGrid[0].w);
-    return u_volFogGrid[0].xyz + kastFroxelRay(uv) * d;
+    return u_volFogGrid[0].xyz + u_volFogGrid[10].xyz * uv.x + u_volFogGrid[11].xyz * uv.y + kastFroxelRay(uv) * d;
 }
 
 vec3 kastFroxelPosition(ivec3 cell)

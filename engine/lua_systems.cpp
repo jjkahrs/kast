@@ -896,15 +896,25 @@ void LuaSystems::State::bindApi()
             return {sol::lua_nil, sol::lua_nil};
         float world[16];
         scene.worldMatrix(camera, world);
-        const float tanHalf = std::tan(bx::toRad(scene.registry().get<Camera>(camera).verticalFovDegrees) * 0.5f);
+        const Camera& c = scene.registry().get<Camera>(camera);
         const float aspect = input->view.width / input->view.height;
         const float ndcX = input->mouseX * 2.0f - 1.0f;
         const float ndcY = 1.0f - input->mouseY * 2.0f;
-        const bx::Vec3 local = {ndcX * tanHalf * aspect, ndcY * tanHalf, -1.0f}; // the camera looks down -z
-        const bx::Vec3 dir = bx::normalize(transformDir(local, world));
         const auto table = [&](const bx::Vec3& v) {
             return sol::make_object(L, lua.create_table_with("x", v.x, "y", v.y, "z", v.z));
         };
+        if (c.projection == CameraProjection::Orthographic) {
+            // Parallel rays along the camera's forward, from the cursor's point on the near plane (scale ignored).
+            const auto axis = [&](const bx::Vec3& v) { return bx::normalize(transformDir(v, world)); };
+            const bx::Vec3 forward = axis({0.0f, 0.0f, -1.0f});
+            bx::Vec3 origin{world[12], world[13], world[14]};
+            origin = bx::mad(axis({1.0f, 0.0f, 0.0f}), ndcX * c.orthographicSize * aspect, origin);
+            origin = bx::mad(axis({0.0f, 1.0f, 0.0f}), ndcY * c.orthographicSize, origin);
+            return {table(bx::mad(forward, c.nearPlane, origin)), table(forward)};
+        }
+        const float tanHalf = std::tan(bx::toRad(c.verticalFovDegrees) * 0.5f);
+        const bx::Vec3 local = {ndcX * tanHalf * aspect, ndcY * tanHalf, -1.0f}; // the camera looks down -z
+        const bx::Vec3 dir = bx::normalize(transformDir(local, world));
         return {table({world[12], world[13], world[14]}), table(dir)};
     });
     inputApi.set_function("wheelDelta", [this] { return input ? input->wheelDelta : 0.0f; });

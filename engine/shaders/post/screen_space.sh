@@ -2,7 +2,7 @@
 // the camera's (PostProcess::setProjection), so u_proj / u_invProj map between the depth buffer and the view space the
 // G-data's normals are in.
 
-uniform vec4 u_depthParams; // x: 1 = uv (0, 0) is the bottom row (OpenGL); y: 1 = clip depth is -1..1
+uniform vec4 u_depthParams; // x: 1 = uv (0, 0) is the bottom row (OpenGL); y: 1 = clip depth is -1..1; z: 1 = orthographic
 uniform vec4 u_texel;       // xy: 1 / the scene's size; zw: 1 / the half-resolution pass's size
 
 #define KAST_PI 3.14159265
@@ -14,6 +14,18 @@ vec3 kastViewPos(vec2 uv, float depth)
     vec2 ndc = vec2(uv.x * 2.0 - 1.0, u_depthParams.x > 0.5 ? uv.y * 2.0 - 1.0 : 1.0 - uv.y * 2.0);
     vec4 p = mul(u_invProj, vec4(ndc, u_depthParams.y > 0.5 ? depth * 2.0 - 1.0 : depth, 1.0));
     return p.xyz / p.w;
+}
+
+// The unit vector from view-space position p toward the eye: parallel to the view axis for an orthographic projection.
+vec3 kastViewDir(vec3 p)
+{
+    return u_depthParams.z > 0.5 ? vec3(0.0, 0.0, p.z < 0.0 ? 1.0 : -1.0) : normalize(-p);
+}
+
+// How far p is from the eye, for comparing neighbors' depths: its distance along the view axis when orthographic.
+float kastViewDistance(vec3 p)
+{
+    return u_depthParams.z > 0.5 ? abs(p.z) : length(p);
 }
 
 // G-data attachment 1's view-space normal (octDecode in post_process.cpp).

@@ -26,7 +26,7 @@ void main()
         gl_FragColor = vec4_splat(0.0);
         return;
     }
-    float dist = length(kastViewPos(uv, texture2DLod(s_tex1, uv, 0.0).x));
+    float dist = kastViewDistance(kastViewPos(uv, texture2DLod(s_tex1, uv, 0.0).x));
     float tolerance = 0.05 * dist + 0.01;
     vec3 n = kastViewNormal(g);
     float spread = 1.0 + 6.0 * g.z; // half-res pixels between taps
@@ -43,7 +43,7 @@ void main()
             vec2 tap = (texel + 0.5) * u_texel.zw;
             vec4 ssr = texture2DLod(s_tex0, tap, 0.0);
             vec2 full = (floor(tap / u_texel.xy) + 0.5) * u_texel.xy; // the full-res texel the trace read there
-            float tapDist = length(kastViewPos(full, texture2DLod(s_tex1, full, 0.0).x));
+            float tapDist = kastViewDistance(kastViewPos(full, texture2DLod(s_tex1, full, 0.0).x));
             vec3 tapN = kastViewNormal(texture2DLod(s_tex2, full, 0.0));
             float w = saturate(1.0 - abs(tapDist - dist) / tolerance) * pow(saturate(dot(n, tapN)), 8.0);
             // Karis's 1 / (1 + luma) weight: a lone hit on a bright highlight among misses stays faint, not a firefly.

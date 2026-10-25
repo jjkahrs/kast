@@ -5,7 +5,8 @@
 #include <nlohmann/json.hpp>
 
 // Unity-style editor camera: orbits a pivot at a distance, looking along yaw/pitch (degrees).
-// Yaw 0 looks down -Z; positive pitch looks up.
+// Yaw 0 looks down -Z; positive pitch looks up. Orthographic: half the view's height is orthoSize(), from distance, so
+// toggling keeps what is at the pivot framed the same and dolly zooms.
 struct EditorCamera {
     static constexpr float kFovY = 60.0f; // degrees
     static constexpr float kNear = 0.1f;
@@ -17,6 +18,7 @@ struct EditorCamera {
     float distance = 10.0f;
     float nearPlane = kNear; // main.cpp widens both while the Scene view shows a zone (2 km maps)
     float farPlane = kFar;
+    bool orthographic = false;
 
     bx::Vec3 forward() const;
     bx::Vec3 right() const;
@@ -24,6 +26,7 @@ struct EditorCamera {
     bx::Vec3 position() const;
     void viewMatrix(float* out) const;
     void projMatrix(float* out, float aspect) const;
+    float orthoSize() const; // distance * tan(kFovY / 2): the perspective view's half height at the pivot
 
     void look(float dx, float dy);   // mouse-look around the camera position (fly mode)
     void orbit(float dx, float dy);  // rotate around the pivot

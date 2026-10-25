@@ -105,7 +105,7 @@ struct SimMouse {
 };
 
 // --sim-key: one key press on the Game panel, or the focused panel (down, its typed character, up two frames later),
-// for tests of game keys and the Shader Graph canvas' shortcuts.
+// for tests of game keys and the Shader Graph canvas' and Scene view's (--focus-panel Scene) shortcuts.
 struct SimKey {
     int frame = 0;
     SDL_Scancode scancode = SDL_SCANCODE_UNKNOWN;
@@ -893,8 +893,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
         kast::log::error("--gui-click requires --play");
         return std::nullopt;
     }
-    if (!options.simKeys.empty() && !options.play && options.openGraph.empty()) {
-        kast::log::error("--sim-key requires --play or --open-graph");
+    if (!options.simKeys.empty() && !options.play && options.openGraph.empty() && options.focusPanel != "Scene") {
+        kast::log::error("--sim-key requires --play, --open-graph or --focus-panel Scene");
         return std::nullopt;
     }
     if (!options.simOnLog.empty() && !options.simMouse && options.simKeys.empty()) {

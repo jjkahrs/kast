@@ -149,7 +149,7 @@ a wrong argument type raises a Lua error at the calling line.</p>
 <tr>
 <td><code>kast.input.mouseRay()</code></td>
 <td><code>origin, direction</code></td>
-<td>The ray from the scene's active <code>Camera</code> through the cursor, as <code>{x, y, z}</code> tables (<code>direction</code> normalized), e.g. for <code>kast.physics.raycast</code> to pick what was clicked. <code>nil, nil</code> before the cursor position is known or without a <code>Camera</code>. The cursor is tracked within the game view: the whole window in the player, the Game panel's image in the editor.</td>
+<td>The ray from the scene's active <code>Camera</code> through the cursor, as <code>{x, y, z}</code> tables (<code>direction</code> normalized), e.g. for <code>kast.physics.raycast</code> to pick what was clicked. <code>nil, nil</code> before the cursor position is known or without a <code>Camera</code>. The cursor is tracked within the game view: the whole window in the player, the Game panel's image in the editor. With an orthographic <code>Camera</code> the rays are parallel: <code>direction</code> is the camera's forward for every cursor position, and <code>origin</code> is the cursor's point on the near plane.</td>
 </tr>
 <tr>
 <td><code>kast.input.setCursorLocked(locked)</code></td>

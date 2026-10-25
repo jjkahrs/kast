@@ -32,12 +32,15 @@ std::array<bx::Vec3, 8> frustumSliceCorners(const float* viewMtx, const float* p
     const bx::Vec3 zero{0.0f, 0.0f, 0.0f};
     std::array<bx::Vec3, 8> corners{zero, zero, zero, zero, zero, zero, zero, zero}; // bx::Vec3 has no default
     const float signs[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+    const bool ortho = projMtx[15] != 0.0f;
     for (int i = 0; i < 4; ++i) {
-        // A point on the corner's ray (NDC z 1 is the far plane in both depth conventions), then scaled to each depth:
-        // view space looks down -Z, so its depth is -z.
+        // A point on the corner's ray (NDC z 1 is the far plane in both depth conventions), then moved to each depth:
+        // view space looks down -Z, so its depth is -z. Perspective rays spread from the eye; orthographic ones are
+        // parallel.
         const bx::Vec3 ray = bx::mulH({signs[i][0], signs[i][1], 1.0f}, invProj);
-        corners[static_cast<size_t>(i)] = bx::mul(bx::mul(ray, nearDepth / -ray.z), cameraWorld);
-        corners[static_cast<size_t>(i + 4)] = bx::mul(bx::mul(ray, farDepth / -ray.z), cameraWorld);
+        const auto at = [&](float depth) { return ortho ? bx::Vec3{ray.x, ray.y, -depth} : bx::mul(ray, depth / -ray.z); };
+        corners[static_cast<size_t>(i)] = bx::mul(at(nearDepth), cameraWorld);
+        corners[static_cast<size_t>(i + 4)] = bx::mul(at(farDepth), cameraWorld);
     }
     return corners;
 }
