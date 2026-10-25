@@ -91,7 +91,7 @@
         },
         "MeshRenderer": {
           "primitive": "plane",
-          "material": "materials/mf_ground.mat",
+          "material": { "id": "c0c4ce01-8830-41b3-94a5-871958a3b296", "path": "materials/mf_ground.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -122,7 +122,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/mf_normal.mat",
+          "material": { "id": "d32f9b97-7bf5-495e-b5c4-0d700a60c6ea", "path": "materials/mf_normal.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -153,7 +153,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/mf_normal.mat",
+          "material": { "id": "d32f9b97-7bf5-495e-b5c4-0d700a60c6ea", "path": "materials/mf_normal.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -184,7 +184,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/mf_flat.mat",
+          "material": { "id": "e2acab1d-b74c-4da0-83cc-88885ae07b4c", "path": "materials/mf_flat.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -215,7 +215,7 @@
         },
         "MeshRenderer": {
           "primitive": "sphere",
-          "material": "materials/mf_normal.mat",
+          "material": { "id": "d32f9b97-7bf5-495e-b5c4-0d700a60c6ea", "path": "materials/mf_normal.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -245,10 +245,10 @@
           ]
         },
         "ModelRenderer": {
-          "model": "models/female-128-anim.glb",
+          "model": { "id": "83a442f9-69ae-4dd9-b1ce-af46df00dd99", "path": "models/female-128-anim.glb" },
           "materials": [
-            "materials/mf_normal.mat",
-            "materials/mf_normal.mat"
+            { "id": "d32f9b97-7bf5-495e-b5c4-0d700a60c6ea", "path": "materials/mf_normal.mat" },
+            { "id": "d32f9b97-7bf5-495e-b5c4-0d700a60c6ea", "path": "materials/mf_normal.mat" }
           ]
         },
         "Animator": {
@@ -284,7 +284,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/mf_tiled.mat",
+          "material": { "id": "cca6b565-5af7-41fb-a1d7-b21fd237b001", "path": "materials/mf_tiled.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -315,7 +315,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/mf_offset.mat",
+          "material": { "id": "fb82f94d-bdda-4841-b99d-187e332ca7fd", "path": "materials/mf_offset.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -346,7 +346,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/checker.mat",
+          "material": { "id": "ba527c96-08c1-4ad3-b807-907ae4675f4c", "path": "materials/checker.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -377,7 +377,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/mf_ao.mat",
+          "material": { "id": "30e86abd-8be4-4c64-87f4-6344640b58c6", "path": "materials/mf_ao.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -408,7 +408,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/mf_orm.mat",
+          "material": { "id": "7479ee6b-8f1e-4807-98d9-9aa70f243814", "path": "materials/mf_orm.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -439,7 +439,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/mf_emissive_tex.mat",
+          "material": { "id": "0d968b61-b0d3-4dc9-8323-ffc8ef7d3759", "path": "materials/mf_emissive_tex.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -470,7 +470,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/mf_emissive_off.mat",
+          "material": { "id": "ab9b9131-d5ce-4bf4-8af3-45b918d261a7", "path": "materials/mf_emissive_off.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -501,7 +501,7 @@
         },
         "MeshRenderer": {
           "primitive": "sphere",
-          "material": "materials/mf_unlit.mat",
+          "material": { "id": "ddfe9da0-b381-467b-8cb9-12762033c85d", "path": "materials/mf_unlit.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -532,7 +532,7 @@
         },
         "MeshRenderer": {
           "primitive": "sphere",
-          "material": "materials/mf_lit_ref.mat",
+          "material": { "id": "1e2a7f6c-bf78-408f-9495-aba8c5266af2", "path": "materials/mf_lit_ref.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -563,7 +563,7 @@
         },
         "MeshRenderer": {
           "primitive": "sphere",
-          "material": "materials/mf_additive.mat",
+          "material": { "id": "f7d36512-4d38-4f94-9d49-856f93f4a063", "path": "materials/mf_additive.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -594,7 +594,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/mf_normal.mat",
+          "material": { "id": "d32f9b97-7bf5-495e-b5c4-0d700a60c6ea", "path": "materials/mf_normal.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -625,7 +625,7 @@
         },
         "MeshRenderer": {
           "primitive": "plane",
-          "material": "materials/mf_cull_back.mat",
+          "material": { "id": "2568c018-fca9-471d-ab7a-ee80b7fa3cb2", "path": "materials/mf_cull_back.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -656,7 +656,7 @@
         },
         "MeshRenderer": {
           "primitive": "plane",
-          "material": "materials/mf_cull_front.mat",
+          "material": { "id": "f15ce507-2a95-40cb-aa66-a2daf1258e03", "path": "materials/mf_cull_front.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -687,7 +687,7 @@
         },
         "MeshRenderer": {
           "primitive": "plane",
-          "material": "materials/mf_cull_none.mat",
+          "material": { "id": "65a1da0e-2f6b-4e72-875f-efc7e142f16d", "path": "materials/mf_cull_none.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -718,7 +718,7 @@
         },
         "MeshRenderer": {
           "primitive": "sphere",
-          "material": "materials/mf_unlit.mat",
+          "material": { "id": "ddfe9da0-b381-467b-8cb9-12762033c85d", "path": "materials/mf_unlit.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -749,7 +749,7 @@
         },
         "MeshRenderer": {
           "primitive": "sphere",
-          "material": "materials/mf_additive.mat",
+          "material": { "id": "f7d36512-4d38-4f94-9d49-856f93f4a063", "path": "materials/mf_additive.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -780,7 +780,7 @@
         },
         "MeshRenderer": {
           "primitive": "sphere",
-          "material": "materials/mf_blend_ref.mat",
+          "material": { "id": "247c1953-e4b0-4a2a-ba1a-9c89f4ab93d2", "path": "materials/mf_blend_ref.mat" },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -811,7 +811,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/mf_flat.mat",
+          "material": { "id": "e2acab1d-b74c-4da0-83cc-88885ae07b4c", "path": "materials/mf_flat.mat" },
           "castShadows": true,
           "receiveShadows": true
         }

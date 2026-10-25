@@ -1,7 +1,7 @@
 <rml>
     <head>
         <title>Drag</title>
-        <link type="text/rcss" href="drag.rcss"/>
+        <link type="text/rcss" href="drag.rcss" data-kast-id="ac15483b-d349-4dd5-a3d4-98ef76aa628c"/>
     </head>
     <body>
         <!-- kast.gui drag and drop (ctest ui_drag_*): the gold box in the centre drags (drag: clone) and publishes

@@ -1,5 +1,5 @@
 {
   "version": 3,
   "baseColor": [0.8, 0.8, 0.8, 1],
-  "shader": "shaders/broken.kshader"
+  "shader": { "id": "f5f41e67-3287-422c-8d9f-f12b5d2dc885", "path": "shaders/broken.kshader" }
 }

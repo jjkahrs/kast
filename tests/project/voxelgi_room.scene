@@ -7,7 +7,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [0, -0.15, -6], "rotation": [0, 0, 0, 1], "scale": [6.6, 0.3, 6.6] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_white.mat", "giMode": "static" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "c3265122-e254-4091-9c1d-c0fdd556acea", "path": "materials/lm_white.mat" }, "giMode": "static" }
       }
     },
     {
@@ -16,7 +16,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [0, 4.15, -6], "rotation": [0, 0, 0, 1], "scale": [6.6, 0.3, 6.6] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_white.mat", "giMode": "static" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "c3265122-e254-4091-9c1d-c0fdd556acea", "path": "materials/lm_white.mat" }, "giMode": "static" }
       }
     },
     {
@@ -25,7 +25,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [0, 2, -9.15], "rotation": [0, 0, 0, 1], "scale": [6.6, 4.6, 0.3] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_white.mat", "giMode": "static" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "c3265122-e254-4091-9c1d-c0fdd556acea", "path": "materials/lm_white.mat" }, "giMode": "static" }
       }
     },
     {
@@ -34,7 +34,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [-3.15, 2, -6], "rotation": [0, 0, 0, 1], "scale": [0.3, 4.6, 6.6] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_red.mat", "giMode": "static" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "e0fce25b-f6b6-4030-8281-4af97b8a58ce", "path": "materials/lm_red.mat" }, "giMode": "static" }
       }
     },
     {
@@ -43,7 +43,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [3.15, 2, -6], "rotation": [0, 0, 0, 1], "scale": [0.3, 4.6, 6.6] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_green.mat", "giMode": "static" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "fc5cc607-dd43-4b6a-a609-14387d4d8c90", "path": "materials/lm_green.mat" }, "giMode": "static" }
       }
     },
     {
@@ -52,7 +52,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [-1.4, 1.2, -7.4], "rotation": [0, 0.173648, 0, 0.984808], "scale": [1.2, 2.4, 1.2] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_white.mat", "giMode": "static" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "c3265122-e254-4091-9c1d-c0fdd556acea", "path": "materials/lm_white.mat" }, "giMode": "static" }
       }
     },
     {
@@ -61,7 +61,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [-1.6, 0.5, -4.6], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
-        "MeshRenderer": { "primitive": "sphere", "material": "materials/lm_white.mat", "giMode": "static" }
+        "MeshRenderer": { "primitive": "sphere", "material": { "id": "c3265122-e254-4091-9c1d-c0fdd556acea", "path": "materials/lm_white.mat" }, "giMode": "static" }
       }
     },
     {
@@ -70,7 +70,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [1.2, 0.8, -6.6], "rotation": [0, 0, 0, 1], "scale": [1.6, 1.6, 1.6] },
-        "MeshRenderer": { "primitive": "sphere", "material": "materials/ibl_chrome.mat" }
+        "MeshRenderer": { "primitive": "sphere", "material": { "id": "e5425188-c302-469f-87e5-ba0d36af9fff", "path": "materials/ibl_chrome.mat" } }
       }
     },
     {
@@ -79,7 +79,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [1.5, 0.4, -4.3], "rotation": [0, 0.382683, 0, 0.92388], "scale": [0.8, 0.8, 0.8] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_white.mat", "giMode": "dynamic" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "c3265122-e254-4091-9c1d-c0fdd556acea", "path": "materials/lm_white.mat" }, "giMode": "dynamic" }
       }
     },
     {
@@ -106,7 +106,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [0, 2, -6], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
-        "VoxelGI": { "boxSize": [6.6, 4.6, 6.6], "resolution": 128, "intensity": 1, "quality": "medium", "priority": 0, "enabled": true, "bakedPath": "voxelgi_room_voxelgi/13.json" }
+        "VoxelGI": { "boxSize": [6.6, 4.6, 6.6], "resolution": 128, "intensity": 1, "quality": "medium", "priority": 0, "enabled": true, "bakedPath": { "id": "965b5a84-03f2-47c7-af0a-b4f6c46dba11", "path": "voxelgi_room_voxelgi/13.json" } }
       }
     },
     {

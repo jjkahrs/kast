@@ -79,7 +79,7 @@
         },
         "MeshRenderer": {
           "primitive": "plane",
-          "material": "materials/checker.mat"
+          "material": { "id": "ba527c96-08c1-4ad3-b807-907ae4675f4c", "path": "materials/checker.mat" }
         }
       }
     },
@@ -108,7 +108,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/red_plastic_r05.mat"
+          "material": { "id": "9dee402f-d253-4dda-a97d-65487f9bd68c", "path": "materials/red_plastic_r05.mat" }
         }
       }
     },
@@ -137,7 +137,7 @@
         },
         "MeshRenderer": {
           "primitive": "sphere",
-          "material": "materials/gold_r05.mat"
+          "material": { "id": "e0bda0c7-806b-42cb-84dc-b6ccd51ddab3", "path": "materials/gold_r05.mat" }
         }
       }
     },
@@ -166,7 +166,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/bricks.mat"
+          "material": { "id": "4f644787-e7cd-4f4c-8b10-d221c7a60abf", "path": "materials/bricks.mat" }
         }
       }
     },
@@ -195,7 +195,7 @@
         },
         "MeshRenderer": {
           "primitive": "plane",
-          "material": "materials/shader_screen_water.mat"
+          "material": { "id": "691460ab-bf8c-49a5-bfd8-c685c3e2576d", "path": "materials/shader_screen_water.mat" }
         }
       }
     },

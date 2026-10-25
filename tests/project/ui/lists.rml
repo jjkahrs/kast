@@ -1,7 +1,7 @@
 <rml>
     <head>
         <title>Lists</title>
-        <link type="text/rcss" href="lists.rcss"/>
+        <link type="text/rcss" href="lists.rcss" data-kast-id="cca16f92-20ea-4945-a9da-b6721ab6a57d"/>
     </head>
     <body>
         <!-- Lists (ctest ui_lists_*, player_lists_*, scripts/ui_lists.lua; self_check's checkGuiLists). lists.rcss only

@@ -6,7 +6,10 @@
     0.3,
     1
   ],
-  "baseColorTexture": "textures/checker.png",
+  "baseColorTexture": {
+    "id": "1224a48a-6473-4fcd-9520-20ac8986a250",
+    "path": "textures/checker.png"
+  },
   "metallic": 0,
   "roughness": 0.9,
   "metallicRoughnessTexture": "",

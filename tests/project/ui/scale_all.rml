@@ -1,7 +1,7 @@
 <rml>
     <head>
         <title>Scale all</title>
-        <link type="text/rcss" href="scale_all.rcss"/>
+        <link type="text/rcss" href="scale_all.rcss" data-kast-id="c0565bb6-7bd0-4093-81c6-4be2e96c6c79"/>
     </head>
     <body>
         <!-- GUI scaling in all mode (the UIDocument's "scaling": "all"): everything, px too, follows the dp ratio. The

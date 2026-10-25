@@ -25,7 +25,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [250, 22, 250], "rotation": [0, 0, 0, 1], "scale": [14, 8, 14] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_white.mat", "giMode": "static" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "c3265122-e254-4091-9c1d-c0fdd556acea", "path": "materials/lm_white.mat" }, "giMode": "static" }
       }
     },
     {
@@ -34,7 +34,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [243.8, 29, 249], "rotation": [0, 0, 0, 1], "scale": [0.4, 6, 10] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_red.mat", "giMode": "static" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "e0fce25b-f6b6-4030-8281-4af97b8a58ce", "path": "materials/lm_red.mat" }, "giMode": "static" }
       }
     },
     {
@@ -43,7 +43,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [256.2, 29, 249], "rotation": [0, 0, 0, 1], "scale": [0.4, 6, 10] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_green.mat", "giMode": "static" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "fc5cc607-dd43-4b6a-a609-14387d4d8c90", "path": "materials/lm_green.mat" }, "giMode": "static" }
       }
     },
     {
@@ -52,7 +52,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [250, 29, 243.8], "rotation": [0, 0, 0, 1], "scale": [12.8, 6, 0.4] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_white.mat", "giMode": "static" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "c3265122-e254-4091-9c1d-c0fdd556acea", "path": "materials/lm_white.mat" }, "giMode": "static" }
       }
     },
     {
@@ -61,7 +61,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [250, 32.2, 246.5], "rotation": [0, 0, 0, 1], "scale": [12.8, 0.4, 5.8] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_white.mat", "giMode": "static" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "c3265122-e254-4091-9c1d-c0fdd556acea", "path": "materials/lm_white.mat" }, "giMode": "static" }
       }
     },
     {
@@ -70,7 +70,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [248, 27.5, 251], "rotation": [0, 0.258819, 0, 0.965926], "scale": [1.5, 3, 1.5] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/lm_white.mat", "giMode": "static" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "c3265122-e254-4091-9c1d-c0fdd556acea", "path": "materials/lm_white.mat" }, "giMode": "static" }
       }
     },
     {
@@ -79,7 +79,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [252.5, 27, 252], "rotation": [0, 0, 0, 1], "scale": [2, 2, 2] },
-        "MeshRenderer": { "primitive": "sphere", "material": "materials/lm_white.mat", "giMode": "dynamic" }
+        "MeshRenderer": { "primitive": "sphere", "material": { "id": "c3265122-e254-4091-9c1d-c0fdd556acea", "path": "materials/lm_white.mat" }, "giMode": "dynamic" }
       }
     },
     {
@@ -92,7 +92,7 @@
       }
     }
   ],
-  "systems": ["scripts/sdfgi_camera_path.lua"],
+  "systems": [{ "id": "c3a21342-f823-4e1a-afc8-99ba8e7d3c6e", "path": "scripts/sdfgi_camera_path.lua" }],
   "lighting": {
     "ambientColor": [1, 1, 1],
     "ambientIntensity": 0.5,

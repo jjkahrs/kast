@@ -1,5 +1,8 @@
 {
   "version": 1,
   "name": "Test Scenes",
-  "startScene": "lua.scene"
+  "startScene": {
+    "id": "92edaa63-8b0a-427a-82e8-3d8741154aa9",
+    "path": "lua.scene"
+  }
 }

@@ -6,7 +6,10 @@
     1,
     1
   ],
-  "baseColorTexture": "textures/bricks.jpg",
+  "baseColorTexture": {
+    "id": "1687d8db-cd12-4716-a363-8b9037cda986",
+    "path": "textures/bricks.jpg"
+  },
   "metallic": 0,
   "roughness": 0.9,
   "metallicRoughnessTexture": "",

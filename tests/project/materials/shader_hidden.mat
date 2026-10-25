@@ -1,5 +1,5 @@
 {
   "version": 3,
   "alphaMode": "mask",
-  "shader": "shaders/hidden.kshader"
+  "shader": { "id": "e9d64e7b-700b-4d06-a5c1-6b6b83bd5c70", "path": "shaders/hidden.kshader" }
 }

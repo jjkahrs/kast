@@ -1,7 +1,7 @@
 <rml>
     <head>
         <title>Bind</title>
-        <link type="text/rcss" href="bind.rcss"/>
+        <link type="text/rcss" href="bind.rcss" data-kast-id="a6cdd48f-2294-4030-be92-9b483a2db39f"/>
     </head>
     <body>
         <!-- Data binding and runtime elements (ctest ui_bind_*, scripts/ui_bind.lua; self_check's checkGuiDataModels).

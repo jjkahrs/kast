@@ -1,7 +1,7 @@
 <rml>
     <head>
         <title>Widgets</title>
-        <link type="text/rcss" href="widgets.rcss"/>
+        <link type="text/rcss" href="widgets.rcss" data-kast-id="6793e0a6-98f9-4d2a-909b-42b2cb3f03c4"/>
     </head>
     <body>
         <!-- Form widgets (ctest ui_widgets_*, player_widgets_*, scripts/ui_widgets.lua; self_check's checkGuiWidgets).

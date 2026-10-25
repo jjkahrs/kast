@@ -1,5 +1,5 @@
 {
   "version": 3,
-  "shader": "shaders/showcase.kshader",
+  "shader": { "id": "c6b80349-7cf6-4b75-b44e-6f0744618346", "path": "shaders/showcase.kshader" },
   "params": { "stripes": 3, "speed": 0 }
 }

@@ -48,8 +48,8 @@
     }
   ],
   "systems": [
-    "scripts/lift_cubes.lua",
-    "scripts/tint_spheres.lua"
+    { "id": "65e02245-97ea-4019-810b-4c94a1f11bf4", "path": "scripts/lift_cubes.lua" },
+    { "id": "4604fca3-d7f8-48f4-877a-462582e0944d", "path": "scripts/tint_spheres.lua" }
   ],
   "editor": {
     "camera": { "pivot": [0, 0.75, 0], "yaw": 20, "pitch": -20, "distance": 8 }

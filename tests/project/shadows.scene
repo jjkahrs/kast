@@ -43,7 +43,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [3, 0, 0], "rotation": [0, 0, 0, 1], "scale": [2, 2, 2] },
-        "ModelRenderer": { "model": "models/female-128-anim.glb", "materials": [] },
+        "ModelRenderer": { "model": { "id": "83a442f9-69ae-4dd9-b1ce-af46df00dd99", "path": "models/female-128-anim.glb" }, "materials": [] },
         "Animator": { "clip": "Cheering_Two_Hands", "loop": true, "speed": 0, "playOnStart": true }
       }
     },
@@ -53,7 +53,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [-1.5, 1.25, 2.5], "rotation": [0, 0, 0, 1], "scale": [2, 2, 0.05] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/cutout.mat" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "c24473ee-3ea2-4546-bbf0-de41a3c4f341", "path": "materials/cutout.mat" } }
       }
     },
     {
@@ -62,7 +62,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [1.5, 0.75, 2.5], "rotation": [0, 0, 0, 1], "scale": [1.5, 1.5, 1.5] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/glass_blue.mat" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "8340bd4b-639a-45e9-824e-3e1352808516", "path": "materials/glass_blue.mat" } }
       }
     },
     {

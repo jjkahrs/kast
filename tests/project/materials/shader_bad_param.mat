@@ -1,4 +1,4 @@
 {
   "version": 3,
-  "shader": "shaders/bad_param.kshader"
+  "shader": { "id": "b78db8b0-14cc-4e10-a057-146469828daa", "path": "shaders/bad_param.kshader" }
 }

@@ -95,7 +95,7 @@
     }
   ],
   "systems": [
-    "scripts/ui_bind.lua"
+    { "id": "87cc8c4a-b2d3-4cde-9f9e-c8a30ba4a26d", "path": "scripts/ui_bind.lua" }
   ],
   "editor": {
     "camera": {

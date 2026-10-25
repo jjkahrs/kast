@@ -15,7 +15,7 @@
       "parent": 1,
       "components": {
         "Transform": {"position": [0, 0.45, 0], "rotation": [0, 0.2588, 0, 0.9659], "scale": [2.4, 1.4, 2.0]},
-        "MeshRenderer": {"primitive": "sphere", "material": "materials/stone.mat", "castShadows": true, "receiveShadows": true}
+        "MeshRenderer": {"primitive": "sphere", "material": { "id": "3abf18f7-6e69-4c7f-b930-f2da7b812af8", "path": "materials/stone.mat" }, "castShadows": true, "receiveShadows": true}
       }
     }
   ]

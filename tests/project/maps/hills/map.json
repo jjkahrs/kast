@@ -4,7 +4,7 @@
   "name": "Hills",
   "tiles": [[0, 0, 1, 1]],
   "heightRange": [0, 80],
-  "material": "materials/terrain_grass.mat",
+  "material": { "id": "d08c0890-e6d4-4380-a5e8-35114fe5fd8a", "path": "materials/terrain_grass.mat" },
   "nav": {"maxSlopeDeg": 40},
   "spawn": {"pos": [256, 30, 256], "heading": 0}
 }

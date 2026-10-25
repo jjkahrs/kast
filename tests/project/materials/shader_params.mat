@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "shader": "shaders/params.kshader",
+  "shader": { "id": "9151e833-1db3-446e-a3e1-9fd39d825ee7", "path": "shaders/params.kshader" },
   "params": {
     "amount": 0.75,
     "tint": [1, 0.5, 0, 1]

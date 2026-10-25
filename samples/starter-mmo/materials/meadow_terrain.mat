@@ -6,7 +6,10 @@
     1.0,
     1.0
   ],
-  "baseColorTexture": "textures/meadow_terrain.png",
+  "baseColorTexture": {
+    "id": "44d32266-d451-496e-b727-b7137a6fef72",
+    "path": "textures/meadow_terrain.png"
+  },
   "metallic": 0.0,
   "roughness": 0.9,
   "metallicRoughnessTexture": "",

@@ -5,7 +5,7 @@
       "id": 1,
       "name": "Sun",
       "parent": null,
-      "prefab": "prefabs/sun.prefab",
+      "prefab": { "id": "7130fbb4-cf84-482d-978f-e40f6f8d181c", "path": "prefabs/sun.prefab" },
       "instance": [
         {
           "source": 1,
@@ -66,7 +66,7 @@
       "id": 3,
       "name": "Player",
       "parent": null,
-      "prefab": "prefabs/player.prefab",
+      "prefab": { "id": "348af078-da5c-4c33-bfe2-a9cde27f07bc", "path": "prefabs/player.prefab" },
       "instance": [
         {
           "source": 1,
@@ -98,7 +98,7 @@
       "id": 4,
       "name": "Remote Player",
       "parent": null,
-      "prefab": "prefabs/remote_player.prefab",
+      "prefab": { "id": "9ccad7dd-f1be-4166-bb2a-6be25bd5340d", "path": "prefabs/remote_player.prefab" },
       "instance": [
         {
           "source": 1,
@@ -130,7 +130,7 @@
       "id": 5,
       "name": "NPC Templates",
       "parent": null,
-      "prefab": "prefabs/npc_templates.prefab",
+      "prefab": { "id": "9ee47b9a-08d1-4d7d-ab7f-cc80aa2aedc6", "path": "prefabs/npc_templates.prefab" },
       "instance": [
         {
           "source": 1,
@@ -194,7 +194,7 @@
       "id": 14,
       "name": "Replication",
       "parent": null,
-      "prefab": "prefabs/replication.prefab",
+      "prefab": { "id": "43a20098-c9ef-42a0-ba1b-202d9503330f", "path": "prefabs/replication.prefab" },
       "instance": [
         {
           "source": 1,
@@ -226,7 +226,7 @@
       "id": 15,
       "name": "Main Camera",
       "parent": null,
-      "prefab": "prefabs/main_camera.prefab",
+      "prefab": { "id": "feaea945-c99a-4bf3-865c-5d32e10c7699", "path": "prefabs/main_camera.prefab" },
       "instance": [
         {
           "source": 1,
@@ -279,7 +279,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/portal.mat"
+          "material": { "id": "84771eca-c9f0-4460-a0f6-641247140396", "path": "materials/portal.mat" }
         }
       }
     },
@@ -308,7 +308,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/portal.mat"
+          "material": { "id": "84771eca-c9f0-4460-a0f6-641247140396", "path": "materials/portal.mat" }
         }
       }
     },
@@ -337,7 +337,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/portal.mat"
+          "material": { "id": "84771eca-c9f0-4460-a0f6-641247140396", "path": "materials/portal.mat" }
         }
       }
     },
@@ -366,7 +366,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/stone.mat"
+          "material": { "id": "3abf18f7-6e69-4c7f-b930-f2da7b812af8", "path": "materials/stone.mat" }
         }
       }
     },
@@ -395,7 +395,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/stone.mat"
+          "material": { "id": "3abf18f7-6e69-4c7f-b930-f2da7b812af8", "path": "materials/stone.mat" }
         }
       }
     },
@@ -403,7 +403,7 @@
       "id": 21,
       "name": "World UI",
       "parent": null,
-      "prefab": "prefabs/world_ui.prefab",
+      "prefab": { "id": "b976c105-2211-4bcc-863c-8e6ce4d9d354", "path": "prefabs/world_ui.prefab" },
       "instance": [
         {
           "source": 1,
@@ -501,7 +501,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/bark.mat"
+          "material": { "id": "5a99a619-9668-4d93-9b0a-e6446377facf", "path": "materials/bark.mat" }
         }
       }
     },
@@ -530,7 +530,7 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/bark.mat"
+          "material": { "id": "5a99a619-9668-4d93-9b0a-e6446377facf", "path": "materials/bark.mat" }
         }
       }
     },
@@ -598,7 +598,7 @@
             0
           ],
           "space": "world",
-          "texture": "textures/particles/fire.png",
+          "texture": { "id": "b37b08c2-0679-4438-94a9-17ae843b7ef5", "path": "textures/particles/fire.png" },
           "blend": "additive"
         }
       }
@@ -667,7 +667,7 @@
             0.05
           ],
           "space": "world",
-          "texture": "textures/particles/smoke.png",
+          "texture": { "id": "6eea685f-6076-4323-9f7d-f6d38836ad96", "path": "textures/particles/smoke.png" },
           "blend": "alpha"
         }
       }
@@ -703,19 +703,19 @@
     }
   ],
   "systems": [
-    "scripts/hud.lua",
-    "scripts/chat.lua",
-    "scripts/player.lua",
-    "scripts/combat.lua",
-    "scripts/powers.lua",
-    "scripts/world_flow.lua",
-    "scripts/loading.lua",
-    "scripts/bag.lua",
-    "scripts/character.lua",
-    "scripts/loot.lua",
-    "scripts/shrines.lua",
-    "scripts/quest.lua",
-    "scripts/quest_log.lua"
+    { "id": "54a49213-8900-46e4-bd00-7d0aacae6890", "path": "scripts/hud.lua" },
+    { "id": "fc668350-9630-4ce0-8821-1c4bb667be4f", "path": "scripts/chat.lua" },
+    { "id": "16bfb04b-e4a3-4a8a-91d4-bc4defffacbe", "path": "scripts/player.lua" },
+    { "id": "68f4eefc-a17b-4b59-b1c0-aa1009fd0dc7", "path": "scripts/combat.lua" },
+    { "id": "9fbb51c7-b99b-48f4-86e2-1c66018899d0", "path": "scripts/powers.lua" },
+    { "id": "d2a63451-37f7-47fd-bd24-31223cdf1aff", "path": "scripts/world_flow.lua" },
+    { "id": "6cb0c1eb-92c5-417f-a18c-2f1a6073a948", "path": "scripts/loading.lua" },
+    { "id": "94d820b9-06de-4bc5-a17b-292c68d4ee79", "path": "scripts/bag.lua" },
+    { "id": "c15b8021-4fd4-4e36-916b-1af925a20d58", "path": "scripts/character.lua" },
+    { "id": "8c5e1368-6c95-440c-a1de-f076ba18be61", "path": "scripts/loot.lua" },
+    { "id": "405695ee-3b89-4319-b022-879b9197af67", "path": "scripts/shrines.lua" },
+    { "id": "20d454bd-e9f8-4e97-9aae-eccdd827b42e", "path": "scripts/quest.lua" },
+    { "id": "e581afd6-e7c8-4dcf-93f5-63f29fe70a8e", "path": "scripts/quest_log.lua" }
   ],
   "lighting": {
     "ambientColor": [

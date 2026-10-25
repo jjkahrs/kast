@@ -34,7 +34,7 @@
       "parent": 3,
       "components": {
         "Transform": { "position": [0, 0.9, 0], "rotation": [0, 0, 0, 1], "scale": [0.8, 1.8, 0.8] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/red_plastic_r05.mat" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "9dee402f-d253-4dda-a97d-65487f9bd68c", "path": "materials/red_plastic_r05.mat" } }
       }
     },
     {
@@ -52,7 +52,7 @@
       "parent": 5,
       "components": {
         "Transform": { "position": [0, 0.9, 0], "rotation": [0, 0, 0, 1], "scale": [0.8, 1.8, 0.8] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/gold_r05.mat" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "e0bda0c7-806b-42cb-84dc-b6ccd51ddab3", "path": "materials/gold_r05.mat" } }
       }
     },
     {
@@ -65,7 +65,7 @@
       }
     }
   ],
-  "systems": ["scripts/zone_objects.lua"],
+  "systems": [{ "id": "51cfe74b-ab42-4c36-b68d-6ff0a5a6ffae", "path": "scripts/zone_objects.lua" }],
   "lighting": { "ambientColor": [0.6, 0.7, 1], "ambientIntensity": 0.25 },
   "physics": { "gravity": [0, -9.81, 0] },
   "editor": {

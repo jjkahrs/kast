@@ -6,7 +6,10 @@
     1,
     1
   ],
-  "baseColorTexture": "textures/cutout.png",
+  "baseColorTexture": {
+    "id": "a9a07faf-7ece-447e-9ce3-4fabc7813047",
+    "path": "textures/cutout.png"
+  },
   "metallic": 0,
   "roughness": 0.5,
   "metallicRoughnessTexture": "",

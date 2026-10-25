@@ -1,6 +1,6 @@
 {
   "version": 3,
   "baseColor": [0.95, 0.45, 0.2, 1],
-  "shader": "shaders/toon.kshader",
+  "shader": { "id": "ef5210c4-1472-4e1f-81a9-94c96cc0ba2c", "path": "shaders/toon.kshader" },
   "params": { "bands": 3 }
 }

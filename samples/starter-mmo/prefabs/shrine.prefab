@@ -15,7 +15,7 @@
       "parent": 1,
       "components": {
         "Transform": {"position": [0, 0.2, 0], "rotation": [0, 0, 0, 1], "scale": [2.4, 0.4, 2.4]},
-        "MeshRenderer": {"primitive": "cube", "material": "materials/stone.mat", "castShadows": true, "receiveShadows": true}
+        "MeshRenderer": {"primitive": "cube", "material": { "id": "3abf18f7-6e69-4c7f-b930-f2da7b812af8", "path": "materials/stone.mat" }, "castShadows": true, "receiveShadows": true}
       }
     },
     {
@@ -24,7 +24,7 @@
       "parent": 1,
       "components": {
         "Transform": {"position": [0, 1.2, 0], "rotation": [0, 0, 0, 1], "scale": [0.7, 1.6, 0.7]},
-        "MeshRenderer": {"primitive": "cube", "material": "materials/stone.mat", "castShadows": true, "receiveShadows": true}
+        "MeshRenderer": {"primitive": "cube", "material": { "id": "3abf18f7-6e69-4c7f-b930-f2da7b812af8", "path": "materials/stone.mat" }, "castShadows": true, "receiveShadows": true}
       }
     },
     {
@@ -33,7 +33,7 @@
       "parent": 1,
       "components": {
         "Transform": {"position": [0, 2.35, 0], "rotation": [0, 0, 0, 1], "scale": [0.7, 0.7, 0.7]},
-        "MeshRenderer": {"primitive": "sphere", "material": "materials/holy.mat", "castShadows": false, "receiveShadows": true}
+        "MeshRenderer": {"primitive": "sphere", "material": { "id": "1c91d0fd-ea40-4a63-beff-340021a029f3", "path": "materials/holy.mat" }, "castShadows": false, "receiveShadows": true}
       }
     },
     {

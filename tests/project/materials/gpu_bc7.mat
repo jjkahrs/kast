@@ -6,7 +6,7 @@
     1,
     1
   ],
-  "baseColorTexture": "textures/gpu/checker_bc7.ktx",
+  "baseColorTexture": { "id": "3dd651f8-6ea0-429d-8d8e-74b61fe933f8", "path": "textures/gpu/checker_bc7.ktx" },
   "metallic": 0,
   "roughness": 0.6,
   "metallicRoughnessTexture": "",

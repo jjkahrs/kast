@@ -90,7 +90,7 @@
       }
     }
   ],
-  "systems": ["scripts/physics_log.lua"],
+  "systems": [{ "id": "cada5e45-d352-4929-a978-d0abfef7ac04", "path": "scripts/physics_log.lua" }],
   "lighting": { "ambientColor": [1, 1, 1], "ambientIntensity": 0.2 },
   "physics": { "gravity": [0, -9.81, 0] },
   "editor": {

@@ -48,7 +48,7 @@
     }
   ],
   "systems": [
-    "scripts/ui_menu.lua"
+    { "id": "e4066b9b-8df6-49a3-86c8-790fba7c2f5a", "path": "scripts/ui_menu.lua" }
   ],
   "editor": {
     "camera": { "pivot": [0, 0.5, 0], "yaw": 20, "pitch": -20, "distance": 8 }

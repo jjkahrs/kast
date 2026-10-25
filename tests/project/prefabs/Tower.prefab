@@ -51,7 +51,10 @@
         },
         "MeshRenderer": {
           "primitive": "cube",
-          "material": "materials/bricks.mat",
+          "material": {
+            "id": "4f644787-e7cd-4f4c-8b10-d221c7a60abf",
+            "path": "materials/bricks.mat"
+          },
           "castShadows": true,
           "receiveShadows": true
         }
@@ -61,7 +64,10 @@
       "id": 3,
       "name": "Crate",
       "parent": 1,
-      "prefab": "prefabs/Crate.prefab",
+      "prefab": {
+        "id": "5027ef5e-8f59-46ba-8cb6-5195e0e6d83d",
+        "path": "prefabs/Crate.prefab"
+      },
       "instance": [
         {
           "source": 1,

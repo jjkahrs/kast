@@ -4,6 +4,6 @@
   "roughness": 0.4,
   "alphaMode": "mask",
   "cullMode": "none",
-  "shader": "shader_graphs/dissolve.kshadergraph",
-  "params": { "noise": "textures/noise.png", "threshold": 0.35 }
+  "shader": { "id": "442c1249-d012-4bb1-81a8-80ea7595cdec", "path": "shader_graphs/dissolve.kshadergraph" },
+  "params": { "noise": { "id": "0311090f-2c98-44f2-9638-15ae28535948", "path": "textures/noise.png" }, "threshold": 0.35 }
 }

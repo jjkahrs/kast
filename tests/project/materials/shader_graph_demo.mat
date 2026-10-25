@@ -2,10 +2,10 @@
   "version": 3,
   "baseColor": [1, 1, 1, 1],
   "roughness": 0.4,
-  "shader": "shaders/graph_demo.kshadergraph",
+  "shader": { "id": "bbdf8b4e-4338-4733-9d2b-500cd53a25b8", "path": "shaders/graph_demo.kshadergraph" },
   "params": {
     "tint": [1, 0.8, 0.5],
     "speed": 1,
-    "pattern": "textures/checker.png"
+    "pattern": { "id": "1224a48a-6473-4fcd-9520-20ac8986a250", "path": "textures/checker.png" }
   }
 }

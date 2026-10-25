@@ -1,7 +1,10 @@
 {
   "version": 1,
   "name": "Switch Test",
-  "startScene": "scene_a.scene",
+  "startScene": {
+    "id": "8233e8ed-a718-41d5-a4d8-c1182837125f",
+    "path": "scene_a.scene"
+  },
   "stateMachines": [
     "game_flow"
   ]

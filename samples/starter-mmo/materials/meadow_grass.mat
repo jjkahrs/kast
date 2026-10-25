@@ -1,7 +1,7 @@
 {
   "version": 1,
   "baseColor": [0.45, 0.7, 0.3, 1],
-  "baseColorTexture": "textures/checker.png",
+  "baseColorTexture": { "id": "62c9d267-f79c-4878-addf-100da8f20f20", "path": "textures/checker.png" },
   "metallic": 0,
   "roughness": 0.9,
   "metallicRoughnessTexture": "",

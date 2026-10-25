@@ -6,7 +6,7 @@
     1,
     1
   ],
-  "baseColorTexture": "textures/gpu/checker_bc3.dds",
+  "baseColorTexture": { "id": "02ad35e6-61e4-40c0-866b-2e1da360d06a", "path": "textures/gpu/checker_bc3.dds" },
   "metallic": 0,
   "roughness": 0.6,
   "metallicRoughnessTexture": "",

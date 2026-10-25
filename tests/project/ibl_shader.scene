@@ -7,7 +7,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [-3, 1.5, -6], "rotation": [0, 0, 0, 1], "scale": [1.8, 1.8, 1.8] },
-        "MeshRenderer": { "primitive": "sphere", "material": "materials/ibl_plastic.mat" }
+        "MeshRenderer": { "primitive": "sphere", "material": { "id": "0f8369bc-a7d3-46a7-81ad-d853c1974816", "path": "materials/ibl_plastic.mat" } }
       }
     },
     {
@@ -16,7 +16,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [-1, 1.5, -6], "rotation": [0, 0, 0, 1], "scale": [1.8, 1.8, 1.8] },
-        "MeshRenderer": { "primitive": "sphere", "material": "materials/shader_light_pbr.mat" }
+        "MeshRenderer": { "primitive": "sphere", "material": { "id": "028e3d51-f684-4100-8a6c-0243f0dfc827", "path": "materials/shader_light_pbr.mat" } }
       }
     },
     {
@@ -25,7 +25,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [1, 1.5, -6], "rotation": [0, 0, 0, 1], "scale": [1.8, 1.8, 1.8] },
-        "MeshRenderer": { "primitive": "sphere", "material": "materials/shader_toon.mat" }
+        "MeshRenderer": { "primitive": "sphere", "material": { "id": "0a0b18ea-29e0-4c42-8d0f-b41624d766e3", "path": "materials/shader_toon.mat" } }
       }
     },
     {
@@ -34,7 +34,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [3, 1.5, -6], "rotation": [0, 0, 0, 1], "scale": [1.8, 1.8, 1.8] },
-        "MeshRenderer": { "primitive": "sphere", "material": "materials/graph_toon.mat" }
+        "MeshRenderer": { "primitive": "sphere", "material": { "id": "af31428f-36ab-41de-a70a-5c7c431a6976", "path": "materials/graph_toon.mat" } }
       }
     },
     {

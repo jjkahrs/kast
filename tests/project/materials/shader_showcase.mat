@@ -2,13 +2,13 @@
   "version": 3,
   "baseColor": [1, 1, 1, 1],
   "roughness": 0.4,
-  "shader": "shaders/showcase.kshader",
+  "shader": { "id": "c6b80349-7cf6-4b75-b44e-6f0744618346", "path": "shaders/showcase.kshader" },
   "params": {
     "tint": [1, 0.6, 0.3, 1],
     "stripes": 8,
     "speed": 1,
     "glow": [0, 0.3, 1],
-    "pattern": "textures/checker.png",
+    "pattern": { "id": "1224a48a-6473-4fcd-9520-20ac8986a250", "path": "textures/checker.png" },
     "removed_param": 0.5
   }
 }

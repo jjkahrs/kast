@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "Starter MMO",
-  "startScene": "scenes/login.scene",
+  "startScene": { "id": "47da4599-7d2e-4f9d-8b6b-24ca4ef57c2f", "path": "scenes/login.scene" },
   "stateMachines": ["session", "loading"],
   "online": {"enabled": true, "authUrl": "http://localhost:3100", "caFile": "certs/world_dev_ca.pem"}
 }

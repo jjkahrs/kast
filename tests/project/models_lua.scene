@@ -87,7 +87,10 @@
           ]
         },
         "ModelRenderer": {
-          "model": "models/female-128-anim.glb",
+          "model": {
+            "id": "83a442f9-69ae-4dd9-b1ce-af46df00dd99",
+            "path": "models/female-128-anim.glb"
+          },
           "materials": []
         },
         "Animator": {
@@ -130,7 +133,10 @@
     }
   ],
   "systems": [
-    "scripts/animation_test.lua"
+    {
+      "id": "74f02b0d-af1d-4dba-993e-c9e74c15b3c4",
+      "path": "scripts/animation_test.lua"
+    }
   ],
   "lighting": {
     "ambientColor": [

@@ -52,8 +52,8 @@
     }
   ],
   "systems": [
-    "scripts/health_events.lua",
-    "scripts/on_health_empty.lua"
+    { "id": "1f56d650-80ed-4ec7-9f75-4b035d94e7af", "path": "scripts/health_events.lua" },
+    { "id": "eb9c3f76-744a-4f31-a34b-310f5327e2a4", "path": "scripts/on_health_empty.lua" }
   ],
   "editor": {
     "camera": { "pivot": [0, 0.75, 0], "yaw": 20, "pitch": -20, "distance": 8 }

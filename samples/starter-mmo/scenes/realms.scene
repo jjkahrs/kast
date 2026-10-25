@@ -55,14 +55,20 @@
           ]
         },
         "UIDocument": {
-          "path": "ui/realms.rml",
+          "path": {
+            "id": "e3ac64b3-cb45-4fea-ba18-c08fa0a4e802",
+            "path": "ui/realms.rml"
+          },
           "visible": true
         }
       }
     }
   ],
   "systems": [
-    "scripts/realms.lua"
+    {
+      "id": "d1c15daf-435d-4f78-9fdb-b3ae1ca97e73",
+      "path": "scripts/realms.lua"
+    }
   ],
   "lighting": {
     "ambientColor": [

@@ -6,7 +6,7 @@
     1,
     1
   ],
-  "baseColorTexture": "models/kenney/skaterMaleA.png",
+  "baseColorTexture": { "id": "586e2eb0-a433-450c-8cf1-1019be75f1e1", "path": "models/kenney/skaterMaleA.png" },
   "metallic": 0,
   "roughness": 0.8,
   "metallicRoughnessTexture": "",

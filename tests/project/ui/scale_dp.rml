@@ -1,7 +1,7 @@
 <rml>
     <head>
         <title>Scale dp</title>
-        <link type="text/rcss" href="scale_dp.rcss"/>
+        <link type="text/rcss" href="scale_dp.rcss" data-kast-id="7ec39bf6-eaad-48bf-95a1-e42c1e8f7cd4"/>
     </head>
     <body>
         <!-- GUI scaling (docs/engine/game-gui.html#scaling) in dp mode: the orange box is in dp (follows the dp ratio),

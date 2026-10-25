@@ -2,5 +2,5 @@
   "version": 3,
   "alphaMode": "blend",
   "unlit": true,
-  "shader": "shaders/screen_identity.kshader"
+  "shader": { "id": "a24b8000-505f-4141-be24-5011c6a61a92", "path": "shaders/screen_identity.kshader" }
 }

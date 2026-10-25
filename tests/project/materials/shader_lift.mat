@@ -1,5 +1,5 @@
 {
   "version": 3,
-  "shader": "shaders/lift.kshader",
+  "shader": { "id": "0ccf51f4-4e11-47f9-aea2-c4f82b90fb43", "path": "shaders/lift.kshader" },
   "params": { "lift": 1 }
 }

@@ -6,7 +6,7 @@
     1,
     1
   ],
-  "baseColorTexture": "textures/gpu/corrupt.ktx",
+  "baseColorTexture": { "id": "0504b310-df6b-43ab-8b66-d09e9680c944", "path": "textures/gpu/corrupt.ktx" },
   "metallic": 0,
   "roughness": 0.6,
   "metallicRoughnessTexture": "",

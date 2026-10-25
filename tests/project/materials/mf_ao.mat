@@ -7,6 +7,6 @@
     1
   ],
   "roughness": 0.8,
-  "occlusionTexture": "textures/ao_grid.png",
+  "occlusionTexture": { "id": "98a7eb54-7bb5-4eb3-9615-e051f422d4da", "path": "textures/ao_grid.png" },
   "occlusionStrength": 1
 }

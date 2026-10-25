@@ -16,7 +16,7 @@
       "parent": null,
       "components": {
         "Transform": { "position": [100, 0, 100], "rotation": [0, 0, 0, 1], "scale": [40, 1, 40] },
-        "MeshRenderer": { "primitive": "plane", "material": "materials/checker.mat" }
+        "MeshRenderer": { "primitive": "plane", "material": { "id": "ba527c96-08c1-4ad3-b807-907ae4675f4c", "path": "materials/checker.mat" } }
       }
     },
     {
@@ -34,7 +34,7 @@
       "parent": 3,
       "components": {
         "Transform": { "position": [0, 0.5, 0], "rotation": [0, 0, 0, 1], "scale": [0.8, 1, 0.8] },
-        "MeshRenderer": { "primitive": "cube", "material": "materials/gold_r05.mat" }
+        "MeshRenderer": { "primitive": "cube", "material": { "id": "e0bda0c7-806b-42cb-84dc-b6ccd51ddab3", "path": "materials/gold_r05.mat" } }
       }
     },
     {
@@ -51,7 +51,7 @@
       "parent": 5,
       "components": {
         "Transform": { "position": [0, 0.5, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
-        "MeshRenderer": { "primitive": "sphere", "material": "materials/red_plastic_r05.mat" }
+        "MeshRenderer": { "primitive": "sphere", "material": { "id": "9dee402f-d253-4dda-a97d-65487f9bd68c", "path": "materials/red_plastic_r05.mat" } }
       }
     },
     {
@@ -74,7 +74,7 @@
     }
   ],
   "systems": [
-    "scripts/online_replication_demo.lua"
+    { "id": "e3497aa5-a8e0-44c5-80d6-1eedd4efe98f", "path": "scripts/online_replication_demo.lua" }
   ],
   "editor": {
     "camera": { "pivot": [101, 0.5, 100], "yaw": 20, "pitch": -20, "distance": 8 }
