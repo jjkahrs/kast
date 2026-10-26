@@ -65,7 +65,9 @@ public:
         display_.attach(window);
     }
     void shutdown();
-    void draw(Document& doc);
+    // shareGuiViews: the Scene view's WorldUI preview drew in guiView's range this frame (SceneViewport::drewGui); the
+    // GUIs take the views after its.
+    void draw(Document& doc, bool shareGuiViews);
     bool hasInput(const Document& doc) const { return focused_ && doc.play == PlayState::Playing; }
     // An SDL event for the game GUIs (call only while hasInput).
     void onEvent(const SDL_Event& event);

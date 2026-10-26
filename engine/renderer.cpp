@@ -36,6 +36,7 @@
 #include "terrain.h"
 #include "volumetric_fog.h"
 #include "voxel_gi.h"
+#include "world_ui.h"
 
 #include <bimg/bimg.h>
 #include <bx/error.h>
@@ -66,6 +67,8 @@ constexpr uint32_t kParticleShapeColor = 0xff00aaff; // ABGR: the editor's orang
 constexpr uint32_t kProbeBoxColor = 0xff00ccff;      // ABGR: the editor's highlight yellow
 constexpr uint32_t kVoxelGiBoxColor = 0xff00aaff;    // ABGR: the editor's orange
 constexpr uint32_t kFogVolumeColor = 0xff00ccff;     // ABGR: the editor's highlight yellow
+constexpr uint32_t kWorldUIColor = 0xff00ccff;       // ABGR: the editor's highlight yellow
+constexpr float kWorldUIAnchorSize = 0.15f;          // meters, each arm of the selected WorldUI's anchor cross
 constexpr int kSphereStacks = 16;
 constexpr int kSphereSlices = 32;
 // No culling here: a mesh draw adds its material's cullMode (cullState), lines draw as they are.
@@ -2805,6 +2808,7 @@ void Renderer::renderOverlays(const Scene& scene, bgfx::ViewId view, const float
     drawColliderWireframe(scene, view, selected);
     drawParticleShape(scene, view, selected);
     drawFogVolume(scene, view, selected);
+    drawWorldUIMarker(scene, view, viewMtx, selected);
     drawOccludedBoxes(view);
 }
 
@@ -3054,6 +3058,34 @@ void Renderer::drawFogVolume(const Scene& scene, bgfx::ViewId view, entt::entity
             for (int segment = 0; segment < kRangeCircleSegments; ++segment)
                 line(at(segment), at(segment + 1));
         }
+    }
+    submitLines(lines, lineLayout_, lineProgram_, view);
+}
+
+void Renderer::drawWorldUIMarker(const Scene& scene, bgfx::ViewId view, const float* viewMtx, entt::entity selected)
+{
+    const auto* ui = scene.valid(selected) ? scene.registry().try_get<WorldUI>(selected) : nullptr;
+    if (!ui)
+        return;
+    float world[16], cameraWorld[16];
+    scene.worldMatrix(selected, world);
+    bx::mtxInverse(cameraWorld, viewMtx);
+    const bx::Vec3 anchor = bx::mul(ui->offset, world);
+    std::vector<LineVertex> lines;
+    const auto line = [&](const bx::Vec3& a, const bx::Vec3& b) {
+        lines.push_back({a.x, a.y, a.z, kWorldUIColor});
+        lines.push_back({b.x, b.y, b.z, kWorldUIColor});
+    };
+    for (const bx::Vec3 arm : {bx::Vec3{kWorldUIAnchorSize, 0.0f, 0.0f}, bx::Vec3{0.0f, kWorldUIAnchorSize, 0.0f},
+                               bx::Vec3{0.0f, 0.0f, kWorldUIAnchorSize}})
+        line(bx::sub(anchor, arm), bx::add(anchor, arm));
+    if (ui->mode == WorldUIMode::World) { // its quad's outline, as layoutWorld places it
+        const float metersPerPixel = 1.0f / std::max(ui->pixelsPerMeter, kMinPixelsPerMeter);
+        const std::array<bx::Vec3, 4> corners =
+            worldUIQuadCorners(ui->facing, anchor, float(ui->width) * metersPerPixel, float(ui->height) * metersPerPixel,
+                               cameraWorld, world);
+        for (size_t i = 0; i < corners.size(); ++i)
+            line(corners[i], corners[(i + 1) % corners.size()]);
     }
     submitLines(lines, lineLayout_, lineProgram_, view);
 }

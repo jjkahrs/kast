@@ -4,6 +4,7 @@
 
 #include <post_process.h>
 #include <renderer.h>
+#include <world_ui.h>
 
 #include <bgfx/bgfx.h>
 #include <imgui.h>
@@ -53,11 +54,16 @@ kast::Ray editorCameraRay(const Document& doc, float u, float v, float aspect, b
 // transform gizmo and viewport shortcuts. Input is only taken while the panel is hovered (or a drag that started
 // there is still held), so other panels keep theirs. Uses views first .. first + Renderer::kShadowViews +
 // PostProcess::kViews: shadow maps, then the scene and post passes, overlays last.
+// WorldUI preview (the toolbar's "World UI" toggle, docs/editor/controls.html#world-ui-preview): the scene's WorldUI panels drawn as in
+// the Game view (world_ui.h) from the editor camera, in edit mode and Play, with their documents' static content (no
+// Lua writes), taking no input; load failures aren't logged (the Inspector flags the path). Its own WorldGui and atlas
+// (which panels get tiles depends on the camera); drawn in guiView's range (gui::kViews, the Game view's GUI range)
+// before the Game view's GUIs, which then take the views after (drewGui).
 class SceneViewport {
 public:
-    explicit SceneViewport(bgfx::ViewId first)
+    SceneViewport(bgfx::ViewId first, bgfx::ViewId guiView)
         : shadowViews_(first), post_(first + kast::Renderer::kShadowViews),
-          target_(first + kast::Renderer::kShadowViews + kast::PostProcess::kViews, "Scene")
+          target_(first + kast::Renderer::kShadowViews + kast::PostProcess::kViews, "Scene"), guiView_(guiView)
     {
     }
 
@@ -65,6 +71,8 @@ public:
     void shutdown();
     void draw(Document& doc);
     void setPostEffects(bool on) { postEffects_ = on; } // the toolbar's "Post" toggle
+    void setShowWorldUI(bool on) { showWorldUI_ = on; }  // the toolbar's "World UI" toggle
+    bool drewGui() const { return drewGui_; }            // this frame's draw used guiView's range
     kast::Renderer& renderer() { return renderer_; }     // --no-instancing, --no-culling
     // The toolbar's Debug menu (docs/editor/controls.html#debug-views), applied to the renderer each frame: tint by
     // LOD level, boxes of the draws occlusion culled, and a Hi-Z pyramid mip (-1: off) in the view's corner.
@@ -114,6 +122,10 @@ private:
     ViewTarget target_;
     kast::Renderer renderer_;
     bool postEffects_ = true;
+    kast::WorldGui worldUi_{"scene-world", false};
+    bgfx::ViewId guiView_;
+    bool showWorldUI_ = true;
+    bool drewGui_ = false;
     Drag drag_ = Drag::None;
     int operation_ = 0; // ImGuizmo::OPERATION; int so this header stays ImGuizmo-free
     bool local_ = true;

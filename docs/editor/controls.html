@@ -79,7 +79,7 @@ work the same. The choice is saved with the scene's editor camera.</p>
 <p>The Scene view draws each <code>Camera</code> as white frustum lines out to 2 m (a preview at 16:9, not the far plane): a pyramid
 from a perspective camera, a box from the near plane for an orthographic one. Select a
 camera and the gizmo moves/rotates it like any entity.</p>
-<p id="debug-views"><strong>Debug views</strong>: the Scene view toolbar's <strong>Debug</strong> button (after Post) opens a menu of
+<p id="debug-views"><strong>Debug views</strong>: the Scene view toolbar's <strong>Debug</strong> button (after Post and World UI) opens a menu of
 views for <a href="../engine/lod-and-occlusion.html">LOD and occlusion</a>. They are not saved.</p>
 <ul>
 <li><strong>LOD tint</strong>: every draw in a flat colour by the level it draws at: LOD0 green, LOD1 yellow, LOD2 orange, LOD3 red,
@@ -161,8 +161,17 @@ path that is not among them shows as <em>(missing)</em> with the red warning <em
 Play logs it once and draws nothing for it), <strong>Visible</strong>, <strong>Mode</strong> (Overlay / World), <strong>Facing</strong> and
 <strong>Pixels Per Meter</strong> (greyed out unless Mode is World), <strong>Offset</strong> (meters, in the
 entity's local space), <strong>Width (px)</strong> and <strong>Height (px)</strong> (at least 1), <strong>Max Distance (m)</strong> (0: unlimited),
-<strong>Occlude</strong> and <strong>Interactive</strong> (mouse hover and clicks in Play, <a href="../engine/world-ui.html#input">World-space UI</a>), each edit an undo step. Panels show only in the Game view during
-Play, never while Stopped.</p>
+<strong>Occlude</strong> and <strong>Interactive</strong> (mouse hover and clicks in Play, <a href="../engine/world-ui.html#input">World-space UI</a>), each edit an undo step. The Game view draws panels during
+Play only, never while Stopped; the Scene view previews them always (below).</p>
+<p id="world-ui-preview"><strong>World UI preview</strong>: the Scene view draws every WorldUI panel from the editor camera, while
+Stopped and in Play, as the Game view would: Overlay panels flat at their pixel size over their anchor, World panels as quads
+in the scene. It shows each document's static content (what the <code>.rml</code> says: no Lua runs while Stopped, and Lua's
+<code>kast.gui</code> writes in Play reach only the Game view). Inspector edits (Path, Mode, Facing, Offset, Width, Height,
+Pixels Per Meter, Max Distance, Visible) show the next frame. Panels take no input there: clicks select what is under them
+and the gizmo works over them. A selected WorldUI entity shows its anchor as a small yellow (#ffcc00) cross and, in World
+mode, its quad's outline. The Scene toolbar's <strong>World UI</strong> box (after Post) hides and shows the preview; it starts
+on (<code>--no-scene-world-ui</code> starts it off). A missing <code>.rml</code> shows nothing and is not logged (the Inspector
+warns). World UI documents have no hot reload: the editor doesn't watch their <code>.rml</code> / <code>.rcss</code> files.</p>
 <p><strong>New Lua Component...</strong> (first item of the Inspector's Add Component popup) creates a Lua component and adds it to the
 selected entity in one step. Type a name (e.g. <code>PlayerHealth</code>) and choose Create (or Enter; Esc cancels): it writes the
 New from Template definition with that type name to <code>&lt;project&gt;/components/&lt;snake_case&gt;.lua</code> (<code>player_health.lua</code>;

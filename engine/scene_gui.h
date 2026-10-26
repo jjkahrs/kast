@@ -65,8 +65,9 @@ public:
     void resize(int width, int height);
     void setDisplayScale(double osScale);
     // Draws the Overlay WorldUI documents, then both contexts over them, into view .. view + gui::kViews - 1 on
-    // frameBuffer, as GuiContext::render, then the World ones into their atlas in the views after those.
-    void render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer);
+    // frameBuffer, as GuiContext::render, then the World ones into their atlas in the views after those. shareViews:
+    // another GUI drew in that range earlier this frame; these take the views after its (view is ignored).
+    void render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, bool shareViews = false);
     // An SDL event, positions mapped as GuiContext::onEvent; routed between the two contexts, then the WorldUI panels
     // (see above).
     void onEvent(const SDL_Event& event, float originX = 0.0f, float originY = 0.0f, float scale = 1.0f);

@@ -1,0 +1,59 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Directional Light",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 4, 0], "rotation": [-0.408218, -0.23457, -0.109382, 0.875426], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.95, 0.9], "intensity": 1.1 }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [12, 1, 12] },
+        "MeshRenderer": { "primitive": "plane", "material": "" }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 1.5, 10], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Crate",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-3, 1.8, -1], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Plate",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-3, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": { "id": "fc419a8f-9210-424f-8892-1c5162855e22", "path": "ui/nameplate.rml" }, "visible": true, "offset": [0, 1.4, 0] }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Sign",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [3, 1.5, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": { "id": "41079a4e-d434-408e-9588-e097bb4425fa", "path": "ui/sign.rml" }, "visible": true, "mode": "world", "facing": "billboard", "offset": [0, 0, 0], "width": 512, "height": 128, "pixelsPerMeter": 128 }
+      }
+    }
+  ]
+}

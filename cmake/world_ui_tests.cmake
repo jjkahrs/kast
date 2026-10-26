@@ -282,3 +282,75 @@ foreach(name idle hover_overlay hover_world text)
     COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/player_world_ui_input_${name}.png" ${world_ui_input_${name}})
   set_tests_properties(player_world_ui_input_${name}_probe PROPERTIES FIXTURES_REQUIRED player_world_ui_input_${name}_shot)
 endforeach()
+
+# The editor's Scene view preview (editor/viewport.h; docs/editor/controls.html#world-ui-preview), Stopped unless noted.
+# tests/project/world_ui_scene_view.scene, seen from the default editor camera in the 1600x900 window (the Scene image
+# is 957x552 at 322,76): Plate (Overlay, ui/nameplate.rml 256x64, magenta) over a Crate cube, Sign (World, ui/sign.rml
+# 512x128 at 128 px/m, white, Billboard) to the right. Shots: the preview on; off (--no-scene-world-ui); Sign's offset
+# raised 1 m and Plate turned to World mode (--set-field, as Inspector edits); Sign turned Fixed; Sign selected (its
+# quad's yellow outline) and Plate selected (its anchor cross); a click on Plate's pixels (selects the Crate under it:
+# the panel takes no Scene view clicks); Sign's gizmo X arrow dragged 120 px right (Sign and its quad move).
+set(world_ui_scene_forbid "\\[warn\\] RmlUi|\\[error\\]|GUI effects need more")
+set(world_ui_scene_args "--scene ${KAST_TEST_PROJECT}/world_ui_scene_view.scene --size 1600x900 --fixed-dt 0.0166667")
+foreach(shot "on|" "off|--no-scene-world-ui" "field|--set-field 6,WorldUI.offset,[0,1,0] --set-field 5,WorldUI.mode,\"world\""
+             "facing|--set-field 6,WorldUI.facing,\"fixed\"" "selected_world|--select 6" "selected_overlay|--select 5"
+             "pick|--sim-mouse 40,left,0,0,0,-145,-92" "gizmo|--select 6 --sim-mouse 40,left,120,0,0,185,-70,5")
+  string(REPLACE "|" ";" shot "${shot}")
+  list(GET shot 0 name)
+  list(GET shot 1 args)
+  add_test(NAME editor_world_ui_scene_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/editor_world_ui_scene_${name}.png"
+            "-DEXTRA_ARGS=${world_ui_scene_args} ${args}" "-DFORBID_OUTPUT=${world_ui_scene_forbid}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+  set_tests_properties(editor_world_ui_scene_${name} PROPERTIES FIXTURES_SETUP editor_world_ui_scene_${name}_shot)
+endforeach()
+# Probes: Plate 700,270 and Sign 1040,262 (their clear color or the ground without them); Sign raised 1040,210; Sign
+# dragged 1150,262; Sign's outline 900,305; Plate's anchor cross below it 649,290; the Hierarchy's Crate row 200,120 (the
+# accent when selected).
+set(world_ui_scene_plate 0.43781,0.30056)
+set(world_ui_scene_sign 0.65031,0.29167)
+set(world_ui_scene_on ${world_ui_scene_plate},${world_ui_magenta} ${world_ui_scene_sign},${world_ui_white}
+                      0.65031,0.23389,${world_ui_editor_clear})
+set(world_ui_scene_off ${world_ui_scene_plate},${world_ui_editor_clear} ${world_ui_scene_sign},${world_ui_editor_clear})
+set(world_ui_scene_field ${world_ui_scene_plate},${world_ui_editor_clear} ${world_ui_scene_sign},${world_ui_editor_clear}
+                         0.65031,0.23389,${world_ui_white})
+set(world_ui_scene_selected_world ${world_ui_scene_on} 0.56281,0.33944,255,204,0,12)
+set(world_ui_scene_selected_overlay ${world_ui_scene_on} 0.40594,0.32278,255,204,0,12)
+set(world_ui_scene_pick ${world_ui_scene_on} 0.12531,0.13389,255,170,0,8)
+set(world_ui_scene_gizmo ${world_ui_scene_plate},${world_ui_magenta} 0.71906,0.29167,${world_ui_white})
+foreach(name on off field selected_world selected_overlay pick gizmo)
+  add_test(NAME editor_world_ui_scene_${name}_probe
+    COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/editor_world_ui_scene_${name}.png" ${world_ui_scene_${name}})
+  set_tests_properties(editor_world_ui_scene_${name}_probe PROPERTIES FIXTURES_REQUIRED editor_world_ui_scene_${name}_shot)
+endforeach()
+foreach(name off field facing) # each changes the Scene view
+  add_test(NAME editor_world_ui_scene_${name}_differs
+    COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/editor_world_ui_scene_on.png"
+            "-DB=${CMAKE_CURRENT_BINARY_DIR}/editor_world_ui_scene_${name}.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+  set_tests_properties(editor_world_ui_scene_${name}_differs PROPERTIES
+                       FIXTURES_REQUIRED "editor_world_ui_scene_on_shot;editor_world_ui_scene_${name}_shot")
+endforeach()
+# Scene and Game side by side (tests/layouts/scene_game_split.ini; each image 478 px wide): both draw their panels in
+# one frame in Play (the Game view's GUIs in the views after the Scene preview's), the Game view none while Stopped.
+# Scene: Plate 430,260, Sign 700,262. Game (Main Camera): Plate 900,320 (the Crate when Stopped), Sign 1150,345.
+foreach(name play stopped)
+  set(play "")
+  if(name STREQUAL "play")
+    set(play --play)
+  endif()
+  add_test(NAME editor_world_ui_scene_split_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/editor_world_ui_scene_split_${name}.png"
+            "-DEXTRA_ARGS=${world_ui_scene_args} ${play}" "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/scene_game_split.ini"
+            "-DFORBID_OUTPUT=${world_ui_scene_forbid}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+  set_tests_properties(editor_world_ui_scene_split_${name} PROPERTIES FIXTURES_SETUP editor_world_ui_scene_split_${name}_shot)
+endforeach()
+set(world_ui_scene_split_scene 0.26906,0.28944,${world_ui_magenta} 0.43781,0.29167,${world_ui_white})
+set(world_ui_scene_split_play ${world_ui_scene_split_scene} 0.56281,0.35611,${world_ui_magenta} 0.71906,0.38389,237,237,237,12) # tone mapped
+set(world_ui_scene_split_stopped ${world_ui_scene_split_scene} 0.56281,0.35611,210,206,202,12
+                                 0.71906,0.38389,${world_ui_editor_clear})
+foreach(name play stopped)
+  add_test(NAME editor_world_ui_scene_split_${name}_probe
+    COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/editor_world_ui_scene_split_${name}.png"
+            ${world_ui_scene_split_${name}})
+  set_tests_properties(editor_world_ui_scene_split_${name}_probe PROPERTIES FIXTURES_REQUIRED editor_world_ui_scene_split_${name}_shot)
+endforeach()

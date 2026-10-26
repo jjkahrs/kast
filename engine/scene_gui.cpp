@@ -460,12 +460,12 @@ void SceneGui::updateScale()
     allContext_.resize(width_, height_, static_cast<float>(dpRatio_), GuiScaling::All);
 }
 
-void SceneGui::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer)
+void SceneGui::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, bool shareViews)
 {
     const bool world = !world_.empty();
     if (world)
-        world_.render(view, frameBuffer); // under the screen GUIs
-    context_.render(view, frameBuffer, world);
+        world_.render(view, frameBuffer, shareViews); // under the screen GUIs
+    context_.render(view, frameBuffer, world || shareViews);
     if (allContext_.created())
         allContext_.render(view, frameBuffer, true);
     world_.renderAtlas(); // in the views after theirs; the scene samples it next frame (WorldGui::quads)

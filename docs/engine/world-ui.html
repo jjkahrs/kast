@@ -16,6 +16,8 @@
 <a href="game-gui.html">Game GUI</a>) at its entity: nameplates, health bars, signs. Each WorldUI entity gets its own document
 instance, even when several entities use the same <code>.rml</code>, and Lua addresses one by its entity. Like UI Documents, they
 are drawn in Play only: in <code>kast_player</code> and in the editor's Game view while playing or paused, never while Stopped.
+The editor's Scene view previews them, with their static content, from its own camera at all times
+(<a href="../editor/controls.html#world-ui-preview">World UI preview</a>).
 Code: <code>engine/world_ui.h</code> (<code>kast::WorldGui</code>, owned by <code>kast::SceneGui</code>).</p>
 <p>Two modes: <a href="#overlay">Overlay</a> (drawn flat over the screen at a constant pixel size) and <a href="#world">World</a>
 (a textured quad in the 3D scene, hidden by what stands in front of it). <a href="#input">Interactive</a> panels take mouse
@@ -126,13 +128,18 @@ views after theirs (<code>GuiContext::render</code>'s shareViews), usually one. 
 <tr><td>0 - 56</td><td>Scene view: shadow maps (34), then its scene and post passes (23)</td></tr>
 <tr><td>57</td><td>Scene view overlays</td></tr>
 <tr><td>58 - 114</td><td>Game view: shadow maps, then its scene and post passes (World-mode quads in its blended pass)</td></tr>
-<tr><td>115 - 179</td><td>Game view GUIs: Overlay WorldUIs, UI Documents (Dp, then All), then the World UI atlas</td></tr>
+<tr><td>115 - 179</td><td>Scene view WorldUI preview (its Overlay panels, then its atlas), then the Game view GUIs: Overlay
+WorldUIs, UI Documents (Dp, then All), then the World UI atlas; each after the last view the one before used this frame</td></tr>
 <tr><td>180 - 244</td><td>GUI Builder preview</td></tr>
 <tr><td>245 - 249</td><td>Shader Graph preview</td></tr>
 <tr><td>250 - 254</td><td>Model Preview</td></tr>
 <tr><td>255</td><td>ImGui</td></tr>
 </tbody>
 </table>
+<p>The Scene view preview has its own <code>WorldGui</code> and atlas, not the Game view's: which panels get tiles (nearest first,
+culled by <code>maxDistance</code> and behind the eye) depends on the camera, and the Game view's documents carry Lua's writes in
+Play. Both draw in the one range in the same frame: the Scene view first, then the Game view's GUIs in the views after its
+(<code>SceneGui::render</code>'s shareViews), so no view is used twice.</p>
 <p><code>kast_player</code>: 0 - 33 shadow maps, 34 - 56 scene and post passes, 57 - 121 the GUIs then the atlas, 122 the
 readable target's present; 123 - 255 free.</p>
 
@@ -258,7 +265,11 @@ in Play, none Stopped), the Inspector, and a save round trip. World mode: <code>
 by <code>scripts/world_ui_world.lua</code>) in the built player and the Game view from three cameras and with Fixed turned:
 probes of the Sign's edges (its size in pixels at 5 m), a Wall hiding half a panel, Fixed narrowing, Yaw Only upright from
 above; the Sign's inside the same from all three cameras and matching <code>tests/reference/world_ui_sign.png</code>; and
-<code>tests/project/world_ui_overflow.scene</code> (six 1000x1000 panels: the nearest four drawn, the warning logged once).</p>
+<code>tests/project/world_ui_overflow.scene</code> (six 1000x1000 panels: the nearest four drawn, the warning logged once).
+The Scene view preview: <code>ctest -R world_ui_scene</code>, <code>tests/project/world_ui_scene_view.scene</code> Stopped (an Overlay
+and a World panel probed; the toggle off; offset and mode changed with <code>--set-field</code>; facing changed; the selected
+outline and anchor cross; a click on a panel selecting the Crate under it; a gizmo drag moving a World panel) and with Scene and
+Game side by side (<code>tests/layouts/scene_game_split.ini</code>): both draw their panels in Play, the Game view none Stopped.</p>
 <p>Input and floating text: <code>kast_self_check --worldui</code> also checks the mouse ray (perspective and orthographic) and
 where it crosses a turned quad (the near half's mapping), a headless <code>SceneGui</code> fed SDL mouse events (the nearer of
 two overlapping Overlay panels, non-interactive ones passed through, World panel clicks at their hit point with their entity,

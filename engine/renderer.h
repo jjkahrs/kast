@@ -166,7 +166,8 @@ void buildMips(MipImage& image, bool srgb);
 // AreaLights nearest it, rendered in kShadowViews views before the scene's (see shadow.h).
 // renderOverlays draws the editor's: a ground grid, axis lines, a short frustum preview per Camera, the range of the
 // selected PointLight (cone of a SpotLight, rect of an AreaLight), the box of the selected ReflectionProbe or VoxelGI, the selected
-// entity's collider, its ParticleEmitter's shape and its FogVolume's box or sphere.
+// entity's collider, its ParticleEmitter's shape, its FogVolume's box or sphere and its WorldUI's anchor (a cross) and,
+// in World mode, quad outline.
 // Volumetric fog (volumetric_fog.h; the scene's postProcessing.volumetricFog, with a target whose fogView setTarget
 // gives): its froxel grid lit by the sun, local lights and their shadow maps just rendered in fogView, composited over
 // the opaque scene in fogView + 1, and sampled by the blended meshes and particles.
@@ -494,6 +495,7 @@ private:
     void drawColliderWireframe(const Scene& scene, bgfx::ViewId view, entt::entity selected);
     void drawParticleShape(const Scene& scene, bgfx::ViewId view, entt::entity selected);
     void drawFogVolume(const Scene& scene, bgfx::ViewId view, entt::entity selected);
+    void drawWorldUIMarker(const Scene& scene, bgfx::ViewId view, const float* viewMtx, entt::entity selected);
 
     // GPU copy of a TerrainTile's heights: kTileSamples^2 vertices in tile-local metres, then its skirt vertices
     // (lod.h terrainSkirtVertex); indices are terrainIndices_.

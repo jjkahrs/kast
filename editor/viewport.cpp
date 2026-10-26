@@ -199,6 +199,7 @@ void SceneViewport::init()
 
 void SceneViewport::shutdown()
 {
+    worldUi_.release();
     target_.destroy();
     post_.shutdown();
     renderer_.shutdown();
@@ -252,6 +253,7 @@ void SceneViewport::draw(Document& doc)
 
     const bool visible = beginViewportPanel("Scene", doc, PanelFocus::Scene);
     ImGuiWindow* window = ImGui::GetCurrentWindow();
+    drewGui_ = false;
     if (visible) {
         drawToolbar(doc);
         const ImVec2 size = ImGui::GetContentRegionAvail();
@@ -293,10 +295,23 @@ void SceneViewport::draw(Document& doc)
             post_.setProjection(proj);
             renderer_.setTarget(post_.target(), post_.width(), post_.height(), post_.blendView(),
                                 post_.volumetricFogView());
-            renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), post_.sceneView(), view,
-                             proj, shadowViews_, extraScene_);
+            const std::filesystem::path root = doc.project ? doc.project->root : std::filesystem::path();
+            if (showWorldUI_) {
+                worldUi_.sync(doc.scene, root); // no bus: the preview takes no input
+                worldUi_.layout(doc.scene, view, proj, width, height, &doc.lua.physics()); // occludes in Play only
+                renderer_.setWorldQuads(worldUi_.atlasTexture(), worldUi_.quads());
+            } else {
+                worldUi_.clear();
+                renderer_.setWorldQuads(BGFX_INVALID_HANDLE, {});
+            }
+            renderer_.render(doc.scene, root, post_.sceneView(), view, proj, shadowViews_, extraScene_);
             post_.apply(doc.scene.postProcessing, postEffects_, target_.frameBuffer());
             renderer_.renderOverlays(doc.scene, target_.view(), view, proj, doc.selected);
+            if (showWorldUI_) { // over the overlays, as the Game view's GUIs are over its image
+                worldUi_.render(guiView_, target_.frameBuffer());
+                worldUi_.renderAtlas(); // the scene samples it next frame
+                drewGui_ = true;
+            }
             if (const bgfx::TextureHandle hiz = renderer_.hizDebugTexture(); bgfx::isValid(hiz)) {
                 // The Hi-Z debug view: a quarter-width inset at the image's bottom-right, outlined in the accent.
                 const float insetWidth = size.x * 0.25f, insetHeight = insetWidth * size.y / size.x;
@@ -389,6 +404,9 @@ void SceneViewport::drawToolbar(Document& doc)
     ImGui::SameLine(0.0f, style.ItemSpacing.x * 3.0f);
     ImGui::Checkbox("Post", &postEffects_);
     ImGui::SetItemTooltip("Show the scene's post-processing effects (Window > Post Processing); fog always shows");
+    ImGui::SameLine();
+    ImGui::Checkbox("World UI", &showWorldUI_);
+    ImGui::SetItemTooltip("Preview the WorldUI panels (nameplates, signs) with their documents' static content");
     ImGui::SameLine();
     if (ImGui::SmallButton("Debug") || (openDebugMenu_ && !ImGui::IsPopupOpen("SceneDebug")))
         ImGui::OpenPopup("SceneDebug");
