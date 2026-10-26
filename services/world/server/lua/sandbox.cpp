@@ -31,7 +31,12 @@ bool exact_integer(double number) { return number == std::floor(number) && std::
 
 size_t vector_size(FieldKind kind) { return kind == FieldKind::Vec3 ? 3 : kind == FieldKind::Quat ? 4 : 0; }
 
-bool scalar_to_json(FieldKind kind, const std::string& label, const sol::object& value, Json& out, std::string& error) {
+// name and element (its 1-based index in an array field, 0 for none) only label errors.
+bool scalar_to_json(FieldKind kind, const std::string& name, size_t element, const sol::object& value, Json& out,
+                    std::string& error) {
+    const auto label = [&] {
+        return element ? std::format("\"{}\" element {}", name, element) : std::format("\"{}\"", name);
+    };
     if (const size_t count = vector_size(kind)) {
         out = Json::array();
         if (value.get_type() == sol::type::table) {
@@ -42,14 +47,14 @@ bool scalar_to_json(FieldKind kind, const std::string& label, const sol::object&
             }
         }
         if (out.size() == count) return true;
-        error = std::format("{} must be a table {{x=, y=, z={}}} of finite numbers", label, count == 4 ? ", w=" : "");
+        error = std::format("{} must be a table {{x=, y=, z={}}} of finite numbers", label(), count == 4 ? ", w=" : "");
         return false;
     }
     switch (value.get_type()) {
     case sol::type::number: {
         const double number = value.as<double>();
         if (!std::isfinite(number)) {
-            error = std::format("{} must be a finite number", label);
+            error = std::format("{} must be a finite number", label());
             return false;
         }
         if (exact_integer(number)) out = static_cast<int64_t>(number); // an integer, so int fields accept it
@@ -64,8 +69,8 @@ bool scalar_to_json(FieldKind kind, const std::string& label, const sol::object&
 
 sol::object scalar_to_lua(sol::state_view lua, FieldKind kind, const Json& value) {
     if (const size_t count = vector_size(kind)) {
-        sol::table table = lua.create_table();
-        for (size_t i = 0; i < count; ++i) table[kVectorKeys[i]] = value[i].get<double>();
+        sol::table table = lua.create_table(0, static_cast<int>(count));
+        for (size_t i = 0; i < count; ++i) table.raw_set(kVectorKeys[i], value[i].get<double>());
         return table;
     }
     if (value.is_boolean()) return sol::make_object(lua, value.get<bool>());
@@ -280,8 +285,7 @@ std::vector<sol::object> sequence(const sol::object& value, const std::string& w
 }
 
 bool lua_to_field_json(const FieldDesc& field, const sol::object& value, Json& out, std::string& error, bool element) {
-    const std::string label = std::format("\"{}\"", field.name);
-    if (!field.array || element) return scalar_to_json(field.kind, label, value, out, error);
+    if (!field.array || element) return scalar_to_json(field.kind, field.name, 0, value, out, error);
     size_t count = 0;
     bool isSequence = value.get_type() == sol::type::table;
     if (isSequence) {
@@ -294,42 +298,70 @@ bool lua_to_field_json(const FieldDesc& field, const sol::object& value, Json& o
             isSequence = value.as<sol::table>()[i].get_type() != sol::type::lua_nil;
     }
     if (!isSequence) {
-        error = std::format("{} must be a sequence table {{v1, v2, ...}}", label);
+        error = std::format("\"{}\" must be a sequence table {{v1, v2, ...}}", field.name);
         return false;
     }
     const sol::table table = value.as<sol::table>();
     out = Json::array();
     for (size_t i = 1; i <= count; ++i) {
         Json item;
-        if (!scalar_to_json(field.kind, std::format("{} element {}", label, i), table[i], item, error)) return false;
+        if (!scalar_to_json(field.kind, field.name, i, table[i], item, error)) return false;
         out.push_back(std::move(item));
     }
     return true;
 }
 
-std::optional<Json> set_fields(const ComponentDef& def, Json value, const sol::table& fields, std::string& error) {
-    for (const auto& [key, item] : fields) {
+std::optional<std::vector<CheckedField>> checked_fields(const ComponentDef& def, const sol::table& fields,
+                                                       std::string& error) {
+    std::vector<CheckedField> out;
+    // lua_next by hand: sol2's table iterator takes a registry reference for every key and value.
+    lua_State* L = fields.lua_state();
+    const int top = lua_gettop(L);
+    fields.push();
+    lua_pushnil(L);
+    bool ok = true;
+    while (ok && lua_next(L, top + 1)) {
+        const sol::stack_object key(L, -2);
         if (key.get_type() != sol::type::string) {
-            error = std::format("\"{}\": field names must be strings, got {}", def.name, to_string(fields.lua_state(), key));
-            return std::nullopt;
+            error = std::format("\"{}\": field names must be strings, got {}", def.name, to_string(L, sol::object(key)));
+            ok = false;
+        } else if (const auto desc = std::ranges::find(def.fields, key.as<std::string_view>(), &FieldDesc::name);
+                   desc == def.fields.end()) {
+            error = std::format("\"{}\": unknown field \"{}\"", def.name, key.as<std::string_view>());
+            ok = false;
+        } else {
+            ok = lua_to_field_json(*desc, sol::object(L, -1), out.emplace_back(&*desc).value, error);
         }
-        const std::string field = key.as<std::string>();
-        const auto desc = std::ranges::find(def.fields, field, &FieldDesc::name);
-        if (desc == def.fields.end()) {
-            error = std::format("\"{}\": unknown field \"{}\"", def.name, field);
-            return std::nullopt;
-        }
-        if (!lua_to_field_json(*desc, item, value[field], error)) return std::nullopt;
+        lua_pop(L, 1);
     }
-    std::optional<Json> valid = component_from_json(def, value, error);
+    lua_settop(L, top);
+    if (!ok) return std::nullopt;
+    // Shape errors above come in table order; the checks in definition order, as component_from_json reported them.
+    std::ranges::sort(out, {}, &CheckedField::field);
+    for (CheckedField& f : out) {
+        std::optional<Json> valid = field_from_json(*f.field, f.value, error);
+        if (!valid) {
+            error = std::format("\"{}\": \"{}\" {}", def.name, f.field->name, error);
+            return std::nullopt;
+        }
+        f.value = std::move(*valid);
+    }
+    return out;
+}
+
+std::optional<Json> set_fields(const ComponentDef& def, Json value, const sol::table& fields, std::string& error) {
+    std::optional<std::vector<CheckedField>> listed = checked_fields(def, fields, error);
+    if (!listed) return std::nullopt;
+    for (CheckedField& f : *listed) value[f.field->name] = std::move(f.value);
+    std::optional<Json> valid = component_from_json(def, value, error); // the unlisted fields are the caller's
     if (!valid) error = std::format("\"{}\": {}", def.name, error);
     return valid;
 }
 
 sol::object field_json_to_lua(sol::state_view lua, const FieldDesc& field, const Json& value, bool element) {
     if (!field.array || element) return scalar_to_lua(lua, field.kind, value);
-    sol::table table = lua.create_table();
-    for (size_t i = 0; i < value.size(); ++i) table[i + 1] = scalar_to_lua(lua, field.kind, value[i]);
+    sol::table table = lua.create_table(static_cast<int>(value.size()), 0);
+    for (size_t i = 0; i < value.size(); ++i) table.raw_set(i + 1, scalar_to_lua(lua, field.kind, value[i]));
     return table;
 }
 

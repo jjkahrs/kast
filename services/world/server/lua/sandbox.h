@@ -62,8 +62,15 @@ bool lua_to_field_json(const FieldDesc& field, const sol::object& value, Json& o
                        bool element = false);
 // The reverse, for a valid canonical value: arrays become 1-based sequences.
 sol::object field_json_to_lua(sol::state_view lua, const FieldDesc& field, const Json& value, bool element = false);
-// kast.set's partial update: the listed fields over value (a valid one), checked like component_from_json. nullopt and
-// error (e.g. "\"Health\": unknown field \"x\"") on any bad field.
+// kast.set's partial update: each listed field converted and checked like component_from_json, in definition order.
+// nullopt and error (e.g. "\"Health\": unknown field \"x\"") on any bad field.
+struct CheckedField {
+    const FieldDesc* field;
+    Json value; // canonical
+};
+std::optional<std::vector<CheckedField>> checked_fields(const ComponentDef& def, const sol::table& fields,
+                                                       std::string& error);
+// The listed fields over value, then the whole of it checked by component_from_json; errors as checked_fields'.
 std::optional<Json> set_fields(const ComponentDef& def, Json value, const sol::table& fields, std::string& error);
 
 // An event payload (plain data) as JSON: nil -> null, booleans, finite numbers (integral ones as integers), strings,

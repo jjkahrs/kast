@@ -107,6 +107,7 @@ struct Runtime::Impl {
         std::vector<std::string> paths; // LUA_ROOT-relative
     };
     std::map<std::string, Definitions, std::less<>> definitions; // kast.definitions, by folder, read on first use
+    std::vector<sol::table> spawns; // kast.get(e, "Spawn") by SpawnRef record, built on first use; after lua
     System* current = nullptr;
     bool returnedTrue = false; // the last call()'s first result was true
     std::string callbackPath; // the definition file whose enter/exit is running, if no system is
@@ -191,14 +192,22 @@ struct Runtime::Impl {
         return {};
     }
 
-    sol::table read_only(const sol::table& source) {
+    // A metatable whose __newindex raises message, hidden from getmetatable.
+    sol::table guard(const char* message) {
+        sol::table meta = lua.create_table();
+        meta["__newindex"] = [message](sol::this_state L, sol::object, sol::object, sol::object) {
+            if (message) raise(L, message); // never null: the branch keeps MSVC's C4702 (unreachable code in sol2) quiet
+        };
+        meta["__metatable"] = false;
+        return meta;
+    }
+
+    sol::table read_only(const sol::table& source, const char* message = "kast is read-only") {
         // A fresh copy behind a proxy: writes raise an error, and even rawset only changes this system's copy.
         sol::table copy = lua.create_table();
         for (const auto& [key, value] : source) copy[key] = value;
-        sol::table meta = lua.create_table();
+        sol::table meta = guard(message);
         meta["__index"] = copy;
-        meta["__newindex"] = [](sol::this_state L, sol::object, sol::object, sol::object) { raise(L, "kast is read-only"); };
-        meta["__metatable"] = false;
         sol::table proxy = lua.create_table();
         proxy[sol::metatable_key] = meta;
         return proxy;
@@ -272,19 +281,41 @@ struct Runtime::Impl {
         };
     }
 
+    // kast.get(e, "Spawn"): a spawn record's data never changes (it points into Maps, which outlives the World), so its
+    // table is built once and shared, read-only. path stays a plain list behind __newindex so # and ipairs work (LuaJIT
+    // ignores __len and __index there): a new key raises, but its existing entries can't be guarded.
+    sol::table spawn_table(uint32_t record) {
+        if (record >= spawns.size()) spawns.resize(record + 1);
+        if (spawns[record].valid()) return spawns[record];
+        constexpr const char* kReadOnly = "\"Spawn\" is read-only";
+        const map::Spawn& s = *npcs.spawn(record);
+        const auto point = [&](const std::array<float, 3>& p) {
+            return read_only(lua.create_table_with("x", p[0], "y", p[1], "z", p[2]), kReadOnly);
+        };
+        sol::table table = lua.create_table_with("id", s.id, "pos", point(s.pos), "heading", s.heading);
+        if (s.path) {
+            sol::table points = lua.create_table(static_cast<int>(s.path->points.size()), 0);
+            for (const auto& p : s.path->points) points.add(point(p));
+            points[sol::metatable_key] = guard(kReadOnly);
+            table.set("path", points, "wait", s.path->wait, "loop", s.path->loop);
+        }
+        return spawns[record] = read_only(table, kReadOnly);
+    }
+
     // kast.fsm.*: thin wrappers over StateMachines, whose std::invalid_argument (a bad target) becomes a Lua error at
     // the calling line. Copied from the engine's bindFsmApi.
     void bind_fsm_api() {
         using Target = StateMachines::Target;
-        const auto target = [](lua_State* L, const char* function, const sol::object& value) -> Target {
-            if (value.get_type() == sol::type::string) return value.as<std::string>();
+        // value: a sol::object, or a sol::stack_object (no registry reference) on the hot kast.fsm.state.
+        const auto target = [](lua_State* L, const char* function, const auto& value) -> Target {
+            if (value.get_type() == sol::type::string) return value.template as<std::string>();
             if (value.get_type() == sol::type::number) {
-                const double id = value.as<double>();
+                const double id = value.template as<double>();
                 if (id >= 0.0 && id <= 4294967295.0 && id == std::floor(id)) return static_cast<EntityId>(id);
-                raise(L, std::format("{}: invalid entity id {}", function, to_string(L, value)));
+                raise(L, std::format("{}: invalid entity id {}", function, to_string(L, sol::object(value))));
             }
             raise(L, std::format("{}: target must be a state machine name or an entity id, got {}", function,
-                                 to_string(L, value)));
+                                 to_string(L, sol::object(value))));
         };
         const auto stateName = [](lua_State* L, const char* function, const sol::object& value) {
             if (value.get_type() != sol::type::string)
@@ -301,7 +332,7 @@ struct Runtime::Impl {
         };
 
         fsmApi = lua.create_table();
-        fsmApi.set_function("state", [this, target, guarded](sol::this_state L, const sol::object& t) {
+        fsmApi.set_function("state", [this, target, guarded](sol::this_state L, const sol::stack_object& t) {
             const Target machine = target(L, "kast.fsm.state", t);
             return guarded(L, "kast.fsm.state", [&] { return fsm.state(machine); });
         });
@@ -328,15 +359,17 @@ struct Runtime::Impl {
         return reg.valid(e) && reg.any_of<world::CharacterRef, world::Npc>(e);
     }
 
-    entt::entity entity(lua_State* L, const sol::object& id, const char* function = nullptr) {
+    // id: a sol::object, or a sol::stack_object (no registry reference) on the hot kast.get/set.
+    entt::entity entity(lua_State* L, const auto& id, const char* function = nullptr) {
         if (id.get_type() == sol::type::number) {
-            const double value = id.as<double>();
+            const double value = id.template as<double>();
             if (value >= 0.0 && value <= 4294967295.0 && value == std::floor(value)) {
                 const auto e = entt::entity{static_cast<uint32_t>(value)};
                 if (in_world(reg, e)) return e;
             }
         }
-        raise(L, std::format("{}invalid entity id {}", function ? std::string(function) + ": " : "", to_string(L, id)));
+        raise(L, std::format("{}invalid entity id {}", function ? std::string(function) + ": " : "",
+                             to_string(L, sol::object(id))));
     }
 
     // A client event's target: any wire id; one not in the world is skipped when the events are sent.
@@ -721,10 +754,26 @@ struct Runtime::Impl {
             p.remove(e);
             changed(e, *t.def);
         });
-        api.set_function("get", [this](sol::this_state L, const sol::object& id, const std::string& name) {
+        api.set_function("get", [this](sol::this_state L, const sol::stack_object& id, const std::string& name) {
             const entt::entity e = entity(L, id);
             const Type t = type(L, name);
-            if (!has(e, t)) raise(L, std::format("entity {} has no \"{}\"", to_string(L, id), name));
+            if (!has(e, t)) raise(L, std::format("entity {} has no \"{}\"", to_string(L, sol::object(id)), name));
+            if (t.builtin == Builtin::spawn) return spawn_table(reg.get<world::SpawnRef>(e).record);
+            if (t.builtin == Builtin::transform) {
+                const auto& tf = reg.get<world::Transform>(e);
+                sol::table position = lua.create_table(0, 3);
+                position.raw_set("x", tf.pos.x, "y", tf.pos.y, "z", tf.pos.z);
+                sol::table table = lua.create_table(0, 3);
+                table.raw_set("position", position, "heading", tf.heading, "map", reg.get<world::MapRef>(e).map);
+                return table;
+            }
+            if (t.def) {
+                const Json& json = t.pool->get(e).value;
+                sol::table table = lua.create_table(0, static_cast<int>(t.def->fields.size()));
+                for (const FieldDesc& field : t.def->fields)
+                    table.raw_set(field.name, field_json_to_lua(lua, field, json[field.name]));
+                return table;
+            }
             sol::table table = lua.create_table();
             if (t.builtin == Builtin::character) {
                 const auto& ch = reg.get<world::CharacterRef>(e);
@@ -733,51 +782,36 @@ struct Runtime::Impl {
                 sol::table options = lua.create_table();
                 for (const auto& [key, value] : ch.options) options[key] = value;
                 table["options"] = options;
-            } else if (t.builtin == Builtin::npc) {
+            } else {
                 const auto& npc = reg.get<world::Npc>(e);
                 table["name"] = npc.name;
                 table["template"] = npc.templateName;
                 table["npc"] = npc.npc;
-            } else if (t.builtin == Builtin::spawn) {
-                const map::Spawn& s = *npcs.spawn(reg.get<world::SpawnRef>(e).record);
-                table["id"] = s.id;
-                table["pos"] = lua.create_table_with("x", s.pos[0], "y", s.pos[1], "z", s.pos[2]);
-                table["heading"] = s.heading;
-                if (s.path) {
-                    sol::table points = lua.create_table();
-                    for (const auto& p : s.path->points) points.add(lua.create_table_with("x", p[0], "y", p[1], "z", p[2]));
-                    table["path"] = points;
-                    table["wait"] = s.path->wait;
-                    table["loop"] = s.path->loop;
-                }
-            } else if (t.builtin == Builtin::transform) {
-                const auto& tf = reg.get<world::Transform>(e);
-                table["position"] = lua.create_table_with("x", tf.pos.x, "y", tf.pos.y, "z", tf.pos.z);
-                table["heading"] = tf.heading;
-                table["map"] = reg.get<world::MapRef>(e).map;
-            } else {
-                const Json& json = t.pool->get(e).value;
-                for (const FieldDesc& field : t.def->fields) table[field.name] = field_json_to_lua(lua, field, json[field.name]);
             }
             return table;
         });
         // Partial tables: listed fields change, the rest keep their values. All-or-nothing: any bad field, or a value
         // min/max / enum values reject, leaves the component unchanged.
-        // ponytail: goes through JSON to reuse the definition checks; convert directly if it shows in profiles.
-        api.set_function("set", [this](sol::this_state L, const sol::object& id, const std::string& name,
+        // ponytail: each listed field goes through JSON to reuse the definition checks (field_from_json), the stored
+        // value isn't copied or re-checked; convert straight from Lua if it shows in profiles.
+        api.set_function("set", [this](sol::this_state L, const sol::stack_object& id, const std::string& name,
                                        const sol::table& fields) {
             const entt::entity e = entity(L, id);
             const Type t = type(L, name);
-            if (!has(e, t)) raise(L, std::format("entity {} has no \"{}\"", to_string(L, id), name));
+            if (!has(e, t)) raise(L, std::format("entity {} has no \"{}\"", to_string(L, sol::object(id)), name));
             if (t.builtin == Builtin::transform && reg.all_of<world::Npc>(e)) return set_npc_transform(L, e, fields);
             const ComponentDef& def = writable(L, t);
-            auto& p = *t.pool;
             std::string error;
-            std::optional<Json> valid = set_fields(def, p.get(e).value, fields, error);
-            if (!valid) raise(L, error);
-            if (*valid == p.get(e).value) return;
-            p.get(e).value = std::move(*valid);
-            changed(e, def);
+            std::optional<std::vector<CheckedField>> listed = checked_fields(def, fields, error);
+            if (!listed) raise(L, error);
+            Json& value = t.pool->get(e).value;
+            bool differs = false;
+            for (CheckedField& f : *listed)
+                if (Json& stored = value[f.field->name]; stored != f.value) {
+                    stored = std::move(f.value);
+                    differs = true;
+                }
+            if (differs) changed(e, def);
         });
 
         // Events: queued, delivered by drain_events() after every update (docs/services/world/events.html). Subscriptions belong to

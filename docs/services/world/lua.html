@@ -196,7 +196,7 @@ and a system reads it with <code>kast.definitions(folder)</code>. The server giv
 </tr>
 <tr>
 <td><code>kast.get(e, name)</code></td>
-<td>A fresh table of the component's fields; arrays are 1-based sequences, <code>vec3</code>/<code>quat</code> are <code>{x=, y=, z=[, w=]}</code></td>
+<td>A fresh table of the component's fields; arrays are 1-based sequences, <code>vec3</code>/<code>quat</code> are <code>{x=, y=, z=[, w=]}</code>. <code>Spawn</code> is the exception: one table per spawn, shared between calls and NPCs, and read-only. A write raises <code>"Spawn" is read-only</code>, except replacing an entry of <code>path</code>, which LuaJIT can't guard (don't). <code>#path</code> and <code>ipairs(path)</code> work; <code>pairs</code> lists nothing on the table, <code>pos</code> or a point</td>
 </tr>
 <tr>
 <td><code>kast.set(e, name, fields)</code></td>

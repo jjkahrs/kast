@@ -1860,6 +1860,282 @@ return {
     check(w.world.registry().view<lua::StateMachineRuntime>().empty(), "fsm: machines go away with their characters");
 }
 
+// kast.fsm.state through enter callbacks that change the component: a lazy first enter (kast.create's components), an
+// enter that queues a change, one that swaps the machine, one that removes it, one that reads its own state.
+void checkFsmStateFlows() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("fsms/hop.lua", R"(return { name = "hop", initial = "a", states = {
+        a = { enter = function(ctx) kast.fsm.change(ctx.entity, "b") end }, b = {} } })");
+    r.write("fsms/vanish.lua", R"(return { name = "vanish", initial = "x", states = {
+        x = { enter = function(ctx) kast.remove(ctx.entity, "StateMachine") end } } })");
+    r.write("fsms/swap.lua", R"(return { name = "swap", initial = "s", states = {
+        s = { enter = function(ctx) kast.set(ctx.entity, "StateMachine", {machine = "hop"}) end } } })");
+    r.write("fsms/peek.lua", R"(return { name = "peek", initial = "p", states = {
+        p = { enter = function(ctx) kast.log("peek " .. kast.fsm.state(ctx.entity)) end }, q = {} } })");
+    r.write("fsms/plain.lua", kPlain);
+    r.write("systems/flows.lua", std::string(kLuaExpect) + R"lua(local done = false
+local function state(e)
+    local ok, s = pcall(kast.fsm.state, e)
+    return ok and s or ("error: " .. s)
+end
+return { update = function()
+    if done then return end
+    done = true
+    local out = {}
+    local function add(v) out[#out + 1] = tostring(v) end
+    for _, m in ipairs({"plain", "hop", "vanish", "swap", "peek"}) do
+        local lazy = kast.create(m, {template = "T", components = {StateMachine = {machine = m}}})
+        add(m .. "=" .. state(lazy)); add(state(lazy))
+        local set = kast.create(m, {template = "T"})
+        kast.add(set, "StateMachine")
+        kast.set(set, "StateMachine", {machine = m})
+        add(state(set))
+    end
+    local e = kast.create("e", {template = "T"})
+    kast.add(e, "StateMachine")
+    kast.set(e, "StateMachine", {machine = "plain", initialState = "b"})
+    add(state(e)); add(kast.fsm.change(e, "a")); add(state(e)); add(kast.fsm.change(e, "b")); add(state(e))
+    kast.set(e, "StateMachine", {machine = "peek"})
+    add(state(e)); add(kast.fsm.change(e, "q")); add(state(e))
+    kast.log("flows " .. table.concat(out, " "))
+end })lua");
+    TestWorld w({});
+    check(w.world.load_scripts(r.root).empty(), "fsm flows: loads");
+    w.world.tick(T0);
+    check_lua_expectations("fsm flows", "flows ");
+    std::string got;
+    for (size_t i : said_at("flows ")) got = nlohmann::json::parse(g_log[i]).value("msg", "");
+    // Captured on the code before the kast.fsm.state changes (lua-bridge-churn).
+    const std::string want = "systems/flows.lua: flows plain=a a a hop=b b b vanish=error: kast.fsm.state: entity 4 has no "
+                             "\"StateMachine\" error: kast.fsm.state: entity 4 has no \"StateMachine\" error: kast.fsm.state: "
+                             "entity 5 has no \"StateMachine\" swap=b b b peek=p p p b true a true b p true q";
+    check(got == want, "fsm flows: [" + got + "]");
+    check(said_at("fsms/peek.lua: peek p").size() == 3,
+          "fsm flows: an enter reading its own state gets the state it enters");
+}
+
+// --- kast.get / kast.set on a bare registry: a Runtime of its own (spawn records from hooks.spawn), so a timed update
+// runs nothing else ---
+
+constexpr const char* kSix = R"(return { name = "Six", replicate = "aoi", persist = true, fields = {
+    { name = "hp", type = "int", default = 10, min = 0, max = 100 },
+    { name = "flag", type = "bool" },
+    { name = "kind", type = "enum", values = {"a", "b"}, default = "b" },
+    { name = "pos", type = "vec3", default = {x = 1, y = 2, z = 3} },
+    { name = "tags", type = "array", of = "string", default = {"a"} },
+    { name = "speed", type = "float", default = 1.5 },
+} })";
+
+// Entity 0: character Alice (Six added by the system's init). 1 and 2: NPCs of spawn record 0 ("guard_1", an 8-point
+// path); 3: record 1 ("bat_1", no path). The system file is kLuaExpect + system.
+struct Bench {
+    LuaRoot r;
+    entt::registry reg;
+    std::vector<map::Spawn> spawns;
+    std::unique_ptr<lua::Runtime> rt;
+    explicit Bench(const std::string& system) {
+        r.write("components/six.lua", kSix).write("fsms/plain.lua", kPlain);
+        r.write("systems/t.lua", std::string(kLuaExpect) + system);
+        map::PatrolPath path{{}, 1.5f, false};
+        for (int i = 0; i < 8; ++i) path.points.push_back({1000.0f + i, 0.25f * i, 2000.0f - i});
+        spawns = {{"guard_1", "Guard", {1024, 3, 1030}, 0.5f, 30, path, ""},
+                  {"bat_1", "Bat", {5, 6, 7}, 0, -1, std::nullopt, ""}};
+        const auto alice = reg.create();
+        reg.emplace<world::CharacterRef>(alice, 11u, "Alice");
+        reg.emplace<world::Transform>(alice, proto::Vec3{1000, 0, 1000}, 0.5f);
+        reg.emplace<world::MapRef>(alice, uint16_t{1});
+        reg.emplace<world::ReplicatedState>(alice);
+        for (uint32_t record : {0u, 0u, 1u}) {
+            const auto e = reg.create();
+            reg.emplace<world::Npc>(e, "N", "T", "");
+            reg.emplace<world::Transform>(e, proto::Vec3{1020, 0, 1020}, 0.f);
+            reg.emplace<world::MapRef>(e, uint16_t{1});
+            reg.emplace<world::SpawnRef>(e, record);
+        }
+        lua::NpcHooks hooks;
+        hooks.spawn = [this](uint32_t i) { return &spawns.at(i); };
+        rt = std::make_unique<lua::Runtime>(reg, r.defs().defs, std::move(hooks));
+        check(rt->load(r.root).empty(), "bench: loads");
+    }
+    // us per call in the fastest of `updates` updates (the least disturbed by the rest of the machine), each making
+    // `calls` of them.
+    double time(int updates, int calls) {
+        double best = HUGE_VAL;
+        for (int i = 0; i < updates; ++i) {
+            const auto start = std::chrono::steady_clock::now();
+            rt->update(0.05f);
+            best = std::min(best, std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count());
+        }
+        for (const auto& s : rt->status()) check(s.ok, "bench: system still enabled " + s.error);
+        return best / calls;
+    }
+};
+
+// Every kast.set failure kind on a Lua component, message for message; each leaves the component unchanged.
+void checkSetErrors() {
+    LogCapture capture;
+    Bench b(R"lua(local function err(f) local ok, e = pcall(f) ; return ok and "no error" or e end
+return { init = function() kast.add(0, "Six") end, update = function()
+    local cases = {
+        {5},
+        {nope = 1},
+        {hp = 1.5},
+        {flag = "x"},
+        {speed = "fast"},
+        {kind = 3},
+        {pos = {x = 1, y = 2, z = "z"}},
+        {hp = 101},
+        {hp = -1},
+        {kind = "zzz"},
+        {tags = {"a", 3}},
+        {tags = {x = 1}},
+        {tags = "a"},
+        {pos = 5},
+        {hp = 1 / 0},
+        {hp = 2 ^ 40},
+        {flag = "x", hp = 101},
+        {hp = 101, pos = 5},
+        {hp = 50, kind = "zzz"},
+        {hp = 50, nope = 1},
+    }
+    for i, c in ipairs(cases) do
+        kast.log("SET " .. i .. " " .. err(function() kast.set(0, "Six", c) end))
+    end
+    kast.log("set errors done")
+end })lua");
+    const Json before = lua::pool(b.reg, "Six").get(entt::entity{0}).value;
+    b.rt->update(0.05f);
+    check_lua_expectations("set errors", "set errors done");
+    std::vector<std::string> got;
+    for (size_t i : said_at("systems/t.lua: SET ")) got.push_back(nlohmann::json::parse(g_log[i]).value("msg", ""));
+    // Captured on the code before the kast.set change (set_fields + component_from_json, lua-bridge-churn).
+    const std::vector<std::string> want = {
+        R"(systems/t.lua: SET 1 systems/t.lua:32: "Six": field names must be strings, got 1)",
+        R"(systems/t.lua: SET 2 systems/t.lua:32: "Six": unknown field "nope")",
+        R"(systems/t.lua: SET 3 systems/t.lua:32: "Six": "hp" must be an integer)",
+        R"(systems/t.lua: SET 4 systems/t.lua:32: "Six": "flag" must be true or false)",
+        R"(systems/t.lua: SET 5 systems/t.lua:32: "Six": "speed" must be a number)",
+        R"(systems/t.lua: SET 6 systems/t.lua:32: "Six": "kind" unknown value 3 (expected one of "a", "b"))",
+        R"(systems/t.lua: SET 7 systems/t.lua:32: "pos" must be a table {x=, y=, z=} of finite numbers)",
+        R"(systems/t.lua: SET 8 systems/t.lua:32: "Six": "hp" must be <= 100)",
+        R"(systems/t.lua: SET 9 systems/t.lua:32: "Six": "hp" must be >= 0)",
+        R"(systems/t.lua: SET 10 systems/t.lua:32: "Six": "kind" unknown value "zzz" (expected one of "a", "b"))",
+        R"(systems/t.lua: SET 11 systems/t.lua:32: "Six": "tags" element 2 must be a string)",
+        R"(systems/t.lua: SET 12 systems/t.lua:32: "tags" must be a sequence table {v1, v2, ...})",
+        R"(systems/t.lua: SET 13 systems/t.lua:32: "tags" must be a sequence table {v1, v2, ...})",
+        R"(systems/t.lua: SET 14 systems/t.lua:32: "pos" must be a table {x=, y=, z=} of finite numbers)",
+        R"(systems/t.lua: SET 15 systems/t.lua:32: "hp" must be a finite number)",
+        R"(systems/t.lua: SET 16 systems/t.lua:32: "Six": "hp" must be a 32-bit integer)",
+        R"(systems/t.lua: SET 17 systems/t.lua:32: "Six": "hp" must be <= 100)",
+        R"(systems/t.lua: SET 18 systems/t.lua:32: "pos" must be a table {x=, y=, z=} of finite numbers)",
+        R"(systems/t.lua: SET 19 systems/t.lua:32: "Six": "kind" unknown value "zzz" (expected one of "a", "b"))",
+        R"(systems/t.lua: SET 20 systems/t.lua:32: "Six": unknown field "nope")",
+    };
+    check(got.size() == want.size(), std::format("set errors: {} messages, want {}", got.size(), want.size()));
+    for (size_t i = 0; i < std::min(got.size(), want.size()); ++i)
+        check(got[i] == want[i], std::format("set error {}: got [{}] want [{}]", i + 1, got[i], want[i]));
+    check(lua::pool(b.reg, "Six").get(entt::entity{0}).value == before, "set errors: Six unchanged by every failed set");
+}
+
+// The kast.set / kast.get / kast.fsm.state hot paths, called from Lua as scripts do. Spawn, set and fsm.state assert a
+// 3x speedup over the code before lua-bridge-churn; Transform and Lua component gets only print.
+void checkBridgeTiming() {
+    constexpr int kUpdates = 20, kCalls = 2000;
+    // before: the us/call on the code before lua-bridge-churn, printed with the new number.
+    const auto run = [&](const char* what, const std::string& init, const std::string& body, const char* before) {
+        LogCapture capture;
+        Bench b("return { init = function() " + init + " end, update = function() for i = 1, " + std::to_string(kCalls) +
+                " do " + body + " end end }");
+        const double us = b.time(kUpdates, kCalls);
+        std::printf("%s: %.3f us/call (before, Release: %s)\n", what, us, before);
+        return us;
+    };
+    const double spawn =
+        run("kast.get(e, \"Spawn\") (8-point path)", "", "local s = kast.get(1, \"Spawn\")", "2.214-2.242");
+    const double set = run("kast.set one field of a 6-field component", "kast.add(0, \"Six\")",
+                           "kast.set(0, \"Six\", {hp = i % 100})", "2.254-2.299");
+    const double state = run("kast.fsm.state(e)",
+                             "kast.add(1, \"StateMachine\") ; kast.set(1, \"StateMachine\", {machine = \"plain\"})",
+                             "local s = kast.fsm.state(1)", "0.389-0.393");
+    run("kast.get(e, \"Transform\")", "", "local t = kast.get(1, \"Transform\")", "0.466-0.468");
+    run("kast.get(e, \"Six\") (6 fields)", "kast.add(0, \"Six\")", "local t = kast.get(0, \"Six\")", "2.076-2.090");
+#ifdef NDEBUG
+    // Baselines before lua-bridge-churn (a fresh Spawn table per call, set through set_fields + component_from_json,
+    // fsm.state re-hashing the StateMachine pool and copying strings): the fastest of 20 updates, 5 runs, Release
+    // (preset release, MSVC, the dev machine); the spreads are above. Each must be at least 3x faster. Debug: not
+    // checked.
+    constexpr double kSpawnUs = 2.23, kSetUs = 2.27, kStateUs = 0.39;
+    check(spawn <= kSpawnUs / 3, std::format("timing: Spawn get {:.3f} us > baseline {} / 3", spawn, kSpawnUs));
+    check(set <= kSetUs / 3, std::format("timing: set {:.3f} us > baseline {} / 3", set, kSetUs));
+    check(state <= kStateUs / 3, std::format("timing: fsm.state {:.3f} us > baseline {} / 3", state, kStateUs));
+#else
+    (void)spawn;
+    (void)set;
+    (void)state;
+#endif
+}
+
+// kast.get(e, "Spawn"): one shared, read-only table per spawn record, with the values it always had.
+void checkSpawnCache() {
+    LogCapture capture;
+    Bench b(R"lua(return { update = function()
+    local a, b = kast.get(1, "Spawn"), kast.get(3, "Spawn")
+    expect(rawequal(a, kast.get(1, "Spawn")), "two calls: the same table")
+    expect(rawequal(a, kast.get(2, "Spawn")), "two NPCs of one record: the same table")
+    expect(not rawequal(a, b), "another record: another table")
+    expect(a.id == "guard_1" and a.pos.x == 1024 and a.pos.y == 3 and a.pos.z == 1030 and a.heading == 0.5, "id, pos, heading")
+    expect(#a.path == 8 and a.wait == 1.5 and a.loop == false, "path, wait, loop")
+    local n = 0
+    for i, p in ipairs(a.path) do
+        n = n + 1
+        expect(p.x == 999 + i and p.y == 0.25 * (i - 1) and p.z == 2001 - i, "path point " .. i)
+    end
+    expect(n == 8, "ipairs walks the path")
+    expect(b.id == "bat_1" and b.pos.x == 5 and b.pos.y == 6 and b.pos.z == 7 and b.heading == 0, "no path: id, pos, heading")
+    expect(b.path == nil and b.wait == nil and b.loop == nil, "no path: no path, wait or loop")
+    raises('"Spawn" is read-only', function() a.id = "x" end)
+    raises('"Spawn" is read-only', function() a.extra = 1 end)
+    raises('"Spawn" is read-only', function() a.pos.x = 1 end)
+    raises('"Spawn" is read-only', function() a.path[9] = {x = 1, y = 2, z = 3} end)
+    raises('"Spawn" is read-only', function() a.path.name = "p" end)
+    raises('"Spawn" is read-only', function() a.path[1].x = 1 end)
+    raises('"Spawn" is read-only', function() b.wait = 1 end)
+    expect(getmetatable(a) == false and getmetatable(a.pos) == false and getmetatable(a.path) == false and
+        getmetatable(a.path[1]) == false, "metatables hidden")
+    expect(a.id == "guard_1" and a.pos.x == 1024 and #a.path == 8 and a.path[1].x == 1000, "failed writes changed nothing")
+    kast.log("spawn cache done")
+end })lua");
+    b.rt->update(0.05f);
+    check_lua_expectations("spawn cache", "spawn cache done");
+}
+
+// kast.set on a Lua component: an equal value marks nothing; a partial set changes only its fields.
+void checkSetPartialAndNoOp() {
+    LogCapture capture;
+    Bench b(R"lua(local t = 0
+return { init = function() kast.add(0, "Six") end, update = function()
+    t = t + 1
+    if t == 1 then kast.set(0, "Six", {hp = 10, flag = false, kind = "b", pos = {x = 1, y = 2, z = 3}, tags = {"a"}, speed = 1.5})
+    else kast.set(0, "Six", {hp = 42, tags = {"x", "y"}}) end
+end })lua");
+    const entt::entity alice{0};
+    auto& rep = b.reg.get<world::ReplicatedState>(alice);
+    rep.dirty.clear(); // kast.add marked it
+    b.reg.remove<world::Dirty>(alice);
+    const Json& value = lua::pool(b.reg, "Six").get(alice).value;
+    const Json before = value;
+    b.rt->update(0.05f);
+    check(value == before && rep.dirty.empty() && !b.reg.all_of<world::Dirty>(alice),
+          "set no-op: an equal value is not replicated or saved");
+    b.rt->update(0.05f);
+    Json want = before;
+    want["hp"] = 42;
+    want["tags"] = Json::array({"x", "y"});
+    check(value.dump() == want.dump(), "set partial: only the listed fields change: " + value.dump());
+    check(rep.dirty.contains("Six") && b.reg.all_of<world::Dirty>(alice), "set: a change is replicated and saved");
+}
+
 } // namespace
 
 // --- NPCs (docs/services/world/npcs.html) ---
@@ -5726,6 +6002,11 @@ int lua_checks(int& checks) {
     checkFsmCallbackErrors();
     checkFsmLuaApi();
     checkFsmEntities();
+    checkFsmStateFlows();
+    checkSetErrors();
+    checkSpawnCache();
+    checkSetPartialAndNoOp();
+    checkBridgeTiming();
     checkNpcApi();
     checkQueryPools();
     checkNpcCap();
