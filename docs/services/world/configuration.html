@@ -359,6 +359,21 @@
 <td>(required)</td>
 <td>The chat service's MySQL user (<code>kast_chat</code>, made by the <code>chat-db-init</code> service). The compose file also reads <code>CHAT_LINK_SECRET</code> (both services), <code>CHAT_DB_USER</code>, <code>CHAT_DB_NAME</code>, <code>CHAT_CHANNELS</code> and <code>CHAT_LOG_LEVEL</code>; see <a href="../chat/configuration.html">chat configuration</a></td>
 </tr>
+<tr>
+<td><code>ADMIN_DB_PASSWORD</code> / <code>ADMIN_WORLD_DB_PASSWORD</code></td>
+<td>(required)</td>
+<td>The admin service's MySQL users: <code>kast_admin</code> and the characters-only world user <code>kast_world_admin</code>; see <a href="../admin/configuration.html">admin configuration</a></td>
+</tr>
+<tr>
+<td><code>ADMIN_HOST_PORT</code></td>
+<td><code>3200</code></td>
+<td>Admin app host port, bound to <code>127.0.0.1</code></td>
+</tr>
+<tr>
+<td><code>SEED_ADMIN_EMAIL</code> / <code>SEED_ADMIN_PASSWORD</code></td>
+<td>empty</td>
+<td>Auth creates this pre-verified admin on start if the email is unused (both or neither)</td>
+</tr>
 </tbody>
 </table>
 </main>
