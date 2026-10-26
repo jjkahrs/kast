@@ -21,7 +21,8 @@ The editor's Scene view previews them, with their static content, from its own c
 Code: <code>engine/world_ui.h</code> (<code>kast::WorldGui</code>, owned by <code>kast::SceneGui</code>).</p>
 <p>Two modes: <a href="#overlay">Overlay</a> (drawn flat over the screen at a constant pixel size) and <a href="#world">World</a>
 (a textured quad in the 3D scene, hidden by what stands in front of it). <a href="#input">Interactive</a> panels take mouse
-hover and clicks, and Lua can show short-lived <a href="#world-text">floating text</a> (damage numbers, XP) at world positions.</p>
+hover and clicks, and Lua can show short-lived <a href="#world-text">floating text</a> (damage numbers, XP) at world positions.
+<a href="#recipes">Recipes</a> build nameplates, damage numbers and a clickable sign from them.</p>
 
 <h2 id="component">The WorldUI component</h2>
 <p><em>World UI</em> in the Inspector (<a href="../editor/controls.html#worldui">Editor controls</a>). Every field is saved; a
@@ -165,7 +166,9 @@ own entity's, its ancestors' and descendants' bodies and triggers don't block).<
 the GUI from a click on the world as it does for UI Documents: <code>kast.gui.mouseOver()</code> is true over an element of a
 screen GUI or of an interactive panel, so a handler that checks it ignores clicks a panel took. World panels get no keyboard
 focus or typed text; hover follows the mouse only when it moves (a panel moving under a still mouse keeps its hover until
-then).</p>
+then). An interactive panel's document takes the mouse whatever its style sheet says about the <code>&lt;body&gt;</code>
+(<code>pointer-events: auto</code> is set on it, in both modes): a project sheet written for full-screen UI Documents, with
+<code>body { pointer-events: none; }</code> (<a href="game-gui.html">Game GUI</a>), can style world panels too.</p>
 <pre><code class="language-lua">-- ui/nameplate.rml: &lt;button id="target" data-event="plate.target"&gt;...&lt;/button&gt;
 kast.subscribe("plate.target", function(event)
     selected = event.entity -- the clicked nameplate's entity
@@ -220,6 +223,69 @@ kast.gui.worldText({x = p.x, y = p.y + 2, z = p.z}, tostring(damage), crit and "
 .damage { color: #ff8000; }
 .gold { color: #ffd700; animation: 1.5s world-text-rise; }
 </code></pre>
+
+<h2 id="recipes">Recipes: nameplates, damage numbers, signs</h2>
+<p>The starter-mmo sample (<code>samples/starter-mmo</code>) uses all three; its files are the worked examples.</p>
+<h3 id="nameplate-recipe">Nameplates</h3>
+<p>One Overlay <code>WorldUI</code> on each character prefab, all on the same <code>.rml</code>; a script writes each one's text by
+its entity. The sample puts it on <code>prefabs/player.prefab</code>, <code>prefabs/remote_player.prefab</code> and the NPC templates
+of <code>prefabs/npc_templates.prefab</code> (replication clones the templates, the component with them), 192x44 px, the offset
+just over the head (2.1 m for the player model, 2.55 m for the Guard):</p>
+<pre><code class="language-json">"WorldUI": {"path": {"id": "...", "path": "ui/nameplate.rml"}, "visible": true, "offset": [0, 2.1, 0], "width": 192, "height": 44}
+</code></pre>
+<pre><code class="language-html">&lt;!-- ui/nameplate.rml (styles in ui/starter.rcss: .plate_name outlined, .plate_hp a 120x10 bar) --&gt;
+&lt;div id="plate" class="plate"&gt;
+    &lt;p id="name" class="plate_name"&gt;&lt;/p&gt;
+    &lt;div id="hp" class="plate_hp" style="display: none"&gt;&lt;div id="hp_fill" class="plate_hp_fill"&gt;&lt;/div&gt;&lt;/div&gt;
+&lt;/div&gt;
+</code></pre>
+<p><code>scripts/nameplates.lua</code> names each clone from <code>world.entitySpawned</code> (and the local player from the
+server's welcome), and on each replicated <code>Health</code> (<code>world.component</code>) shows the bar and sets its fill's width.
+Characters without Health (friendly NPCs) keep the bar hidden; the dead get <code>visible</code> off. Bars change only when
+Health does, so the script costs nothing per frame:</p>
+<pre><code class="language-lua">kast.subscribe("world.entitySpawned", function(e)
+    kast.gui.setText(e.entity, "name", e.name)
+end)
+local function showHealth(entity, health) -- from world.component "Health"
+    local percent = math.floor(100 * math.max(0, math.min(1, health.current / health.max)) + 0.5)
+    kast.gui.setVisible(entity, "hp", true)
+    kast.gui.setAttribute(entity, "hp_fill", "style", string.format("width: %d%%", percent))
+    kast.set(entity, "WorldUI", {visible = health.current &gt; 0})
+end
+</code></pre>
+<p>Replication publishes a new clone's first components while it handles the spawn, so a clone's first
+<code>world.component</code> can arrive before its <code>world.entitySpawned</code>: read the clone's component there too
+(<code>kast.get(e.entity, "Health")</code>). Whether the local player sees their own nameplate is one prefab line: drop the
+<code>WorldUI</code> from <code>player.prefab</code> to hide it (the sample shows it).</p>
+<h3 id="damage-recipe">Damage numbers</h3>
+<p>Remember each character's last <code>Health.current</code>; when a new one is lower, show the loss with
+<a href="#world-text"><code>kast.gui.worldText</code></a> just under the nameplate (the entity's position plus its
+<code>WorldUI</code> offset), class <code>damage</code>, lifetime 1 s (the default animation's). The sample shows no heals:
+regeneration raises Health every second and would show a number each time.</p>
+<pre><code class="language-lua">if last and health.current &lt; last then
+    local p, offset = kast.get(entity, "Transform").position, kast.get(entity, "WorldUI").offset
+    kast.gui.worldText({x = p.x, y = p.y + offset.y - 0.3, z = p.z}, string.format("%d", last - health.current), "damage", 1)
+end
+</code></pre>
+<h3 id="sign-recipe">An interactive sign</h3>
+<p>A World-mode, <code>fixed</code>, <code>interactive</code> panel on its own entity, with meshes for the posts and a backing
+board (behind the panel's offset). The Meadow's notice board (<code>scenes/meadow.scene</code>, <code>ui/notice_board.rml</code>, 512x256
+px at 256 px/m: 2 x 1 m) has a <code>&lt;button data-event="notice.next"&gt;</code>; <code>scripts/notice_board.lua</code> turns the page
+through the click's <code>entity</code>. Its <code>:hover</code> style has no <code>box-shadow</code>: an effect's layer in the atlas
+is atlas-sized.</p>
+<pre><code class="language-lua">kast.subscribe("notice.next", function(e)
+    page = page % #NOTICES + 1
+    kast.gui.setText(e.entity, "notice_text", NOTICES[page])
+end)
+</code></pre>
+<h3 id="perf">Performance</h3>
+<p>Each Overlay panel is its own RmlUi document, positioned every frame (four inline properties) and, with
+<code>occlude</code>, one physics ray. Writes are what cost: keep them event-driven (on a Health change, not every frame). Measured
+on the starter-mmo Meadow with 100 Guard nameplates in view (<code>ctest -R starter_mmo_nameplates_perf</code>: the built player,
+1600x900, no vsync, 600 frames) a Release build averaged 2.03 ms a frame, against 1.70 ms for the same scene and Guards
+without nameplates: about 3.3 microseconds a nameplate, far inside the 16.7 ms (60 fps) the test enforces in optimized builds (October
+2026, the development machine; the test prints its number). Farther than <code>maxDistance</code> (50 m by default) a panel
+costs only its distance check.</p>
 
 <h2 id="lua">Lua</h2>
 <p>The <code>kast.gui</code> functions that act on one document's element take an <strong>entity id first</strong> to act on that
@@ -281,6 +347,12 @@ removing the oldest, reset). <code>ctest -R world_ui_input</code>: <code>tests/p
 right half where a screen-box mapping would say left, a wall blocking, a non-interactive panel passing the click on, a
 screen button over a World panel taking it); hover probes of both modes; the worldText argument errors and cap; a floating
 text showing at frame 30 and gone (count 0 logged at 1 s) at frame 100.</p>
+<p>The recipes in the starter-mmo sample: <code>ctest -R "starter_mmo_(nameplates|notice_board)"</code> plays the Meadow offline with
+a test-only driver (<code>cmake/starter_mmo_nameplates_driver.lua</code>) in the world client's place: probes of the player's,
+the Guard's (hit), Rival's and the friendly Elder's (no bar) nameplates, the dead Bat's hidden, two damage numbers then none; the
+notice board's button hovered (highlighted) and clicked (the next page) with real mouse events; and the 100-nameplate frame
+time. Live, <code>starter_mmo_live_nameplates</code> checks the bot's and the Guard's nameplates and damage numbers showing and
+going in a real fight.</p>
 </main>
 </div>
 </body>

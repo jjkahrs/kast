@@ -15,6 +15,9 @@
 -- Bat is on the view's centre line for --sim-mouse's click. "combat" stands there too, targets with the Tab key's event,
 -- clears and targets again, and attacks until the Bat dies. "combat_guard" walks up to the Meadow's Guard from the south
 -- and hits it ATTACKS_ON_GUARD times; "death" and "revive" hit it once and stand until it kills them.
+-- "nameplates" (scripts/nameplates.lua, with the idle bot) fights the Guard as "combat_guard" does and logs each clone's
+-- WorldUI (the bot's and the Guard's nameplates) and when floating damage numbers show and go
+-- (kast.gui.worldTextCount); it shoots when one shows again after the first went.
 -- Loot and bag stages (scripts/loot.lua, scripts/bag.lua, the server's systems/inventory.lua) use the test-only server
 -- system cmake/starter_mmo_test_server.lua: "test.bag" sets the bag, "test.seed" makes the Bat's loot roll known (SEED:
 -- 1 gold, a Bat Wing, Linen Cloth). They stand where "combat" does, wait for a living Bat, kill it and then:
@@ -61,7 +64,8 @@ local REALM = "Starter Realm"
 local SPEED = 5 -- m/s, under the world server's 10 m/s limit
 local MEADOW, CAVERN = 10, 11
 local GATES = {[MEADOW] = {x = 153, z = 128}, [CAVERN] = {x = 103, z = 128}} -- inside each map's portal area
-local FIGHT_MAP = {combat_target = CAVERN, combat = CAVERN, combat_guard = MEADOW, death = MEADOW, revive = MEADOW,
+local FIGHT_MAP = {combat_target = CAVERN, combat = CAVERN, combat_guard = MEADOW, nameplates = MEADOW, death = MEADOW,
+                   revive = MEADOW,
                    loot_window = CAVERN, loot_rejects = CAVERN, loot = CAVERN, bag_full = CAVERN,
                    warrior = MEADOW, mage = MEADOW, mage_bolt = MEADOW, priest = MEADOW, rogue = MEADOW,
                    rogue_backstab = CAVERN, equip_rules = MEADOW, equip_combat = MEADOW}
@@ -160,6 +164,7 @@ local guard, guardId -- the Guard's clone and server id
 local health = {}    -- server id -> the latest replicated Health
 local guardWaitLogged = false
 local targeted, engaged, hits, nextAttack, shot = false, false, 0, 0, false
+local worldTexts, worldTextsGone = 0, false -- "nameplates": the floating texts showing, and whether they all went once
 local bat, batId          -- the latest Bat clone and its server id
 local corpses = {}        -- server id -> Corpse.owner
 local phase = "arrive"    -- loot and bag stages
@@ -946,6 +951,9 @@ return {
         end)
         kast.subscribe("world.entitySpawned", function(e)
             log("cloned %s (server id %d)", e.name, e.entityId)
+            if STAGE == "nameplates" and kast.has(e.entity, "WorldUI") then
+                log("nameplate on %s %s: %s", e.kind, e.name, kast.get(e.entity, "WorldUI").path)
+            end
             clones[e.name] = true
             if e.name == "Guard" then guard, guardId = e.entity, e.entityId end
             if e.name == "Bat" then bat, batId = e.entity, e.entityId end
@@ -1075,9 +1083,9 @@ return {
             if STAGE == "shrine" and e.text:find("The shrine hums", 1, true) then shoot("blessing") end
         end)
         kast.subscribe("server.combat.hit", function(e)
-            if e.attacker ~= me or STAGE ~= "combat_guard" then return end
+            if e.attacker ~= me or (STAGE ~= "combat_guard" and STAGE ~= "nameplates") then return end
             hits = hits + 1
-            if hits >= ATTACKS_ON_GUARD then shoot("guard hit " .. hits .. " times") end
+            if hits >= ATTACKS_ON_GUARD and STAGE == "combat_guard" then shoot("guard hit " .. hits .. " times") end
         end)
         kast.subscribe("world.chat", function(e)
             if e.kind == "say" then log("chat %s: %s", e.from, e.text) else log("chat %s %s: %s", e.kind, e.from, e.text) end
@@ -1132,6 +1140,17 @@ return {
     end,
     update = function(dt)
         frame = frame + 1
+        if STAGE == "nameplates" and kast.gui.worldTextCount() ~= worldTexts then
+            local was = worldTexts
+            worldTexts = kast.gui.worldTextCount()
+            if was == 0 then
+                log("damage number shown (%d)", worldTexts)
+                if worldTextsGone then shoot("damage number") end
+            elseif worldTexts == 0 then
+                worldTextsGone = true
+                log("damage numbers gone")
+            end
+        end
         if not clipSeen and player and clipNow() == "Punch_Jab" then
             clipSeen = true
             log("attack clip %d frame(s) after the press", frame - pressFrame)
@@ -1227,7 +1246,8 @@ return {
                 classStage()
             else
                 fight()
-                if STAGE == "combat_guard" and engaged and hits < ATTACKS_ON_GUARD and elapsed >= nextAttack then
+                if (STAGE == "combat_guard" or STAGE == "nameplates") and engaged and hits < ATTACKS_ON_GUARD and
+                    elapsed >= nextAttack then
                     nextAttack = elapsed + ATTACK_EVERY
                     attack()
                 end

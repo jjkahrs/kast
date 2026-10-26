@@ -46,7 +46,7 @@ constexpr int kScreenshotTimeoutFrames = 30;
 constexpr const char* kPakFileName = "game.pak";
 constexpr int kGuiClickFrame = 10; // --gui-click: once the GUIs have loaded and laid out
 constexpr const char* kUsage =
-    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--sim-key frame,key]... [--sim-click frame,x,y]... [--sim-move frame,x,y]... [--size WxH] [--window-pos X,Y] [--user-settings file] [--fixed-dt S] [--gpu-stats] [--log-sdfgi] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--no-occlusion] [--no-audio-device]";
+    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--sim-key frame,key]... [--sim-click frame,x,y]... [--sim-move frame,x,y]... [--size WxH] [--window-pos X,Y] [--user-settings file] [--fixed-dt S] [--gpu-stats] [--log-sdfgi] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--no-occlusion] [--no-audio-device] [--no-vsync]";
 constexpr int kGpuStatsWarmupFrames = 10; // --gpu-stats: skip startup frames (shader and target creation)
 
 struct Options {
@@ -68,6 +68,7 @@ struct Options {
     float lodBias = 1.0f;      // --lod-bias: Renderer::setLodBias
     int forceLod = -1;         // --force-lod: Renderer::setForcedLod (-1: by screen height)
     bool noAudioDevice = false; // tests: sound on the null backend (silent), as if there were no output device
+    bool noVsync = false;       // present as fast as possible (frame-time measurements), as the editor's --no-vsync
 };
 
 bool parseInt(std::string_view text, int& out)
@@ -175,6 +176,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             }
         } else if (arg == "--no-audio-device") {
             options.noAudioDevice = true;
+        } else if (arg == "--no-vsync") {
+            options.noVsync = true;
         } else {
             kast::log::error(std::format("Invalid argument '{}'. {}", arg, kUsage));
             return std::nullopt;
@@ -495,7 +498,8 @@ int main(int argc, char** argv)
     };
 
     const int code = kast::run({.title = project.name.c_str(), .width = startMode.width, .height = startMode.height,
-                                .activate = options->frames == 0, .position = options->windowPos},
+                                .vsync = !options->noVsync, .activate = options->frames == 0,
+                                .position = options->windowPos},
                                hooks);
     if (code != 0)
         return code;

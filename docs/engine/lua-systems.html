@@ -55,7 +55,7 @@ a wrong argument type raises a Lua error at the calling line.</p>
 <tr>
 <td><code>kast.get(id, name)</code></td>
 <td>table</td>
-<td>A copy of every field. Raises if the entity doesn't have the component.</td>
+<td>A copy of every field (but an optional one a scene file leaves out at its default, e.g. a UI Document's <code>scaling</code>: nil). Raises if the entity doesn't have the component.</td>
 </tr>
 <tr>
 <td><code>kast.set(id, name, fields)</code></td>

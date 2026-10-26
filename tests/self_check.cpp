@@ -1053,6 +1053,10 @@ return { update = function(dt)
     assert(kast.get(cam, "Camera").verticalFovDegrees == 60, "get float")
     assert(kast.get(cam, "Camera").projection == "perspective" and kast.get(cam, "Camera").orthographicSize == 5,
            "get Camera projection defaults")
+    kast.add(cam, "UIDocument")
+    local doc = kast.get(cam, "UIDocument")
+    assert(doc.path == "" and doc.visible == true and doc.scaling == nil, "get leaves out an omitDefault field at its default")
+    kast.remove(cam, "UIDocument")
     kast.set(cube, "Transform", {position = {x = 2, y = 3, z = 4}})
     kast.set(cube, "MeshRenderer", {primitive = "sphere"})
     t = kast.get(cube, "Transform")
@@ -16669,6 +16673,11 @@ void checkWorldGuiInput()
         std::filesystem::create_directories(root / "ui");
         std::filesystem::copy_file(std::filesystem::path(KAST_SOURCE_DIR) / "tests/project/ui/wui_buttons.rml",
                                    root / "ui/wui_buttons.rml");
+        std::string buttons; // the same under a sheet that turns the body's mouse off (as one for full-screen GUIs may)
+        check(kast::readFile(root / "ui/wui_buttons.rml", buttons) && buttons.find("body {") != std::string::npos,
+              "the input fixture's buttons read");
+        buttons.replace(buttons.find("body {"), 6, "body { pointer-events: none;");
+        std::ofstream(root / "ui/wui_buttons_none.rml", std::ios::binary | std::ios::trunc) << buttons;
         kast::Scene scene;
         const auto add = [&](const char* name, bx::Vec3 position, kast::WorldUI ui) {
             const entt::entity e = scene.create(name);
@@ -16756,6 +16765,13 @@ void checkWorldGuiInput()
         scene.registry().get<kast::WorldUI>(angled).interactive = false;
         frame();
         check(!click(650.0f, 360.0f) && lua.bus().history().empty(), "a non-interactive World panel gets no click");
+        kast::WorldUI& none = scene.registry().get<kast::WorldUI>(angled);
+        none.path = "ui/wui_buttons_none.rml";
+        none.interactive = true;
+        frame();
+        frame(); // its quad the frame after its tile
+        check(click(650.0f, 360.0f) && clicked("wui.right", angled),
+              "an interactive World panel gets the click though its style sheet sets body { pointer-events: none }");
         lua.stop();
         gui.release();
     }

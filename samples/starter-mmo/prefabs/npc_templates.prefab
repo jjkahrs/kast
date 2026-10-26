@@ -14,7 +14,8 @@
       "name": "Guard",
       "parent": 1,
       "components": {
-        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "WorldUI": {"path": { "id": "bb7c1c19-fa80-4649-b347-e1120ad06aec", "path": "ui/nameplate.rml" }, "visible": true, "offset": [0, 2.55, 0], "width": 192, "height": 44}
       }
     },
     {
@@ -49,7 +50,8 @@
       "name": "Bat",
       "parent": 1,
       "components": {
-        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "WorldUI": {"path": { "id": "bb7c1c19-fa80-4649-b347-e1120ad06aec", "path": "ui/nameplate.rml" }, "visible": true, "offset": [0, 2.75, 0], "width": 192, "height": 44}
       }
     },
     {
@@ -84,7 +86,8 @@
       "name": "Elder",
       "parent": 1,
       "components": {
-        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "WorldUI": {"path": { "id": "bb7c1c19-fa80-4649-b347-e1120ad06aec", "path": "ui/nameplate.rml" }, "visible": true, "offset": [0, 2.45, 0], "width": 192, "height": 44}
       }
     },
     {

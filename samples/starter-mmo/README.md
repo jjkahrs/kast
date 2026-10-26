@@ -24,8 +24,8 @@ The same folder is the game project (client) **and** the world server's Lua and 
 |---|---|---|
 | `project.kast` | client | `Starter MMO`, starts at `scenes/login.scene`, Online Services on (`http://localhost:3100`, CA `certs/world_dev_ca.pem`), game state machine `session` |
 | `scenes/` | client | `login`, `register`, `realms`, `characters` (one screen each), then one scene per zone: `meadow` (map 10, with a campfire: additive fire and alpha smoke `ParticleEmitter`s a few metres north of the spawn) and `cavern` (map 11) |
-| `scripts/` | client | one Lua system per screen or concern; they talk through the event bus. `characters.lua`: the character list and creation with a class; `combat.lua`: targeting, the target marker, the combat log, a spark burst on each hit (a one-shot `ParticleEmitter` destroyed once `kast.particles.alive` is 0), tipped corpses and right clicks on them; `powers.lua`: the action bar, keys 1-3, power requests (`kast.world.send`) and their effects; `loot.lua`: the loot window and the sparkle over your corpses; `bag.lua`: the bag window, its drags and tooltips; `character.lua`: the character window (paper doll), its drags, stats and tooltips; `shrines.lua`: E uses the nearest interactable (the Meadow Shrine); `quest.lua`: the quest markers over the Elder, right clicks on it and the quest dialog; `quest_log.lua`: the quest log (L); `player.lua`: movement, stopped by the zone obstacles |
-| `ui/` | client | RmlUi documents, one per screen, sharing `starter.rcss` (the Kast editor palette; `box-shadow` glows on a hovered button, the picked class and ready powers) |
+| `scripts/` | client | one Lua system per screen or concern; they talk through the event bus. `characters.lua`: the character list and creation with a class; `combat.lua`: targeting, the target marker, the combat log, a spark burst on each hit (a one-shot `ParticleEmitter` destroyed once `kast.particles.alive` is 0), tipped corpses and right clicks on them; `powers.lua`: the action bar, keys 1-3, power requests (`kast.world.send`) and their effects; `loot.lua`: the loot window and the sparkle over your corpses; `bag.lua`: the bag window, its drags and tooltips; `character.lua`: the character window (paper doll), its drags, stats and tooltips; `shrines.lua`: E uses the nearest interactable (the Meadow Shrine); `quest.lua`: the quest markers over the Elder, right clicks on it and the quest dialog; `quest_log.lua`: the quest log (L); `player.lua`: movement, stopped by the zone obstacles; `nameplates.lua`: the name and Health bar over every character and the floating damage numbers; `notice_board.lua`: the Meadow notice board's Next notice button |
+| `ui/` | client | RmlUi documents, one per screen, sharing `starter.rcss` (the Kast editor palette; `box-shadow` glows on a hovered button, the picked class and ready powers); two are world-space UI ([docs/engine/world-ui.html](../../docs/engine/world-ui.html)): `nameplate.rml` (an Overlay `WorldUI` on the player, remote player and NPC prefabs) and `notice_board.rml` (the Meadow's sign, a World-mode panel you can click) |
 | `components/` | **both** | `Health` (replicated to everyone in view), `Wallet` (owner only), `Class` (warrior, mage, priest or rogue; owner only, saved), `Inventory` (the bag, owner only, saved), `Equipment` (7 gear slots, owner only, saved), `Quests` (active quest ids, their objectives' progress and the completed ids, owner only, saved), `Corpse` (who may loot a dead NPC, everyone in view) |
 | `items/` | **both** | one item per file (`id`, `name`, `icon`, `quality`, `maxStack`, `sellPrice`, `description`): Bat Wing, Linen Cloth, Minor Healing Potion, and the gear: Worn Shortsword, Leather Cap, Linen Tunic, Patched Trousers, Worn Boots, Cloth Gloves, Wooden Shield; `kast.items` on both sides. Which slot gear fits and its stats are `systems/inventory.lua`'s `GEAR` table (item files may hold only those seven keys) |
 | `fsms/` | both | `patrol` (the Guard's machine, server: walking, waiting, combat, returning), `creature` (the Bat's machine, server: idle, combat, returning), `session` (why the client is on the login screen) |
@@ -107,6 +107,14 @@ running it twice adds nothing.
   ...`, `To Name: ...`, `Name yells: ...`); whispers, channels and zone chat go through the stack's chat service
   (`services/chat`), and if it is down the box says so while say keeps working. The Guard
   patrols a 10 m square just ahead of the spawn.
+- **Nameplates** (`scripts/nameplates.lua`, world-space UI): every character shows its name over its head, and a Health
+  bar once the server has sent its Health: you, other players, the Guard and the Bat. The Elder, being friendly, shows
+  its name only; a dead character's nameplate hides until it revives. When a character's Health drops, the loss floats up
+  over it in red (`kast.gui.worldText`) and fades within a second; Health going up (regeneration, Heal) shows nothing.
+  Your own nameplate is on too; to hide it, remove the `WorldUI` component from `prefabs/player.prefab`.
+- **Notice board**: a few metres from the spawn stands a board (a World-mode panel in the scene, `ui/notice_board.rml`); hover
+  its **Next notice** button (it lights up) and click it to read the next of three notices. Clicking the board neither
+  targets nor turns the camera.
 - **Combat** (tab-target): **Tab** cycles the NPCs in view, nearest first, within 40 m; a **left click** (without
   dragging) on an NPC selects it; **Esc** clears the target. The target gets a gold disc under it and a frame at the top
   centre with its name and Health. Keys typed into the chat box do nothing.
@@ -312,6 +320,13 @@ of the client project, in dot-folders or elsewhere.
   definitions or quest text) but does hold `scripts/quest.lua`. `starter_mmo_lists` plays it offline with
   `cmake/starter_mmo_lists_driver.lua` (test only): 15 chat lines and 25 quests in the bound (`data-for`) chat and quest
   log, no row cap (`starter_mmo_lists.png`).
+  `starter_mmo_nameplates` plays the Meadow offline with `cmake/starter_mmo_nameplates_driver.lua` (test only) in the
+  world client's place: a Guard, the Elder, a Bat and another player spawn, the Guard is hit for 12 and the Bat dies; the
+  shot (`starter_mmo_nameplates.png`) is pixel-probed for each bar (the Elder's missing), and the log for the Bat's
+  hidden plate and the two damage numbers. `starter_mmo_notice_board_hover` / `_click` hover and click the board's
+  button with real mouse events (highlighted; the next page). `starter_mmo_nameplates_perf` builds a copy that starts in
+  the Meadow with 100 Guards in view, each with its nameplate, runs the player without vsync and fails if the average
+  frame time is over 16.7 ms (60 fps; optimized builds only; the number is printed).
 - **Live**, against the compose stack, with a test account in the environment only:
 
   ```sh
@@ -326,6 +341,8 @@ of the client project, in dot-folders or elsewhere.
   their events:
   - `starter_mmo_live_chars`: the character list.
   - `starter_mmo_live_world`: the Meadow with the Guard, an idle `kast_bot`, the HUD and a chat line.
+  - `starter_mmo_live_nameplates`: the idle bot's and the Guard's nameplates, then Strikes on the Guard: its bar
+    shrinks and damage numbers show and go.
   - `starter_mmo_live_cavern`: both portals, ending in the Cavern with the Bat.
   - `starter_mmo_live_travel`: enters in `meadow.scene`, walks the portal into `cavern.scene` (Terrain map 11, the
     Bat cloned, HUD and chat shown, the player where the server put it) and back into `meadow.scene` (the Guard).

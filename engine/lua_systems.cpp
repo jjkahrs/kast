@@ -569,8 +569,9 @@ void LuaSystems::State::bindApi()
             raise(L, std::format("entity {} has no \"{}\"", toString(L, id), name));
         const Json json = componentToJson(registry, e, type);
         sol::table table = lua.create_table();
-        for (const FieldDesc& field : type.fields())
-            table[field.name] = fieldJsonToLua(lua, field, json[field.name]);
+        for (const FieldDesc& field : type.fields()) // an omitDefault field at its default isn't in the JSON: nil
+            if (const auto value = json.find(field.name); value != json.end())
+                table[field.name] = fieldJsonToLua(lua, field, *value);
         return table;
     });
     // Partial tables: listed fields change, the rest keep their values. All-or-nothing: any bad field or a value
