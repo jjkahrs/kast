@@ -2,6 +2,7 @@
 
 #include "files.h"
 #include "gui_prefabs.h"
+#include "gui_richtext.h"
 #include "gui_widgets.h"
 #include "log.h"
 #include "physics.h"
@@ -9,6 +10,8 @@
 
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/ElementDocument.h>
+
+#include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <cmath>
@@ -22,6 +25,24 @@ constexpr int kMaxOcclusionCasts = 8;     // bodies of the owner (or triggers) s
 constexpr float kOcclusionSkip = 1e-3f;   // meters past a skipped hit the next cast starts
 constexpr float kOcclusionMargin = 1e-2f; // a hit this near the anchor (its own surface) doesn't occlude it
 constexpr float kMinPixelsPerMeter = 1e-3f; // a World panel's pixelsPerMeter is taken as at least this
+
+// kast.gui.worldText's default style: rising and fading over 1 s, centered on its point, never taking the mouse. A
+// project's ui/world_text.rcss comes after it (same selectors win).
+constexpr const char* kWorldTextStyle = R"(
+body { pointer-events: none; }
+.world-text { position: absolute; width: 400px; margin-left: -200px; height: 40px; margin-top: -20px; line-height: 40px;
+              text-align: center; font-family: Roboto; font-size: 28px; font-weight: bold; color: #ffffff;
+              font-effect: outline(2px #000000); pointer-events: none; animation: 1s world-text-rise; }
+.damage { color: #ff4040; }
+.heal { color: #40ff60; }
+.xp { color: #c080ff; font-size: 22px; }
+.crit { color: #ffcc00; font-size: 40px; }
+@keyframes world-text-rise {
+    0% { transform: translateY(0px); opacity: 1; }
+    60% { transform: translateY(-36px); opacity: 1; }
+    100% { transform: translateY(-60px); opacity: 0; }
+}
+)";
 
 } // namespace
 
@@ -133,9 +154,39 @@ std::array<bx::Vec3, 4> worldUIQuadCorners(WorldUIFacing facing, const bx::Vec3&
             bx::sub(bx::add(center, right), up), bx::sub(bx::sub(center, right), up)};
 }
 
-void WorldGui::sync(const Scene& scene, const std::filesystem::path& projectRoot)
+WorldUIRay worldUIMouseRay(const float* viewProj, const bx::Vec3& eye, float x, float y, float width, float height)
+{
+    float inverse[16];
+    bx::mtxInverse(inverse, viewProj);
+    const float ndcX = x / width * 2.0f - 1.0f, ndcY = 1.0f - y / height * 2.0f;
+    // Two points on the ray (depths 0.5 and 1 are inside either clip depth range), then the origin on it nearest the
+    // eye: the eye for a perspective camera, on its plane for an orthographic one.
+    const bx::Vec3 a = bx::mulH({ndcX, ndcY, 0.5f}, inverse), b = bx::mulH({ndcX, ndcY, 1.0f}, inverse);
+    const bx::Vec3 direction = bx::normalize(bx::sub(b, a));
+    return {bx::mad(direction, bx::dot(bx::sub(eye, a), direction), a), direction};
+}
+
+std::optional<WorldUIQuadHit> worldUIRayQuad(const WorldUIRay& ray, const std::array<bx::Vec3, 4>& corners)
+{
+    const bx::Vec3 across = bx::sub(corners[1], corners[0]), down = bx::sub(corners[3], corners[0]);
+    const bx::Vec3 normal = bx::cross(across, down);
+    const float facing = bx::dot(normal, ray.direction);
+    if (std::abs(facing) < 1e-8f)
+        return std::nullopt; // edge on
+    const float distance = bx::dot(normal, bx::sub(corners[0], ray.origin)) / facing;
+    if (distance <= 0.0f)
+        return std::nullopt;
+    const bx::Vec3 local = bx::sub(bx::mad(ray.direction, distance, ray.origin), corners[0]);
+    const float u = bx::dot(local, across) / bx::dot(across, across), v = bx::dot(local, down) / bx::dot(down, down);
+    if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f)
+        return std::nullopt;
+    return WorldUIQuadHit{distance, u, v};
+}
+
+void WorldGui::sync(const Scene& scene, const std::filesystem::path& projectRoot, EventBus* bus)
 {
     root_ = projectRoot;
+    bus_ = bus;
     std::vector<Entry> next;
     for (auto [entity, ui, id] : scene.registry().view<const WorldUI, const PersistentId>().each()) {
         if (ui.path.empty())
@@ -145,7 +196,7 @@ void WorldGui::sync(const Scene& scene, const std::filesystem::path& projectRoot
             return e.entity == entity && e.path == ui.path && e.mode == ui.mode;
         });
         if (old != entries_.end()) {
-            next.push_back(*old);
+            next.push_back(std::move(*old));
             entries_.erase(old);
         } else {
             next.push_back({.entity = entity, .id = id.value, .path = ui.path, .mode = ui.mode});
@@ -162,11 +213,17 @@ void WorldGui::layout(const Scene& scene, const float* view, const float* proj, 
 {
     if (width <= 0 || height <= 0)
         return; // minimized: the documents keep their places
-    float viewProj[16], inverse[16];
-    bx::mtxMul(viewProj, view, proj);
+    float inverse[16];
+    bx::mtxMul(viewProj_, view, proj);
     bx::mtxInverse(inverse, view);
-    layoutOverlay(scene, viewProj, {inverse[12], inverse[13], inverse[14]}, width, height, physics);
+    eye_ = {inverse[12], inverse[13], inverse[14]};
+    width_ = width;
+    height_ = height;
+    scene_ = &scene;
+    physics_ = physics;
+    layoutOverlay(scene, viewProj_, eye_, width, height, physics);
     layoutWorld(scene, inverse);
+    layoutTexts(viewProj_, width, height);
 }
 
 void WorldGui::layoutOverlay(const Scene& scene, const float* viewProj, const bx::Vec3& eye, int width, int height,
@@ -180,6 +237,12 @@ void WorldGui::layoutOverlay(const Scene& scene, const float* viewProj, const bx
         if (!entry.document || entry.mode != WorldUIMode::Overlay)
             continue;
         const WorldUI& ui = registry.get<WorldUI>(entry.entity); // sync ran this frame: the entity has it
+        if (entry.interactive != ui.interactive) { // a panel that isn't lets the mouse through to the ones under it
+            entry.interactive = ui.interactive;
+            entry.document->SetProperty(Rml::PropertyId::PointerEvents,
+                                        Rml::Property(ui.interactive ? Rml::Style::PointerEvents::Auto
+                                                                     : Rml::Style::PointerEvents::None));
+        }
         if (!ui.visible) {
             entry.document->Hide();
             continue;
@@ -231,6 +294,7 @@ void WorldGui::layoutWorld(const Scene& scene, const float* cameraWorld)
         if (!entry.document || entry.mode != WorldUIMode::World)
             continue;
         entry.tile.reset();
+        entry.corners.reset();
         const WorldUI& ui = scene.registry().get<WorldUI>(entry.entity); // sync ran this frame: the entity has it
         Panel panel{.entry = &entry, .ui = &ui};
         scene.worldMatrix(entry.entity, panel.world.data());
@@ -279,6 +343,8 @@ void WorldGui::layoutWorld(const Scene& scene, const float* cameraWorld)
                                                         float(ui.height) * metersPerPixel, cameraWorld,
                                                         panels[i].world.data()),
                           .uv = {uv(shown.x), uv(shown.y), uv(shown.x + shown.width), uv(shown.y + shown.height)}});
+        entry.interactive = ui.interactive;
+        entry.corners = quads_.back().corners;
     }
     if (skipped > 0 && !atlasWarned_) {
         atlasWarned_ = true;
@@ -292,9 +358,145 @@ bgfx::TextureHandle WorldGui::atlasTexture() const
     return bgfx::isValid(atlasFrameBuffer_) ? bgfx::getTexture(atlasFrameBuffer_) : bgfx::TextureHandle BGFX_INVALID_HANDLE;
 }
 
+void WorldGui::layoutTexts(const float* viewProj, int width, int height)
+{
+    if (texts_.empty() || (!textDocument_ && !loadTextDocument()))
+        return;
+    textDocument_->PullToFront(); // over the panels
+    for (FloatingText& text : texts_) {
+        if (!text.element) {
+            Rml::ElementPtr element = textDocument_->CreateElement("div");
+            element->SetClassNames("world-text " + text.cssClass);
+            element->SetInnerRML(guiTextRml(text.text));
+            text.element = textDocument_->AppendChild(std::move(element));
+        }
+        const std::optional<ScreenPoint> at = worldToScreen(viewProj, text.position, float(width), float(height));
+        const bool shown = at && at->x >= 0.0f && at->x <= float(width) && at->y >= 0.0f && at->y <= float(height);
+        text.element->SetProperty(Rml::PropertyId::Visibility,
+                                  Rml::Property(shown ? Rml::Style::Visibility::Visible : Rml::Style::Visibility::Hidden));
+        if (shown) {
+            text.element->SetProperty(Rml::PropertyId::Left, Rml::Property(std::round(at->x), Rml::Unit::PX));
+            text.element->SetProperty(Rml::PropertyId::Top, Rml::Property(std::round(at->y), Rml::Unit::PX));
+        }
+    }
+}
+
+std::pair<const WorldGui::Entry*, Rml::Vector2f> WorldGui::pickWorld(float x, float y) const
+{
+    if (width_ <= 0 || height_ <= 0)
+        return {};
+    const WorldUIRay ray = worldUIMouseRay(viewProj_, eye_, x, y, float(width_), float(height_));
+    const Entry* nearest = nullptr;
+    WorldUIQuadHit hit;
+    for (const Entry& entry : entries_) {
+        if (!entry.interactive || !entry.corners || !entry.tile || !entry.document)
+            continue;
+        if (const std::optional<WorldUIQuadHit> h = worldUIRayQuad(ray, *entry.corners); h && (!nearest || h->distance < hit.distance)) {
+            nearest = &entry;
+            hit = *h;
+        }
+    }
+    if (!nearest)
+        return {};
+    const bx::Vec3 point = bx::mad(ray.direction, hit.distance, ray.origin);
+    if (physics_ && physics_->running() && scene_ && worldUIOccluded(*physics_, *scene_, nearest->entity, ray.origin, point))
+        return {}; // scene geometry in front of it takes the click
+    const WorldUITile& tile = *nearest->tile;
+    return {nearest, {float(tile.x) + hit.u * float(tile.width), float(tile.y) + hit.v * float(tile.height)}};
+}
+
+void WorldGui::onEvent(const SDL_Event& event, float originX, float originY, float scale, bool blocked)
+{
+    const bool button = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP;
+    const bool leave = event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE;
+    if (!gui::ready() || !(button || leave || event.type == SDL_EVENT_MOUSE_MOTION))
+        return;
+    const auto away = [](GuiContext& context) {
+        if (context.created())
+            context.context()->ProcessMouseLeave();
+    };
+    if (blocked || leave) {
+        away(context_);
+        away(atlas_);
+        return;
+    }
+    if (context_.created()) { // Overlay panels are drawn over the scene: they come first
+        context_.onEvent(event, originX, originY, scale);
+        if (gui::overElement(*context_.context())) {
+            away(atlas_);
+            return;
+        }
+    }
+    const float x = ((button ? event.button.x : event.motion.x) - originX) * scale;
+    const float y = ((button ? event.button.y : event.motion.y) - originY) * scale;
+    const auto [panel, at] = pickWorld(x, y);
+    if (!panel) {
+        away(atlas_);
+        return;
+    }
+    SDL_Event mapped = event; // at its atlas pixel
+    (button ? mapped.button.x : mapped.motion.x) = at.x;
+    (button ? mapped.button.y : mapped.motion.y) = at.y;
+    atlas_.onEvent(mapped);
+}
+
+bool WorldGui::mouseOver()
+{
+    const auto over = [](GuiContext& context) { return context.created() && gui::overElement(*context.context()); };
+    return gui::ready() && (over(context_) || over(atlas_));
+}
+
+void WorldGui::worldText(const bx::Vec3& position, std::string_view text, const std::string& cssClass, float lifetime)
+{
+    if (texts_.size() >= kMaxWorldTexts) {
+        removeText(texts_.front());
+        texts_.pop_front();
+    }
+    texts_.push_back({.position = position, .left = lifetime, .text = std::string(text), .cssClass = cssClass});
+}
+
+void WorldGui::advance(float dt)
+{
+    for (FloatingText& text : texts_)
+        text.left -= dt;
+    std::erase_if(texts_, [this](const FloatingText& text) {
+        if (text.left > 0.0f)
+            return false;
+        removeText(text);
+        return true;
+    });
+}
+
+void WorldGui::removeText(const FloatingText& text)
+{
+    if (text.element && textDocument_ && gui::ready())
+        textDocument_->RemoveChild(text.element);
+}
+
+bool WorldGui::loadTextDocument()
+{
+    Rml::Context* context = context_.context();
+    if (!context)
+        return false;
+    std::string style = kWorldTextStyle, reason, sheet;
+    if (!root_.empty())
+        if (const auto file = resolveProjectPath(root_, "ui/world_text.rcss", reason); file && readFile(*file, sheet))
+            style += sheet; // the project's own over the defaults
+    textDocument_ = context->LoadDocumentFromMemory("<rml><head><style>" + style + "</style></head><body></body></rml>",
+                                                    "world_text");
+    if (!textDocument_) {
+        log::error("World UI: the floating text document did not load (see the RmlUi errors above)");
+        texts_.clear(); // not tried again until the next worldText
+        return false;
+    }
+    textDocument_->SetProperty(Rml::PropertyId::Position, Rml::Property(Rml::Style::Position::Absolute));
+    textDocument_->Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
+    return true;
+}
+
 bool WorldGui::empty() const
 {
-    return std::ranges::none_of(entries_, [](const Entry& entry) {
+    return texts_.empty() && std::ranges::none_of(entries_, [](const Entry& entry) {
         return entry.document != nullptr && entry.mode == WorldUIMode::Overlay;
     });
 }
@@ -329,11 +531,17 @@ void WorldGui::reset()
     clear();
     written_.clear();
     logged_.clear();
+    texts_.clear();
+    if (textDocument_ && gui::ready())
+        textDocument_->Close(); // the next session's first text reads ui/world_text.rcss again
+    textDocument_ = nullptr;
 }
 
 void WorldGui::release()
 {
     clear();
+    texts_.clear();
+    textDocument_ = nullptr; // closed with its context
     context_.release();
     atlas_.release();
     if (bgfx::isValid(atlasFrameBuffer_))
@@ -427,14 +635,24 @@ void WorldGui::load(Entry& entry)
     if (const auto written = written_.find(entry.id); written != written_.end())
         for (const auto& [id, write] : written->second) // what Lua wrote before this document loaded
             apply(*document, entry.id, id, write);
+    if (entry.mode == WorldUIMode::Overlay) // no mouse until layout() sees it interactive (World: only those get any)
+        document->SetProperty(Rml::PropertyId::PointerEvents, Rml::Property(Rml::Style::PointerEvents::None));
+    if (bus_) {
+        entry.listener = std::make_unique<ButtonClickListener>(*bus_, entry.path, entry.id);
+        document->AddEventListener(Rml::EventId::Click, entry.listener.get());
+    }
     entry.document = document; // hidden until layout() places it
 }
 
 void WorldGui::unload(Entry& entry)
 {
-    if (entry.document && gui::ready())
+    if (entry.document && gui::ready()) {
+        if (entry.listener)
+            entry.document->RemoveEventListener(Rml::EventId::Click, entry.listener.get());
         entry.document->Close();
+    }
     entry.document = nullptr;
+    entry.listener.reset();
 }
 
 } // namespace kast

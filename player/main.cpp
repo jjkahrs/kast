@@ -46,7 +46,7 @@ constexpr int kScreenshotTimeoutFrames = 30;
 constexpr const char* kPakFileName = "game.pak";
 constexpr int kGuiClickFrame = 10; // --gui-click: once the GUIs have loaded and laid out
 constexpr const char* kUsage =
-    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--sim-key frame,key]... [--sim-click frame,x,y]... [--size WxH] [--window-pos X,Y] [--user-settings file] [--fixed-dt S] [--gpu-stats] [--log-sdfgi] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--no-occlusion] [--no-audio-device]";
+    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--sim-key frame,key]... [--sim-click frame,x,y]... [--sim-move frame,x,y]... [--size WxH] [--window-pos X,Y] [--user-settings file] [--fixed-dt S] [--gpu-stats] [--log-sdfgi] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--no-occlusion] [--no-audio-device]";
 constexpr int kGpuStatsWarmupFrames = 10; // --gpu-stats: skip startup frames (shader and target creation)
 
 struct Options {
@@ -55,6 +55,7 @@ struct Options {
     std::string guiClick;   // tests: click this GUI element id on frame kGuiClickFrame
     std::vector<std::pair<int, SDL_Scancode>> simKeys; // tests: these keys pressed on these frames (pushed SDL events)
     std::vector<std::pair<int, SDL_FPoint>> simClicks; // tests: a left click at this window position on this frame
+    std::vector<std::pair<int, SDL_FPoint>> simMoves;  // tests: the mouse moved to this window position on this frame
     std::optional<std::pair<int, int>> size; // --size: a window of this size, over the project's and user's mode
     std::filesystem::path userSettings; // --user-settings: this file instead of the per-user one (tests)
     std::optional<std::pair<int, int>> windowPos; // --window-pos: window top-left
@@ -105,7 +106,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                 return std::nullopt;
             }
             options.simKeys.emplace_back(frame, key);
-        } else if (arg == "--sim-click" && hasValue) {
+        } else if ((arg == "--sim-click" || arg == "--sim-move") && hasValue) {
             const std::string_view text = argv[++i];
             const size_t first = text.find(','), second = first == std::string_view::npos ? first : text.find(',', first + 1);
             int frame = 0, x = -1, y = -1;
@@ -115,10 +116,11 @@ std::optional<Options> parseArgs(int argc, char** argv)
             };
             if (second == std::string_view::npos || !parseInt(text.substr(0, first), frame) ||
                 !coordinate(text.substr(first + 1, second - first - 1), x) || !coordinate(text.substr(second + 1), y)) {
-                kast::log::error(std::format("Invalid --sim-click '{}', expected frame,x,y (window units). {}", text, kUsage));
+                kast::log::error(std::format("Invalid {} '{}', expected frame,x,y (window units). {}", arg, text, kUsage));
                 return std::nullopt;
             }
-            options.simClicks.emplace_back(frame, SDL_FPoint{static_cast<float>(x), static_cast<float>(y)});
+            (arg == "--sim-click" ? options.simClicks : options.simMoves)
+                .emplace_back(frame, SDL_FPoint{static_cast<float>(x), static_cast<float>(y)});
         } else if (arg == "--size" && hasValue) {
             const std::string_view text = argv[++i];
             const size_t x = text.find('x');
@@ -425,6 +427,13 @@ int main(int argc, char** argv)
             SDL_PushEvent(&event);
             event.key.type = SDL_EVENT_KEY_UP;
             event.key.down = false;
+            SDL_PushEvent(&event);
+        }
+        for (const auto& [moveFrame, at] : options->simMoves) {
+            if (frame != moveFrame)
+                continue;
+            SDL_Event event{};
+            event.motion = {.type = SDL_EVENT_MOUSE_MOTION, .windowID = SDL_GetWindowID(window), .x = at.x, .y = at.y};
             SDL_PushEvent(&event);
         }
         for (const auto& [clickFrame, at] : options->simClicks) { // a move there, a press and a release, as a real click

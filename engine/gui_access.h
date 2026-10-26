@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <map>
@@ -111,6 +112,13 @@ public:
     // document only (world_ui.h), kept per entity like setText. Without WorldUI documents here they do nothing.
     virtual void writeEntity(uint64_t /*entity*/, const std::string& /*id*/, const GuiWrite& /*write*/) {}
     virtual std::optional<GuiValue> entityValue(uint64_t /*entity*/, const std::string& /*id*/) { return std::nullopt; }
+    // kast.gui.worldText (world_ui.h): a floating text at a world position (x, y, z) for lifetime seconds of Play time,
+    // styled by the CSS class cssClass; the oldest goes first past kMaxWorldTexts. worldTextCount: those showing.
+    // advance: Play time passed (LuaSystems::tick), they age. Without WorldUI support here they do nothing.
+    virtual void worldText(const std::array<float, 3>& /*position*/, std::string_view /*text*/,
+                           const std::string& /*cssClass*/, float /*lifetime*/) {}
+    virtual size_t worldTextCount() { return 0; }
+    virtual void advance(float /*dt*/) {}
 };
 
 } // namespace kast

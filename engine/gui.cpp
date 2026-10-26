@@ -203,6 +203,12 @@ void addWidgetStyle(Rml::ElementDocument& document)
 
 bool updating() { return g_updating; }
 
+bool overElement(Rml::Context& context)
+{
+    Rml::Element* hover = context.GetHoverElement();
+    return hover && hover != context.GetRootElement() && hover != hover->GetOwnerDocument();
+}
+
 void loadProjectFonts(const std::filesystem::path& projectRoot)
 {
     if (!g_globals || projectRoot.empty())

@@ -1,0 +1,16 @@
+<rml>
+<head>
+    <title>World UI Buttons</title>
+    <style>
+        body { font-family: Roboto; font-size: 20px; color: #ffffff; }
+        button { display: block; position: absolute; top: 0; width: 50%; height: 100%; background-color: #203080;
+                 text-align: center; line-height: 64px; }
+        #left { left: 0; }
+        #right { left: 50%; }
+        button:hover { background-color: #ffcc00; color: #000000; }
+    </style>
+</head>
+<body>
+    <button id="left" data-event="wui.left">L</button><button id="right" data-event="wui.right">R</button>
+</body>
+</rml>

@@ -71,6 +71,8 @@ bool fontFamilyLoaded(std::string_view family);
 // Every <p class="rich"> under root holding only text gets that text, trimmed, as rich text (guiRichTextRml, a [font=]
 // of an unloaded family shown as text). Call once a document has loaded (SceneGui, the GUI Builder preview).
 void convertRichText(Rml::Element& root);
+// Over an element of a document, not just a document's <body> or nothing: what takes the mouse (SceneGui, WorldGui).
+bool overElement(Rml::Context& context);
 
 } // namespace kast::gui
 

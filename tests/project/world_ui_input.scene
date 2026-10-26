@@ -1,0 +1,93 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Directional Light",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [0, 4, 0], "rotation": [-0.408218, -0.23457, -0.109382, 0.875426], "scale": [1, 1, 1]},
+        "DirectionalLight": {"color": [1, 0.95, 0.9], "intensity": 1.1, "castShadows": false, "bias": 0.05, "normalBias": 1.5, "maxDistance": 100, "cascadeCount": 4, "bakeMode": "indirect"}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [0, 1.5, 6], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "Camera": {"verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000, "projection": "perspective", "orthographicSize": 5}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Screen GUI",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "UIDocument": {"path": {"id": "478e86e0-bbe1-4a5a-af8b-75555a1bcd02", "path": "ui/wui_screen.rml"}, "visible": true}
+      }
+    },
+    {
+      "id": 4,
+      "name": "Overlay",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [-2.5, 3, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "WorldUI": {"path": {"id": "4bb1fd55-73a5-4327-8386-463ef0047bd8", "path": "ui/wui_buttons.rml"}, "visible": true, "mode": "overlay", "facing": "billboard", "offset": [0, 0, 0], "width": 256, "height": 64, "pixelsPerMeter": 128, "maxDistance": 0, "occlude": true, "interactive": true}
+      }
+    },
+    {
+      "id": 5,
+      "name": "Passive",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [2.5, 3, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "WorldUI": {"path": {"id": "4bb1fd55-73a5-4327-8386-463ef0047bd8", "path": "ui/wui_buttons.rml"}, "visible": true, "mode": "overlay", "facing": "billboard", "offset": [0, 0, 0], "width": 256, "height": 64, "pixelsPerMeter": 128, "maxDistance": 0, "occlude": true, "interactive": false}
+      }
+    },
+    {
+      "id": 6,
+      "name": "Angled",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [0, 1.5, 2], "rotation": [0, -0.461749, 0, 0.887011], "scale": [1, 1, 1]},
+        "WorldUI": {"path": {"id": "4bb1fd55-73a5-4327-8386-463ef0047bd8", "path": "ui/wui_buttons.rml"}, "visible": true, "mode": "world", "facing": "fixed", "offset": [0, 0, 0], "width": 256, "height": 64, "pixelsPerMeter": 128, "maxDistance": 0, "occlude": true, "interactive": true}
+      }
+    },
+    {
+      "id": 7,
+      "name": "Behind",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [3, 0.7, -1], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "WorldUI": {"path": {"id": "4bb1fd55-73a5-4327-8386-463ef0047bd8", "path": "ui/wui_buttons.rml"}, "visible": true, "mode": "world", "facing": "billboard", "offset": [0, 0, 0], "width": 256, "height": 64, "pixelsPerMeter": 128, "maxDistance": 0, "occlude": true, "interactive": true}
+      }
+    },
+    {
+      "id": 8,
+      "name": "Wall",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [3.06, 0.7, 0.5], "rotation": [0, 0, 0, 1], "scale": [1.5, 1, 0.2]},
+        "MeshRenderer": {"primitive": "cube", "material": ""},
+        "Collider": {"shape": "box", "size": [1, 1, 1], "radius": 0.5, "height": 2, "center": [0, 0, 0], "isTrigger": false, "friction": 0.5, "restitution": 0}
+      }
+    },
+    {
+      "id": 9,
+      "name": "Under",
+      "parent": null,
+      "components": {
+        "Transform": {"position": [-3, 0.7, -1], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "WorldUI": {"path": {"id": "4bb1fd55-73a5-4327-8386-463ef0047bd8", "path": "ui/wui_buttons.rml"}, "visible": true, "mode": "world", "facing": "billboard", "offset": [0, 0, 0], "width": 256, "height": 64, "pixelsPerMeter": 128, "maxDistance": 0, "occlude": true, "interactive": true}
+      }
+    }
+  ],
+  "systems": [
+    { "id": "a8de415a-1469-431a-af58-9456d7827091", "path": "scripts/world_ui_input.lua" }
+  ],
+  "editor": {
+    "camera": { "pivot": [0, 1, 0], "yaw": 0, "pitch": -10, "distance": 8 }
+  }
+}
