@@ -1,6 +1,6 @@
 // Assert-style checks for the world server's pure logic: frame codec (every message), frame rejection, names,
-// movement, AOI sets, chat sanitizing and rate limits, config validation, tick stats and JWT/JWKS verification with
-// locally generated RSA keys; lua_checks.cpp covers the Lua layer and the maps (manifests, World on several maps). No network, database or sleeping: time is passed in.
+// movement, AOI sets, chat sanitizing and rate limits, config validation, send fan-out (one encode), tick stats and JWT/JWKS verification with
+// locally generated RSA keys; lua_checks.cpp covers the Lua layer and the maps (manifests, World on several maps). No network or database; time is passed in (only the lag-simulator fan-out waits a few ms).
 // Exit 0 if every check passes. Run by CTest as world_self_check.
 #include "auth/jwks_cache.h"
 #include "auth/jwt_verify.h"
@@ -23,6 +23,7 @@
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -598,6 +599,39 @@ void checkLagSim() {
     check(exact, "lag sim: no jitter -> exactly the latency");
 }
 
+// The world's fan-out (GameServer's SendMany -> net::send_many): one encode for every recipient, each session getting
+// exactly proto::encode(m), with the lag simulator off and on. Sessions on unconnected sockets: nothing is written
+// before TLS, so pending() holds what the next write would send. The lag run waits for its timers (a few ms).
+void checkSendMany() {
+    asio::io_context io;
+    asio::ssl::context tls(asio::ssl::context::tls_server);
+    const proto::Message m = proto::ChatMsg{proto::ChatKind::say, "Bob", "hello everyone"};
+    const auto expected = proto::encode(m);
+    for (const Millis latency : {Millis(0), Millis(5)}) {
+        net::SessionLimits limits;
+        limits.simLatency = latency;
+        std::vector<std::shared_ptr<net::Session>> sessions;
+        std::vector<net::Session*> to;
+        for (uint32_t id = 1; id <= 5; ++id) {
+            sessions.push_back(std::make_shared<net::Session>(id, asio::ip::tcp::socket(io), tls, limits, nullptr, nullptr));
+            to.push_back(sessions.back().get());
+        }
+        const size_t before = net::framesEncoded;
+        net::send_many(to, m);
+        net::send_many({}, m); // nobody to send to: no encode
+        const size_t encodes = net::framesEncoded - before;
+        io.restart();
+        io.run_for(latency + Millis(50));
+        bool same = true;
+        for (const auto* s : to) same &= std::ranges::equal(s->pending(), expected);
+        const bool lagged = latency.count() > 0;
+        check(encodes == 1, lagged ? "send_many (lag sim): 5 recipients, 1 encode" : "send_many: 5 recipients, 1 encode");
+        check(same, lagged ? "send_many (lag sim): every session gets proto::encode(m)"
+                           : "send_many: every session gets proto::encode(m)");
+        if (encodes != 1) std::printf("  send_many encoded %zu times for 5 recipients\n", encodes);
+    }
+}
+
 void checkTickStats() {
     TickStats s;
     for (int i = 1; i <= 100; ++i) s.add(i * 0.1); // 0.1 .. 10 ms
@@ -877,6 +911,7 @@ int main(int argc, char** argv) {
     checkMessageRate();
     checkConfig();
     checkLagSim();
+    checkSendMany();
     checkTickStats();
     checkJwt();
     checkJwksCache();

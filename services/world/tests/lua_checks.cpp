@@ -250,6 +250,9 @@ struct TestWorld {
     world::World world;
     explicit TestWorld(lua::Defs defs, world::WorldRules rules = {}, world::Maps m = test_maps())
         : maps(std::move(m)), world(rules, maps, [this](uint32_t sid, const proto::Message& m) { sent.bySession[sid].push_back(m); },
+                [this](std::span<const uint32_t> sids, const proto::Message& m) {
+                    for (uint32_t sid : sids) sent.bySession[sid].push_back(m);
+                },
                 [this](const db::CharSave& s) { sent.saves.push_back(s); }, std::move(defs)) {}
     entt::entity spawn(uint32_t sid, uint64_t charId, const std::string& name, float x, float z,
                        const std::string& components = "", uint16_t map = 1, proto::CharOptions options = {}) {
@@ -655,9 +658,10 @@ void checkReplicationIdleTiming() {
     check(w.sent.updates(1, wire(w.world.registry().view<world::Npc>().front())).size() == 3, "timing: full set sent once");
     size_t sends = 0;
     const world::Send send = [&](uint32_t, const proto::Message&) { ++sends; };
+    const world::SendMany sendMany = [&](std::span<const uint32_t> sids, const proto::Message&) { sends += sids.size(); };
     constexpr int kTicks = 200;
     const auto start = std::chrono::steady_clock::now();
-    for (int i = 0; i < kTicks; ++i) world::component_replication_system(w.world.registry(), defs, send);
+    for (int i = 0; i < kTicks; ++i) world::component_replication_system(w.world.registry(), defs, send, sendMany);
     const double perTickUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / kTicks;
     check(sends == 0, "timing: idle ticks send nothing");
     std::printf("component_replication_system idle: %.1f us/tick (1000 entities x 3 components)\n", perTickUs);

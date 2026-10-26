@@ -86,6 +86,7 @@ private:
     uint32_t nextSessionId_ = 1;
     std::unordered_map<uint32_t, Client> clients_;
     std::unordered_map<uint64_t, uint32_t> online_; // accountId -> session id
+    std::vector<net::Session*> fanOut_;             // the SendMany recipient buffer, kept for its capacity
 
     asio::steady_timer tickTimer_;
     TimePoint nextTick_{};

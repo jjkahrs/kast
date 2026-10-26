@@ -53,6 +53,16 @@ GameServer::GameServer(asio::io_context& io, const Config& cfg, const world::Map
              [this](uint32_t sid, const proto::Message& m) {
                  if (auto* c = find(sid)) c->session->send(m);
              },
+             [this](std::span<const uint32_t> sids, const proto::Message& m) {
+                 // Borrowed, not used in place: a slow client dropped mid-send leaves the world (on_closed) and that
+                 // can fan out again before this call returns.
+                 auto to = std::move(fanOut_);
+                 to.clear();
+                 for (uint32_t sid : sids)
+                     if (auto* c = find(sid)) to.push_back(c->session.get());
+                 net::send_many(to, m);
+                 fanOut_ = std::move(to);
+             },
              [this](const db::CharSave& s) { db_.save(s); }, std::move(defs)),
       tickTimer_(io), tickPeriod_(Millis(1000 / cfg.tickHz)), windowTicks_(std::make_unique<TickStats>()),
       totalTicks_(std::make_unique<TickStats>()), windowLag_(std::make_unique<TickStats>()),

@@ -1,6 +1,6 @@
 // The world: every loaded map (maps.h) in one ECS registry and one AOI grid, plus the Lua systems and the NPCs of the
 // maps' spawn files (spawner_system); runs the systems in
-// a fixed order each tick. Talks to the outside only through Send (to a session) and Save (to the DB worker).
+// a fixed order each tick. Talks to the outside only through Send (to a session), SendMany (one message to several) and Save (to the DB worker).
 // Each player and NPC is on one map (MapRef); only transfer() changes it.
 #pragma once
 #include "maps.h"
@@ -42,7 +42,7 @@ class World {
 public:
     // maps must outlive the World and hold rules.startMap. defs: the Lua component types (lua/components.h); their
     // instances are restored, saved and replicated here.
-    World(WorldRules rules, const Maps& maps, Send send, Save save, lua::Defs defs = {});
+    World(WorldRules rules, const Maps& maps, Send send, SendMany sendMany, Save save, lua::Defs defs = {});
 
     // Loads the state machine definitions under luaRoot/fsms/, the NPC definitions under luaRoot/npcs/ and the Lua
     // systems under luaRoot/systems/, runs their init, then starts the game machines (by name); every error, empty if
@@ -109,6 +109,7 @@ private:
     WorldRules rules_;
     const Maps& maps_;
     Send send_;
+    SendMany sendMany_;
     Save save_;
     lua::Defs defs_;
     entt::registry reg_;

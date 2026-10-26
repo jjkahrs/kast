@@ -128,11 +128,9 @@ void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send) {
 }
 
 // Accepted player moves and script NPC moves go to every player that sees the mover; never back to the mover.
-void replication_system(entt::registry& reg, const Send& send) {
-    for (auto [e, tf] : reg.view<Moved, Transform>().each()) {
-        const proto::EntityMove msg{wire_id(e), tf.pos, tf.heading};
-        for (uint32_t sid : audience(reg, e)) send(sid, msg);
-    }
+void replication_system(entt::registry& reg, const SendMany& sendMany) {
+    for (auto [e, tf] : reg.view<Moved, Transform>().each())
+        sendMany(audience(reg, e), proto::EntityMove{wire_id(e), tf.pos, tf.heading});
 }
 
 namespace {
@@ -149,8 +147,8 @@ std::vector<uint32_t> yell_audience(const entt::registry& reg, entt::entity e, f
 }
 } // namespace
 
-void chat_system(entt::registry& reg, const ChatRules& rules, const Mutes& mutes, const Send& send, TimePoint now,
-                 SysTime wallNow) {
+void chat_system(entt::registry& reg, const ChatRules& rules, const Mutes& mutes, const Send& send,
+                 const SendMany& sendMany, TimePoint now, SysTime wallNow) {
     for (auto [e, pending, limit, ch, link] : reg.view<PendingSay, ChatLimit, CharacterRef, SessionLink>().each()) {
         for (auto& say : pending.says) {
             if (!limit.limiter.allow(now)) {
@@ -167,10 +165,9 @@ void chat_system(entt::registry& reg, const ChatRules& rules, const Mutes& mutes
                 send(link.sessionId, proto::ChatNotice{proto::ChatNoticeCode::muted, "", *left});
                 continue;
             }
-            const proto::ChatMsg msg{say.kind, ch.name, std::move(*clean)};
-            send(link.sessionId, msg);
-            const auto to = say.kind == proto::ChatKind::yell ? yell_audience(reg, e, rules.yellRadius) : audience(reg, e);
-            for (uint32_t sid : to) send(sid, msg);
+            auto to = say.kind == proto::ChatKind::yell ? yell_audience(reg, e, rules.yellRadius) : audience(reg, e);
+            to.insert(to.begin(), link.sessionId); // the sender first
+            sendMany(to, proto::ChatMsg{say.kind, ch.name, std::move(*clean)});
         }
         pending.says.clear();
     }
@@ -214,7 +211,8 @@ void interact_system(entt::registry& reg, const Maps& maps, EventBus& bus) {
 // it earlier in the tick, and a viewer that just got it receives the full set instead of this tick's changes.
 // Only components a writer marked dirty are diffed; each change is serialized once, whatever the number of viewers.
 // ponytail: a change is still sent as the component's full JSON; delta or binary encoding if bandwidth matters.
-void component_replication_system(entt::registry& reg, const lua::Defs& defs, const Send& send) {
+void component_replication_system(entt::registry& reg, const lua::Defs& defs, const Send& send,
+                                  const SendMany& sendMany) {
     struct Replicated {
         const lua::ComponentDef* def;
         entt::storage_for_t<lua::ComponentData>* pool;
@@ -224,16 +222,19 @@ void component_replication_system(entt::registry& reg, const lua::Defs& defs, co
         if (def->replicate != lua::Replicate::none) types.push_back({def.get(), &lua::pool(reg, def->name)});
     if (types.empty()) return;
 
-    const auto toViewers = [&](entt::entity e, const proto::Message& msg) {
-        for (entt::entity viewer : viewers_of(reg, e)) {
-            const auto& entered = reg.get<Visible>(viewer).entered;
-            if (std::binary_search(entered.begin(), entered.end(), wire_id(e))) continue; // gets the full set below
-            send(reg.get<SessionLink>(viewer).sessionId, msg);
-        }
-    };
-    // An NPC has no owner: its owner components reach nobody, its aoi ones only the players that see it.
-    const auto toOwner = [&](const SessionLink* link, const proto::Message& msg) {
-        if (link) send(link->sessionId, msg);
+    // The owner first, then (aoi) every viewer. An NPC has no owner: its owner components reach nobody, its aoi ones
+    // only the players that see it.
+    std::vector<uint32_t> to;
+    const auto fanOut = [&](entt::entity e, const SessionLink* link, bool aoi, const proto::Message& msg) {
+        to.clear();
+        if (link) to.push_back(link->sessionId);
+        if (aoi)
+            for (entt::entity viewer : viewers_of(reg, e)) {
+                const auto& entered = reg.get<Visible>(viewer).entered;
+                if (std::binary_search(entered.begin(), entered.end(), wire_id(e))) continue; // gets the full set below
+                to.push_back(reg.get<SessionLink>(viewer).sessionId);
+            }
+        sendMany(to, msg);
     };
     for (auto [e, rep] : reg.view<ReplicatedState>().each()) {
         if (rep.dirty.empty()) continue;
@@ -246,9 +247,7 @@ void component_replication_system(entt::registry& reg, const lua::Defs& defs, co
                 if (sent == rep.sent.end()) continue;
                 rep.sent.erase(sent);
                 rep.oversize.erase(def->name);
-                const proto::ComponentRemove msg{wire_id(e), def->name};
-                toOwner(link, msg);
-                if (aoi) toViewers(e, msg);
+                fanOut(e, link, aoi, proto::ComponentRemove{wire_id(e), def->name});
                 continue;
             }
             const auto& value = pool->get(e).value;
@@ -267,9 +266,7 @@ void component_replication_system(entt::registry& reg, const lua::Defs& defs, co
                 continue;
             }
             rep.oversize.erase(def->name);
-            const proto::ComponentUpdate msg{wire_id(e), def->name, json};
-            toOwner(link, msg);
-            if (aoi) toViewers(e, msg);
+            fanOut(e, link, aoi, proto::ComponentUpdate{wire_id(e), def->name, json});
         }
         rep.dirty.clear();
     }
@@ -288,7 +285,8 @@ void component_replication_system(entt::registry& reg, const lua::Defs& defs, co
     }
 }
 
-void client_event_system(entt::registry& reg, std::vector<lua::ClientEvent> events, const Send& send) {
+void client_event_system(entt::registry& reg, std::vector<lua::ClientEvent> events, const Send& send,
+                         const SendMany& sendMany) {
     for (auto& event : events) {
         if (event.to == lua::ClientEvent::To::reply) { // kast.reply: the requester alone, if still here
             const auto e = from_wire(event.entity);
@@ -296,16 +294,18 @@ void client_event_system(entt::registry& reg, std::vector<lua::ClientEvent> even
                 send(link->sessionId, proto::Reply{event.requestId, event.ok, std::move(event.json)});
             continue;
         }
-        const proto::ServerEvent msg{std::move(event.name), std::move(event.json)};
+        const proto::Message msg = proto::ServerEvent{std::move(event.name), std::move(event.json)};
+        std::vector<uint32_t> to;
         if (event.to == lua::ClientEvent::To::all) {
-            for (auto [e, link] : reg.view<SessionLink>().each()) send(link.sessionId, msg);
+            for (auto [e, link] : reg.view<SessionLink>().each()) to.push_back(link.sessionId);
+            sendMany(to, msg);
             continue;
         }
         const auto e = from_wire(event.entity);
         if (!reg.valid(e) || !reg.any_of<Visible, Viewers>(e)) continue; // left already: nothing to send
-        if (const auto* link = reg.try_get<SessionLink>(e)) send(link->sessionId, msg); // an NPC has no client
-        if (event.to == lua::ClientEvent::To::nearby)
-            for (uint32_t sid : audience(reg, e)) send(sid, msg);
+        if (event.to == lua::ClientEvent::To::nearby) to = audience(reg, e);
+        if (const auto* link = reg.try_get<SessionLink>(e)) to.insert(to.begin(), link->sessionId); // an NPC has no client
+        sendMany(to, msg);
     }
 }
 
