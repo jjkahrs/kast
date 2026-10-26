@@ -18,8 +18,8 @@ instance, even when several entities use the same <code>.rml</code>, and Lua add
 are drawn in Play only: in <code>kast_player</code> and in the editor's Game view while playing or paused, never while Stopped.
 Code: <code>engine/world_ui.h</code> (<code>kast::WorldGui</code>, owned by <code>kast::SceneGui</code>).</p>
 <p>Two modes: <a href="#overlay">Overlay</a> (drawn flat over the screen at a constant pixel size) and <a href="#world">World</a>
-(a textured quad in the 3D scene, hidden by what stands in front of it). Mouse input on panels and floating text come in
-later phases: until then Interactive does nothing.</p>
+(a textured quad in the 3D scene, hidden by what stands in front of it). <a href="#input">Interactive</a> panels take mouse
+hover and clicks, and Lua can show short-lived <a href="#world-text">floating text</a> (damage numbers, XP) at world positions.</p>
 
 <h2 id="component">The WorldUI component</h2>
 <p><em>World UI</em> in the Inspector (<a href="../editor/controls.html#worldui">Editor controls</a>). Every field is saved; a
@@ -39,7 +39,7 @@ WorldUI load unchanged.</p>
 <tr><td><code>pixelsPerMeter</code></td><td><code>256</code></td><td>World mode only (at least 1): the quad is <code>width / pixelsPerMeter</code> x <code>height / pixelsPerMeter</code> meters.</td></tr>
 <tr><td><code>maxDistance</code></td><td><code>50</code></td><td>Hidden when the anchor is further than this many meters from the camera; <code>0</code>: never.</td></tr>
 <tr><td><code>occlude</code></td><td><code>true</code></td><td>Overlay: hidden while a physics body lies between the camera and the anchor (see <a href="#occlusion">Occlusion</a>). World mode: always depth-tested instead, so it changes nothing.</td></tr>
-<tr><td><code>interactive</code></td><td><code>false</code></td><td>Mouse hover and clicks on the panel (not used yet).</td></tr>
+<tr><td><code>interactive</code></td><td><code>false</code></td><td>The panel takes mouse hover and clicks (see <a href="#input">Mouse input</a>); off, the mouse goes through it.</td></tr>
 </tbody>
 </table>
 <pre><code class="language-json">"WorldUI": { "path": { "id": "...", "path": "ui/nameplate.rml" }, "visible": true, "offset": [0, 1.4, 0], "width": 96, "height": 32 }
@@ -64,7 +64,8 @@ Documents), so a HUD stays on top of nameplates. The document's <code>&lt;body&g
 &lt;/rml&gt;
 </code></pre>
 <p>GUI prefabs, rich text (<code>&lt;p class="rich"&gt;</code>), the default widget style, effects and project fonts work as in UI
-Documents. Data models (<code>data-model</code>), clicks and hot reload of the files are not supported on WorldUI documents yet.</p>
+Documents. Data models (<code>data-model</code>), drags, widget events and hot reload of the files are not supported on
+WorldUI documents yet; button clicks are, on <a href="#input">interactive</a> panels.</p>
 
 <h3 id="occlusion">Occlusion</h3>
 <p>With <code>occlude</code> on, a ray is cast through the <a href="physics.html">physics</a> world from the camera to the anchor;
@@ -135,6 +136,83 @@ views after theirs (<code>GuiContext::render</code>'s shareViews), usually one. 
 <p><code>kast_player</code>: 0 - 33 shadow maps, 34 - 56 scene and post passes, 57 - 121 the GUIs then the atlas, 122 the
 readable target's present; 123 - 255 free.</p>
 
+<h2 id="input">Mouse input</h2>
+<p>Panels with <code>interactive</code> on take the mouse in Play, in <code>kast_player</code> and the editor's Game view, in both
+modes: hover (<code>:hover</code> styles, <code>mouseover</code> / <code>mouseout</code>) and clicks. A click on a
+<code>&lt;button data-event="name"&gt;</code> publishes <code>name</code> on the event bus as in UI Documents
+(<a href="game-gui.html">Game GUI</a>), its payload with one more field, <code>entity</code>: the panel's entity id, so one
+handler serves every nameplate on the same <code>.rml</code>. Rich text links (<code>gui.link</code>) publish as usual. Where the
+mouse goes, first match wins:</p>
+<ol>
+<li><strong>The screen GUIs</strong> (UI Documents), as before: a HUD button over a panel takes the click.</li>
+<li><strong>Overlay panels</strong> (drawn over the scene): where they overlap, the nearer one (drawn on top). Only their
+elements count, not a bare <code>&lt;body&gt;</code>.</li>
+<li><strong>World panels</strong>: a ray from the camera through the mouse; the nearest quad it crosses gets the event at the
+point it crosses, mapped to that panel's own pixels (a panel seen at an angle maps right: a click on the near, wider half of
+a turned panel lands in that half). Not if a physics body is nearer than the panel on that ray: as for
+<a href="#occlusion">Overlay occlusion</a>, only colliders count, so a wall that should block clicks needs a Collider (its
+own entity's, its ancestors' and descendants' bodies and triggers don't block).</li>
+</ol>
+<p>Non-interactive panels never get the mouse: it goes on to what is under them, and to the game. The game tells a click on
+the GUI from a click on the world as it does for UI Documents: <code>kast.gui.mouseOver()</code> is true over an element of a
+screen GUI or of an interactive panel, so a handler that checks it ignores clicks a panel took. World panels get no keyboard
+focus or typed text; hover follows the mouse only when it moves (a panel moving under a still mouse keeps its hover until
+then).</p>
+<pre><code class="language-lua">-- ui/nameplate.rml: &lt;button id="target" data-event="plate.target"&gt;...&lt;/button&gt;
+kast.subscribe("plate.target", function(event)
+    selected = event.entity -- the clicked nameplate's entity
+end)
+-- the game's own clicks (e.g. click-to-move) skip what the GUI took:
+if kast.input.mouseDown("left") and not kast.gui.mouseOver() then moveTo(kast.input.mouseRay()) end
+</code></pre>
+
+<h2 id="world-text">Floating world text</h2>
+<p><code>kast.gui.worldText(pos, text, class, lifetime)</code> shows <code>text</code> floating at a world position for a while:
+damage numbers, healing, XP. No entity is needed. It is drawn like an Overlay panel (constant pixel size, centered on the
+point's pixel, over the Overlay panels and under the screen GUIs, hidden while the point is behind the camera or off the
+view) and is removed after <code>lifetime</code> seconds of Play time (paused Play doesn't age it; a new Play session or scene
+switch clears them all). It never takes the mouse. Returns nothing; <code>kast.gui.worldTextCount()</code> returns how many
+show.</p>
+<table>
+<thead>
+<tr><th>Argument</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>pos</code></td><td>A table <code>{x = ..., y = ..., z = ...}</code> of numbers, in world meters (e.g. a Transform's position).</td></tr>
+<tr><td><code>text</code></td><td>A string, shown as text (not RML: <code>&lt;</code> shows as typed).</td></tr>
+<tr><td><code>class</code></td><td>CSS class(es), space-separated, added to the text's element: <code>&lt;div class="world-text CLASS"&gt;</code>. <code>""</code> for none.</td></tr>
+<tr><td><code>lifetime</code></td><td>Seconds, a positive number.</td></tr>
+</tbody>
+</table>
+<p>A wrong argument raises a Lua error naming it, e.g. <em>kast.gui.worldText: pos must be a table {x, y, z} of numbers, got
+5</em> or <em>lifetime must be a positive number of seconds, got 0</em>. At most <strong>256</strong> show at once
+(<code>kMaxWorldTexts</code>): another removes the oldest first.</p>
+<p>The default style (<code>engine/world_ui.cpp</code>) makes a 28 px bold white text with a black outline that rises 60 px
+and fades out over 1 s (CSS <code>@keyframes world-text-rise</code>; it fades in the last 0.4 s, so give a lifetime of about
+1 s). Its classes:</p>
+<table>
+<thead>
+<tr><th>Class</th><th>Look</th></tr>
+</thead>
+<tbody>
+<tr><td><code>world-text</code></td><td>On every text: 400 x 40 px box centered on the point, centered text, the animation.</td></tr>
+<tr><td><code>damage</code></td><td>Red <code>#ff4040</code>.</td></tr>
+<tr><td><code>heal</code></td><td>Green <code>#40ff60</code>.</td></tr>
+<tr><td><code>xp</code></td><td>Purple <code>#c080ff</code>, 22 px.</td></tr>
+<tr><td><code>crit</code></td><td>Yellow <code>#ffcc00</code>, 40 px.</td></tr>
+</tbody>
+</table>
+<p>A project overrides or adds classes in <code>ui/world_text.rcss</code>: if it exists, it is read after the defaults (the
+same selectors win), when the first text shows in a Play session. The animation runs on RmlUi's clock (real time) while the
+lifetime counts Play time; keep the animation no longer than the lifetime.</p>
+<pre><code class="language-lua">local p = kast.get(target, "Transform").position
+kast.gui.worldText({x = p.x, y = p.y + 2, z = p.z}, tostring(damage), crit and "damage crit" or "damage", 1)
+</code></pre>
+<pre><code class="language-css">/* ui/world_text.rcss */
+.damage { color: #ff8000; }
+.gold { color: #ffd700; animation: 1.5s world-text-rise; }
+</code></pre>
+
 <h2 id="lua">Lua</h2>
 <p>The <code>kast.gui</code> functions that act on one document's element take an <strong>entity id first</strong> to act on that
 entity's WorldUI document only:</p>
@@ -181,6 +259,16 @@ by <code>scripts/world_ui_world.lua</code>) in the built player and the Game vie
 probes of the Sign's edges (its size in pixels at 5 m), a Wall hiding half a panel, Fixed narrowing, Yaw Only upright from
 above; the Sign's inside the same from all three cameras and matching <code>tests/reference/world_ui_sign.png</code>; and
 <code>tests/project/world_ui_overflow.scene</code> (six 1000x1000 panels: the nearest four drawn, the warning logged once).</p>
+<p>Input and floating text: <code>kast_self_check --worldui</code> also checks the mouse ray (perspective and orthographic) and
+where it crosses a turned quad (the near half's mapping), a headless <code>SceneGui</code> fed SDL mouse events (the nearer of
+two overlapping Overlay panels, non-interactive ones passed through, World panel clicks at their hit point with their entity,
+a physics body in front taking the click) and floating texts (escaped, centered, hidden behind the camera, lifetime, the cap
+removing the oldest, reset). <code>ctest -R world_ui_input</code>: <code>tests/project/world_ui_input.scene</code> (driven by
+<code>scripts/world_ui_input.lua</code>) in the built player with pushed SDL mouse events (<code>--sim-click</code>,
+<code>--sim-move</code>): a sequence of clicks logging which button of which panel each reached (an angled World panel's
+right half where a screen-box mapping would say left, a wall blocking, a non-interactive panel passing the click on, a
+screen button over a World panel taking it); hover probes of both modes; the worldText argument errors and cap; a floating
+text showing at frame 30 and gone (count 0 logged at 1 s) at frame 100.</p>
 </main>
 </div>
 </body>

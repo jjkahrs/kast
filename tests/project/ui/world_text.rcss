@@ -1,0 +1,4 @@
+/* The project's floating world text style (kast.gui.worldText), over the engine's defaults. wui-block: a solid block
+   on a 10 s animation, so a test can probe it while its 1 s lifetime runs whatever the frame rate. */
+.wui-block { width: 200px; height: 60px; margin-left: -100px; margin-top: -30px; background-color: #00ff00;
+             animation: 10s world-text-rise; }

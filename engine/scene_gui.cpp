@@ -53,13 +53,6 @@ bool isTextField(const Rml::Element& element)
     return type == "text" || type == "password";
 }
 
-// Over an element of a document, not just a document's <body> or nothing.
-bool overElement(Rml::Context& context)
-{
-    Rml::Element* hover = context.GetHoverElement();
-    return hover && hover != context.GetRootElement() && hover != hover->GetOwnerDocument();
-}
-
 } // namespace
 
 void SceneGui::sync(const Scene& scene, const std::filesystem::path& projectRoot, EventBus& bus)
@@ -104,7 +97,7 @@ void SceneGui::sync(const Scene& scene, const std::filesystem::path& projectRoot
     for (Entry& entry : entries_)
         if (entry.document)
             entry.listListener->update();
-    world_.sync(scene, projectRoot);
+    world_.sync(scene, projectRoot, &bus);
 }
 
 void SceneGui::clear()
@@ -245,15 +238,17 @@ std::optional<std::string> SceneGui::focusedField()
     return focus->GetId();
 }
 
-bool SceneGui::mouseOver()
+bool SceneGui::screenMouseOver()
 {
-    return std::ranges::any_of(contexts(), [](Rml::Context* context) { return overElement(*context); });
+    return std::ranges::any_of(contexts(), [](Rml::Context* context) { return gui::overElement(*context); });
 }
+
+bool SceneGui::mouseOver() { return screenMouseOver() || world_.mouseOver(); }
 
 std::optional<std::string> SceneGui::hovered()
 {
     for (Rml::Context* context : contexts()) // the All one first: it is on top
-        if (overElement(*context)) {
+        if (gui::overElement(*context)) {
             const std::string id = guiElementId(context->GetHoverElement());
             return id.empty() ? std::nullopt : std::optional(id);
         }
@@ -478,6 +473,12 @@ void SceneGui::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer)
 
 void SceneGui::onEvent(const SDL_Event& event, float originX, float originY, float scale)
 {
+    routeScreen(event, originX, originY, scale);
+    world_.onEvent(event, originX, originY, scale, screenMouseOver()); // the mouse the screen GUIs don't have
+}
+
+void SceneGui::routeScreen(const SDL_Event& event, float originX, float originY, float scale)
+{
     if (!allContext_.created() || !gui::ready()) {
         context_.onEvent(event, originX, originY, scale);
         return;
@@ -490,7 +491,7 @@ void SceneGui::onEvent(const SDL_Event& event, float originX, float originY, flo
         motion.motion.x = button ? event.button.x : event.motion.x;
         motion.motion.y = button ? event.button.y : event.motion.y;
         allContext_.onEvent(motion, originX, originY, scale);
-        const bool overAll = overElement(*allContext_.context());
+        const bool overAll = gui::overElement(*allContext_.context());
         if (overAll) {
             context_.context()->ProcessMouseLeave();
             if (button)
@@ -501,7 +502,7 @@ void SceneGui::onEvent(const SDL_Event& event, float originX, float originY, flo
         if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
             takeKeyboard(overAll ? GuiScaling::All : GuiScaling::Dp);
     } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
-        contextFor(overElement(*allContext_.context()) ? GuiScaling::All : GuiScaling::Dp).onEvent(event, originX, originY, scale);
+        contextFor(gui::overElement(*allContext_.context()) ? GuiScaling::All : GuiScaling::Dp).onEvent(event, originX, originY, scale);
     } else if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE) {
         context_.onEvent(event, originX, originY, scale);
         allContext_.onEvent(event, originX, originY, scale);

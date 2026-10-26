@@ -1400,6 +1400,27 @@ void LuaSystems::State::bindGuiApi()
         return id ? sol::make_object(lua, *id) : sol::object(sol::lua_nil);
     });
     guiApi.set_function("mouseOver", [this] { return gui->mouseOver(); });
+    // kast.gui.worldText(pos, text, class, lifetime): a floating text at a world position (GuiAccess::worldText);
+    // kast.gui.worldTextCount(): how many show.
+    guiApi.set_function("worldText", [=, this](sol::this_state L, const sol::object& pos, const sol::object& value,
+                                               const sol::object& cssClass, const sol::object& lifetime) {
+        std::array<float, 3> at{};
+        bool numbers = pos.get_type() == sol::type::table;
+        for (int i = 0; numbers && i < 3; ++i) {
+            const sol::object c = pos.as<sol::table>()[std::string(1, "xyz"[i])];
+            numbers = c.get_type() == sol::type::number;
+            at[i] = numbers ? c.as<float>() : 0.0f;
+        }
+        if (!numbers)
+            raise(L, std::format("kast.gui.worldText: pos must be a table {{x, y, z}} of numbers, got {}", toString(L, pos)));
+        const std::string shown = text(L, "worldText", "text", value);
+        const std::string classes = text(L, "worldText", "class", cssClass);
+        if (lifetime.get_type() != sol::type::number || !(lifetime.as<double>() > 0.0))
+            raise(L, std::format("kast.gui.worldText: lifetime must be a positive number of seconds, got {}",
+                                 toString(L, lifetime)));
+        gui->worldText(at, shown, classes, lifetime.as<float>());
+    });
+    guiApi.set_function("worldTextCount", [this] { return gui->worldTextCount(); });
     // Data models (data-model="name" in an .rml): key is a top-level variable, value plain data (luaToJson).
     const auto key = [=](lua_State* L, const char* function, const sol::object& value) {
         std::string name = text(L, function, "key", value);
@@ -2071,6 +2092,8 @@ bool LuaSystems::tick(float dt)
     }
     for (NetEvent& event : chat_.poll())
         bus_.publish(std::move(event.name), std::move(event.payload), "kast.chat");
+    if (state_->gui)
+        state_->gui->advance(dt); // floating world texts age (kast.gui.worldText)
     state_->tick(dt);
     replication_.update(dt); // sends what this frame's systems did to the local player
     if (!state_->pending)

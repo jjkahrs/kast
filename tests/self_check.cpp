@@ -3210,7 +3210,7 @@ void checkBuildSettings()
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                        "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_overflow.scene", "world_ui_world.scene",
+                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_input.scene", "world_ui_overflow.scene", "world_ui_world.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
 
@@ -3234,7 +3234,7 @@ void checkBuildSettings()
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                                           "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_overflow.scene", "world_ui_world.scene",
+                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_input.scene", "world_ui_overflow.scene", "world_ui_world.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
@@ -16607,6 +16607,224 @@ void checkWorldGuiAtlas()
     bgfx::shutdown();
 }
 
+// The mouse ray through a pixel and where it crosses a World quad (u, v from its top-left corner).
+void checkWorldUIRay()
+{
+    kast::Scene scene;
+    const entt::entity camera = scene.create("Camera"); // at (0, 1.5, 6) looking down -Z, 1280x720
+    scene.registry().get<kast::Transform>(camera).position = {0.0f, 1.5f, 6.0f};
+    scene.registry().emplace<kast::Camera>(camera);
+    float view[16], proj[16], viewProj[16];
+    kast::cameraMatrices(scene, camera, 1280.0f / 720.0f, false, view, proj);
+    bx::mtxMul(viewProj, view, proj);
+    const bx::Vec3 eye{0.0f, 1.5f, 6.0f};
+    const auto near = [](const bx::Vec3& a, const bx::Vec3& b) { return bx::length(bx::sub(a, b)) < 1e-3f; };
+    const kast::WorldUIRay center = kast::worldUIMouseRay(viewProj, eye, 640.0f, 360.0f, 1280.0f, 720.0f);
+    check(near(center.origin, eye) && near(center.direction, {0.0f, 0.0f, -1.0f}),
+          "worldUIMouseRay: the viewport's center looks straight ahead from the eye");
+    const kast::WorldUIRay corner = kast::worldUIMouseRay(viewProj, eye, 0.0f, 0.0f, 1280.0f, 720.0f);
+    const float t = std::tan(bx::toRad(30.0f));
+    check(near(corner.direction, bx::normalize(bx::Vec3{-t * 16.0f / 9.0f, t, -1.0f})),
+          "worldUIMouseRay: the top-left pixel looks along the frustum's top-left edge");
+    scene.registry().get<kast::Camera>(camera).projection = kast::CameraProjection::Orthographic;
+    float orthoView[16], orthoProj[16], orthoViewProj[16];
+    kast::cameraMatrices(scene, camera, 1280.0f / 720.0f, false, orthoView, orthoProj);
+    bx::mtxMul(orthoViewProj, orthoView, orthoProj);
+    const kast::WorldUIRay ortho = kast::worldUIMouseRay(orthoViewProj, eye, 1280.0f, 360.0f, 1280.0f, 720.0f);
+    check(near(ortho.direction, {0.0f, 0.0f, -1.0f}) && std::abs(ortho.origin.z - 6.0f) < 1e-3f && ortho.origin.x > 1.0f,
+          "worldUIMouseRay: an orthographic camera's rays are parallel, from its plane beside the eye");
+
+    // The 2 x 0.5 m panel of world_ui_input.scene's Angled: at (0, 1.5, 2), its right edge turned 55 degrees toward the
+    // camera, so its right half is wider on screen: x 650 (left of its screen box's middle, 659) is in its right half.
+    const float a = bx::toRad(-55.0f);
+    const bx::Vec3 right{std::cos(a), 0.0f, -std::sin(a)}, up{0.0f, 0.25f, 0.0f}, c{0.0f, 1.5f, 2.0f};
+    const std::array<bx::Vec3, 4> quad = {bx::add(bx::sub(c, right), up), bx::add(bx::add(c, right), up),
+                                          bx::sub(bx::add(c, right), up), bx::sub(bx::sub(c, right), up)};
+    const auto hit = [&](float x, float y) {
+        return kast::worldUIRayQuad(kast::worldUIMouseRay(viewProj, eye, x, y, 1280.0f, 720.0f), quad);
+    };
+    const std::optional<kast::WorldUIQuadHit> middle = hit(640.0f, 360.0f), rightHalf = hit(650.0f, 360.0f);
+    check(middle && std::abs(middle->u - 0.5f) < 1e-3f && std::abs(middle->v - 0.5f) < 1e-3f &&
+              std::abs(middle->distance - 4.0f) < 1e-3f,
+          "worldUIRayQuad: the panel's center is at u, v 0.5, 4 m away");
+    check(rightHalf && rightHalf->u > 0.5f && rightHalf->u < 0.6f,
+          "worldUIRayQuad: a point left of the turned panel's screen box middle maps into its right half (perspective)");
+    const std::optional<kast::WorldUIQuadHit> topLeft = hit(566.5f, 328.5f);
+    check(topLeft && topLeft->u < 0.02f && topLeft->v < 0.05f, "worldUIRayQuad: its top-left corner maps to u, v 0, 0");
+    check(!hit(560.0f, 360.0f) && !hit(640.0f, 300.0f), "worldUIRayQuad: beside the panel misses");
+    check(!kast::worldUIRayQuad({{0.0f, 1.5f, 4.0f}, {0.0f, 0.0f, 1.0f}}, quad),
+          "worldUIRayQuad: a panel behind the ray's origin is missed");
+}
+
+// Mouse input in a headless SceneGui (world_ui_input.scene's rules): the nearer of two overlapping interactive Overlay
+// panels takes it, a non-interactive one lets it through, a World panel gets it at the atlas pixel its quad is hit at
+// (and clicks publish with its entity) unless a physics body is in front; mouseOver tells.
+void checkWorldGuiInput()
+{
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    check(bgfx::init(init) && kast::gui::init(), "headless bgfx and RmlUi start (world UI input)");
+    {
+        const std::filesystem::path root = projectTestDir("kast_world_ui_input", "worldui_input");
+        std::filesystem::create_directories(root / "ui");
+        std::filesystem::copy_file(std::filesystem::path(KAST_SOURCE_DIR) / "tests/project/ui/wui_buttons.rml",
+                                   root / "ui/wui_buttons.rml");
+        kast::Scene scene;
+        const auto add = [&](const char* name, bx::Vec3 position, kast::WorldUI ui) {
+            const entt::entity e = scene.create(name);
+            scene.registry().get<kast::Transform>(e).position = position;
+            scene.registry().emplace<kast::WorldUI>(e, std::move(ui));
+            return e;
+        };
+        const entt::entity camera = scene.create("Camera"); // at (0, 1.5, 6) looking down -Z
+        scene.registry().get<kast::Transform>(camera).position = {0.0f, 1.5f, 6.0f};
+        scene.registry().emplace<kast::Camera>(camera);
+        // Near (x 387..643, y 312..376) over Far (x 496..752, y 304..368), left of Angled: at 530,340 Near's R button, Far's L.
+        const kast::WorldUI plate{.path = "ui/wui_buttons.rml", .offset = {0.0f, 1.4f, 0.0f}, .interactive = true};
+        const entt::entity nearPanel = add("Near", {-0.8f, 0.0f, 2.0f}, plate);
+        const entt::entity farPanel = add("Far", {-0.2f, 0.0f, -2.0f}, plate);
+        kast::WorldUI world = plate;
+        world.mode = kast::WorldUIMode::World;
+        world.facing = kast::WorldUIFacing::Fixed;
+        world.offset = {0.0f, 0.0f, 0.0f};
+        world.pixelsPerMeter = 128.0f;
+        const entt::entity angled = add("Angled", {0.0f, 1.5f, 2.0f}, world); // as checkWorldUIRay's
+        scene.registry().get<kast::Transform>(angled).rotation = bx::fromEuler({0.0f, bx::toRad(-55.0f), 0.0f});
+        const entt::entity box = scene.create("Box"); // in front of Angled's left part (587..612 x 348..372 px)
+        scene.registry().get<kast::Transform>(box).position = {-0.163f, 1.5f, 3.5f};
+        scene.registry().get<kast::Transform>(box).scale = {0.1f, 0.1f, 0.1f};
+        scene.registry().emplace<kast::Collider>(box);
+        const auto idOf = [&](entt::entity e) { return scene.registry().get<kast::PersistentId>(e).value; };
+
+        kast::SceneGui gui("worldui_input");
+        kast::LuaSystems lua; // its physics (the box) and bus (clicks)
+        lua.setGui(&gui);
+        lua.start(scene, root, "", nullptr);
+        constexpr int kWidth = 1280, kHeight = 720;
+        const auto frame = [&] {
+            lua.tick(1.0f / 60.0f);
+            gui.sync(scene, root, lua.bus());
+            float view[16], proj[16];
+            kast::cameraMatrices(scene, camera, float(kWidth) / float(kHeight), false, view, proj);
+            gui.world().layout(scene, view, proj, kWidth, kHeight, &lua.physics());
+            gui.resize(kWidth, kHeight);
+            gui.render(0, BGFX_INVALID_HANDLE);
+            bgfx::frame();
+        };
+        const auto click = [&](float x, float y) {
+            SDL_Event event{};
+            event.motion = {.type = SDL_EVENT_MOUSE_MOTION, .x = x, .y = y};
+            gui.onEvent(event);
+            event.button = {.type = SDL_EVENT_MOUSE_BUTTON_DOWN, .button = SDL_BUTTON_LEFT, .down = true, .clicks = 1, .x = x, .y = y};
+            gui.onEvent(event);
+            event.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            event.button.down = false;
+            gui.onEvent(event);
+            const bool over = gui.mouseOver();
+            lua.bus().clearHistory();
+            frame(); // its tick delivers the clicks
+            return over;
+        };
+        const auto clicked = [&](const char* event, entt::entity e) {
+            return std::ranges::any_of(lua.bus().history(), [&](const kast::EventBus::Delivered& d) {
+                return d.name == event && d.payload.find(std::format("\"entity\":{}", idOf(e))) != std::string::npos;
+            });
+        };
+        frame();
+        frame(); // Angled's quad comes the frame after its tile
+        check(gui.world().document(idOf(nearPanel)) && gui.world().document(idOf(angled)) && gui.world().quads().size() == 1,
+              "the input fixture's panels load, Angled with its quad");
+
+        check(click(530.0f, 340.0f) && clicked("wui.right", nearPanel) && lua.bus().history().size() == 1,
+              "a click where two interactive Overlay panels overlap reaches the nearer one only, with its entity");
+        scene.registry().get<kast::WorldUI>(nearPanel).interactive = false;
+        frame();
+        check(click(530.0f, 340.0f) && clicked("wui.left", farPanel) && lua.bus().history().size() == 1,
+              "a non-interactive Overlay panel lets the click through to the one under it");
+        scene.registry().get<kast::WorldUI>(farPanel).interactive = false;
+        frame();
+        check(!click(530.0f, 340.0f) && lua.bus().history().empty(),
+              "non-interactive Overlay panels never get the mouse (mouseOver false: the game's)");
+
+        check(click(650.0f, 360.0f) && clicked("wui.right", angled),
+              "a click on the turned World panel reaches the button at its hit point (its right half)");
+        check(click(700.0f, 350.0f) && clicked("wui.right", angled) && click(580.0f, 345.0f) && clicked("wui.left", angled),
+              "World panel clicks map across it: its right and left buttons");
+        check(!click(600.0f, 360.0f) && lua.bus().history().empty(),
+              "a physics body in front of a World panel takes the click (none reaches it, mouseOver false)");
+        check(!click(900.0f, 600.0f) && lua.bus().history().empty(), "a click on nothing reaches no panel");
+        scene.registry().get<kast::WorldUI>(angled).interactive = false;
+        frame();
+        check(!click(650.0f, 360.0f) && lua.bus().history().empty(), "a non-interactive World panel gets no click");
+        lua.stop();
+        gui.release();
+    }
+    kast::gui::shutdown();
+    bgfx::shutdown();
+}
+
+// kast.gui.worldText's floating texts in a headless SceneGui: placed over their point, capped at kMaxWorldTexts (the
+// oldest go first), gone once their lifetime of advance() passed, and all at a new scene's reset().
+void checkWorldText()
+{
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    check(bgfx::init(init) && kast::gui::init(), "headless bgfx and RmlUi start (world text)");
+    {
+        kast::Scene scene;
+        const entt::entity camera = scene.create("Camera"); // at (0, 1.5, 6) looking down -Z
+        scene.registry().get<kast::Transform>(camera).position = {0.0f, 1.5f, 6.0f};
+        scene.registry().emplace<kast::Camera>(camera);
+        kast::SceneGui gui("worldui_text");
+        kast::EventBus bus;
+        const auto frame = [&] {
+            gui.sync(scene, {}, bus);
+            float view[16], proj[16];
+            kast::cameraMatrices(scene, camera, 1280.0f / 720.0f, false, view, proj);
+            gui.world().layout(scene, view, proj, 1280, 720, nullptr);
+            gui.resize(1280, 720);
+            gui.render(0, BGFX_INVALID_HANDLE);
+            bgfx::frame();
+        };
+        gui.worldText({0.0f, 1.5f, 0.0f}, "<b>12</b>", "damage", 1.0f);
+        gui.worldText({0.0f, 1.5f, 10.0f}, "behind", "heal", 0.5f);
+        check(gui.worldTextCount() == 2 && !gui.world().empty(), "worldText adds floating texts (render draws them)");
+        frame();
+        Rml::Context* context = Rml::GetContext("worldui_text-world");
+        Rml::ElementDocument* texts = nullptr;
+        for (int i = 0; context && i < context->GetNumDocuments(); ++i)
+            if (context->GetDocument(i)->GetSourceURL() == "world_text")
+                texts = context->GetDocument(i);
+        Rml::Element* first = texts && texts->GetNumChildren() == 2 ? texts->GetChild(0) : nullptr;
+        check(first && first->IsClassSet("world-text") && first->IsClassSet("damage") &&
+                  first->GetInnerRML() == "&lt;b&gt;12&lt;/b&gt;",
+              "a floating text is a div of classes world-text and its class, its text escaped");
+        if (first) {
+            const Rml::Vector2f at = first->GetAbsoluteOffset(Rml::BoxArea::Border) +
+                                     first->GetBox().GetSize(Rml::BoxArea::Border) * 0.5f;
+            check(std::abs(at.x - 640.0f) < 1.0f && std::abs(at.y - 360.0f) < 1.0f,
+                  std::format("a floating text is centered on its point's pixel (at {},{})", at.x, at.y).c_str());
+            check(texts->GetChild(1)->GetComputedValues().visibility() == Rml::Style::Visibility::Hidden,
+                  "a floating text behind the eye is hidden");
+        }
+        gui.advance(0.6f);
+        check(gui.worldTextCount() == 1, "a floating text goes once its lifetime passed, the others stay");
+        gui.advance(0.4f);
+        check(gui.worldTextCount() == 0, "the last one goes after its 1 s");
+        for (size_t i = 0; i < kast::kMaxWorldTexts + 10; ++i)
+            gui.worldText({0.0f, 1.5f, 0.0f}, std::to_string(i), "xp", 5.0f);
+        frame();
+        check(gui.worldTextCount() == kast::kMaxWorldTexts, "floating texts are capped at kMaxWorldTexts");
+        Rml::Element* oldest = texts ? texts->GetChild(0) : nullptr;
+        check(oldest && oldest->GetInnerRML() == "10", "past the cap the oldest floating texts went first");
+        gui.reset();
+        check(gui.worldTextCount() == 0 && gui.world().empty(), "a new scene's reset removes the floating texts");
+        gui.release();
+    }
+    kast::gui::shutdown();
+    bgfx::shutdown();
+}
+
 int main(int argc, char** argv)
 {
     kast::disableCrashDialogsIfRequested();
@@ -16696,6 +16914,9 @@ int main(int argc, char** argv)
         checkWorldGuiScene();
         checkWorldUIAtlas();
         checkWorldGuiAtlas();
+        checkWorldUIRay();
+        checkWorldGuiInput();
+        checkWorldText();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All world UI checks passed" : std::format("{} world UI check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
@@ -16883,6 +17104,9 @@ int main(int argc, char** argv)
     checkWorldGuiScene();
     checkWorldUIAtlas();
     checkWorldGuiAtlas();
+    checkWorldUIRay();
+    checkWorldGuiInput();
+    checkWorldText();
     checkGuiListMath();
     checkGuiLists();
     checkExternalEditor();

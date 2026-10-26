@@ -1,0 +1,13 @@
+<rml>
+<head>
+    <title>World UI Screen</title>
+    <style>
+        body { width: 100%; height: 100%; font-family: Roboto; font-size: 18px; }
+        #screen { display: block; position: absolute; left: 300px; top: 410px; width: 100px; height: 40px;
+                  background-color: #20a040; color: #ffffff; text-align: center; line-height: 40px; }
+    </style>
+</head>
+<body>
+    <button id="screen" data-event="wui.screen">Screen</button>
+</body>
+</rml>

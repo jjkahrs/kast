@@ -9,11 +9,15 @@
 
 namespace kast {
 
-bool publishButtonClick(EventBus& bus, std::string_view event, std::string_view id, std::string_view document)
+bool publishButtonClick(EventBus& bus, std::string_view event, std::string_view id, std::string_view document,
+                        uint64_t entity)
 {
     if (event.empty())
         return false;
-    bus.publish(std::string(event), {{"id", std::string(id)}, {"document", std::string(document)}}, "UI");
+    nlohmann::json payload = {{"id", std::string(id)}, {"document", std::string(document)}};
+    if (entity != 0)
+        payload["entity"] = entity;
+    bus.publish(std::string(event), std::move(payload), "UI");
     return true;
 }
 
@@ -22,7 +26,7 @@ void ButtonClickListener::ProcessEvent(Rml::Event& event)
     Rml::Element* target = event.GetTargetElement();
     Rml::Element* button = target && target->GetTagName() == "button" ? target : target ? target->Closest("button") : nullptr;
     if (button)
-        publishButtonClick(bus_, button->GetAttribute<Rml::String>("data-event", ""), button->GetId(), document_);
+        publishButtonClick(bus_, button->GetAttribute<Rml::String>("data-event", ""), button->GetId(), document_, entity_);
     for (Rml::Element* link = target; link && link != link->GetOwnerDocument(); link = link->GetParentNode())
         if (link->HasAttribute("data-link")) {
             bus_.publish("gui.link",

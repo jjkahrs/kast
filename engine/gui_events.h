@@ -4,13 +4,15 @@
 
 #include <RmlUi/Core/EventListener.h>
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <string_view>
 
 // The links from game GUIs to game logic, all published on the Play session's event bus from publisher "UI":
 // - clicking a <button data-event="name"> publishes "name" with payload {"id": <button id or "">, "document":
-//   <project-relative .rml path>}. A missing or empty data-event publishes nothing.
+//   <project-relative .rml path>} (a WorldUI panel's also "entity": its entity's id). A missing or empty data-event
+//   publishes nothing.
 // - clicking a rich text link (<span class="link" data-link="target">, gui_richtext.h; any element with data-link)
 //   publishes "gui.link" with {"id": <the id of the link's nearest element that has one, the rich text element's in a
 //   rich text with an id; "" if none>, "document": <.rml path>, "target": <its data-link>}.
@@ -21,18 +23,21 @@
 //   is that element's .rml ("" with no target). The modifier flags are the keys held at that moment.
 namespace kast {
 
-// Publishes the click event, or nothing if event is empty. True if it published.
-bool publishButtonClick(EventBus& bus, std::string_view event, std::string_view id, std::string_view document);
+// Publishes the click event, or nothing if event is empty. True if it published. entity: added to the payload unless 0.
+bool publishButtonClick(EventBus& bus, std::string_view event, std::string_view id, std::string_view document,
+                        uint64_t entity = 0);
 
-// Listens for clicks (buttons, links) on one document; the bus must outlive it.
+// Listens for clicks (buttons, links) on one document; the bus must outlive it. entity: a WorldUI panel's (0: none).
 class ButtonClickListener final : public Rml::EventListener {
 public:
-    ButtonClickListener(EventBus& bus, std::string document) : bus_(bus), document_(std::move(document)) {}
+    ButtonClickListener(EventBus& bus, std::string document, uint64_t entity = 0)
+        : bus_(bus), document_(std::move(document)), entity_(entity) {}
     void ProcessEvent(Rml::Event& event) override;
 
 private:
     EventBus& bus_;
     std::string document_;
+    uint64_t entity_ = 0;
 };
 
 // Listens for drags (dragstart, dragend) on one document; the bus must outlive it. documentPath names the .rml of any

@@ -214,3 +214,71 @@ add_test(NAME editor_world_ui_overflow_probe COMMAND kast_self_check --probe-png
          0.3423,0.3733,${world_ui_magenta} 0.4173,0.3733,${world_ui_magenta} 0.4757,0.3733,${world_ui_magenta}
          0.5224,0.3733,${world_ui_magenta} 0.5607,0.3733,${world_ui_editor_clear} 0.5925,0.3733,${world_ui_editor_clear})
 set_tests_properties(editor_world_ui_overflow_probe PROPERTIES FIXTURES_REQUIRED editor_world_ui_overflow_shot)
+
+# Mouse input and floating text (the C++ side is kast_self_check --worldui: checkWorldUIRay, checkWorldGuiInput,
+# checkWorldText). tests/project/world_ui_input.scene, the camera at (0, 1.5, 6) looking down -Z, 1280x720: panels on
+# ui/wui_buttons.rml (256x64, a blue L button left and R right, yellow while hovered; World ones 2 x 0.5 m): Overlay
+# (interactive) at 252..508 x 140..204 px and Passive (not) at 772..1028; Angled, World, Fixed facing turned 55 degrees
+# so its right half is nearer and wider on screen (its middle at x 640, its screen box's at 659: a click at 650,360
+# lies in its right half, a box-linear mapping would say left); Behind, World, at 818..996 x 409..454 with a box-collider
+# Wall in front of its right half (from x 907); Under, World, at 284..462 x 409..454 with the screen GUI's button
+# (ui/wui_screen.rml) over 300..400 x 410..450. scripts/world_ui_input.lua logs each click by panel, each
+# kast.gui.mouseOver() change, the worldText checks and the floating text count; it shows a damage text and a green
+# test block (ui/world_text.rcss, a 10 s animation) for 1 s.
+set(world_ui_input_forbid "world_ui_input: FAIL|Lua error|\\[warn\\] RmlUi|\\[error\\]")
+kast_game_project(world_ui_input "World UI Input Test" world_ui_input.scene FALSE)
+add_test(NAME build_game_world_ui_input
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DPROJECT=${CMAKE_CURRENT_BINARY_DIR}/game_projects/world_ui_input"
+          "-DOUT=${KAST_GAME_OUT}/world_ui_input" "-DEXE=World UI Input Test.exe" -DEXPECT=0 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_test.cmake")
+set_tests_properties(build_game_world_ui_input PROPERTIES FIXTURES_SETUP game_world_ui_input_built)
+# Real (pushed SDL) clicks, in order: Overlay's R; Angled's right half where a box-linear mapping says left, then its
+# left half; Behind where the Wall covers it (nothing, the mouse over no GUI), then where it shows (its L); Passive
+# (nothing: not interactive, kast.gui.mouseOver() false, so the game's own click handling gets it); the screen button
+# over Under (the screen GUI takes it, Under doesn't); Under beside the button (its R).
+add_test(NAME player_world_ui_input_clicks
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/world_ui_input" "-DEXE=World UI Input Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/world_ui_input_clicks.run"
+          "-DEXTRA_ARGS=--frames 100 --fixed-dt 0.0166667 --size 1280x720 --sim-click 10,444,172 --sim-click 20,650,360 --sim-click 30,600,360 --sim-click 40,960,430 --sim-click 50,850,430 --sim-click 60,836,172 --sim-click 70,350,430 --sim-click 80,440,430"
+          -DEXPECT=0 "-DEXPECT_OUTPUT=wui: mouseOver true.*wui: right on overlay.*wui: right on angled.*wui: left on angled.*wui: mouseOver false.*wui: mouseOver true.*wui: left on behind.*wui: mouseOver false.*wui: mouseOver true.*wui: screen.*wui: right on under"
+          "-DFORBID_OUTPUT=on passive|right on behind|left on under|${world_ui_input_forbid}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_world_ui_input_clicks PROPERTIES FIXTURES_REQUIRED game_world_ui_input_built TIMEOUT 90)
+# Shots: idle (no mouse; frame 100, the 1 s texts gone: logged count 0 at 1 s of Play time), the mouse resting on
+# Overlay's R, on Angled's right half, and frame 30 (the texts showing).
+# The 300 cap-test texts (0.001 s) go on the first frame, the two shown ones after 1 s.
+set(world_ui_input_expect_idle "world_ui_input: PASS.*wui: worldText count 2 at 0\\.02.*wui: worldText count 0 at 1\\.0[0-2]")
+set(world_ui_input_expect_hover_overlay "world_ui_input: PASS")
+set(world_ui_input_expect_hover_world "world_ui_input: PASS")
+set(world_ui_input_expect_text "world_ui_input: PASS")
+foreach(shot "idle|100|" "hover_overlay|100|--sim-move 10,444,172" "hover_world|100|--sim-move 10,650,360" "text|30|")
+  string(REPLACE "|" ";" shot "${shot}")
+  list(GET shot 0 name)
+  list(GET shot 1 frames)
+  list(GET shot 2 move)
+  add_test(NAME player_world_ui_input_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/world_ui_input" "-DEXE=World UI Input Test.exe"
+            "-DWORK_DIR=${KAST_GAME_OUT}/world_ui_input_${name}.run" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_world_ui_input_${name}.png"
+            "-DEXTRA_ARGS=--frames ${frames} --fixed-dt 0.0166667 --size 1280x720 ${move}" -DEXPECT=0
+            "-DEXPECT_OUTPUT=${world_ui_input_expect_${name}}" "-DFORBID_OUTPUT=${world_ui_input_forbid}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+  set_tests_properties(player_world_ui_input_${name} PROPERTIES FIXTURES_REQUIRED game_world_ui_input_built
+                       FIXTURES_SETUP player_world_ui_input_${name}_shot TIMEOUT 90)
+endforeach()
+# Probes: Overlay's L 265,150 and R 495,150; Angled's left half 578,340 and right half 725,332 (away from the letters);
+# the test block 640,250 and 560,240.
+set(world_ui_blue 32,48,128,12)
+set(world_ui_yellow 255,204,0,12)
+set(world_ui_green 0,255,0,12)
+set(world_ui_input_idle 0.2070,0.2083,${world_ui_blue} 0.3867,0.2083,${world_ui_blue}
+                        0.4520,0.4721,${world_ui_blue} 0.5668,0.4611,${world_ui_blue}
+                        0.5000,0.3472,${world_ui_clear} 0.4375,0.3333,${world_ui_clear})
+set(world_ui_input_hover_overlay 0.2070,0.2083,${world_ui_blue} 0.3867,0.2083,${world_ui_yellow}
+                                 0.4520,0.4721,${world_ui_blue} 0.5668,0.4611,${world_ui_blue})
+set(world_ui_input_hover_world 0.2070,0.2083,${world_ui_blue} 0.3867,0.2083,${world_ui_blue}
+                               0.4520,0.4721,${world_ui_blue} 0.5668,0.4611,${world_ui_yellow})
+set(world_ui_input_text 0.5000,0.3472,${world_ui_green} 0.4375,0.3333,${world_ui_green})
+foreach(name idle hover_overlay hover_world text)
+  add_test(NAME player_world_ui_input_${name}_probe
+    COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/player_world_ui_input_${name}.png" ${world_ui_input_${name}})
+  set_tests_properties(player_world_ui_input_${name}_probe PROPERTIES FIXTURES_REQUIRED player_world_ui_input_${name}_shot)
+endforeach()

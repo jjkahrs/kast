@@ -36,7 +36,9 @@ class ElementDocument;
 // one of its elements, else to the Dp one; a click or focus() in one takes the keyboard there and blurs the other's
 // focused element; click, focus, mouseOver, hovered and the data models span both.
 // WorldUI documents (world_ui.h) are its WorldGui's: synced, cleared and reset with these, the Overlay ones drawn under
-// them, the World ones into the WorldGui's atlas after them (the host hands its quads to the Renderer).
+// them, the World ones into the WorldGui's atlas after them (the host hands its quads to the Renderer). The mouse goes
+// to the screen GUIs first; the interactive WorldUI panels get it while it is over no screen GUI element. mouseOver
+// counts both.
 namespace kast {
 
 class SceneGui final : public GuiAccess {
@@ -65,7 +67,8 @@ public:
     // Draws the Overlay WorldUI documents, then both contexts over them, into view .. view + gui::kViews - 1 on
     // frameBuffer, as GuiContext::render, then the World ones into their atlas in the views after those.
     void render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer);
-    // An SDL event, positions mapped as GuiContext::onEvent; routed between the two contexts (see above).
+    // An SDL event, positions mapped as GuiContext::onEvent; routed between the two contexts, then the WorldUI panels
+    // (see above).
     void onEvent(const SDL_Event& event, float originX = 0.0f, float originY = 0.0f, float scale = 1.0f);
     void release(); // unloads every document and removes both contexts (before gui::shutdown)
     // Called after each setScale (kast_player saves the player's UI scale).
@@ -97,6 +100,13 @@ public:
     double dpRatio() override { return dpRatio_; }
     void writeEntity(uint64_t entity, const std::string& id, const GuiWrite& write) override { world_.write(entity, id, write); }
     std::optional<GuiValue> entityValue(uint64_t entity, const std::string& id) override { return world_.value(entity, id); }
+    void worldText(const std::array<float, 3>& position, std::string_view text, const std::string& cssClass,
+                   float lifetime) override
+    {
+        world_.worldText({position[0], position[1], position[2]}, text, cssClass, lifetime);
+    }
+    size_t worldTextCount() override { return world_.worldTextCount(); }
+    void advance(float dt) override { world_.advance(dt); }
 
 private:
     using Written = GuiWrite;
@@ -129,6 +139,8 @@ private:
     std::vector<Rml::Context*> contexts(); // the live ones (the Dp one made if needed); none without RmlUi
     void updateScale(); // the dp ratio from the size and settings, applied to both contexts
     void takeKeyboard(GuiScaling scaling); // that context gets keys and text; the other's focused element is blurred
+    void routeScreen(const SDL_Event& event, float originX, float originY, float scale); // between the two contexts
+    bool screenMouseOver(); // over an element of the screen GUIs
 
     GuiModels models_; // before the contexts: their models point into it
     GuiContext context_;    // Dp documents

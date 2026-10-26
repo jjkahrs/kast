@@ -388,7 +388,7 @@ enum class WorldUIFacing { Billboard, YawOnly, Fixed };
 // offset in the entity's local space. Overlay: drawn screen-space, width x height pixels, centered over the anchor with
 // its bottom on it; hidden off-screen, beyond maxDistance meters (0: unlimited) and, with occlude, behind physics
 // colliders. World: a width / pixelsPerMeter x height / pixelsPerMeter meter quad in the scene centered on the anchor,
-// turned by facing, depth-tested (occlude unused). interactive: World-space UI phase 3.
+// turned by facing, depth-tested (occlude unused). interactive: it takes mouse hover and clicks (world_ui.h).
 // Every field but path and visible may be missing from a scene file (its default).
 struct WorldUI {
     std::string path;
