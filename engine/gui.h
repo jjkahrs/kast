@@ -94,8 +94,9 @@ public:
     // Updates and draws the documents into view on frameBuffer (BGFX_INVALID_HANDLE = backbuffer) at the resize()
     // size, using views view .. view + gui::kViews - 1 (only the first unless a document has effects). The view's
     // clear is the caller's. shareViews: drawn over another context rendered just before in the same range, in the
-    // views after its (view is ignored).
-    void render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, bool shareViews = false);
+    // views after its (view is ignored). clear (with shareViews): frameBuffer is cleared to
+    // transparent first.
+    void render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, bool shareViews = false, bool clear = false);
     // Mouse, wheel, key and text events. Event positions are mapped to the area's pixels as (p - origin) * scale (then
     // to the context's units).
     void onEvent(const SDL_Event& event, float originX = 0.0f, float originY = 0.0f, float scale = 1.0f);

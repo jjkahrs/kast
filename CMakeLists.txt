@@ -48,6 +48,7 @@ foreach(path editor/shaders/vs_imgui editor/shaders/fs_imgui
              engine/shaders/vs_shadow_instanced engine/shaders/fs_shadow
              engine/shaders/fs_line engine/shaders/vs_sky engine/shaders/fs_sky
              engine/shaders/cs_particle_sim engine/shaders/vs_particle engine/shaders/fs_particle engine/shaders/cs_ibl
+             engine/shaders/vs_world_quad engine/shaders/fs_world_quad
              engine/shaders/cs_voxelgi_inject engine/shaders/cs_voxelgi_mip engine/shaders/cs_voxelgi_bounce
              engine/shaders/cs_sdfgi_build engine/shaders/cs_sdfgi_light engine/shaders/cs_sdfgi_probe
              engine/shaders/cs_hiz_build engine/shaders/cs_hiz_test engine/shaders/cs_hiz_debug

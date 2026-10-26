@@ -17,9 +17,9 @@
 instance, even when several entities use the same <code>.rml</code>, and Lua addresses one by its entity. Like UI Documents, they
 are drawn in Play only: in <code>kast_player</code> and in the editor's Game view while playing or paused, never while Stopped.
 Code: <code>engine/world_ui.h</code> (<code>kast::WorldGui</code>, owned by <code>kast::SceneGui</code>).</p>
-<p>This page covers <strong>Overlay</strong> mode. World mode (documents drawn as textured quads in the 3D scene, with Facing and
-Pixels Per Meter), mouse input on panels and floating text come in later phases: until then a World-mode WorldUI draws
-nothing and Interactive does nothing.</p>
+<p>Two modes: <a href="#overlay">Overlay</a> (drawn flat over the screen at a constant pixel size) and <a href="#world">World</a>
+(a textured quad in the 3D scene, hidden by what stands in front of it). Mouse input on panels and floating text come in
+later phases: until then Interactive does nothing.</p>
 
 <h2 id="component">The WorldUI component</h2>
 <p><em>World UI</em> in the Inspector (<a href="../editor/controls.html#worldui">Editor controls</a>). Every field is saved; a
@@ -32,13 +32,13 @@ WorldUI load unchanged.</p>
 <tbody>
 <tr><td><code>path</code></td><td><code>""</code></td><td>Project-relative <code>.rml</code> (saved as an <a href="asset-refs.html">asset reference</a>). Empty: nothing is drawn.</td></tr>
 <tr><td><code>visible</code></td><td><code>true</code></td><td>Off: the panel is hidden (its document stays loaded, keeping what Lua wrote).</td></tr>
-<tr><td><code>mode</code></td><td><code>"overlay"</code></td><td><code>"overlay"</code> or <code>"world"</code> (not drawn yet).</td></tr>
-<tr><td><code>facing</code></td><td><code>"billboard"</code></td><td>World mode only: <code>"billboard"</code>, <code>"yawOnly"</code> or <code>"fixed"</code>.</td></tr>
-<tr><td><code>offset</code></td><td><code>[0, 2, 0]</code></td><td>The anchor, in meters in the entity's local space (its world matrix applies, scale included).</td></tr>
-<tr><td><code>width</code>, <code>height</code></td><td><code>256</code>, <code>64</code></td><td>The document's size in pixels (at least 1).</td></tr>
-<tr><td><code>pixelsPerMeter</code></td><td><code>256</code></td><td>World mode only (at least 1).</td></tr>
+<tr><td><code>mode</code></td><td><code>"overlay"</code></td><td><code>"overlay"</code> or <code>"world"</code>.</td></tr>
+<tr><td><code>facing</code></td><td><code>"billboard"</code></td><td>World mode only: <code>"billboard"</code>, <code>"yawOnly"</code> or <code>"fixed"</code> (see <a href="#facing">Facing</a>).</td></tr>
+<tr><td><code>offset</code></td><td><code>[0, 2, 0]</code></td><td>The anchor, in meters in the entity's local space (its world matrix applies, scale included). World mode: the quad's center.</td></tr>
+<tr><td><code>width</code>, <code>height</code></td><td><code>256</code>, <code>64</code></td><td>The document's size in pixels (at least 1); World mode: its tile in the atlas.</td></tr>
+<tr><td><code>pixelsPerMeter</code></td><td><code>256</code></td><td>World mode only (at least 1): the quad is <code>width / pixelsPerMeter</code> x <code>height / pixelsPerMeter</code> meters.</td></tr>
 <tr><td><code>maxDistance</code></td><td><code>50</code></td><td>Hidden when the anchor is further than this many meters from the camera; <code>0</code>: never.</td></tr>
-<tr><td><code>occlude</code></td><td><code>true</code></td><td>Hidden while a physics body lies between the camera and the anchor (see <a href="#occlusion">Occlusion</a>).</td></tr>
+<tr><td><code>occlude</code></td><td><code>true</code></td><td>Overlay: hidden while a physics body lies between the camera and the anchor (see <a href="#occlusion">Occlusion</a>). World mode: always depth-tested instead, so it changes nothing.</td></tr>
 <tr><td><code>interactive</code></td><td><code>false</code></td><td>Mouse hover and clicks on the panel (not used yet).</td></tr>
 </tbody>
 </table>
@@ -73,6 +73,67 @@ the panel is hidden if it hits a body before the anchor. Bodies of the entity it
 the frame being drawn (a depth read-back lags a frame or more) and it costs one ray per panel otherwise shown. The catch:
 only colliders occlude. A wall with a Mesh Renderer but no Collider does not hide a panel behind it; give walls that should
 hide nameplates a (static) Collider. Without a physics session (none outside Play) nothing occludes.</p>
+
+<h2 id="world">World mode</h2>
+<p>A World-mode panel is a quad in the scene: <code>width / pixelsPerMeter</code> meters wide and <code>height / pixelsPerMeter</code>
+tall, centered on the anchor, turned by <a href="#facing">Facing</a>. It is drawn with the scene's blended (transparent)
+meshes and particles, sorted far to near with them by its center, and depth-tested against the opaque scene without writing
+depth: a wall in front of a sign hides the part of it behind the wall, with or without a Collider. It is unlit, but it is
+drawn <strong>before post-processing</strong> (into the HDR scene): exposure, tonemapping, bloom, depth of field and color
+grading apply to it as to the rest of the scene, so a panel looks like a sign in the world rather than a HUD. Distance and
+volumetric fog do not. It is hidden beyond <code>maxDistance</code> and when wholly behind the camera; quads off the sides of
+the view are left to the GPU to clip.</p>
+<p>Text stays legible because each document is drawn at its full pixel size and the quad samples it with mipmaps and
+linear filtering: a 512x128 sign at 256 px/m (2 x 0.5 m) with 64 px bold text reads clearly at 5 m in 720p
+(<code>tests/reference/world_ui_sign.png</code>). For a sharper panel, raise <code>width</code>, <code>height</code> and
+<code>pixelsPerMeter</code> together: the quad keeps its size and gets more pixels.</p>
+
+<h3 id="facing">Facing</h3>
+<table>
+<thead>
+<tr><th>Facing</th><th>The quad</th></tr>
+</thead>
+<tbody>
+<tr><td><code>billboard</code></td><td>Lies in the camera's plane: always seen straight on, from any side, above or below.</td></tr>
+<tr><td><code>yawOnly</code></td><td>Stays upright and turns only around world Y to face the camera: from above it is seen foreshortened, like a standing board (nameplates that should not lean back).</td></tr>
+<tr><td><code>fixed</code></td><td>Lies in the entity's own XY plane (its rotation; scale ignored), read from its +Z side: a sign on a wall. Seen from behind it shows mirrored.</td></tr>
+</tbody>
+</table>
+
+<h3 id="atlas">The atlas</h3>
+<p>All World-mode documents share one RmlUi context drawn into one <strong>2048x2048 RGBA8 atlas</strong> texture (premultiplied
+alpha, with mipmaps: 16 MiB, about 21 MiB with them), one tile per panel of its <code>width x height</code> pixels, 4 transparent
+pixels apart. Each frame the panels in range are sorted near to far and packed in rows in that order, so the nearest always
+get a tile: the atlas holds about 210 nameplates of 256x64 (the 100-nameplate target with room to spare), or four 1000x1000
+panels. When it is full, the farthest panels are not drawn and the log says, once per run:
+<code>World UI atlas full (2048x2048): the N farthest World panel(s) not drawn (logged once)</code>. What a document draws
+outside its box is clipped to its tile. Documents with effects (filters, box-shadow) work, but their layers are atlas-sized
+(16 MiB each).</p>
+<p>The atlas is drawn after the screen GUIs, in the views after theirs (<a href="#views">below</a>), so the scene samples
+it as drawn the frame before: a panel's quad appears the frame after the panel comes into range, and text that Lua changes
+shows a frame later (1/60 s at 60 fps). A quad always uses the tile its content was drawn in, so tiles moving as panels come
+and go never show the wrong panel.</p>
+
+<h3 id="views">bgfx views</h3>
+<p>The atlas takes no bgfx views of its own: it is drawn in the screen GUIs' range (<code>gui::kViews</code> = 65 views), in the
+views after theirs (<code>GuiContext::render</code>'s shareViews), usually one. The editor's 256 views stay as they were:</p>
+<table>
+<thead>
+<tr><th>Editor views</th><th>Use</th></tr>
+</thead>
+<tbody>
+<tr><td>0 - 56</td><td>Scene view: shadow maps (34), then its scene and post passes (23)</td></tr>
+<tr><td>57</td><td>Scene view overlays</td></tr>
+<tr><td>58 - 114</td><td>Game view: shadow maps, then its scene and post passes (World-mode quads in its blended pass)</td></tr>
+<tr><td>115 - 179</td><td>Game view GUIs: Overlay WorldUIs, UI Documents (Dp, then All), then the World UI atlas</td></tr>
+<tr><td>180 - 244</td><td>GUI Builder preview</td></tr>
+<tr><td>245 - 249</td><td>Shader Graph preview</td></tr>
+<tr><td>250 - 254</td><td>Model Preview</td></tr>
+<tr><td>255</td><td>ImGui</td></tr>
+</tbody>
+</table>
+<p><code>kast_player</code>: 0 - 33 shadow maps, 34 - 56 scene and post passes, 57 - 121 the GUIs then the atlas, 122 the
+readable target's present; 123 - 255 free.</p>
 
 <h2 id="lua">Lua</h2>
 <p>The <code>kast.gui</code> functions that act on one document's element take an <strong>entity id first</strong> to act on that
@@ -110,9 +171,16 @@ on. The Inspector shows a path that is not in the project as <em>(missing)</em> 
 <h2 id="tests">Tests</h2>
 <p><code>kast_self_check --worldui</code>: component defaults, JSON round trip, missing fields, an old scene, validation,
 <code>worldToScreen</code> (center, edges, beside, behind), placement order and culling, and a headless <code>SceneGui</code> with
-Lua, physics occlusion and a bad path. <code>ctest -R world_ui</code>: <code>tests/project/world_ui.scene</code> in the built player
-(pixel probes of every case at frame 30 and 120, the Mover's panel following it) and in the editor's Game view (panels in Play,
-none Stopped), the Inspector, and a save round trip.</p>
+Lua, physics occlusion and a bad path; World mode: atlas packing (rows, padding, what does not fit), the quad corners of
+each facing (camera turned, looking down, a turned and scaled entity), and a headless <code>SceneGui</code> with World panels (the
+atlas context, tiles nearest first, the quad's size from <code>pixelsPerMeter</code> and its frame of delay, culling, a full atlas
+warning once, tiles following the camera). <code>ctest -R world_ui</code>: <code>tests/project/world_ui.scene</code> in the built
+player (pixel probes of every case at frame 30 and 120, the Mover's panel following it) and in the editor's Game view (panels
+in Play, none Stopped), the Inspector, and a save round trip. World mode: <code>tests/project/world_ui_world.scene</code> (driven
+by <code>scripts/world_ui_world.lua</code>) in the built player and the Game view from three cameras and with Fixed turned:
+probes of the Sign's edges (its size in pixels at 5 m), a Wall hiding half a panel, Fixed narrowing, Yaw Only upright from
+above; the Sign's inside the same from all three cameras and matching <code>tests/reference/world_ui_sign.png</code>; and
+<code>tests/project/world_ui_overflow.scene</code> (six 1000x1000 panels: the nearest four drawn, the warning logged once).</p>
 </main>
 </div>
 </body>

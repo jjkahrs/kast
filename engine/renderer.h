@@ -178,6 +178,15 @@ void buildMips(MipImage& image, bool srgb);
 // The caller owns the views' framebuffers, rects and clears; these set the view transform and mode and submit.
 class Renderer {
 public:
+    // A textured quad in world space (a World UI panel, world_ui.h): unlit, depth-tested, sorted far to near with the
+    // blended draws by its center. corners: top-left, top-right, bottom-right, bottom-left; uv: the texture's rect
+    // (u0, v0 at the top-left, u1, v1).
+    struct WorldQuad {
+        std::array<bx::Vec3, 4> corners{bx::Vec3{0.0f, 0.0f, 0.0f}, bx::Vec3{0.0f, 0.0f, 0.0f},
+                                        bx::Vec3{0.0f, 0.0f, 0.0f}, bx::Vec3{0.0f, 0.0f, 0.0f}};
+        std::array<float, 4> uv{0.0f, 0.0f, 1.0f, 1.0f};
+    };
+
     // The cascades, then 6 cube faces per shadowed point light, then one per shadowed spot / area light, then the VoxelGI
     // view (its volumes' compute passes, after the shadow maps they read; named "VoxelGI" for its GPU time), then the
     // SDFGI view (its cascades' compute passes; "SDFGI").
@@ -211,6 +220,12 @@ public:
     // blendView (PostProcess::volumetricFogView()); UINT16_MAX (the default): no volumetric fog.
     void setTarget(bgfx::FrameBufferHandle target, uint16_t width, uint16_t height, bgfx::ViewId blendView,
                    bgfx::ViewId fogView = UINT16_MAX);
+    // The next render() (not a bake) also draws quads from texture (premultiplied alpha, sRGB values: a GUI's); none after.
+    void setWorldQuads(bgfx::TextureHandle texture, std::span<const WorldQuad> quads)
+    {
+        worldQuadTexture_ = texture;
+        worldQuads_.assign(quads.begin(), quads.end());
+    }
     // Frames whose opaque scene color / depth was copied for SCREEN_TEXTURE / DEPTH_TEXTURE, since init.
     struct SceneCopies {
         uint64_t screen = 0, depth = 0;
@@ -459,6 +474,7 @@ private:
     void destroyCopies();
     // Draws occlusion found hidden: their boxes for renderOverlays (setShowOccluded), counted in stats_.
     void drawOccludedBoxes(bgfx::ViewId view);
+    void drawWorldQuad(bgfx::ViewId view, const WorldQuad& quad);
     // Culling is on and item is outside frustum (posed draws never are: their bounds are the bind pose's).
     // ponytail: by the undisplaced bounds; a .kshader vertex() moving geometry outside them can pop at the frustum's edge.
     // Pad the bounds per material (a .kshader "cull margin") if that shows.
@@ -608,6 +624,11 @@ private:
     std::unique_ptr<VolumetricFog> volumetricFog_; // its history follows this Renderer's camera
     bool capture_ = false; // bakeProbe: no particles, no probes, no VoxelGI, no SDFGI
     ParticleRenderer particles_;
+    std::vector<WorldQuad> worldQuads_; // setWorldQuads, for the next render()
+    bgfx::TextureHandle worldQuadTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::VertexLayout worldQuadLayout_; // position, texcoord0
+    bgfx::ProgramHandle worldQuadProgram_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle worldQuadSampler_ = BGFX_INVALID_HANDLE;
     float timeSeconds_ = 0.0f; // setTime
     bool instancing_ = true;
     bool culling_ = true;

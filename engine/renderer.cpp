@@ -4,6 +4,7 @@
 #include "fs_mesh.bin.h"
 #include "fs_mesh_sdfgi.bin.h"
 #include "fs_shadow.bin.h"
+#include "fs_world_quad.bin.h"
 #include "vs_line.bin.h"
 #include "vs_mesh.bin.h"
 #include "vs_mesh_instanced.bin.h"
@@ -11,6 +12,7 @@
 #include "vs_shadow.bin.h"
 #include "vs_shadow_instanced.bin.h"
 #include "vs_shadow_skinned.bin.h"
+#include "vs_world_quad.bin.h"
 
 #include <algorithm>
 #include <cctype>
@@ -778,6 +780,13 @@ void Renderer::init()
     sky_.init();
     envFilter_.init();
     particles_.init(bgfx::getCaps()->supported);
+    worldQuadLayout_.begin()
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+        .end();
+    worldQuadProgram_ = bgfx::createProgram(bgfx::createShader(bgfx::makeRef(vs_world_quad, sizeof(vs_world_quad))),
+                                            bgfx::createShader(bgfx::makeRef(fs_world_quad, sizeof(fs_world_quad))), true);
+    worldQuadSampler_ = bgfx::createUniform("s_worldQuad", bgfx::UniformType::Sampler);
     hiz_.init();
     voxelGi_->passes.init();
     sdfgi_->init();
@@ -858,6 +867,8 @@ void Renderer::shutdown()
     envFilter_.shutdown();
     sky_.shutdown();
     particles_.shutdown();
+    bgfx::destroy(worldQuadProgram_);
+    bgfx::destroy(worldQuadSampler_);
     hiz_.shutdown();
     voxelGi_->clear();
     for (bgfx::UniformHandle uniform : {voxelGi_->params, voxelGi_->cones, voxelGi_->sampler})
@@ -2714,6 +2725,12 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
         capture_ ? std::vector<ParticleRenderer::Draw>() : particles_.simulate(scene, view, culling_ ? &frustum : nullptr);
     for (const ParticleRenderer::Draw& emitter : particles)
         centers.push_back(emitter.center);
+    std::vector<WorldQuad> quads; // setWorldQuads': one blended draw each, sorted by its center
+    if (!capture_ && bgfx::isValid(worldQuadTexture_))
+        quads.swap(worldQuads_);
+    worldQuads_.clear();
+    for (const WorldQuad& quad : quads)
+        centers.push_back(bx::mul(bx::add(quad.corners[0], quad.corners[2]), 0.5f));
     std::vector<const DrawItem*> batch;
     for (const std::vector<size_t>& indices :
          batchDraws(opaque.size(), [&](size_t i) {
@@ -2763,6 +2780,10 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
             submit(blendView, *blended[i], lightsOf(*blended[i]));
             continue;
         }
+        if (i >= blended.size() + particles.size()) {
+            drawWorldQuad(blendView, quads[i - blended.size() - particles.size()]);
+            continue;
+        }
         const ParticleRenderer::Draw& emitter = particles[i - blended.size()];
         const bgfx::TextureHandle image = texture(emitter.emitter->texture, TextureUsage::Color); // white_: none or failed to load
         particles_.draw(emitter, blendView, image, image.idx != white_.idx, fogColor, fogParams, cameraPos,
@@ -2785,6 +2806,32 @@ void Renderer::renderOverlays(const Scene& scene, bgfx::ViewId view, const float
     drawParticleShape(scene, view, selected);
     drawFogVolume(scene, view, selected);
     drawOccludedBoxes(view);
+}
+
+void Renderer::drawWorldQuad(bgfx::ViewId view, const WorldQuad& quad)
+{
+    struct Vertex {
+        float x, y, z, u, v;
+    };
+    bgfx::TransientVertexBuffer vertices;
+    bgfx::TransientIndexBuffer indices;
+    if (!bgfx::allocTransientBuffers(&vertices, worldQuadLayout_, 4, &indices, 6))
+        return; // out of transient memory this frame: not drawn
+    const auto [u0, v0, u1, v1] = quad.uv;
+    const float uvs[4][2] = {{u0, v0}, {u1, v0}, {u1, v1}, {u0, v1}};
+    auto* out = reinterpret_cast<Vertex*>(vertices.data);
+    for (size_t i = 0; i < 4; ++i)
+        out[i] = {quad.corners[i].x, quad.corners[i].y, quad.corners[i].z, uvs[i][0], uvs[i][1]};
+    const uint16_t corners[6] = {0, 1, 2, 0, 2, 3};
+    std::memcpy(indices.data, corners, sizeof(corners));
+    ++stats_.draws;
+    stats_.triangles += 2;
+    bgfx::setVertexBuffer(0, &vertices);
+    bgfx::setIndexBuffer(&indices);
+    bgfx::setTexture(0, worldQuadSampler_, worldQuadTexture_);
+    // Both faces; premultiplied alpha; tested against the scene's depth, not written (as blended meshes).
+    bgfx::setState((kState & ~BGFX_STATE_WRITE_Z) | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA));
+    bgfx::submit(view, worldQuadProgram_);
 }
 
 void Renderer::drawOccludedBoxes(bgfx::ViewId view)
