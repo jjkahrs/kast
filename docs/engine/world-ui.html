@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>World-space UI - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="ssao.html">SSAO</a></li><li><a href="ssr.html">Screen-space reflections</a></li><li><a href="depth-of-field.html">Depth of field</a></li><li><a href="volumetric-fog.html">Volumetric fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="lightmaps.html">Lightmaps and GI</a></li><li><a href="voxelgi.html">VoxelGI</a></li><li><a href="sdfgi.html">SDFGI</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="world-ui.html" class="active">World-space UI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li><li><a href="lod-and-occlusion.html">LOD and occlusion</a></li><li><a href="asset-refs.html">Asset references</a></li></ul></nav>
+<main>
+<h1 id="world-ui">World-space UI</h1>
+<p>A <strong>WorldUI</strong> component floats a game GUI (an <code>.rml</code> document, styled and scripted as in
+<a href="game-gui.html">Game GUI</a>) at its entity: nameplates, health bars, signs. Each WorldUI entity gets its own document
+instance, even when several entities use the same <code>.rml</code>, and Lua addresses one by its entity. Like UI Documents, they
+are drawn in Play only: in <code>kast_player</code> and in the editor's Game view while playing or paused, never while Stopped.
+Code: <code>engine/world_ui.h</code> (<code>kast::WorldGui</code>, owned by <code>kast::SceneGui</code>).</p>
+<p>This page covers <strong>Overlay</strong> mode. World mode (documents drawn as textured quads in the 3D scene, with Facing and
+Pixels Per Meter), mouse input on panels and floating text come in later phases: until then a World-mode WorldUI draws
+nothing and Interactive does nothing.</p>
+
+<h2 id="component">The WorldUI component</h2>
+<p><em>World UI</em> in the Inspector (<a href="../editor/controls.html#worldui">Editor controls</a>). Every field is saved; a
+scene file may leave out any field but <code>path</code> and <code>visible</code> (it then has its default), and scenes from before
+WorldUI load unchanged.</p>
+<table>
+<thead>
+<tr><th>Field (JSON)</th><th>Default</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>path</code></td><td><code>""</code></td><td>Project-relative <code>.rml</code> (saved as an <a href="asset-refs.html">asset reference</a>). Empty: nothing is drawn.</td></tr>
+<tr><td><code>visible</code></td><td><code>true</code></td><td>Off: the panel is hidden (its document stays loaded, keeping what Lua wrote).</td></tr>
+<tr><td><code>mode</code></td><td><code>"overlay"</code></td><td><code>"overlay"</code> or <code>"world"</code> (not drawn yet).</td></tr>
+<tr><td><code>facing</code></td><td><code>"billboard"</code></td><td>World mode only: <code>"billboard"</code>, <code>"yawOnly"</code> or <code>"fixed"</code>.</td></tr>
+<tr><td><code>offset</code></td><td><code>[0, 2, 0]</code></td><td>The anchor, in meters in the entity's local space (its world matrix applies, scale included).</td></tr>
+<tr><td><code>width</code>, <code>height</code></td><td><code>256</code>, <code>64</code></td><td>The document's size in pixels (at least 1).</td></tr>
+<tr><td><code>pixelsPerMeter</code></td><td><code>256</code></td><td>World mode only (at least 1).</td></tr>
+<tr><td><code>maxDistance</code></td><td><code>50</code></td><td>Hidden when the anchor is further than this many meters from the camera; <code>0</code>: never.</td></tr>
+<tr><td><code>occlude</code></td><td><code>true</code></td><td>Hidden while a physics body lies between the camera and the anchor (see <a href="#occlusion">Occlusion</a>).</td></tr>
+<tr><td><code>interactive</code></td><td><code>false</code></td><td>Mouse hover and clicks on the panel (not used yet).</td></tr>
+</tbody>
+</table>
+<pre><code class="language-json">"WorldUI": { "path": { "id": "...", "path": "ui/nameplate.rml" }, "visible": true, "offset": [0, 1.4, 0], "width": 96, "height": 32 }
+</code></pre>
+
+<h2 id="overlay">Overlay mode</h2>
+<p>Every frame the anchor is projected through the camera the game renders from (the first Camera entity): the document is
+drawn screen-space at a constant pixel size, centered horizontally on the anchor with its bottom edge on it. It is hidden
+when the anchor is behind the camera or off the view, beyond <code>maxDistance</code>, or occluded. Panels are drawn far to near,
+so a nearer panel covers a farther one where they overlap, and all of them are drawn <strong>under</strong> the screen GUIs (UI
+Documents), so a HUD stays on top of nameplates. The document's <code>&lt;body&gt;</code> is given <code>display: block</code>,
+<code>position: absolute</code> and the component's size; style its content as usual (RmlUi has no default styles: blocks need
+<code>display: block</code>).</p>
+<pre><code class="language-html">&lt;rml&gt;
+&lt;head&gt;
+    &lt;style&gt;
+        body { font-family: Roboto; font-size: 18px; color: #000000; }
+        .plate { display: block; width: 100%; height: 100%; background-color: #ff00ff; text-align: center; }
+    &lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;&lt;div id="plate" class="plate"&gt;&lt;p id="name"&gt;Name&lt;/p&gt;&lt;/div&gt;&lt;/body&gt;
+&lt;/rml&gt;
+</code></pre>
+<p>GUI prefabs, rich text (<code>&lt;p class="rich"&gt;</code>), the default widget style, effects and project fonts work as in UI
+Documents. Data models (<code>data-model</code>), clicks and hot reload of the files are not supported on WorldUI documents yet.</p>
+
+<h3 id="occlusion">Occlusion</h3>
+<p>With <code>occlude</code> on, a ray is cast through the <a href="physics.html">physics</a> world from the camera to the anchor;
+the panel is hidden if it hits a body before the anchor. Bodies of the entity itself, its ancestors and its descendants
+(e.g. a character's own capsule) and trigger colliders are skipped. Why physics and not the depth buffer: the answer is for
+the frame being drawn (a depth read-back lags a frame or more) and it costs one ray per panel otherwise shown. The catch:
+only colliders occlude. A wall with a Mesh Renderer but no Collider does not hide a panel behind it; give walls that should
+hide nameplates a (static) Collider. Without a physics session (none outside Play) nothing occludes.</p>
+
+<h2 id="lua">Lua</h2>
+<p>The <code>kast.gui</code> functions that act on one document's element take an <strong>entity id first</strong> to act on that
+entity's WorldUI document only:</p>
+<table>
+<thead>
+<tr><th>Screen GUIs (UI Documents)</th><th>One entity's WorldUI</th></tr>
+</thead>
+<tbody>
+<tr><td><code>kast.gui.setText(id, text)</code></td><td><code>kast.gui.setText(entity, id, text)</code></td></tr>
+<tr><td><code>kast.gui.setRichText(id, text)</code></td><td><code>kast.gui.setRichText(entity, id, text)</code></td></tr>
+<tr><td><code>kast.gui.setVisible(id, visible)</code></td><td><code>kast.gui.setVisible(entity, id, visible)</code></td></tr>
+<tr><td><code>kast.gui.setAttribute(id, name, value)</code></td><td><code>kast.gui.setAttribute(entity, id, name, value)</code></td></tr>
+<tr><td><code>kast.gui.setValue(id, value)</code></td><td><code>kast.gui.setValue(entity, id, value)</code></td></tr>
+<tr><td><code>kast.gui.value(id)</code></td><td><code>kast.gui.value(entity, id)</code></td></tr>
+</tbody>
+</table>
+<p>The entity form is used when the call has one argument more than the plain form and the first is a number (an entity id,
+as <code>kast.query</code> returns); every other call is the plain form, with its errors as before (<code>kast.gui.setText(5,
+"x")</code> still raises <em>id must be a string</em>). An id that names no entity raises <em>invalid entity id</em>. The plain forms
+never touch WorldUI documents. Writes are kept per entity like <code>setText</code>'s: made in <code>init</code>, before the document has
+loaded, they apply when it does; they are forgotten when the next scene's systems start.</p>
+<pre><code class="language-lua">for e in kast.query("WorldUI") do
+    kast.gui.setText(e, "name", "Guard")             -- this entity's panel only
+end
+kast.gui.setAttribute(boss, "plate", "class", "plate elite")
+kast.gui.setVisible(boss, "hp", false)
+</code></pre>
+
+<h2 id="errors">Errors</h2>
+<p>A missing <code>.rml</code> (or one with RmlUi errors) logs <code>World UI document 'ui/x.rml' not found</code> (or <em>has errors</em>)
+once per path, however many entities use it, and those entities draw nothing; every other panel still draws and Play goes
+on. The Inspector shows a path that is not in the project as <em>(missing)</em> with a warning.</p>
+
+<h2 id="tests">Tests</h2>
+<p><code>kast_self_check --worldui</code>: component defaults, JSON round trip, missing fields, an old scene, validation,
+<code>worldToScreen</code> (center, edges, beside, behind), placement order and culling, and a headless <code>SceneGui</code> with
+Lua, physics occlusion and a bad path. <code>ctest -R world_ui</code>: <code>tests/project/world_ui.scene</code> in the built player
+(pixel probes of every case at frame 30 and 120, the Mover's panel following it) and in the editor's Game view (panels in Play,
+none Stopped), the Inspector, and a save round trip.</p>
+</main>
+</div>
+</body>
+</html>

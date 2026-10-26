@@ -1320,22 +1320,39 @@ void LuaSystems::State::bindGuiApi()
             raise(L, std::format("kast.gui.{}: {} must be a string, got {}", function, what, toString(L, value)));
         return value.as<std::string>();
     };
+    // The functions that act on one document's element (value, setValue, setText, setRichText, setVisible,
+    // setAttribute) also take an entity id first: one argument more than their own and a number first target that
+    // entity's WorldUI document (GuiAccess::writeEntity); anything else is their own form, its errors as they were.
+    const auto arg = [](const sol::variadic_args& args, size_t i) {
+        return i < args.size() ? args.get<sol::object>(static_cast<int>(i)) : sol::make_object(args.lua_state(), sol::lua_nil);
+    };
+    const auto target = [=, this](lua_State* L, const sol::variadic_args& args, size_t own) -> std::optional<EntityId> {
+        if (args.size() <= own || arg(args, 0).get_type() != sol::type::number)
+            return std::nullopt;
+        return scene.registry().get<PersistentId>(entity(L, arg(args, 0))).value;
+    };
     guiApi = lua.create_table();
-    guiApi.set_function("value", [=, this](sol::this_state L, const sol::object& id) -> sol::object {
-        const std::optional<GuiValue> value = gui->value(text(L, "value", "id", id));
+    guiApi.set_function("value", [=, this](sol::this_state L, sol::variadic_args args) -> sol::object {
+        const std::optional<EntityId> e = target(L, args, 1);
+        const std::string id = text(L, "value", "id", arg(args, e ? 1 : 0));
+        const std::optional<GuiValue> value = e ? gui->entityValue(*e, id) : gui->value(id);
         return value ? jsonToLua(lua, *value) : sol::object(sol::lua_nil);
     });
-    guiApi.set_function("setValue", [=, this](sol::this_state L, const sol::object& id, const sol::object& value) {
-        const std::string widget = text(L, "setValue", "id", id);
+    guiApi.set_function("setValue", [=, this](sol::this_state L, sol::variadic_args args) {
+        const std::optional<EntityId> e = target(L, args, 2);
+        const std::string widget = text(L, "setValue", "id", arg(args, e ? 1 : 0));
+        const sol::object value = arg(args, e ? 2 : 1);
+        GuiValue json;
         switch (value.get_type()) {
-        case sol::type::boolean: gui->setValue(widget, value.as<bool>()); break;
-        case sol::type::number: gui->setValue(widget, value.as<double>()); break;
-        case sol::type::string: gui->setValue(widget, value.as<std::string>()); break;
+        case sol::type::boolean: json = value.as<bool>(); break;
+        case sol::type::number: json = value.as<double>(); break;
+        case sol::type::string: json = value.as<std::string>(); break;
         case sol::type::lua_nil:
-        case sol::type::none: gui->setValue(widget, nullptr); break; // a list: no row selected
+        case sol::type::none: json = nullptr; break; // a list: no row selected
         default:
             raise(L, std::format("kast.gui.setValue: value must be a boolean, number, string or nil, got {}", toString(L, value)));
         }
+        e ? gui->writeEntity(*e, widget, {.value = std::move(json)}) : gui->setValue(widget, std::move(json));
     });
     guiApi.set_function("scrollTo", [=, this](sol::this_state L, const sol::object& id, const sol::object& index) {
         const std::string list = text(L, "scrollTo", "id", id);
@@ -1347,21 +1364,33 @@ void LuaSystems::State::bindGuiApi()
     guiApi.set_function("scrollToEnd", [=, this](sol::this_state L, const sol::object& id) {
         gui->scrollToEnd(text(L, "scrollToEnd", "id", id));
     });
-    guiApi.set_function("setText", [=, this](sol::this_state L, const sol::object& id, const sol::object& value) {
-        gui->setText(text(L, "setText", "id", id), text(L, "setText", "text", value));
+    guiApi.set_function("setText", [=, this](sol::this_state L, sol::variadic_args args) {
+        const std::optional<EntityId> e = target(L, args, 2);
+        const std::string id = text(L, "setText", "id", arg(args, e ? 1 : 0));
+        std::string value = text(L, "setText", "text", arg(args, e ? 2 : 1));
+        e ? gui->writeEntity(*e, id, {.text = std::move(value)}) : gui->setText(id, value);
     });
-    guiApi.set_function("setRichText", [=, this](sol::this_state L, const sol::object& id, const sol::object& value) {
-        gui->setRichText(text(L, "setRichText", "id", id), text(L, "setRichText", "text", value));
+    guiApi.set_function("setRichText", [=, this](sol::this_state L, sol::variadic_args args) {
+        const std::optional<EntityId> e = target(L, args, 2);
+        const std::string id = text(L, "setRichText", "id", arg(args, e ? 1 : 0));
+        std::string value = text(L, "setRichText", "text", arg(args, e ? 2 : 1));
+        e ? gui->writeEntity(*e, id, {.rich = std::move(value)}) : gui->setRichText(id, value);
     });
-    guiApi.set_function("setVisible", [=, this](sol::this_state L, const sol::object& id, const sol::object& visible) {
+    guiApi.set_function("setVisible", [=, this](sol::this_state L, sol::variadic_args args) {
+        const std::optional<EntityId> e = target(L, args, 2);
+        const sol::object visible = arg(args, e ? 2 : 1);
         if (visible.get_type() != sol::type::boolean)
             raise(L, std::format("kast.gui.setVisible: visible must be a boolean, got {}", toString(L, visible)));
-        gui->setVisible(text(L, "setVisible", "id", id), visible.as<bool>());
+        const std::string id = text(L, "setVisible", "id", arg(args, e ? 1 : 0));
+        e ? gui->writeEntity(*e, id, {.visible = visible.as<bool>()}) : gui->setVisible(id, visible.as<bool>());
     });
-    guiApi.set_function("setAttribute", [=, this](sol::this_state L, const sol::object& id, const sol::object& name,
-                                                  const sol::object& value) {
-        gui->setAttribute(text(L, "setAttribute", "id", id), text(L, "setAttribute", "name", name),
-                          text(L, "setAttribute", "value", value));
+    guiApi.set_function("setAttribute", [=, this](sol::this_state L, sol::variadic_args args) {
+        const std::optional<EntityId> e = target(L, args, 3);
+        const size_t at = e ? 1 : 0;
+        const std::string id = text(L, "setAttribute", "id", arg(args, at));
+        const std::string name = text(L, "setAttribute", "name", arg(args, at + 1));
+        std::string value = text(L, "setAttribute", "value", arg(args, at + 2));
+        e ? gui->writeEntity(*e, id, {.attributes = {{name, std::move(value)}}}) : gui->setAttribute(id, name, value);
     });
     guiApi.set_function("focus", [=, this](sol::this_state L, const sol::object& id) {
         return gui->focus(text(L, "focus", "id", id));

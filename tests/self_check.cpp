@@ -62,6 +62,7 @@
 #include <occlusion.h>
 #include <ibl.h>
 #include <volumetric_fog.h>
+#include <world_ui.h>
 #include <state_machines.h>
 #include <stats_overlay.h>
 #include <systems.h>
@@ -348,7 +349,7 @@ void checkComponentRegistry()
     check(typeNames() == std::vector<std::string>{"Transform", "MeshRenderer", "ModelRenderer", "LODGroup", "Animator",
                                                  "DirectionalLight", "PointLight", "SpotLight", "AreaLight", "ReflectionProbe", "VoxelGI", "Camera",
                                                  "Rotator", "Collider", "Rigidbody", "CharacterController", "StateMachine", "UIDocument",
-                                                 "AudioSource", "NetworkLocalPlayer", "NetworkReplication",
+                                                 "WorldUI", "AudioSource", "NetworkLocalPlayer", "NetworkReplication",
                                                  "NetworkEntity", "Terrain", "TerrainTile", "ParticleEmitter", "FogVolume"},
           "built-in component types in registration order");
     check(kast::componentInfo(kast::findComponentType("TerrainTile")).runtime &&
@@ -16175,6 +16176,259 @@ int migrateAssets(const std::filesystem::path& root)
     return 0;
 }
 
+// --- World-space UI (world_ui.h, docs/engine/world-ui.html): the WorldUI component, projection, placement, and Overlay
+// documents in a headless SceneGui driven by Lua and occluded by physics ---
+void checkWorldUIComponent()
+{
+    const kast::ComponentType type = kast::findAnyComponentType("WorldUI");
+    check(static_cast<bool>(type) && std::string_view(type.displayName()) == "World UI", "WorldUI is registered");
+    const kast::WorldUI defaults;
+    check(defaults.path.empty() && defaults.visible && defaults.mode == kast::WorldUIMode::Overlay &&
+              defaults.facing == kast::WorldUIFacing::Billboard && defaults.offset.x == 0.0f && defaults.offset.y == 2.0f &&
+              defaults.offset.z == 0.0f && defaults.width == 256 && defaults.height == 64 &&
+              defaults.pixelsPerMeter == 256.0f && defaults.maxDistance == 50.0f && defaults.occlude && !defaults.interactive,
+          "WorldUI defaults: Overlay, Billboard, offset (0,2,0), 256x64 px, 256 px/m, 50 m, occlude, not interactive");
+
+    kast::Scene scene;
+    scene.registry().emplace<kast::WorldUI>(scene.create("Plain"), kast::WorldUI{.path = "ui/nameplate.rml"});
+    const kast::WorldUI changed{.path = "ui/sign.rml", .visible = false, .mode = kast::WorldUIMode::World,
+                                .facing = kast::WorldUIFacing::YawOnly, .offset = {1.0f, 2.5f, -3.0f}, .width = 128,
+                                .height = 32, .pixelsPerMeter = 100.0f, .maxDistance = 0.0f, .occlude = false,
+                                .interactive = true};
+    scene.registry().emplace<kast::WorldUI>(scene.create("Changed"), changed);
+    const std::string saved = kast::sceneToJson(scene).dump();
+    check(contains(saved, R"("WorldUI":{"path":"ui/nameplate.rml","visible":true,"mode":"overlay","facing":"billboard",)"
+                          R"("offset":[0.0,2.0,0.0],"width":256,"height":64,"pixelsPerMeter":256.0,"maxDistance":50.0,)"
+                          R"("occlude":true,"interactive":false})"),
+          "a default WorldUI saves every field");
+    check(contains(saved, R"("mode":"world","facing":"yawOnly","offset":[1.0,2.5,-3.0],"width":128,"height":32,)"
+                          R"("pixelsPerMeter":100.0,"maxDistance":0.0,"occlude":false,"interactive":true)"),
+          "a changed WorldUI saves every field, enums by name");
+    kast::Scene loaded;
+    std::string error;
+    check(kast::sceneFromJson(kast::sceneToJson(scene), loaded, error), "a scene with WorldUIs loads");
+    int matched = 0;
+    for (auto [e, ui] : loaded.registry().view<const kast::WorldUI>().each()) {
+        const kast::WorldUI want = ui.path == changed.path ? changed : kast::WorldUI{.path = "ui/nameplate.rml"};
+        matched += ui.path == want.path && ui.visible == want.visible && ui.mode == want.mode && ui.facing == want.facing &&
+                   ui.offset.x == want.offset.x && ui.offset.y == want.offset.y && ui.offset.z == want.offset.z &&
+                   ui.width == want.width && ui.height == want.height && ui.pixelsPerMeter == want.pixelsPerMeter &&
+                   ui.maxDistance == want.maxDistance && ui.occlude == want.occlude && ui.interactive == want.interactive;
+    }
+    check(matched == 2, "both WorldUIs round-trip through scene JSON");
+
+    kast::Scene partial; // a scene saved with only path and visible: the rest are their defaults
+    check(kast::sceneFromJson(nlohmann::ordered_json::parse(R"({"version": 5, "entities": [{"id": 1, "name": "Plate",
+        "parent": null, "components": {"Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "WorldUI": {"path": "ui/nameplate.rml", "visible": true}}}]})"), partial, error) &&
+              partial.registry().view<const kast::WorldUI>().size() == 1 &&
+              kast::componentToJson(partial.registry(), partial.registry().view<const kast::WorldUI>().front(),
+                                    kast::findAnyComponentType("WorldUI")) ==
+                  kast::componentToJson(scene.registry(), named(scene, "Plain"), kast::findAnyComponentType("WorldUI")),
+          "a WorldUI with only path and visible loads with every other field at its default");
+    kast::Scene old;
+    const bool oldLoaded = kast::sceneFromJson(nlohmann::ordered_json::parse(R"({"version": 5, "entities": [{"id": 1,
+        "name": "Menu", "parent": null, "components": {"Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "UIDocument": {"path": "ui/menu.rml", "visible": true}}}]})"), old, error);
+    check(oldLoaded && old.registry().view<const kast::WorldUI>().empty() && old.registry().view<const kast::UIDocument>().size() == 1,
+          std::format("a scene from before WorldUI loads unchanged ({})", error).c_str());
+    kast::Scene rejected;
+    const bool badLoaded = kast::sceneFromJson(nlohmann::ordered_json::parse(R"({"version": 5, "entities": [{"id": 1,
+        "name": "Bad", "parent": null, "components": {"Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+        "WorldUI": {"path": "", "visible": true, "width": 0}}}]})"), rejected, error);
+    check(!badLoaded && contains(error, "\"WorldUI\": \"width\" and \"height\" must be >= 1"),
+          "a WorldUI with a zero width is rejected, naming the field");
+}
+
+void checkWorldToScreen()
+{
+    // A camera at the origin looking down -Z, 60 degrees high, on a 200 x 100 viewport (aspect 2).
+    kast::Scene scene;
+    const entt::entity camera = scene.create("Camera");
+    scene.registry().emplace<kast::Camera>(camera);
+    float view[16], proj[16], viewProj[16];
+    kast::cameraMatrices(scene, camera, 2.0f, false, view, proj);
+    bx::mtxMul(viewProj, view, proj);
+    const auto near = [](float a, float b) { return std::abs(a - b) < 0.01f; };
+    const float halfHeight = 5.0f * std::tan(bx::toRad(30.0f)); // at 5 m
+    const auto center = kast::worldToScreen(viewProj, {0.0f, 0.0f, -5.0f}, 200.0f, 100.0f);
+    check(center && near(center->x, 100.0f) && near(center->y, 50.0f) && near(center->depth, 5.0f),
+          "worldToScreen: a point straight ahead lands in the viewport's center, 5 m deep");
+    const auto right = kast::worldToScreen(viewProj, {2.0f * halfHeight, 0.0f, -5.0f}, 200.0f, 100.0f);
+    const auto top = kast::worldToScreen(viewProj, {0.0f, halfHeight, -5.0f}, 200.0f, 100.0f);
+    const auto bottomLeft = kast::worldToScreen(viewProj, {-2.0f * halfHeight, -halfHeight, -5.0f}, 200.0f, 100.0f);
+    check(right && near(right->x, 200.0f) && near(right->y, 50.0f) && top && near(top->x, 100.0f) && near(top->y, 0.0f) &&
+              bottomLeft && near(bottomLeft->x, 0.0f) && near(bottomLeft->y, 100.0f),
+          "worldToScreen: the frustum's edges land on the viewport's edges (y down from the top)");
+    const auto outside = kast::worldToScreen(viewProj, {4.0f * halfHeight, 0.0f, -5.0f}, 200.0f, 100.0f);
+    check(outside && near(outside->x, 300.0f), "worldToScreen: a point beside the frustum lands beside the viewport");
+    check(!kast::worldToScreen(viewProj, {0.0f, 0.0f, 5.0f}, 200.0f, 100.0f) &&
+              !kast::worldToScreen(viewProj, {1.0f, 0.0f, 0.0f}, 200.0f, 100.0f),
+          "worldToScreen: a point behind the camera or on its plane has no screen point");
+
+    // placeWorldUI: distance cull (0 = unlimited), behind and off-screen culls, occlusion asked last, far to near.
+    const std::vector<kast::WorldUIAnchor> anchors = {
+        {{0.0f, 0.0f, -4.0f}, 50.0f},  // 0: near
+        {{0.5f, 0.0f, -8.0f}, 50.0f},  // 1: farther
+        {{0.0f, 0.0f, -60.0f}, 50.0f}, // 2: beyond its maxDistance
+        {{0.0f, 0.0f, -60.0f}, 0.0f},  // 3: as far, unlimited
+        {{0.0f, 0.0f, 4.0f}, 0.0f},    // 4: behind
+        {{50.0f, 0.0f, -4.0f}, 0.0f},  // 5: off-screen
+        {{-0.5f, 0.0f, -6.0f}, 50.0f}, // 6: occluded
+        {{-0.5f, 0.0f, -8.0f}, 50.0f}, // 7: as far as 1, listed after it
+    };
+    std::vector<size_t> asked;
+    const std::vector<kast::WorldUIPlacement> placed =
+        kast::placeWorldUI(anchors, {0.0f, 0.0f, 0.0f}, viewProj, 200.0f, 100.0f, [&](size_t i) {
+            asked.push_back(i);
+            return i == 6;
+        });
+    std::vector<size_t> order;
+    for (const kast::WorldUIPlacement& placement : placed)
+        order.push_back(placement.index);
+    check(order == std::vector<size_t>{3, 1, 7, 0},
+          std::format("placeWorldUI: far to near (ties in order), culled ones left out (got {})", nlohmann::json(order).dump()).c_str());
+    check(asked == std::vector<size_t>{0, 1, 3, 6, 7}, "placeWorldUI asks about occlusion only for anchors otherwise drawn");
+}
+
+// Overlay documents in a headless SceneGui: one per entity (several on the same .rml), Lua's kast.gui calls with an
+// entity reaching only that entity's, placement over the anchor, a physics wall occluding (not with occlude off), a far
+// one culled, a bad path shared by two entities logged once, Stop unloading them.
+void checkWorldGuiScene()
+{
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    check(bgfx::init(init) && kast::gui::init(), "headless bgfx and RmlUi start (world UI)");
+    {
+        const std::filesystem::path root = projectTestDir("kast_world_ui", "worldui");
+        std::filesystem::create_directories(root / "ui");
+        std::filesystem::copy_file(std::filesystem::path(KAST_SOURCE_DIR) / "tests/project/ui/nameplate.rml",
+                                   root / "ui/nameplate.rml");
+        kast::Scene scene;
+        const auto add = [&](const char* name, bx::Vec3 position, kast::WorldUI ui) {
+            const entt::entity e = scene.create(name);
+            scene.registry().get<kast::Transform>(e).position = position;
+            scene.registry().emplace<kast::WorldUI>(e, std::move(ui));
+            return e;
+        };
+        const entt::entity camera = scene.create("Camera"); // at (0, 1.5, 6) looking down -Z
+        scene.registry().get<kast::Transform>(camera).position = {0.0f, 1.5f, 6.0f};
+        scene.registry().emplace<kast::Camera>(camera);
+        const kast::WorldUI plate{.path = "ui/nameplate.rml", .offset = {0.0f, 1.4f, 0.0f}};
+        const entt::entity a = add("A", {-0.8f, 0.0f, 2.0f}, plate);
+        const entt::entity b = add("B", {-0.2f, 0.0f, -2.0f}, plate);
+        const entt::entity hidden = add("Hidden", {2.4f, 0.0f, -2.0f}, plate);
+        kast::WorldUI seeThrough = plate;
+        seeThrough.occlude = false;
+        const entt::entity shown = add("Shown", {3.8f, 0.0f, -2.0f}, seeThrough);
+        const entt::entity far = add("Far", {0.0f, 0.0f, -60.0f}, plate);
+        add("Bad 1", {0.0f, 0.0f, 0.0f}, {.path = "ui/missing.rml"});
+        add("Bad 2", {1.0f, 0.0f, 0.0f}, {.path = "ui/missing.rml"});
+        const entt::entity wall = scene.create("Wall"); // a box collider between the camera and Hidden / Shown
+        scene.registry().get<kast::Transform>(wall).position = {2.2f, 1.2f, 0.0f};
+        scene.registry().get<kast::Transform>(wall).scale = {2.0f, 2.4f, 0.2f};
+        scene.registry().emplace<kast::Collider>(wall);
+        const auto idOf = [&](entt::entity e) { return scene.registry().get<kast::PersistentId>(e).value; };
+        writeFile(root / "scripts/plates.lua", std::format(R"(return {{
+    init = function()
+        kast.gui.setText({0}, "name", "Alice")
+        kast.gui.setAttribute({1}, "plate", "class", "plate far")
+        kast.gui.setText("name", "Screen only") -- the plain form: the screen GUIs, never a WorldUI
+        kast.gui.setVisible({2}, "name", false)
+    end,
+    update = function()
+        assert(kast.gui.value({0}, "plate") == nil, "a WorldUI element that is no widget has no value")
+        local ok, err = pcall(kast.gui.value, {0}) -- one argument: the plain form, its error as it was
+        assert(not ok and string.find(err, "kast.gui.value: id must be a string, got {0}", 1, true), tostring(err))
+    end,
+}})", idOf(a), idOf(b), idOf(shown)));
+        scene.systems = {"scripts/plates.lua"};
+
+        kast::SceneGui gui("worldui_check");
+        kast::LuaSystems lua;
+        lua.setGui(&gui);
+        const size_t badBefore = loggedCount("World UI document 'ui/missing.rml' not found");
+        lua.start(scene, root, "", nullptr);
+        constexpr int kWidth = 1280, kHeight = 720;
+        const auto frame = [&] {
+            lua.tick(1.0f / 60.0f);
+            gui.sync(scene, root, lua.bus());
+            float view[16], proj[16];
+            kast::cameraMatrices(scene, camera, float(kWidth) / float(kHeight), false, view, proj);
+            gui.world().layout(scene, view, proj, kWidth, kHeight, &lua.physics());
+            gui.resize(kWidth, kHeight);
+            gui.render(0, BGFX_INVALID_HANDLE);
+            bgfx::frame();
+        };
+        frame();
+        frame();
+        checkOk(lua, 0, "the Lua driver's kast.gui calls with entities run");
+        check(lua.physics().running(), "Play's physics runs (the wall occludes)");
+        const auto doc = [&](entt::entity e) { return gui.world().document(idOf(e)); };
+        check(doc(a) && doc(b) && doc(hidden) && doc(shown) && doc(far) && doc(a) != doc(b),
+              "one document per WorldUI entity, two on the same .rml apart");
+        check(loggedCount("World UI document 'ui/missing.rml' not found") == badBefore + 1,
+              "a missing .rml shared by two entities logs once");
+        if (doc(a) && doc(b) && doc(hidden) && doc(shown) && doc(far)) {
+            const auto inner = [&](entt::entity e, const char* id) {
+                Rml::Element* element = doc(e)->GetElementById(id);
+                return element ? element->GetInnerRML() : std::string("<none>");
+            };
+            check(inner(a, "name") == "Alice" && inner(b, "name") == "Name",
+                  "kast.gui.setText(entity, ...) changes that entity's panel only (same .rml); the plain form none");
+            check(doc(b)->GetElementById("plate")->GetAttribute<Rml::String>("class", "") == "plate far" &&
+                      doc(a)->GetElementById("plate")->GetAttribute<Rml::String>("class", "") == "plate",
+                  "kast.gui.setAttribute(entity, ...) changes that entity's panel only");
+            check(doc(shown)->GetElementById("name")->GetLocalProperty("display") != nullptr &&
+                      doc(a)->GetElementById("name")->GetLocalProperty("display") == nullptr,
+                  "kast.gui.setVisible(entity, ...) hides the element in that entity's panel only");
+            // A: anchor (-0.8, 1.4, 2), 4 m deep: x = (1 - 0.8 / (4 tan30 * 16/9)) * 640, y = (1 + 0.1 / (4 tan30)) * 360.
+            const float t = std::tan(bx::toRad(30.0f));
+            const float ax = (1.0f - 0.8f / (4.0f * t * 16.0f / 9.0f)) * 640.0f, ay = (1.0f + 0.1f / (4.0f * t)) * 360.0f;
+            const Rml::Vector2f at = doc(a)->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const Rml::Vector2f size = doc(a)->GetBox().GetSize(Rml::BoxArea::Border);
+            check(std::abs(at.x - std::round(ax - 128.0f)) < 0.5f && std::abs(at.y - std::round(ay - 64.0f)) < 0.5f &&
+                      size == Rml::Vector2f(256.0f, 64.0f),
+                  std::format("an Overlay panel is 256x64 px, centered over its anchor with its bottom on it (at {},{} "
+                              "size {}x{}, expected {},{})", at.x, at.y, size.x, size.y, std::round(ax - 128.0f),
+                              std::round(ay - 64.0f)).c_str());
+            check(doc(a)->IsVisible() && doc(b)->IsVisible() && doc(shown)->IsVisible(),
+                  "panels in view are shown (one behind the wall with occlude off)");
+            check(!doc(hidden)->IsVisible(), "a panel behind the wall (occlude) is hidden");
+            check(!doc(far)->IsVisible(), "a panel beyond maxDistance is hidden");
+            Rml::Context* context = Rml::GetContext("worldui_check-world");
+            int indexA = -1, indexB = -1;
+            for (int i = 0; context && i < context->GetNumDocuments(); ++i) {
+                indexA = context->GetDocument(i) == doc(a) ? i : indexA;
+                indexB = context->GetDocument(i) == doc(b) ? i : indexB;
+            }
+            check(indexA > indexB && indexB >= 0, "the nearer panel is drawn over the farther one");
+            Rml::Context* screen = gui.context().context();
+            check(screen && screen->GetNumDocuments() == 0, "WorldUI documents stay out of the screen GUIs' context");
+
+            // The camera turns around: every panel hides. The entity moves: its panel follows.
+            scene.registry().get<kast::Transform>(camera).rotation = bx::fromEuler({0.0f, bx::kPi, 0.0f});
+            frame();
+            check(!doc(a)->IsVisible() && !doc(b)->IsVisible() && !doc(shown)->IsVisible(),
+                  "panels behind the camera are hidden");
+            scene.registry().get<kast::Transform>(camera).rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+            scene.registry().get<kast::Transform>(a).position.x += 1.0f;
+            frame();
+            check(doc(a)->IsVisible() && doc(a)->GetAbsoluteOffset(Rml::BoxArea::Border).x > at.x + 50.0f,
+                  "a panel follows its entity");
+            scene.registry().get<kast::WorldUI>(a).visible = false;
+            frame();
+            check(!doc(a)->IsVisible(), "a WorldUI with visible off is hidden");
+        }
+        lua.stop();
+        gui.clear();
+        check(!gui.world().document(idOf(a)) && gui.world().empty(), "Stop (SceneGui::clear) unloads the WorldUI documents");
+        gui.release();
+    }
+    kast::gui::shutdown();
+    bgfx::shutdown();
+}
+
 int main(int argc, char** argv)
 {
     kast::disableCrashDialogsIfRequested();
@@ -16256,6 +16510,14 @@ int main(int argc, char** argv)
         checkGuiPrefabs();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All GUI checks passed" : std::format("{} GUI check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--worldui") { // only the world-space UI checks
+        checkWorldUIComponent();
+        checkWorldToScreen();
+        checkWorldGuiScene();
+        removeTree(testRoot());
+        kast::log::info(g_failures == 0 ? "All world UI checks passed" : std::format("{} world UI check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--guiprefabs") { // only the GUI prefab checks
@@ -16436,6 +16698,9 @@ int main(int argc, char** argv)
     checkGuiRichText();
     checkGuiRichTextScene();
     checkGuiPrefabs();
+    checkWorldUIComponent();
+    checkWorldToScreen();
+    checkWorldGuiScene();
     checkGuiListMath();
     checkGuiLists();
     checkExternalEditor();

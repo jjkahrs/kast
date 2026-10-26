@@ -1,6 +1,7 @@
 #include "gui_widgets.h"
 
 #include "gui.h"
+#include "gui_richtext.h"
 
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Elements/ElementFormControl.h>
@@ -424,6 +425,25 @@ bool setGuiWidgetValue(Rml::Element& element, const GuiValue& value, std::string
         return true;
     }
     return fail("it is not a form widget or text field");
+}
+
+void applyGuiWrite(Rml::Element& element, const GuiWrite& write)
+{
+    if (write.text || write.rich) {
+        if (auto* control = dynamic_cast<Rml::ElementFormControl*>(&element))
+            control->SetValue(write.text ? *write.text : *write.rich);
+        else
+            element.SetInnerRML(write.text ? guiTextRml(*write.text)
+                                           : guiRichTextRml(*write.rich, nullptr, gui::fontFamilyLoaded));
+    }
+    for (const auto& [name, value] : write.attributes)
+        element.SetAttribute(name, value);
+    if (write.visible) {
+        if (*write.visible)
+            element.RemoveProperty("display"); // back to the style sheet's
+        else
+            element.SetProperty("display", "none");
+    }
 }
 
 void WidgetListener::ProcessEvent(Rml::Event& event)

@@ -10,6 +10,7 @@
 #include "gui_richtext.h"
 #include "gui_widgets.h"
 #include "scene.h"
+#include "world_ui.h"
 
 #include <filesystem>
 #include <functional>
@@ -34,11 +35,13 @@ class ElementDocument;
 // dp ratio and layout size are per context. Both act as one GUI: the mouse goes to the All context while it is over
 // one of its elements, else to the Dp one; a click or focus() in one takes the keyboard there and blurs the other's
 // focused element; click, focus, mouseOver, hovered and the data models span both.
+// WorldUI documents (world_ui.h) are its WorldGui's: synced, cleared and reset with these, drawn under them.
 namespace kast {
 
 class SceneGui final : public GuiAccess {
 public:
-    explicit SceneGui(std::string contextName) : context_(contextName), allContext_(contextName + "-all") {}
+    explicit SceneGui(std::string contextName)
+        : context_(contextName), allContext_(contextName + "-all"), world_(contextName + "-world") {}
     ~SceneGui() override { clear(); }
 
     // Loads, unloads, shows and hides documents so they match scene's UIDocuments (paths relative to projectRoot;
@@ -52,11 +55,14 @@ public:
     // Clicks the element with this id in the topmost visible document holding one, as the mouse would. False if none.
     bool click(const std::string& id);
     GuiContext& context() { return context_; } // the Dp documents' (tests drive it directly)
+    // The WorldUI documents: the host lays them out each frame from its camera (WorldGui::layout) before render().
+    WorldGui& world() { return world_; }
     // The pixel size the GUIs draw in (a zero side, e.g. minimized: ignored, nothing recomputes), and the OS display
     // scale of the window's display; either recomputes the dp ratio. setScale (below) sets the rest.
     void resize(int width, int height);
     void setDisplayScale(double osScale);
-    // Draws both contexts into view .. view + gui::kViews - 1 on frameBuffer, as GuiContext::render.
+    // Draws the WorldUI documents, then both contexts over them, into view .. view + gui::kViews - 1 on frameBuffer, as
+    // GuiContext::render.
     void render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer);
     // An SDL event, positions mapped as GuiContext::onEvent; routed between the two contexts (see above).
     void onEvent(const SDL_Event& event, float originX = 0.0f, float originY = 0.0f, float scale = 1.0f);
@@ -88,15 +94,11 @@ public:
     GuiScale scale() override { return scale_; }
     void setScale(const GuiScale& scale) override;
     double dpRatio() override { return dpRatio_; }
+    void writeEntity(uint64_t entity, const std::string& id, const GuiWrite& write) override { world_.write(entity, id, write); }
+    std::optional<GuiValue> entityValue(uint64_t entity, const std::string& id) override { return world_.value(entity, id); }
 
 private:
-    struct Written { // kast.gui writes to one id, applied again to documents that load later
-        std::optional<std::string> text;
-        std::optional<std::string> rich; // BBCode; text or rich, the later write
-        std::optional<bool> visible;
-        std::map<std::string, std::string> attributes;
-        std::optional<GuiValue> value;
-    };
+    using Written = GuiWrite;
 
     struct Entry {
         entt::entity entity = entt::null;
@@ -130,6 +132,7 @@ private:
     GuiModels models_; // before the contexts: their models point into it
     GuiContext context_;    // Dp documents
     GuiContext allContext_; // All documents, made when the first loads
+    WorldGui world_;
     GuiScaling keyboard_ = GuiScaling::Dp; // the context keys and text go to
     GuiScale scale_;
     double osScale_ = 1.0;

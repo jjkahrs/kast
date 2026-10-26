@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
@@ -31,6 +32,16 @@ inline bool guiVariableName(std::string_view name)
     std::ranges::transform(lower, lower.begin(), [](char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); });
     return std::ranges::find(kReserved, lower) == std::end(kReserved);
 }
+
+// What kast.gui wrote to one element id (setText, setRichText, setVisible, setAttribute, setValue), kept and applied
+// again to documents that load later. text or rich: the later write.
+struct GuiWrite {
+    std::optional<std::string> text;
+    std::optional<std::string> rich; // BBCode
+    std::optional<bool> visible;
+    std::map<std::string, std::string> attributes;
+    std::optional<GuiValue> value;
+};
 
 class GuiAccess {
 public:
@@ -96,6 +107,10 @@ public:
     virtual void setScale(const GuiScale& scale) = 0;
     // The dp ratio the documents use now.
     virtual double dpRatio() = 0;
+    // kast.gui calls with an entity id first (kast.gui.setText(entity, id, text), ...): the same on that entity's WorldUI
+    // document only (world_ui.h), kept per entity like setText. Without WorldUI documents here they do nothing.
+    virtual void writeEntity(uint64_t /*entity*/, const std::string& /*id*/, const GuiWrite& /*write*/) {}
+    virtual std::optional<GuiValue> entityValue(uint64_t /*entity*/, const std::string& /*id*/) { return std::nullopt; }
 };
 
 } // namespace kast

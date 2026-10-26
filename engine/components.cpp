@@ -237,6 +237,20 @@ const char* validateAudioSource(const entt::meta_any& component)
     return nullptr;
 }
 
+const char* validateWorldUI(const entt::meta_any& component)
+{
+    const auto& ui = component.cast<const WorldUI&>();
+    if (!(ui.width >= 1 && ui.height >= 1))
+        return "\"width\" and \"height\" must be >= 1";
+    if (!(ui.pixelsPerMeter >= 1.0f))
+        return "\"pixelsPerMeter\" must be >= 1";
+    if (!(ui.maxDistance >= 0.0f))
+        return "\"maxDistance\" must be >= 0";
+    if (!(std::isfinite(ui.offset.x) && std::isfinite(ui.offset.y) && std::isfinite(ui.offset.z)))
+        return "\"offset\" must be finite";
+    return nullptr;
+}
+
 const char* validateNetworkLocalPlayer(const entt::meta_any& component)
 {
     const auto& player = component.cast<const NetworkLocalPlayer&>();
@@ -481,6 +495,31 @@ void registerBuiltins()
         .data<&UIDocument::path>("path").custom<FieldInfo>("Path")
         .data<&UIDocument::visible>("visible").custom<FieldInfo>("Visible")
         .data<&UIDocument::scaling>("scaling").custom<FieldInfo>(FieldInfo{.displayName = "Scaling", .optional = true, .omitDefault = true});
+    entt::meta_factory<WorldUIMode>{}
+        .type("WorldUIMode")
+        .data<WorldUIMode::Overlay>("overlay").custom<FieldInfo>("Overlay")
+        .data<WorldUIMode::World>("world").custom<FieldInfo>("World");
+    entt::meta_factory<WorldUIFacing>{}
+        .type("WorldUIFacing")
+        .data<WorldUIFacing::Billboard>("billboard").custom<FieldInfo>("Billboard")
+        .data<WorldUIFacing::YawOnly>("yawOnly").custom<FieldInfo>("Yaw Only")
+        .data<WorldUIFacing::Fixed>("fixed").custom<FieldInfo>("Fixed");
+    // Optional, not omitDefault: the generic Inspector and kast.get read every field from the component's JSON.
+    const auto worldUiField = [](const char* name, std::optional<double> min = std::nullopt) {
+        return FieldInfo{.displayName = name, .min = min, .optional = true};
+    };
+    registerComponent<WorldUI>("WorldUI", {"World UI", true, validateWorldUI})
+        .data<&WorldUI::path>("path").custom<FieldInfo>("Path")
+        .data<&WorldUI::visible>("visible").custom<FieldInfo>("Visible")
+        .data<&WorldUI::mode>("mode").custom<FieldInfo>(worldUiField("Mode"))
+        .data<&WorldUI::facing>("facing").custom<FieldInfo>(worldUiField("Facing"))
+        .data<&WorldUI::offset>("offset").custom<FieldInfo>(worldUiField("Offset"))
+        .data<&WorldUI::width>("width").custom<FieldInfo>(worldUiField("Width (px)", 1.0))
+        .data<&WorldUI::height>("height").custom<FieldInfo>(worldUiField("Height (px)", 1.0))
+        .data<&WorldUI::pixelsPerMeter>("pixelsPerMeter").custom<FieldInfo>(worldUiField("Pixels Per Meter", 1.0))
+        .data<&WorldUI::maxDistance>("maxDistance").custom<FieldInfo>(worldUiField("Max Distance (m)", 0.0))
+        .data<&WorldUI::occlude>("occlude").custom<FieldInfo>(worldUiField("Occlude"))
+        .data<&WorldUI::interactive>("interactive").custom<FieldInfo>(worldUiField("Interactive"));
     entt::meta_factory<AudioBus>{}
         .type("AudioBus")
         .data<AudioBus::Master>("Master").custom<FieldInfo>("Master")

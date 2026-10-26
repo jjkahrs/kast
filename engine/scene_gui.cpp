@@ -6,7 +6,6 @@
 
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/ElementDocument.h>
-#include <RmlUi/Core/Elements/ElementFormControl.h>
 #include <RmlUi/Core/Factory.h>
 #include <RmlUi/Core/StyleSheetContainer.h>
 
@@ -105,6 +104,7 @@ void SceneGui::sync(const Scene& scene, const std::filesystem::path& projectRoot
     for (Entry& entry : entries_)
         if (entry.document)
             entry.listListener->update();
+    world_.sync(scene, projectRoot);
 }
 
 void SceneGui::clear()
@@ -112,6 +112,7 @@ void SceneGui::clear()
     for (Entry& entry : entries_)
         unload(entry);
     entries_.clear();
+    world_.clear();
 }
 
 void SceneGui::reloadChanged()
@@ -401,6 +402,7 @@ void SceneGui::reset()
     clear();
     written_.clear();
     models_.clear(contexts());
+    world_.reset();
 }
 
 void SceneGui::release()
@@ -408,6 +410,7 @@ void SceneGui::release()
     clear();
     context_.release();
     allContext_.release();
+    world_.release();
 }
 
 std::vector<Rml::Context*> SceneGui::contexts()
@@ -464,7 +467,10 @@ void SceneGui::updateScale()
 
 void SceneGui::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer)
 {
-    context_.render(view, frameBuffer);
+    const bool world = !world_.empty();
+    if (world)
+        world_.render(view, frameBuffer); // under the screen GUIs
+    context_.render(view, frameBuffer, world);
     if (allContext_.created())
         allContext_.render(view, frameBuffer, true);
 }
@@ -526,21 +532,7 @@ void SceneGui::apply(Entry& entry, Rml::ElementDocument& document, const std::st
     Rml::Element* element = document.GetElementById(id);
     if (!element)
         return;
-    if (written.text || written.rich) {
-        if (auto* control = dynamic_cast<Rml::ElementFormControl*>(element))
-            control->SetValue(written.text ? *written.text : *written.rich);
-        else
-            element->SetInnerRML(written.text ? guiTextRml(*written.text)
-                                              : guiRichTextRml(*written.rich, nullptr, gui::fontFamilyLoaded));
-    }
-    for (const auto& [name, value] : written.attributes)
-        element->SetAttribute(name, value);
-    if (written.visible) {
-        if (*written.visible)
-            element->RemoveProperty("display"); // back to the style sheet's
-        else
-            element->SetProperty("display", "none");
-    }
+    applyGuiWrite(*element, written);
     if (written.value)
         applyValue(entry, *element, id, *written.value);
 }
