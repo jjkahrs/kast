@@ -1,0 +1,129 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Directional Light",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 4, 0], "rotation": [-0.408218, -0.23457, -0.109382, 0.875426], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.95, 0.9], "intensity": 1.1 }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [12, 1, 12] },
+        "MeshRenderer": { "primitive": "plane", "material": "" }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 1.5, 6], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000 }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Near",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-0.8, 0, 2], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": { "id": "fc419a8f-9210-424f-8892-1c5162855e22", "path": "ui/nameplate.rml" }, "visible": true, "offset": [0, 1.4, 0] }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Far",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-0.2, 0, -2], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": { "id": "fc419a8f-9210-424f-8892-1c5162855e22", "path": "ui/nameplate.rml" }, "visible": true, "offset": [0, 1.4, 0] }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Wall",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [2.2, 1.2, 0], "rotation": [0, 0, 0, 1], "scale": [2, 2.4, 0.2] },
+        "MeshRenderer": { "primitive": "cube", "material": "" },
+        "Collider": { "shape": "box", "size": [1, 1, 1], "radius": 0.5, "height": 2, "center": [0, 0, 0], "isTrigger": false, "friction": 0.5, "restitution": 0 }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Behind Wall Occluded",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [2.4, 0, -2], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": { "id": "fc419a8f-9210-424f-8892-1c5162855e22", "path": "ui/nameplate.rml" }, "visible": true, "offset": [0, 1.4, 0], "width": 96, "height": 32 }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Behind Wall Shown",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [3.8, 0, -2], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": { "id": "fc419a8f-9210-424f-8892-1c5162855e22", "path": "ui/nameplate.rml" }, "visible": true, "offset": [0, 1.4, 0], "width": 96, "height": 32, "occlude": false }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Distant Culled",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-30, 20, -60], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": { "id": "fc419a8f-9210-424f-8892-1c5162855e22", "path": "ui/nameplate.rml" }, "visible": true, "offset": [0, 1.4, 0], "width": 96, "height": 32 }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Distant Unlimited",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [30, 20, -60], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": { "id": "fc419a8f-9210-424f-8892-1c5162855e22", "path": "ui/nameplate.rml" }, "visible": true, "offset": [0, 1.4, 0], "width": 96, "height": 32, "maxDistance": 0 }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Mover",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 3.5, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": { "id": "fc419a8f-9210-424f-8892-1c5162855e22", "path": "ui/nameplate.rml" }, "visible": true, "offset": [0, 0, 0], "width": 96, "height": 32 }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Bad Path A",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": "ui/missing_plate.rml", "visible": true }
+      }
+    },
+    {
+      "id": 13,
+      "name": "Bad Path B",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [1, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": "ui/missing_plate.rml", "visible": true }
+      }
+    }
+  ],
+  "systems": [
+    { "id": "943b1934-5a1b-40c0-9330-7533aa7a74e7", "path": "scripts/world_ui.lua" }
+  ],
+  "editor": {
+    "camera": { "pivot": [0, 1, 0], "yaw": 0, "pitch": -10, "distance": 8 }
+  }
+}

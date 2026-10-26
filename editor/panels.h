@@ -184,6 +184,8 @@ private:
     bool drawClipPicker(Document& doc, entt::entity entity, nlohmann::ordered_json& value);
     // AudioSource "clip": a combo of the project's .wav / .mp3 files; an unreadable clip shows its error.
     bool drawSoundPicker(Document& doc, nlohmann::ordered_json& value);
+    // WorldUI "path": a combo of the project's .rml files (a path not among them is shown missing, with a warning).
+    bool drawRmlPicker(Document& doc, nlohmann::ordered_json& value);
     // Preview / Stop: plays the AudioSource's clip in edit mode at its volume and bus (disabled during Play).
     void drawAudioPreview(Document& doc, entt::entity entity);
     void stopPreview();

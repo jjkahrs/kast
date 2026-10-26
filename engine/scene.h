@@ -381,6 +381,28 @@ struct UIDocument {
     GuiScaling scaling = GuiScaling::Dp;
 };
 
+enum class WorldUIMode { Overlay, World };
+enum class WorldUIFacing { Billboard, YawOnly, Fixed };
+
+// Shows a game GUI (.rml, project-relative path) floating at the entity in Play mode (see world_ui.h): its anchor is
+// offset in the entity's local space. Overlay: drawn screen-space, width x height pixels, centered over the anchor with
+// its bottom on it; hidden off-screen, beyond maxDistance meters (0: unlimited) and, with occlude, behind physics
+// colliders. World mode, facing and pixelsPerMeter: not drawn yet (World-space UI phase 2). interactive: phase 3.
+// Every field but path and visible may be missing from a scene file (its default).
+struct WorldUI {
+    std::string path;
+    bool visible = true;
+    WorldUIMode mode = WorldUIMode::Overlay;
+    WorldUIFacing facing = WorldUIFacing::Billboard;
+    bx::Vec3 offset{0.0f, 2.0f, 0.0f};
+    int width = 256; // pixels
+    int height = 64;
+    float pixelsPerMeter = 256.0f;
+    float maxDistance = 50.0f;
+    bool occlude = true;
+    bool interactive = false;
+};
+
 enum class ColliderShape { Box, Sphere, Capsule, Cylinder };
 
 // A physics shape (see physics.h). Without a Rigidbody the entity is a static body. size: box full extents; radius:

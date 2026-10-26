@@ -509,6 +509,7 @@ void Panels::drawInspector(Document& doc)
                         const bool probe = type.meta() && type.meta() == entt::resolve<kast::ReflectionProbe>();
                         const bool voxel = type.meta() && type.meta() == entt::resolve<kast::VoxelGI>();
                         const bool lodGroup = type.meta() && type.meta() == entt::resolve<kast::LODGroup>();
+                        const bool worldUi = type.meta() && type.meta() == entt::resolve<kast::WorldUI>();
                         const auto drawOne = [&](const kast::FieldDesc& field, Json& value) {
                             if (mesh && field.name == "material")
                                 return drawMaterialPicker(doc, value);
@@ -544,6 +545,14 @@ void Panels::drawInspector(Document& doc)
                                 return drawClipPicker(doc, entity, value);
                             if (sound && field.name == "clip")
                                 return drawSoundPicker(doc, value);
+                            if (worldUi && field.name == "path")
+                                return drawRmlPicker(doc, value);
+                            if (worldUi && (field.name == "facing" || field.name == "pixelsPerMeter")) { // World mode's
+                                ImGui::BeginDisabled(registry.get<kast::WorldUI>(entity).mode != kast::WorldUIMode::World);
+                                const bool edited = drawField(entity, type, field, value);
+                                ImGui::EndDisabled();
+                                return edited;
+                            }
                             if ((probe || voxel) && field.name == "resolution") { // kProbeResolutions, kVoxelGiResolutions
                                 const std::string current = std::to_string(value.get<int>());
                                 bool picked = false;
@@ -1152,6 +1161,19 @@ bool Panels::drawModelPicker(Document& doc, Json& value)
     collectFiles(assets_, {".glb", ".gltf", ".fbx", ".obj"}, files); // kast::modelExtensions()
     std::string path = value.get<std::string>();
     if (!drawFilePicker("Model", files, "None", path))
+        return false;
+    value = path;
+    return true;
+}
+
+bool Panels::drawRmlPicker(Document& doc, Json& value)
+{
+    if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
+        refreshAssets(doc);
+    std::vector<std::string> files;
+    collectFiles(assets_, {".rml"}, files);
+    std::string path = value.get<std::string>();
+    if (!drawFilePicker("Path", files, "None", path))
         return false;
     value = path;
     return true;

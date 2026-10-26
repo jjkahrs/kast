@@ -155,6 +155,14 @@ Volume</strong> adds a local fog region to the entity, a box or sphere sized by 
 <strong>Height Falloff</strong> (optional, &gt;= 0), each edit an undo step. While the entity is selected the Scene view outlines
 the box or sphere in yellow. It only shows while the scene's volumetric fog is on (Window &gt; Post Processing &gt;
 Volumetric Fog).</p>
+<p id="worldui"><strong>World UI</strong> (<a href="../engine/world-ui.html">WorldUI</a>): <strong>Add Component &gt; World UI</strong> floats a
+game GUI over the entity in Play. Its Inspector section: <strong>Path</strong> (a combo of the project's <code>.rml</code> files and None; a
+path that is not among them shows as <em>(missing)</em> with the red warning <em>No file "..." in the project: kept as-is</em>, and
+Play logs it once and draws nothing for it), <strong>Visible</strong>, <strong>Mode</strong> (Overlay / World), <strong>Facing</strong> and
+<strong>Pixels Per Meter</strong> (greyed out unless Mode is World: World mode arrives in a later phase), <strong>Offset</strong> (meters, in the
+entity's local space), <strong>Width (px)</strong> and <strong>Height (px)</strong> (at least 1), <strong>Max Distance (m)</strong> (0: unlimited),
+<strong>Occlude</strong> and <strong>Interactive</strong> (not used yet), each edit an undo step. Panels show only in the Game view during
+Play, never while Stopped.</p>
 <p><strong>New Lua Component...</strong> (first item of the Inspector's Add Component popup) creates a Lua component and adds it to the
 selected entity in one step. Type a name (e.g. <code>PlayerHealth</code>) and choose Create (or Enter; Esc cancels): it writes the
 New from Template definition with that type name to <code>&lt;project&gt;/components/&lt;snake_case&gt;.lua</code> (<code>player_health.lua</code>;

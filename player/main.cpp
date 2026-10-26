@@ -381,6 +381,7 @@ int main(int argc, char** argv)
             renderer.setTarget(post.target(), post.width(), post.height(), post.blendView(),
                                post.volumetricFogView());
             renderer.render(scene, project.root, post.sceneView(), view, proj, kShadowViews);
+            gui.world().layout(scene, view, proj, width, height, &lua.physics());
         }
         if (kast::gui::wantsReadableTarget() && width > 0 && height > 0 &&
             (!bgfx::isValid(readable) || width != readableWidth || height != readableHeight)) {

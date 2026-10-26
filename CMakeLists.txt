@@ -186,7 +186,7 @@ add_library(kast_engine STATIC
   engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/lod.cpp engine/occlusion.cpp engine/material.cpp engine/asset_ref.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
-  engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/gui_lists.cpp engine/gui_richtext.cpp engine/gui_prefabs.cpp engine/gui_scale.cpp engine/scene_gui.cpp engine/window_display.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
+  engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/gui_lists.cpp engine/gui_richtext.cpp engine/gui_prefabs.cpp engine/gui_scale.cpp engine/scene_gui.cpp engine/world_ui.cpp engine/window_display.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
   engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/ibl.cpp engine/bvh.cpp engine/lightmap.cpp engine/lightmap_bake.cpp engine/voxel_gi.cpp engine/sdfgi.cpp engine/volumetric_fog.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
@@ -198,6 +198,7 @@ target_compile_options(kast_engine PRIVATE ${KAST_COMPILE_OPTIONS})
 # Asio targets Windows 10 (and its templates need /bigobj); crypt32 reads the ROOT certificate store.
 set_source_files_properties(engine/network.cpp PROPERTIES COMPILE_DEFINITIONS "_WIN32_WINNT=0x0A00" COMPILE_OPTIONS /bigobj)
 set_source_files_properties(engine/lua_systems.cpp PROPERTIES COMPILE_OPTIONS /bigobj) # sol2 templates
+set_source_files_properties(engine/components.cpp PROPERTIES COMPILE_OPTIONS /bigobj) # entt::meta per component and enum (Debug)
 target_link_libraries(kast_engine
   PUBLIC bgfx::bgfx bgfx::bx EnTT::EnTT nlohmann_json::nlohmann_json RmlUi::RmlUi pugixml::pugixml kast_map
   PRIVATE SDL3::SDL3 bgfx::bimg sol2::sol2 Jolt::Jolt "${LUAJIT_LIBRARY}" kast_protocol xatlas meshoptimizer::meshoptimizer
@@ -3287,6 +3288,9 @@ include(cmake/screen_space_tests.cmake)
 
 # Game GUI resolution and DPI scaling, display modes, kast.gui scaling / kast.display.
 include(cmake/gui_scaling_tests.cmake)
+
+# World-space UI: WorldUI Overlay panels in the player and the editor's Game view, kast.gui with an entity.
+include(cmake/world_ui_tests.cmake)
 # Stable asset ids end to end: a copy of the legacy fixture tests/legacy_project opens, builds and plays; its refs
 # upgrade on save; Assets renames rewrite unopened scenes and project.kast; an Explorer rename with the .meta ships fresh hints in game.pak.
 add_test(NAME asset_ids_rename

@@ -152,6 +152,7 @@ void GameViewport::draw(Document& doc)
                                     post_.volumetricFogView());
                 renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), post_.sceneView(),
                                  view, proj, shadowViews_);
+                gui_.world().layout(doc.scene, view, proj, width, height, &doc.lua.physics()); // none while Stopped
             }
             post_.apply(doc.scene.postProcessing, true, target_.frameBuffer());
             if (doc.play != PlayState::Stopped) {

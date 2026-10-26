@@ -52,6 +52,9 @@ std::optional<GuiValue> guiWidgetValue(Rml::Element& element);
 // to 0..max; a toggle takes a bool, a dropdown the value of one of its options, a text field a string. False (and why
 // in error, never naming the value) if element is no widget or value doesn't fit it.
 bool setGuiWidgetValue(Rml::Element& element, const GuiValue& value, std::string& error);
+// Applies write's text or rich text (a text field: as its value, else as the element's content, escaped / BBCode),
+// attributes and visibility (display: none, or back to the style sheet's) to element; its value is the caller's.
+void applyGuiWrite(Rml::Element& element, const GuiWrite& write);
 
 // Listens to one document's form widgets; the bus must outlive it. Drives the spinboxes (-/+ clicks, Up / Down while its
 // input has focus, typed text checked on blur or Enter: a number is snapped and clamped, anything else reverts to the

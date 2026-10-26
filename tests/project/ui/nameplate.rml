@@ -1,0 +1,13 @@
+<rml>
+<head>
+    <title>Nameplate</title>
+    <style>
+        body { font-family: Roboto; font-size: 18px; color: #000000; }
+        .plate { display: block; width: 100%; height: 100%; background-color: #ff00ff; text-align: center; }
+        .far { background-color: #00ffff; }
+    </style>
+</head>
+<body>
+    <div id="plate" class="plate"><p id="name">Name</p></div>
+</body>
+</rml>
