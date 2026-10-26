@@ -79,6 +79,59 @@ add_test(NAME starter_mmo_hit_sparks
 add_test(NAME starter_mmo_lists
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSAMPLE=${KAST_STARTER}" "-DOUT=${KAST_STARTER_OUT}/lists"
           "-DSCREENSHOT=${KAST_STARTER_OUT}/starter_mmo_lists.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_lists.cmake")
+# Nameplates, damage numbers and the notice board (scripts/nameplates.lua, scripts/notice_board.lua), offline: a
+# test-only driver plays the world client's part on the bus (cmake/starter_mmo_nameplates.cmake). The shot (the Guard
+# hit for 12, the Bat dead): Tester's bar full, the Guard's 38/50 red then grey, no bar under the friendly Elder's name,
+# Rival's 100/140; the Bat's plate hidden; two floating damage numbers. Then the notice board's Next notice button
+# (World mode, interactive): hovered (highlighted) and clicked (the next page), with real --sim-mouse events.
+set(nameplates_args "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSAMPLE=${KAST_STARTER}" "-DCA=${KAST_TEST_PROJECT}/certs/net_test_ca.pem")
+set(nameplates_expect "test nameplates: Guard .npc. plate ui/nameplate.rml, Health yes"
+    "test nameplates: Elder .npc. plate ui/nameplate.rml, Health no" "test nameplates: Rival .player. plate ui/nameplate.rml"
+    "test nameplates: hit: 2 floating text.s., Bat plate visible false, Guard plate visible true")
+string(REPLACE ";" "$<SEMICOLON>" nameplates_expect "${nameplates_expect}")
+add_test(NAME starter_mmo_nameplates
+  COMMAND "${CMAKE_COMMAND}" ${nameplates_args} "-DOUT=${KAST_STARTER_OUT}/nameplates"
+          "-DSCREENSHOT=${KAST_STARTER_OUT}/starter_mmo_nameplates.png" "-DEDITOR_ARGS=--screenshot-on-log 4,SHOT"
+          "-DEXPECT_ALL=${nameplates_expect}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_nameplates.cmake")
+add_test(NAME starter_mmo_nameplates_probe COMMAND kast_self_check --probe-png "${KAST_STARTER_OUT}/starter_mmo_nameplates.png"
+         0.5312,0.3250,224,60,60,12 0.5094,0.2470,224,60,60,12 0.5763,0.2470,49,49,49,12 0.6106,0.2470,109,114,94,14
+         0.4031,0.2210,224,60,60,12 0.4656,0.2210,49,49,49,12 0.6875,0.5270,255,170,0,12)
+# The board's button 286,147 px from the Game view's centre: held over it from frame 60 (highlighted #ffcc00; the
+# floating texts gone a second after the hit), or clicked there (page 2).
+foreach(sign "hover|none|test nameplates: mouseOver true$<SEMICOLON>test nameplates: after 70 frames: 0 floating text"
+             "click|left|test nameplates: mouseOver true$<SEMICOLON>notice board: page 2")
+  string(REPLACE "|" ";" sign "${sign}")
+  list(GET sign 0 name)
+  list(GET sign 1 button)
+  list(GET sign 2 expect)
+  add_test(NAME starter_mmo_notice_board_${name}
+    COMMAND "${CMAKE_COMMAND}" ${nameplates_args} "-DOUT=${KAST_STARTER_OUT}/notice_board_${name}"
+            "-DSCREENSHOT=${KAST_STARTER_OUT}/starter_mmo_notice_board_${name}.png" -DFRAMES=150
+            "-DEDITOR_ARGS=--sim-mouse 60,${button},0,0,0,286,147" "-DEXPECT_ALL=${expect}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_nameplates.cmake")
+  set_tests_properties(starter_mmo_notice_board_${name} PROPERTIES FIXTURES_SETUP starter_mmo_notice_board_${name}_shot)
+endforeach()
+set_tests_properties(starter_mmo_nameplates PROPERTIES FIXTURES_SETUP starter_mmo_nameplates_shot)
+set_tests_properties(starter_mmo_nameplates_probe PROPERTIES FIXTURES_REQUIRED starter_mmo_nameplates_shot)
+add_test(NAME starter_mmo_notice_board_hover_probe COMMAND kast_self_check --probe-png
+         "${KAST_STARTER_OUT}/starter_mmo_notice_board_hover.png" 0.6875,0.5270,255,204,0,12)
+set_tests_properties(starter_mmo_notice_board_hover_probe PROPERTIES FIXTURES_REQUIRED starter_mmo_notice_board_hover_shot)
+add_test(NAME starter_mmo_notice_board_page # the click turned the page: the board differs from the hover's
+  COMMAND "${CMAKE_COMMAND}" "-DA=${KAST_STARTER_OUT}/starter_mmo_notice_board_hover.png"
+          "-DB=${KAST_STARTER_OUT}/starter_mmo_notice_board_click.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(starter_mmo_notice_board_page PROPERTIES
+                     FIXTURES_REQUIRED "starter_mmo_notice_board_hover_shot;starter_mmo_notice_board_click_shot")
+# 100 nameplates (the driver's grid of Guards) in the built player, without vsync: the average frame time is logged and
+# must hold 60 fps (16.7 ms) in an optimized build.
+set(nameplates_budget "")
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(nameplates_budget -DMAX_MS=16.7)
+endif()
+add_test(NAME starter_mmo_nameplates_perf
+  COMMAND "${CMAKE_COMMAND}" ${nameplates_args} "-DOUT=${KAST_STARTER_OUT}/nameplates_perf"
+          "-DSCREENSHOT=${KAST_STARTER_OUT}/starter_mmo_nameplates_perf.png" -DPERF=ON ${nameplates_budget}
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_nameplates.cmake")
+set_tests_properties(starter_mmo_nameplates_perf PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE) # alone: a frame time
 
 # Live. RUN_SERIAL: they change which content the shared compose stack serves.
 set(live_args "-DWORLD_DIR=${KAST_WORLD_DIR}" "-DSAMPLE=${KAST_STARTER}" "-DSTATE=${KAST_STARTER_STATE}")
@@ -130,6 +183,9 @@ foreach(stage
     "starter_mmo_live_combat|combat|Fighter|6000|OFF|test driver: target selected Bat&test driver: target cleared, 0 marker&test driver: combat log: You cast Strike on Bat for 12&test driver: combat log: Bat dies&test driver: corpse [0-9]+ owner [0-9]+|--screenshot-on-log 45,SHOT"
     # Mid-fight with the Guard: three Strikes, and it hits back:
     "starter_mmo_live_combat_guard|combat_guard|Fighter|6000|OFF|test driver: target selected Guard&test driver: combat log: You cast Strike on Guard for 12&test driver: Health 14 / 50 on&test driver: combat log: Guard hits you for 5|--screenshot-on-log 45,SHOT"
+    # Nameplates (scripts/nameplates.lua) over the idle bot and the Guard; Strikes on the Guard shrink its bar and show
+    # floating damage numbers, which go after a second; the shot when one shows again:
+    "starter_mmo_live_nameplates|nameplates|Plater|6000|ON|test driver: nameplate on npc Guard: ui/nameplate.rml&test driver: nameplate on player [^ ]+: ui/nameplate.rml&test driver: combat log: You cast Strike on Guard for 12&test driver: Health [0-9]+ / 50 on&test driver: damage number shown.*test driver: damage numbers gone.*test driver: damage number shown&test driver: SHOT damage number|--screenshot-on-log 2,SHOT"
     # The Guard kills a Warrior that hit it once (140 Health, 5 every 2 s): dead, then revived at the spawn:
     "starter_mmo_live_death|death|Fallen|12000|OFF|test driver: combat log: Guard hits you for 5&test driver: combat log: You die&test driver: Health 0 / 140 on|--screenshot-on-log 45,SHOT"
     "starter_mmo_live_revive|revive|Fallen|12000|OFF|test driver: combat log: You die&test driver: combat log: You revive&test driver: Health 140 / 140 on&world: map changed to 10 at 128.0, 128.0|--screenshot-on-log 60,SHOT"
@@ -259,14 +315,15 @@ add_test(NAME starter_mmo_live_secrets
   COMMAND "${CMAKE_COMMAND}" "-DSAMPLE=${KAST_STARTER}" "-DSTATE=${KAST_STARTER_STATE}" "-DSHOTS=${live_shots}"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_live_secrets.cmake")
 set_tests_properties(starter_mmo_live_secrets PROPERTIES FIXTURES_REQUIRED starter_mmo_live
-                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_loading;starter_mmo_live_loaded;starter_mmo_live_enter_error;starter_mmo_live_world;starter_mmo_live_chat;starter_mmo_live_chat_down;starter_mmo_live_cavern;starter_mmo_live_travel;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_death;starter_mmo_live_revive;${inventory_stages};${class_stages};${equip_stages};${quest_stages}"
+                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_loading;starter_mmo_live_loaded;starter_mmo_live_enter_error;starter_mmo_live_world;starter_mmo_live_chat;starter_mmo_live_chat_down;starter_mmo_live_cavern;starter_mmo_live_travel;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_nameplates;starter_mmo_live_death;starter_mmo_live_revive;${inventory_stages};${class_stages};${equip_stages};${quest_stages}"
                      SKIP_REGULAR_EXPRESSION "SKIP: ")
 set_tests_properties(starter_mmo_live_setup starter_mmo_live_teardown starter_mmo_live_chars starter_mmo_live_loading
                      starter_mmo_live_loaded starter_mmo_live_enter_error starter_mmo_live_world
                      starter_mmo_live_chat starter_mmo_live_chat_down
                      starter_mmo_live_cavern starter_mmo_live_travel starter_mmo_live_camera starter_mmo_live_camera_zoom
                      starter_mmo_live_camera_orbit starter_mmo_live_combat_target starter_mmo_live_combat
-                     starter_mmo_live_combat_guard starter_mmo_live_death starter_mmo_live_revive starter_mmo_live_secrets
+                     starter_mmo_live_combat_guard starter_mmo_live_nameplates starter_mmo_live_death starter_mmo_live_revive
+                     starter_mmo_live_secrets
                      ${inventory_stages} ${class_stages} ${equip_stages} ${quest_stages} PROPERTIES RUN_SERIAL TRUE)
 # The Bat kills wait for respawns (30 s after each looted corpse goes).
 set_tests_properties(starter_mmo_live_quest_kills PROPERTIES TIMEOUT 900)

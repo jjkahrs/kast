@@ -1,0 +1,16 @@
+<rml>
+    <head>
+        <title>Notice Board</title>
+        <link type="text/rcss" href="starter.rcss" data-kast-id="15ecd441-7e6e-4395-bce7-288118db1e7c"/>
+    </head>
+    <body>
+        <!-- The Meadow's notice board (meadow.scene's "Notice Board": a World-mode, interactive WorldUI). Next notice
+             publishes "notice.next"; scripts/notice_board.lua turns the page. -->
+        <div id="notice" class="notice">
+            <p class="notice_title">Notice Board</p>
+            <p id="notice_text" class="notice_text">Bats in the Cavern! The Elder pays for their wings. The gate is east of here.</p>
+            <p id="notice_page" class="notice_page">1 / 3</p>
+            <button id="notice_next" data-event="notice.next">Next notice</button>
+        </div>
+    </body>
+</rml>

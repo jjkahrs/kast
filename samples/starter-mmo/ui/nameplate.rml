@@ -1,0 +1,14 @@
+<rml>
+    <head>
+        <title>Nameplate</title>
+        <link type="text/rcss" href="starter.rcss" data-kast-id="15ecd441-7e6e-4395-bce7-288118db1e7c"/>
+    </head>
+    <body>
+        <!-- An Overlay WorldUI over each character (prefabs/player.prefab, remote_player.prefab, the NPC templates):
+             scripts/nameplates.lua writes the name and, once the server sends a Health, shows the bar. -->
+        <div id="plate" class="plate">
+            <p id="name" class="plate_name"></p>
+            <div id="hp" class="plate_hp" style="display: none"><div id="hp_fill" class="plate_hp_fill"></div></div>
+        </div>
+    </body>
+</rml>

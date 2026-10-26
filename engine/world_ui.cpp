@@ -342,7 +342,12 @@ void WorldGui::layoutWorld(const Scene& scene, const float* cameraWorld)
                                                         float(ui.height) * metersPerPixel, cameraWorld,
                                                         panels[i].world.data()),
                           .uv = {uv(shown.x), uv(shown.y), uv(shown.x + shown.width), uv(shown.y + shown.height)}});
-        entry.interactive = ui.interactive;
+        if (entry.interactive != ui.interactive) { // as Overlay: over a style sheet's pointer-events (e.g. body none)
+            entry.interactive = ui.interactive;
+            document.SetProperty(Rml::PropertyId::PointerEvents,
+                                 Rml::Property(ui.interactive ? Rml::Style::PointerEvents::Auto
+                                                              : Rml::Style::PointerEvents::None));
+        }
         entry.corners = quads_.back().corners;
     }
     if (skipped > 0 && !atlasWarned_ && logErrors_) {

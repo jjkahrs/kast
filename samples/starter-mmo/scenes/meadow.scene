@@ -700,6 +700,147 @@
           "visible": true
         }
       }
+    },
+    {
+      "id": 36,
+      "name": "Notice Board",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            124.5,
+            4.93,
+            124.5
+          ],
+          "rotation": [
+            0,
+            0.964379,
+            0,
+            0.264523
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "WorldUI": {
+          "path": {
+            "id": "4911fd58-cf4c-4815-a2c6-48818dd66a99",
+            "path": "ui/notice_board.rml"
+          },
+          "visible": true,
+          "mode": "world",
+          "facing": "fixed",
+          "offset": [
+            0,
+            1.75,
+            0.06
+          ],
+          "width": 512,
+          "height": 256,
+          "pixelsPerMeter": 256,
+          "maxDistance": 60,
+          "occlude": true,
+          "interactive": true
+        }
+      }
+    },
+    {
+      "id": 37,
+      "name": "Notice Board Post Left",
+      "parent": 36,
+      "components": {
+        "Transform": {
+          "position": [
+            -1.1,
+            1.15,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            0.14,
+            2.3,
+            0.14
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": {
+            "id": "5a99a619-9668-4d93-9b0a-e6446377facf",
+            "path": "materials/bark.mat"
+          }
+        }
+      }
+    },
+    {
+      "id": 38,
+      "name": "Notice Board Post Right",
+      "parent": 36,
+      "components": {
+        "Transform": {
+          "position": [
+            1.1,
+            1.15,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            0.14,
+            2.3,
+            0.14
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": {
+            "id": "5a99a619-9668-4d93-9b0a-e6446377facf",
+            "path": "materials/bark.mat"
+          }
+        }
+      }
+    },
+    {
+      "id": 39,
+      "name": "Notice Board Back",
+      "parent": 36,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.75,
+            -0.02
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            2.12,
+            1.12,
+            0.06
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": {
+            "id": "5a99a619-9668-4d93-9b0a-e6446377facf",
+            "path": "materials/bark.mat"
+          }
+        }
+      }
     }
   ],
   "systems": [
@@ -715,7 +856,9 @@
     { "id": "8c5e1368-6c95-440c-a1de-f076ba18be61", "path": "scripts/loot.lua" },
     { "id": "405695ee-3b89-4319-b022-879b9197af67", "path": "scripts/shrines.lua" },
     { "id": "20d454bd-e9f8-4e97-9aae-eccdd827b42e", "path": "scripts/quest.lua" },
-    { "id": "e581afd6-e7c8-4dcf-93f5-63f29fe70a8e", "path": "scripts/quest_log.lua" }
+    { "id": "e581afd6-e7c8-4dcf-93f5-63f29fe70a8e", "path": "scripts/quest_log.lua" },
+    { "id": "d8e7a460-94c2-4239-8111-df8191956e08", "path": "scripts/nameplates.lua" },
+    { "id": "1ec13511-2482-4aa1-a478-7768a08aae81", "path": "scripts/notice_board.lua" }
   ],
   "lighting": {
     "ambientColor": [

@@ -8,7 +8,8 @@
       "components": {
         "Transform": {"position": [131, 0, 128], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
         "ModelRenderer": {"model": { "id": "08e9df5d-4c26-41bb-a5e8-6eaed621bd6f", "path": "models/female-128-anim.glb" }, "materials": [{ "id": "4efc09e1-e45f-4352-9233-2ba8bd50b2fe", "path": "materials/gold.mat" }]},
-        "Animator": {"clip": "Idle_A", "loop": true, "speed": 1, "playOnStart": true}
+        "Animator": {"clip": "Idle_A", "loop": true, "speed": 1, "playOnStart": true},
+        "WorldUI": {"path": { "id": "bb7c1c19-fa80-4649-b347-e1120ad06aec", "path": "ui/nameplate.rml" }, "visible": true, "offset": [0, 2.1, 0], "width": 192, "height": 44}
       }
     }
   ]
