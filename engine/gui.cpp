@@ -372,13 +372,13 @@ void GuiContext::resize(int width, int height, float dpRatio, GuiScaling scaling
         context_->SetDimensions(layoutSize());
 }
 
-void GuiContext::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, bool shareViews)
+void GuiContext::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, bool shareViews, bool clear)
 {
     Rml::Context* rml = context();
     GuiRenderer* renderer = gui::renderer();
     if (!rml || !renderer)
         return;
-    renderer->begin(view, frameBuffer, width_, height_, 1.0f / unitsPerPixel(), shareViews);
+    renderer->begin(view, frameBuffer, width_, height_, 1.0f / unitsPerPixel(), shareViews, clear);
     gui::g_updating = true;
     rml->Update();
     gui::g_updating = false;

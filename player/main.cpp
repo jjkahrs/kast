@@ -38,7 +38,8 @@ namespace {
 
 constexpr bgfx::ViewId kShadowViews = 0; // the scene's shadow maps (Renderer::kShadowViews)
 constexpr bgfx::ViewId kGameView = kShadowViews + kast::Renderer::kShadowViews; // then its post passes
-constexpr bgfx::ViewId kGuiView = kGameView + kast::PostProcess::kViews; // the scene's game GUIs (kast::gui::kViews), over the scene
+// The scene's game GUIs (kast::gui::kViews), over the scene, then the World UI atlas (world_ui.h) in the views after theirs.
+constexpr bgfx::ViewId kGuiView = kGameView + kast::PostProcess::kViews;
 constexpr bgfx::ViewId kPresentView = kGuiView + kast::gui::kViews; // the readable target onto the screen, if used
 constexpr uint32_t kClearColor = 0x202020ff;
 constexpr int kScreenshotTimeoutFrames = 30;
@@ -380,8 +381,9 @@ int main(int argc, char** argv)
             post.setProjection(proj);
             renderer.setTarget(post.target(), post.width(), post.height(), post.blendView(),
                                post.volumetricFogView());
-            renderer.render(scene, project.root, post.sceneView(), view, proj, kShadowViews);
             gui.world().layout(scene, view, proj, width, height, &lua.physics());
+            renderer.setWorldQuads(gui.world().atlasTexture(), gui.world().quads());
+            renderer.render(scene, project.root, post.sceneView(), view, proj, kShadowViews);
         }
         if (kast::gui::wantsReadableTarget() && width > 0 && height > 0 &&
             (!bgfx::isValid(readable) || width != readableWidth || height != readableHeight)) {

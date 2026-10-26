@@ -3210,7 +3210,7 @@ void checkBuildSettings()
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                        "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene",
+                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_overflow.scene", "world_ui_world.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
 
@@ -3234,7 +3234,7 @@ void checkBuildSettings()
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                                           "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene",
+                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_overflow.scene", "world_ui_world.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
@@ -16291,6 +16291,74 @@ void checkWorldToScreen()
     check(asked == std::vector<size_t>{0, 1, 3, 6, 7}, "placeWorldUI asks about occlusion only for anchors otherwise drawn");
 }
 
+// World mode's atlas packing (rows in the given order, kWorldUIAtlasPadding apart) and its quads' corners per facing.
+void checkWorldUIAtlas()
+{
+    using Tile = std::optional<kast::WorldUITile>;
+    constexpr int pad = kast::kWorldUIAtlasPadding;
+    const std::vector<std::pair<int, int>> big(6, {1000, 1000});
+    check(kast::packWorldUIAtlas(big, 2048) ==
+              std::vector<Tile>{kast::WorldUITile{0, 0, 1000, 1000}, kast::WorldUITile{1000 + pad, 0, 1000, 1000},
+                                kast::WorldUITile{0, 1000 + pad, 1000, 1000},
+                                kast::WorldUITile{1000 + pad, 1000 + pad, 1000, 1000}, std::nullopt, std::nullopt},
+          "packWorldUIAtlas: four 1000 px panels fill a 2048 atlas in rows, the ones after them get no tile");
+    const std::vector<std::pair<int, int>> rows = {{2000, 10}, {100, 20}, {100, 20}, {3000, 10}, {0, 10}, {10, 10}};
+    check(kast::packWorldUIAtlas(rows, 2048) ==
+              std::vector<Tile>{kast::WorldUITile{0, 0, 2000, 10}, kast::WorldUITile{0, 10 + pad, 100, 20},
+                                kast::WorldUITile{100 + pad, 10 + pad, 100, 20}, std::nullopt, std::nullopt,
+                                kast::WorldUITile{200 + 2 * pad, 10 + pad, 10, 10}},
+          "packWorldUIAtlas: a full row starts the next under its tallest; a panel too big or empty gets none");
+    const std::vector<std::pair<int, int>> after = {{1000, 2000}, {1100, 100}, {900, 100}};
+    check(kast::packWorldUIAtlas(after, 2048) ==
+              std::vector<Tile>{kast::WorldUITile{0, 0, 1000, 2000}, std::nullopt, kast::WorldUITile{1000 + pad, 0, 900, 100}},
+          "packWorldUIAtlas: a panel that doesn't fit leaves the room it didn't take to the smaller ones after it");
+
+    const auto near = [](const bx::Vec3& a, const bx::Vec3& b) { return bx::length(bx::sub(a, b)) < 1e-4f; };
+    const auto cornersAre = [&](const std::array<bx::Vec3, 4>& got, const std::array<bx::Vec3, 4>& want) {
+        return near(got[0], want[0]) && near(got[1], want[1]) && near(got[2], want[2]) && near(got[3], want[3]);
+    };
+    const auto transform = [](const bx::Quaternion& rotation, const bx::Vec3& scale, const bx::Vec3& position) {
+        std::array<float, 16> m{};
+        kast::mtxFromTrs(m.data(), position, rotation, scale); // as Scene::worldMatrix
+        return m;
+    };
+    const bx::Vec3 center{0.0f, 1.0f, -5.0f};
+    const std::array<float, 16> identity = transform({0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f});
+    const float s45 = std::sin(bx::kPi / 4.0f), s22 = std::sin(bx::kPi / 8.0f), c22 = std::cos(bx::kPi / 8.0f);
+    const bx::Quaternion yaw90{0.0f, s45, 0.0f, s45}; // +90 degrees around Y: -Z (forward) to -X
+    const bx::Quaternion pitchDown45{-s22, 0.0f, 0.0f, c22};
+    const std::array<float, 16> turned = transform(yaw90, {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f});
+    const std::array<float, 16> above = transform(pitchDown45, {1.0f, 1.0f, 1.0f}, {0.0f, 5.0f, 0.0f});
+    const std::array<float, 16> scaledTurn = transform(yaw90, {3.0f, 3.0f, 3.0f}, center);
+    using F = kast::WorldUIFacing;
+    check(cornersAre(kast::worldUIQuadCorners(F::Billboard, center, 2.0f, 1.0f, identity.data(), identity.data()),
+                     {bx::Vec3{-1.0f, 1.5f, -5.0f}, bx::Vec3{1.0f, 1.5f, -5.0f}, bx::Vec3{1.0f, 0.5f, -5.0f},
+                      bx::Vec3{-1.0f, 0.5f, -5.0f}}),
+          "worldUIQuadCorners: a 2 x 1 m Billboard before an unturned camera is upright across X, centered");
+    check(cornersAre(kast::worldUIQuadCorners(F::Billboard, center, 2.0f, 1.0f, turned.data(), identity.data()),
+                     {bx::Vec3{0.0f, 1.5f, -4.0f}, bx::Vec3{0.0f, 1.5f, -6.0f}, bx::Vec3{0.0f, 0.5f, -6.0f},
+                      bx::Vec3{0.0f, 0.5f, -4.0f}}),
+          "worldUIQuadCorners: a Billboard turns with the camera (looking down -X: across Z)");
+    const std::array<bx::Vec3, 4> billboardAbove =
+        kast::worldUIQuadCorners(F::Billboard, center, 2.0f, 1.0f, above.data(), identity.data());
+    const float h = 0.5f * std::sqrt(0.5f);
+    check(cornersAre(billboardAbove, {bx::Vec3{-1.0f, 1.0f + h, -5.0f - h}, bx::Vec3{1.0f, 1.0f + h, -5.0f - h},
+                                      bx::Vec3{1.0f, 1.0f - h, -5.0f + h}, bx::Vec3{-1.0f, 1.0f - h, -5.0f + h}}),
+          "worldUIQuadCorners: a Billboard tilts back to face a camera looking down 45 degrees");
+    check(cornersAre(kast::worldUIQuadCorners(F::YawOnly, center, 2.0f, 1.0f, above.data(), identity.data()),
+                     {bx::Vec3{-1.0f, 1.5f, -5.0f}, bx::Vec3{1.0f, 1.5f, -5.0f}, bx::Vec3{1.0f, 0.5f, -5.0f},
+                      bx::Vec3{-1.0f, 0.5f, -5.0f}}),
+          "worldUIQuadCorners: YawOnly stays upright under a camera looking down 45 degrees");
+    check(cornersAre(kast::worldUIQuadCorners(F::YawOnly, center, 2.0f, 1.0f, turned.data(), identity.data()),
+                     {bx::Vec3{0.0f, 1.5f, -4.0f}, bx::Vec3{0.0f, 1.5f, -6.0f}, bx::Vec3{0.0f, 0.5f, -6.0f},
+                      bx::Vec3{0.0f, 0.5f, -4.0f}}),
+          "worldUIQuadCorners: YawOnly turns around Y with the camera");
+    check(cornersAre(kast::worldUIQuadCorners(F::Fixed, center, 2.0f, 1.0f, above.data(), scaledTurn.data()),
+                     {bx::Vec3{0.0f, 1.5f, -4.0f}, bx::Vec3{0.0f, 1.5f, -6.0f}, bx::Vec3{0.0f, 0.5f, -6.0f},
+                      bx::Vec3{0.0f, 0.5f, -4.0f}}),
+          "worldUIQuadCorners: Fixed lies in its entity's turned XY plane whatever the camera, its scale ignored");
+}
+
 // Overlay documents in a headless SceneGui: one per entity (several on the same .rml), Lua's kast.gui calls with an
 // entity reaching only that entity's, placement over the anchor, a physics wall occluding (not with occlude off), a far
 // one culled, a bad path shared by two entities logged once, Stop unloading them.
@@ -16429,6 +16497,116 @@ void checkWorldGuiScene()
     bgfx::shutdown();
 }
 
+// World documents in a headless SceneGui: in the atlas context (not the Overlay one), placed in tiles nearest first,
+// their quads (width / pixelsPerMeter meters, from the tile the atlas was drawn with) from the frame after; a full atlas
+// leaves the farthest out and warns once.
+void checkWorldGuiAtlas()
+{
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    check(bgfx::init(init) && kast::gui::init(), "headless bgfx and RmlUi start (world UI atlas)");
+    {
+        const std::filesystem::path root = projectTestDir("kast_world_ui_atlas", "worldui_atlas");
+        std::filesystem::create_directories(root / "ui");
+        std::filesystem::copy_file(std::filesystem::path(KAST_SOURCE_DIR) / "tests/project/ui/nameplate.rml",
+                                   root / "ui/nameplate.rml");
+        kast::Scene scene;
+        const auto add = [&](const char* name, bx::Vec3 position, kast::WorldUI ui) {
+            const entt::entity e = scene.create(name);
+            scene.registry().get<kast::Transform>(e).position = position;
+            scene.registry().emplace<kast::WorldUI>(e, std::move(ui));
+            return e;
+        };
+        const entt::entity camera = scene.create("Camera"); // at (0, 1.5, 6) looking down -Z
+        scene.registry().get<kast::Transform>(camera).position = {0.0f, 1.5f, 6.0f};
+        scene.registry().emplace<kast::Camera>(camera);
+        const kast::WorldUI sign{.path = "ui/nameplate.rml", .mode = kast::WorldUIMode::World, .offset = {0.0f, 0.0f, 0.0f},
+                                 .width = 512, .height = 128, .pixelsPerMeter = 256.0f, .maxDistance = 0.0f};
+        kast::WorldUI farSign = sign;
+        farSign.width = 256;
+        const entt::entity a = add("A", {0.0f, 1.5f, 1.0f}, sign); // 5 m away
+        const entt::entity b = add("B", {2.0f, 1.5f, -2.0f}, farSign);
+        kast::WorldUI culled = sign;
+        culled.maxDistance = 10.0f;
+        const entt::entity beyond = add("Beyond", {0.0f, 1.5f, -20.0f}, culled);
+        const entt::entity behind = add("Behind", {0.0f, 1.5f, 10.0f}, sign);
+        const entt::entity overlay = add("Overlay", {0.0f, 0.0f, 0.0f}, {.path = "ui/nameplate.rml"});
+        const auto idOf = [&](entt::entity e) { return scene.registry().get<kast::PersistentId>(e).value; };
+
+        kast::SceneGui gui("worldui_atlas");
+        kast::EventBus bus;
+        constexpr int kWidth = 1280, kHeight = 720;
+        const auto frame = [&] {
+            gui.sync(scene, root, bus);
+            float view[16], proj[16];
+            kast::cameraMatrices(scene, camera, float(kWidth) / float(kHeight), false, view, proj);
+            gui.world().layout(scene, view, proj, kWidth, kHeight, nullptr);
+            gui.resize(kWidth, kHeight);
+            gui.render(0, BGFX_INVALID_HANDLE);
+            bgfx::frame();
+        };
+        frame();
+        const auto doc = [&](entt::entity e) { return gui.world().document(idOf(e)); };
+        Rml::Context* atlas = Rml::GetContext("worldui_atlas-world-atlas");
+        Rml::Context* screen = Rml::GetContext("worldui_atlas-world");
+        check(atlas && atlas->GetNumDocuments() == 4 && screen && screen->GetNumDocuments() == 1 && doc(a) && doc(overlay) &&
+                  doc(a)->GetContext() == atlas && doc(overlay)->GetContext() == screen,
+              "World documents load into the atlas context, Overlay ones stay in theirs");
+        check(gui.world().quads().empty() && !gui.world().empty(),
+              "a World panel's quad waits for the atlas to be drawn with it (the first frame has none)");
+        frame();
+        if (doc(a) && doc(b) && doc(beyond) && doc(behind)) {
+            const auto at = [&](entt::entity e) { return doc(e)->GetAbsoluteOffset(Rml::BoxArea::Border); };
+            const auto size = [&](entt::entity e) { return doc(e)->GetBox().GetSize(Rml::BoxArea::Border); };
+            check(at(a) == Rml::Vector2f(0.0f, 0.0f) && size(a) == Rml::Vector2f(512.0f, 128.0f) &&
+                      at(b) == Rml::Vector2f(float(512 + kast::kWorldUIAtlasPadding), 0.0f) &&
+                      size(b) == Rml::Vector2f(256.0f, 128.0f),
+                  std::format("World panels take atlas tiles of their size, nearest first (A at {},{} {}x{}, B at {},{})",
+                              at(a).x, at(a).y, size(a).x, size(a).y, at(b).x, at(b).y).c_str());
+            check(doc(a)->IsVisible() && doc(b)->IsVisible() && !doc(beyond)->IsVisible() && !doc(behind)->IsVisible(),
+                  "a World panel beyond its maxDistance or behind the eye gets no tile");
+            const std::vector<kast::Renderer::WorldQuad>& quads = gui.world().quads();
+            check(quads.size() == 2 && bgfx::isValid(gui.world().atlasTexture()), "the placed World panels have quads");
+            if (quads.size() == 2) {
+                const auto near = [](const bx::Vec3& p, const bx::Vec3& q) { return bx::length(bx::sub(p, q)) < 1e-4f; };
+                const kast::Renderer::WorldQuad& qa = quads[0];
+                check(near(qa.corners[0], {-1.0f, 1.75f, 1.0f}) && near(qa.corners[2], {1.0f, 1.25f, 1.0f}),
+                      "A's quad is 512 / 256 x 128 / 256 = 2 x 0.5 m, centered on it, facing the camera");
+                check(qa.uv == std::array<float, 4>{0.0f, 0.0f, 512.0f / 2048.0f, 128.0f / 2048.0f},
+                      "A's quad shows its tile of the atlas");
+            }
+            // Six 1000 px panels farther away: three fit beside and under A and B, the three farthest don't; logged once.
+            const size_t fullBefore = loggedCount("World UI atlas full");
+            std::vector<entt::entity> big;
+            for (int i = 0; i < 6; ++i) {
+                kast::WorldUI panel = sign;
+                panel.width = panel.height = 1000;
+                big.push_back(add("Big", {float(i) - 2.5f, 1.5f, -3.0f - float(i)}, panel));
+            }
+            frame();
+            frame();
+            check(doc(big[0])->IsVisible() && doc(big[1])->IsVisible() && doc(big[2])->IsVisible() &&
+                      !doc(big[3])->IsVisible() && !doc(big[4])->IsVisible() && !doc(big[5])->IsVisible() &&
+                      doc(a)->IsVisible() && doc(b)->IsVisible(),
+                  "a full atlas: the nearest panels are placed, the farthest left out");
+            check(gui.world().quads().size() == 5, "only the placed panels have quads");
+            check(loggedCount("World UI atlas full (2048x2048): the 3 farthest World panel(s) not drawn") == fullBefore + 1 &&
+                      loggedCount("World UI atlas full") == fullBefore + 1,
+                  "a full atlas logs one warning, not one per frame");
+            scene.registry().get<kast::Transform>(camera).position.z = -14.0f; // turned back: now big[5] is the nearest
+            scene.registry().get<kast::Transform>(camera).rotation = bx::fromEuler({0.0f, bx::kPi, 0.0f});
+            frame();
+            check(doc(big[5])->IsVisible() && !doc(a)->IsVisible(), "the tiles follow the camera: nearest first");
+        }
+        gui.clear();
+        check(gui.world().empty() && !Rml::GetContext("worldui_atlas-world-atlas")->GetNumDocuments(),
+              "Stop (SceneGui::clear) unloads the World documents");
+        gui.release();
+    }
+    kast::gui::shutdown();
+    bgfx::shutdown();
+}
+
 int main(int argc, char** argv)
 {
     kast::disableCrashDialogsIfRequested();
@@ -16516,6 +16694,8 @@ int main(int argc, char** argv)
         checkWorldUIComponent();
         checkWorldToScreen();
         checkWorldGuiScene();
+        checkWorldUIAtlas();
+        checkWorldGuiAtlas();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All world UI checks passed" : std::format("{} world UI check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
@@ -16701,6 +16881,8 @@ int main(int argc, char** argv)
     checkWorldUIComponent();
     checkWorldToScreen();
     checkWorldGuiScene();
+    checkWorldUIAtlas();
+    checkWorldGuiAtlas();
     checkGuiListMath();
     checkGuiLists();
     checkExternalEditor();

@@ -387,7 +387,8 @@ enum class WorldUIFacing { Billboard, YawOnly, Fixed };
 // Shows a game GUI (.rml, project-relative path) floating at the entity in Play mode (see world_ui.h): its anchor is
 // offset in the entity's local space. Overlay: drawn screen-space, width x height pixels, centered over the anchor with
 // its bottom on it; hidden off-screen, beyond maxDistance meters (0: unlimited) and, with occlude, behind physics
-// colliders. World mode, facing and pixelsPerMeter: not drawn yet (World-space UI phase 2). interactive: phase 3.
+// colliders. World: a width / pixelsPerMeter x height / pixelsPerMeter meter quad in the scene centered on the anchor,
+// turned by facing, depth-tested (occlude unused). interactive: World-space UI phase 3.
 // Every field but path and visible may be missing from a scene file (its default).
 struct WorldUI {
     std::string path;

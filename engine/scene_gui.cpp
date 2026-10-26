@@ -473,6 +473,7 @@ void SceneGui::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer)
     context_.render(view, frameBuffer, world);
     if (allContext_.created())
         allContext_.render(view, frameBuffer, true);
+    world_.renderAtlas(); // in the views after theirs; the scene samples it next frame (WorldGui::quads)
 }
 
 void SceneGui::onEvent(const SDL_Event& event, float originX, float originY, float scale)

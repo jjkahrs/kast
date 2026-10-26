@@ -25,9 +25,10 @@ public:
     // Where the next RenderGeometry calls draw: view on frameBuffer, width x height pixels. Layer passes take the views
     // after it, up to view + gui::kViews - 1. scale: RmlUi's units are scale pixels each (a context laid out at
     // width / scale x height / scale, drawn scaled up). shareViews: a second context drawn over the last begin()'s in
-    // the same frame, taking the views after the ones it used (view is ignored), within the same range.
+    // the same frame, taking the views after the ones it used (view is ignored), within the same range. clear (with
+    // shareViews): that view clears frameBuffer to transparent first.
     void begin(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, int width, int height, float scale = 1.0f,
-               bool shareViews = false);
+               bool shareViews = false, bool clear = false);
 
     Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) override;
     void RenderGeometry(Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation, Rml::TextureHandle texture) override;

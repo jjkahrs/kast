@@ -1,0 +1,13 @@
+<rml>
+<head>
+    <title>Sign</title>
+    <style>
+        body { font-family: Roboto; font-size: 64px; font-weight: bold; color: #000000; }
+        .sign { display: block; width: 100%; height: 100%; background-color: #ffffff; text-align: center; }
+        p { line-height: 128px; }
+    </style>
+</head>
+<body>
+    <div class="sign"><p id="text">KAST 5 M</p></div>
+</body>
+</rml>

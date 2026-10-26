@@ -64,7 +64,10 @@ constexpr float kZoneFarPlane = 6000.0f;
 constexpr bgfx::ViewId kViewportViews = kast::Renderer::kShadowViews + kast::PostProcess::kViews;
 constexpr bgfx::ViewId kSceneView = 0; // then its overlays (view 0 too: 256 views hold no more)
 constexpr bgfx::ViewId kGameView = kSceneView + kViewportViews + 1;
-constexpr bgfx::ViewId kGameGuiView = kGameView + kViewportViews; // the game GUIs (kast::gui::kViews), over the Game view's scene
+// The game GUIs (kast::gui::kViews), over the Game view's scene, then the World UI atlas (world_ui.h) in the views after
+// theirs: one range, so the atlas takes no views of its own (all 256 are spoken for). The Game view's scene samples the
+// atlas the frame after it is drawn, since these views come after the scene's.
+constexpr bgfx::ViewId kGameGuiView = kGameView + kViewportViews;
 constexpr bgfx::ViewId kGuiPreviewView = kGameGuiView + kast::gui::kViews; // the GUI Builder's preview
 constexpr bgfx::ViewId kShaderPreviewView = kGuiPreviewView + kast::gui::kViews; // the Shader Graph's preview
 constexpr bgfx::ViewId kModelPreviewView = kShaderPreviewView + ShaderPreview::kViews; // the Model Preview

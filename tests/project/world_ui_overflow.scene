@@ -1,0 +1,90 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Directional Light",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 4, 0], "rotation": [-0.408218, -0.23457, -0.109382, 0.875426], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.95, 0.9], "intensity": 1.1, "castShadows": true, "bias": 0.05, "normalBias": 1.5, "maxDistance": 100, "cascadeCount": 4, "bakeMode": "indirect" }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [12, 1, 12] },
+        "MeshRenderer": { "primitive": "plane", "material": "", "castShadows": true, "receiveShadows": true, "giMode": "off", "lightmapScale": 1 }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 1.5, 6], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 1000, "projection": "perspective", "orthographicSize": 5 }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Panel 1",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-3.5, 1.5, -1], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": { "id": "fc419a8f-9210-424f-8892-1c5162855e22", "path": "ui/nameplate.rml" }, "visible": true, "mode": "world", "facing": "billboard", "offset": [0, 0, 0], "width": 1000, "height": 1000, "pixelsPerMeter": 1000, "maxDistance": 0, "occlude": true, "interactive": false }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Panel 2",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-2.1, 1.5, -2], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": { "id": "fc419a8f-9210-424f-8892-1c5162855e22", "path": "ui/nameplate.rml" }, "visible": true, "mode": "world", "facing": "billboard", "offset": [0, 0, 0], "width": 1000, "height": 1000, "pixelsPerMeter": 1000, "maxDistance": 0, "occlude": true, "interactive": false }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Panel 3",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-0.7, 1.5, -3], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": { "id": "fc419a8f-9210-424f-8892-1c5162855e22", "path": "ui/nameplate.rml" }, "visible": true, "mode": "world", "facing": "billboard", "offset": [0, 0, 0], "width": 1000, "height": 1000, "pixelsPerMeter": 1000, "maxDistance": 0, "occlude": true, "interactive": false }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Panel 4",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0.7, 1.5, -4], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": { "id": "fc419a8f-9210-424f-8892-1c5162855e22", "path": "ui/nameplate.rml" }, "visible": true, "mode": "world", "facing": "billboard", "offset": [0, 0, 0], "width": 1000, "height": 1000, "pixelsPerMeter": 1000, "maxDistance": 0, "occlude": true, "interactive": false }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Panel 5",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [2.1, 1.5, -5], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": { "id": "fc419a8f-9210-424f-8892-1c5162855e22", "path": "ui/nameplate.rml" }, "visible": true, "mode": "world", "facing": "billboard", "offset": [0, 0, 0], "width": 1000, "height": 1000, "pixelsPerMeter": 1000, "maxDistance": 0, "occlude": true, "interactive": false }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Panel 6",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [3.5, 1.5, -6], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "WorldUI": { "path": { "id": "fc419a8f-9210-424f-8892-1c5162855e22", "path": "ui/nameplate.rml" }, "visible": true, "mode": "world", "facing": "billboard", "offset": [0, 0, 0], "width": 1000, "height": 1000, "pixelsPerMeter": 1000, "maxDistance": 0, "occlude": true, "interactive": false }
+      }
+    }
+  ],
+  "systems": [],
+  "editor": {
+    "camera": { "pivot": [0, 1, 0], "yaw": 0, "pitch": -10, "distance": 8 }
+  }
+}

@@ -21,6 +21,7 @@ constexpr float kMinDepth = 1e-4f;       // nearer to the eye plane than this co
 constexpr int kMaxOcclusionCasts = 8;     // bodies of the owner (or triggers) skipped per anchor, at most
 constexpr float kOcclusionSkip = 1e-3f;   // meters past a skipped hit the next cast starts
 constexpr float kOcclusionMargin = 1e-2f; // a hit this near the anchor (its own surface) doesn't occlude it
+constexpr float kMinPixelsPerMeter = 1e-3f; // a World panel's pixelsPerMeter is taken as at least this
 
 } // namespace
 
@@ -82,20 +83,72 @@ bool worldUIOccluded(const Physics& physics, const Scene& scene, entt::entity ow
     return false; // ponytail: past kMaxOcclusionCasts skipped bodies the anchor counts as seen
 }
 
+std::vector<std::optional<WorldUITile>> packWorldUIAtlas(std::span<const std::pair<int, int>> sizes, int atlasSize)
+{
+    // ponytail: rows ("shelves") in distance order, repacked every frame; a skyline packer if mixed sizes waste room.
+    std::vector<std::optional<WorldUITile>> tiles;
+    int x = 0, y = 0, row = 0; // the free spot in the current row, its height so far
+    for (const auto& [width, height] : sizes) {
+        if (width <= 0 || height <= 0 || width > atlasSize || height > atlasSize) {
+            tiles.emplace_back();
+            continue;
+        }
+        int tx = x, ty = y, tallest = row;
+        if (tx + width > atlasSize) { // a new row under this one
+            tx = 0;
+            ty += tallest;
+            tallest = 0;
+        }
+        if (ty + height > atlasSize) { // the next, smaller panel may still fit where this one didn't
+            tiles.emplace_back();
+            continue;
+        }
+        tiles.push_back(WorldUITile{tx, ty, width, height});
+        x = tx + width + kWorldUIAtlasPadding;
+        y = ty;
+        row = std::max(tallest, height + kWorldUIAtlasPadding);
+    }
+    return tiles;
+}
+
+std::array<bx::Vec3, 4> worldUIQuadCorners(WorldUIFacing facing, const bx::Vec3& center, float width, float height,
+                                           const float* cameraWorld, const float* entityWorld)
+{
+    const bx::Vec3 cameraRight{cameraWorld[0], cameraWorld[1], cameraWorld[2]};
+    bx::Vec3 right = cameraRight, up{cameraWorld[4], cameraWorld[5], cameraWorld[6]};
+    if (facing == WorldUIFacing::YawOnly) {
+        up = {0.0f, 1.0f, 0.0f};
+        right = {cameraRight.x, 0.0f, cameraRight.z};
+        if (bx::length(right) < 1e-4f) // the camera rolled on its side: face it by where it stands instead
+            right = bx::cross(up, bx::sub({cameraWorld[12], 0.0f, cameraWorld[14]}, {center.x, 0.0f, center.z}));
+        if (bx::length(right) < 1e-4f)
+            right = {1.0f, 0.0f, 0.0f};
+    } else if (facing == WorldUIFacing::Fixed) {
+        right = {entityWorld[0], entityWorld[1], entityWorld[2]};
+        up = {entityWorld[4], entityWorld[5], entityWorld[6]};
+    }
+    right = bx::mul(bx::normalize(right), width * 0.5f);
+    up = bx::mul(bx::normalize(up), height * 0.5f);
+    return {bx::add(bx::sub(center, right), up), bx::add(bx::add(center, right), up),
+            bx::sub(bx::add(center, right), up), bx::sub(bx::sub(center, right), up)};
+}
+
 void WorldGui::sync(const Scene& scene, const std::filesystem::path& projectRoot)
 {
     root_ = projectRoot;
     std::vector<Entry> next;
     for (auto [entity, ui, id] : scene.registry().view<const WorldUI, const PersistentId>().each()) {
-        if (ui.path.empty() || ui.mode != WorldUIMode::Overlay)
+        if (ui.path.empty())
             continue;
         // ponytail: a linear find per entity; index entries_ by entity if scenes get thousands of panels
-        const auto old = std::ranges::find_if(entries_, [&](const Entry& e) { return e.entity == entity && e.path == ui.path; });
+        const auto old = std::ranges::find_if(entries_, [&](const Entry& e) {
+            return e.entity == entity && e.path == ui.path && e.mode == ui.mode;
+        });
         if (old != entries_.end()) {
             next.push_back(*old);
             entries_.erase(old);
         } else {
-            next.push_back({.entity = entity, .id = id.value, .path = ui.path});
+            next.push_back({.entity = entity, .id = id.value, .path = ui.path, .mode = ui.mode});
             load(next.back());
         }
     }
@@ -109,16 +162,22 @@ void WorldGui::layout(const Scene& scene, const float* view, const float* proj, 
 {
     if (width <= 0 || height <= 0)
         return; // minimized: the documents keep their places
-    context_.resize(width, height);
     float viewProj[16], inverse[16];
     bx::mtxMul(viewProj, view, proj);
     bx::mtxInverse(inverse, view);
-    const bx::Vec3 eye{inverse[12], inverse[13], inverse[14]};
+    layoutOverlay(scene, viewProj, {inverse[12], inverse[13], inverse[14]}, width, height, physics);
+    layoutWorld(scene, inverse);
+}
+
+void WorldGui::layoutOverlay(const Scene& scene, const float* viewProj, const bx::Vec3& eye, int width, int height,
+                             const Physics* physics)
+{
+    context_.resize(width, height);
     const entt::registry& registry = scene.registry();
     std::vector<WorldUIAnchor> anchors;
     std::vector<Entry*> candidates; // by anchor
     for (Entry& entry : entries_) {
-        if (!entry.document)
+        if (!entry.document || entry.mode != WorldUIMode::Overlay)
             continue;
         const WorldUI& ui = registry.get<WorldUI>(entry.entity); // sync ran this frame: the entity has it
         if (!ui.visible) {
@@ -155,12 +214,108 @@ void WorldGui::layout(const Scene& scene, const float* view, const float* proj, 
             candidates[i]->document->Hide();
 }
 
+void WorldGui::layoutWorld(const Scene& scene, const float* cameraWorld)
+{
+    atlas_.resize(kWorldUIAtlasSize, kWorldUIAtlasSize);
+    const bx::Vec3 eye{cameraWorld[12], cameraWorld[13], cameraWorld[14]};
+    const bx::Vec3 forward{-cameraWorld[8], -cameraWorld[9], -cameraWorld[10]}; // cameras look down their -Z
+    struct Panel {
+        Entry* entry;
+        const WorldUI* ui;
+        std::array<float, 16> world{};
+        bx::Vec3 center{0.0f, 0.0f, 0.0f};
+        float distance = 0.0f;
+    };
+    std::vector<Panel> panels;
+    for (Entry& entry : entries_) {
+        if (!entry.document || entry.mode != WorldUIMode::World)
+            continue;
+        entry.tile.reset();
+        const WorldUI& ui = scene.registry().get<WorldUI>(entry.entity); // sync ran this frame: the entity has it
+        Panel panel{.entry = &entry, .ui = &ui};
+        scene.worldMatrix(entry.entity, panel.world.data());
+        panel.center = bx::mul(ui.offset, panel.world.data());
+        const bx::Vec3 toPanel = bx::sub(panel.center, eye);
+        panel.distance = bx::length(toPanel);
+        const float metersPerPixel = 1.0f / std::max(ui.pixelsPerMeter, kMinPixelsPerMeter);
+        const float radius = 0.5f * std::hypot(float(ui.width), float(ui.height)) * metersPerPixel;
+        if (!ui.visible || (ui.maxDistance > 0.0f && panel.distance > ui.maxDistance) ||
+            bx::dot(toPanel, forward) < -radius) { // wholly behind the eye
+            entry.document->Hide();
+            continue;
+        }
+        panels.push_back(panel);
+    }
+    std::ranges::stable_sort(panels, std::ranges::less{}, &Panel::distance); // the nearest get tiles first
+    std::vector<std::pair<int, int>> sizes;
+    for (const Panel& panel : panels)
+        sizes.emplace_back(panel.ui->width, panel.ui->height);
+    const std::vector<std::optional<WorldUITile>> tiles = packWorldUIAtlas(sizes);
+    quads_.clear();
+    size_t skipped = 0;
+    for (size_t i = 0; i < panels.size(); ++i) {
+        Entry& entry = *panels[i].entry;
+        Rml::ElementDocument& document = *entry.document;
+        if (!tiles[i]) {
+            ++skipped;
+            document.Hide();
+            continue;
+        }
+        entry.tile = tiles[i];
+        const auto px = [](int value) { return Rml::Property(float(value), Rml::Unit::PX); };
+        document.SetProperty(Rml::PropertyId::Left, px(entry.tile->x));
+        document.SetProperty(Rml::PropertyId::Top, px(entry.tile->y));
+        document.SetProperty(Rml::PropertyId::Width, px(entry.tile->width));
+        document.SetProperty(Rml::PropertyId::Height, px(entry.tile->height));
+        if (!document.IsVisible())
+            document.Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
+        if (!entry.shown) // its tile isn't drawn yet: from the next frame
+            continue;
+        const WorldUI& ui = *panels[i].ui;
+        const float metersPerPixel = 1.0f / std::max(ui.pixelsPerMeter, kMinPixelsPerMeter);
+        const auto uv = [](int pixels) { return float(pixels) / float(kWorldUIAtlasSize); };
+        const WorldUITile& shown = *entry.shown;
+        quads_.push_back({.corners = worldUIQuadCorners(ui.facing, panels[i].center, float(ui.width) * metersPerPixel,
+                                                        float(ui.height) * metersPerPixel, cameraWorld,
+                                                        panels[i].world.data()),
+                          .uv = {uv(shown.x), uv(shown.y), uv(shown.x + shown.width), uv(shown.y + shown.height)}});
+    }
+    if (skipped > 0 && !atlasWarned_) {
+        atlasWarned_ = true;
+        log::warn(std::format("World UI atlas full ({0}x{0}): the {1} farthest World panel(s) not drawn (logged once)",
+                              kWorldUIAtlasSize, skipped));
+    }
+}
+
+bgfx::TextureHandle WorldGui::atlasTexture() const
+{
+    return bgfx::isValid(atlasFrameBuffer_) ? bgfx::getTexture(atlasFrameBuffer_) : bgfx::TextureHandle BGFX_INVALID_HANDLE;
+}
+
 bool WorldGui::empty() const
 {
-    return std::ranges::none_of(entries_, [](const Entry& entry) { return entry.document != nullptr; });
+    return std::ranges::none_of(entries_, [](const Entry& entry) {
+        return entry.document != nullptr && entry.mode == WorldUIMode::Overlay;
+    });
 }
 
 void WorldGui::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer) { context_.render(view, frameBuffer); }
+
+void WorldGui::renderAtlas()
+{
+    const bool placed = std::ranges::any_of(entries_, [](const Entry& entry) { return entry.tile.has_value(); });
+    if (placed && !bgfx::isValid(atlasFrameBuffer_)) {
+        const bgfx::TextureHandle color =
+            bgfx::createTexture2D(kWorldUIAtlasSize, kWorldUIAtlasSize, true, 1, bgfx::TextureFormat::RGBA8,
+                                  BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP); // mips made as drawn
+        atlasFrameBuffer_ = bgfx::createFrameBuffer(1, &color, true);
+        bgfx::setName(color, "World UI atlas");
+    }
+    if (placed)
+        atlas_.render(0, atlasFrameBuffer_, true, true);
+    for (Entry& entry : entries_)
+        entry.shown = entry.tile;
+}
 
 void WorldGui::clear()
 {
@@ -180,6 +335,10 @@ void WorldGui::release()
 {
     clear();
     context_.release();
+    atlas_.release();
+    if (bgfx::isValid(atlasFrameBuffer_))
+        bgfx::destroy(atlasFrameBuffer_); // and its texture
+    atlasFrameBuffer_ = BGFX_INVALID_HANDLE;
 }
 
 void WorldGui::write(EntityId entity, const std::string& id, const GuiWrite& write)
@@ -226,7 +385,10 @@ void WorldGui::apply(Rml::ElementDocument& document, EntityId entity, const std:
 void WorldGui::load(Entry& entry)
 {
     entry.document = nullptr;
-    Rml::Context* context = context_.context();
+    GuiContext& owner = entry.mode == WorldUIMode::World ? atlas_ : context_;
+    if (entry.mode == WorldUIMode::World)
+        owner.resize(kWorldUIAtlasSize, kWorldUIAtlasSize);
+    Rml::Context* context = owner.context();
     if (!context)
         return;
     const auto fail = [&](const std::string& why) {
@@ -258,6 +420,10 @@ void WorldGui::load(Entry& entry)
     gui::addWidgetStyle(*document);
     document->SetProperty(Rml::PropertyId::Display, Rml::Property(Rml::Style::Display::Block)); // so it takes the size
     document->SetProperty(Rml::PropertyId::Position, Rml::Property(Rml::Style::Position::Absolute));
+    if (entry.mode == WorldUIMode::World) { // nothing drawn past its tile, into a neighbor's
+        document->SetProperty(Rml::PropertyId::OverflowX, Rml::Property(Rml::Style::Overflow::Hidden));
+        document->SetProperty(Rml::PropertyId::OverflowY, Rml::Property(Rml::Style::Overflow::Hidden));
+    }
     if (const auto written = written_.find(entry.id); written != written_.end())
         for (const auto& [id, write] : written->second) // what Lua wrote before this document loaded
             apply(*document, entry.id, id, write);

@@ -150,9 +150,10 @@ void GameViewport::draw(Document& doc)
                 post_.setProjection(proj);
                 renderer_.setTarget(post_.target(), post_.width(), post_.height(), post_.blendView(),
                                     post_.volumetricFogView());
+                gui_.world().layout(doc.scene, view, proj, width, height, &doc.lua.physics()); // none while Stopped
+                renderer_.setWorldQuads(gui_.world().atlasTexture(), gui_.world().quads());
                 renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), post_.sceneView(),
                                  view, proj, shadowViews_);
-                gui_.world().layout(doc.scene, view, proj, width, height, &doc.lua.physics()); // none while Stopped
             }
             post_.apply(doc.scene.postProcessing, true, target_.frameBuffer());
             if (doc.play != PlayState::Stopped) {

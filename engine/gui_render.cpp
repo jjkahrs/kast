@@ -88,7 +88,7 @@ void GuiRenderer::shutdown()
 }
 
 void GuiRenderer::begin(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, int width, int height, float scale,
-                        bool shareViews)
+                        bool shareViews, bool clear)
 {
     if (width != width_ || height != height_)
         destroyLayers(); // the pool is the GUI's size; recreated as layers are pushed
@@ -102,7 +102,7 @@ void GuiRenderer::begin(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, 
     bx::mtxOrtho(proj_, 0.0f, static_cast<float>(width) / scale_, static_cast<float>(height) / scale_, 0.0f, 0.0f,
                  1000.0f, 0.0f, bgfx::getCaps()->homogeneousDepth);
     if (shareViews) {
-        if (!nextView(0, false))
+        if (!nextView(0, clear))
             viewLayer_ = kNoLayer; // out of views: every draw tries for one and is dropped
         return;
     }

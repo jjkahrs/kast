@@ -35,7 +35,8 @@ class ElementDocument;
 // dp ratio and layout size are per context. Both act as one GUI: the mouse goes to the All context while it is over
 // one of its elements, else to the Dp one; a click or focus() in one takes the keyboard there and blurs the other's
 // focused element; click, focus, mouseOver, hovered and the data models span both.
-// WorldUI documents (world_ui.h) are its WorldGui's: synced, cleared and reset with these, drawn under them.
+// WorldUI documents (world_ui.h) are its WorldGui's: synced, cleared and reset with these, the Overlay ones drawn under
+// them, the World ones into the WorldGui's atlas after them (the host hands its quads to the Renderer).
 namespace kast {
 
 class SceneGui final : public GuiAccess {
@@ -61,8 +62,8 @@ public:
     // scale of the window's display; either recomputes the dp ratio. setScale (below) sets the rest.
     void resize(int width, int height);
     void setDisplayScale(double osScale);
-    // Draws the WorldUI documents, then both contexts over them, into view .. view + gui::kViews - 1 on frameBuffer, as
-    // GuiContext::render.
+    // Draws the Overlay WorldUI documents, then both contexts over them, into view .. view + gui::kViews - 1 on
+    // frameBuffer, as GuiContext::render, then the World ones into their atlas in the views after those.
     void render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer);
     // An SDL event, positions mapped as GuiContext::onEvent; routed between the two contexts (see above).
     void onEvent(const SDL_Event& event, float originX = 0.0f, float originY = 0.0f, float scale = 1.0f);
