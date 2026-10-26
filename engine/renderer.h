@@ -166,7 +166,7 @@ void buildMips(MipImage& image, bool srgb);
 // AreaLights nearest it, rendered in kShadowViews views before the scene's (see shadow.h).
 // renderOverlays draws the editor's: a ground grid, axis lines, a short frustum preview per Camera, the range of the
 // selected PointLight (cone of a SpotLight, rect of an AreaLight), the box of the selected ReflectionProbe or VoxelGI, the selected
-// entity's collider, its ParticleEmitter's shape, its FogVolume's box or sphere and its WorldUI's anchor (a cross) and,
+// entity's collider, its ParticleEmitter's shape, its FogVolume's box or sphere and its WorldUI's anchor (a cross, on a line from the entity) and,
 // in World mode, quad outline.
 // Volumetric fog (volumetric_fog.h; the scene's postProcessing.volumetricFog, with a target whose fogView setTarget
 // gives): its froxel grid lit by the sun, local lights and their shadow maps just rendered in fogView, composited over
@@ -179,7 +179,8 @@ void buildMips(MipImage& image, bool srgb);
 // The caller owns the views' framebuffers, rects and clears; these set the view transform and mode and submit.
 class Renderer {
 public:
-    // A textured quad in world space (a World UI panel, world_ui.h): unlit, depth-tested, sorted far to near with the
+    // A textured quad in world space (a World UI panel, world_ui.h): unlit, depth-tested and depth-written where not fully
+    // transparent (so the editor overlays drawn after, e.g. the grid, stay behind it), sorted far to near with the
     // blended draws by its center. corners: top-left, top-right, bottom-right, bottom-left; uv: the texture's rect
     // (u0, v0 at the top-left, u1, v1).
     struct WorldQuad {

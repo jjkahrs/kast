@@ -168,8 +168,8 @@ Stopped and in Play, as the Game view would: Overlay panels flat at their pixel 
 in the scene. It shows each document's static content (what the <code>.rml</code> says: no Lua runs while Stopped, and Lua's
 <code>kast.gui</code> writes in Play reach only the Game view). Inspector edits (Path, Mode, Facing, Offset, Width, Height,
 Pixels Per Meter, Max Distance, Visible) show the next frame. Panels take no input there: clicks select what is under them
-and the gizmo works over them. A selected WorldUI entity shows its anchor as a small yellow (#ffcc00) cross and, in World
-mode, its quad's outline. The Scene toolbar's <strong>World UI</strong> box (after Post) hides and shows the preview; it starts
+and the gizmo works over them. A selected WorldUI entity shows its anchor as a yellow (#ffcc00) cross on a line up from the entity and its
+panel's outline: the quad's in World mode, the panel's screen rectangle (drawn over it) in Overlay mode. The Scene toolbar's <strong>World UI</strong> box (after Post) hides and shows the preview; it starts
 on (<code>--no-scene-world-ui</code> starts it off). A missing <code>.rml</code> shows nothing and is not logged (the Inspector
 warns). World UI documents have no hot reload: the editor doesn't watch their <code>.rml</code> / <code>.rcss</code> files.</p>
 <p><strong>New Lua Component...</strong> (first item of the Inspector's Add Component popup) creates a Lua component and adds it to the

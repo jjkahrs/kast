@@ -80,8 +80,9 @@ hide nameplates a (static) Collider. Without a physics session (none outside Pla
 <h2 id="world">World mode</h2>
 <p>A World-mode panel is a quad in the scene: <code>width / pixelsPerMeter</code> meters wide and <code>height / pixelsPerMeter</code>
 tall, centered on the anchor, turned by <a href="#facing">Facing</a>. It is drawn with the scene's blended (transparent)
-meshes and particles, sorted far to near with them by its center, and depth-tested against the opaque scene without writing
-depth: a wall in front of a sign hides the part of it behind the wall, with or without a Collider. It is unlit, but it is
+meshes and particles, sorted far to near with them by its center, and depth-tested against the opaque scene, writing
+depth where it is not fully transparent (so what is drawn after it farther away, such as the editor's grid, stays behind it;
+occlusion culling read the depth before, so nothing is culled behind a panel): a wall in front of a sign hides the part of it behind the wall, with or without a Collider. It is unlit, but it is
 drawn <strong>before post-processing</strong> (into the HDR scene): exposure, tonemapping, bloom, depth of field and color
 grading apply to it as to the rest of the scene, so a panel looks like a sign in the world rather than a HUD. Distance and
 volumetric fog do not. It is hidden beyond <code>maxDistance</code> and when wholly behind the camera; quads off the sides of

@@ -75,6 +75,25 @@ void forEachMeshHit(const kast::Scene& scene, const kast::Ray& ray, Fn&& fn)
     }
 }
 
+// The selected Overlay WorldUI's panel outlined in the highlight color, over the panel (the overlay lines, its anchor
+// cross included, draw under it). viewProj, origin and size: the Scene image's, in ImGui points.
+void outlineOverlayPanel(const Document& doc, const float* viewProj, ImVec2 origin, ImVec2 size)
+{
+    const auto* ui = doc.scene.valid(doc.selected) ? doc.scene.registry().try_get<kast::WorldUI>(doc.selected) : nullptr;
+    if (!ui || ui->mode != kast::WorldUIMode::Overlay || !ui->visible)
+        return;
+    float world[16];
+    doc.scene.worldMatrix(doc.selected, world);
+    const std::optional<kast::ScreenPoint> anchor = kast::worldToScreen(viewProj, bx::mul(ui->offset, world), size.x, size.y);
+    if (!anchor)
+        return;
+    const float scale = ImGui::GetIO().DisplayFramebufferScale.x; // the panel's size is in pixels
+    const float halfWidth = static_cast<float>(ui->width) * 0.5f / scale, height = static_cast<float>(ui->height) / scale;
+    const ImVec2 bottom(origin.x + anchor->x, origin.y + anchor->y);
+    ImGui::GetWindowDrawList()->AddRect(ImVec2(bottom.x - halfWidth, bottom.y - height), ImVec2(bottom.x + halfWidth, bottom.y),
+                                        IM_COL32(0xff, 0xcc, 0x00, 0xff), 0.0f, 0, 3.0f);
+}
+
 constexpr float kDropDistance = 10.0f; // a prefab dropped where the cursor ray hits nothing: this far along it
 
 } // namespace
@@ -324,6 +343,8 @@ void SceneViewport::draw(Document& doc)
                               std::format("Hi-Z mip {}", debug_.hizMip).c_str());
             }
 
+            if (showWorldUI_)
+                outlineOverlayPanel(doc, viewProj, origin, size);
             imageCenter_ = ImVec2(origin.x + size.x * 0.5f, origin.y + size.y * 0.5f);
             const bool claimed =
                 input && input({viewProj, origin.x, origin.y, size.x, size.y, hovered, drag_ != Drag::None});

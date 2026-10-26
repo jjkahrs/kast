@@ -305,17 +305,26 @@ foreach(shot "on|" "off|--no-scene-world-ui" "field|--set-field 6,WorldUI.offset
   set_tests_properties(editor_world_ui_scene_${name} PROPERTIES FIXTURES_SETUP editor_world_ui_scene_${name}_shot)
 endforeach()
 # Probes: Plate 700,270 and Sign 1040,262 (their clear color or the ground without them); Sign raised 1040,210; Sign
-# dragged 1150,262; Sign's outline 900,305; Plate's anchor cross below it 649,290; the Hierarchy's Crate row 200,120 (the
+# dragged 1150,262; Sign's outline 900,305; Plate's anchor cross below it 649,290 and its outline 700,222 and 520,250
+# (over the panel); the Hierarchy's Crate row 200,120 (the
 # accent when selected).
 set(world_ui_scene_plate 0.43781,0.30056)
 set(world_ui_scene_sign 0.65031,0.29167)
+# Inside Sign where the grid's lines run behind it (1040,282, 1040,288, 870,277: grey lines in the _off shot): the
+# nearer panel covers them (World quads write depth; the grid draws after them).
+set(world_ui_scene_grid 0.65031,0.31389 0.65031,0.32056 0.54406,0.30833)
 set(world_ui_scene_on ${world_ui_scene_plate},${world_ui_magenta} ${world_ui_scene_sign},${world_ui_white}
                       0.65031,0.23389,${world_ui_editor_clear})
-set(world_ui_scene_off ${world_ui_scene_plate},${world_ui_editor_clear} ${world_ui_scene_sign},${world_ui_editor_clear})
+foreach(at ${world_ui_scene_grid})
+  list(APPEND world_ui_scene_on ${at},${world_ui_white})
+  list(APPEND world_ui_scene_off ${at},80,80,80,12)
+endforeach()
+list(APPEND world_ui_scene_off ${world_ui_scene_plate},${world_ui_editor_clear} ${world_ui_scene_sign},${world_ui_editor_clear})
 set(world_ui_scene_field ${world_ui_scene_plate},${world_ui_editor_clear} ${world_ui_scene_sign},${world_ui_editor_clear}
                          0.65031,0.23389,${world_ui_white})
 set(world_ui_scene_selected_world ${world_ui_scene_on} 0.56281,0.33944,255,204,0,12)
-set(world_ui_scene_selected_overlay ${world_ui_scene_on} 0.40594,0.32278,255,204,0,12)
+set(world_ui_scene_selected_overlay ${world_ui_scene_on} 0.40594,0.32278,255,204,0,12 0.43781,0.24722,255,204,0,12
+                                     0.32531,0.27833,255,204,0,12)
 set(world_ui_scene_pick ${world_ui_scene_on} 0.12531,0.13389,255,170,0,8)
 set(world_ui_scene_gizmo ${world_ui_scene_plate},${world_ui_magenta} 0.71906,0.29167,${world_ui_white})
 foreach(name on off field selected_world selected_overlay pick gizmo)
