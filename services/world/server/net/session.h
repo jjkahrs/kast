@@ -10,11 +10,13 @@
 #include <asio/ssl.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <random>
+#include <span>
 #include <vector>
 
 namespace kast::net {
@@ -38,6 +40,9 @@ inline TimePoint lag_due(TimePoint now, TimePoint previous, Millis latency, Mill
     return std::max({now, previous, now + latency + offset});
 }
 
+// Frames Session::send and send_many have encoded, ever: lets a check prove a fan-out encodes once.
+inline std::atomic<size_t> framesEncoded{0};
+
 class Session : public std::enable_shared_from_this<Session> {
 public:
     using OnMessage = std::function<void(Session&, proto::Message&&)>;
@@ -52,6 +57,8 @@ public:
     // rejectWith: complete TLS, send Disconnect{rejectWith}, close (e.g. server_full).
     void start(std::optional<proto::Code> rejectWith = std::nullopt);
     void send(const proto::Message& m);
+    // An already encoded frame (send_many): same rules as send (dropped while closing, lag simulator, buffer cap).
+    void send_frame(std::span<const uint8_t> frame);
     // Sends Disconnect{reason}, stops reading, closes once it is written (or after a short grace).
     void disconnect(proto::Code reason);
     // Handshake finished (AuthOk sent): the handshake deadline no longer applies.
@@ -60,22 +67,24 @@ public:
     uint32_t id() const { return id_; }
     bool closing() const { return closing_; }
     std::string remote() const { return remote_; }
+    std::span<const uint8_t> pending() const { return pending_; } // queued for the next write; for tests
 
 private:
-    struct Delayed {
+    // Received messages wait decoded (for deliver), sent ones encoded (for pending_): a fan-out is not re-encoded.
+    template <class T> struct Delayed {
         TimePoint due;
-        proto::Message msg;
+        T item;
     };
-    using DelayQueue = std::deque<Delayed>;
+    template <class T> using DelayQueue = std::deque<Delayed<T>>;
 
     void read_header();
     void read_payload(uint16_t length, proto::Opcode op);
     void handle_frame(proto::Opcode op);
     void deliver(proto::Message&& m); // a received message: Ping answered here, the rest to on_message
-    void write(const proto::Message& m);
+    void written(); // after appending to pending_: the buffer cap, then the flush
     bool lagged() const { return limits_.simLatency.count() > 0 || limits_.simJitter.count() > 0; }
-    void delay(DelayQueue& queue, asio::steady_timer& timer, proto::Message m);
-    void arm_delay(DelayQueue& queue, asio::steady_timer& timer);
+    template <class T> void delay(DelayQueue<T>& queue, asio::steady_timer& timer, T item);
+    template <class T> void arm_delay(DelayQueue<T>& queue, asio::steady_timer& timer);
     void schedule_flush();
     void flush();
     void arm_heartbeat();
@@ -101,12 +110,16 @@ private:
     asio::steady_timer handshakeTimer_;
     asio::steady_timer heartbeatTimer_;
     asio::steady_timer closeTimer_;
-    DelayQueue lagIn_, lagOut_;
+    DelayQueue<proto::Message> lagIn_;
+    DelayQueue<std::vector<uint8_t>> lagOut_;
     asio::steady_timer lagInTimer_, lagOutTimer_;
     std::minstd_rand lagRng_;
     TimePoint lastReceive_;
     uint32_t pingNonce_ = 0;
     MessageRateLimiter rate_;
 };
+
+// Encodes m once and appends that frame to every session in to (send_frame); no encode when to is empty.
+void send_many(std::span<Session* const> to, const proto::Message& m);
 
 } // namespace kast::net

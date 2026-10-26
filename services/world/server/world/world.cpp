@@ -17,8 +17,8 @@ void mark_replicated(entt::registry& reg, entt::entity e, const lua::Defs& defs)
 }
 } // namespace
 
-World::World(WorldRules rules, const Maps& maps, Send send, Save save, lua::Defs defs)
-    : rules_(rules), maps_(maps), send_(std::move(send)), save_(std::move(save)), defs_(defs),
+World::World(WorldRules rules, const Maps& maps, Send send, SendMany sendMany, Save save, lua::Defs defs)
+    : rules_(rules), maps_(maps), send_(std::move(send)), sendMany_(std::move(sendMany)), save_(std::move(save)), defs_(defs),
       grid_(rules.cellSize, rules.viewRadius),
       lua_(reg_, std::move(defs),
            {.create = [this](std::string name, std::string templateName, std::optional<uint16_t> map,
@@ -54,7 +54,7 @@ void World::shutdown_scripts() {
         reg_.emplace<ScriptsLeft>(e);
     }
     lua_.shutdown();
-    client_event_system(reg_, lua_.take_client_events(), send_); // before the despawns
+    client_event_system(reg_, lua_.take_client_events(), send_, sendMany_); // before the despawns
 }
 
 entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint now) {
@@ -107,7 +107,7 @@ void World::despawn(entt::entity e) {
     if (!reg_.valid(e)) return;
     if (!reg_.all_of<ScriptsLeft>(e)) {
         lua_.leave(e);
-        client_event_system(reg_, lua_.take_client_events(), send_); // before the Despawn, while e can still be seen
+        client_event_system(reg_, lua_.take_client_events(), send_, sendMany_); // before the Despawn, while e can still be seen
     }
     const auto& ch = reg_.get<CharacterRef>(e);
     const auto& tf = reg_.get<Transform>(e);
@@ -254,7 +254,7 @@ void World::tick(TimePoint now) {
     for (const auto& [e, portal] : area_system(reg_, maps_, lua_.bus()))
         transfer(e, {portal.map, {portal.pos[0], portal.pos[1], portal.pos[2]}, portal.heading});
     aoi_system(reg_, grid_, send_);
-    chat_system(reg_, rules_.chat, mutes_, send_, now, std::chrono::system_clock::now());
+    chat_system(reg_, rules_.chat, mutes_, send_, sendMany_, now, std::chrono::system_clock::now());
     client_event_in_system(reg_, lua_.bus(), now); // delivered by the drain after this tick's Lua update
     interact_system(reg_, maps_, lua_.bus());      // likewise
     spawner_system(reg_, spawner_, rules_.maxNpcs, now, [this](const SpawnRecord& r) {
@@ -267,9 +267,9 @@ void World::tick(TimePoint now) {
     lua_.update(rules_.tickSeconds);
     lua_.drain_events();
     aoi_rebucket(reg_, grid_); // NPCs Lua moved: in their new cell for the next tick's view diff
-    replication_system(reg_, send_);
-    component_replication_system(reg_, defs_, send_);
-    client_event_system(reg_, lua_.take_client_events(), send_);
+    replication_system(reg_, sendMany_);
+    component_replication_system(reg_, defs_, send_, sendMany_);
+    client_event_system(reg_, lua_.take_client_events(), send_, sendMany_);
     save_system(reg_, defs_, save_, rules_.saveInterval, now);
     end_of_tick_system(reg_);
 }

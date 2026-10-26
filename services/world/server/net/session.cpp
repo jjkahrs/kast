@@ -86,37 +86,65 @@ void Session::deliver(proto::Message&& m) {
 
 void Session::send(const proto::Message& m) {
     if (closing_) return;
-    if (lagged()) delay(lagOut_, lagOutTimer_, m);
-    else write(m);
+    ++framesEncoded;
+    if (!lagged()) {
+        proto::encode(pending_, m);
+        written();
+        return;
+    }
+    std::vector<uint8_t> frame;
+    proto::encode(frame, m);
+    delay(lagOut_, lagOutTimer_, std::move(frame));
 }
 
-// The lag simulator: messages wait in queue until due (lag_due), then go on (received ones to deliver, sent ones to
-// write) in order. A Disconnect is not delayed; whatever is still queued when the session closes is dropped.
-void Session::delay(DelayQueue& queue, asio::steady_timer& timer, proto::Message m) {
+void Session::send_frame(std::span<const uint8_t> frame) {
+    if (closing_) return;
+    if (lagged()) {
+        // ponytail: a copy per lagged session; share one buffer if the lag simulator ever runs at load-test scale.
+        delay(lagOut_, lagOutTimer_, std::vector<uint8_t>(frame.begin(), frame.end()));
+        return;
+    }
+    pending_.insert(pending_.end(), frame.begin(), frame.end());
+    written();
+}
+
+void send_many(std::span<Session* const> to, const proto::Message& m) {
+    if (to.empty()) return;
+    ++framesEncoded;
+    std::vector<uint8_t> frame;
+    proto::encode(frame, m);
+    for (Session* s : to) s->send_frame(frame);
+}
+
+// The lag simulator: messages wait in queue until due (lag_due), then go on (received ones to deliver, sent frames to
+// pending_) in order. A Disconnect is not delayed; whatever is still queued when the session closes is dropped.
+template <class T> void Session::delay(DelayQueue<T>& queue, asio::steady_timer& timer, T item) {
     const TimePoint now = SteadyClock::now();
     queue.push_back({lag_due(now, queue.empty() ? now : queue.back().due, limits_.simLatency, limits_.simJitter, lagRng_),
-                     std::move(m)});
+                     std::move(item)});
     if (queue.size() == 1) arm_delay(queue, timer);
 }
 
-void Session::arm_delay(DelayQueue& queue, asio::steady_timer& timer) {
+template <class T> void Session::arm_delay(DelayQueue<T>& queue, asio::steady_timer& timer) {
     timer.expires_at(queue.front().due);
     timer.async_wait([self = shared_from_this(), &queue, &timer](asio::error_code ec) {
         if (ec || self->closing_) return;
-        const bool inbound = &queue == &self->lagIn_;
         while (!queue.empty() && queue.front().due <= SteadyClock::now()) {
-            proto::Message m = std::move(queue.front().msg);
+            T item = std::move(queue.front().item);
             queue.pop_front();
-            if (inbound) self->deliver(std::move(m));
-            else self->write(m);
+            if constexpr (std::is_same_v<T, proto::Message>) {
+                self->deliver(std::move(item));
+            } else {
+                self->pending_.insert(self->pending_.end(), item.begin(), item.end());
+                self->written();
+            }
             if (self->closing_) return;
         }
         if (!queue.empty()) self->arm_delay(queue, timer);
     });
 }
 
-void Session::write(const proto::Message& m) {
-    proto::encode(pending_, m);
+void Session::written() {
     if (pending_.size() > limits_.maxSendBuffer) {
         log::warn("send buffer full, dropping slow client", {{"session", id_}, {"bytes", pending_.size()}});
         close();

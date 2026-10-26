@@ -13,10 +13,13 @@
 #include <entt/entity/registry.hpp>
 
 #include <functional>
+#include <span>
 
 namespace kast::world {
 
 using Send = std::function<void(uint32_t sessionId, const proto::Message&)>;
+// One message to several sessions, each getting it where a Send would have put it: encoded once, not per session.
+using SendMany = std::function<void(std::span<const uint32_t> sessionIds, const proto::Message&)>;
 using Save = std::function<void(const db::CharSave&)>;
 
 inline uint32_t wire_id(entt::entity e) { return entt::to_integral(e); }
@@ -61,12 +64,12 @@ std::vector<std::pair<entt::entity, map::Portal>> area_system(entt::registry& re
 // again after Lua, whose NPC moves would otherwise miss the next tick's view diff.
 void aoi_rebucket(entt::registry& reg, AoiGrid& grid);
 void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send);
-void replication_system(entt::registry& reg, const Send& send);
+void replication_system(entt::registry& reg, const SendMany& sendMany);
 // Each player's Says: rate limited (ChatLimit), sanitized, dropped with ChatNotice{muted} while the character is muted
 // (wallNow against mutes), then ChatMsg{kind} to the sender and: say / emote the players that see it, yell every player
 // on its map within rules.yellRadius.
-void chat_system(entt::registry& reg, const ChatRules& rules, const Mutes& mutes, const Send& send, TimePoint now,
-                 SysTime wallNow);
+void chat_system(entt::registry& reg, const ChatRules& rules, const Mutes& mutes, const Send& send,
+                 const SendMany& sendMany, TimePoint now, SysTime wallNow);
 // Publishes each character's ClientEvents (kast.world.send) on the Lua bus as "client.<name>" {entity, data}, in
 // arrival order, plus requestId for a kast.world.request; past the character's ClientEventLimit they are dropped and
 // counted (a dropped request is never answered: the client times it out).
@@ -77,12 +80,14 @@ void client_event_in_system(entt::registry& reg, EventBus& bus, TimePoint now);
 void interact_system(entt::registry& reg, const Maps& maps, EventBus& bus);
 // Sends replicated Lua components (docs/services/world/lua.html): what changed since the last send to the
 // owner (owner, aoi) and observers (aoi), and every aoi component of an entity to a viewer it came into view of.
-void component_replication_system(entt::registry& reg, const lua::Defs& defs, const Send& send);
+void component_replication_system(entt::registry& reg, const lua::Defs& defs, const Send& send,
+                                  const SendMany& sendMany);
 // Sends the client events Lua queued (kast.sendTo/sendNearby/broadcast) as ServerEvent, in call order. The audience is
 // taken now: owner = the character's session, nearby = it and every session that sees it, all = every player. A
 // target no longer in the world is skipped, and an NPC target has no client of its own. A kast.reply goes as Reply to
 // its entity's session alone.
-void client_event_system(entt::registry& reg, std::vector<lua::ClientEvent> events, const Send& send);
+void client_event_system(entt::registry& reg, std::vector<lua::ClientEvent> events, const Send& send,
+                         const SendMany& sendMany);
 void save_system(entt::registry& reg, const lua::Defs& defs, const Save& save, Millis interval, TimePoint now);
 void end_of_tick_system(entt::registry& reg);
 
