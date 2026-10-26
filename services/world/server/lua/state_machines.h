@@ -5,6 +5,7 @@
 // syncAll. Game machines (GAME_STATE_MACHINES) run for the server's lifetime; entity machines come from the
 // StateMachine built-in on characters. One per lua::Runtime (fsm()). See docs/services/world/lua.html.
 #pragma once
+#include "components.h"
 #include "event_bus.h"
 
 #include <entt/entity/registry.hpp>
@@ -63,7 +64,8 @@ class StateMachines {
 public:
     using Target = std::variant<std::string, EntityId>; // a game machine name or an entity id
 
-    StateMachines(EventBus& bus, entt::registry& reg) : bus_(bus), reg_(reg) {}
+    StateMachines(EventBus& bus, entt::registry& reg)
+        : bus_(bus), reg_(reg), machines_(pool(reg, kStateMachineComponent)) {}
     StateMachines(const StateMachines&) = delete;
     StateMachines& operator=(const StateMachines&) = delete;
 
@@ -95,12 +97,12 @@ private:
         Target target;
         std::string to;
     };
-    // A snapshot of one machine. Re-resolved after callbacks run, as they may change the registry.
+    // One machine, valid until a callback runs (they may change the registry): copy what outlives one.
     struct Instance {
         const StateMachineDef* def;
-        std::string current; // empty: not entered yet
-        std::string initial; // what it enters first (entity: a valid initialState, else the definition's initial)
+        const std::string* current; // in game_ or StateMachineRuntime; null or empty: not entered yet
         std::optional<EntityId> entity;
+        entt::entity handle = entt::null; // entity machines
     };
 
     // Throws std::invalid_argument for a bad target. enter: a machine not entered yet enters its initial state.
@@ -114,11 +116,17 @@ private:
               const Transition& t);
     std::string label(const Instance& machine) const;
     std::string entityInitial(entt::entity entity, const StateMachineDef& def, bool warn);
+    // What it enters first (entity: a valid initialState, else the definition's initial).
+    std::string initialOf(const Instance& machine);
     entt::entity find(EntityId id) const; // entt::null if no such character
-    std::optional<std::string> machineOf(entt::entity entity); // StateMachine "machine"; nullopt without one
+    // StateMachine "machine", in the component (copy it before a callback runs); null without one.
+    const std::string* machineOf(entt::entity entity) const;
 
     EventBus& bus_;
     entt::registry& reg_;
+    // The StateMachine pool, resolved once: EnTT keeps each storage in a shared_ptr (registry.hpp pool_container_type),
+    // so the reference outlives later pools; only registry::reset(id), never called here, would drop it.
+    entt::storage_for_t<ComponentData>& machines_;
     std::map<std::string, StateMachineDef> defs_;
     std::vector<std::string> gameList_;
     std::map<std::string, std::string> game_; // name -> current state, for game machines that have entered one
