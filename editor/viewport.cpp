@@ -75,6 +75,25 @@ void forEachMeshHit(const kast::Scene& scene, const kast::Ray& ray, Fn&& fn)
     }
 }
 
+// The selected Overlay WorldUI's panel outlined in the highlight color, over the panel (the overlay lines, its anchor
+// cross included, draw under it). viewProj, origin and size: the Scene image's, in ImGui points.
+void outlineOverlayPanel(const Document& doc, const float* viewProj, ImVec2 origin, ImVec2 size)
+{
+    const auto* ui = doc.scene.valid(doc.selected) ? doc.scene.registry().try_get<kast::WorldUI>(doc.selected) : nullptr;
+    if (!ui || ui->mode != kast::WorldUIMode::Overlay || !ui->visible)
+        return;
+    float world[16];
+    doc.scene.worldMatrix(doc.selected, world);
+    const std::optional<kast::ScreenPoint> anchor = kast::worldToScreen(viewProj, bx::mul(ui->offset, world), size.x, size.y);
+    if (!anchor)
+        return;
+    const float scale = ImGui::GetIO().DisplayFramebufferScale.x; // the panel's size is in pixels
+    const float halfWidth = static_cast<float>(ui->width) * 0.5f / scale, height = static_cast<float>(ui->height) / scale;
+    const ImVec2 bottom(origin.x + anchor->x, origin.y + anchor->y);
+    ImGui::GetWindowDrawList()->AddRect(ImVec2(bottom.x - halfWidth, bottom.y - height), ImVec2(bottom.x + halfWidth, bottom.y),
+                                        IM_COL32(0xff, 0xcc, 0x00, 0xff), 0.0f, 0, 3.0f);
+}
+
 constexpr float kDropDistance = 10.0f; // a prefab dropped where the cursor ray hits nothing: this far along it
 
 } // namespace
@@ -199,6 +218,7 @@ void SceneViewport::init()
 
 void SceneViewport::shutdown()
 {
+    worldUi_.release();
     target_.destroy();
     post_.shutdown();
     renderer_.shutdown();
@@ -252,6 +272,7 @@ void SceneViewport::draw(Document& doc)
 
     const bool visible = beginViewportPanel("Scene", doc, PanelFocus::Scene);
     ImGuiWindow* window = ImGui::GetCurrentWindow();
+    drewGui_ = false;
     if (visible) {
         drawToolbar(doc);
         const ImVec2 size = ImGui::GetContentRegionAvail();
@@ -293,10 +314,23 @@ void SceneViewport::draw(Document& doc)
             post_.setProjection(proj);
             renderer_.setTarget(post_.target(), post_.width(), post_.height(), post_.blendView(),
                                 post_.volumetricFogView());
-            renderer_.render(doc.scene, doc.project ? doc.project->root : std::filesystem::path(), post_.sceneView(), view,
-                             proj, shadowViews_, extraScene_);
+            const std::filesystem::path root = doc.project ? doc.project->root : std::filesystem::path();
+            if (showWorldUI_) {
+                worldUi_.sync(doc.scene, root); // no bus: the preview takes no input
+                worldUi_.layout(doc.scene, view, proj, width, height, &doc.lua.physics()); // occludes in Play only
+                renderer_.setWorldQuads(worldUi_.atlasTexture(), worldUi_.quads());
+            } else {
+                worldUi_.clear();
+                renderer_.setWorldQuads(BGFX_INVALID_HANDLE, {});
+            }
+            renderer_.render(doc.scene, root, post_.sceneView(), view, proj, shadowViews_, extraScene_);
             post_.apply(doc.scene.postProcessing, postEffects_, target_.frameBuffer());
             renderer_.renderOverlays(doc.scene, target_.view(), view, proj, doc.selected);
+            if (showWorldUI_) { // over the overlays, as the Game view's GUIs are over its image
+                worldUi_.render(guiView_, target_.frameBuffer());
+                worldUi_.renderAtlas(); // the scene samples it next frame
+                drewGui_ = true;
+            }
             if (const bgfx::TextureHandle hiz = renderer_.hizDebugTexture(); bgfx::isValid(hiz)) {
                 // The Hi-Z debug view: a quarter-width inset at the image's bottom-right, outlined in the accent.
                 const float insetWidth = size.x * 0.25f, insetHeight = insetWidth * size.y / size.x;
@@ -309,6 +343,8 @@ void SceneViewport::draw(Document& doc)
                               std::format("Hi-Z mip {}", debug_.hizMip).c_str());
             }
 
+            if (showWorldUI_)
+                outlineOverlayPanel(doc, viewProj, origin, size);
             imageCenter_ = ImVec2(origin.x + size.x * 0.5f, origin.y + size.y * 0.5f);
             const bool claimed =
                 input && input({viewProj, origin.x, origin.y, size.x, size.y, hovered, drag_ != Drag::None});
@@ -389,6 +425,9 @@ void SceneViewport::drawToolbar(Document& doc)
     ImGui::SameLine(0.0f, style.ItemSpacing.x * 3.0f);
     ImGui::Checkbox("Post", &postEffects_);
     ImGui::SetItemTooltip("Show the scene's post-processing effects (Window > Post Processing); fog always shows");
+    ImGui::SameLine();
+    ImGui::Checkbox("World UI", &showWorldUI_);
+    ImGui::SetItemTooltip("Preview the WorldUI panels (nameplates, signs) with their documents' static content");
     ImGui::SameLine();
     if (ImGui::SmallButton("Debug") || (openDebugMenu_ && !ImGui::IsPopupOpen("SceneDebug")))
         ImGui::OpenPopup("SceneDebug");

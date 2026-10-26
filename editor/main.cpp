@@ -66,7 +66,8 @@ constexpr bgfx::ViewId kSceneView = 0; // then its overlays (view 0 too: 256 vie
 constexpr bgfx::ViewId kGameView = kSceneView + kViewportViews + 1;
 // The game GUIs (kast::gui::kViews), over the Game view's scene, then the World UI atlas (world_ui.h) in the views after
 // theirs: one range, so the atlas takes no views of its own (all 256 are spoken for). The Game view's scene samples the
-// atlas the frame after it is drawn, since these views come after the scene's.
+// atlas the frame after it is drawn, since these views come after the scene's. The Scene view's WorldUI preview (its
+// Overlay panels, then its own atlas) draws first in the same range; the Game view's GUIs then take the views after.
 constexpr bgfx::ViewId kGameGuiView = kGameView + kViewportViews;
 constexpr bgfx::ViewId kGuiPreviewView = kGameGuiView + kast::gui::kViews; // the GUI Builder's preview
 constexpr bgfx::ViewId kShaderPreviewView = kGuiPreviewView + kast::gui::kViews; // the Shader Graph's preview
@@ -80,7 +81,7 @@ constexpr int kAddComponentPopupFrame = 10;
 constexpr float kComponentPollSeconds = 0.5f; // Lua definition files and the Assets tree are checked this often
 constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--screenshot-on-log frames,text] [--size WxH] [--window-pos X,Y] [--ui-scale F] [--projects-file list.json] "
-    "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--add-component-popup] "
+    "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--no-scene-world-ui] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--open-gui-settings] [--gui-settings-set json] [--game-resolution WxH] [--game-display-scale S] [--gui-preview-scale PERCENT] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-rename path=name] [--assets-select path] [--material-set field=json] [--material-undo N] [--material-redo N] "
     "[--focus-panel Window] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
@@ -132,6 +133,7 @@ struct Options {
     bool play = false;            // enter Play mode once the startup scene is loaded
     bool selectNetworkEntity = false; // with --play: select the first replicated clone (NetworkEntity) once it exists
     bool noScenePost = false;     // start with the Scene view's "Post" toggle off
+    bool noSceneWorldUI = false;  // start with the Scene view's "World UI" toggle off
     std::optional<std::pair<std::string, std::string>> newProject; // name, dir: open the prefilled New Project modal
     bool addComponentPopup = false; // open the Inspector's Add Component popup for the --select entity
     std::optional<std::string> newComponentPrompt; // open the Inspector's New Lua Component modal with this name
@@ -804,6 +806,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
                                     : what == "down" ? OnlineModel::Compose::Down : OnlineModel::Compose::Ps;
         } else if (arg == "--no-scene-post") {
             options.noScenePost = true;
+        } else if (arg == "--no-scene-world-ui") {
+            options.noSceneWorldUI = true;
         } else if (arg == "--size" && hasValue) {
             if (!parseSize(argv[++i], options.size))
                 return std::nullopt;
@@ -1626,7 +1630,7 @@ int main(int argc, char** argv)
         panels.openNewComponent(*options->newComponentPrompt);
     if (options->newStateMachinePrompt)
         panels.openNewStateMachine(*options->newStateMachinePrompt);
-    SceneViewport viewport(kSceneView);
+    SceneViewport viewport(kSceneView, kGameGuiView);
     ZoneRender zoneRender;
     ZonePanel zonePanel(settingsFile);
     if (!options->mapbake.empty())
@@ -1711,6 +1715,7 @@ int main(int argc, char** argv)
             viewport.openDebugMenu();
         viewport.init();
         viewport.setPostEffects(!options->noScenePost);
+        viewport.setShowWorldUI(!options->noSceneWorldUI);
         game.init(window);
         game.simulate(options->gameResolution, options->gameDisplayScale);
         kast::gui::init();
@@ -2002,7 +2007,7 @@ int main(int argc, char** argv)
         // Layouts saved before the Game panel existed: dock it as a tab beside Scene.
         if (const ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("Scene")))
             ImGui::SetNextWindowDockID(scene->DockId, ImGuiCond_FirstUseEver);
-        game.draw(doc);
+        game.draw(doc, viewport.drewGui());
         // Layouts saved before the Systems panel existed: dock it as a tab beside Hierarchy.
         if (const ImGuiWindowSettings* hierarchy = ImGui::FindWindowSettingsByID(ImHashStr("Hierarchy"));
             hierarchy && !ImGui::FindWindowSettingsByID(ImHashStr("Systems")))
@@ -2095,8 +2100,8 @@ int main(int argc, char** argv)
         graphs.shutdown();
         modelPreview.shutdown();
         game.shutdown();
+        viewport.shutdown(); // its WorldUI preview's documents, before RmlUi's
         kast::gui::shutdown();
-        viewport.shutdown();
         imgui_bgfx::shutdown();
         ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();

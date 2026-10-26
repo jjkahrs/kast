@@ -24,7 +24,6 @@ constexpr float kMinDepth = 1e-4f;       // nearer to the eye plane than this co
 constexpr int kMaxOcclusionCasts = 8;     // bodies of the owner (or triggers) skipped per anchor, at most
 constexpr float kOcclusionSkip = 1e-3f;   // meters past a skipped hit the next cast starts
 constexpr float kOcclusionMargin = 1e-2f; // a hit this near the anchor (its own surface) doesn't occlude it
-constexpr float kMinPixelsPerMeter = 1e-3f; // a World panel's pixelsPerMeter is taken as at least this
 
 // kast.gui.worldText's default style: rising and fading over 1 s, centered on its point, never taking the mouse. A
 // project's ui/world_text.rcss comes after it (same selectors win).
@@ -346,7 +345,7 @@ void WorldGui::layoutWorld(const Scene& scene, const float* cameraWorld)
         entry.interactive = ui.interactive;
         entry.corners = quads_.back().corners;
     }
-    if (skipped > 0 && !atlasWarned_) {
+    if (skipped > 0 && !atlasWarned_ && logErrors_) {
         atlasWarned_ = true;
         log::warn(std::format("World UI atlas full ({0}x{0}): the {1} farthest World panel(s) not drawn (logged once)",
                               kWorldUIAtlasSize, skipped));
@@ -501,7 +500,10 @@ bool WorldGui::empty() const
     });
 }
 
-void WorldGui::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer) { context_.render(view, frameBuffer); }
+void WorldGui::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, bool shareViews)
+{
+    context_.render(view, frameBuffer, shareViews);
+}
 
 void WorldGui::renderAtlas()
 {
@@ -600,7 +602,7 @@ void WorldGui::load(Entry& entry)
     if (!context)
         return;
     const auto fail = [&](const std::string& why) {
-        if (logged_.insert(entry.path).second)
+        if (logErrors_ && logged_.insert(entry.path).second)
             log::error(std::format("World UI document '{}'{}", entry.path, why));
     };
     std::string reason = "no project is open";

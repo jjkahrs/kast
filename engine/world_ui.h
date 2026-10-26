@@ -72,6 +72,7 @@ bool worldUIOccluded(const Physics& physics, const Scene& scene, entt::entity ow
 // 256x64 nameplates), its tiles kWorldUIAtlasPadding transparent pixels apart so the mips of neighbors don't mix.
 constexpr int kWorldUIAtlasSize = 2048;
 constexpr int kWorldUIAtlasPadding = 4;
+constexpr float kMinPixelsPerMeter = 1e-3f; // a World panel's pixelsPerMeter is taken as at least this
 struct WorldUITile {
     int x = 0, y = 0; // top-left, pixels
     int width = 0, height = 0;
@@ -105,7 +106,10 @@ constexpr size_t kMaxWorldTexts = 256;
 
 class WorldGui {
 public:
-    explicit WorldGui(std::string contextName) : context_(contextName), atlas_(contextName + "-atlas") {}
+    // logErrors false: a missing or broken .rml and a full atlas aren't logged (the editor's Scene view preview: the
+    // Inspector already flags the path, and Play logs both).
+    explicit WorldGui(std::string contextName, bool logErrors = true)
+        : context_(contextName), atlas_(contextName + "-atlas"), logErrors_(logErrors) {}
     ~WorldGui() { clear(); }
     WorldGui(const WorldGui&) = delete;
     WorldGui& operator=(const WorldGui&) = delete;
@@ -124,8 +128,9 @@ public:
     const std::vector<Renderer::WorldQuad>& quads() const { return quads_; }
     bgfx::TextureHandle atlasTexture() const;
     bool empty() const; // no Overlay document loaded nor floating text: render would draw nothing
-    // Draws the Overlay documents into view .. view + gui::kViews - 1 on frameBuffer, as GuiContext::render.
-    void render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer);
+    // Draws the Overlay documents into view .. view + gui::kViews - 1 on frameBuffer, as GuiContext::render (shareViews:
+    // in the views after another context's drawn earlier this frame).
+    void render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, bool shareViews = false);
     // Draws the World documents placed by layout() into the atlas (cleared first), in the views after those of another
     // context rendered just before in the same frame (GuiContext::render's shareViews); nothing if none is placed.
     void renderAtlas();
@@ -195,6 +200,7 @@ private:
     Rml::ElementDocument* textDocument_ = nullptr; // floating texts, made by the first layout() that has one
     std::deque<FloatingText> texts_;               // oldest first
     bool atlasWarned_ = false; // "atlas full" is logged once per run
+    bool logErrors_ = true;
     std::filesystem::path root_;
     std::vector<Entry> entries_;
     std::map<EntityId, std::map<std::string, GuiWrite>> written_;

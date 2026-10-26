@@ -36,6 +36,7 @@
 #include "terrain.h"
 #include "volumetric_fog.h"
 #include "voxel_gi.h"
+#include "world_ui.h"
 
 #include <bimg/bimg.h>
 #include <bx/error.h>
@@ -66,6 +67,9 @@ constexpr uint32_t kParticleShapeColor = 0xff00aaff; // ABGR: the editor's orang
 constexpr uint32_t kProbeBoxColor = 0xff00ccff;      // ABGR: the editor's highlight yellow
 constexpr uint32_t kVoxelGiBoxColor = 0xff00aaff;    // ABGR: the editor's orange
 constexpr uint32_t kFogVolumeColor = 0xff00ccff;     // ABGR: the editor's highlight yellow
+constexpr uint32_t kWorldUIColor = 0xff00ccff;       // ABGR: the editor's highlight yellow
+constexpr float kWorldUIAnchorSize = 0.3f;           // meters, each arm of the selected WorldUI's anchor cross
+constexpr float kWorldUILinePull = 0.02f;            // meters its lines are drawn nearer the eye than they are
 constexpr int kSphereStacks = 16;
 constexpr int kSphereSlices = 32;
 // No culling here: a mesh draw adds its material's cullMode (cullState), lines draw as they are.
@@ -2805,6 +2809,7 @@ void Renderer::renderOverlays(const Scene& scene, bgfx::ViewId view, const float
     drawColliderWireframe(scene, view, selected);
     drawParticleShape(scene, view, selected);
     drawFogVolume(scene, view, selected);
+    drawWorldUIMarker(scene, view, viewMtx, selected);
     drawOccludedBoxes(view);
 }
 
@@ -2829,8 +2834,10 @@ void Renderer::drawWorldQuad(bgfx::ViewId view, const WorldQuad& quad)
     bgfx::setVertexBuffer(0, &vertices);
     bgfx::setIndexBuffer(&indices);
     bgfx::setTexture(0, worldQuadSampler_, worldQuadTexture_);
-    // Both faces; premultiplied alpha; tested against the scene's depth, not written (as blended meshes).
-    bgfx::setState((kState & ~BGFX_STATE_WRITE_Z) | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA));
+    // Both faces; premultiplied alpha; tested against the scene's depth and written where the panel isn't fully
+    // transparent (fs_world_quad discards there), unlike blended meshes: the editor overlays drawn after (the grid) stay
+    // behind a panel. Hi-Z copied the depth before, so it doesn't cull behind panels.
+    bgfx::setState(kState | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA));
     bgfx::submit(view, worldQuadProgram_);
 }
 
@@ -3054,6 +3061,39 @@ void Renderer::drawFogVolume(const Scene& scene, bgfx::ViewId view, entt::entity
             for (int segment = 0; segment < kRangeCircleSegments; ++segment)
                 line(at(segment), at(segment + 1));
         }
+    }
+    submitLines(lines, lineLayout_, lineProgram_, view);
+}
+
+void Renderer::drawWorldUIMarker(const Scene& scene, bgfx::ViewId view, const float* viewMtx, entt::entity selected)
+{
+    const auto* ui = scene.valid(selected) ? scene.registry().try_get<WorldUI>(selected) : nullptr;
+    if (!ui)
+        return;
+    float world[16], cameraWorld[16];
+    scene.worldMatrix(selected, world);
+    bx::mtxInverse(cameraWorld, viewMtx);
+    const bx::Vec3 anchor = bx::mul(ui->offset, world);
+    std::vector<LineVertex> lines;
+    const bx::Vec3 eye{cameraWorld[12], cameraWorld[13], cameraWorld[14]};
+    const auto line = [&](const bx::Vec3& a, const bx::Vec3& b) {
+        for (const bx::Vec3& p : {a, b}) { // pulled toward the eye: in front of the panel's quad, which writes depth
+            const bx::Vec3 q = bx::mad(bx::normalize(bx::sub(eye, p)), kWorldUILinePull, p);
+            lines.push_back({q.x, q.y, q.z, kWorldUIColor});
+        }
+    };
+    for (const bx::Vec3 arm : {bx::Vec3{kWorldUIAnchorSize, 0.0f, 0.0f}, bx::Vec3{0.0f, kWorldUIAnchorSize, 0.0f},
+                               bx::Vec3{0.0f, 0.0f, kWorldUIAnchorSize}})
+        line(bx::sub(anchor, arm), bx::add(anchor, arm));
+    // A stalk from the entity to the anchor: an Overlay panel stands on its anchor and hides the cross's upper half.
+    line({world[12], world[13], world[14]}, anchor);
+    if (ui->mode == WorldUIMode::World) { // its quad's outline, as layoutWorld places it
+        const float metersPerPixel = 1.0f / std::max(ui->pixelsPerMeter, kMinPixelsPerMeter);
+        const std::array<bx::Vec3, 4> corners =
+            worldUIQuadCorners(ui->facing, anchor, float(ui->width) * metersPerPixel, float(ui->height) * metersPerPixel,
+                               cameraWorld, world);
+        for (size_t i = 0; i < corners.size(); ++i)
+            line(corners[i], corners[(i + 1) % corners.size()]);
     }
     submitLines(lines, lineLayout_, lineProgram_, view);
 }

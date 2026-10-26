@@ -114,7 +114,7 @@ void GameViewport::drawStats(const Document& doc) const
     draw->AddText(ImVec2(min.x + kPad, min.y + kPad), IM_COL32_WHITE, text.c_str());
 }
 
-void GameViewport::draw(Document& doc)
+void GameViewport::draw(Document& doc, bool shareGuiViews)
 {
     syncGui(doc);
     const bool visible = beginViewportPanel("Game", doc, PanelFocus::Game);
@@ -159,7 +159,7 @@ void GameViewport::draw(Document& doc)
             if (doc.play != PlayState::Stopped) {
                 gui_.setDisplayScale(display_.displayScale());
                 gui_.resize(width, height);
-                gui_.render(guiView_, target_.frameBuffer());
+                gui_.render(guiView_, target_.frameBuffer(), shareGuiViews);
             }
             imageMin_ = ImGui::GetCursorScreenPos();
             imageSize_ = size;
