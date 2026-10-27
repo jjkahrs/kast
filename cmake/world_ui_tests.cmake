@@ -5,7 +5,7 @@
 # one as far with no limit; a Mover; two entities on a missing .rml. scripts/world_ui.lua names Near "Alice", gives
 # Far the "far" class (cyan) through kast.gui calls with an entity, logs "world_ui: PASS", and from 1 s of Play time
 # moves the Mover 1.5 m right. Probes are at the pixels the panels' anchors project to (see the scene's numbers).
-set(world_ui_forbid "world_ui: FAIL|Lua error|\\[warn\\] RmlUi|missing_plate.rml' not found.*missing_plate.rml' not found")
+set(world_ui_forbid "world_ui: FAIL|Lua error|\\[warn\\] RmlUi|GUI base layer|missing_plate.rml' not found.*missing_plate.rml' not found")
 
 add_test(NAME world_ui_self_check COMMAND kast_self_check --worldui)
 

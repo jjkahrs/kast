@@ -1397,6 +1397,11 @@ void checkGuiEffectCompile()
           "an unknown GUI shader compiles to 0 and warns");
     check(renderer.CompileShader("linear-gradient", {}) == 0 && warnings("GUI linear-gradient has no color stops") == 1,
           "a gradient without stops compiles to 0 and warns");
+    // A mask-image with no layer to save its mask in (RmlUi always pushes one; simulated here) gives RmlUi no filter,
+    // so the element draws unmasked, and warns once however often it is asked for.
+    check(renderer.SaveLayerAsMaskImage() == 0 && renderer.SaveLayerAsMaskImage() == 0 &&
+              warnings("GUI mask-image has no layer to save its mask in") == 1,
+          "a mask-image that can't be saved draws unmasked and warns once");
 }
 
 void checkLuaGui()
@@ -3214,7 +3219,7 @@ void checkBuildSettings()
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                        "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_input.scene", "world_ui_overflow.scene", "world_ui_scene_view.scene", "world_ui_world.scene",
+                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_masks.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_input.scene", "world_ui_overflow.scene", "world_ui_scene_view.scene", "world_ui_world.scene",
                                        "zone_objects.scene"},
           "tests/project lists its scenes, sorted");
 
@@ -3238,7 +3243,7 @@ void checkBuildSettings()
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
                                                           "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_input.scene", "world_ui_overflow.scene", "world_ui_scene_view.scene", "world_ui_world.scene",
+                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_masks.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_input.scene", "world_ui_overflow.scene", "world_ui_scene_view.scene", "world_ui_world.scene",
                                                           "zone_objects.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
