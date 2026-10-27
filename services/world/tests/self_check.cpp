@@ -973,6 +973,7 @@ struct Loopback {
     std::vector<uint8_t> received; // what the client got from the server
     std::array<uint8_t, 4096> chunk{};
     bool ready = false;
+    bool kickOnMessage = false; // on_message disconnects the session (as an admin kick would)
 
     Loopback(asio::ssl::context& tls, uint32_t maxFrameBytes) : serverTls(tls) {
         net::SessionLimits limits;
@@ -981,7 +982,11 @@ struct Loopback {
             if (ec) return;
             server = std::make_shared<net::Session>(
                 1, std::move(s), serverTls, limits,
-                [this](net::Session&, proto::Message&& m) { delivered.push_back(std::move(m)); }, nullptr);
+                [this](net::Session& s, proto::Message&& m) {
+                    delivered.push_back(std::move(m));
+                    if (kickOnMessage) s.disconnect(proto::Code::kicked);
+                },
+                nullptr);
             server->start();
         });
         client.lowest_layer().connect(acceptor.local_endpoint());
@@ -1095,6 +1100,20 @@ void checkSessionReads() {
         lb.write(bytes);
         check(lb.disconnected_with(proto::Code::unknown_opcode), "loopback: unknown opcode -> Disconnect{unknown_opcode}");
         check(lb.delivered.empty(), "loopback: a frame after the unknown opcode in the same write is not delivered");
+    }
+    {
+        Loopback lb(tls, 4096);
+        lb.kickOnMessage = true;
+        std::vector<uint8_t> bytes;
+        for (const char* t : {"first", "second", "third"}) {
+            const auto f = say_frame(t);
+            bytes.insert(bytes.end(), f.begin(), f.end());
+        }
+        lb.write(bytes);
+        check(lb.disconnected_with(proto::Code::kicked), "loopback: on_message disconnecting -> Disconnect{kicked}");
+        lb.run_until([] { return false; }, Millis(50)); // anything still delivered would show up here
+        check(lb.delivered.size() == 1 && said(lb.delivered[0], "first"),
+              "loopback: frames after one whose on_message disconnected, in the same write, are not delivered");
     }
     {
         constexpr uint32_t kMax = 32 * 1024; // bigger than one 16 KB read: the buffer grows to hold the frame

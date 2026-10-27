@@ -60,7 +60,7 @@ void Session::read() {
 // Every complete frame in rx_, in order; the next read only once all of them are handled and nothing closed.
 void Session::handle_frames() {
     size_t used = 0;
-    while (!closing_) {
+    while (!closing_ && !closed_) {
         proto::Decoded d = proto::decode_frame(std::span(rx_).subspan(used), limits_.maxFrameBytes);
         switch (d.status) {
         case proto::DecodeStatus::ok: break;
