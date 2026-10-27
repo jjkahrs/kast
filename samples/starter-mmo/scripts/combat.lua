@@ -3,8 +3,8 @@
 -- Targeting: Tab cycles the NPCs in view, nearest first, within TAB_RANGE; a left click (press and release without
 -- dragging, not on the GUI) on an NPC selects it (kast.input.mouseRay against each NPC's PICK sphere, unless the
 -- terrain is closer); Escape clears. The target clears when its NPC despawns or dies (or the map changes). A gold disc
--- (MARKER_*) under the target shows it. "target.selected" {entityId, name, health} / "target.cleared" go on the bus for the
--- HUD's target frame (scripts/hud.lua).
+-- (MARKER_*) under the target shows it. "target.selected" {entityId, name, kind = "npc", health} / "target.cleared" go
+-- on the bus for the HUD's target frame (scripts/hud.lua).
 -- Dead NPCs (replicated Health 0) are corpses: never targeted, tipped onto their side. NPCs without Health are friendly
 -- (the server's npcs/elder.lua; it refuses powers on them too): never targeted either. A right click (press and release
 -- without dragging, not on the GUI) on a corpse publishes "loot.clicked" {entityId} for scripts/loot.lua, on a friendly
@@ -84,7 +84,7 @@ local function selectTarget(id)
     kast.add(marker, "MeshRenderer")
     kast.set(marker, "MeshRenderer", {primitive = "sphere", material = MARKER_MATERIAL, castShadows = false})
     local health = kast.has(npc.entity, "Health") and kast.get(npc.entity, "Health") or nil -- replicated
-    kast.publish("target.selected", {entityId = id, name = npc.name, health = health})
+    kast.publish("target.selected", {entityId = id, name = npc.name, kind = "npc", health = health})
 end
 
 local function position(entity) return kast.get(entity, "Transform").position end

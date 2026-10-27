@@ -117,11 +117,12 @@ running it twice adds nothing.
   targets nor turns the camera.
 - **Combat** (tab-target): **Tab** cycles the NPCs in view, nearest first, within 40 m; a **left click** (without
   dragging) on an NPC selects it; **Esc** clears the target. The target gets a gold disc under it and a frame at the top
-  centre with its name and Health. Keys typed into the chat box do nothing.
+  centre with its name, Health and a round portrait (a placeholder per kind, NPC or player). Keys typed into the chat
+  box do nothing.
 - **Classes and powers**: each class has three powers on keys **1**, **2** and **3**, also shown on the action bar at
   the bottom (in a narrow window, right of the chat box); clicking a button is the same as its key. All are instant,
   with cooldowns only (no mana, rage or energy). A power used starts its own cooldown and a 1 s global cooldown on all
-  three: the buttons grey out and count down the seconds. Damage powers need a living NPC target in range (melee 3 m,
+  three: the buttons grey out and count down the seconds, under a dark wipe that sweeps clockwise as the cooldown runs out. Damage powers need a living NPC target in range (melee 3 m,
   ranged 25 m); heals and buffs are on yourself.
 
   | Class | Health | 1 | 2 | 3 |
@@ -319,7 +320,9 @@ of the client project, in dot-folders or elsewhere.
   (`starter_mmo_hit_sparks.png`). `starter_mmo_pak_server_only` checks the built `game.pak` holds nothing from `.server/` (no quest
   definitions or quest text) but does hold `scripts/quest.lua`. `starter_mmo_lists` plays it offline with
   `cmake/starter_mmo_lists_driver.lua` (test only): 15 chat lines and 25 quests in the bound (`data-for`) chat and quest
-  log, no row cap (`starter_mmo_lists.png`).
+  log, no row cap (`starter_mmo_lists.png`). `starter_mmo_hud_masks` plays it offline with
+  `cmake/starter_mmo_hud_masks_driver.lua` (test only: the Guard targeted, a full chat, Firebolt cooling down) and
+  pixel-probes the round target portrait, the chat's top fade and the cooldown wipes (`starter_mmo_hud_masks.png`).
   `starter_mmo_nameplates` plays the Meadow offline with `cmake/starter_mmo_nameplates_driver.lua` (test only) in the
   world client's place: a Guard, the Elder, a Bat and another player spawn, the Guard is hit for 12 and the Bat dies; the
   shot (`starter_mmo_nameplates.png`) is pixel-probed for each bar (the Elder's missing), and the log for the Bat's

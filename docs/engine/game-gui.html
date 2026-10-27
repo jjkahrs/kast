@@ -655,12 +655,71 @@ sheet, and never reaches the renderer.</li>
 <li>Invalid parameters (<code>filter: blur(-4px)</code>) log <code>GUI filter 'blur' has invalid parameters: elements using it draw
 without it</code> once per filter, plus RmlUi's <code>Could not compile filter on element: ...</code>.</li>
 </ul>
-<p><strong>Not supported</strong>: <code>mask-image</code> (the renderer has no <code>SaveLayerAsMaskImage</code>), and clip masks in general.
-Clip masks work inside effect layers only, where <code>box-shadow</code> needs them; on the document's base layer they do nothing,
-so <code>overflow: hidden</code> on a transformed or rounded element clips to its plain rectangle (scissor) instead of its shape.</p>
 <p>Tests: <code>ctest -R "effects|ui_layer|bad_filter|starter_mmo_(login_hover|hud_glow)"</code> plays
 <code>tests/project/ui/effects.rml</code> (one element per effect) in the Game view, the GUI Builder and the built player and
 checks each effect's pixels.</p>
+
+<h2 id="masking">Masking: mask-image and shape clipping</h2>
+<p>Two standard RmlUi CSS routes mask an element, in Play, the GUI Builder preview and the built player alike
+(<code>engine/gui_render.cpp</code>, <code>engine/gui_effects.cpp</code>; no extra shader):</p>
+<table>
+<thead>
+<tr>
+<th>CSS</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mask-image</code></td>
+<td>The mask's alpha multiplies the element (its content, background and children). Sources: <code>image(file.png)</code> (a path
+relative to the style sheet), <code>linear-gradient</code>, <code>radial-gradient</code>, <code>conic-gradient</code> and their
+<code>repeating-</code> forms. Several, comma separated, add up. Combines with <code>filter</code> (the mask applies last),
+<code>border-radius</code> and clip masks.</td>
+</tr>
+<tr>
+<td><code>overflow: hidden</code> on a rounded (<code>border-radius</code>) or transformed element</td>
+<td>Children are clipped to the element's real shape (a circle, a rotated box) instead of its bounding rectangle. The
+clipped children must be in normal flow: RmlUi doesn't clip absolutely positioned children.</td>
+</tr>
+</tbody>
+</table>
+<p>RmlUi 6 takes no percentage <code>border-radius</code> (<code>50%</code> is a syntax warning): for a circle give half the box's
+size in px. The Starter MMO (<code>samples/starter-mmo/ui/starter.rcss</code>) uses all three typical cases:</p>
+<pre><code class="language-css">#target_portrait { width: 52px; height: 52px; border: 2px #ffaa00; border-radius: 28px; overflow: hidden; } /* round portrait */
+#chat_log { mask-image: linear-gradient(to bottom, #00000000 0px, #000000ff 60px); }   /* oldest lines fade out at the top */
+/* cooldown wipe: scripts/powers.lua sets the angle each frame from the fraction of the cooldown left */
+#power_1_wipe { background-color: #000000b0; mask-image: conic-gradient(#00000000 0deg, #00000000 94deg, #000000ff 94deg); }
+</code></pre>
+<p><strong>Shape clipping on the base layer</strong>: clip masks use a stencil, which the window's backbuffer (or a host's
+target) doesn't give the GUI. The first frame a document asks for one on its base layer draws that element clipped to
+its rectangle; from the next frame on the GUI draws its base layer into an offscreen layer with the GUI's stencil
+(logged once as <code>GUI base layer redirected for clip masks (WxH)</code>) and copies it onto the target at the end. Shapes are
+therefore exact from the second frame. The redirect stays on until 60 renders pass without a request (about a second),
+so an element that hides for a moment keeps its shape when it returns. Inside effect layers clip masks work at once.
+Note that form widgets with a rounded, scrolling style (<code>overflow-y: auto</code>) ask for one too.</p>
+<p><strong>Performance</strong>: masking costs only where it is used; a document without <code>mask-image</code> or shape clipping
+draws exactly as before (<code>ctest -R "ui_play|ui_layer|ui_effects"</code> forbid the redirect line). In views (out of
+<code>gui::kViews</code>, as for the <a href="#effects">effects</a>):</p>
+<ul>
+<li>a <code>mask-image</code> element about 4 views every frame: its own layer, the mask's layer, the masking pass and the
+return to the layer below; and one more GUI layer in the pool while a mask is held;</li>
+<li>shape clipping on the base layer 2 views every frame while redirected, whatever the number of clipped elements, plus
+2 per <code>backdrop-filter</code> (it reads what the redirect has drawn so far), and one GUI-sized layer; each clip itself
+draws its shape into the stencil in the current view;</li>
+<li>shape clipping inside an effect layer nothing extra.</li>
+</ul>
+<p><strong>Failures</strong> never stop the document:</p>
+<ul>
+<li>A mask with no layer to save it in logs <code>GUI mask-image has no layer to save its mask in: elements using it draw
+unmasked</code> once, and the element draws unmasked.</li>
+<li>Out of views, the effects' <code>GUI effects need more than 65 bgfx views in a frame; some are not drawn</code> warning fires once
+and the masked element is not drawn that frame (its final composite needs a view too).</li>
+<li>A source RmlUi can't parse is RmlUi's own warning (<code>RmlUi: ...</code>) about the style sheet.</li>
+</ul>
+<p>Tests: <code>ctest -R masks</code> plays <code>tests/project/ui/masks.rml</code> (one element per masking
+case) in the Game view, the GUI Builder and the built player, and the Starter MMO HUD (round portrait, chat fade,
+cooldown wipes), and checks their pixels; <code>kast_self_check</code> covers the no-layer failure.</p>
 
 <h2 id="scaling">Resolution and DPI scaling</h2>
 <p>A GUI designed at one resolution should look right on a 4K monitor, at Windows' 150% display scale, and when the
