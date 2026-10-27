@@ -33,7 +33,7 @@ describe('world admin client', () => {
     world.sessions = Array.from({ length: 2500 }, (_, i) => session(i + 1));
     world.chunkSize = 1000;
     const online = await client.online(at());
-    expect(world.hellos).toEqual([{ version: 8, secret: SECRET }]);
+    expect(world.hellos).toEqual([{ version: 9, secret: SECRET }]);
     expect(online).toHaveLength(2500);
     expect(online[1]).toEqual({
       accountId: 2 ** 40 + 2,

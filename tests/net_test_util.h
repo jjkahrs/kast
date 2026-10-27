@@ -148,7 +148,7 @@ Server::Body serveFakeAuth(FakeAuth& fake);
 // "Kick<n>" -> Disconnect{code n} and close; "Garbage" -> a malformed Spawn frame; "Unknown" -> opcode 0x7777;
 // "Split" -> CharCreated written in two parts 50 ms apart; anything else -> CharCreated{id from 100, name,
 // (100, 0, 100), the options sent}. CharDelete / EnterWorld of an unknown id -> CharError{not_found}. EnterWorld -> EnterWorldOk{1,
-// (100, 0, 100), 0.5}, Spawn{2, "Other", (101, 0, 100), 0}, EntityMove{2, (102, 0, 100), 1}, Correction{(100, 0, 100)}
+// (100, 0, 100), 0.5}, Spawn{2, "Other", (101, 0, 100), 0}, EntityMoves{{2, (102, 0, 100), 1}}, Correction{(100, 0, 100)}
 // in one write. Move more than 20 m (x/z) from the last accepted position (at first the spawn) -> Correction{that
 // position, the Move's seq, epoch + 1}, else it is accepted silently; a Move of an older epoch is dropped silently.
 // Say "hold": the next Correction is held back until 3 more Moves have come (Moves in flight behind it); Say "reject":

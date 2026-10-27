@@ -4,7 +4,7 @@ import { realmUnreachable } from './errors.js';
 
 // World admin port protocol (docs/services/world/protocol.html#admin): TLS, frames of
 // u16 payloadLength, u16 opcode, payload (little-endian); str = u16 byte length + UTF-8 bytes.
-const PROTOCOL_VERSION = 8;
+const PROTOCOL_VERSION = 9;
 export const OP = {
   ping: 0x0003,
   pong: 0x0004,

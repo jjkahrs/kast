@@ -485,7 +485,7 @@ struct Runtime::Impl {
     }
 
     // kast.set(npc, "Transform", {position=, heading=}): partial and all-or-nothing like any set. The position is
-    // clamped onto the NPC's map, on its ground (y is ignored); script moves are trusted (no speed check) and replicate as EntityMove like an
+    // clamped onto the NPC's map, on its ground (y is ignored); script moves are trusted (no speed check) and replicate in EntityMoves like an
     // accepted player move. The map is read-only: kast.transfer changes it.
     void set_npc_transform(lua_State* L, entt::entity e, const sol::table& fields) {
         auto& tf = reg.get<world::Transform>(e);

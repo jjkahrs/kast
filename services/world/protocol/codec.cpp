@@ -48,7 +48,7 @@ const char* opcode_name(Opcode op) {
     case Opcode::CharError: return "CharError";
     case Opcode::Spawn: return "Spawn";
     case Opcode::Despawn: return "Despawn";
-    case Opcode::EntityMove: return "EntityMove";
+    case Opcode::EntityMoves: return "EntityMoves";
     case Opcode::Correction: return "Correction";
     case Opcode::ChatMsg: return "ChatMsg";
     case Opcode::ComponentUpdate: return "ComponentUpdate";

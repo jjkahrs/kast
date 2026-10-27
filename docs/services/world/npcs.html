@@ -14,13 +14,13 @@
 <h1 id="npcs">NPCs</h1>
 <p>A system creates server-authoritative NPCs with <code>kast.create</code>, moves them by setting their <code>Transform</code>, and removes them
 with <code>kast.destroy</code>. Clients see them through the usual interest management: a player in range gets <code>Spawn</code> with
-<code>kind</code> npc and the NPC's <code>template</code> (<a href="protocol.html#interest-management">protocol</a>), then <code>EntityMove</code> as it moves,
+<code>kind</code> npc and the NPC's <code>template</code> (<a href="protocol.html#interest-management">protocol</a>), then its moves in <code>EntityMoves</code>,
 and <code>Despawn</code> when it leaves the view or is destroyed. The engine shows each one as a clone of the scene entity named
 after its template (<a href="../../engine/online-services.html#replication">Engine, Replication</a>).</p>
 <pre><code class="language-lua">local guard = kast.create(&quot;Guard&quot;, {npc = &quot;Guard&quot;, position = {x = 1034, y = 0, z = 1024}, heading = 0})
 local boss = kast.create(&quot;Gate Boss&quot;, {npc = &quot;Guard&quot;, components = {Health = {max = 500, current = 500}}})
 local prop = kast.create(&quot;Crate&quot;, {template = &quot;Crate&quot;})            -- no definition, no components
-kast.set(guard, &quot;Transform&quot;, {position = {x = 1035, y = 0, z = 1024}}) -- one EntityMove to every player who sees it
+kast.set(guard, &quot;Transform&quot;, {position = {x = 1035, y = 0, z = 1024}}) -- an EntityMoves entry to every player who sees it
 kast.destroy(guard)                                                 -- Despawn to every player who sees it
 </code></pre>
 <ul>
@@ -40,8 +40,8 @@ kast.destroy(guard)                                                 -- Despawn t
   an invalid id raises an error. A destroyed NPC's id is stale at once: <code>kast.*</code> on it raises <code>invalid entity id</code>.</li>
 <li><strong>Moving:</strong> <code>kast.set(npc, "Transform", {position = {x, y, z}, heading = h})</code> is partial and all-or-nothing like any
   <code>set</code>, and clamps onto the NPC's map like <code>create</code>. <code>map</code> cannot be set (<code>"Transform": "map" is read-only; use
-  kast.transfer</code>). Script moves are trusted: there is no speed check. A move goes out as <code>EntityMove</code>
-  in the same tick, like an accepted player move. A move into or out of a player's view gives <code>Spawn</code> / <code>Despawn</code> on
+  kast.transfer</code>). Script moves are trusted: there is no speed check. A move goes out in that
+  tick's <code>EntityMoves</code>, like an accepted player move. A move into or out of a player's view gives <code>Spawn</code> / <code>Despawn</code> on
   the next tick.</li>
 <li><strong>Components and machines:</strong> <code>kast.add/set/get/has/remove</code>, and <code>StateMachine</code> with <code>kast.fsm.*</code>, work on NPCs as on
   characters, whether the components came from a definition or a system. An <code>aoi</code> component reaches the players who see the NPC, an <code>owner</code> one nobody, and <code>persist</code> is ignored.</li>
@@ -50,9 +50,10 @@ kast.destroy(guard)                                                 -- Despawn t
 <li><strong>Ephemeral:</strong> NPCs are never saved and need no database. A restart starts without them: the spawn files and the
   systems' <code>init</code> create them again. A graceful shutdown removes them silently, after the players.</li>
 </ul>
-<p><strong>NPCs cost bandwidth like players.</strong> Each move is one <code>EntityMove</code> per tick to each player in view, so a crowd of
-walking NPCs around a crowd of players costs NPCs x players messages a tick. Move NPCs at the rate clients need and let
-the engine interpolate.</p>
+<p><strong>NPCs cost bandwidth like players.</strong> Each move is one 20-byte entry per tick in the <code>EntityMoves</code> of each
+player in view. A player gets one such message a tick however many movers it sees, but a crowd of walking NPCs around a
+crowd of players still costs NPCs x players entries a tick. Move NPCs at the rate clients need and let the engine
+interpolate.</p>
 <h1 id="npc-definitions">NPC definitions</h1>
 <p>An NPC type is data: one file per type under <code>LUA_ROOT/npcs/</code> (scanned recursively), listing the Lua components every
 NPC of that type starts with. Spawn files (<code>npc</code>) and <code>kast.create</code> (<code>opts.npc</code>) make NPCs from them.</p>

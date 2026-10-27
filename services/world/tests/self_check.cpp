@@ -105,7 +105,36 @@ void checkCodecRoundTrip() {
     roundtrip(Spawn{3, "Dave", {10, 0, 10}, 0.5f, SpawnKind::player, ""}, "Spawn");
     roundtrip(Spawn{4, "Guard", {12, 1, 10}, 1.5f, SpawnKind::npc, "Guard"}, "Spawn npc");
     roundtrip(Despawn{3}, "Despawn");
-    roundtrip(EntityMove{3, {11, 0, 12}, 0.25f}, "EntityMove");
+    roundtrip(EntityMoves{{{3, {11, 0, 12}, 0.25f}, {4, {-1, 2, 3}, 1.5f}}}, "EntityMoves");
+    roundtrip(EntityMoves{}, "EntityMoves empty");
+    {
+        // v9 EntityMoves: u16 count, count x (u32 entityId, Vec3 pos, f32 heading)
+        EntityMoves full;
+        for (uint32_t i = 0; i < EntityMoves::kMaxEntries; ++i)
+            full.entries.push_back({i, {static_cast<float>(i), -1, 2}, 0.5f});
+        const auto frame = encode(Message{full});
+        const auto d = decode_frame(frame, kMaxPayloadBytes);
+        check(frame.size() - kHeaderSize <= kMaxPayloadBytes && d.status == DecodeStatus::ok &&
+                  std::get<EntityMoves>(d.msg) == full,
+              "a full EntityMoves (kMaxEntries) fits one frame and round-trips");
+        check(frame.size() - kHeaderSize + 20 > kMaxPayloadBytes, "kMaxEntries is the most that fits");
+        const auto one = encode(Message{EntityMoves{{{3, {11, 0, 12}, 0.25f}}}});
+        check(one.size() == kHeaderSize + 2 + 20 && one[4] == 1 && one[5] == 0 && one[6] == 3, "EntityMoves bytes: u16 count, then entries");
+        Message out;
+        const std::vector<uint8_t> payload(one.begin() + kHeaderSize, one.end());
+        check(decode_payload(Opcode::EntityMoves, std::span(payload).first(payload.size() - 1), out) == DecodeStatus::malformed,
+              "a cut EntityMoves entry is malformed");
+        std::vector<uint8_t> more = payload;
+        more[0] = 2; // count 2, one entry
+        check(decode_payload(Opcode::EntityMoves, more, out) == DecodeStatus::malformed, "EntityMoves count past the payload is malformed");
+        std::vector<uint8_t> trailing = payload;
+        trailing[0] = 0; // count 0, an entry's bytes left over
+        check(decode_payload(Opcode::EntityMoves, trailing, out) == DecodeStatus::malformed, "EntityMoves bytes past its count are malformed");
+        check(decode_payload(Opcode::EntityMoves, std::vector<uint8_t>{1}, out) == DecodeStatus::malformed, "EntityMoves cut count is malformed");
+        std::vector<uint8_t> nan = payload;
+        nan[2 + 4] = 0; nan[2 + 5] = 0; nan[2 + 6] = 0xC0; nan[2 + 7] = 0x7F; // pos.x NaN
+        check(decode_payload(Opcode::EntityMoves, nan, out) == DecodeStatus::malformed, "EntityMoves NaN position is malformed");
+    }
     roundtrip(Correction{{1, 2, 3}, 0xFFFFFFFEu, 7}, "Correction");
     roundtrip(Move{{1, 2, 3}, 0.5f, 99, 0xFFFFFFFFu, 3}, "Move");
     roundtrip(ChatMsg{ChatKind::say, "Eve", "hi all"}, "ChatMsg");
@@ -176,7 +205,7 @@ void checkCodecRoundTrip() {
     roundtrip(ClientEvent{"combat.power", R"({"power":"strike"})", 0xFFFFFFFEu}, "ClientEvent with requestId");
     roundtrip(Reply{0xFFFFFFFEu, true, R"({"power":"strike"})"}, "Reply ok");
     roundtrip(Reply{3, false, R"("range")"}, "Reply rejected");
-    check(kProtocolVersion == 8, "protocol version 8");
+    check(kProtocolVersion == 9, "protocol version 9");
     // v7 ClientEvent: str name, str json, u32 requestId (0: kast.world.send); Reply: u32 requestId, u8 ok (0/1), str json
     const auto cev = encode(Message{ClientEvent{"a", "{}", 0x01020304}});
     check(cev.size() == 4 + 3 + 4 + 4 && cev[11] == 0x04 && cev[14] == 0x01, "ClientEvent requestId after json");

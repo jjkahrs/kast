@@ -57,6 +57,13 @@ std::vector<T> only(const std::vector<proto::Message>& msgs) {
     return out;
 }
 
+// Every EntityMoves entry in msgs, in order.
+std::vector<proto::EntityMoves::Entry> moves_in(const std::vector<proto::Message>& msgs) {
+    std::vector<proto::EntityMoves::Entry> out;
+    for (const auto& m : only<proto::EntityMoves>(msgs)) out.insert(out.end(), m.entries.begin(), m.entries.end());
+    return out;
+}
+
 std::string fmt(const proto::Vec3& v) {
     char buf[96];
     std::snprintf(buf, sizeof buf, "(%.2f, %.2f, %.2f)", v.x, v.y, v.z);
@@ -200,12 +207,12 @@ asio::awaitable<void> aoi(Ctx& x) {
     auto p = co_await walk(*a, ea.pos, 20, 0);
     auto bMsgs = co_await drain(*b, Millis(500));
     auto aMsgs = co_await drain(*a, Millis(100));
-    auto moves = only<proto::EntityMove>(bMsgs);
-    std::erase_if(moves, [&](const proto::EntityMove& m) { return m.entityId != ea.entityId; }); // not the Guard's
+    auto moves = moves_in(bMsgs);
+    std::erase_if(moves, [&](const proto::EntityMoves::Entry& m) { return m.entityId != ea.entityId; }); // not the Guard's
     const bool sawA = !moves.empty() && same_pos(moves.back().pos, p);
     x.check.expect(sawA, "B received A's moves, last at " + fmt(p) + " (" + std::to_string(moves.size()) + " updates)");
     bool echo = false;
-    for (auto& m : only<proto::EntityMove>(aMsgs)) echo |= m.entityId == ea.entityId;
+    for (auto& m : moves_in(aMsgs)) echo |= m.entityId == ea.entityId;
     x.check.expect(!echo, "A never receives its own moves");
 
     co_await walk(*a, p, 130, 0); // 150 m from B: past the 128 m view radius
@@ -282,7 +289,7 @@ asio::awaitable<void> speedhack(Ctx& x) {
     x.check.expect(!only<proto::Correction>(aMsgs).empty(), "sustained 30 m/s -> Correction");
     const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     float farthest = 0;
-    for (auto& m : only<proto::EntityMove>(bMsgs))
+    for (auto& m : moves_in(bMsgs))
         if (m.entityId == ea.entityId) farthest = std::max(farthest, distance_xz(m.pos, origin));
     const float allowed = static_cast<float>(11.0 * secs + 11.0); // (10 m/s + 1 tolerance) + 1 s burst
     x.check.expect(farthest <= allowed, "observer never sees an illegal position (farthest " + std::to_string(farthest) +
@@ -798,8 +805,12 @@ asio::awaitable<void> npcs(Ctx& x) {
         std::vector<proto::Message> out;
         for (const auto& m : msgs)
             std::visit([&](const auto& v) {
-                if constexpr (requires { v.entityId; })
+                if constexpr (requires { v.entityId; }) {
                     if (v.entityId == G) out.push_back(m);
+                } else if constexpr (std::is_same_v<std::decay_t<decltype(v)>, proto::EntityMoves>) {
+                    for (const auto& e : v.entries) // its entries for the Guard, each on its own
+                        if (e.entityId == G) out.push_back(proto::EntityMoves{{e}});
+                }
             }, m);
         return out;
     };
@@ -814,7 +825,7 @@ asio::awaitable<void> npcs(Ctx& x) {
     x.check.expect(fromDefinition(health),
                    "A gets the Guard's Health from its definition (current 50, max 50)" +
                        (health.empty() ? std::string(", got none") : ", got " + health.front().json));
-    const auto moves = only<proto::EntityMove>(first);
+    const auto moves = moves_in(first);
     std::set<std::pair<float, float>> positions;
     for (const auto& m : moves) positions.insert({m.pos.x, m.pos.z});
     x.check.expect(moves.size() >= 3 && positions.size() >= 3,
@@ -997,7 +1008,7 @@ asio::awaitable<void> terrain(Ctx& x) {
     const proto::Vec3 top = co_await walk(*a, mcA->pos, -30, 25, 9.0f, groundY);
     const auto aMsgs = co_await drain(*a, Millis(500));
     x.check.expect(only<proto::Correction>(aMsgs).empty(), "walking the slope at ground height: no Correction");
-    const auto seen = only<proto::EntityMove>(co_await drain(*b, Millis(300)));
+    const auto seen = moves_in(co_await drain(*b, Millis(300)));
     size_t moves = 0, onGround = 0;
     for (const auto& m : seen)
         if (m.entityId == ea.entityId) { ++moves; onGround += std::fabs(m.pos.y - hills->ground(m.pos.x, m.pos.z)) < 0.05f; }
@@ -1059,7 +1070,7 @@ asio::awaitable<void> navmesh(Ctx& x) {
     if (!sentry) co_return;
     size_t moves = 0, onGround = 0, pastMesa = 0;
     float intoWall = 0; // deepest move into the mesa's footprint: its 3 m walls start at the edge
-    for (const auto& m : only<proto::EntityMove>(msgs)) {
+    for (const auto& m : moves_in(msgs)) {
         if (m.entityId != *sentry) continue;
         ++moves;
         onGround += std::fabs(m.pos.y - hills->ground(m.pos.x, m.pos.z)) < 0.05f;
@@ -1344,7 +1355,7 @@ asio::awaitable<void> combat_rules(Ctx& x) {
     proto::Vec3 g = guard->pos;
     bool close = false;
     for (int i = 0; i < 300 && !close; ++i) { // up to 30 s: one patrol round is about 21 s
-        for (const auto& m : only<proto::EntityMove>(co_await drain(*a, Millis(100))))
+        for (const auto& m : moves_in(co_await drain(*a, Millis(100))))
             if (m.entityId == guard->entityId) g = m.pos;
         close = std::hypot(g.x - me.x, g.z - me.z) <= 2.5f;
     }
@@ -1428,7 +1439,7 @@ asio::awaitable<void> lag_run(Ctx& x) {
 
 // The same run with one cheat 3 s in (the client jumps 50 m and keeps running from there): exactly one Correction,
 // none for the moves already in flight behind it, and once the bot rebases like the engine's client (the Correction's
-// pos + everything it moved since the Move ackSeq) the server takes its moves again: an observer's last EntityMove
+// pos + everything it moved since the Move ackSeq) the server takes its moves again: an observer's last move
 // is where the bot ends.
 asio::awaitable<void> lag_reject(Ctx& x) {
     proto::EnterWorldOk ea, eb;
@@ -1479,10 +1490,10 @@ asio::awaitable<void> lag_reject(Ctx& x) {
                        "the Correction acks the cheating Move (seq " + std::to_string(corrections[0].ackSeq) + ", want " +
                            std::to_string(cheatSeq) + ") and starts epoch 1 (got " + std::to_string(corrections[0].epoch) + ")");
     std::optional<proto::Vec3> seen;
-    for (const auto& m : only<proto::EntityMove>(co_await drain(*b, Millis(500))))
+    for (const auto& m : moves_in(co_await drain(*b, Millis(500))))
         if (m.entityId == ea.entityId) seen = m.pos;
     x.check.expect(seen && distance_xz(*seen, p) < 0.01f, "the server ends where the rebased bot ends " + fmt(p) +
-                                                              " (observer's last EntityMove " + (seen ? fmt(*seen) : "none") + ")");
+                                                              " (observer's last move " + (seen ? fmt(*seen) : "none") + ")");
     a->close();
     b->close();
 }

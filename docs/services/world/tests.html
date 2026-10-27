@@ -13,7 +13,11 @@
 <main>
 <h1 id="tests">Tests</h1>
 <ul>
-<li><strong>Self-check</strong> (<code>tests/self_check.cpp</code> + <code>tests/lua_checks.cpp</code>, ctest <code>world_self_check</code>): assert-style checks of the pure logic with an injected clock, so nothing sleeps (except the send fan-out check: <code>net::send_many</code> to five sessions on unconnected sockets encodes the message once and leaves exactly <code>proto::encode</code> of it in each one's send buffer, also through the lag simulator, whose timers it waits a few ms for). The Lua checks write their scripts to a temp folder and drive a <code>World</code> with captured sends, saves and log lines. They cover the event bus (the engine's cases), <code>kast.publish/subscribe/unsubscribe</code> and the client sends: audiences, order, rejections and timing. They also cover state machines, from definitions to C++ / Lua parity, and Lua logging
+<li><strong>Self-check</strong> (<code>tests/self_check.cpp</code> + <code>tests/lua_checks.cpp</code>, ctest <code>world_self_check</code>): assert-style checks of the pure logic with an injected clock, so nothing sleeps (except the send fan-out check: <code>net::send_many</code> to five sessions on unconnected sockets encodes the message once and leaves exactly <code>proto::encode</code> of it in each one's send buffer, also through the lag simulator, whose timers it waits a few ms for). The Lua checks write their scripts to a temp folder and drive a <code>World</code> with captured sends, saves and log lines. A batching check moves 3 players and a script NPC in view of
+  2 still players and asserts each of the 5 gets exactly one <code>EntityMoves</code> with every other mover's move and never
+  its own, and that a lone player gets none (it fails if replication goes back to a message per mover). The codec checks
+  round-trip <code>EntityMoves</code> empty, with two entries and full (<code>kMaxEntries</code>, which must fit one frame), and reject a cut
+  entry, a count past the payload, bytes past the count and a NaN position. They cover the event bus (the engine's cases), <code>kast.publish/subscribe/unsubscribe</code> and the client sends: audiences, order, rejections and timing. They also cover state machines, from definitions to C++ / Lua parity, and Lua logging
   (<code>kast.debug</code>, fields tables, their errors, <code>LOG_LEVEL</code>). Log lines are written by a background thread, so the checks call
   <code>log::flush()</code> before reading what they captured.</li>
 <li><strong>Logging</strong> (ctest <code>log_bench</code> and <code>log_flush</code>): <code>log_bench</code> (<code>world_self_check --log-bench</code>, stdout to the null device)
@@ -71,7 +75,7 @@
   <code>areas.json</code> and portal load error; the sample maps loading. With the sample maps and <code>lua/</code>: <code>area.enter</code> on login
   (and <code>events.lua</code>'s log line), <code>area.leave</code> then <code>area.enter</code> exactly once on crossing a border, and a walk into the
   cave portal (map, position, heading, events, <code>MapChange</code> before <code>Despawn</code> before <code>Spawn</code> in that tick, no
-  <code>EntityMove</code> leaking to the old neighbours, the save on map 2). <code>kast.map.area</code> / <code>areaAt</code> for players, NPCs and
+  <code>EntityMoves</code> entry leaking to the old neighbours, the save on map 2). <code>kast.map.area</code> / <code>areaAt</code> for players, NPCs and
   points, and their errors.</li>
 <li><strong>NPC spawns</strong> (in <code>lua_checks.cpp</code>): <code>parse_spawns</code> with every field, default and rejection; every spawn file
   load error (file name, tile not on the map, <code>pos</code> outside the tile, duplicate id across a map's files); respawn on the
@@ -114,7 +118,7 @@
 <li>Scenarios 39–40 cover the <a href="protocol.html#admin">admin port</a> (<code>WORLD_ADMIN_SECRET</code> in <code>.env</code>; the bot reads it from its environment). 39 (<code>admin</code>): a wrong secret gets <code>Disconnect{invalid_token}</code> and a request before the hello <code>unexpected_message</code>; with the right one the online list has a bot in the world (account, character, name, map, session, connect time) and a lobby bot with no character; a kick by character gives <code>kicked 1</code>, the bot gets <code>Disconnect{kicked}</code> and drops off the list, a second kick gives <code>kicked 0</code>, a kick by account reaches the lobby bot; the kicked character then enters at the position it walked to (saved). 40 (<code>admin-off</code>) recreates <code>world</code> with an empty <code>WORLD_ADMIN_SECRET</code>: the start logs <code>admin port off</code>, nothing listens on 7780 and a bot still enters the world; then <code>world</code> is recreated with the secret again. <code>tests/integration.sh --admin</code> runs only these two.</li>
 <li>Scenario 14 uses the sample <code>systems/events.lua</code>: <code>sendTo</code> reaches only its target, <code>sendNearby</code> only bots in view, and <code>broadcast</code> every bot.</li>
 <li>Scenario 15 (<code>fsm</code>) uses the sample <code>locomotion</code> machine. On entering, a bot gets exactly one <code>fsm.state</code> (<code>nil-&gt;idle</code>), because the denied <code>idle-&gt;idle</code> sends nothing. Walking, then standing still, gives <code>idle-&gt;moving</code> and then <code>moving-&gt;idle</code>. A bot in view gets none of them.</li>
-<li>Scenario 16 (<code>npcs</code>) uses the sample <code>systems/npcs.lua</code>, <code>npcs/guard.lua</code> and the Guard's spawn file. A bot entering at the spawn point gets <code>Spawn</code> for the Guard (<code>kind</code> npc, <code>template</code> <code>Guard</code>), its <code>Health</code> from the definition (<code>current</code> 50, <code>max</code> 50) and <code>EntityMove</code>s at changing positions. Walking 200 m away gives <code>Despawn</code> and then nothing about it; walking back gives <code>Spawn</code> and the <code>Health</code> again.</li>
+<li>Scenario 16 (<code>npcs</code>) uses the sample <code>systems/npcs.lua</code>, <code>npcs/guard.lua</code> and the Guard's spawn file. A bot entering at the spawn point gets <code>Spawn</code> for the Guard (<code>kind</code> npc, <code>template</code> <code>Guard</code>), its <code>Health</code> from the definition (<code>current</code> 50, <code>max</code> 50) and <code>EntityMoves</code> entries at changing positions. Walking 200 m away gives <code>Despawn</code> and then nothing about it; walking back gives <code>Spawn</code> and the <code>Health</code> again.</li>
 <li>Scenario 17 (<code>portal</code>) uses the sample <code>areas.json</code> files. Bot A walks from the spawn point into <code>cave_mouth</code>.
   It gets <code>MapChange{2}</code> at the portal destination before any <code>Despawn</code>/<code>Spawn</code>, then sees the Bat and loses bot B,
   who gets A's <code>Despawn</code>. After a relog A is still on map 2.</li>
@@ -125,10 +129,10 @@
   the fresh and stored navtiles' checksums.</li>
 <li>Scenario 19 (<code>terrain</code>) reads <code>maps/hills</code> itself (<code>--map-root</code>, the maps mounted into the bot). Bots A and B take
   <code>hills_gate</code> to map 3 and land on the ground. A walks 40 m down the slope (9 m, at most 36.5 degrees, under the
-  navmesh's 40) at the ground's height with no <code>Correction</code>, and B's <code>EntityMove</code>s for A are within 5 cm of the
+  navmesh's 40) at the ground's height with no <code>Correction</code>, and B's <code>EntityMoves</code> entries for A are within 5 cm of the
   ground. A rising 20 m then 30 m above the ground gets <code>Correction</code> back to its last position.</li>
 <li>Scenario 20 (<code>navmesh</code>) takes bot A to the hills: walking at ground height to the mesa's south foot gets no
-  <code>Correction</code>; walking on up its wall does. Over 30 s, the Sentry's <code>EntityMove</code>s pass the mesa's x range, all on
+  <code>Correction</code>; walking on up its wall does. Over 30 s, the Sentry's <code>EntityMoves</code> entries pass the mesa's x range, all on
   the ground and at most 0.5 m into its walls' foot (a navmesh corner may graze it).</li>
 <li>Scenario 21 (<code>client-events</code>) uses the sample <code>systems/test_hooks.lua</code>, which answers every <code>client.test.echo</code>
   with <code>test.echo</code> <code>{n, entity}</code>: a <code>ClientEvent</code> comes back with the sender's entity and its <code>n</code>. A name with

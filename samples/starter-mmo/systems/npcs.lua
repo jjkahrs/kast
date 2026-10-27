@@ -10,8 +10,9 @@
 -- On a map with a navmesh (docs/services/world/maps.html#navmesh) it walks kast.map.path's corners from where it is to the next point, so it
 -- goes around cliffs; without one (or no path), straight there. The server keeps it on the ground.
 --
--- Bandwidth: every kast.set of an NPC's Transform is one EntityMove per tick (20 Hz) to each player that sees it, so a
--- walking NPC costs as much as a walking player; a waiting one costs nothing. With many NPCs in a crowd, move them less
+-- Bandwidth: every kast.set of an NPC's Transform is one 20-byte entry per tick (20 Hz) in the EntityMoves of each player
+-- that sees it (one message a tick per player, all its moves), so a walking NPC costs as much as a walking player; a
+-- waiting one costs nothing. With many NPCs in a crowd, move them less
 -- often (every other tick, say) and let clients interpolate.
 local SPEED = 3 -- m/s, a walk
 

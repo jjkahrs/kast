@@ -2623,7 +2623,7 @@ void checkReplicationFakeServer()
               logged(std::format("replication: Other spawned as entity {} (server id 2)",
                                  reg.get<kast::PersistentId>(clone).value)),
           "replication: the clone carries NetworkEntity 2, the template's child, and Lua gets its entity id");
-    // Spawn (101) and EntityMove (102) came in one write: the clone glides to 102 over 100 ms of frames.
+    // Spawn (101) and EntityMoves (102) came in one write: the clone glides to 102 over 100 ms of frames.
     std::vector<float> xs;
     for (int frame = 0; frame < 12; ++frame) {
         xs.push_back(reg.get<kast::Transform>(clone).position.x);
@@ -3731,9 +3731,9 @@ int liveOnlineCheck(const std::string& authUrl, const std::string& mailpitUrl, c
                (what == OnlineModel::Compose::Ps || pollUntil(online, project, [&] { return !online.composeBusy(); }, 60s));
     };
     const auto running = [&] {
-        // chat-db-init is a one-shot (the chat database), done once it exited
+        // chat-db-init and admin-db-init are one-shots (their databases), done once they exited
         return online.services().size() >= 4 && std::ranges::all_of(online.services(), [](const ComposeService& s) {
-                   return s.state == "running" || (s.name == "chat-db-init" && s.state == "exited");
+                   return s.state == "running" || (s.name.ends_with("-db-init") && s.state == "exited");
                });
     };
     if (!compose(OnlineModel::Compose::Ps, 60s) || !online.composeError().empty()) {

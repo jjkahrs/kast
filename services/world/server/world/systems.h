@@ -64,7 +64,7 @@ std::vector<std::pair<entt::entity, map::Portal>> area_system(entt::registry& re
 // again after Lua, whose NPC moves would otherwise miss the next tick's view diff.
 void aoi_rebucket(entt::registry& reg, AoiGrid& grid);
 void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send);
-void replication_system(entt::registry& reg, const SendMany& sendMany);
+void replication_system(entt::registry& reg, const Send& send);
 // Each player's Says: rate limited (ChatLimit), sanitized, dropped with ChatNotice{muted} while the character is muted
 // (wallNow against mutes), then ChatMsg{kind} to the sender and: say / emote the players that see it, yell every player
 // on its map within rules.yellRadius.

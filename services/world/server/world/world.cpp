@@ -147,10 +147,10 @@ bool World::transfer(entt::entity e, const Destination& to) {
         ms->budget = {0, now_};
         epoch = ++ms->epoch;
     }
-    reg_.remove<Moved>(e); // a move this tick must not reach the new neighbours as EntityMove
+    reg_.remove<Moved>(e); // a move this tick must not reach the new neighbours in an EntityMoves
     // Out of every view at once, both ways: the mover gets MapChange, then a Despawn per old neighbour; they get its
     // Despawn. The next aoi pass sends Spawns for whoever is in range now, on the new map or (a teleport within
-    // the map) the same neighbours again at the new position. No Moved: nobody may see an EntityMove to where it went.
+    // the map) the same neighbours again at the new position. No Moved: no EntityMoves may show anyone where it went.
     if (const auto* link = reg_.try_get<SessionLink>(e)) {
         reg_.emplace_or_replace<Dirty>(e);
         send_(link->sessionId, proto::MapChange{to.map, pos, to.heading, epoch});
@@ -267,7 +267,7 @@ void World::tick(TimePoint now) {
     lua_.update(rules_.tickSeconds);
     lua_.drain_events();
     aoi_rebucket(reg_, grid_); // NPCs Lua moved: in their new cell for the next tick's view diff
-    replication_system(reg_, sendMany_);
+    replication_system(reg_, send_);
     component_replication_system(reg_, defs_, send_, sendMany_);
     client_event_system(reg_, lua_.take_client_events(), send_, sendMany_);
     save_system(reg_, defs_, save_, rules_.saveInterval, now);

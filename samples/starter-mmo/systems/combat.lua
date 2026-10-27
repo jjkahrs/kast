@@ -50,7 +50,7 @@
 -- targetName, damage, power? (its name), absorbed?, absorbedBy? (the shield's name)} per hit, "combat.dodge"
 -- {attacker, target, attackerName, targetName}, "combat.fade" {entity, power, name} when a buff ends, "combat.death"
 -- {entity, name}, "combat.revive" {entity, name}. Health is replicated on its own, once per hit or heal. A chasing or returning NPC costs one
--- EntityMove a tick to each viewer, like a patrolling one; a rooted one costs nothing.
+-- EntityMoves entry a tick to each viewer, like a patrolling one; a rooted one costs nothing.
 local GCD = 1 -- seconds: the global cooldown every power starts
 local POWERS = { -- by class; the order is the key (1-3). effect tells clients what to draw.
     warrior = {
