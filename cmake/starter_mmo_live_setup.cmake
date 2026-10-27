@@ -3,18 +3,15 @@
 # test-only override that adds starter_mmo_test_server.lua to a copy of the sample's server Lua, checks
 # the world server loaded them, runs the sample's setup_realm.cmake (CA file + realm "Starter Realm") and makes sure the
 # test account in KAST_ONLINE_EMAIL / KAST_ONLINE_PASSWORD can log in (starter_mmo_account.ps1: registers and verifies
-# it through Mailpit if needed). The credentials come only from the environment ctest runs in: never from a file, a
-# CMake variable or a command line. Writes STATE/override once the stack runs with the override (the teardown restores
+# it through Mailpit if needed). The credentials come from the environment ctest runs in, or the defaults in
+# starter_mmo_live_env.cmake: never from a command line. Writes STATE/override once the stack runs with the override (the teardown restores
 # the default mounts), STATE/started_stack if the stack wasn't running before (the teardown stops it again) and
-# STATE/ready when everything worked. Without docker, a running Docker engine or the credentials it prints "SKIP: ..."
+# STATE/ready when everything worked. Without docker or a running Docker engine it prints "SKIP: ..."
 # and writes nothing, so every live test skips.
 # Usage: cmake -DWORLD_DIR=<services/world> -DSAMPLE=<samples/starter-mmo> -DSTATE=<dir> -P starter_mmo_live_setup.cmake
 file(REMOVE_RECURSE "${STATE}")
 file(MAKE_DIRECTORY "${STATE}")
-if(NOT DEFINED ENV{KAST_ONLINE_EMAIL} OR NOT DEFINED ENV{KAST_ONLINE_PASSWORD})
-  message("SKIP: set KAST_ONLINE_EMAIL and KAST_ONLINE_PASSWORD (a test account) in the environment to run them")
-  return()
-endif()
+include("${CMAKE_CURRENT_LIST_DIR}/starter_mmo_live_env.cmake")
 execute_process(COMMAND docker info RESULT_VARIABLE result OUTPUT_QUIET ERROR_QUIET)
 if(NOT result EQUAL 0)
   message("SKIP: docker is not on PATH or its engine is not running")

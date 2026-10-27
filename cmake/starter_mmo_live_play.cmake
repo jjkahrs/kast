@@ -5,13 +5,14 @@
 # screens by publishing the events their buttons publish; its game machine "test_route" (a copy's fsms/ and
 # project.kast only) counts the portals it took across the zone scenes' switches. BOT=ON first starts an idle kast_bot
 # (compose service "bot") standing at the Meadow spawn and stops it afterwards. Every EXPECT_ALL regex must match the editor's log, which is kept in
-# STATE/<STAGE>.log; an [error] line, an RmlUi warning or a GUI image warning fails. Prints "SKIP: ..." when the setup didn't finish (no docker or credentials).
+# STATE/<STAGE>.log; an [error] line, an RmlUi warning or a GUI image warning fails. Prints "SKIP: ..." when the setup didn't finish (no docker).
 # Usage: cmake -DEDITOR=<exe> -DWORLD_DIR=<dir> -DSAMPLE=<dir> -DSTATE=<dir> -DSTAGE=<name> -DCHARACTER=<name>
 #              -DSCREENSHOT=<png> -DFRAMES=<n> -DEXPECT_ALL=<regex;...> [-DBOT=ON] [-DEDITOR_ARGS=<flags>]
 #              [-DSTOP_CHAT=ON] -P starter_mmo_live_play.cmake
 # STOP_CHAT=ON stops the stack's chat service for the run and starts it again afterwards.
 # EDITOR_ARGS go to the editor too (e.g. --sim-mouse for the camera stages).
 include("${CMAKE_CURRENT_LIST_DIR}/asset_refs.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/starter_mmo_live_env.cmake")
 if(NOT EXISTS "${STATE}/ready")
   message("SKIP: starter_mmo_live_setup did not get the stack ready (see its output)")
   return()

@@ -330,11 +330,10 @@ of the client project, in dot-folders or elsewhere.
   button with real mouse events (highlighted; the next page). `starter_mmo_nameplates_perf` builds a copy that starts in
   the Meadow with 100 Guards in view, each with its nameplate, runs the player without vsync and fails if the average
   frame time is over 16.7 ms (60 fps; optimized builds only; the number is printed).
-- **Live**, against the compose stack, with a test account in the environment only:
+- **Live**, against the compose stack. The test account is `starter-live@example.com` unless `KAST_ONLINE_EMAIL` /
+  `KAST_ONLINE_PASSWORD` in the environment name another (`cmake/starter_mmo_live_env.cmake`):
 
   ```sh
-  set KAST_ONLINE_EMAIL=starter-test@example.com
-  set KAST_ONLINE_PASSWORD=<any test password>
   ctest --preset debug -R starter_mmo
   ```
 

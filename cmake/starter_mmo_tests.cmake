@@ -6,11 +6,11 @@
 #
 # Live (the services/world compose stack): starter_mmo_live_setup restarts the stack with the sample's compose override,
 # adds "Starter Realm" and readies the test account from KAST_ONLINE_EMAIL / KAST_ONLINE_PASSWORD (the environment ctest
-# runs in; unset = skip). Three stages then play test-time copies through the sample's screens (character list, the
+# runs in; unset = starter_mmo_live_env.cmake's defaults). Three stages then play test-time copies through the sample's screens (character list, the
 # Meadow with the Guard, an idle kast_bot, the HUD and a chat line, both portals into the Cavern, the zone scenes loaded
 # on each portal), a secrets check
 # follows, and starter_mmo_live_teardown puts the default world mounts back. Each prints "SKIP: ..." and is skipped
-# without docker, a running engine or the credentials.
+# without docker or a running engine.
 set(KAST_STARTER "${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo")
 set(KAST_STARTER_OUT "${CMAKE_CURRENT_BINARY_DIR}/starter_mmo")
 set(KAST_STARTER_COPY "${KAST_STARTER_OUT}/offline")

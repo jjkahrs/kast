@@ -9,6 +9,7 @@ if(NOT EXISTS "${STATE}/ready")
   return()
 endif()
 set(base "${CHARACTER}")
+include("${CMAKE_CURRENT_LIST_DIR}/starter_mmo_live_env.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/starter_mmo_character.cmake")
 set(name "${CHARACTER}")
 
