@@ -927,6 +927,58 @@ void checkEventBus() {
     bus.publish("a", 6);
     bus.drain();
     check(seen == std::vector<std::string>{"fresh6"}, "bus: stale handles never remove newer subscriptions");
+
+    // Name buckets: per-name subscription order across interleaved names, a self- and another name's unsubscribe
+    // mid-drain, a mid-drain subscription to a new name getting that name's later events, buckets emptied and refilled.
+    {
+        EventBus names;
+        std::vector<std::string> got;
+        const auto tag = [&got](std::string t) { return [&got, t](const nlohmann::json&) { got.push_back(t); }; };
+        EventBus::Subscription x1 = names.subscribe("x", tag("x1"));
+        EventBus::Subscription y1 = names.subscribe("y", tag("y1"));
+        EventBus::Subscription x2 = names.subscribe("x", tag("x2"));
+        EventBus::Subscription z1 = names.subscribe("z", tag("z1"));
+        EventBus::Subscription y2 = names.subscribe("y", tag("y2"));
+        EventBus::Subscription x3 = names.subscribe("x", tag("x3"));
+        names.publish("y", nullptr);
+        names.publish("x", nullptr);
+        names.publish("none", nullptr);
+        names.drain();
+        check(got == std::vector<std::string>{"y1", "y2", "x1", "x2", "x3"},
+              "bus: each name keeps subscription order across interleaved subscribes; other names are never called");
+
+        got.clear();
+        EventBus::Subscription self;
+        EventBus::Subscription w;
+        self = names.subscribe("self", [&](const nlohmann::json&) {
+            got.push_back("self");
+            self.unsubscribe(); // itself: not even the second "self" of this drain
+            y2.unsubscribe();   // another name's subscriber: nothing from the "y" later in this drain
+            w = names.subscribe("w", tag("w")); // a new name: its later events in this drain arrive
+        });
+        names.publish("self", nullptr);
+        names.publish("self", nullptr);
+        names.publish("y", nullptr);
+        names.publish("w", nullptr);
+        names.drain();
+        check(got == std::vector<std::string>{"self", "y1", "w"},
+              "bus: a self- or other-name unsubscribe mid-drain is immediate; a new name subscribed mid-drain gets its next events");
+
+        got.clear();
+        self.unsubscribe(); // stale: no-op
+        y2.unsubscribe();   // stale: no-op
+        x1.unsubscribe();
+        x2.unsubscribe();
+        x3.unsubscribe(); // "x" emptied outside a drain
+        EventBus::Subscription again = names.subscribe("self", tag("again")); // "self" emptied by the drain
+        EventBus::Subscription x4 = names.subscribe("x", tag("x4"));
+        names.publish("self", nullptr);
+        names.publish("x", nullptr);
+        names.publish("y", nullptr);
+        names.drain();
+        check(got == std::vector<std::string>{"again", "x4", "y1"},
+              "bus: stale unsubscribes are no-ops; emptied names take new subscribers");
+    }
 }
 
 // Lua -> Lua and Lua -> C++: same tick after every update, one subscription order across Lua and C++, independent

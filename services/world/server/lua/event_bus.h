@@ -9,6 +9,8 @@
 #include <deque>
 #include <functional>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace kast {
 
@@ -55,7 +57,6 @@ private:
     };
     struct Subscriber {
         uint64_t id;
-        std::string name;
         Callback callback;
         bool active;
     };
@@ -64,9 +65,13 @@ private:
     void unsubscribe(uint64_t id);
 
     entt::dispatcher dispatcher_;
-    // A deque: a callback may subscribe while it runs, and push_back must not move the running callback. Removed
-    // entries are erased outside drains only.
-    std::deque<Subscriber> subscribers_;
+    // Subscribers by event name, each in subscription order, so a delivery touches only its name's. A callback may
+    // subscribe while it runs and that must not move the running callback: deque push_back keeps existing elements in
+    // place, and an unordered_map rehash keeps its nodes (the deques) in place. Removed entries, and buckets left
+    // empty, are erased outside drains only.
+    std::unordered_map<std::string, std::deque<Subscriber>> subscribers_;
+    std::unordered_map<uint64_t, std::string> names_; // a live subscription's id -> its bucket
+    std::vector<std::string> pruned_;                 // buckets with entries removed during this drain
     uint64_t nextId_ = 1; // never reused, so a stale handle can't remove a newer subscription
     bool draining_ = false;
 };

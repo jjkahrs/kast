@@ -3404,6 +3404,69 @@ void checkEventBus()
     bus.publish("a", 6);
     bus.drain();
     check(seen == std::vector<std::string>{"fresh6"}, "bus: stale handles never remove newer subscriptions");
+
+    // Name buckets: per-name subscription order across interleaved names, a self- and another name's unsubscribe
+    // mid-drain, a mid-drain subscription to a new name getting that name's later events, buckets emptied and refilled.
+    {
+        kast::EventBus names;
+        std::vector<std::string> got;
+        const auto tag = [&got](std::string t) { return [&got, t](const nlohmann::json&) { got.push_back(t); }; };
+        kast::EventBus::Subscription x1 = names.subscribe("x", tag("x1"));
+        kast::EventBus::Subscription y1 = names.subscribe("y", tag("y1"));
+        kast::EventBus::Subscription x2 = names.subscribe("x", tag("x2"));
+        kast::EventBus::Subscription z1 = names.subscribe("z", tag("z1"));
+        kast::EventBus::Subscription y2 = names.subscribe("y", tag("y2"));
+        kast::EventBus::Subscription x3 = names.subscribe("x", tag("x3"));
+        names.publish("y", nullptr);
+        names.publish("x", nullptr);
+        names.publish("none", nullptr);
+        names.drain();
+        check(got == std::vector<std::string>{"y1", "y2", "x1", "x2", "x3"},
+              "bus: each name keeps subscription order across interleaved subscribes; other names are never called");
+
+        got.clear();
+        kast::EventBus::Subscription self;
+        kast::EventBus::Subscription w;
+        self = names.subscribe("self", [&](const nlohmann::json&) {
+            got.push_back("self");
+            self.unsubscribe(); // itself: not even the second "self" of this drain
+            y2.unsubscribe();   // another name's subscriber: nothing from the "y" later in this drain
+            w = names.subscribe("w", tag("w")); // a new name: its later events in this drain arrive
+        });
+        names.publish("self", nullptr);
+        names.publish("self", nullptr);
+        names.publish("y", nullptr);
+        names.publish("w", nullptr);
+        names.drain();
+        check(got == std::vector<std::string>{"self", "y1", "w"},
+              "bus: a self- or other-name unsubscribe mid-drain is immediate; a new name subscribed mid-drain gets its next events");
+
+        got.clear();
+        self.unsubscribe(); // stale: no-op
+        y2.unsubscribe();   // stale: no-op
+        x1.unsubscribe();
+        x2.unsubscribe();
+        x3.unsubscribe(); // "x" emptied outside a drain
+        kast::EventBus::Subscription again = names.subscribe("self", tag("again")); // "self" emptied by the drain
+        kast::EventBus::Subscription x4 = names.subscribe("x", tag("x4"));
+        names.publish("self", nullptr);
+        names.publish("x", nullptr);
+        names.publish("y", nullptr);
+        names.drain();
+        check(got == std::vector<std::string>{"again", "x4", "y1"},
+              "bus: stale unsubscribes are no-ops; emptied names take new subscribers");
+
+        got.clear();
+        std::optional<kast::EventBus::Subscription> old(names.subscribe("k", tag("old")));
+        names.reset();
+        kast::EventBus::Subscription now = names.subscribe("k", tag("now"));
+        old.reset(); // destroyed after reset: no-op
+        names.publish("k", nullptr);
+        names.publish("x", nullptr);
+        names.drain();
+        check(got == std::vector<std::string>{"now"},
+              "bus: reset drops every subscription; a handle destroyed after it removes nothing");
+    }
 }
 
 // Lua -> Lua and Lua -> C++: same frame after every update, shared subscription order, independent payload copies,
