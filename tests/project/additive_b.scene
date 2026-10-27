@@ -1,0 +1,205 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "B Sphere",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            1.5,
+            0.75,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.5,
+            1.5,
+            1.5
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "sphere",
+          "material": "",
+          "castShadows": true,
+          "receiveShadows": true,
+          "giMode": "off",
+          "lightmapScale": 1.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "B Pillar",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            3.5,
+            1.0,
+            -1.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            0.5,
+            2.0,
+            0.5
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "cube",
+          "material": "",
+          "castShadows": true,
+          "receiveShadows": true,
+          "giMode": "off",
+          "lightmapScale": 1.0
+        }
+      }
+    }
+  ],
+  "systems": [],
+  "lighting": {
+    "ambientColor": [
+      1.0,
+      0.8,
+      0.6
+    ],
+    "ambientIntensity": 0.5
+  },
+  "postProcessing": {
+    "tonemapping": {
+      "enabled": false,
+      "exposure": 0.0,
+      "operator": "None"
+    },
+    "bloom": {
+      "enabled": false,
+      "threshold": 1.0,
+      "intensity": 0.5,
+      "radius": 0.5
+    },
+    "colorGrading": {
+      "enabled": false,
+      "contrast": 1.0,
+      "saturation": 1.0,
+      "colorFilter": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "temperature": 0.0
+    },
+    "vignette": {
+      "enabled": false,
+      "intensity": 0.3,
+      "smoothness": 0.5
+    },
+    "fxaa": {
+      "enabled": false
+    },
+    "fog": {
+      "enabled": false,
+      "color": [
+        0.5,
+        0.6,
+        0.7
+      ],
+      "density": 0.05,
+      "start": 0.0
+    },
+    "ssao": {
+      "enabled": false,
+      "radius": 0.5,
+      "intensity": 1.0,
+      "power": 1.5,
+      "sliceCount": 2
+    },
+    "ssr": {
+      "enabled": false,
+      "maxDistance": 50.0,
+      "thickness": 0.3,
+      "maxRoughness": 0.6,
+      "intensity": 1.0,
+      "steps": 32
+    },
+    "depthOfField": {
+      "enabled": false,
+      "focusDistance": 10.0,
+      "fStop": 2.8,
+      "focalLength": 50.0,
+      "maxCoc": 16.0
+    },
+    "volumetricFog": {
+      "enabled": false,
+      "density": 0.02,
+      "albedo": [
+        0.9,
+        0.9,
+        0.9
+      ],
+      "anisotropy": 0.2,
+      "heightFalloff": 0.1,
+      "baseHeight": 0.0,
+      "maxDistance": 100.0,
+      "temporalBlend": 0.9,
+      "lightIntensity": 1.0,
+      "ambientIntensity": 1.0
+    }
+  },
+  "sky": {
+    "mode": "procedural",
+    "top": [
+      0.6,
+      0.2,
+      0.1
+    ],
+    "horizon": [
+      0.95,
+      0.55,
+      0.25
+    ],
+    "bottom": [
+      0.25,
+      0.15,
+      0.1
+    ],
+    "faces": {
+      "px": "",
+      "nx": "",
+      "py": "",
+      "ny": "",
+      "pz": "",
+      "nz": ""
+    }
+  },
+  "physics": {
+    "gravity": [
+      0.0,
+      -2.0,
+      0.0
+    ]
+  },
+  "editor": {
+    "camera": {
+      "pivot": [
+        2.0,
+        1.0,
+        0.0
+      ],
+      "yaw": -30.0,
+      "pitch": -15.0,
+      "distance": 6.0
+    }
+  }
+}

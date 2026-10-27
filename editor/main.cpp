@@ -92,7 +92,7 @@ constexpr const char* kUsage =
     "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
-    "[--prefab-save] [--prefab-back] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--log-lod] [--no-occlusion] [--occlusion-unsupported] [--lod-tint] [--show-occluded] [--show-hiz MIP] [--show-gdata 1|2|3] [--scroll-post-section NAME] [--scene-debug-menu] [--terrain-lod-tint] [--terrain-lod-checker] [--no-terrain-skirts] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
+    "[--prefab-save] [--prefab-back] [--open-additive scene]... [--active-scene N] [--move-to-scene ID,N] [--scene-menu N] [--remove-scene N] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--log-lod] [--no-occlusion] [--occlusion-unsupported] [--lod-tint] [--show-occluded] [--show-hiz MIP] [--show-gdata 1|2|3] [--scroll-post-section NAME] [--scene-debug-menu] [--terrain-lod-tint] [--terrain-lod-checker] [--no-terrain-skirts] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel (without --play: on the Scene view), for
@@ -174,6 +174,16 @@ struct Options {
     std::optional<std::array<int, 2>> promptRemoveTile; // --prompt-remove-tile: open the Zone tab's remove-tile dialog
     bool fileSave = false;  // --file-save: File > Save (as Ctrl+S) at frame kAddComponentPopupFrame, for tests
     int undo = 0, redo = 0; // --scene-undo N / --scene-redo N: scene Undo N times, then Redo N times, after the startup edits
+    // Additive scenes (docs/editor/multi-scene.html), after --scene / --project: --open-additive opens each scene as
+    // File > Open Scene Additive does; --active-scene N makes open scene N (0 = the first) active; --move-to-scene
+    // ID,N moves entity ID (its in-memory id) into open scene N as the Hierarchy drop does, before --scene-undo;
+    // --scene-menu N opens scene header N's context menu and --remove-scene N its Remove Scene (with the
+    // unsaved-changes prompt) at the --file-save frame.
+    std::vector<std::string> openAdditive;
+    std::optional<size_t> activeScene;
+    std::vector<std::pair<kast::EntityId, size_t>> moveToScene;
+    std::optional<size_t> sceneMenu;
+    std::optional<size_t> removeScene;
     std::string scrollPostSection;  // the Post Processing panel's section to keep scrolled to its top (Panels::scrollPostSection)
     std::string focusPanel;         // bring this window (e.g. "Events"; "Lighting", "Post Processing", "Physics", "Mixer", "Network" and "Online" also open it) to the front, for screenshots
     std::string openGui;            // open this .rml in the GUI Builder (relative paths: to the project, else the cwd)
@@ -462,13 +472,43 @@ bool parseGuiScalingArg(std::string_view arg, int argc, char** argv, int& i, Opt
     return true;
 }
 
+// The additive scene flags (Options::openAdditive ...). False if arg isn't one; ok false (logged) if its value is bad.
+bool parseSceneSetArg(std::string_view arg, int argc, char** argv, int& i, Options& options, bool& ok)
+{
+    if (i + 1 >= argc)
+        return false;
+    const std::string_view value = argv[i + 1];
+    if (arg == "--open-additive") {
+        options.openAdditive.emplace_back(value);
+    } else if (arg == "--active-scene" || arg == "--scene-menu" || arg == "--remove-scene") {
+        size_t index = 0;
+        ok = std::from_chars(value.data(), value.data() + value.size(), index).ec == std::errc();
+        (arg == "--active-scene" ? options.activeScene : arg == "--scene-menu" ? options.sceneMenu : options.removeScene) = index;
+        if (!ok)
+            kast::log::error(std::format("Invalid {} '{}', expected an open scene index (0 = the first)", arg, value));
+    } else if (arg == "--move-to-scene") {
+        const size_t comma = value.find(',');
+        kast::EntityId id = 0;
+        size_t index = 0;
+        ok = comma != std::string_view::npos && std::from_chars(value.data(), value.data() + comma, id).ec == std::errc() &&
+             std::from_chars(value.data() + comma + 1, value.data() + value.size(), index).ec == std::errc();
+        options.moveToScene.emplace_back(id, index);
+        if (!ok)
+            kast::log::error(std::format("Invalid --move-to-scene '{}', expected ID,N", value));
+    } else {
+        return false;
+    }
+    ++i;
+    return true;
+}
+
 std::optional<Options> parseArgs(int argc, char** argv)
 {
     Options options;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
         const bool hasValue = i + 1 < argc;
-        if (bool ok = true; parseGuiScalingArg(arg, argc, argv, i, options, ok)) {
+        if (bool ok = true; parseGuiScalingArg(arg, argc, argv, i, options, ok) || parseSceneSetArg(arg, argc, argv, i, options, ok)) {
             if (!ok)
                 return std::nullopt;
         } else if (arg == "--frames" && hasValue && parsePositive(argv[i + 1], options.frames)) {
@@ -670,6 +710,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.sculptLoop = true;
         } else if (arg == "--file-save") {
             options.fileSave = true;
+
         } else if (arg == "--bake-probes") {
             options.bakeProbes = true;
         } else if (arg == "--bake-lightmaps") {
@@ -868,7 +909,9 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.onlineCompose || !options.zoneOps.empty() || options.headless || options.noRecycle ||
                              options.sculptLoop || options.focus || options.promptRemoveTile || options.fileSave ||
                              options.bakeProbes || options.bakeLightmaps || options.bakeLightmapsAsync ||
-                             options.cancelLightmaps || options.bakeVoxelGi || options.undo || options.redo;
+                             options.cancelLightmaps || options.bakeVoxelGi || options.undo || options.redo ||
+                             !options.openAdditive.empty() || options.activeScene || !options.moveToScene.empty() ||
+                             options.sceneMenu || options.removeScene;
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --select-network-entity, --add-component-popup, --new-component[-prompt], "
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --open-gui-settings, "
@@ -876,7 +919,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                          "--assets-menu, "
                          "--assets-create, --assets-rename, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
                          "--gui-click, --open-graph, --preview-model, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
-                         "steps, --scene-undo, --scene-redo, --assets-delete, --inspector-apply-menu, --file-save, --bake-probes, --bake-lightmaps[-async], --cancel-lightmaps, --bake-voxelgi and the zone flags require "
+                         "steps, --open-additive, --active-scene, --move-to-scene, --scene-menu, --remove-scene, --scene-undo, --scene-redo, --assets-delete, --inspector-apply-menu, --file-save, --bake-probes, --bake-lightmaps[-async], --cancel-lightmaps, --bake-voxelgi and the zone flags require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
     }
@@ -1044,7 +1087,11 @@ void drawMenuBar(FileActions& files, Document& doc, const UndoTarget& undo, Game
                 files.newScene();
             if (ImGui::MenuItem("Open...", "Ctrl+O", false, idle))
                 files.open();
-            if (ImGui::MenuItem("Save", "Ctrl+S", false, idle))
+            if (ImGui::MenuItem("Open Scene Additive...", nullptr, false, idle && !doc.prefabEdit))
+                files.openAdditive();
+            if (ImGui::MenuItem("New Scene Additive", nullptr, false, idle && !doc.prefabEdit))
+                addNewScene(doc);
+            if (ImGui::MenuItem("Save", "Ctrl+S", false, idle)) // every open scene with unsaved changes
                 files.save();
             if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S", false, idle))
                 files.saveAs();
@@ -1504,6 +1551,8 @@ int main(int argc, char** argv)
         kast::Audio::setDefaultOutput(kast::Audio::Output::Null);
 
     Document doc;
+    const std::filesystem::path settingsFile =
+        options->settingsFile.empty() ? defaultEditorSettingsFile() : std::filesystem::absolute(options->settingsFile);
     std::optional<kast::Project> opened; // --project, recorded in the recent list once the editor window opens
     if (!options->project.empty()) {
         if (std::string error; !openProject(doc, std::filesystem::path(options->project) / kast::kProjectFileName, error)) {
@@ -1511,6 +1560,8 @@ int main(int argc, char** argv)
             return 1;
         }
         opened = doc.project;
+        if (options->scene.empty()) // the scenes open when the editor last closed this project, if any
+            restoreOpenScenes(doc, openScenesSetting(loadEditorSettings(settingsFile), doc.project->root));
     }
     if (!options->scene.empty()) {
         if (std::string error; !openFile(doc, options->scene, error)) { // its project walk-up wins over --project
@@ -1518,6 +1569,15 @@ int main(int argc, char** argv)
             return 1;
         }
     }
+    for (const std::string& scene : options->openAdditive)
+        if (std::string error; !openSceneAdditive(doc, scene, error))
+            kast::log::error(std::format("--open-additive: {}", error));
+    if (options->activeScene && *options->activeScene < doc.scene.loadedScenes().size())
+        setActiveScene(doc, doc.scene.loadedScenes()[*options->activeScene].slot);
+    for (const auto& [id, index] : options->moveToScene)
+        if (index >= doc.scene.loadedScenes().size() ||
+            !moveToScene(doc, kast::findById(doc.scene, id), doc.scene.loadedScenes()[index].slot))
+            kast::log::error(std::format("--move-to-scene {},{}: no such entity or open scene", id, index));
     if (options->select != 0 && !selectById(doc, options->select)) {
         kast::log::error(std::format("--select {}: no entity with that id", options->select));
         return 1;
@@ -1554,8 +1614,6 @@ int main(int argc, char** argv)
     for (int i = 0; i < options->redo; ++i)
         redoScene(doc);
     refreshStateMachines(doc); // the Inspector and State Machines panel list them from the first frame
-    const std::filesystem::path settingsFile =
-        options->settingsFile.empty() ? defaultEditorSettingsFile() : std::filesystem::absolute(options->settingsFile);
     ZoneSession zone; // the scene's zone: the Scene view shows it, the Zone tab edits it
     zone.setRecycle(!options->noRecycle);
     if (!options->zoneOps.empty() || options->headless) { // the zone edit flags (zone_cli.h)
@@ -1766,6 +1824,8 @@ int main(int argc, char** argv)
     VoxelGiJob voxelGiJob; // Bake VoxelGI on a worker thread
     panels.voxelGiStatus = [&](const kast::Scene& scene, entt::entity volume) { return viewport.renderer().voxelGiStatus(scene, volume); };
     panels.voxelGiProgress = [&] { return voxelGiJob.progress(); };
+    nlohmann::json rememberedScenes = // what the settings hold: written again only when the open set differs
+        doc.project ? openScenesSetting(loadEditorSettings(settingsFile), doc.project->root) : nlohmann::json();
     hooks.frame = [&] {
         const uint64_t frameStart = SDL_GetPerformanceCounter();
         // Before this frame submits anything: a bake runs frames of its own on the Scene view's views.
@@ -1883,6 +1943,18 @@ int main(int argc, char** argv)
         voxelGiJob.poll(doc);
         if (options->fileSave && frames.frame() == kAddComponentPopupFrame)
             files.save();
+        if (options->sceneMenu && frames.frame() == kAddComponentPopupFrame)
+            panels.openSceneMenu(*options->sceneMenu);
+        if (options->removeScene && frames.frame() == kAddComponentPopupFrame &&
+            *options->removeScene < doc.scene.loadedScenes().size())
+            files.removeScene(doc.scene.loadedScenes()[*options->removeScene].slot);
+        // The open scene set, remembered per project for the next launch (only when it changes).
+        if (nlohmann::json state = openScenesState(doc); doc.play == PlayState::Stopped && !state.is_null() &&
+                                                          state != rememberedScenes) {
+            rememberedScenes = state;
+            if (std::string error; !saveOpenScenesSetting(settingsFile, doc.project->root, state, error))
+                kast::log::warn(error);
+        }
         if (!options->openGui.empty() && frames.frame() == kAddComponentPopupFrame)
             guiBuilder.focusPanels(); // again: the first frames' docking undid the focus open() asked for
         if (!options->openGraph.empty() && frames.frame() == kAddComponentPopupFrame)

@@ -39,8 +39,11 @@ public:
     bool coversSettings() const { return settings_.has_value(); }
     bool hasPrefabInstances() const; // any copy is (part of) a prefab instance
     std::vector<kast::EntityId> ids() const; // in capture order
+    // The open scenes it covers: its entities' (kast::slotOfId) and, with settings, the scene they belong to.
+    std::vector<kast::SceneSlot> scenes() const;
     // Puts the copies back: deep entities are rebuilt with their ids where they were (or removed if absent), shallow
-    // ones get their name and components back.
+    // ones get their name and components back, settings go to the scene they came from. Copies of a scene no longer
+    // open are skipped.
     void restore(kast::Scene& scene) const;
     // Everything captured as JSON, to compare two states.
     nlohmann::ordered_json describe() const;
@@ -55,6 +58,7 @@ private:
         entt::entity copy = entt::null; // in stash_
     };
     struct Settings {
+        kast::SceneSlot slot = 0; // the active scene they were captured from
         std::vector<std::string> systems;
         kast::SceneLighting lighting;
         kast::SceneSky sky;
@@ -95,7 +99,8 @@ void endSceneGesture(Document& doc);
 SceneState captureScene(const kast::Scene& scene, const SceneScope& scope);
 
 // Undo / redo on doc.history: reselects the step's entity by id (clears the selection if it is gone), bumps
-// sceneGeneration and sets dirty from the save point. Nothing during Play.
+// sceneGeneration and sets each open scene's unsaved changes from its save point (Document::sceneSaves: each step
+// records the scenes it touched). Nothing during Play.
 void undoScene(Document& doc);
 void redoScene(Document& doc);
 // Drops doc.history and any open recording (New, Open, prefab open / leave, ops that write files and change the scene).

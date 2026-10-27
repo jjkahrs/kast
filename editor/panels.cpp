@@ -94,8 +94,26 @@ void Panels::drawHierarchy(Document& doc, FileActions& files)
             ImGui::TextColored(ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), "%s", breadcrumb(doc).c_str());
             ImGui::Separator();
         }
-        for (entt::entity root : doc.scene.children(entt::null))
-            drawNode(doc, root);
+        if (doc.prefabEdit || doc.scene.loadedScenes().size() < 2) { // one scene: the plain tree, as before
+            for (entt::entity root : doc.scene.children(entt::null))
+                drawNode(doc, root);
+        } else { // one collapsible section per open scene (docs/editor/multi-scene.html)
+            const std::vector<kast::LoadedScene>& scenes = doc.scene.loadedScenes();
+            for (size_t i = 0; i < scenes.size(); ++i) {
+                const kast::SceneSlot slot = scenes[i].slot;
+                ImGui::PushID(static_cast<int>(slot));
+                if (sceneMenuRequest_ == i) {
+                    ImGui::OpenPopup("##sceneMenu");
+                    sceneMenuRequest_.reset();
+                }
+                bool open = true;
+                drawSceneHeader(doc, slot, open);
+                if (open)
+                    for (entt::entity root : doc.scene.roots(slot))
+                        drawNode(doc, root);
+                ImGui::PopID();
+            }
+        }
 
         // The rest of the panel: click clears selection, drop unparents to root, right-click creates at root.
         ImVec2 rest = ImGui::GetContentRegionAvail();
@@ -111,7 +129,7 @@ void Panels::drawHierarchy(Document& doc, FileActions& files)
         if (std::string prefab; acceptPrefabDrop(prefab))
             edit_ = {Edit::Op::DropPrefab, entt::null, entt::null, ObjectKind::Empty, prefab};
         if (ImGui::BeginPopupContextItem("##rootMenu")) {
-            drawCreateItems(entt::null);
+            drawCreateItems(entt::null); // into the active scene
             ImGui::EndPopup();
         }
 
@@ -130,7 +148,48 @@ void Panels::drawHierarchy(Document& doc, FileActions& files)
         }
     }
     ImGui::End();
-    applyEdit(doc);
+    applyEdit(doc, files);
+}
+
+void Panels::drawSceneHeader(Document& doc, kast::SceneSlot slot, bool& open)
+{
+    const bool active = slot == doc.scene.activeSlot();
+    const bool playing = doc.play != PlayState::Stopped;
+    // Play shows the scenes as kast.loadScene left them: their own paths, no unsaved-changes markers.
+    const std::string path = playing ? doc.scene.findScene(slot)->path : scenePath(doc, slot);
+    const std::string name = path.empty() ? "Untitled" : utf8(fromUtf8(path).stem());
+    const std::string label = std::format("{}{}{}###scene", name, !playing && sceneDirty(doc, slot) ? "*" : "",
+                                          active ? "  (Active)" : "");
+    if (active) // the palette's highlight #ffcc00; the others keep the #ffaa00 header
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(1.0f, 0.8f, 0.0f, 1.0f));
+    open = ImGui::CollapsingHeader(label.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
+    if (active)
+        ImGui::PopStyleColor();
+    if (!path.empty())
+        ImGui::SetItemTooltip("%s", path.c_str());
+    if (entt::entity dropped = entt::null; acceptEntityDrop(dropped)) // a root of this scene, its subtree moving along
+        edit_ = {Edit::Op::MoveToScene, dropped, entt::null, ObjectKind::Empty, "", slot};
+    if (ImGui::BeginPopupContextItem("##sceneMenu")) {
+        const bool stopped = !playing;
+        if (ImGui::MenuItem("Set Active Scene", nullptr, active, stopped && !active))
+            edit_ = {.op = Edit::Op::SetActiveScene, .scene = slot};
+        if (ImGui::MenuItem("Save Scene", nullptr, false, stopped))
+            edit_ = {.op = Edit::Op::SaveScene, .scene = slot};
+        if (ImGui::MenuItem("Remove Scene", nullptr, false, stopped && doc.scene.loadedScenes().size() > 1))
+            edit_ = {.op = Edit::Op::RemoveScene, .scene = slot};
+        disabledTooltip(stopped && doc.scene.loadedScenes().size() < 2 ? "The only open scene can't be removed" : nullptr);
+        ImGui::Separator();
+        if (ImGui::MenuItem("New Scene", nullptr, false, stopped))
+            edit_ = {.op = Edit::Op::NewScene};
+        if (ImGui::MenuItem("Open Scene Additive...", nullptr, false, stopped))
+            edit_ = {.op = Edit::Op::OpenSceneAdditive};
+        ImGui::Separator();
+        if (ImGui::BeginMenu("Create", stopped)) {
+            drawCreateItems(entt::null, slot);
+            ImGui::EndMenu();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 void Panels::drawNode(Document& doc, entt::entity entity)
@@ -231,20 +290,38 @@ void Panels::drawNode(Document& doc, entt::entity entity)
     ImGui::PopID();
 }
 
-void Panels::drawCreateItems(entt::entity parent)
+void Panels::drawCreateItems(entt::entity parent, std::optional<kast::SceneSlot> scene)
 {
     for (ObjectKind kind : kObjectKinds)
         if (ImGui::MenuItem(objectKindLabel(kind)))
-            edit_ = {Edit::Op::Create, entt::null, parent, kind};
+            edit_ = {Edit::Op::Create, entt::null, parent, kind, "", scene};
 }
 
-void Panels::applyEdit(Document& doc)
+void Panels::applyEdit(Document& doc, FileActions& files)
 {
     const Edit edit = std::exchange(edit_, Edit{});
     kast::Scene& scene = doc.scene;
     switch (edit.op) {
     case Edit::Op::Create:
-        createObject(doc, edit.kind, edit.parent);
+        createObject(doc, edit.kind, edit.parent, edit.scene);
+        break;
+    case Edit::Op::MoveToScene:
+        moveToScene(doc, edit.target, *edit.scene);
+        break;
+    case Edit::Op::SetActiveScene:
+        setActiveScene(doc, *edit.scene);
+        break;
+    case Edit::Op::SaveScene:
+        files.saveScene(*edit.scene);
+        break;
+    case Edit::Op::RemoveScene:
+        files.removeScene(*edit.scene);
+        break;
+    case Edit::Op::NewScene:
+        addNewScene(doc);
+        break;
+    case Edit::Op::OpenSceneAdditive:
+        files.openAdditive();
         break;
     case Edit::Op::CreateModel:
         createModelEntity(doc, edit.path, edit.parent);
@@ -285,7 +362,8 @@ void Panels::applyEdit(Document& doc)
         else
             kast::log::warn(std::format("Cannot parent '{}' under its own descendant",
                                         scene.registry().get<kast::Name>(edit.target).value));
-        endSceneEdit(doc);
+        // Under an entity of another open scene the subtree moved into it, with that scene's ids.
+        endSceneEdit(doc, {scene.registry().get<kast::PersistentId>(edit.target).value});
         break;
     case Edit::Op::None:
         break;
@@ -2818,6 +2896,15 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& g
             zone.remap(edit.path, selected);
             if (scenePath)
                 doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
+            for (const kast::LoadedScene& loaded : doc.scene.loadedScenes()) { // the other open scenes follow theirs too
+                const std::optional<std::filesystem::path> moved =
+                    loaded.slot == doc.scene.activeSlot() || loaded.path.empty()
+                        ? std::nullopt
+                        : remapPath(std::filesystem::absolute(loaded.path), source, dest);
+                if (std::string ignored; moved)
+                    if (std::optional<std::string> narrow = narrowPath(*moved, ignored))
+                        doc.scene.findScene(loaded.slot)->path = std::move(*narrow);
+            }
             remapScenePaths(doc, edit.path, selected); // in memory; the files below
             assetIds().scan(root);                      // the moved files' ids at their new paths
             for (const std::string& file : remapAssetRefs(root, edit.path, selected, assetIds()))

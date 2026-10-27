@@ -14,6 +14,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -25,22 +26,35 @@ struct SDL_Window;
 enum class PlayState { Stopped, Playing, Paused };
 enum class PanelFocus { None, Scene, Game }; // a viewport tab to bring to front
 
-// The scene being edited plus its editor-side state.
+// One open scene's place in the undo history (scene_undo.h): head is the last applied step that changed it, saved the
+// head it was saved at (nullopt: an edit that is no step changed it since). It has unsaved changes while they differ.
+struct SceneSave {
+    uint64_t head = 0;
+    std::optional<uint64_t> saved = 0;
+};
+
+// The scenes being edited plus their editor-side state. doc.scene holds every open scene (additive scenes,
+// docs/editor/multi-scene.html): one active, whose file is path, the others' in their kast::LoadedScene.
 struct Document {
     kast::Scene scene;
-    EditorCamera camera;
-    std::string path; // empty until first saved/opened
+    EditorCamera camera; // saved into the active scene's editorData
+    std::string path; // the active scene's file; empty until first saved/opened
     std::optional<kast::Project> project; // the active project; scene systems and kast.loadScene paths are relative to it
     entt::entity selected = entt::null;
-    bool dirty = false;
+    bool dirty = false; // some open scene has unsaved changes (updateDirty)
+    std::map<kast::SceneSlot, SceneSave> sceneSaves; // per open scene; none = no unsaved changes
+    uint64_t undoSerial = 0; // the last SceneSave::head handed out
 
     PlayState play = PlayState::Stopped;
     kast::ShaderClock shaderClock; // u_time of the Scene and Game views: updatePlay advances it, except while paused
-    nlohmann::ordered_json playSnapshot; // the scene as it was when Play started, restored on Stop
+    nlohmann::ordered_json playSnapshot; // every open scene as it was when Play started (kast::scenesToJson), restored on Stop
     bool playSnapshotDirty = false;
+    std::map<kast::SceneSlot, SceneSave> playSnapshotSaves;
     kast::Input input; // fed by the Game panel while it is focused and playing
     kast::LuaSystems lua; // the scene's Lua systems; a session runs from Play to Stop
-    std::string playSceneName; // the running scene's name after a kast.loadScene switch; empty if none happened
+    // The running active scene's name after a kast.loadScene switch or a Lua change of the active scene; empty if none.
+    std::string playSceneName;
+    bool playSwitched = false; // a kast.loadScene switch replaced the scenes this Play session (ids mean other entities)
     uint32_t playGeneration = 0; // bumped when Play starts and on each kast.loadScene switch (Game view GUIs reload)
     // Bumped whenever doc.scene is replaced (Stop, kast.loadScene switch, New, Open): entity handles and in-progress
     // edits held by panels are stale.
@@ -65,6 +79,7 @@ struct Document {
         kast::EntityId selected = 0;
         std::string prefab; // the open prefab, project-relative
         UndoStack history;  // the scene's, kept while the prefab is open
+        std::map<kast::SceneSlot, SceneSave> sceneSaves;
     };
     std::optional<PrefabEdit> prefabEdit;
 
@@ -74,13 +89,47 @@ struct Document {
 };
 
 // Sets dirty, except during Play: play-mode edits are discarded on Stop. Outside a scene step recording
-// (beginSceneEdit) the edit can't be undone, so the history's save point is lost.
-void markDirty(Document& doc);
+// (beginSceneEdit) the edit can't be undone, so the history's save point is lost, and so is scene's (default: the
+// active scene); markAllDirty: every open scene's.
+void markDirty(Document& doc, std::optional<kast::SceneSlot> scene = std::nullopt);
+void markAllDirty(Document& doc);
+// Whether open scene slot has unsaved changes (its SceneSave), and doc.dirty from them all.
+bool sceneDirty(const Document& doc, kast::SceneSlot slot);
+void updateDirty(Document& doc);
+
+// Additive scenes in the editor (docs/editor/multi-scene.html). The open scenes are doc.scene.loadedScenes(); none of
+// these is an undo step, each bumps sceneGeneration.
+// An open scene's file: path for the active one, else its LoadedScene's (empty: untitled).
+std::string scenePath(const Document& doc, kast::SceneSlot slot);
+// "Untitled" or the file's stem.
+std::string sceneName(const Document& doc, kast::SceneSlot slot);
+// Opens path as one more open scene (last, not active, no unsaved changes). False + error (nothing changes) during Play
+// or prefab edit mode, if it is already open, belongs to another project than doc's, or doesn't load.
+bool openSceneAdditive(Document& doc, const std::string& path, std::string& error);
+// Adds an empty, untitled open scene (File > New Scene Additive) and returns its slot.
+kast::SceneSlot addNewScene(Document& doc);
+// Makes an open scene the active one: its settings show in the Lighting / Post Processing / Physics panels and Systems,
+// path becomes its file, new entities go into it.
+void setActiveScene(Document& doc, kast::SceneSlot slot);
+// Closes an open scene, discarding its unsaved changes (FileActions::removeScene prompts first). The only open scene
+// can't be closed (false); the active one hands active to the first other.
+bool removeScene(Document& doc, kast::SceneSlot slot);
+// Writes one open scene to path (saveFile for the active one): it becomes its file and has no unsaved changes.
+bool saveOpenScene(Document& doc, kast::SceneSlot slot, const std::string& path, std::string& error);
+// Moves entity's subtree into open scene slot as a root (an undo step, "Move <name>"). False if it can't move (logged).
+bool moveToScene(Document& doc, entt::entity entity, kast::SceneSlot slot);
+// The open scene set as the editor settings remember it per project: {"scenes": [project-relative paths in load
+// order], "active": path}. null without a project or a saved scene in it (untitled ones are left out).
+nlohmann::json openScenesState(const Document& doc);
+// Opens state's scenes (the first with openFile, the rest additively) and makes its active one active. Missing or
+// broken files are skipped with a warning. False (doc unchanged) if none opened.
+bool restoreOpenScenes(Document& doc, const nlohmann::json& state);
 // Selects the entity with this PersistentId; clears the selection if there is none. Returns whether it was found.
 bool selectById(Document& doc, kast::EntityId id);
 
-// Play mode. Play snapshots the scene in memory and runs the systems every frame; Pause holds them; Stop restores
-// the snapshot (scene, dirty flag, selection by id unless a kast.loadScene switch cleared it) without touching the editor camera. Play from Stopped requests
+// Play mode. Play snapshots every open scene in memory and runs all their systems every frame; Pause holds them; Stop
+// restores the snapshot (the open scenes, the active one, dirty flags, selection by id unless a kast.loadScene switch
+// cleared it) without touching the editor camera. Play from Stopped requests
 // Game focus and Stop requests Scene focus; Pause and resume leave focus alone. A kast.loadScene switch replaces
 // doc.scene and clears the selection; path and project stay those of the edited scene.
 void startPlay(Document& doc); // also resumes when paused
@@ -184,7 +233,9 @@ const char* objectKindLabel(ObjectKind kind); // menu label, e.g. "Create Empty"
 // Scene edits below are undo steps (scene_undo.h) unless they say they clear the history.
 // Adds an object under parent (entt::null = root), selects it and marks the document dirty. Does nothing and returns
 // entt::null if parent is at kast::kMaxHierarchyDepth (also createModelEntity).
-entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent);
+// scene: the open scene a root goes into (default: the active one).
+entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent,
+                          std::optional<kast::SceneSlot> scene = std::nullopt);
 // Adds an entity named after the model file (a project-relative .glb/.gltf/.fbx/.obj) under parent with a
 // ModelRenderer, plus an Animator playing kast::defaultClip if the model has clips; selects it and marks the document
 // dirty. What dropping a model from the Assets panel on the viewport or the Hierarchy does.
@@ -271,8 +322,15 @@ public:
     // then prompt for the scene).
     void openPrefab(std::string path);
     void backFromPrefab();
+    // Save: every open scene with unsaved changes, each to its own file (an untitled one asks where), and the active
+    // one always (as before additive scenes).
     void save();
     void saveAs();
+    // Additive scenes: Open Scene Additive... (a dialog), a scene header's Save Scene / Remove Scene (an unsaved-changes
+    // prompt first if it has unsaved changes).
+    void openAdditive();
+    void saveScene(kast::SceneSlot slot);
+    void removeScene(kast::SceneSlot slot);
     void exit();
     // Build menu: Build... asks for an output folder; Build and Run uses the project's last one (or asks) and then
     // starts the game. Both save or discard unsaved changes first (the prompt), so game.pak holds the on-disk files.
@@ -315,8 +373,8 @@ public:
     bool onQuitRequested();
 
 private:
-    enum class Pending { None, New, Open, OpenPath, Quit, Build, BuildAndRun, OpenPrefab, Back };
-    enum class DialogKind { Open, SaveAs, BuildFolder, CaFile };
+    enum class Pending { None, New, Open, OpenPath, Quit, Build, BuildAndRun, OpenPrefab, Back, RemoveScene };
+    enum class DialogKind { Open, SaveAs, BuildFolder, CaFile, OpenAdditive, SaveScene };
 
     // extra.unsaved(), or empty (unset, or a prefab is open).
     std::string extraUnsaved() const;
@@ -326,6 +384,9 @@ private:
     void request(Pending action);
     void perform(Pending action);
     void showSaveDialog(Pending after);
+    // Saves every open scene with unsaved changes and then the active one, asking for untitled ones' files; then after.
+    void saveAll(Pending after);
+    void fail(const std::string& error); // logs it and shows the Error modal
     void handleDialogResult();
     void saveTo(const std::string& path, Pending after);
     void drawModals();
@@ -346,6 +407,9 @@ private:
     Pending afterSave_ = Pending::None; // action to run once a Save As dialog saves successfully
     std::string openPath_; // the scene Pending::OpenPath opens
     std::string openPrefab_; // the prefab Pending::OpenPrefab opens
+    kast::SceneSlot sceneSlot_ = 0; // the open scene a SaveScene dialog or Pending::RemoveScene is about
+    bool removeConfirmRequested_ = false;
+    bool savingAll_ = false; // the SaveScene dialog is part of saveAll, which goes on after it
     bool confirmRequested_ = false;
     bool quitConfirmed_ = false;
     std::string error_;

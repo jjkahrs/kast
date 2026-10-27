@@ -89,14 +89,17 @@ bool editPrefabFile(const std::filesystem::path& projectRoot, const std::string&
 bool editInstanceRecord(Scene& scene, entt::entity root, const std::filesystem::path& projectRoot,
                         const std::function<void(Json& entities, size_t record)>& edit, std::string& error)
 {
-    Json json = sceneToJson(scene);
-    Json& entities = json["entities"];
-    const EntityId rootId = idOf(scene, root);
-    for (size_t i = 0; i < entities.size(); ++i) {
-        if (entities[i].contains("prefab") && entities[i]["id"] == rootId) {
-            edit(entities, i);
+    Json json = scenesToJson(scene); // every loaded scene: root's is the one edited
+    Json* entities = nullptr;
+    for (Json& loaded : json["scenes"])
+        if (loaded["slot"] == scene.sceneOf(root))
+            entities = &loaded["scene"]["entities"];
+    const EntityId rootId = fileEntityId(idOf(scene, root));
+    for (size_t i = 0; i < entities->size(); ++i) {
+        if ((*entities)[i].contains("prefab") && (*entities)[i]["id"] == rootId) {
+            edit(*entities, i);
             Scene out;
-            if (!sceneFromJson(json, out, error, nullptr, projectRoot))
+            if (!scenesFromJson(json, out, error, nullptr, projectRoot))
                 return false;
             scene = std::move(out);
             return true;
@@ -566,7 +569,7 @@ bool reloadPrefabs(Scene& scene, const std::filesystem::path& projectRoot, std::
 {
     Scene out;
     SceneLoadReport report;
-    if (!sceneFromJson(sceneToJson(scene), out, error, &report, projectRoot))
+    if (!scenesFromJson(scenesToJson(scene), out, error, &report, projectRoot))
         return false;
     for (const std::string& warning : report.warnings)
         log::warn(warning);

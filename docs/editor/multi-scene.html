@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-scene editing - Kast Editor</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="multi-scene.html" class="active">Multi-scene editing</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="zone-builder.html">Zone Builder</a></li><li><a href="model-preview.html">Model Preview</a></li><li><a href="assets.html">Assets and asset ids</a></li></ul></nav>
+<main>
+<h1 id="multi-scene">Multi-scene editing</h1>
+<p>The editor can have several scenes open at once, each saving to its own <code>.scene</code> file, and runs them together in
+Play: the editor side of <a href="../engine/additive-scenes.html">additive scenes</a>. One open scene is <strong>active</strong>: its
+sky, lighting, post-processing and physics settings are the ones in effect (and edited in Window &gt; Lighting, Post
+Processing and Physics and the Systems panel), new objects go into it, and the window title names it.</p>
+
+<h2 id="hierarchy">The Hierarchy</h2>
+<ul>
+<li>With one scene open the Hierarchy is the plain entity tree. With more, each open scene is a collapsible header
+  with its entities under it: the scene's name, <code>*</code> while it has unsaved
+  changes, and <code>(Active)</code> on the active one, whose header is drawn in the highlight color (#ffcc00) instead of the
+  header color (#ffaa00). Hovering a header shows its file.</li>
+<li>Drag an entity onto another scene's header to move it into that scene as a root, or onto an entity of another scene
+  to parent it there: either way its whole subtree moves into that scene (cross-scene references are not kept). The
+  move is one undo step and leaves both scenes with unsaved changes.</li>
+<li>Right-click a header for:
+  <ul>
+  <li><strong>Set Active Scene</strong>: makes it active (not an undo step).</li>
+  <li><strong>Save Scene</strong>: saves just that scene (an untitled one asks for a file).</li>
+  <li><strong>Remove Scene</strong>: closes it, asking first to save it if it has unsaved changes (Save / Don't Save / Cancel).
+    The only open scene can't be removed; removing the active one makes the first remaining scene active.</li>
+  <li><strong>New Scene</strong>: adds an empty, untitled scene to the open set.</li>
+  <li><strong>Open Scene Additive...</strong> and <strong>Create</strong> (an object as a root of that scene).</li>
+  </ul></li>
+<li>Right-clicking the empty space below the scenes creates objects in the active scene. In prefab edit mode the
+  Hierarchy shows just the prefab, as before.</li>
+</ul>
+
+<h2 id="file-menu">File menu and saving</h2>
+<ul>
+<li><strong>File &gt; Open Scene Additive...</strong> adds a scene to the open set (it isn't active and has no unsaved changes). A
+  scene that is already open is refused, and so is one from another project.</li>
+<li><strong>File &gt; New Scene Additive</strong> adds an empty, untitled scene to the open set.</li>
+<li><strong>File &gt; Open...</strong> and <strong>New</strong> replace the whole open set, as before.</li>
+<li><strong>Ctrl+S / File &gt; Save</strong> saves every open scene with unsaved changes, each to its own file (an untitled one asks
+  where), and always the active one. The unsaved-changes prompt (New, Open, Quit, Build) saves them the same way.</li>
+<li>Each scene saves only its own entities and settings, in the usual deterministic format: a scene opened alongside
+  others and saved unchanged is byte-identical to its file. The editor camera is saved into the active scene.</li>
+<li>Adding or removing a scene from the open set and Set Active Scene are not undo steps.</li>
+</ul>
+
+<h2 id="undo">Undo and unsaved changes</h2>
+<p>All open scenes share one undo history (<a href="undo-redo.html">Undo and redo</a>). Each step records which scenes it touched,
+so each scene's <code>*</code> follows its own save point: undoing an edit of scene B back to where B was saved clears B's
+<code>*</code> whatever happened to the others.</p>
+
+<h2 id="play">Play</h2>
+<ul>
+<li>Play runs every open scene: their systems (each script once), entities and physics together, with the active scene's
+  settings.</li>
+<li>While playing, Lua can load and unload scenes (<code>kast.loadScene(path, {additive = true})</code>, <code>kast.unloadScene</code>) and
+  change the active one; the Hierarchy shows the scenes as they are, and the title names the running active scene when
+  it isn't the edited one.</li>
+<li>Stop restores the open set exactly as it was: the scenes (also ones Lua unloaded or added), the active scene, their
+  unsaved-changes markers and the selection.</li>
+</ul>
+
+<h2 id="prefab-mode">Prefab edit mode</h2>
+<p>Opening a prefab puts the whole open set aside; going Back brings every scene back with its active scene, unsaved
+changes and undo history.</p>
+
+<h2 id="restart">Reopening the set</h2>
+<p>The editor remembers each project's open scenes and its active one in the editor settings
+(<code>editor_settings.json</code>, <code>"openScenes"</code>, keyed by the project folder; untitled scenes are left out) and reopens them
+the next time it opens that project (<code>--project</code> or the Project Manager). A remembered scene whose file is gone is
+skipped with a warning in the Console. Opening a scene by <code>--scene</code> opens just that scene.</p>
+
+<h2 id="command-line">Command line</h2>
+<p>For tests and screenshots (<a href="command-line.html">Command line</a>): <code>--open-additive file</code> (repeatable) opens scenes
+additively after <code>--scene</code>; <code>--active-scene N</code> makes open scene N (0 = the first) active; <code>--move-to-scene ID,N</code> moves
+entity ID (its in-memory id: file id plus the scene's slot times 4294967296) into open scene N as a Hierarchy drop
+does; <code>--scene-menu N</code> opens scene header N's menu and <code>--remove-scene N</code> its Remove Scene.</p>
+</main>
+</div>
+</body>
+</html>

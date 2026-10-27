@@ -12,7 +12,10 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace kast {
@@ -21,6 +24,21 @@ using EntityId = uint64_t; // persistent across save/load; 0 is never a valid id
 
 struct PersistentId {
     EntityId value = 0;
+};
+
+// Additive scenes (docs/engine/additive-scenes.html): one Scene holds every loaded scene file, each in a slot. An
+// entity's PersistentId is its file id with its slot in the high bits, so ids repeated across files stay distinct in
+// memory and every lookup by id is scoped by scene. Slot 0's ids are the file's own (a scene loaded alone is unchanged).
+using SceneSlot = uint32_t;
+constexpr int kSceneSlotShift = 32;
+constexpr EntityId kMaxFileEntityId = (EntityId(1) << kSceneSlotShift) - 1; // the largest id a scene file may use
+constexpr EntityId scopedId(SceneSlot slot, EntityId fileId) { return EntityId(slot) << kSceneSlotShift | fileId; }
+constexpr EntityId fileEntityId(EntityId id) { return id & kMaxFileEntityId; } // as the scene file saves it
+constexpr SceneSlot slotOfId(EntityId id) { return static_cast<SceneSlot>(id >> kSceneSlotShift); }
+
+// The loaded scene an entity belongs to (always its PersistentId's slot). Set by Scene; never saved.
+struct SceneMember {
+    SceneSlot slot = 0;
 };
 
 struct Name {
@@ -510,63 +528,8 @@ Aabb primitiveBounds(Primitive primitive);
 // reparent refuse anything deeper.
 constexpr int kMaxHierarchyDepth = 1000;
 
-// An entity hierarchy on an EnTT registry. Entities are created and destroyed only through Scene so the
-// Hierarchy links and root list stay consistent; other components can be added directly via registry().
-class Scene {
-public:
-    entt::registry& registry() { return registry_; }
-    const entt::registry& registry() const { return registry_; }
-
-    // New entity with Name, Transform, Hierarchy and a fresh PersistentId, appended to parent's children.
-    // Returns entt::null and creates nothing if parent is already kMaxHierarchyDepth levels deep.
-    entt::entity create(const std::string& name, entt::entity parent = entt::null);
-    // Same, with an explicit id (used by loading). The caller guarantees the id is unique and nonzero.
-    entt::entity createWithId(EntityId id, const std::string& name, entt::entity parent = entt::null);
-    // A fresh id for createWithId (never handed out again), and keeping ids up to id from create / newId (loading).
-    EntityId newId() { return nextId_++; }
-    void reserveId(EntityId id) { nextId_ = std::max(nextId_, id + 1); }
-
-    bool valid(entt::entity entity) const { return entity != entt::null && registry_.valid(entity); }
-
-    // Entities created so far by every Scene: unchanged means no entity is new since, for caches keyed by entity.
-    static uint64_t creations() { return creations_; }
-
-    // Destroys the entity and its whole subtree. No-op if entity isn't valid.
-    void destroy(entt::entity entity);
-
-    // Copies the subtree with new ids, inserted right after the original among its siblings. Returns the copy.
-    entt::entity duplicate(entt::entity entity);
-
-    // Moves entity under newParent (entt::null = root), appended last. Keeps the world transform.
-    // Returns false and changes nothing if either isn't valid, newParent is entity itself or one of its descendants,
-    // or the move would put part of entity's subtree deeper than kMaxHierarchyDepth.
-    bool reparent(entt::entity entity, entt::entity newParent);
-
-    // Moves entity to position index among its siblings (past the end: last). No-op if entity isn't valid.
-    void setSiblingIndex(entt::entity entity, size_t index);
-    // entity's position among its siblings.
-    size_t siblingIndex(entt::entity entity) const;
-
-    // True if ancestor is entity or one of its ancestors.
-    bool isSelfOrAncestor(entt::entity ancestor, entt::entity entity) const;
-
-    entt::entity parent(entt::entity entity) const { return registry_.get<Hierarchy>(entity).parent; }
-    // Levels from the top: 1 for a root.
-    int depth(entt::entity entity) const;
-    // Ordered children; entt::null gives the roots.
-    const std::vector<entt::entity>& children(entt::entity entity) const;
-
-    void localMatrix(entt::entity entity, float* out) const;
-    void worldMatrix(entt::entity entity, float* out) const;
-
-    // Depth-first, parents before children, in child order.
-    template <typename Fn>
-    void forEachDepthFirst(Fn&& fn) const
-    {
-        for (entt::entity root : roots_)
-            visit(root, fn);
-    }
-
+// One scene file's scene-level settings.
+struct SceneSettings {
     // Lua system scripts in run order, relative to the project root (see project.h, lua_systems.h).
     std::vector<std::string> systems;
 
@@ -581,6 +544,107 @@ public:
 
     // Opaque data owned by the editor (e.g. camera pose), saved under "editor" in the scene file.
     nlohmann::ordered_json editorData = nlohmann::ordered_json::object();
+};
+
+// One scene file loaded into a Scene.
+struct LoadedScene {
+    SceneSlot slot = 0;
+    std::string path;       // as whoever loaded it named it (a file path, or project-relative); may be empty
+    SceneSettings settings; // while it is not the active scene (the active scene's are the Scene's own)
+};
+
+// An entity hierarchy on an EnTT registry. Entities are created and destroyed only through Scene so the
+// Hierarchy links and root list stay consistent; other components can be added directly via registry().
+// It holds one or more loaded scene files (loadedScenes; additive scenes): every entity belongs to one (SceneMember),
+// a subtree never spans two, and the roots are grouped by scene in load order. The Scene's own SceneSettings are the
+// active scene's, the ones that render and simulate; the others' wait in their LoadedScene.
+class Scene : public SceneSettings {
+public:
+    entt::registry& registry() { return registry_; }
+    const entt::registry& registry() const { return registry_; }
+
+    // New entity with Name, Transform, Hierarchy and a fresh PersistentId, appended to parent's children (a root: of
+    // loaded scene `scene`, else of the active scene). Returns entt::null and creates nothing if parent is already
+    // kMaxHierarchyDepth levels deep.
+    entt::entity create(const std::string& name, entt::entity parent = entt::null, std::optional<SceneSlot> scene = {});
+    // Same, with an explicit id (used by loading): it belongs to slotOfId(id), which must be parent's scene. The caller
+    // guarantees the id is unique and nonzero.
+    entt::entity createWithId(EntityId id, const std::string& name, entt::entity parent = entt::null);
+    // A fresh id for an entity created under parent (entt::null: a root of the active scene), never handed out again,
+    // and keeping ids up to id's file id from create / newId (loading).
+    EntityId newId(entt::entity parent = entt::null);
+    void reserveId(EntityId id) { nextId_ = std::max(nextId_, fileEntityId(id) + 1); }
+
+    // The loaded scene files in load order (never empty: a new Scene has one, slot 0 with no path).
+    const std::vector<LoadedScene>& loadedScenes() const { return loaded_; }
+    SceneSlot activeSlot() const { return active_; }
+    // nullptr if slot / path isn't loaded (path: exact match).
+    const LoadedScene* findScene(SceneSlot slot) const;
+    LoadedScene* findScene(SceneSlot slot);
+    const LoadedScene* findScene(std::string_view path) const;
+    LoadedScene& activeScene() { return *findScene(active_); }
+    const LoadedScene& activeScene() const { return *findScene(active_); }
+    SceneSlot sceneOf(entt::entity entity) const { return registry_.get<SceneMember>(entity).slot; }
+    // One more loaded scene, empty and last (not active), with settings. slot: that one (unused, and past every loaded
+    // slot: Play's restore), else one this Scene never used. Returns its slot.
+    SceneSlot addScene(std::string path, SceneSettings settings = {}, std::optional<SceneSlot> slot = {});
+    // Destroys the scene's entities and drops it; if it was active, the first remaining one becomes active. False and
+    // nothing changes if it is the only one or isn't loaded.
+    bool removeScene(SceneSlot slot);
+    // Makes slot the active scene: its settings become the Scene's own, the previous active one's go back to its
+    // LoadedScene. No-op if it isn't loaded.
+    void setActiveScene(SceneSlot slot);
+    // A loaded scene's settings: the Scene's own for the active one. slot must be loaded.
+    SceneSettings& settingsOf(SceneSlot slot);
+    const SceneSettings& settingsOf(SceneSlot slot) const;
+    // Moves entity's subtree into loaded scene slot as its last root, keeping the world transform. Each entity keeps
+    // its file id unless that scene already uses it (then it gets a fresh one); prefab links inside the subtree follow.
+    // False and nothing changes if entity isn't valid or slot isn't loaded.
+    bool moveToScene(entt::entity entity, SceneSlot slot);
+
+    bool valid(entt::entity entity) const { return entity != entt::null && registry_.valid(entity); }
+
+    // Entities created so far by every Scene: unchanged means no entity is new since, for caches keyed by entity.
+    static uint64_t creations() { return creations_; }
+
+    // Destroys the entity and its whole subtree. No-op if entity isn't valid.
+    void destroy(entt::entity entity);
+
+    // Copies the subtree with new ids, inserted right after the original among its siblings. Returns the copy.
+    entt::entity duplicate(entt::entity entity);
+
+    // Moves entity under newParent (entt::null = a root of its own scene), appended last. Keeps the world transform.
+    // A newParent in another loaded scene moves the subtree into that scene (as moveToScene). Returns false and changes nothing if either isn't valid, newParent is entity itself or one of its descendants,
+    // or the move would put part of entity's subtree deeper than kMaxHierarchyDepth.
+    bool reparent(entt::entity entity, entt::entity newParent);
+
+    // Moves entity to position index among its siblings (a root's: its scene's roots; past the end: last). No-op if
+    // entity isn't valid.
+    void setSiblingIndex(entt::entity entity, size_t index);
+    // entity's position among its siblings (a root: among its scene's roots).
+    size_t siblingIndex(entt::entity entity) const;
+
+    // True if ancestor is entity or one of its ancestors.
+    bool isSelfOrAncestor(entt::entity ancestor, entt::entity entity) const;
+
+    entt::entity parent(entt::entity entity) const { return registry_.get<Hierarchy>(entity).parent; }
+    // Levels from the top: 1 for a root.
+    int depth(entt::entity entity) const;
+    // Ordered children; entt::null gives the roots (every scene's, grouped by scene in load order).
+    const std::vector<entt::entity>& children(entt::entity entity) const;
+    // The roots of one loaded scene, in order.
+    std::vector<entt::entity> roots(SceneSlot slot) const;
+
+    void localMatrix(entt::entity entity, float* out) const;
+    void worldMatrix(entt::entity entity, float* out) const;
+
+    // Depth-first, parents before children, in child order.
+    template <typename Fn>
+    void forEachDepthFirst(Fn&& fn) const
+    {
+        for (entt::entity root : roots_)
+            visit(root, fn);
+    }
 
 private:
     template <typename Fn>
@@ -592,12 +656,18 @@ private:
     }
 
     std::vector<entt::entity>& siblings(entt::entity parent);
+    void insertRoot(entt::entity entity); // last of its scene's group in roots_
+    std::pair<size_t, size_t> rootRange(SceneSlot slot) const; // [begin, end) of slot's group in roots_
+    void rescope(entt::entity entity, SceneSlot slot);         // entity's subtree now belongs to slot
     entt::entity copySubtree(entt::entity source, entt::entity parent);
     int height(entt::entity entity) const; // levels in entity's subtree: 1 for a leaf
 
     entt::registry registry_;
     std::vector<entt::entity> roots_;
-    EntityId nextId_ = 1;
+    EntityId nextId_ = 1; // file ids: the next fresh one, past every loaded scene's
+    std::vector<LoadedScene> loaded_{LoadedScene{}}; // sorted by slot (slots only grow)
+    SceneSlot active_ = 0;
+    SceneSlot nextSlot_ = 1;
     inline static std::atomic<uint64_t> creations_ = 0;
 };
 

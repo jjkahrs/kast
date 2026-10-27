@@ -10,6 +10,7 @@
 #include "assets.h"   // Assets panel file logic; links editor/assets.cpp
 #include "build.h"    // editor Build pipeline; links editor/build.cpp
 #include "document.h" // editor Play mode; links editor/document.cpp, no window needed
+#include "editor_settings.h"
 #include "external_editor.h" // external editor command; links editor/external_editor.cpp
 #include "gui_doc.h"  // GUI Builder document model; links editor/gui_doc.cpp
 #include "gui_undo.h" // GUI Builder undo steps; links editor/gui_undo.cpp
@@ -2328,6 +2329,396 @@ end })");
     check(idleBefore && !files.idle() && doc.dirty, "FileActions is not idle while the unsaved-changes prompt is pending");
 }
 
+// --- Additive scenes (docs/engine/additive-scenes.html, docs/editor/multi-scene.html) ---
+
+// A temp project holding copies of tests/project/additive_a.scene and additive_b.scene (and their .meta files).
+std::filesystem::path additiveTestDir(const char* name)
+{
+    const std::filesystem::path dir = projectTestDir(name, "Additive");
+    for (const char* file : {"additive_a.scene", "additive_a.scene.meta", "additive_b.scene", "additive_b.scene.meta"})
+        std::filesystem::copy_file(std::filesystem::path(KAST_TEST_PROJECT_DIR) / file, dir / file);
+    return dir;
+}
+
+std::string savedText(const kast::Scene& scene, kast::SceneSlot slot, const std::filesystem::path& file)
+{
+    std::string error;
+    check(kast::saveScene(scene, slot, file.string(), error), "save one loaded scene");
+    return readText(file);
+}
+
+// The engine model: one registry, entities scoped by scene, per-scene settings with the active scene's in effect,
+// per-scene saves, moves between scenes, unload.
+void checkAdditiveSceneModel()
+{
+    const std::filesystem::path dir = additiveTestDir("kast_additive_model");
+    const std::filesystem::path a = dir / "additive_a.scene", b = dir / "additive_b.scene";
+    const std::string aText = readText(a), bText = readText(b);
+
+    kast::Scene alone;
+    std::string error;
+    check(kast::loadScene(a.string(), alone, error) && savedText(alone, alone.activeSlot(), dir / "alone.scene") == aText,
+          "a scene loaded alone saves byte-identical");
+
+    kast::Scene scene;
+    check(kast::loadScene(a.string(), scene, error), "load additive_a.scene");
+    kast::SceneSlot slotB = 0;
+    check(kast::loadSceneAdditive(b.string(), scene, slotB, error) && slotB != scene.activeSlot(),
+          "load additive_b.scene additively");
+    const kast::SceneSlot slotA = scene.activeSlot();
+    check(scene.loadedScenes().size() == 2 && scene.loadedScenes()[0].path == a.string() &&
+              scene.loadedScenes()[1].path == b.string(),
+          "loadedScenes lists both in load order with their paths");
+    check(!kast::loadSceneAdditive(b.string(), scene, slotB, error) && contains(error, "already loaded") &&
+              scene.loadedScenes().size() == 2,
+          "loading a path that is already loaded is an error naming it");
+    check(named(scene, "A Ground") != entt::null && named(scene, "B Sphere") != entt::null, "both scenes' entities are there");
+
+    // Both files use id 1: scoped by scene in memory.
+    const entt::entity ground = kast::findById(scene, 1), sphere = kast::findById(scene, kast::scopedId(slotB, 1));
+    check(ground == named(scene, "A Ground") && sphere == named(scene, "B Sphere") && ground != sphere,
+          "PersistentId 1 of each file finds its own entity (scoped by scene)");
+    check(scene.sceneOf(ground) == slotA && scene.sceneOf(sphere) == slotB &&
+              scene.registry().get<kast::SceneMember>(sphere).slot == slotB,
+          "every entity carries the loaded scene it belongs to");
+    check(scene.roots(slotA).size() == 4 && scene.roots(slotB).size() == 2 && scene.children(entt::null).size() == 6 &&
+              scene.children(entt::null)[4] == sphere,
+          "roots are grouped by scene in load order");
+
+    // The active scene's settings are in effect; the other's wait.
+    check(scene.physics.gravity.y == -9.81f && scene.sky.top.z == 0.75f && scene.settingsOf(slotB).physics.gravity.y == -2.0f,
+          "the active (first) scene's gravity and sky are the scene's");
+    scene.setActiveScene(slotB);
+    check(scene.activeSlot() == slotB && scene.physics.gravity.y == -2.0f && scene.sky.top.x == 0.6f &&
+              scene.lighting.ambientIntensity == 0.5f && scene.settingsOf(slotA).physics.gravity.y == -9.81f,
+          "setActiveScene: b's gravity, sky and lighting are in effect, a's kept");
+    const entt::entity created = scene.create("New In B");
+    check(scene.sceneOf(created) == slotB && kast::slotOfId(scene.registry().get<kast::PersistentId>(created).value) == slotB,
+          "a new root entity goes into the active scene");
+    scene.destroy(created);
+    scene.setActiveScene(slotA);
+
+    // Each scene saves only its own entities and settings: byte-identical to the files.
+    check(savedText(scene, slotA, dir / "a_out.scene") == aText, "a saves byte-identical with b loaded too");
+    check(savedText(scene, slotB, dir / "b_out.scene") == bText, "b saves byte-identical (file ids, its own settings)");
+    scene.setActiveScene(slotB);
+    check(savedText(scene, slotA, dir / "a_out2.scene") == aText && savedText(scene, slotB, dir / "b_out2.scene") == bText,
+          "and with b active");
+    scene.setActiveScene(slotA);
+
+    // The whole set round-trips (Play snapshots, prefab reloads).
+    kast::Scene copy;
+    check(kast::scenesFromJson(kast::scenesToJson(scene), copy, error) && kast::scenesToJson(copy) == kast::scenesToJson(scene) &&
+              copy.activeSlot() == slotA && kast::findById(copy, kast::scopedId(slotB, 1)) != entt::null,
+          "scenesToJson / scenesFromJson keep slots, paths, ids and the active scene");
+
+    // Moving a subtree into the other scene: B already uses file id 2, so the cube gets a fresh one; its child keeps 3.
+    const entt::entity cube = named(scene, "A Cube"), child = named(scene, "A Child");
+    check(scene.moveToScene(cube, slotB) && scene.sceneOf(cube) == slotB && scene.sceneOf(child) == slotB &&
+              scene.parent(child) == cube,
+          "moveToScene moves the whole subtree");
+    const kast::EntityId cubeId = scene.registry().get<kast::PersistentId>(cube).value;
+    check(kast::slotOfId(cubeId) == slotB && kast::fileEntityId(cubeId) != 2 &&
+              scene.registry().get<kast::PersistentId>(child).value == kast::scopedId(slotB, 3),
+          "moved ids are scoped to the target, fresh only where the target already uses the file id");
+    const std::string movedB = savedText(scene, slotB, dir / "b_moved.scene");
+    const std::string movedA = savedText(scene, slotA, dir / "a_moved.scene");
+    check(contains(movedB, "\"A Cube\"") && contains(movedB, "\"A Child\"") && !contains(movedA, "\"A Cube\"") &&
+              !contains(movedA, "\"A Child\""),
+          "after the move the subtree saves with b, not with a");
+    const entt::entity pillar = named(scene, "B Pillar");
+    check(scene.reparent(pillar, ground) && scene.sceneOf(pillar) == slotA && scene.parent(pillar) == ground,
+          "reparenting under another scene's entity moves into that scene");
+
+    // Unload: only that scene's entities go.
+    check(scene.removeScene(slotB) && scene.loadedScenes().size() == 1 && named(scene, "B Sphere") == entt::null &&
+              named(scene, "A Cube") == entt::null && named(scene, "A Ground") != entt::null && named(scene, "Sun") != entt::null,
+          "removeScene destroys exactly that scene's entities");
+    check(!scene.removeScene(slotA), "the only loaded scene can't be removed");
+
+    // Unloading the active scene hands active to the first remaining one.
+    check(kast::loadSceneAdditive(b.string(), scene, slotB, error), "load b again after unloading it");
+    scene.setActiveScene(slotB);
+    check(scene.removeScene(slotB) && scene.activeSlot() == slotA && scene.physics.gravity.y == -9.81f,
+          "removing the active scene makes the first remaining one active, with its settings");
+
+    writeFile(dir / "big.scene", std::format(R"({{"version": 5, "entities": [{{"id": {}, "name": "X", "parent": null,
+        "components": {{"Transform": {{"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}}}}}}]}})",
+                                              kast::kMaxFileEntityId + 1));
+    kast::Scene big;
+    check(!kast::loadScene((dir / "big.scene").string(), big, error) && contains(error, "must be at most"),
+          "entity ids past kMaxFileEntityId are refused (the high bits name the scene)");
+}
+
+// kast.loadScene(path, {additive = true}), kast.unloadScene, kast.loadedScenes, kast.setActiveScene / activeScene.
+void checkAdditiveLua()
+{
+    const std::filesystem::path dir = additiveTestDir("kast_additive_lua");
+    std::filesystem::create_directories(dir / "levels");
+    // a.scene runs shared.lua and a.lua; b.scene runs shared.lua and b.lua.
+    writeFile(dir / "scripts/shared.lua", R"(return {
+    init = function() kast.log("add shared init") end,
+    update = function(dt) end,
+    shutdown = function() kast.log("add shared shutdown") end,
+})");
+    writeFile(dir / "scripts/b.lua", R"(return {
+    init = function() kast.log("add b init " .. table.concat(kast.loadedScenes(), ",")) end,
+    update = function(dt) end,
+    shutdown = function() kast.log("add b shutdown") end,
+})");
+    writeFile(dir / "scripts/c.lua", R"(return { init = function() kast.log("add c init") end, update = function(dt) end })");
+    writeFile(dir / "scripts/a.lua", R"(local frame = 0
+local function fails(part, fn)
+    local ok, err = pcall(fn)
+    assert(not ok, "expected an error mentioning " .. part)
+    assert(string.find(err, part, 1, true), "error '" .. tostring(err) .. "' does not mention " .. part)
+end
+local function list() return table.concat(kast.loadedScenes(), ",") end
+local function primitives()
+    local out = {}
+    for e in kast.query("MeshRenderer") do out[#out + 1] = string.format("%.0f=%s", e, kast.get(e, "MeshRenderer").primitive) end
+    table.sort(out)
+    return table.concat(out, " ")
+end
+return { update = function(dt)
+    frame = frame + 1
+    if frame == 1 then
+        assert(list() == "a.scene" and kast.activeScene() == "a.scene", "one scene at first")
+        fails("'a.scene' is already loaded", function() kast.loadScene("a.scene", {additive = true}) end)
+        fails("'levels/none.scene' is not loaded", function() kast.unloadScene("levels/none.scene") end)
+        fails("'a.scene' is the only loaded scene", function() kast.unloadScene("a.scene") end)
+        fails("'b.scene' is not loaded", function() kast.setActiveScene("b.scene") end)
+        fails("additive must be a boolean", function() kast.loadScene("b.scene", {additive = 1}) end)
+        kast.loadScene("b.scene", {additive = true})
+        fails("'b.scene' is already loaded", function() kast.loadScene("./b.scene", {additive = true}) end)
+        assert(list() == "a.scene", "applied at the end of the frame")
+    elseif frame == 2 then
+        kast.log("add frame2 " .. list() .. " | " .. primitives())
+        kast.setActiveScene("b.scene")
+        assert(kast.activeScene() == "a.scene", "setActiveScene waits for the end of the frame too")
+    elseif frame == 3 then
+        kast.log("add frame3 active " .. kast.activeScene() .. " current " .. kast.currentScene())
+        kast.unloadScene("b.scene")
+    elseif frame == 4 then
+        kast.log("add frame4 " .. list() .. " active " .. kast.activeScene() .. " | " .. primitives())
+        -- in call order within one frame: load b, make it active, unload a
+        kast.loadScene("b.scene", {additive = true})
+        kast.setActiveScene("b.scene")
+        kast.unloadScene("a.scene")
+    end
+end, shutdown = function() kast.log("add a shutdown") end })");
+    const auto writeScene = [&](const char* name, std::vector<std::string> systems) {
+        nlohmann::ordered_json json = nlohmann::ordered_json::parse(readText(dir / name));
+        json["systems"] = systems;
+        writeFile(dir / name, json.dump(2));
+    };
+    writeScene("additive_a.scene", {"scripts/shared.lua", "scripts/a.lua"});
+    writeScene("additive_b.scene", {"scripts/shared.lua", "scripts/b.lua"});
+    std::filesystem::rename(dir / "additive_a.scene", dir / "a.scene");
+    std::filesystem::rename(dir / "additive_b.scene", dir / "b.scene");
+    saveTestScene(dir / "levels/c.scene", "C", {"scripts/c.lua"});
+
+    kast::Scene scene;
+    std::string error;
+    check(kast::loadScene((dir / "a.scene").string(), scene, error), "load a.scene");
+    kast::LuaSystems lua;
+    lua.start(scene, dir, "a.scene", nullptr);
+    const uint32_t changes = lua.sceneChanges();
+    check(!lua.tick(0.1f), "an additive load is no switch");
+    checkOk(lua, 1, "kast.loadScene / unloadScene / setActiveScene errors raise at the call");
+    check(lua.sceneChanges() != changes && scene.loadedScenes().size() == 2 && named(scene, "A Ground") != entt::null &&
+              named(scene, "B Sphere") != entt::null,
+          "kast.loadScene(path, {additive = true}): both scenes' entities after the frame");
+    check(countLogged("add b init a.scene,b.scene") == 1 && countLogged("add shared init") == 1,
+          "b's systems ran init once; a system a already runs (shared.lua) isn't started twice");
+    check(lua.status().size() == 3, "a's two systems and b's own one run");
+    const kast::SceneSlot slotB = scene.loadedScenes()[1].slot;
+    lua.tick(0.1f);
+    check(logged(std::format("add frame2 a.scene,b.scene | 1=plane 2=cube 3=cube {}=sphere {}=cube", kast::scopedId(slotB, 1),
+                             kast::scopedId(slotB, 2))),
+          "kast.loadedScenes() lists both; Lua ids of the two files' entity 1 are distinct and each finds its own");
+    check(scene.activeSlot() == slotB && scene.physics.gravity.y == -2.0f && scene.sky.top.x == 0.6f && lua.scenePath() == "b.scene",
+          "kast.setActiveScene: b's gravity and sky are in effect after the frame");
+    lua.tick(0.1f);
+    check(logged("add frame3 active b.scene current b.scene"), "kast.activeScene / currentScene follow");
+    check(countLogged("add b shutdown") == 1 && !logged("add shared shutdown") && !logged("add a shutdown"),
+          "kast.unloadScene shuts down b's own systems only (not one a also lists)");
+    check(named(scene, "B Sphere") == entt::null && named(scene, "B Pillar") == entt::null && named(scene, "A Ground") != entt::null &&
+              named(scene, "A Child") != entt::null && scene.loadedScenes().size() == 1 && lua.status().size() == 2,
+          "unloading b removes exactly its entities; a's are untouched");
+    check(scene.physics.gravity.y == -9.81f && lua.scenePath() == "a.scene", "unloading the active scene makes a active again");
+    lua.tick(0.1f);
+    check(logged("add frame4 a.scene active a.scene | 1=plane 2=cube 3=cube"), "Lua sees the unload in the next frame");
+    check(scene.loadedScenes().size() == 1 && named(scene, "B Sphere") != entt::null && named(scene, "A Ground") == entt::null &&
+              lua.scenePath() == "b.scene" && countLogged("add a shutdown") == 1 && countLogged("add shared shutdown") == 0 &&
+              countLogged("add b init") == 2,
+          "requests of one frame apply in call order: load b, activate it, unload a");
+    lua.stop();
+
+    // A switch (no additive) still replaces every loaded scene.
+    writeFile(dir / "scripts/sw.lua", R"(local frame = 0
+return { update = function(dt)
+    frame = frame + 1
+    if frame == 1 then kast.loadScene("b.scene", {additive = true}) end
+    if frame == 2 then kast.loadScene("levels/c.scene") end
+end })");
+    writeScene("a.scene", {"scripts/sw.lua"});
+    check(kast::loadScene((dir / "a.scene").string(), scene, error), "reload a.scene");
+    lua.start(scene, dir, "a.scene", nullptr);
+    lua.tick(0.1f);
+    check(lua.tick(0.1f) && scene.loadedScenes().size() == 1 && named(scene, "C") != entt::null &&
+              named(scene, "A Ground") == entt::null && named(scene, "B Sphere") == entt::null && lua.scenePath() == "levels/c.scene",
+          "a non-additive kast.loadScene replaces every loaded scene");
+    lua.stop();
+}
+
+// The editor: several open scenes, each its own Hierarchy section, file and unsaved changes; one shared undo history.
+void checkAdditiveEditor()
+{
+    const std::filesystem::path dir = additiveTestDir("kast_additive_editor");
+    const std::filesystem::path a = dir / "additive_a.scene", b = dir / "additive_b.scene";
+    const std::string aText = readText(a), bText = readText(b);
+    Document doc;
+    std::string error;
+    check(openFile(doc, a.string(), error) && openSceneAdditive(doc, b.string(), error), "open a, then b additively");
+    check(!openSceneAdditive(doc, b.string(), error) && contains(error, "already open"), "an open scene is refused");
+    const kast::SceneSlot slotA = doc.scene.loadedScenes()[0].slot, slotB = doc.scene.loadedScenes()[1].slot;
+    check(doc.scene.activeSlot() == slotA && scenePath(doc, slotB) == b.string() && sceneName(doc, slotB) == "additive_b" &&
+              !doc.dirty,
+          "a stays active, b is open with its file, nothing unsaved");
+
+    // Ids repeated across files: selection and undo find the right entity.
+    check(selectById(doc, kast::scopedId(slotB, 1)) && doc.selected == named(doc.scene, "B Sphere") && selectById(doc, 1) &&
+              doc.selected == named(doc.scene, "A Ground"),
+          "selection by id hits each file's id 1");
+    const entt::entity sphere = named(doc.scene, "B Sphere");
+    beginSceneEdit(doc, "Rename B Sphere", {.entities = {doc.scene.registry().get<kast::PersistentId>(sphere).value}});
+    doc.scene.registry().get<kast::Name>(sphere).value = "B Ball";
+    markDirty(doc);
+    endSceneEdit(doc);
+    check(sceneDirty(doc, slotB) && !sceneDirty(doc, slotA) && doc.dirty && named(doc.scene, "A Ground") != entt::null,
+          "an edit of b makes only b unsaved");
+    undoScene(doc);
+    check(named(doc.scene, "B Sphere") != entt::null && named(doc.scene, "A Ground") != entt::null && !doc.dirty &&
+              doc.selected == named(doc.scene, "B Sphere"),
+          "undo puts back b's entity 1 (not a's) and both are saved again");
+    redoScene(doc);
+
+    // Move a's cube (with its child) into b: undoable, both scenes unsaved, each saves to its own file.
+    check(moveToScene(doc, named(doc.scene, "A Cube"), slotB) && doc.scene.sceneOf(named(doc.scene, "A Child")) == slotB,
+          "the Hierarchy drop moves the subtree into b");
+    check(sceneDirty(doc, slotA) && sceneDirty(doc, slotB), "the move changes both scenes");
+    undoScene(doc);
+    check(doc.scene.sceneOf(named(doc.scene, "A Cube")) == slotA && doc.scene.sceneOf(named(doc.scene, "A Child")) == slotA &&
+              kast::findById(doc.scene, 2) == named(doc.scene, "A Cube") && !sceneDirty(doc, slotA) && sceneDirty(doc, slotB),
+          "undoing the move puts the subtree back into a with its ids (b still has the rename)");
+    redoScene(doc);
+    FileActions files(doc);
+    files.save(); // Save All
+    check(!doc.dirty && !sceneDirty(doc, slotA) && !sceneDirty(doc, slotB), "Save writes every scene with unsaved changes");
+    check(contains(readText(b), "\"A Cube\"") && contains(readText(b), "\"B Ball\"") && !contains(readText(a), "\"A Cube\"") &&
+              !contains(readText(a), "\"A Child\""),
+          "after Save the moved subtree is in b's file, not a's");
+    undoScene(doc);
+    check(sceneDirty(doc, slotA) && sceneDirty(doc, slotB), "undo past a save point makes both unsaved again");
+    undoScene(doc);
+    files.save();
+    check(readText(a) == aText && readText(b) == bText, "undo both edits and Save: both files byte-identical to the originals");
+
+    // Save Scene (a header's menu) writes just that scene.
+    beginSceneEdit(doc, "Rename B Sphere", {.entities = {kast::scopedId(slotB, 1)}});
+    doc.scene.registry().get<kast::Name>(named(doc.scene, "B Sphere")).value = "B Saved";
+    markDirty(doc);
+    endSceneEdit(doc);
+    createObject(doc, ObjectKind::Cube, entt::null); // into a, the active scene
+    files.saveScene(slotB);
+    check(!sceneDirty(doc, slotB) && sceneDirty(doc, slotA) && contains(readText(b), "\"B Saved\"") && readText(a) == aText,
+          "Save Scene writes only that scene and clears only its unsaved marker");
+    undoScene(doc);
+    undoScene(doc);
+    files.save();
+    check(readText(a) == aText && readText(b) == bText && !doc.dirty, "undone and saved again: the original bytes");
+
+    // Set Active Scene: settings, path, new entities.
+    setActiveScene(doc, slotB);
+    check(doc.scene.activeSlot() == slotB && doc.path == b.string() && doc.scene.physics.gravity.y == -2.0f &&
+              windowTitle(doc) == "Kast Editor - Additive - additive_b",
+          "Set Active Scene: b's settings, its path and the title");
+    createObject(doc, ObjectKind::Cube, entt::null);
+    check(doc.scene.sceneOf(doc.selected) == slotB && sceneDirty(doc, slotB) && !sceneDirty(doc, slotA),
+          "new objects go into the active scene");
+    undoScene(doc);
+    check(openScenesState(doc) ==
+              nlohmann::json{{"scenes", nlohmann::json::array({"additive_a.scene", "additive_b.scene"})}, {"active", "additive_b.scene"}},
+          "the open scene set as the editor settings remember it");
+
+    // Play runs both; Lua unloads b and loads a third; Stop restores the two, the active scene, flags and selection.
+    writeFile(dir / "scripts/play.lua", R"(local frame = 0
+return { init = function() kast.log("addplay init " .. table.concat(kast.loadedScenes(), ",") .. " active " .. kast.activeScene()) end,
+update = function(dt)
+    frame = frame + 1
+    if frame == 1 then
+        kast.unloadScene("additive_b.scene")
+        kast.loadScene("third.scene", {additive = true})
+    elseif frame == 2 then
+        kast.log("addplay after " .. table.concat(kast.loadedScenes(), ",") .. " active " .. kast.activeScene())
+    end
+end })");
+    saveTestScene(dir / "third.scene", "Third", {});
+    doc.scene.settingsOf(slotA).systems = {"scripts/play.lua"}; // a's (not active), unsaved
+    markDirty(doc, slotA);
+    selectById(doc, 1);
+    const nlohmann::ordered_json before = kast::scenesToJson(doc.scene);
+    startPlay(doc);
+    check(logged("addplay init additive_a.scene,additive_b.scene active additive_b.scene") && doc.play == PlayState::Playing,
+          "Play runs every open scene's systems; Lua sees the open scenes and the active one");
+    updatePlay(doc, 0.1f);
+    updatePlay(doc, 0.1f);
+    check(logged("addplay after additive_a.scene,third.scene active additive_a.scene") && named(doc.scene, "Third") != entt::null &&
+              named(doc.scene, "B Sphere") == entt::null && windowTitle(doc) == "Kast Editor - Additive - additive_b* (Playing: additive_a)",
+          "Lua unloaded b and loaded third; the title names the running active scene");
+    stopPlay(doc);
+    check(kast::scenesToJson(doc.scene) == before && doc.scene.activeSlot() == slotB && doc.path == b.string() &&
+              sceneDirty(doc, slotA) && !sceneDirty(doc, slotB) && doc.selected == named(doc.scene, "A Ground"),
+          "Stop restores both scenes exactly, the active one, the unsaved flags and the selection");
+
+    // Prefab edit mode stashes and restores the whole open set.
+    writeFile(dir / "thing.prefab", R"({"version": 5, "entities": [{"id": 1, "name": "Thing", "parent": null, "components":
+        {"Transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}}}]})");
+    check(openPrefab(doc, "thing.prefab", error) && doc.scene.loadedScenes().size() == 1 && named(doc.scene, "Thing") != entt::null,
+          "prefab edit mode shows only the prefab");
+    closePrefab(doc);
+    check(kast::scenesToJson(doc.scene) == before && doc.scene.activeSlot() == slotB && doc.path == b.string() &&
+              sceneDirty(doc, slotA) && !sceneDirty(doc, slotB),
+          "leaving prefab edit mode restores both open scenes, the active one and their unsaved flags");
+
+    // Remove Scene: a has unsaved changes, so FileActions asks first; b has none, so it goes at once.
+    files.removeScene(slotA);
+    check(!files.idle() && doc.scene.loadedScenes().size() == 2, "Remove Scene on an unsaved scene prompts first");
+    FileActions other(doc);
+    other.removeScene(slotB);
+    check(doc.scene.loadedScenes().size() == 1 && named(doc.scene, "B Sphere") == entt::null &&
+              doc.scene.activeSlot() == slotA && doc.path == a.string() && doc.dirty,
+          "removing the active scene closes it and makes a active (a's unsaved changes stay)");
+    check(!removeScene(doc, slotA), "the only open scene can't be removed");
+    const kast::SceneSlot added = addNewScene(doc);
+    check(doc.scene.loadedScenes().size() == 2 && sceneName(doc, added) == "Untitled", "New Scene adds an empty untitled scene");
+
+    // Restart: the settings remember the set per project; reopening skips missing files with a warning.
+    const std::filesystem::path settings = dir / "editor_settings.json";
+    check(saveOpenScenesSetting(settings, dir,
+                                {{"scenes", {"additive_a.scene", "missing.scene", "additive_b.scene"}}, {"active", "additive_b.scene"}},
+                                error),
+          "save the open scene set");
+    Document restarted;
+    check(openProject(restarted, dir / kast::kProjectFileName, error), "open the project again");
+    check(restoreOpenScenes(restarted, openScenesSetting(loadEditorSettings(settings), dir)) &&
+              restarted.scene.loadedScenes().size() == 2 && std::filesystem::equivalent(restarted.path, b) &&
+              named(restarted.scene, "A Ground") != entt::null && named(restarted.scene, "B Sphere") != entt::null &&
+              logged("Cannot reopen scene \"missing.scene\""),
+          "restoreOpenScenes reopens the set and the active scene, skipping a missing file with a warning");
+}
+
 } // namespace
 
 // --- Lua components ---
@@ -3210,7 +3601,7 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"area_lights.scene", "audio.scene", "custom_shaders.scene", "dof.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "lightmap_room.scene", "material_features.scene",
+              std::vector<std::string>{"additive_a.scene", "additive_b.scene", "additive_player.scene", "area_lights.scene", "audio.scene", "custom_shaders.scene", "dof.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "lightmap_room.scene", "material_features.scene",
                                        "materials.scene", "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
                                        "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "orm_split.scene",
@@ -3232,7 +3623,7 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / ".dot.scene");
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
-    check(projectScenes(root) == std::vector<std::string>{"area_lights.scene", "audio.scene", "broken.scene", "custom_shaders.scene", "dof.scene", "events.scene", "fsm.scene",
+    check(projectScenes(root) == std::vector<std::string>{"additive_a.scene", "additive_b.scene", "additive_player.scene", "area_lights.scene", "audio.scene", "broken.scene", "custom_shaders.scene", "dof.scene", "events.scene", "fsm.scene",
                                                           "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "levels/c.scene", "lightmap_room.scene", "material_features.scene", "materials.scene",
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
@@ -16986,6 +17377,14 @@ int main(int argc, char** argv)
         kast::log::info(g_failures == 0 ? "All model checks passed" : std::format("{} model check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--additive") { // only the additive scene checks
+        checkAdditiveSceneModel();
+        checkAdditiveLua();
+        checkAdditiveEditor();
+        removeTree(testRoot());
+        kast::log::info(g_failures == 0 ? "All additive scene checks passed" : std::format("{} additive scene check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--assets") { // only the Assets panel file logic checks
         checkAssets();
         removeTree(testRoot());
@@ -17173,6 +17572,9 @@ int main(int argc, char** argv)
     checkSystemEdits();
     checkSceneSwitchErrors();
     checkSceneSwitch();
+    checkAdditiveSceneModel();
+    checkAdditiveLua();
+    checkAdditiveEditor();
     checkEventBus();
     checkLuaEvents();
     checkLuaEventsFromCpp();

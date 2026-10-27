@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html" class="active">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="zone-builder.html">Zone Builder</a></li><li><a href="model-preview.html">Model Preview</a></li><li><a href="assets.html">Assets and asset ids</a></li></ul></nav>
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html" class="active">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="multi-scene.html">Multi-scene editing</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="zone-builder.html">Zone Builder</a></li><li><a href="model-preview.html">Model Preview</a></li><li><a href="assets.html">Assets and asset ids</a></li></ul></nav>
 <main>
 <h1 id="run">Run</h1>
 <pre><code class="language-bat">build\release\kast_editor.exe
@@ -313,6 +313,17 @@ Text.</td>
 <tr>
 <td><code>--prefab-back</code></td>
 <td>In prefab edit mode: <strong>Back</strong> to the scene without a prompt (unsaved prefab changes are discarded), refreshing its instances.</td>
+</tr>
+<tr>
+<td><code>--open-additive &lt;file&gt;</code> (repeatable), <code>--active-scene &lt;N&gt;</code>, <code>--move-to-scene &lt;ID&gt;,&lt;N&gt;</code></td>
+<td>Right after <code>--scene</code> / <code>--project</code>: open each file as <strong>File &gt; Open Scene Additive...</strong> does, make open
+scene N (0 = the first) active, and move entity ID (its in-memory id: file id + slot &times; 4294967296) into open scene N
+as a Hierarchy drop does (an undo step). See <a href="multi-scene.html">Multi-scene editing</a>.</td>
+</tr>
+<tr>
+<td><code>--scene-menu &lt;N&gt;</code>, <code>--remove-scene &lt;N&gt;</code></td>
+<td>After 10 frames: open the context menu of the Hierarchy's scene header N, or its <strong>Remove Scene</strong> (with the
+unsaved-changes prompt if that scene has unsaved changes), for screenshots.</td>
 </tr>
 <tr>
 <td><code>--scene-undo &lt;N&gt;</code>, <code>--scene-redo &lt;N&gt;</code></td>

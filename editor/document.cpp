@@ -145,12 +145,12 @@ const char* objectKindLabel(ObjectKind kind)
     return "";
 }
 
-entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent)
+entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent, std::optional<kast::SceneSlot> sceneSlot)
 {
     kast::Scene& scene = doc.scene;
     const char* name = kind == ObjectKind::Empty ? "Empty" : objectKindLabel(kind);
     beginSceneEdit(doc, std::format("Create {}", name));
-    const entt::entity entity = scene.create(name, parent);
+    const entt::entity entity = scene.create(name, parent, sceneSlot);
     if (entity == entt::null) {
         endSceneEdit(doc);
         return entity; // parent is at the hierarchy depth limit
@@ -227,13 +227,212 @@ void duplicateSelected(Document& doc)
     endSceneEdit(doc, {doc.scene.registry().get<kast::PersistentId>(doc.selected).value});
 }
 
-void markDirty(Document& doc)
+void markDirty(Document& doc, std::optional<kast::SceneSlot> scene)
 {
     if (doc.play != PlayState::Stopped)
         return;
     doc.dirty = true;
-    if (!doc.recording)
+    if (!doc.recording) {
         doc.history.forgetSavePoint();
+        doc.sceneSaves[scene.value_or(doc.scene.activeSlot())].saved.reset();
+    }
+}
+
+void markAllDirty(Document& doc)
+{
+    for (const kast::LoadedScene& loaded : doc.scene.loadedScenes())
+        markDirty(doc, loaded.slot);
+}
+
+bool sceneDirty(const Document& doc, kast::SceneSlot slot)
+{
+    const auto it = doc.sceneSaves.find(slot);
+    return it != doc.sceneSaves.end() && it->second.saved != it->second.head;
+}
+
+void updateDirty(Document& doc)
+{
+    doc.dirty = std::ranges::any_of(doc.scene.loadedScenes(),
+                                    [&](const kast::LoadedScene& loaded) { return sceneDirty(doc, loaded.slot); });
+}
+
+std::string scenePath(const Document& doc, kast::SceneSlot slot)
+{
+    if (slot == doc.scene.activeSlot())
+        return doc.path;
+    const kast::LoadedScene* loaded = doc.scene.findScene(slot);
+    return loaded ? loaded->path : std::string();
+}
+
+std::string sceneName(const Document& doc, kast::SceneSlot slot)
+{
+    const std::string path = scenePath(doc, slot);
+    return path.empty() ? "Untitled" : utf8(fromUtf8(path).stem());
+}
+
+namespace {
+
+// The open scenes' file paths, for comparing (case-insensitive on Windows, as the file system).
+std::string sameFileKey(const std::string& path)
+{
+    std::string key = utf8(std::filesystem::absolute(fromUtf8(path)).lexically_normal());
+    std::ranges::transform(key, key.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return key;
+}
+
+} // namespace
+
+bool openSceneAdditive(Document& doc, const std::string& path, std::string& error)
+{
+    if (doc.play != PlayState::Stopped || doc.prefabEdit) {
+        error = "Stop Play mode and leave prefab edit mode to open another scene";
+        return false;
+    }
+    for (const kast::LoadedScene& loaded : doc.scene.loadedScenes()) {
+        if (const std::string open = scenePath(doc, loaded.slot); !open.empty() && sameFileKey(open) == sameFileKey(path)) {
+            error = std::format("Scene '{}' is already open", path);
+            return false;
+        }
+    }
+    const std::optional<kast::Project> project = projectOf(path);
+    if ((project ? project->root : std::filesystem::path()) != (doc.project ? doc.project->root : std::filesystem::path())) {
+        error = std::format("Scene '{}' is not in {}: additive scenes share the open scene's project", path,
+                            doc.project ? std::format("project '{}'", doc.project->name) : "the open scene's folder (no project)");
+        return false;
+    }
+    kast::Scene loaded;
+    kast::SceneLoadReport report;
+    if (!kast::loadScene(path, loaded, error, &report, rootOf(doc.project).value_or(std::filesystem::path())))
+        return false;
+    endSceneGesture(doc);
+    const kast::SceneSlot slot = kast::appendScene(doc.scene, std::move(loaded), path);
+    doc.sceneSaves[slot] = {};
+    if (report.migrated)
+        doc.sceneSaves[slot].saved.reset();
+    updateDirty(doc);
+    ++doc.sceneGeneration;
+    kast::log::info(std::format("Opened scene '{}' additively", path));
+    return true;
+}
+
+kast::SceneSlot addNewScene(Document& doc)
+{
+    endSceneGesture(doc);
+    const kast::SceneSlot slot = doc.scene.addScene("");
+    doc.sceneSaves[slot] = {};
+    ++doc.sceneGeneration;
+    kast::log::info("New scene added");
+    return slot;
+}
+
+void setActiveScene(Document& doc, kast::SceneSlot slot)
+{
+    if (slot == doc.scene.activeSlot() || !doc.scene.findScene(slot))
+        return;
+    endSceneGesture(doc);
+    doc.scene.activeScene().path = doc.path;
+    doc.scene.setActiveScene(slot);
+    doc.path = doc.scene.activeScene().path;
+    ++doc.sceneGeneration;
+    kast::log::info(std::format("Active scene '{}'", sceneName(doc, slot)));
+}
+
+bool removeScene(Document& doc, kast::SceneSlot slot)
+{
+    if (doc.scene.loadedScenes().size() < 2 || !doc.scene.findScene(slot))
+        return false;
+    endSceneGesture(doc);
+    const std::string name = sceneName(doc, slot);
+    if (slot == doc.scene.activeSlot()) {
+        const kast::SceneSlot first = doc.scene.loadedScenes().front().slot;
+        setActiveScene(doc, first != slot ? first : doc.scene.loadedScenes()[1].slot);
+    }
+    doc.scene.removeScene(slot);
+    doc.sceneSaves.erase(slot);
+    if (!doc.scene.valid(doc.selected))
+        doc.selected = entt::null;
+    updateDirty(doc);
+    ++doc.sceneGeneration;
+    kast::log::info(std::format("Removed scene '{}'", name));
+    return true;
+}
+
+bool saveOpenScene(Document& doc, kast::SceneSlot slot, const std::string& path, std::string& error)
+{
+    if (slot == doc.scene.activeSlot())
+        return saveFile(doc, path, error);
+    endSceneGesture(doc);
+    if (!kast::saveScene(doc.scene, slot, path, error))
+        return false;
+    doc.scene.findScene(slot)->path = path;
+    SceneSave& save = doc.sceneSaves[slot];
+    save.saved = save.head;
+    updateDirty(doc);
+    kast::log::info(std::format("Saved scene '{}'", path));
+    return true;
+}
+
+bool moveToScene(Document& doc, entt::entity entity, kast::SceneSlot slot)
+{
+    kast::Scene& scene = doc.scene;
+    if (!scene.valid(entity) || !scene.findScene(slot) || scene.sceneOf(entity) == slot)
+        return false;
+    const std::string name = scene.registry().get<kast::Name>(entity).value;
+    if (const char* blocker = kast::reparentBlocker(scene, entity)) {
+        kast::log::warn(std::format("Cannot move '{}': {}", name, blocker));
+        return false;
+    }
+    beginSceneEdit(doc, std::format("Move {}", name),
+                   {.entities = {scene.registry().get<kast::PersistentId>(entity).value}, .deep = true});
+    scene.moveToScene(entity, slot);
+    markDirty(doc);
+    endSceneEdit(doc, {scene.registry().get<kast::PersistentId>(entity).value});
+    return true;
+}
+
+nlohmann::json openScenesState(const Document& doc)
+{
+    if (!doc.project || doc.prefabEdit)
+        return nullptr;
+    nlohmann::json scenes = nlohmann::json::array();
+    std::string active;
+    for (const kast::LoadedScene& loaded : doc.scene.loadedScenes()) {
+        const std::string path = scenePath(doc, loaded.slot);
+        const std::optional<std::string> relative = path.empty() ? std::nullopt : kast::toProjectPath(doc.project->root, path);
+        if (!relative)
+            continue;
+        scenes.push_back(*relative);
+        if (loaded.slot == doc.scene.activeSlot())
+            active = *relative;
+    }
+    if (scenes.empty())
+        return nullptr;
+    return {{"scenes", std::move(scenes)}, {"active", active}};
+}
+
+bool restoreOpenScenes(Document& doc, const nlohmann::json& state)
+{
+    if (!doc.project || !state.is_object() || !state.contains("scenes") || !state["scenes"].is_array())
+        return false;
+    const std::filesystem::path root = doc.project->root;
+    bool opened = false;
+    std::optional<kast::SceneSlot> active;
+    for (const nlohmann::json& entry : state["scenes"]) {
+        std::string error = "not a path";
+        const std::optional<std::filesystem::path> file =
+            entry.is_string() ? kast::resolveProjectPath(root, entry.get<std::string>(), error) : std::nullopt;
+        const bool ok = file && (!opened ? openFile(doc, file->string(), error) : openSceneAdditive(doc, file->string(), error));
+        if (!ok) {
+            kast::log::warn(std::format("Cannot reopen scene {}: {}", entry.dump(), error));
+            continue;
+        }
+        if (entry == state.value("active", nlohmann::json()))
+            active = doc.scene.loadedScenes().back().slot;
+        opened = true;
+    }
+    if (active)
+        setActiveScene(doc, *active);
+    return opened;
 }
 
 bool selectById(Document& doc, kast::EntityId id)
@@ -253,13 +452,16 @@ void startPlay(Document& doc)
     }
     if (doc.play == PlayState::Stopped) {
         endSceneGesture(doc); // a gesture still open is an edit-mode step
-        doc.playSnapshot = kast::sceneToJson(doc.scene);
+        doc.scene.activeScene().path = doc.path; // the Hierarchy and kast.loadedScenes read every scene's from the Scene
+        doc.playSnapshot = kast::scenesToJson(doc.scene);
         doc.playSnapshotDirty = doc.dirty;
+        doc.playSnapshotSaves = doc.sceneSaves;
         doc.focusRequest = PanelFocus::Game;
         kast::log::info("Play");
         if (kast::activeCamera(doc.scene) == entt::null)
             kast::log::warn("No Camera in scene: the Game view has nothing to render");
         doc.playSceneName.clear();
+        doc.playSwitched = false;
         ++doc.playGeneration;
         doc.scene.registry().clear<kast::AnimatorState>(); // Play starts clips from 0, not from the Edit preview
         doc.scene.registry().clear<kast::ParticleEmitterState>(); // and emitters afresh
@@ -294,16 +496,18 @@ void stopPlay(Document& doc)
     if (doc.onPlayStopping)
         doc.onPlayStopping(doc.lua);
     doc.lua.stop(); // shutdowns see the play-mode scene
-    // Ids are only unique per scene file: after a kast.loadScene switch the selection's id means nothing in the snapshot.
-    const kast::EntityId selected = doc.playSceneName.empty() && doc.scene.valid(doc.selected)
+    // Ids are only unique per scene: after a kast.loadScene switch the selection's id means nothing in the snapshot.
+    // Additive loads never reuse a scene slot, so their ids never name a snapshot entity.
+    const kast::EntityId selected = !doc.playSwitched && doc.scene.valid(doc.selected)
                                         ? doc.scene.registry().get<kast::PersistentId>(doc.selected).value
                                         : 0;
     std::string error;
-    if (!kast::sceneFromJson(doc.playSnapshot, doc.scene, error, nullptr, rootOf(doc.project).value_or(std::filesystem::path())))
+    if (!kast::scenesFromJson(doc.playSnapshot, doc.scene, error, nullptr, rootOf(doc.project).value_or(std::filesystem::path())))
         kast::log::error(std::format("Cannot restore the scene from before Play: {}", error)); // keeps the play-mode scene
     doc.play = PlayState::Stopped;
     doc.playSnapshot = nullptr;
     doc.playSceneName.clear();
+    doc.sceneSaves = doc.playSnapshotSaves;
     doc.dirty = doc.playSnapshotDirty;
     selectById(doc, selected);
     ++doc.sceneGeneration;
@@ -324,11 +528,19 @@ void updatePlay(Document& doc, float dt)
     }
     if (doc.play != PlayState::Playing)
         return;
+    const uint32_t changes = doc.lua.sceneChanges();
     if (kast::tickPlay(doc.scene, doc.lua, dt)) { // kast.loadScene replaced doc.scene
         doc.selected = entt::null;
+        doc.playSwitched = true;
         ++doc.playGeneration;
         ++doc.sceneGeneration;
         doc.playSceneName = std::filesystem::path(doc.lua.scenePath()).stem().string();
+    } else if (doc.lua.sceneChanges() != changes) { // additive loads and unloads, a new active scene
+        if (!doc.scene.valid(doc.selected))
+            doc.selected = entt::null;
+        ++doc.sceneGeneration;
+        if (doc.lua.scenePath() != projectScenePath(doc)) // the title names the running active scene
+            doc.playSceneName = std::filesystem::path(doc.lua.scenePath()).stem().string();
     }
 }
 
@@ -382,12 +594,16 @@ void remapScenePaths(Document& doc, const std::string& from, const std::string& 
 {
     const AssetRefEdit edit = [&](std::string& path, std::string&) { remapAssetPath(path, from, to); };
     const auto remapIn = [&](kast::Scene& scene) {
-        bool changed = remapAssetPath(scene.sky.cube, from, to);
-        for (std::string& path : scene.sky.faces)
-            changed = remapAssetPath(path, from, to) || changed;
-        for (std::string& path : scene.systems)
-            changed = remapAssetPath(path, from, to) || changed;
-        changed = remapAssetPath(scene.lighting.lightmaps.bakedPath, from, to) || changed;
+        bool changed = false;
+        for (const kast::LoadedScene& loaded : scene.loadedScenes()) { // every open scene's settings
+            kast::SceneSettings& settings = scene.settingsOf(loaded.slot);
+            changed = remapAssetPath(settings.sky.cube, from, to) || changed;
+            for (std::string& path : settings.sky.faces)
+                changed = remapAssetPath(path, from, to) || changed;
+            for (std::string& path : settings.systems)
+                changed = remapAssetPath(path, from, to) || changed;
+            changed = remapAssetPath(settings.lighting.lightmaps.bakedPath, from, to) || changed;
+        }
         entt::registry& registry = scene.registry();
         for (const entt::entity entity : registry.view<kast::PersistentId>()) {
             for (const kast::ComponentType& type : kast::allComponentTypes()) {
@@ -409,7 +625,7 @@ void remapScenePaths(Document& doc, const std::string& from, const std::string& 
     };
     // The files moved, so the histories' copies would put the old paths back: they are dropped.
     if (remapIn(doc.scene)) {
-        markDirty(doc);
+        markAllDirty(doc);
         clearSceneHistory(doc);
     }
     if (doc.prefabEdit) {
@@ -456,7 +672,7 @@ bool createPrefabFrom(Document& doc, entt::entity entity, const std::string& fol
     if (!kast::createPrefab(doc.scene, entity, path, doc.project->root, error))
         return false;
     doc.selected = entity;
-    markDirty(doc);
+    markDirty(doc, doc.scene.sceneOf(entity));
     clearSceneHistory(doc); // it wrote a file
     return true;
 }
@@ -535,11 +751,12 @@ bool openPrefab(Document& doc, const std::string& path, std::string& error)
         const kast::EntityId selected =
             doc.scene.valid(doc.selected) ? doc.scene.registry().get<kast::PersistentId>(doc.selected).value : 0;
         doc.prefabEdit = Document::PrefabEdit{std::move(doc.scene), doc.camera, doc.path, doc.dirty, selected, path,
-                                              std::move(doc.history)};
+                                              std::move(doc.history), std::move(doc.sceneSaves)};
     }
     doc.prefabEdit->prefab = path;
     doc.scene = std::move(prefab);
     doc.path = file->string();
+    doc.sceneSaves.clear();
     doc.dirty = false;
     clearSceneHistory(doc); // the prefab's own; a prefab open before is dropped
     doc.selected = entt::null;
@@ -558,6 +775,7 @@ void closePrefab(Document& doc)
     doc.scene = std::move(waiting.scene);
     doc.camera = waiting.camera;
     doc.path = waiting.path;
+    doc.sceneSaves = std::move(waiting.sceneSaves);
     doc.dirty = waiting.dirty;
     doc.recording.reset();
     doc.history = std::move(waiting.history); // the prefab's is dropped
@@ -632,7 +850,10 @@ bool runPrefabOp(Document& doc, const PrefabOp& op, std::string& error)
             endSceneEdit(doc);
         return false;
     }
-    markDirty(doc);
+    if (apply)
+        markAllDirty(doc); // every instance of the prefab follows
+    else
+        markDirty(doc);
     if (apply) {
         refreshPrefabs(doc); // prefab files changed
         clearSceneHistory(doc);
@@ -698,6 +919,7 @@ void resetToDefault(Document& doc)
     doc.camera = EditorCamera{.pivot = {0.0f, 0.5f, 0.0f}, .yaw = 30.0f, .pitch = -25.0f, .distance = 7.0f};
     doc.path.clear();
     doc.selected = entt::null;
+    doc.sceneSaves.clear();
     doc.dirty = false;
     clearSceneHistory(doc);
     ++doc.sceneGeneration;
@@ -730,7 +952,10 @@ bool openFile(Document& doc, const std::string& path, std::string& error)
     doc.selected = entt::null;
     // Lua component data fixed by the drift rules, or refs resolved by id to a path other than their hint: Save writes
     // the fresh hints.
-    doc.dirty = report.migrated || staleAssetRefs() != stale;
+    doc.sceneSaves.clear();
+    if (report.migrated || staleAssetRefs() != stale)
+        doc.sceneSaves[doc.scene.activeSlot()].saved.reset();
+    updateDirty(doc);
     doc.prefabEdit.reset();
     clearSceneHistory(doc);
     ++doc.sceneGeneration;
@@ -749,6 +974,8 @@ bool saveFile(Document& doc, const std::string& path, std::string& error)
         }
         if (!kast::savePrefab(doc.scene, doc.project->root, *prefab, error))
             return false;
+        SceneSave& save = doc.sceneSaves[doc.scene.activeSlot()];
+        save.saved = save.head;
         doc.dirty = false;
         doc.history.markSaved();
         ++doc.prefabSaves;
@@ -765,12 +992,15 @@ bool saveFile(Document& doc, const std::string& path, std::string& error)
                                     project ? std::format("project '{}'", project->name) : "no project"));
     const bool projectChanged = root(project) != root(doc.project);
     doc.path = path;
+    doc.scene.activeScene().path = path;
     doc.project = std::move(project);
-    doc.dirty = false;
+    SceneSave& save = doc.sceneSaves[doc.scene.activeSlot()];
+    save.saved = save.head;
+    updateDirty(doc);
     doc.history.markSaved();
     kast::log::info(std::format("Saved scene '{}'", path));
     if (projectChanged && kast::activateComponentDefinitions(rootOf(doc.project), &doc.scene)) {
-        markDirty(doc); // the new project's Lua component definitions changed the scene
+        markAllDirty(doc); // the new project's Lua component definitions changed the scene
         clearSceneHistory(doc);
     }
     return true;
@@ -809,7 +1039,7 @@ bool canEditComponents(const Document& doc) { return doc.play == PlayState::Stop
 void refreshComponents(Document& doc)
 {
     if (doc.play == PlayState::Stopped && kast::refreshComponentDefinitions(doc.scene)) {
-        markDirty(doc);
+        markAllDirty(doc);
         clearSceneHistory(doc); // migrated: the copies hold the old component data
     }
 }
@@ -1255,12 +1485,81 @@ void FileActions::exit() { kast::requestQuit(); } // same path as the window X, 
 void FileActions::build() { request(Pending::Build); }
 void FileActions::buildAndRun() { request(Pending::BuildAndRun); }
 
-void FileActions::save()
+void FileActions::save() { saveAll(Pending::None); }
+
+void FileActions::saveAll(Pending after)
 {
+    for (const kast::LoadedScene& loaded : doc_.scene.loadedScenes()) {
+        if (loaded.slot == doc_.scene.activeSlot() || !sceneDirty(doc_, loaded.slot))
+            continue;
+        if (loaded.path.empty()) { // asks, then comes back here for the rest
+            if (dialogOpen_)
+                return;
+            sceneSlot_ = loaded.slot;
+            afterSave_ = after;
+            savingAll_ = true;
+            dialogOpen_ = true;
+            dialogKind_ = DialogKind::SaveScene;
+            SDL_ShowSaveFileDialog(onDialogDone, this, window_, &kSceneFilter, 1, nullptr);
+            return;
+        }
+        if (std::string error; !saveOpenScene(doc_, loaded.slot, loaded.path, error))
+            return fail(error);
+    }
     if (doc_.path.empty())
-        showSaveDialog(Pending::None);
+        showSaveDialog(after);
     else
-        saveTo(doc_.path, Pending::None);
+        saveTo(doc_.path, after);
+}
+
+void FileActions::openAdditive()
+{
+    if (!idle())
+        return;
+    dialogOpen_ = true;
+    dialogKind_ = DialogKind::OpenAdditive;
+    SDL_ShowOpenFileDialog(onDialogDone, this, window_, &kSceneFilter, 1, nullptr, false);
+}
+
+void FileActions::saveScene(kast::SceneSlot slot)
+{
+    if (!idle() || !doc_.scene.findScene(slot))
+        return;
+    const std::string path = scenePath(doc_, slot);
+    if (slot == doc_.scene.activeSlot()) {
+        if (path.empty())
+            showSaveDialog(Pending::None);
+        else
+            saveTo(path, Pending::None);
+    } else if (path.empty()) {
+        sceneSlot_ = slot;
+        savingAll_ = false;
+        dialogOpen_ = true;
+        dialogKind_ = DialogKind::SaveScene;
+        SDL_ShowSaveFileDialog(onDialogDone, this, window_, &kSceneFilter, 1, nullptr);
+    } else if (std::string error; !saveOpenScene(doc_, slot, path, error)) {
+        fail(error);
+    }
+}
+
+void FileActions::removeScene(kast::SceneSlot slot)
+{
+    if (!idle() || doc_.scene.loadedScenes().size() < 2 || !doc_.scene.findScene(slot))
+        return;
+    sceneSlot_ = slot;
+    if (!sceneDirty(doc_, slot)) {
+        perform(Pending::RemoveScene);
+        return;
+    }
+    pending_ = Pending::RemoveScene;
+    removeConfirmRequested_ = true;
+}
+
+void FileActions::fail(const std::string& error)
+{
+    error_ = error;
+    kast::log::error(error_);
+    errorRequested_ = true;
 }
 
 bool FileActions::onQuitRequested()
@@ -1293,7 +1592,8 @@ void FileActions::request(Pending action)
 
 void FileActions::perform(Pending action)
 {
-    if (doc_.prefabEdit && action != Pending::None && action != Pending::OpenPrefab && action != Pending::Back) {
+    if (doc_.prefabEdit && action != Pending::None && action != Pending::OpenPrefab && action != Pending::Back &&
+        action != Pending::RemoveScene) {
         closePrefab(doc_); // its changes were saved or discarded by now
         if (unsaved()) {
             request(action); // now the scene's
@@ -1343,6 +1643,9 @@ void FileActions::perform(Pending action)
     case Pending::Back:
         closePrefab(doc_);
         break;
+    case Pending::RemoveScene:
+        ::removeScene(doc_, sceneSlot_);
+        break;
     case Pending::None: break;
     }
 }
@@ -1391,6 +1694,24 @@ void FileActions::handleDialogResult()
         if (openFile(doc_, path, error))
             return;
         error_ = error;
+    } else if (dialogKind_ == DialogKind::OpenAdditive) {
+        std::string error;
+        if (openSceneAdditive(doc_, path, error))
+            return;
+        error_ = error;
+    } else if (dialogKind_ == DialogKind::SaveScene) {
+        if (std::filesystem::path(path).extension().empty())
+            path += ".scene";
+        std::string error;
+        if (!saveOpenScene(doc_, sceneSlot_, path, error)) {
+            error_ = error;
+        } else {
+            if (after == Pending::RemoveScene)
+                perform(after);
+            else if (savingAll_)
+                saveAll(after); // the rest of a Save / the unsaved-changes prompt's Save
+            return;
+        }
     } else if (dialogKind_ == DialogKind::CaFile) {
         if (doc_.project) // a file outside the project stays absolute, so the modal's check explains it
             online_.caFile = kast::toProjectPath(doc_.project->root, fromUtf8(path)).value_or(path);
@@ -1455,12 +1776,8 @@ void FileActions::drawModals()
         ImGui::Spacing();
         if (ImGui::Button("Save")) {
             ImGui::CloseCurrentPopup();
-            stopPlay(doc_); // save the edit-mode scene, never a play-mode one
-            const Pending action = std::exchange(pending_, Pending::None);
-            if (doc_.path.empty())
-                showSaveDialog(action);
-            else
-                saveTo(doc_.path, action);
+            stopPlay(doc_); // save the edit-mode scenes, never play-mode ones
+            saveAll(std::exchange(pending_, Pending::None));
         }
         ImGui::SameLine();
         if (ImGui::Button("Don't Save")) {
@@ -1468,6 +1785,40 @@ void FileActions::drawModals()
             stopPlay(doc_);
             if (extra.discard && !extraUnsaved().empty())
                 extra.discard();
+            perform(std::exchange(pending_, Pending::None));
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            ImGui::CloseCurrentPopup();
+            pending_ = Pending::None;
+        }
+        ImGui::EndPopup();
+    }
+
+    if (std::exchange(removeConfirmRequested_, false))
+        ImGui::OpenPopup("Remove scene");
+    if (ImGui::BeginPopupModal("Remove scene", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Save changes to %s before removing it?", sceneName(doc_, sceneSlot_).c_str());
+        ImGui::Spacing();
+        if (ImGui::Button("Save")) {
+            ImGui::CloseCurrentPopup();
+            const std::string path = scenePath(doc_, sceneSlot_);
+            if (path.empty()) {
+                afterSave_ = std::exchange(pending_, Pending::None);
+                savingAll_ = false;
+                dialogOpen_ = true;
+                dialogKind_ = DialogKind::SaveScene;
+                SDL_ShowSaveFileDialog(onDialogDone, this, window_, &kSceneFilter, 1, nullptr);
+            } else if (std::string error; saveOpenScene(doc_, sceneSlot_, path, error)) {
+                perform(std::exchange(pending_, Pending::None));
+            } else {
+                pending_ = Pending::None;
+                fail(error);
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Don't Save")) {
+            ImGui::CloseCurrentPopup();
             perform(std::exchange(pending_, Pending::None));
         }
         ImGui::SameLine();
