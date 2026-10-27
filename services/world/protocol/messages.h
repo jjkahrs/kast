@@ -15,7 +15,7 @@
 
 namespace kast::proto {
 
-constexpr uint16_t kProtocolVersion = 8;
+constexpr uint16_t kProtocolVersion = 9;
 constexpr size_t kHeaderSize = 4; // u16 payload length + u16 opcode
 constexpr size_t kMaxPayloadBytes = 0xFFFF; // the u16 length field's limit
 
@@ -46,7 +46,7 @@ enum class Opcode : uint16_t {
     CharError = 0x0114,    // S
     Spawn = 0x0120,        // S
     Despawn = 0x0121,      // S
-    EntityMove = 0x0122,   // S
+    EntityMoves = 0x0122,  // S
     Correction = 0x0123,   // S
     ChatMsg = 0x0124,      // S
     ComponentUpdate = 0x0125, // S
@@ -390,14 +390,40 @@ struct Despawn {
     bool operator==(const Despawn&) const = default;
 };
 
-struct EntityMove {
-    static constexpr Opcode op = Opcode::EntityMove;
-    uint32_t entityId = 0;
-    Vec3 pos;
-    float heading = 0;
-    void write(Writer& w) const { w.u32(entityId); proto::write(w, pos); w.f32(heading); }
-    void read(Reader& r) { entityId = r.u32(); proto::read(r, pos); heading = r.f32(); }
-    bool operator==(const EntityMove&) const = default;
+// v9: every move a viewer sees in one tick, in one message (u16 count, then count x {u32 entityId, Vec3 pos, f32
+// heading}); more than kMaxEntries go as several, in order.
+struct EntityMoves {
+    static constexpr Opcode op = Opcode::EntityMoves;
+    static constexpr size_t kMaxEntries = (kMaxPayloadBytes - 2) / 20; // 3276 x 20 bytes stays under the 64 KB frame
+    struct Entry {
+        uint32_t entityId = 0;
+        Vec3 pos;
+        float heading = 0;
+        bool operator==(const Entry&) const = default;
+    };
+    std::vector<Entry> entries;
+    void write(Writer& w) const {
+        w.u16(static_cast<uint16_t>(entries.size()));
+        uint8_t* p = w.grow(entries.size() * 20); // as u32 entityId, Vec3 pos, f32 heading, in one go
+        for (const auto& e : entries) {
+            for (uint32_t v : {e.entityId, std::bit_cast<uint32_t>(e.pos.x), std::bit_cast<uint32_t>(e.pos.y),
+                               std::bit_cast<uint32_t>(e.pos.z), std::bit_cast<uint32_t>(e.heading)}) {
+                Writer::le32(p, v);
+                p += 4;
+            }
+        }
+    }
+    void read(Reader& r) {
+        entries.clear();
+        const uint16_t n = r.u16();
+        if (n > kMaxEntries) r.fail();
+        for (uint16_t i = 0; i < n && r.ok(); ++i) {
+            Entry e;
+            e.entityId = r.u32(); proto::read(r, e.pos); e.heading = r.f32();
+            entries.push_back(e);
+        }
+    }
+    bool operator==(const EntityMoves&) const = default;
 };
 
 // v6: pos is where the server has the player after the Move ackSeq, the last one it processed (the rejected one);
@@ -769,7 +795,7 @@ struct AdminKicked {
 
 using Message = std::variant<Hello, Auth, Ping, Pong, CharListReq, CharCreate, CharDelete, EnterWorld, Move, Say, ClientEvent, Interact,
                              AuthOk, Disconnect, CharList, CharCreated, CharDeleted, EnterWorldOk, CharError, Spawn,
-                             Despawn, EntityMove, Correction, ChatMsg, ComponentUpdate,
+                             Despawn, EntityMoves, Correction, ChatMsg, ComponentUpdate,
                              ComponentRemove, ServerEvent, MapChange, Reply, ChatServer, ChatSend, ChatJoin, ChatLeave,
                              ChatIgnore, ChatMute, ChatLine, ChatChannel, ChatNotice, LinkHello, LinkOk, CharOnline,
                              MapChanged, CharOffline, MuteState, AdminOnlineReq, AdminOnline, AdminKick, AdminKicked>;

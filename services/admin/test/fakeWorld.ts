@@ -82,7 +82,7 @@ export class FakeWorld {
           const version = p.readUInt16LE(0);
           const secret = p.subarray(4, 4 + p.readUInt16LE(2)).toString('utf8');
           this.hellos.push({ version, secret });
-          if (version !== 8) return void socket.end(disconnect(1));
+          if (version !== 9) return void socket.end(disconnect(1));
           if (secret !== this.secret) return void socket.end(disconnect(8));
           linked = true;
           socket.write(frame(0x0201));

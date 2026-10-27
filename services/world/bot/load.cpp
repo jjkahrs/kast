@@ -14,7 +14,7 @@ namespace {
 
 struct Stats {
     std::atomic<int> tokens{0}, connected{0}, entered{0}, unexpectedDisconnects{0}, expectedDisconnects{0}, errors{0};
-    std::atomic<uint64_t> movesSent{0}, entityMoves{0}, spawns{0}, despawns{0}, corrections{0}, mapChanges{0}, chats{0}, says{0},
+    std::atomic<uint64_t> movesSent{0}, entityMoves{0}, entityMovesMsgs{0}, spawns{0}, despawns{0}, corrections{0}, mapChanges{0}, chats{0}, says{0},
         componentUpdates{0}, componentBytes{0}, componentRemoves{0}, serverEvents{0};
     std::mutex mu;
     std::vector<std::string> errorSamples;
@@ -76,8 +76,10 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
     // ponytail: parked, not wandering on; give the bot the destination map's bounds if load tests need cross-map moves.
     auto parked = std::make_shared<bool>(false);
     c->onMessage = [&st, pos, parked](const proto::Message& m) {
-        if (std::holds_alternative<proto::EntityMove>(m)) ++st.entityMoves;
-        else if (std::holds_alternative<proto::Spawn>(m)) ++st.spawns;
+        if (auto* mv = std::get_if<proto::EntityMoves>(&m)) {
+            ++st.entityMovesMsgs;
+            st.entityMoves += mv->entries.size(); // entries: the moves seen, as before batching
+        } else if (std::holds_alternative<proto::Spawn>(m)) ++st.spawns;
         else if (std::holds_alternative<proto::Despawn>(m)) ++st.despawns;
         else if (std::holds_alternative<proto::ChatMsg>(m)) ++st.chats;
         else if (auto* cu = std::get_if<proto::ComponentUpdate>(&m)) {
@@ -178,10 +180,11 @@ int run_load(const Options& o) {
         while (std::chrono::steady_clock::now() < end) {
             std::this_thread::sleep_for(std::chrono::seconds(30));
             std::printf("{\"phase\":\"running\",\"entered\":%d,\"unexpected_disconnects\":%d,\"errors\":%d,"
-                        "\"moves_sent\":%llu,\"entity_moves_recv\":%llu}\n",
+                        "\"moves_sent\":%llu,\"entity_moves_recv\":%llu,\"entity_moves_msgs_recv\":%llu}\n",
                         st.entered.load(), st.unexpectedDisconnects.load(), st.errors.load(),
                         static_cast<unsigned long long>(st.movesSent.load()),
-                        static_cast<unsigned long long>(st.entityMoves.load()));
+                        static_cast<unsigned long long>(st.entityMoves.load()),
+                        static_cast<unsigned long long>(st.entityMovesMsgs.load()));
             std::fflush(stdout);
         }
     });
@@ -201,6 +204,7 @@ int run_load(const Options& o) {
                               {"errors", st.errors.load()},
                               {"moves_sent", st.movesSent.load()},
                               {"entity_moves_recv", st.entityMoves.load()},
+                              {"entity_moves_msgs_recv", st.entityMovesMsgs.load()},
                               {"spawns_recv", st.spawns.load()},
                               {"despawns_recv", st.despawns.load()},
                               {"corrections_recv", st.corrections.load()},

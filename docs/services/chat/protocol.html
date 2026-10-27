@@ -12,7 +12,7 @@
 <nav class="side"><h2>Chat Service</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="tests.html">Tests</a></li><li><a href="protocol.html" class="active">Protocol</a></li></ul></nav>
 <main>
 <h1 id="protocol">Chat service protocol</h1>
-<p>The chat service speaks the world server's protocol (version 8, <code>services/world/protocol/messages.h</code>): the same frames (<code>u16</code> payload length, <code>u16</code> opcode, little-endian payload), strings, handshake and heartbeat; see the <a href="../world/protocol.html">world protocol</a> for those. Every message below is in <a href="../world/protocol.html#messages">its message table</a> too.</p>
+<p>The chat service speaks the world server's protocol (version 9, <code>services/world/protocol/messages.h</code>): the same frames (<code>u16</code> payload length, <code>u16</code> opcode, little-endian payload), strings, handshake and heartbeat; see the <a href="../world/protocol.html">world protocol</a> for those. Every message below is in <a href="../world/protocol.html#messages">its message table</a> too.</p>
 <h2 id="client">Game client connection (<code>CHAT_PORT</code>, 7778)</h2>
 <pre><code>client                                   chat service
   |---- TLS ---------------------------------&gt;|

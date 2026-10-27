@@ -42,7 +42,7 @@ void roundtrip(const T& msg, const char* name) {
 
 void checkCodec() {
     using namespace proto;
-    check(kProtocolVersion == 8, "protocol version 8");
+    check(kProtocolVersion == 9, "protocol version 9");
     roundtrip(ChatSend{ChatTarget::zone, "", "anyone?"}, "ChatSend");
     roundtrip(ChatJoin{"Trade"}, "ChatJoin");
     roundtrip(ChatLeave{"Trade"}, "ChatLeave");

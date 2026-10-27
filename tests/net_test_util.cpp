@@ -392,7 +392,7 @@ void runFakeWorld(FakeWorld& fake, TlsSocket& socket)
                 if (fake.chatPort)
                     queue(proto::ChatServer{"127.0.0.1", static_cast<uint16_t>(fake.chatPort.load())});
                 queue(proto::Spawn{2, "Other", {101, 0, 100}, 0});
-                queue(proto::EntityMove{2, {102, 0, 100}, 1});
+                queue(proto::EntityMoves{{{2, {102, 0, 100}, 1}}});
                 queue(proto::Correction{spawn});
             } else {
                 queue(proto::CharError{proto::Opcode::EnterWorld, proto::Code::not_found});

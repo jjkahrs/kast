@@ -127,10 +127,23 @@ void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send) {
     }
 }
 
-// Accepted player moves and script NPC moves go to every player that sees the mover; never back to the mover.
-void replication_system(entt::registry& reg, const SendMany& sendMany) {
-    for (auto [e, tf] : reg.view<Moved, Transform>().each())
-        sendMany(audience(reg, e), proto::EntityMove{wire_id(e), tf.pos, tf.heading});
+// Accepted player moves and script NPC moves go to every player that sees the mover; never back to the mover. Each
+// player gets every mover in its view in one EntityMoves (chunks of kMaxEntries past that). Range is symmetric and an
+// NPC's Viewers follow the players' views, so these are exactly the movers' audiences. Batches differ per viewer: Send.
+// ponytail: payload bytes stay O(movers x viewers); quantized/delta entries or a lower rate for far viewers if they matter.
+void replication_system(entt::registry& reg, const Send& send) {
+    constexpr size_t kMax = proto::EntityMoves::kMaxEntries;
+    std::vector<proto::EntityMoves::Entry> moves;
+    for (auto [e, vis, link] : reg.view<Visible, SessionLink>().each()) {
+        moves.clear();
+        for (uint32_t id : vis.ids)
+            if (const auto other = from_wire(id); reg.all_of<Moved>(other)) {
+                const auto& tf = reg.get<Transform>(other);
+                moves.push_back({id, tf.pos, tf.heading});
+            }
+        for (size_t i = 0; i < moves.size(); i += kMax)
+            send(link.sessionId, proto::EntityMoves{{moves.begin() + i, moves.begin() + std::min(i + kMax, moves.size())}});
+    }
 }
 
 namespace {

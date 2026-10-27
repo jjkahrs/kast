@@ -18,6 +18,15 @@ public:
     void u32(uint32_t v) { put(v, 4); }
     void u64(uint64_t v) { put(v, 8); }
     void f32(float v) { u32(std::bit_cast<uint32_t>(v)); }
+    // n bytes appended at once, for a caller that fills many fixed-size fields (le32): EntityMoves writes MBs a tick,
+    // and a push_back per byte is most of that.
+    uint8_t* grow(size_t n) {
+        out_.resize(out_.size() + n);
+        return out_.data() + out_.size() - n;
+    }
+    static void le32(uint8_t* p, uint32_t v) {
+        for (int i = 0; i < 4; ++i) p[i] = static_cast<uint8_t>(v >> (8 * i));
+    }
     void str(const std::string& s) {
         // Callers keep strings far below 64 KB (frame limit); truncate rather than corrupt the frame.
         const auto n = static_cast<uint16_t>(s.size() > 0xFFFF ? 0xFFFF : s.size());

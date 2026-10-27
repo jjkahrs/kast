@@ -401,8 +401,9 @@ void WorldClient::dispatch(const auto& m)
                              {"template", m.templateName}});
     } else if constexpr (std::is_same_v<T, proto::Despawn>) {
         emit("world.despawn", {{"entityId", m.entityId}});
-    } else if constexpr (std::is_same_v<T, proto::EntityMove>) {
-        emit("world.entityMove", {{"entityId", m.entityId}, {"position", position(m.pos)}, {"heading", m.heading}});
+    } else if constexpr (std::is_same_v<T, proto::EntityMoves>) {
+        for (const auto& e : m.entries) // one world.entityMove each, in order, as when each came on its own
+            emit("world.entityMove", {{"entityId", e.entityId}, {"position", position(e.pos)}, {"heading", e.heading}});
     } else if constexpr (std::is_same_v<T, proto::Correction>) {
         emit("world.correction", {{"position", position(m.pos)}, {"ackSeq", m.ackSeq}, {"epoch", m.epoch}});
     } else if constexpr (std::is_same_v<T, proto::ChatMsg>) {

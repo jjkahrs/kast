@@ -14,7 +14,7 @@
 <h1 id="tests">Tests</h1>
 <ul>
 <li><strong><code>chat_self_check</code></strong> (<code>ctest --preset debug</code> in <code>services/chat</code>; also run by the Docker build): the chat messages' codec, binding (held, replaced, dropped on <code>CharOffline</code> and a lost link), whispers across maps and to offline names, channels (General on connect, join/leave Trade, non-members), the zone channel following map changes, ignore / unignore, mutes (players refused, GM mute persisted and sent to the links, notices, expiry, unmute, cap), the rate limit and text rules, the config, and token rejection. No network or database: time is passed in.</li>
-<li><strong><code>world_self_check</code></strong> (<code>services/world</code>): the v8 codec (every chat and link message, kinds, malformed values), proximity chat (say in view, yell past the view radius but not past <code>CHAT_YELL_RADIUS</code> nor to another map, emote, muted characters dropped with a notice, expiry) and the chat config.</li>
+<li><strong><code>world_self_check</code></strong> (<code>services/world</code>): the v9 codec (every chat and link message, kinds, malformed values), proximity chat (say in view, yell past the view radius but not past <code>CHAT_YELL_RADIUS</code> nor to another map, emote, muted characters dropped with a notice, expiry) and the chat config.</li>
 <li><strong>Integration</strong> (<code>services/world/tests/integration.sh</code>, against the compose stack): <code>kast_bot</code> scenarios 29-38:
 <ul>
 <li>29 <code>yell</code>: say to B 100 m away only; yell reaches C 200 m away (past the 128 m view radius), not D 320 m away; emote.</li>

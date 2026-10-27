@@ -355,7 +355,7 @@ return {
 <li><strong>spawner:</strong> the <a href="npcs.html#npc-spawns">NPC spawns</a> that are due</li>
 <li><strong>Lua <code>update</code></strong>, every system in filename order</li>
 <li><strong>event drain:</strong> the events queued since the last drain go to their subscribers</li>
-<li>replication (<code>EntityMove</code>)</li>
+<li>replication (one <code>EntityMoves</code> per player)</li>
 <li>component replication</li>
 <li><strong>events to clients:</strong> <code>ServerEvent</code> for every <code>kast.sendTo</code> / <code>sendNearby</code> / <code>broadcast</code> since the last flush</li>
 <li>save</li>
@@ -467,7 +467,7 @@ end)
 </tr>
 <tr>
 <td><code>systems/npcs.lua</code></td>
-<td>Patrols every NPC whose <code>Spawn</code> has a path (its definition gives it the <code>patrol</code> machine): it walks it at 3 m/s to each point in turn, facing where it goes, and waits the path's <code>wait</code> at each (<code>loop</code>, or back along the path). While walking it costs one <code>EntityMove</code> per tick per viewer. No NPCs or waypoints of its own: the sample maps' spawn files place the "Guard" (<code>npc</code> Guard, <code>tests/project/maps/start/.server/spawns/4_4.json</code>: respawn 5 s, a 20 m square around the spawn point, 2 s waits), the "Sentry" on the hills and a still "Bat" (never respawns) at map 2's spawn point, the far side of the sample portal</td>
+<td>Patrols every NPC whose <code>Spawn</code> has a path (its definition gives it the <code>patrol</code> machine): it walks it at 3 m/s to each point in turn, facing where it goes, and waits the path's <code>wait</code> at each (<code>loop</code>, or back along the path). While walking it costs one <code>EntityMoves</code> entry per tick per viewer. No NPCs or waypoints of its own: the sample maps' spawn files place the "Guard" (<code>npc</code> Guard, <code>tests/project/maps/start/.server/spawns/4_4.json</code>: respawn 5 s, a 20 m square around the spawn point, 2 s waits), the "Sentry" on the hills and a still "Bat" (never respawns) at map 2's spawn point, the far side of the sample portal</td>
 </tr>
 <tr>
 <td><code>systems/test_hooks.lua</code></td>

@@ -215,6 +215,12 @@ struct Sent {
                 if (auto* t = std::get_if<T>(&m)) out.push_back(*t);
         return out;
     }
+    // Every EntityMoves entry sid got, in order.
+    std::vector<proto::EntityMoves::Entry> moves(uint32_t sid) const {
+        std::vector<proto::EntityMoves::Entry> out;
+        for (const auto& m : of<proto::EntityMoves>(sid)) out.insert(out.end(), m.entries.begin(), m.entries.end());
+        return out;
+    }
     // Component updates for entity on sid, by name.
     std::vector<proto::ComponentUpdate> updates(uint32_t sid, uint32_t entity, const std::string& name = "") const {
         std::vector<proto::ComponentUpdate> out;
@@ -2399,6 +2405,59 @@ end, update = function() end })lua");
           "MAX_NPCS 0: create raises at the call: " + (errors.empty() ? "" : errors[0]));
 }
 
+// replication_system batching: 3 moving players, 2 still ones and a script-moved NPC, all in view of each other, plus
+// a lone player far off. One tick: each in-view player gets exactly one EntityMoves holding every other mover's move
+// (never its own); the lone one gets none.
+void checkEntityMovesBatch() {
+    LuaRoot r;
+    r.write("systems/npc.lua", R"lua(local g
+return {
+    init = function()
+        g = kast.create("Walker", {template = "Walker", position = {x = 1005, y = 0, z = 1005}})
+        kast.subscribe("move", function() kast.set(g, "Transform", {position = {x = 1006, y = 0, z = 1005}}) end)
+    end,
+    update = function() end,
+})lua");
+    TestWorld w(r.defs().defs);
+    const auto errors = w.world.load_scripts(r.root);
+    check(errors.empty(), "batch: loads" + (errors.empty() ? "" : ": " + errors[0]));
+    const auto npc = w.world.registry().view<world::Npc>().front();
+    std::vector<entt::entity> players;
+    for (uint32_t sid = 1; sid <= 5; ++sid)
+        players.push_back(w.spawn(sid, 300 + sid, "P" + std::to_string(sid), 1000.f + static_cast<float>(sid), 1000));
+    w.spawn(6, 306, "Lone", 1800, 1800);
+    w.world.tick(T0); // everyone sees everyone near (1000, 1000)
+    w.sent.clear();
+    for (size_t i = 0; i < 3; ++i) // players 1-3 move, 4-5 stand
+        w.move(players[i], proto::Move{{1000.f + static_cast<float>(i + 1), 0, 1001}, 1, static_cast<uint32_t>(i + 1)});
+    w.world.bus().publish("move", Json());
+    w.world.tick(T0 + std::chrono::seconds(1)); // budget for the 1.4 m moves
+
+    std::vector<uint32_t> movers = {wire(players[0]), wire(players[1]), wire(players[2]), wire(npc)};
+    for (uint32_t sid = 1; sid <= 5; ++sid) {
+        const auto msgs = w.sent.of<proto::EntityMoves>(sid);
+        std::vector<uint32_t> want, got;
+        for (uint32_t id : movers)
+            if (id != wire(players[sid - 1])) want.push_back(id);
+        if (msgs.size() == 1)
+            for (const auto& e : msgs[0].entries) got.push_back(e.entityId);
+        std::ranges::sort(got);
+        std::ranges::sort(want);
+        check(msgs.size() == 1, "batch: player " + std::to_string(sid) + " gets exactly one EntityMoves (got " +
+                                    std::to_string(msgs.size()) + ")");
+        std::string ids;
+        for (uint32_t id : got) ids += " " + std::to_string(id);
+        check(got == want, "batch: player " + std::to_string(sid) + "'s EntityMoves holds every other mover's move, never its own:" + ids);
+    }
+    const auto moves = w.sent.moves(4);
+    const auto p1 = std::ranges::find(moves, wire(players[0]), &proto::EntityMoves::Entry::entityId);
+    const auto n = std::ranges::find(moves, wire(npc), &proto::EntityMoves::Entry::entityId);
+    check(p1 != moves.end() && p1->pos == proto::Vec3{1001, 0, 1001} && p1->heading == 1 && n != moves.end() &&
+              n->pos == proto::Vec3{1006, 0, 1005},
+          "batch: entries carry each mover's new position and heading");
+    check(w.sent.of<proto::EntityMoves>(6).empty(), "batch: a player with no moving neighbours gets none");
+}
+
 // AOI, replication and send routing for an NPC moved by a script (driven through the bus from C++), plus hooks,
 // persistence and destroy.
 void checkNpcRouting() {
@@ -2441,7 +2500,8 @@ return {
         for (const auto& m : w.sent.bySession[sid]) {
             if (auto* s = std::get_if<proto::Spawn>(&m); s && s->entityId == G) out += "spawn;";
             if (auto* d = std::get_if<proto::Despawn>(&m); d && d->entityId == G) out += "despawn;";
-            if (auto* mv = std::get_if<proto::EntityMove>(&m); mv && mv->entityId == G) out += "move;";
+            if (auto* mv = std::get_if<proto::EntityMoves>(&m))
+                for (const auto& e : mv->entries) out += e.entityId == G ? "move;" : "";
             if (auto* u = std::get_if<proto::ComponentUpdate>(&m); u && u->entityId == G) out += "update " + u->name + ";";
             if (auto* x = std::get_if<proto::ComponentRemove>(&m); x && x->entityId == G) out += "remove " + x->name + ";";
         }
@@ -2465,9 +2525,9 @@ return {
         w.world.bus().publish("move", {{"x", 1010 + i}, {"z", 1000}});
         tick();
     }
-    const auto moves = w.sent.of<proto::EntityMove>(1);
+    const auto moves = w.sent.moves(1);
     check(moves.size() == 3 && moves[0].pos.x == 1011 && moves[2].pos.x == 1013 && moves[2].entityId == G,
-          "each script move reaches the viewer as EntityMove, in the same tick");
+          "each script move reaches the viewer in an EntityMoves, in the same tick");
     check(about(2).empty(), "the out-of-range player gets no moves");
 
     w.sent.clear();
@@ -2668,7 +2728,7 @@ void checkNpcSample() {
               "the player gets the Guard's Spawn, then its Health (aoi) in the AOI-enter full set");
     }
     size_t moves = 0;
-    for (const auto& m : w.sent.of<proto::EntityMove>(1)) moves += m.entityId == wire(g);
+    for (const auto& m : w.sent.moves(1)) moves += m.entityId == wire(g);
     check(moves > 400, "and its moves (" + std::to_string(moves) + ")");
 
     // The test hook: a "Respawntest..." character destroys the Guard; respawnSec 5 brings it back.
@@ -4605,7 +4665,7 @@ void checkMapWorld() {
     check(w.sent.of<proto::Despawn>(1).size() == 1 && w.sent.of<proto::Despawn>(1)[0].entityId == wire(near), "mover: Despawn Near");
     check(w.sent.of<proto::Spawn>(1).size() == 1 && w.sent.of<proto::Spawn>(1)[0].entityId == wire(cave), "mover: Spawn the cave player");
     check(w.sent.of<proto::Despawn>(7).size() == 1 && w.sent.of<proto::Despawn>(7)[0].entityId == wire(a), "old neighbour: Despawn mover");
-    check(w.sent.of<proto::EntityMove>(7).empty(), "old neighbour never sees where it went");
+    check(w.sent.moves(7).empty(), "old neighbour never sees where it went");
     check(w.sent.of<proto::Spawn>(2).size() == 1 && w.sent.of<proto::Spawn>(2)[0].pos == proto::Vec3{310, 0, 300},
           "new neighbour: Spawn at the destination");
     check(spawnsOf(6).empty(), "the map-1 player at the same x/z still sees nothing");
@@ -4917,8 +4977,8 @@ void checkAreaWorld() {
     check(bLostA, "B gets A's Despawn");
     bool leaked = false;
     for (uint32_t sid : {2u, 3u})
-        for (const auto& m : w.sent.of<proto::EntityMove>(sid)) leaked |= m.entityId == A;
-    check(!leaked, "no EntityMove for A's portal step, to B on map 1 or Cora on map 2");
+        for (const auto& m : w.sent.moves(sid)) leaked |= m.entityId == A;
+    check(!leaked, "no EntityMoves entry for A's portal step, to B on map 1 or Cora on map 2");
     check(std::ranges::any_of(w.sent.of<proto::Spawn>(3), [&](const proto::Spawn& s) { return s.entityId == A; }),
           "Cora gets A's Spawn in the portal tick");
 
@@ -6015,6 +6075,7 @@ int lua_checks(int& checks) {
     checkQueryPools();
     checkNpcCap();
     checkNpcRouting();
+    checkEntityMovesBatch();
     checkNpcDestroyedOnEnter();
     checkNpcShutdown();
     checkSpawnParsing();
