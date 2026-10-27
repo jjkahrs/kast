@@ -48,6 +48,9 @@ public:
                          Rml::Span<const Rml::CompiledFilterHandle> filters) override;
     void PopLayer() override;
     Rml::TextureHandle SaveLayerAsTexture() override;
+    // mask-image: the top layer holds the mask decorators; the CompositeLayers that follows multiplies the element by
+    // its alpha (a filter pass). The layer itself is the mask, kept from spare() until then.
+    Rml::CompiledFilterHandle SaveLayerAsMaskImage() override;
     Rml::CompiledFilterHandle CompileFilter(const Rml::String& name, const Rml::Dictionary& parameters) override;
     void ReleaseFilter(Rml::CompiledFilterHandle filter) override;
     Rml::CompiledShaderHandle CompileShader(const Rml::String& name, const Rml::Dictionary& parameters) override;
@@ -120,6 +123,7 @@ private:
     std::vector<bgfx::FrameBufferHandle> layers_; // the pool: layers_[i] backs layer handle i + 1
     Rml::LayerHandle top_ = 0;       // where RmlUi draws now
     Rml::LayerHandle viewLayer_ = 0; // what view_ draws into
+    Rml::LayerHandle maskLayer_ = 0; // a saved mask-image (SaveLayerAsMaskImage) until the next PushLayer; 0 if none
     bool viewsWarned_ = false;
     bool wantsReadable_ = false;
     bgfx::TextureHandle stencil_ = BGFX_INVALID_HANDLE; // shared by the layers

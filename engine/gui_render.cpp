@@ -97,6 +97,7 @@ void GuiRenderer::begin(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, 
     height_ = static_cast<uint16_t>(height);
     scale_ = scale > 0.0f ? scale : 1.0f;
     top_ = 0;
+    maskLayer_ = 0;
     scissor_ = false;
     transform_.reset();
     baseMaskAsked_ = false;
@@ -340,6 +341,7 @@ void GuiRenderer::ensureLayer(Rml::LayerHandle layer)
 Rml::LayerHandle GuiRenderer::PushLayer()
 {
     ensureLayer(++top_);
+    maskLayer_ = 0; // a saved mask is used up by the CompositeLayers right after it, before any push
     nextView(top_, true); // RmlUi expects it transparent: the whole layer is cleared, not just the scissor region
     return top_;
 }
