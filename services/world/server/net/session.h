@@ -42,6 +42,8 @@ inline TimePoint lag_due(TimePoint now, TimePoint previous, Millis latency, Mill
 
 // Frames Session::send and send_many have encoded, ever: lets a check prove a fan-out encodes once.
 inline std::atomic<size_t> framesEncoded{0};
+// Reads Session has issued, ever: lets a check prove that frames arriving together share one read.
+inline std::atomic<size_t> readsIssued{0};
 
 class Session : public std::enable_shared_from_this<Session> {
 public:
@@ -77,9 +79,9 @@ private:
     };
     template <class T> using DelayQueue = std::deque<Delayed<T>>;
 
-    void read_header();
-    void read_payload(uint16_t length, proto::Opcode op);
-    void handle_frame(proto::Opcode op);
+    void read(); // one async_read_some into rx_
+    void handle_frames(); // decodes every complete frame in rx_
+    void handle_frame(proto::Message&& msg);
     void deliver(proto::Message&& m); // a received message: Ping answered here, the rest to on_message
     void written(); // after appending to pending_: the buffer cap, then the flush
     bool lagged() const { return limits_.simLatency.count() > 0 || limits_.simJitter.count() > 0; }
@@ -98,8 +100,7 @@ private:
     asio::ssl::stream_base::handshake_type role_;
     std::string remote_;
 
-    std::array<uint8_t, proto::kHeaderSize> header_{};
-    std::vector<uint8_t> payload_;
+    std::vector<uint8_t> rx_; // received, not yet decoded: at most one partial frame between reads
     std::vector<uint8_t> pending_, writing_;
     bool flushScheduled_ = false;
     bool writing_now_ = false;

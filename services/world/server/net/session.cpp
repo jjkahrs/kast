@@ -33,50 +33,59 @@ void Session::start(std::optional<proto::Code> rejectWith) {
         }
         self->tlsDone_ = true;
         if (rejectWith) { self->disconnect(*rejectWith); return; }
-        self->read_header();
+        self->read();
         self->arm_heartbeat();
         self->flush(); // what a client-role session sent before the handshake finished
     });
 }
 
-void Session::read_header() {
+// ponytail: 16 KB per read; one TLS record is at most 16 KB, so a bigger chunk would rarely fill.
+constexpr size_t kReadChunk = 16 * 1024;
+
+// Before each read rx_ holds at most one partial frame (< kHeaderSize + maxFrameBytes: a complete one is decoded, an
+// oversized header disconnects), so it never exceeds kHeaderSize + maxFrameBytes + kReadChunk.
+void Session::read() {
+    const size_t kept = rx_.size();
+    rx_.resize(kept + kReadChunk);
+    ++readsIssued;
     auto self = shared_from_this();
-    asio::async_read(stream_, asio::buffer(header_), [self](asio::error_code ec, size_t) {
+    stream_.async_read_some(asio::buffer(rx_.data() + kept, kReadChunk), [self, kept](asio::error_code ec, size_t n) {
         if (self->closed_ || self->closing_) return;
         if (ec) { self->close(); return; }
-        const proto::Header h = proto::parse_header(self->header_);
-        if (h.length > self->limits_.maxFrameBytes) { self->disconnect(proto::Code::frame_too_large); return; }
-        self->read_payload(h.length, h.opcode);
+        self->rx_.resize(kept + n);
+        self->handle_frames();
     });
 }
 
-void Session::read_payload(uint16_t length, proto::Opcode op) {
-    payload_.resize(length);
-    if (length == 0) { handle_frame(op); return; }
-    auto self = shared_from_this();
-    asio::async_read(stream_, asio::buffer(payload_), [self, op](asio::error_code ec, size_t) {
-        if (self->closed_ || self->closing_) return;
-        if (ec) { self->close(); return; }
-        self->handle_frame(op);
-    });
-}
-
-void Session::handle_frame(proto::Opcode op) {
-    const TimePoint now = SteadyClock::now();
-    lastReceive_ = now;
-    const auto verdict = rate_.check(now);
-    if (verdict == MessageRateLimiter::Verdict::disconnect) { disconnect(proto::Code::rate_limited); return; }
-    if (verdict == MessageRateLimiter::Verdict::accept) {
-        proto::Message msg;
-        switch (proto::decode_payload(op, payload_, msg)) {
+// Every complete frame in rx_, in order; the next read only once all of them are handled and nothing closed.
+void Session::handle_frames() {
+    size_t used = 0;
+    while (!closing_) {
+        proto::Decoded d = proto::decode_frame(std::span(rx_).subspan(used), limits_.maxFrameBytes);
+        switch (d.status) {
         case proto::DecodeStatus::ok: break;
+        case proto::DecodeStatus::need_more:
+            rx_.erase(rx_.begin(), rx_.begin() + static_cast<std::ptrdiff_t>(used));
+            read();
+            return;
+        case proto::DecodeStatus::too_large: disconnect(proto::Code::frame_too_large); return;
         case proto::DecodeStatus::unknown_opcode: disconnect(proto::Code::unknown_opcode); return;
         default: disconnect(proto::Code::malformed); return;
         }
-        if (lagged()) delay(lagIn_, lagInTimer_, std::move(msg));
-        else deliver(std::move(msg));
+        used += d.consumed;
+        handle_frame(std::move(d.msg));
     }
-    if (!closing_) read_header();
+}
+
+void Session::handle_frame(proto::Message&& msg) {
+    const TimePoint now = SteadyClock::now();
+    lastReceive_ = now;
+    // The frame is already decoded: a malformed one disconnects even when the limiter would have dropped it.
+    const auto verdict = rate_.check(now);
+    if (verdict == MessageRateLimiter::Verdict::disconnect) { disconnect(proto::Code::rate_limited); return; }
+    if (verdict == MessageRateLimiter::Verdict::drop) return;
+    if (lagged()) delay(lagIn_, lagInTimer_, std::move(msg));
+    else deliver(std::move(msg));
 }
 
 void Session::deliver(proto::Message&& m) {

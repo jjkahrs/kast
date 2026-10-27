@@ -1,6 +1,6 @@
 // Assert-style checks for the world server's pure logic: frame codec (every message), frame rejection, names,
-// movement, AOI sets, chat sanitizing and rate limits, config validation, send fan-out (one encode), tick stats and JWT/JWKS verification with
-// locally generated RSA keys; lua_checks.cpp covers the Lua layer and the maps (manifests, World on several maps). No network or database; time is passed in (only the lag-simulator fan-out waits a few ms).
+// movement, AOI sets, chat sanitizing and rate limits, config validation, send fan-out (one encode), buffered session reads over a 127.0.0.1 TLS loopback, tick stats and JWT/JWKS verification with
+// locally generated RSA keys; lua_checks.cpp covers the Lua layer and the maps (manifests, World on several maps). No database or outside network; time is passed in (only the lag-simulator fan-out waits a few ms).
 // Exit 0 if every check passes. Run by CTest as world_self_check.
 #include "auth/jwks_cache.h"
 #include "auth/jwt_verify.h"
@@ -10,6 +10,7 @@
 #include "core/tick_stats.h"
 #include "core/utc.h"
 #include "net/session.h"
+#include "net/tls_context.h"
 #include "world/aoi_grid.h"
 #include "world/components.h"
 #include "world/rules.h"
@@ -30,6 +31,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <map>
 #include <mutex>
 #include <random>
@@ -959,6 +961,156 @@ void checkSendMany() {
     }
 }
 
+// A server Session on 127.0.0.1 and a raw TLS client writing bytes at it: what the buffered reader delivers.
+struct Loopback {
+    asio::io_context io;
+    asio::ssl::context& serverTls;
+    asio::ssl::context clientTls{asio::ssl::context::tls_client}; // verify_none: the cert is a throwaway
+    asio::ip::tcp::acceptor acceptor{io, {asio::ip::make_address("127.0.0.1"), 0}};
+    asio::ssl::stream<asio::ip::tcp::socket> client{io, clientTls};
+    std::shared_ptr<net::Session> server;
+    std::vector<proto::Message> delivered;
+    std::vector<uint8_t> received; // what the client got from the server
+    std::array<uint8_t, 4096> chunk{};
+    bool ready = false;
+
+    Loopback(asio::ssl::context& tls, uint32_t maxFrameBytes) : serverTls(tls) {
+        net::SessionLimits limits;
+        limits.maxFrameBytes = maxFrameBytes;
+        acceptor.async_accept([this, limits](asio::error_code ec, asio::ip::tcp::socket s) {
+            if (ec) return;
+            server = std::make_shared<net::Session>(
+                1, std::move(s), serverTls, limits,
+                [this](net::Session&, proto::Message&& m) { delivered.push_back(std::move(m)); }, nullptr);
+            server->start();
+        });
+        client.lowest_layer().connect(acceptor.local_endpoint());
+        client.async_handshake(asio::ssl::stream_base::client, [this](asio::error_code ec) {
+            ready = !ec;
+            if (ready) read_client();
+        });
+        run_until([&] { return ready && server; });
+    }
+    void read_client() {
+        client.async_read_some(asio::buffer(chunk), [this](asio::error_code ec, size_t n) {
+            if (ec) return;
+            received.insert(received.end(), chunk.begin(), chunk.begin() + static_cast<std::ptrdiff_t>(n));
+            read_client();
+        });
+    }
+    template <class Pred> bool run_until(Pred done, Millis timeout = Millis(3000)) {
+        const auto end = SteadyClock::now() + timeout;
+        while (!done() && SteadyClock::now() < end) {
+            io.restart();
+            io.run_for(Millis(5));
+        }
+        return done();
+    }
+    void write(std::vector<uint8_t> bytes) {
+        bool sent = false;
+        asio::async_write(client, asio::buffer(bytes), [&](asio::error_code, size_t) { sent = true; });
+        run_until([&] { return sent; });
+    }
+    // The server's Disconnect reason, once it arrived.
+    std::optional<proto::Code> disconnect_reason() const {
+        for (size_t at = 0;;) {
+            const auto d = proto::decode_frame(std::span(received).subspan(at), proto::kMaxPayloadBytes);
+            if (d.status != proto::DecodeStatus::ok) return std::nullopt;
+            if (const auto* dc = std::get_if<proto::Disconnect>(&d.msg)) return dc->reason;
+            at += d.consumed;
+        }
+    }
+    bool disconnected_with(proto::Code c) {
+        run_until([&] { return disconnect_reason().has_value(); });
+        return disconnect_reason() == c;
+    }
+};
+
+std::vector<uint8_t> say_frame(std::string text) {
+    return proto::encode(proto::Message{proto::Say{proto::ChatKind::say, std::move(text)}});
+}
+
+bool said(const proto::Message& m, const std::string& text) {
+    const auto* s = std::get_if<proto::Say>(&m);
+    return s && s->text == text;
+}
+
+// net::Session's reader over real TLS: one async_read_some can carry many frames, a frame can span many reads, and
+// a frame that disconnects stops everything after it.
+void checkSessionReads() {
+    const auto dir = std::filesystem::temp_directory_path() / "kast_self_check_tls"; // generated dev cert, not in the repo
+    asio::ssl::context tls = net::make_server_tls({"", "", dir.string()});
+
+    {
+        Loopback lb(tls, 4096);
+        constexpr size_t N = 100; // under the rate limiter's burst of 120
+        std::vector<uint8_t> batch;
+        for (size_t i = 0; i < N; ++i) {
+            const auto f = say_frame("m" + std::to_string(i));
+            batch.insert(batch.end(), f.begin(), f.end());
+        }
+        const size_t before = net::readsIssued;
+        lb.write(batch);
+        lb.run_until([&] { return lb.delivered.size() >= N; });
+        const size_t reads = net::readsIssued - before;
+        bool inOrder = lb.delivered.size() == N;
+        for (size_t i = 0; inOrder && i < N; ++i) inOrder = said(lb.delivered[i], "m" + std::to_string(i));
+        check(inOrder, "loopback: 100 frames in one write all delivered, in order");
+        check(reads < N, "loopback: the batched frames share reads (readsIssued grows by fewer than the frame count)");
+        std::printf("  loopback batch: %zu frames (%zu bytes) in one write, %zu reads issued\n", N, batch.size(), reads);
+    }
+    {
+        Loopback lb(tls, 4096);
+        const auto frame = say_frame("one byte at a time");
+        const size_t before = net::readsIssued;
+        for (uint8_t b : frame) lb.write({b});
+        lb.run_until([&] { return !lb.delivered.empty(); });
+        lb.run_until([] { return false; }, Millis(50)); // a duplicate would show up here
+        check(lb.delivered.size() == 1 && said(lb.delivered[0], "one byte at a time"),
+              "loopback: a frame written a byte at a time is delivered once, intact");
+        std::printf("  loopback byte-at-a-time: %zu bytes in %zu writes, %zu reads issued\n", frame.size(), frame.size(),
+                    net::readsIssued - before);
+    }
+    {
+        Loopback lb(tls, 4096);
+        lb.write({0x01, 0x10, 0x21, 0x00}); // header only: a Say of 4097 bytes, no payload sent
+        check(lb.disconnected_with(proto::Code::frame_too_large), "loopback: oversized header -> Disconnect{frame_too_large}");
+    }
+    {
+        Loopback lb(tls, 4096);
+        std::vector<uint8_t> bytes = {4, 0, 0x21, 0, 3, 1, 0, 'a'}; // Say kind 3: malformed
+        for (const char* t : {"after1", "after2", "after3"}) {
+            const auto f = say_frame(t);
+            bytes.insert(bytes.end(), f.begin(), f.end());
+        }
+        lb.write(bytes);
+        check(lb.disconnected_with(proto::Code::malformed), "loopback: malformed payload -> Disconnect{malformed}");
+        check(lb.delivered.empty(), "loopback: frames after the malformed one in the same write are not delivered");
+    }
+    {
+        Loopback lb(tls, 4096);
+        std::vector<uint8_t> bytes = {0, 0, 0xFF, 0x7F};
+        const auto f = say_frame("after");
+        bytes.insert(bytes.end(), f.begin(), f.end());
+        lb.write(bytes);
+        check(lb.disconnected_with(proto::Code::unknown_opcode), "loopback: unknown opcode -> Disconnect{unknown_opcode}");
+        check(lb.delivered.empty(), "loopback: a frame after the unknown opcode in the same write is not delivered");
+    }
+    {
+        constexpr uint32_t kMax = 32 * 1024; // bigger than one 16 KB read: the buffer grows to hold the frame
+        Loopback lb(tls, kMax);
+        const std::string big(kMax - 3, 'x'); // Say payload: kind u8 + u16 length + text
+        auto bytes = say_frame(big);
+        const bool exact = bytes.size() == proto::kHeaderSize + kMax;
+        const auto f = say_frame("next");
+        bytes.insert(bytes.end(), f.begin(), f.end());
+        lb.write(bytes);
+        lb.run_until([&] { return lb.delivered.size() >= 2; });
+        check(exact && lb.delivered.size() == 2 && said(lb.delivered[0], big) && said(lb.delivered[1], "next"),
+              "loopback: a maxFrameBytes (32 KB) frame and the frame after it are both delivered");
+    }
+}
+
 void checkTickStats() {
     TickStats s;
     for (int i = 1; i <= 100; ++i) s.add(i * 0.1); // 0.1 .. 10 ms
@@ -1300,6 +1452,7 @@ int main(int argc, char** argv) {
     checkConfig();
     checkLagSim();
     checkSendMany();
+    checkSessionReads();
     checkTickStats();
     checkJwt();
     checkJwksCache();
