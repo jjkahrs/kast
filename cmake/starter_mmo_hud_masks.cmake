@@ -21,9 +21,18 @@ file(WRITE "${project}/scripts/powers.lua" "${text}")
 execute_process(COMMAND "${CMAKE_COMMAND}" "-DEDITOR=${EDITOR}" "-DSCREENSHOT=${SCREENSHOT}" -DFRAMES=400
                         "-DEXTRA_ARGS=--scene ${project}/scenes/meadow.scene --play --no-audio-device --size 1600x1000 --fixed-dt 0.016666667 --screenshot-on-log 5,HUDSHOT"
                         "-DEXPECT_OUTPUT=GUI base layer redirected for clip masks.*test hud masks: HUDSHOT"
-                        "-DFORBID_OUTPUT=[[]error|Lua error|${FORBID}"
+                        "-DFORBID_OUTPUT=[[]error|Lua error|${FORBID}" "-DOUTPUT_FILE=${OUT}/log.txt"
                         -P "${CMAKE_CURRENT_LIST_DIR}/smoke_test.cmake"
                 RESULT_VARIABLE result)
 if(NOT result EQUAL 0)
   message(FATAL_ERROR "HUD masks check failed")
+endif()
+# The screen GUI and the world UI atlas (nameplates) share the GUI renderer at different sizes: each size's layers and
+# redirect are created once and kept, so no creation line repeats for the same size.
+file(STRINGS "${OUT}/log.txt" created REGEX "GUI (layer framebuffer [0-9]+ created|base layer redirected for clip masks) [(]")
+list(LENGTH created all)
+list(REMOVE_DUPLICATES created)
+list(LENGTH created distinct)
+if(NOT all EQUAL distinct)
+  message(FATAL_ERROR "GUI layers recreated: ${all} creation lines, ${distinct} distinct")
 endif()

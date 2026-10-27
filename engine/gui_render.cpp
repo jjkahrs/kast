@@ -18,6 +18,7 @@
 #include <cmath>
 #include <filesystem>
 #include <format>
+#include <utility>
 
 namespace kast {
 namespace {
@@ -70,7 +71,11 @@ void GuiRenderer::init()
 
 void GuiRenderer::shutdown()
 {
-    destroyLayers();
+    destroyPool(pool_);
+    for (auto& [size, pool] : parked_)
+        destroyPool(pool);
+    parked_.clear();
+    width_ = height_ = 0;
     for (bgfx::ProgramHandle* program : {&program_, &matrixProgram_, &blurProgram_, &gradientProgram_}) {
         if (bgfx::isValid(*program))
             bgfx::destroy(*program);
@@ -90,8 +95,34 @@ void GuiRenderer::shutdown()
 void GuiRenderer::begin(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, int width, int height, float scale,
                         bool shareViews, bool clear, bool redirectBase)
 {
-    if (width != width_ || height != height_)
-        destroyLayers(); // the pool is the GUI's size; recreated as layers are pushed
+    // ponytail: a pool per context size, kept while that size renders (memory: each size holds its own layers
+    // and stencil). A size not begun for kPoolIdle begins is freed (a window resize leaves the old size behind), and
+    // at most kMaxParked other sizes are kept, the least recently used freed first.
+    constexpr uint64_t kPoolIdle = 120;
+    constexpr size_t kMaxParked = 3;
+    ++begins_;
+    if (width != width_ || height != height_) {
+        const auto key = [](int w, int h) { return static_cast<uint32_t>(w) << 16 | static_cast<uint16_t>(h); };
+        pool_.used = begins_;
+        if (!pool_.layers.empty() || bgfx::isValid(pool_.redirect))
+            parked_.emplace_back(key(width_, height_), std::exchange(pool_, {}));
+        const auto parked = std::ranges::find(parked_, key(width, height), &decltype(parked_)::value_type::first);
+        if (parked != parked_.end()) {
+            pool_ = parked->second;
+            parked_.erase(parked);
+        }
+    }
+    std::erase_if(parked_, [&](auto& parked) {
+        const bool idle = begins_ - parked.second.used > kPoolIdle;
+        if (idle)
+            destroyPool(parked.second);
+        return idle;
+    });
+    if (parked_.size() > kMaxParked) {
+        const auto oldest = std::ranges::min_element(parked_, {}, [](const auto& parked) { return parked.second.used; });
+        destroyPool(oldest->second);
+        parked_.erase(oldest);
+    }
     base_ = frameBuffer;
     width_ = static_cast<uint16_t>(width);
     height_ = static_cast<uint16_t>(height);
@@ -102,8 +133,8 @@ void GuiRenderer::begin(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, 
     transform_.reset();
     baseMaskAsked_ = false;
     redirected_ = redirectBase;
-    if (redirected_ && !bgfx::isValid(redirect_)) {
-        redirect_ = createLayer();
+    if (redirected_ && !bgfx::isValid(pool_.redirect)) {
+        pool_.redirect = createLayer();
         log::info(std::format("GUI base layer redirected for clip masks ({}x{})", width_, height_));
     }
     bx::mtxOrtho(proj_, 0.0f, static_cast<float>(width) / scale_, static_cast<float>(height) / scale_, 0.0f, 0.0f,
@@ -171,24 +202,22 @@ bool GuiRenderer::nextView(Rml::LayerHandle layer, bool clear)
 bgfx::FrameBufferHandle GuiRenderer::frameBuffer(Rml::LayerHandle layer) const
 {
     if (layer == 0)
-        return redirected_ ? redirect_ : base_;
-    return layer == kHost ? base_ : layers_[layer - 1];
+        return redirected_ ? pool_.redirect : base_;
+    return layer == kHost ? base_ : pool_.layers[layer - 1];
 }
 
-void GuiRenderer::destroyLayers()
+void GuiRenderer::destroyPool(LayerPool& pool)
 {
     const auto destroy = [](bgfx::FrameBufferHandle layer) {
         bgfx::destroy(bgfx::getTexture(layer)); // its color; the stencil is shared
         bgfx::destroy(layer);
     };
-    std::ranges::for_each(layers_, destroy);
-    layers_.clear();
-    if (bgfx::isValid(redirect_))
-        destroy(redirect_);
-    redirect_ = BGFX_INVALID_HANDLE;
-    if (bgfx::isValid(stencil_))
-        bgfx::destroy(stencil_);
-    stencil_ = BGFX_INVALID_HANDLE;
+    std::ranges::for_each(pool.layers, destroy);
+    if (bgfx::isValid(pool.redirect))
+        destroy(pool.redirect);
+    if (bgfx::isValid(pool.stencil))
+        bgfx::destroy(pool.stencil);
+    pool = {};
 }
 
 Rml::CompiledGeometryHandle GuiRenderer::CompileGeometry(Rml::Span<const Rml::Vertex> vertices,
@@ -322,19 +351,19 @@ void GuiRenderer::SetTransform(const Rml::Matrix4f* transform)
 
 bgfx::FrameBufferHandle GuiRenderer::createLayer()
 {
-    if (!bgfx::isValid(stencil_))
-        stencil_ =
+    if (!bgfx::isValid(pool_.stencil))
+        pool_.stencil =
             bgfx::createTexture2D(width_, height_, false, 1, bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT_WRITE_ONLY);
     const bgfx::TextureHandle textures[] = {
-        bgfx::createTexture2D(width_, height_, false, 1, bgfx::TextureFormat::RGBA8, kLayerFlags), stencil_};
+        bgfx::createTexture2D(width_, height_, false, 1, bgfx::TextureFormat::RGBA8, kLayerFlags), pool_.stencil};
     return bgfx::createFrameBuffer(2, textures, false);
 }
 
 void GuiRenderer::ensureLayer(Rml::LayerHandle layer)
 {
-    while (layers_.size() < static_cast<size_t>(layer)) {
-        layers_.push_back(createLayer());
-        log::info(std::format("GUI layer framebuffer {} created ({}x{})", layers_.size(), width_, height_));
+    while (pool_.layers.size() < static_cast<size_t>(layer)) {
+        pool_.layers.push_back(createLayer());
+        log::info(std::format("GUI layer framebuffer {} created ({}x{})", pool_.layers.size(), width_, height_));
     }
 }
 

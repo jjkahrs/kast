@@ -90,7 +90,6 @@ private:
     void applyScissor();
     // The scissor region (the whole GUI without one) at scale, rounded outwards.
     void applyScissor(float scale);
-    void destroyLayers();
     bgfx::FrameBufferHandle createLayer(); // a GUI-sized RGBA8 target on the shared stencil
     void ensureLayer(Rml::LayerHandle layer);
     // Draws the redirected base layer over begin()'s target; then, if more draws follow, clears it for them.
@@ -113,20 +112,29 @@ private:
     bgfx::ViewId firstView_ = 0;
     bgfx::ViewId view_ = 0;
     bgfx::FrameBufferHandle base_ = BGFX_INVALID_HANDLE; // begin()'s target: layer 0 unless redirected
-    bgfx::FrameBufferHandle redirect_ = BGFX_INVALID_HANDLE; // layer 0 while redirected_ (created on first use)
     bool redirected_ = false;
     bool baseMaskAsked_ = false; // since begin(), RenderToClipMask on the base layer
     uint16_t width_ = 0;
     uint16_t height_ = 0;
     float scale_ = 1.0f; // target pixels per RmlUi unit (begin)
     float proj_[16] = {};
-    std::vector<bgfx::FrameBufferHandle> layers_; // the pool: layers_[i] backs layer handle i + 1
+    // One context size's targets. The renderer is shared (e.g. a screen GUI and the world UI atlas alternate in a
+    // frame), so a size's pool is parked while another size renders instead of being destroyed and recreated.
+    struct LayerPool {
+        std::vector<bgfx::FrameBufferHandle> layers; // layers[i] backs layer handle i + 1
+        bgfx::FrameBufferHandle redirect = BGFX_INVALID_HANDLE; // layer 0 while redirected_ (created on first use)
+        bgfx::TextureHandle stencil = BGFX_INVALID_HANDLE;      // shared by the layers
+        uint64_t used = 0;                                      // begins_ when last begun
+    };
+    static void destroyPool(LayerPool& pool);
+    LayerPool pool_; // begin()'s size
+    std::vector<std::pair<uint32_t, LayerPool>> parked_; // other sizes' pools, by width << 16 | height
+    uint64_t begins_ = 0;
     Rml::LayerHandle top_ = 0;       // where RmlUi draws now
     Rml::LayerHandle viewLayer_ = 0; // what view_ draws into
     Rml::LayerHandle maskLayer_ = 0; // a saved mask-image (SaveLayerAsMaskImage) until the next PushLayer; 0 if none
     bool viewsWarned_ = false;
     bool wantsReadable_ = false;
-    bgfx::TextureHandle stencil_ = BGFX_INVALID_HANDLE; // shared by the layers
     bool clipMask_ = false;
     bool maskInLayer_ = false; // the last RenderToClipMask drew into the stencil (a layer or the redirected base)
     uint8_t clipRef_ = 1;      // stencil value inside the mask

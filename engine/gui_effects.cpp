@@ -135,7 +135,7 @@ Rml::CompiledFilterHandle GuiRenderer::SaveLayerAsMaskImage()
 {
     // As RmlUi's GL3 backend (which copies the layer to a mask buffer): RmlUi pops this layer and composites the
     // element's with the mask as its last filter, drawing nothing in between, so the layer is kept as it is.
-    if (top_ == 0 || !bgfx::isValid(layers_[top_ - 1])) {
+    if (top_ == 0 || !bgfx::isValid(pool_.layers[top_ - 1])) {
         warnOnce("GUI mask-image has no layer to save its mask in: elements using it draw unmasked");
         return 0;
     }
